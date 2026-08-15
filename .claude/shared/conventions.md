@@ -25,7 +25,8 @@ Once resolved, **every** read and write for that run happens inside that folder.
 | `requirement.md` | `business-analyst` | business requirements, scope, declined features |
 | `design.md` | `system-analyst` | feasibility verdicts, the confirmed Prisma schema, module breakdown |
 | `plan.md` | `project-manager` (checkboxes: `qa-engineer`) | phased, tagged task list |
-| `review.md` | `qa-engineer` | per-task verification results, issues, routing |
+| `review.md` | `qa-engineer` | open issues (all phases) + the current verify round only |
+| `review/phase-N.md` | `qa-engineer` | archived verify rounds for phases that are closed — read only on demand |
 | `security.md` | `security` | findings, accepted risks |
 | `deploy.md` | `devops` | environments, deploy/migration runbook, history |
 
@@ -56,14 +57,16 @@ Not scaffolded yet — run the `setup` agent before Phase 1.
 ## sales-crm
 
 Docs: requirement ✅ · design ✅ · plan ✅
-- Phase 1 — implemented ✅ · verified ✅ · security ✅ · deployed ✅
-- Phase 2 — implemented ⬜ · verified ⬜ · security ⬜ · deployed ⬜
+- Phase 1 — implemented ✅ · verified ✅ (FULL) · security ✅ · deployed ✅
+- Phase 2 — implemented ✅ · verified ⚠️ (TARGETED) · security ⬜ · deployed ⬜
 
 **Now**: Phase 2 `[backend]` tasks — 4 of 7 unchecked in `plan.md`
 **Blocked on**: —
 ```
 
 Use `✅` done · `⬜` not started/in progress · `⚠️` done with open issues · `n/a` not applicable.
+
+**Record which mode the last verify round used** — `(FULL)` or `(TARGETED)`, exactly as `qa-engineer` reported it. That parenthesis is the difference between a phase `devops` can ship and one that needs a full pass first (`.claude/agents/qa-engineer.md` defines the two modes and the gate). `qa-engineer` writes it; everyone else reads it and never edits it to something more convenient.
 
 **`status.md` is an index, not a source of truth.** If it ever disagrees with the actual documents or code, the documents and code win — correct `status.md` to match and mention the discrepancy to the user. Never make a decision based on `status.md` alone; open the real file.
 
@@ -87,6 +90,24 @@ Once a document exists, you are amending it, not regenerating it.
 - Append a dated line to that document's `## Change Log`; never rewrite or prune existing entries.
 - Confirm a changed section with the user before saving it.
 - **Checkboxes in `plan.md` belong to `qa-engineer` alone.** It sets `[ ]` → `[x]` only after inspecting real code. No other agent may set, clear, or reorder a checkbox — and this is exactly why `project-manager` must amend `plan.md` with `Edit` rather than rewriting it.
+
+### Keeping `review.md` small — it is the one document every agent pays for
+
+"Amend, don't regenerate" applies to `review.md` too, but it must not be allowed to grow without limit. Every engineer, `security`, and `devops` run reads it in full, so once a phase is closed its per-task detail is pure cost to everyone downstream — nobody implementing Phase 6 needs to re-read what a Phase 1 bug was.
+
+`review.md` holds exactly three things:
+
+1. **`## Open Issues — all phases`, at the very top** — every unresolved item from *any* phase, as a table: what it is, which phase it came from, which agent it routes to, and whether it's blocking. This section is why nothing gets lost when a round is archived, and it's the first thing an engineer should be able to act on.
+2. **The current verify round**, in full detail — including which mode it ran in, and, for a phase that still has open items, the `## Verified File Manifest` the next round needs in order to tell what moved.
+3. **`## Archived rounds`** — one pointer line per archived round. A list of links, not content.
+
+Plus the `## Change Log` every document in this pipeline carries — one line per round, with the archived rounds' full entries travelling to the archive file along with them.
+
+When a phase's round is superseded, `qa-engineer` **moves** it — verbatim, never summarized or pruned — into `review/phase-N.md`, carries any still-open item up into `Open Issues`, and leaves a pointer under `## Archived rounds`. Moving is not the same as discarding; the history stays complete and readable, it just stops being loaded by every run.
+
+The exact section layout, the two verify modes (FULL and TARGETED), and what the manifest is for belong to `qa-engineer` and are defined in `.claude/agents/qa-engineer.md`. It is the only agent that writes any of this; everyone else reads `Open Issues` first and the current round second.
+
+**Do not read `review/phase-N.md` as part of your normal startup.** Read `review.md` only. Open an archive file solely when something specific sends you there — an `Open Issues` row you need the background on, a regression that looks like it's re-opening old work, or the user asking about past history.
 
 ---
 
@@ -128,6 +149,18 @@ business-analyst → system-analyst → project-manager → frontend-engineer / 
 
 No agent invents, renames, or "improves" a field, type, or relation. If a task needs something the schema doesn't cover, stop and route it back to `system-analyst` — don't improvise a schema change and don't work around the gap.
 
+**Once `setup` has written the real `schema.prisma`, that file is the contract's working copy** — `design.md`'s Data Model stays the authority, but the engineers work from `schema.prisma`, which is the file their queries and types actually have to agree with, and which they have open anyway. Reading both is reading the same contract twice.
+
+That only holds because one agent keeps them equal: **`qa-engineer` reads both and compares them field by field**, and any divergence is a ❌ — a field in `schema.prisma` that `design.md` doesn't have is exactly the improvised schema change this rule exists to catch. So:
+
+- Before scaffold (`schema.prisma` doesn't exist yet): `setup`/`backend-engineer` read `design.md`'s Data Model. It's the only copy.
+- After scaffold: engineers read `schema.prisma` for the models their task touches, and go to `design.md`'s Data Model only when they need the reasoning behind a field rather than its shape.
+- `qa-engineer` always reads both, in full, for the phase it's verifying. It is the only agent that does, and that is deliberate — not a step to optimize away.
+
+If `schema.prisma` and `design.md` disagree, **`design.md` wins and the code is wrong** — route it to `system-analyst` if the design turns out to be the thing that's wrong, never by editing `design.md` to match whatever got built.
+
+**Only two agents ever write `schema.prisma`**: `setup` seeds it from `design.md`'s Data Model at scaffold time, and `backend-engineer` changes it afterwards — and only to bring it in line with a Data Model `system-analyst` has already amended and the user has already confirmed. A schema amendment isn't finished when `design.md` is saved; it lands when `backend-engineer` propagates it and `qa-engineer` confirms the two match again.
+
 ---
 
 ## 8. Right-sizing the pipeline
@@ -154,3 +187,54 @@ The reverse is also a rule: **don't skip a stage that the change actually needs*
 `.claude/agents/frontend-engineer.md` and `.claude/agents/backend-engineer.md` hold the authoritative "Fixed project stack" sections. Any agent that needs to know the stack **reads those files** rather than assuming — the user can change the stack, and those two files get updated in place when they do.
 
 Only `frontend-engineer` and `backend-engineer` may edit their own stack sections, and only after the user explicitly confirms the change.
+
+---
+
+## 10. Read only the part of a document your run needs
+
+Every agent runs with a fresh context and pays to read these documents again from scratch. That cost isn't one-off — it's the base that every turn of your run carries. Reading a whole document when you need one section of it is the single most repeated waste in this pipeline, so read deliberately.
+
+This does **not** mean skimming or guessing. It means knowing which section answers your question and reading that section completely.
+
+### `plan.md`
+
+Read: the **`## Plan Summary`**, **your phase's block**, **`## Sequencing Notes`**, and **`## Unresolved Open Questions`**. Skip other phases' task lists and the `## Change Log`.
+
+How, without reading the file to find out where things are:
+
+1. **Which phase?** Take it from the user. If they didn't say, `_docs/status.md` names the phase in play — that's what the index is for. If it's still ambiguous, ask. Don't scan `plan.md` to work it out.
+2. `Grep` for `^## ` with `-n` on `plan.md` — a dozen lines that give you every section's start line.
+3. `Read` with `offset`/`limit` for each of the four ranges above.
+
+Nothing is lost by skipping the other phases: cross-phase dependencies live in `Sequencing Notes`, which you always read, and unfinished work from an earlier phase surfaces in `review.md`'s `## Open Issues — all phases`, which you also always read. If the user asks you to work across several phases, read each of those phases' blocks — the rule is "the phases your run touches", not "exactly one".
+
+`project-manager` is the exception: it owns `plan.md` and reads it in full when amending, because it has to place new work in the right order relative to everything already there.
+
+### `design.md`
+
+Same technique — `Grep` for `^## ` to get the section map, then `Read` the ranges you need.
+
+**Always read**, whatever your phase is, because these carry decisions and prohibitions that don't repeat anywhere else:
+
+- **`## Feature-by-Feature Feasibility`** — including its "การตัดสินใจที่ผู้ใช้ยืนยันแล้ว" table of confirmed decisions, and which dependencies the design actually sanctioned
+- **`## Risks & Dependencies`** — several mitigations in there are implementation instructions, not commentary
+- **`## Unresolved Open Questions`** — this is where "explicitly cut from scope, do not implement without amending first" lives
+
+**Read the parts that match your phase:**
+
+- the contract section your phase implements — `## Import Rules`, `## KPI & Scoring Rules`, or whatever the module's equivalents are named. Read it in full; these are contracts, not summaries.
+- your module's entry under `## Modules` — not the other modules'
+
+**Skip:** `## Feasibility Summary` (an executive summary of sections you're reading anyway), `## Change Log`, and `## Data Model` — read `schema.prisma` for that instead, per §7, once it exists.
+
+`system-analyst` owns this document and reads it in full when amending. `qa-engineer` reads the Data Model in full every round — see §7 for why that one isn't optional. `project-manager` also reads the Data Model, because it writes one task per model/migration and needs the model list; it usually runs before scaffold, when `design.md` is the only copy anyway.
+
+### `review.md`
+
+Read **`## Open Issues — all phases`** first — it's at the top for that reason, and for most runs it's the only part you need to act on. Then the current round, for the phase you're working on.
+
+Don't open `review/phase-N.md` as part of startup. Go there only when an `Open Issues` row doesn't give you enough to act on, when something looks like it's re-opening closed work, or when the user asks about history. §4 has the full rule.
+
+### `requirement.md`
+
+Read it in full. It's the shortest of the four, it has no per-phase structure to slice along, and the business rule you skipped is exactly the one you'd have implemented wrong.

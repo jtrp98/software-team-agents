@@ -39,7 +39,7 @@ business-analyst → system-analyst → project-manager → frontend-engineer / 
 | `project-manager` | แตก design ที่ยืนยันแล้วเป็น task list แบ่ง phase พร้อม tag | `plan.md` |
 | `frontend-engineer` | ทำ task ที่ tag `[frontend]` ตาม schema ที่ยืนยันแล้ว | โค้ดแอป |
 | `backend-engineer` | ทำ task ที่ tag `[backend]` ตาม schema ที่ยืนยันแล้ว | โค้ดแอป |
-| `qa-engineer` | ตรวจงานที่เสร็จเทียบกับ requirement/design ส่งงานที่ไม่ผ่านกลับไปจุดที่ถูกต้อง | `review.md` |
+| `qa-engineer` | ตรวจงานที่เสร็จเทียบกับ requirement/design ส่งงานที่ไม่ผ่านกลับไปจุดที่ถูกต้อง | `review.md` + `review/phase-N.md` |
 | `security` | ตรวจงานที่อ่อนไหวหาช่องโหว่ที่โจมตีได้จริง | `security.md` |
 | `devops` | container, CI, migration, deploy — เฉพาะงานที่ QA ยอมรับแล้วเท่านั้น | `deploy.md` |
 
@@ -66,7 +66,9 @@ _docs/
         ├── requirement.md       ← business-analyst
         ├── design.md            ← system-analyst
         ├── plan.md               ← project-manager  (ติ๊ก checkbox: qa-engineer เท่านั้น)
-        ├── review.md            ← qa-engineer
+        ├── review.md            ← qa-engineer  (issue ที่ยังเปิด + รอบปัจจุบันเท่านั้น)
+        ├── review/
+        │   └── phase-N.md       ← qa-engineer  (ประวัติรอบที่ปิดแล้ว — เปิดอ่านเฉพาะเมื่อต้องการ)
         ├── security.md          ← security
         └── deploy.md            ← devops
 
@@ -83,10 +85,23 @@ _docs/
 
 - **ไม่มี agent ไหนเชื่อมไปตัวถัดไปเอง** ทุกรอบจบด้วยการบอกว่าอะไรพร้อมแล้วและใครควรหยิบไปทำต่อ แล้วก็หยุด
 - **ห้ามใช้ git เด็ดขาด** ไม่มี agent ไหนรัน `git init`/`add`/`commit`/`push` หรือแตะ `.git` — version control เป็นเรื่องของคุณคนเดียว
-- **Data Model ใน `design.md` คือสัญญา** schema ถูกยืนยันกับคุณครั้งเดียว แล้วถูกนำไปใช้ตรงตัวเป๊ะๆ — ไม่มี agent ไหนคิดฟิลด์เองหรือเปลี่ยนชื่อเอง ถ้ามีช่องว่างต้องส่งกลับ `system-analyst` ห้ามด้นสดแก้เอง
+- **Data Model ใน `design.md` คือสัญญา** schema ถูกยืนยันกับคุณครั้งเดียว แล้วถูกนำไปใช้ตรงตัวเป๊ะๆ — ไม่มี agent ไหนคิดฟิลด์เองหรือเปลี่ยนชื่อเอง ถ้ามีช่องว่างต้องส่งกลับ `system-analyst` ห้ามด้นสดแก้เอง หลัง `setup` เขียน `schema.prisma` ตัวจริงแล้ว engineer จะทำงานจากไฟล์นั้น (มันคือสำเนาใช้งานของสัญญา และเป็นไฟล์ที่ query ต้องตรงด้วยจริงๆ) โดยมี `qa-engineer` เป็นตัวเดียวที่อ่านทั้งสองไฟล์แล้วเทียบทีละฟิลด์ให้เท่ากัน — ถ้าไม่ตรงกันเมื่อไหร่ `design.md` ชนะ แปลว่าโค้ดผิด และมีแค่ `setup` (ตอน scaffold) กับ `backend-engineer` (ตอนตามแก้ให้ตรงกับ design ที่ยืนยันแล้ว) เท่านั้นที่เขียน `schema.prisma` ได้
 - **มีแค่ `qa-engineer` เท่านั้นที่ติ๊กงานว่าเสร็จ** มันติ๊ก `[x]` ใน `plan.md` หลังตรวจโค้ดจริงแล้วเท่านั้น — ไม่มีการปั๊มตราให้ผ่านลอยๆ
 - **แก้ไขเอกสารเดิม ไม่ใช่สร้างใหม่ทับ** เอกสารที่มีอยู่แล้วถูกอัปเดตทีละส่วนพร้อมลง Change Log ที่มีวันที่กำกับ ไม่มีการเขียนทับทั้งไฟล์
-- **ไม่มีอะไรถูก deploy โดยไม่ผ่านการตรวจ** `devops` จะปฏิเสธ deploy phase ที่ QA ยังไม่ยอมรับ หรือ phase ที่ยังมีช่องโหว่ระดับ Critical/Important ค้างอยู่ เว้นแต่คุณจะสั่ง override เอง
+- **`review.md` ต้องเล็กอยู่เสมอ** มันเก็บแค่ `Open Issues — all phases` กับรอบตรวจปัจจุบันเท่านั้น รอบที่ปิดแล้วถูก `qa-engineer` ย้าย (ยกมาทั้งดุ้น ไม่ย่อ ไม่ตัด) ไปไว้ใน `review/phase-N.md` — เพราะทุกรอบของ engineer/`security`/`devops` อ่านไฟล์นี้เต็มๆ รายละเอียดของ phase ที่ปิดไปแล้วจึงเป็นต้นทุนที่ทั้ง pipeline ต้องจ่ายซ้ำโดยไม่ได้อะไรกลับมา ไฟล์ใน `review/` ไม่ถูกเปิดอ่านตอนเริ่มงานปกติ
+- **อ่านเฉพาะส่วนที่ต้องใช้ ไม่ใช่ทั้งไฟล์** agent ทุกตัวเริ่มจาก context เปล่า การอ่านทั้งไฟล์จึงเป็นต้นทุนที่จ่ายใหม่ทุกครั้ง — `plan.md` อ่าน Plan Summary + phase ของตัวเอง + Sequencing Notes + Open Questions, `design.md` อ่าน Feature-by-Feature Feasibility, Risks และ Open Questions เสมอ (สามส่วนนี้เก็บการตัดสินใจที่ยืนยันแล้วและรายการ "ห้ามทำ") บวกส่วนสัญญาของ phase ตัวเองกับ module ของตัวเอง วิธีทำอยู่ใน `conventions.md` §10 ข้อยกเว้นมีโดยตั้งใจ: `project-manager` เป็นเจ้าของ `plan.md`, `system-analyst` เป็นเจ้าของ `design.md`, และ `qa-engineer` อ่าน Data Model เต็มทุกรอบ
+- **ไม่มีอะไรถูก deploy โดยไม่ผ่านการตรวจ** `devops` จะปฏิเสธ deploy phase ที่ QA ยังไม่ยอมรับ, phase ที่รอบตรวจล่าสุดเป็นแบบ TARGETED, หรือ phase ที่ยังมีช่องโหว่ระดับ Critical/Important ค้างอยู่ เว้นแต่คุณจะสั่ง override เอง
+
+## สองโหมดของการตรวจ — FULL กับ TARGETED
+
+`qa-engineer` ตรวจได้สองแบบ และต้องบอกทุกครั้งว่ารอบนี้ใช้แบบไหน:
+
+- **FULL** — ตรวจทุก task ใน phase ตั้งแต่ต้น เป็นค่าเริ่มต้น และเป็นแบบเดียวที่ปิด phase ได้ ใช้เมื่อตรวจ phase นั้นครั้งแรก เมื่อคุณสั่ง เมื่อบอกไม่ได้ว่าอะไรเปลี่ยนไปบ้างตั้งแต่รอบก่อน หรือเมื่อ phase กำลังจะถูกส่งให้ `security`/`devops` จบรอบด้วยการบันทึก **file manifest** (ไฟล์ที่ตรวจ + ขนาด + จำนวนบรรทัด) เพื่อให้รอบถัดไปรู้ได้เองว่าอะไรขยับ โดยไม่ต้องใช้ git และไม่ต้องเชื่อคำบอกเล่าของใคร
+- **TARGETED** — ตรวจซ้ำเฉพาะจุดหลัง engineer แก้ item ที่เคยถูก flag ใช้ได้ต่อเมื่อรอบก่อนของ phase นั้นเป็น FULL, งานที่ทำหลังจากนั้นจำกัดอยู่แค่การแก้ที่ระบุไว้ และมี manifest จากรอบนั้น มีอยู่เพราะการตรวจซ้ำสองบรรทัดไม่ควรแพงเท่าตรวจยี่สิบ task — การตรวจซ้ำที่แพงเกินไปคือการตรวจซ้ำที่เงียบๆ แล้วไม่เกิดขึ้นจริง
+
+TARGETED ไม่ได้แปลว่า "ดูแค่จุดที่แก้แล้วจบ" — มันครอบคลุมทั้ง task อื่นใน phase ที่แตะไฟล์เดียวกัน, watchlist ของโค้ดที่ใช้ร่วมกัน (auth middleware, Prisma client, API client ฝั่ง frontend, layout/component กลาง), การเทียบ `schema.prisma` กับ Data Model เต็มทุกรอบ, typecheck/lint/build ทั้งโปรเจกต์ และการกวาดผิวทั้ง phase ว่า route/schema/component ยังต่อกันครบ สิ่งที่มันไม่ครอบคลุมต้องถูกเขียนบอกไว้ใน `review.md` ตรงๆ ไม่ปล่อยให้อ่านเหมือนรอบเต็ม
+
+**phase ที่รอบล่าสุดเป็น TARGETED จะยัง deploy ไม่ได้** ต้องผ่าน FULL หนึ่งรอบก่อนเสมอ — จ่ายค่ารอบเต็มครั้งเดียวตรงนี้ แทนที่จะจ่ายทุกครั้งที่แก้ของเล็กๆ (ส่วน `security` ไม่ติด gate นี้ เพราะมันตรวจตัวโค้ดเองแยกจากการตรวจเชิงฟังก์ชัน)
 
 ## Right-sizing — ข้ามด่านได้สำหรับงานเล็ก
 
@@ -118,4 +133,6 @@ pipeline เต็มมีไว้สำหรับสร้างของ�
 
 ## กลับมาดูโปรเจกต์เดิม
 
-อ่าน `_docs/status.md` ก่อน — มันบอกว่ามี module อะไรบ้าง แต่ละตัวไปถึงไหนแล้ว และ agent ไหนควรทำต่อ จากนั้นเปิดเอกสารของ module นั้นตามลำดับ: `requirement.md` → `design.md` → `plan.md` → `review.md` → `security.md` → `deploy.md`
+อ่าน `_docs/status.md` ก่อน — มันบอกว่ามี module อะไรบ้าง แต่ละตัวไปถึงไหนแล้ว agent ไหนควรทำต่อ และแต่ละ phase ผ่านการตรวจแบบไหนมา (`verified ✅ (FULL)` / `verified ⚠️ (TARGETED)`) จากนั้นเปิดเอกสารของ module นั้นตามลำดับ: `requirement.md` → `design.md` → `plan.md` → `review.md` (เริ่มที่ `Open Issues — all phases`) → `security.md` → `deploy.md`
+
+`status.md` เป็นแค่ดัชนี ถ้ามันขัดกับเอกสารหรือโค้ดจริงเมื่อไหร่ เอกสารและโค้ดชนะเสมอ

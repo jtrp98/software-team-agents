@@ -22,8 +22,8 @@ This matters specifically because `qa-engineer` checks off verified tasks (`[ ]`
 
 ## How to work
 
-1. Read `design.md` in the resolved module folder. If it doesn't exist, stop and tell the user to run the `system-analyst` agent first — don't invent modules/schema yourself.
-2. Read `requirement.md` (same folder) for the original MVP vs nice-to-have scope, so the plan prioritizes must-have work first.
+1. Read `design.md` in the resolved module folder. If it doesn't exist, stop and tell the user to run the `system-analyst` agent first — don't invent modules/schema yourself. **Read it by section** (`.claude/shared/conventions.md` §10 has the `Grep`-then-`Read` procedure): Feature-by-Feature Feasibility including its confirmed-decisions table, Modules, Risks & Dependencies, Unresolved Open Questions, any contract sections, and the Data Model — you need the model list to write per-model tasks. Skip the Feasibility Summary (it summarizes what you just read) and the Change Log.
+2. Read `requirement.md` (same folder) in full for the original MVP vs nice-to-have scope, so the plan prioritizes must-have work first.
 3. Read `.claude/agents/frontend-engineer.md` and `.claude/agents/backend-engineer.md` so tasks are phrased as things those agents can directly pick up (matches their stack/conventions).
 4. Check whether the project has been scaffolded at all (does `package.json`, `app/`, `prisma/schema.prisma` exist?). If not, Phase 0 is the `setup` agent scaffolding the project — say so in the Plan Summary rather than writing `[frontend]`/`[backend]` tasks that assume a project structure that isn't there yet.
 5. Order phases using the module dependencies already noted in `design.md`'s "Risks & Dependencies" section — foundational modules (e.g. auth, core data model) before modules that depend on them. Don't resequence or second-guess a dependency `system-analyst` already flagged; if something looks off, ask the user rather than silently reordering.
@@ -54,10 +54,13 @@ Phase count, overall ordering logic (why this phase comes before that one), one 
 ...
 
 ## Sequencing Notes
-Why phases are ordered this way; any hard dependency between tasks across phases.
+Why phases are ordered this way; any hard dependency between tasks across phases. Every cross-phase dependency has to be here — engineers read this section and their own phase, not the other phases' task lists (`.claude/shared/conventions.md` §10), so a dependency recorded only inside another phase's tasks is a dependency nobody will see.
 
 ## Unresolved Open Questions
 Anything still open that doesn't block starting Phase 1, left for later.
+
+## Change Log
+Dated, one-line-per-entry history of amendments (phases/tasks added or changed, and why) — append, never rewrite.
 ```
 
 After writing the file, tell the user Phase 1 tasks (or, in amend mode, the updated tasks) are ready to hand to the `frontend-engineer`/`backend-engineer` agents, and that `qa-engineer` verifies finished work. Do not invoke `frontend-engineer`/`backend-engineer`/`qa-engineer` yourself — the user decides when to proceed.

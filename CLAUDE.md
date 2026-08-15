@@ -24,15 +24,15 @@ business-analyst → system-analyst → project-manager → frontend-engineer / 
 
 | Agent | Owns | Reads | Writes |
 |---|---|---|---|
-| `setup` | project skeleton | `design.md` (optional), stack files | scaffolding, `.env`, `.gitignore` |
+| `setup` | project skeleton | `design.md` (optional), stack files | scaffolding, `schema.prisma`, `.env`, `.gitignore` |
 | `business-analyst` | business requirements | `review.md`, `design.md` | `requirement.md` |
 | `system-analyst` | feasibility + data model | `requirement.md`, `review.md`, stack files | `design.md` |
 | `project-manager` | phased task list | `design.md`, `requirement.md`, stack files | `plan.md` |
 | `frontend-engineer` | UI code | `plan.md`, `design.md`, `requirement.md`, `review.md` | app code |
 | `backend-engineer` | API/DB code | `plan.md`, `design.md`, `requirement.md`, `review.md` | app code |
-| `qa-engineer` | verification | all four docs + real code | `review.md`, `[x]` in `plan.md` |
+| `qa-engineer` | verification | all four docs + `schema.prisma` + real code | `review.md`, `review/phase-N.md`, `[x]` in `plan.md` |
 | `security` | security audit | `requirement.md`, `design.md`, `review.md`, real code | `security.md` |
-| `devops` | deploy, CI, migrations | `review.md`, `security.md`, `design.md`, stack files | `deploy.md`, infra files |
+| `devops` | deploy, CI, migrations | `review.md`, `security.md`, `schema.prisma`, stack files | `deploy.md`, infra files |
 
 `setup` runs once per project, before Phase 1. Everything after that loops per phase.
 
@@ -46,7 +46,9 @@ _docs/
         ├── requirement.md       ← business-analyst
         ├── design.md            ← system-analyst
         ├── plan.md              ← project-manager  (checkboxes: qa-engineer)
-        ├── review.md            ← qa-engineer
+        ├── review.md            ← qa-engineer  (open issues + current round only)
+        ├── review/
+        │   └── phase-N.md       ← qa-engineer  (archived rounds — read on demand only)
         ├── security.md          ← security
         └── deploy.md            ← devops
 
@@ -63,12 +65,15 @@ Full text in `.claude/shared/conventions.md`; the short version:
 
 - **No agent chains to the next.** Each finishes by saying what's ready and who should get it, then stops.
 - **No git, ever.** No agent runs git or touches `.git`. `setup`/`devops` may *write* a `.gitignore` or CI file — that's writing a file, not running git.
-- **`design.md`'s Data Model is the contract.** `backend-engineer` implements it verbatim, `frontend-engineer` derives types from it, `qa-engineer` fails any drift. A gap goes back to `system-analyst`, never gets improvised.
+- **`design.md`'s Data Model is the contract.** `backend-engineer` implements it verbatim, `frontend-engineer` derives types from it, `qa-engineer` fails any drift. A gap goes back to `system-analyst`, never gets improvised. Once `setup` has written the real `schema.prisma`, the engineers work from that file — it's the contract's working copy and the one their queries must agree with — and `qa-engineer` is the agent that reads both and keeps them equal. If they ever disagree, `design.md` wins and the code is wrong. Only `setup` (at scaffold) and `backend-engineer` (propagating a confirmed amendment) ever write `schema.prisma`.
 - **Only `qa-engineer` marks tasks done.** It sets `[x]` in `plan.md` after inspecting real code; nobody else touches a checkbox.
 - **Amend, don't regenerate.** Existing docs are updated with `Edit`, section by section, with a dated line appended to their `## Change Log`. Never a full rewrite.
+- **`review.md` stays small.** It holds `Open Issues — all phases` plus the current verify round only; `qa-engineer` moves closed rounds verbatim into `review/phase-N.md`. Every engineer/`security`/`devops` run reads `review.md` in full, so closed-phase detail left in it is a tax on the whole pipeline. Nobody opens an archive file as part of normal startup.
 - **Dates come from the user.** No agent can reliably know today's date, so any agent writing a dated entry asks first and reuses that answer for the session.
-- **`status.md` is an index, not a truth.** If it disagrees with the docs or the code, the docs and code win.
-- **Nothing ships unverified.** `devops` refuses to deploy a phase `qa-engineer` hasn't accepted, or one with unresolved Critical/Important security findings, without an explicit user override.
+- **`status.md` is an index, not a truth.** If it disagrees with the docs or the code, the docs and code win. It's also where an agent looks up which phase is in play, instead of scanning `plan.md` to work it out, and where `qa-engineer` stamps each phase's verify mode — `(FULL)` / `(TARGETED)` — for `devops` to gate on.
+- **Read the section, not the file.** Every agent starts from a fresh context, so a whole-file read is a cost paid again on every run. `plan.md` → Plan Summary + your phase + Sequencing Notes + Open Questions. `design.md` → always Feature-by-Feature Feasibility, Risks, and Open Questions (they carry the confirmed decisions and the "don't implement this" list), plus your phase's contract section and your own module's entry. `conventions.md` §10 has the procedure. Exceptions by design: `project-manager` owns `plan.md`, `system-analyst` owns `design.md`, and `qa-engineer` reads the Data Model in full every round.
+- **QA runs in one of two modes, and says which.** FULL covers every task in the phase and is the only mode that closes one; TARGETED re-checks named fixes plus their blast radius, the shared-code watchlist, the whole-project typecheck/lint/build, and the full schema contract. TARGETED is allowed only after a FULL round left a file manifest to compare against, and it must state what it didn't cover. `.claude/agents/qa-engineer.md` has the rules.
+- **Nothing ships unverified.** `devops` refuses to deploy a phase `qa-engineer` hasn't accepted, one whose most recent round was TARGETED, or one with unresolved Critical/Important security findings, without an explicit user override. `security` isn't gated on the mode — it audits the code independently.
 
 ## Right-size the pipeline — don't run all of it for small work
 

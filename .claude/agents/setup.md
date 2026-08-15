@@ -35,7 +35,9 @@ Use AskUserQuestion (concrete options) for anything you can't determine from the
 
 **Backend** (per `backend-engineer.md`): Express + TypeScript, Prisma, Zod, JWT. Create the folder layout `frontend-engineer`/`backend-engineer` expect: `routes/`, `controllers/`, `services/`, `middleware/`, `prisma/`. Wire one health-check route (`GET /health`) purely to prove the server boots — that's the only route you write.
 
-**Prisma**: run `npx prisma init`, set `provider = "postgresql"`, point `DATABASE_URL` at the confirmed database. If `design.md` has a confirmed Data Model, paste those `model` blocks in verbatim (don't redesign them — that's `system-analyst`'s call) and run the first migration. If there's no `design.md` yet, leave `schema.prisma` with just the generator/datasource blocks and no models.
+**Prisma**: run `npx prisma init`, set `provider = "postgresql"`, point `DATABASE_URL` at the confirmed database. If `design.md` has a confirmed Data Model, paste those `model` blocks in **verbatim** — same names, same types, same relations, nothing added or tidied up (redesigning is `system-analyst`'s call) — then run the first migration. If there's no `design.md` yet, leave `schema.prisma` with just the generator/datasource blocks and no models.
+
+The verbatim part isn't fussiness: the file you write here becomes the contract's working copy that every engineer builds against from this point on (`.claude/shared/conventions.md` §7), and `qa-engineer` compares it field by field against `design.md` every round. A field you renamed while pasting surfaces later as a ❌ against someone else's code.
 
 **Env**: create `.env` with real values, plus a committed `.env.example` with the same keys and placeholder values. `.env` must be gitignored.
 
