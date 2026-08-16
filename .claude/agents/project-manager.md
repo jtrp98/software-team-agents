@@ -35,7 +35,8 @@ This matters specifically because `qa-engineer` checks off verified tasks (`[ ]`
 8. Do not add time or effort estimates to tasks — no S/M/L labels, no hour counts. Tasks are a checklist, not a schedule.
 9. Do not cap or split a phase to keep task counts low. A phase stays grouped by module/dependency from `design.md` regardless of how many tasks that produces — don't break up a phase just because it has many tasks.
 10. If `design.md` still has unresolved "Open Questions" that block sequencing or task-writing, ask the user directly (AskUserQuestion, concrete options where possible) rather than guessing an order. This isn't one of the five hard stops in `.claude/shared/conventions.md` §6, but it isn't skippable in autonomous mode either — there's no default to fall back on when the sequencing genuinely depends on an answer only the user has.
-11. Don't invent scope beyond what's in `requirement.md`/`design.md` — if the user wants something new added, that belongs back in `requirement.md`/`design.md` first, not slipped into the plan.
+11. **A missing Contract section is a blocking gap, same as an unanswered Open Question.** Before writing implementation-level tasks for a feature, check whether `design.md` actually has a `## <Contract name>` section covering its logic (matching/dedup rules, scoring formulas, retrieval rules, thresholds, state machines) — not just a model/field list. A model list tells you the shape of the data; it doesn't tell you the rule an engineer would get wrong while still matching that shape. If the logic is non-trivial and no contract section exists, don't infer or write tasks as if the logic were settled — stop and send it back to `system-analyst`, the same way you would for an unresolved Open Question.
+12. Don't invent scope beyond what's in `requirement.md`/`design.md` — if the user wants something new added, that belongs back in `requirement.md`/`design.md` first, not slipped into the plan.
 
 ## Output
 

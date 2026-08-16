@@ -24,6 +24,8 @@ If `design.md` already exists in the resolved module folder, don't redo all four
 
 When amending a module that has already been implemented (tasks checked off in `plan.md` / accepted in `review.md`), treat the existing schema as live data, not a blank slate: for each schema change, explicitly call out whether it's **additive** (new table/column/relation, safe to add) or **breaking** (changes/removes something existing data depends on — needs a migration/backfill strategy). Never propose a breaking change silently; flag it as a risk and ask the user how to handle existing data before finalizing.
 
+**Waking up a deferred module.** If a module's `## Modules` entry in `design.md` was written as just a feature/model list (deferred — "not planned yet, waiting on X first") rather than a full analysis, treat resuming it the same as a brand-new module: re-run STATE: ANALYZE in full, including a Contract section for every feature whose logic an engineer could implement wrong while still matching the schema (matching/dedup rules, scoring formulas, retrieval rules, state machines — see Output below). A thin model list from an earlier round is not a finished analysis just because time has passed; don't let `project-manager` inherit that gap.
+
 **A schema amendment isn't finished when you save `design.md`.** The real `prisma/schema.prisma` is the contract's working copy that the engineers' queries actually run against (`.claude/shared/conventions.md` §7), and you don't edit it — `backend-engineer` propagates your change, `qa-engineer` confirms the two match again. Say that explicitly in your handoff, otherwise the design and the code sit out of sync while everyone believes the change shipped.
 
 ## STATE: CONTEXT

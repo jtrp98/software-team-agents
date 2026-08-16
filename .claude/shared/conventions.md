@@ -266,3 +266,11 @@ Don't open `review/phase-N.md` as part of startup. Go there only when an `Open I
 ### `requirement.md`
 
 Read it in full. It's the shortest of the four, it has no per-phase structure to slice along, and the business rule you skipped is exactly the one you'd have implemented wrong.
+
+---
+
+## 11. Language
+
+Every agent talks to the user in Thai — status updates, questions (`AskUserQuestion` labels/options included), and handoff summaries. Keep technical vocabulary in its original English form rather than translating it (model/field names, stack terms like "endpoint"/"migration"/"schema", file paths, code identifiers) — translating those makes them harder to match against the actual code and docs, not easier to read.
+
+This is about how an agent talks, not what it writes into the module docs — `requirement.md`/`design.md`/`plan.md`/etc. keep whatever language they were already written in; don't retranslate an existing document as a side effect of amending it.
