@@ -22,7 +22,7 @@ Once resolved, **every** read and write for that run happens inside that folder.
 
 | File | Written by | Contains |
 |---|---|---|
-| `requirement.md` | `business-analyst` | business requirements, scope, declined features |
+| `requirement.md` | `business-analyst` | business requirements, scope, declined features, references for any external fact |
 | `design.md` | `system-analyst` | feasibility verdicts, the confirmed Prisma schema, module breakdown |
 | `plan.md` | `project-manager` (checkboxes: `qa-engineer`) | phased, tagged task list |
 | `review.md` | `qa-engineer` | open issues (all phases) + the current verify round only |
@@ -65,6 +65,8 @@ Docs: requirement ✅ · design ✅ · plan ✅
 ```
 
 Use `✅` done · `⬜` not started/in progress · `⚠️` done with open issues · `n/a` not applicable.
+
+A phase whose heading in `plan.md` carries `🔒 Security gate` keeps `security ⬜` until `security` has actually audited it. Never mark that one `n/a` — the flag exists precisely because someone already judged that it isn't.
 
 **Record which mode the last verify round used** — `(FULL)` or `(TARGETED)`, exactly as `qa-engineer` reported it. That parenthesis is the difference between a phase `devops` can ship and one that needs a full pass first (`.claude/agents/qa-engineer.md` defines the two modes and the gate). `qa-engineer` writes it; everyone else reads it and never edits it to something more convenient.
 
@@ -111,19 +113,45 @@ The exact section layout, the two verify modes (FULL and TARGETED), and what the
 
 ---
 
+## 5a. Stay inside the repo
+
+Every agent's writes resolve to a path under this project's root — `_docs/module/<name>/`, app source, `.claude/...`. No agent writes a file elsewhere on disk, whatever the reason: not to "fix" something outside the project, not to save a copy somewhere else, not because an absolute path looked more convenient.
+
+**This is enforced, not just requested**, the same way as §5's git rule: `.claude/hooks/block-outside-repo.js`, wired in `.claude/settings.json`, blocks `Write`/`Edit`/`MultiEdit`/`NotebookEdit` calls whose target resolves outside the repo root before the tool runs. If you get blocked, don't look for a path that slips past it — tell the user what you were trying to write and where, and let them decide.
+
 ## 5. Version control
 
 **No agent runs git.** No `git init`, `add`, `commit`, `push`, `checkout`, branch or tag operations, and nothing that touches `.git/`. Version control is entirely the user's.
 
 Writing a *file* that happens to relate to git — `.gitignore`, a CI workflow YAML — is allowed for the agents whose job that is (`setup`, `devops`). Writing a config file is not running git.
 
+**This one is enforced, not just requested.** `.claude/hooks/block-git.js`, wired as a `PreToolUse` hook in `.claude/settings.json`, blocks state-changing git commands and any direct access to `.git/` before the tool call runs. Read-only inspection (`git status`, `log`, `diff`, `show`) still works, because it changes nothing. If you get blocked, the answer is never to find a way around it — report to the user what you wanted to do and let them run it.
+
 ---
 
 ## 6. Handoffs
 
-**No agent invokes the next agent.** Every run ends by telling the user what was produced, what state it leaves the module in, and which agent should pick it up — then stops. The user decides every handoff, including whether to accept a result at all.
+**No agent invokes the next agent.** This is structural, not just a rule: none of the nine agents has the `Agent` tool in its own toolset, so none of them can call another one even if it wanted to. Every run ends the same way — telling the user (or the session driving the pipeline) what was produced, what state it leaves the module in, and which agent should pick it up next — then stops. What differs between the two modes below is **who decides to make that next call**, not whether an agent is allowed to make it itself. It never is.
 
-Never assume your own output was accepted, never chain "and now I'll run QA on it", and never act on behalf of the user's decision about routing.
+### Manual mode (the default)
+
+The user reads each agent's report and decides, explicitly, whether and when to invoke the next stage. Never assume your own output was accepted, never act as if "and now QA runs on it" was decided for you, and never act on behalf of the user's decision about routing. This stays the default because it's the safest one — nothing moves without a person having seen it.
+
+### Autonomous mode (opt-in, per run)
+
+When the user explicitly asks for a continuous or unattended run — e.g. "รันข้ามคืนได้เลย", "เชื่อมต่อเนื่องไปเลยไม่ต้องถามทุกจุด", "let this run overnight" — the session orchestrating the pipeline (not the subagents themselves; see above, they still can't call each other) invokes each next stage itself as soon as the current one finishes cleanly, following the same routing table below, instead of waiting for the user to ask for every single stage by name.
+
+This is opt-in per run, not a standing setting. Say it again next time you want it; a green light for one overnight run isn't a standing green light for every run after it.
+
+**Five points always stop and wait for a real person, in both modes — autonomous mode does not remove them, it just means the pipeline drives itself up to them instead of a person driving it there:**
+
+1. **`business-analyst`, any time it runs.** Whether it's the first interview on a blank project or a business-logic dead end routed to it mid-pipeline, its job is asking a human questions it cannot answer itself. There is no autonomous version of that — the run pauses here and picks back up once a person answers.
+2. **`system-analyst`'s schema/feasibility confirmation.** §7 calls the Data Model a contract precisely because a person confirmed it — a schema nobody looked at is not a contract, it's a guess that everything downstream will treat as settled. This step waits for confirmation in both modes.
+3. **`qa-engineer`, the moment a phase comes back ⚠️ Partial or ❌ Failed.** Autonomous mode may drive an automatic fix-and-reverify cycle back through the responsible engineer — but only up to the re-check ceiling already defined in `qa-engineer.md` (two rounds). Hitting that ceiling, or hitting a routing decision that needs `system-analyst`/`business-analyst`, stops the run and reports rather than continuing to loop. A phase where every task is ✅ Verified in a FULL round may continue automatically without a separate accept/reject prompt — see `qa-engineer.md` for exactly when that applies.
+4. **`security`, any 🔴 Critical or 🟠 Important finding.** Accepting a security risk is a business decision, not an engineering one, and this pipeline doesn't make that call unattended. 🟡 Minor findings may be logged as deferred and the run continues past them.
+5. **`devops`, the actual deploy or migration command, against any environment.** Generating a Dockerfile, a CI workflow, or a migration dry-run may proceed automatically; running it against something real never does — this is the same "confirm before a hard-to-reverse, outward-facing action" rule the top-level instructions already require, and autonomous mode doesn't waive it.
+
+Outside those five, a stage that genuinely can't proceed without a human decision — `project-manager` hitting a sequencing ambiguity it can't resolve from `design.md`, `system-analyst` hitting an ambiguity mid-analysis — still stops, in either mode. That's not a mode setting; it's just an agent that has run out of things it can decide for itself.
 
 The normal flow, and the loops back:
 

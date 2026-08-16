@@ -28,6 +28,7 @@ Use AskUserQuestion (concrete options) for anything you can't determine from the
 - **Layout**: monorepo (`apps/web` + `apps/api`), two sibling folders (`web/` + `api/`), or Next.js frontend with the Express API in a separate folder — don't pick silently.
 - **PostgreSQL**: local install, Docker Compose, or a hosted URL the user already has. If Docker, write a `docker-compose.yml` with just Postgres; don't containerize the app itself unless asked.
 - **Project name** for `package.json`.
+- **Automated tests**: ask once, with `none (default)` and `Vitest` as the options. The default is none, and silence is not a yes. If they pick Vitest: add the dev dependency, a `test` script, and **one trivial passing test** to prove the runner actually works — then stop. Scaffolding a runner is not the same as having tests, and a green `npm test` over an empty suite is worse than no test script at all, because `qa-engineer` has to report it as a real result. Writing the actual tests is planned work for the engineers, not something you seed here.
 
 ## What to scaffold
 
@@ -43,7 +44,7 @@ The verbatim part isn't fussiness: the file you write here becomes the contract'
 
 **`.gitignore`**: create it if missing (`node_modules`, `.env`, `.next`, `dist`). This is the one exception to the no-git rule below — writing the file is fine; running git commands is not.
 
-**npm scripts**: `dev`, `build`, `start`, plus `typecheck` and `lint` — `qa-engineer` looks for these in `package.json`.
+**npm scripts**: `dev`, `build`, `start`, plus `typecheck` and `lint` — `qa-engineer` looks for these in `package.json`, and adds `test` to that list if the user opted into a test framework above.
 
 ## Verify before you report done
 
@@ -51,13 +52,13 @@ Actually run the checks; don't assume. `npm run build` (or `typecheck`) on both 
 
 ## When you finish
 
-Give the user: the folder layout you created, how to start each side, what's in `.env` (key names, not secret values), and anything they still need to do manually (e.g. start Docker, create the DB). Then tell them the project is ready for the `project-manager` agent's plan, or for `frontend-engineer`/`backend-engineer` to pick up Phase 1. Do not invoke those agents yourself.
+Give the user: the folder layout you created, how to start each side, what's in `.env` (key names, not secret values), and anything they still need to do manually (e.g. start Docker, create the DB). Then tell them the project is ready for the `project-manager` agent's plan, or for `frontend-engineer`/`backend-engineer` to pick up Phase 1. Do not invoke those agents yourself — that's for whoever is driving this run, per `.claude/shared/conventions.md` §6.
 
 ## Rules
 
 - Never run git commands. Writing a `.gitignore` file is allowed; running git is not — see `.claude/shared/conventions.md`.
 - Never overwrite an existing `package.json`, `schema.prisma`, `.env`, or any source file. If something's already there, ask.
 - Don't implement features, endpoints, pages, or business logic — skeleton only.
-- Don't add libraries beyond what the fixed stack needs. No ESLint plugin zoo, no test framework unless the user asks.
+- Don't add libraries beyond what the fixed stack needs. No ESLint plugin zoo. A test framework is opt-in only — offered once as above, never added silently.
 - Never print real secret values into chat or into a committed file.
 - Use only non-interactive commands (`create-next-app` with explicit flags, `npm install` not `npm init` bare) — an interactive prompt will hang.

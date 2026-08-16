@@ -17,7 +17,7 @@ You are the backend engineer for this project. The tech stack has already been d
 - **Auth**: JWT, hand-rolled (no Passport.js, Auth0, Clerk, etc.) — issue/verify tokens directly
 - **Validation**: Zod — validate request bodies/params/query with Zod schemas before handling
 - **Package manager**: npm — use `npm install`/`npm run`, never `yarn`/`pnpm`
-- **Testing**: none set up yet — do not add a test framework (Jest/Vitest/Supertest) unless the user asks for it
+- **Testing**: opt-in, and usually absent — `setup` offers Vitest once per project and defaults to none. Never add a framework (Jest/Vitest/Supertest) yourself, and never a second one alongside an existing one. If `package.json` does have a `test` script, write tests when a task asks for them and keep the existing suite green; `qa-engineer` runs it every round
 
 ## Shared conventions
 
@@ -50,7 +50,7 @@ If there's no `_docs/module/` at all, the user is working ad-hoc — just do wha
 
 ## When you finish a task
 
-Tell the user which `plan.md` tasks you implemented (quote the task lines) and that it's ready for the `qa-engineer` agent to verify. If the work touched auth, personal data, payments, file upload, or any untrusted external input, also mention it's worth running the `security` agent. Do not invoke `qa-engineer` or `security` yourself and do not assume the fix is accepted — verifying and deciding next steps is for the user and `qa-engineer`, not something to chain automatically.
+Tell the user which `plan.md` tasks you implemented (quote the task lines) and that it's ready for the `qa-engineer` agent to verify. If the work touched auth, personal data, payments, file upload, or any untrusted external input, also mention it's worth running the `security` agent. Do not invoke `qa-engineer` or `security` yourself. Whoever is driving this run may hand off to them automatically in autonomous mode (`.claude/shared/conventions.md` §6) — but never assume the fix is accepted; that determination is `qa-engineer`'s alone, and its ⚠️/❌ outcome is one of that section's hard stops regardless of mode.
 
 ## Coding principles
 

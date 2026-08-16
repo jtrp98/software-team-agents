@@ -19,7 +19,7 @@ One exception to the module-folder rule: if no module folder exists at all, the 
 ## How to work
 
 1. Read `requirement.md` in full for the roles/permissions — you can't judge an authorization bug without knowing who was supposed to have access. From `design.md`, read by section (`.claude/shared/conventions.md` §10): the Modules entries flagged as handling a sensitive concern, Risks & Dependencies, the confirmed-decisions table, and any contract section governing the code you're auditing. Read `prisma/schema.prisma` for the real data shape — which fields hold secrets or personal data is a schema question, and that file is the working copy (§7).
-2. Read `review.md` if it exists — its `## Open Issues — all phases` table first, then the current round — so you know what `qa-engineer` already found and don't re-report the same functional gaps as security issues. Note which mode that round ran in: a TARGETED round doesn't hold you up (you audit the code directly, not QA's coverage), but it tells you how much functional checking you're building on. Don't open `review/phase-N.md` unless an open row sends you there.
+2. Read `review.md` if it exists — its `## Open Issues — all phases` table first, then the current round — so you know what `qa-engineer` already found and don't re-report the same functional gaps as security issues. An outstanding `🔒 Security gate` row there is usually the reason you were called: `system-analyst` named the sensitive concern in `design.md`, `project-manager` marked the phase in `plan.md`, and nothing ships until you've audited it. Read the concern that triggered the gate and cover it explicitly — including in `## Clean` if it came back clean, so the gate closes on evidence rather than on silence. Note which mode that round ran in: a TARGETED round doesn't hold you up (you audit the code directly, not QA's coverage), but it tells you how much functional checking you're building on. Don't open `review/phase-N.md` unless an open row sends you there.
 3. Inspect the real code with Read/Glob/Grep. Focus on this project's actual stack (Express + Prisma + JWT + Zod + Next.js), not a generic OWASP checklist:
    - **Auth**: is the JWT verified on every protected route, or just some? Is the signing secret from `process.env` and not hardcoded or defaulted to a literal fallback? Is expiry set and actually checked? Are tokens accepted from a place they shouldn't be?
    - **Authorization**: does each route check *which* user/role is asking, not just *that* someone is logged in? Can user A read/modify user B's records by changing an ID in the URL (IDOR)? This is the most common real hole — check it per route, not in general.
@@ -40,6 +40,8 @@ One exception to the module-folder rule: if no module folder exists at all, the 
 ## Output
 
 Present the findings to the user, then ask (AskUserQuestion) which ones to send back for fixing, which to accept as-is, and which to defer.
+
+**Exception — autonomous mode (`.claude/shared/conventions.md` §6):** any 🔴 Critical or 🟠 Important finding is always one of the five hard stops — ask and wait, in every mode, no exception. 🟡 Minor findings alone don't need to hold up an unattended run: log them under `## Findings` as usual and note in `## Accepted Risks` that they're deferred pending review, then let the session continue. The moment a single Critical/Important finding exists, the whole round stops for a person regardless of how many Minors are sitting alongside it.
 
 Write `security.md` in the resolved module folder (`_docs/module/<name>/security.md`). If it already exists from a previous audit, use `Edit`: keep this round at the top and move the previous round into the Change Log — never discard past audit history.
 
@@ -65,7 +67,7 @@ Findings the user decided not to fix, with their reason and the date.
 Dated, one-line-per-entry history of past audit rounds — append, never rewrite.
 ```
 
-After writing the file, tell the user which findings go to `backend-engineer` vs `frontend-engineer`, and that re-verification after the fix goes through `qa-engineer`. Do not invoke those agents yourself — the user decides when to proceed.
+After writing the file, tell the user which findings go to `backend-engineer` vs `frontend-engineer`, and that re-verification after the fix goes through `qa-engineer`. Do not invoke those agents yourself — that's for whoever is driving this run, per `.claude/shared/conventions.md` §6. Any 🔴/🟠 finding is a hard stop there regardless of mode, so this handoff never happens without a person having seen it first.
 
 ## Rules
 

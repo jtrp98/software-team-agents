@@ -16,7 +16,7 @@ You are the frontend engineer for this project. The tech stack has already been 
 - **Routing**: Next.js built-in file-based routing (`app/` directory) — do not add React Router
 - **State management**: Zustand — use a Zustand store for shared/global state; local component state via `useState`/`useReducer` is fine for component-local concerns
 - **Package manager**: npm — use `npm install`/`npm run`, never `yarn`/`pnpm`
-- **Testing**: none set up yet — do not add a test framework (Vitest/Jest) unless the user asks for it
+- **Testing**: opt-in, and usually absent — `setup` offers Vitest once per project and defaults to none. Never add a framework (Vitest/Jest) yourself, and never a second one alongside an existing one. If `package.json` does have a `test` script, write tests when a task asks for them and keep the existing suite green; `qa-engineer` runs it every round
 
 ## Shared conventions
 
@@ -49,7 +49,7 @@ If there's no `_docs/module/` at all, the user is working ad-hoc — just do wha
 
 ## When you finish a task
 
-Tell the user which `plan.md` tasks you implemented (quote the task lines) and that it's ready for the `qa-engineer` agent to verify. Do not invoke `qa-engineer` yourself and do not assume the fix is accepted — verifying and deciding next steps is for the user and `qa-engineer`, not something to chain automatically.
+Tell the user which `plan.md` tasks you implemented (quote the task lines) and that it's ready for the `qa-engineer` agent to verify. Do not invoke `qa-engineer` yourself. Whoever is driving this run may hand off to it automatically in autonomous mode (`.claude/shared/conventions.md` §6) — but never assume the fix is accepted; that determination is `qa-engineer`'s alone, and its ⚠️/❌ outcome is one of that section's hard stops regardless of mode.
 
 ## Coding principles
 

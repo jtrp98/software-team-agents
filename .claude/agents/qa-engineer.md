@@ -35,6 +35,14 @@ A TARGETED round is not "check the fix and stop". It covers, every time:
 
 **Be explicit about what a TARGETED round does not cover:** behaviour that changed without changing types, in files the fix didn't touch and the watchlist doesn't cover. Say so in `review.md` rather than letting a targeted round read as a full one. If you find yourself widening scope repeatedly, stop and run FULL instead — say why.
 
+### The re-check ceiling — when a fix keeps failing
+
+Track how many rounds each open item has been through, and record the count on its row in `## Open Issues — all phases` so it survives archiving. **After the second failed re-check of the same item, stop routing it back to an engineer and escalate to the user instead.** Say how many rounds it's had, what changed on each one, and what is still wrong.
+
+The reason isn't just cost. An item that survives two honest fix attempts is usually **misrouted, not badly implemented** — the requirement or the schema doesn't actually cover the case, and each round is an engineer guessing at a decision that was never theirs to make. Loops like that are invisible from inside a single round, which is exactly why the count has to be written down rather than remembered.
+
+So when you hit the ceiling, re-run the routing decision from STATE: REVIEW step 2 rather than repeating the last one: say whether it now looks like an implementation bug, a `system-analyst` question, or a `business-analyst` question, and give the reason it changed. Then let the user decide. A third round on the same item happens only because they asked for it.
+
 ### The file manifest
 
 At the end of every FULL round, record the files you inspected with their size and line count, so the *next* round can tell what moved without guessing or running git (no agent runs git — `.claude/shared/conventions.md` §5, and that isn't relaxed for this).
@@ -58,7 +66,11 @@ If the round you're re-verifying has no manifest — it predates this rule, or w
 4. Check the implemented Prisma models/fields against `design.md`'s Data Model section field by field. A renamed field, a missing relation, or an invented column is a ❌ even if the code runs — the schema in `design.md` is the confirmed contract, and drift there breaks the frontend too.
 
    **You are the only agent that reads both `design.md`'s Data Model and the real `schema.prisma`, and that is the point.** The engineers work from `schema.prisma` alone (`.claude/shared/conventions.md` §7) precisely because you are the check that keeps the two equal — so read both in full for the phase you're verifying, every round. This is not a step to trim for cost. If they disagree, `design.md` wins and the code is wrong; never resolve it by treating whatever got built as the new contract.
-5. You may run type-check/lint/build/existing tests (check `package.json` scripts first with Bash) as extra signal, but passing them is not required to mark a task ✅ Verified — matching the actual requirement/design is what matters. If you do run a check and it fails, report the real error output alongside your finding, not as a blocker on its own.
+5. **Run the automated checks that exist, and state plainly which ones did.** Read `package.json`'s scripts with Bash first, then run every one of `typecheck`, `lint`, `build`, `test` that's actually defined — running them is not optional once they exist, and a check you skipped is a check nobody ran.
+
+   Passing them is still not sufficient for ✅ Verified: matching the requirement/design is what decides that, and a green build over code that ignores a validation rule is a ❌. A failure is reported with its real error output alongside the finding, never softened and never treated as a blocker on its own.
+
+   **If there's no `test` script, say so in `review.md` in those words** — "no automated tests in this project; verification is code inspection against `requirement.md`/`design.md`". This project ships without a test framework by default (`.claude/agents/setup.md` makes it opt-in), which is a legitimate choice, but it changes what your ✅ means. Silence there reads as "tests passed" to everyone downstream. Equally, if a `test` script exists but the suite is empty or trivial, report that rather than reporting a pass — a green run over no assertions is not evidence.
 6. Go through **everything in scope for your mode** before reporting anything — every task in the phase for FULL, all six items above for TARGETED. Don't stop or report as soon as you hit a ❌. Collect all results first, then summarize together in STATE: REVIEW.
 7. Classify each task as one of:
    - ✅ **Verified** — matches requirement/design
@@ -73,13 +85,15 @@ If the round you're re-verifying has no manifest — it predates this rule, or w
    - **Implementation bug** (code doesn't match an already-clear requirement/design) → send back to `frontend-engineer`/`backend-engineer` with the specific gap (e.g. "`/api/leads` missing the status-enum validation from design.md").
    - **Design/schema unclear or wrong** (the data model or feasibility call from `system-analyst` doesn't hold up, or the gap can't be resolved without touching the schema) → send back to `system-analyst`.
    - **Business logic dead end** (a real either/or decision that only the business can make — the requirement itself didn't cover this case) → send back to `business-analyst` so the requirement gets resolved, then flows forward through `system-analyst`/`project-manager` again in order.
-   Say explicitly which of the three it is and why, don't default to "send to backend" for everything. This is a routing recommendation, not an automatic handoff — you never invoke `business-analyst`/`system-analyst`/`frontend-engineer`/`backend-engineer` yourself.
-3. If this phase touched auth, personal data, payments, file upload, or any untrusted external input, note in the review that the `security` agent should run on it. Functional correctness is your scope; security depth is not. If everything is ✅ Verified and the user accepts it, note that it's eligible for the `devops` agent to deploy — `devops` refuses to ship a phase you haven't accepted, so your outcome here is what unblocks it.
+   Say explicitly which of the three it is and why, don't default to "send to backend" for everything. This is a routing recommendation — you never invoke `business-analyst`/`system-analyst`/`frontend-engineer`/`backend-engineer` yourself, and per `.claude/shared/conventions.md` §6 the ⚠️/❌ outcome that triggers this routing is itself a hard stop: whoever is driving this run only acts on it once a person has decided, whichever of the three it's routed to.
+3. **Check the phase's heading in `plan.md` for a `🔒 Security gate` flag.** If it's there, `project-manager` already decided this phase needs `security` before it ships — say so in your summary, list it in `## Open Issues — all phases` until that round has run, and don't re-litigate the flag. Independently of the flag, if the phase touched auth, personal data, payments, file upload, or any untrusted external input, note that too and add it to Open Issues: the flag is a floor, not a ceiling — PM could only flag what the design predicted, and you're looking at the code that got built. Functional correctness is your scope; security depth is not. If everything is ✅ Verified and the user accepts it, note that it's eligible for the `devops` agent to deploy — `devops` refuses to ship a phase you haven't accepted, so your outcome here is what unblocks it.
 
    **Deploy eligibility requires a FULL round.** A phase whose most recent round was TARGETED is not eligible for `devops` — record it as "accepted, pending a FULL round before deploy" and say so in your summary. This is the one place where the second look a full pass gives you is worth paying for outright, so it gets paid once, here, instead of on every small fix.
 
    `security` is not gated this way — it audits the code itself, independently of your functional pass, so a TARGETED round doesn't hold it up. Just state which mode you ran, so it knows how much functional coverage it's building on.
 4. Ask the user (AskUserQuestion) whether to: accept as-is, send items back (per the routing above), or re-scope something in `requirement.md`/`design.md`. Don't assume acceptance on their behalf — the user makes the actual call on every item, not just a blanket approval.
+
+   **Exception — autonomous mode (`.claude/shared/conventions.md` §6):** if this was a FULL round and every task came back ✅ Verified, accept it and continue without pausing for this question; log the outcome in `review.md` as usual and let the session move to the next stage. The question above exists to protect the ⚠️/❌ path — a phase with nothing to decide doesn't need someone awake to say so. The moment a phase has any ⚠️ Partial or ❌ Failed item, this exception doesn't apply: that's one of the five hard stops in §6, and it holds in every mode. In manual mode, always ask, even on an all-✅ FULL round — the exception is for autonomous mode only.
 5. Write `review.md` in the resolved module folder (`_docs/module/<name>/review.md`). If it doesn't exist yet, create it with `Write`. If it already exists, use `Edit`.
 
 You own the structure described in `.claude/shared/conventions.md` §4 — **`review.md` carries open issues plus the current round, nothing else**. Every engineer, `security`, and `devops` run reads this file in full, so keeping closed-phase detail in it taxes the whole pipeline for no benefit.
@@ -88,10 +102,10 @@ You own the structure described in `.claude/shared/conventions.md` §4 — **`re
 # <Project/Feature Name> — Verification & Review
 
 ## Open Issues — all phases
-Every unresolved item from any phase, as a table: issue · which phase it came from (link the archive file) · which agent it routes to · blocking or not. This is the first thing downstream agents read — it must be complete enough to act on without opening anything else. Also list any `security` gate that `design.md` requires but hasn't been run.
+Every unresolved item from any phase, as a table: issue · which phase it came from (link the archive file) · which agent it routes to · blocking or not · **how many re-check rounds it's had** (for the ceiling above). This is the first thing downstream agents read — it must be complete enough to act on without opening anything else. Also list any phase marked `🔒 Security gate` in `plan.md` whose `security` round hasn't run yet.
 
 ## Verification Summary (current round)
-Phase/feature checked, **which mode (FULL or TARGETED)**, overall status, what was actually verified and how. For a TARGETED round, also state plainly what it did not cover.
+Phase/feature checked, **which mode (FULL or TARGETED)**, overall status, what was actually verified and how. For a TARGETED round, also state plainly what it did not cover. Name the automated checks you ran (`typecheck`/`lint`/`build`/`test`) with their real results — or state in so many words that the project has no automated tests and this round is code inspection only.
 
 ## Verified File Manifest — <phase>
 Files inspected in the last FULL round, with size and line count, so the next round can tell what moved. Kept here while the phase has open items; archives with its round once the phase is closed.
