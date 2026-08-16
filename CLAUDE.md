@@ -1,6 +1,6 @@
 # AgentClaude — Agent Pipeline
 
-This repo defines a fixed, hand-off-based agent pipeline for building a project from a vague idea through to verified, security-reviewed, deployed code. Each stage is a subagent under `.claude/agents/`, each owns exactly one artifact, and **no agent ever invokes the next one** — the user decides every handoff.
+This repo defines a fixed, hand-off-based agent pipeline for building a project from a vague idea through to verified, security-reviewed, deployed code. Each stage is a subagent under `.claude/agents/`, each owns exactly one artifact, and **no agent ever invokes the next one** — structurally true in every mode, since none of them holds the `Agent` tool. By default the user decides every handoff explicitly; an opt-in autonomous mode lets the session chain them instead, but five points (requirement interview, schema confirmation, a failed QA round, a Critical/Important security finding, an actual deploy/migration) always wait for a person regardless. See "Rules that hold across every agent" below.
 
 ## Read this first
 

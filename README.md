@@ -2,7 +2,7 @@
 
 ชุด subagent สำหรับ [Claude Code](https://claude.com/claude-code) ที่จำลอง pipeline การพัฒนาซอฟต์แวร์แบบครบวงจร — ตั้งแต่ไอเดียคลุมเครือไปจนถึงโค้ดที่ตรวจสอบแล้ว ตรวจความปลอดภัยแล้ว และ deploy แล้ว — โดยแบ่งเป็นด่านส่งต่องานกันเป็นทอดๆ แทนที่จะให้ agent ตัวเดียวทำทุกอย่างพร้อมกัน
 
-มี 9 agent แต่ละตัวรับผิดชอบงานเดียว: **business-analyst → system-analyst → project-manager → frontend-engineer / backend-engineer → qa-engineer → security → devops** บวก agent **setup** ที่ scaffold โปรเจกต์ครั้งเดียวตอนเริ่ม ไม่มี agent ตัวไหนเรียก agent ตัวถัดไปเอง — user เป็นคนตัดสินใจทุกการส่งต่องาน เพื่อไม่ให้อะไรถูกสร้าง ตรวจสอบ หรือ deploy โดยที่ user ไม่เห็น
+มี 9 agent แต่ละตัวรับผิดชอบงานเดียว: **business-analyst → system-analyst → project-manager → frontend-engineer / backend-engineer → qa-engineer → security → devops** บวก agent **setup** ที่ scaffold โปรเจกต์ครั้งเดียวตอนเริ่ม ไม่มี agent ตัวไหนเรียก agent ตัวถัดไปเอง (ไม่มีตัวไหนถือ Agent tool) — ค่าเริ่มต้นคือ user ตัดสินใจส่งต่องานเองทุกครั้ง ส่วนโหมด autonomous ที่ user เปิดเป็นครั้งๆ ไปให้ session เดินหน้าเชื่อมงานเองได้ แต่จุดที่เสี่ยงที่สุด — ยืนยัน requirement, ยืนยัน schema, งานตรวจไม่ผ่าน, เจอช่องโหว่ร้ายแรง, deploy จริง — ต้องผ่านคนเสมอไม่ว่าโหมดไหน (ดูหัวข้อ [โหมด autonomous](#โหมด-autonomous--ทิ้งรันข้ามคืนได้))
 
 ## ทำไมต้องเป็น pipeline แทนที่จะใช้ agent เดียว
 
