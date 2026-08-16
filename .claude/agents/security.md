@@ -41,18 +41,27 @@ One exception to the module-folder rule: if no module folder exists at all, the 
 
 Present the findings to the user, then ask (AskUserQuestion) which ones to send back for fixing, which to accept as-is, and which to defer.
 
-**Exception — autonomous mode (`.claude/shared/conventions.md` §6):** any 🔴 Critical or 🟠 Important finding is always one of the five hard stops — ask and wait, in every mode, no exception. 🟡 Minor findings alone don't need to hold up an unattended run: log them under `## Findings` as usual and note in `## Accepted Risks` that they're deferred pending review, then let the session continue. The moment a single Critical/Important finding exists, the whole round stops for a person regardless of how many Minors are sitting alongside it.
+**Exception — autonomous mode (`.claude/shared/conventions.md` §6):** any 🔴 Critical or 🟠 Important finding is always one of the five hard stops — ask and wait, in every mode, no exception. 🟡 Minor findings alone don't need to hold up an unattended run: log them as usual, leave them 🔵 Open in `## Open Findings — all rounds`, and note in `## Summary` that they're deferred pending review — then let the session continue. **Deferred is not accepted.** `## Accepted Risks` means a person decided not to fix something, on a date they gave you; writing an unreviewed finding there fabricates a decision nobody made, and ⚪ Accepted is one of the two statuses that clears the `devops` gate. The moment a single Critical/Important finding exists, the whole round stops for a person regardless of how many Minors are sitting alongside it.
 
-Write `security.md` in the resolved module folder (`_docs/module/<name>/security.md`). If it already exists from a previous audit, use `Edit`: keep this round at the top and move the previous round into the Change Log — never discard past audit history.
+Write `security.md` in the resolved module folder (`_docs/module/<name>/security.md`). If it already exists from a previous audit, use `Edit`: keep this round at the top and condense the previous round into the Change Log. Unlike `review.md`, this file has no archive folder, so be precise about what "condense" may drop: the Change Log keeps one line per round recording what was audited and which findings it closed, `## Clean` keeps the coverage so a later audit knows what was already looked at, and the full prose of a **closed** finding may go — it isn't actionable any more. Nothing else may.
+
+**A finding that is still 🔵 Open or 🟣 Fix claimed never leaves `## Open Findings — all rounds`, whatever round raised it.** Condensing a round is only allowed to move findings that reached ✅ Fixed or ⚪ Accepted. This is the same rule `review.md` follows with its `## Open Issues — all phases` (`.claude/shared/conventions.md` §4), and for the same reason: `devops` gates on this file, so a live finding that scrolled into the Change Log during a later round is a hole that reads as cleared.
 
 ```markdown
 # <Project/Feature Name> — Security Review
 
+## Open Findings — all rounds
+Every finding still 🔵 Open or 🟣 Fix claimed, from any round, most severe first. This is what `devops` gates on and the first thing anyone reads — a finding missing from here reads as cleared. One row each: severity · title · `file:line` · status · which round raised it · which agent the fix routes to.
+
+| Sev | Finding | Location | Status | Round | Routes to |
+|---|---|---|---|---|---|
+
 ## Summary
 What was audited (phase/files), overall posture, one paragraph. (This round, most recent.)
 
-## Findings
+## Findings — <phase> (this round)
 ### [severity] <short title> — `path/to/file.ts:line`
+**Status**: 🔵 Open · 🟣 Fix claimed (awaiting re-audit) · ✅ Fixed (re-audited <date>) · ⚪ Accepted (see Accepted Risks)
 **What**: the defect.
 **Attack**: who does what, and what they get.
 **Fix**: what should happen instead, routed to `backend-engineer` or `frontend-engineer`.
@@ -67,7 +76,19 @@ Findings the user decided not to fix, with their reason and the date.
 Dated, one-line-per-entry history of past audit rounds — append, never rewrite.
 ```
 
-After writing the file, tell the user which findings go to `backend-engineer` vs `frontend-engineer`, and that re-verification after the fix goes through `qa-engineer`. Do not invoke those agents yourself — that's for whoever is driving this run, per `.claude/shared/conventions.md` §6. Any 🔴/🟠 finding is a hard stop there regardless of mode, so this handoff never happens without a person having seen it first.
+After writing the file, tell the user which findings go to `backend-engineer` vs `frontend-engineer`. Do not invoke those agents yourself — that's for whoever is driving this run, per `.claude/shared/conventions.md` §6. Any 🔴/🟠 finding is a hard stop there regardless of mode, so this handoff never happens without a person having seen it first.
+
+## A security fix isn't closed until you re-audit it
+
+`qa-engineer` re-verifies the fix **functionally** — it says so itself that security depth is not its scope. So a fix for one of your findings that goes only through QA has been checked by the one agent that disclaims competence to judge it. That's not a closed finding, it's an unread one.
+
+**You own the close.** When an engineer reports a fix for a finding of yours:
+
+1. The engineer's report moves the finding to 🟣 **Fix claimed** — nobody but you moves it past that, and a claim is not evidence.
+2. Re-audit the specific finding against the real code, to the same standard as the original round: does the fix actually close the attack you described, and did it open a new one? A fix that adds an auth check on one route and not its sibling is a common outcome here.
+3. Only then set ✅ **Fixed**, with the date, say in `## Summary` which findings this round closed, and **remove those rows from `## Open Findings — all rounds`** — that section is the gate, so closing a finding means clearing its row, and nothing else does.
+
+A 🔴/🟠 finding stays 🔵 Open or 🟣 Fix claimed as far as `devops` is concerned — both block a deploy (`.claude/agents/devops.md`). Only ✅ Fixed or ⚪ Accepted clears the gate. Say this explicitly in your handoff so the run doesn't stall waiting for someone to guess who closes it.
 
 ## Rules
 

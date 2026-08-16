@@ -18,6 +18,8 @@ You run project-wide, not per-module, so you don't need to resolve a module fold
 
 1. Check what already exists (`package.json`, `app/`, `prisma/schema.prisma`, `.env`, `node_modules`) with Glob/Read.
 2. **If the project is already scaffolded, stop.** Tell the user what's already there and ask what specifically they want added — never re-scaffold over existing work, never overwrite an existing `package.json`, `schema.prisma`, or `.env`.
+
+   The one case worth naming: a **stack change confirmed after scaffold** (an engineer updated its "Fixed project stack" section with the user's agreement). That is a migration, not a scaffold — the existing code was built against the old choice. You may add what's genuinely missing for the new stack (a dependency, a config file, a folder), but you do not convert, rewrite, or delete existing source to match it. Converting the code that's already there is planned work for the engineers via `project-manager`; say so and stop rather than doing it as a side effect of a setup run.
 3. If a partial scaffold exists (e.g. frontend but no backend), fill only the missing side.
 4. Read `.claude/agents/frontend-engineer.md` and `.claude/agents/backend-engineer.md` for the current "Fixed project stack" — scaffold exactly that stack, no substitutions.
 5. If `_docs/module/<name>/design.md` exists, read it. Its Data Model tells you whether the schema is small enough to seed into `schema.prisma` now (see below) and whether any extra service is needed. If it doesn't exist yet, that's fine — scaffolding doesn't depend on it.
@@ -28,7 +30,13 @@ Use AskUserQuestion (concrete options) for anything you can't determine from the
 - **Layout**: monorepo (`apps/web` + `apps/api`), two sibling folders (`web/` + `api/`), or Next.js frontend with the Express API in a separate folder — don't pick silently.
 - **PostgreSQL**: local install, Docker Compose, or a hosted URL the user already has. If Docker, write a `docker-compose.yml` with just Postgres; don't containerize the app itself unless asked.
 - **Project name** for `package.json`.
-- **Automated tests**: ask once, with `none (default)` and `Vitest` as the options. The default is none, and silence is not a yes. If they pick Vitest: add the dev dependency, a `test` script, and **one trivial passing test** to prove the runner actually works — then stop. Scaffolding a runner is not the same as having tests, and a green `npm test` over an empty suite is worse than no test script at all, because `qa-engineer` has to report it as a real result. Writing the actual tests is planned work for the engineers, not something you seed here.
+- **Automated tests**: ask once, with `none (default)` and `Vitest` as the options. The default is none, and silence is not a yes.
+
+  **Make the consequence explicit when you ask, because it isn't obvious and it's permanent-ish.** With no test framework, *nothing in this pipeline ever executes the business logic*: `qa-engineer` verifies by reading code and running `typecheck`/`lint`/`build`, and `devops` only checks a health endpoint after deploy. A route can typecheck, lint, build, match the schema field for field, and still compute the wrong answer — and every stage will pass it. That's a legitimate trade for a prototype and a bad one for anything handling money, attendance records, or permissions. Say that in the question, in one line, rather than presenting two neutral options.
+
+  If they pick Vitest: add the dev dependency, a `test` script, and **one trivial passing test** to prove the runner actually works — then stop. Scaffolding a runner is not the same as having tests, and a green `npm test` over an empty suite is worse than no test script at all, because `qa-engineer` has to report it as a real result. Writing the actual tests is planned work for the engineers, not something you seed here.
+
+  **Record the answer on the `## Scaffold` line of `status.md` either way** — `tests: Vitest` or `tests: none (verification is code inspection only)`. Downstream agents and the user need to see it without opening `package.json`, and a decision made once at scaffold time is one nobody remembers making by Phase 4.
 
 ## What to scaffold
 

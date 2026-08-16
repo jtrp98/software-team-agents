@@ -18,6 +18,22 @@ All project documents live under `_docs/module/<kebab-name>/` — never at the r
 
 Once resolved, **every** read and write for that run happens inside that folder.
 
+### Two things are called "module" — here's which one you mean
+
+- A **module folder** (`_docs/module/sales-crm/`) is a *delivery unit*: its own requirement, design, plan, and review cycle, with its own phase numbering. Only `business-analyst` creates one.
+- A **Module** under `design.md`'s `## Modules` is a *sub-grouping of features inside one delivery unit* — `system-analyst` produces these in STATE: GAP_ANALYSIS, and `project-manager` usually turns each into a phase.
+
+They are not interchangeable, and picking the wrong one is expensive in opposite directions: too many folders fragments one product into documents that can't see each other, and too few buries unrelated work in one plan that never finishes.
+
+**The test is whether it has its own business conversation.** A separate module folder is right when the work would get its own requirement interview — a different business purpose, a different set of users, and a scope that could ship (or be cancelled) without the other one changing. If it's the same product being built out feature by feature, it's one folder with several Modules inside `design.md`, however large it gets.
+
+Two consequences worth stating plainly, because they're what makes the choice matter:
+
+- Splitting into folders is **not** a way to manage size. A big product is a big `plan.md` with many phases, not five folders.
+- Module folders share one codebase and one `schema.prisma` (§7), so cross-folder work needs care: each `design.md` owns its own models, and a relation reaching into another folder's model is allowed but is never redesigned from this side.
+
+When it's genuinely ambiguous, ask the user — and record the reason in `requirement.md` so the next person doesn't re-litigate it.
+
 ### The files in a module folder
 
 | File | Written by | Contains |
@@ -25,7 +41,7 @@ Once resolved, **every** read and write for that run happens inside that folder.
 | `requirement.md` | `business-analyst` | business requirements, scope, declined features, references for any external fact |
 | `design.md` | `system-analyst` | feasibility verdicts, the confirmed Prisma schema, module breakdown |
 | `plan.md` | `project-manager` (checkboxes: `qa-engineer`) | phased, tagged task list |
-| `review.md` | `qa-engineer` | open issues (all phases) + the current verify round only |
+| `review.md` | `qa-engineer` | open issues (all phases) + the current verify round + undeployed phases' `Unverified Behaviour` |
 | `review/phase-N.md` | `qa-engineer` | archived verify rounds for phases that are closed — read only on demand |
 | `security.md` | `security` | findings, accepted risks |
 | `deploy.md` | `devops` | environments, deploy/migration runbook, history |
@@ -45,7 +61,7 @@ Once resolved, **every** read and write for that run happens inside that folder.
 
 ## Scaffold
 Not scaffolded yet — run the `setup` agent before Phase 1.
-<!-- once scaffolded, replace with: Scaffolded — Next.js in `web/`, Express API in `api/`, Postgres via Docker Compose -->
+<!-- once scaffolded, replace with: Scaffolded — Next.js in `web/`, Express API in `api/`, Postgres via Docker Compose · tests: none (verification is code inspection only) -->
 
 ## Modules
 
@@ -92,32 +108,30 @@ Once a document exists, you are amending it, not regenerating it.
 - Append a dated line to that document's `## Change Log`; never rewrite or prune existing entries.
 - Confirm a changed section with the user before saving it.
 - **Checkboxes in `plan.md` belong to `qa-engineer` alone.** It sets `[ ]` → `[x]` only after inspecting real code. No other agent may set, clear, or reorder a checkbox — and this is exactly why `project-manager` must amend `plan.md` with `Edit` rather than rewriting it.
+- **`qa-engineer` may also *add* a `🔒 Security gate` to a phase heading in `plan.md`, never remove one.** `project-manager` can only flag what the design predicted; QA is looking at the code that got built, and `devops` gates on the heading. This is the only other write any agent but `project-manager` makes to `plan.md`.
 
 ### Keeping `review.md` small — it is the one document every agent pays for
 
 "Amend, don't regenerate" applies to `review.md` too, but it must not be allowed to grow without limit. Every engineer, `security`, and `devops` run reads it in full, so once a phase is closed its per-task detail is pure cost to everyone downstream — nobody implementing Phase 6 needs to re-read what a Phase 1 bug was.
 
-`review.md` holds exactly three things:
+`review.md` holds exactly four things:
 
 1. **`## Open Issues — all phases`, at the very top** — every unresolved item from *any* phase, as a table: what it is, which phase it came from, which agent it routes to, and whether it's blocking. This section is why nothing gets lost when a round is archived, and it's the first thing an engineer should be able to act on.
 2. **The current verify round**, in full detail — including which mode it ran in, and, for a phase that still has open items, the `## Verified File Manifest` the next round needs in order to tell what moved.
-3. **`## Archived rounds`** — one pointer line per archived round. A list of links, not content.
+3. **`## Unverified Behaviour — undeployed phases`** — only on a project with no test suite: per phase, the rules QA could read but not execute. Kept until the phase is *deployed*, not until its round is archived, because `devops` reads it at deploy time — which is after the phase closed.
+4. **`## Archived rounds`** — one pointer line per archived round. A list of links, not content.
 
 Plus the `## Change Log` every document in this pipeline carries — one line per round, with the archived rounds' full entries travelling to the archive file along with them.
 
-When a phase's round is superseded, `qa-engineer` **moves** it — verbatim, never summarized or pruned — into `review/phase-N.md`, carries any still-open item up into `Open Issues`, and leaves a pointer under `## Archived rounds`. Moving is not the same as discarding; the history stays complete and readable, it just stops being loaded by every run.
+When a phase's round is superseded, `qa-engineer` **moves** it — verbatim, never summarized or pruned — into `review/phase-N.md`, carries any still-open item up into `Open Issues`, keeps the phase's `Unverified Behaviour` block behind until it deploys, and leaves a pointer under `## Archived rounds`. Moving is not the same as discarding; the history stays complete and readable, it just stops being loaded by every run.
+
+Sections 1 and 3 are both **outlive-your-round** sections, and they exist for the same failure: something a *later* stage needs, produced by a round that stops being current before that stage runs. Archiving one of those on schedule looks tidy and silently disarms a gate. When in doubt about whether something has been consumed yet, it stays.
 
 The exact section layout, the two verify modes (FULL and TARGETED), and what the manifest is for belong to `qa-engineer` and are defined in `.claude/agents/qa-engineer.md`. It is the only agent that writes any of this; everyone else reads `Open Issues` first and the current round second.
 
 **Do not read `review/phase-N.md` as part of your normal startup.** Read `review.md` only. Open an archive file solely when something specific sends you there — an `Open Issues` row you need the background on, a regression that looks like it's re-opening old work, or the user asking about past history.
 
 ---
-
-## 5a. Stay inside the repo
-
-Every agent's writes resolve to a path under this project's root — `_docs/module/<name>/`, app source, `.claude/...`. No agent writes a file elsewhere on disk, whatever the reason: not to "fix" something outside the project, not to save a copy somewhere else, not because an absolute path looked more convenient.
-
-**This is enforced, not just requested**, the same way as §5's git rule: `.claude/hooks/block-outside-repo.js`, wired in `.claude/settings.json`, blocks `Write`/`Edit`/`MultiEdit`/`NotebookEdit` calls whose target resolves outside the repo root before the tool runs. If you get blocked, don't look for a path that slips past it — tell the user what you were trying to write and where, and let them decide.
 
 ## 5. Version control
 
@@ -126,6 +140,12 @@ Every agent's writes resolve to a path under this project's root — `_docs/modu
 Writing a *file* that happens to relate to git — `.gitignore`, a CI workflow YAML — is allowed for the agents whose job that is (`setup`, `devops`). Writing a config file is not running git.
 
 **This one is enforced, not just requested.** `.claude/hooks/block-git.js`, wired as a `PreToolUse` hook in `.claude/settings.json`, blocks state-changing git commands and any direct access to `.git/` before the tool call runs. Read-only inspection (`git status`, `log`, `diff`, `show`) still works, because it changes nothing. If you get blocked, the answer is never to find a way around it — report to the user what you wanted to do and let them run it.
+
+## 5a. Stay inside the repo
+
+Every agent's writes resolve to a path under this project's root — `_docs/module/<name>/`, app source, `.claude/...`. No agent writes a file elsewhere on disk, whatever the reason: not to "fix" something outside the project, not to save a copy somewhere else, not because an absolute path looked more convenient.
+
+**This is enforced, not just requested**, the same way as §5's git rule: `.claude/hooks/block-outside-repo.js`, wired in `.claude/settings.json`, blocks `Write`/`Edit`/`MultiEdit`/`NotebookEdit` calls whose target resolves outside the repo root before the tool runs. If you get blocked, don't look for a path that slips past it — tell the user what you were trying to write and where, and let them decide.
 
 ---
 
@@ -179,7 +199,20 @@ No agent invents, renames, or "improves" a field, type, or relation. If a task n
 
 **Once `setup` has written the real `schema.prisma`, that file is the contract's working copy** — `design.md`'s Data Model stays the authority, but the engineers work from `schema.prisma`, which is the file their queries and types actually have to agree with, and which they have open anyway. Reading both is reading the same contract twice.
 
-That only holds because one agent keeps them equal: **`qa-engineer` reads both and compares them field by field**, and any divergence is a ❌ — a field in `schema.prisma` that `design.md` doesn't have is exactly the improvised schema change this rule exists to catch. So:
+That only holds because one agent keeps them equal: **`qa-engineer` reads both and compares them field by field**, and an unexplained divergence is a ❌ — a field in `schema.prisma` that no module's `design.md` accounts for is exactly the improvised schema change this rule exists to catch. Which divergences count depends on how many modules exist:
+
+### Scoping the comparison when more than one module exists
+
+`schema.prisma` is one file for the whole project; `design.md` is one file **per module folder**. So the comparison is directional, and only one direction is a straight equality check:
+
+- **Every model in this module's `design.md` Data Model must exist in `schema.prisma` and match field for field.** A missing model, a renamed field, a changed type, a dropped relation — all ❌. This direction is absolute.
+- **A model in `schema.prisma` that this module's `design.md` doesn't have is not automatically a ❌.** It may belong to another module. Before flagging it, **`Grep` for `model <Name>` across `_docs/module/*/design.md`** — one search per unclaimed model, and the hit tells you which folder owns it. Do *not* read other modules' Data Model sections to answer this; ownership is a name lookup, and reading another module's schema to check one name is exactly the whole-file read §10 exists to prevent. If another module claims it, it's out of scope for this round — leave it alone, don't verify it, don't report it. **If the Grep comes back empty, that is the improvised schema change this rule exists to catch, and it is a ❌** regardless of which module's round found it.
+
+The second bullet is why the rule can't be "the two files must be identical" — that phrasing is only correct on a single-module project, and it produces a guaranteed false ❌ on every round the moment a second module exists.
+
+Cross-module relations (a model in module B with a relation to a model owned by module A) are legitimate and expected. Verify the field on **your** side of the relation; take the other side as given, since the module that owns it is responsible for it.
+
+So:
 
 - Before scaffold (`schema.prisma` doesn't exist yet): `setup`/`backend-engineer` read `design.md`'s Data Model. It's the only copy.
 - After scaffold: engineers read `schema.prisma` for the models their task touches, and go to `design.md`'s Data Model only when they need the reasoning behind a field rather than its shape.
@@ -274,3 +307,13 @@ Read it in full. It's the shortest of the four, it has no per-phase structure to
 Every agent talks to the user in Thai — status updates, questions (`AskUserQuestion` labels/options included), and handoff summaries. Keep technical vocabulary in its original English form rather than translating it (model/field names, stack terms like "endpoint"/"migration"/"schema", file paths, code identifiers) — translating those makes them harder to match against the actual code and docs, not easier to read.
 
 This is about how an agent talks, not what it writes into the module docs — `requirement.md`/`design.md`/`plan.md`/etc. keep whatever language they were already written in; don't retranslate an existing document as a side effect of amending it.
+
+---
+
+## 12. Verify against real state, not memory
+
+A recalled fact — from an earlier turn in the same run, from a summary, from "I remember this project does X" — is a hypothesis, not a fact. Every agent (and whoever is driving the session) reads the actual current file, schema, or code before stating something as true or acting on it.
+
+This matters more than it looks: a recollection is never automatically revalidated the way a file is. An error made once at recall time can silently outlive the file it was drawn from — the file gets edited, the wrong belief doesn't.
+
+There's also no good reason to lean on recall in the first place: this pipeline already keeps its own memory, in files — `status.md` for where things stand, `plan.md`/`design.md`/`review.md` for what was decided and why, each with a `## Change Log` — updated with discipline (§4) precisely so nobody has to hold state in their head. An agent's own recollection is a worse copy of something the project already tracks properly; reach for the file, not the memory. This is the same discipline §2 already applies to `status.md` ("an index, not a truth" — the real docs win on disagreement) and the one every agent invokes when it says "don't work from memory" about `conventions.md` itself; it generalizes to any recalled fact, not just those two. Whenever a stated fact and the current file/code disagree, the file/code wins, and the stale belief is corrected on the spot rather than carried forward.

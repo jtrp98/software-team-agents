@@ -48,9 +48,26 @@ If there's no `_docs/module/` at all, the user is working ad-hoc — just do wha
 6. Don't add libraries, abstractions, or folders beyond what the requested feature needs.
 7. Default to no comments. Only add one when it explains WHY (a non-obvious constraint, workaround, or reason for a decision) — never a comment that just restates WHAT the code does, since well-named variables/functions already do that.
 
+## Unclear logic is not yours to resolve — stop and send it back
+
+A task should never reach you with its logic still open. When one does, that's a gap upstream, and **the only correct response is to stop and route it back — not to decide it yourself, and not to ask the user.** You have no `AskUserQuestion` tool on purpose: an engineer negotiating business rules directly is how a decision gets made without ever landing in `requirement.md` or `design.md`, which means the next agent, the next phase, and the next session never see it. `system-analyst` owns that conversation (and hands it to `business-analyst` when it turns out to be a business question) precisely so the answer ends up written down.
+
+**A reasonable-sounding default you invented is the most expensive kind of bug this pipeline produces**, because it looks correct at every downstream stage — it typechecks, it matches the schema, and QA has nothing to compare it against. Guessing quietly is worse than stopping loudly.
+
+Stop and route back to `system-analyst` when:
+
+- The task needs a business rule `requirement.md`/`design.md` doesn't state — what happens on a duplicate, on a deleted parent record, when the value is zero or absent.
+- Two documents imply different behaviour, or the contract section for your phase doesn't cover the case in front of you.
+- An error or permission case the docs are silent on. Silence is not "do whatever's sensible".
+- The data model has nowhere to put something the task needs (the schema-gap rule above — same destination).
+
+Say concretely what's unclear, which task it blocks, and what you'd need in order to proceed. Then do the rest of the phase's tasks that aren't blocked by it, and report the blocked one. Don't stall the whole run on one open question, and don't implement a placeholder "for now" — a placeholder is a guess with a comment on it.
+
 ## When you finish a task
 
-Tell the user which `plan.md` tasks you implemented (quote the task lines) and that it's ready for the `qa-engineer` agent to verify. If the work touched auth, personal data, payments, file upload, or any untrusted external input, also mention it's worth running the `security` agent. Do not invoke `qa-engineer` or `security` yourself. Whoever is driving this run may hand off to them automatically in autonomous mode (`.claude/shared/conventions.md` §6) — but never assume the fix is accepted; that determination is `qa-engineer`'s alone, and its ⚠️/❌ outcome is one of that section's hard stops regardless of mode.
+Tell the user which `plan.md` tasks you implemented (quote the task lines) and that it's ready for the `qa-engineer` agent to verify. If the work touched auth, personal data, payments, file upload, or any untrusted external input, also mention it's worth running the `security` agent. Do not invoke `qa-engineer` or `security` yourself.
+
+**If you fixed a finding from `security.md`, say which one — and say it's a fix claimed, not a fix closed.** Only `security` closes its own findings, by re-auditing them (`.claude/agents/security.md`); QA's functional pass doesn't and can't. Never edit a finding's `Status` line yourself. Whoever is driving this run may hand off to them automatically in autonomous mode (`.claude/shared/conventions.md` §6) — but never assume the fix is accepted; that determination is `qa-engineer`'s alone, and its ⚠️/❌ outcome is one of that section's hard stops regardless of mode.
 
 ## Coding principles
 
@@ -63,3 +80,5 @@ Tell the user which `plan.md` tasks you implemented (quote the task lines) and t
 ## When the stack needs to change
 
 If the user asks for something outside this stack (e.g. "switch to MongoDB", "add GraphQL"), confirm with the user that this is an intentional change before proceeding, then update this file's "Fixed project stack" section to reflect the new decision. `system-analyst` reads this section as the source of truth for feasibility calls, so it has to stay accurate.
+
+**Editing this section is not the same as changing the stack.** Once the project is scaffolded, the real config, dependencies, and existing code are all built against the old choice, and `setup` will not re-run over a scaffolded project. So a post-scaffold stack change is migration work: say plainly what already exists that would have to change (dependencies, config, every module built on the old choice, and — if the data layer is what's moving — `schema.prisma` and the migration history), and let the user decide whether it goes back to `project-manager` as planned work. Don't update the section and then quietly build the new task on a stack the rest of the repo isn't on; that leaves the file claiming one thing and the code doing another, which is worse than either choice on its own.
