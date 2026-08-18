@@ -72,32 +72,33 @@ agent เองยังเรียกกันเองไม่ได้เ�
 
 ## เอา pipeline นี้ไปรวมกับโปรเจกต์ที่มีอยู่แล้ว
 
-เอาไฟล์แค่ 2 อย่างจาก repo นี้ไปวางใน**โปรเจกต์ปลายทางจริง** (สมมติชื่อ `projectx`, repo คนละอันกับ `AgentClaude`) — pipeline (`.claude/` + `CLAUDE.md`) วางไว้ใน subfolder ชื่อ `external-agent/` (ชื่อ staging folder ที่ตั้งตายตัวไว้ — เอาไว้แยกของที่กำลังจะ merge ออกจากของเดิมใน `projectx` ให้ชัด), ส่วน `MERGE_GUIDE.md` วางไว้ที่ root ของ `projectx` เลย ผลลัพธ์หน้าตาแบบนี้:
+เอา pipeline ทั้งชุด (`.claude/` + `CLAUDE.md` + `MERGE_GUIDE.md`) จาก repo นี้ไปวางเป็น **staging folder เดียว** ชื่อ `software-team-agents/` ไว้ที่ root ของ**โปรเจกต์ปลายทางจริง** (สมมติชื่อ `projectx`, repo คนละอันกับ `AgentClaude`) — ชื่อ folder นี้ตั้งตายตัวไว้ เอาไว้แยกของที่กำลังจะ merge ออกจากของเดิมใน `projectx` ให้ชัด `MERGE_GUIDE.md` อยู่ *ข้างใน* staging folder นี้เอง ไม่ใช่ที่ root ของ `projectx`. ผลลัพธ์หน้าตาแบบนี้:
 
 ```
-projectx/                     ← โปรเจกต์ปลายทางจริง
-├── MERGE_GUIDE.md             ← คัดลอกมาวางที่ root
-├── external-agent/            ← staging folder: pipeline ที่จะเอาไป merge
+projectx/                           ← โปรเจกต์ปลายทางจริง (cwd ตอนรัน merge)
+├── software-team-agents/           ← staging folder: pipeline ที่จะเอาไป merge
 │   ├── .claude/
-│   └── CLAUDE.md
-├── .claude/                   ← (ถ้ามีอยู่แล้ว) ของเดิมของ projectx เอง
-├── CLAUDE.md                  ← (ถ้ามีอยู่แล้ว) ของเดิมของ projectx เอง
+│   ├── CLAUDE.md
+│   └── MERGE_GUIDE.md
+├── .claude/                        ← (ถ้ามีอยู่แล้ว) ของเดิมของ projectx เอง
+├── CLAUDE.md                       ← (ถ้ามีอยู่แล้ว) ของเดิมของ projectx เอง
 └── ...ไฟล์อื่นของ projectx
 ```
 
 ขั้นตอน — รันจาก root ของ `AgentClaude`:
 
 ```bash
-cp -r .claude <path-to-projectx>/external-agent/.claude
-cp CLAUDE.md <path-to-projectx>/external-agent/CLAUDE.md
-cp MERGE_GUIDE.md <path-to-projectx>/MERGE_GUIDE.md
+mkdir -p <path-to-projectx>/software-team-agents
+cp -r .claude <path-to-projectx>/software-team-agents/.claude
+cp CLAUDE.md <path-to-projectx>/software-team-agents/CLAUDE.md
+cp MERGE_GUIDE.md <path-to-projectx>/software-team-agents/MERGE_GUIDE.md
 ```
 
-จากนั้น `cd <path-to-projectx>` (เข้าไปที่ root ของ `projectx`) แล้วบอก AI แค่ **"อ่าน `MERGE_GUIDE.md` แล้ว merge pipeline เข้ากับโปรเจกต์นี้"** — ไม่ต้องบอกอะไรเพิ่ม ไม่ต้องชี้ path อื่น เพราะไฟล์เดียวที่ต้องอ่านคือ `MERGE_GUIDE.md` ตัวมันเองรู้อยู่แล้วว่า source คือ `external-agent/` ที่อยู่ข้างๆ มัน และ target คือ root ของ `projectx` ที่มันถูกวางอยู่
+จากนั้น `cd <path-to-projectx>` (เข้าไปที่ root ของ `projectx`) แล้วบอก AI แค่ **"อ่าน `software-team-agents/MERGE_GUIDE.md` แล้ว merge pipeline เข้ากับโปรเจกต์นี้"** — ไม่ต้องบอกอะไรเพิ่ม ไม่ต้องชี้ path อื่น เพราะไฟล์เดียวที่ต้องอ่านคือ `MERGE_GUIDE.md` ตัวมันเองรู้อยู่แล้วว่า source คือ `software-team-agents/` ที่มันถูกวางอยู่ข้างใน และ target คือ root ของ `projectx`
 
-AI จะ inventory ของเดิมใน `projectx` ก่อน (ถ้ายังไม่มี `.claude`/`CLAUDE.md` เลยก็แค่คัดลอกยกชุด ถ้ามีอยู่แล้วก็ merge แบบ additive ทีละไฟล์ตามตารางในไฟล์นั้น) — ของเดิมไม่หาย ไม่มีการ `git` ใดๆ ระหว่างทาง (กติกาเดิม §5 ยังคุมอยู่) ตรวจผลตาม checklist ท้ายไฟล์ก่อนใช้งานจริง อย่าลืมเช็ค [Stack ที่ใช้](#stack-ที่ใช้) ว่าตรงกับ `projectx` ไหม ถ้าไม่ตรงต้องแก้ `frontend-engineer.md`/`backend-engineer.md` ก่อนใช้งานจริง
+AI จะ inventory ของเดิมใน `projectx` ก่อน (ถ้ายังไม่มี `.claude`/`CLAUDE.md` เลยก็แค่คัดลอกยกชุด ถ้ามีอยู่แล้วก็ merge แบบ additive ทีละไฟล์ตามตารางในไฟล์นั้น) — ของเดิมไม่หาย ไม่มีการ `git` ใดๆ ระหว่างทาง (กติกาเดิม §5 ยังคุมอยู่) ตรวจผลตาม checklist ท้ายไฟล์ก่อนใช้งานจริง อย่าลืมเช็ค [Stack ที่ใช้](#stack-ที่ใช้) ว่าตรงกับ `projectx` ไหม ถ้าไม่ตรงต้องแก้ `frontend-engineer.md`/`backend-engineer.md` ก่อนใช้งานจริง (ถ้า `projectx` แยก repo frontend/backend ออกจากกัน ไฟล์ `MERGE_GUIDE.md` จะถามก่อนว่าเป็นฝั่งไหนแล้วแก้แค่ไฟล์ที่เกี่ยวข้อง)
 
-เสร็จแล้วลบ `external-agent/` และ `MERGE_GUIDE.md` ออกจาก `projectx` ได้เลย — เป็นแค่ staging ใช้ครั้งเดียวตอน merge ไม่ใช่ส่วนหนึ่งของ pipeline ที่ต้องอยู่ถาวร
+เสร็จแล้วลบ `software-team-agents/` (ทั้ง `.claude/`, `CLAUDE.md`, `MERGE_GUIDE.md` ข้างใน) ออกจาก `projectx` ได้เลย — เป็นแค่ staging ใช้ครั้งเดียวตอน merge ไม่ใช่ส่วนหนึ่งของ pipeline ที่ต้องอยู่ถาวร
 
 ## โครงสร้างไฟล์
 
@@ -120,8 +121,15 @@ _docs/
 ├── agents/*.md                  ← agent ทั้ง 9 ตัว
 ├── hooks/
 │   ├── block-git.js              ← PreToolUse hook ที่บังคับกติกา "ห้ามใช้ git" จริง
-│   └── block-outside-repo.js     ← PreToolUse hook ที่บังคับ "ห้ามเขียนไฟล์นอก repo" จริง
-└── settings.json                ← ที่ต่อ hook ทั้งสองเข้ากับ session (commit ไว้ ใช้ร่วมกันทั้ง repo)
+│   ├── block-outside-repo.js     ← PreToolUse hook ที่บังคับ "ห้ามเขียนไฟล์นอก repo" จริง
+│   ├── block-doc-rewrite.js      ← PreToolUse hook ที่บังคับให้ใช้ Edit (ไม่ใช่ Write) กับเอกสารเดิม
+│   └── require-green-before-stop.js ← Stop hook: engineer ส่งงานต่อไม่ได้ถ้า typecheck/lint แดง
+├── scripts/
+│   ├── check-schema-contract.js  ← qa-engineer รัน: เทียบ schema.prisma กับ design.md ทุก module
+│   └── check-status-sync.js      ← รันก่อนเชื่อ status.md: เทียบกับ checkbox จริงใน plan.md ทุก module
+├── tests/
+│   └── run.js                    ← self-test ของ hook/script ทั้งหมด (69 เคส ไม่ต้องติดตั้งอะไรเพิ่ม)
+└── settings.json                ← ที่ต่อ hook ทั้งสี่ตัวเข้ากับ session (commit ไว้ ใช้ร่วมกันทั้ง repo)
 ```
 
 ไม่มี *เอกสาร* ตัวไหนถูกเขียนที่ root ของ repo — แต่ละ module มีโฟลเดอร์ของตัวเองใต้ `_docs/module/` เพื่อไม่ให้ฟีเจอร์ที่ไม่เกี่ยวกันมาทับประวัติของกันและกัน (ส่วนไฟล์โปรเจกต์ที่ตามธรรมเนียมต้องอยู่ที่ root เป็นคนละเรื่อง — `setup` เขียน `package.json`, `.env`, `.env.example`, `.gitignore` ที่นั่น และ `devops` เขียนไฟล์ infra)
@@ -141,7 +149,9 @@ _docs/
 - **มีแค่ `security` เท่านั้นที่ปิด finding ของตัวเองได้** แต่ละ finding มีสถานะกำกับ (🔵 Open · 🟣 แก้แล้วรอตรวจซ้ำ · ✅ ตรวจซ้ำแล้ว · ⚪ ยอมรับความเสี่ยง) การที่ engineer แก้เสร็จเลื่อนได้แค่ถึง 🟣 เท่านั้น เพราะการตรวจของ `qa-engineer` เป็นการตรวจเชิงฟังก์ชันซึ่งมันประกาศเองว่าไม่ครอบคลุมด้านความปลอดภัย — `security` ต้องกลับมาตรวจซ้ำเองถึงจะปิดได้ และ `devops` บล็อกทั้ง 🔵 และ 🟣 เท่ากัน
 - **ทำงานจากไฟล์จริง ไม่ใช่จากความจำ** สิ่งที่จำมาจากรอบก่อนหรือจากบทสรุปเป็นแค่สมมติฐาน ต้องเปิดไฟล์/โค้ดจริงยืนยันก่อนเสมอ ถ้าขัดกัน ไฟล์ชนะและความเข้าใจเดิมต้องถูกแก้ทันที — pipeline นี้มีความจำของตัวเองอยู่ในไฟล์แล้ว (`status.md`, `plan.md`, `design.md`, `review.md` พร้อม Change Log) การจำเองจึงเป็นแค่สำเนาที่แย่กว่าของสิ่งที่ track ไว้อย่างมีวินัยอยู่แล้ว (`conventions.md` §12)
 - **มีแค่ `qa-engineer` เท่านั้นที่ติ๊กงานว่าเสร็จ** มันติ๊ก `[x]` ใน `plan.md` หลังตรวจโค้ดจริงแล้วเท่านั้น — ไม่มีการปั๊มตราให้ผ่านลอยๆ
-- **แก้ไขเอกสารเดิม ไม่ใช่สร้างใหม่ทับ** เอกสารที่มีอยู่แล้วถูกอัปเดตทีละส่วนพร้อมลง Change Log ที่มีวันที่กำกับ ไม่มีการเขียนทับทั้งไฟล์
+- **แก้ไขเอกสารเดิม ไม่ใช่สร้างใหม่ทับ** เอกสารที่มีอยู่แล้วถูกอัปเดตทีละส่วนพร้อมลง Change Log ที่มีวันที่กำกับ ไม่มีการเขียนทับทั้งไฟล์ — ข้อนี้ก็ถูกบังคับด้วย hook จริงเช่นกัน (`block-doc-rewrite.js`) ดูหัวข้อ [กติกาที่บังคับด้วยโค้ด](#กติกาที่บังคับด้วยโค้ด-ไม่ใช่-prompt)
+- **engineer ส่งงานต่อไม่ได้ถ้าโค้ดยังแดง** `typecheck`/`lint` ต้องรันผ่านก่อนที่ `frontend-engineer`/`backend-engineer` จะจบงานได้ — บังคับด้วย hook (`require-green-before-stop.js`) ไม่ใช่แค่ขอความร่วมมือ ข้อผิดพลาดที่จับได้ตรงนี้แก้ในบริบทเดิมได้เลย ส่วนข้อผิดพลาดแบบเดียวกันที่ไปโผล่ตอน `qa-engineer` ตรวจจะแพงกว่าเพราะต้องเปิด agent ใหม่สองรอบ
+- **hook/script ทุกตัวมีการทดสอบตัวเอง** รัน `node .claude/tests/run.js` ทุกครั้งที่แก้ไฟล์ใต้ `.claude/hooks/` หรือ `.claude/scripts/` — hook ที่พิมพ์ผิดจน syntax error จะ "fail open" (ยังต่ออยู่ใน `settings.json` แต่ไม่บล็อกอะไรเลย) ซึ่งเคยเกิดขึ้นจริงมาแล้ว หน้าจอเขียวของ test suite นี้คือสิ่งเดียวที่ยืนยันว่า guard ทั้งหมดยังทำงานตามที่อ้าง
 - **`review.md` ต้องเล็กอยู่เสมอ** มันเก็บแค่ `Open Issues — all phases`, รอบตรวจปัจจุบัน และ `Unverified Behaviour` ของ phase ที่ยังไม่ deploy รอบที่ปิดแล้วถูก `qa-engineer` ย้าย (ยกมาทั้งดุ้น ไม่ย่อ ไม่ตัด) ไปไว้ใน `review/phase-N.md` — เพราะทุกรอบของ engineer/`security`/`devops` อ่านไฟล์นี้เต็มๆ รายละเอียดของ phase ที่ปิดไปแล้วจึงเป็นต้นทุนที่ทั้ง pipeline ต้องจ่ายซ้ำโดยไม่ได้อะไรกลับมา ไฟล์ใน `review/` ไม่ถูกเปิดอ่านตอนเริ่มงานปกติ ข้อยกเว้นคือของสองอย่างที่ "อายุยืนกว่ารอบของตัวเอง" — item ที่ยังเปิดค้าง และ `Unverified Behaviour` — เพราะมีด่านถัดไป (engineer, `devops`) ที่ต้องอ่านมันหลังจากรอบที่สร้างมันหมดอายุไปแล้ว การ archive ของพวกนี้ตามกำหนดจะดูเรียบร้อยดีแต่เท่ากับปลดล็อก gate เงียบๆ
 - **อ่านเฉพาะส่วนที่ต้องใช้ ไม่ใช่ทั้งไฟล์** agent ทุกตัวเริ่มจาก context เปล่า การอ่านทั้งไฟล์จึงเป็นต้นทุนที่จ่ายใหม่ทุกครั้ง — `plan.md` อ่าน Plan Summary + phase ของตัวเอง + Sequencing Notes + Open Questions, `design.md` อ่าน Feature-by-Feature Feasibility, Risks และ Open Questions เสมอ (สามส่วนนี้เก็บการตัดสินใจที่ยืนยันแล้วและรายการ "ห้ามทำ") บวกส่วนสัญญาของ phase ตัวเองกับ module ของตัวเอง วิธีทำอยู่ใน `conventions.md` §10 ข้อยกเว้นมีโดยตั้งใจ: `project-manager` เป็นเจ้าของ `plan.md`, `system-analyst` เป็นเจ้าของ `design.md`, และ `qa-engineer` อ่าน Data Model เต็มทุกรอบ
 - **ไม่มีอะไรถูก deploy โดยไม่ผ่านการตรวจ** `devops` จะปฏิเสธ deploy phase ที่ QA ยังไม่ยอมรับ, phase ที่รอบตรวจล่าสุดเป็นแบบ TARGETED, phase ที่ติดธง `🔒 Security gate` แต่ `security` ยังไม่ได้ตรวจ, หรือ phase ที่ยังมีช่องโหว่ระดับ Critical/Important ค้างอยู่ (อ่านจาก `Open Findings — all rounds` ซึ่งรวมทุกรอบ ไม่ใช่แค่รอบล่าสุด) เว้นแต่คุณจะสั่ง override เอง
@@ -151,7 +161,7 @@ _docs/
 
 ## กติกาที่บังคับด้วยโค้ด ไม่ใช่ prompt
 
-กติกาที่เหลือทั้งหมดในหน้านี้อยู่ในไฟล์ prompt ของ agent ซึ่งแปลว่ามันมีผลเท่าที่ agent จำได้และเชื่อฟัง — สำหรับเรื่องที่พลาดแล้วแก้คืนยาก อย่าง version control ของคุณหรือไฟล์นอกโปรเจกต์ แค่นั้นไม่พอ ตอนนี้มี `PreToolUse` hook สองตัวต่อไว้ใน `.claude/settings.json` ตรวจทุก tool call ก่อนมันจะรันจริง
+กติกาที่เหลือทั้งหมดในหน้านี้อยู่ในไฟล์ prompt ของ agent ซึ่งแปลว่ามันมีผลเท่าที่ agent จำได้และเชื่อฟัง — สำหรับเรื่องที่พลาดแล้วแก้คืนยาก อย่าง version control ของคุณ, ไฟล์นอกโปรเจกต์, การเขียนทับเอกสารเดิม, หรือการส่งงานที่โค้ดยังแดง แค่นั้นไม่พอ ตอนนี้มี `PreToolUse` hook สามตัวและ `Stop`/`SubagentStop` hook อีกหนึ่งตัวต่อไว้ใน `.claude/settings.json` ตรวจทุก tool call / ทุกครั้งที่ agent จะจบงานก่อนปล่อยให้ผ่านจริง
 
 ### `block-git.js` — ห้ามใช้ git
 
@@ -170,11 +180,30 @@ false positive คลาสเดียวที่เจอ: คำสั่ง
 
 **ไม่ครอบคลุม `Bash`** โดยตั้งใจ — การไล่ตรวจทุก path ที่คำสั่ง shell อาจแตะ (temp file, npm cache, redirect) ให้ถูกต้องแทบเป็นไปไม่ได้ และการบล็อกผิดจะเสียหายมากกว่าการปล่อยผ่านบางเคส
 
-### สิ่งที่ควรรู้ก่อนเอาไปใช้ (มีผลกับ hook ทั้งสองตัว)
+### `block-doc-rewrite.js` — แก้เอกสารเดิมด้วย Edit เท่านั้น ห้าม Write ทับ
 
-- **ต้องมี Node** ในเครื่อง (โปรเจกต์นี้เป็น stack Node อยู่แล้ว) แต่ละ hook กินเวลา ~35ms ต่อ tool call ซึ่ง ~33ms ในนั้นคือค่าสตาร์ท process ของ Node เอง ไม่ใช่ตัว logic — สอง hook รันต่อกันจึงคูณสองคร่าวๆ
+ตรวจ `Write` — ถ้าปลายทางเป็นหนึ่งในเอกสาร 6 ไฟล์ต่อ module (`requirement.md`, `design.md`, `plan.md`, `review.md`, `security.md`, `deploy.md`) **และไฟล์นั้นมีอยู่แล้ว** จะบล็อก `Write` ทับทันที — ต้องใช้ `Edit`/`MultiEdit` แก้เฉพาะส่วนที่เปลี่ยนแทน ถ้าไฟล์ยังไม่มี (สร้างครั้งแรก) `Write` ยังใช้ได้ตามปกติ hook นี้แยกแยะ "agent ไหนเรียก" ไม่ได้ — เช็คแค่ "ไฟล์นี้มีอยู่แล้วหรือยัง" ก็เพียงพอให้พฤติกรรมถูกต้องเองโดยไม่ต้องรู้ว่าใครเรียก
+
+### `require-green-before-stop.js` — engineer ส่งงานต่อไม่ได้ถ้าโค้ดยังแดง
+
+Wired เป็น `Stop`/`SubagentStop` hook (ไม่ใช่ `PreToolUse`) — รันตอน agent กำลังจะจบงาน ถ้ารอบนั้นแก้โค้ดแอปจริง จะรัน `typecheck`/`lint` (บวก script ตรวจ drift สองตัวด้านล่าง) ถ้าแดงจะบล็อกไม่ให้จบ บังคับให้แก้ในบริบทเดิมอย่างน้อยหนึ่งรอบก่อน — รอบถัดไปปล่อยผ่านเสมอ ไม่มีวันขังใครไว้ไม่ให้จบงาน งานที่ไม่แตะโค้ดแอป (เช่น `business-analyst`/`system-analyst`/`project-manager` หรือ `qa-engineer` ที่เขียนแค่ `review.md`) ไม่โดน hook นี้เลย
+
+### `.claude/scripts/` — เครื่องมือเสริม ไม่ใช่ hook ไม่บล็อกอะไร
+
+- **`check-schema-contract.js`** — `qa-engineer` รันผ่าน Bash เพื่อเทียบ `schema.prisma` กับ Data Model ใน `design.md` ของทุก module แบบ field-by-field พร้อมเช็คว่า model ที่ไม่มีใครประกาศเป็นการด้นสด (§7 ใน conventions.md)
+- **`check-status-sync.js`** — เทียบ `status.md` กับจำนวน checkbox จริงใน `plan.md` ของทุก module หา `implemented`/`verified` ที่เขียนไว้ผิดจากของจริง
+
+ทั้งสองเป็น regex-based parser ไม่ใช่ Prisma/Markdown parser จริง — ใช้เป็นตัวช่วยตรวจก่อน ไม่ใช่ตัวแทนการอ่านโค้ด/เอกสารจริง
+
+### `.claude/tests/run.js` — self-test ของ hook/script ทั้งหมด
+
+รัน `node .claude/tests/run.js` ทุกครั้งที่แก้ไฟล์ใต้ `.claude/hooks/` หรือ `.claude/scripts/` — 69 เคส ไม่มี dependency ต้องติดตั้งเพิ่ม เหตุผลที่ต้องรันจริงจัง: hook ที่ syntax error จะ exit 1 ซึ่ง `PreToolUse` มองว่าไม่ใช่การบล็อก (บล็อกต้อง exit 2) แปลว่า hook ที่พิมพ์ผิดจะ **fail open** — ยังต่ออยู่ใน `settings.json`, ดูเหมือนติดตั้งแล้ว แต่ไม่บังคับอะไรเลยเงียบๆ เคยเกิดขึ้นจริงมาแล้วระหว่างพัฒนา
+
+### สิ่งที่ควรรู้ก่อนเอาไปใช้ (มีผลกับ hook ทั้งสี่ตัว)
+
+- **ต้องมี Node** ในเครื่อง (โปรเจกต์นี้เป็น stack Node อยู่แล้ว) แต่ละ `PreToolUse` hook กินเวลา ~35ms ต่อ tool call ซึ่ง ~33ms ในนั้นคือค่าสตาร์ท process ของ Node เอง ไม่ใช่ตัว logic — สาม `PreToolUse` hook รันต่อกันจึงคูณสามคร่าวๆ
 - **มีผลกับทุก session ใน repo นี้ รวม session หลักและคำสั่ง `!git` ที่คุณพิมพ์เอง** ถ้าคุณต้อง commit หรือเขียนไฟล์นอกโปรเจกต์ ให้ทำจาก terminal ปกตินอก Claude Code
-- **ปิดได้ทีละตัวหรือทั้งคู่** ด้วยการลบ entry ที่ต้องการออกจาก `hooks.PreToolUse` ใน `.claude/settings.json` — แต่ถ้าปิด กติกาที่เกี่ยวข้องจะกลับไปเป็นแค่ข้อความใน prompt เหมือนเดิม
+- **ปิดได้ทีละตัวหรือทั้งหมด** ด้วยการลบ entry ที่ต้องการออกจาก `hooks.PreToolUse`/`hooks.Stop`/`hooks.SubagentStop` ใน `.claude/settings.json` — แต่ถ้าปิด กติกาที่เกี่ยวข้องจะกลับไปเป็นแค่ข้อความใน prompt เหมือนเดิม
 
 ## สองโหมดของการตรวจ — FULL กับ TARGETED
 

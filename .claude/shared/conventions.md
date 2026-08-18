@@ -88,6 +88,8 @@ A phase whose heading in `plan.md` carries `🔒 Security gate` keeps `security 
 
 **`status.md` is an index, not a source of truth.** If it ever disagrees with the actual documents or code, the documents and code win — correct `status.md` to match and mention the discrepancy to the user. Never make a decision based on `status.md` alone; open the real file.
 
+**`node .claude/scripts/check-status-sync.js` finds that disagreement mechanically.** It counts real checkboxes per phase in every module's `plan.md` and compares them against what `status.md` claims — the `implemented` symbol on each `- Phase N` line, and the `**Now**: ... X of Y unchecked` line — and reports every mismatch. Not a hook, blocks nothing; run it via `Bash` whenever you're about to trust `status.md` for a routing decision, or as a cheap first pass before deciding a phase needs a full `qa-engineer` round.
+
 Don't put dates in `status.md`. It records where things stand right now; dated history belongs in each document's own `## Change Log`.
 
 ---
@@ -148,6 +150,34 @@ Every agent's writes resolve to a path under this project's root — `_docs/modu
 **This is enforced, not just requested**, the same way as §5's git rule: `.claude/hooks/block-outside-repo.js`, wired in `.claude/settings.json`, blocks `Write`/`Edit`/`MultiEdit`/`NotebookEdit` calls whose target resolves outside the repo root before the tool runs. If you get blocked, don't look for a path that slips past it — tell the user what you were trying to write and where, and let them decide. Two narrow exceptions exist, both the harness's own mechanisms rather than an agent going off scope: the OS-temp-dir scratchpad convention, and `~/.claude/projects/<project-key>/memory/...` (Claude Code's cross-session auto-memory store) — see the hook file's own comment for the exact scoping.
 
 ---
+
+## 5b. Amend, don't regenerate — the mechanical half
+
+§4 says existing docs are amended with `Edit`, never replaced with `Write`. The "never replaced" half of that is enforced, not just requested, the same way as §5 and §5a: `.claude/hooks/block-doc-rewrite.js`, wired in `.claude/settings.json`, blocks a `Write` call whose target is one of the six per-module docs (`requirement.md`, `design.md`, `plan.md`, `review.md`, `security.md`, `deploy.md`) **when that file already exists**. `Edit`/`MultiEdit` are unaffected — they're the allowed path. A `Write` to one of these paths when the file doesn't exist yet (the doc's first creation) is unaffected too. If you get blocked, the answer is the same as §5/§5a: don't look for a way around it, use `Edit` on the section that needs to change.
+
+This hook cannot tell *which agent* is calling it — it has no way to except "business-analyst creating requirement.md for the first time" by name, so it doesn't try to; the file-exists check produces the right behavior structurally instead.
+
+## 5c. An engineer doesn't hand off red code
+
+The most expensive thing in this pipeline is the dev↔QA round trip. `qa-engineer` starts from a fresh context every round — it reads `plan.md`, `design.md`, `requirement.md`, `schema.prisma` and the real code — so a round that exists only to report a type error costs a full verification run plus a full engineer run to fix it, and the round after that costs exactly the same again. Nothing amortizes across rounds.
+
+Most of what such a round catches is what a compiler catches for free. So those checks happen **before an engineer is allowed to finish**, not after: `.claude/hooks/require-green-before-stop.js`, wired as a `Stop`/`SubagentStop` hook, runs `typecheck` and `lint` (plus this repo's two drift scripts) when a run has changed application code, and blocks the finish while they're red. A failure caught there is fixed in-context for the price of one edit; the same failure caught by QA costs two fresh-context agent runs.
+
+Three things worth knowing about it:
+
+- **It only triggers on runs that changed application code.** Doc-only runs (`business-analyst`, `system-analyst`, `project-manager`, and `qa-engineer` writing `review.md`) never trip it. Stop hooks carry no agent identity, so "did app code change?" is the proxy — and it's the more accurate question anyway.
+- **It can never trap you.** It forces at most one in-context fix attempt; the next attempt is allowed through regardless. That one attempt is the whole saving.
+- **It is not a licence to improvise.** If a failure isn't yours to fix — a schema gap that belongs to `system-analyst`, a contract question you must not invent an answer to (§7) — say so in your handoff and finish. Never edit the contract, or fake a type, to make the checks pass.
+
+`build` and `test` deliberately stay with `qa-engineer`: too slow to pay for on every agent stop.
+
+## 5d. The guards are themselves tested
+
+§5, §5a, §5b and §5c are the only rules in this pipeline that don't depend on an agent remembering them, which makes them the load-bearing part of the design. So they get the same treatment they give everyone else: `node .claude/tests/run.js` exercises every hook and both checker scripts — 69 cases, no dependencies, no install.
+
+**Run it after editing anything under `.claude/hooks/` or `.claude/scripts/`.** The reason is specific: a hook that throws a `SyntaxError` exits 1, and a `PreToolUse` hook only blocks on exit 2 — so a hook with a typo **fails open**. It stays wired in `settings.json`, still looks installed, and enforces nothing, silently. That already happened once during development. The first thing the harness checks is that every guard still parses, and it's verified to catch both that failure and a silent behavioral regression (a guard whose syntax is fine but whose logic stopped blocking).
+
+A failing guard is worse than no guard, because it buys false confidence. Treat a red run as blocking.
 
 ## 6. Handoffs
 
@@ -223,6 +253,8 @@ So:
 If `schema.prisma` and `design.md` disagree, **`design.md` wins and the code is wrong** — route it to `system-analyst` if the design turns out to be the thing that's wrong, never by editing `design.md` to match whatever got built.
 
 **Only two agents ever write `schema.prisma`**: `setup` seeds it from `design.md`'s Data Model at scaffold time, and `backend-engineer` changes it afterwards — and only to bring it in line with a Data Model `system-analyst` has already amended and the user has already confirmed. A schema amendment isn't finished when `design.md` is saved; it lands when `backend-engineer` propagates it and `qa-engineer` confirms the two match again.
+
+**`node .claude/scripts/check-schema-contract.js` does this comparison mechanically.** It parses every module's `design.md` Data Model and the real `schema.prisma`, diffs `model` blocks field by field, and reports unclaimed models (in `schema.prisma`, declared by no module) as the improvised-change ❌ this section describes — the cross-module "who owns this" lookup included, instead of a per-module `Grep`. It's not a hook and blocks nothing; it's a script `qa-engineer` runs via `Bash` as an aid to the manual comparison this section requires, not a replacement for reading the phase's actual models — it's a regex-based parser, not a real Prisma parser, and says so when something didn't parse.
 
 ---
 
@@ -306,9 +338,9 @@ Read it in full. It's the shortest of the four, it has no per-phase structure to
 
 ## 11. Language
 
-Every agent talks to the user in Thai — status updates, questions (`AskUserQuestion` labels/options included), and handoff summaries. Keep technical vocabulary in its original English form rather than translating it (model/field names, stack terms like "endpoint"/"migration"/"schema", file paths, code identifiers) — translating those makes them harder to match against the actual code and docs, not easier to read.
+Every agent talks to the user in Thai — status updates, questions (`AskUserQuestion` labels/options included), and handoff summaries. **Every document an agent creates is written in Thai too** — `requirement.md`, `design.md`, `plan.md`, `review.md`, `security.md`, `deploy.md`, `status.md`, and their `## Change Log` entries. Keep technical vocabulary in its original English form rather than translating it (model/field names, stack terms like "endpoint"/"migration"/"schema", file paths, code identifiers, code/schema blocks) — translating those makes them harder to match against the actual code and docs, not easier to read.
 
-This is about how an agent talks, not what it writes into the module docs — `requirement.md`/`design.md`/`plan.md`/etc. keep whatever language they were already written in; don't retranslate an existing document as a side effect of amending it.
+This governs new content, not a retranslation pass: if a document already exists with content written in another language, amend it per §4 — add or edit your section in Thai — but don't retranslate the rest of the document as a side effect of an unrelated edit. Bringing a whole existing document over to Thai is a deliberate decision the user asks for explicitly.
 
 ---
 
