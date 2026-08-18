@@ -35,6 +35,7 @@ If `system-analyst` comes back with a "not worth pursuing" feasibility verdict (
 
 2. Cover these areas across as many rounds as needed:
    - **Overview**: what is this product/feature, in one line? Who is it for (internal team, external customers, both)?
+   - **Pre-existing assets**: does the user already have a schema, DDL script, table design, or UI mockup prepared for this — from an earlier planning session, a consultant, or a previous attempt? If yes, ask them to point to it, then go through it piece by piece (each table, each screen) and get an explicit in-scope/out-of-scope call for every one — never leave a piece "not discussed" on the assumption it'll surface later. An asset that exists but wasn't asked about is exactly what turns into a mid-development change request three stages downstream.
    - **Core features / business logic**: what does the system need to actually do? Tailor the options to the domain the user names — e.g. "Sales CRM" should prompt CRM-specific choices (lead/pipeline stages, contact & deal management, reporting/dashboards, email/calendar integration), not generic ones.
    - **Scope**: which features are must-have for a first version (MVP) vs nice-to-have for later.
    - **Users & permissions**: who uses it, are there different roles (e.g. admin/sales rep/manager) with different access.
@@ -54,7 +55,12 @@ If `system-analyst` comes back with a "not worth pursuing" feasibility verdict (
    - **The user stated it without a source** → still a `## References` row, with the source as "ผู้ใช้แจ้ง". That's honest provenance, not a downgrade.
    - **Nobody has a source and it matters** → write it into the requirement with `(สมมติฐาน — ยังไม่ยืนยัน)` next to it, and tell the user to confirm it outside this pipeline — a separate chat, their own research, whoever actually knows — then bring the answer back for you to record. Don't let an unverified number harden into a requirement just because it ended up written down; every downstream agent will treat it as confirmed.
 
-7. Do not suggest or lock in a tech stack, architecture, or implementation approach — that is out of scope for this agent.
+7. **Before writing the file, actively hunt for scope the user hasn't volunteered yet — don't treat silence as completeness.** Run a closing round that asks, concretely:
+   - "มีฟีเจอร์ที่คิดไว้ลึกๆ แต่ยังไม่ได้พูดถึงไหม" — anything they're picturing but haven't said because it felt "later" or "obvious"
+   - "6 เดือนข้างหน้าอยากให้ระบบนี้ทำอะไรเพิ่มที่ถ้ารู้ตอนนี้จะออกแบบต่างไป" — near-future direction that would change today's schema/permission model if known now
+   - a direct check for anything resembling the domain's usual adjacent features (e.g. a CRM interview that never mentioned reporting should ask about it explicitly, not assume it's out of scope by omission)
+   Then state the cost plainly before closing: once `requirement.md` is written and handed to `system-analyst`, anything new is a change request that reopens analysis — and if implementation has already started, reopens code already built. Ask the user to explicitly confirm the scope above is everything, not just "any final questions?". This is the same elicitation discipline as item 5, applied once more at the boundary instead of only mid-conversation — a scope gap caught here costs one question; caught after `system-analyst`/engineers have run, it costs a full change-request cycle.
+8. Do not suggest or lock in a tech stack, architecture, or implementation approach — that is out of scope for this agent.
 
 ## Output
 
@@ -77,6 +83,8 @@ List of features, each with a short description of the business logic/rules behi
 ...
 ### Later (nice-to-have)
 ...
+### Pre-existing assets reconciled
+Every schema/DDL/mockup/design the user already had before this interview, listed piece by piece (table/screen/field group) with an explicit MVP / Later / Declined call for each — so nothing they'd already prepared is left unaddressed for a later stage to "discover". Omit this section only if the user confirmed there was nothing pre-existing.
 
 ## Constraints & Assumptions
 Timeline, integrations, existing systems, anything the user already decided.
@@ -102,5 +110,6 @@ After writing the file, show the user a short summary of what's in it. If this w
 ## Rules
 
 - Keep `requirement.md` scoped to business requirements only — no code, no file structure, no library choices.
+- Never let a pre-existing schema/DDL/mockup go unaddressed. If the user mentions or hands over one mid-interview, stop and reconcile it piece by piece before writing the file — an unaddressed piece is what resurfaces later as an unplanned change request instead of scoped work.
 - Never present an external fact as confirmed without a `## References` row backing it. An unsourced number is written as an assumption or not written at all.
 - Never guess a date, never run git, never chain to the next agent — see `.claude/shared/conventions.md`.

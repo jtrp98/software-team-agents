@@ -11,10 +11,15 @@
  * Root is `$CLAUDE_PROJECT_DIR` if the harness provides it, else the hook's own cwd (Claude
  * Code always launches PreToolUse hooks with the project directory as cwd).
  *
- * One deliberate exception: Claude Code's own scratchpad convention writes temp files under
- * the OS temp dir, e.g. `...\AppData\Local\Temp\claude\<project>\<session>\scratchpad\...`.
- * That's the harness's own mechanism for exactly this kind of repo, not an agent going rogue,
- * so it's allowed through rather than fighting the tool that told it to write there.
+ * Two deliberate exceptions, both the harness's own mechanisms rather than an agent going rogue:
+ *   1. Claude Code's scratchpad convention, under the OS temp dir, e.g.
+ *      `...\AppData\Local\Temp\claude\<project>\<session>\scratchpad\...`.
+ *   2. Claude Code's persistent auto-memory store, under
+ *      `~/.claude/projects/<project-key>/memory/...` — the `MEMORY.md` index and its per-topic
+ *      files, which are meant to survive across sessions and therefore can't live under the repo
+ *      root or the (session-scoped) temp dir. Scoped narrowly to exactly that `memory` folder one
+ *      level under a project key, not the whole `~/.claude/projects/` tree (which also holds
+ *      session transcripts and other per-project state this hook has no business touching).
  *
  * Only checks tools that take a destination path (Write/Edit/MultiEdit/NotebookEdit). Bash is
  * deliberately out of scope here — firewalling every path a shell command might touch (temp
@@ -64,8 +69,19 @@ function check(input) {
 
   if (isUnder(target, root)) return null;
   if (isUnder(target, normalize(path.join(os.tmpdir(), 'claude')))) return null;
+  if (isMemoryDir(target)) return null;
 
   return deny(rawPath, root);
+}
+
+/** Allows writes under exactly `~/.claude/projects/<project-key>/memory/...`. */
+function isMemoryDir(target) {
+  const projectsRoot = normalize(path.join(os.homedir(), '.claude', 'projects'));
+  if (!isUnder(target, projectsRoot)) return false;
+  if (target === projectsRoot) return false;
+  const rel = target.slice(projectsRoot.length + 1);
+  const parts = rel.split('/');
+  return parts.length >= 2 && parts[1] === 'memory';
 }
 
 /** Case-insensitive on Windows, backslashes normalized to forward slashes, no trailing slash. */

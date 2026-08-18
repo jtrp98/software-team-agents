@@ -70,6 +70,35 @@ agent เองยังเรียกกันเองไม่ได้เ�
 
 นอกจาก 5 จุดนี้ ยังมีบางจุดที่หยุดเพราะ agent ตอบเองไม่ได้จริงๆ (เช่น `project-manager` เจอ sequencing ที่ต้องถามคุณ) ไม่ใช่เพราะโหมด แต่เพราะไม่มีคำตอบสำรองให้เดา
 
+## เอา pipeline นี้ไปรวมกับโปรเจกต์ที่มีอยู่แล้ว
+
+เอาไฟล์แค่ 2 อย่างจาก repo นี้ไปวางใน**โปรเจกต์ปลายทางจริง** (สมมติชื่อ `projectx`, repo คนละอันกับ `AgentClaude`) — pipeline (`.claude/` + `CLAUDE.md`) วางไว้ใน subfolder ชื่อ `external-agent/` (ชื่อ staging folder ที่ตั้งตายตัวไว้ — เอาไว้แยกของที่กำลังจะ merge ออกจากของเดิมใน `projectx` ให้ชัด), ส่วน `MERGE_GUIDE.md` วางไว้ที่ root ของ `projectx` เลย ผลลัพธ์หน้าตาแบบนี้:
+
+```
+projectx/                     ← โปรเจกต์ปลายทางจริง
+├── MERGE_GUIDE.md             ← คัดลอกมาวางที่ root
+├── external-agent/            ← staging folder: pipeline ที่จะเอาไป merge
+│   ├── .claude/
+│   └── CLAUDE.md
+├── .claude/                   ← (ถ้ามีอยู่แล้ว) ของเดิมของ projectx เอง
+├── CLAUDE.md                  ← (ถ้ามีอยู่แล้ว) ของเดิมของ projectx เอง
+└── ...ไฟล์อื่นของ projectx
+```
+
+ขั้นตอน — รันจาก root ของ `AgentClaude`:
+
+```bash
+cp -r .claude <path-to-projectx>/external-agent/.claude
+cp CLAUDE.md <path-to-projectx>/external-agent/CLAUDE.md
+cp MERGE_GUIDE.md <path-to-projectx>/MERGE_GUIDE.md
+```
+
+จากนั้น `cd <path-to-projectx>` (เข้าไปที่ root ของ `projectx`) แล้วบอก AI แค่ **"อ่าน `MERGE_GUIDE.md` แล้ว merge pipeline เข้ากับโปรเจกต์นี้"** — ไม่ต้องบอกอะไรเพิ่ม ไม่ต้องชี้ path อื่น เพราะไฟล์เดียวที่ต้องอ่านคือ `MERGE_GUIDE.md` ตัวมันเองรู้อยู่แล้วว่า source คือ `external-agent/` ที่อยู่ข้างๆ มัน และ target คือ root ของ `projectx` ที่มันถูกวางอยู่
+
+AI จะ inventory ของเดิมใน `projectx` ก่อน (ถ้ายังไม่มี `.claude`/`CLAUDE.md` เลยก็แค่คัดลอกยกชุด ถ้ามีอยู่แล้วก็ merge แบบ additive ทีละไฟล์ตามตารางในไฟล์นั้น) — ของเดิมไม่หาย ไม่มีการ `git` ใดๆ ระหว่างทาง (กติกาเดิม §5 ยังคุมอยู่) ตรวจผลตาม checklist ท้ายไฟล์ก่อนใช้งานจริง อย่าลืมเช็ค [Stack ที่ใช้](#stack-ที่ใช้) ว่าตรงกับ `projectx` ไหม ถ้าไม่ตรงต้องแก้ `frontend-engineer.md`/`backend-engineer.md` ก่อนใช้งานจริง
+
+เสร็จแล้วลบ `external-agent/` และ `MERGE_GUIDE.md` ออกจาก `projectx` ได้เลย — เป็นแค่ staging ใช้ครั้งเดียวตอน merge ไม่ใช่ส่วนหนึ่งของ pipeline ที่ต้องอยู่ถาวร
+
 ## โครงสร้างไฟล์
 
 ```

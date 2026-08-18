@@ -145,7 +145,7 @@ Writing a *file* that happens to relate to git — `.gitignore`, a CI workflow Y
 
 Every agent's writes resolve to a path under this project's root — `_docs/module/<name>/`, app source, `.claude/...`. No agent writes a file elsewhere on disk, whatever the reason: not to "fix" something outside the project, not to save a copy somewhere else, not because an absolute path looked more convenient.
 
-**This is enforced, not just requested**, the same way as §5's git rule: `.claude/hooks/block-outside-repo.js`, wired in `.claude/settings.json`, blocks `Write`/`Edit`/`MultiEdit`/`NotebookEdit` calls whose target resolves outside the repo root before the tool runs. If you get blocked, don't look for a path that slips past it — tell the user what you were trying to write and where, and let them decide.
+**This is enforced, not just requested**, the same way as §5's git rule: `.claude/hooks/block-outside-repo.js`, wired in `.claude/settings.json`, blocks `Write`/`Edit`/`MultiEdit`/`NotebookEdit` calls whose target resolves outside the repo root before the tool runs. If you get blocked, don't look for a path that slips past it — tell the user what you were trying to write and where, and let them decide. Two narrow exceptions exist, both the harness's own mechanisms rather than an agent going off scope: the OS-temp-dir scratchpad convention, and `~/.claude/projects/<project-key>/memory/...` (Claude Code's cross-session auto-memory store) — see the hook file's own comment for the exact scoping.
 
 ---
 
@@ -162,6 +162,8 @@ The user reads each agent's report and decides, explicitly, whether and when to 
 When the user explicitly asks for a continuous or unattended run — e.g. "รันข้ามคืนได้เลย", "เชื่อมต่อเนื่องไปเลยไม่ต้องถามทุกจุด", "let this run overnight" — the session orchestrating the pipeline (not the subagents themselves; see above, they still can't call each other) invokes each next stage itself as soon as the current one finishes cleanly, following the same routing table below, instead of waiting for the user to ask for every single stage by name.
 
 This is opt-in per run, not a standing setting. Say it again next time you want it; a green light for one overnight run isn't a standing green light for every run after it.
+
+**Exception, standing in every mode: `qa-engineer` and `security` are never auto-chained.** They only run when the user explicitly asks for them by name or by an equivalent request ("ตรวจงานหน่อย", "verify ให้หน่อย", "security review", ฯลฯ) — not automatically just because `frontend-engineer`/`backend-engineer` finished a phase, and not automatically just because a QA round finished on a sensitive module, even in autonomous mode. This is the opposite direction from the five points below (which are "pipeline drives itself, but stops here for a person"): here the pipeline never drives itself into these two stages at all — a person has to name them, every time. Once the user has explicitly asked for one, everything else about it (its own internal FULL/TARGETED gating, its own escalation rules) still applies unchanged.
 
 **Five points always stop and wait for a real person, in both modes — autonomous mode does not remove them, it just means the pipeline drives itself up to them instead of a person driving it there:**
 

@@ -1,6 +1,6 @@
 ---
 name: security
-description: Use this agent after `qa-engineer` has verified a phase that touched auth, personal data, payments, file upload, or any untrusted external input — to audit the implemented code for real security defects (auth/authorization holes, injection, secret leakage, unsafe input handling) before it's accepted or deployed. Trigger on requests like "ตรวจความปลอดภัยหน่อย", "security review", "โค้ดนี้ปลอดภัยไหม", or right after a QA round on a sensitive module.
+description: Use this agent only when the user explicitly asks for a security review of a phase that touched auth, personal data, payments, file upload, or any untrusted external input — to audit the implemented code for real security defects (auth/authorization holes, injection, secret leakage, unsafe input handling) before it's accepted or deployed. Trigger only on explicit requests like "ตรวจความปลอดภัยหน่อย", "security review", "โค้ดนี้ปลอดภัยไหม". Do NOT auto-invoke just because a QA round finished on a sensitive module — wait for the user to ask, even when `plan.md` carries a 🔒 Security gate.
 tools: Read, Glob, Grep, Bash, AskUserQuestion, Write, Edit
 model: opus
 effort: high

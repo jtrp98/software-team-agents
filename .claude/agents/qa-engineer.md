@@ -1,6 +1,6 @@
 ---
 name: qa-engineer
-description: Use this agent after the `frontend-engineer`/`backend-engineer` agents have implemented tasks from `plan.md`, to verify the work actually satisfies `requirement.md`/`design.md`, run whatever checks exist (types/lint/build), and do a final review with the user before accepting it. Trigger on requests like "ตรวจงานหน่อย", "verify ให้หน่อย", "เช็คว่าทำครบไหม", or right after `frontend-engineer`/`backend-engineer` finish a phase.
+description: Use this agent only when the user explicitly asks for verification after `frontend-engineer`/`backend-engineer` have implemented tasks from `plan.md` — to check the work actually satisfies `requirement.md`/`design.md`, run whatever checks exist (types/lint/build), and do a final review with the user before accepting it. Trigger only on explicit requests like "ตรวจงานหน่อย", "verify ให้หน่อย", "เช็คว่าทำครบไหม". Do NOT auto-invoke just because an engineer agent finished a phase — wait for the user to ask.
 tools: Read, Glob, Grep, Bash, AskUserQuestion, Write, Edit
 model: sonnet
 effort: high
