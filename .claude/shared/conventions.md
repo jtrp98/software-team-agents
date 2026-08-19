@@ -156,6 +156,18 @@ Once a decision in one of those three sections is closed (the question is answer
 
 This is `system-analyst`'s responsibility on the amend round that closes the decision, the same way archiving a `review.md` round is `qa-engineer`'s job — do it as part of the amend that resolves the question, not as separate cleanup work later. `.claude/agents/system-analyst.md`'s Output section has the template.
 
+### Catching up a document that grew bloated before it was ever archived
+
+The three rules above (`review.md`, `design.md`'s always-read sections, and `status.md` in §2) all assume archiving has been happening round by round. Nothing here retroactively splits a document — if `review.md`, `design.md`, or a `status.md` module section has simply never been archived and is now carrying rounds of history it shouldn't, the agent that notices does a one-time **catch-up round** instead of leaving it for "later":
+
+1. Read the whole document once — the cost is paid once, here, instead of paid partially by every future run that keeps reading the bloat.
+2. Decide what's actually closed by that document's own rule: a `review.md` round that's superseded (a later round covers the same phase, or the phase deployed); a `design.md` decision whose rule now lives in a Contract section, the Data Model, or `## Modules`; a `status.md` module section holding anything beyond its four fields (§2).
+3. Move the closed material **verbatim** into that document's archive file (`review/phase-N.md`, `design-archive.md`, `status-archive.md`) — never summarize, never prune, exactly the same move as the steady-state rule makes each round.
+4. Leave a one-line pointer where the material was, and keep whatever the steady-state rule says must stay behind (`review.md`'s `Open Issues` and `Unverified Behaviour`; `design.md`'s current, still-open decisions; `status.md`'s current four fields).
+5. After the catch-up round, the normal per-round discipline (`qa-engineer` for `review.md`, `system-analyst` for `design.md`, whoever notices for `status.md`) is enough to keep it small going forward — catch-up is a one-time correction, not a new recurring job.
+
+This isn't gated behind any specific agent owning the fix: whichever agent's run would otherwise pay to read the bloat is the one authorized to do the catch-up, the same "whoever notices" principle §2 already uses for `status.md`.
+
 ---
 
 ## 5. Version control

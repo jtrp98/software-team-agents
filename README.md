@@ -2,7 +2,7 @@
 
 ชุด subagent สำหรับ [Claude Code](https://claude.com/claude-code) ที่จำลอง pipeline การพัฒนาซอฟต์แวร์แบบครบวงจร — ตั้งแต่ไอเดียคลุมเครือไปจนถึงโค้ดที่ตรวจสอบแล้ว ตรวจความปลอดภัยแล้ว และ deploy แล้ว — โดยแบ่งเป็นด่านส่งต่องานกันเป็นทอดๆ แทนที่จะให้ agent ตัวเดียวทำทุกอย่างพร้อมกัน
 
-มี 9 agent แต่ละตัวรับผิดชอบงานเดียว: **business-analyst → system-analyst → project-manager → frontend-engineer / backend-engineer → qa-engineer → security → devops** บวก agent **setup** ที่ scaffold โปรเจกต์ครั้งเดียวตอนเริ่ม ไม่มี agent ตัวไหนเรียก agent ตัวถัดไปเอง (ไม่มีตัวไหนถือ Agent tool) — ค่าเริ่มต้นคือ user ตัดสินใจส่งต่องานเองทุกครั้ง ส่วนโหมด autonomous ที่ user เปิดเป็นครั้งๆ ไปให้ session เดินหน้าเชื่อมงานเองได้ แต่จุดที่เสี่ยงที่สุด — ยืนยัน requirement, ยืนยัน schema, งานตรวจไม่ผ่าน, เจอช่องโหว่ร้ายแรง, deploy จริง — ต้องผ่านคนเสมอไม่ว่าโหมดไหน (ดูหัวข้อ [โหมด autonomous](#โหมด-autonomous--ทิ้งรันข้ามคืนได้))
+มี 9 agent แต่ละตัวรับผิดชอบงานเดียว: **business-analyst → system-analyst → project-manager → backend-engineer → frontend-engineer → qa-engineer → security → devops** บวก agent **setup** ที่ scaffold โปรเจกต์ครั้งเดียวตอนเริ่ม ไม่มี agent ตัวไหนเรียก agent ตัวถัดไปเอง (ไม่มีตัวไหนถือ Agent tool) — ค่าเริ่มต้นคือ user ตัดสินใจส่งต่องานเองทุกครั้ง ส่วนโหมด autonomous ที่ user เปิดเป็นครั้งๆ ไปให้ session เดินหน้าเชื่อมงานเองได้ แต่จุดที่เสี่ยงที่สุด — ยืนยัน requirement, ยืนยัน schema, งานตรวจไม่ผ่าน, เจอช่องโหว่ร้ายแรง, deploy จริง — ต้องผ่านคนเสมอไม่ว่าโหมดไหน (ดูหัวข้อ [โหมด autonomous](#โหมด-autonomous--ทิ้งรันข้ามคืนได้))
 
 ## ทำไมต้องเป็น pipeline แทนที่จะใช้ agent เดียว
 
@@ -20,7 +20,7 @@ agent ตัวเดียวที่ถูกสั่งให้ "สร้
 ```
 setup (ครั้งเดียวต่อโปรเจกต์)
    ↓
-business-analyst → system-analyst → project-manager → frontend-engineer / backend-engineer
+business-analyst → system-analyst → project-manager → backend-engineer → frontend-engineer
                                                                   ↓
                                                             qa-engineer
                                                   ↓            ↓            ↓
@@ -51,7 +51,7 @@ business-analyst → system-analyst → project-manager → frontend-engineer / 
 4. ส่งไฟล์นั้นให้ `system-analyst` ยืนยันความเป็นไปได้และ data model → ได้ `design.md`
 5. ส่งต่อให้ `project-manager` แตกเป็น task list แบ่ง phase → ได้ `plan.md`
 6. รัน `setup` ครั้งเดียวเพื่อ scaffold โปรเจกต์จริง (Next.js + Express + Prisma + Postgres) — ตอนนี้มันจะถามด้วยว่าจะใส่ test framework ไหม ค่าเริ่มต้นคือไม่ใส่ (อ่าน [ถ้าไม่ใส่ test จะไม่มีใครรันโค้ดเลยทั้ง pipeline](#ถ้าไม่ใส่-test-จะไม่มีใครรันโค้ดเลยทั้ง-pipeline) ก่อนตอบ)
-7. ทำ Phase 1 ด้วย `frontend-engineer`/`backend-engineer` แล้วตรวจด้วย `qa-engineer`
+7. ทำ Phase 1 ด้วย `backend-engineer` ก่อนแล้วค่อย `frontend-engineer` (ห้ามรันพร้อมกันในรอบเดียวกัน — frontend ต้องอ่าน contract จาก backend ที่สร้างจริง) แล้วตรวจด้วย `qa-engineer`
 8. phase ไหนที่ `plan.md` ติดธง `🔒 Security gate` ไว้ ให้รัน `security` ก่อนส่งให้ `devops` — `devops` จะไม่ยอม deploy phase ที่ติดธงแต่ยังไม่ถูกตรวจอยู่แล้ว คุณไม่ต้องคอยจำเอง
 
 ทุก agent จะบอกว่าอะไรพร้อมแล้วและควรส่งต่อให้ใคร — ค่าเริ่มต้น (โหมด manual) คือคุณเป็นคนสั่งเดินหน้าทุกครั้ง
@@ -105,10 +105,12 @@ AI จะ inventory ของเดิมใน `projectx` ก่อน (ถ้�
 ```
 _docs/
 ├── status.md                    ← ดัชนีรวม: มี module อะไรบ้าง ไปถึงไหนแล้ว ใครควรทำต่อ
+├── status-archive.md            ← (สร้างเมื่อจำเป็น) เนื้อหา status.md ที่ตกยุคแล้ว ย้ายมาทั้งดุ้น
 └── module/
     └── sales-crm/
         ├── requirement.md       ← business-analyst
         ├── design.md            ← system-analyst
+        ├── design-archive.md    ← (สร้างเมื่อจำเป็น) บันทึกถาม-ตอบของรอบ amend ที่ปิดแล้ว ย้ายออกจากส่วนที่ต้องอ่านทุกรอบของ design.md
         ├── plan.md               ← project-manager  (ติ๊ก checkbox + เพิ่มธง security: qa-engineer)
         ├── review.md            ← qa-engineer  (issue ที่ยังเปิด + รอบปัจจุบัน + งานที่ยังไม่ถูกรันจริง)
         ├── review/
@@ -117,7 +119,9 @@ _docs/
         └── deploy.md            ← devops
 
 .claude/
-├── shared/conventions.md        ← กติกาที่ agent ทุกตัวใช้ร่วมกัน
+├── shared/
+│   ├── conventions.md            ← กติกาที่ agent ทุกตัวใช้ร่วมกัน
+│   └── multi-module-schema-scoping.md ← ขั้นตอนเทียบ schema.prisma กับ design.md เมื่อมีมากกว่า 1 module (อ่านเฉพาะตอนจำเป็น)
 ├── agents/*.md                  ← agent ทั้ง 9 ตัว
 ├── hooks/
 │   ├── block-git.js              ← PreToolUse hook ที่บังคับกติกา "ห้ามใช้ git" จริง
@@ -140,10 +144,11 @@ _docs/
 
 เนื้อหาเต็มและเหตุผลอยู่ใน `.claude/shared/conventions.md`:
 
+- **`backend-engineer` ต้องทำก่อน `frontend-engineer` เสมอในแต่ละ phase ห้ามรันพร้อมกัน** frontend ต้องอ่าน type/API call จากสิ่งที่ backend สร้างจริง ไม่ใช่เดาจาก `design.md` เฉยๆ — รันพร้อมกันแล้ว frontend ต้องเดา contract เอง ซึ่งเคยทำให้เกิด response-shape ไม่ตรงกันจริงมาแล้วจนต้องเสียรอบแก้เพิ่ม ข้อยกเว้นคือ task ในรอบเดียวกันที่ไม่มี API contract ร่วมกันเลย รันสลับลำดับได้ (`conventions.md` §6a)
 - **ไม่มี agent ไหนเชื่อมไปตัวถัดไปเอง — เพราะไม่มีตัวไหนถือ Agent tool** ทุกรอบจบด้วยการบอกว่าอะไรพร้อมแล้วและใครควรหยิบไปทำต่อ ค่าเริ่มต้นคือหยุดรอคุณสั่ง ส่วนโหมด autonomous (คุณสั่งเป็นครั้งๆ ไป) ให้ session เดินหน้าต่อเองได้ แต่ 5 จุด (ดูหัวข้อ [โหมด autonomous](#โหมด-autonomous--ทิ้งรันข้ามคืนได้) ด้านบน) หยุดรอคนเสมอไม่ว่าโหมดไหน
 - **ห้ามใช้ git เด็ดขาด** ไม่มี agent ไหนรัน `git init`/`add`/`commit`/`push` หรือแตะ `.git` — version control เป็นเรื่องของคุณคนเดียว และข้อนี้ไม่ได้ฝากไว้กับความเชื่อฟังของ agent — มันถูกบังคับด้วย hook จริง ดูหัวข้อ [กติกาที่บังคับด้วยโค้ด](#กติกาที่บังคับด้วยโค้ด-ไม่ใช่-prompt)
 - **ไม่มี agent ไหนเขียนไฟล์นอก repo นี้** ทุกการเขียนต้อง resolve อยู่ใต้ root ของโปรเจกต์เสมอ — `_docs/module/<name>/`, โค้ดแอป, `.claude/...` เท่านั้น บังคับด้วย hook อีกตัวเช่นกัน ดูหัวข้อเดียวกัน
-- **Data Model ใน `design.md` คือสัญญา** schema ถูกยืนยันกับคุณครั้งเดียว แล้วถูกนำไปใช้ตรงตัวเป๊ะๆ — ไม่มี agent ไหนคิดฟิลด์เองหรือเปลี่ยนชื่อเอง ถ้ามีช่องว่างต้องส่งกลับ `system-analyst` ห้ามด้นสดแก้เอง หลัง `setup` เขียน `schema.prisma` ตัวจริงแล้ว engineer จะทำงานจากไฟล์นั้น (มันคือสำเนาใช้งานของสัญญา และเป็นไฟล์ที่ query ต้องตรงด้วยจริงๆ) โดยมี `qa-engineer` เป็นตัวเดียวที่อ่านทั้งสองไฟล์แล้วเทียบทีละฟิลด์ให้เท่ากัน — ถ้าไม่ตรงกันเมื่อไหร่ `design.md` ชนะ แปลว่าโค้ดผิด และมีแค่ `setup` (ตอน scaffold) กับ `backend-engineer` (ตอนตามแก้ให้ตรงกับ design ที่ยืนยันแล้ว) เท่านั้นที่เขียน `schema.prisma` ได้ **การเทียบนี้แยกตาม module** เพราะ `schema.prisma` มีไฟล์เดียวทั้งโปรเจกต์ แต่ `design.md` มีต่อ module: ทุก model ใน design ของ module นั้นต้องมีใน schema และตรงเป๊ะ ส่วน model ที่มีใน schema แต่ไม่มีใน design ของ module นี้ ต้อง `Grep` หาก่อนว่า module อื่นเป็นเจ้าของหรือเปล่า — มีแต่ model ที่ไม่มี module ไหนประกาศเลยถึงจะนับว่าเป็นการด้นสดแก้ schema
+- **Data Model ใน `design.md` คือสัญญา** schema ถูกยืนยันกับคุณครั้งเดียว แล้วถูกนำไปใช้ตรงตัวเป๊ะๆ — ไม่มี agent ไหนคิดฟิลด์เองหรือเปลี่ยนชื่อเอง ถ้ามีช่องว่างต้องส่งกลับ `system-analyst` ห้ามด้นสดแก้เอง หลัง `setup` เขียน `schema.prisma` ตัวจริงแล้ว engineer จะทำงานจากไฟล์นั้น (มันคือสำเนาใช้งานของสัญญา และเป็นไฟล์ที่ query ต้องตรงด้วยจริงๆ) โดยมี `qa-engineer` เป็นตัวเดียวที่อ่านทั้งสองไฟล์แล้วเทียบทีละฟิลด์ให้เท่ากัน — ถ้าไม่ตรงกันเมื่อไหร่ `design.md` ชนะ แปลว่าโค้ดผิด และมีแค่ `setup` (ตอน scaffold) กับ `backend-engineer` (ตอนตามแก้ให้ตรงกับ design ที่ยืนยันแล้ว) เท่านั้นที่เขียน `schema.prisma` ได้ ถ้ามีมากกว่า 1 module folder **การเทียบต้องแยกตาม module** เพราะ `schema.prisma` มีไฟล์เดียวทั้งโปรเจกต์ แต่ `design.md` มีต่อ module — ขั้นตอนเต็มอยู่ใน `.claude/shared/multi-module-schema-scoping.md` (อ่านเฉพาะตอนมีมากกว่า 1 module เท่านั้น): ทุก model ใน design ของ module นั้นต้องมีใน schema และตรงเป๊ะเสมอ ส่วน model ที่มีใน schema แต่ไม่มีใน design ของ module นี้ ต้อง `Grep` หาก่อนว่า module อื่นเป็นเจ้าของหรือเปล่า — มีแต่ model ที่ไม่มี module ไหนประกาศเลยถึงจะนับว่าเป็นการด้นสดแก้ schema โปรเจกต์ที่มี module เดียวไม่ต้องอ่านไฟล์นี้เลย
 
 - **engineer ไม่มีสิทธิ์ตัดสินกฎ — ทำตามที่เขียนไว้ หรือหยุดแล้วตีกลับ** `frontend-engineer`/`backend-engineer` ไม่มี `AskUserQuestion` โดยตั้งใจ เพราะกฎที่ตกลงกันในแชทกับ engineer คือกฎที่ไม่เคยลงไปอยู่ใน `requirement.md`/`design.md` แปลว่า phase ถัดไปและ session ถัดไปไม่มีทางเห็นมัน logic ที่ไม่ชัดจึงต้องตีกลับ `system-analyst` (ซึ่งส่งต่อ `business-analyst` ถ้ากลายเป็นคำถามเชิงธุรกิจ) และฝั่ง `system-analyst` มีเกณฑ์กำกับว่า contract section ต้องสมบูรณ์พอที่ engineer จะไม่ต้องตัดสินอะไรเลย — เคสไหนไม่ครอบคลุมต้องเขียนลง contract หรือระบุใน Open Questions ว่าอยู่นอก scope การไม่พูดถึงเลยไม่นับเป็นทั้งสองอย่าง
 - **มีแค่ `security` เท่านั้นที่ปิด finding ของตัวเองได้** แต่ละ finding มีสถานะกำกับ (🔵 Open · 🟣 แก้แล้วรอตรวจซ้ำ · ✅ ตรวจซ้ำแล้ว · ⚪ ยอมรับความเสี่ยง) การที่ engineer แก้เสร็จเลื่อนได้แค่ถึง 🟣 เท่านั้น เพราะการตรวจของ `qa-engineer` เป็นการตรวจเชิงฟังก์ชันซึ่งมันประกาศเองว่าไม่ครอบคลุมด้านความปลอดภัย — `security` ต้องกลับมาตรวจซ้ำเองถึงจะปิดได้ และ `devops` บล็อกทั้ง 🔵 และ 🟣 เท่ากัน
@@ -153,7 +158,9 @@ _docs/
 - **engineer ส่งงานต่อไม่ได้ถ้าโค้ดยังแดง** `typecheck`/`lint` ต้องรันผ่านก่อนที่ `frontend-engineer`/`backend-engineer` จะจบงานได้ — บังคับด้วย hook (`require-green-before-stop.js`) ไม่ใช่แค่ขอความร่วมมือ ข้อผิดพลาดที่จับได้ตรงนี้แก้ในบริบทเดิมได้เลย ส่วนข้อผิดพลาดแบบเดียวกันที่ไปโผล่ตอน `qa-engineer` ตรวจจะแพงกว่าเพราะต้องเปิด agent ใหม่สองรอบ
 - **hook/script ทุกตัวมีการทดสอบตัวเอง** รัน `node .claude/tests/run.js` ทุกครั้งที่แก้ไฟล์ใต้ `.claude/hooks/` หรือ `.claude/scripts/` — hook ที่พิมพ์ผิดจน syntax error จะ "fail open" (ยังต่ออยู่ใน `settings.json` แต่ไม่บล็อกอะไรเลย) ซึ่งเคยเกิดขึ้นจริงมาแล้ว หน้าจอเขียวของ test suite นี้คือสิ่งเดียวที่ยืนยันว่า guard ทั้งหมดยังทำงานตามที่อ้าง
 - **`review.md` ต้องเล็กอยู่เสมอ** มันเก็บแค่ `Open Issues — all phases`, รอบตรวจปัจจุบัน และ `Unverified Behaviour` ของ phase ที่ยังไม่ deploy รอบที่ปิดแล้วถูก `qa-engineer` ย้าย (ยกมาทั้งดุ้น ไม่ย่อ ไม่ตัด) ไปไว้ใน `review/phase-N.md` — เพราะทุกรอบของ engineer/`security`/`devops` อ่านไฟล์นี้เต็มๆ รายละเอียดของ phase ที่ปิดไปแล้วจึงเป็นต้นทุนที่ทั้ง pipeline ต้องจ่ายซ้ำโดยไม่ได้อะไรกลับมา ไฟล์ใน `review/` ไม่ถูกเปิดอ่านตอนเริ่มงานปกติ ข้อยกเว้นคือของสองอย่างที่ "อายุยืนกว่ารอบของตัวเอง" — item ที่ยังเปิดค้าง และ `Unverified Behaviour` — เพราะมีด่านถัดไป (engineer, `devops`) ที่ต้องอ่านมันหลังจากรอบที่สร้างมันหมดอายุไปแล้ว การ archive ของพวกนี้ตามกำหนดจะดูเรียบร้อยดีแต่เท่ากับปลดล็อก gate เงียบๆ
-- **อ่านเฉพาะส่วนที่ต้องใช้ ไม่ใช่ทั้งไฟล์** agent ทุกตัวเริ่มจาก context เปล่า การอ่านทั้งไฟล์จึงเป็นต้นทุนที่จ่ายใหม่ทุกครั้ง — `plan.md` อ่าน Plan Summary + phase ของตัวเอง + Sequencing Notes + Open Questions, `design.md` อ่าน Feature-by-Feature Feasibility, Risks และ Open Questions เสมอ (สามส่วนนี้เก็บการตัดสินใจที่ยืนยันแล้วและรายการ "ห้ามทำ") บวกส่วนสัญญาของ phase ตัวเองกับ module ของตัวเอง วิธีทำอยู่ใน `conventions.md` §10 ข้อยกเว้นมีโดยตั้งใจ: `project-manager` เป็นเจ้าของ `plan.md`, `system-analyst` เป็นเจ้าของ `design.md`, และ `qa-engineer` อ่าน Data Model เต็มทุกรอบ
+- **`status.md` ก็ต้องเล็กอยู่เสมอเหมือนกัน แต่หนักกว่า `review.md`** เพราะ `review.md` เป็นต้นทุนต่อการอ่านของ module เดียว ส่วน `status.md` ถูกอ่านเป็นด่านแรกของ*ทุก* module ทุกรอบ — แต่ละ module เก็บแค่ `Docs:` หนึ่งบรรทัด, ตารางรายเฟสสัญลักษณ์ปัจจุบัน, `**Now**:` และ `**Blocked on**:` เท่านั้น ไม่ใช่บันทึกไล่รอบว่าทำอะไรมาบ้าง — ส่วนที่เกินนั้น (เหตุผลของการตัดสินใจ, กลไกบั๊กที่แก้แล้ว, ผลตรวจรอบเก่า) อยู่ในเอกสารของ module นั้นอยู่แล้วซึ่งมีอำนาจกว่า **เงื่อนไขในการย้ายไม่ใช่ตัวเลขบรรทัดที่นับได้ แต่เป็นเชิงคุณภาพ**: ทันทีที่ section ของ module ไหนมีอะไรเกินกว่า 4 อย่างข้างต้น ก็ถือว่าบวมเกินแล้ว และไม่มี agent ตัวไหนถูกมอบหมายให้เช็คเรื่องนี้ตามรอบ — **ใครสังเกตเห็นก่อน**ระหว่างอ่าน `status.md` ในรอบนั้น เป็นคนย้ายเนื้อหาที่ตกยุคไปไว้ที่ `status-archive.md` แบบยกมาทั้งดุ้นเหมือนที่ `qa-engineer` archive `review.md` แล้วเหลือ pointer บรรทัดเดียวไว้แทน ถ้าไม่ย้าย ทุก module อื่นที่อ่าน `status.md` ต้องจ่ายต้นทุนนั้นไปด้วย ไม่ใช่แค่ module ที่บวม
+- **อ่านเฉพาะส่วนที่ต้องใช้ ไม่ใช่ทั้งไฟล์** agent ทุกตัวเริ่มจาก context เปล่า การอ่านทั้งไฟล์จึงเป็นต้นทุนที่จ่ายใหม่ทุกครั้ง — `plan.md` อ่าน Plan Summary + phase ของตัวเอง + Sequencing Notes + Open Questions, `design.md` อ่าน Feature-by-Feature Feasibility, Risks และ Open Questions เสมอ (สามส่วนนี้เก็บการตัดสินใจที่ยืนยันแล้วและรายการ "ห้ามทำ") บวกส่วนสัญญาของ phase ตัวเองกับ module ของตัวเอง วิธีทำอยู่ใน `conventions.md` §10 ข้อยกเว้นมีโดยตั้งใจ: `project-manager` เป็นเจ้าของ `plan.md`, `system-analyst` เป็นเจ้าของ `design.md`, และ `qa-engineer` อ่าน Data Model เต็มทุกรอบ เพราะสามส่วนนี้ของ `design.md` เป็น mandatory read ทุกรอบเหมือนกัน `system-analyst` จึงต้องเล็กเก็บมันไว้แบบเดียวกัน แต่เงื่อนไขที่นี่เป็นเหตุการณ์ที่ชัดเจน ไม่ใช่การเช็คขนาด: **ทันทีที่รอบ amend ไหนปิดคำถามหนึ่งได้จริง** (กติกาที่ตอบคำถามนั้นถูกย้ายไปอยู่ใน Contract section/Data Model/`## Modules` แล้ว) บันทึกถาม-ตอบของรอบนั้นจะหมดหน้าที่ในฐานะ mandatory read ทันที และต้องถูกย้ายทั้งดุ้นไปไว้ที่ `design-archive.md` — งานนี้ผูกกับ `system-analyst` โดยเฉพาะ (ต่างจาก `status.md` ที่เป็น "ใครเห็นก่อน") และต้องทำ**เป็นส่วนหนึ่งของ amend รอบที่ปิดคำถามนั้นเลย** ไม่ใช่งาน cleanup แยกไปทำทีหลัง
+- **ถ้าเอกสารบวมมาก่อนแล้วโดยไม่เคยถูก archive มาเลยสักรอบ** (ไม่ใช่กรณีที่ archive ทีละรอบแล้วมีอะไรหลุดไปนิดหน่อย) — ไม่มีกลไกไหนแบ่งย้อนหลังให้อัตโนมัติ agent ตัวไหนก็ตามที่รอบของตัวเองต้องจ่ายต้นทุนอ่านของบวมนี้ ทำ**รอบ catch-up ครั้งเดียว**แทนที่จะปล่อยไว้: เปิดไฟล์เต็มครั้งเดียว, ตัดสินว่าส่วนไหนปิดแล้วจริงตามกติกาของไฟล์นั้น (`review.md` = รอบที่ถูกแทนที่แล้วหรือ phase deploy ไปแล้ว, `design.md` = คำถามที่กติกาย้ายไป Contract section แล้ว, `status.md` = อะไรเกิน 4 หัวข้อ), ย้ายส่วนที่ปิดแล้วไปไฟล์ archive แบบยกทั้งดุ้นไม่สรุปไม่ตัด, เหลือ pointer บรรทัดเดียวไว้แทน หลังจากนั้นกติกาต่อรอบปกติ (agent เจ้าของไฟล์ทำต่อเนื่องเอง) ก็เพียงพอแล้ว ไม่ต้อง catch-up ซ้ำอีก — `conventions.md` §4 หัวข้อ "Catching up a document that grew bloated before it was ever archived" มีขั้นตอนเต็ม
 - **ไม่มีอะไรถูก deploy โดยไม่ผ่านการตรวจ** `devops` จะปฏิเสธ deploy phase ที่ QA ยังไม่ยอมรับ, phase ที่รอบตรวจล่าสุดเป็นแบบ TARGETED, phase ที่ติดธง `🔒 Security gate` แต่ `security` ยังไม่ได้ตรวจ, หรือ phase ที่ยังมีช่องโหว่ระดับ Critical/Important ค้างอยู่ (อ่านจาก `Open Findings — all rounds` ซึ่งรวมทุกรอบ ไม่ใช่แค่รอบล่าสุด) เว้นแต่คุณจะสั่ง override เอง
 - **phase ที่อ่อนไหวถูกติดธงเป็นลายลักษณ์อักษร ไม่ใช่ให้ใครนึกเอาเอง** `project-manager` ติด `🔒 Security gate` ที่หัว phase ตั้งแต่ตอนวางแผน ถ้ามันแตะ auth, ข้อมูลส่วนบุคคล, การเงิน, upload หรือ input จากภายนอก — `qa-engineer` เพิ่มธงที่ PM มองไม่เห็นตอนวางแผนได้ และ `devops` ใช้ธงนี้เป็น gate ไม่มีใครถอดธงออกได้นอกจากคุณ
 - **แก้ไม่ผ่านสองรอบให้ส่งกลับหาคุณ ไม่ใช่วนส่งต่อ** หลัง re-check รอบที่สองของ item เดิมยังไม่ผ่าน `qa-engineer` จะหยุดวนแล้วรายงานคุณแทน — item ที่รอดจากการแก้สองรอบมักแปลว่า route ผิดตั้งแต่ต้น (เป็นคำถามเชิง design หรือ business) ไม่ใช่ implement ห่วย
@@ -222,7 +229,7 @@ pipeline เต็มมีไว้สำหรับสร้างของ�
 
 | ลักษณะงาน | เริ่มที่ |
 |---|---|
-| แก้ข้อความ/สไตล์ หรือบั๊กที่ requirement + schema ชัดเจนอยู่แล้ว | `frontend-engineer`/`backend-engineer` → `qa-engineer` |
+| แก้ข้อความ/สไตล์ หรือบั๊กที่ requirement + schema ชัดเจนอยู่แล้ว | `backend-engineer` (ถ้าแตะ API) → `frontend-engineer` → `qa-engineer` |
 | เพิ่ม/แก้ฟิลด์-ตาราง-ความสัมพันธ์ | `system-analyst` (amend) → engineer → `qa-engineer` |
 | เปลี่ยน business rule แต่ไม่กระทบ schema | `business-analyst` (amend) → `system-analyst` (amend) → engineer → `qa-engineer` |
 | ฟีเจอร์/โมดูล/โปรเจกต์ใหม่ | `business-analyst` เริ่มเต็มสาย |
