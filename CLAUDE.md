@@ -11,7 +11,7 @@ This repo defines a fixed, hand-off-based agent pipeline for building a project 
 ```
 setup (once per project)
    ↓
-business-analyst → system-analyst → project-manager → frontend-engineer / backend-engineer
+business-analyst → system-analyst → project-manager → backend-engineer → frontend-engineer
                                                                   ↓
                                                             qa-engineer
                                                   ↓            ↓            ↓
@@ -78,6 +78,7 @@ A **module folder** is a delivery unit with its own doc set and phase numbering;
 
 Full text in `.claude/shared/conventions.md`; the short version:
 
+- **`backend-engineer` runs before `frontend-engineer`, never in parallel, within a phase.** The frontend reads its types/API calls off what the backend actually built, not off `design.md` alone — running both at once means frontend has to guess the contract, which is exactly what produced a real `staff-roles/sync` response-shape mismatch that cost an extra fix round. Exception: tasks in the same phase that share no API contract can run in either order. `.claude/shared/conventions.md` §6a has the full rule.
 - **No agent chains to the next — structurally, none of the nine has the `Agent` tool.** By default (manual mode) each finishes by saying what's ready and who should get it, then the user decides. When the user explicitly asks for a continuous/unattended run ("รันข้ามคืนได้เลย"), the session orchestrating the pipeline may chain the handoffs itself, opt-in per run — but five points always stop and wait for a person regardless of mode: `business-analyst` any time it runs, `system-analyst`'s schema confirmation, `qa-engineer` on any ⚠️/❌ result, `security` on any 🔴/🟠 finding, and `devops` before an actual deploy/migration. **`qa-engineer` and `security` are further exempt from auto-chaining altogether, in every mode** — the pipeline never invokes them on its own just because an engineer or a QA round finished; the user must ask for them by name every time. `.claude/shared/conventions.md` §6 has the full rule.
 - **No git, ever.** No agent runs git or touches `.git`. `setup`/`devops` may *write* a `.gitignore` or CI file — that's writing a file, not running git. This is enforced by a `PreToolUse` hook (`.claude/hooks/block-git.js`), not left to the prompt: state-changing git commands are blocked at the tool call, read-only ones (`status`/`log`/`diff`/`show`) still run.
 - **No agent writes outside this repo.** Every write resolves under the project root, whatever the reason. Enforced by a second `PreToolUse` hook (`.claude/hooks/block-outside-repo.js`) on `Write`/`Edit`/`MultiEdit`/`NotebookEdit` — the one exception is Claude Code's own scratchpad convention under the OS temp dir, which isn't an agent going off scope.
@@ -106,7 +107,7 @@ The full chain is for building something new. Running nine stages for a copy fix
 
 | The work is | Start at | Skip |
 |---|---|---|
-| Copy/styling tweak, or a bug where requirement + schema are already clear | `frontend-engineer` / `backend-engineer` → `qa-engineer` | BA, SA, PM |
+| Copy/styling tweak, or a bug where requirement + schema are already clear | `backend-engineer` (if it touches the API) → `frontend-engineer` → `qa-engineer` | BA, SA, PM |
 | Adds or alters a field/table/relation | `system-analyst` (amend) → engineer → `qa-engineer` | BA, PM |
 | Changes a business rule, no schema impact | `business-analyst` (amend) → `system-analyst` (amend) → engineer → `qa-engineer` | PM |
 | A new feature, module, or project | `business-analyst`, full chain | nothing |

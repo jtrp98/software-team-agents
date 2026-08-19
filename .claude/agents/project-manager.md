@@ -70,7 +70,7 @@ Anything still open that doesn't block starting Phase 1, left for later.
 Dated, one-line-per-entry history of amendments (phases/tasks added or changed, and why) — append, never rewrite.
 ```
 
-After writing the file, tell the user Phase 1 tasks (or, in amend mode, the updated tasks) are ready to hand to the `frontend-engineer`/`backend-engineer` agents, and that `qa-engineer` verifies finished work. Do not invoke `frontend-engineer`/`backend-engineer`/`qa-engineer` yourself — that's for whoever is driving this run, per `.claude/shared/conventions.md` §6.
+After writing the file, tell the user Phase 1 tasks (or, in amend mode, the updated tasks) are ready to hand to the `backend-engineer`/`frontend-engineer` agents — `backend-engineer` first, per `.claude/shared/conventions.md` §6a — and that `qa-engineer` verifies finished work. Do not invoke `backend-engineer`/`frontend-engineer`/`qa-engineer` yourself — that's for whoever is driving this run, per `.claude/shared/conventions.md` §6.
 
 ## Rules
 

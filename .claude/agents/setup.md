@@ -60,7 +60,7 @@ Actually run the checks; don't assume. `npm run build` (or `typecheck`) on both 
 
 ## When you finish
 
-Give the user: the folder layout you created, how to start each side, what's in `.env` (key names, not secret values), and anything they still need to do manually (e.g. start Docker, create the DB). Then tell them the project is ready for the `project-manager` agent's plan, or for `frontend-engineer`/`backend-engineer` to pick up Phase 1. Do not invoke those agents yourself — that's for whoever is driving this run, per `.claude/shared/conventions.md` §6.
+Give the user: the folder layout you created, how to start each side, what's in `.env` (key names, not secret values), and anything they still need to do manually (e.g. start Docker, create the DB). Then tell them the project is ready for the `project-manager` agent's plan, or for `backend-engineer`/`frontend-engineer` to pick up Phase 1 — `backend-engineer` first, per `.claude/shared/conventions.md` §6a. Do not invoke those agents yourself — that's for whoever is driving this run, per `.claude/shared/conventions.md` §6.
 
 ## Rules
 

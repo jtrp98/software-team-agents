@@ -92,6 +92,21 @@ A phase whose heading in `plan.md` carries `🔒 Security gate` keeps `security 
 
 Don't put dates in `status.md`. It records where things stand right now; dated history belongs in each document's own `## Change Log`.
 
+### Keeping `status.md` small — it's read on every single run, project-wide
+
+Same reasoning as `review.md` in §4, only wider: `review.md` taxes every run *on that module*; `status.md` taxes every run on *every* module, since it's the first thing read to get oriented. A module's section that grows round-by-round narrative becomes a cost every other module's runs pay too.
+
+Each module's section holds exactly:
+
+1. **`Docs:`** — one line, doc status only (✅/⬜, a short "last amended" note if useful)
+2. **The per-phase table** — one line per phase, current symbols only (§2's `implemented`/`verified`/`security`/`deployed` row)
+3. **`**Now**:`** — the current actionable state, a few sentences
+4. **`**Blocked on**:`** — current blockers only, or `—`
+
+Anything more than that — how a decision was reached, a fixed bug's mechanism, a past round's findings, a judgment call's reasoning — belongs in that module's own documents (`design.md`'s `## Change Log`, `review.md`, `security.md`), which already carry it with more authority. Don't duplicate it into `status.md` as running narrative; a status update is a fact about *current state*, not a diary entry about how the run went.
+
+**When a module's section has outgrown this** — superseded "Next step" paragraphs, resolved judgment calls, round-by-round history — move the superseded material verbatim into an archive file next to `status.md` (e.g. `status-archive.md`), the same way `qa-engineer` archives `review.md` rounds into `review/phase-N.md` (§4): move, don't summarize, don't discard, leave a one-line pointer under the module's section. This isn't only `qa-engineer`'s or the pipeline-driver's job — whoever notices the file has grown this way trims it, since every agent that reads `status.md` is who pays for leaving it untrimmed.
+
 ---
 
 ## 3. Dates
@@ -133,51 +148,43 @@ The exact section layout, the two verify modes (FULL and TARGETED), and what the
 
 **Do not read `review/phase-N.md` as part of your normal startup.** Read `review.md` only. Open an archive file solely when something specific sends you there — an `Open Issues` row you need the background on, a regression that looks like it's re-opening old work, or the user asking about past history.
 
+### Keeping `design.md`'s always-read sections small
+
+The same reasoning applies to `design.md`, and it hits harder here because §10 makes three of its sections — `## Feature-by-Feature Feasibility`, `## Risks & Dependencies`, `## Unresolved Open Questions` — mandatory reading on *every single run*, not just `system-analyst`'s own. A module that goes through several amend rounds naturally accumulates one question-and-answer table per round in those sections; left alone, each round adds its full reasoning and rejected alternatives on top of the last, and every future run — engineer, `qa-engineer`, `security`, `devops` — pays to read all of it just to find out today's rule.
+
+Once a decision in one of those three sections is closed (the question is answered and the resulting rule now lives in a Contract section, the Data Model, or `## Modules`), its role in the always-read section is done — the *rule* stays in a Contract section where it belongs, but the *question-and-answer record* of how it was reached is done being load-bearing. Move it, verbatim, into a `design-archive.md` next to `design.md`, the same way `qa-engineer` moves a closed round into `review/phase-N.md`: move, don't summarize, don't discard, leave a one-line pointer where it was ("mati ของแต่ละรอบย้ายไปเก็บที่ `design-archive.md` แล้ว — กติกาที่ใช้จริงอยู่ที่ § ... ด้านล่าง"). A decision's reasoning is still fully available, it just stops being loaded by every run that doesn't need it.
+
+This is `system-analyst`'s responsibility on the amend round that closes the decision, the same way archiving a `review.md` round is `qa-engineer`'s job — do it as part of the amend that resolves the question, not as separate cleanup work later. `.claude/agents/system-analyst.md`'s Output section has the template.
+
 ---
 
 ## 5. Version control
 
-**No agent runs git.** No `git init`, `add`, `commit`, `push`, `checkout`, branch or tag operations, and nothing that touches `.git/`. Version control is entirely the user's.
+**No agent runs git** — no `init`/`add`/`commit`/`push`/`checkout`/branch/tag, nothing touching `.git/`. Version control is entirely the user's. Writing a git-*related file* (`.gitignore`, a CI workflow) is fine for the agents whose job that is (`setup`, `devops`) — writing a config file isn't running git.
 
-Writing a *file* that happens to relate to git — `.gitignore`, a CI workflow YAML — is allowed for the agents whose job that is (`setup`, `devops`). Writing a config file is not running git.
-
-**This one is enforced, not just requested.** `.claude/hooks/block-git.js`, wired as a `PreToolUse` hook in `.claude/settings.json`, blocks state-changing git commands and any direct access to `.git/` before the tool call runs. Read-only inspection (`git status`, `log`, `diff`, `show`) still works, because it changes nothing. If you get blocked, the answer is never to find a way around it — report to the user what you wanted to do and let them run it.
+**Enforced, not just requested**: `.claude/hooks/block-git.js` blocks state-changing git commands and any `.git/` access before the call runs; read-only inspection (`status`/`log`/`diff`/`show`) still works. Full reasoning is in the hook's own comments — read it if you're touching the hook, not on every agent run. If you get blocked, don't look for a way around it: tell the user what you wanted to do and let them run it.
 
 ## 5a. Stay inside the repo
 
-Every agent's writes resolve to a path under this project's root — `_docs/module/<name>/`, app source, `.claude/...`. No agent writes a file elsewhere on disk, whatever the reason: not to "fix" something outside the project, not to save a copy somewhere else, not because an absolute path looked more convenient.
+Every write resolves under this project's root. No agent writes elsewhere, whatever the reason.
 
-**This is enforced, not just requested**, the same way as §5's git rule: `.claude/hooks/block-outside-repo.js`, wired in `.claude/settings.json`, blocks `Write`/`Edit`/`MultiEdit`/`NotebookEdit` calls whose target resolves outside the repo root before the tool runs. If you get blocked, don't look for a path that slips past it — tell the user what you were trying to write and where, and let them decide. Two narrow exceptions exist, both the harness's own mechanisms rather than an agent going off scope: the OS-temp-dir scratchpad convention, and `~/.claude/projects/<project-key>/memory/...` (Claude Code's cross-session auto-memory store) — see the hook file's own comment for the exact scoping.
+**Enforced** by `.claude/hooks/block-outside-repo.js` on `Write`/`Edit`/`MultiEdit`/`NotebookEdit`. Two narrow exceptions exist, both the harness's own mechanisms rather than an agent going off scope (the OS-temp scratchpad, and Claude Code's cross-session memory store) — see the hook's own comments for the exact scoping. If blocked, tell the user what you were trying to write and where, and let them decide.
 
 ---
 
 ## 5b. Amend, don't regenerate — the mechanical half
 
-§4 says existing docs are amended with `Edit`, never replaced with `Write`. The "never replaced" half of that is enforced, not just requested, the same way as §5 and §5a: `.claude/hooks/block-doc-rewrite.js`, wired in `.claude/settings.json`, blocks a `Write` call whose target is one of the six per-module docs (`requirement.md`, `design.md`, `plan.md`, `review.md`, `security.md`, `deploy.md`) **when that file already exists**. `Edit`/`MultiEdit` are unaffected — they're the allowed path. A `Write` to one of these paths when the file doesn't exist yet (the doc's first creation) is unaffected too. If you get blocked, the answer is the same as §5/§5a: don't look for a way around it, use `Edit` on the section that needs to change.
-
-This hook cannot tell *which agent* is calling it — it has no way to except "business-analyst creating requirement.md for the first time" by name, so it doesn't try to; the file-exists check produces the right behavior structurally instead.
+§4 says existing docs are amended with `Edit`, never replaced with `Write`. **Enforced** by `.claude/hooks/block-doc-rewrite.js`, which blocks a `Write` to one of the six per-module docs once it already exists on disk — `Edit`/`MultiEdit` are unaffected, and so is a doc's first creation (file doesn't exist yet). If blocked, use `Edit` on the section that needs to change. (The hook can't tell which agent is calling it — see its comments for why the file-exists check is the right proxy anyway.)
 
 ## 5c. An engineer doesn't hand off red code
 
-The most expensive thing in this pipeline is the dev↔QA round trip. `qa-engineer` starts from a fresh context every round — it reads `plan.md`, `design.md`, `requirement.md`, `schema.prisma` and the real code — so a round that exists only to report a type error costs a full verification run plus a full engineer run to fix it, and the round after that costs exactly the same again. Nothing amortizes across rounds.
-
-Most of what such a round catches is what a compiler catches for free. So those checks happen **before an engineer is allowed to finish**, not after: `.claude/hooks/require-green-before-stop.js`, wired as a `Stop`/`SubagentStop` hook, runs `typecheck` and `lint` (plus this repo's two drift scripts) when a run has changed application code, and blocks the finish while they're red. A failure caught there is fixed in-context for the price of one edit; the same failure caught by QA costs two fresh-context agent runs.
-
-Three things worth knowing about it:
-
-- **It only triggers on runs that changed application code.** Doc-only runs (`business-analyst`, `system-analyst`, `project-manager`, and `qa-engineer` writing `review.md`) never trip it. Stop hooks carry no agent identity, so "did app code change?" is the proxy — and it's the more accurate question anyway.
-- **It can never trap you.** It forces at most one in-context fix attempt; the next attempt is allowed through regardless. That one attempt is the whole saving.
-- **It is not a licence to improvise.** If a failure isn't yours to fix — a schema gap that belongs to `system-analyst`, a contract question you must not invent an answer to (§7) — say so in your handoff and finish. Never edit the contract, or fake a type, to make the checks pass.
-
-`build` and `test` deliberately stay with `qa-engineer`: too slow to pay for on every agent stop.
+The dev↔QA round trip is the most expensive thing in this pipeline: a type error `qa-engineer` finds costs a full fresh-context QA run plus a full fresh-context engineer run to fix — and the round after that costs the same again. So `typecheck`/`lint` (plus this repo's two drift scripts) run **before an engineer is allowed to finish**, not after: `.claude/hooks/require-green-before-stop.js` blocks the finish while they're red on a run that touched application code. It forces at most one in-context fix attempt and can never trap you — the next attempt is let through regardless. **It's not a licence to improvise**: if a failure isn't yours to fix (a schema gap, a contract question you must not invent an answer to per §7), say so in your handoff instead of editing around it. Full reasoning — including why "did app code change?" stands in for agent identity — is in the hook's own comments. `build`/`test` stay with `qa-engineer`: too slow to pay for on every stop.
 
 ## 5d. The guards are themselves tested
 
-§5, §5a, §5b and §5c are the only rules in this pipeline that don't depend on an agent remembering them, which makes them the load-bearing part of the design. So they get the same treatment they give everyone else: `node .claude/tests/run.js` exercises every hook and both checker scripts — 69 cases, no dependencies, no install.
+§5–5c are the only rules here that don't depend on an agent remembering them — the load-bearing part of the design. `node .claude/tests/run.js` exercises every hook and both checker scripts (69 cases, no dependencies).
 
-**Run it after editing anything under `.claude/hooks/` or `.claude/scripts/`.** The reason is specific: a hook that throws a `SyntaxError` exits 1, and a `PreToolUse` hook only blocks on exit 2 — so a hook with a typo **fails open**. It stays wired in `settings.json`, still looks installed, and enforces nothing, silently. That already happened once during development. The first thing the harness checks is that every guard still parses, and it's verified to catch both that failure and a silent behavioral regression (a guard whose syntax is fine but whose logic stopped blocking).
-
-A failing guard is worse than no guard, because it buys false confidence. Treat a red run as blocking.
+**Run it after editing anything under `.claude/hooks/` or `.claude/scripts/`.** A hook with a syntax error exits 1, not 2 — and `PreToolUse` only blocks on exit 2 — so a typo makes a guard **fail open**: still wired up, still looking installed, enforcing nothing. That happened once for real. A failing guard is worse than no guard, because it buys false confidence — treat a red run as blocking.
 
 ## 6. Handoffs
 
@@ -210,7 +217,7 @@ The normal flow, and the loops back:
 ```
 setup (once per project)
    ↓
-business-analyst → system-analyst → project-manager → frontend-engineer / backend-engineer
+business-analyst → system-analyst → project-manager → backend-engineer → frontend-engineer
                                                                     ↓
                                                               qa-engineer
                                                     ↓            ↓            ↓
@@ -223,6 +230,16 @@ business-analyst → system-analyst → project-manager → frontend-engineer / 
 
 ---
 
+## 6a. `backend-engineer` before `frontend-engineer`, never at the same time
+
+A phase's `[frontend]` tasks are not an independent track from its `[backend]` tasks — the frontend reads its types and API calls off what the backend *actually built* (a route's real request/response shape), not off `design.md`'s Data Model alone, which describes storage, not wire format. Running both engineers at once on the same phase means `frontend-engineer` has nothing real to read yet and has to guess the contract. That guess is exactly what produced the `staff-roles/sync` response-shape mismatch in `hkt`'s `crm-ai-support` module (`created`/`reactivated`/`deactivated`/`unchanged` guessed by the frontend session while the backend session — running concurrently — actually shipped `processed`/`failed`) — caught only after the fact, and it cost a dedicated fix round on top of both engineer runs.
+
+**Within a phase, always run `backend-engineer` to completion first, then `frontend-engineer`.** This applies in both manual and autonomous mode — it isn't one of the five points that stop for a person (§6), because it isn't a decision at all, it's an ordering rule like any other in this file: the pipeline (or the user) simply invokes them in that order instead of together.
+
+The one exception: tasks in the same phase that share no API contract — a frontend-only styling task and an unrelated backend task — can run in either order or the same session, since there's no contract to guess at. The rule is about tasks that share a contract within one phase, not a blanket ban on touching both halves in one sitting.
+
+---
+
 ## 7. The design is the contract
 
 `design.md`'s Data Model section is the confirmed Prisma schema, agreed with the user by `system-analyst`. `backend-engineer` implements it verbatim, `frontend-engineer` derives its types from it, `qa-engineer` fails any drift from it.
@@ -231,18 +248,9 @@ No agent invents, renames, or "improves" a field, type, or relation. If a task n
 
 **Once `setup` has written the real `schema.prisma`, that file is the contract's working copy** — `design.md`'s Data Model stays the authority, but the engineers work from `schema.prisma`, which is the file their queries and types actually have to agree with, and which they have open anyway. Reading both is reading the same contract twice.
 
-That only holds because one agent keeps them equal: **`qa-engineer` reads both and compares them field by field**, and an unexplained divergence is a ❌ — a field in `schema.prisma` that no module's `design.md` accounts for is exactly the improvised schema change this rule exists to catch. Which divergences count depends on how many modules exist:
+That only holds because one agent keeps them equal: **`qa-engineer` reads both and compares them field by field**, and an unexplained divergence is a ❌ — a field in `schema.prisma` that no module's `design.md` accounts for is exactly the improvised schema change this rule exists to catch. **Every model in this module's `design.md` Data Model must exist in `schema.prisma` and match field for field** — a missing model, a renamed field, a changed type, a dropped relation, all ❌, and that direction is absolute regardless of module count.
 
-### Scoping the comparison when more than one module exists
-
-`schema.prisma` is one file for the whole project; `design.md` is one file **per module folder**. So the comparison is directional, and only one direction is a straight equality check:
-
-- **Every model in this module's `design.md` Data Model must exist in `schema.prisma` and match field for field.** A missing model, a renamed field, a changed type, a dropped relation — all ❌. This direction is absolute.
-- **A model in `schema.prisma` that this module's `design.md` doesn't have is not automatically a ❌.** It may belong to another module. Before flagging it, **`Grep` for `model <Name>` across `_docs/module/*/design.md`** — one search per unclaimed model, and the hit tells you which folder owns it. Do *not* read other modules' Data Model sections to answer this; ownership is a name lookup, and reading another module's schema to check one name is exactly the whole-file read §10 exists to prevent. If another module claims it, it's out of scope for this round — leave it alone, don't verify it, don't report it. **If the Grep comes back empty, that is the improvised schema change this rule exists to catch, and it is a ❌** regardless of which module's round found it.
-
-The second bullet is why the rule can't be "the two files must be identical" — that phrasing is only correct on a single-module project, and it produces a guaranteed false ❌ on every round the moment a second module exists.
-
-Cross-module relations (a model in module B with a relation to a model owned by module A) are legitimate and expected. Verify the field on **your** side of the relation; take the other side as given, since the module that owns it is responsible for it.
+**If `_docs/module/` has more than one folder**, a model in `schema.prisma` that *this* module's `design.md` doesn't declare isn't automatically a ❌ — it may belong to another module, and deciding that needs an ownership check before you flag it. Read `.claude/shared/multi-module-schema-scoping.md` for the exact procedure the moment you're in that situation; skip it entirely on a single-module project, where every model in `schema.prisma` belongs to your one `design.md` by definition and the rule above already covers you completely.
 
 So:
 
@@ -266,7 +274,7 @@ Match the entry point to the size of the change:
 
 | The work is | Start at | Skip |
 |---|---|---|
-| Copy/styling tweak, or a bug where the requirement and schema are already clear | `frontend-engineer` / `backend-engineer` → `qa-engineer` | `business-analyst`, `system-analyst`, `project-manager` |
+| Copy/styling tweak, or a bug where the requirement and schema are already clear | `backend-engineer` (if it touches the API) → `frontend-engineer` → `qa-engineer` | `business-analyst`, `system-analyst`, `project-manager` |
 | A change that adds or alters a field/table/relation | `system-analyst` (amend mode) → engineer → `qa-engineer` | `business-analyst`, `project-manager` |
 | A change to business rules, but no schema impact | `business-analyst` (amend) → `system-analyst` (amend) → engineer → `qa-engineer` | `project-manager` |
 | A new feature, module, or project | `business-analyst`, full chain | nothing |
@@ -309,9 +317,9 @@ Nothing is lost by skipping the other phases: cross-phase dependencies live in `
 
 Same technique — `Grep` for `^## ` to get the section map, then `Read` the ranges you need.
 
-**Always read**, whatever your phase is, because these carry decisions and prohibitions that don't repeat anywhere else:
+**Always read**, whatever your phase is, because these carry decisions and prohibitions that don't repeat anywhere else — and because they're mandatory reading on every run, `system-analyst` keeps them archived per §4's "Keeping `design.md`'s always-read sections small": a closed decision's rule lives in a Contract section, and only a one-line pointer to `design-archive.md` remains here, not the full question-and-answer record:
 
-- **`## Feature-by-Feature Feasibility`** — including its "การตัดสินใจที่ผู้ใช้ยืนยันแล้ว" table of confirmed decisions, and which dependencies the design actually sanctioned
+- **`## Feature-by-Feature Feasibility`** — current feasibility verdict per feature and which dependencies the design actually sanctioned
 - **`## Risks & Dependencies`** — several mitigations in there are implementation instructions, not commentary
 - **`## Unresolved Open Questions`** — this is where "explicitly cut from scope, do not implement without amending first" lives
 
