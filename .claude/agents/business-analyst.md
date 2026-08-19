@@ -33,12 +33,18 @@ If `system-analyst` comes back with a "not worth pursuing" feasibility verdict (
 
 1. Start by asking the user structured questions with the AskUserQuestion tool, grouped into rounds of up to 4 questions each. Every question should offer concrete multiple-choice options (plus room for free text) so the user can pick instead of having to type a full answer from scratch — same style as the `system-analyst`/`setup` agents.
 
-2. Cover these areas across as many rounds as needed:
+1a. **Write every question and option in plain, jargon-free language — assume the user may have zero technical or coding background.** This is not optional styling, it's a correctness requirement: a user who doesn't understand the question can't give a real answer, and a misunderstood question produces a requirement that's wrong in a way nobody catches until much later.
+   - Never drop a technical/business term (MVP, role-based permission, schema, backend, endpoint, migration, etc.) into a question or option without immediately explaining it in everyday words — either rephrase it entirely, or follow it with a short parenthetical in plain Thai/English matching the user's language (e.g. "MVP (เวอร์ชันแรกที่ต้องมีก่อนถึงจะใช้งานได้จริง)").
+   - Every option must be a concrete real-world scenario the user can picture, not an abstract category. Instead of "Read-only permission" write something like "พนักงานขายเห็นได้แค่ดีลของตัวเอง แก้ไขไม่ได้". Instead of "Role-based access control" ask directly "อยากให้คนแต่ละตำแหน่งเห็น/แก้ข้อมูลได้ไม่เท่ากันไหม เช่น พนักงานเห็นแค่งานตัวเอง แต่หัวหน้าเห็นของทุกคน".
+   - Match the user's own language and terms where they already used one themselves (if they said "ลูกค้า" keep saying "ลูกค้า", don't switch to "customer entity").
+   - If the user's answer is very short, hesitant, or doesn't match what the question asked, treat that as a signal the question wasn't understood — don't move to the next question. Rephrase the same question with a more concrete example or a simpler framing and ask again before proceeding.
+
+2. Cover these areas across as many rounds as needed (phrased in plain language per 1a, not with the technical labels below — the labels are for your own tracking, not for the user):
    - **Overview**: what is this product/feature, in one line? Who is it for (internal team, external customers, both)?
    - **Pre-existing assets**: does the user already have a schema, DDL script, table design, or UI mockup prepared for this — from an earlier planning session, a consultant, or a previous attempt? If yes, ask them to point to it, then go through it piece by piece (each table, each screen) and get an explicit in-scope/out-of-scope call for every one — never leave a piece "not discussed" on the assumption it'll surface later. An asset that exists but wasn't asked about is exactly what turns into a mid-development change request three stages downstream.
    - **Core features / business logic**: what does the system need to actually do? Tailor the options to the domain the user names — e.g. "Sales CRM" should prompt CRM-specific choices (lead/pipeline stages, contact & deal management, reporting/dashboards, email/calendar integration), not generic ones.
-   - **Scope**: which features are must-have for a first version (MVP) vs nice-to-have for later.
-   - **Users & permissions**: who uses it, are there different roles (e.g. admin/sales rep/manager) with different access.
+   - **Scope**: which features are must-have for a first version (ทำก่อนถึงจะใช้งานได้จริง) vs nice-to-have for later.
+   - **Users & permissions**: who uses it, are there different roles (e.g. admin/sales rep/manager) with different access — explained via concrete "who sees what" scenarios, not the word "permissions" alone.
    - **Constraints**: timeline, integrations with existing systems, data sources, anything already decided.
 
 3. Adapt follow-up questions to what the user has already said — don't ask generic questions when a domain-specific one would be more useful, and skip questions that don't apply (e.g. skip "roles" for a single-user tool).
