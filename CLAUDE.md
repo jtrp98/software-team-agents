@@ -6,6 +6,8 @@ This repo defines a fixed, hand-off-based agent pipeline for building a project 
 
 `.claude/shared/conventions.md` is the authoritative source for the rules every agent shares: module-folder resolution, the `_docs/status.md` index, dates, amend discipline, version control, handoffs, the design-as-contract rule, and where the stack is defined. The agent files deliberately don't repeat those rules — they point at that file, so changing a rule means editing one place, not nine.
 
+`orchestrator/` (a separate Node/TypeScript package, `npm install`/`npm test` inside it) automates the opt-in autonomous mode described above — it shells out to `claude -p --agent <role>`, so it still runs the exact `.claude/agents/<role>.md` files this document defines, and it still stops at the same five human-approval points via its own gate/retry logic. It never invokes an agent by holding the `Agent` tool itself, and it never edits `.claude/` or `_docs/` directly. See `README.md`'s `orchestrator/` section for how to run it.
+
 ## The pipeline
 
 ```

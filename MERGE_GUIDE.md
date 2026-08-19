@@ -13,18 +13,27 @@ the pipeline itself:
 projectx/                           ← target project root — your cwd when executing this merge
 ├── software-team-agents/           ← staging folder — the SOURCE of the merge
 │   ├── .claude/
+│   ├── orchestrator/
 │   ├── CLAUDE.md
 │   └── MERGE_GUIDE.md              ← this file
 ├── .claude/                        ← (if present) projectx's own existing setup — the MERGE TARGET
+├── orchestrator/                   ← (if present) projectx's own existing copy — the MERGE TARGET
 ├── CLAUDE.md                       ← (if present) projectx's own existing CLAUDE.md — the MERGE TARGET
 └── ...the rest of projectx
 ```
 
-So: **source** = `./software-team-agents/.claude/` and `./software-team-agents/CLAUDE.md`. **Target** = `./.claude/`
-and `./CLAUDE.md` (i.e. `projectx`'s root — not the staging folder itself, and not a further
-subfolder). Every path below is relative to your current directory (`projectx`'s root, even though
-this file physically sits one level down inside `software-team-agents/`); the source paths are
-explicitly prefixed `software-team-agents/` and the target paths have no prefix.
+So: **source** = `./software-team-agents/.claude/`, `./software-team-agents/orchestrator/`, and
+`./software-team-agents/CLAUDE.md`. **Target** = `./.claude/`, `./orchestrator/`, and `./CLAUDE.md`
+(i.e. `projectx`'s root — not the staging folder itself, and not a further subfolder). Every path
+below is relative to your current directory (`projectx`'s root, even though this file physically
+sits one level down inside `software-team-agents/`); the source paths are explicitly prefixed
+`software-team-agents/` and the target paths have no prefix.
+
+`orchestrator/` is part of this merge, not an optional add-on — it's what actually runs the
+pipeline's opt-in autonomous mode by shelling out to `claude -p --agent <role>` against the
+`.claude/agents/<role>.md` files this same merge installs (see README.md's `orchestrator/`
+section in the source repo for what it does). Skipping it leaves `projectx` with the agent
+definitions but no automated way to chain them.
 
 The merge must be **additive**: the target keeps everything it already has (its own agents, hooks,
 settings, CLAUDE.md content) and gains this pipeline on top. Never delete or blindly overwrite a
@@ -32,22 +41,25 @@ file that already exists in the target unless a rule below says exactly that.
 
 ## 0. Preconditions
 
-1. Confirm `software-team-agents/.claude/` and `software-team-agents/CLAUDE.md` actually exist before starting
-   — if they don't, the staging copy step was skipped or pointed somewhere else; stop and tell the
-   user rather than improvising a source.
+1. Confirm `software-team-agents/.claude/`, `software-team-agents/orchestrator/`, and
+   `software-team-agents/CLAUDE.md` actually exist before starting — if any are missing, the staging
+   copy step was skipped or pointed somewhere else; stop and tell the user rather than improvising a
+   source.
 2. If `projectx` has uncommitted changes (`git status`, read-only), tell the user before writing
    anything; don't stash or commit for them.
 3. List what the target already has: `ls .claude 2>/dev/null`, `ls .claude/agents 2>/dev/null`,
-   `cat .claude/settings.json 2>/dev/null`, `test -f CLAUDE.md`. You need this inventory before any
-   copy decision — every rule below branches on "target already has this or not."
+   `cat .claude/settings.json 2>/dev/null`, `test -f CLAUDE.md`, `ls orchestrator 2>/dev/null`,
+   `cat orchestrator/package.json 2>/dev/null`. You need this inventory before any copy decision —
+   every rule below branches on "target already has this or not."
 4. Check whether this is a **re-merge** — i.e. this pipeline was already merged into `projectx`
    once before, and you're now picking up upstream changes (new/edited agent instructions, a
-   changed hook, a new convention) rather than merging for the first time. Signals it's a re-merge:
-   `.claude/agents/business-analyst.md` (or any non-stack agent file) already exists and its
-   content is recognizably this same pipeline, not something `projectx` built independently; or
-   `CLAUDE.md` already has the `<!-- agentclaude-pipeline:start -->` marker described in step 1's
-   `CLAUDE.md` row. If it's a re-merge, section 1a below governs instead of treating every file as
-   brand new — read it before copying anything.
+   changed hook, a new convention, an orchestrator update) rather than merging for the first time.
+   Signals it's a re-merge: `.claude/agents/business-analyst.md` (or any non-stack agent file)
+   already exists and its content is recognizably this same pipeline, not something `projectx`
+   built independently; `CLAUDE.md` already has the `<!-- agentclaude-pipeline:start -->` marker
+   described in step 1's `CLAUDE.md` row; or `orchestrator/package.json`'s `"name"` is already
+   `"@agentclaude/orchestrator"`. If it's a re-merge, section 1a below governs instead of treating
+   every file as brand new — read it before copying anything.
 
 ## 1. File-by-file merge rules
 
@@ -58,10 +70,13 @@ prefix).
 | Source path | If target lacks it | If target already has it |
 |---|---|---|
 | `software-team-agents/.claude/agents/*.md` (9 files) | Copy verbatim to `.claude/agents/`. | Per file: if target's file is byte-identical or clearly a stale copy of this same pipeline, overwrite; if it's a *different* agent the target built for its own purposes (same filename, unrelated content), do **not** overwrite — copy this pipeline's version alongside under a non-colliding name (e.g. suffix `-agentclaude`) and flag the collision to the user instead of guessing which one should win. |
-| `software-team-agents/.claude/shared/conventions.md` | Copy verbatim to `.claude/shared/conventions.md`. | If target has no file at that path, this case doesn't apply. If it does (rare), diff the two and ask the user which rule set governs — this file is the contract every agent in the table above points at, so a silent merge here is how two rule sets end up contradicting each other. |
-| `software-team-agents/.claude/hooks/block-git.js`, `software-team-agents/.claude/hooks/block-outside-repo.js` | Copy verbatim to `.claude/hooks/`. Both are self-contained: they read `$CLAUDE_PROJECT_DIR` (falling back to cwd) and stdin JSON, with no path baked in from the source project. Safe to drop into any project unchanged. | If the target already has same-named hook files doing something else, copy these under new filenames (e.g. `block-git-agentclaude.js`) and wire both into `settings.json` — don't replace a hook the target depends on. |
-| `software-team-agents/.claude/settings.json` | Copy verbatim to `.claude/settings.json`. | **Never overwrite.** JSON-merge instead: for each entry in the source's `hooks.PreToolUse` array, append it to the target's `hooks.PreToolUse` array unless an entry with the same `matcher` + inner `command` already exists (dedupe on that pair, not the whole object). Preserve every other top-level key the target's `settings.json` already has untouched. Do the same additive merge for any other hook events the source might have — never assume `PreToolUse` is the only key. |
+| `software-team-agents/.claude/shared/conventions.md`, `software-team-agents/.claude/shared/multi-module-schema-scoping.md` | Copy both verbatim to `.claude/shared/`. | If target has no file at that path, this case doesn't apply. If it does (rare — `conventions.md` is the one likely to collide), diff the two and ask the user which rule set governs — this file is the contract every agent in the table above points at, so a silent merge here is how two rule sets end up contradicting each other. |
+| `software-team-agents/.claude/hooks/block-git.js`, `software-team-agents/.claude/hooks/block-outside-repo.js`, `software-team-agents/.claude/hooks/block-doc-rewrite.js`, `software-team-agents/.claude/hooks/require-green-before-stop.js` | Copy verbatim to `.claude/hooks/`. All four are self-contained: they read `$CLAUDE_PROJECT_DIR` (falling back to cwd) and stdin JSON, with no path baked in from the source project. `require-green-before-stop.js` additionally shells out to `npm run typecheck`/`lint` in whichever package directory defines those scripts, and to the two scripts below if present — all resolved at runtime, nothing hardcoded. Safe to drop into any project unchanged. | If the target already has same-named hook files doing something else, copy these under new filenames (e.g. `block-git-agentclaude.js`) and wire all four into `settings.json` — don't replace a hook the target depends on. |
+| `software-team-agents/.claude/scripts/check-schema-contract.js`, `software-team-agents/.claude/scripts/check-status-sync.js` | Copy verbatim to `.claude/scripts/`. Both are read-only drift checkers (`qa-engineer` runs the first, anyone can run the second before trusting `status.md`) and `require-green-before-stop.js` also invokes them when present — no source-project paths baked in. | If the target already has same-named scripts doing something else, copy these under new filenames and update the `require-green-before-stop.js` script-name list (and any agent instructions referencing them) to match. |
+| `software-team-agents/.claude/tests/run.js` | Copy verbatim to `.claude/tests/run.js`. This is the self-test suite for every hook and script above — run it (`node .claude/tests/run.js`) as part of verification (step 4) whenever any hook or script file changes. | If the target already has a test runner at that path, copy this one under a new filename and note the new invocation in verification step 4. |
+| `software-team-agents/.claude/settings.json` | Copy verbatim to `.claude/settings.json`. | **Never overwrite.** JSON-merge instead: for each entry in the source's `hooks.PreToolUse` array, append it to the target's `hooks.PreToolUse` array unless an entry with the same `matcher` + inner `command` already exists (dedupe on that pair, not the whole object). Do the same additive merge for `hooks.SubagentStop` and `hooks.Stop` (the source currently has one entry in each, wiring up `require-green-before-stop.js`), deduping on the inner `command` since these events carry no `matcher`. Preserve every other top-level key the target's `settings.json` already has untouched. Never assume `PreToolUse` is the only key — merge every hook event the source defines. |
 | `_docs/` (not present in the staging folder — this is created fresh, not copied) | Create `_docs/status.md` from scratch (empty index — no modules yet) and the `_docs/module/` directory. | Leave the target's existing `_docs/` alone entirely; the pipeline reads/writes it going forward but doesn't need to seed anything that's already there. |
+| `software-team-agents/orchestrator/` | Copy the whole folder verbatim to `orchestrator/` **except `node_modules/` and `dist/`** (its own `.gitignore` already excludes both — if the staging copy somehow still has them, skip copying those two subfolders rather than dragging a stale build/install across). Then `cd orchestrator && npm install` in `projectx` to get a real `node_modules/` for this checkout — never copy the source's own `node_modules/`. | If `projectx` already has an `orchestrator/` of its own doing something unrelated, don't overwrite it — copy this one to a non-colliding name (e.g. `agentclaude-orchestrator/`) and flag the collision to the user, same as an agent-file collision. If it's a stale copy of this same package (`package.json`'s `"name"` is `"@agentclaude/orchestrator"`), treat it as a re-merge — see 1a below — rather than a fresh copy. |
 | `software-team-agents/CLAUDE.md` | Copy verbatim as `CLAUDE.md`. | **Append, don't replace — but wrap it so a re-merge can find it.** Add a new section at the end of the target's existing `CLAUDE.md`, wrapped in an HTML comment marker: `<!-- agentclaude-pipeline:start -->`, then `## Agent pipeline (merged from AgentClaude)`, then `software-team-agents/CLAUDE.md`'s content minus its own top `# AgentClaude — Agent Pipeline` H1 (avoid two H1s), then `<!-- agentclaude-pipeline:end -->`. Leave every existing section above the marker untouched, in its original order. On a **re-merge**, replace everything between the two markers with the new content instead of appending a second copy — search for `agentclaude-pipeline:start` first to decide which case you're in. |
 
 ## 1a. Re-running this merge — picking up upstream pipeline changes
@@ -84,11 +99,22 @@ else as pipeline content that should track `software-team-agents/` exactly.
   but **carry the target's existing `## Fixed project stack` bullets forward untouched**; don't
   reset them to the pipeline defaults. If there are other differences too, treat it like any other
   collision (ask before overwriting).
-- **`.claude/shared/conventions.md`, `.claude/hooks/*.js`**: overwrite with the new source version
-  on a re-merge, same reasoning as the agent files — nothing here is meant to diverge per-project.
+- **`.claude/shared/conventions.md`, `.claude/shared/multi-module-schema-scoping.md`, `.claude/hooks/*.js`, `.claude/scripts/*.js`, `.claude/tests/run.js`**: overwrite with the new source
+  version on a re-merge, same reasoning as the agent files — nothing here is meant to diverge
+  per-project. Re-run `node .claude/tests/run.js` afterward to confirm the refreshed hooks/scripts
+  still pass.
 - **`.claude/settings.json`**: same additive JSON-merge as a first merge (step 1's row already
   dedupes on `matcher`+`command`, so re-running it is naturally safe — it just won't add duplicate
   entries for hooks already merged in).
+- **`orchestrator/`**: `diff -rq` the target's `orchestrator/src/` against the source's (ignore
+  `node_modules/`, `dist/`, `package-lock.json` — those are expected to differ per-checkout). If
+  `projectx` never modified anything under `orchestrator/src/` since the last merge, overwrite the
+  whole `src/` tree plus `package.json`/`tsconfig.json` with the new source versions and re-run
+  `npm install` (the lockfile may need to change too). If `projectx` added its own files under
+  `orchestrator/src/` (a custom executor, extra tests), leave those alone and only overwrite files
+  that exist in the source — same principle as the agent-file case above, just at file granularity
+  instead of whole-package. Either way, re-run `npm test` and `npm run typecheck` inside
+  `orchestrator/` afterward — a re-merge that silently breaks the build is worse than not re-merging.
 - **`CLAUDE.md`**: replace the marked section as described in the table row above; don't append a
   second one.
 - Still run section 2 (stack check) and section 4 (verification) in full afterward — a re-merge is
@@ -143,24 +169,32 @@ while merging:
 - No agent runs git or touches `.git/` (`block-git.js`).
 - No agent writes outside `projectx`'s root, except Claude Code's own scratchpad and memory
   conventions (`block-outside-repo.js`).
+- No agent `Write`s over an existing module doc instead of amending it (`block-doc-rewrite.js`).
+- An engineer that changed application code can't finish while `typecheck`/`lint` (and the two
+  drift scripts, where present) are red (`require-green-before-stop.js`).
 - `.claude/settings.json`'s `PreToolUse` matchers must still cover `Bash|Write|Edit|MultiEdit|
-  NotebookEdit` for `block-git.js` and `Write|Edit|MultiEdit|NotebookEdit` for
-  `block-outside-repo.js` — if you renamed either hook file in step 1 to dodge a collision, update
-  the `command` string in the merged settings entry to match the new filename.
+  NotebookEdit` for `block-git.js`, `Write|Edit|MultiEdit|NotebookEdit` for
+  `block-outside-repo.js`, and `Write` for `block-doc-rewrite.js`; its `SubagentStop` and `Stop`
+  arrays must each still carry an entry for `require-green-before-stop.js` — if you renamed any
+  hook file in step 1 to dodge a collision, update the `command` string in the merged settings
+  entry to match the new filename.
 
 ## 4. Post-merge verification
 
 Run these before telling the user the merge is done:
 
-1. `.claude/settings.json` is valid JSON (`node -e "JSON.parse(require('fs').readFileSync('.claude/settings.json','utf8'))"` or equivalent) and still contains every hook entry the target had *before* the merge, plus the ones from `software-team-agents/`.
-2. Both hook files execute without crashing on a no-op input, e.g. `echo '{}' | node .claude/hooks/block-git.js` should exit 0.
-3. All nine agent files are present under `.claude/agents/` and readable.
-4. `.claude/shared/conventions.md` exists and every agent file's references to it (`.claude/shared/conventions.md`) resolve to that same path.
-5. `_docs/status.md` exists (even if empty/near-empty) so `business-analyst` has somewhere to start.
-6. `CLAUDE.md` has no duplicate H1 and the target's pre-existing content is still present above the merged section.
-7. Step 2 actually happened: you asked whether `projectx` is รวม or แยก (and which side, if แยก), then asked for the applicable stack(s) — and if they differ from the defaults, the applicable `.claude/agents/frontend-engineer.md`/`backend-engineer.md` `## Fixed project stack` section(s) were edited to match, not left as pipeline defaults with a TODO for later. Don't report the merge done with this step still outstanding.
-8. Delete the staging folder `software-team-agents/` (this file, `MERGE_GUIDE.md`, lives inside it and goes with it) from `projectx`'s root — it was only needed to carry the pipeline over, not to stay as part of it.
-9. Report back: what was copied as-is, what was renamed to avoid a collision, what the confirmed stack was and what (if anything) got edited in step 2, and any file this guide told you to flag instead of merge automatically.
+1. `.claude/settings.json` is valid JSON (`node -e "JSON.parse(require('fs').readFileSync('.claude/settings.json','utf8'))"` or equivalent) and still contains every hook entry the target had *before* the merge, plus the ones from `software-team-agents/` — all four hooks, not just the first two.
+2. All four hook files execute without crashing on a no-op input, e.g. `echo '{}' | node .claude/hooks/block-git.js` should exit 0 (same for `block-outside-repo.js`, `block-doc-rewrite.js`, `require-green-before-stop.js`).
+3. Run the self-test suite: `node .claude/tests/run.js` — every case should pass. This is the load-bearing check for everything copied in step 1's hooks/scripts/tests rows; a hook with a syntax error still looks installed but silently enforces nothing (fails open), and this is what would catch that.
+4. All nine agent files are present under `.claude/agents/` and readable.
+5. `.claude/shared/conventions.md` and `.claude/shared/multi-module-schema-scoping.md` exist, and every agent file's references to them (`.claude/shared/conventions.md`) resolve to that same path.
+6. `.claude/scripts/check-schema-contract.js` and `.claude/scripts/check-status-sync.js` exist and run without crashing (`node .claude/scripts/check-status-sync.js`) — expect a non-crash exit even on an empty `_docs/`.
+7. `_docs/status.md` exists (even if empty/near-empty) so `business-analyst` has somewhere to start.
+8. `CLAUDE.md` has no duplicate H1 and the target's pre-existing content is still present above the merged section.
+9. Step 2 actually happened: you asked whether `projectx` is รวม or แยก (and which side, if แยก), then asked for the applicable stack(s) — and if they differ from the defaults, the applicable `.claude/agents/frontend-engineer.md`/`backend-engineer.md` `## Fixed project stack` section(s) were edited to match, not left as pipeline defaults with a TODO for later. Don't report the merge done with this step still outstanding.
+10. `orchestrator/` is present in `projectx`, `npm install` succeeded, and `npm test` + `npm run typecheck` both pass inside it — this is the check that actually confirms the copied `orchestrator/` still resolves the merged `.claude/agents/<role>.md` roles correctly, not just that the files landed on disk.
+11. Delete the staging folder `software-team-agents/` (this file, `MERGE_GUIDE.md`, lives inside it and goes with it) from `projectx`'s root — it was only needed to carry the pipeline over, not to stay as part of it.
+12. Report back: what was copied as-is, what was renamed to avoid a collision, what the confirmed stack was and what (if anything) got edited in step 2, whether `orchestrator/` merged clean or hit a collision, and any file this guide told you to flag instead of merge automatically.
 
 ## 5. What NOT to do
 
@@ -173,3 +207,5 @@ Run these before telling the user the merge is done:
   side that isn't part of this repo.
 - Don't leave `software-team-agents/` (and the `MERGE_GUIDE.md` inside it) behind after the merge —
   it's staging, not part of the pipeline.
+- Don't skip `orchestrator/` as optional — it's part of this merge (step 1's table), not a
+  follow-up the user has to remember to ask for separately.

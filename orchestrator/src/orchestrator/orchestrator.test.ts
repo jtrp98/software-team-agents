@@ -1,0 +1,293 @@
+import { describe, expect, it } from "vitest";
+import { Orchestrator, type AgentExecutor, type AgentExecutorResult } from "./orchestrator.js";
+import { classifyTask } from "../classification/taskClassifier.js";
+import { AgentStage, TaskState } from "../types.js";
+import { ArtifactType, type DesignArtifact, type QaReportArtifact, type SecurityReportArtifact } from "../artifacts/schemas.js";
+import { BudgetExceededError } from "../cost/costControl.js";
+
+const okDesign: DesignArtifact = {
+  taskId: "T",
+  feasibility: "feasible",
+  dataModel: [{ model: "Refund", fields: [{ name: "id", type: "string" }] }],
+  risks: [],
+  openQuestions: [],
+  contract: ["refund status must be REFUNDED"],
+};
+
+function qaReport(status: "PASS" | "FAIL"): QaReportArtifact {
+  return {
+    taskId: "T",
+    status,
+    mode: "FULL",
+    requirements: { "REQ-001": status },
+    tests: { passed: status === "PASS" ? 10 : 8, failed: status === "PASS" ? 0 : 2 },
+    evidence: ["log"],
+    risks: [],
+    hasAutomatedTests: true,
+    unverifiedBehaviour: [],
+  };
+}
+
+function securityReport(status: "PASS" | "FAIL"): SecurityReportArtifact {
+  return {
+    taskId: "T",
+    overallStatus: status,
+    findings:
+      status === "PASS"
+        ? []
+        : [{ id: "F-1", severity: "HIGH", status: "OPEN", description: "missing authz" }],
+  };
+}
+
+function makeExecutor(overrides: Partial<Record<AgentStage, (callIndex: number) => AgentExecutorResult>>): AgentExecutor {
+  const counts: Partial<Record<AgentStage, number>> = {};
+  return (req) => {
+    const idx = counts[req.stage] ?? 0;
+    counts[req.stage] = idx + 1;
+    const override = overrides[req.stage];
+    if (override) return override(idx);
+    return { outcome: { tokens: 100, cost: 0.01, result: "PASS" } };
+  };
+}
+
+async function runToCompletion(orch: Orchestrator, executor: AgentExecutor, maxSteps = 20) {
+  for (let i = 0; i < maxSteps; i++) {
+    const status = await orch.step(executor);
+    if (status.kind === "WAITING_FOR_HUMAN") {
+      const field = status.to === TaskState.IMPLEMENTATION ? "designApproved" : "humanApproved";
+      orch.provideHumanApproval(field, true);
+      continue;
+    }
+    if (status.kind === "DEPLOYED" || status.kind === "BLOCKED") return status;
+  }
+  throw new Error("runToCompletion exceeded maxSteps");
+}
+
+describe("Orchestrator", () => {
+  it("drives a TRIVIAL task straight to DEPLOYED in one step", async () => {
+    const classification = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
+    const orch = new Orchestrator("T-TRIVIAL", classification);
+    const executor = makeExecutor({});
+    const status = await orch.step(executor);
+    expect(status.kind).toBe("DEPLOYED");
+    expect(orch.runLog.all()).toHaveLength(1);
+    expect(orch.runLog.all()[0].agent).toBe(AgentStage.FRONTEND_ENGINEER);
+  });
+
+  it("loops a SMALL task's QA failure back to the engineer, then deploys on the retry", async () => {
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const orch = new Orchestrator("T-SMALL", classification);
+    const executor = makeExecutor({
+      [AgentStage.QA_ENGINEER]: (idx) => ({
+        outcome: { tokens: 500, cost: 0.02, result: idx === 0 ? "FAIL" : "PASS" },
+        artifactType: ArtifactType.QA_REPORT,
+        artifact: qaReport(idx === 0 ? "FAIL" : "PASS"),
+      }),
+    });
+
+    const final = await runToCompletion(orch, executor);
+    expect(final.kind).toBe("DEPLOYED");
+    expect(orch.retries.qa).toBe(1);
+    const agentsRun = orch.runLog.all().map((r) => r.agent);
+    expect(agentsRun).toEqual([
+      AgentStage.BACKEND_ENGINEER,
+      AgentStage.QA_ENGINEER,
+      AgentStage.BACKEND_ENGINEER,
+      AgentStage.QA_ENGINEER,
+    ]);
+  });
+
+  it("escalates to BLOCKED once QA fails past MAX_RETRY", async () => {
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const orch = new Orchestrator("T-SMALL-FAIL", classification);
+    const executor = makeExecutor({
+      [AgentStage.QA_ENGINEER]: () => ({
+        outcome: { tokens: 500, cost: 0.02, result: "FAIL" },
+        artifactType: ArtifactType.QA_REPORT,
+        artifact: qaReport("FAIL"),
+      }),
+    });
+
+    const final = await runToCompletion(orch, executor);
+    expect(final.kind).toBe("BLOCKED");
+    expect(orch.retries.qa).toBe(4); // 3 retries + the failure that exceeds the limit
+  });
+
+  it("drives a LARGE_CRITICAL schema-change task through both human-approval gates to DEPLOYED", async () => {
+    const classification = classifyTask({ touchesSchema: true, touchesBackend: true });
+    const orch = new Orchestrator("T-LARGE", classification);
+    const executor = makeExecutor({
+      [AgentStage.SYSTEM_ANALYST]: () => ({
+        outcome: { tokens: 2000, cost: 0.2, result: "PASS" },
+        artifactType: ArtifactType.DESIGN,
+        artifact: okDesign,
+      }),
+      [AgentStage.QA_ENGINEER]: () => ({
+        outcome: { tokens: 800, cost: 0.05, result: "PASS" },
+        artifactType: ArtifactType.QA_REPORT,
+        artifact: qaReport("PASS"),
+      }),
+      [AgentStage.SECURITY]: () => ({
+        outcome: { tokens: 1200, cost: 0.1, result: "PASS" },
+        artifactType: ArtifactType.SECURITY_REPORT,
+        artifact: securityReport("PASS"),
+      }),
+    });
+
+    const final = await runToCompletion(orch, executor);
+    expect(final.kind).toBe("DEPLOYED");
+    expect(orch.machine.history).toEqual([
+      TaskState.CREATED,
+      TaskState.DESIGN,
+      TaskState.IMPLEMENTATION,
+      TaskState.QA,
+      TaskState.SECURITY,
+      TaskState.READY_TO_DEPLOY,
+      TaskState.APPROVED,
+      TaskState.DEPLOYED,
+    ]);
+  });
+
+  it("stops at WAITING_FOR_HUMAN for design approval and never runs the engineer until approved", async () => {
+    const classification = classifyTask({ touchesSchema: true, touchesBackend: true });
+    const orch = new Orchestrator("T-GATE", classification);
+    const executor = makeExecutor({
+      [AgentStage.SYSTEM_ANALYST]: () => ({
+        outcome: { tokens: 2000, cost: 0.2, result: "PASS" },
+        artifactType: ArtifactType.DESIGN,
+        artifact: okDesign,
+      }),
+    });
+
+    const status = await orch.step(executor); // runs system-analyst, then blocks on the gate
+    expect(status.kind).toBe("WAITING_FOR_HUMAN");
+    expect(orch.runLog.all().map((r) => r.agent)).toEqual([AgentStage.SYSTEM_ANALYST]);
+    // asking again without approval makes no further progress
+    const stillWaiting = await orch.step(executor);
+    expect(stillWaiting.kind).toBe("WAITING_FOR_HUMAN");
+    expect(orch.runLog.all()).toHaveLength(1);
+  });
+
+  it("stops with BLOCKED (STOP -> Human) once the token budget is exceeded", async () => {
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const orch = new Orchestrator("T-BUDGET", classification, { budget: { task_budget: Infinity, agent_budget: Infinity, retry_budget: 3, token_budget: 100 } });
+    const executor = makeExecutor({
+      [AgentStage.BACKEND_ENGINEER]: () => ({ outcome: { tokens: 1000, cost: 0.01, result: "PASS" } }),
+    });
+
+    const status = await orch.step(executor);
+    expect(status.kind).toBe("BLOCKED");
+    expect(status.kind === "BLOCKED" && status.reason).toMatch(/token_budget/);
+  });
+
+  it("routes an UNKNOWN classification straight to BLOCKED without executing any agent", async () => {
+    const classification = classifyTask({});
+    const orch = new Orchestrator("T-UNKNOWN", classification);
+    const executor = makeExecutor({});
+    const status = await orch.step(executor);
+    expect(status.kind).toBe("BLOCKED");
+    expect(orch.runLog.all()).toHaveLength(0);
+  });
+
+  it("emits AGENT_ASSIGNED, AGENT_COMPLETED, and TASK_DEPLOYED for a TRIVIAL task's event bus", async () => {
+    const classification = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
+    const orch = new Orchestrator("T-EVENTS", classification);
+    const seen: string[] = [];
+    orch.events.on("AGENT_ASSIGNED", (e) => seen.push(`ASSIGNED:${e.stage}`));
+    orch.events.on("AGENT_COMPLETED", (e) => seen.push(`COMPLETED:${e.stage}`));
+    orch.events.on("TASK_DEPLOYED", () => seen.push("DEPLOYED"));
+
+    await orch.step(makeExecutor({}));
+
+    expect(seen).toEqual([
+      `ASSIGNED:${AgentStage.FRONTEND_ENGINEER}`,
+      `COMPLETED:${AgentStage.FRONTEND_ENGINEER}`,
+      "DEPLOYED",
+    ]);
+  });
+
+  it("does not re-emit AGENT_ASSIGNED for the same assignment on repeated status() polls", async () => {
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const orch = new Orchestrator("T-DEDUP", classification);
+    let assignedCount = 0;
+    orch.events.on("AGENT_ASSIGNED", () => assignedCount++);
+
+    orch.status();
+    orch.status();
+    orch.status();
+    expect(assignedCount).toBe(1);
+  });
+
+  it("reportCompletion is the same event-driven path step() uses under the hood — no direct executor call needed", () => {
+    const classification = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
+    const orch = new Orchestrator("T-PUSH", classification);
+    const assigned = orch.status();
+    expect(assigned.kind).toBe("RUNNING");
+    expect(assigned.kind === "RUNNING" && assigned.stage).toBe(AgentStage.FRONTEND_ENGINEER);
+
+    // simulate "the agent finished and told us" without ever calling an executor callback
+    const final = orch.reportCompletion(
+      AgentStage.FRONTEND_ENGINEER,
+      { outcome: { tokens: 50, cost: 0.01, result: "PASS" } },
+      { start: 0, end: 1 },
+    );
+    expect(final.kind).toBe("DEPLOYED");
+  });
+
+  it("reportCompletion rejects a completion report for a stage that isn't currently assigned", () => {
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const orch = new Orchestrator("T-WRONG-STAGE", classification);
+    orch.status(); // assigns BACKEND_ENGINEER
+    expect(() =>
+      orch.reportCompletion(
+        AgentStage.QA_ENGINEER,
+        { outcome: { tokens: 1, cost: 0, result: "PASS" } },
+        { start: 0, end: 1 },
+      ),
+    ).toThrow(/not currently assigned/);
+  });
+
+  it("emits WAITING_FOR_HUMAN and TASK_BLOCKED at the right points", async () => {
+    const classification = classifyTask({ touchesSchema: true, touchesBackend: true });
+    const orch = new Orchestrator("T-GATE-EVENT", classification);
+    const waiting: string[] = [];
+    orch.events.on("WAITING_FOR_HUMAN", (e) => waiting.push(`${e.from}->${e.to}`));
+    const executor = makeExecutor({
+      [AgentStage.SYSTEM_ANALYST]: () => ({
+        outcome: { tokens: 100, cost: 0.01, result: "PASS" },
+        artifactType: ArtifactType.DESIGN,
+        artifact: okDesign,
+      }),
+    });
+    await orch.step(executor);
+    expect(waiting).toEqual([`${TaskState.DESIGN}->${TaskState.IMPLEMENTATION}`]);
+
+    const blocked: string[] = [];
+    const orch2 = new Orchestrator("T-BLOCKED-EVENT", classification, {
+      budget: { task_budget: Infinity, agent_budget: Infinity, retry_budget: 3, token_budget: 1 },
+    });
+    orch2.events.on("TASK_BLOCKED", (e) => blocked.push(e.reason));
+    const executor2 = makeExecutor({
+      [AgentStage.SYSTEM_ANALYST]: () => ({
+        outcome: { tokens: 100, cost: 0.01, result: "PASS" },
+        artifactType: ArtifactType.DESIGN,
+        artifact: okDesign,
+      }),
+    });
+    await orch2.step(executor2);
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0]).toMatch(/token_budget/);
+  });
+
+  it("gives the backend-engineer only its policy-allowed context categories", async () => {
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const orch = new Orchestrator("T-CTX", classification);
+    let capturedSources: string[] = [];
+    const executor: AgentExecutor = (req) => {
+      capturedSources = req.context.map((c) => c.source);
+      return { outcome: { tokens: 10, cost: 0.01, result: "PASS" } };
+    };
+    await orch.step(executor);
+    expect(capturedSources.every((s) => s !== "frontend-code" && s !== "devops-docs")).toBe(true);
+  });
+});

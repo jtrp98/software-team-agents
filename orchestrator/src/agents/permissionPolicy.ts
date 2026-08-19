@@ -1,0 +1,50 @@
+import { AgentStage } from "../types.js";
+import { Permission } from "./permissions.js";
+import { getAgent } from "./registry.js";
+
+export class PermissionDeniedError extends Error {
+  constructor(
+    public readonly stage: AgentStage,
+    public readonly permission: Permission,
+  ) {
+    super(`${stage} does not have permission "${permission}"`);
+    this.name = "PermissionDeniedError";
+  }
+}
+
+export class ToolDeniedError extends Error {
+  constructor(
+    public readonly stage: AgentStage,
+    public readonly tool: string,
+  ) {
+    super(`${stage} is not allowed to use tool "${tool}"`);
+    this.name = "ToolDeniedError";
+  }
+}
+
+export function hasPermission(stage: AgentStage, permission: Permission): boolean {
+  return getAgent(stage).permissions.includes(permission);
+}
+
+/**
+ * The actual enforcement point: an orchestrator calls this before letting a
+ * role perform a permission-gated action (deploy, write_code, ...). Bound to
+ * the registry (item 9), so a role's permission list is defined in exactly
+ * one place. Agents never call this on themselves — the point is that they
+ * can't grant themselves a permission by deciding to.
+ */
+export function assertPermission(stage: AgentStage, permission: Permission): void {
+  if (!hasPermission(stage, permission)) {
+    throw new PermissionDeniedError(stage, permission);
+  }
+}
+
+export function canUseTool(stage: AgentStage, tool: string): boolean {
+  return getAgent(stage).tools.includes(tool);
+}
+
+export function assertTool(stage: AgentStage, tool: string): void {
+  if (!canUseTool(stage, tool)) {
+    throw new ToolDeniedError(stage, tool);
+  }
+}

@@ -70,17 +70,45 @@ agent เองยังเรียกกันเองไม่ได้เ�
 
 นอกจาก 5 จุดนี้ ยังมีบางจุดที่หยุดเพราะ agent ตอบเองไม่ได้จริงๆ (เช่น `project-manager` เจอ sequencing ที่ต้องถามคุณ) ไม่ใช่เพราะโหมด แต่เพราะไม่มีคำตอบสำรองให้เดา
 
+ต้องกดสั่งเองทีละ agent เสมอถ้าไม่มีเครื่องมือช่วย — ถ้าอยากให้โหมด autonomous นี้รันจริงแบบไม่ต้องนั่งเฝ้า ดูหัวข้อ [`orchestrator/` — ตัวขับเคลื่อนโหมด autonomous แบบรันจริง](#orchestrator--ตัวขับเคลื่อนโหมด-autonomous-แบบรันจริง) ด้านล่าง
+
+## `orchestrator/` — ตัวขับเคลื่อนโหมด autonomous แบบรันจริง
+
+`orchestrator/` เป็นแพ็กเกจ Node/TypeScript แยกต่างหากในรีโปนี้ (`npm install` แล้ว `npm test`/`npm run typecheck` ที่ `orchestrator/`) มีหน้าที่ **รันโหมด autonomous ข้างบนให้จริงแทนที่จะให้คุณกดสั่งเอง** — ไม่ใช่ pipeline คนละอันหรือ agent ตัวที่ 10 มันไม่มีวันแก้ไฟล์ `_docs/*` เองและไม่มีวันเรียก `.claude/agents/*.md` โดยตรง สิ่งที่มันทำคือ:
+
+1. **จัดกลุ่ม state** — จำลอง state machine ของ task หนึ่งตัวตาม 12 state ใน `orchestrator/src/state/taskState.ts` (`CREATED` → ... → `DEPLOYED`, มี `QA_FAILED`/`SECURITY_FAILED`/`BLOCKED` เป็น branch ล้มเหลว) และ**จัด pipeline stage ให้เองจาก flag การจำแนกงาน** (`orchestrator/src/classification/taskClassifier.ts`) ตรงกับตาราง [Right-sizing](#right-sizing--ข้ามด่านได้สำหรับงานเล็ก) ด้านบนทุกแถว
+2. **บังคับ 4 gate ตรงกับ 5 จุดที่ต้องรอคนข้างบน** (`orchestrator/src/gates/gatePolicy.ts`): ยืนยัน design ก่อนเข้า implementation, `qa-report.status` ต้อง PASS ก่อนไปต่อ, `security-report.overallStatus` ต้อง PASS ก่อนไปต่อ, และต้อง `humanApproved` ก่อน deploy จริง — ทั้งสี่ gate ไม่มี agent ตัวไหนตอบแทนคนได้ ต้องมีหลักฐานจริงเท่านั้น
+3. **บังคับเพดาน retry เดียวกับ QA/security** (`orchestrator/src/retry/retryPolicy.ts`, `MAX_RETRY = 3`) — แก้ไม่ผ่านเกินรอบก็ถูกบังคับเข้า `BLOCKED` เหมือนกติกา "แก้ไม่ผ่านสองรอบให้ส่งกลับหาคุณ" ข้างบน
+4. **รัน agent จริง** ผ่าน `orchestrator/src/agents/claudeCliExecutor.ts` — เรียก `claude -p --agent <role>` ในโฟลเดอร์โปรเจกต์จริง ซึ่ง `<role>` (`business-analyst`, `qa-engineer`, ...) resolve ไปที่ `.claude/agents/<role>.md` ไฟล์เดียวกับที่ agent list ข้างบนใช้ทุกประการ — orchestrator ไม่ได้ถือ prompt ของตัวเองซ้ำซ้อน แค่เป็นคนกด "รันตัวถัดไป" แทนคุณ แล้วอ่านผลจริงกลับมาตัดสินว่าจะไปต่อยังไง: `review.md`/`security.md` ที่ `qa-engineer`/`security` เขียนจริงถูกอ่านกลับมา parse เป็นหลักฐาน (`orchestrator/src/agents/moduleDocs.ts`, อ่านเครื่องหมาย ✅/⚠️/❌ กับ `(FULL)`/`(TARGETED)` และ 🔴/🟠/🟡 กับ 🔵/🟣/✅/⚪ ตรงตามอนุสัญญาที่อธิบายไว้ด้านบนทุกตัว — regex-based เหมือน `.claude/scripts/*.js` สองตัว ไม่ใช่ Markdown parser จริง) ก่อนตัดสินว่า gate ผ่านหรือไม่
+
+รันจริงจาก root ของโปรเจกต์เป้าหมาย (ไม่ใช่ root ของ `AgentClaude`):
+
+```bash
+cd orchestrator
+npm install
+npm run orchestrate -- --task-id T-1 --module sales-crm --new-feature --backend --frontend
+```
+
+พอเจอจุดที่ 5 จุดข้างบนต้องรอคน มันจะหยุดถามตรงๆ ใน terminal เดียวกัน (`Approve DESIGN -> IMPLEMENTATION? [y/N]`) ไม่ใช่เดาให้เอง — ตอบ `y` แล้วมันเดินหน้าต่อในรันเดียวกัน ตอบ `N` หรือ Ctrl-C แล้วค่อยกลับมาสั่งต่อทีหลัง (state ปัจจุบันยังไม่มีการบันทึกข้ามรัน — ดูข้อจำกัดข้างล่าง)
+
+**ข้อจำกัดที่ควรรู้ก่อนใช้จริง:**
+- **ยังไม่มี persistence ข้าม process** — `Orchestrator` เก็บ state ในหน่วยความจำของรันนั้นเท่านั้น ปิด terminal แล้ว state หาย ต้องเริ่ม `--task-id` เดิมใหม่ตั้งแต่ต้น (แต่เอกสารจริงใน `_docs/` ที่ agent เขียนไปแล้วไม่หาย — สิ่งที่หายคือแค่ตำแหน่งในสาย pipeline)
+- **`--module` ต้องมีอยู่แล้ว** — orchestrator ไม่ได้ resolve module folder ให้แบบที่ agent จริงทำ (หนึ่ง folder → ใช้, หลาย folder → ถาม) ต้องระบุชื่อ module เองตรงๆ ทุกครั้ง
+- **การอ่าน `review.md`/`security.md` กลับเป็น regex-based** เช่นเดียวกับ `.claude/scripts/` — เป็นตัวช่วยเชื่อม ไม่ใช่ตัวแทนการอ่านเอกสารจริงของคน ถ้า mode หรือ severity marker ที่มันหาไม่เจอ มันจะ fail-closed (บังคับ `TARGETED`/`FAIL`) แทนที่จะเดาว่า PASS
+
 ## เอา pipeline นี้ไปรวมกับโปรเจกต์ที่มีอยู่แล้ว
 
-เอา pipeline ทั้งชุด (`.claude/` + `CLAUDE.md` + `MERGE_GUIDE.md`) จาก repo นี้ไปวางเป็น **staging folder เดียว** ชื่อ `software-team-agents/` ไว้ที่ root ของ**โปรเจกต์ปลายทางจริง** (สมมติชื่อ `projectx`, repo คนละอันกับ `AgentClaude`) — ชื่อ folder นี้ตั้งตายตัวไว้ เอาไว้แยกของที่กำลังจะ merge ออกจากของเดิมใน `projectx` ให้ชัด `MERGE_GUIDE.md` อยู่ *ข้างใน* staging folder นี้เอง ไม่ใช่ที่ root ของ `projectx`. ผลลัพธ์หน้าตาแบบนี้:
+เอา pipeline ทั้งชุด (`.claude/` + `orchestrator/` + `CLAUDE.md` + `MERGE_GUIDE.md`) จาก repo นี้ไปวางเป็น **staging folder เดียว** ชื่อ `software-team-agents/` ไว้ที่ root ของ**โปรเจกต์ปลายทางจริง** (สมมติชื่อ `projectx`, repo คนละอันกับ `AgentClaude`) — ชื่อ folder นี้ตั้งตายตัวไว้ เอาไว้แยกของที่กำลังจะ merge ออกจากของเดิมใน `projectx` ให้ชัด `MERGE_GUIDE.md` อยู่ *ข้างใน* staging folder นี้เอง ไม่ใช่ที่ root ของ `projectx`. `orchestrator/` ไปด้วยเสมอ ไม่ใช่ของเสริม — ไม่งั้น `projectx` จะได้แค่ตัว agent แต่ไม่มีตัวขับเคลื่อนโหมด autonomous ผลลัพธ์หน้าตาแบบนี้:
 
 ```
 projectx/                           ← โปรเจกต์ปลายทางจริง (cwd ตอนรัน merge)
 ├── software-team-agents/           ← staging folder: pipeline ที่จะเอาไป merge
 │   ├── .claude/
+│   ├── orchestrator/
 │   ├── CLAUDE.md
 │   └── MERGE_GUIDE.md
 ├── .claude/                        ← (ถ้ามีอยู่แล้ว) ของเดิมของ projectx เอง
+├── orchestrator/                   ← (ถ้ามีอยู่แล้ว) ของเดิมของ projectx เอง
 ├── CLAUDE.md                       ← (ถ้ามีอยู่แล้ว) ของเดิมของ projectx เอง
 └── ...ไฟล์อื่นของ projectx
 ```
@@ -90,6 +118,8 @@ projectx/                           ← โปรเจกต์ปลายท�
 ```bash
 mkdir -p <path-to-projectx>/software-team-agents
 cp -r .claude <path-to-projectx>/software-team-agents/.claude
+cp -r orchestrator <path-to-projectx>/software-team-agents/orchestrator
+rm -rf <path-to-projectx>/software-team-agents/orchestrator/node_modules <path-to-projectx>/software-team-agents/orchestrator/dist
 cp CLAUDE.md <path-to-projectx>/software-team-agents/CLAUDE.md
 cp MERGE_GUIDE.md <path-to-projectx>/software-team-agents/MERGE_GUIDE.md
 ```
@@ -98,7 +128,7 @@ cp MERGE_GUIDE.md <path-to-projectx>/software-team-agents/MERGE_GUIDE.md
 
 AI จะ inventory ของเดิมใน `projectx` ก่อน (ถ้ายังไม่มี `.claude`/`CLAUDE.md` เลยก็แค่คัดลอกยกชุด ถ้ามีอยู่แล้วก็ merge แบบ additive ทีละไฟล์ตามตารางในไฟล์นั้น) — ของเดิมไม่หาย ไม่มีการ `git` ใดๆ ระหว่างทาง (กติกาเดิม §5 ยังคุมอยู่) ตรวจผลตาม checklist ท้ายไฟล์ก่อนใช้งานจริง อย่าลืมเช็ค [Stack ที่ใช้](#stack-ที่ใช้) ว่าตรงกับ `projectx` ไหม ถ้าไม่ตรงต้องแก้ `frontend-engineer.md`/`backend-engineer.md` ก่อนใช้งานจริง (ถ้า `projectx` แยก repo frontend/backend ออกจากกัน ไฟล์ `MERGE_GUIDE.md` จะถามก่อนว่าเป็นฝั่งไหนแล้วแก้แค่ไฟล์ที่เกี่ยวข้อง)
 
-เสร็จแล้วลบ `software-team-agents/` (ทั้ง `.claude/`, `CLAUDE.md`, `MERGE_GUIDE.md` ข้างใน) ออกจาก `projectx` ได้เลย — เป็นแค่ staging ใช้ครั้งเดียวตอน merge ไม่ใช่ส่วนหนึ่งของ pipeline ที่ต้องอยู่ถาวร
+เสร็จแล้วลบ `software-team-agents/` (ทั้ง `.claude/`, `orchestrator/`, `CLAUDE.md`, `MERGE_GUIDE.md` ข้างใน) ออกจาก `projectx` ได้เลย — เป็นแค่ staging ใช้ครั้งเดียวตอน merge ไม่ใช่ส่วนหนึ่งของ pipeline ที่ต้องอยู่ถาวร
 
 ## โครงสร้างไฟล์
 
@@ -134,6 +164,14 @@ _docs/
 ├── tests/
 │   └── run.js                    ← self-test ของ hook/script ทั้งหมด (69 เคส ไม่ต้องติดตั้งอะไรเพิ่ม)
 └── settings.json                ← ที่ต่อ hook ทั้งสี่ตัวเข้ากับ session (commit ไว้ ใช้ร่วมกันทั้ง repo)
+
+orchestrator/                    ← แพ็กเกจ Node/TS แยกต่างหาก: รันโหมด autonomous ให้จริงแทนคุณ (ดูหัวข้อด้านล่าง)
+├── src/
+│   ├── agents/claudeCliExecutor.ts  ← เรียก `claude -p --agent <role>` จริง ต่อกับ `.claude/agents/<role>.md`
+│   ├── agents/moduleDocs.ts         ← อ่าน review.md/security.md จริงกลับมาเป็นหลักฐานให้ gate
+│   ├── orchestrator/orchestrator.ts ← state machine + gate + retry ที่คุม pipeline stage ไหนรันต่อ
+│   └── cli.ts                       ← `npm run orchestrate` entry point
+└── package.json
 ```
 
 ไม่มี *เอกสาร* ตัวไหนถูกเขียนที่ root ของ repo — แต่ละ module มีโฟลเดอร์ของตัวเองใต้ `_docs/module/` เพื่อไม่ให้ฟีเจอร์ที่ไม่เกี่ยวกันมาทับประวัติของกันและกัน (ส่วนไฟล์โปรเจกต์ที่ตามธรรมเนียมต้องอยู่ที่ root เป็นคนละเรื่อง — `setup` เขียน `package.json`, `.env`, `.env.example`, `.gitignore` ที่นั่น และ `devops` เขียนไฟล์ infra)
