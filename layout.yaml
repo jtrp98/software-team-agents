@@ -179,6 +179,23 @@ concepts:
         optional: true
         holds: state.db (SQLite, source of truth) and state.yaml (generated readable view)
 
+  knowledge:
+    answers: "รู้อะไรเกี่ยวกับโปรเจกต์นี้ — what the project knows about itself, for any role to query"
+    why: >
+      Every role needs the same facts and sees a different slice of them, and until T61 the
+      only copy of those facts was prose in _docs/. Prose cannot be queried across kinds
+      ("which tasks implement the API this requirement needs"), so each agent re-derived what
+      it needed by re-reading documents. This holds the same facts as data — one YAML file per
+      item, one envelope for all nine kinds — while _docs/ keeps holding them as prose for a
+      person. It is committed, unlike .workflow/: this is what the team shares, that is what
+      one run is doing.
+    homes:
+      - path: knowledge
+        status: active
+        pattern: "*.yaml"
+        read_by: orchestrator
+        holds: one file per knowledge item, under <module>/<kind>/<ID>.yaml, checked by --check-knowledge
+
   docs:
     answers: "อธิบายให้คนอ่าน — what is true, for a person to read"
     why: >

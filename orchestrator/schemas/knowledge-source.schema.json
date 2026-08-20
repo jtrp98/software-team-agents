@@ -1,0 +1,53 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/knowledge-source.schema.json",
+  "title": "Raw source record (knowledge/_sources/<SRC-id>.yaml)",
+  "description": "One piece of raw material this project has ingested — a file that was read, a database that was introspected, an API spec, a person who was interviewed (T62). Deliberately a different record from a knowledge item: a source is what was there, an item is what somebody concluded from it. Collapsing the two loses the ability to answer 'we read this file, and derived nothing from it yet' — which is the normal state during discovery (V1.2/V1.3), not an error.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "type", "locator", "captured_at", "captured_by", "digest"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": {
+      "description": "SRC-<slug>. A prefix no knowledge kind uses, so a source id and an item id can never be confused for one another.",
+      "type": "string",
+      "pattern": "^SRC-[A-Za-z0-9._/-]+$"
+    },
+    "type": {
+      "description": "What kind of material this is. The same vocabulary a knowledge item's `sources[].type` uses, so a reference and its record agree on what they are talking about.",
+      "enum": ["file", "db", "api-spec", "code", "human", "agent"]
+    },
+    "locator": {
+      "description": "Where the material is: a repo-relative path, a table name, an OpenAPI path, a person's name, a role name. The canonical form — an item's source ref pointing here should name the same string, optionally with a line range appended.",
+      "type": "string",
+      "minLength": 1
+    },
+    "captured_at": {
+      "description": "When it was read. T71 measures staleness from this, not from the item's updated_at: an item edited today out of a file read six months ago is stale in a way updated_at cannot show.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "captured_by": {
+      "description": "Which role read it. A source captured by an agent and a source stated by a person carry different weight when they disagree (T66).",
+      "enum": [
+        "setup",
+        "business-analyst",
+        "system-analyst",
+        "project-manager",
+        "test-planner",
+        "backend-engineer",
+        "frontend-engineer",
+        "qa-engineer",
+        "security",
+        "devops",
+        "human"
+      ]
+    },
+    "digest": {
+      "description": "Hash of the material as it was when read, so a later run can tell it changed underneath without re-reading everything. null when the material cannot be hashed (a conversation, a person).",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "note": { "type": "string", "minLength": 1 }
+  }
+}

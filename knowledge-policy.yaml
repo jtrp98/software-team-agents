@@ -1,0 +1,58 @@
+# Which fields of a knowledge item each role may see, and how old an item may get
+# before it is called stale (T68 / T71).
+#
+# WHY THIS IS A FILE
+#
+# T15 put per-agent *path* permissions in `contracts/*.yaml` rather than in code, for
+# the same reason this is here: a permission that can only be changed by editing
+# TypeScript is one that nobody outside this repo can change, and every project ends up
+# needing a different answer. The code enforces; the file decides.
+#
+# WHAT IS DELIBERATELY PERMISSIVE
+#
+# The defaults hide nothing. Field-level restriction is a real capability and a real
+# way to break a pipeline — an engineer who cannot see the acceptance criteria will
+# implement the wrong thing — so nothing is hidden unless a project says so. The two
+# overrides below are the ones that hold generally:
+#
+#   devops and project-manager schedule and ship work. Neither implements it, and
+#   neither reviews it for correctness. For an item flagged `sensitive` (auth, personal
+#   data, payments, uploads, untrusted input) they get its existence, title and status
+#   — enough to sequence and to gate on — and not its contents.
+#
+# An item's own owner always sees it in full, whatever this file says. A rule that hid
+# a role's own work from it would be a bug wearing a policy's clothes.
+
+version: 1
+
+defaults:
+  sensitive: full
+  hide_fields: []
+
+roles:
+  devops:
+    sensitive: redacted
+  project-manager:
+    sensitive: redacted
+
+# Freshness is measured from a source's `captured_at`, not from the item's `updated_at`:
+# an item edited today out of a file that was read six months ago is stale, and
+# `updated_at` cannot show that. See orchestrator/src/knowledge/freshness.ts.
+freshness:
+  default:
+    aging_after_days: 90
+    stale_after_days: 180
+  by_kind:
+    # The code moves under these faster than anything else here, and a model or an
+    # endpoint that no longer matches the code is wrong rather than merely old.
+    db-schema:
+      aging_after_days: 30
+      stale_after_days: 90
+    api:
+      aging_after_days: 30
+      stale_after_days: 90
+    # A settled decision does not rot on a schedule — it is superseded, explicitly,
+    # by another decision. Long thresholds so it is not nagged about.
+    decision:
+      aging_after_days: 365
+      stale_after_days: 730

@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/knowledge-policy.schema.json",
+  "title": "Knowledge context policy (knowledge-policy.yaml)",
+  "description": "Which fields of a knowledge item each role may see, and how old an item may get before it is called stale (T68/T71). A file rather than code because these are project decisions — one team's 'devops does not need the body of an auth requirement' is another team's obstruction — and a decision that can only be changed by editing TypeScript is one nobody outside the repo can make. Absent entirely is a valid state: the built-in defaults are permissive, and the check says so rather than failing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "version": { "type": "integer", "minimum": 1 },
+    "defaults": { "$ref": "#/definitions/rolePolicy" },
+    "roles": {
+      "description": "Per-role overrides. A role absent here gets `defaults`.",
+      "type": "object",
+      "propertyNames": {
+        "enum": [
+          "setup",
+          "business-analyst",
+          "system-analyst",
+          "project-manager",
+          "test-planner",
+          "backend-engineer",
+          "frontend-engineer",
+          "qa-engineer",
+          "security",
+          "devops",
+          "human"
+        ]
+      },
+      "additionalProperties": { "$ref": "#/definitions/rolePolicy" }
+    },
+    "freshness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default"],
+      "properties": {
+        "default": { "$ref": "#/definitions/freshnessThreshold" },
+        "by_kind": {
+          "description": "Per-kind overrides. A db-schema goes stale faster than a domain term: the code moves under it.",
+          "type": "object",
+          "propertyNames": {
+            "enum": [
+              "requirement",
+              "business-rule",
+              "domain",
+              "architecture",
+              "api",
+              "db-schema",
+              "decision",
+              "task",
+              "test"
+            ]
+          },
+          "additionalProperties": { "$ref": "#/definitions/freshnessThreshold" }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "rolePolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sensitive": {
+          "description": "What this role gets for an item flagged `sensitive`. full = everything. redacted = it exists, with its title and status, but not its body, payload or sources. hidden = not returned at all. An item's own owner always gets `full` regardless — a rule that hid a role's own work from it would be a bug, not a policy.",
+          "enum": ["full", "redacted", "hidden"]
+        },
+        "hide_fields": {
+          "description": "Fields removed from every item this role retrieves, sensitive or not. `body`, `sources`, `relations`, or `payload.<key>`.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "freshnessThreshold": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["aging_after_days", "stale_after_days"],
+      "properties": {
+        "aging_after_days": { "type": "integer", "minimum": 1 },
+        "stale_after_days": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

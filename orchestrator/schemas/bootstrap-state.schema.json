@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/bootstrap-state.schema.json",
+  "title": "Project bootstrap state (knowledge/_bootstrap/STATE.yaml)",
+  "description": "T73 — the one file that tracks whether a project has gone through Discovery (T74-T79) and Human Validation (T80) yet. One file per project (or per module, when `module` is set), because bootstrap runs once, not once per knowledge item. Committed, like the rest of `knowledge/`: whether a project is Ready is a fact the whole team needs, not a local run detail.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "module", "status", "stages", "validated_by", "validated_at", "created_at", "updated_at"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "module": {
+      "description": "_docs/module/<name> this bootstrap covers, or null for a project that has not split into modules yet.",
+      "type": ["string", "null"]
+    },
+    "status": {
+      "description": "Derived from `stages` and `validated_by`/`validated_at` — see bootstrapModel.ts's computeStatus(). A hand-edited file that disagrees with the derivation is rejected by checkBootstrapState(), not silently trusted.",
+      "enum": ["discovering", "pending_validation", "ready"]
+    },
+    "stages": {
+      "description": "Exactly one record per T74-T79 discovery stage plus T79's human-input stage, in a fixed order (see ALL_STAGES).",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/stageRecord" }
+    },
+    "validated_by": {
+      "description": "T80 — the person who reviewed the discovered knowledge and approved it. A name, not a role: same reasoning as knowledge-conflict.schema.json's decided_by.",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "validated_at": { "type": ["string", "null"], "format": "date-time" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "definitions": {
+    "stageRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "completed_at", "knowledge_ids"],
+      "properties": {
+        "id": {
+          "enum": ["repository", "documentation", "db-schema", "api", "architecture", "human-input"]
+        },
+        "status": { "enum": ["pending", "in_progress", "done", "skipped"] },
+        "completed_at": { "type": ["string", "null"], "format": "date-time" },
+        "knowledge_ids": {
+          "description": "Items this stage produced (T61 ids) — how bootstrap and the knowledge base cross-check each other.",
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9]*-[A-Za-z0-9._/-]+$" }
+        },
+        "note": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

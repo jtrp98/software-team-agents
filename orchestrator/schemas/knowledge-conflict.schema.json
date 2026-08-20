@@ -1,0 +1,39 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/knowledge-conflict.schema.json",
+  "title": "Conflict resolution (knowledge/_conflicts/<CONF-id>.yaml)",
+  "description": "A person's decision about two pieces of knowledge that contradict each other (T66). Only the decision is stored — the conflict itself is detected fresh on every run from the items, because a stored list of conflicts goes stale the moment somebody fixes one. `decided_by` is a person's name and not a role for a reason: the whole point of this record is that an agent did not decide it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "conflict_kind", "items", "decision", "decided_by", "decided_at"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": {
+      "description": "CONF-<hash>, derived from the conflicting ids and the kind of conflict, so the same conflict gets the same id on every run and a decision made last month still matches it.",
+      "type": "string",
+      "pattern": "^CONF-[a-f0-9]{10}$"
+    },
+    "conflict_kind": {
+      "description": "declared = somebody wrote a `conflicts-with` relation. The rest are detected: two records defining the same model, the same endpoint, or the same domain term.",
+      "enum": ["declared", "duplicate-model", "duplicate-endpoint", "duplicate-term"]
+    },
+    "items": {
+      "description": "The conflicting item ids, sorted. Stored as well as hashed into the id so the file is readable without re-running detection.",
+      "type": "array",
+      "minItems": 2,
+      "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9]*-[A-Za-z0-9._/-]+$" }
+    },
+    "decision": {
+      "description": "What was decided, in a sentence. Free text on purpose: 'keep the first' is rarely the real answer, and an enum would push whoever writes this toward the nearest available option instead of the true one.",
+      "type": "string",
+      "minLength": 1
+    },
+    "decided_by": {
+      "description": "The person who decided. A name, not a role — a resolution attributed to 'human' cannot be asked a follow-up question.",
+      "type": "string",
+      "minLength": 1
+    },
+    "decided_at": { "type": "string", "format": "date-time" },
+    "note": { "type": "string", "minLength": 1 }
+  }
+}

@@ -1,0 +1,405 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/knowledge-item.schema.json",
+  "title": "Knowledge item (knowledge/<module>/<kind>/<ID>.yaml)",
+  "description": "One fact the project knows about itself — a requirement, a business rule, a domain term, an architecture note, an API, a DB model, an ADR, a task, or a test (T61). Every kind shares one envelope so a query can cross kinds; only `payload` differs, discriminated on `kind`. One item per file: two people editing different items edit different files, so git merges them without a conflict. The file is the source of truth — nothing derives an index from it, because a stored derivation is a second source of truth waiting to disagree with the first.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "kind",
+    "title",
+    "body",
+    "repo",
+    "module",
+    "owner",
+    "status",
+    "sensitive",
+    "version",
+    "created_at",
+    "updated_at",
+    "sources",
+    "relations",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Generation of this envelope. Bumped only when a change would break an existing reader.",
+      "const": 1
+    },
+    "id": {
+      "description": "The id space is the one the pipeline already uses (T19): REQ-/DES-/BE-/FE-/TEST- and ADR-NNN. Deliberately not a parallel id — a knowledge id that differed from the id in plan.md would need a mapping nobody maintains. The prefix must match `kind`; that pairing is checked in knowledgeModel.ts, not here, because JSON Schema cannot express 'BE- or FE-, but only for kind task' without nine more branches.",
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9]*-[A-Za-z0-9._/-]+$"
+    },
+    "kind": {
+      "description": "Which of the nine entity types this item is. Also picks the payload branch below.",
+      "enum": [
+        "requirement",
+        "business-rule",
+        "domain",
+        "architecture",
+        "api",
+        "db-schema",
+        "decision",
+        "task",
+        "test"
+      ]
+    },
+    "title": {
+      "description": "One line a person can recognise the item by in a listing. Never empty — an item nobody can identify in a list is one nobody will find.",
+      "type": "string",
+      "minLength": 1
+    },
+    "body": {
+      "description": "Prose. May be empty when the payload IS the content (a domain term, a DB model), which is why it is required-but-emptiable rather than optional: a reader never has to ask whether the key is missing or the text is.",
+      "type": "string"
+    },
+    "repo": {
+      "description": "Which repo of a multi-repo workspace (T42) this belongs to. null = the single/primary repo. A label only — it does not say where knowledge/ itself lives.",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "module": {
+      "description": "The _docs/module/<name>/ delivery unit this belongs to. null = project-wide (an ADR, a domain term the whole project shares).",
+      "type": ["string", "null"],
+      "minLength": 1
+    },
+    "owner": {
+      "description": "The role answerable for this item (T65). The ten pipeline stages plus human — the same AgentStage set the orchestrator already routes on, not a second role vocabulary.",
+      "enum": [
+        "setup",
+        "business-analyst",
+        "system-analyst",
+        "project-manager",
+        "test-planner",
+        "backend-engineer",
+        "frontend-engineer",
+        "qa-engineer",
+        "security",
+        "devops",
+        "human"
+      ]
+    },
+    "status": {
+      "description": "draft = written, nobody has checked it. reviewed = someone read it. approved = binding; downstream work may rely on it. deprecated = superseded or withdrawn, kept because something still cites it.",
+      "enum": ["draft", "reviewed", "approved", "deprecated"]
+    },
+    "sensitive": {
+      "description": "True when this item touches auth, personal data, payments, uploads, or untrusted input — the same trigger as plan.md's Security gate. Read as a query filter here; T68/T69 build field-level policy on it.",
+      "type": "boolean"
+    },
+    "version": {
+      "description": "Bumped by exactly 1 every time the content changes. Two people editing the same item both bump the same line, so git reports a conflict on `version` itself instead of silently merging two different edits — that is the mechanism, not bookkeeping.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "created_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "sources": {
+      "description": "Where this knowledge came from (T62/T72). At least one, always: an item with no source is an assertion nobody can check, which is the exact failure requirement.md's References table already exists to prevent.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/source" }
+    },
+    "relations": {
+      "description": "Outgoing edges only. The reverse index is built in memory by knowledgeBase.ts, the way TaskGraph builds its incoming map — storing both directions would be two records of one fact, free to disagree.",
+      "type": "array",
+      "items": { "$ref": "#/definitions/relation" }
+    },
+    "payload": {
+      "description": "The kind-specific half. Which branch applies is decided by `kind` below.",
+      "type": "object"
+    }
+  },
+  "discriminator": { "propertyName": "kind" },
+  "oneOf": [
+    {
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "requirement" },
+        "payload": { "$ref": "#/definitions/requirementPayload" }
+      }
+    },
+    {
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "business-rule" },
+        "payload": { "$ref": "#/definitions/businessRulePayload" }
+      }
+    },
+    {
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "domain" },
+        "payload": { "$ref": "#/definitions/domainPayload" }
+      }
+    },
+    {
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "architecture" },
+        "payload": { "$ref": "#/definitions/architecturePayload" }
+      }
+    },
+    {
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "api" },
+        "payload": { "$ref": "#/definitions/apiPayload" }
+      }
+    },
+    {
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "db-schema" },
+        "payload": { "$ref": "#/definitions/dbSchemaPayload" }
+      }
+    },
+    {
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "decision" },
+        "payload": { "$ref": "#/definitions/decisionPayload" }
+      }
+    },
+    {
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "task" },
+        "payload": { "$ref": "#/definitions/taskPayload" }
+      }
+    },
+    {
+      "required": ["kind"],
+      "properties": {
+        "kind": { "const": "test" },
+        "payload": { "$ref": "#/definitions/testPayload" }
+      }
+    }
+  ],
+  "definitions": {
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "locator", "captured_at", "digest"],
+      "properties": {
+        "type": {
+          "description": "What kind of thing was read. `human`/`agent` are first-class: a fact someone stated in an interview is a real source, and pretending otherwise is how it ends up looking like a fact from a file.",
+          "enum": ["file", "db", "api-spec", "code", "human", "agent"]
+        },
+        "locator": {
+          "description": "Where exactly: `path#L10-L24`, a table name, an OpenAPI path, a person's name, a role name.",
+          "type": "string",
+          "minLength": 1
+        },
+        "captured_at": {
+          "description": "When the source was read — deliberately not `updated_at`. An item edited today from a file read six months ago is stale in a way `updated_at` cannot show. T71 reads this one.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "digest": {
+          "description": "Hash of the slice that was read, so a later run can tell the source changed underneath. null when the source cannot be hashed (a person, a conversation).",
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "source_id": {
+          "description": "The raw source in knowledge/_sources/ this was read from (T62). Optional because a source ref can name material nobody registered — but when it is set it must resolve, and that is what makes provenance answerable (T72) rather than merely recorded.",
+          "type": "string",
+          "pattern": "^SRC-[A-Za-z0-9._/-]+$"
+        },
+        "note": { "type": "string", "minLength": 1 }
+      }
+    },
+    "relation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "to"],
+      "properties": {
+        "type": {
+          "description": "Which kinds may sit on each end is a matrix enforced in knowledgeModel.ts — a graph where anything may point at anything degenerates into a flat list with arrows, and check() could not then say what is wrong.",
+          "enum": [
+            "refines",
+            "implements",
+            "verifies",
+            "references",
+            "depends-on",
+            "constrains",
+            "supersedes",
+            "conflicts-with",
+            "derived-from"
+          ]
+        },
+        "to": {
+          "description": "Id of the target item. Checked for existence by check(), not here — during discovery knowledge arrives in batches, and a target not written yet is reported rather than thrown on.",
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9]*-[A-Za-z0-9._/-]+$"
+        },
+        "note": { "type": "string", "minLength": 1 }
+      }
+    },
+
+    "requirementPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["acceptance_criteria", "actors", "priority", "assumption_unconfirmed"],
+      "properties": {
+        "acceptance_criteria": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "actors": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "priority": { "enum": ["must", "should", "could", null] },
+        "assumption_unconfirmed": {
+          "description": "CLAUDE.md's rule made machine-readable: a number nobody sourced is an assumption, in writing. True here is what the Thai marker for an unconfirmed assumption says in requirement.md.",
+          "type": "boolean"
+        }
+      }
+    },
+    "businessRulePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["statement", "enforcement"],
+      "properties": {
+        "statement": { "type": "string", "minLength": 1 },
+        "enforcement": {
+          "description": "Where the rule is actually held. `manual`/`unknown` are honest answers — a rule believed to live in code but actually living in someone's head is the drift T66 exists to flag.",
+          "enum": ["code", "policy", "manual", "unknown"]
+        }
+      }
+    },
+    "domainPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["term", "definition", "aliases"],
+      "properties": {
+        "term": { "type": "string", "minLength": 1 },
+        "definition": { "type": "string", "minLength": 1 },
+        "aliases": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "architecturePayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["feasibility", "risks", "component"],
+      "properties": {
+        "feasibility": { "enum": ["feasible", "feasible-with-risk", "not-feasible", "unknown"] },
+        "risks": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "component": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "apiPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path", "contract_name", "request_shape", "response_shape"],
+      "properties": {
+        "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE", "other"] },
+        "path": { "type": "string", "minLength": 1 },
+        "contract_name": {
+          "description": "The same string a plan task names in `produces`/`consumes` (taskGraph.ts). One name on both sides is what lets an ordering edge be derived instead of remembered.",
+          "type": ["string", "null"],
+          "minLength": 1
+        },
+        "request_shape": { "type": ["string", "null"], "minLength": 1 },
+        "response_shape": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "dbSchemaPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "fields", "relations"],
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "type", "optional"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "type": { "type": "string", "minLength": 1 },
+              "optional": { "type": "boolean" }
+            }
+          }
+        },
+        "relations": {
+          "description": "Prisma-level relations as written in design.md's Data Model. Prose on purpose — this mirrors the contract, it does not replace schema.prisma, and design.md still wins if the two disagree.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "decisionPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adr_status", "date", "supersedes", "superseded_by"],
+      "properties": {
+        "adr_status": { "enum": ["proposed", "accepted", "superseded", "rejected"] },
+        "date": { "type": "string", "minLength": 1 },
+        "supersedes": { "type": ["string", "null"], "minLength": 1 },
+        "superseded_by": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+    "taskPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent",
+        "phase",
+        "tag",
+        "plan_status",
+        "produces",
+        "consumes",
+        "contract_version",
+        "orchestrator_task_id"
+      ],
+      "properties": {
+        "agent": {
+          "enum": [
+            "setup",
+            "business-analyst",
+            "system-analyst",
+            "project-manager",
+            "test-planner",
+            "backend-engineer",
+            "frontend-engineer",
+            "qa-engineer",
+            "security",
+            "devops",
+            "human",
+            null
+          ]
+        },
+        "phase": { "type": ["integer", "null"], "minimum": 1 },
+        "tag": { "enum": ["frontend", "backend", null] },
+        "plan_status": {
+          "description": "plan.md's Status cell (T52). Only qa-engineer ever writes `verified`/`blocked`; the owning engineer may set `in_progress` on its own row.",
+          "enum": ["pending", "in_progress", "verified", "blocked"]
+        },
+        "produces": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "consumes": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "contract_version": { "type": ["integer", "null"], "minimum": 1 },
+        "orchestrator_task_id": {
+          "description": "PersistedTask.taskId — the join between this graph and the state machine. null for a task the orchestrator never ran.",
+          "type": ["string", "null"],
+          "minLength": 1
+        }
+      }
+    },
+    "testPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["levels", "automated"],
+      "properties": {
+        "levels": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "enum": ["unit", "integration", "api", "e2e"] }
+        },
+        "automated": {
+          "description": "False is the normal value — tests are opt-in per CLAUDE.md and usually absent. It says the level was decided, not that a suite exists.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

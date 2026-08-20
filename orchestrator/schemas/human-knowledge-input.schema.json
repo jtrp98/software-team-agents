@@ -1,0 +1,43 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/human-knowledge-input.schema.json",
+  "title": "Human knowledge input (knowledge/_human-input/INPUT.yaml)",
+  "description": "T79 — the channel for knowledge discovery cannot infer on its own: business rules and domain terms that live in a person's head, not in code or a doc. A person edits this file directly; humanInputDiscovery.ts (the T79 stage) turns each entry into a proper business-rule or domain knowledge item on the next bootstrap run. Only these two kinds are accepted here on purpose — anything else (a requirement, an architecture decision) already has an agent/interview flow that produces it with more context than a flat list entry could carry.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "entries"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "entries": {
+      "type": "array",
+      "items": { "oneOf": [{ "$ref": "#/definitions/businessRuleEntry" }, { "$ref": "#/definitions/domainEntry" }] }
+    }
+  },
+  "definitions": {
+    "businessRuleEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "statement", "enforcement", "author"],
+      "properties": {
+        "kind": { "const": "business-rule" },
+        "module": { "type": ["string", "null"] },
+        "statement": { "type": "string", "minLength": 1 },
+        "enforcement": { "enum": ["code", "policy", "manual", "unknown"] },
+        "author": { "type": "string", "minLength": 1 }
+      }
+    },
+    "domainEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "term", "definition", "author"],
+      "properties": {
+        "kind": { "const": "domain" },
+        "module": { "type": ["string", "null"] },
+        "term": { "type": "string", "minLength": 1 },
+        "definition": { "type": "string", "minLength": 1 },
+        "aliases": { "type": "array", "items": { "type": "string" } },
+        "author": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

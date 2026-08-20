@@ -27,6 +27,7 @@ import { checkWorkspace, hasWorkspace, loadWorkspace, workspacePath, type Worksp
 import { checkRepoMap, loadStageRoots } from "./repos/repoMap.js";
 import { Environment, checkEnvironmentConfig, describeEnvironment, isEnvironment } from "./environment/environment.js";
 import { checkDocStructure } from "./docs/docStructure.js";
+import { checkKnowledge } from "./knowledge/knowledgeBase.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -76,6 +77,8 @@ export interface CliArgs {
   checkEnvironments: boolean;
   /** Check every module's requirement/design/plan/review/security doc structure against its schema and exit (T53). Same audience. */
   checkDocStructure: boolean;
+  /** Check knowledge/*.yaml against its schema, its id/relation rules and its own cross-links, and exit (T61). Same audience. */
+  checkKnowledge: boolean;
   /** local/dev/staging/production (T43). Defaults to Environment.LOCAL; only used when creating a task — a --resume/--retry inherits the task's already-stored environment. */
   environment: Environment;
   dependsOn: string[];
@@ -127,6 +130,7 @@ export const USAGE =
   "  orchestrate --check-repos [--project-root <path>]          check repos.yaml (if any) against the filesystem\n" +
   "  orchestrate --check-environments [--project-root <path>]   check environments.yaml (if any) against its schema\n" +
   "  orchestrate --check-doc-structure [--project-root <path>]  check every _docs/module/*/*.md's sections against its schema\n" +
+  "  orchestrate --check-knowledge [--project-root <path>]      check knowledge/*.yaml against its schema and cross-links\n" +
   `  classification flags: ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
 
 /** Pure argv parser — kept separate from process.argv/console/exit so it's directly testable. */
@@ -149,6 +153,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkReposFlag = false;
   let checkEnvironmentsFlag = false;
   let checkDocStructureFlag = false;
+  let checkKnowledgeFlag = false;
   let environment: Environment = Environment.LOCAL;
   let dependsOn: string[] = [];
   let phases: number[] = [];
@@ -202,6 +207,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkEnvironmentsFlag = true;
     } else if (arg === "--check-doc-structure") {
       checkDocStructureFlag = true;
+    } else if (arg === "--check-knowledge") {
+      checkKnowledgeFlag = true;
     } else if (arg === "--env") {
       const value = argv[++i];
       if (!value || !isEnvironment(value)) {
@@ -228,7 +235,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkWorkspaceFlag &&
     !checkReposFlag &&
     !checkEnvironmentsFlag &&
-    !checkDocStructureFlag
+    !checkDocStructureFlag &&
+    !checkKnowledgeFlag
   ) {
     if (!taskId) throw new CliUsageError("--task-id is required");
     if (!moduleName) throw new CliUsageError("--module is required (the _docs/module/<name>/ this task belongs to)");
@@ -256,6 +264,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkRepos: checkReposFlag,
     checkEnvironments: checkEnvironmentsFlag,
     checkDocStructure: checkDocStructureFlag,
+    checkKnowledge: checkKnowledgeFlag,
     environment,
     dependsOn,
     stateDb,
@@ -829,6 +838,20 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       return 0;
     }
     console.error("[orchestrator] module documents have structural problems:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
+  if (args.checkKnowledge) {
+    const result = checkKnowledge(args.projectRoot);
+    // Notes print either way: a repo with nothing captured in knowledge/ yet is the normal
+    // state, the same reading --check-doc-structure gives a project before its first module.
+    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
+    if (result.ok) {
+      console.log("[orchestrator] knowledge/ is consistent.");
+      return 0;
+    }
+    console.error("[orchestrator] knowledge/ has problems:");
     for (const problem of result.problems) console.error(`  - ${problem}`);
     return 1;
   }

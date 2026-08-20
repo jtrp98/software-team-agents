@@ -36,6 +36,7 @@ describe("parseArgs", () => {
       checkRepos: false,
       checkEnvironments: false,
       checkDocStructure: false,
+      checkKnowledge: false,
       environment: Environment.LOCAL,
       dependsOn: [],
       stateDb: undefined,
@@ -864,5 +865,80 @@ describe("runCli --check-environments (T43)", () => {
   it("needs neither --task-id nor --module, and is listed in the usage text", () => {
     expect(parseArgs(["--check-environments"], "/repo").checkEnvironments).toBe(true);
     expect(USAGE).toContain("--check-environments");
+  });
+});
+
+describe("runCli --check-knowledge (T61)", () => {
+  it("passes against this repo", async () => {
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => void logs.push(args.join(" "));
+    try {
+      const code = await runCli(["--check-knowledge"], defaultProjectRoot());
+      expect(code).toBe(0);
+      expect(logs.join("\n")).toContain("knowledge/ is consistent");
+    } finally {
+      console.log = original;
+    }
+  });
+
+  it("passes with a note on a repo that has captured nothing yet — this checks consistency, not progress", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-cknow-"));
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => void logs.push(args.join(" "));
+    try {
+      expect(await runCli(["--check-knowledge", "--project-root", dir], dir)).toBe(0);
+      expect(logs.join("\n")).toContain("no `knowledge/` directory yet");
+    } finally {
+      console.log = original;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("exits non-zero when an item names a relation target that does not exist", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-cknow-"));
+    try {
+      const file = path.join(dir, "knowledge", "sales-crm", "test", "TEST-003.yaml");
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(
+        file,
+        [
+          "schema_version: 1",
+          "id: TEST-003",
+          "kind: test",
+          "title: shift ownership",
+          "version: 1",
+          "status: draft",
+          "owner: test-planner",
+          "module: sales-crm",
+          "repo: null",
+          "sensitive: false",
+          'created_at: "2026-08-20T09:00:00Z"',
+          'updated_at: "2026-08-20T09:00:00Z"',
+          "sources:",
+          "  - type: agent",
+          "    locator: test-planner",
+          '    captured_at: "2026-08-20T09:00:00Z"',
+          "    digest: null",
+          "relations:",
+          "  - { type: verifies, to: REQ-404 }",
+          "payload:",
+          "  levels: [api]",
+          "  automated: false",
+          'body: ""',
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+      expect(await runCli(["--check-knowledge", "--project-root", dir], dir)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("needs neither --task-id nor --module, and is listed in the usage text", () => {
+    expect(parseArgs(["--check-knowledge"], "/repo").checkKnowledge).toBe(true);
+    expect(USAGE).toContain("--check-knowledge");
   });
 });
