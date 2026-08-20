@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_REGISTRY, getAgent } from "./registry.js";
+import {
+  AGENT_REGISTRY,
+  agentsForFramework,
+  agentsForLanguage,
+  agentsWithCapability,
+  coverageFor,
+  getAgent,
+} from "./registry.js";
+import { Capability } from "./capabilities.js";
 import { STAGE_TO_STATE } from "../state/taskState.js";
 import { AgentStage } from "../types.js";
 
@@ -41,5 +49,50 @@ describe("AGENT_REGISTRY", () => {
       expect(entry.permissions).toContain("write_code");
       expect(entry.permissions).not.toContain("deploy");
     }
+  });
+});
+
+describe("agent capabilities (T12)", () => {
+  it("gives every agent a capability block — an empty one is a claim, an absent one is an oversight", () => {
+    for (const entry of Object.values(AGENT_REGISTRY)) {
+      expect(entry.capability, entry.name).toBeDefined();
+      expect(Array.isArray(entry.capability.capabilities), entry.name).toBe(true);
+      expect(entry.capability.capabilities.length, entry.name).toBeGreaterThan(0);
+    }
+  });
+
+  it("finds every agent that can do a thing, rather than picking one", () => {
+    const testers = agentsWithCapability(Capability.TESTING).map((a) => a.name);
+    expect(testers).toContain(AgentStage.BACKEND_ENGINEER);
+    expect(testers).toContain(AgentStage.FRONTEND_ENGINEER);
+    expect(testers).toContain(AgentStage.QA_ENGINEER);
+  });
+
+  it("selects by language and framework", () => {
+    expect(agentsForLanguage("TypeScript").length).toBeGreaterThan(0);
+    expect(agentsForFramework("prisma").map((a) => a.name)).toContain(AgentStage.BACKEND_ENGINEER);
+    expect(agentsForFramework("react").map((a) => a.name)).toContain(AgentStage.FRONTEND_ENGINEER);
+  });
+
+  it("gives the analysis roles no language, which is a statement rather than a gap", () => {
+    expect(AGENT_REGISTRY[AgentStage.BUSINESS_ANALYST].capability.languages).toEqual([]);
+    expect(AGENT_REGISTRY[AgentStage.BUSINESS_ANALYST].capability.capabilities).toContain(
+      Capability.REQUIREMENTS_INTERVIEW,
+    );
+  });
+
+  it("reports what the roster covers and what it does not", () => {
+    const coverage = coverageFor([Capability.REST_API, Capability.GRPC]);
+    expect(coverage.covered).toContain(Capability.REST_API);
+    // Nothing on this roster builds gRPC yet. Tracking the absence is the point:
+    // a capability nobody has must read as missing, not as unasked.
+    expect(coverage.missing).toContain(Capability.GRPC);
+  });
+
+  it("declares the stack the prompts actually implement, not the one project.yaml targets", () => {
+    const backend = AGENT_REGISTRY[AgentStage.BACKEND_ENGINEER].capability;
+    expect(backend.languages).toEqual(["typescript"]);
+    expect(backend.frameworks).toContain("prisma");
+    expect(backend.languages).not.toContain("csharp");
   });
 });

@@ -1,0 +1,13 @@
+# An actual production deploy or DB migration. The work it ships was verified by its own
+# upstream task, so this workflow starts at the gate rather than re-running the pipeline.
+workflow: deploy
+description: Production deploy or database migration - always stops for a person first.
+trigger:
+  kind: signal
+  signal: isProductionDeployOrMigration
+  priority: 0
+level: LARGE_CRITICAL
+requires_human_approval: true
+steps:
+  - agent: devops
+    note: refuses to ship a phase qa-engineer has not accepted, whatever this file says

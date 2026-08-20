@@ -19,6 +19,22 @@ Since P0 finished, three of its behaviours are worth knowing when you read the a
   it can only reach a state the task genuinely passed through), Rollback (a failure arriving after
   verification returns the task to its last verified state), Escalate (a person can unblock it), and
   Abort (the retry budget is spent). The budget outranks whatever the failure claims about itself.
+- **Each agent writes only what its contract gives it.** `contracts/<role>.yaml` carries `write`,
+  `deny` and `read` path globs, derived from the ownership table above. Enforcement is layered
+  because a `PreToolUse` hook cannot see which subagent is acting: the orchestrator enforces it
+  where identity is certain, and `.claude/hooks/block-path-permissions.js` reads the role from
+  `AGENTCLAUDE_ROLE` (set by the orchestrator) — falling back, in an interactive session, to the
+  floor no agent may cross at all (`.git/`, `node_modules/`, `.workflow/`, `dist/`). `read` is documentation rather than a
+  block: reading is non-destructive, and a read guard that got one path wrong would trap an agent
+  for no safety gain. It is still checked for one thing — everything a role may write, it must be
+  able to read, because these documents are amended, not regenerated.
+- **Tasks form a graph, not a queue.** `workflows/*.yml` say which roles run for a kind of change;
+  `orchestrator/src/graph/taskGraph.ts` says which *tasks* may run together. §6a's
+  backend-before-frontend rule is derived there from the API contracts a task produces and
+  consumes, so the exception §6a grants — tasks sharing no contract may run in either order — is
+  finally actionable instead of being knowledge someone had to hold. `--list` shows the batches.
+  The orchestrator still runs one task at a time: executing a batch concurrently needs file-level
+  locking (T35) first.
 - **An approval is a record, not a flag.** Each of the five always-human points carries a type, a
   status, who answered and when. The one that mattered: a rejection is now stored as `rejected`, so
   it blocks the task — previously `false` and "never asked" were the same value, and a "no" quietly
@@ -88,7 +104,7 @@ _docs/
 │   ├── check-schema-contract.js  ← run by qa-engineer: diffs schema.prisma against every design.md
 │   └── check-status-sync.js      ← run before trusting status.md: diffs it against every plan.md
 ├── tests/
-│   └── run.js                    ← self-test for every hook + script (70 cases, no deps)
+│   └── run.js                    ← self-test for every hook + script (83 cases, no deps)
 └── settings.json                ← wires all four hooks up (checked in, applies to everyone)
 ```
 

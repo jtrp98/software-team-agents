@@ -1,0 +1,18 @@
+# Requirement and schema already cover the case; the code simply does not match them.
+# Nothing upstream has a question to answer, so nothing upstream runs.
+workflow: bugfix
+description: Bug fix where requirement and schema are already clear - BA, SA and PM all skipped.
+trigger:
+  kind: signal
+  signal: isClearBugFix
+  priority: 5
+level: SMALL
+requires_human_approval: false
+steps:
+  - agent: backend-engineer
+    when: touchesBackend
+  - agent: frontend-engineer
+    when: touchesFrontend
+  - agent: qa-engineer
+  - agent: security
+    when: touchesSensitiveArea

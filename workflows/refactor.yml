@@ -1,0 +1,19 @@
+# Behaviour is meant to stay identical, so there is no requirement or design question to ask -
+# but QA matters more than usual, because "unchanged behaviour" is exactly the claim under test.
+#
+# Chosen explicitly: a refactor and a bug fix look the same from the outside, and the difference
+# is what the author intended. Inferring it from the diff would be guessing.
+workflow: refactor
+description: Restructuring with no intended behaviour change - verification is the point.
+trigger:
+  kind: explicit
+level: SMALL
+requires_human_approval: false
+steps:
+  - agent: backend-engineer
+    when: touchesBackend
+  - agent: frontend-engineer
+    when: touchesFrontend
+  - agent: qa-engineer
+  - agent: security
+    when: touchesSensitiveArea

@@ -6,6 +6,7 @@ import { parse as parseYaml } from "yaml";
 import { AgentStage, TaskState } from "../types.js";
 import type { Permission } from "./permissions.js";
 import { AGENT_REGISTRY } from "./registry.js";
+import type { Capability } from "./capabilities.js";
 
 /**
  * Loads and checks `contracts/<agent-name>.yaml`.
@@ -31,9 +32,15 @@ export interface AgentContract {
   input: { required: string[]; optional: string[] };
   output: { required: string[] };
   constraints: string[];
-  permissions: { capabilities: Permission[]; read: string[]; write: string[] };
+  permissions: { capabilities: Permission[]; read: string[]; write: string[]; deny: string[] };
   tools: string[];
   states: TaskState[];
+  capability: {
+    languages: string[];
+    frameworks: string[];
+    database: string[];
+    capabilities: Capability[];
+  };
 }
 
 /** Every agent that has a contract — the nine real roles. `human` is a gate, not an agent, and has none. */
@@ -164,6 +171,10 @@ export function diffContractAgainstRegistry(contract: AgentContract): string[] {
     describeDiff("permissions.capabilities", contract.permissions.capabilities, entry.permissions),
     describeDiff("tools", contract.tools, entry.tools),
     describeDiff("states", contract.states, entry.allowed_states),
+    describeDiff("capability.languages", contract.capability.languages, entry.capability.languages),
+    describeDiff("capability.frameworks", contract.capability.frameworks, entry.capability.frameworks),
+    describeDiff("capability.database", contract.capability.database, entry.capability.database),
+    describeDiff("capability.capabilities", contract.capability.capabilities, entry.capability.capabilities),
   ];
   return issues.filter((i): i is string => i !== null);
 }

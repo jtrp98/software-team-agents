@@ -25,7 +25,14 @@ constraints:
   - cannot_close_security_finding
 permissions:
   capabilities: [read, test, write_docs]
-  read: []
-  write: []
+  # Owns review.md, and is the only role that may edit plan.md checkboxes. It writes no application code at all: a verifier that fixes what it finds is no longer verifying.
+  read: [".claude/agents/backend-engineer.md", ".claude/agents/frontend-engineer.md", ".claude/scripts/**", ".claude/shared/**", "CLAUDE.md", "_docs/module/**", "_docs/status-archive.md", "_docs/status.md", "app/**", "components/**", "package.json", "prisma/**", "server/**", "src/**"]
+  write: ["_docs/module/*/review.md", "_docs/module/*/review/**", "_docs/module/*/plan.md", "_docs/status.md", "_docs/status-archive.md"]
+  deny: ["_docs/module/*/design.md", "_docs/module/*/requirement.md", "_docs/module/*/security.md", "app/**", "server/**", "prisma/**"]
 tools: [Read, Glob, Grep, Bash, AskUserQuestion, Write, Edit]
 states: [QA]
+capability:
+  languages: ["typescript"]
+  frameworks: []
+  database: ["postgresql"]
+  capabilities: [verification, testing]

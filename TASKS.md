@@ -413,7 +413,7 @@ depends_on: [SA-001]
 ทุก PR ต้องตรวจ hook syntax, agent files, schema, workflow, policy, self-test
 
 ### T55 — Integration Test เต็ม pipeline
-ต่อยอดจาก self-test เดิม (70 cases) เป็น integration test ครอบคลุม
+ต่อยอดจาก self-test เดิม (83 cases) เป็น integration test ครอบคลุม
 Agent → Workflow → State → QA → Retry → Approval
 
 ### T56 — Failure Simulation

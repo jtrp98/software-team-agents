@@ -1,0 +1,17 @@
+# Copy or styling only. Running nine stages for a wording fix is waste, not diligence
+# (CLAUDE.md, "Right-size the pipeline").
+workflow: typo
+description: Copy or styling change only - engineer alone, no QA stage.
+trigger:
+  kind: signal
+  signal: isTypoOrCopyOnly
+  priority: 6
+level: TRIVIAL
+requires_human_approval: false
+steps:
+  - agent: backend-engineer
+    when: touchesBackend
+  - agent: frontend-engineer
+    when: touchesFrontend
+  - agent: security
+    when: touchesSensitiveArea

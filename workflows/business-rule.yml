@@ -1,0 +1,20 @@
+# A rule changed, the shape of the data did not. BA and SA amend their documents;
+# project-manager earns no run because there is not enough work to phase.
+workflow: business-rule
+description: Business rule change with no schema impact - BA and SA amend, project-manager skipped.
+trigger:
+  kind: signal
+  signal: touchesBusinessRuleOnly
+  priority: 3
+level: MEDIUM
+requires_human_approval: false
+steps:
+  - agent: business-analyst
+  - agent: system-analyst
+  - agent: backend-engineer
+    when: touchesBackend
+  - agent: frontend-engineer
+    when: touchesFrontend
+  - agent: qa-engineer
+  - agent: security
+    when: touchesSensitiveArea

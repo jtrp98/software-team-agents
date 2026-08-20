@@ -1,0 +1,17 @@
+# The frontend stack, unchanged between the current and target backends — which is why it is
+# its own profile rather than a field on each backend one.
+stack: frontend
+kind: frontend
+language: typescript
+runtime: node
+frameworks: [nextjs, react, tailwind, zustand]
+database: []
+api: [rest]
+package_manager: npm
+commands:
+  install: npm install
+  build: npm run build
+  test: npm test
+  lint: npm run lint
+  typecheck: npm run typecheck
+capabilities: [ui, testing]

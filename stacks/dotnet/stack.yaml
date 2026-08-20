@@ -1,0 +1,22 @@
+# The backend stack TASKS.md T13/T14 names as this project's target.
+#
+# Nothing implements it yet: no agent prompt knows C# or EF Core, and CLAUDE.md requires the
+# user to confirm a stack change before `backend-engineer.md` and `setup.md` are rewritten.
+# project.yaml records it under `target` for exactly that reason — a profile that claimed this
+# was current would match tasks nothing on the roster can build.
+stack: dotnet
+kind: backend
+language: csharp
+runtime: dotnet-10
+frameworks: [aspnetcore, grpc]
+orm: ef-core
+database: [postgresql]
+api: [rest, grpc]
+package_manager: nuget
+commands:
+  install: dotnet restore
+  build: dotnet build
+  test: dotnet test
+  lint: dotnet format --verify-no-changes
+  typecheck: dotnet build
+capabilities: [rest-api, grpc, database-access, auth, testing]

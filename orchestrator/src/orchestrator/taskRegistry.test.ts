@@ -104,3 +104,69 @@ describe("TaskRegistry", () => {
     }
   });
 });
+
+
+describe("TaskRegistry as a dependency graph (T10/T11 wiring)", () => {
+  /** A store plus the registry over it, so a case can reach past the registry when it needs to. */
+  function fixture() {
+    const store = new MemoryTaskStore();
+    return { store, registry: new TaskRegistry({ store }) };
+  }
+
+  it("groups independent tasks into one batch", () => {
+    const { registry } = fixture();
+    registry.create({ taskId: "A", classification: incremental() });
+    registry.create({ taskId: "B", classification: incremental() });
+
+    const layers = registry.readyLayers();
+    expect(layers).toHaveLength(1);
+    expect(layers[0].map((t) => t.taskId).sort()).toEqual(["A", "B"]);
+  });
+
+  it("puts a dependent task in the batch after the one it waits for", () => {
+    const { registry } = fixture();
+    registry.create({ taskId: "A", classification: incremental() });
+    registry.create({ taskId: "B", classification: incremental(), dependsOn: ["A"] });
+
+    const layers = registry.readyLayers();
+    expect(layers.map((l) => l.map((t) => t.taskId))).toEqual([["A"], ["B"]]);
+  });
+
+  it("reports how much of the store could run at once", () => {
+    const { registry } = fixture();
+    registry.create({ taskId: "A", classification: incremental() });
+    registry.create({ taskId: "B", classification: incremental() });
+    registry.create({ taskId: "C", classification: incremental(), dependsOn: ["A", "B"] });
+
+    expect(registry.parallelism()).toMatchObject({ tasks: 3, layers: 2, widest: 2 });
+  });
+
+  it("collapses to one task per layer when everything is a chain", () => {
+    const { registry } = fixture();
+    registry.create({ taskId: "A", classification: incremental() });
+    registry.create({ taskId: "B", classification: incremental(), dependsOn: ["A"] });
+    registry.create({ taskId: "C", classification: incremental(), dependsOn: ["B"] });
+
+    expect(registry.parallelism()).toMatchObject({ layers: 3, widest: 1, sequentialSpeedup: 1 });
+  });
+
+  it("builds a graph over an empty store without complaining", () => {
+    const { registry } = fixture();
+    expect(registry.readyLayers()).toEqual([]);
+    expect(registry.parallelism().tasks).toBe(0);
+  });
+
+  /**
+   * The creation rule already makes a cycle impossible, so this is not the normal
+   * defence — it is what catches a store that was hand-edited or restored from a
+   * backup written by something with looser rules.
+   */
+  it("survives a dependency on a task the store no longer holds", () => {
+    const { store, registry } = fixture();
+    registry.create({ taskId: "A", classification: incremental() });
+    const orphan = { ...store.loadTask("A")!, taskId: "B", dependsOn: ["GONE"] };
+    store.createTask(orphan);
+
+    expect(() => registry.readyLayers()).not.toThrow();
+  });
+});

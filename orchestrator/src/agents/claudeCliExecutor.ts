@@ -27,7 +27,14 @@ import { classifyQaFailure, classifySecurityFailure } from "../orchestrator/fail
 export type SpawnSync = (
   command: string,
   args: string[],
-  options: { cwd: string; encoding: "utf8"; input?: string; timeout?: number; maxBuffer?: number },
+  options: {
+    cwd: string;
+    encoding: "utf8";
+    input?: string;
+    timeout?: number;
+    maxBuffer?: number;
+    env?: NodeJS.ProcessEnv;
+  },
 ) => SpawnSyncReturns<string>;
 
 export interface ClaudeCliExecutorOptions {
@@ -161,7 +168,17 @@ export function createClaudeCliExecutor(opts: ClaudeCliExecutorOptions): AgentEx
 
     let proc: SpawnSyncReturns<string>;
     try {
-      proc = spawn("claude", args, { cwd: opts.projectRoot, encoding: "utf8", timeout, maxBuffer: 64 * 1024 * 1024 });
+      proc = spawn("claude", args, {
+        cwd: opts.projectRoot,
+        encoding: "utf8",
+        timeout,
+        maxBuffer: 64 * 1024 * 1024,
+        // T15: the one way a PreToolUse hook can know which agent is writing.
+        // Hooks get no subagent identity of their own, so the orchestrator — which
+        // does know, because it chose the role — passes it down. Without this the
+        // path guard can only enforce the universal floor.
+        env: { ...process.env, AGENTCLAUDE_ROLE: agent.role },
+      });
     } catch (e) {
       return failResult(`failed to spawn \`claude\` CLI for stage ${req.stage}: ${String(e)}`);
     }

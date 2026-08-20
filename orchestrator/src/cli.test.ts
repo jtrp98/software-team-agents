@@ -20,6 +20,8 @@ describe("parseArgs", () => {
       list: false,
       checkContracts: false,
       checkLayout: false,
+      checkWorkflows: false,
+      checkProfile: false,
       dependsOn: [],
       stateDb: undefined,
       phases: [],
@@ -134,6 +136,46 @@ describe("runCli --check-contracts (T03)", () => {
 
   it("needs neither --task-id nor --module", () => {
     expect(parseArgs(["--check-contracts"], "/repo").checkContracts).toBe(true);
+  });
+});
+
+describe("runCli --check-workflows (T09)", () => {
+  it("passes against this repo's own workflows, without opening a state database", async () => {
+    expect(await runCli(["--check-workflows"], defaultProjectRoot())).toBe(0);
+  });
+
+  it("exits non-zero when there are no workflow files, rather than passing quietly", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-cw-"));
+    try {
+      expect(await runCli(["--check-workflows", "--project-root", dir], dir)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("needs neither --task-id nor --module, and is listed in the usage text", () => {
+    expect(parseArgs(["--check-workflows"], "/repo").checkWorkflows).toBe(true);
+    expect(USAGE).toContain("--check-workflows");
+  });
+});
+
+describe("runCli --check-profile (T13/T14)", () => {
+  it("passes against this repo's own profile", async () => {
+    expect(await runCli(["--check-profile"], defaultProjectRoot())).toBe(0);
+  });
+
+  it("exits non-zero when there is no project.yaml, rather than passing quietly", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-cp-"));
+    try {
+      expect(await runCli(["--check-profile", "--project-root", dir], dir)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("needs neither --task-id nor --module, and is listed in the usage text", () => {
+    expect(parseArgs(["--check-profile"], "/repo").checkProfile).toBe(true);
+    expect(USAGE).toContain("--check-profile");
   });
 });
 

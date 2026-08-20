@@ -452,6 +452,105 @@ check(
 );
 
 // ---------------------------------------------------------------------------
+// 7. block-path-permissions.js -- each agent writes only what its contract allows (T15)
+// ---------------------------------------------------------------------------
+
+section('7. block-path-permissions.js -- per-agent write paths (T15)');
+
+/** Feeds the hook a write attempt, optionally as a named agent. */
+function runPathHook(tool, filePath, role) {
+  const env = {};
+  if (role) env.AGENTCLAUDE_ROLE = role;
+  return runHook('block-path-permissions.js', { tool_name: tool, tool_input: { file_path: filePath } }, env);
+}
+
+check(
+  'no role set -> a normal write is allowed (hooks carry no identity; this is the honest floor)',
+  runPathHook('Write', path.join(ROOT, 'server', 'x.ts')),
+  ALLOW,
+);
+
+check(
+  'no role set -> .workflow/ is still blocked (the floor applies to everyone)',
+  runPathHook('Write', path.join(ROOT, '.workflow', 'state.db')),
+  BLOCK,
+);
+
+check(
+  'a non-write tool is never this hook\'s business',
+  runPathHook('Read', path.join(ROOT, '_docs', 'module', 'm', 'design.md'), 'backend-engineer'),
+  ALLOW,
+);
+
+check(
+  'backend-engineer writing server code -> allowed',
+  runPathHook('Write', path.join(ROOT, 'server', 'routes', 'deal.ts'), 'backend-engineer'),
+  ALLOW,
+);
+
+check(
+  'backend-engineer writing design.md -> blocked (an engineer editing a contract has changed the rule)',
+  runPathHook('Write', path.join(ROOT, '_docs', 'module', 'crm', 'design.md'), 'backend-engineer'),
+  BLOCK,
+);
+
+check(
+  'frontend-engineer writing schema.prisma -> blocked (backend owns it)',
+  runPathHook('Edit', path.join(ROOT, 'prisma', 'schema.prisma'), 'frontend-engineer'),
+  BLOCK,
+);
+
+check(
+  'system-analyst writing design.md -> allowed (it owns it)',
+  runPathHook('Write', path.join(ROOT, '_docs', 'module', 'crm', 'design.md'), 'system-analyst'),
+  ALLOW,
+);
+
+check(
+  'qa-engineer writing application code -> blocked (a verifier that fixes is not verifying)',
+  runPathHook('Write', path.join(ROOT, 'server', 'routes', 'deal.ts'), 'qa-engineer'),
+  BLOCK,
+);
+
+check(
+  'any role writing the pipeline\'s own contracts -> blocked',
+  runPathHook('Write', path.join(ROOT, 'contracts', 'backend-engineer.yaml'), 'backend-engineer'),
+  BLOCK,
+);
+
+check(
+  'an unknown role -> allowed (fail open rather than trap a run on a typo)',
+  runPathHook('Write', path.join(ROOT, 'server', 'x.ts'), 'architect'),
+  ALLOW,
+);
+
+check(
+  'a role name that looks like a path -> allowed, and reads no file',
+  runPathHook('Write', path.join(ROOT, 'server', 'x.ts'), '../../etc/passwd'),
+  ALLOW,
+);
+
+// The hook reads contracts/*.yaml with its own minimal reader, because hooks take no
+// dependencies. That agreement is only safe if something checks it: a contract
+// reformatted into block style must fail here rather than silently disabling the guard.
+(function contractsStillReadableByTheHook() {
+  const agents = ['setup', 'business-analyst', 'system-analyst', 'project-manager', 'backend-engineer',
+                  'frontend-engineer', 'qa-engineer', 'security', 'devops'];
+  let bad = [];
+  for (const agent of agents) {
+    const text = fs.readFileSync(path.join(ROOT, 'contracts', agent + '.yaml'), 'utf8');
+    const write = /^\s*write:\s*\[([^\]]*)\]\s*$/m.exec(text);
+    const deny = /^\s*deny:\s*\[([^\]]*)\]\s*$/m.exec(text);
+    if (!write || !deny || write[1].trim() === '') bad.push(agent);
+  }
+  check(
+    'every contract still exposes write/deny in the flow style the hook can read',
+    bad.length === 0 ? 0 : 1,
+    0,
+  );
+})();
+
+// ---------------------------------------------------------------------------
 // report
 // ---------------------------------------------------------------------------
 

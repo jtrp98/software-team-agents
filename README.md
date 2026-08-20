@@ -178,7 +178,7 @@ _docs/
 │   ├── check-schema-contract.js  ← qa-engineer รัน: เทียบ schema.prisma กับ design.md ทุก module
 │   └── check-status-sync.js      ← รันก่อนเชื่อ status.md: เทียบกับ checkbox จริงใน plan.md ทุก module
 ├── tests/
-│   └── run.js                    ← self-test ของ hook/script ทั้งหมด (70 เคส ไม่ต้องติดตั้งอะไรเพิ่ม)
+│   └── run.js                    ← self-test ของ hook/script ทั้งหมด (83 เคส ไม่ต้องติดตั้งอะไรเพิ่ม)
 └── settings.json                ← ที่ต่อ hook ทั้งสี่ตัวเข้ากับ session (commit ไว้ ใช้ร่วมกันทั้ง repo)
 
 contracts/                       ← contract ของ agent ทั้ง 9 ตัวแบบเครื่องอ่านได้ (`<agent>.yaml`) — input/output/permission/constraint
@@ -267,7 +267,7 @@ Wired เป็น `Stop`/`SubagentStop` hook (ไม่ใช่ `PreToolUse`) 
 
 ### `.claude/tests/run.js` — self-test ของ hook/script ทั้งหมด
 
-รัน `node .claude/tests/run.js` ทุกครั้งที่แก้ไฟล์ใต้ `.claude/hooks/` หรือ `.claude/scripts/` — 70 เคส ไม่มี dependency ต้องติดตั้งเพิ่ม เหตุผลที่ต้องรันจริงจัง: hook ที่ syntax error จะ exit 1 ซึ่ง `PreToolUse` มองว่าไม่ใช่การบล็อก (บล็อกต้อง exit 2) แปลว่า hook ที่พิมพ์ผิดจะ **fail open** — ยังต่ออยู่ใน `settings.json`, ดูเหมือนติดตั้งแล้ว แต่ไม่บังคับอะไรเลยเงียบๆ เคยเกิดขึ้นจริงมาแล้วระหว่างพัฒนา
+รัน `node .claude/tests/run.js` ทุกครั้งที่แก้ไฟล์ใต้ `.claude/hooks/` หรือ `.claude/scripts/` — 83 เคส ไม่มี dependency ต้องติดตั้งเพิ่ม เหตุผลที่ต้องรันจริงจัง: hook ที่ syntax error จะ exit 1 ซึ่ง `PreToolUse` มองว่าไม่ใช่การบล็อก (บล็อกต้อง exit 2) แปลว่า hook ที่พิมพ์ผิดจะ **fail open** — ยังต่ออยู่ใน `settings.json`, ดูเหมือนติดตั้งแล้ว แต่ไม่บังคับอะไรเลยเงียบๆ เคยเกิดขึ้นจริงมาแล้วระหว่างพัฒนา
 
 ### สิ่งที่ควรรู้ก่อนเอาไปใช้ (มีผลกับ hook ทั้งสี่ตัว)
 

@@ -1,0 +1,13 @@
+# No signal matched. The one thing this must never do is pick a level anyway: an
+# unclassified task gets a person, because guessing here is wrong in a way nothing downstream catches.
+workflow: triage
+description: Nothing matched - escalate to a person rather than defaulting to a level.
+trigger:
+  kind: signal
+  signal: none
+  priority: 99
+level: UNKNOWN
+requires_human_approval: true
+steps:
+  - agent: human
+    note: no forward path exists until a person re-classifies the task

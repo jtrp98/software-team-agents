@@ -1,0 +1,19 @@
+# An urgent production fix. It skips the analysis stages, but deliberately does NOT skip
+# qa-engineer: shipping unverified is what turns one incident into two, and devops refuses a
+# phase QA has not accepted regardless of how the task was classified.
+#
+# Chosen explicitly: urgency is a property of the situation, not of the change.
+workflow: hotfix
+description: Urgent production fix - straight to the engineers, then verified and shipped.
+trigger:
+  kind: explicit
+level: MEDIUM
+requires_human_approval: true
+steps:
+  - agent: backend-engineer
+    when: touchesBackend
+  - agent: frontend-engineer
+    when: touchesFrontend
+  - agent: qa-engineer
+  - agent: devops
+    note: still gated - an unverified or unaudited phase is refused even here

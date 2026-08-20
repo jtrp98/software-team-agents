@@ -18,7 +18,14 @@ constraints:
   - human_confirmation_required
 permissions:
   capabilities: [read, write_docs]
-  read: []
-  write: []
+  # Owns design.md. prisma/** is denied on purpose: the schema is written by setup and backend-engineer, and design.md is the contract it must match.
+  read: [".claude/agents/backend-engineer.md", ".claude/agents/frontend-engineer.md", ".claude/shared/**", "CLAUDE.md", "_docs/module/*/design-archive.md", "_docs/module/*/design.md", "_docs/module/*/requirement.md", "_docs/module/*/review.md", "_docs/status-archive.md", "_docs/status.md", "prisma/**"]
+  write: ["_docs/module/*/design.md", "_docs/module/*/design-archive.md", "_docs/status.md", "_docs/status-archive.md"]
+  deny: ["_docs/module/*/requirement.md", "_docs/module/*/plan.md", "prisma/**"]
 tools: [Read, Glob, Grep, AskUserQuestion, Write, Edit]
 states: [DESIGN]
+capability:
+  languages: []
+  frameworks: []
+  database: ["postgresql"]
+  capabilities: [schema-design, feasibility-analysis]

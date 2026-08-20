@@ -1,0 +1,18 @@
+# Named so a Java project has one obvious home rather than an invented one. Nothing in this
+# repo targets it; it is a profile, not a claim that anything can build it.
+stack: java
+kind: backend
+language: java
+runtime: jdk-21
+frameworks: [spring-boot]
+orm: hibernate
+database: [postgresql]
+api: [rest, grpc]
+package_manager: maven
+commands:
+  install: mvn dependency:resolve
+  build: mvn package
+  test: mvn test
+  lint: mvn checkstyle:check
+  typecheck: mvn compile
+capabilities: [rest-api, grpc, database-access, auth, testing]

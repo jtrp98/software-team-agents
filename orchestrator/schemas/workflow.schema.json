@@ -1,0 +1,96 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/workflow.schema.json",
+  "title": "Workflow definition (workflows/<id>.yml)",
+  "description": "Which agents run, in what order, for one kind of change. Before these files the answer lived only inside orchestrator/src/classification/taskClassifier.ts, so 'what happens for a hotfix' was a code change rather than something a person could read or edit. The classifier remains the runtime authority (it is a pure function and must not read files at import time); these files state the same thing in checkable form, and --check-workflows fails when the two disagree.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["workflow", "description", "trigger", "level", "requires_human_approval", "steps"],
+  "properties": {
+    "workflow": {
+      "description": "Stable id. Equal to the filename without its extension — one identifier, not a mapping to keep in sync.",
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "description": { "type": "string", "minLength": 1 },
+    "trigger": {
+      "description": "How this workflow is chosen. A classification signal picks it automatically; \"explicit\" means it has no signal of its own and must be named by the caller, because the difference is intent rather than anything observable in the change.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "enum": ["signal", "explicit"] },
+        "signal": {
+          "description": "The ClassificationInput field that selects this workflow. Required when kind is \"signal\".",
+          "type": "string",
+          "enum": [
+            "isProductionDeployOrMigration",
+            "touchesSchema",
+            "isNewFeatureModuleOrProject",
+            "touchesBusinessRuleOnly",
+            "isIncrementalFeature",
+            "isClearBugFix",
+            "isTypoOrCopyOnly",
+            "none"
+          ]
+        },
+        "priority": {
+          "description": "Order the classifier tests signals in, lowest first. Recorded so the precedence between two true signals is data rather than the order of if-statements.",
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "signal" } }, "required": ["kind"] },
+          "then": {
+            "required": ["signal", "priority"],
+            "properties": { "signal": { "type": "string" }, "priority": { "type": "integer" } }
+          }
+        }
+      ]
+    },
+    "level": {
+      "description": "The task level this workflow always produces.",
+      "type": "string",
+      "enum": ["TRIVIAL", "SMALL", "MEDIUM", "LARGE_CRITICAL", "UNKNOWN"]
+    },
+    "requires_human_approval": {
+      "description": "Whether this kind of change always needs an explicit human decision, independent of the per-edge gates.",
+      "type": "boolean"
+    },
+    "steps": {
+      "description": "The agents this workflow runs, in order. Order is the contract: backend-engineer precedes frontend-engineer within a phase, never the reverse.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["agent"],
+        "properties": {
+          "agent": {
+            "type": "string",
+            "enum": [
+              "setup",
+              "business-analyst",
+              "system-analyst",
+              "project-manager",
+              "backend-engineer",
+              "frontend-engineer",
+              "qa-engineer",
+              "security",
+              "devops",
+              "human"
+            ]
+          },
+          "when": {
+            "description": "Condition for including this step. Omitted means always. \"always_sensitive\" marks a workflow that forces a security pass regardless of what the caller said.",
+            "type": "string",
+            "enum": ["touchesBackend", "touchesFrontend", "touchesSensitiveArea", "always_sensitive"]
+          },
+          "note": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

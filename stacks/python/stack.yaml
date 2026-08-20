@@ -1,0 +1,18 @@
+# Named so a Python project has one obvious home rather than an invented one. Nothing in this
+# repo targets it; it is a profile, not a claim that anything can build it.
+stack: python
+kind: backend
+language: python
+runtime: python-3.12
+frameworks: [fastapi, pydantic]
+orm: sqlalchemy
+database: [postgresql]
+api: [rest]
+package_manager: uv
+commands:
+  install: uv sync
+  build: uv build
+  test: pytest
+  lint: ruff check
+  typecheck: mypy .
+capabilities: [rest-api, database-access, auth, testing]

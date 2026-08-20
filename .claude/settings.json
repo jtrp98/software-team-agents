@@ -27,6 +27,15 @@
             "command": "node .claude/hooks/block-doc-rewrite.js"
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .claude/hooks/block-path-permissions.js"
+          }
+        ]
       }
     ],
     "SubagentStop": [

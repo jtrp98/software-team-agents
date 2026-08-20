@@ -1,0 +1,19 @@
+# The backend stack the agent prompts implement today. `.claude/agents/backend-engineer.md`
+# is the authoritative prose version; this file is the machine-readable twin, and
+# --check-profile fails if they disagree about the language.
+stack: node
+kind: backend
+language: typescript
+runtime: node
+frameworks: [express, zod]
+orm: prisma
+database: [postgresql]
+api: [rest]
+package_manager: npm
+commands:
+  install: npm install
+  build: npm run build
+  test: npm test
+  lint: npm run lint
+  typecheck: npm run typecheck
+capabilities: [rest-api, database-access, auth, testing]

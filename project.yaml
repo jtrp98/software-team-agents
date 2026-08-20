@@ -1,0 +1,54 @@
+# The single place an agent looks up what this project is built with (T14).
+#
+# WHY THIS SPLITS current FROM target
+#
+# TASKS.md names .NET 10 / C# / EF Core / gRPC as this project's target stack. The agent prompts
+# in `.claude/agents/` implement Node + Express + Prisma, and CLAUDE.md is explicit that changing
+# the stack means the user confirms it and the two engineer prompts are rewritten in place.
+#
+# Declaring only the target would make this file a description of a system that does not exist:
+# `--check-profile` would pass while every capability lookup returned an agent that cannot build
+# the thing. Declaring only the current stack would lose the decision that has already been made.
+# So both are here, and the checker holds them to different standards — `current` must match the
+# agent roster, `target` only has to name a stack profile that exists.
+#
+# `target.blocked_on` is what turns the gap from a contradiction into a tracked migration.
+
+project:
+  name: software-team-agents
+  description: A hand-off based multi-agent pipeline and the orchestrator that drives it.
+
+# What the agents can actually build today. Checked against contracts/*.yaml.
+current:
+  backend:
+    stack: node
+    language: typescript
+    framework: express
+    orm: prisma
+  frontend:
+    stack: frontend
+    language: typescript
+    framework: nextjs
+  database:
+    type: postgresql
+  api: [rest]
+
+# Where TASKS.md T13/T14 says this is going. Not checked against the roster on purpose —
+# nothing implements it yet, and pretending otherwise is the failure this split prevents.
+target:
+  backend:
+    stack: dotnet
+    language: csharp
+    framework: dotnet-10
+    orm: ef-core
+  frontend:
+    stack: frontend
+    language: typescript
+    framework: nextjs
+  database:
+    type: postgresql
+  api: [rest, grpc]
+  blocked_on: >
+    CLAUDE.md requires the user to confirm a stack change before .claude/agents/backend-engineer.md
+    and .claude/agents/setup.md are rewritten. Until that happens no agent can build C#, and the
+    capability registry says so rather than claiming otherwise.

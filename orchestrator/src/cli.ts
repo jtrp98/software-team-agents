@@ -9,8 +9,11 @@ import { createClaudeCliExecutor } from "./agents/claudeCliExecutor.js";
 import { SqliteTaskStore } from "./store/sqliteStore.js";
 import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
 import { checkAllContracts } from "./agents/agentContract.js";
+import { checkPathRules } from "./agents/pathPermissions.js";
 import { checkLayout } from "./layout/repoLayout.js";
 import { ApprovalType } from "./gates/approval.js";
+import { checkAllWorkflows } from "./workflow/workflowDefinition.js";
+import { checkProfile } from "./profile/projectProfile.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -40,6 +43,10 @@ export interface CliArgs {
   checkContracts: boolean;
   /** Check layout.yaml against the directories that actually exist and exit. Same audience. */
   checkLayout: boolean;
+  /** Check workflows/*.yml against the classifier and exit. Same audience. */
+  checkWorkflows: boolean;
+  /** Check project.yaml and stacks/ against the agent roster and exit. Same audience. */
+  checkProfile: boolean;
   dependsOn: string[];
   stateDb?: string;
   /** Phases of plan.md this run touches, used to slice module docs per conventions.md §10. Empty = send the plan whole. */
@@ -68,6 +75,8 @@ export const USAGE =
   "  orchestrate --list [--project-root <path>]                 show every task and stop\n" +
   "  orchestrate --check-contracts [--project-root <path>]      check contracts/*.yaml against the agent registry\n" +
   "  orchestrate --check-layout [--project-root <path>]         check layout.yaml against the real directories\n" +
+  "  orchestrate --check-workflows [--project-root <path>]      check workflows/*.yml against the classifier\n" +
+  "  orchestrate --check-profile [--project-root <path>]        check project.yaml and stacks/ against the agent roster\n" +
   `  classification flags: ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
 
 /** Pure argv parser — kept separate from process.argv/console/exit so it's directly testable. */
@@ -80,6 +89,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let list = false;
   let checkContracts = false;
   let checkLayoutFlag = false;
+  let checkWorkflowsFlag = false;
+  let checkProfileFlag = false;
   let dependsOn: string[] = [];
   let phases: number[] = [];
   const classification: ClassificationInput = {};
@@ -112,6 +123,10 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkContracts = true;
     } else if (arg === "--check-layout") {
       checkLayoutFlag = true;
+    } else if (arg === "--check-workflows") {
+      checkWorkflowsFlag = true;
+    } else if (arg === "--check-profile") {
+      checkProfileFlag = true;
     } else if (arg in FLAG_TO_CLASSIFICATION) {
       classification[FLAG_TO_CLASSIFICATION[arg]] = true;
     } else {
@@ -119,7 +134,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     }
   }
 
-  if (!list && !checkContracts && !checkLayoutFlag) {
+  if (!list && !checkContracts && !checkLayoutFlag && !checkWorkflowsFlag && !checkProfileFlag) {
     if (!taskId) throw new CliUsageError("--task-id is required");
     if (!moduleName) throw new CliUsageError("--module is required (the _docs/module/<name>/ this task belongs to)");
   }
@@ -136,6 +151,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     list,
     checkContracts,
     checkLayout: checkLayoutFlag,
+    checkWorkflows: checkWorkflowsFlag,
+    checkProfile: checkProfileFlag,
     dependsOn,
     stateDb,
     phases,
@@ -175,11 +192,33 @@ function printListing(registry: TaskRegistry): void {
     console.log("[orchestrator] no tasks in this store yet.");
     return;
   }
+
+  // Which batch each task falls into, so the listing shows what could run
+  // together rather than leaving it to be worked out from depends_on by hand.
+  const layerOf = new Map<string, number>();
+  try {
+    registry.readyLayers().forEach((layer, i) => layer.forEach((t) => layerOf.set(t.taskId, i + 1)));
+  } catch {
+    // A store too broken to graph is still worth listing — the rows below are
+    // what would tell someone why.
+  }
+
   for (const { task, status } of listing) {
     const agent = status.currentAgent ? ` agent=${status.currentAgent}` : "";
     const waiting = status.waitingOn?.length ? ` waiting_on=${status.waitingOn.join(",")}` : "";
     const reason = status.reason ? ` — ${status.reason}` : "";
-    console.log(`  ${task.taskId.padEnd(12)} ${status.kind.padEnd(22)} ${status.state.padEnd(16)}${agent}${waiting}${reason}`);
+    const layer = layerOf.has(task.taskId) ? ` batch=${layerOf.get(task.taskId)}` : "";
+    console.log(
+      `  ${task.taskId.padEnd(12)} ${status.kind.padEnd(22)} ${status.state.padEnd(16)}${agent}${layer}${waiting}${reason}`,
+    );
+  }
+
+  const stats = layerOf.size > 0 ? registry.parallelism() : null;
+  if (stats && stats.widest > 1) {
+    console.log(
+      `[orchestrator] ${stats.tasks} tasks in ${stats.layers} batch(es); up to ${stats.widest} could run at once ` +
+        "(the orchestrator still runs one at a time — concurrent execution needs file locking, T35).",
+    );
   }
 }
 
@@ -218,12 +257,16 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
 
   if (args.checkContracts) {
     const result = checkAllContracts(args.projectRoot);
-    if (result.ok) {
-      console.log("[orchestrator] contracts/*.yaml agree with the agent registry.");
+    // Path rules live in the same files, so they are checked in the same pass —
+    // a write glob that can never match is a role that silently cannot do its job.
+    const paths = checkPathRules(args.projectRoot);
+    const problems = [...result.problems, ...paths.problems];
+    if (problems.length === 0) {
+      console.log("[orchestrator] contracts/*.yaml agree with the agent registry, and their path rules are sane.");
       return 0;
     }
-    console.error("[orchestrator] contracts/*.yaml disagree with the agent registry:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
+    console.error("[orchestrator] contracts/*.yaml have problems:");
+    for (const problem of problems) console.error(`  - ${problem}`);
     return 1;
   }
 
@@ -234,6 +277,31 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       return 0;
     }
     console.error("[orchestrator] layout.yaml and the repo disagree:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
+  if (args.checkWorkflows) {
+    const result = checkAllWorkflows(args.projectRoot);
+    if (result.ok) {
+      console.log("[orchestrator] workflows/*.yml agree with the classifier.");
+      return 0;
+    }
+    console.error("[orchestrator] workflows/*.yml and the classifier disagree:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
+  if (args.checkProfile) {
+    const result = checkProfile(args.projectRoot);
+    // Notes print either way: a tracked migration is worth seeing on a green run,
+    // and burying it until something breaks is how it stops being tracked.
+    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
+    if (result.ok) {
+      console.log("[orchestrator] project.yaml and stacks/ agree with the agent roster.");
+      return 0;
+    }
+    console.error("[orchestrator] project.yaml and the agent roster disagree:");
     for (const problem of result.problems) console.error(`  - ${problem}`);
     return 1;
   }

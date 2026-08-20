@@ -2,6 +2,8 @@
 
 รายละเอียดแต่ละ task ดูที่ `TASKS.md` (ID ตรงกัน เช่น T01)
 
+สถานะปัจจุบันและบริบทสำหรับทำงานต่อ — รวมการตัดสินใจที่ทำไปแล้วและเหตุผล — อยู่ที่ `HANDOFF.md`
+
 ## 🔴 P0 — Core Orchestration (ทำก่อน — บล็อกงานอื่น)
 - [x] T01 — สร้าง Orchestrator กลาง
 - [x] T02 — ทำ State Machine กลาง (`.workflow/state.yaml`)
@@ -13,13 +15,13 @@
 - [x] T08 — Human Approval เป็น First-class State
 
 ## 🟠 P1 — Architecture
-- [ ] T09 — Workflow Definition แยกไฟล์ (`workflows/*.yml`)
-- [ ] T10 — รองรับ Parallel Execution (DAG)
-- [ ] T11 — Dependency Graph ระดับ Task
-- [ ] T12 — Agent Capability Registry
-- [ ] T13 — Stack Profile แยกตามเทคโนโลยี
-- [ ] T14 — Project Profile (single source of truth)
-- [ ] T15 — Permission Model แบบละเอียด
+- [x] T09 — Workflow Definition แยกไฟล์ (`workflows/*.yml`)
+- [x] T10 — รองรับ Parallel Execution (DAG)
+- [x] T11 — Dependency Graph ระดับ Task
+- [x] T12 — Agent Capability Registry
+- [x] T13 — Stack Profile แยกตามเทคโนโลยี
+- [x] T14 — Project Profile (single source of truth)
+- [x] T15 — Permission Model แบบละเอียด
 
 ## 🟠 P1 — Documentation / Knowledge
 - [ ] T16 — Decision Log (ADR)

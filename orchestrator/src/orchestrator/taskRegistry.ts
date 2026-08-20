@@ -3,6 +3,7 @@ import type { ClassificationResult } from "../classification/taskClassifier.js";
 import type { Budget } from "../cost/costControl.js";
 import { writeStateViewFromStore } from "../store/stateView.js";
 import { TaskNotFoundError, type PersistedTask, type TaskStore } from "../store/taskStore.js";
+import { TaskGraph, type TaskNode } from "../graph/taskGraph.js";
 import { Orchestrator } from "./orchestrator.js";
 import { describeStatus, unmetDependencies, type TaskStatusView } from "./taskStatus.js";
 
@@ -120,6 +121,60 @@ export class TaskRegistry {
         t.machine.current !== TaskState.BLOCKED &&
         unmetDependencies(t, tasks).length === 0,
     );
+  }
+
+  /**
+   * The stored tasks as a dependency graph (T11).
+   *
+   * The registry's own ordering rule — a task may only depend on tasks that
+   * already exist — makes a cycle structurally impossible, so this is not how
+   * cycles are normally prevented. It is how they are *caught* anyway: a store
+   * that was hand-edited, restored from a backup, or written by an older version
+   * can hold a cycle the creation rule would have refused, and a task registry
+   * that hangs forever is a much worse failure than one that says why.
+   */
+  graph(): TaskGraph {
+    const tasks = this.store.listTasks();
+    const known = new Set(tasks.map((t) => t.taskId));
+    const nodes: TaskNode[] = tasks.map((t) => ({
+      id: t.taskId,
+      // Dependencies on tasks the store no longer holds are dropped rather than
+      // treated as an error: a deleted task cannot be waited for, and refusing to
+      // build the graph at all would make the whole registry unusable over one
+      // stale row.
+      dependsOn: t.dependsOn.filter((id) => known.has(id)),
+    }));
+    return new TaskGraph(nodes);
+  }
+
+  /**
+   * Unfinished tasks grouped into batches that could run at the same time (T10).
+   *
+   * This answers *what may run concurrently*, which is a planning question and
+   * is genuinely useful on its own — it is what `--list` shows, and what tells
+   * you whether a dependency chain has serialized work that did not need to be.
+   *
+   * It does not run anything concurrently. Doing that safely needs file-level
+   * locking so two agents cannot write the same file at once (T35), and starting
+   * without it would trade a visible ordering problem for an invisible
+   * corruption one.
+   */
+  readyLayers(): PersistedTask[][] {
+    const tasks = this.store.listTasks();
+    const byId = new Map(tasks.map((t) => [t.taskId, t]));
+    const layers: PersistedTask[][] = [];
+    for (const layer of this.graph().parallelLayers()) {
+      const batch = layer
+        .map((node) => byId.get(node.id)!)
+        .filter((t) => t.machine.current !== TaskState.DEPLOYED && t.machine.current !== TaskState.BLOCKED);
+      if (batch.length > 0) layers.push(batch);
+    }
+    return layers;
+  }
+
+  /** How much of this store's work could run in parallel, versus one task at a time. */
+  parallelism(): { tasks: number; layers: number; widest: number; sequentialSpeedup: number } {
+    return this.graph().parallelism();
   }
 
   waitingOn(taskId: string): string[] {

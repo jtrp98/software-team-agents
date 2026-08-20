@@ -1,0 +1,20 @@
+# Remediating a finding the security agent raised. security runs unconditionally, because the
+# whole point is re-auditing, and only security may close its own finding - an engineer's fix
+# moves it to "fix claimed" and no further.
+#
+# Chosen explicitly: the trigger is a finding in security.md, which is not a classification signal.
+workflow: security-fix
+description: Fixing a raised security finding - re-audited by security, never closed by the fixer.
+trigger:
+  kind: explicit
+level: LARGE_CRITICAL
+requires_human_approval: true
+steps:
+  - agent: backend-engineer
+    when: touchesBackend
+  - agent: frontend-engineer
+    when: touchesFrontend
+  - agent: qa-engineer
+  - agent: security
+    when: always_sensitive
+  - agent: devops

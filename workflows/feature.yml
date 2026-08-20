@@ -1,0 +1,20 @@
+# Brand-new feature, module or project: nothing is assumed, so no stage is skipped.
+workflow: feature
+description: New feature, module or project - the full chain, starting from a requirements interview.
+trigger:
+  kind: signal
+  signal: isNewFeatureModuleOrProject
+  priority: 2
+level: LARGE_CRITICAL
+requires_human_approval: false
+steps:
+  - agent: business-analyst
+  - agent: system-analyst
+  - agent: project-manager
+  - agent: backend-engineer
+    when: touchesBackend
+  - agent: frontend-engineer
+    when: touchesFrontend
+  - agent: qa-engineer
+  - agent: security
+    when: touchesSensitiveArea

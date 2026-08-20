@@ -1,0 +1,19 @@
+# Building out a module whose requirements are already understood. The business interview
+# would ask nothing new, so it is skipped; the design still gets a look.
+workflow: incremental
+description: Incremental feature on an existing module - business-analyst and project-manager skipped.
+trigger:
+  kind: signal
+  signal: isIncrementalFeature
+  priority: 4
+level: MEDIUM
+requires_human_approval: false
+steps:
+  - agent: system-analyst
+  - agent: backend-engineer
+    when: touchesBackend
+  - agent: frontend-engineer
+    when: touchesFrontend
+  - agent: qa-engineer
+  - agent: security
+    when: touchesSensitiveArea

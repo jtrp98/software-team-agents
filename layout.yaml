@@ -106,14 +106,32 @@ concepts:
   workflow:
     answers: "ทำเมื่อไหร่ — which roles run, in what order, for a kind of change"
     why: >
-      Today the pipeline for each kind of change is a decision inside
-      orchestrator/src/classification/taskClassifier.ts. That works, but it means changing
-      "what happens for a hotfix" is a code change. T09 moves the definitions out to data.
+      The pipeline for each kind of change used to be a chain of if-statements inside
+      orchestrator/src/classification/taskClassifier.ts, so changing "what happens for a
+      hotfix" was a code change rather than an edit. T09 moved the definitions here. The
+      classifier is still what runs (it is a pure function and must not read files at import
+      time); --check-workflows fails when a file and the classifier disagree, which is what
+      keeps these from becoming a stale description of a system that moved on.
     homes:
       - path: workflows
-        status: reserved
-        filled_by: T09
-        holds: one YAML per kind of change (feature, bugfix, refactor, hotfix, security-fix)
+        status: active
+        pattern: "*.yml"
+        read_by: orchestrator
+        holds: one YAML per kind of change, checked against the classifier by --check-workflows
+
+  stack:
+    answers: "ด้วยอะไร — the technology a project is built on"
+    why: >
+      "What stack is this?" used to be answered by reading backend-engineer.md and inferring.
+      That works for a person and not for a program, and the moment anything has to decide
+      from it — which agent can take a task, which build command to run, whether a capability
+      is covered — an inference is not good enough. project.yaml at the root names the
+      project's own answer; these profiles are the vocabulary it names.
+    homes:
+      - path: stacks
+        status: active
+        read_by: orchestrator
+        holds: one folder per technology, each with a stack.yaml describing its language, frameworks and commands
 
   orchestrator:
     answers: "ใครทำต่อ — the thing that decides what runs next"

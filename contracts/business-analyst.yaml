@@ -21,7 +21,14 @@ constraints:
   - human_confirmation_required
 permissions:
   capabilities: [read, write_docs]
-  read: []
-  write: []
+  # Owns requirement.md. The denies are the neighbouring documents it must route to, not edit.
+  read: [".claude/shared/**", "CLAUDE.md", "_docs/module/*/design.md", "_docs/module/*/requirement.md", "_docs/module/*/review.md", "_docs/status-archive.md", "_docs/status.md"]
+  write: ["_docs/module/*/requirement.md", "_docs/status.md", "_docs/status-archive.md"]
+  deny: ["_docs/module/*/design.md", "_docs/module/*/plan.md", "_docs/module/*/review.md"]
 tools: [AskUserQuestion, Write, Edit, Read, Glob, Grep]
 states: [REQUIREMENT]
+capability:
+  languages: []
+  frameworks: []
+  database: []
+  capabilities: [requirements-interview]
