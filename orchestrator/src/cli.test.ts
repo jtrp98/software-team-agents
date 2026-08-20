@@ -35,6 +35,7 @@ describe("parseArgs", () => {
       checkWorkspace: false,
       checkRepos: false,
       checkEnvironments: false,
+      checkDocStructure: false,
       environment: Environment.LOCAL,
       dependsOn: [],
       stateDb: undefined,

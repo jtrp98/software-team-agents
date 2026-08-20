@@ -91,11 +91,16 @@ function idsOnSameLineAs(markdown: string, anchors: string[], targetPrefix: stri
   return ordered;
 }
 
-/** True when `taskId`'s line in `planMd` is a checked checkbox — `qa-engineer`'s mark, per conventions.md, that a task is actually done. */
+/** True when `taskId`'s row in `planMd`'s task table (T52) has Status `verified` — `qa-engineer`'s mark, per `policies/documentation.md` §4, that a task is actually done. */
 function isTaskChecked(planMd: string, taskId: string): boolean {
   for (const line of planMd.split(/\r?\n/)) {
     if (!line.includes(taskId)) continue;
-    return /^\s*-\s*\[x\]/i.test(line);
+    if (!line.trim().startsWith("|")) continue;
+    const cells = line
+      .split("|")
+      .map((c) => c.trim())
+      .filter(Boolean);
+    return (cells[1] ?? "").toLowerCase() === "verified";
   }
   return false;
 }

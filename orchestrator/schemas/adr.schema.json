@@ -23,7 +23,7 @@
       "enum": ["proposed", "accepted", "superseded", "rejected"]
     },
     "date": {
-      "description": "The date the status above became true, asked from the user per conventions.md's dating rule — never inferred by an agent.",
+      "description": "The date the status above became true, asked from the user per policies/documentation.md's §3 dating rule — never inferred by an agent.",
       "type": "string",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
     },

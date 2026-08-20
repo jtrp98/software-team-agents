@@ -135,7 +135,7 @@ describe("the shipped contracts' path rules", () => {
     }
   });
 
-  it("lets qa-engineer edit plan.md, which is its one non-checkbox exception", () => {
+  it("lets qa-engineer edit plan.md, which is its one exception beyond review.md", () => {
     expect(canWritePath(pathRulesFor(AgentStage.QA_ENGINEER), "_docs/module/crm/plan.md").allowed).toBe(true);
   });
 
@@ -178,7 +178,7 @@ describe("toRepoRelative", () => {
 
 describe("checkPathRules", () => {
   /**
-   * Every document here is amended, never regenerated (conventions.md §4), so a
+   * Every document here is amended, never regenerated (`policies/documentation.md` §4), so a
    * role allowed to write something it cannot read is a rule that contradicts
    * itself. This caught three real gaps the moment it was written.
    */

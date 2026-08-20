@@ -8,6 +8,8 @@ export interface RunRecord {
   duration: number;
   /** Which model actually ran this stage (T26) — from `.claude/agents/<role>.md`'s frontmatter, not guessed. Null when the executor didn't resolve one (e.g. a test stub). */
   model: string | null;
+  /** Which prompt version ran this stage (T57) — from the same file's `version:` frontmatter field. Null when absent (an agent file that predates T57, or a test stub) — log-only, never selects which prompt actually runs. */
+  promptVersion: number | null;
   tokens: number;
   cost: number;
   result: "PASS" | "FAIL";
@@ -24,6 +26,7 @@ export interface RunRecord {
 
 export interface RunOutcome {
   model?: string;
+  promptVersion?: number;
   tokens: number;
   cost: number;
   result: "PASS" | "FAIL";
@@ -72,6 +75,7 @@ export class RunLog {
       end_time: params.end_time,
       duration: params.end_time - params.start_time,
       model: params.outcome.model ?? null,
+      promptVersion: params.outcome.promptVersion ?? null,
       tokens: params.outcome.tokens,
       cost: params.outcome.cost,
       result: params.outcome.result,

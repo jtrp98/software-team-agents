@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * PreToolUse guard for `.claude/shared/conventions.md` §5 — "No agent runs git".
+ * PreToolUse guard for `policies/git.md` §5 — "No agent runs git".
  *
  * That rule is a prompt instruction, which means it holds only as long as every agent
  * remembers it. This hook enforces it at the tool-call layer instead: a state-changing
@@ -149,7 +149,7 @@ function deny(what) {
   return [
     `Blocked: ${what}.`,
     '',
-    'Version control belongs to the user (`.claude/shared/conventions.md` §5) — no agent in this',
+    'Version control belongs to the user (`policies/git.md` §5) — no agent in this',
     'pipeline runs git or touches `.git/`. Read-only inspection (`git status`, `log`, `diff`, `show`)',
     'is allowed; anything that changes repository state is not.',
     '',

@@ -13,7 +13,7 @@ import { CONTEXT_POLICY, type ContextCategory } from "./contextSelection.js";
  * whole thing. Reading a 900-line plan to implement one phase is the single
  * most repeated waste in this pipeline.
  *
- * The rule for what to keep is not invented here — `.claude/shared/conventions.md`
+ * The rule for what to keep is not invented here — `policies/documentation.md` §10
  * §10 already states it per document and per role. What §10 could not do is
  * enforce it: it is prose, so it binds an agent that reads and remembers it, and
  * costs nothing to ignore. This module makes the same rule executable, so the
@@ -74,7 +74,7 @@ export function sectionMap(markdown: string): Section[] {
   let fenced = false;
 
   for (let i = 0; i < lines.length; i++) {
-    // A `## ` inside a fenced block is sample content, not a heading — conventions.md
+    // A `## ` inside a fenced block is sample content, not a heading — policies/documentation.md
     // itself contains exactly that, and treating it as a boundary would split a code block.
     if (/^\s*(```|~~~)/.test(lines[i])) fenced = !fenced;
     if (fenced) continue;

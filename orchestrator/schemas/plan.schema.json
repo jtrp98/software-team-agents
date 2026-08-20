@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/plan.schema.json",
+  "title": "plan.md structural summary (T53)",
+  "description": "Validates the structural summary orchestrator/src/docs/docStructure.ts extracts from a plan.md — presence of the sections .claude/agents/project-manager.md's Output template requires, plus a real phase count (T52's task table lives under each `## Phase N` heading).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["hasPlanSummary", "hasSequencingNotes", "hasOpenQuestions", "hasChangeLog", "phaseCount"],
+  "properties": {
+    "hasPlanSummary": { "const": true, "description": "## Plan Summary" },
+    "hasSequencingNotes": { "const": true, "description": "## Sequencing Notes" },
+    "hasOpenQuestions": { "const": true, "description": "## Unresolved Open Questions" },
+    "hasChangeLog": { "const": true, "description": "## Change Log" },
+    "phaseCount": { "type": "integer", "minimum": 1, "description": "count of `## Phase N` headings — a plan with zero phases has nothing for an engineer to pick up" }
+  }
+}

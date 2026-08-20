@@ -12,7 +12,7 @@ import type { Capability } from "./capabilities.js";
  * Loads and checks `contracts/<agent-name>.yaml`.
  *
  * Before these files existed, an agent's input/output/permission rules were
- * spread across its own prompt, CLAUDE.md and conventions.md — readable by a
+ * spread across its own prompt, CLAUDE.md and policies/*.md — readable by a
  * person, checkable by nothing. These files state the same rules in a form a
  * program can verify, which is the whole point: a contract nobody can check is
  * a description, not a contract.

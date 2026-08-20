@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/security.schema.json",
+  "title": "security.md structural summary (T53)",
+  "description": "Validates the structural summary orchestrator/src/docs/docStructure.ts extracts from a security.md — presence of the sections .claude/agents/security.md's Output template requires. `## Findings — <phase>`, `## Clean`, and `## Accepted Risks` are round-specific/optional and not checked here.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["hasOpenFindings", "hasSummary", "hasChangeLog"],
+  "properties": {
+    "hasOpenFindings": { "const": true, "description": "## Open Findings — all rounds" },
+    "hasSummary": { "const": true, "description": "## Summary" },
+    "hasChangeLog": { "const": true, "description": "## Change Log" }
+  }
+}

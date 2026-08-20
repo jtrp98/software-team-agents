@@ -19,7 +19,7 @@ which version it's calling.
 No versioning scheme. Routes are unversioned (`/api/users`, not `/api/v1/users`). A breaking
 change to an endpoint's contract is a coordinated change: `backend-engineer` updates the route and
 `frontend-engineer` updates every caller in the same phase, per the backend-before-frontend
-ordering rule in `.claude/shared/conventions.md` §6a — not a parallel `/v2` route kept alongside
+ordering rule in `policies/agent-boundaries.md` §6a — not a parallel `/v2` route kept alongside
 the old one.
 
 ## Consequences

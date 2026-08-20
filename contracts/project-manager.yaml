@@ -20,7 +20,7 @@ constraints:
 permissions:
   capabilities: [read, write_docs]
   # Owns plan.md.
-  read: [".claude/agents/backend-engineer.md", ".claude/agents/frontend-engineer.md", ".claude/shared/**", "CLAUDE.md", "_docs/module/*/design.md", "_docs/module/*/plan.md", "_docs/module/*/requirement.md", "_docs/status-archive.md", "_docs/status.md"]
+  read: [".claude/agents/backend-engineer.md", ".claude/agents/frontend-engineer.md", ".claude/shared/**", "policies/**", "CLAUDE.md", "_docs/module/*/design.md", "_docs/module/*/plan.md", "_docs/module/*/requirement.md", "_docs/status-archive.md", "_docs/status.md"]
   write: ["_docs/module/*/plan.md", "_docs/status.md", "_docs/status-archive.md"]
   deny: ["_docs/module/*/design.md", "_docs/module/*/requirement.md", "_docs/module/*/review.md"]
 tools: [Read, Glob, Grep, AskUserQuestion, Write, Edit]

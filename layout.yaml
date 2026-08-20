@@ -31,7 +31,7 @@
 #             directory must exist and hold nothing but its README.md until `filled_by` lands
 #   planned   named here so nobody invents a second home for it; not created yet
 #
-# TWO THINGS THIS FILE DELIBERATELY DOES NOT MOVE
+# THREE THINGS THIS FILE DELIBERATELY DOES NOT MOVE
 #
 #   `.claude/agents/`  Claude Code loads subagents from exactly this path, and the orchestrator
 #                      shells out to `claude -p --agent <role>`. Moving the prompts elsewhere
@@ -41,6 +41,27 @@
 #
 #   `.workflow/`       T02 specified this path for runtime state and the code writes there.
 #                      Renaming it to `runtime/` would break existing state to gain a synonym.
+#
+#   `.claude/tests/`   The self-test for every hook and script that lives in `.claude/` (118
+#                      cases, `node .claude/tests/run.js`, no deps). It stays next to what it
+#                      tests on purpose — moving it out of `.claude/` doesn't reduce anyone's
+#                      footprint, it just puts the guards and their coverage in different
+#                      directories for no reason. Not claimed by any concept below: it isn't a
+#                      skill, a policy, or an agent half, it's the harness that checks them.
+#
+# T48 ("reduce `.claude/` to agents/, skills/, hooks/, settings.json") is otherwise done: T04
+# already moved everything workflow/state/contracts/runtime/orchestrator owns to the homes
+# below. One more thing worth naming so nobody "fixes" it by accident:
+#
+#   `.claude/scripts/` is the skill concept's *active* home (see below) — `.claude/skills/` is
+#   reserved for a different thing entirely (native Claude Code skills, if this project ever
+#   ships one). Renaming scripts/ to skills/ would merge two concepts T04 kept apart on purpose.
+#
+# T49 split `.claude/shared/conventions.md` into `policies/*.md`, one file per area. A short
+# pointer stays at the old path (agents built against that filename for a long time; a 404
+# where a rule used to be is worse than a one-line redirect). `.claude/shared/` itself stays —
+# `multi-module-schema-scoping.md` is a procedure read on demand, not a policy, and has no
+# reason to move.
 
 version: 1
 
@@ -92,16 +113,18 @@ concepts:
       - path: .claude/shared
         status: active
         pattern: "*.md"
-        holds: the written rules every agent reads (conventions.md and friends)
+        holds: >
+          multi-module-schema-scoping.md (a procedure, read on demand) plus a short pointer
+          left at conventions.md's old path — the rules themselves moved to policies/ in T49
       - path: .claude/hooks
         status: active
         pattern: "*.js"
         enforced_by_settings: true
         holds: the rules that do not depend on an agent remembering them
       - path: policies
-        status: reserved
-        filled_by: T49
-        holds: conventions.md split into one file per policy area
+        status: active
+        pattern: "*.md"
+        holds: conventions.md split one file per area (T49) — coding, git, architecture, documentation, security, agent-boundaries
 
   workflow:
     answers: "ทำเมื่อไหร่ — which roles run, in what order, for a kind of change"

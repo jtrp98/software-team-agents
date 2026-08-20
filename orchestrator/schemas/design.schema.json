@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/design.schema.json",
+  "title": "design.md structural summary (T53)",
+  "description": "Validates the structural summary orchestrator/src/docs/docStructure.ts extracts from a design.md — presence of the sections .claude/agents/system-analyst.md's Output template requires. Contract sections are named per-feature and can't be enumerated here, so they're not checked by this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "hasFeasibilitySummary",
+    "hasFeatureFeasibility",
+    "hasDataModel",
+    "hasModules",
+    "hasRisks",
+    "hasOpenQuestions",
+    "hasChangeLog"
+  ],
+  "properties": {
+    "hasFeasibilitySummary": { "const": true, "description": "## Feasibility Summary" },
+    "hasFeatureFeasibility": { "const": true, "description": "## Feature-by-Feature Feasibility" },
+    "hasDataModel": { "const": true, "description": "## Data Model — the confirmed Prisma schema, policies/architecture.md §7" },
+    "hasModules": { "const": true, "description": "## Modules" },
+    "hasRisks": { "const": true, "description": "## Risks & Dependencies" },
+    "hasOpenQuestions": { "const": true, "description": "## Unresolved Open Questions" },
+    "hasChangeLog": { "const": true, "description": "## Change Log" }
+  }
+}

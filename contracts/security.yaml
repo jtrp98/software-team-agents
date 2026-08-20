@@ -19,7 +19,7 @@ constraints:
 permissions:
   capabilities: [read, write_docs]
   # Owns security.md, and only it may close a finding. Writes no application code, for the same reason qa-engineer does not.
-  read: [".claude/shared/**", "CLAUDE.md", "_docs/module/*/design.md", "_docs/module/*/requirement.md", "_docs/module/*/review.md", "_docs/module/*/security.md", "_docs/status-archive.md", "_docs/status.md", "app/**", "components/**", "package.json", "prisma/**", "server/**", "src/**"]
+  read: [".claude/shared/**", "policies/**", "CLAUDE.md", "_docs/module/*/design.md", "_docs/module/*/requirement.md", "_docs/module/*/review.md", "_docs/module/*/security.md", "_docs/status-archive.md", "_docs/status.md", "app/**", "components/**", "package.json", "prisma/**", "server/**", "src/**"]
   write: ["_docs/module/*/security.md", "_docs/status.md", "_docs/status-archive.md"]
   deny: ["_docs/module/*/review.md", "app/**", "server/**", "prisma/**"]
 tools: [Read, Glob, Grep, Bash, AskUserQuestion, Write, Edit]

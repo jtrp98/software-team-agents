@@ -1,0 +1,85 @@
+# CI for the agent framework itself (T54) — not for a project this pipeline builds.
+#
+# Every check here already existed before this file did (T04–T53 built each one as its own
+# task landed); this workflow's only job is to run all of them, in order, on every PR and on
+# every push to master, so a drift between an agent prompt, a hook, a schema, a workflow
+# definition, or a policy file is caught before it merges instead of by whoever hits it next.
+#
+# If you add a new `--check-*` flag or a new hook/script, add it here in the same change —
+# `docs/agent-framework-checks.md` doesn't exist on purpose: this file is the single list.
+name: Agent framework CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # No dependencies, no install step — the harness that guards the harness cannot
+      # require one either. Section 0 inside it already checks every hook/script parses
+      # before running any case, so a syntax error fails loudly here, not silently in prod.
+      - name: Self-test — hooks and scripts (.claude/tests/run.js)
+        run: node .claude/tests/run.js
+
+      - name: Install orchestrator dependencies
+        working-directory: orchestrator
+        run: npm ci
+
+      - name: Build orchestrator
+        working-directory: orchestrator
+        run: npm run build --silent
+
+      - name: Typecheck orchestrator
+        working-directory: orchestrator
+        run: npm run typecheck
+
+      - name: Test orchestrator
+        working-directory: orchestrator
+        run: npm test
+
+      # One step per checker so a failure names exactly which repo-consistency check broke,
+      # instead of one opaque "checks" step covering all of them.
+      - name: Check contracts/*.yaml against the agent registry
+        run: node orchestrator/dist/cli.js --check-contracts
+
+      - name: Check layout.yaml against the repo
+        run: node orchestrator/dist/cli.js --check-layout
+
+      - name: Check workflows/*.yml against the classifier
+        run: node orchestrator/dist/cli.js --check-workflows
+
+      - name: Check project.yaml and stacks/ against the agent roster
+        run: node orchestrator/dist/cli.js --check-profile
+
+      - name: Check decisions/*.md ADRs
+        run: node orchestrator/dist/cli.js --check-decisions
+
+      - name: Check test-pyramid.yaml
+        run: node orchestrator/dist/cli.js --check-test-pyramid
+
+      - name: Check review separation (T39)
+        run: node orchestrator/dist/cli.js --check-review-separation
+
+      - name: Check escalation-policy.yaml (T40)
+        run: node orchestrator/dist/cli.js --check-escalation-policy
+
+      - name: Check workspace.yaml, if any (T41)
+        run: node orchestrator/dist/cli.js --check-workspace
+
+      - name: Check repos.yaml, if any (T42)
+        run: node orchestrator/dist/cli.js --check-repos
+
+      - name: Check environments.yaml, if any (T43)
+        run: node orchestrator/dist/cli.js --check-environments
+
+      - name: Check every module document's structure (T53)
+        run: node orchestrator/dist/cli.js --check-doc-structure

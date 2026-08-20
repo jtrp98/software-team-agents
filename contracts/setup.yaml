@@ -18,7 +18,7 @@ constraints:
 permissions:
   capabilities: [read, write_code, write_docs]
   # Scaffolds the codebase once. Broad by necessity, but never touches the pipeline's own definition.
-  read: [".claude/agents/backend-engineer.md", ".claude/agents/frontend-engineer.md", ".claude/shared/**", ".env", ".env.example", ".gitignore", "CLAUDE.md", "_docs/module/*/design.md", "_docs/status-archive.md", "_docs/status.md", "app/**", "next.config.*", "package-lock.json", "package.json", "prisma/**", "public/**", "server/**", "src/**", "tailwind.config.*", "tsconfig.json"]
+  read: [".claude/agents/backend-engineer.md", ".claude/agents/frontend-engineer.md", ".claude/shared/**", "policies/**", ".env", ".env.example", ".gitignore", "CLAUDE.md", "_docs/module/*/design.md", "_docs/status-archive.md", "_docs/status.md", "app/**", "next.config.*", "package-lock.json", "package.json", "prisma/**", "public/**", "server/**", "src/**", "tailwind.config.*", "tsconfig.json"]
   write: ["package.json", "package-lock.json", "tsconfig.json", ".env", ".env.example", ".gitignore", "next.config.*", "tailwind.config.*", "prisma/**", "app/**", "server/**", "src/**", "public/**"]
   deny: ["_docs/**", ".claude/**", "contracts/**", "workflows/**", "stacks/**", "orchestrator/**"]
 tools: [Bash, Write, Edit, Read, Glob, Grep, AskUserQuestion]

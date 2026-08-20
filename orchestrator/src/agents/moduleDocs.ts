@@ -5,7 +5,7 @@ import type { QaReportArtifact, SecurityReportArtifact } from "../artifacts/sche
 /**
  * Bridges the real pipeline's Markdown docs (`_docs/module/<name>/review.md`,
  * `security.md` — written by the actual `qa-engineer`/`security` subagents
- * per `.claude/shared/conventions.md`) into the structured artifacts the
+ * per `policies/documentation.md`) into the structured artifacts the
  * orchestrator's gates (gates/gatePolicy.ts) require. Regex-based, same
  * spirit and same limits as `.claude/scripts/check-schema-contract.js` and
  * `check-status-sync.js`: a helper that reads the convention's own markers
@@ -129,7 +129,7 @@ const STATUS_MAP: Record<string, "OPEN" | "FIX_CLAIMED" | "FIXED" | "ACCEPTED"> 
  * Parses `security.md`'s `Open Findings — all rounds` (or the whole doc, if
  * that heading isn't found) into a SecurityReportArtifact. Only lines
  * carrying both a severity emoji and a status emoji are read as findings —
- * `conventions.md`'s own vocabulary, nothing invented here.
+ * `policies/documentation.md`'s own vocabulary, nothing invented here.
  */
 export function parseSecurityReport(taskId: string, securityMd: string): SecurityReportArtifact {
   const section = (() => {

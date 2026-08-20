@@ -6,7 +6,8 @@
  * WHY THIS FILE IS THE MOST IMPORTANT ONE IN THE FOLDER
  *
  * Those files are the only rules in this pipeline that don't depend on an agent remembering
- * them (`.claude/shared/conventions.md` §5, §5a, §5b, §5c). That makes them load-bearing — and
+ * them (`policies/git.md` §5, `policies/security.md` §5a, `policies/documentation.md` §5b,
+ * `policies/coding.md` §5c). That makes them load-bearing — and
  * until this harness existed, nothing checked that they still worked.
  *
  * That gap was not theoretical. `block-doc-rewrite.js` shipped its first draft with a `*​/`
@@ -118,7 +119,7 @@ for (const dir of [HOOKS, SCRIPTS, path.join(ROOT, '.claude', 'tests')]) {
 }
 
 // ---------------------------------------------------------------------------
-// 1. block-git.js — conventions.md §5
+// 1. block-git.js — `policies/git.md` §5
 // ---------------------------------------------------------------------------
 
 section('1. block-git.js — no agent runs git (§5)');
@@ -157,7 +158,7 @@ for (const [name, input, expected] of gitCases) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. block-outside-repo.js — conventions.md §5a
+// 2. block-outside-repo.js — `policies/security.md` §5a
 // ---------------------------------------------------------------------------
 
 section('2. block-outside-repo.js — every write stays inside the repo (§5a)');
@@ -188,7 +189,7 @@ withTempProject((tmp) => {
 });
 
 // ---------------------------------------------------------------------------
-// 3. block-doc-rewrite.js — conventions.md §5b
+// 3. block-doc-rewrite.js — `policies/documentation.md` §5b
 // ---------------------------------------------------------------------------
 
 section('3. block-doc-rewrite.js — amend existing docs with Edit, never Write (§5b)');
@@ -225,7 +226,7 @@ withTempProject((tmp) => {
 });
 
 // ---------------------------------------------------------------------------
-// 4. check-schema-contract.js — conventions.md §7
+// 4. check-schema-contract.js — `policies/architecture.md` §7
 // ---------------------------------------------------------------------------
 
 section('4. check-schema-contract.js — design.md Data Model is the contract (§7)');
@@ -301,13 +302,18 @@ withTempProject((tmp) => {
 });
 
 // ---------------------------------------------------------------------------
-// 5. check-status-sync.js — conventions.md §2
+// 5. check-status-sync.js — `policies/documentation.md` §2
 // ---------------------------------------------------------------------------
 
 section('5. check-status-sync.js — status.md is an index, and must agree with plan.md (§2)');
 
-function planDoc(phase1Checked, phase2) {
-  return `# Plan\n\n## Plan Summary\nx\n\n## Phase 1: A\n${phase1Checked.map((c) => `- [${c}] task`).join('\n')}\n\n## Phase 2: B\n${phase2.map((c) => `- [${c}] task`).join('\n')}\n`;
+function taskRows(statuses) {
+  return statuses.map((s) => `| task | ${s} | backend-engineer | — |`).join('\n');
+}
+
+function planDoc(phase1Statuses, phase2Statuses) {
+  const header = '| Task | Status | Owner | Depends on |\n|---|---|---|---|';
+  return `# Plan\n\n## Plan Summary\nx\n\n## Phase 1: A\n${header}\n${taskRows(phase1Statuses)}\n\n## Phase 2: B\n${header}\n${taskRows(phase2Statuses)}\n`;
 }
 
 function statusDoc(p1, p2, nowUnchecked, nowTotal) {
@@ -319,31 +325,31 @@ withTempProject((tmp) => {
 });
 
 withTempProject((tmp) => {
-  write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), planDoc(['x', 'x'], ['x', ' ', ' ']));
+  write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), planDoc(['verified', 'verified'], ['verified', 'pending', 'pending']));
   write(path.join(tmp, '_docs', 'status.md'), statusDoc('✅', '⬜', 2, 3));
   check('status.md agrees with plan.md → passes', runScript('check-status-sync.js', { CLAUDE_PROJECT_DIR: tmp }), 0);
 });
 
 withTempProject((tmp) => {
-  write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), planDoc(['x', 'x'], ['x', ' ', ' ']));
+  write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), planDoc(['verified', 'verified'], ['verified', 'pending', 'pending']));
   write(path.join(tmp, '_docs', 'status.md'), statusDoc('✅', '✅', 2, 3));
   check('claims implemented ✅ with tasks still unchecked → fails', runScript('check-status-sync.js', { CLAUDE_PROJECT_DIR: tmp }), 1);
 });
 
 withTempProject((tmp) => {
-  write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), planDoc(['x', 'x'], ['x', 'x', 'x']));
+  write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), planDoc(['verified', 'verified'], ['verified', 'verified', 'verified']));
   write(path.join(tmp, '_docs', 'status.md'), statusDoc('✅', '⬜', 0, 3));
   check('claims implemented ⬜ with every task checked → fails', runScript('check-status-sync.js', { CLAUDE_PROJECT_DIR: tmp }), 1);
 });
 
 withTempProject((tmp) => {
-  write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), planDoc(['x', 'x'], ['x', ' ', ' ']));
+  write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), planDoc(['verified', 'verified'], ['verified', 'pending', 'pending']));
   write(path.join(tmp, '_docs', 'status.md'), statusDoc('✅', '⬜', 7, 9));
   check('**Now** line with wrong counts → fails', runScript('check-status-sync.js', { CLAUDE_PROJECT_DIR: tmp }), 1);
 });
 
 withTempProject((tmp) => {
-  write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), planDoc(['x', 'x'], ['x', ' ', ' ']));
+  write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), planDoc(['verified', 'verified'], ['verified', 'pending', 'pending']));
   write(path.join(tmp, '_docs', 'status.md'), '# Project Status\n\n## Scaffold\nScaffolded\n');
   check('module missing from status.md entirely → fails', runScript('check-status-sync.js', { CLAUDE_PROJECT_DIR: tmp }), 1);
 });
@@ -497,7 +503,7 @@ withTempProject((tmp) => {
 });
 
 // ---------------------------------------------------------------------------
-// 7. require-green-before-stop.js — conventions.md §5c
+// 7. require-green-before-stop.js — `policies/coding.md` §5c
 // ---------------------------------------------------------------------------
 
 section('7. require-green-before-stop.js — no handing off red code (§5c)');
@@ -782,6 +788,86 @@ check(
     0,
   );
 })();
+
+// ---------------------------------------------------------------------------
+// 10. generate-status.js — status.md computed from the real docs, not hand-written (T51)
+// ---------------------------------------------------------------------------
+
+section('10. generate-status.js — status.md is generated, not hand-written (T51)');
+
+/** A plan.md phase's task table (T52), one row per [title, status]. */
+function taskTable(rows) {
+  const header = '| Task | Status | Owner | Depends on |\n|---|---|---|---|';
+  return `${header}\n${rows.map(([title, status]) => `| ${title} | ${status} | backend-engineer | — |`).join('\n')}\n`;
+}
+
+function runGenerate(env) {
+  const res = spawnSync(process.execPath, [path.join(SCRIPTS, 'generate-status.js')], {
+    encoding: 'utf8',
+    env: { ...process.env, ...(env || {}) },
+    timeout: 60000,
+  });
+  return res.status;
+}
+
+withTempProject((tmp) => {
+  check('no module yet -> exits 0, writes nothing', runGenerate({ CLAUDE_PROJECT_DIR: tmp }), 0);
+  check('  and status.md was not created', fs.existsSync(path.join(tmp, '_docs', 'status.md')) ? 1 : 0, 0);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'),
+    `# Plan\n\n## Phase 1: A\n${taskTable([['task one', 'verified'], ['task two', 'verified']])}\n## Phase 2: B 🔒\n${taskTable([['task three', 'pending']])}`);
+  runGenerate({ CLAUDE_PROJECT_DIR: tmp });
+  const out = fs.readFileSync(path.join(tmp, '_docs', 'status.md'), 'utf8');
+  check('Phase 1 fully checked -> implemented ✅', /Phase 1 — implemented ✅/.test(out) ? 0 : 1, 0);
+  check('Phase 2 untouched -> implemented ⬜', /Phase 2 — implemented ⬜/.test(out) ? 0 : 1, 0);
+  check('no review.md yet -> verified ⬜', /Phase 1 — implemented ✅ · verified ⬜/.test(out) ? 0 : 1, 0);
+  check('Phase 2 is gated and unaudited -> security ⬜', /Phase 2.*security ⬜/.test(out) ? 0 : 1, 0);
+  check('Phase 1 has no gate -> security n\\/a', /Phase 1.*security n\/a/.test(out) ? 0 : 1, 0);
+  check('Now line points at the first open phase', /\*\*Now\*\*: Phase 1/.test(out) ? 0 : 1, 0);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), `# Plan\n\n## Phase 1: A\n${taskTable([['task one', 'verified']])}`);
+  write(path.join(tmp, '_docs', 'module', 'm', 'review.md'),
+    '# Review\n\n## Review Outcome — Phase 1\n**Status:** ✅ Verified (FULL)\nAccepted.\n');
+  write(path.join(tmp, '_docs', 'module', 'm', 'deploy.md'),
+    '# Deploy\n\n## Deploy History\n| Date | Environment | Phase/Module | Outcome |\n|---|---|---|---|\n| 2026-01-01 | production | Phase 1 | success |\n');
+  runGenerate({ CLAUDE_PROJECT_DIR: tmp });
+  const out = fs.readFileSync(path.join(tmp, '_docs', 'status.md'), 'utf8');
+  check('review.md\'s Status line drives verified + mode', /verified ✅ \(FULL\)/.test(out) ? 0 : 1, 0);
+  check('deploy.md\'s history row drives deployed ✅', /deployed ✅/.test(out) ? 0 : 1, 0);
+  check('fully done phase -> Now says complete', /\*\*Now\*\*: All phases complete/.test(out) ? 0 : 1, 0);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), `# Plan\n\n## Phase 1: A 🔒\n${taskTable([['task one', 'verified']])}`);
+  write(path.join(tmp, '_docs', 'module', 'm', 'review.md'),
+    '# Review\n\n## Review Outcome — Phase 1\n**Status:** ✅ Verified (FULL)\nAccepted.\n');
+  write(path.join(tmp, '_docs', 'module', 'm', 'security.md'),
+    '# Security\n\n## Open Findings — all rounds\n| Sev | Finding | Location | Status | Round | Routes to |\n|---|---|---|---|---|---|\n| 🟠 | x | Phase 1 | 🔵 Open | 1 | backend-engineer |\n');
+  runGenerate({ CLAUDE_PROJECT_DIR: tmp });
+  const out = fs.readFileSync(path.join(tmp, '_docs', 'status.md'), 'utf8');
+  check('gated phase with an open finding -> security ⚠️, not ✅', /security ⚠️/.test(out) ? 0 : 1, 0);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), `# Plan\n\n## Phase 1: A\n${taskTable([['task one', 'verified']])}`);
+  write(path.join(tmp, '_docs', 'module', 'm', 'review.md'),
+    '# Review\n\n## Open Issues — all phases\n| Issue | Phase | Routes to | Blocking |\n|---|---|---|---|\n| BE-001 bug | 1 | backend-engineer | blocking |\n\n## Review Outcome — Phase 1\n**Status:** ⚠️ Partial (FULL)\nSent back.\n');
+  runGenerate({ CLAUDE_PROJECT_DIR: tmp });
+  const out = fs.readFileSync(path.join(tmp, '_docs', 'status.md'), 'utf8');
+  check('a blocking Open Issues row surfaces under Blocked on', /\*\*Blocked on\*\*: .*BE-001/.test(out) ? 0 : 1, 0);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, '_docs', 'status.md'), '# Project Status\n\n## Scaffold\nScaffolded — custom note.\n');
+  write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), `# Plan\n\n## Phase 1: A\n${taskTable([['task', 'pending']])}`);
+  runGenerate({ CLAUDE_PROJECT_DIR: tmp });
+  const out = fs.readFileSync(path.join(tmp, '_docs', 'status.md'), 'utf8');
+  check('an existing Scaffold section is preserved, not overwritten', /Scaffolded — custom note\./.test(out) ? 0 : 1, 0);
+});
 
 // ---------------------------------------------------------------------------
 // report

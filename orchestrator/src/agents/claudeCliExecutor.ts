@@ -3,7 +3,7 @@ import { AgentStage } from "../types.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { getAgent } from "./registry.js";
-import { resolveAgentModel } from "./agentModel.js";
+import { resolveAgentModel, resolveAgentVersion } from "./agentModel.js";
 import { readModuleDoc, parseQaReport, parseSecurityReport } from "./moduleDocs.js";
 import { ContextManager, type SelectedContext } from "../context/contextManager.js";
 import { classifyQaFailure, classifySecurityFailure } from "../orchestrator/failureClassifier.js";
@@ -53,7 +53,7 @@ export interface ClaudeCliExecutorOptions {
   extraInstruction?: string;
   /**
    * Which phases of `plan.md` this task touches, used to slice the module docs
-   * down to the sections this run needs (conventions.md §10). Returning
+   * down to the sections this run needs (`policies/documentation.md` §10). Returning
    * undefined is safe: the plan then comes through whole rather than sliced
    * wrong.
    */
@@ -94,7 +94,7 @@ interface ClaudeCliJsonResult {
 function renderSlicedDocs(selected: SelectedContext[], cm: ContextManager): string[] {
   if (selected.length === 0) return [];
 
-  const parts: string[] = ["", "Module documents, sliced to what this stage needs (`.claude/shared/conventions.md` §10):"];
+  const parts: string[] = ["", "Module documents, sliced to what this stage needs (`policies/documentation.md` §10):"];
   for (const s of selected) {
     parts.push("", `### ${s.doc}.md`);
     if (!s.fullDocument && s.skipped.length > 0) {
@@ -181,6 +181,7 @@ export function createClaudeCliExecutor(opts: ClaudeCliExecutorOptions): AgentEx
 
     const prompt = buildPrompt(req, opts.extraInstruction, sliced);
     const model = resolveAgentModel(opts.projectRoot, agent.role) ?? undefined;
+    const promptVersion = resolveAgentVersion(opts.projectRoot, agent.role) ?? undefined;
     const context_chars = prompt.length;
 
     const args = [
@@ -210,11 +211,11 @@ export function createClaudeCliExecutor(opts: ClaudeCliExecutorOptions): AgentEx
         env: { ...process.env, AGENTCLAUDE_ROLE: agent.role },
       });
     } catch (e) {
-      return failResult(`failed to spawn \`claude\` CLI for stage ${req.stage}: ${String(e)}`, { model, context_chars });
+      return failResult(`failed to spawn \`claude\` CLI for stage ${req.stage}: ${String(e)}`, { model, promptVersion, context_chars });
     }
 
     if (proc.error) {
-      return failResult(`\`claude\` CLI errored for stage ${req.stage}: ${proc.error.message}`, { model, context_chars });
+      return failResult(`\`claude\` CLI errored for stage ${req.stage}: ${proc.error.message}`, { model, promptVersion, context_chars });
     }
 
     const cli = parseCliOutput(proc.stdout ?? "");
@@ -222,6 +223,7 @@ export function createClaudeCliExecutor(opts: ClaudeCliExecutorOptions): AgentEx
     const output_tokens = cli.usage?.output_tokens ?? 0;
     const metrics: Metrics = {
       model,
+      promptVersion,
       tokens: input_tokens + output_tokens,
       cost: cli.total_cost_usd ?? 0,
       input_tokens,
@@ -249,9 +251,10 @@ export function createClaudeCliExecutor(opts: ClaudeCliExecutorOptions): AgentEx
   };
 }
 
-/** Everything T26/T28 want logged, threaded as one bundle instead of a growing positional-argument list. */
+/** Everything T26/T28/T57 want logged, threaded as one bundle instead of a growing positional-argument list. */
 interface Metrics {
   model?: string;
+  promptVersion?: number;
   tokens: number;
   cost: number;
   input_tokens?: number;

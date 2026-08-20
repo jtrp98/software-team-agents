@@ -1,23 +1,24 @@
 #!/usr/bin/env node
 /*
- * status.md / plan.md consistency checker for `.claude/shared/conventions.md` §2 --
+ * status.md / plan.md consistency checker for `policies/documentation.md` §2 --
  * "`status.md` is an index, not a source of truth. If it ever disagrees with the actual
  * documents or code, the documents and code win."
  *
  * Nothing currently checks that disagreement mechanically -- an agent has to notice it by
  * reading both. This script does the noticing for free: for every module folder, it counts
- * real checkboxes per phase in `plan.md` and compares them against what `status.md` claims
- * (the `implemented` symbol on each `- Phase N -- ...` line, and the `**Now**: ... X of Y
- * unchecked` line), and reports every mismatch.
+ * `verified` rows per phase in `plan.md`'s task table (T52) and compares them against what
+ * `status.md` claims (the `implemented` symbol on each `- Phase N -- ...` line, and the
+ * `**Now**: ... X of Y unchecked` line), and reports every mismatch.
  *
  * Not a hook -- blocks nothing. Run via Bash: `node .claude/scripts/check-status-sync.js`.
  * Exit code 0 = status.md matches plan.md everywhere checked, 1 = at least one drift found.
  * Use it as a cheap first pass before deciding whether a phase needs a full qa-engineer
  * round, or just to catch a stale index before anyone acts on it.
  *
- * Parsing follows the exact status.md template in conventions.md §2 and the `## Phase N`
- * / `- [ ]`/`- [x]` structure every plan.md uses. A module whose section doesn't match that
- * shape is reported as "could not parse" rather than silently skipped or treated as clean.
+ * Parsing follows the exact status.md template in `policies/documentation.md` §2 and the
+ * `## Phase N` / task-table structure every plan.md uses since T52 (a `| Task | Status | Owner |
+ * Depends on |` row per task). A module whose section doesn't match that shape is reported as
+ * "could not parse" rather than silently skipped or treated as clean.
  */
 
 'use strict';
@@ -37,18 +38,19 @@ function findModules() {
     .filter((m) => fs.existsSync(m.planPath));
 }
 
-/** Counts `- [ ]` / `- [x]` lines per `## Phase N` block in plan.md. */
+/** Counts task-table rows (T52) per `## Phase N` block in plan.md, by Status cell. */
 function parsePlan(text) {
   const lines = text.split(/\r?\n/);
   const phases = new Map(); // phaseNum -> { total, checked, unchecked }
   let current = null;
+  let sawHeaderRow = false;
   const phaseHeadingRe = /^##\s*Phase\s*(\d+)\b/i;
-  const checkboxRe = /^\s*-\s*\[( |x|X)\]/;
 
   for (const line of lines) {
     const headingMatch = line.match(phaseHeadingRe);
     if (headingMatch) {
       current = Number(headingMatch[1]);
+      sawHeaderRow = false;
       if (!phases.has(current)) phases.set(current, { total: 0, checked: 0, unchecked: 0 });
       continue;
     }
@@ -57,11 +59,16 @@ function parsePlan(text) {
       continue;
     }
     if (current === null) continue;
-    const cbMatch = line.match(checkboxRe);
-    if (!cbMatch) continue;
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('|')) continue;
+    if (/^\|?\s*:?-{2,}/.test(trimmed)) continue; // table separator row
+    if (!sawHeaderRow) { sawHeaderRow = true; continue; } // the table's own header row
+    const cells = trimmed.split('|').map((c) => c.trim()).filter(Boolean);
+    const status = (cells[1] || '').toLowerCase();
+    if (!status) continue;
     const stat = phases.get(current);
     stat.total++;
-    if (cbMatch[1].toLowerCase() === 'x') stat.checked++;
+    if (status === 'verified') stat.checked++;
     else stat.unchecked++;
   }
   return phases;
@@ -129,7 +136,7 @@ function main() {
     console.log(`## ${mod.name}`);
     const planPhases = parsePlan(fs.readFileSync(mod.planPath, 'utf8'));
     if (planPhases.size === 0) {
-      console.log('  (no `## Phase N` sections with checkboxes found in plan.md -- skipped)\n');
+      console.log('  (no `## Phase N` sections with a task table found in plan.md -- skipped)\n');
       continue;
     }
 

@@ -21,17 +21,23 @@ const DESIGN_MD = `
 `;
 
 function planMd(overrides: { orderChecked?: boolean; loginChecked?: boolean } = {}): string {
-  const login = overrides.loginChecked ? "x" : " ";
-  const order = overrides.orderChecked ? "x" : " ";
+  const login = overrides.loginChecked ? "verified" : "pending";
+  const order = overrides.orderChecked ? "verified" : "pending";
   return `
 # Sales CRM — Implementation Plan
 
 ## Phase 1: Auth
-- [${login}] BE-001 (DES-001) [backend] implement /login
-- [${login}] FE-001 (DES-001) [frontend] build login form
+
+| Task | Status | Owner | Depends on |
+|---|---|---|---|
+| BE-001 (DES-001) — implement /login | ${login} | backend-engineer | — |
+| FE-001 (DES-001) — build login form | ${login} | frontend-engineer | — |
 
 ## Phase 2: Orders
-- [${order}] BE-002 (DES-002) [backend] implement POST /orders
+
+| Task | Status | Owner | Depends on |
+|---|---|---|---|
+| BE-002 (DES-002) — implement POST /orders | ${order} | backend-engineer | — |
 `;
 }
 

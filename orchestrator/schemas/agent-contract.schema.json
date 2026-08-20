@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://agentclaude.local/schemas/agent-contract.schema.json",
   "title": "Agent contract (contracts/<agent-name>.yaml)",
-  "description": "The machine-readable declaration of one agent: what it must be given, what it must produce, what it may never do, and what it is allowed to touch. Before this existed those rules were spread across the agent's own prompt, CLAUDE.md and conventions.md, where nothing could check them. The orchestrator's in-process registry is checked against these files, so the two can never drift apart silently.",
+  "description": "The machine-readable declaration of one agent: what it must be given, what it must produce, what it may never do, and what it is allowed to touch. Before this existed those rules were spread across the agent's own prompt, CLAUDE.md and policies/*.md, where nothing could check them. The orchestrator's in-process registry is checked against these files, so the two can never drift apart silently.",
   "type": "object",
   "additionalProperties": false,
   "required": ["agent", "input", "output", "constraints", "permissions", "tools", "states", "capability"],
@@ -46,7 +46,7 @@
       }
     },
     "constraints": {
-      "description": "Hard boundaries, as identifiers rather than prose, so they can be checked instead of only read. Each traces to a rule in .claude/shared/conventions.md.",
+      "description": "Hard boundaries, as identifiers rather than prose, so they can be checked instead of only read. Each traces to a rule in policies/*.md.",
       "type": "array",
       "minItems": 1,
       "items": { "$ref": "#/definitions/constraint" }
@@ -63,7 +63,7 @@
           "items": { "type": "string", "enum": ["read", "write_docs", "write_code", "test", "build", "deploy", "rollback"] }
         },
         "read": {
-          "description": "Paths this role's run actually needs to read, from CLAUDE.md's Reads column and conventions.md 10. Unlike write/deny this is NOT enforced as a block: reading is non-destructive, and a read guard that got a path wrong would trap an agent mid-run for no safety gain. It is documentation the orchestrator can act on -- it says what to assemble into a prompt, and checkPathRules() holds it to one real rule: everything a role may write, it must also be able to read, because a document you cannot open is a document you cannot amend.",
+          "description": "Paths this role's run actually needs to read, from CLAUDE.md's Reads column and policies/documentation.md 10. Unlike write/deny this is NOT enforced as a block: reading is non-destructive, and a read guard that got a path wrong would trap an agent mid-run for no safety gain. It is documentation the orchestrator can act on -- it says what to assemble into a prompt, and checkPathRules() holds it to one real rule: everything a role may write, it must also be able to read, because a document you cannot open is a document you cannot amend.",
           "type": "array",
           "items": { "type": "string", "minLength": 1 }
         },

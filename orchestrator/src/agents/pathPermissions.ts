@@ -202,7 +202,7 @@ export function checkPathRules(projectRoot: string = defaultProjectRoot()): Path
     }
 
     // A document you cannot open is a document you cannot amend, and every doc in
-    // this pipeline is amended rather than regenerated (conventions.md §4). A role
+    // this pipeline is amended rather than regenerated (`policies/documentation.md` §4). A role
     // allowed to write something it cannot read is a rule that contradicts itself.
     for (const target of rules.write) {
       const readable = rules.read.some((pattern) => matchesGlob(pattern, target) || pattern === target);

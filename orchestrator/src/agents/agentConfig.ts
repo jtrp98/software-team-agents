@@ -66,7 +66,7 @@ export const BACKEND_ENGINEER_CONFIG: AgentConfig = validateAgentConfig({
   context: [],
   constraints: [
     "never decides a business or design rule itself — unclear logic goes back to system-analyst",
-    "never marks a plan.md checkbox — only qa-engineer does that",
+    "never sets a plan.md task's Status cell to verified/blocked — only qa-engineer does that",
     "never runs git",
   ],
   artifacts: {

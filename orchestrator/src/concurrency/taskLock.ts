@@ -41,7 +41,7 @@ export function defaultLockDir(projectRoot: string): string {
 
 function lockFilePath(projectRoot: string, taskId: string): string {
   // Task ids are user-supplied; sanitize to a safe filename rather than trusting one straight
-  // into a path (conventions.md's "every write resolves under the project root" spirit extends
+  // into a path (policies/security.md §5a's "every write resolves under the project root" spirit extends
   // to this file too, even though it lives under .workflow/ rather than being agent-written).
   const safe = taskId.replace(/[^A-Za-z0-9_.-]/g, "_");
   return path.join(defaultLockDir(projectRoot), `${safe}.lock`);

@@ -26,6 +26,7 @@ import { checkEscalationPolicy } from "./escalation/escalationPolicy.js";
 import { checkWorkspace, hasWorkspace, loadWorkspace, workspacePath, type Workspace } from "./workspace/workspace.js";
 import { checkRepoMap, loadStageRoots } from "./repos/repoMap.js";
 import { Environment, checkEnvironmentConfig, describeEnvironment, isEnvironment } from "./environment/environment.js";
+import { checkDocStructure } from "./docs/docStructure.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -73,11 +74,13 @@ export interface CliArgs {
   checkRepos: boolean;
   /** Check environments.yaml, if one exists, against its schema and exit (T43). Same audience. */
   checkEnvironments: boolean;
+  /** Check every module's requirement/design/plan/review/security doc structure against its schema and exit (T53). Same audience. */
+  checkDocStructure: boolean;
   /** local/dev/staging/production (T43). Defaults to Environment.LOCAL; only used when creating a task — a --resume/--retry inherits the task's already-stored environment. */
   environment: Environment;
   dependsOn: string[];
   stateDb?: string;
-  /** Phases of plan.md this run touches, used to slice module docs per conventions.md §10. Empty = send the plan whole. */
+  /** Phases of plan.md this run touches, used to slice module docs per `policies/documentation.md` §10. Empty = send the plan whole. */
   phases: number[];
 }
 
@@ -123,6 +126,7 @@ export const USAGE =
   "  orchestrate --check-workspace [--project-root <path>]      check workspace.yaml (if any) against the filesystem\n" +
   "  orchestrate --check-repos [--project-root <path>]          check repos.yaml (if any) against the filesystem\n" +
   "  orchestrate --check-environments [--project-root <path>]   check environments.yaml (if any) against its schema\n" +
+  "  orchestrate --check-doc-structure [--project-root <path>]  check every _docs/module/*/*.md's sections against its schema\n" +
   `  classification flags: ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
 
 /** Pure argv parser — kept separate from process.argv/console/exit so it's directly testable. */
@@ -144,6 +148,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkWorkspaceFlag = false;
   let checkReposFlag = false;
   let checkEnvironmentsFlag = false;
+  let checkDocStructureFlag = false;
   let environment: Environment = Environment.LOCAL;
   let dependsOn: string[] = [];
   let phases: number[] = [];
@@ -195,6 +200,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkReposFlag = true;
     } else if (arg === "--check-environments") {
       checkEnvironmentsFlag = true;
+    } else if (arg === "--check-doc-structure") {
+      checkDocStructureFlag = true;
     } else if (arg === "--env") {
       const value = argv[++i];
       if (!value || !isEnvironment(value)) {
@@ -220,7 +227,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkEscalationPolicyFlag &&
     !checkWorkspaceFlag &&
     !checkReposFlag &&
-    !checkEnvironmentsFlag
+    !checkEnvironmentsFlag &&
+    !checkDocStructureFlag
   ) {
     if (!taskId) throw new CliUsageError("--task-id is required");
     if (!moduleName) throw new CliUsageError("--module is required (the _docs/module/<name>/ this task belongs to)");
@@ -247,6 +255,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkWorkspace: checkWorkspaceFlag,
     checkRepos: checkReposFlag,
     checkEnvironments: checkEnvironmentsFlag,
+    checkDocStructure: checkDocStructureFlag,
     environment,
     dependsOn,
     stateDb,
@@ -806,6 +815,20 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       return 0;
     }
     console.error("[orchestrator] environments.yaml has problems:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
+  if (args.checkDocStructure) {
+    const result = checkDocStructure(args.projectRoot);
+    // Notes print either way: "no _docs/module/ yet" is the normal, expected state before
+    // business-analyst has run once.
+    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
+    if (result.ok) {
+      console.log("[orchestrator] every module document present has the sections its schema requires.");
+      return 0;
+    }
+    console.error("[orchestrator] module documents have structural problems:");
     for (const problem of result.problems) console.error(`  - ${problem}`);
     return 1;
   }

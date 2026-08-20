@@ -37,7 +37,7 @@ export type FailureCategory = StructuredFailure["category"];
  *
  * Each entry is a preference order, not a single answer, because the pipeline a
  * task actually has decides which of them exists. "implementation" lists backend
- * first per `conventions.md` §6a (the frontend builds against what the backend
+ * first per `policies/agent-boundaries.md` §6a (the frontend builds against what the backend
  * actually shipped, so backend-first is the pipeline's own ordering), and the
  * affected ids override that whenever they name a side.
  *
@@ -164,6 +164,6 @@ export function routeByCategory(category: FailureCategory, context: RoutingConte
     reason:
       `category "${category}" could route to ${candidates.join(" or ")}; ` +
       `nothing in the report distinguishes them, so it goes to ${candidates[0]} first ` +
-      "(conventions.md §6a: backend before frontend)",
+      "(`policies/agent-boundaries.md` §6a: backend before frontend)",
   };
 }

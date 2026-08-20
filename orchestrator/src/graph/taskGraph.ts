@@ -8,7 +8,7 @@ import { AgentStage } from "../types.js";
  * but says nothing about the eight tasks inside Phase 2, so the only safe
  * reading of it was "run everything in written order", and the pipeline's one
  * ordering rule had to be a blanket one: backend-engineer before
- * frontend-engineer, always, per `.claude/shared/conventions.md` §6a.
+ * frontend-engineer, always, per `policies/agent-boundaries.md` §6a.
  *
  * That rule exists for a real reason — the frontend reads its types and API
  * calls off what the backend actually built, and running both at once produced

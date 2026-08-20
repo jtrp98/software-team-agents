@@ -19,6 +19,7 @@ describe("RunLog", () => {
       end_time: 4500,
       duration: 3500,
       model: null,
+      promptVersion: null,
       tokens: 22000,
       cost: 0.33,
       result: "FAIL",

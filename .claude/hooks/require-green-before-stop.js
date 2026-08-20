@@ -28,7 +28,7 @@
  * engineer that touched app source does.
  *
  * Read-only git (`git diff --name-only`, `git ls-files`) is how it sees what changed. That is
- * consistent with conventions.md §5, on two counts: §5 binds *agents*, and this is harness code,
+ * consistent with `policies/git.md` §5, on two counts: §5 binds *agents*, and this is harness code,
  * not an agent; and even for agents §5 explicitly allows read-only inspection. Nothing here
  * changes repository state.
  *
@@ -228,7 +228,7 @@ function deny(failures, code) {
     `Changed code files: ${code.slice(0, 15).join(', ')}${code.length > 15 ? `, +${code.length - 15} more` : ''}`,
     '',
     '**If a failure is not yours to fix** — a schema drift that belongs to `system-analyst`, a',
-    'contract gap you must not improvise around (`.claude/shared/conventions.md` §7) — do not',
+    'contract gap you must not improvise around (`policies/architecture.md` §7) — do not',
     'invent a fix to make this pass. Say so explicitly in your handoff and finish; this guard',
     'allows the next attempt through so it can never trap you.',
   );

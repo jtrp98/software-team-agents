@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * PreToolUse guard for `.claude/shared/conventions.md` §4 — "Amend, don't regenerate".
+ * PreToolUse guard for `policies/documentation.md` §4 — "Amend, don't regenerate".
  *
  * That rule is a prompt instruction: once a module doc exists, every agent is supposed to
  * amend it section-by-section with `Edit`, never blow it away with a full `Write`. Like the
@@ -93,7 +93,7 @@ function deny(rawPath, filename) {
   return [
     `Blocked: \`Write\` to \`${rawPath}\`, which already exists.`,
     '',
-    '`.claude/shared/conventions.md` §4 — "Amend, don\'t regenerate": once a module doc exists,',
+    '`policies/documentation.md` §4 — "Amend, don\'t regenerate": once a module doc exists,',
     `it's amended with \`Edit\`, section by section, never replaced with \`Write\`. A full rewrite`,
     'of an existing `' + filename + '` silently destroys history, the `## Change Log`, and any',
     'other agent\'s prior work in it.',

@@ -75,6 +75,7 @@ function sampleRun(taskId = "T-1"): RunRecord {
     end_time: 60,
     duration: 50,
     model: "sonnet",
+    promptVersion: 1,
     tokens: 1234,
     cost: 0.5,
     result: "PASS",
@@ -345,6 +346,45 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       } catch (e) {
         expect(e).toBeInstanceOf(SchemaVersionMismatchError);
         expect(e).not.toBeInstanceOf(DatabaseUnavailableError);
+      }
+    } finally {
+      fs.rmSync(path.dirname(file), { recursive: true, force: true });
+    }
+  });
+
+  it("T57: a v3 file (predating runs.prompt_version) migrates in place — old runs read back with promptVersion: null, new runs get a real one", () => {
+    const file = tmpDbPath();
+    try {
+      // Build a v3-shaped file by hand: same DDL as before T57, minus the new column.
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const db = new Database(file);
+      db.pragma("journal_mode = WAL");
+      db.exec(`
+        CREATE TABLE tasks (task_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, state TEXT NOT NULL);
+        CREATE TABLE runs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, agent TEXT NOT NULL, start_time INTEGER NOT NULL,
+          end_time INTEGER NOT NULL, duration INTEGER NOT NULL, model TEXT, tokens INTEGER NOT NULL, cost REAL NOT NULL,
+          result TEXT NOT NULL, retry_count INTEGER NOT NULL, failure_reason TEXT, input_tokens INTEGER, output_tokens INTEGER,
+          cache_read_tokens INTEGER, context_chars INTEGER
+        );
+        CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, at INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL, actor TEXT, reason TEXT, input TEXT, output TEXT, decision TEXT);
+      `);
+      db.exec(
+        "INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count) VALUES ('T-OLD', 'backend-engineer', 1, 2, 1, 'sonnet', 100, 0.1, 'PASS', 0)",
+      );
+      db.pragma("user_version = 3");
+      db.close();
+
+      const store = new SqliteTaskStore(file);
+      try {
+        const runs = store.runsForTask("T-OLD");
+        expect(runs).toHaveLength(1);
+        expect(runs[0].promptVersion).toBeNull(); // pre-T57 row — not recorded, not guessed
+
+        store.appendRun({ ...sampleRun("T-NEW"), promptVersion: 2 });
+        expect(store.runsForTask("T-NEW")[0].promptVersion).toBe(2);
+      } finally {
+        store.close();
       }
     } finally {
       fs.rmSync(path.dirname(file), { recursive: true, force: true });

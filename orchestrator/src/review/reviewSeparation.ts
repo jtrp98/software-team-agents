@@ -21,7 +21,7 @@ import type { ClassificationInput } from "../classification/taskClassifier.js";
  * its own homework.
  *
  * So T39 is mostly not new machinery. It is making the existing arrangement
- * *stated and checked*, in the same way the hooks make `conventions.md`'s rules
+ * *stated and checked*, in the same way the hooks make `policies/*.md`'s rules
  * enforceable rather than remembered.
  *
  * THE THREE THINGS CHECKED, AND WHY EACH IS SEPARATE

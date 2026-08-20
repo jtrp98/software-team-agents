@@ -1,23 +1,26 @@
 # `policies/` — ห้ามอะไร
 
-**Reserved for T49.** This directory is claimed but not yet filled: it holds nothing but this
-file, and `--check-layout` fails if anything else appears here before T49 lands.
-
-## What belongs here
-
-Policy is the answer to *ห้ามอะไร* — what no agent may do. Today it lives in one file,
-`.claude/shared/conventions.md`, at 373 lines and thirteen numbered sections. T49 splits it into
-one file per area:
+**Filled by T49.** `.claude/shared/conventions.md` (373 lines, thirteen numbered sections) is
+split into one file per area:
 
 ```
 policies/
-├── coding.md
-├── git.md
-├── architecture.md
-├── documentation.md
-├── security.md
-└── agent-boundaries.md
+├── coding.md            §5c, §9, §12
+├── git.md               §5
+├── architecture.md      §7
+├── documentation.md     §1, §2, §3, §4, §5b, §10, §11
+├── security.md          §5a, §5c-1, §5d
+└── agent-boundaries.md  §6, §6a, §8
 ```
+
+Section numbers didn't change — only which file holds them. A citation like "conventions.md §7"
+now reads "`policies/architecture.md` §7"; `.claude/shared/conventions.md` itself is now a short
+pointer table for anything still built against the old path.
+
+## What belongs here
+
+Policy is the answer to *ห้ามอะไร* — what no agent may do. Six files above, one per area, so a
+rule can be found by asking "which area is this?" instead of searching one file's headings.
 
 ## What does not belong here
 
@@ -30,10 +33,13 @@ looking installed; this repo has shipped exactly that failure twice.
 Anything load-bearing should end up in that enforced form. Written policy is for the rules a
 hook cannot express.
 
-## Why the split is not free
+## Why the split took a whole task, not a rename
 
-Sixty-eight references across the nine agent prompts point at `.claude/shared/conventions.md`
-by path. Splitting the file means updating every one of them in the same change — which is why
-T49 is its own task and not a side effect of the layout work that reserved this directory.
+Around 150 references across the ten agent prompts, `.claude/hooks/`, `.claude/scripts/`, and
+`orchestrator/src/`'s own comments point at `.claude/shared/conventions.md` by path and section
+number. Every one of those had to either keep working (the section numbers didn't move) or get
+repointed to the new file (the ones that cited `conventions.md` generically, without a number) —
+which is why T49 is its own task and not a side effect of the layout work that reserved this
+directory.
 
 See `layout.yaml` for the full concept map.

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * Schema/design drift checker for `.claude/shared/conventions.md` §7 — "The design is the
+ * Schema/design drift checker for `policies/architecture.md` §7 — "The design is the
  * contract". `qa-engineer` is supposed to read `schema.prisma` and every module's `design.md`
  * Data Model section field-by-field and catch any divergence. Read-and-compare-by-eye misses
  * things on a long schema, so this script does the comparison mechanically instead: parse
@@ -11,7 +11,7 @@
  * is 0 when every module's Data Model matches its slice of schema.prisma with no unclaimed
  * models, 1 otherwise, so it can gate a CI step later if this project ever gets one.
  *
- * Scoping rule this script implements (conventions.md §7):
+ * Scoping rule this script implements (`policies/architecture.md` §7):
  *   - every model a module's design.md declares must exist in schema.prisma, field for field
  *     (missing/renamed/retyped/dropped-relation = drift, always reported)
  *   - a model schema.prisma has that NO design.md declares is drift (an improvised change) --
@@ -167,7 +167,7 @@ function main() {
   if (unclaimed.length > 0) {
     drift = true;
     console.log('## Unclaimed models (in schema.prisma, not declared by ANY module\'s design.md)');
-    console.log('These are the improvised-schema-change case conventions.md §7 calls out as a hard ❌:');
+    console.log('These are the improvised-schema-change case `policies/architecture.md` §7 calls out as a hard ❌:');
     for (const name of unclaimed) console.log(`  - ${name}`);
     console.log('');
   }
