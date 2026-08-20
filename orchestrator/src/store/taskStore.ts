@@ -3,6 +3,7 @@ import { AgentStage, TaskLevel, TaskState } from "../types.js";
 import { QaReportArtifactSchema, SecurityReportArtifactSchema } from "../artifacts/schemas.js";
 import { StructuredFailureSchema } from "../orchestrator/failure.js";
 import { ApprovalRecordSchema } from "../gates/approval.js";
+import { Environment } from "../environment/environment.js";
 import type { RunRecord } from "../observability/runLog.js";
 
 /**
@@ -76,6 +77,23 @@ export const PersistedTaskSchema = z.object({
   paused: z.boolean().default(false),
   cancelled: z.boolean().default(false),
   cancelReason: z.string().nullable().default(null),
+  /**
+   * T43 — local/dev/staging/production. Defaulted to `local` so a row written before T43 still
+   * loads: an old task simply never declared one, and "local" is the least destructive assumption
+   * to make about it after the fact, same defaulting pattern as `paused`/`cancelled` above.
+   */
+  environment: z.enum(Environment).default(Environment.LOCAL),
+  /**
+   * T44 — true once `devops`'s "prepare" run (Dockerfile/CI/dry-run, safe unattended) has
+   * completed at READY_TO_DEPLOY. Distinguishes it from "execute" (the actual deploy/migration
+   * command, at APPROVED, always after the human gate) — both are the same pipeline stage
+   * (`devops`) run twice, and unlike backend/frontend's two IMPLEMENTATION stages (distinguished
+   * by pipelineCursor alone, since they share one TaskState) devops's two runs sit on either
+   * side of a gated state transition, so pipelineCursor alone can't tell them apart. Defaulted
+   * so a row written before T44 still loads: an old task simply never went through this, which
+   * is true rather than broken, same pattern as `paused`/`cancelled` above.
+   */
+  deployPrepared: z.boolean().default(false),
 });
 export type PersistedTask = z.infer<typeof PersistedTaskSchema>;
 
@@ -186,6 +204,7 @@ export function newPersistedTask(params: {
   classification: PersistedTask["classification"];
   machine: PersistedTask["machine"];
   now: number;
+  environment?: Environment;
 }): PersistedTask {
   return {
     taskId: params.taskId,
@@ -204,5 +223,7 @@ export function newPersistedTask(params: {
     paused: false,
     cancelled: false,
     cancelReason: null,
+    environment: params.environment ?? Environment.LOCAL,
+    deployPrepared: false,
   };
 }

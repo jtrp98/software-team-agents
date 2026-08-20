@@ -1,0 +1,49 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/environments.schema.json",
+  "title": "Environment descriptions (environments.yaml)",
+  "description": "Optional. Describes the local/dev/staging/production environments a task can target (T43), so every agent's prompt can say which one it's in instead of only devops finding out at deploy time. The four names are fixed — this file only adds description/requires_approval metadata for names an agent already knows about; it does not invent new environment names. Absence is not an error: every project has the four built-in generic descriptions even with no file at all.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "environments"],
+  "properties": {
+    "version": {
+      "description": "Schema generation of this file. Bumped only when a change would break an existing reader.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "environments": {
+      "description": "Metadata for one or more of the four fixed environment names. An environment this file doesn't mention still exists — it just uses the built-in generic description.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/environment" }
+    },
+    "default": {
+      "description": "Which environment a task gets when --env is not passed. Must name an environment declared above. When this key is absent, the built-in default (local) applies.",
+      "type": "string",
+      "enum": ["local", "dev", "staging", "production"]
+    }
+  },
+  "definitions": {
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "description"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": ["local", "dev", "staging", "production"]
+        },
+        "description": {
+          "description": "What this environment is, in the words an agent should treat as ground truth instead of assuming.",
+          "type": "string",
+          "minLength": 1
+        },
+        "requires_approval": {
+          "description": "Descriptive only — this file does not itself gate anything (see T44 for prepare-vs-execute deploy approval). Records the project's own policy so a person reading this file, or a future checker, has one place to look.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

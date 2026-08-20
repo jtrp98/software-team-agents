@@ -7,7 +7,7 @@ import { AgentStage, TaskState } from "../types.js";
 import { classifyTask } from "../classification/taskClassifier.js";
 import { initTaskMachine } from "../state/taskState.js";
 import { MemoryTaskStore } from "./memoryStore.js";
-import { SchemaVersionMismatchError, SqliteTaskStore } from "./sqliteStore.js";
+import { DatabaseUnavailableError, SchemaVersionMismatchError, SqliteTaskStore } from "./sqliteStore.js";
 import {
   PersistedStateCorruptError,
   TaskAlreadyExistsError,
@@ -291,6 +291,61 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       db.pragma("user_version = 99");
       db.close();
       expect(() => new SqliteTaskStore(file)).toThrow(SchemaVersionMismatchError);
+    } finally {
+      fs.rmSync(path.dirname(file), { recursive: true, force: true });
+    }
+  });
+
+  it("T47: a database it cannot open fails as DatabaseUnavailableError, not a raw fs/sqlite stack trace", () => {
+    const blockingFile = tmpDbPath();
+    fs.mkdirSync(path.dirname(blockingFile), { recursive: true });
+    fs.writeFileSync(blockingFile, "not a directory", "utf8"); // a plain file sits where a directory needs to go
+    try {
+      // Asking for a db *inside* a path component that is actually a file — mkdirSync can never
+      // create it, the same shape a permissions problem or a vanished mount point would produce.
+      const unreachable = path.join(blockingFile, "state.db");
+      expect(() => new SqliteTaskStore(unreachable)).toThrow(DatabaseUnavailableError);
+    } finally {
+      fs.rmSync(path.dirname(blockingFile), { recursive: true, force: true });
+    }
+  });
+
+  it("T47: the message names the file and says nothing was lost — actionable, not a stack trace", () => {
+    const blockingFile = tmpDbPath();
+    fs.mkdirSync(path.dirname(blockingFile), { recursive: true });
+    fs.writeFileSync(blockingFile, "not a directory", "utf8");
+    try {
+      const unreachable = path.join(blockingFile, "state.db");
+      try {
+        new SqliteTaskStore(unreachable);
+        expect.unreachable("constructor should have thrown");
+      } catch (e) {
+        expect(e).toBeInstanceOf(DatabaseUnavailableError);
+        const err = e as DatabaseUnavailableError;
+        expect(err.filePath).toBe(unreachable);
+        expect(err.message).toContain(unreachable);
+        expect(err.message).toMatch(/nothing was written/);
+      }
+    } finally {
+      fs.rmSync(path.dirname(blockingFile), { recursive: true, force: true });
+    }
+  });
+
+  it("T47: a schema version mismatch is NOT relabelled as DatabaseUnavailableError — it's a distinct, deliberate refusal", () => {
+    const file = tmpDbPath();
+    try {
+      const store = new SqliteTaskStore(file);
+      store.close();
+      const db = new Database(file);
+      db.pragma("user_version = 99");
+      db.close();
+      try {
+        new SqliteTaskStore(file);
+        expect.unreachable("constructor should have thrown");
+      } catch (e) {
+        expect(e).toBeInstanceOf(SchemaVersionMismatchError);
+        expect(e).not.toBeInstanceOf(DatabaseUnavailableError);
+      }
     } finally {
       fs.rmSync(path.dirname(file), { recursive: true, force: true });
     }

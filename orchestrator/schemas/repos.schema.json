@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/repos.schema.json",
+  "title": "Repository map (repos.yaml)",
+  "description": "Optional. Names the separate git repos a single project's pipeline spans (T42) — e.g. a frontend repo, a backend repo, an infra repo — and which pipeline stage writes into each. Absence is not an error: most projects keep everything in one repo, the same project root every stage already uses.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "repos"],
+  "properties": {
+    "version": {
+      "description": "Schema generation of this file. Bumped only when a change would break an existing reader.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "repos": {
+      "description": "Every repo this project's pipeline writes into.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/repo" }
+    }
+  },
+  "definitions": {
+    "repo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "root", "stages"],
+      "properties": {
+        "name": {
+          "description": "Stable identifier for this repo within the map — lower-case, unpunctuated.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "root": {
+          "description": "Path to this repo's own root, resolved relative to the directory holding this repos.yaml — so a relative path like '../frontend-repo' works regardless of where the orchestrator is invoked from.",
+          "type": "string",
+          "minLength": 1
+        },
+        "stages": {
+          "description": "Which pipeline stage(s) write their code into this repo. A stage may be claimed by at most one repo in the whole map — a stage the map does not mention still writes into the main project root, where _docs/ and .claude/ live.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "enum": [
+              "setup",
+              "business-analyst",
+              "system-analyst",
+              "project-manager",
+              "test-planner",
+              "backend-engineer",
+              "frontend-engineer",
+              "qa-engineer",
+              "security",
+              "devops"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

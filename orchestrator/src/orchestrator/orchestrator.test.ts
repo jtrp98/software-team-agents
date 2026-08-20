@@ -298,3 +298,120 @@ describe("Orchestrator", () => {
     expect(capturedSources.every((s) => s !== "frontend-code" && s !== "devops-docs")).toBe(true);
   });
 });
+
+describe("T44 — deploy prepare vs execute", () => {
+  it("runs devops twice for a deploy-only task — prepare, then (after the DEPLOY gate) execute — never DEPLOYED before approval", async () => {
+    const classification = classifyTask({ isProductionDeployOrMigration: true });
+    const orch = new Orchestrator("T-DEPLOY", classification);
+    const phases: (string | undefined)[] = [];
+    const executor: AgentExecutor = (req) => {
+      phases.push(req.deployPhase);
+      return { outcome: { tokens: 50, cost: 0.01, result: "PASS" } };
+    };
+
+    // step() runs whatever it finds assigned (devops/prepare, reached by an ungated CREATED ->
+    // READY_TO_DEPLOY walk) and returns the status *after* that completion — which must be the
+    // DEPLOY gate, never DEPLOYED and never a second prepare run.
+    const afterPrepare = await orch.step(executor);
+    expect(afterPrepare.kind).toBe("WAITING_FOR_HUMAN");
+    if (afterPrepare.kind === "WAITING_FOR_HUMAN") expect(afterPrepare.approvalType).toBe(ApprovalType.DEPLOY);
+
+    orch.decideApproval(ApprovalType.DEPLOY, true, { by: "tester" });
+
+    const executeStatus = await orch.step(executor);
+    expect(executeStatus.kind).toBe("DEPLOYED");
+
+    expect(phases).toEqual(["prepare", "execute"]);
+    expect(orch.runLog.all().map((r) => r.agent)).toEqual([AgentStage.DEVOPS, AgentStage.DEVOPS]);
+  });
+
+  it("a failed prepare run is retried as prepare again, never treated as done", async () => {
+    const classification = classifyTask({ isProductionDeployOrMigration: true });
+    const orch = new Orchestrator("T-DEPLOY-FAIL", classification);
+    const phases: (string | undefined)[] = [];
+    let call = 0;
+    const executor: AgentExecutor = (req) => {
+      phases.push(req.deployPhase);
+      call += 1;
+      return { outcome: { tokens: 50, cost: 0.01, result: call === 1 ? "FAIL" : "PASS" } };
+    };
+
+    await orch.step(executor); // fails
+    const afterFailedPrepare = orch.status();
+    // Still assigned to devops/prepare — not waiting on the DEPLOY gate, since prepare never
+    // actually succeeded.
+    expect(afterFailedPrepare.kind).toBe("RUNNING");
+    if (afterFailedPrepare.kind === "RUNNING") expect(afterFailedPrepare.stage).toBe(AgentStage.DEVOPS);
+
+    await orch.step(executor); // prepare, this time PASS
+    expect(orch.status().kind).toBe("WAITING_FOR_HUMAN");
+    expect(phases).toEqual(["prepare", "prepare"]);
+  });
+
+  it("deployPrepared survives a resume — a task doesn't re-run prepare just because the process restarted", async () => {
+    const { MemoryTaskStore } = await import("../store/memoryStore.js");
+    const store = new MemoryTaskStore();
+    const classification = classifyTask({ isProductionDeployOrMigration: true });
+    const orch = new Orchestrator("T-DEPLOY-RESUME", classification, { store });
+    await orch.step(() => ({ outcome: { tokens: 10, cost: 0.01, result: "PASS" } })); // prepare
+
+    const resumed = Orchestrator.resume("T-DEPLOY-RESUME", store);
+    const status = resumed.status();
+    expect(status.kind).toBe("WAITING_FOR_HUMAN"); // not RUNNING prepare again
+    if (status.kind === "WAITING_FOR_HUMAN") expect(status.approvalType).toBe(ApprovalType.DEPLOY);
+  });
+
+  it("a non-devops stage never gets a deployPhase", async () => {
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const orch = new Orchestrator("T-NOT-DEPLOY", classification);
+    let captured: string | undefined = "unset";
+    const executor: AgentExecutor = (req) => {
+      captured = req.deployPhase;
+      return { outcome: { tokens: 10, cost: 0.01, result: "PASS" } };
+    };
+    await orch.step(executor);
+    expect(captured).toBeUndefined();
+  });
+});
+
+describe("T45 — a failed execute blocks instead of silently deploying", () => {
+  async function toApproved(orch: Orchestrator): Promise<void> {
+    await orch.step(() => ({ outcome: { tokens: 10, cost: 0.01, result: "PASS" } })); // prepare
+    orch.decideApproval(ApprovalType.DEPLOY, true, { by: "tester" });
+  }
+
+  it("execute FAIL forces BLOCKED, never DEPLOYED, and names the Rollback runbook", async () => {
+    const classification = classifyTask({ isProductionDeployOrMigration: true });
+    const orch = new Orchestrator("T-EXEC-FAIL", classification);
+    await toApproved(orch);
+
+    const status = await orch.step(() => ({ outcome: { tokens: 10, cost: 0.01, result: "FAIL" } })); // execute
+    expect(status.kind).toBe("BLOCKED");
+    if (status.kind === "BLOCKED") {
+      expect(status.reason).toContain("execute failed");
+      expect(status.reason).toContain("Rollback runbook");
+    }
+
+    // Terminal: another step() must not un-stick it or claim success.
+    const again = await orch.step(() => ({ outcome: { tokens: 10, cost: 0.01, result: "PASS" } }));
+    expect(again.kind).toBe("BLOCKED");
+  });
+
+  it("execute PASS still reaches DEPLOYED — the new block only fires on FAIL", async () => {
+    const classification = classifyTask({ isProductionDeployOrMigration: true });
+    const orch = new Orchestrator("T-EXEC-PASS", classification);
+    await toApproved(orch);
+
+    const status = await orch.step(() => ({ outcome: { tokens: 10, cost: 0.01, result: "PASS" } })); // execute
+    expect(status.kind).toBe("DEPLOYED");
+  });
+
+  it("a FAILed prepare (before approval) is retried, not routed through the T45 block — that only applies to execute", async () => {
+    const classification = classifyTask({ isProductionDeployOrMigration: true });
+    const orch = new Orchestrator("T-PREPARE-FAIL", classification);
+
+    const status = await orch.step(() => ({ outcome: { tokens: 10, cost: 0.01, result: "FAIL" } })); // prepare fails
+    expect(status.kind).toBe("RUNNING"); // reassigned to prepare again, not BLOCKED
+    if (status.kind === "RUNNING") expect(status.stage).toBe(AgentStage.DEVOPS);
+  });
+});

@@ -41,7 +41,12 @@ Nothing here has a safe default. Use AskUserQuestion (concrete options) for anyt
 
 **Environments**: keep `.env.example` in sync with every key the app reads, so a new environment is reproducible. Real values go in the platform's secret store, or in a local `.env` you have confirmed is listed in `.gitignore` — check, don't assume. Never in a committed file, never printed into chat, never echoed into a log.
 
-**Migrations**: `npx prisma migrate deploy` for anything that isn't local — never `migrate dev`, and **never `migrate reset` against a shared or production database**. Before running a migration on an environment with real data, read what the migration actually does and tell the user in plain terms which tables/columns it changes and whether any of it is destructive. If `design.md` flagged the change as breaking, confirm the backfill plan exists before you run it.
+**Migrations** (T46 — every migration against a shared or production database goes through dry-run → backup → approval → execute → verify, in that order, and none of the five is optional):
+1. **Dry-run**: `prisma migrate diff` (or the equivalent for the schema/DB in play) before anything else. Read what it actually does and tell the user in plain terms which tables/columns change and whether any of it is destructive. If `design.md` flagged the change as breaking, confirm the backfill plan exists before you go further.
+2. **Backup**: take a real, restorable backup of the target database (a platform snapshot, `pg_dump`, whatever the environment actually supports) *before* running anything that writes. Record where the backup lives and how to restore it — this goes in `deploy.md`'s Runbook, not just in your own head. No backup, no migration: if you cannot take one (permissions, no tooling, environment doesn't support it), stop and say so instead of migrating anyway.
+3. **Approval**: the gate covered above — never skipped, never assumed from an earlier deploy.
+4. **Execute**: `npx prisma migrate deploy` for anything that isn't local — never `migrate dev`, and **never `migrate reset` against a shared or production database**.
+5. **Verify**: after the migration runs, confirm the schema actually matches what was intended (`npx prisma migrate status`, a spot-check query) — this is about the *data*, distinct from the service health check below which is about the *app*. A migration that applied without error but left data in the wrong shape is still a failure; report it as one.
 
 **Rollback**: for every deploy, know how to undo it before you start, and write it down in `deploy.md`.
 
@@ -51,6 +56,7 @@ Deploying, migrating a shared database, and changing infrastructure are hard to 
 
 - **Confirm with the user immediately before each one**, stating what will change and what the blast radius is. Approval for a staging deploy is not approval for production.
 - **This holds in autonomous/unattended runs too** (`.claude/shared/conventions.md` §6) — it's one of the five points that always waits for a real person, whatever else in the pipeline was allowed to chain automatically to get here. Preparing the deploy — generating a Dockerfile, a CI workflow, a migration dry-run — may run unattended; issuing the actual deploy or migration command never does.
+- **When the orchestrator drives this pipeline (T44), it enforces that split structurally, not just by convention**: a run tells you `Deploy phase: PREPARE` or `Deploy phase: EXECUTE` in the prompt. On `PREPARE`, do exactly what the label says and stop there — do not run the actual deploy/migration command, even if everything looks ready. On `EXECUTE`, the orchestrator will not have started this run at all until its own approval gate passed, so a real person has already signed off on this specific deploy at the orchestrator level; you still confirm the specifics with the user per the rules above before running anything destructive, since the gate approves that *a* deploy may proceed, not that every command in it is safe unexamined. Running interactively (no `Deploy phase:` line in the prompt), decide for yourself using the rules above exactly as before — this doesn't change anything about that mode.
 - Never run a command that drops, truncates, resets, or overwrites data on a shared environment. If a task seems to need one, stop and explain the situation — the user runs it themselves.
 - Prefer a dry run where the tool offers one (`prisma migrate diff`, `docker compose config`, a CI run without the deploy step) and show the user the output first.
 - Never disable a check, skip a hook, or force-push past a failure to make a deploy succeed.
@@ -58,6 +64,8 @@ Deploying, migrating a shared database, and changing infrastructure are hard to 
 ## Verify after you deploy
 
 Actually check, don't assume: hit the health endpoint, confirm the migration applied (`npx prisma migrate status`), check the service is up. Report the real output — including failures, in full. If a deploy half-succeeded, say exactly which part didn't and what state the environment is in now.
+
+**If the health check fails, this run has failed — say so plainly, don't soften it into a success.** (T45) When the orchestrator drives this pipeline, a failed EXECUTE run (see the prepare/execute note above, T44) blocks the task immediately rather than continuing to `DEPLOYED` or retrying on its own — no automatic rollback runs, because guessing at an undo is worse than a person deciding one. Point the user at `deploy.md`'s Rollback runbook (below) so they can act. Running interactively, do the same thing yourself: don't report success, and walk the user through the runbook before doing anything else.
 
 Then **mark the phase `deployed ✅` on its line in `_docs/status.md`** — only after you've verified it, and only for what actually went out. `qa-engineer` watches for that marker to know when a phase's block under `## Unverified Behaviour — undeployed phases` can finally be archived, so a deploy you don't record leaves that section accumulating forever.
 
@@ -72,13 +80,13 @@ Write `deploy.md` in the resolved module folder. If it exists, amend it with `Ed
 Where each environment runs, its database, and how to reach it. No secret values — key names only.
 
 ## Runbook
-How to deploy, how to run migrations, how to roll back. Concrete commands.
+How to deploy, how to run migrations, how to roll back, and how to restore from the backup taken before each migration (T46). Concrete commands.
 
 ## Required Environment Variables
 Key names, what each is for, where the real value lives. Never the value itself.
 
 ## Deploy History
-Dated, one line per deploy: environment, what phase/module went out, migrations applied, outcome. This is `deploy.md`'s `## Change Log` under a more useful name (`.claude/shared/conventions.md` §4) — append, never rewrite.
+Dated, one line per deploy: environment, what phase/module went out, migrations applied, backup taken (where/how, or "n/a — no migration"), outcome. This is `deploy.md`'s `## Change Log` under a more useful name (`.claude/shared/conventions.md` §4) — append, never rewrite.
 ```
 
 Then tell the user what's live where, what you verified, and anything they must do manually (DNS, secrets in the platform console, a database they need to provision). Do not invoke other agents yourself — and note the actual deploy/migration step itself is always a hard stop (`.claude/shared/conventions.md` §6), autonomous mode or not.

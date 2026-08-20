@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as readline from "node:readline/promises";
@@ -6,7 +7,7 @@ import { classifyTask, type ClassificationInput } from "./classification/taskCla
 import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
 import { createClaudeCliExecutor } from "./agents/claudeCliExecutor.js";
-import { SqliteTaskStore } from "./store/sqliteStore.js";
+import { DatabaseUnavailableError, SqliteTaskStore } from "./store/sqliteStore.js";
 import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
 import { checkAllContracts } from "./agents/agentContract.js";
 import { checkPathRules } from "./agents/pathPermissions.js";
@@ -22,6 +23,9 @@ import { acquireTaskLock, releaseTaskLock, TaskLockedError } from "./concurrency
 import { actorsIn, auditTrail, decisionTrail, formatAuditTrail } from "./audit/auditTrail.js";
 import { checkReviewSeparation } from "./review/reviewSeparation.js";
 import { checkEscalationPolicy } from "./escalation/escalationPolicy.js";
+import { checkWorkspace, hasWorkspace, loadWorkspace, workspacePath, type Workspace } from "./workspace/workspace.js";
+import { checkRepoMap, loadStageRoots } from "./repos/repoMap.js";
+import { Environment, checkEnvironmentConfig, describeEnvironment, isEnvironment } from "./environment/environment.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -63,6 +67,14 @@ export interface CliArgs {
   checkReviewSeparation: boolean;
   /** Check escalation-policy.yaml against the runtime policy and exit (T40). Same audience. */
   checkEscalationPolicy: boolean;
+  /** Check workspace.yaml, if one exists, against the filesystem and exit (T41). Same audience. */
+  checkWorkspace: boolean;
+  /** Check repos.yaml, if one exists, against the filesystem and exit (T42). Same audience. */
+  checkRepos: boolean;
+  /** Check environments.yaml, if one exists, against its schema and exit (T43). Same audience. */
+  checkEnvironments: boolean;
+  /** local/dev/staging/production (T43). Defaults to Environment.LOCAL; only used when creating a task — a --resume/--retry inherits the task's already-stored environment. */
+  environment: Environment;
   dependsOn: string[];
   stateDb?: string;
   /** Phases of plan.md this run touches, used to slice module docs per conventions.md §10. Empty = send the plan whole. */
@@ -86,7 +98,7 @@ export class CliUsageError extends Error {}
 
 export const USAGE =
   "usage (T31 verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  orchestrate run --task-id <id> --module <name> <classification flags> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>]\n" +
+  "  orchestrate run --task-id <id> --module <name> <classification flags> [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--project-root <path>] [--state-db <path>]\n" +
   "  orchestrate status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  orchestrate approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
   "  orchestrate resume  <task-id> --module <name> [--project-root <path>]   continue a task already in the store\n" +
@@ -94,6 +106,7 @@ export const USAGE =
   "  orchestrate pause  <task-id> [--project-root <path>]   freeze a task; run/resume/retry refuse it until resumed\n" +
   "  orchestrate cancel <task-id> [--reason <text>] [--project-root <path>]   give up on a task for good; run/resume/retry refuse it permanently\n" +
   "  orchestrate audit  <task-id> [--decisions] [--project-root <path>]   the WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail; --decisions shows only the choices\n" +
+  "  orchestrate projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names (T41)\n" +
   "\n" +
   "underlying flag-based form:\n" +
   "  orchestrate --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] <classification flags>\n" +
@@ -107,6 +120,9 @@ export const USAGE =
   "  orchestrate --check-test-pyramid [--project-root <path>]   check test-pyramid.yaml against its schema\n" +
   "  orchestrate --check-review-separation [--project-root <path>]  check that no agent can review its own work\n" +
   "  orchestrate --check-escalation-policy [--project-root <path>]  check escalation-policy.yaml against the runtime policy\n" +
+  "  orchestrate --check-workspace [--project-root <path>]      check workspace.yaml (if any) against the filesystem\n" +
+  "  orchestrate --check-repos [--project-root <path>]          check repos.yaml (if any) against the filesystem\n" +
+  "  orchestrate --check-environments [--project-root <path>]   check environments.yaml (if any) against its schema\n" +
   `  classification flags: ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
 
 /** Pure argv parser — kept separate from process.argv/console/exit so it's directly testable. */
@@ -125,6 +141,10 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkTestPyramidFlag = false;
   let checkReviewSeparationFlag = false;
   let checkEscalationPolicyFlag = false;
+  let checkWorkspaceFlag = false;
+  let checkReposFlag = false;
+  let checkEnvironmentsFlag = false;
+  let environment: Environment = Environment.LOCAL;
   let dependsOn: string[] = [];
   let phases: number[] = [];
   const classification: ClassificationInput = {};
@@ -169,6 +189,18 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkReviewSeparationFlag = true;
     } else if (arg === "--check-escalation-policy") {
       checkEscalationPolicyFlag = true;
+    } else if (arg === "--check-workspace") {
+      checkWorkspaceFlag = true;
+    } else if (arg === "--check-repos") {
+      checkReposFlag = true;
+    } else if (arg === "--check-environments") {
+      checkEnvironmentsFlag = true;
+    } else if (arg === "--env") {
+      const value = argv[++i];
+      if (!value || !isEnvironment(value)) {
+        throw new CliUsageError(`--env must be one of: ${Object.values(Environment).join(", ")} (got ${value ?? "nothing"})`);
+      }
+      environment = value;
     } else if (arg in FLAG_TO_CLASSIFICATION) {
       classification[FLAG_TO_CLASSIFICATION[arg]] = true;
     } else {
@@ -185,7 +217,10 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkDecisionsFlag &&
     !checkTestPyramidFlag &&
     !checkReviewSeparationFlag &&
-    !checkEscalationPolicyFlag
+    !checkEscalationPolicyFlag &&
+    !checkWorkspaceFlag &&
+    !checkReposFlag &&
+    !checkEnvironmentsFlag
   ) {
     if (!taskId) throw new CliUsageError("--task-id is required");
     if (!moduleName) throw new CliUsageError("--module is required (the _docs/module/<name>/ this task belongs to)");
@@ -209,6 +244,10 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkTestPyramid: checkTestPyramidFlag,
     checkReviewSeparation: checkReviewSeparationFlag,
     checkEscalationPolicy: checkEscalationPolicyFlag,
+    checkWorkspace: checkWorkspaceFlag,
+    checkRepos: checkReposFlag,
+    checkEnvironments: checkEnvironmentsFlag,
+    environment,
     dependsOn,
     stateDb,
     phases,
@@ -350,10 +389,10 @@ function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orches
     `[orchestrator] task ${taskId}: level=${classification.level} pipeline=${classification.pipeline.join(" -> ")}`,
   );
   for (const reason of classification.reasons) console.log(`[orchestrator]   reason: ${reason}`);
-  return registry.create({ taskId, classification, dependsOn: args.dependsOn });
+  return registry.create({ taskId, classification, dependsOn: args.dependsOn, environment: args.environment });
 }
 
-const VERBS = ["run", "status", "approve", "retry", "resume", "pause", "cancel", "audit"] as const;
+const VERBS = ["run", "status", "approve", "retry", "resume", "pause", "cancel", "audit", "projects"] as const;
 type Verb = (typeof VERBS)[number];
 
 function isVerb(s: string | undefined): s is Verb {
@@ -540,6 +579,59 @@ async function runAuditVerb(rest: string[], defaultProjectRoot: string): Promise
   }
 }
 
+/**
+ * `projects [--workspace <path>]` — T41's read-only fan-out: one line per
+ * project workspace.yaml names, each with its own store's status counts.
+ *
+ * Deliberately never opens a `SqliteTaskStore` for a project that has no
+ * `.workflow/state.db` yet — the constructor creates one on open (same as
+ * every other verb's first run), and a status listing should never be the
+ * thing that plants an empty database in a project nobody has run yet.
+ */
+async function runProjectsVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const workspaceFlag = flagValue(rest, "--workspace");
+  const root = workspaceFlag ? path.dirname(path.resolve(workspaceFlag)) : projectRoot;
+
+  if (!hasWorkspace(root)) {
+    console.log(
+      `[orchestrator] no workspace.yaml at ${workspacePath(root)} — this project runs standalone. ` +
+        "Add one (T41) to list other project roots here, or use --project-root with status/audit directly.",
+    );
+    return 0;
+  }
+
+  let workspace: Workspace;
+  try {
+    workspace = loadWorkspace(root);
+  } catch (e) {
+    console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+    return 1;
+  }
+
+  for (const project of workspace.projects) {
+    const dbPath = defaultStateDbPath(project.root);
+    if (!fs.existsSync(dbPath)) {
+      console.log(`  ${project.name.padEnd(20)} ${project.root} — no tasks yet`);
+      continue;
+    }
+    const store = new SqliteTaskStore(dbPath);
+    try {
+      const tasks = store.listTasks();
+      const counts = new Map<TaskStatusKind, number>();
+      for (const t of tasks) {
+        const kind = describeStatus(t, tasks).kind;
+        counts.set(kind, (counts.get(kind) ?? 0) + 1);
+      }
+      const summary = [...counts.entries()].map(([kind, n]) => `${STATUS_EMOJI[kind] ?? " "}${n}`).join(" ");
+      console.log(`  ${project.name.padEnd(20)} ${project.root} — ${tasks.length} task(s)${summary ? " " + summary : ""}`);
+    } finally {
+      store.close();
+    }
+  }
+  return 0;
+}
+
 /** Dispatches a T31 verb, translating the ones that are really the existing engine in disguise (`run`, `resume`, `retry`) rather than duplicating the step loop. */
 async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): Promise<number> {
   switch (verb) {
@@ -562,6 +654,8 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
       return runCancelVerb(rest, defaultProjectRoot);
     case "audit":
       return runAuditVerb(rest, defaultProjectRoot);
+    case "projects":
+      return runProjectsVerb(rest, defaultProjectRoot);
   }
 }
 
@@ -673,6 +767,49 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     return 1;
   }
 
+  if (args.checkWorkspace) {
+    const result = checkWorkspace(args.projectRoot);
+    // Notes print either way: "no workspace.yaml" is the normal, expected state for a
+    // standalone project, and burying that note would make silence indistinguishable
+    // from a workspace nobody remembered to validate.
+    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
+    if (result.ok) {
+      console.log("[orchestrator] workspace.yaml is fine.");
+      return 0;
+    }
+    console.error("[orchestrator] workspace.yaml has problems:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
+  if (args.checkRepos) {
+    const result = checkRepoMap(args.projectRoot);
+    // Notes print either way: "no repos.yaml" is the normal, expected state for a
+    // single-repo project, same reasoning as --check-workspace's note above.
+    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
+    if (result.ok) {
+      console.log("[orchestrator] repos.yaml is fine.");
+      return 0;
+    }
+    console.error("[orchestrator] repos.yaml has problems:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
+  if (args.checkEnvironments) {
+    const result = checkEnvironmentConfig(args.projectRoot);
+    // Notes print either way: "no environments.yaml" is the normal, expected state — every
+    // project gets the four built-in descriptions even without one.
+    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
+    if (result.ok) {
+      console.log("[orchestrator] environments.yaml is fine.");
+      return 0;
+    }
+    console.error("[orchestrator] environments.yaml has problems:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
   const store = new SqliteTaskStore(args.stateDb ?? defaultStateDbPath(args.projectRoot));
   const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(args.projectRoot) });
   let lockedTaskId: string | undefined;
@@ -720,6 +857,12 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       projectRoot: args.projectRoot,
       moduleName: () => args.module!,
       phases: () => (args.phases.length > 0 ? args.phases : undefined),
+      // T42: absent when there's no repos.yaml — every stage then spawns in
+      // args.projectRoot exactly as before this task existed.
+      stageRoots: loadStageRoots(args.projectRoot),
+      // T43: every stage's prompt states which environment this task targets — the task's own
+      // stored environment (survives --resume), not args.environment, which only matters on create.
+      extraInstruction: `Environment: ${orchestrator.environment} — ${describeEnvironment(orchestrator.environment, args.projectRoot)}`,
     });
 
     for (;;) {
@@ -803,6 +946,13 @@ if (isMain) {
         console.error(`usage error: ${e.message}`);
         console.error(USAGE);
         process.exit(64);
+      }
+      // T47: a clean, actionable message instead of a raw better-sqlite3/fs stack trace — the
+      // same task id's resume/retry picks this back up once whatever made the file unavailable
+      // clears, since DatabaseUnavailableError is only ever thrown before anything was written.
+      if (e instanceof DatabaseUnavailableError) {
+        console.error(`[orchestrator] ${e.message}`);
+        process.exit(5);
       }
       console.error(e);
       process.exit(1);

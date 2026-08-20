@@ -1,0 +1,179 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import Ajv, { type ValidateFunction } from "ajv";
+import { parse as parseYaml } from "yaml";
+import { AgentStage } from "../types.js";
+import { defaultProjectRoot } from "../agents/agentContract.js";
+
+/**
+ * Reads `repos.yaml` — an optional file naming the separate git repos a
+ * single project's pipeline spans (T42): a frontend repo, a backend repo, an
+ * infra repo, each written to by a different subset of pipeline stages.
+ *
+ * This is a different question from T41's `workspace.yaml`. A workspace
+ * groups several *independent* projects, each with its own full doc set and
+ * pipeline, so a person can see them together. A repo map describes *one*
+ * project whose *own* pipeline's stages don't all write into the same
+ * checkout — `_docs/`, `.claude/`, `design.md`, `status.md` still live in one
+ * place (the project root every other module already resolves against), but
+ * `backend-engineer` and `frontend-engineer` may need to run `claude` inside
+ * two different working directories to actually commit code where it
+ * belongs. `claudeCliExecutor.ts`'s `stageRoots` option is what acts on this
+ * — this module only reads and validates the file.
+ *
+ * Absence is not an error. Most projects keep everything in one repo, the
+ * same as before T42 — `checkRepoMap()` reports that as a note, not a
+ * problem, the same way `checkWorkspace()` (T41) does for its own file.
+ */
+
+export interface RepoEntry {
+  name: string;
+  /** Absolute, resolved relative to the directory holding repos.yaml. */
+  root: string;
+  stages: AgentStage[];
+}
+
+export interface RepoMap {
+  version: number;
+  repos: RepoEntry[];
+}
+
+const SCHEMA_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+  "..",
+  "schemas",
+  "repos.schema.json",
+);
+
+export function reposPath(projectRoot: string = defaultProjectRoot()): string {
+  return path.join(projectRoot, "repos.yaml");
+}
+
+export function hasRepoMap(projectRoot: string = defaultProjectRoot()): boolean {
+  return fs.existsSync(reposPath(projectRoot));
+}
+
+export class RepoMapError extends Error {
+  constructor(public readonly issues: string[]) {
+    super(`repos.yaml is not usable:\n- ${issues.join("\n- ")}`);
+    this.name = "RepoMapError";
+  }
+}
+
+let compiled: ValidateFunction | undefined;
+
+function validator(): ValidateFunction {
+  if (!compiled) {
+    const ajv = new Ajv({ allErrors: true, strict: true });
+    compiled = ajv.compile(JSON.parse(fs.readFileSync(SCHEMA_PATH, "utf8")));
+  }
+  return compiled;
+}
+
+/** Reads and validates repos.yaml, resolving every `root` relative to the file's own directory. Throws rather than returning a partly trusted map — a stage sent to the wrong checkout is worse than one sent nowhere. */
+export function loadRepoMap(projectRoot: string = defaultProjectRoot()): RepoMap {
+  const file = reposPath(projectRoot);
+  let raw: string;
+  try {
+    raw = fs.readFileSync(file, "utf8");
+  } catch {
+    throw new RepoMapError([`no file at ${file}`]);
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(raw);
+  } catch (e) {
+    throw new RepoMapError([`file is not valid YAML: ${(e as Error).message}`]);
+  }
+
+  const validate = validator();
+  if (!validate(parsed)) {
+    throw new RepoMapError(
+      (validate.errors ?? []).map((e) => `${e.instancePath || "(root)"} ${e.message ?? "is invalid"}`),
+    );
+  }
+
+  const doc = parsed as { version: number; repos: { name: string; root: string; stages: string[] }[] };
+  const baseDir = path.dirname(file);
+  return {
+    version: doc.version,
+    repos: doc.repos.map((r) => ({
+      name: r.name,
+      root: path.resolve(baseDir, r.root),
+      stages: r.stages as AgentStage[], // schema enum already restricts these to real AgentStage values
+    })),
+  };
+}
+
+/** Stage -> repo root, flattened from every repo's `stages` list. A stage this map does not mention is simply absent from the result — the caller falls back to the project root for it. */
+export function stageRoots(repoMap: RepoMap): Partial<Record<AgentStage, string>> {
+  const result: Partial<Record<AgentStage, string>> = {};
+  for (const repo of repoMap.repos) {
+    for (const stage of repo.stages) result[stage] = repo.root;
+  }
+  return result;
+}
+
+/** `loadRepoMap` + `stageRoots` in one call, or `undefined` when there is no repos.yaml — the shape `claudeCliExecutor`'s options want directly. */
+export function loadStageRoots(projectRoot: string = defaultProjectRoot()): Partial<Record<AgentStage, string>> | undefined {
+  if (!hasRepoMap(projectRoot)) return undefined;
+  return stageRoots(loadRepoMap(projectRoot));
+}
+
+export interface RepoMapCheckResult {
+  ok: boolean;
+  problems: string[];
+  notes: string[];
+}
+
+/**
+ * The check `--check-repos` runs. No file at all is not a problem — most
+ * projects keep everything in one repo. A file that exists has to actually
+ * work: parse, every repo name unique, every root a real directory, and no
+ * stage claimed by two repos at once (that would make "where does this
+ * stage's code land" ambiguous, which is the one thing this file exists to
+ * settle).
+ */
+export function checkRepoMap(projectRoot: string = defaultProjectRoot()): RepoMapCheckResult {
+  if (!hasRepoMap(projectRoot)) {
+    return {
+      ok: true,
+      problems: [],
+      notes: ["no repos.yaml — every stage writes into the project root, the same repo (T42)."],
+    };
+  }
+
+  let repoMap: RepoMap;
+  try {
+    repoMap = loadRepoMap(projectRoot);
+  } catch (e) {
+    return { ok: false, problems: e instanceof RepoMapError ? e.issues : [String(e)], notes: [] };
+  }
+
+  const problems: string[] = [];
+  const seenNames = new Set<string>();
+  const stageOwner = new Map<AgentStage, string>();
+  for (const repo of repoMap.repos) {
+    if (seenNames.has(repo.name)) {
+      problems.push(`repo name "${repo.name}" is declared more than once`);
+    }
+    seenNames.add(repo.name);
+
+    if (!fs.existsSync(repo.root) || !fs.statSync(repo.root).isDirectory()) {
+      problems.push(`repo "${repo.name}": root "${repo.root}" is not a directory`);
+    }
+
+    for (const stage of repo.stages) {
+      const owner = stageOwner.get(stage);
+      if (owner && owner !== repo.name) {
+        problems.push(`stage "${stage}" is claimed by both "${owner}" and "${repo.name}" — a stage can only write into one repo`);
+      }
+      stageOwner.set(stage, repo.name);
+    }
+  }
+
+  return { ok: problems.length === 0, problems, notes: [] };
+}

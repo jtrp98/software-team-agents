@@ -65,6 +65,15 @@ export interface ClaudeCliExecutorOptions {
    * plan to implement one phase of it.
    */
   sliceModuleDocs?: boolean;
+  /**
+   * T42: per-stage working directory override, for a project whose pipeline
+   * spans more than one repo (a frontend repo, a backend repo, an infra
+   * repo). A stage missing from this map — or the map itself being absent —
+   * spawns `claude` in `projectRoot`, exactly as before T42. `_docs/` and
+   * `.claude/agents/` are still only ever resolved against `projectRoot`:
+   * only the working directory `claude` actually runs in moves.
+   */
+  stageRoots?: Partial<Record<AgentStage, string>>;
 }
 
 interface ClaudeCliJsonResult {
@@ -100,6 +109,21 @@ function renderSlicedDocs(selected: SelectedContext[], cm: ContextManager): stri
   return parts;
 }
 
+/**
+ * T44 — what `req.deployPhase` means for the one stage that gets it (devops). The orchestrator
+ * has already enforced the structural half (execute is unreachable without the DEPLOY approval
+ * gate having passed — see `isAgentAssignedAt` in taskStatus.ts); this only tells the agent which
+ * of the two runs it's in, since devops.md's own rules read differently depending on which.
+ */
+const DEPLOY_PHASE_INSTRUCTION: Record<"prepare" | "execute", string> = {
+  prepare:
+    "Deploy phase: PREPARE. Do only what's safe to run unattended — Dockerfile/CI workflow/config, a migration dry-run, and — if this deploy includes a migration against a shared or production database — take and record a real, restorable backup before this run ends (T46: no backup, no migration). " +
+    "Do NOT run the actual deploy or migration command in this run; that happens in a separate EXECUTE run, after the orchestrator's own human approval gate.",
+  execute:
+    "Deploy phase: EXECUTE. The orchestrator's structural approval gate for this deploy has already been granted — this run is what actually issues the deploy/migration command, then verifies the result (service health, and — for a migration — the schema/data actually match what was intended, T46). " +
+    "Still follow your own agent instructions for what to confirm and verify; the gate having passed doesn't relax those. Report failure plainly if verification doesn't pass — do not soften it into a success.",
+};
+
 function buildPrompt(req: AgentExecutorRequest, extra?: string, sliced?: string[]): string {
   const parts: string[] = [
     `Task ${req.taskId} — you are running as the \`${req.stage}\` stage of this repo's pipeline (see CLAUDE.md).`,
@@ -114,6 +138,7 @@ function buildPrompt(req: AgentExecutorRequest, extra?: string, sliced?: string[
     }
   }
   if (sliced && sliced.length > 0) parts.push(...sliced);
+  if (req.deployPhase) parts.push("", DEPLOY_PHASE_INSTRUCTION[req.deployPhase]);
   if (extra) parts.push("", extra);
   parts.push(
     "",
@@ -169,10 +194,12 @@ export function createClaudeCliExecutor(opts: ClaudeCliExecutorOptions): AgentEx
       prompt,
     ];
 
+    const cwd = opts.stageRoots?.[req.stage] ?? opts.projectRoot;
+
     let proc: SpawnSyncReturns<string>;
     try {
       proc = spawn("claude", args, {
-        cwd: opts.projectRoot,
+        cwd,
         encoding: "utf8",
         timeout,
         maxBuffer: 64 * 1024 * 1024,

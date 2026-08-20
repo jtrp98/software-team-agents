@@ -99,6 +99,120 @@ describe("createClaudeCliExecutor", () => {
     expect(result.outcome.result).toBe("FAIL");
     expect(result.outcome.failure_reason).toMatch(/failed to spawn/);
   });
+
+  it("T47: an agent timeout — spawnSync returns normally with `error` set, the shape Node's own `timeout` option produces — is a FAIL, not a crash", async () => {
+    const spawnSync: SpawnSync = () => {
+      const timeoutError = Object.assign(new Error("spawnSync claude ETIMEDOUT"), { code: "ETIMEDOUT" });
+      return { status: null, signal: "SIGTERM", stdout: "", stderr: "", error: timeoutError, pid: 1, output: [] } as unknown as SpawnSyncReturns<string>;
+    };
+    const root = tmpProject();
+    const executor = createClaudeCliExecutor({ projectRoot: root, moduleName: () => "sales-crm", spawnSync });
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-1", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toMatch(/ETIMEDOUT/);
+  });
+});
+
+describe("stageRoots — per-stage working directory for a multi-repo project (T42)", () => {
+  it("spawns a stage named in stageRoots inside that stage's own repo, not projectRoot", async () => {
+    let capturedCwd: string | undefined;
+    const spawnSync: SpawnSync = (_cmd, _args, options) => {
+      capturedCwd = options.cwd;
+      return cliResult(0, JSON.stringify({ is_error: false, result: "done" }));
+    };
+
+    const hub = tmpProject();
+    const backendRepo = tmpProject();
+    const executor = createClaudeCliExecutor({
+      projectRoot: hub,
+      moduleName: () => "sales-crm",
+      spawnSync,
+      stageRoots: { [AgentStage.BACKEND_ENGINEER]: backendRepo },
+    });
+    await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-1", context: [] });
+
+    expect(capturedCwd).toBe(backendRepo);
+  });
+
+  it("falls back to projectRoot for a stage stageRoots does not name", async () => {
+    let capturedCwd: string | undefined;
+    const spawnSync: SpawnSync = (_cmd, _args, options) => {
+      capturedCwd = options.cwd;
+      return cliResult(0, JSON.stringify({ is_error: false, result: "done" }));
+    };
+
+    const hub = tmpProject();
+    const backendRepo = tmpProject();
+    const executor = createClaudeCliExecutor({
+      projectRoot: hub,
+      moduleName: () => "sales-crm",
+      spawnSync,
+      stageRoots: { [AgentStage.BACKEND_ENGINEER]: backendRepo },
+    });
+    // system-analyst is not in stageRoots — it writes design.md in the hub, not a code repo.
+    await executor({ stage: AgentStage.SYSTEM_ANALYST, taskId: "T-1", context: [] });
+
+    expect(capturedCwd).toBe(hub);
+  });
+
+  it("with no stageRoots at all, every stage still spawns in projectRoot exactly as before T42", async () => {
+    let capturedCwd: string | undefined;
+    const spawnSync: SpawnSync = (_cmd, _args, options) => {
+      capturedCwd = options.cwd;
+      return cliResult(0, JSON.stringify({ is_error: false, result: "done" }));
+    };
+
+    const hub = tmpProject();
+    const executor = createClaudeCliExecutor({ projectRoot: hub, moduleName: () => "sales-crm", spawnSync });
+    await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-1", context: [] });
+
+    expect(capturedCwd).toBe(hub);
+  });
+});
+
+describe("deployPhase — prepare vs execute instruction in the prompt (T44)", () => {
+  it("a prepare run tells the agent to stop short of the actual deploy command", async () => {
+    let capturedArgs: string[] = [];
+    const spawnSync: SpawnSync = (_cmd, args) => {
+      capturedArgs = args;
+      return cliResult(0, JSON.stringify({ is_error: false, result: "done" }));
+    };
+    const executor = createClaudeCliExecutor({ projectRoot: tmpProject(), moduleName: () => "sales-crm", spawnSync });
+    await executor({ stage: AgentStage.DEVOPS, taskId: "T-1", context: [], deployPhase: "prepare" });
+
+    const prompt = capturedArgs[capturedArgs.length - 1];
+    expect(prompt).toContain("Deploy phase: PREPARE");
+    expect(prompt).toMatch(/do not run the actual deploy/i);
+    expect(prompt).toMatch(/backup/i); // T46: no backup, no migration — reinforced even unattended
+  });
+
+  it("an execute run tells the agent the orchestrator's own gate already passed", async () => {
+    let capturedArgs: string[] = [];
+    const spawnSync: SpawnSync = (_cmd, args) => {
+      capturedArgs = args;
+      return cliResult(0, JSON.stringify({ is_error: false, result: "done" }));
+    };
+    const executor = createClaudeCliExecutor({ projectRoot: tmpProject(), moduleName: () => "sales-crm", spawnSync });
+    await executor({ stage: AgentStage.DEVOPS, taskId: "T-1", context: [], deployPhase: "execute" });
+
+    const prompt = capturedArgs[capturedArgs.length - 1];
+    expect(prompt).toContain("Deploy phase: EXECUTE");
+    expect(prompt).toMatch(/approval gate.*already been granted/i);
+    expect(prompt).toMatch(/verifies the result/i); // T46: schema/data verify, not just service health
+  });
+
+  it("no deployPhase at all — the prompt says nothing about a deploy phase", async () => {
+    let capturedArgs: string[] = [];
+    const spawnSync: SpawnSync = (_cmd, args) => {
+      capturedArgs = args;
+      return cliResult(0, JSON.stringify({ is_error: false, result: "done" }));
+    };
+    const executor = createClaudeCliExecutor({ projectRoot: tmpProject(), moduleName: () => "sales-crm", spawnSync });
+    await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-1", context: [] });
+
+    const prompt = capturedArgs[capturedArgs.length - 1];
+    expect(prompt).not.toContain("Deploy phase");
+  });
 });
 
 describe("execution log metadata (T26/T28)", () => {

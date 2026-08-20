@@ -3,7 +3,7 @@ import { AgentStage, TaskState } from "../types.js";
 import { classifyTask } from "../classification/taskClassifier.js";
 import { initTaskMachine } from "../state/taskState.js";
 import { newPersistedTask, type PersistedTask } from "../store/taskStore.js";
-import { describeStatus, phaseOf, stageStateOf, unmetDependencies } from "./taskStatus.js";
+import { describeStatus, isAgentAssignedAt, phaseOf, stageStateOf, unmetDependencies } from "./taskStatus.js";
 
 function task(overrides: Partial<PersistedTask> = {}): PersistedTask {
   const classification = classifyTask({ isIncrementalFeature: true, touchesBackend: true });
@@ -23,6 +23,29 @@ describe("stageStateOf", () => {
     expect(stageStateOf(AgentStage.DEVOPS)).toBe(TaskState.READY_TO_DEPLOY);
     expect(stageStateOf(AgentStage.QA_ENGINEER)).toBe(TaskState.QA);
     expect(stageStateOf(undefined)).toBeUndefined();
+  });
+});
+
+describe("isAgentAssignedAt (T44 — devops runs at two states, everyone else at one)", () => {
+  it("devops is assigned at READY_TO_DEPLOY only when it hasn't prepared yet", () => {
+    expect(isAgentAssignedAt(AgentStage.DEVOPS, TaskState.READY_TO_DEPLOY, false)).toBe(true);
+    expect(isAgentAssignedAt(AgentStage.DEVOPS, TaskState.READY_TO_DEPLOY, true)).toBe(false);
+  });
+
+  it("devops is assigned at APPROVED regardless of deployPrepared", () => {
+    expect(isAgentAssignedAt(AgentStage.DEVOPS, TaskState.APPROVED, true)).toBe(true);
+    expect(isAgentAssignedAt(AgentStage.DEVOPS, TaskState.APPROVED, false)).toBe(true);
+  });
+
+  it("devops is never assigned at any other state", () => {
+    expect(isAgentAssignedAt(AgentStage.DEVOPS, TaskState.QA, false)).toBe(false);
+    expect(isAgentAssignedAt(AgentStage.DEVOPS, TaskState.DEPLOYED, false)).toBe(false);
+  });
+
+  it("every other stage ignores deployPrepared and just falls back to stageStateOf", () => {
+    expect(isAgentAssignedAt(AgentStage.QA_ENGINEER, TaskState.QA, true)).toBe(true);
+    expect(isAgentAssignedAt(AgentStage.QA_ENGINEER, TaskState.QA, false)).toBe(true);
+    expect(isAgentAssignedAt(AgentStage.QA_ENGINEER, TaskState.READY_TO_DEPLOY, false)).toBe(false);
   });
 });
 
@@ -62,6 +85,32 @@ describe("describeStatus", () => {
     const status = describeStatus(dependent, [task(), dependent]);
     expect(status.kind).toBe("WAITING_FOR_DEPENDENCY");
     expect(status.currentAgent).toBeUndefined();
+  });
+
+  it("T44: a deploy-only task at READY_TO_DEPLOY is RUNNING/devops before prepare, and WAITING_FOR_HUMAN once deployPrepared is true — from the stored row alone, the same as the live orchestrator", () => {
+    const deployClassification = classifyTask({ isProductionDeployOrMigration: true });
+    const base = newPersistedTask({
+      taskId: "T-DEPLOY",
+      classification: deployClassification,
+      machine: initTaskMachine(deployClassification.pipeline, deployClassification.requiresHumanApproval),
+      now: 1_000,
+    });
+    // Both rows are already at READY_TO_DEPLOY — describeStatus never transitions a task itself,
+    // so the fixture has to already be where it would be after the CREATED -> READY_TO_DEPLOY
+    // ungated walk, the same way other describeStatus tests above override `machine.current`.
+    const atReadyToDeploy = {
+      ...base,
+      machine: { ...base.machine, current: TaskState.READY_TO_DEPLOY, history: [...base.machine.history, TaskState.READY_TO_DEPLOY] },
+    };
+
+    const beforePrepare = describeStatus(atReadyToDeploy);
+    expect(beforePrepare.kind).toBe("RUNNING");
+    expect(beforePrepare.currentAgent).toBe(AgentStage.DEVOPS);
+
+    const preparedTask = { ...atReadyToDeploy, deployPrepared: true };
+    const afterPrepare = describeStatus(preparedTask);
+    expect(afterPrepare.kind).toBe("WAITING_FOR_HUMAN");
+    expect(afterPrepare.nextState).toBe(TaskState.APPROVED);
   });
 });
 

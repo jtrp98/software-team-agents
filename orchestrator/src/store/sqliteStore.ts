@@ -100,6 +100,33 @@ export class SchemaVersionMismatchError extends Error {
   }
 }
 
+/**
+ * T47 (Disaster Recovery) — "database unavailable" as a named, actionable failure instead of
+ * whatever raw error `better-sqlite3`/`fs` happened to throw reaching the terminal as a bare
+ * stack trace. This is deliberately narrow: it only wraps *opening* the store (the constructor),
+ * not every query — a query failing mid-run for its own reason (a real bug, a corrupt row) should
+ * still surface as itself, not get relabelled "unavailable" and hidden behind a generic message.
+ *
+ * Nothing is written before the constructor succeeds (WAL mode + DDL run before any task row is
+ * touched), so once whatever made the file unavailable clears — the disk had no space, another
+ * process held an incompatible lock, the parent directory couldn't be created — the exact same
+ * `resume`/`retry` command picks the task back up with nothing lost. This class exists so a
+ * person hits a clear message instead of a crash, not so anything gets auto-retried: retrying a
+ * database open by itself, without knowing why it failed, is exactly the kind of guess CLAUDE.md's
+ * "verify against real state, not memory" rule warns against.
+ */
+export class DatabaseUnavailableError extends Error {
+  constructor(public readonly filePath: string, public readonly cause: unknown) {
+    super(
+      `cannot open the state database at ${filePath}: ${cause instanceof Error ? cause.message : String(cause)} — ` +
+        "this is likely transient (disk full, another process holding an incompatible lock, the path " +
+        "unreachable) rather than corrupt state; once it clears, resume/retry with the same task id " +
+        "continues from exactly where it left off, since nothing was written before this failed.",
+    );
+    this.name = "DatabaseUnavailableError";
+  }
+}
+
 interface TaskRow {
   task_id: string;
   state: string;
@@ -160,19 +187,27 @@ export class SqliteTaskStore implements TaskStore {
 
   /** `:memory:` is accepted for tests; any other path has its parent directory created. */
   constructor(filePath: string) {
-    if (filePath !== ":memory:") {
-      fs.mkdirSync(path.dirname(path.resolve(filePath)), { recursive: true });
-    }
-    this.db = new Database(filePath);
-    // WAL keeps a reader (`agent status`) from blocking the run that is writing.
-    this.db.pragma("journal_mode = WAL");
-    this.db.exec(DDL);
+    try {
+      if (filePath !== ":memory:") {
+        fs.mkdirSync(path.dirname(path.resolve(filePath)), { recursive: true });
+      }
+      this.db = new Database(filePath);
+      // WAL keeps a reader (`agent status`) from blocking the run that is writing.
+      this.db.pragma("journal_mode = WAL");
+      this.db.exec(DDL);
 
-    const found = Number((this.db.pragma("user_version", { simple: true }) as number) ?? 0);
-    if (found === 0) {
-      this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
-    } else if (found !== SCHEMA_VERSION) {
-      this.migrate(found);
+      const found = Number((this.db.pragma("user_version", { simple: true }) as number) ?? 0);
+      if (found === 0) {
+        this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
+      } else if (found !== SCHEMA_VERSION) {
+        this.migrate(found);
+      }
+    } catch (e) {
+      // SchemaVersionMismatchError is already a specific, well-messaged refusal (and already
+      // closed the handle itself in migrate()) — pass it through unchanged rather than
+      // relabelling a deliberate refusal as "unavailable" (T47).
+      if (e instanceof SchemaVersionMismatchError) throw e;
+      throw new DatabaseUnavailableError(filePath, e);
     }
   }
 

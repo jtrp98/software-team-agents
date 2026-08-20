@@ -9,6 +9,7 @@ import { SqliteTaskStore } from "./store/sqliteStore.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
 import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
 import { acquireTaskLock, releaseTaskLock } from "./concurrency/taskLock.js";
+import { Environment } from "./environment/environment.js";
 
 describe("parseArgs", () => {
   it("parses required flags and maps classification flags", () => {
@@ -31,6 +32,10 @@ describe("parseArgs", () => {
       checkTestPyramid: false,
       checkReviewSeparation: false,
       checkEscalationPolicy: false,
+      checkWorkspace: false,
+      checkRepos: false,
+      checkEnvironments: false,
+      environment: Environment.LOCAL,
       dependsOn: [],
       stateDb: undefined,
       phases: [],
@@ -644,5 +649,219 @@ describe("runCli --check-escalation-policy (T40)", () => {
   it("needs neither --task-id nor --module, and is listed in the usage text", () => {
     expect(parseArgs(["--check-escalation-policy"], "/repo").checkEscalationPolicy).toBe(true);
     expect(USAGE).toContain("--check-escalation-policy");
+  });
+});
+
+describe("runCli --check-workspace (T41)", () => {
+  it("passes against this repo, noting that it runs standalone (no workspace.yaml)", async () => {
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => void logs.push(args.join(" "));
+    try {
+      const code = await runCli(["--check-workspace"], defaultProjectRoot());
+      expect(code).toBe(0);
+      expect(logs.join("\n")).toContain("workspace.yaml is fine");
+      expect(logs.join("\n")).toContain("runs standalone");
+    } finally {
+      console.log = original;
+    }
+  });
+
+  it("exits non-zero when workspace.yaml exists but points at a root that doesn't", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-cwrk-"));
+    try {
+      fs.writeFileSync(path.join(dir, "workspace.yaml"), "version: 1\nprojects:\n  - name: ghost\n    root: ./nowhere\n", "utf8");
+      expect(await runCli(["--check-workspace", "--project-root", dir], dir)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("needs neither --task-id nor --module, and is listed in the usage text", () => {
+    expect(parseArgs(["--check-workspace"], "/repo").checkWorkspace).toBe(true);
+    expect(USAGE).toContain("--check-workspace");
+  });
+});
+
+describe("T41 projects verb", () => {
+  function tmpDir(): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-projects-"));
+  }
+
+  it("says so when there is no workspace.yaml, and does not create a state database", async () => {
+    const dir = tmpDir();
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => void logs.push(args.join(" "));
+    try {
+      const code = await runCli(["projects", "--project-root", dir], dir);
+      expect(code).toBe(0);
+      expect(logs.join("\n")).toContain("no workspace.yaml");
+      expect(fs.existsSync(path.join(dir, ".workflow"))).toBe(false);
+    } finally {
+      console.log = original;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lists every project workspace.yaml names, without creating a store for one that never ran", async () => {
+    const dir = tmpDir();
+    const untouched = path.join(dir, "untouched");
+    const withTasks = path.join(dir, "with-tasks");
+    fs.mkdirSync(untouched, { recursive: true });
+    fs.mkdirSync(withTasks, { recursive: true });
+
+    // Seed a task directly through the store, like other T31 verb tests do — no real `claude` binary needed.
+    const { SqliteTaskStore } = await import("./store/sqliteStore.js");
+    const { TaskRegistry } = await import("./orchestrator/taskRegistry.js");
+    const { classifyTask } = await import("./classification/taskClassifier.js");
+    const { defaultStateDbPath, defaultStateViewPath } = await import("./store/stateView.js");
+    const store = new SqliteTaskStore(defaultStateDbPath(withTasks));
+    const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(withTasks) });
+    registry.create({ taskId: "T-1", classification: classifyTask({ isTypoOrCopyOnly: true }), dependsOn: [] });
+    registry.close();
+
+    fs.writeFileSync(
+      path.join(dir, "workspace.yaml"),
+      "version: 1\nprojects:\n  - name: untouched\n    root: ./untouched\n  - name: with-tasks\n    root: ./with-tasks\n",
+      "utf8",
+    );
+
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => void logs.push(args.join(" "));
+    try {
+      const code = await runCli(["projects", "--project-root", dir], dir);
+      expect(code).toBe(0);
+      const out = logs.join("\n");
+      expect(out).toContain("untouched");
+      expect(out).toContain("no tasks yet");
+      expect(out).toContain("with-tasks");
+      expect(out).toContain("1 task(s)");
+      expect(fs.existsSync(path.join(untouched, ".workflow"))).toBe(false);
+    } finally {
+      console.log = original;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("is listed in the usage text", () => {
+    expect(USAGE).toContain("orchestrate projects");
+  });
+});
+
+describe("runCli --check-repos (T42)", () => {
+  it("passes against this repo, noting that it's single-repo (no repos.yaml)", async () => {
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => void logs.push(args.join(" "));
+    try {
+      const code = await runCli(["--check-repos"], defaultProjectRoot());
+      expect(code).toBe(0);
+      expect(logs.join("\n")).toContain("repos.yaml is fine");
+      expect(logs.join("\n")).toContain("the same repo");
+    } finally {
+      console.log = original;
+    }
+  });
+
+  it("exits non-zero when repos.yaml exists but claims the same stage in two repos", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-crepo-"));
+    try {
+      const a = path.join(dir, "a");
+      const b = path.join(dir, "b");
+      fs.mkdirSync(a, { recursive: true });
+      fs.mkdirSync(b, { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "repos.yaml"),
+        "version: 1\nrepos:\n  - name: a\n    root: ./a\n    stages: [devops]\n  - name: b\n    root: ./b\n    stages: [devops]\n",
+        "utf8",
+      );
+      expect(await runCli(["--check-repos", "--project-root", dir], dir)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("needs neither --task-id nor --module, and is listed in the usage text", () => {
+    expect(parseArgs(["--check-repos"], "/repo").checkRepos).toBe(true);
+    expect(USAGE).toContain("--check-repos");
+  });
+});
+
+describe("--env (T43)", () => {
+  it("parseArgs defaults to local when --env is not passed", () => {
+    expect(parseArgs(["--task-id", "T-1", "--module", "m", "--typo"], "/repo").environment).toBe(Environment.LOCAL);
+  });
+
+  it("parseArgs accepts each of the four fixed names", () => {
+    for (const env of Object.values(Environment)) {
+      expect(parseArgs(["--task-id", "T-1", "--module", "m", "--typo", "--env", env], "/repo").environment).toBe(env);
+    }
+  });
+
+  it("parseArgs rejects a name that isn't one of the four, rather than silently accepting a typo", () => {
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--typo", "--env", "prod"], "/repo")).toThrow(CliUsageError);
+  });
+
+  it("a task's environment is set at creation and is unaffected by later --env — resuming reads it back off the stored row, not the flag", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-env-"));
+    try {
+      const store = new SqliteTaskStore(defaultStateDbPath(dir));
+      const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+      registry.create({
+        taskId: "T-1",
+        classification: classifyTask({ isClearBugFix: true, touchesBackend: true }),
+        environment: Environment.STAGING,
+      });
+      expect(store.loadTask("T-1")?.environment).toBe(Environment.STAGING);
+
+      // registry.open() is what --resume/--retry drive (see openTask() in cli.ts) — it never
+      // takes an --env value, it only reads the row `create()` already wrote.
+      const resumed = registry.open("T-1");
+      expect(resumed.environment).toBe(Environment.STAGING);
+      registry.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("is listed in the usage text", () => {
+    expect(USAGE).toContain("--env");
+  });
+});
+
+describe("runCli --check-environments (T43)", () => {
+  it("passes against this repo, noting that it uses the built-in descriptions (no environments.yaml)", async () => {
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => void logs.push(args.join(" "));
+    try {
+      const code = await runCli(["--check-environments"], defaultProjectRoot());
+      expect(code).toBe(0);
+      expect(logs.join("\n")).toContain("environments.yaml is fine");
+      expect(logs.join("\n")).toContain("built-in");
+    } finally {
+      console.log = original;
+    }
+  });
+
+  it("exits non-zero when environments.yaml's default names an environment it never declares", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-cenv-"));
+    try {
+      fs.writeFileSync(
+        path.join(dir, "environments.yaml"),
+        "version: 1\nenvironments:\n  - name: dev\n    description: x\ndefault: production\n",
+        "utf8",
+      );
+      expect(await runCli(["--check-environments", "--project-root", dir], dir)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("needs neither --task-id nor --module, and is listed in the usage text", () => {
+    expect(parseArgs(["--check-environments"], "/repo").checkEnvironments).toBe(true);
+    expect(USAGE).toContain("--check-environments");
   });
 });

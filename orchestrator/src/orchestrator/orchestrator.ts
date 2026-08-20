@@ -30,13 +30,16 @@ import { describeEvent } from "../audit/auditTrail.js";
 import { assertIndependentVerdict } from "../review/reviewSeparation.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";
 import { TaskNotFoundError, newPersistedTask, type PersistedTask, type TaskStore } from "../store/taskStore.js";
+import { Environment } from "../environment/environment.js";
 import { type StructuredFailure } from "./failure.js";
-import { stageStateOf } from "./taskStatus.js";
+import { isAgentAssignedAt, stageStateOf } from "./taskStatus.js";
 
 export interface AgentExecutorRequest {
   stage: AgentStage;
   taskId: string;
   context: ContextItem[];
+  /** T44 — only set when stage is DEVOPS: which of the two runs this is, so the executor's prompt can say so. See `isAgentAssignedAt` in taskStatus.ts. */
+  deployPhase?: "prepare" | "execute";
 }
 
 export interface AgentExecutorResult {
@@ -100,6 +103,8 @@ export interface OrchestratorOptions {
    * Use `Orchestrator.resume()` / the registry rather than passing this by hand.
    */
   restore?: PersistedTask;
+  /** T43 — local/dev/staging/production. Defaults to `Environment.LOCAL` when not given (a fresh task) or not stored (an old row, see taskStore.ts). */
+  environment?: Environment;
 }
 
 function assertCanProduce(stage: AgentStage, artifactType: ArtifactType): void {
@@ -167,6 +172,10 @@ export class Orchestrator {
   private paused: boolean;
   private cancelled: boolean;
   private cancelReason: string | null;
+  /** T43 — local/dev/staging/production. Set once at creation, carried through resume/snapshot like paused/cancelled above; nothing in the state machine reads it — it exists to be told to agents, not to gate anything (that's T44/T45's job). */
+  private taskEnvironment: Environment;
+  /** T44 — true once devops's "prepare" run has completed at READY_TO_DEPLOY. See `isAgentAssignedAt` in taskStatus.ts for what this distinguishes and why. */
+  private deployPrepared: boolean;
   /** The state the task was in when the current failure arrived, captured before retryPolicy moves it. */
   private stateBeforeFailure: TaskState = TaskState.CREATED;
   /** What the last failure resolved to (T07). Exposed for the CLI and the run log; not persisted — it is derived, not state. */
@@ -195,6 +204,8 @@ export class Orchestrator {
       this.paused = restore.paused;
       this.cancelled = restore.cancelled;
       this.cancelReason = restore.cancelReason;
+      this.taskEnvironment = restore.environment;
+      this.deployPrepared = restore.deployPrepared;
       // Seeded from the store so budget accounting (item 12) counts what the
       // earlier process already spent — a resumed task must not get a fresh
       // token allowance just because it restarted.
@@ -210,6 +221,8 @@ export class Orchestrator {
       this.paused = false;
       this.cancelled = false;
       this.cancelReason = null;
+      this.taskEnvironment = opts?.environment ?? Environment.LOCAL;
+      this.deployPrepared = false;
       this.runLog = new RunLog();
       this.store.createTask(
         newPersistedTask({
@@ -218,6 +231,7 @@ export class Orchestrator {
           classification,
           machine: this.run.machine,
           now: this.createdAt,
+          environment: this.taskEnvironment,
         }),
       );
     }
@@ -256,6 +270,11 @@ export class Orchestrator {
     return this.run.retries;
   }
 
+  /** T43 — which of local/dev/staging/production this task targets. */
+  get environment(): Environment {
+    return this.taskEnvironment;
+  }
+
   /** How the most recent failure was resolved (T07), or null if none has happened in this process. */
   get recovery(): RecoveryAction | null {
     return this.lastRecovery;
@@ -280,6 +299,8 @@ export class Orchestrator {
       paused: this.paused,
       cancelled: this.cancelled,
       cancelReason: this.cancelReason,
+      environment: this.taskEnvironment,
+      deployPrepared: this.deployPrepared,
     };
   }
 
@@ -477,7 +498,7 @@ export class Orchestrator {
       }
 
       const stage = this.pipeline[this.pipelineCursor];
-      if (stage !== undefined && stageStateOf(stage) === current) {
+      if (stage !== undefined && isAgentAssignedAt(stage, current, this.deployPrepared)) {
         return this.settle({ kind: "RUNNING", stage });
       }
 
@@ -588,9 +609,33 @@ export class Orchestrator {
       this.gateContext = { ...this.gateContext, ...result.gateEvidence };
     }
 
-    this.pipelineCursor += 1;
+    // T44: devops's "prepare" completion (at READY_TO_DEPLOY) does not advance the cursor — the
+    // same pipeline slot is still assigned once the task reaches APPROVED, for "execute". A
+    // failed prepare leaves deployPrepared false, so the next run retries prepare rather than
+    // treating a failure as done — devops has no other failure routing (unlike qa/security
+    // below), so this is the one place a failed prepare doesn't silently count as finished.
+    // Every other completion, including devops's own "execute" one, advances exactly as before.
+    const isDevopsPrepareCompletion = stage === AgentStage.DEVOPS && this.run.machine.current === TaskState.READY_TO_DEPLOY;
+    if (isDevopsPrepareCompletion) {
+      if (result.outcome.result !== "FAIL") this.deployPrepared = true;
+    } else {
+      this.pipelineCursor += 1;
+    }
     if (result.outcome.result === "FAIL" && result.failure) {
       this.lastFailure = result.failure;
+    }
+
+    // T45: a failed "execute" — the actual deploy/migration command, and the health check
+    // devops.md requires right after it — must never be silently treated as a successful
+    // deploy. devops has no retry budget and no automatic recovery route (unlike qa/security
+    // just below): re-running a failed deploy command without a person looking is exactly the
+    // kind of destructive automation CLAUDE.md forbids, so this blocks immediately and points
+    // at deploy.md's Rollback runbook rather than guessing at an undo.
+    if (stage === AgentStage.DEVOPS && this.run.machine.current === TaskState.APPROVED && result.outcome.result === "FAIL") {
+      this.run = { ...this.run, machine: forceBlock(this.run.machine) };
+      this.blockedReason =
+        "deploy execute failed (or its post-deploy health check did) — see deploy.md's Rollback runbook " +
+        "before deciding whether to retry; this task will not auto-retry or auto-rollback.";
     }
 
     const failureKind = stage === AgentStage.QA_ENGINEER ? "qa" : stage === AgentStage.SECURITY ? "security" : null;
@@ -723,8 +768,12 @@ export class Orchestrator {
 
     const { stage } = status;
     const context = selectContext(stage, this.artifactStore);
+    // T44: at the moment this status was returned, DEVOPS is only ever assigned at exactly one
+    // of these two states (see isAgentAssignedAt) — so the current state alone tells us which run.
+    const deployPhase: AgentExecutorRequest["deployPhase"] =
+      stage === AgentStage.DEVOPS ? (this.run.machine.current === TaskState.APPROVED ? "execute" : "prepare") : undefined;
     const start = now();
-    const result = await executor({ stage, taskId: this.taskId, context });
+    const result = await executor({ stage, taskId: this.taskId, context, deployPhase });
     const end = now();
 
     return this.reportCompletion(stage, result, { start, end });

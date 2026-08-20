@@ -19,6 +19,29 @@ export function stageStateOf(stage: AgentStage | undefined): TaskState | undefin
 }
 
 /**
+ * Whether `stage` is the one that should be running right now, given the
+ * task's current state — the single source both the orchestrator's own
+ * advance loop and any read-only view (state view, CLI listing) use, so they
+ * can never disagree about who is assigned.
+ *
+ * `devops` is the one stage assigned at two different states instead of one
+ * (T44): "prepare" at READY_TO_DEPLOY (Dockerfile/CI/dry-run — safe to run
+ * unattended) and "execute" at APPROVED (the actual deploy/migration command,
+ * always after the human gate). `deployPrepared` is what tells the two runs
+ * apart — `pipelineCursor` alone can't, because unlike backend/frontend's two
+ * IMPLEMENTATION-state runs, these sit on either side of a gated transition,
+ * and the cursor does not move until the *second* of the two completes (see
+ * orchestrator.ts's `reportCompletion`).
+ */
+export function isAgentAssignedAt(stage: AgentStage, state: TaskState, deployPrepared: boolean): boolean {
+  if (stage === AgentStage.DEVOPS) {
+    if (state === TaskState.READY_TO_DEPLOY) return !deployPrepared;
+    return state === TaskState.APPROVED;
+  }
+  return stageStateOf(stage) === state;
+}
+
+/**
  * Coarse label for a state, for a person skimming `.workflow/state.yaml`
  * (TASKS.md T02's `phase: backend`). IMPLEMENTATION is the one state that
  * cannot be labelled from the state alone — backend and frontend share it —
@@ -131,7 +154,7 @@ export function describeStatus(task: PersistedTask, allTasks?: readonly Persiste
   const next = forwardState(machine);
 
   const stage = machine.pipeline[task.pipelineCursor];
-  if (stage !== undefined && stageStateOf(stage) === current) {
+  if (stage !== undefined && isAgentAssignedAt(stage, current, task.deployPrepared)) {
     return { kind: "RUNNING", state: current, currentAgent: stage, nextState: next ?? undefined };
   }
 

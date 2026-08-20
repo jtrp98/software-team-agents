@@ -1,6 +1,7 @@
 import { TaskState } from "../types.js";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
 import type { Budget } from "../cost/costControl.js";
+import type { Environment } from "../environment/environment.js";
 import { writeStateViewFromStore } from "../store/stateView.js";
 import { TaskNotFoundError, type PersistedTask, type TaskStore } from "../store/taskStore.js";
 import { TaskGraph, type TaskNode } from "../graph/taskGraph.js";
@@ -71,7 +72,12 @@ export class TaskRegistry {
     return { store: this.store, budget: this.budget, now: this.now };
   }
 
-  create(params: { taskId: string; classification: ClassificationResult; dependsOn?: string[] }): Orchestrator {
+  create(params: {
+    taskId: string;
+    classification: ClassificationResult;
+    dependsOn?: string[];
+    environment?: Environment;
+  }): Orchestrator {
     const dependsOn = params.dependsOn ?? [];
     const missing = dependsOn.filter((id) => this.store.loadTask(id) === null);
     if (missing.length > 0) throw new UnknownDependencyError(params.taskId, missing);
@@ -79,6 +85,7 @@ export class TaskRegistry {
     const orchestrator = new Orchestrator(params.taskId, params.classification, {
       ...this.orchestratorOptions(),
       dependsOn,
+      environment: params.environment,
     });
     this.refreshStateView();
     return orchestrator;

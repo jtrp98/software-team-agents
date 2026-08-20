@@ -59,13 +59,13 @@
 - [x] T40 — Human Escalation Policy
 
 ## 🟣 P3 — Production
-- [ ] T41 — Multi-project Support
-- [ ] T42 — Multi-repository Support
-- [ ] T43 — Environment Awareness
-- [ ] T44 — Deployment Approval (prepare vs execute)
-- [ ] T45 — Rollback Strategy
-- [ ] T46 — Backup / Migration Safety
-- [ ] T47 — Disaster Recovery
+- [x] T41 — Multi-project Support
+- [x] T42 — Multi-repository Support
+- [x] T43 — Environment Awareness
+- [x] T44 — Deployment Approval (prepare vs execute)
+- [x] T45 — Rollback Strategy
+- [x] T46 — Backup / Migration Safety
+- [x] T47 — Disaster Recovery
 
 ## 🟣 P4 — ปรับ Repo โดยตรง
 - [ ] T48 — ลดขนาด `.claude/`
