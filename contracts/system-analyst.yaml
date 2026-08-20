@@ -1,0 +1,24 @@
+# Contract for the `system-analyst` agent. Shape: orchestrator/schemas/agent-contract.schema.json
+agent:
+  name: system-analyst
+  role: system-analyst
+  description: Judges feasibility and designs the data model in design.md — the contract every later stage implements.
+input:
+  required: [requirements]
+  optional: [qa-report]
+output:
+  required: [design]
+constraints:
+  - no_git
+  - stay_inside_repo
+  - no_next_agent_invocation
+  - amend_not_regenerate
+  - dates_from_user
+  # A schema nobody confirmed is a guess that everything downstream treats as settled.
+  - human_confirmation_required
+permissions:
+  capabilities: [read, write_docs]
+  read: []
+  write: []
+tools: [Read, Glob, Grep, AskUserQuestion, Write, Edit]
+states: [DESIGN]

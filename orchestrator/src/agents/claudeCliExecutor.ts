@@ -4,6 +4,8 @@ import { ArtifactType } from "../artifacts/schemas.js";
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { getAgent } from "./registry.js";
 import { readModuleDoc, parseQaReport, parseSecurityReport } from "./moduleDocs.js";
+import { ContextManager, type SelectedContext } from "../context/contextManager.js";
+import { classifyQaFailure, classifySecurityFailure } from "../orchestrator/failureClassifier.js";
 
 /**
  * The concrete `AgentExecutor` (orchestrator/orchestrator.ts's pluggable
@@ -41,6 +43,20 @@ export interface ClaudeCliExecutorOptions {
   spawnSync?: SpawnSync;
   /** Extra instruction appended to every stage's prompt, e.g. a link to a ticket. */
   extraInstruction?: string;
+  /**
+   * Which phases of `plan.md` this task touches, used to slice the module docs
+   * down to the sections this run needs (conventions.md §10). Returning
+   * undefined is safe: the plan then comes through whole rather than sliced
+   * wrong.
+   */
+  phases?: (taskId: string) => number[] | undefined;
+  /**
+   * Set false to send no module-doc context at all and let the agent read the
+   * docs itself, as it did before T05. On by default: the whole point is that
+   * an agent starting from a fresh context should not pay to re-read a 900-line
+   * plan to implement one phase of it.
+   */
+  sliceModuleDocs?: boolean;
 }
 
 interface ClaudeCliJsonResult {
@@ -50,7 +66,33 @@ interface ClaudeCliJsonResult {
   usage?: { input_tokens?: number; output_tokens?: number };
 }
 
-function buildPrompt(req: AgentExecutorRequest, extra?: string): string {
+/**
+ * Renders the sliced module docs, and — just as importantly — says what was cut.
+ *
+ * An agent that is handed a subset with no note of what is missing cannot tell a
+ * section that was dropped from one that never existed, so it cannot ask for it.
+ * Naming the skipped headings and the file they came from keeps the filter an
+ * optimization the agent can undo, rather than a silent edit of its inputs.
+ */
+function renderSlicedDocs(selected: SelectedContext[], cm: ContextManager): string[] {
+  if (selected.length === 0) return [];
+
+  const parts: string[] = ["", "Module documents, sliced to what this stage needs (`.claude/shared/conventions.md` §10):"];
+  for (const s of selected) {
+    parts.push("", `### ${s.doc}.md`);
+    if (!s.fullDocument && s.skipped.length > 0) {
+      parts.push(
+        `_Sections not included: ${s.skipped.join(", ")}. ` +
+          `The full file is at \`${cm.path(s.doc)}\` — read it if one of those turns out to matter._`,
+        "",
+      );
+    }
+    parts.push(s.text);
+  }
+  return parts;
+}
+
+function buildPrompt(req: AgentExecutorRequest, extra?: string, sliced?: string[]): string {
   const parts: string[] = [
     `Task ${req.taskId} — you are running as the \`${req.stage}\` stage of this repo's pipeline (see CLAUDE.md).`,
     "",
@@ -63,6 +105,7 @@ function buildPrompt(req: AgentExecutorRequest, extra?: string): string {
       parts.push("", `### ${item.source}`, item.content);
     }
   }
+  if (sliced && sliced.length > 0) parts.push(...sliced);
   if (extra) parts.push("", extra);
   parts.push(
     "",
@@ -85,9 +128,25 @@ export function createClaudeCliExecutor(opts: ClaudeCliExecutorOptions): AgentEx
   const permissionMode = opts.permissionMode ?? "manual";
   const timeout = opts.timeoutMs ?? 30 * 60_000;
 
+  const sliceDocs = opts.sliceModuleDocs ?? true;
+
   return function claudeCliExecutor(req: AgentExecutorRequest): AgentExecutorResult {
     const agent = getAgent(req.stage);
-    const prompt = buildPrompt(req, opts.extraInstruction);
+
+    // Additive context. Anything that goes wrong resolving or reading the docs
+    // leaves the prompt exactly as it was before T05 — the agent then reads them
+    // itself, which is slower but never wrong.
+    let sliced: string[] = [];
+    if (sliceDocs) {
+      try {
+        const cm = new ContextManager({ projectRoot: opts.projectRoot, moduleName: opts.moduleName(req.taskId) });
+        sliced = renderSlicedDocs(cm.forStage(req.stage, opts.phases?.(req.taskId)), cm);
+      } catch {
+        sliced = [];
+      }
+    }
+
+    const prompt = buildPrompt(req, opts.extraInstruction, sliced);
 
     const args = [
       "-p",
@@ -159,6 +218,12 @@ function withQaArtifact(
     outcome: { tokens, cost, result: artifact.status },
     artifactType: ArtifactType.QA_REPORT,
     artifact,
+    // T06: on a failed round, hand the orchestrator the owner qa-engineer already
+    // wrote in `## Open Issues`, so a schema gap does not get routed to an
+    // engineer as though it were a bug. Undefined when the doc names no owner —
+    // the classifier escalates rather than guessing, and an absent failure keeps
+    // the pre-T06 fallback.
+    failure: artifact.status === "FAIL" ? (classifyQaFailure(reviewMd) ?? undefined) : undefined,
   };
 }
 
@@ -182,5 +247,7 @@ function withSecurityArtifact(
     outcome: { tokens, cost, result: artifact.overallStatus },
     artifactType: ArtifactType.SECURITY_REPORT,
     artifact,
+    failure:
+      artifact.overallStatus === "FAIL" ? (classifySecurityFailure(securityMd, req.taskId) ?? undefined) : undefined,
   };
 }

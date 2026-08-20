@@ -1,0 +1,211 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/state-view.schema.json",
+  "title": "Orchestrator runtime state view (.workflow/state.yaml)",
+  "description": "The published shape of the generated .workflow/state.yaml. The state database is the source of truth; this file is a view regenerated from it on every state change. The schema exists so other tools can read the view without reverse-engineering it, and so the generator is checked against its own published contract before it writes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at", "tasks"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "tasks": { "type": "array", "items": { "$ref": "#/definitions/task" } }
+  },
+  "definitions": {
+    "approvalType": {
+      "description": "The five points CLAUDE.md says always wait for a person, whatever mode the pipeline runs in.",
+      "type": "string",
+      "enum": ["requirement-interview", "schema-confirmation", "qa-failure", "security-risk", "deploy"]
+    },
+    "agent": {
+      "type": "string",
+      "enum": [
+        "setup",
+        "business-analyst",
+        "system-analyst",
+        "project-manager",
+        "backend-engineer",
+        "frontend-engineer",
+        "qa-engineer",
+        "security",
+        "devops",
+        "human"
+      ]
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "CREATED",
+        "REQUIREMENT",
+        "DESIGN",
+        "PLAN",
+        "IMPLEMENTATION",
+        "QA",
+        "QA_FAILED",
+        "SECURITY",
+        "SECURITY_FAILED",
+        "READY_TO_DEPLOY",
+        "APPROVED",
+        "DEPLOYED",
+        "BLOCKED"
+      ]
+    },
+    "phase": {
+      "description": "Coarse label for the state, for a person skimming the file. IMPLEMENTATION resolves to backend or frontend by which engineer holds it.",
+      "type": "string",
+      "enum": [
+        "created",
+        "requirement",
+        "design",
+        "plan",
+        "backend",
+        "frontend",
+        "implementation",
+        "qa",
+        "security",
+        "deploy",
+        "done",
+        "blocked"
+      ]
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "status",
+        "phase",
+        "state",
+        "current_agent",
+        "previous",
+        "next",
+        "reason",
+        "level",
+        "pipeline",
+        "depends_on",
+        "waiting_on",
+        "retry",
+        "approvals",
+        "approval",
+        "last_failure",
+        "updated_at"
+      ],
+      "properties": {
+        "task_id": { "type": "string", "minLength": 1 },
+        "status": {
+          "type": "string",
+          "enum": ["RUNNING", "WAITING_FOR_HUMAN", "WAITING_FOR_DEPENDENCY", "BLOCKED", "DEPLOYED"]
+        },
+        "phase": { "$ref": "#/definitions/phase" },
+        "state": { "$ref": "#/definitions/state" },
+        "current_agent": { "oneOf": [{ "$ref": "#/definitions/agent" }, { "type": "null" }] },
+        "previous": {
+          "description": "The agent whose run finished most recently, and how it went. Null until one has.",
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["agent", "result"],
+              "properties": {
+                "agent": { "$ref": "#/definitions/agent" },
+                "result": { "type": "string", "enum": ["PASS", "FAIL"] }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "next": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["agent", "state"],
+          "properties": {
+            "agent": { "oneOf": [{ "$ref": "#/definitions/agent" }, { "type": "null" }] },
+            "state": { "oneOf": [{ "$ref": "#/definitions/state" }, { "type": "null" }] }
+          }
+        },
+        "reason": { "type": ["string", "null"] },
+        "level": { "type": "string", "enum": ["TRIVIAL", "SMALL", "MEDIUM", "LARGE_CRITICAL", "UNKNOWN"] },
+        "pipeline": { "type": "array", "items": { "$ref": "#/definitions/agent" } },
+        "depends_on": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "waiting_on": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "retry": {
+          "description": "QA and security keep separate budgets, so the flat count/max pair is split rather than summed — a total would be compared against a per-kind ceiling and read wrong.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["qa", "security", "max"],
+          "properties": {
+            "qa": { "type": "integer", "minimum": 0 },
+            "security": { "type": "integer", "minimum": 0 },
+            "max": { "type": "integer", "minimum": 0 }
+          }
+        },
+        "approvals": {
+          "description": "The gate booleans, derived from the ledger below. Kept because readers already depend on them; the ledger is the source of truth.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["design_approved", "human_approved", "ledger"],
+          "properties": {
+            "design_approved": { "type": "boolean" },
+            "human_approved": { "type": "boolean" },
+            "ledger": {
+              "description": "Every human decision this task asked for, with its answer. A rejected entry is an answer, not an absence — the task blocks on it rather than asking again.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "required", "status", "reason", "decided_by", "decided_at"],
+                "properties": {
+                  "type": { "$ref": "#/definitions/approvalType" },
+                  "required": { "type": "boolean" },
+                  "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+                  "reason": { "type": "string", "minLength": 1 },
+                  "decided_by": { "type": ["string", "null"] },
+                  "decided_at": { "type": ["string", "null"] }
+                }
+              }
+            }
+          }
+        },
+        "approval": {
+          "description": "The decision this task is waiting on right now, in T08's shape. Null when nothing is outstanding.",
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["required", "type", "status"],
+              "properties": {
+                "required": { "type": "boolean" },
+                "type": { "$ref": "#/definitions/approvalType" },
+                "status": { "type": "string", "enum": ["pending", "approved", "rejected"] }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "last_failure": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["category", "owner", "severity", "retryable", "requires_human", "reason", "affected"],
+              "properties": {
+                "category": {
+                  "type": "string",
+                  "enum": ["implementation", "contract", "requirement", "infrastructure", "test", "unknown"]
+                },
+                "owner": { "$ref": "#/definitions/agent" },
+                "severity": { "type": "string", "enum": ["low", "medium", "high", "critical"] },
+                "retryable": { "type": "boolean" },
+                "requires_human": { "type": "boolean" },
+                "reason": { "type": "string", "minLength": 1 },
+                "affected": { "type": "array", "items": { "type": "string" } }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "updated_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

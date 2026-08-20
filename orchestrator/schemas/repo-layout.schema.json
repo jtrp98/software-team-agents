@@ -1,0 +1,107 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/repo-layout.schema.json",
+  "title": "Repo layout (layout.yaml)",
+  "description": "Declares which concept owns which directory, so that 'where does this file go?' has one answer a program can check rather than one answer per person who last added a file. Each concept answers exactly one question; a file belongs to the concept whose question it answers. Validated and cross-checked against the real filesystem by orchestrator/src/layout/repoLayout.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "concepts"],
+  "properties": {
+    "version": {
+      "description": "Schema generation of this file. Bumped only when a change would break an existing reader.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "concepts": {
+      "description": "Concept id -> its declaration. Ids are stable identifiers referenced from code, so they are lower-case and unpunctuated.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+      "additionalProperties": { "$ref": "#/definitions/concept" }
+    }
+  },
+  "definitions": {
+    "concept": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["answers", "why", "homes"],
+      "properties": {
+        "answers": {
+          "description": "The single question this concept answers. If two concepts would answer the same question, they are one concept.",
+          "type": "string",
+          "minLength": 1
+        },
+        "why": {
+          "description": "Why this is separated at all — the failure that keeping it elsewhere caused or would cause.",
+          "type": "string",
+          "minLength": 1
+        },
+        "homes": {
+          "description": "Every directory this concept lives in. More than one is legitimate when the same concept has parts with different readers (an agent's prompt is read by Claude Code, its contract by the orchestrator).",
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/home" }
+        }
+      }
+    },
+    "home": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "status", "holds"],
+      "properties": {
+        "path": {
+          "description": "Repo-relative directory. Forward slashes, no leading ./, no trailing slash, no . or .. segment — it is compared against paths derived from the filesystem, and a path that can be written two ways cannot be compared.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$"
+        },
+        "status": {
+          "description": "active = in use, directory must exist. reserved = boundary claimed and documented but content not written yet; directory must exist and hold nothing but README.md. planned = named so nobody invents a second home for it; not created yet.",
+          "enum": ["active", "reserved", "planned"]
+        },
+        "holds": {
+          "description": "What actually lives here, in one line.",
+          "type": "string",
+          "minLength": 1
+        },
+        "pattern": {
+          "description": "Glob-ish extension pattern for the files that belong here, e.g. \"*.md\". Only the extension is used.",
+          "type": "string",
+          "pattern": "^\\*\\.[A-Za-z0-9]+$"
+        },
+        "per_agent": {
+          "description": "True when this directory must hold exactly one file per agent the orchestrator knows — no missing file, no orphan. This is what keeps an agent's two halves from drifting apart.",
+          "type": "boolean"
+        },
+        "read_by": {
+          "description": "Who consumes these files at runtime. Recorded because the reader is why a home exists separately at all.",
+          "type": "string",
+          "minLength": 1
+        },
+        "enforced_by_settings": {
+          "description": "True for a home whose files are only real if .claude/settings.json wires them up. A hook present on disk but unreferenced there enforces nothing while looking installed — the exact fail-open this repo has already shipped once.",
+          "type": "boolean"
+        },
+        "optional": {
+          "description": "True for a directory that is created at runtime or by the pipeline's output, so its absence in a fresh checkout is normal rather than drift.",
+          "type": "boolean"
+        },
+        "filled_by": {
+          "description": "The task id that turns a reserved home into an active one.",
+          "type": "string",
+          "pattern": "^T[0-9]{2}$"
+        }
+      },
+      "allOf": [
+        {
+          "description": "A reserved home has to say what will fill it, or 'reserved' is indistinguishable from 'abandoned'.",
+          "if": { "properties": { "status": { "const": "reserved" } }, "required": ["status"] },
+          "then": {
+            "required": ["filled_by"],
+            "properties": { "filled_by": { "type": "string", "pattern": "^T[0-9]{2}$" } }
+          }
+        }
+      ]
+    }
+  }
+}

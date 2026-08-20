@@ -1,0 +1,24 @@
+# Contract for the `security` agent. Shape: orchestrator/schemas/agent-contract.schema.json
+agent:
+  name: security
+  role: security
+  description: Audits implemented code for real security defects, independently of whether QA passed it.
+input:
+  required: [requirements, design]
+  optional: [qa-report, backend-code, frontend-code]
+output:
+  required: [security-report]
+constraints:
+  - no_git
+  - stay_inside_repo
+  - no_next_agent_invocation
+  - amend_not_regenerate
+  - dates_from_user
+  # An engineer's fix moves a finding to Fix-claimed and no further — this agent is the only one that closes it.
+  - sole_security_finding_closer
+permissions:
+  capabilities: [read, write_docs]
+  read: []
+  write: []
+tools: [Read, Glob, Grep, Bash, AskUserQuestion, Write, Edit]
+states: [SECURITY]

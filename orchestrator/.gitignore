@@ -14,3 +14,6 @@ Thumbs.db
 
 *.tsbuildinfo
 .vite/
+
+# Runtime state written by the orchestrator (source of truth = state.db, state.yaml = generated view)
+.workflow/

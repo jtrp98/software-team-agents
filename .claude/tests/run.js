@@ -372,14 +372,41 @@ withTempProject((tmp) => {
 // fixture inside this repo. Read-only git only; removed in the finally below.
 const FIXTURE = path.join(ROOT, '_selftest_fixture');
 
+/** A package.json whose `typecheck` exits with the code we want, plus a changed .ts file for it to own. */
+function writeFixturePackage(dir, name, typecheckExit) {
+  write(path.join(dir, 'package.json'), JSON.stringify({
+    name,
+    scripts: { typecheck: `node -e "process.exit(${typecheckExit})"` },
+  }, null, 2));
+  write(path.join(dir, 'deal.ts'), 'export const x: number = 1;\n');
+}
+
 function withRepoFixture(typecheckExit, fn) {
   fs.rmSync(FIXTURE, { recursive: true, force: true });
   try {
-    write(path.join(FIXTURE, 'package.json'), JSON.stringify({
-      name: 'selftest-fixture',
-      scripts: { typecheck: `node -e "process.exit(${typecheckExit})"` },
-    }, null, 2));
-    write(path.join(FIXTURE, 'deal.ts'), 'export const x: number = 1;\n');
+    writeFixturePackage(FIXTURE, 'selftest-fixture', typecheckExit);
+    return fn();
+  } finally {
+    fs.rmSync(FIXTURE, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Two packages nested two levels down, one green and one red, neither reachable by the
+ * "scan root plus one level, take the first match" resolution the hook shipped with.
+ *
+ * This is the regression case for a fail-open that actually happened: once `orchestrator/`
+ * (which defines `typecheck`) existed at the repo root, the hook graded every engineer's change
+ * against the orchestrator's green typecheck and let red app code hand off. Nesting both
+ * packages below the scan depth, and making the green one the only thing an ordering-based
+ * resolver could find, means this case can only pass if the hook resolves upward from the
+ * changed files — not by iterating directories, whose order is a filesystem detail.
+ */
+function withNestedRepoFixture(fn) {
+  fs.rmSync(FIXTURE, { recursive: true, force: true });
+  try {
+    writeFixturePackage(path.join(FIXTURE, 'green-pkg'), 'selftest-green', 0);
+    writeFixturePackage(path.join(FIXTURE, 'red-pkg'), 'selftest-red', 1);
     return fn();
   } finally {
     fs.rmSync(FIXTURE, { recursive: true, force: true });
@@ -407,6 +434,14 @@ withRepoFixture(1, () => {
     'red but already retried once → allowed (cannot trap an agent)',
     runHook('require-green-before-stop.js', { stop_hook_active: true }),
     ALLOW,
+  );
+});
+
+withNestedRepoFixture(() => {
+  check(
+    'red package nested below scan depth → still blocked (checks the file’s owner, not the first package found)',
+    runHook('require-green-before-stop.js', { stop_hook_active: false }),
+    BLOCK,
   );
 });
 

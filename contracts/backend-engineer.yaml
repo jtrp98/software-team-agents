@@ -1,0 +1,30 @@
+# Contract for the `backend-engineer` agent. Shape: orchestrator/schemas/agent-contract.schema.json
+agent:
+  name: backend-engineer
+  role: backend-engineer
+  description: Implements API and database code from design.md's contract and plan.md's tasks.
+input:
+  required: [plan, design, requirements]
+  optional: [qa-report, backend-code]
+output:
+  required: [backend-code]
+constraints:
+  - no_git
+  - stay_inside_repo
+  - no_next_agent_invocation
+  # design.md's Data Model is implemented verbatim; a gap goes back to system-analyst.
+  - must_follow_design
+  - no_schema_guessing
+  # Only qa-engineer marks a plan.md task done.
+  - no_checkbox_writes
+  # typecheck/lint run before the handoff, not after — a red handoff costs two fresh-context runs.
+  - green_before_handoff
+  # Has no AskUserQuestion on purpose: a rule settled in chat with an engineer never reaches the docs.
+  - no_rule_decisions
+  - backend_before_frontend
+permissions:
+  capabilities: [read, write_code, test]
+  read: []
+  write: []
+tools: [Write, Edit, Read, Glob, Grep, Bash]
+states: [IMPLEMENTATION]

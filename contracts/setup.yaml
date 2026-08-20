@@ -1,0 +1,23 @@
+# Contract for the `setup` agent. Shape: orchestrator/schemas/agent-contract.schema.json
+agent:
+  name: setup
+  role: setup
+  description: Scaffolds the project once, before any feature work — app skeleton, schema.prisma, .env, .gitignore.
+input:
+  required: []
+  # Runs on a blank project too; when a design already exists it is followed rather than re-invented.
+  optional: [design]
+output:
+  required: [scaffolding, schema.prisma, backend-code]
+constraints:
+  - no_git
+  - stay_inside_repo
+  - no_next_agent_invocation
+  - must_follow_design
+  - no_schema_guessing
+permissions:
+  capabilities: [read, write_code, write_docs]
+  read: []
+  write: []
+tools: [Bash, Write, Edit, Read, Glob, Grep, AskUserQuestion]
+states: [CREATED]

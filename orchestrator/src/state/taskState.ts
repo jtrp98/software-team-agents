@@ -152,6 +152,63 @@ export function transition(machine: TaskMachine, to: TaskState): TaskMachine {
   };
 }
 
+export class InvalidRecoveryError extends Error {
+  constructor(machine: TaskMachine, to: TaskState, why: string) {
+    super(`cannot recover ${machine.current} -> ${to}: ${why}`);
+    this.name = "InvalidRecoveryError";
+  }
+}
+
+/**
+ * Moves a task *backwards* to a state it already completed — the "Recover"
+ * strategy (T07), as distinct from a retry.
+ *
+ * Retrying re-runs the stage that failed. Recovering says the failure was never
+ * that stage's to fix: a contract gap belongs to `system-analyst` at DESIGN, a
+ * business rule that was never decided belongs to `business-analyst` at
+ * REQUIREMENT. Before this existed the machine had no edge for that, so
+ * `routeFailure` had to stop for a person on every such failure — the honest
+ * limit it documented and left to T07.
+ *
+ * This is the second deliberate exception to "transition() is the single
+ * mutator", and it is guarded much more tightly than `forceBlock`. The target
+ * must satisfy all three:
+ *
+ *   - be in this task's own `sequence`, so recovery can never invent a stage
+ *     this pipeline does not have;
+ *   - be in `history`, so a task can only return somewhere it genuinely was;
+ *   - sit strictly earlier in the sequence than the current state, so this can
+ *     never be used to skip work forward.
+ *
+ * Together those make it impossible for recovery to reach a state a normal
+ * forward walk could not have reached first. After it lands, the ordinary
+ * forward walk re-runs everything from there — which is the point: a design
+ * amendment has to flow back through PLAN and IMPLEMENTATION to matter.
+ */
+export function recoverTo(machine: TaskMachine, to: TaskState): TaskMachine {
+  const targetIdx = machine.sequence.indexOf(to);
+  if (targetIdx === -1) {
+    throw new InvalidRecoveryError(machine, to, `${to} is not in this task's sequence (${machine.sequence.join(" -> ")})`);
+  }
+  if (!machine.history.includes(to)) {
+    throw new InvalidRecoveryError(machine, to, "the task has never been in that state, so there is nothing to return to");
+  }
+
+  const currentIdx = machine.sequence.indexOf(machine.current);
+  // A failed state (QA_FAILED/SECURITY_FAILED) is not in `sequence`, so index -1
+  // means "off the forward path" — recovering from there is exactly the case
+  // this exists for, and any earlier state qualifies.
+  if (currentIdx !== -1 && targetIdx >= currentIdx) {
+    throw new InvalidRecoveryError(machine, to, "recovery only moves backwards; use transition() to go forward");
+  }
+
+  return {
+    ...machine,
+    current: to,
+    history: [...machine.history, to],
+  };
+}
+
 /**
  * Emergency-stop bypass for cost/token budget overruns (item 12): forces
  * BLOCKED from any state, ignoring the structural graph. This is the one

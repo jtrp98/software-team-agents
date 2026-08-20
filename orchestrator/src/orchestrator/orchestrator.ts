@@ -1,14 +1,19 @@
 import { AgentStage, TaskState } from "../types.js";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
-import {
-  STAGE_TO_STATE,
-  forceBlock,
-  forwardState,
-  transition,
-  type TaskMachine,
-} from "../state/taskState.js";
+import { forceBlock, forwardState, recoverTo, transition, type TaskMachine } from "../state/taskState.js";
 import { MAX_RETRY, initTaskRun, recordFailure, type TaskRun } from "../retry/retryPolicy.js";
+import { decideRecovery, type RecoveryAction } from "../retry/recoveryPolicy.js";
 import { checkGate, type GateContext } from "../gates/gatePolicy.js";
+import {
+  ApprovalType,
+  approvalTypeForEdge,
+  decideApproval as decideApprovalRecord,
+  findApproval,
+  gateEvidenceFrom,
+  requestApproval,
+  type ApprovalLedger,
+  type ApprovalRecord,
+} from "../gates/approval.js";
 import {
   ArtifactType,
   validateArtifact,
@@ -20,6 +25,10 @@ import { RunLog, type RunOutcome } from "../observability/runLog.js";
 import { assertBudget, BudgetExceededError, DEFAULT_BUDGET, type Budget } from "../cost/costControl.js";
 import { AGENT_REGISTRY } from "../agents/registry.js";
 import { EventBus } from "../events/eventBus.js";
+import { MemoryTaskStore } from "../store/memoryStore.js";
+import { TaskNotFoundError, newPersistedTask, type PersistedTask, type TaskStore } from "../store/taskStore.js";
+import { type StructuredFailure } from "./failure.js";
+import { stageStateOf } from "./taskStatus.js";
 
 export interface AgentExecutorRequest {
   stage: AgentStage;
@@ -33,6 +42,14 @@ export interface AgentExecutorResult {
   artifact?: unknown;
   /** Evidence a human, not this agent, actually supplied (e.g. relayed approval) — rare; usually set via provideHumanApproval instead. */
   gateEvidence?: Partial<GateContext>;
+  /**
+   * A failure as structured data: what broke, who owns it, whether a person
+   * must look. The agent supplies the facts; the orchestrator decides where
+   * the task goes next (see failure.ts). Optional — omitting it keeps the
+   * original behaviour of sending a failed round back to the first
+   * implementation stage.
+   */
+  failure?: StructuredFailure;
 }
 
 /** The pluggable seam: item 13 is a pure coordinator, it never runs an agent itself. */
@@ -40,7 +57,7 @@ export type AgentExecutor = (req: AgentExecutorRequest) => Promise<AgentExecutor
 
 export type OrchestratorStatus =
   | { kind: "RUNNING"; stage: AgentStage }
-  | { kind: "WAITING_FOR_HUMAN"; from: TaskState; to: TaskState; reason: string }
+  | { kind: "WAITING_FOR_HUMAN"; from: TaskState; to: TaskState; reason: string; approvalType: ApprovalType | null }
   | { kind: "BLOCKED"; reason: string }
   | { kind: "DEPLOYED" };
 
@@ -52,21 +69,36 @@ export type OrchestratorStatus =
 export interface OrchestratorEventMap {
   AGENT_ASSIGNED: { taskId: string; stage: AgentStage };
   AGENT_COMPLETED: { taskId: string; stage: AgentStage; outcome: RunOutcome };
-  WAITING_FOR_HUMAN: { taskId: string; from: TaskState; to: TaskState; reason: string };
+  WAITING_FOR_HUMAN: { taskId: string; from: TaskState; to: TaskState; reason: string; approvalType: ApprovalType | null };
   TASK_BLOCKED: { taskId: string; reason: string };
   TASK_DEPLOYED: { taskId: string };
 }
 
-function stageState(stage: AgentStage | undefined): TaskState | undefined {
-  if (stage === undefined) return undefined;
-  if (stage === AgentStage.DEVOPS) return TaskState.READY_TO_DEPLOY;
-  return STAGE_TO_STATE[stage];
+export interface OrchestratorOptions {
+  budget?: Budget;
+  /**
+   * Where this task's state is kept. Defaults to a private in-memory store —
+   * fine for a test, useless for a real run that has to survive the process.
+   */
+  store?: TaskStore;
+  /** Task ids that must reach DEPLOYED first. Enforced by orchestrator/taskRegistry.ts, recorded here. */
+  dependsOn?: string[];
+  now?: () => number;
+  /**
+   * Internal: rebuild from stored state instead of creating a new task.
+   * Use `Orchestrator.resume()` / the registry rather than passing this by hand.
+   */
+  restore?: PersistedTask;
 }
 
 function assertCanProduce(stage: AgentStage, artifactType: ArtifactType): void {
   if (!AGENT_REGISTRY[stage].outputs.includes(artifactType)) {
     throw new Error(`${stage} is not registered (item 9) to produce ${artifactType}`);
   }
+}
+
+function implementationStart(pipeline: AgentStage[]): number {
+  return pipeline.findIndex((s) => s === AgentStage.BACKEND_ENGINEER || s === AgentStage.FRONTEND_ENGINEER);
 }
 
 /**
@@ -82,29 +114,107 @@ function assertCanProduce(stage: AgentStage, artifactType: ArtifactType): void {
  * every routing decision it makes is also emitted on `events`, not only
  * returned — step() is a convenience wrapper over reportCompletion() for
  * callers that do want a direct call/await relationship.
+ *
+ * Since T01 it is durable as well: every state change is written through to a
+ * `TaskStore` before the caller is told about it, so a closed terminal or a
+ * crashed process resumes from where it stopped (`Orchestrator.resume`)
+ * instead of re-running a pipeline whose expensive stages already ran.
+ * Approvals a person gave are part of that stored state — resuming must never
+ * re-ask a question that was already answered.
  */
 export class Orchestrator {
-  readonly runLog = new RunLog();
+  readonly runLog: RunLog;
   readonly events = new EventBus<OrchestratorEventMap>();
   readonly taskId: string;
+  readonly store: TaskStore;
+  readonly dependsOn: string[];
+  readonly classification: ClassificationResult;
   private readonly pipeline: AgentStage[];
   private readonly implementationStartIndex: number;
   private readonly budget: Budget;
+  private readonly now: () => number;
+  private readonly createdAt: number;
   private run: TaskRun;
-  private gateContext: GateContext = {};
-  private artifactStore: Partial<Record<ContextCategory, string>> = {};
-  private pipelineCursor = 0;
+  private gateContext: GateContext;
+  private artifactStore: Partial<Record<ContextCategory, string>>;
+  private pipelineCursor: number;
   private blockedReason: string | undefined;
+  private lastFailure: StructuredFailure | null;
+  private approvals: ApprovalLedger;
   private lastStatusKey: string | undefined;
+  /** The state the task was in when the current failure arrived, captured before retryPolicy moves it. */
+  private stateBeforeFailure: TaskState = TaskState.CREATED;
+  /** What the last failure resolved to (T07). Exposed for the CLI and the run log; not persisted — it is derived, not state. */
+  private lastRecovery: RecoveryAction | null = null;
 
-  constructor(taskId: string, classification: ClassificationResult, opts?: { budget?: Budget }) {
+  constructor(taskId: string, classification: ClassificationResult, opts?: OrchestratorOptions) {
+    const restore = opts?.restore;
     this.taskId = taskId;
-    this.pipeline = classification.pipeline;
-    this.run = initTaskRun(classification.pipeline, classification.requiresHumanApproval);
+    this.now = opts?.now ?? Date.now;
+    this.store = opts?.store ?? new MemoryTaskStore();
     this.budget = opts?.budget ?? DEFAULT_BUDGET;
-    this.implementationStartIndex = this.pipeline.findIndex(
-      (s) => s === AgentStage.BACKEND_ENGINEER || s === AgentStage.FRONTEND_ENGINEER,
-    );
+    this.classification = classification;
+    this.createdAt = restore?.createdAt ?? this.now();
+    this.dependsOn = restore ? [...restore.dependsOn] : [...(opts?.dependsOn ?? [])];
+    this.pipeline = restore ? restore.machine.pipeline : classification.pipeline;
+    this.implementationStartIndex = implementationStart(this.pipeline);
+
+    if (restore) {
+      this.run = { machine: restore.machine, retries: { ...restore.retries } };
+      this.gateContext = { ...restore.gateContext };
+      this.artifactStore = { ...restore.artifacts } as Partial<Record<ContextCategory, string>>;
+      this.pipelineCursor = restore.pipelineCursor;
+      this.blockedReason = restore.blockedReason ?? undefined;
+      this.lastFailure = restore.lastFailure;
+      this.approvals = [...restore.approvals];
+      // Seeded from the store so budget accounting (item 12) counts what the
+      // earlier process already spent — a resumed task must not get a fresh
+      // token allowance just because it restarted.
+      this.runLog = new RunLog(this.store.runsForTask(taskId));
+    } else {
+      this.run = initTaskRun(classification.pipeline, classification.requiresHumanApproval);
+      this.gateContext = {};
+      this.artifactStore = {};
+      this.pipelineCursor = 0;
+      this.blockedReason = undefined;
+      this.lastFailure = null;
+      this.approvals = [];
+      this.runLog = new RunLog();
+      this.store.createTask(
+        newPersistedTask({
+          taskId,
+          dependsOn: this.dependsOn,
+          classification,
+          machine: this.run.machine,
+          now: this.createdAt,
+        }),
+      );
+    }
+  }
+
+  /**
+   * Rebuilds an orchestrator from stored state. The task continues with the
+   * state, retry counts, approvals, artifacts and spend it already had —
+   * nothing is replayed and no agent is re-run, because a stage that already
+   * cost a model run must not be paid for twice.
+   */
+  static resume(
+    taskId: string,
+    store: TaskStore,
+    opts?: Omit<OrchestratorOptions, "store" | "dependsOn" | "restore">,
+  ): Orchestrator {
+    const stored = store.loadTask(taskId);
+    if (!stored) throw new TaskNotFoundError(taskId);
+    return Orchestrator.fromPersisted(stored, store, opts);
+  }
+
+  /** Same as resume(), for a caller that already holds the row (the registry lists every task in one query). */
+  static fromPersisted(
+    stored: PersistedTask,
+    store: TaskStore,
+    opts?: Omit<OrchestratorOptions, "store" | "dependsOn" | "restore">,
+  ): Orchestrator {
+    return new Orchestrator(stored.taskId, stored.classification, { ...opts, store, restore: stored });
   }
 
   get machine(): TaskMachine {
@@ -115,9 +225,85 @@ export class Orchestrator {
     return this.run.retries;
   }
 
-  /** Supplies human evidence for the one gate an executor can never supply itself. */
+  /** How the most recent failure was resolved (T07), or null if none has happened in this process. */
+  get recovery(): RecoveryAction | null {
+    return this.lastRecovery;
+  }
+
+  /** The exact row this orchestrator would persist right now. */
+  snapshot(): PersistedTask {
+    return {
+      taskId: this.taskId,
+      createdAt: this.createdAt,
+      updatedAt: this.now(),
+      dependsOn: [...this.dependsOn],
+      classification: this.classification,
+      machine: this.run.machine,
+      retries: { ...this.run.retries },
+      gateContext: { ...this.gateContext },
+      artifacts: { ...this.artifactStore } as Record<string, string>,
+      approvals: [...this.approvals],
+      pipelineCursor: this.pipelineCursor,
+      blockedReason: this.blockedReason ?? null,
+      lastFailure: this.lastFailure,
+    };
+  }
+
+  private persist(): void {
+    this.store.saveTask(this.snapshot());
+  }
+
+  /** The full approval ledger for this task — what was asked, what was answered, when, and by whom. */
+  get approvalLedger(): ApprovalRecord[] {
+    return [...this.approvals];
+  }
+
+  /**
+   * Records a person's answer to an approval this task actually asked for.
+   *
+   * A rejection is an answer, not an absence: it is stored as `rejected`, and
+   * `advance()` blocks the task on it rather than posing the same question on
+   * the next poll. Before T08 `provideHumanApproval(field, false)` was
+   * indistinguishable from never having asked, so a "no" degraded into a
+   * re-prompt until someone eventually said yes.
+   */
+  decideApproval(
+    type: ApprovalType,
+    approved: boolean,
+    opts: { by?: string; note?: string } = {},
+  ): void {
+    this.approvals = decideApprovalRecord(this.approvals, {
+      type,
+      approved,
+      now: this.now(),
+      by: opts.by,
+      note: opts.note,
+    });
+    this.syncGateEvidence();
+    this.persist();
+  }
+
+  /**
+   * The pre-T08 entry point, kept working: it maps a gate field back to the
+   * approval type that feeds it. Callers that know which of the five decisions
+   * they are answering should use `decideApproval` — this cannot express a
+   * rejection distinctly, which is the whole reason T08 exists.
+   */
   provideHumanApproval(field: "designApproved" | "humanApproved", value: boolean): void {
-    this.gateContext = { ...this.gateContext, [field]: value };
+    const type = field === "designApproved" ? ApprovalType.SCHEMA_CONFIRMATION : ApprovalType.DEPLOY;
+    if (!findApproval(this.approvals, type)) {
+      // The gate has not been reached yet, so there is no question to answer.
+      // Record the evidence directly, as this method always did.
+      this.gateContext = { ...this.gateContext, [field]: value };
+      this.persist();
+      return;
+    }
+    this.decideApproval(type, value);
+  }
+
+  /** Keeps the gate's booleans equal to the ledger — the ledger is the source, these are the derivation. */
+  private syncGateEvidence(): void {
+    this.gateContext = { ...this.gateContext, ...gateEvidenceFrom(this.approvals) };
   }
 
   private statusKey(status: OrchestratorStatus): string {
@@ -140,25 +326,37 @@ export class Orchestrator {
       this.lastStatusKey = key;
       switch (status.kind) {
         case "RUNNING":
-          this.events.emit("AGENT_ASSIGNED", { taskId: this.taskId, stage: status.stage });
+          this.emitAndStore("AGENT_ASSIGNED", { taskId: this.taskId, stage: status.stage });
           break;
         case "WAITING_FOR_HUMAN":
-          this.events.emit("WAITING_FOR_HUMAN", {
+          this.emitAndStore("WAITING_FOR_HUMAN", {
             taskId: this.taskId,
             from: status.from,
             to: status.to,
             reason: status.reason,
+            approvalType: status.approvalType,
           });
           break;
         case "BLOCKED":
-          this.events.emit("TASK_BLOCKED", { taskId: this.taskId, reason: status.reason });
+          this.emitAndStore("TASK_BLOCKED", { taskId: this.taskId, reason: status.reason });
           break;
         case "DEPLOYED":
-          this.events.emit("TASK_DEPLOYED", { taskId: this.taskId });
+          this.emitAndStore("TASK_DEPLOYED", { taskId: this.taskId });
           break;
       }
     }
     return status;
+  }
+
+  /** Every emitted event is also appended to the store: the audit trail of who was asked to do what, and why a task stopped. */
+  private emitAndStore<K extends keyof OrchestratorEventMap & string>(type: K, payload: OrchestratorEventMap[K]): void {
+    this.events.emit(type, payload);
+    this.store.appendEvent({
+      taskId: this.taskId,
+      at: this.now(),
+      type,
+      payload: payload as unknown as Record<string, unknown>,
+    });
   }
 
   /**
@@ -169,30 +367,47 @@ export class Orchestrator {
   private advance(): OrchestratorStatus {
     for (;;) {
       const current = this.run.machine.current;
-      if (current === TaskState.DEPLOYED) return this.emitAndReturn({ kind: "DEPLOYED" });
+      if (current === TaskState.DEPLOYED) return this.settle({ kind: "DEPLOYED" });
       if (current === TaskState.BLOCKED) {
-        return this.emitAndReturn({ kind: "BLOCKED", reason: this.blockedReason ?? "blocked" });
+        return this.settle({ kind: "BLOCKED", reason: this.blockedReason ?? "blocked" });
       }
 
       const stage = this.pipeline[this.pipelineCursor];
-      if (stage !== undefined && stageState(stage) === current) {
-        return this.emitAndReturn({ kind: "RUNNING", stage });
+      if (stage !== undefined && stageStateOf(stage) === current) {
+        return this.settle({ kind: "RUNNING", stage });
       }
 
       const next = forwardState(this.run.machine);
       if (!next) {
         this.blockedReason ??= "no forward state available";
-        return this.emitAndReturn({ kind: "BLOCKED", reason: this.blockedReason });
+        return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
       }
 
       const gate = checkGate(current, next, this.gateContext);
       if (!gate.allowed) {
-        return this.emitAndReturn({
-          kind: "WAITING_FOR_HUMAN",
-          from: current,
-          to: next,
-          reason: gate.reason ?? "gate not satisfied",
-        });
+        const reason = gate.reason ?? "gate not satisfied";
+        const approvalType = approvalTypeForEdge(current, next);
+
+        if (approvalType) {
+          const existing = findApproval(this.approvals, approvalType);
+          // A rejection is a decision. Re-asking it would turn "no" into "not yet".
+          if (existing?.status === "rejected") {
+            this.blockedReason =
+              `${approvalType} was rejected${existing.decidedBy ? ` by ${existing.decidedBy}` : ""}` +
+              `${existing.note ? `: ${existing.note}` : ""}`;
+            this.run = { ...this.run, machine: forceBlock(this.run.machine) };
+            return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
+          }
+          this.approvals = requestApproval(this.approvals, {
+            type: approvalType,
+            reason,
+            now: this.now(),
+            from: current,
+            to: next,
+          });
+        }
+
+        return this.settle({ kind: "WAITING_FOR_HUMAN", from: current, to: next, reason, approvalType });
       }
 
       this.run = { ...this.run, machine: transition(this.run.machine, next) };
@@ -200,6 +415,16 @@ export class Orchestrator {
         this.blockedReason ??= "unclassifiable task — needs human triage";
       }
     }
+  }
+
+  /**
+   * Writes the state that produced this status *before* the caller is told
+   * about it. The ordering matters: a crash between "told the caller QA runs
+   * next" and "wrote that down" would resume onto the wrong stage.
+   */
+  private settle(status: OrchestratorStatus): OrchestratorStatus {
+    this.persist();
+    return this.emitAndReturn(status);
   }
 
   status(): OrchestratorStatus {
@@ -224,14 +449,15 @@ export class Orchestrator {
       );
     }
 
-    this.events.emit("AGENT_COMPLETED", { taskId: this.taskId, stage, outcome: result.outcome });
-    this.runLog.record({
+    this.emitAndStore("AGENT_COMPLETED", { taskId: this.taskId, stage, outcome: result.outcome });
+    const record = this.runLog.record({
       task_id: this.taskId,
       agent: stage,
       start_time: timing.start,
       end_time: timing.end,
       outcome: result.outcome,
     });
+    this.store.appendRun(record);
 
     try {
       assertBudget(this.runLog, this.taskId, this.budget);
@@ -239,7 +465,7 @@ export class Orchestrator {
       if (e instanceof BudgetExceededError) {
         this.run = { ...this.run, machine: forceBlock(this.run.machine) };
         this.blockedReason = e.message;
-        return this.emitAndReturn({ kind: "BLOCKED", reason: this.blockedReason });
+        return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
       }
       throw e;
     }
@@ -260,19 +486,97 @@ export class Orchestrator {
     }
 
     this.pipelineCursor += 1;
+    if (result.outcome.result === "FAIL" && result.failure) {
+      this.lastFailure = result.failure;
+    }
 
     const failureKind = stage === AgentStage.QA_ENGINEER ? "qa" : stage === AgentStage.SECURITY ? "security" : null;
     if (failureKind && result.outcome.result === "FAIL") {
+      this.stateBeforeFailure = this.run.machine.current;
       this.run = recordFailure(this.run, failureKind);
-      if (this.implementationStartIndex !== -1) {
-        this.pipelineCursor = this.implementationStartIndex;
-      }
-      if (this.run.machine.current === TaskState.BLOCKED) {
-        this.blockedReason = `${failureKind} retry limit (${MAX_RETRY}) exceeded`;
-      }
+      this.applyFailureRoute(failureKind, result.failure);
     }
 
     return this.advance();
+  }
+
+  /**
+   * Decides what happens after a failed round, and applies it.
+   *
+   * The decision itself lives in retry/recoveryPolicy.ts and is pure; this only
+   * carries it out. Keeping those apart matters because the decision is the part
+   * worth reviewing: RETRY, RECOVER, ROLLBACK, ESCALATE and ABORT are five
+   * different answers, and before T07 the pipeline could only express two of
+   * them. The agent that reported the failure makes none of these calls — it
+   * supplies facts, the orchestrator draws the conclusion.
+   */
+  private applyFailureRoute(failureKind: "qa" | "security", failure: StructuredFailure | undefined): void {
+    const action = decideRecovery({
+      failure,
+      kind: failureKind,
+      run: this.run,
+      pipeline: this.pipeline,
+      currentState: this.stateBeforeFailure,
+    });
+    this.lastRecovery = action;
+
+    if (this.run.machine.current === TaskState.BLOCKED) {
+      // retryPolicy already forced BLOCKED because the budget is spent. No
+      // recovery decision may override that, so record why and stop here.
+      this.blockedReason = action.kind === "ABORT" ? action.reason : `${failureKind} retry limit (${MAX_RETRY}) exceeded`;
+      return;
+    }
+
+    switch (action.kind) {
+      case "ESCALATE":
+      case "ABORT":
+        // Both stop the task, but a person still has to be told *what* they are
+        // being asked about. Recording the approval gives the stop a type and a
+        // reason in the ledger instead of only an opaque BLOCKED string — these
+        // are two of CLAUDE.md's five always-human points, and they were the two
+        // that left no trace of having been reached.
+        this.approvals = requestApproval(this.approvals, {
+          type: failureKind === "qa" ? ApprovalType.QA_FAILURE : ApprovalType.SECURITY_RISK,
+          reason: action.reason,
+          now: this.now(),
+        });
+        this.run = { ...this.run, machine: forceBlock(this.run.machine) };
+        this.blockedReason = action.reason;
+        return;
+
+      case "ROLLBACK":
+        this.run = { ...this.run, machine: recoverTo(this.run.machine, action.toState) };
+        this.pipelineCursor = this.cursorForState(action.toState);
+        return;
+
+      case "RECOVER": {
+        // The backward edge is guarded (taskState.recoverTo): it can only reach a
+        // state this task genuinely passed through. If it cannot, that is a real
+        // inconsistency and stopping is the honest answer, not improvising forward.
+        try {
+          this.run = { ...this.run, machine: recoverTo(this.run.machine, action.toState) };
+        } catch (e) {
+          this.run = { ...this.run, machine: forceBlock(this.run.machine) };
+          this.blockedReason = `cannot recover to ${action.toState}: ${(e as Error).message}`;
+          return;
+        }
+        const index = this.pipeline.indexOf(action.stage);
+        this.pipelineCursor = index === -1 ? this.implementationStartIndex : index;
+        return;
+      }
+
+      case "RETRY": {
+        const index = this.pipeline.indexOf(action.stage);
+        this.pipelineCursor = index === -1 ? this.implementationStartIndex : index;
+        return;
+      }
+    }
+  }
+
+  /** First pipeline position whose stage occupies `state` — where the cursor must sit after moving the machine there. */
+  private cursorForState(state: TaskState): number {
+    const index = this.pipeline.findIndex((stage) => stageStateOf(stage) === state);
+    return index === -1 ? this.implementationStartIndex : index;
   }
 
   /** Convenience wrapper for callers that want a direct call/await relationship instead of listening on `events`. */

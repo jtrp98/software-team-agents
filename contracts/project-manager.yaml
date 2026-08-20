@@ -1,0 +1,25 @@
+# Contract for the `project-manager` agent. Shape: orchestrator/schemas/agent-contract.schema.json
+agent:
+  name: project-manager
+  role: project-manager
+  description: Turns a confirmed design into a phased plan.md of ordered, tagged tasks.
+input:
+  required: [design, requirements]
+  optional: []
+output:
+  required: [plan]
+constraints:
+  - no_git
+  - stay_inside_repo
+  - no_next_agent_invocation
+  - amend_not_regenerate
+  - dates_from_user
+  # Any phase touching auth, personal data, payments, uploads or untrusted input is marked in writing,
+  # not remembered — devops gates on that mark later.
+  - flags_sensitive_phases
+permissions:
+  capabilities: [read, write_docs]
+  read: []
+  write: []
+tools: [Read, Glob, Grep, AskUserQuestion, Write, Edit]
+states: [PLAN]

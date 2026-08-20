@@ -1,0 +1,151 @@
+# Repo layout — which concept owns which directory.
+#
+# WHY THIS FILE EXISTS
+#
+# `.claude/` grew into the home of everything: the agent prompts, the shared rules, the
+# enforcement hooks, the checker scripts, the settings. All five of those answer *different*
+# questions, and mixing them meant the only way to know where a new file belonged was to ask
+# whoever wrote the last one.
+#
+# This file gives that decision one answer, and `orchestrator/src/layout/repoLayout.ts` checks
+# the answer against what is actually on disk. That check is the point — a layout nothing
+# verifies is a diagram, and a diagram drifts silently.
+#
+# THE TEST FOR WHERE SOMETHING GOES
+#
+# Each concept answers exactly one question. A new file belongs to the concept whose question
+# it answers, not to the folder that happens to be convenient:
+#
+#   agent        ใคร          — which role does this work belong to
+#   skill        ทำอะไรได้     — a reusable capability a role can invoke
+#   policy       ห้ามอะไร      — what no role may do, written down or enforced
+#   workflow     ทำเมื่อไหร่    — which roles run, in what order, for a kind of change
+#   orchestrator ใครทำต่อ      — the thing that decides what runs next
+#   runtime      state ตอนนี้   — what is true right now, for a program to read
+#   docs         อธิบายให้คนอ่าน — what is true, for a person to read
+#
+# HOME STATUS
+#
+#   active    in use now; the directory must exist
+#   reserved  the boundary is claimed and documented, the content is not written yet; the
+#             directory must exist and hold nothing but its README.md until `filled_by` lands
+#   planned   named here so nobody invents a second home for it; not created yet
+#
+# TWO THINGS THIS FILE DELIBERATELY DOES NOT MOVE
+#
+#   `.claude/agents/`  Claude Code loads subagents from exactly this path, and the orchestrator
+#                      shells out to `claude -p --agent <role>`. Moving the prompts elsewhere
+#                      would separate the concept by breaking the product. T48 keeps them here
+#                      too. The concept is separated by *naming both halves* of an agent below
+#                      — the prompt and the contract — not by relocating either.
+#
+#   `.workflow/`       T02 specified this path for runtime state and the code writes there.
+#                      Renaming it to `runtime/` would break existing state to gain a synonym.
+
+version: 1
+
+concepts:
+  agent:
+    answers: "ใคร — which role does a piece of work belong to"
+    why: >
+      An agent has two halves that must stay in step: the prompt a model reads, and the
+      contract a program checks. Keeping them in separate directories is what makes the
+      second one enforceable — `--check-contracts` can compare the contract against the
+      orchestrator's registry precisely because it is not prose inside the prompt.
+    homes:
+      - path: .claude/agents
+        status: active
+        pattern: "*.md"
+        per_agent: true
+        read_by: claude-code
+        holds: the prompt Claude Code loads when a subagent runs
+      - path: contracts
+        status: active
+        pattern: "*.yaml"
+        per_agent: true
+        read_by: orchestrator
+        holds: the machine-readable input/output/permission contract for the same role
+
+  skill:
+    answers: "ทำอะไรได้ — a reusable capability a role can invoke"
+    why: >
+      A capability that several agents use is not any one agent's property. Left inside a
+      prompt it gets copied into the next prompt and the two drift; kept here, it is one
+      executable with one behaviour that the self-test can cover.
+    homes:
+      - path: .claude/scripts
+        status: active
+        pattern: "*.js"
+        holds: checkers an agent runs against the repo (schema-contract drift, status.md sync)
+      - path: .claude/skills
+        status: planned
+        holds: Claude Code-native skills, if this project ever ships one
+
+  policy:
+    answers: "ห้ามอะไร — what no role may do"
+    why: >
+      A policy exists in two forms and the difference matters more than the wording. Written
+      policy binds an agent that reads and remembers it. Enforced policy binds an agent that
+      does not. Anything load-bearing belongs in the second form — which is why every hook
+      here must be wired into settings.json, checked below.
+    homes:
+      - path: .claude/shared
+        status: active
+        pattern: "*.md"
+        holds: the written rules every agent reads (conventions.md and friends)
+      - path: .claude/hooks
+        status: active
+        pattern: "*.js"
+        enforced_by_settings: true
+        holds: the rules that do not depend on an agent remembering them
+      - path: policies
+        status: reserved
+        filled_by: T49
+        holds: conventions.md split into one file per policy area
+
+  workflow:
+    answers: "ทำเมื่อไหร่ — which roles run, in what order, for a kind of change"
+    why: >
+      Today the pipeline for each kind of change is a decision inside
+      orchestrator/src/classification/taskClassifier.ts. That works, but it means changing
+      "what happens for a hotfix" is a code change. T09 moves the definitions out to data.
+    homes:
+      - path: workflows
+        status: reserved
+        filled_by: T09
+        holds: one YAML per kind of change (feature, bugfix, refactor, hotfix, security-fix)
+
+  orchestrator:
+    answers: "ใครทำต่อ — the thing that decides what runs next"
+    why: >
+      No agent holds the Agent tool, so nothing in the pipeline can invoke the next stage.
+      This package is what does instead: state, routing, retry, gates, dependencies.
+    homes:
+      - path: orchestrator
+        status: active
+        holds: the Node/TypeScript package that drives the pipeline and its own tests
+
+  runtime:
+    answers: "state ตอนนี้ — what is true right now, for a program to read"
+    why: >
+      Runtime state is written by a program on every transition and read by a program to
+      decide the next one. Markdown cannot do that job: it has no schema, no atomic write,
+      and no way to fail loudly when it disagrees with reality. `state.yaml` here is a
+      generated view of `state.db`, never the source of truth.
+    homes:
+      - path: .workflow
+        status: active
+        optional: true
+        holds: state.db (SQLite, source of truth) and state.yaml (generated readable view)
+
+  docs:
+    answers: "อธิบายให้คนอ่าน — what is true, for a person to read"
+    why: >
+      These are the pipeline's product, not its state. An agent writes them for the next
+      agent and for the user; when one disagrees with the code or the store, the code and
+      the store win.
+    homes:
+      - path: _docs
+        status: active
+        optional: true
+        holds: per-module requirement/design/plan/review/security/deploy, plus status.md

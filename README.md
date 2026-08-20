@@ -80,6 +80,9 @@ agent เองยังเรียกกันเองไม่ได้เ�
 2. **บังคับ 4 gate ตรงกับ 5 จุดที่ต้องรอคนข้างบน** (`orchestrator/src/gates/gatePolicy.ts`): ยืนยัน design ก่อนเข้า implementation, `qa-report.status` ต้อง PASS ก่อนไปต่อ, `security-report.overallStatus` ต้อง PASS ก่อนไปต่อ, และต้อง `humanApproved` ก่อน deploy จริง — ทั้งสี่ gate ไม่มี agent ตัวไหนตอบแทนคนได้ ต้องมีหลักฐานจริงเท่านั้น
 3. **บังคับเพดาน retry เดียวกับ QA/security** (`orchestrator/src/retry/retryPolicy.ts`, `MAX_RETRY = 3`) — แก้ไม่ผ่านเกินรอบก็ถูกบังคับเข้า `BLOCKED` เหมือนกติกา "แก้ไม่ผ่านสองรอบให้ส่งกลับหาคุณ" ข้างบน
 4. **รัน agent จริง** ผ่าน `orchestrator/src/agents/claudeCliExecutor.ts` — เรียก `claude -p --agent <role>` ในโฟลเดอร์โปรเจกต์จริง ซึ่ง `<role>` (`business-analyst`, `qa-engineer`, ...) resolve ไปที่ `.claude/agents/<role>.md` ไฟล์เดียวกับที่ agent list ข้างบนใช้ทุกประการ — orchestrator ไม่ได้ถือ prompt ของตัวเองซ้ำซ้อน แค่เป็นคนกด "รันตัวถัดไป" แทนคุณ แล้วอ่านผลจริงกลับมาตัดสินว่าจะไปต่อยังไง: `review.md`/`security.md` ที่ `qa-engineer`/`security` เขียนจริงถูกอ่านกลับมา parse เป็นหลักฐาน (`orchestrator/src/agents/moduleDocs.ts`, อ่านเครื่องหมาย ✅/⚠️/❌ กับ `(FULL)`/`(TARGETED)` และ 🔴/🟠/🟡 กับ 🔵/🟣/✅/⚪ ตรงตามอนุสัญญาที่อธิบายไว้ด้านบนทุกตัว — regex-based เหมือน `.claude/scripts/*.js` สองตัว ไม่ใช่ Markdown parser จริง) ก่อนตัดสินว่า gate ผ่านหรือไม่
+5. **จำ state ข้าม process ได้จริง** — ทุกครั้งที่ task เปลี่ยน state มันเขียนลง `.workflow/state.db` (SQLite ไฟล์เดียว ไม่มี server) *ก่อน* จะบอกผลกลับมา แล้ว generate `.workflow/state.yaml` ให้คนอ่านคู่กันทุกครั้ง (`orchestrator/src/store/`) ปิด terminal กลางคันแล้วสั่ง `--resume` มันจะเดินต่อจาก stage เดิม ไม่รัน stage ที่จ่ายเงินไปแล้วซ้ำ และ**ไม่ถามซ้ำ approval ที่คุณตอบไปแล้ว** — `state.yaml` เป็น view อย่างเดียว แก้ไปก็ถูกเขียนทับ ตัวจริงคือ `state.db` เสมอ — และรูปร่างของมันเป็น contract จริงที่เครื่องมืออื่นอ่านได้ (`orchestrator/schemas/state-view.schema.json`, validate ด้วย ajv **ก่อน** เขียนไฟล์ทุกครั้ง ถ้าไม่ผ่านคือไม่เขียน ไม่ใช่เขียนไฟล์ที่ผิดสัญญาตัวเองทิ้งไว้)
+6. **คุมลำดับ task หลายตัว** (`orchestrator/src/orchestrator/taskRegistry.ts`) — `--depends-on` ทำให้ task ที่ยังรอ dependency เปิดรันไม่ได้เลยจนกว่าตัวที่มันรอจะถึง `DEPLOYED` (ยังรันขนานไม่ได้ นั่นเป็นงาน DAG คนละส่วน)
+7. **route failure จากข้อมูล ไม่ใช่จากที่ agent สั่ง** (`orchestrator/src/orchestrator/failure.ts`) — ถ้ารอบที่ fail ส่ง structured failure มาด้วย (category/owner/severity/retryable/requires_human) orchestrator เป็นคนเลือกเองว่าย้อนกลับไปหา engineer คนไหน หรือหยุดรอคน ถ้าเป็น contract gap ที่ไม่มีทางกลับไป `DESIGN` ได้จริง มันจะ `BLOCKED` แทนที่จะส่งกลับไปให้ engineer แก้สิ่งที่ไม่ใช่ความผิดตัวเอง
 
 รันจริงจาก root ของโปรเจกต์เป้าหมาย (ไม่ใช่ root ของ `AgentClaude`):
 
@@ -87,12 +90,25 @@ agent เองยังเรียกกันเองไม่ได้เ�
 cd orchestrator
 npm install
 npm run orchestrate -- --task-id T-1 --module sales-crm --new-feature --backend --frontend
+
+# กลับมาทำต่อหลังปิด terminal หรือหลังตอบ N ไปก่อนหน้า
+npm run orchestrate -- --task-id T-1 --module sales-crm --resume
+
+# ดูว่ามี task อะไรค้างอยู่บ้าง (ไม่รัน agent เลย)
+npm run orchestrate -- --list
+
+# เช็คว่า contracts/*.yaml ยังตรงกับ registry ที่ orchestrator ใช้จริง (เหมาะกับ CI)
+npm run orchestrate -- --check-contracts
+
+# ให้ T-2 รอจน T-1 ถึง DEPLOYED ก่อนถึงจะเริ่มได้
+npm run orchestrate -- --task-id T-2 --module sales-crm --incremental --backend --depends-on T-1
 ```
 
-พอเจอจุดที่ 5 จุดข้างบนต้องรอคน มันจะหยุดถามตรงๆ ใน terminal เดียวกัน (`Approve DESIGN -> IMPLEMENTATION? [y/N]`) ไม่ใช่เดาให้เอง — ตอบ `y` แล้วมันเดินหน้าต่อในรันเดียวกัน ตอบ `N` หรือ Ctrl-C แล้วค่อยกลับมาสั่งต่อทีหลัง (state ปัจจุบันยังไม่มีการบันทึกข้ามรัน — ดูข้อจำกัดข้างล่าง)
+พอเจอจุดที่ 5 จุดข้างบนต้องรอคน มันจะหยุดถามตรงๆ ใน terminal เดียวกัน (`Approve DESIGN -> IMPLEMENTATION? [y/N]`) ไม่ใช่เดาให้เอง — ตอบ `y` แล้วมันเดินหน้าต่อในรันเดียวกัน ตอบ `N` หรือ Ctrl-C ได้เลย — state ถูกบันทึกไว้แล้ว กลับมาต่อด้วย `--resume` เมื่อไหร่ก็ได้
 
 **ข้อจำกัดที่ควรรู้ก่อนใช้จริง:**
-- **ยังไม่มี persistence ข้าม process** — `Orchestrator` เก็บ state ในหน่วยความจำของรันนั้นเท่านั้น ปิด terminal แล้ว state หาย ต้องเริ่ม `--task-id` เดิมใหม่ตั้งแต่ต้น (แต่เอกสารจริงใน `_docs/` ที่ agent เขียนไปแล้วไม่หาย — สิ่งที่หายคือแค่ตำแหน่งในสาย pipeline)
+- **รันได้ทีละ task** — dependency บังคับ *ลำดับ* ได้แล้ว แต่ยังรัน task ที่ไม่เกี่ยวกันพร้อมกันไม่ได้ และยังไม่มี lock กันสอง process สั่งงาน task เดียวกันพร้อมกัน (SQLite กันไฟล์พังให้ แต่ไม่ได้กันสอง orchestrator แย่งกันสั่ง agent)
+- **`.workflow/` ถูกสร้างที่ root ของโปรเจกต์เป้าหมาย** — `state.db` คือของจริง ส่วน `state.yaml` เป็น view ที่ถูกเขียนทับทุกครั้ง อย่าแก้ด้วยมือ และควรใส่ `.workflow/` ไว้ใน `.gitignore` ของโปรเจกต์นั้น
 - **`--module` ต้องมีอยู่แล้ว** — orchestrator ไม่ได้ resolve module folder ให้แบบที่ agent จริงทำ (หนึ่ง folder → ใช้, หลาย folder → ถาม) ต้องระบุชื่อ module เองตรงๆ ทุกครั้ง
 - **การอ่าน `review.md`/`security.md` กลับเป็น regex-based** เช่นเดียวกับ `.claude/scripts/` — เป็นตัวช่วยเชื่อม ไม่ใช่ตัวแทนการอ่านเอกสารจริงของคน ถ้า mode หรือ severity marker ที่มันหาไม่เจอ มันจะ fail-closed (บังคับ `TARGETED`/`FAIL`) แทนที่จะเดาว่า PASS
 
@@ -162,15 +178,24 @@ _docs/
 │   ├── check-schema-contract.js  ← qa-engineer รัน: เทียบ schema.prisma กับ design.md ทุก module
 │   └── check-status-sync.js      ← รันก่อนเชื่อ status.md: เทียบกับ checkbox จริงใน plan.md ทุก module
 ├── tests/
-│   └── run.js                    ← self-test ของ hook/script ทั้งหมด (69 เคส ไม่ต้องติดตั้งอะไรเพิ่ม)
+│   └── run.js                    ← self-test ของ hook/script ทั้งหมด (70 เคส ไม่ต้องติดตั้งอะไรเพิ่ม)
 └── settings.json                ← ที่ต่อ hook ทั้งสี่ตัวเข้ากับ session (commit ไว้ ใช้ร่วมกันทั้ง repo)
 
+contracts/                       ← contract ของ agent ทั้ง 9 ตัวแบบเครื่องอ่านได้ (`<agent>.yaml`) — input/output/permission/constraint
 orchestrator/                    ← แพ็กเกจ Node/TS แยกต่างหาก: รันโหมด autonomous ให้จริงแทนคุณ (ดูหัวข้อด้านล่าง)
 ├── src/
 │   ├── agents/claudeCliExecutor.ts  ← เรียก `claude -p --agent <role>` จริง ต่อกับ `.claude/agents/<role>.md`
 │   ├── agents/moduleDocs.ts         ← อ่าน review.md/security.md จริงกลับมาเป็นหลักฐานให้ gate
-│   ├── orchestrator/orchestrator.ts ← state machine + gate + retry ที่คุม pipeline stage ไหนรันต่อ
-│   └── cli.ts                       ← `npm run orchestrate` entry point
+│   ├── orchestrator/orchestrator.ts ← state machine + gate + retry ที่คุม pipeline stage ไหนรันต่อ (เขียน state ลง store ทุก transition)
+│   ├── orchestrator/taskRegistry.ts ← task หลายตัว + dependency: task ที่ยังรอตัวอื่นอยู่ เปิดรันไม่ได้
+│   ├── orchestrator/failure.ts      ← structured failure → orchestrator เป็นคนตัดสินว่า route กลับไปหาใคร
+│   ├── store/sqliteStore.ts         ← state จริงใน `.workflow/state.db` (SQLite ไฟล์เดียว ไม่มี server)
+│   ├── store/stateView.ts           ← generate `.workflow/state.yaml` ให้คนอ่าน (view อย่างเดียว เขียนทับทุกครั้ง)
+│   ├── store/stateSchema.ts         ← โหลด JSON Schema + ajv, บังคับ validate ก่อนเขียน state.yaml
+│   └── cli.ts                       ← `npm run orchestrate` entry point (`--resume`, `--list`, `--depends-on`)
+├── schemas/state-view.schema.json ← contract ของ `.workflow/state.yaml` (JSON Schema draft-07)
+├── schemas/agent-contract.schema.json ← contract ของ `contracts/<agent>.yaml`
+│   (`src/agents/agentContract.ts` โหลด/validate และเทียบกับ registry ที่โค้ดใช้จริง)
 └── package.json
 ```
 
@@ -242,7 +267,7 @@ Wired เป็น `Stop`/`SubagentStop` hook (ไม่ใช่ `PreToolUse`) 
 
 ### `.claude/tests/run.js` — self-test ของ hook/script ทั้งหมด
 
-รัน `node .claude/tests/run.js` ทุกครั้งที่แก้ไฟล์ใต้ `.claude/hooks/` หรือ `.claude/scripts/` — 69 เคส ไม่มี dependency ต้องติดตั้งเพิ่ม เหตุผลที่ต้องรันจริงจัง: hook ที่ syntax error จะ exit 1 ซึ่ง `PreToolUse` มองว่าไม่ใช่การบล็อก (บล็อกต้อง exit 2) แปลว่า hook ที่พิมพ์ผิดจะ **fail open** — ยังต่ออยู่ใน `settings.json`, ดูเหมือนติดตั้งแล้ว แต่ไม่บังคับอะไรเลยเงียบๆ เคยเกิดขึ้นจริงมาแล้วระหว่างพัฒนา
+รัน `node .claude/tests/run.js` ทุกครั้งที่แก้ไฟล์ใต้ `.claude/hooks/` หรือ `.claude/scripts/` — 70 เคส ไม่มี dependency ต้องติดตั้งเพิ่ม เหตุผลที่ต้องรันจริงจัง: hook ที่ syntax error จะ exit 1 ซึ่ง `PreToolUse` มองว่าไม่ใช่การบล็อก (บล็อกต้อง exit 2) แปลว่า hook ที่พิมพ์ผิดจะ **fail open** — ยังต่ออยู่ใน `settings.json`, ดูเหมือนติดตั้งแล้ว แต่ไม่บังคับอะไรเลยเงียบๆ เคยเกิดขึ้นจริงมาแล้วระหว่างพัฒนา
 
 ### สิ่งที่ควรรู้ก่อนเอาไปใช้ (มีผลกับ hook ทั้งสี่ตัว)
 

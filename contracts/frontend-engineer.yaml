@@ -1,0 +1,28 @@
+# Contract for the `frontend-engineer` agent. Shape: orchestrator/schemas/agent-contract.schema.json
+agent:
+  name: frontend-engineer
+  role: frontend-engineer
+  description: Implements UI code from design.md and from the API the backend actually built.
+input:
+  required: [plan, design, requirements]
+  optional: [qa-report, frontend-code]
+output:
+  required: [frontend-code]
+constraints:
+  - no_git
+  - stay_inside_repo
+  - no_next_agent_invocation
+  - must_follow_design
+  - no_schema_guessing
+  - no_checkbox_writes
+  - green_before_handoff
+  - no_rule_decisions
+  # Reads the route's real request/response shape rather than guessing it from design.md alone —
+  # that guess is what produced a shipped response-shape mismatch once already.
+  - backend_before_frontend
+permissions:
+  capabilities: [read, write_code, test]
+  read: []
+  write: []
+tools: [Write, Edit, Read, Glob, Grep, Bash]
+states: [IMPLEMENTATION]

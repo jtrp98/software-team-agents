@@ -1,0 +1,158 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/agent-contract.schema.json",
+  "title": "Agent contract (contracts/<agent-name>.yaml)",
+  "description": "The machine-readable declaration of one agent: what it must be given, what it must produce, what it may never do, and what it is allowed to touch. Before this existed those rules were spread across the agent's own prompt, CLAUDE.md and conventions.md, where nothing could check them. The orchestrator's in-process registry is checked against these files, so the two can never drift apart silently.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agent", "input", "output", "constraints", "permissions", "tools", "states"],
+  "properties": {
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "role", "description"],
+      "properties": {
+        "name": { "$ref": "#/definitions/agentName" },
+        "role": {
+          "description": "The `--agent` value passed to the claude CLI, which resolves .claude/agents/<role>.md. Equal to name by design: one identifier, not a mapping to keep in sync.",
+          "$ref": "#/definitions/agentName"
+        },
+        "description": { "type": "string", "minLength": 1 }
+      }
+    },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "optional"],
+      "properties": {
+        "required": {
+          "description": "Artifacts the agent cannot start without. A missing one is a reason to stop, never a reason to guess.",
+          "type": "array",
+          "items": { "$ref": "#/definitions/artifact" }
+        },
+        "optional": {
+          "description": "Artifacts the agent reads when they exist — e.g. a previous QA round, or its own prior code.",
+          "type": "array",
+          "items": { "$ref": "#/definitions/artifact" }
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required"],
+      "properties": {
+        "required": { "type": "array", "items": { "$ref": "#/definitions/artifact" } }
+      }
+    },
+    "constraints": {
+      "description": "Hard boundaries, as identifiers rather than prose, so they can be checked instead of only read. Each traces to a rule in .claude/shared/conventions.md.",
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/constraint" }
+    },
+    "permissions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capabilities", "read", "write"],
+      "properties": {
+        "capabilities": {
+          "description": "The fixed permission vocabulary the orchestrator enforces today.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["read", "write_docs", "write_code", "test", "build", "deploy", "rollback"] }
+        },
+        "read": {
+          "description": "Path globs this agent may read. Empty means no path-level restriction has been declared yet — the capability list above is what is actually enforced. Filling these in is the fine-grained permission model, tracked separately.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "write": {
+          "description": "Path globs this agent may write. Empty carries the same meaning as `read` above.",
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "tools": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } },
+    "states": {
+      "description": "The task states this agent is allowed to act in.",
+      "type": "array",
+      "items": { "$ref": "#/definitions/state" }
+    }
+  },
+  "definitions": {
+    "agentName": {
+      "type": "string",
+      "enum": [
+        "setup",
+        "business-analyst",
+        "system-analyst",
+        "project-manager",
+        "backend-engineer",
+        "frontend-engineer",
+        "qa-engineer",
+        "security",
+        "devops"
+      ]
+    },
+    "artifact": {
+      "type": "string",
+      "enum": [
+        "requirements",
+        "design",
+        "plan",
+        "qa-report",
+        "security-report",
+        "backend-code",
+        "frontend-code",
+        "devops-docs",
+        "scaffolding",
+        "schema.prisma"
+      ]
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "CREATED",
+        "REQUIREMENT",
+        "DESIGN",
+        "PLAN",
+        "IMPLEMENTATION",
+        "QA",
+        "QA_FAILED",
+        "SECURITY",
+        "SECURITY_FAILED",
+        "READY_TO_DEPLOY",
+        "APPROVED",
+        "DEPLOYED",
+        "BLOCKED"
+      ]
+    },
+    "constraint": {
+      "type": "string",
+      "enum": [
+        "no_git",
+        "stay_inside_repo",
+        "no_next_agent_invocation",
+        "amend_not_regenerate",
+        "dates_from_user",
+        "must_follow_design",
+        "no_schema_guessing",
+        "no_checkbox_writes",
+        "backend_before_frontend",
+        "green_before_handoff",
+        "no_rule_decisions",
+        "evidence_required",
+        "must_state_verify_mode",
+        "escalate_after_second_failure",
+        "cannot_close_security_finding",
+        "sole_security_finding_closer",
+        "no_deploy_without_verification",
+        "human_confirmation_required",
+        "unsourced_facts_marked_assumption",
+        "flags_sensitive_phases"
+      ]
+    }
+  }
+}

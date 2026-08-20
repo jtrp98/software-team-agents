@@ -28,7 +28,16 @@ export interface RunOutcome {
  * token" per task, so a record written here must stay a trustworthy fact.
  */
 export class RunLog {
-  private records: RunRecord[] = [];
+  private records: RunRecord[];
+
+  /**
+   * Seeded with the runs a previous process already logged when a task is
+   * resumed from a store, empty for a fresh task. Copied on the way in: this
+   * log stays append-only and never shares an array with its caller.
+   */
+  constructor(initial: readonly RunRecord[] = []) {
+    this.records = initial.map((r) => ({ ...r }));
+  }
 
   record(params: {
     task_id: string;

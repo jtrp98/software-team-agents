@@ -8,6 +8,22 @@ This repo defines a fixed, hand-off-based agent pipeline for building a project 
 
 `orchestrator/` (a separate Node/TypeScript package, `npm install`/`npm test` inside it) automates the opt-in autonomous mode described above — it shells out to `claude -p --agent <role>`, so it still runs the exact `.claude/agents/<role>.md` files this document defines, and it still stops at the same five human-approval points via its own gate/retry logic. It never invokes an agent by holding the `Agent` tool itself, and it never edits `.claude/` or `_docs/` directly. See `README.md`'s `orchestrator/` section for how to run it.
 
+Since P0 finished, three of its behaviours are worth knowing when you read the agent files:
+
+- **A failed round is routed by owner, not by position.** `qa-engineer` already writes which agent
+  each open issue routes to; the orchestrator reads that column rather than guessing, and when the
+  document names no owner — or names two — it stops for a person instead of picking one. A wrong
+  owner costs two fresh-context runs and fixes the wrong thing.
+- **Recovery is five choices, not one.** Retry (re-run the owner), Recover (go back to
+  `system-analyst` at DESIGN or `business-analyst` at REQUIREMENT — the backward edge is guarded so
+  it can only reach a state the task genuinely passed through), Rollback (a failure arriving after
+  verification returns the task to its last verified state), Escalate (a person can unblock it), and
+  Abort (the retry budget is spent). The budget outranks whatever the failure claims about itself.
+- **An approval is a record, not a flag.** Each of the five always-human points carries a type, a
+  status, who answered and when. The one that mattered: a rejection is now stored as `rejected`, so
+  it blocks the task — previously `false` and "never asked" were the same value, and a "no" quietly
+  became a re-prompt until someone said yes.
+
 ## The pipeline
 
 ```
@@ -72,9 +88,30 @@ _docs/
 │   ├── check-schema-contract.js  ← run by qa-engineer: diffs schema.prisma against every design.md
 │   └── check-status-sync.js      ← run before trusting status.md: diffs it against every plan.md
 ├── tests/
-│   └── run.js                    ← self-test for every hook + script (69 cases, no deps)
+│   └── run.js                    ← self-test for every hook + script (70 cases, no deps)
 └── settings.json                ← wires all four hooks up (checked in, applies to everyone)
 ```
+
+```
+layout.yaml                      ← which concept owns which directory (checked by --check-layout)
+contracts/*.yaml                 ← the machine-readable half of each agent
+policies/                        ← reserved for T49 (conventions.md split per area)
+workflows/                       ← reserved for T09 (one YAML per kind of change)
+```
+
+`layout.yaml` is the one answer to "where does this file go?". Five concepts, each answering
+exactly one question — Agent (ใคร) · Skill (ทำอะไรได้) · Policy (ห้ามอะไร) · Workflow (ทำเมื่อไหร่) ·
+Orchestrator (ใครทำต่อ) — plus runtime state and docs. `orchestrator/src/layout/repoLayout.ts`
+checks the declaration against the real filesystem, which is the part that keeps it from
+becoming a diagram that drifts: it catches an agent with a prompt but no contract, two concepts
+claiming one directory, and a hook sitting in `.claude/hooks/` that `settings.json` never wires
+up. Run it with `node orchestrator/dist/cli.js --check-layout`.
+
+Two paths are deliberately **not** moved by it. `.claude/agents/` is where Claude Code resolves
+subagents from, so relocating the prompts would separate the concept by breaking the product;
+the concept is separated instead by naming both halves of an agent — the prompt and the
+contract. And `.workflow/` keeps the runtime state path T02 specified, since renaming it to
+`runtime/` would break existing state to gain a synonym.
 
 No *document* is written at the repo root — every module doc lives under `_docs/module/<name>/`. (Project files that belong at the root by convention are a different thing: `setup` writes `package.json`, `.env`, `.env.example`, and `.gitignore` there, and `devops` writes infra files.) Every doc agent resolves its module folder first: one folder → use it; several → ask the user; none → send them back to `business-analyst`.
 
@@ -98,7 +135,7 @@ Full text in `.claude/shared/conventions.md`; the short version:
 - **An engineer doesn't hand off red code.** `typecheck`/`lint` run *before* an engineer is allowed to finish, not after — enforced by a `Stop`/`SubagentStop` hook (`.claude/hooks/require-green-before-stop.js`) that blocks the finish while they fail on a run that touched app code. This is a token-cost rule as much as a quality one: a type error found by `qa-engineer` costs two fresh-context agent runs to fix, the same error found here costs one edit. It forces at most one in-context fix attempt and can never trap an agent, and it is never a reason to improvise around a contract gap — say so in the handoff instead. `.claude/shared/conventions.md` §5c has the full rule.
 - **Verify against real state, not memory.** A recalled fact from an earlier turn, a summary, or "I remember this does X" is a hypothesis, not a fact — read the actual current file/schema/code before stating or acting on it. If it disagrees with what's recalled, the file/code wins and the stale belief is corrected on the spot. `.claude/shared/conventions.md` §12 has the full rule.
 - **`status.md` is an index, not a truth.** If it disagrees with the docs or the code, the docs and code win. It's also where an agent looks up which phase is in play, instead of scanning `plan.md` to work it out, and where `qa-engineer` stamps each phase's verify mode — `(FULL)` / `(TARGETED)` — for `devops` to gate on. It's read on *every* run of *every* module, so each module's section stays to exactly four things: `Docs:`, the per-phase table, `**Now**:`, and `**Blocked on**:` — no round-by-round narrative. **The trigger is qualitative, not a line-count threshold: the moment a module's section holds anything beyond those four** (a decision's reasoning, a fixed bug's mechanism, a past round's findings), it's already outgrown the limit. There's no agent assigned to catch this on a schedule — **whoever notices it first** (any agent reading `status.md` that run) moves the superseded material verbatim into `status-archive.md` and leaves a one-line pointer, the same discipline `qa-engineer` applies to `review.md`. Leaving it unarchived costs every other module's run too, not just the offending one. `.claude/shared/conventions.md` §2 has the rule.
-- **Read the section, not the file.** Every agent starts from a fresh context, so a whole-file read is a cost paid again on every run. `plan.md` → Plan Summary + your phase + Sequencing Notes + Open Questions. `design.md` → always Feature-by-Feature Feasibility, Risks, and Open Questions (they carry the confirmed decisions and the "don't implement this" list), plus your phase's contract section and your own module's entry. `conventions.md` §10 has the procedure. Exceptions by design: `project-manager` owns `plan.md`, `system-analyst` owns `design.md`, and `qa-engineer` reads the Data Model in full every round. Because those three `design.md` sections are mandatory reading on *every* run, `system-analyst` keeps them small the same way, and the trigger there is a concrete event, not a size check: **the moment an amend round's decision is settled** — its rule now lives in a Contract section, the Data Model, or `## Modules` — the question-and-answer record that produced it has stopped being load-bearing and moves verbatim into `design-archive.md`. This is specifically `system-analyst`'s job (unlike `status.md`'s "whoever notices"), and it happens **as part of the same amend that closes the decision** — not batched up as separate cleanup later. `.claude/shared/conventions.md` §4 has the rule. **If a document already grew bloated before this archiving discipline was ever applied to it** (no per-round archiving happened, so there's nothing to catch up on incrementally), whichever agent's run would otherwise pay to read the bloat does a one-time catch-up round instead of waiting: read the whole document once, move everything already closed by that document's own rule verbatim into its archive file, leave a pointer, keep the current/open material behind. After that one correction, the normal per-round discipline is enough. `.claude/shared/conventions.md` §4 ("Catching up a document that grew bloated before it was ever archived") has the procedure.
+- **Read the section, not the file.** Every agent starts from a fresh context, so a whole-file read is a cost paid again on every run. `plan.md` → Plan Summary + your phase + Sequencing Notes + Open Questions. `design.md` → always Feature-by-Feature Feasibility, Risks, and Open Questions (they carry the confirmed decisions and the "don't implement this" list), plus your phase's contract section and your own module's entry. `conventions.md` §10 has the procedure. Since T05 the orchestrator applies that same rule itself before invoking a stage (`orchestrator/src/context/contextManager.ts`), so an agent driven by it is handed the slice rather than asked to remember to take one — and is told which sections were withheld, so a filter can never silently edit its inputs. When a document's structure isn't the one §10 describes, the whole file is sent instead: slicing is an optimization, completeness is a correctness requirement. Exceptions by design: `project-manager` owns `plan.md`, `system-analyst` owns `design.md`, and `qa-engineer` reads the Data Model in full every round. Because those three `design.md` sections are mandatory reading on *every* run, `system-analyst` keeps them small the same way, and the trigger there is a concrete event, not a size check: **the moment an amend round's decision is settled** — its rule now lives in a Contract section, the Data Model, or `## Modules` — the question-and-answer record that produced it has stopped being load-bearing and moves verbatim into `design-archive.md`. This is specifically `system-analyst`'s job (unlike `status.md`'s "whoever notices"), and it happens **as part of the same amend that closes the decision** — not batched up as separate cleanup later. `.claude/shared/conventions.md` §4 has the rule. **If a document already grew bloated before this archiving discipline was ever applied to it** (no per-round archiving happened, so there's nothing to catch up on incrementally), whichever agent's run would otherwise pay to read the bloat does a one-time catch-up round instead of waiting: read the whole document once, move everything already closed by that document's own rule verbatim into its archive file, leave a pointer, keep the current/open material behind. After that one correction, the normal per-round discipline is enough. `.claude/shared/conventions.md` §4 ("Catching up a document that grew bloated before it was ever archived") has the procedure.
 - **QA runs in one of two modes, and says which.** FULL covers every task in the phase and is the only mode that closes one; TARGETED re-checks named fixes plus their blast radius, the shared-code watchlist, the whole-project typecheck/lint/build, and the full schema contract. TARGETED is allowed only after a FULL round left a file manifest to compare against, and it must state what it didn't cover. `.claude/agents/qa-engineer.md` has the rules.
 - **Nothing ships unverified.** `devops` refuses to deploy a phase `qa-engineer` hasn't accepted, one whose most recent round was TARGETED, one marked `🔒 Security gate` that `security` never audited, or one with unresolved Critical/Important security findings, without an explicit user override. `security` isn't gated on the mode — it audits the code independently.
 - **Only `security` closes a `security` finding.** Each finding carries a `Status` — 🔵 Open, 🟣 Fix claimed, ✅ Fixed (re-audited), ⚪ Accepted. An engineer's fix moves it to 🟣 and no further; `qa-engineer`'s pass is functional and says so itself, so it cannot close one. `devops` blocks on 🔵 and 🟣 alike.

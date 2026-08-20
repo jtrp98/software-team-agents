@@ -1,0 +1,26 @@
+# Contract for the `devops` agent. Shape: orchestrator/schemas/agent-contract.schema.json
+agent:
+  name: devops
+  role: devops
+  description: Builds, deploys and migrates — only once qa-engineer, and security where required, have accepted the work.
+input:
+  required: [qa-report, plan]
+  optional: [security-report, design, devops-docs]
+output:
+  required: [devops-docs]
+constraints:
+  - no_git
+  - stay_inside_repo
+  - no_next_agent_invocation
+  - amend_not_regenerate
+  - dates_from_user
+  # Refuses an unaccepted phase, a TARGETED-only round, an unaudited security gate, or open findings.
+  - no_deploy_without_verification
+  # Preparing a Dockerfile or a dry-run may proceed; running it against something real never does.
+  - human_confirmation_required
+permissions:
+  capabilities: [read, build, deploy, rollback]
+  read: []
+  write: []
+tools: [Bash, Read, Write, Edit, Glob, Grep, AskUserQuestion]
+states: [READY_TO_DEPLOY, APPROVED, DEPLOYED]

@@ -45,6 +45,10 @@
  * `build` and `test` stay with `qa-engineer` -- too slow to pay for on every agent stop.
  * Also runs this repo's two drift scripts when they apply.
  *
+ * WHICH package.json those scripts come from is decided by the changed files themselves, not by
+ * scanning the repo: each changed file resolves to the nearest package.json at or above it, and
+ * every distinct owner is checked. See packagesOwning() for why that direction is load-bearing.
+ *
  * Exits 2 to block with the failure text on stderr; 0 to allow. Anything it can't parse,
  * resolve, or run is allowed through -- a guard that fails closed here would trap every agent
  * in the project, and this is a cost optimization, not the correctness guarantee.
@@ -101,19 +105,19 @@ function run(input) {
   const failures = [];
 
   for (const script of ['typecheck', 'lint']) {
-    const pkg = findPackageWithScript(script);
-    if (!pkg) continue;
-    const res = spawnSync('npm', ['run', '--silent', script], {
-      cwd: pkg.dir,
-      encoding: 'utf8',
-      shell: process.platform === 'win32',
-      timeout: 180000,
-    });
-    if (res.error || res.status !== 0) {
-      failures.push({
-        label: `npm run ${script}` + (pkg.dir === root ? '' : ` (in ${path.relative(root, pkg.dir)})`),
-        output: tail((res.stdout || '') + (res.stderr || ''), 40) || String(res.error || 'exited non-zero'),
+    for (const dir of packagesOwning(code, script)) {
+      const res = spawnSync('npm', ['run', '--silent', script], {
+        cwd: dir,
+        encoding: 'utf8',
+        shell: process.platform === 'win32',
+        timeout: 180000,
       });
+      if (res.error || res.status !== 0) {
+        failures.push({
+          label: `npm run ${script}` + (dir === root ? '' : ` (in ${path.relative(root, dir)})`),
+          output: tail((res.stdout || '') + (res.stderr || ''), 40) || String(res.error || 'exited non-zero'),
+        });
+      }
     }
   }
 
@@ -148,24 +152,58 @@ function changedFiles() {
   return [...new Set(out)];
 }
 
-/** Nearest package.json (root, then one level down) that actually defines `script`. */
-function findPackageWithScript(script) {
-  const dirs = [root];
+/** Does `<dir>/package.json` exist and actually define `script`? */
+function definesScript(dir, script) {
+  const pkgPath = path.join(dir, 'package.json');
+  if (!fs.existsSync(pkgPath)) return false;
   try {
-    for (const e of fs.readdirSync(root, { withFileTypes: true })) {
-      if (e.isDirectory() && !e.name.startsWith('.') && e.name !== 'node_modules') dirs.push(path.join(root, e.name));
-    }
-  } catch { /* ignore */ }
-
-  for (const dir of dirs) {
-    const pkgPath = path.join(dir, 'package.json');
-    if (!fs.existsSync(pkgPath)) continue;
-    try {
-      const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-      if (pkg && pkg.scripts && typeof pkg.scripts[script] === 'string') return { dir };
-    } catch { /* unparseable package.json -- skip */ }
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    return !!(pkg && pkg.scripts && typeof pkg.scripts[script] === 'string');
+  } catch {
+    return false; // unparseable package.json -- treat as not defining it
   }
-  return null;
+}
+
+/**
+ * The packages that actually OWN the changed code, i.e. for each changed file the nearest
+ * `package.json` at or above it that defines `script`. Every distinct owner is returned, so a
+ * run touching two workspaces gets both checked.
+ *
+ * It resolves upward from the files rather than scanning the repo, and that direction is the
+ * whole point. The first version scanned root plus one level down and took the first package
+ * defining the script — which had two failure modes, both of them silent:
+ *
+ *   - Wrong package. Adding `orchestrator/` (which defines `typecheck`) to this repo meant an
+ *     engineer's change to app code got graded against the orchestrator's typecheck instead.
+ *     Green there, so the guard passed the run through: it fails OPEN, looking installed and
+ *     enforcing nothing — exactly the failure this folder's self-test exists to catch.
+ *   - Invisible package. Anything deeper than one level (`packages/api/`, `apps/web/`) was
+ *     never checked at all.
+ *
+ * Walking up from the changed file can't do either: the answer is a property of the file, not
+ * of directory iteration order. Nothing above `root` is ever consulted.
+ */
+function packagesOwning(codeFiles, script) {
+  const owners = new Set();
+  const rootResolved = path.resolve(root);
+
+  for (const rel of codeFiles) {
+    let dir = path.resolve(path.dirname(path.join(root, rel)));
+    // A path from git is repo-relative, but a `..` in one would escape the repo -- don't follow it.
+    if (dir !== rootResolved && !dir.startsWith(rootResolved + path.sep)) continue;
+
+    for (;;) {
+      if (definesScript(dir, script)) {
+        owners.add(dir);
+        break;
+      }
+      if (dir === rootResolved) break;
+      const parent = path.dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+  }
+  return [...owners];
 }
 
 function tail(text, lines) {
