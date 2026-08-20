@@ -11,6 +11,7 @@ steps:
   - agent: business-analyst
   - agent: system-analyst
   - agent: project-manager
+  - agent: test-planner
   - agent: backend-engineer
     when: touchesBackend
   - agent: frontend-engineer

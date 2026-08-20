@@ -33,6 +33,8 @@ export enum Capability {
   UI = "ui",
   /** Write and run automated tests. */
   TESTING = "testing",
+  /** Decide what needs testing and how (unit/integration/API/E2E), before implementation starts. */
+  TEST_STRATEGY = "test-strategy",
   /** Check implemented work against what was specified. */
   VERIFICATION = "verification",
   /** Audit code adversarially for security defects. */

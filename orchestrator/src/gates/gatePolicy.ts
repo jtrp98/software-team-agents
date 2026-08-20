@@ -25,7 +25,13 @@ export interface GateResult {
  * answer — only the orchestrator (item 13) consults it, same as canTransition.
  */
 export function checkGate(from: TaskState, to: TaskState, ctx: GateContext): GateResult {
-  if (from === TaskState.DESIGN && to === TaskState.IMPLEMENTATION) {
+  // Gated on leaving DESIGN at all, not specifically on landing in IMPLEMENTATION: T20 put
+  // test-planner (and project-manager already did, for the "feature" pipeline) between the
+  // two, so a task can leave DESIGN into PLAN without ever taking the DESIGN->IMPLEMENTATION
+  // edge directly. The schema has to be confirmed before *anything* downstream reads it —
+  // a plan or a test strategy built against an unconfirmed schema is exactly as wrong as code
+  // built against one.
+  if (from === TaskState.DESIGN) {
     return ctx.designApproved
       ? { allowed: true }
       : { allowed: false, reason: "DESIGN_APPROVED required before development can start" };

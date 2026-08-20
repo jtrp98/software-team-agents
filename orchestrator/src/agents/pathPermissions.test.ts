@@ -94,6 +94,7 @@ describe("the shipped contracts' path rules", () => {
       [AgentStage.BUSINESS_ANALYST, "_docs/module/crm/requirement.md", "_docs/module/crm/design.md"],
       [AgentStage.SYSTEM_ANALYST, "_docs/module/crm/design.md", "_docs/module/crm/plan.md"],
       [AgentStage.PROJECT_MANAGER, "_docs/module/crm/plan.md", "_docs/module/crm/design.md"],
+      [AgentStage.TEST_PLANNER, "_docs/module/crm/test-plan.md", "_docs/module/crm/plan.md"],
       [AgentStage.SECURITY, "_docs/module/crm/security.md", "_docs/module/crm/review.md"],
       [AgentStage.DEVOPS, "_docs/module/crm/deploy.md", "_docs/module/crm/design.md"],
     ];
@@ -108,7 +109,7 @@ describe("the shipped contracts' path rules", () => {
   it("stops an engineer writing any module document", () => {
     for (const agent of [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER]) {
       const rules = pathRulesFor(agent);
-      for (const doc of ["design.md", "requirement.md", "plan.md", "review.md"]) {
+      for (const doc of ["design.md", "requirement.md", "plan.md", "test-plan.md", "review.md"]) {
         expect(canWritePath(rules, `_docs/module/crm/${doc}`).allowed, `${agent} ${doc}`).toBe(false);
       }
     }

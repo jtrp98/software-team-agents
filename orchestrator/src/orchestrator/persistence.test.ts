@@ -53,6 +53,7 @@ describe("Orchestrator persistence (T01)", () => {
     const first = new Orchestrator("T-1", incremental(), { store });
     await first.step(() => pass); // system-analyst done
     first.provideHumanApproval("designApproved", true);
+    await first.step(() => pass); // test-planner done
     await first.step(() => pass); // backend-engineer done
 
     const resumed = Orchestrator.resume("T-1", store);
@@ -79,10 +80,11 @@ describe("Orchestrator persistence (T01)", () => {
   it("carries retry counts and spend across a resume, so a restart is not a fresh allowance", async () => {
     const store = new MemoryTaskStore();
     const first = new Orchestrator("T-1", incremental(), { store });
-    await first.step(() => pass);
+    await first.step(() => pass); // system-analyst
     first.provideHumanApproval("designApproved", true);
-    await first.step(() => ({ outcome: { tokens: 5_000, cost: 0.2, result: "PASS" } }));
-    await first.step(() => ({ outcome: { tokens: 5_000, cost: 0.2, result: "PASS" } }));
+    await first.step(() => pass); // test-planner
+    await first.step(() => ({ outcome: { tokens: 5_000, cost: 0.2, result: "PASS" } })); // backend-engineer
+    await first.step(() => ({ outcome: { tokens: 5_000, cost: 0.2, result: "PASS" } })); // frontend-engineer
     await first.step(() => ({
       outcome: { tokens: 1_000, cost: 0.05, result: "FAIL" },
       artifactType: ArtifactType.QA_REPORT,
@@ -94,7 +96,7 @@ describe("Orchestrator persistence (T01)", () => {
     const resumed = Orchestrator.resume("T-1", store);
     expect(resumed.retries.qa).toBe(1);
     expect(resumed.runLog.totalTokens("T-1")).toBe(first.runLog.totalTokens("T-1"));
-    expect(resumed.runLog.runsForTask("T-1")).toHaveLength(4);
+    expect(resumed.runLog.runsForTask("T-1")).toHaveLength(5);
   });
 
   it("keeps every routing decision in the store as an audit trail", async () => {
@@ -124,6 +126,7 @@ describe("Orchestrator failure routing (T01)", () => {
     const orch = new Orchestrator("T-1", incremental(), { store });
     await orch.step(() => pass); // system-analyst
     orch.provideHumanApproval("designApproved", true);
+    await orch.step(() => pass); // test-planner
     await orch.step(() => pass); // backend
     await orch.step(() => pass); // frontend
     const status = await orch.step(() => ({
@@ -215,7 +218,7 @@ describe("Orchestrator persistence — against the real file-backed store", () =
       });
 
       // system-analyst is not re-run, and the approval is not re-asked.
-      expect(ran).toEqual([AgentStage.BACKEND_ENGINEER]);
+      expect(ran).toEqual([AgentStage.TEST_PLANNER]);
       expect(resumed.snapshot().gateContext.designApproved).toBe(true);
       secondStore.close();
     } finally {
@@ -247,7 +250,9 @@ describe("human approval as first-class state (T08)", () => {
       status: "pending",
       required: true,
       from: TaskState.DESIGN,
-      to: TaskState.IMPLEMENTATION,
+      // PLAN (test-planner), not IMPLEMENTATION directly — see gatePolicy.ts's T20 comment:
+      // the gate fires leaving DESIGN regardless of what sits immediately after it.
+      to: TaskState.PLAN,
     });
   });
 
@@ -266,7 +271,7 @@ describe("human approval as first-class state (T08)", () => {
     orch.status();
     orch.decideApproval(ApprovalType.SCHEMA_CONFIRMATION, true, { by: "jaturapat", note: "schema ok" });
 
-    expect(orch.status()).toEqual({ kind: "RUNNING", stage: AgentStage.BACKEND_ENGINEER });
+    expect(orch.status()).toEqual({ kind: "RUNNING", stage: AgentStage.TEST_PLANNER });
     expect(orch.approvalLedger[0]).toMatchObject({ status: "approved", decidedBy: "jaturapat", note: "schema ok" });
   });
 
@@ -298,7 +303,7 @@ describe("human approval as first-class state (T08)", () => {
 
     const resumed = Orchestrator.resume("T-1", store);
     expect(resumed.approvalLedger[0]).toMatchObject({ status: "approved", decidedBy: "jaturapat" });
-    expect(resumed.status()).toEqual({ kind: "RUNNING", stage: AgentStage.BACKEND_ENGINEER });
+    expect(resumed.status()).toEqual({ kind: "RUNNING", stage: AgentStage.TEST_PLANNER });
   });
 
   it("carries a rejection across a resume too — the task does not un-reject itself by restarting", async () => {
@@ -321,7 +326,7 @@ describe("human approval as first-class state (T08)", () => {
     orch.status();
     orch.provideHumanApproval("designApproved", true);
 
-    expect(orch.status()).toEqual({ kind: "RUNNING", stage: AgentStage.BACKEND_ENGINEER });
+    expect(orch.status()).toEqual({ kind: "RUNNING", stage: AgentStage.TEST_PLANNER });
     expect(orch.approvalLedger[0].status).toBe("approved");
   });
 
@@ -329,10 +334,11 @@ describe("human approval as first-class state (T08)", () => {
   it("records an escalated QA failure as a typed approval, not just an opaque BLOCKED", async () => {
     const store = new MemoryTaskStore();
     const orch = new Orchestrator("T-1", incremental(), { store });
-    await orch.step(() => pass);
+    await orch.step(() => pass); // system-analyst
     orch.provideHumanApproval("designApproved", true);
-    await orch.step(() => pass);
-    await orch.step(() => pass);
+    await orch.step(() => pass); // test-planner
+    await orch.step(() => pass); // backend-engineer
+    await orch.step(() => pass); // frontend-engineer
     await orch.step(() => ({
       outcome: { tokens: 100, cost: 0.01, result: "FAIL" },
       artifactType: ArtifactType.QA_REPORT,

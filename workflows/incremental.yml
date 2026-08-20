@@ -10,6 +10,7 @@ level: MEDIUM
 requires_human_approval: false
 steps:
   - agent: system-analyst
+  - agent: test-planner
   - agent: backend-engineer
     when: touchesBackend
   - agent: frontend-engineer

@@ -14,6 +14,8 @@ import { checkLayout } from "./layout/repoLayout.js";
 import { ApprovalType } from "./gates/approval.js";
 import { checkAllWorkflows } from "./workflow/workflowDefinition.js";
 import { checkProfile } from "./profile/projectProfile.js";
+import { checkDecisions } from "./decisions/decisionLog.js";
+import { checkTestPyramid } from "./testing/testPyramid.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -47,6 +49,10 @@ export interface CliArgs {
   checkWorkflows: boolean;
   /** Check project.yaml and stacks/ against the agent roster and exit. Same audience. */
   checkProfile: boolean;
+  /** Check decisions/*.md ADRs against the schema and cross-links and exit. Same audience. */
+  checkDecisions: boolean;
+  /** Check test-pyramid.yaml against its schema and exit. Same audience. */
+  checkTestPyramid: boolean;
   dependsOn: string[];
   stateDb?: string;
   /** Phases of plan.md this run touches, used to slice module docs per conventions.md §10. Empty = send the plan whole. */
@@ -77,6 +83,8 @@ export const USAGE =
   "  orchestrate --check-layout [--project-root <path>]         check layout.yaml against the real directories\n" +
   "  orchestrate --check-workflows [--project-root <path>]      check workflows/*.yml against the classifier\n" +
   "  orchestrate --check-profile [--project-root <path>]        check project.yaml and stacks/ against the agent roster\n" +
+  "  orchestrate --check-decisions [--project-root <path>]      check decisions/*.md ADRs against the schema and cross-links\n" +
+  "  orchestrate --check-test-pyramid [--project-root <path>]   check test-pyramid.yaml against its schema\n" +
   `  classification flags: ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
 
 /** Pure argv parser — kept separate from process.argv/console/exit so it's directly testable. */
@@ -91,6 +99,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkLayoutFlag = false;
   let checkWorkflowsFlag = false;
   let checkProfileFlag = false;
+  let checkDecisionsFlag = false;
+  let checkTestPyramidFlag = false;
   let dependsOn: string[] = [];
   let phases: number[] = [];
   const classification: ClassificationInput = {};
@@ -127,6 +137,10 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkWorkflowsFlag = true;
     } else if (arg === "--check-profile") {
       checkProfileFlag = true;
+    } else if (arg === "--check-decisions") {
+      checkDecisionsFlag = true;
+    } else if (arg === "--check-test-pyramid") {
+      checkTestPyramidFlag = true;
     } else if (arg in FLAG_TO_CLASSIFICATION) {
       classification[FLAG_TO_CLASSIFICATION[arg]] = true;
     } else {
@@ -134,7 +148,15 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     }
   }
 
-  if (!list && !checkContracts && !checkLayoutFlag && !checkWorkflowsFlag && !checkProfileFlag) {
+  if (
+    !list &&
+    !checkContracts &&
+    !checkLayoutFlag &&
+    !checkWorkflowsFlag &&
+    !checkProfileFlag &&
+    !checkDecisionsFlag &&
+    !checkTestPyramidFlag
+  ) {
     if (!taskId) throw new CliUsageError("--task-id is required");
     if (!moduleName) throw new CliUsageError("--module is required (the _docs/module/<name>/ this task belongs to)");
   }
@@ -153,16 +175,25 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkLayout: checkLayoutFlag,
     checkWorkflows: checkWorkflowsFlag,
     checkProfile: checkProfileFlag,
+    checkDecisions: checkDecisionsFlag,
+    checkTestPyramid: checkTestPyramidFlag,
     dependsOn,
     stateDb,
     phases,
   };
 }
 
-/** Which `provideHumanApproval` field a given gate's target state maps to. */
-function approvalFieldFor(to: TaskState): "designApproved" | "humanApproved" | null {
-  if (to === TaskState.IMPLEMENTATION) return "designApproved";
-  if (to === TaskState.APPROVED) return "humanApproved";
+/**
+ * Which `provideHumanApproval` field a gate's approval type maps to. Keyed on
+ * `approvalType`, not on the edge's target state: T20 put `test-planner`
+ * (and `project-manager` already did, for the "feature" pipeline) between
+ * DESIGN and IMPLEMENTATION, so the schema-confirmation gate's target can be
+ * PLAN rather than IMPLEMENTATION directly — the approval type is what stays
+ * stable, per gatePolicy.ts/approval.ts's matching fix.
+ */
+function approvalFieldFor(approvalType: ApprovalType | null): "designApproved" | "humanApproved" | null {
+  if (approvalType === ApprovalType.SCHEMA_CONFIRMATION) return "designApproved";
+  if (approvalType === ApprovalType.DEPLOY) return "humanApproved";
   return null;
 }
 
@@ -306,6 +337,28 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     return 1;
   }
 
+  if (args.checkDecisions) {
+    const result = checkDecisions(args.projectRoot);
+    if (result.ok) {
+      console.log("[orchestrator] decisions/*.md agree with the schema and cross-link cleanly.");
+      return 0;
+    }
+    console.error("[orchestrator] decisions/*.md have problems:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
+  if (args.checkTestPyramid) {
+    const result = checkTestPyramid(args.projectRoot);
+    if (result.ok) {
+      console.log("[orchestrator] test-pyramid.yaml agrees with its schema.");
+      return 0;
+    }
+    console.error("[orchestrator] test-pyramid.yaml has problems:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
   const store = new SqliteTaskStore(args.stateDb ?? defaultStateDbPath(args.projectRoot));
   const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(args.projectRoot) });
 
@@ -337,7 +390,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
         return 1;
       }
       if (status.kind === "WAITING_FOR_HUMAN") {
-        const field = approvalFieldFor(status.to);
+        const field = approvalFieldFor(status.approvalType);
         if (!field) {
           console.log(
             `[orchestrator] task ${taskId} stuck waiting: ${status.from} -> ${status.to} (${status.reason}), ` +

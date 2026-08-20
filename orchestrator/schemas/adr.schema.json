@@ -1,0 +1,50 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/adr.schema.json",
+  "title": "ADR frontmatter (decisions/ADR-<NNN>-<slug>.md)",
+  "description": "The YAML frontmatter every Architecture Decision Record in decisions/ starts with. Project-wide decisions (stack, cross-cutting architecture, permission model) are written down once here so an agent reads one instead of re-litigating it on the next run. Validated by orchestrator/src/decisions/decisionLog.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "status", "date"],
+  "properties": {
+    "id": {
+      "description": "Stable identifier. Equal to the leading ADR-<NNN> of the filename — one identifier, not a mapping to keep in sync.",
+      "type": "string",
+      "pattern": "^ADR-[0-9]{3}$"
+    },
+    "title": {
+      "description": "One-sentence summary of the decision, not the topic — \"Use PostgreSQL with Prisma\", not \"Database\".",
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "description": "proposed = written down, not yet binding, an agent may still ask about it. accepted = settled, implement without asking. superseded = replaced by a later ADR (must carry superseded_by). rejected = considered and turned down, kept so the option isn't re-proposed.",
+      "type": "string",
+      "enum": ["proposed", "accepted", "superseded", "rejected"]
+    },
+    "date": {
+      "description": "The date the status above became true, asked from the user per conventions.md's dating rule — never inferred by an agent.",
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "supersedes": {
+      "description": "The ADR id this record replaces, if any.",
+      "type": "string",
+      "pattern": "^ADR-[0-9]{3}$"
+    },
+    "superseded_by": {
+      "description": "The ADR id that replaces this record. Required once status is \"superseded\".",
+      "type": "string",
+      "pattern": "^ADR-[0-9]{3}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "status": { "const": "superseded" } }, "required": ["status"] },
+      "then": {
+        "required": ["superseded_by"],
+        "properties": { "superseded_by": { "type": "string", "pattern": "^ADR-[0-9]{3}$" } }
+      }
+    }
+  ]
+}

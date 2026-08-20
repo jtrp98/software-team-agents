@@ -24,12 +24,12 @@
 - [x] T15 — Permission Model แบบละเอียด
 
 ## 🟠 P1 — Documentation / Knowledge
-- [ ] T16 — Decision Log (ADR)
-- [ ] T17 — Change Impact Analysis
-- [ ] T18 — Versioning ของ Contract
-- [ ] T19 — Requirement Traceability
-- [ ] T20 — Test Planner Agent
-- [ ] T21 — Test Pyramid ตาม task type
+- [x] T16 — Decision Log (ADR)
+- [x] T17 — Change Impact Analysis
+- [x] T18 — Versioning ของ Contract
+- [x] T19 — Requirement Traceability
+- [x] T20 — Test Planner Agent
+- [x] T21 — Test Pyramid ตาม task type
 
 ## 🟠 P2 — Quality
 - [ ] T22 — Static Analysis Gate

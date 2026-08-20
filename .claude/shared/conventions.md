@@ -186,7 +186,7 @@ Every write resolves under this project's root. No agent writes elsewhere, whate
 
 ## 5b. Amend, don't regenerate — the mechanical half
 
-§4 says existing docs are amended with `Edit`, never replaced with `Write`. **Enforced** by `.claude/hooks/block-doc-rewrite.js`, which blocks a `Write` to one of the six per-module docs once it already exists on disk — `Edit`/`MultiEdit` are unaffected, and so is a doc's first creation (file doesn't exist yet). If blocked, use `Edit` on the section that needs to change. (The hook can't tell which agent is calling it — see its comments for why the file-exists check is the right proxy anyway.)
+§4 says existing docs are amended with `Edit`, never replaced with `Write`. **Enforced** by `.claude/hooks/block-doc-rewrite.js`, which blocks a `Write` to one of the seven per-module docs once it already exists on disk — `Edit`/`MultiEdit` are unaffected, and so is a doc's first creation (file doesn't exist yet). If blocked, use `Edit` on the section that needs to change. (The hook can't tell which agent is calling it — see its comments for why the file-exists check is the right proxy anyway.)
 
 ## 5c. An engineer doesn't hand off red code
 
@@ -200,7 +200,7 @@ The dev↔QA round trip is the most expensive thing in this pipeline: a type err
 
 ## 6. Handoffs
 
-**No agent invokes the next agent.** This is structural, not just a rule: none of the nine agents has the `Agent` tool in its own toolset, so none of them can call another one even if it wanted to. Every run ends the same way — telling the user (or the session driving the pipeline) what was produced, what state it leaves the module in, and which agent should pick it up next — then stops. What differs between the two modes below is **who decides to make that next call**, not whether an agent is allowed to make it itself. It never is.
+**No agent invokes the next agent.** This is structural, not just a rule: none of the ten agents has the `Agent` tool in its own toolset, so none of them can call another one even if it wanted to. Every run ends the same way — telling the user (or the session driving the pipeline) what was produced, what state it leaves the module in, and which agent should pick it up next — then stops. What differs between the two modes below is **who decides to make that next call**, not whether an agent is allowed to make it itself. It never is.
 
 ### Manual mode (the default)
 
@@ -358,7 +358,7 @@ Read it in full. It's the shortest of the four, it has no per-phase structure to
 
 ## 11. Language
 
-Every agent talks to the user in Thai — status updates, questions (`AskUserQuestion` labels/options included), and handoff summaries. **Every document an agent creates is written in Thai too** — `requirement.md`, `design.md`, `plan.md`, `review.md`, `security.md`, `deploy.md`, `status.md`, and their `## Change Log` entries. Keep technical vocabulary in its original English form rather than translating it (model/field names, stack terms like "endpoint"/"migration"/"schema", file paths, code identifiers, code/schema blocks) — translating those makes them harder to match against the actual code and docs, not easier to read.
+Every agent talks to the user in Thai — status updates, questions (`AskUserQuestion` labels/options included), and handoff summaries. **Every document an agent creates is written in Thai too** — `requirement.md`, `design.md`, `plan.md`, `test-plan.md`, `review.md`, `security.md`, `deploy.md`, `status.md`, and their `## Change Log` entries. Keep technical vocabulary in its original English form rather than translating it (model/field names, stack terms like "endpoint"/"migration"/"schema", file paths, code identifiers, code/schema blocks) — translating those makes them harder to match against the actual code and docs, not easier to read.
 
 This governs new content, not a retranslation pass: if a document already exists with content written in another language, amend it per §4 — add or edit your section in Thai — but don't retranslate the rest of the document as a side effect of an unrelated edit. Bringing a whole existing document over to Thai is a deliberate decision the user asks for explicitly.
 

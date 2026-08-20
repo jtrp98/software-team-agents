@@ -33,6 +33,14 @@ describe("checkGate", () => {
     expect(result.allowed).toBe(true);
   });
 
+  /** T20: test-planner (like project-manager already did, for the "feature" pipeline) can sit
+   *  between DESIGN and IMPLEMENTATION, so the gate must fire leaving DESIGN at all — not only
+   *  on the literal DESIGN->IMPLEMENTATION edge, which a pipeline may never actually take. */
+  it("blocks DESIGN -> PLAN without designApproved too", () => {
+    expect(checkGate(TaskState.DESIGN, TaskState.PLAN, {}).allowed).toBe(false);
+    expect(checkGate(TaskState.DESIGN, TaskState.PLAN, { designApproved: true }).allowed).toBe(true);
+  });
+
   it("blocks QA -> next without a passing qa report", () => {
     expect(checkGate(TaskState.QA, TaskState.READY_TO_DEPLOY, {}).allowed).toBe(false);
     expect(

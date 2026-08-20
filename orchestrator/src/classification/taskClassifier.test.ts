@@ -32,6 +32,7 @@ describe("classifyTask", () => {
     expect(result.level).toBe(TaskLevel.MEDIUM);
     expect(result.pipeline).toEqual([
       AgentStage.SYSTEM_ANALYST,
+      AgentStage.TEST_PLANNER,
       AgentStage.BACKEND_ENGINEER,
       AgentStage.QA_ENGINEER,
     ]);
@@ -43,6 +44,7 @@ describe("classifyTask", () => {
     expect(result.pipeline).toEqual([
       AgentStage.BUSINESS_ANALYST,
       AgentStage.SYSTEM_ANALYST,
+      AgentStage.TEST_PLANNER,
       AgentStage.BACKEND_ENGINEER,
       AgentStage.QA_ENGINEER,
     ]);
@@ -55,6 +57,7 @@ describe("classifyTask", () => {
     expect(result.sensitiveGate).toBe(true);
     expect(result.pipeline).toEqual([
       AgentStage.SYSTEM_ANALYST,
+      AgentStage.TEST_PLANNER,
       AgentStage.BACKEND_ENGINEER,
       AgentStage.QA_ENGINEER,
       AgentStage.SECURITY,
@@ -72,6 +75,7 @@ describe("classifyTask", () => {
       AgentStage.BUSINESS_ANALYST,
       AgentStage.SYSTEM_ANALYST,
       AgentStage.PROJECT_MANAGER,
+      AgentStage.TEST_PLANNER,
       AgentStage.BACKEND_ENGINEER,
       AgentStage.FRONTEND_ENGINEER,
       AgentStage.QA_ENGINEER,

@@ -112,6 +112,8 @@ You own the structure described in `.claude/shared/conventions.md` §4 — **`re
 ## Open Issues — all phases
 Every unresolved item from any phase, as a table: issue · which phase it came from (link the archive file) · which agent it routes to · blocking or not · **how many re-check rounds it's had** (for the ceiling above). This is the first thing downstream agents read — it must be complete enough to act on without opening anything else. Also list any phase marked `🔒 Security gate` in `plan.md` whose `security` round hasn't run yet.
 
+**Name the task's id (`BE-NNN`/`FE-NNN`) in the issue cell whenever the item traces to one** — `BE-004 login validation is wrong`, not just `login validation is wrong`. This is what lets the requirement traceability chain (T19) mark a task `blocked` instead of quietly reading it as verified once its checkbox is set; an issue with no id in it is invisible to that chain, not just harder for a person to place.
+
 ## Verification Summary (current round)
 Phase/feature checked, **which mode (FULL or TARGETED)**, overall status, what was actually verified and how. For a TARGETED round, also state plainly what it did not cover. Name the automated checks you ran (`typecheck`/`lint`/`build`/`test`) with their real results — or state in so many words that the project has no automated tests and this round is code inspection only.
 

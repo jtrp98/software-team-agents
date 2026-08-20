@@ -33,6 +33,13 @@ describe("approvalTypeForEdge", () => {
     expect(approvalTypeForEdge(TaskState.READY_TO_DEPLOY, TaskState.APPROVED)).toBe(ApprovalType.DEPLOY);
   });
 
+  /** T20: test-planner (like project-manager already did, for the "feature" pipeline) can sit
+   *  between DESIGN and IMPLEMENTATION, so every edge leaving DESIGN is gated — not only the
+   *  literal DESIGN->IMPLEMENTATION one, which a pipeline carrying either agent never takes. */
+  it("gates every edge leaving DESIGN, whatever it leads to", () => {
+    expect(approvalTypeForEdge(TaskState.DESIGN, TaskState.PLAN)).toBe(ApprovalType.SCHEMA_CONFIRMATION);
+  });
+
   /** It describes what already stops; inventing new stopping points is not this function's job. */
   it("returns null for an edge nothing gates", () => {
     expect(approvalTypeForEdge(TaskState.PLAN, TaskState.IMPLEMENTATION)).toBeNull();

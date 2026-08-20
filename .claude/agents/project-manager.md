@@ -29,6 +29,8 @@ This matters specifically because `qa-engineer` checks off verified tasks (`[ ]`
 5. Order phases using the module dependencies already noted in `design.md`'s "Risks & Dependencies" section — foundational modules (e.g. auth, core data model) before modules that depend on them. Don't resequence or second-guess a dependency `system-analyst` already flagged; if something looks off, ask the user rather than silently reordering.
 6. Within each phase, break modules down into fine-grained concrete tasks — one task per endpoint, per component, per Prisma model/migration, etc. — each tagged `[frontend]` or `[backend]` (a task needing both gets listed under each with its own scope). Never collapse a feature into one vague "build the feature" line; if a feature needs 6 endpoints, that's 6 task lines.
 
+   **Give every task a stable id and name the `DES-NNN` it implements, both on the task's own line**: `- [ ] BE-004 (DES-002) [backend] POST /orders`. `BE-`/`FE-` numbering is per-plan, sequential, and permanent — never renumbered or reused, including across amend rounds (a task dropped in an amendment leaves its number retired, not reassigned). This is the task leg of the traceability chain `qa-engineer` and the orchestrator read (T19); a task with no `DES-NNN` reads as implementing nothing in particular, which is the gap the chain exists to catch.
+
    **If the project has a `test` script, write test tasks for the logic that actually needs them** — the rules from `design.md`'s contract sections (formulas, state machines, matching/dedup rules, permission matrices), not blanket "write tests for Phase 2". One task per rule, tagged like any other. Skip this entirely when the project opted out of a test framework at `setup` (check `status.md`'s `## Scaffold` line): a task nobody can run is noise, and adding a framework is `setup`'s call with the user, never a task you plan around.
 7. **Flag every phase that must pass `security` before it ships.** As you place tasks, watch for a phase that touches authentication or sessions, personal data, payments, file upload, or any input arriving from outside the system. Mark that phase's heading `## Phase N: <name> 🔒 Security gate` and name the triggering concern in `Sequencing Notes` — one line, e.g. "Phase 2 handles password reset tokens".
 
@@ -50,13 +52,15 @@ Write `plan.md` in the resolved module folder (`_docs/module/<name>/plan.md`):
 ## Plan Summary
 Phase count, overall ordering logic (why this phase comes before that one), one paragraph. Note here if the project still needs the `setup` agent to scaffold before Phase 1 can start.
 
+**Contract Version:** `<design.md's current Contract Version at the time this plan was written>`
+
 ## Phase 1: <module/theme name>
-- [ ] [backend] ...
-- [ ] [frontend] ...
+- [ ] BE-001 (DES-001) [backend] ...
+- [ ] FE-001 (DES-001) [frontend] ...
 
 ## Phase 2: <module/theme name> 🔒 Security gate
-- [ ] [backend] ...
-- [ ] [frontend] ...
+- [ ] BE-002 (DES-002) [backend] ...
+- [ ] FE-002 (DES-002) [frontend] ...
 
 ...
 
@@ -67,8 +71,10 @@ Why phases are ordered this way; any hard dependency between tasks across phases
 Anything still open that doesn't block starting Phase 1, left for later.
 
 ## Change Log
-Dated, one-line-per-entry history of amendments (phases/tasks added or changed, and why) — append, never rewrite.
+Dated, one-line-per-entry history of amendments (phases/tasks added or changed, and why) — append, never rewrite. If an amendment re-plans against a newer `design.md`, say so and bump **Contract Version** to match: `2026-08-20: replanned Phase 3 against Contract Version 2 (Order.discountCode)`.
 ```
+
+**Read `design.md`'s Contract Version before writing or amending a plan (T18).** Copy the number into Plan Summary as the version this plan was written against. If you are amending an existing `plan.md` and `design.md`'s Contract Version has increased since the last time this file recorded one, that means the Data Model or a Contract section changed after some of this plan's tasks were written — don't assume the unfinished ones are still accurate. Re-read the Data Model and the Contract sections your unfinished phases depend on, update `Plan Summary`'s Contract Version, and note in the Change Log which phases you re-checked.
 
 After writing the file, tell the user Phase 1 tasks (or, in amend mode, the updated tasks) are ready to hand to the `backend-engineer`/`frontend-engineer` agents — `backend-engineer` first, per `.claude/shared/conventions.md` §6a — and that `qa-engineer` verifies finished work. Do not invoke `backend-engineer`/`frontend-engineer`/`qa-engineer` yourself — that's for whoever is driving this run, per `.claude/shared/conventions.md` §6.
 

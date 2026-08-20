@@ -113,6 +113,25 @@ const RAW_REGISTRY: Record<AgentStage, AgentRegistryEntry> = {
       capabilities: [Capability.TASK_PHASING],
     },
   },
+  [AgentStage.TEST_PLANNER]: {
+    name: AgentStage.TEST_PLANNER,
+    role: "test-planner",
+    responsibilities: [
+      "decide what needs testing and at what level (unit/integration/API/E2E), before implementation starts",
+      "write test-plan.md so engineers and qa-engineer share one test strategy instead of each guessing their own",
+    ],
+    inputs: ["requirements", "design", "plan"],
+    outputs: ["test-plan"],
+    tools: ["Read", "Glob", "Grep", "Write", "Edit"],
+    permissions: [Permission.READ, Permission.WRITE_DOCS],
+    allowed_states: [TaskState.PLAN],
+    capability: {
+      languages: [],
+      frameworks: [],
+      database: [],
+      capabilities: [Capability.TEST_STRATEGY],
+    },
+  },
   [AgentStage.BACKEND_ENGINEER]: {
     name: AgentStage.BACKEND_ENGINEER,
     role: "backend-engineer",

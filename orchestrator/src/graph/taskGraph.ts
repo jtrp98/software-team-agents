@@ -53,6 +53,14 @@ export interface TaskNode {
   produces?: string[];
   /** Contracts this task reads. Consuming one it does not produce is what creates an implicit edge. */
   consumes?: string[];
+  /**
+   * The `design.md` Contract Version this task was planned against (T18).
+   * Not used by the graph itself — `dependsOn`/`produces`/`consumes` are what
+   * scheduling reads — but carried on the node so `contracts/contractVersion.ts`
+   * can flag a task whose plan predates a later schema amendment, without a
+   * second parallel data structure to keep in sync with this one.
+   */
+  contractVersion?: number;
   description?: string;
 }
 

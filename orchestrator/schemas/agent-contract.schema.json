@@ -96,7 +96,7 @@
             "type": "string",
             "enum": [
               "requirements-interview", "feasibility-analysis", "schema-design", "task-phasing",
-              "scaffolding", "rest-api", "grpc", "database-access", "auth", "ui", "testing",
+              "scaffolding", "rest-api", "grpc", "database-access", "auth", "ui", "testing", "test-strategy",
               "verification", "security-audit", "deployment", "migration", "ci", "triage", "approval"
             ]
           }
@@ -117,6 +117,7 @@
         "business-analyst",
         "system-analyst",
         "project-manager",
+        "test-planner",
         "backend-engineer",
         "frontend-engineer",
         "qa-engineer",
@@ -130,6 +131,7 @@
         "requirements",
         "design",
         "plan",
+        "test-plan",
         "qa-report",
         "security-report",
         "backend-code",

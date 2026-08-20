@@ -82,7 +82,7 @@ One-paragraph pitch: what it is, who it's for.
 Who uses this system and what roles/permissions exist, if any.
 
 ## Core Features
-List of features, each with a short description of the business logic/rules behind it.
+List of features, each with a short description of the business logic/rules behind it. **Tag each one `REQ-NNN`** (`REQ-001`, `REQ-002`, ...), numbered in the order written. This is the anchor `system-analyst`/`project-manager`/`qa-engineer` trace back to (T19) — never renumber or reuse a `REQ-NNN` once assigned, even if that feature is later moved to Declined/Not Pursuing; add new features at the next free number instead.
 
 ## Scope
 ### MVP (must-have)

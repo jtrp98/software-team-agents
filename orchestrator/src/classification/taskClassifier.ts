@@ -91,6 +91,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
     );
     const base = [
       AgentStage.SYSTEM_ANALYST,
+      AgentStage.TEST_PLANNER,
       ...engineerStages(input, reasons),
       AgentStage.QA_ENGINEER,
     ];
@@ -113,6 +114,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
       AgentStage.BUSINESS_ANALYST,
       AgentStage.SYSTEM_ANALYST,
       AgentStage.PROJECT_MANAGER,
+      AgentStage.TEST_PLANNER,
       ...engineerStages(input, reasons),
       AgentStage.QA_ENGINEER,
     ];
@@ -131,6 +133,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
     const base = [
       AgentStage.BUSINESS_ANALYST,
       AgentStage.SYSTEM_ANALYST,
+      AgentStage.TEST_PLANNER,
       ...engineerStages(input, reasons),
       AgentStage.QA_ENGINEER,
     ];
@@ -146,7 +149,12 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
 
   if (input.isIncrementalFeature) {
     reasons.push("incremental feature on existing module — business-analyst and project-manager skipped");
-    const base = [AgentStage.SYSTEM_ANALYST, ...engineerStages(input, reasons), AgentStage.QA_ENGINEER];
+    const base = [
+      AgentStage.SYSTEM_ANALYST,
+      AgentStage.TEST_PLANNER,
+      ...engineerStages(input, reasons),
+      AgentStage.QA_ENGINEER,
+    ];
     const { pipeline, sensitiveGate } = withSecurityGate(base, input);
     return {
       level: TaskLevel.MEDIUM,

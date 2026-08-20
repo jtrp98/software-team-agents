@@ -9,6 +9,7 @@ export enum ArtifactType {
   REQUIREMENTS = "requirements",
   DESIGN = "design",
   PLAN = "plan",
+  TEST_PLAN = "test-plan",
   QA_REPORT = "qa-report",
   SECURITY_REPORT = "security-report",
 }
@@ -79,6 +80,26 @@ export const PlanArtifactSchema = z.object({
 });
 export type PlanArtifact = z.infer<typeof PlanArtifactSchema>;
 
+export const TestPlanArtifactSchema = z.object({
+  taskId: z.string().min(1),
+  // One entry per requirement this test strategy covers — the REQ-NNN traceability id (T19),
+  // so a task's tests can be traced back to the requirement they verify.
+  items: z
+    .array(
+      z.object({
+        requirementId: z.string().min(1),
+        levels: z.array(z.enum(["unit", "integration", "api", "e2e"])).min(1),
+        rationale: z.string().min(1),
+      }),
+    )
+    .min(1),
+  // True only if the project actually has an automated test framework (opt-in per CLAUDE.md).
+  // False is a normal, expected value — most projects never opt in — and does not invalidate the plan:
+  // it still tells engineers/qa-engineer what *should* be exercised, by reading if nothing else.
+  hasAutomatedTests: z.boolean(),
+});
+export type TestPlanArtifact = z.infer<typeof TestPlanArtifactSchema>;
+
 export const QaReportArtifactSchema = z
   .object({
     taskId: z.string().min(1),
@@ -145,6 +166,7 @@ export const ARTIFACT_SCHEMAS = {
   [ArtifactType.REQUIREMENTS]: RequirementsArtifactSchema,
   [ArtifactType.DESIGN]: DesignArtifactSchema,
   [ArtifactType.PLAN]: PlanArtifactSchema,
+  [ArtifactType.TEST_PLAN]: TestPlanArtifactSchema,
   [ArtifactType.QA_REPORT]: QaReportArtifactSchema,
   [ArtifactType.SECURITY_REPORT]: SecurityReportArtifactSchema,
 } as const;
@@ -163,6 +185,7 @@ interface ArtifactDataMap {
   [ArtifactType.REQUIREMENTS]: RequirementsArtifact;
   [ArtifactType.DESIGN]: DesignArtifact;
   [ArtifactType.PLAN]: PlanArtifact;
+  [ArtifactType.TEST_PLAN]: TestPlanArtifact;
   [ArtifactType.QA_REPORT]: QaReportArtifact;
   [ArtifactType.SECURITY_REPORT]: SecurityReportArtifact;
 }

@@ -4,7 +4,7 @@ This repo defines a fixed, hand-off-based agent pipeline for building a project 
 
 ## Read this first
 
-`.claude/shared/conventions.md` is the authoritative source for the rules every agent shares: module-folder resolution, the `_docs/status.md` index, dates, amend discipline, version control, handoffs, the design-as-contract rule, and where the stack is defined. The agent files deliberately don't repeat those rules — they point at that file, so changing a rule means editing one place, not nine.
+`.claude/shared/conventions.md` is the authoritative source for the rules every agent shares: module-folder resolution, the `_docs/status.md` index, dates, amend discipline, version control, handoffs, the design-as-contract rule, and where the stack is defined. The agent files deliberately don't repeat those rules — they point at that file, so changing a rule means editing one place, not ten.
 
 `orchestrator/` (a separate Node/TypeScript package, `npm install`/`npm test` inside it) automates the opt-in autonomous mode described above — it shells out to `claude -p --agent <role>`, so it still runs the exact `.claude/agents/<role>.md` files this document defines, and it still stops at the same five human-approval points via its own gate/retry logic. It never invokes an agent by holding the `Agent` tool itself, and it never edits `.claude/` or `_docs/` directly. See `README.md`'s `orchestrator/` section for how to run it.
 
@@ -45,15 +45,15 @@ Since P0 finished, three of its behaviours are worth knowing when you read the a
 ```
 setup (once per project)
    ↓
-business-analyst → system-analyst → project-manager → backend-engineer → frontend-engineer
-                                                                  ↓
-                                                            qa-engineer
-                                                  ↓            ↓            ↓
-                                       implementation bug   schema gap   business gap
-                                                  ↓            ↓            ↓
-                                    frontend/backend-engineer  system-analyst  business-analyst
-                                                                  ↓
-                                                security (sensitive phases) → devops
+business-analyst → system-analyst → project-manager → test-planner → backend-engineer → frontend-engineer
+                                                                                  ↓
+                                                                            qa-engineer
+                                                                  ↓            ↓            ↓
+                                                       implementation bug   schema gap   business gap
+                                                                  ↓            ↓            ↓
+                                                    frontend/backend-engineer  system-analyst  business-analyst
+                                                                                  ↓
+                                                                security (sensitive phases) → devops
 ```
 
 | Agent | Owns | Reads | Writes |
@@ -62,13 +62,16 @@ business-analyst → system-analyst → project-manager → backend-engineer →
 | `business-analyst` | business requirements | `review.md`, `design.md`, `requirement.md` (amend) | `requirement.md` |
 | `system-analyst` | feasibility + data model | `requirement.md`, `review.md`, stack files | `design.md` |
 | `project-manager` | phased task list | `design.md`, `requirement.md`, stack files | `plan.md` |
-| `frontend-engineer` | UI code | `plan.md`, `design.md`, `requirement.md`, `review.md` | app code |
-| `backend-engineer` | API/DB code | `plan.md`, `design.md`, `requirement.md`, `review.md` | app code |
-| `qa-engineer` | verification | all four docs + `schema.prisma` + real code | `review.md`, `review/phase-N.md`, `[x]` and add-only `🔒 Security gate` in `plan.md` |
+| `test-planner` | test strategy | `requirement.md`, `design.md`, `plan.md` | `test-plan.md` |
+| `frontend-engineer` | UI code | `plan.md`, `design.md`, `requirement.md`, `test-plan.md`, `review.md` | app code |
+| `backend-engineer` | API/DB code | `plan.md`, `design.md`, `requirement.md`, `test-plan.md`, `review.md` | app code |
+| `qa-engineer` | verification | all docs + `schema.prisma` + real code | `review.md`, `review/phase-N.md`, `[x]` and add-only `🔒 Security gate` in `plan.md` |
 | `security` | security audit | `requirement.md`, `design.md`, `review.md`, `schema.prisma`, real code | `security.md` |
 | `devops` | deploy, CI, migrations | `status.md`, `review.md`, `security.md`, `plan.md`, `design.md`, `schema.prisma`, stack files | `deploy.md`, infra files |
 
-Every agent also reads `_docs/status.md` when it starts and updates its own lines when it finishes (`conventions.md` §2) — that's left out of the table above rather than repeated on all nine rows.
+Every agent also reads `_docs/status.md` when it starts and updates its own lines when it finishes (`conventions.md` §2) — that's left out of the table above rather than repeated on all ten rows.
+
+`test-planner` runs after `project-manager`, before the engineers — deciding what needs testing and at what level (unit/integration/API/E2E) so `backend-engineer`/`frontend-engineer` build against a stated strategy instead of each guessing their own, and `qa-engineer` verifies against it instead of inventing one per round. Like every other stage but `qa-engineer`/`security`, it participates in normal auto-chaining — it is not a third exemption. Right-sizing still applies: small work that skips `project-manager` skips `test-planner` too (see below).
 
 `setup` runs once per project, before Phase 1. Everything after that loops per phase.
 
@@ -84,6 +87,7 @@ _docs/
         ├── design.md            ← system-analyst
         ├── design-archive.md    ← (created on demand) closed amend-round Q&A, moved out of design.md's always-read sections
         ├── plan.md              ← project-manager  (checkboxes + added security gates: qa-engineer)
+        ├── test-plan.md         ← test-planner
         ├── review.md            ← qa-engineer  (open issues + current round + unverified behaviour)
         ├── review/
         │   └── phase-N.md       ← qa-engineer  (archived rounds — read on demand only)
@@ -94,7 +98,7 @@ _docs/
 ├── shared/
 │   ├── conventions.md            ← rules every agent follows
 │   └── multi-module-schema-scoping.md ← schema.prisma vs design.md scoping procedure, read only once >1 module exists
-├── agents/*.md                  ← the nine agents
+├── agents/*.md                  ← the ten agents
 ├── hooks/
 │   ├── block-git.js              ← PreToolUse guard enforcing the no-git rule
 │   ├── block-outside-repo.js     ← PreToolUse guard keeping every write inside the repo root
@@ -138,7 +142,7 @@ A **module folder** is a delivery unit with its own doc set and phase numbering;
 Full text in `.claude/shared/conventions.md`; the short version:
 
 - **`backend-engineer` runs before `frontend-engineer`, never in parallel, within a phase.** The frontend reads its types/API calls off what the backend actually built, not off `design.md` alone — running both at once means frontend has to guess the contract, which is exactly what produced a real `staff-roles/sync` response-shape mismatch that cost an extra fix round. Exception: tasks in the same phase that share no API contract can run in either order. `.claude/shared/conventions.md` §6a has the full rule.
-- **No agent chains to the next — structurally, none of the nine has the `Agent` tool.** By default (manual mode) each finishes by saying what's ready and who should get it, then the user decides. When the user explicitly asks for a continuous/unattended run ("รันข้ามคืนได้เลย"), the session orchestrating the pipeline may chain the handoffs itself, opt-in per run — but five points always stop and wait for a person regardless of mode: `business-analyst` any time it runs, `system-analyst`'s schema confirmation, `qa-engineer` on any ⚠️/❌ result, `security` on any 🔴/🟠 finding, and `devops` before an actual deploy/migration. **`qa-engineer` and `security` are further exempt from auto-chaining altogether, in every mode** — the pipeline never invokes them on its own just because an engineer or a QA round finished; the user must ask for them by name every time. `.claude/shared/conventions.md` §6 has the full rule.
+- **No agent chains to the next — structurally, none of the ten has the `Agent` tool.** By default (manual mode) each finishes by saying what's ready and who should get it, then the user decides. When the user explicitly asks for a continuous/unattended run ("รันข้ามคืนได้เลย"), the session orchestrating the pipeline may chain the handoffs itself, opt-in per run — but five points always stop and wait for a person regardless of mode: `business-analyst` any time it runs, `system-analyst`'s schema confirmation, `qa-engineer` on any ⚠️/❌ result, `security` on any 🔴/🟠 finding, and `devops` before an actual deploy/migration. **`qa-engineer` and `security` are further exempt from auto-chaining altogether, in every mode** — the pipeline never invokes them on its own just because an engineer or a QA round finished; the user must ask for them by name every time. `.claude/shared/conventions.md` §6 has the full rule.
 - **No git, ever.** No agent runs git or touches `.git`. `setup`/`devops` may *write* a `.gitignore` or CI file — that's writing a file, not running git. This is enforced by a `PreToolUse` hook (`.claude/hooks/block-git.js`), not left to the prompt: state-changing git commands are blocked at the tool call, read-only ones (`status`/`log`/`diff`/`show`) still run.
 - **No agent writes outside this repo.** Every write resolves under the project root, whatever the reason. Enforced by a second `PreToolUse` hook (`.claude/hooks/block-outside-repo.js`) on `Write`/`Edit`/`MultiEdit`/`NotebookEdit` — the one exception is Claude Code's own scratchpad convention under the OS temp dir, which isn't an agent going off scope.
 - **`design.md`'s Data Model is the contract.** `backend-engineer` implements it verbatim, `frontend-engineer` derives types from it, `qa-engineer` fails any drift. A gap goes back to `system-analyst`, never gets improvised. Once `setup` has written the real `schema.prisma`, the engineers work from that file — it's the contract's working copy and the one their queries must agree with — and `qa-engineer` is the agent that reads both and keeps them equal. If they ever disagree, `design.md` wins and the code is wrong. Only `setup` (at scaffold) and `backend-engineer` (propagating a confirmed amendment) ever write `schema.prisma`. Every model in a module's Data Model must exist in `schema.prisma` and match — that direction is absolute regardless of module count. **If more than one module folder exists**, a model `schema.prisma` has that this `design.md` doesn't may belong to another module rather than being drift — `.claude/shared/multi-module-schema-scoping.md` has the exact ownership-check procedure (read it only once that situation applies; a single-module project is fully covered by the rule above already).
@@ -162,16 +166,16 @@ Full text in `.claude/shared/conventions.md`; the short version:
 
 ## Right-size the pipeline — don't run all of it for small work
 
-The full chain is for building something new. Running nine stages for a copy fix is waste, not diligence. Pick the entry point by the size of the change:
+The full chain is for building something new. Running ten stages for a copy fix is waste, not diligence. Pick the entry point by the size of the change:
 
 | The work is | Start at | Skip |
 |---|---|---|
-| Copy/styling tweak, or a bug where requirement + schema are already clear | `backend-engineer` (if it touches the API) → `frontend-engineer` → `qa-engineer` | BA, SA, PM |
-| Adds or alters a field/table/relation | `system-analyst` (amend) → engineer → `qa-engineer` | BA, PM |
-| Changes a business rule, no schema impact | `business-analyst` (amend) → `system-analyst` (amend) → engineer → `qa-engineer` | PM |
+| Copy/styling tweak, or a bug where requirement + schema are already clear | `backend-engineer` (if it touches the API) → `frontend-engineer` → `qa-engineer` | BA, SA, PM, test-planner |
+| Adds or alters a field/table/relation | `system-analyst` (amend) → `test-planner` → engineer → `qa-engineer` | BA, PM |
+| Changes a business rule, no schema impact | `business-analyst` (amend) → `system-analyst` (amend) → `test-planner` → engineer → `qa-engineer` | PM |
 | A new feature, module, or project | `business-analyst`, full chain | nothing |
 
-`project-manager` only earns its run when there's enough work to need phasing. One or two tasks go straight to an engineer.
+`project-manager` only earns its run when there's enough work to need phasing. One or two tasks go straight to an engineer, and `test-planner` goes with it — a change too small for a phased plan is also too small for a separate test strategy pass; the engineer and `qa-engineer` reason about it directly.
 
 But **don't skip a stage the change actually needs** — a schema change that bypasses `system-analyst` is the exact failure this pipeline exists to prevent.
 
@@ -185,6 +189,7 @@ Set in each agent's frontmatter. The split puts the expensive model where a mist
 | `business-analyst` | opus | medium | short output, but an error here contaminates everything downstream |
 | `system-analyst` | opus | high | hardest reasoning in the chain; a wrong schema is the costliest mistake available |
 | `project-manager` | sonnet | medium | decomposition from an already-confirmed design |
+| `test-planner` | sonnet | medium | derives test items from an already-confirmed design/plan — same tier as decomposition, not the same tier as the design decision itself |
 | `frontend-engineer` | sonnet | medium | highest volume, highest output — where the savings actually are |
 | `backend-engineer` | sonnet | medium | same |
 | `qa-engineer` | sonnet | high | comparison work, so `effort: high` buys more here than the tier does — but note this is the highest-leverage cost decision in the table: with tests opt-in and usually absent, this agent is the *only* correctness guarantee in the chain and nothing re-checks it. `opus` is the upgrade to reach for first if verification starts missing things |

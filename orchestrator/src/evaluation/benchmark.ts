@@ -1,6 +1,7 @@
-import { AgentStage, TaskState } from "../types.js";
+import { AgentStage } from "../types.js";
 import { classifyTask, type ClassificationInput } from "../classification/taskClassifier.js";
 import { Orchestrator, type AgentExecutor } from "../orchestrator/orchestrator.js";
+import { ApprovalType } from "../gates/approval.js";
 
 export interface BenchmarkCase {
   id: string;
@@ -36,7 +37,10 @@ export async function runBenchmarkCase(bc: BenchmarkCase, now: () => number = Da
   for (let steps = 0; status.kind !== "DEPLOYED" && status.kind !== "BLOCKED" && steps < MAX_STEPS_PER_CASE; steps++) {
     if (status.kind === "WAITING_FOR_HUMAN") {
       if (bc.approveHumanGates === false) break;
-      const field = status.to === TaskState.IMPLEMENTATION ? "designApproved" : "humanApproved";
+      // Keyed on approvalType, not on `to`: T20's test-planner (like project-manager
+      // before it, for the "feature" pipeline) can sit between DESIGN and
+      // IMPLEMENTATION, so the gate's target state is not always IMPLEMENTATION itself.
+      const field = status.approvalType === ApprovalType.SCHEMA_CONFIRMATION ? "designApproved" : "humanApproved";
       orch.provideHumanApproval(field, true);
     }
     status = await orch.step(bc.executor, now);

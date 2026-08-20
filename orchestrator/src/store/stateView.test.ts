@@ -41,7 +41,8 @@ describe("state view", () => {
 
   it("says which agent is up and what the retry budget looks like", () => {
     const t = task("T-1");
-    const doc = renderAndParse([{ ...t, machine: { ...t.machine, current: TaskState.IMPLEMENTATION }, pipelineCursor: 1, retries: { qa: 2, security: 0 } }]);
+    // cursor 2: pipeline is [system-analyst, test-planner, backend-engineer, qa-engineer] (T20).
+    const doc = renderAndParse([{ ...t, machine: { ...t.machine, current: TaskState.IMPLEMENTATION }, pipelineCursor: 2, retries: { qa: 2, security: 0 } }]);
 
     expect(doc.tasks[0].status).toBe("RUNNING");
     expect(doc.tasks[0].current_agent).toBe(AgentStage.BACKEND_ENGINEER);
@@ -97,7 +98,7 @@ describe("state view", () => {
 describe("state view — T02 fields", () => {
   it("labels the phase from the engineer holding IMPLEMENTATION, not from the state alone", () => {
     const t = task("T-1");
-    const backend = { ...t, machine: { ...t.machine, current: TaskState.IMPLEMENTATION }, pipelineCursor: 1 };
+    const backend = { ...t, machine: { ...t.machine, current: TaskState.IMPLEMENTATION }, pipelineCursor: 2 };
     expect(renderAndParse([backend]).tasks[0].phase).toBe("backend");
   });
 

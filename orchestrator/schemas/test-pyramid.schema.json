@@ -1,0 +1,48 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/test-pyramid.schema.json",
+  "title": "Test pyramid policy (test-pyramid.yaml)",
+  "description": "Which test levels (unit/integration/api/e2e) a kind of task requires, by default, before qa-engineer or test-planner decides the same thing again from scratch every time (T21). This is a floor, not a plan: test-planner still writes the specific case per REQ-NNN, but the level(s) it picks for a task of this type may never be a strict subset of what's declared required here without saying why in test-plan.md's Unresolved Open Questions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "task_types"],
+  "properties": {
+    "version": {
+      "description": "Schema generation of this file. Bumped only when a change would break an existing reader.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "task_types": {
+      "description": "Task type id -> its declaration. Ids are stable identifiers referenced from test-plan.md, so they are lower-case and unpunctuated.",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9-]*$" },
+      "additionalProperties": { "$ref": "#/definitions/taskType" }
+    }
+  },
+  "definitions": {
+    "taskType": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["description", "required_levels"],
+      "properties": {
+        "description": {
+          "description": "What kind of task.md line this covers, in one sentence — specific enough that test-planner can tell which id applies without guessing.",
+          "type": "string",
+          "minLength": 1
+        },
+        "required_levels": {
+          "description": "The test levels this task type never ships without, lowest first. Not exhaustive — test-planner may add more for a specific requirement — but never fewer without recording why.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "enum": ["unit", "integration", "api", "e2e"] }
+        },
+        "why": {
+          "description": "Why this floor, specifically — the failure mode skipping it would let through. Optional but strongly expected: a floor with no reason is a rule nobody can evaluate an exception against.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

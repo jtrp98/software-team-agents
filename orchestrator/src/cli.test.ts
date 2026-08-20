@@ -22,6 +22,8 @@ describe("parseArgs", () => {
       checkLayout: false,
       checkWorkflows: false,
       checkProfile: false,
+      checkDecisions: false,
+      checkTestPyramid: false,
       dependsOn: [],
       stateDb: undefined,
       phases: [],
@@ -205,5 +207,45 @@ describe("runCli --check-layout (T04)", () => {
 
   it("is listed in the usage text, so it is discoverable without reading the source", () => {
     expect(USAGE).toContain("--check-layout");
+  });
+});
+
+describe("runCli --check-decisions (T16)", () => {
+  it("passes against this repo's own decisions/", async () => {
+    expect(await runCli(["--check-decisions"], defaultProjectRoot())).toBe(0);
+  });
+
+  it("exits non-zero when there is no decisions/ directory, rather than passing quietly", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-cd-"));
+    try {
+      expect(await runCli(["--check-decisions", "--project-root", dir], dir)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("needs neither --task-id nor --module, and is listed in the usage text", () => {
+    expect(parseArgs(["--check-decisions"], "/repo").checkDecisions).toBe(true);
+    expect(USAGE).toContain("--check-decisions");
+  });
+});
+
+describe("runCli --check-test-pyramid (T21)", () => {
+  it("passes against this repo's own test-pyramid.yaml", async () => {
+    expect(await runCli(["--check-test-pyramid"], defaultProjectRoot())).toBe(0);
+  });
+
+  it("exits non-zero when there is no test-pyramid.yaml, rather than passing quietly", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-ctp-"));
+    try {
+      expect(await runCli(["--check-test-pyramid", "--project-root", dir], dir)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("needs neither --task-id nor --module, and is listed in the usage text", () => {
+    expect(parseArgs(["--check-test-pyramid"], "/repo").checkTestPyramid).toBe(true);
+    expect(USAGE).toContain("--check-test-pyramid");
   });
 });

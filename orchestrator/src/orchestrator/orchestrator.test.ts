@@ -4,6 +4,7 @@ import { classifyTask } from "../classification/taskClassifier.js";
 import { AgentStage, TaskState } from "../types.js";
 import { ArtifactType, type DesignArtifact, type QaReportArtifact, type SecurityReportArtifact } from "../artifacts/schemas.js";
 import { BudgetExceededError } from "../cost/costControl.js";
+import { ApprovalType } from "../gates/approval.js";
 
 const okDesign: DesignArtifact = {
   taskId: "T",
@@ -54,7 +55,10 @@ async function runToCompletion(orch: Orchestrator, executor: AgentExecutor, maxS
   for (let i = 0; i < maxSteps; i++) {
     const status = await orch.step(executor);
     if (status.kind === "WAITING_FOR_HUMAN") {
-      const field = status.to === TaskState.IMPLEMENTATION ? "designApproved" : "humanApproved";
+      // Keyed on approvalType, not on `to`: T20 put test-planner between DESIGN and
+      // IMPLEMENTATION, so the schema-confirmation gate's target is PLAN, not
+      // IMPLEMENTATION directly (gatePolicy.ts/approval.ts's matching fix).
+      const field = status.approvalType === ApprovalType.SCHEMA_CONFIRMATION ? "designApproved" : "humanApproved";
       orch.provideHumanApproval(field, true);
       continue;
     }
@@ -139,6 +143,7 @@ describe("Orchestrator", () => {
     expect(orch.machine.history).toEqual([
       TaskState.CREATED,
       TaskState.DESIGN,
+      TaskState.PLAN, // test-planner (T20), between system-analyst and the engineers
       TaskState.IMPLEMENTATION,
       TaskState.QA,
       TaskState.SECURITY,
@@ -260,7 +265,9 @@ describe("Orchestrator", () => {
       }),
     });
     await orch.step(executor);
-    expect(waiting).toEqual([`${TaskState.DESIGN}->${TaskState.IMPLEMENTATION}`]);
+    // PLAN (test-planner), not IMPLEMENTATION directly — the gate fires leaving DESIGN
+    // regardless of what sits immediately after it (T20).
+    expect(waiting).toEqual([`${TaskState.DESIGN}->${TaskState.PLAN}`]);
 
     const blocked: string[] = [];
     const orch2 = new Orchestrator("T-BLOCKED-EVENT", classification, {

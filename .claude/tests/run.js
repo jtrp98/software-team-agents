@@ -197,7 +197,7 @@ withTempProject((tmp) => {
   const env = { CLAUDE_PROJECT_DIR: tmp };
   const mod = path.join(tmp, '_docs', 'module', 'sales-crm');
 
-  for (const f of ['requirement.md', 'design.md', 'plan.md', 'review.md', 'security.md', 'deploy.md']) {
+  for (const f of ['requirement.md', 'design.md', 'plan.md', 'test-plan.md', 'review.md', 'security.md', 'deploy.md']) {
     write(path.join(mod, f), `# ${f}\n\n## Change Log\n- 2026-08-18 created\n`);
   }
   write(path.join(mod, 'review', 'phase-1.md'), '# archived round\n');
@@ -205,6 +205,7 @@ withTempProject((tmp) => {
 
   const cases = [
     ['Write over an existing plan.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'plan.md') } }, BLOCK],
+    ['Write over an existing test-plan.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'test-plan.md') } }, BLOCK],
     ['Write over an existing design.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'design.md') } }, BLOCK],
     ['Write over an existing review.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'review.md') } }, BLOCK],
     ['Write over an existing security.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'security.md') } }, BLOCK],
@@ -213,7 +214,7 @@ withTempProject((tmp) => {
     ['Write to a doc that does not exist yet is allowed (first creation)', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs/module/new-mod/requirement.md') } }, ALLOW],
     ['Edit on an existing doc is allowed — that is the point', { tool_name: 'Edit', tool_input: { file_path: path.join(mod, 'plan.md') } }, ALLOW],
     ['MultiEdit on an existing doc is allowed', { tool_name: 'MultiEdit', tool_input: { file_path: path.join(mod, 'plan.md') } }, ALLOW],
-    ['Write to an archived round is allowed (not one of the six)', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'review', 'phase-1.md') } }, ALLOW],
+    ['Write to an archived round is allowed (not one of the seven)', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'review', 'phase-1.md') } }, ALLOW],
     ['Write to status.md is allowed (not a per-module doc)', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'status.md') } }, ALLOW],
     ['Write to app code named plan.md elsewhere is allowed', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'app', 'plan.md') } }, ALLOW],
   ];
@@ -534,7 +535,7 @@ check(
 // dependencies. That agreement is only safe if something checks it: a contract
 // reformatted into block style must fail here rather than silently disabling the guard.
 (function contractsStillReadableByTheHook() {
-  const agents = ['setup', 'business-analyst', 'system-analyst', 'project-manager', 'backend-engineer',
+  const agents = ['setup', 'business-analyst', 'system-analyst', 'project-manager', 'test-planner', 'backend-engineer',
                   'frontend-engineer', 'qa-engineer', 'security', 'devops'];
   let bad = [];
   for (const agent of agents) {

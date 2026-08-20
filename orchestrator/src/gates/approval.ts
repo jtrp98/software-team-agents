@@ -67,7 +67,10 @@ export type ApprovalLedger = ApprovalRecord[];
  * does not invent new stopping points.
  */
 export function approvalTypeForEdge(from: TaskState, to: TaskState): ApprovalType | null {
-  if (from === TaskState.DESIGN && to === TaskState.IMPLEMENTATION) return ApprovalType.SCHEMA_CONFIRMATION;
+  // Matches gatePolicy.ts's checkGate: gated on leaving DESIGN at all, since PLAN (project-manager
+  // and/or test-planner) can sit between DESIGN and IMPLEMENTATION and must not be reachable
+  // without the same confirmation IMPLEMENTATION requires.
+  if (from === TaskState.DESIGN) return ApprovalType.SCHEMA_CONFIRMATION;
   if (from === TaskState.READY_TO_DEPLOY && to === TaskState.APPROVED) return ApprovalType.DEPLOY;
   return null;
 }

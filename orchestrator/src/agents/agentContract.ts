@@ -43,7 +43,7 @@ export interface AgentContract {
   };
 }
 
-/** Every agent that has a contract — the nine real roles. `human` is a gate, not an agent, and has none. */
+/** Every agent that has a contract — the ten real roles. `human` is a gate, not an agent, and has none. */
 export const CONTRACTED_AGENTS: AgentStage[] = Object.values(AgentStage).filter((s) => s !== AgentStage.HUMAN);
 
 const SCHEMA_PATH = path.resolve(

@@ -10,6 +10,11 @@ export const STAGE_TO_STATE: Partial<Record<AgentStage, TaskState>> = {
   [AgentStage.BUSINESS_ANALYST]: TaskState.REQUIREMENT,
   [AgentStage.SYSTEM_ANALYST]: TaskState.DESIGN,
   [AgentStage.PROJECT_MANAGER]: TaskState.PLAN,
+  // Runs after project-manager, still inside PLAN (T20) — a task-list phase gets a test
+  // strategy phase alongside it, not a state of its own. The two are consecutive stages
+  // in the pipeline sharing one TaskState, the same trick backend/frontend already use for
+  // IMPLEMENTATION.
+  [AgentStage.TEST_PLANNER]: TaskState.PLAN,
   [AgentStage.BACKEND_ENGINEER]: TaskState.IMPLEMENTATION,
   [AgentStage.FRONTEND_ENGINEER]: TaskState.IMPLEMENTATION,
   [AgentStage.QA_ENGINEER]: TaskState.QA,

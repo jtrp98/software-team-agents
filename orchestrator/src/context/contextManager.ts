@@ -31,13 +31,14 @@ import { CONTEXT_POLICY, type ContextCategory } from "./contextSelection.js";
  * downstream can tell a missing rule from a rule that never existed.
  */
 
-/** The module documents this understands. `security`/`deploy` have no §10 slicing rule, so they pass through whole. */
-export type DocKind = "requirement" | "design" | "plan" | "review" | "security" | "deploy";
+/** The module documents this understands. `test-plan`/`security`/`deploy` have no §10 slicing rule, so they pass through whole. */
+export type DocKind = "requirement" | "design" | "plan" | "test-plan" | "review" | "security" | "deploy";
 
 export const DOC_FILENAME: Record<DocKind, string> = {
   requirement: "requirement.md",
   design: "design.md",
   plan: "plan.md",
+  "test-plan": "test-plan.md",
   review: "review.md",
   security: "security.md",
   deploy: "deploy.md",
@@ -48,6 +49,7 @@ export const CATEGORY_TO_DOC: Partial<Record<ContextCategory, DocKind>> = {
   [ArtifactType.REQUIREMENTS]: "requirement",
   [ArtifactType.DESIGN]: "design",
   [ArtifactType.PLAN]: "plan",
+  [ArtifactType.TEST_PLAN]: "test-plan",
   [ArtifactType.QA_REPORT]: "review",
   [ArtifactType.SECURITY_REPORT]: "security",
 };
@@ -175,7 +177,7 @@ function readsInFull(req: ContextRequest): string | null {
   if (req.doc === "design" && req.stage === AgentStage.SYSTEM_ANALYST) {
     return "§10: system-analyst owns design.md and reads it in full when amending";
   }
-  if (req.doc === "security" || req.doc === "deploy") {
+  if (req.doc === "security" || req.doc === "deploy" || req.doc === "test-plan") {
     return "§10 gives no slicing rule for this document, so it is passed through whole";
   }
   return null;

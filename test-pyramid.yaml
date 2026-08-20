@@ -1,0 +1,84 @@
+# Test Pyramid policy — which test levels a kind of task requires by default (T21).
+#
+# WHY THIS FILE EXISTS
+#
+# Before this, "does this task need a unit test, an integration test, both, or an E2E run?"
+# was a judgment call test-planner (T20) or qa-engineer made fresh every time, from nothing —
+# so the same kind of task could get thorough coverage in one module and none in the next,
+# depending on who was reasoning about it that day and how much of design.md's Contract
+# sections they weighed. This file is the floor that judgment starts from: it doesn't replace
+# test-planner's per-requirement judgment (a floor can't know the specific case), but a task
+# type's required_levels is never quietly skipped without a reason recorded in test-plan.md's
+# Unresolved Open Questions.
+#
+# WHO READS THIS
+#
+# `.claude/agents/test-planner.md` consults it while deciding levels per REQ-NNN. It is not
+# wired to a runtime check yet — orchestrator/src/testing/testPyramid.ts is the checkable half
+# (schema validity, no duplicate ids, no empty required_levels), ready for a future round to
+# cross-check test-plan.md's stated levels against it the way check-schema-contract.js compares
+# schema.prisma against design.md.
+
+version: 1
+
+task_types:
+  api-endpoint:
+    description: >
+      A new or changed REST route — request validation, response shape, status codes
+      (backend-engineer).
+    required_levels: [unit, api]
+    why: >
+      "unit" catches a validation/business-logic mistake cheaply; "api" is the only level that
+      actually exercises the request/response contract frontend-engineer builds against, so a
+      route that only has unit coverage can still return the wrong shape.
+
+  data-model-change:
+    description: >
+      A new or altered Prisma model, field, relation, or migration (backend-engineer,
+      propagating a confirmed design.md amendment).
+    required_levels: [integration]
+    why: >
+      A model/migration is only wrong in ways a real database catches — a constraint, a
+      cascade, a type Prisma's client silently coerces. A unit test that mocks the ORM verifies
+      the mock, not the schema.
+
+  business-rule:
+    description: >
+      A formula, matching/dedup rule, state machine, or permission check named in one of
+      design.md's `## <Contract sections>` — the logic an engineer could implement wrong while
+      still matching the schema.
+    required_levels: [unit]
+    why: >
+      This is exactly the class of bug backend-engineer.md's "Unclear logic is not yours to
+      resolve" rule exists for — a rule precise enough to get subtly wrong needs a test precise
+      enough to catch it isolated from everything else that could mask the mistake.
+
+  auth-flow:
+    description: >
+      Login, token issuance/verification, session handling, or a permission boundary (ADR-002).
+    required_levels: [unit, integration, api]
+    why: >
+      Getting two of the three right is how an auth bug ships: a unit test on the token logic
+      doesn't catch a route that forgot to check it, and an API test on one endpoint doesn't
+      catch every other route that needed the same middleware. All three levels cover a
+      different way this fails.
+
+  ui-component:
+    description: >
+      A new or changed frontend component or page that doesn't drive its own multi-step flow
+      (frontend-engineer).
+    required_levels: [unit]
+    why: >
+      A component's own rendering/prop logic is cheap to isolate and expensive to leave broken
+      silently — but a full E2E run for every component would make the suite too slow to run
+      routinely, which is how a test suite stops being run at all.
+
+  user-flow:
+    description: >
+      A flow a real user completes end to end across more than one page/component — sign up,
+      checkout, the multi-step forms `design.md`'s Feature-by-Feature Feasibility describes as
+      one piece of work.
+    required_levels: [e2e]
+    why: >
+      Unit and API coverage on the pieces doesn't say the pieces still fit together after
+      today's change — a flow test is what catches an integration seam nobody owns alone.

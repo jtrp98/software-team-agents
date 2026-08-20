@@ -167,3 +167,10 @@ concepts:
         status: active
         optional: true
         holds: per-module requirement/design/plan/review/security/deploy, plus status.md
+      - path: decisions
+        status: active
+        pattern: "*.md"
+        holds: >
+          ADRs — decisions already settled, so an agent reads one instead of re-litigating it.
+          Project-wide (stack, layout, permission model), not per-module — a per-module call
+          belongs in that module's design.md instead.

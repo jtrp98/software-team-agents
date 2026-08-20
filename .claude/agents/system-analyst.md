@@ -69,11 +69,13 @@ Write `design.md` in the resolved module folder (`_docs/module/<name>/design.md`
 ```markdown
 # <Project/Feature Name> — Feasibility & Design
 
+**Contract Version:** 1
+
 ## Feasibility Summary
 Overall verdict, one paragraph.
 
 ## Feature-by-Feature Feasibility
-Feature: straightforward / needs new dependency / out of current stack — with a short note.
+Feature: straightforward / needs new dependency / out of current stack — with a short note. **Tag each row `DES-NNN`, and name the `REQ-NNN`(s) it covers on the same line** — `DES-001 — covers REQ-001: straightforward, standard JWT login.` One design row can cover several requirements and one requirement can need several rows; state it in prose either way, as long as the ids share a line. This is the design leg of the traceability chain `project-manager`/`qa-engineer` read (T19) — same numbering discipline as `REQ-NNN`, never renumbered or reused.
 
 ### การตัดสินใจที่ผู้ใช้ยืนยันแล้ว
 Every either/or you put to the user and they answered, as a table: the question, what they chose, and what that rules out. Downstream agents read this section on every run (`.claude/shared/conventions.md` §10) precisely to find this table — a decision recorded only in chat is a decision the next agent will re-litigate or quietly reverse.
@@ -99,8 +101,12 @@ Features/models in this module. Dependencies on other modules, if any. Note if i
 Anything still open, left for the user or the `project-manager` agent to decide.
 
 ## Change Log
-Dated, one-line-per-entry history of amendments (new CRs analyzed, schema changes, additive vs breaking calls) — append, never rewrite.
+Dated, one-line-per-entry history of amendments (new CRs analyzed, schema changes, additive vs breaking calls) — append, never rewrite. Every entry that bumps **Contract Version** says so: `2026-08-20: v1 -> v2 — added Order.discountCode (additive)`.
 ```
+
+**Contract Version bumps by 1 whenever an amendment changes the Data Model or a Contract section** — the two things `backend-engineer` implements verbatim and `frontend-engineer` derives types from (T18). A wording fix, a typo, or a change confined to Feasibility Summary/Risks/Open Questions does not bump it, because nothing an engineer already built against has changed shape. A fresh `design.md` starts at 1.
+
+This exists so a `plan.md` written against an older Data Model is a fact `project-manager`/an engineer can check instead of relying on remembering there was an amendment — `plan.md`'s Plan Summary records the Contract Version the plan was written against, and a task planned against a lower number than `design.md`'s current one means the schema moved after that task was planned and it needs a fresh look before implementation, not a guess that nothing relevant changed.
 
 After writing the file, tell the user what's ready next: a fresh `design.md` is ready for the `project-manager` agent's PLAN state; an amendment is ready to be sent back to whoever raised it (`qa-engineer`, or forward to `project-manager` if the plan needs updating too). Do not invoke that next agent yourself — that's for whoever is driving this run, per `.claude/shared/conventions.md` §6 (the user in manual mode, the orchestrating session in autonomous mode — except your own confirmation step above, which is a hard stop in both).
 
