@@ -52,11 +52,11 @@
 - [x] T35 — Concurrency Lock
 
 ## 🟣 P3 — Architecture ขั้นสูง
-- [ ] T36 — Event-driven Architecture
-- [ ] T37 — Event Store / Audit
-- [ ] T38 — Dynamic Routing (classifier-based)
-- [ ] T39 — Multi-Agent Review (Creator/Reviewer แยกกัน)
-- [ ] T40 — Human Escalation Policy
+- [x] T36 — Event-driven Architecture
+- [x] T37 — Event Store / Audit
+- [x] T38 — Dynamic Routing (classifier-based)
+- [x] T39 — Multi-Agent Review (Creator/Reviewer แยกกัน)
+- [x] T40 — Human Escalation Policy
 
 ## 🟣 P3 — Production
 - [ ] T41 — Multi-project Support

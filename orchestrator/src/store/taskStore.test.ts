@@ -192,9 +192,44 @@ describe.each(implementations)("%s", (_name, makeStore) => {
     const store = makeStore();
     store.appendEvent({ taskId: "T-1", at: 1, type: "AGENT_ASSIGNED", payload: { stage: "backend-engineer" } });
     store.appendEvent({ taskId: "T-2", at: 2, type: "TASK_BLOCKED", payload: { reason: "nope" } });
+    // T37's audit fields are optional on the way in and always present on the way
+    // out — explicitly null, so "not recorded" is a value rather than an absence.
     expect(store.eventsForTask("T-1")).toEqual([
-      { taskId: "T-1", at: 1, type: "AGENT_ASSIGNED", payload: { stage: "backend-engineer" } },
+      {
+        taskId: "T-1",
+        at: 1,
+        type: "AGENT_ASSIGNED",
+        payload: { stage: "backend-engineer" },
+        actor: null,
+        reason: null,
+        input: null,
+        output: null,
+        decision: null,
+      },
     ]);
+    store.close();
+  });
+
+  it("round-trips the audit fields an emitter did record (T37)", () => {
+    const store = makeStore();
+    store.appendEvent({
+      taskId: "T-1",
+      at: 3,
+      type: "QA_FAILED",
+      payload: { round: 1 },
+      actor: "qa-engineer",
+      reason: "API response mismatch",
+      input: "design, plan",
+      output: "FAIL (round 1)",
+      decision: "retry:backend-engineer",
+    });
+    expect(store.eventsForTask("T-1")[0]).toMatchObject({
+      actor: "qa-engineer",
+      reason: "API response mismatch",
+      input: "design, plan",
+      output: "FAIL (round 1)",
+      decision: "retry:backend-engineer",
+    });
     store.close();
   });
 

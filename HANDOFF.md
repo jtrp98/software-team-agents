@@ -3,11 +3,11 @@
 เอกสารนี้เขียนไว้ให้ session ถัดไป **เริ่มจาก context ว่างเปล่าแล้วทำงานต่อได้ทันที** โดยไม่ต้องอ่าน
 โค้ดทั้งหมดเพื่อเดาว่าอะไรตัดสินใจไปแล้วและเพราะอะไร
 
-- **สถานะ:** 35/60 tasks เสร็จ — P0, P1 ทั้งหมด, และ P2 ทั้งหมด (Quality T22–T25, Observability
-  T26–T30, Developer Experience T31–T35) ครบทั้งสามกลุ่ม
-- **งานถัดไป:** T36 (Event-driven Architecture, P3 — Architecture ขั้นสูง) เป็นต้นไป ดู `CHECKLIST.md`
+- **สถานะ:** 40/60 tasks เสร็จ — P0, P1, P2 ทั้งหมด, และ **P3 — Architecture ขั้นสูง (T36–T40) ครบแล้ว**
+- **งานถัดไป:** T41 (Multi-project Support, P3 — Production) เป็นต้นไป ดู `CHECKLIST.md`
 - **spec ฉบับเต็มของทุก task:** `TASKS.md` (ID ตรงกับ `CHECKLIST.md`)
-- **โค้ดทั้งหมดยังไม่ commit** — version control เป็นของผู้ใช้ ไม่มี agent ตัวไหนรัน git
+- **T01–T35 commit ไปแล้ว** (`git log`: "P0 — Core Orchestration" … "P2 — Developer Experience");
+  **T36–T40 ยังไม่ commit** — version control เป็นของผู้ใช้ ไม่มี agent ตัวไหนรัน git
 
 ---
 
@@ -24,25 +24,27 @@ node .claude/tests/run.js
 ```
 
 ```bash
-cd orchestrator && npm run build --silent && cd .. && node orchestrator/dist/cli.js --check-contracts && node orchestrator/dist/cli.js --check-layout && node orchestrator/dist/cli.js --check-workflows && node orchestrator/dist/cli.js --check-profile && node orchestrator/dist/cli.js --check-decisions && node orchestrator/dist/cli.js --check-test-pyramid
+cd orchestrator && npm run build --silent && cd .. && for f in contracts layout workflows profile decisions test-pyramid review-separation escalation-policy; do node orchestrator/dist/cli.js --check-$f || echo "FAILED: $f"; done
 ```
 
-ค่าที่ควรได้ ณ วันที่ส่งมอบ (2026-08-20):
+ค่าที่ควรได้ ณ วันที่ส่งมอบ (2026-08-20, หลัง T36–T40):
 
 | ตัวตรวจ | ผลที่ถูกต้อง |
 |---|---|
-| `npm test` (orchestrator) | 690 passed / 44 files (T23–T25 ไม่แตะ `orchestrator/` เลย, T26–T35 แตะเยอะ — ดู §4.10–4.11) |
+| `npm test` (orchestrator) | 793 passed / 50 files (T36–T40 เพิ่ม 103 tests / 6 files) |
 | `npm run typecheck` | exit 0 |
-| `.claude/tests/run.js` | All 118 case(s) passed (T26–T35 ไม่แตะ `.claude/` เลย — ทุกอย่างอยู่ใน `orchestrator/`) |
+| `.claude/tests/run.js` | All 118 case(s) passed (T36–T40 ไม่แตะ `.claude/` เลย — ทุกอย่างอยู่ใน `orchestrator/` + ไฟล์ policy ที่ root) |
 | `--check-contracts` | contracts agree with the agent registry (10 agents now, not 9), and their path rules are sane |
 | `--check-layout` | layout.yaml agrees with the repo |
 | `--check-workflows` | workflows/*.yml agree with the classifier |
 | `--check-profile` | agree with the agent roster + **2 notes เรื่อง .NET target** (ดู §4.2) |
 | `--check-decisions` | decisions/*.md ADRs agree with the schema and cross-link cleanly |
 | `--check-test-pyramid` | test-pyramid.yaml agrees with its schema |
+| `--check-review-separation` (T39) | no agent can review its own work + **1 note เรื่อง workflow "typo"** (ดู §4.13) |
+| `--check-escalation-policy` (T40) | escalation-policy.yaml agrees with the runtime policy + **1 note เรื่อง severity "critical"** |
 
-**`--check-profile` พิมพ์ note 2 บรรทัดแล้ว exit 0 — นั่นถูกต้องแล้ว ไม่ใช่ warning ที่ต้องไปทำให้หาย**
-เหตุผลอยู่ใน §4.2
+**`--check-profile` / `--check-review-separation` / `--check-escalation-policy` พิมพ์ note แล้ว exit 0 —
+นั่นถูกต้องแล้ว ไม่ใช่ warning ที่ต้องไปทำให้หาย** เหตุผลอยู่ใน §4.2 และ §4.13
 
 ---
 
@@ -110,12 +112,25 @@ comment แบบ `item N` (item 7, 11, 12, 13, 14, 15, 16, 17 ฯลฯ) ชี
 | `concurrency/taskLock.ts` (ใหม่) | T35 | file lock ต่อ task_id ใน `.workflow/locks/`, stale เคลียร์เองด้วย PID-liveness + TTL (ดู §4.11) |
 | `cli.ts`'s `STATUS_EMOJI`/`watchListing()` (ใหม่) | T32 | ✅🔄⏳⏸️🚫 ต่อแถวใน `--list`/`status`, `status --watch` poll แล้ว re-render — ไม่มี web server ในโปรเจกต์นี้เลย |
 | `schemas/state-view.schema.json` (แก้) | T31 | เพิ่ม `PAUSED`/`CANCELLED` เข้า `status` enum — ลืมจุดนี้ตอนแรกแล้ว `refreshStateView()` throw (ดู §4.11) |
+| `events/domainEvents.ts` (ใหม่) | T36 | vocabulary 7 ตัว: `QA_PASSED`/`QA_FAILED`/`SECURITY_PASSED`/`SECURITY_FAILED`/`APPROVAL_REQUIRED`/`APPROVAL_DECIDED`/`DEPLOY_COMPLETED` — **เพิ่มจาก** lifecycle 5 ตัวเดิม ไม่ใช่แทนที่ (ดู §4.12) |
+| `events/eventRouter.ts` (ใหม่) | T36 | `AgentEventRouter.dispatch(raw: unknown)` — inbound event → orchestrator → next stage; reject เป็น value ไม่ใช่ throw (queue consumer ที่ throw บน stale message = หยุด consume) |
+| `orchestrator/orchestrator.ts` (แก้) | T36/T37 | emit domain events + `openApproval()` (idempotent) + `deploySummary()`; `AGENT_ASSIGNED` เพิ่ม `inputs`, `AGENT_COMPLETED` เพิ่ม `artifactType` (= INPUT/OUTPUT ของ T37) |
+| `audit/auditTrail.ts` (ใหม่) | T37 | `describeEvent()` แปลง payload → WHO/WHY/INPUT/OUTPUT/DECISION; `auditTrail()`/`decisionTrail()`/`formatAuditTrail()` |
+| `store/taskStore.ts` (แก้) | T37 | `PersistedEventSchema` เพิ่ม 5 field; แยก `NewEvent` (input, optional) จาก `PersistedEvent` (output, ครบเสมอ) |
+| `store/sqliteStore.ts` (แก้) | T37 | `events` เพิ่ม 5 คอลัมน์, `SCHEMA_VERSION` 2→3 + **migration จริงครั้งแรกในโปรเจกต์นี้** (`MIGRATIONS`) — v1 ยัง fail closed (ดู §4.12) |
+| `cli.ts`'s `audit` verb (ใหม่) | T37 | `audit <task-id> [--decisions]` — read-only, ไม่เปิด `Orchestrator` เลย |
+| `routing/dynamicRouter.ts` (ใหม่) | T38 | `CATEGORY_DESTINATION` (category → owner) + `routeByCategory()`; ทิศตรงข้ามกับ `CATEGORY_BY_OWNER` เดิม (ดู §4.13) |
+| `orchestrator/failureClassifier.ts` (แก้) | T38 | `OpenIssueRow.owner` เป็น nullable + เพิ่ม `category`; แถวที่ระบุแต่ category ก็ route ได้ — **owner ที่คนเขียนไว้ยังชนะเสมอ** |
+| `review/reviewSeparation.ts` (ใหม่) | T39 | `REVIEWS` matrix + `checkReviewSeparation()` (static, hard fail) + `reviewCoverage()` (notes) + `assertIndependentVerdict()` (runtime) |
+| `escalation-policy.yaml` + `escalation/escalationPolicy.ts` (ใหม่) | T40 | severity → autonomous/max_retry/approval/stop_pipeline; code เป็น authority, YAML เป็นสำเนาที่ถูกตรวจ |
+| `retry/recoveryPolicy.ts` (แก้) | T40 | `decideRecovery` อ่าน `failure.severity` เป็นครั้งแรกนับตั้งแต่ T06 — เพิ่มขั้น 1a ก่อน routing (ดู §4.13) |
 
 CLI flags สะสม: `--check-contracts` `--check-layout` `--check-workflows` `--check-profile`
-`--check-decisions` (T16) `--check-test-pyramid` (T21)
+`--check-decisions` (T16) `--check-test-pyramid` (T21) `--check-review-separation` (T39)
+`--check-escalation-policy` (T40)
 
-CLI verbs สะสม (T31): `run` `status [--watch]` `approve` `retry` `resume` `pause` `cancel` — thin
-wrappers, flag-based form เดิมยังใช้ได้ทุกอันเหมือนเดิม (backward compatible)
+CLI verbs สะสม: `run` `status [--watch]` `approve` `retry` `resume` `pause` `cancel` (T31) `audit
+[--decisions]` (T37) — thin wrappers, flag-based form เดิมยังใช้ได้ทุกอันเหมือนเดิม (backward compatible)
 
 ---
 
@@ -398,6 +413,63 @@ verb-based (`agent run/status/...`) ตามที่ TASKS.md อยากไ�
 
 ---
 
+### 4.12 T36/T37 — domain events **เพิ่ม** ไม่ใช่ rename, และ SQLite migrate จริงครั้งแรก
+
+**T36 ไม่ rename event เดิม** ทั้ง 5 ตัว (`AGENT_ASSIGNED`/`AGENT_COMPLETED`/`WAITING_FOR_HUMAN`/
+`TASK_BLOCKED`/`TASK_DEPLOYED`) ยังอยู่ครบและยัง emit เหมือนเดิม เพราะ (ก) `benchmark.ts` ฟัง
+`AGENT_COMPLETED` อยู่จริง และ (ข) **ทุก event ถูก persist** — rename แล้วประวัติที่เก็บไว้จะอ่านไม่ตรง
+กับ vocabulary ปัจจุบัน โดยไม่มีอะไรบันทึกว่าทำไม
+
+domain event 7 ตัวใหม่จึงต้อง**ถืออะไรที่ lifecycle event ถือไม่ได้** ไม่งั้นมันคือ synonym:
+`QA_FAILED` ถือ `StructuredFailure` + `RecoveryAction` (สองอย่างนี้คำนวณใน `reportCompletion` แล้วเดิม
+ทิ้งไปเลย เหลือแค่ return value), `QA_PASSED` ถือ `round` (= first-pass rate ของ T30),
+`APPROVAL_REQUIRED` ถือ `ApprovalRecord` เต็ม ๆ และยิงครั้งเดียวตอนเปิดคำถามจริง (ต่างจาก
+`WAITING_FOR_HUMAN` ที่ยิงทุก gate รวมถึง gate ที่ไม่มี approvalType), `APPROVAL_DECIDED` คือ**คำตอบ** —
+ก่อนหน้านี้ไม่มีอะไร emit คำตอบเลย, `DEPLOY_COMPLETED` ถือราคา (stages/runs/tokens/cost/duration)
+ส่วน `TASK_DEPLOYED` คือ transition เปล่า ๆ
+
+**`openApproval()` ต้อง guard ด้วย reference comparison** `requestApproval` คืน ledger ตัวเดิมเมื่อคำถาม
+เปิดอยู่แล้ว และ `advance()` ถูก poll ทุกครั้งที่เรียก `status()` — ถ้า emit โดยไม่เทียบ reference จะได้
+event ซ้ำใน store ทุก poll
+
+**T37: SQLite migrate จริงครั้งแรก (v2→v3)** ก่อนหน้านี้ store fail closed อย่างเดียว ตอนนี้ `MIGRATIONS`
+เดินหน้าทีละเวอร์ชันใน transaction เดียว **แต่ v1→v2 ยัง fail closed เหมือนเดิม** ความต่างไม่ใช่ความขี้เกียจ:
+v3 เพิ่มคอลัมน์ nullable ให้ `events` (แถวเก่าได้ null แล้ว `describeEvent()` derive กลับมาจาก payload
+ได้อยู่ดี — ไม่มีอะไรถูกเดา ไม่มีอะไรหาย) ส่วน v1→v2 เปลี่ยนคอลัมน์ที่ใช้อ่าน *run* ซึ่งอ่านผิดเงียบ ๆ
+= cost/token accounting เพี้ยนโดยไม่มีอะไรจับได้ เวอร์ชันที่ใหม่กว่า build นี้ก็ยังปฏิเสธ (downgrade
+ไม่ใช่ migration)
+
+**`NewEvent` แยกจาก `PersistedEvent`** — เขียนเท่าที่รู้ (audit field optional), อ่านได้ครบทั้ง 7 เสมอ
+(null แปลว่า "ไม่ได้บันทึก" ไม่ใช่ "ไม่มี") ถ้าบังคับ required ตอนเขียน ทุก call site ต้องเขียน
+`actor: null, reason: null, …` ให้ event ที่ไม่มีจริง ๆ ซึ่งกลบตัวที่มีความหมาย
+
+### 4.13 T38/T39/T40 — สามอันนี้ล้วน "ทำให้กฎที่มีอยู่แล้วตรวจได้" ไม่ใช่กฎใหม่
+
+**T38 ไม่แตะกฎ NEVER GUESS AN OWNER** `failureClassifier.ts` ยังหยุดถามคนเมื่อไม่มีใครระบุ owner
+สิ่งที่ T38 เพิ่มคือ: แถวที่ระบุ **category** ไว้ตรง ๆ (cell ที่เป็นคำนั้นทั้งเซลล์ หรือ `Type: contract`)
+เดิมถูก **ทิ้งทั้งแถว** เพราะ `parseOpenIssues` เก็บเฉพาะแถวที่มี role — คำตอบที่คนเขียนไว้แล้วถูกนับเป็น
+ความเงียบ ตอนนี้ route ได้ ด้วยมาตรฐานความเข้มงวดเดียวกับ owner (ต้องมีคำนั้นจริง ไม่ใช่อ่านจาก prose)
+**owner ที่ระบุไว้ชนะ category เสมอ** และ `routeFailure`'s "owner ไม่อยู่ใน pipeline → ESCALATE"
+**ไม่ถูกแตะ** (นั่นคือข้อมูลที่ขัดกันเอง ไม่ใช่ข้อมูลที่ขาด)
+
+**T39 เจอของจริงหนึ่งอย่าง** `workflows/typo.yml` รัน engineer เดี่ยว ๆ ไม่มีใครตรวจเลย — และ
+`--check-review-separation` จะพิมพ์เป็น **note** ไม่ใช่ error เพราะไฟล์นั้นเขียนไว้ตรง ๆ ว่าตั้งใจ
+("engineer alone, no QA stage") การ fail = ไปล้มการตัดสินใจ right-sizing ของผู้ใช้ ส่วนที่ fail จริงคือ
+reviewer ที่ produce สิ่งที่ตัวเองตรวจ / ถือ `WRITE_CODE`
+**หมายเหตุตอน implement:** probe ด้วย `when:` เปิดหมดจะ**กลบ**ปัญหา เพราะ typo workflow ได้ `security`
+มาเป็น reviewer เมื่อ `touchesSensitiveArea` — ต้องเดินหลาย combination แล้วรายงานอันที่แย่ที่สุด
+
+**T40 คือครั้งแรกที่มีอะไรอ่าน `failure.severity`** field นี้มีมาตั้งแต่ T06 และ `decideRecovery`
+**ไม่เคยอ่านเลย** — bug ที่จัดหน้าเพี้ยนกับ CRITICAL security finding ได้ 3 รอบเท่ากัน
+ค่าที่ตั้ง **ไม่ได้ลอกจาก TASKS.md ตรง ๆ** เพราะ `high` ในโค้ดนี้แปลว่า "blocking QA issue" ซึ่งคือเคสปกติ
+ถ้าใช้ตามตัวอักษร (`high: {approval: true}` = ไม่ retry เอง) pipeline จะหยุดถามคนทุกรอบ QA ที่ fail
+= ลบ fix-and-recheck loop ทิ้ง เหตุผลเต็มอยู่ในหัวไฟล์ `escalation-policy.yaml`
+**ผลข้างเคียงที่ตั้งใจ:** `high` ได้ 2 รอบแทน 3 ซึ่งไป**ตรงกับ**ที่ CLAUDE.md เขียนไว้อยู่แล้ว
+("fix ที่พัง 2 ครั้งให้ escalate") และ `REROUTE_CEILING = 2` — runtime budget เป็นที่เดียวที่ยังเขียน 3
+เทสต์เดิม 2 ตัวถูกแก้เพราะเรื่องนี้ (`recoveryPolicy.test.ts`'s `action.max`, และ `parseArgs` toEqual)
+
+---
+
 ## 5. ของค้าง — และมันอยู่ Phase ไหน
 
 | เรื่อง | สถานะ | อยู่ที่ไหน |
@@ -409,20 +481,28 @@ verb-based (`agent run/status/...`) ตามที่ TASKS.md อยากไ�
 | `README.md` (ฉบับไทย) ไม่ sync กับ 10-agent roster เต็ม | แก้แค่จุดเดียว (บรรทัด hook description) | ไม่มี task กำกับ — ของค้างเดียวกับ HANDOFF.md เอง |
 | `MERGE_GUIDE.md` พูดถึง "9 agent files"/"four hooks" | ล้าสมัยตั้งแต่ก่อน T24/T25 (ตอนนี้มี 10 agents, 6 hooks) | ไม่มี task กำกับ — ของค้างเดียวกันกับ README.md ด้านบน, พบระหว่าง T24/T25 แต่ไม่ได้แก้ (นอกขอบเขต P2 — Quality) |
 | id convention (`REQ-NNN` ฯลฯ จาก T19) ยังไม่เคยถูกใช้จริง | ไม่มี `_docs/module/` จริงในโปรเจกต์นี้เลย | รอโปรเจกต์จริงตัวแรกมาทดสอบ convention |
+| `events/eventRouter.ts` (T36) ยังไม่ผูก CLI | โมดูล+เทสต์ครบ แต่โปรเจกต์นี้ไม่มี queue/webhook ให้ต่อ — เป็น library เหมือน `changeImpact.ts` | ไม่มี task กำกับ — จะมีประโยชน์จริงตอน T42 (multi-repo) หรือเมื่อมี transport จริง |
+| `workflows/typo.yml` ส่งงาน engineer ออกโดยไม่มีใครตรวจ | T39 รายงานเป็น note แล้ว (ตั้งใจตามที่ไฟล์เขียนไว้) **แต่ขัดกับตาราง right-size ใน CLAUDE.md** ที่ระบุ `qa-engineer` ไว้แม้กับ copy fix | รอผู้ใช้ตัดสิน — เปลี่ยน `typo.yml` หรือเปลี่ยน CLAUDE.md ให้ตรงกัน |
 
 ---
 
-## 6. งานถัดไป: T36 (P3 — Architecture ขั้นสูง, ต่อจาก P2 ที่ครบหมดแล้วทั้ง Quality/Observability/Developer Experience)
+## 6. งานถัดไป: T41 (P3 — Production, ต่อจาก P3 — Architecture ขั้นสูง ที่ครบแล้ว)
 
-อ่าน spec เต็มใน `TASKS.md`. T36 (Event-driven Architecture: `Agent → Event → Orchestrator → Next
-Task` พร้อม event ชนิด `QA_PASSED`/`QA_FAILED`/`SECURITY_FAILED`/`APPROVAL_REQUIRED`/
-`DEPLOY_COMPLETED`) — **เช็คของเดิมก่อนเสมอ** (บทเรียนซ้ำทุก task ตั้งแต่ T22): `orchestrator/src/
-events/eventBus.ts` **มีอยู่แล้ว** (เห็นใน `npm test` output — 5 tests) และ
-`orchestrator.ts`'s `this.emitAndStore("AGENT_COMPLETED", ...)` ก็มีอยู่แล้วที่ `reportCompletion()`
-— อ่าน `eventBus.ts` และทุกจุดที่ `emitAndStore`/`this.events.on(...)` ถูกเรียกใน `orchestrator.ts`
-ก่อนเขียนโค้ดใหม่ ดูว่า event ชนิดที่ TASKS.md ต้องการ (`QA_PASSED` ฯลฯ) มีอยู่แล้วกี่ตัว ขาดกี่ตัว
-(สังเกตจาก `benchmark.ts`'s `orch.events.on("AGENT_COMPLETED", ...)` ที่ใช้อยู่แล้วตอน T29 — event
-bus นี้มีผู้ใช้จริงแล้ว ไม่ใช่แค่โครงว่าง)
+อ่าน spec เต็มใน `TASKS.md`. กลุ่มถัดไปคือ T41–T47 (Multi-project, Multi-repo, Environment
+Awareness, Deployment Approval, Rollback, Backup/Migration Safety, Disaster Recovery)
+
+**เช็คของเดิมก่อนเสมอ** (บทเรียนซ้ำทุก task ตั้งแต่ T22 — และซ้ำอีกทั้ง T36–T40) จุดที่รู้แล้วว่ามีของเดิม:
+
+- **T41 (Multi-project)** — `defaultProjectRoot()`/`--project-root` มีอยู่ทุก checker แล้ว และ
+  `.workflow/state.db` ก็ผูกกับ project root อยู่แล้ว (`defaultStateDbPath()`) คำถามจริงคือ workspace
+  ที่มีหลาย root ไม่ใช่การเพิ่ม concept ใหม่ทั้งชุด
+- **T44 (Deployment Approval: prepare vs execute)** — `ApprovalType.DEPLOY` + gate ที่
+  `READY_TO_DEPLOY -> APPROVED` มีครบแล้ว (T08) สิ่งที่ยังไม่มีคือการแยก "เตรียม" ออกจาก "ยิงจริง"
+  ในตัว `devops` เอง
+- **T45/T46 (Rollback / Migration Safety)** — `RecoveryAction`'s `ROLLBACK` เป็นเรื่อง *task state*
+  ไม่ใช่ deployment rollback อย่าเอาสองอย่างนี้ปนกัน
+- **T47 (Disaster Recovery)** — `Orchestrator.resume()` + `TaskRegistry` + T35 lock + T33 คุมส่วน
+  "orchestrator crash" ไปแล้วเกือบหมด ที่ยังไม่มีคือ Claude API error / agent timeout
 
 ---
 
@@ -443,13 +523,26 @@ bus นี้มีผู้ใช้จริงแล้ว ไม่ใช่
 - **(ใหม่) เทสต์ที่ fixture `pipelineCursor: N` แบบ hardcode ตัวเลข** (เช่นใน `taskStatus.test.ts`,
   `stateView.test.ts`) จะพังทันทีถ้า pipeline order เปลี่ยน — เวลาแทรก stage ใหม่เข้า pipeline
   ให้ `grep -rn "pipelineCursor:" orchestrator/src` หาให้ครบก่อนรัน test
+- **(ใหม่ T36–T40) เพิ่ม field ใน `CliArgs` → `cli.test.ts`'s `parseArgs` toEqual พังทันที**
+  เทสต์ตัวแรกสุดของไฟล์ assert ทั้ง object แบบ exact — เจอสองครั้งใน P3 นี้ (T39, T40)
+- **(ใหม่ T36) `z.looseObject` ไม่ใช่ `z.object`** สำหรับ schema ที่รับของจาก wire: `RunOutcome`
+  ได้ optional field เพิ่มมาแล้วรอบหนึ่ง (T26/T28) — `z.object` จะ **strip ทิ้งเงียบ ๆ** กลายเป็น
+  measurement ที่หายไปโดยไม่มีอะไรรู้ และ type assertion แบบสองทางต้องเทียบกับ `z.object` ตัวเข้ม
+  (`looseObject` infer ออกมาพร้อม index signature ซึ่งไม่มี interface ตัวไหน assignable ให้)
+- **(ใหม่ T38) `classifyQaFailure`'s branch ที่ owner ว่าง** อ่านง่ายผิดว่ามี case "ไม่มีทั้ง owner
+  และ category" — ไม่มีทางเกิด เพราะ `parseOpenIssues` ไม่เก็บแถวนั้นตั้งแต่แรก (rows.length === 0
+  แล้วไปออกทางเดิมก่อน) อย่าเขียน error message สำหรับ case ที่ตายแล้ว
+- **(ใหม่ T39) probe workflow ด้วย `when:` เปิดหมด = กลบปัญหา** ดู §4.13
 
 ---
 
 ## 8. หมายเหตุปิดท้าย
 
-ทุกอย่างในรอบนี้ **ยังไม่ commit** — `git status` จะเห็นไฟล์ใหม่/แก้จำนวนมาก (T16–T30 รวมกัน)
-ถ้าจะ commit ผู้ใช้ต้องรันเอง (ไม่มี agent ตัวไหนรัน git ได้ และ hook บล็อกไว้)
+T01–T35 commit ไปแล้ว **T36–T40 ยังไม่ commit** — `git status` จะเห็นไฟล์ใหม่ 12 ไฟล์
+(`events/domainEvents.ts` `events/eventRouter.ts` `audit/auditTrail.ts` `routing/dynamicRouter.ts`
+`review/reviewSeparation.ts` `escalation/escalationPolicy.ts` + เทสต์ของแต่ละตัว, `escalation-policy.yaml`,
+`schemas/escalation-policy.schema.json`) และไฟล์แก้อีกราว 8 ไฟล์ ถ้าจะ commit ผู้ใช้ต้องรันเอง
+(ไม่มี agent ตัวไหนรัน git ได้ และ hook บล็อกไว้)
 
 ไฟล์ที่ถูกลบไปคือ `workflows/README.md` (จาก T09) — ถูกแทนที่ด้วย workflow จริง 11 ไฟล์ตอนที่ home
 เปลี่ยนสถานะจาก `reserved` เป็น `active` ใน `layout.yaml`

@@ -25,6 +25,9 @@ import { RunLog, type RunOutcome } from "../observability/runLog.js";
 import { assertBudget, BudgetExceededError, DEFAULT_BUDGET, type Budget } from "../cost/costControl.js";
 import { AGENT_REGISTRY } from "../agents/registry.js";
 import { EventBus } from "../events/eventBus.js";
+import { verdictEventFor, type DomainEventMap } from "../events/domainEvents.js";
+import { describeEvent } from "../audit/auditTrail.js";
+import { assertIndependentVerdict } from "../review/reviewSeparation.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";
 import { TaskNotFoundError, newPersistedTask, type PersistedTask, type TaskStore } from "../store/taskStore.js";
 import { type StructuredFailure } from "./failure.js";
@@ -65,10 +68,18 @@ export type OrchestratorStatus =
  * Item 14: every routing decision is also an event, not only a return value —
  * "Developer finished -> emit IMPLEMENTATION_COMPLETED -> orchestrator routes
  * -> QA" from task-detail.md maps to AGENT_COMPLETED in, AGENT_ASSIGNED out.
+ *
+ * The five below are the *lifecycle*: which stage is up, which finished, why the
+ * machine stopped. T36 extends the map with the *domain* events — the verdicts,
+ * the approvals, and what a deploy cost — which carry facts these five cannot
+ * express (see events/domainEvents.ts for what each adds and why neither set
+ * replaces the other).
  */
-export interface OrchestratorEventMap {
-  AGENT_ASSIGNED: { taskId: string; stage: AgentStage };
-  AGENT_COMPLETED: { taskId: string; stage: AgentStage; outcome: RunOutcome };
+export interface OrchestratorEventMap extends DomainEventMap {
+  /** `inputs` is the artifact categories this stage is actually handed (T37's INPUT) — the same slice `step()` passes to the executor. */
+  AGENT_ASSIGNED: { taskId: string; stage: AgentStage; inputs: ContextCategory[] };
+  /** `artifactType` is what the stage produced (T37's OUTPUT), or null for a stage whose work is only code on disk. */
+  AGENT_COMPLETED: { taskId: string; stage: AgentStage; outcome: RunOutcome; artifactType: ArtifactType | null };
   WAITING_FOR_HUMAN: { taskId: string; from: TaskState; to: TaskState; reason: string; approvalType: ApprovalType | null };
   TASK_BLOCKED: { taskId: string; reason: string };
   TASK_DEPLOYED: { taskId: string };
@@ -95,6 +106,11 @@ function assertCanProduce(stage: AgentStage, artifactType: ArtifactType): void {
   if (!AGENT_REGISTRY[stage].outputs.includes(artifactType)) {
     throw new Error(`${stage} is not registered (item 9) to produce ${artifactType}`);
   }
+  // T39: and a verdict specifically must come from a role that did not do the
+  // work. Checked separately from the registry lookup above on purpose — that one
+  // asks "is this in the table?", this one asks "is this a review of your own
+  // work?", and only the second still holds if someone edits the table.
+  assertIndependentVerdict(stage, artifactType);
 }
 
 function implementationStart(pipeline: AgentStage[]): number {
@@ -299,6 +315,14 @@ export class Orchestrator {
     });
     this.syncGateEvidence();
     this.persist();
+    // T36: the answer is an event too. Before this, a listener could observe every
+    // question the pipeline ever asked and never learn what a person said back.
+    this.emitAndStore("APPROVAL_DECIDED", {
+      taskId: this.taskId,
+      type,
+      approved,
+      by: opts.by ?? null,
+    });
   }
 
   /**
@@ -317,6 +341,23 @@ export class Orchestrator {
       return;
     }
     this.decideApproval(type, value);
+  }
+
+  /**
+   * Opens a human decision and announces it (T36's APPROVAL_REQUIRED).
+   *
+   * The emit rides on `requestApproval`'s own idempotence: it returns the ledger
+   * unchanged when this type is already open or already answered, and `advance()`
+   * is polled, so an unguarded emit here would append an identical event to the
+   * store on every single `status()` call. Comparing the reference is what makes
+   * "a question was opened" a one-time fact rather than a per-poll one.
+   */
+  private openApproval(params: { type: ApprovalType; reason: string; from?: TaskState; to?: TaskState }): void {
+    const before = this.approvals;
+    this.approvals = requestApproval(before, { ...params, now: this.now() });
+    if (this.approvals === before) return;
+    const record = findApproval(this.approvals, params.type);
+    if (record) this.emitAndStore("APPROVAL_REQUIRED", { taskId: this.taskId, approval: record });
   }
 
   /** Keeps the gate's booleans equal to the ledger — the ledger is the source, these are the derivation. */
@@ -344,7 +385,13 @@ export class Orchestrator {
       this.lastStatusKey = key;
       switch (status.kind) {
         case "RUNNING":
-          this.emitAndStore("AGENT_ASSIGNED", { taskId: this.taskId, stage: status.stage });
+          this.emitAndStore("AGENT_ASSIGNED", {
+            taskId: this.taskId,
+            stage: status.stage,
+            // The same selection step() will hand the executor. Recorded here so the
+            // trail says what the agent was given, not just that it was given something.
+            inputs: selectContext(status.stage, this.artifactStore).map((item) => item.source),
+          });
           break;
         case "WAITING_FOR_HUMAN":
           this.emitAndStore("WAITING_FOR_HUMAN", {
@@ -360,20 +407,59 @@ export class Orchestrator {
           break;
         case "DEPLOYED":
           this.emitAndStore("TASK_DEPLOYED", { taskId: this.taskId });
+          // Same moment, different fact: TASK_DEPLOYED is the transition,
+          // DEPLOY_COMPLETED is what reaching it cost (T36).
+          this.emitAndStore("DEPLOY_COMPLETED", this.deploySummary());
           break;
       }
     }
     return status;
   }
 
-  /** Every emitted event is also appended to the store: the audit trail of who was asked to do what, and why a task stopped. */
+  /**
+   * What this task cost to reach DEPLOYED, read off the run log rather than
+   * recomputed by whoever is listening.
+   *
+   * `runs` counts every agent run including redone rounds, while `stages` lists
+   * each stage once — so `runs > stages.length` is the signal that work was
+   * repeated, which is the fact T29/T30's rework rate is built from and the one
+   * a bare "DEPLOYED" tells nobody.
+   */
+  private deploySummary(): DomainEventMap["DEPLOY_COMPLETED"] {
+    const runs = this.runLog.runsForTask(this.taskId);
+    const stages: AgentStage[] = [];
+    for (const run of runs) if (!stages.includes(run.agent)) stages.push(run.agent);
+    return {
+      taskId: this.taskId,
+      stages,
+      runs: runs.length,
+      totalTokens: this.runLog.totalTokens(this.taskId),
+      totalCost: this.runLog.totalCost(this.taskId),
+      durationMs:
+        runs.length === 0
+          ? 0
+          : Math.max(...runs.map((r) => r.end_time)) - Math.min(...runs.map((r) => r.start_time)),
+    };
+  }
+
+  /**
+   * Every emitted event is also appended to the store: the audit trail of who
+   * was asked to do what, and why a task stopped.
+   *
+   * The seven T37 fields are derived once, here, by the module that knows every
+   * payload shape (`audit/auditTrail.ts`) rather than assembled by hand at each
+   * emit site — a per-site sprinkle is exactly how two events end up disagreeing
+   * about what "actor" means.
+   */
   private emitAndStore<K extends keyof OrchestratorEventMap & string>(type: K, payload: OrchestratorEventMap[K]): void {
     this.events.emit(type, payload);
+    const record = payload as unknown as Record<string, unknown>;
     this.store.appendEvent({
       taskId: this.taskId,
       at: this.now(),
       type,
-      payload: payload as unknown as Record<string, unknown>,
+      payload: record,
+      ...describeEvent(type, record),
     });
   }
 
@@ -416,13 +502,7 @@ export class Orchestrator {
             this.run = { ...this.run, machine: forceBlock(this.run.machine) };
             return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
           }
-          this.approvals = requestApproval(this.approvals, {
-            type: approvalType,
-            reason,
-            now: this.now(),
-            from: current,
-            to: next,
-          });
+          this.openApproval({ type: approvalType, reason, from: current, to: next });
         }
 
         return this.settle({ kind: "WAITING_FOR_HUMAN", from: current, to: next, reason, approvalType });
@@ -467,7 +547,12 @@ export class Orchestrator {
       );
     }
 
-    this.emitAndStore("AGENT_COMPLETED", { taskId: this.taskId, stage, outcome: result.outcome });
+    this.emitAndStore("AGENT_COMPLETED", {
+      taskId: this.taskId,
+      stage,
+      outcome: result.outcome,
+      artifactType: result.artifactType ?? null,
+    });
     const record = this.runLog.record({
       task_id: this.taskId,
       agent: stage,
@@ -515,7 +600,42 @@ export class Orchestrator {
       this.applyFailureRoute(failureKind, result.failure);
     }
 
+    // T36's verdict events, emitted after the route is decided so a failed round
+    // carries the decision with it. A listener that only saw AGENT_COMPLETED
+    // would have to re-derive both halves — and could not derive the recovery
+    // action at all, since nothing outside this method computes it.
+    this.emitVerdict(stage, result);
+
     return this.advance();
+  }
+
+  /**
+   * Emits QA_PASSED/QA_FAILED/SECURITY_PASSED/SECURITY_FAILED for a stage that
+   * verifies something, and nothing at all for a stage that doesn't.
+   *
+   * An engineer finishing is an AGENT_COMPLETED and no more: giving it a verdict
+   * would make "passed" mean two different things depending on who emitted it —
+   * "I ran without erroring" for a producer, "I checked someone else's work and
+   * it holds" for a reviewer. Those are not the same claim, and T39 rests on
+   * their being kept apart.
+   */
+  private emitVerdict(stage: AgentStage, result: AgentExecutorResult): void {
+    const passed = result.outcome.result !== "FAIL";
+    const type = verdictEventFor(stage, passed);
+    if (!type) return;
+
+    const round = stage === AgentStage.QA_ENGINEER ? this.run.retries.qa : this.run.retries.security;
+    if (type === "QA_PASSED" || type === "SECURITY_PASSED") {
+      this.emitAndStore(type, { taskId: this.taskId, stage, round });
+      return;
+    }
+    this.emitAndStore(type, {
+      taskId: this.taskId,
+      stage,
+      round,
+      failure: result.failure ?? null,
+      recovery: this.lastRecovery,
+    });
   }
 
   /**
@@ -553,10 +673,9 @@ export class Orchestrator {
         // reason in the ledger instead of only an opaque BLOCKED string — these
         // are two of CLAUDE.md's five always-human points, and they were the two
         // that left no trace of having been reached.
-        this.approvals = requestApproval(this.approvals, {
+        this.openApproval({
           type: failureKind === "qa" ? ApprovalType.QA_FAILURE : ApprovalType.SECURITY_RISK,
           reason: action.reason,
-          now: this.now(),
         });
         this.run = { ...this.run, machine: forceBlock(this.run.machine) };
         this.blockedReason = action.reason;

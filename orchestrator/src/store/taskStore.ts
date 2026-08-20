@@ -79,13 +79,50 @@ export const PersistedTaskSchema = z.object({
 });
 export type PersistedTask = z.infer<typeof PersistedTaskSchema>;
 
+/**
+ * One recorded event, with T37's audit fields alongside the payload.
+ *
+ * `type` is WHAT and `at` is WHEN; the five below are WHO / WHY / INPUT /
+ * OUTPUT / DECISION. They are nullable and defaulted rather than required
+ * because two things legitimately have nothing to put in them: a row written
+ * before T37 existed, and an event that genuinely made no decision (an agent
+ * finishing is a fact, not a choice). `audit/auditTrail.ts` derives the same
+ * fields from `payload` when they are null, so an old row still reads as a
+ * proper trail instead of a wall of nulls.
+ */
 export const PersistedEventSchema = z.object({
   taskId: z.string().min(1),
   at: z.number(),
   type: z.string().min(1),
   payload: z.record(z.string(), z.unknown()),
+  /** WHO: the agent role, the person, or "orchestrator". */
+  actor: z.string().nullable().default(null),
+  /** WHY: the reason carried by the event, in the words it used. */
+  reason: z.string().nullable().default(null),
+  /** INPUT: what went in — the artifact categories handed over, or the gate being answered. */
+  input: z.string().nullable().default(null),
+  /** OUTPUT: what came out — the artifact, the verdict, the cost. */
+  output: z.string().nullable().default(null),
+  /** DECISION: the choice made, as a short stable token. Null for an event that decided nothing. */
+  decision: z.string().nullable().default(null),
 });
 export type PersistedEvent = z.infer<typeof PersistedEventSchema>;
+
+/**
+ * What a caller supplies to record an event, as opposed to what it gets back.
+ *
+ * The asymmetry is deliberate: an emitter states the audit fields it knows and
+ * omits the rest, while a reader always receives all seven — explicitly null
+ * where nothing was recorded. Requiring them on the way in would force every
+ * call site to write `actor: null, reason: null, …` for events that genuinely
+ * have none, which is noise that hides the ones that matter.
+ */
+export type NewEvent = z.input<typeof PersistedEventSchema>;
+
+/** Normalises an event on the way into a store, so both implementations record the same shape. */
+export function parseNewEvent(event: NewEvent): PersistedEvent {
+  return PersistedEventSchema.parse(event);
+}
 
 export class TaskAlreadyExistsError extends Error {
   constructor(public readonly taskId: string) {
@@ -126,7 +163,7 @@ export interface TaskStore {
   listTasks(): PersistedTask[];
   appendRun(record: RunRecord): void;
   runsForTask(taskId: string): RunRecord[];
-  appendEvent(event: PersistedEvent): void;
+  appendEvent(event: NewEvent): void;
   eventsForTask(taskId: string): PersistedEvent[];
   close(): void;
 }

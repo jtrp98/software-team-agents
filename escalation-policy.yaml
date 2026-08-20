@@ -1,0 +1,95 @@
+# Human escalation policy — what a failure's severity is allowed to do on its own (T40).
+#
+# WHY THIS FILE EXISTS
+#
+# `StructuredFailure.severity` has been part of the record since T06, and until T40 *nothing
+# read it*. Every failure got the same three automatic rounds and the same routing regardless
+# of whether it was a spacing bug or an unauthenticated admin endpoint. The severity was
+# written down, carried through the store, shown in the audit trail — and had no consequence.
+#
+# This file gives it one, in a place that can be changed without touching code.
+#
+# HOW THE FOUR FIELDS COMBINE
+#
+#   autonomous     may the orchestrator retry this by itself at all?
+#   max_retry      how many automatic rounds this severity gets, at most. The global ceiling
+#                  (retry/retryPolicy.ts MAX_RETRY) still outranks it — this can only ever be
+#                  stricter, never a way to buy extra rounds.
+#   approval       when it stops, is a person formally *asked* (an approval record with a type
+#                  and a reason), or does the task just go quiet in BLOCKED?
+#   stop_pipeline  stop the task outright rather than routing the failure to an owner.
+#
+# Stopping is always ESCALATE, not ABORT: a person can answer and the task continues. ABORT is
+# reserved for the global retry budget being spent, which is the one case where no further
+# automatic round can help.
+#
+# WHERE THIS DEVIATES FROM TASKS.md's SKETCH, AND WHY
+#
+# TASKS.md writes `high: {approval: true}` with no `autonomous` key, which read literally means
+# a high-severity failure never gets an automatic round at all. That cannot be adopted as
+# written, because of what "high" actually means in this codebase: `failureClassifier.ts` labels
+# *every blocking QA issue* high — the ordinary case, not the alarming one. Taking the literal
+# reading would stop the pipeline for a person on every failed QA round and delete the
+# fix-and-recheck loop the whole design is built around.
+#
+# So `high` keeps its automatic rounds and gets a tighter ceiling instead: 2 rather than 3.
+# That is not a compromise value, it is the number the rest of the repo already uses —
+# CLAUDE.md's "a fix that fails twice gets escalated, not re-sent", and
+# `failureClassifier.ts`'s REROUTE_CEILING = 2. The runtime budget was the one place still
+# saying 3.
+#
+# `critical` is the severity that takes TASKS.md at its word, and it is the one where that is
+# right: `classifySecurityFailure` only reaches critical when a CRITICAL security finding is
+# open, and CLAUDE.md makes that a hard stop for a person in every mode.
+#
+# WHAT CHECKS THIS
+#
+# `orchestrator/src/escalation/escalationPolicy.ts` holds the same values as the runtime
+# authority (a policy that has to be read off disk to decide a retry would fail closed at the
+# worst possible moment), and `--check-escalation-policy` fails when this file and that constant
+# disagree. Same arrangement as `workflows/*.yml` against the classifier.
+
+version: 1
+
+severity:
+  low:
+    autonomous: true
+    max_retry: 3
+    approval: false
+    stop_pipeline: false
+    why: >
+      A cosmetic or non-blocking problem. It gets the full global budget because retrying it
+      costs one agent run and asking a person costs their attention, which is the scarcer of
+      the two.
+
+  medium:
+    autonomous: true
+    max_retry: 3
+    approval: false
+    stop_pipeline: false
+    why: >
+      A real but non-blocking problem — what `failureClassifier.ts` assigns when open issues
+      exist and none of them is marked blocking. Same budget as low: nothing here is holding
+      up a deploy.
+
+  high:
+    autonomous: true
+    max_retry: 2
+    approval: true
+    stop_pipeline: false
+    why: >
+      A blocking problem: the phase does not ship until it is fixed. Two automatic rounds, per
+      CLAUDE.md's rule that an item surviving two honest fix attempts is usually misrouted
+      rather than badly implemented — a third round would most likely fix the wrong thing.
+      When it does stop, a person is asked rather than the task simply going quiet.
+
+  critical:
+    autonomous: false
+    max_retry: 0
+    approval: true
+    stop_pipeline: true
+    why: >
+      An open CRITICAL security finding, or a failure an agent explicitly escalated to this
+      level. No automatic round runs at all: CLAUDE.md makes a Critical finding a hard stop for
+      a person in every mode, and only `security` may ever close one — so retrying an engineer
+      could at best produce a fix nobody has re-audited.

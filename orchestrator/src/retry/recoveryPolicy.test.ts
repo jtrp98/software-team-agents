@@ -4,6 +4,7 @@ import { validateStructuredFailure, type StructuredFailure } from "../orchestrat
 import { InvalidRecoveryError, recoverTo, transition } from "../state/taskState.js";
 import { MAX_RETRY, initTaskRun, recordFailure, type TaskRun } from "./retryPolicy.js";
 import { decideRecovery, describeRecovery, isTerminal } from "./recoveryPolicy.js";
+import { effectiveMaxRetry } from "../escalation/escalationPolicy.js";
 
 const PIPELINE = [
   AgentStage.BUSINESS_ANALYST,
@@ -88,7 +89,12 @@ describe("decideRecovery", () => {
       if (action.kind === "RETRY") {
         expect(action.stage).toBe(AgentStage.BACKEND_ENGINEER);
         expect(action.strategy).toBe("retry_same_stage");
-        expect(action.max).toBe(MAX_RETRY);
+        // Two, not MAX_RETRY: since T40 the ceiling reported is the one this
+        // failure's severity actually gets ("high" = a blocking issue = two
+        // rounds, per CLAUDE.md's "a fix that fails twice gets escalated").
+        // Reporting the global budget here would promise a round it will not get.
+        expect(action.max).toBe(effectiveMaxRetry("high"));
+        expect(action.max).toBeLessThan(MAX_RETRY);
       }
     });
 

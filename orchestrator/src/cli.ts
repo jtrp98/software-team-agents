@@ -19,6 +19,9 @@ import { checkTestPyramid } from "./testing/testPyramid.js";
 import { describeStatus, type TaskStatusKind } from "./orchestrator/taskStatus.js";
 import { RunLog } from "./observability/runLog.js";
 import { acquireTaskLock, releaseTaskLock, TaskLockedError } from "./concurrency/taskLock.js";
+import { actorsIn, auditTrail, decisionTrail, formatAuditTrail } from "./audit/auditTrail.js";
+import { checkReviewSeparation } from "./review/reviewSeparation.js";
+import { checkEscalationPolicy } from "./escalation/escalationPolicy.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -56,6 +59,10 @@ export interface CliArgs {
   checkDecisions: boolean;
   /** Check test-pyramid.yaml against its schema and exit. Same audience. */
   checkTestPyramid: boolean;
+  /** Check that no agent can review its own work, and report pipelines that ship unreviewed (T39). Same audience. */
+  checkReviewSeparation: boolean;
+  /** Check escalation-policy.yaml against the runtime policy and exit (T40). Same audience. */
+  checkEscalationPolicy: boolean;
   dependsOn: string[];
   stateDb?: string;
   /** Phases of plan.md this run touches, used to slice module docs per conventions.md §10. Empty = send the plan whole. */
@@ -86,6 +93,7 @@ export const USAGE =
   "  orchestrate retry   <task-id> --module <name> [--project-root <path>]   same as resume — there is no daemon here for the two to mean different things\n" +
   "  orchestrate pause  <task-id> [--project-root <path>]   freeze a task; run/resume/retry refuse it until resumed\n" +
   "  orchestrate cancel <task-id> [--reason <text>] [--project-root <path>]   give up on a task for good; run/resume/retry refuse it permanently\n" +
+  "  orchestrate audit  <task-id> [--decisions] [--project-root <path>]   the WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail; --decisions shows only the choices\n" +
   "\n" +
   "underlying flag-based form:\n" +
   "  orchestrate --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] <classification flags>\n" +
@@ -97,6 +105,8 @@ export const USAGE =
   "  orchestrate --check-profile [--project-root <path>]        check project.yaml and stacks/ against the agent roster\n" +
   "  orchestrate --check-decisions [--project-root <path>]      check decisions/*.md ADRs against the schema and cross-links\n" +
   "  orchestrate --check-test-pyramid [--project-root <path>]   check test-pyramid.yaml against its schema\n" +
+  "  orchestrate --check-review-separation [--project-root <path>]  check that no agent can review its own work\n" +
+  "  orchestrate --check-escalation-policy [--project-root <path>]  check escalation-policy.yaml against the runtime policy\n" +
   `  classification flags: ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
 
 /** Pure argv parser — kept separate from process.argv/console/exit so it's directly testable. */
@@ -113,6 +123,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkProfileFlag = false;
   let checkDecisionsFlag = false;
   let checkTestPyramidFlag = false;
+  let checkReviewSeparationFlag = false;
+  let checkEscalationPolicyFlag = false;
   let dependsOn: string[] = [];
   let phases: number[] = [];
   const classification: ClassificationInput = {};
@@ -153,6 +165,10 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkDecisionsFlag = true;
     } else if (arg === "--check-test-pyramid") {
       checkTestPyramidFlag = true;
+    } else if (arg === "--check-review-separation") {
+      checkReviewSeparationFlag = true;
+    } else if (arg === "--check-escalation-policy") {
+      checkEscalationPolicyFlag = true;
     } else if (arg in FLAG_TO_CLASSIFICATION) {
       classification[FLAG_TO_CLASSIFICATION[arg]] = true;
     } else {
@@ -167,7 +183,9 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkWorkflowsFlag &&
     !checkProfileFlag &&
     !checkDecisionsFlag &&
-    !checkTestPyramidFlag
+    !checkTestPyramidFlag &&
+    !checkReviewSeparationFlag &&
+    !checkEscalationPolicyFlag
   ) {
     if (!taskId) throw new CliUsageError("--task-id is required");
     if (!moduleName) throw new CliUsageError("--module is required (the _docs/module/<name>/ this task belongs to)");
@@ -189,6 +207,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkProfile: checkProfileFlag,
     checkDecisions: checkDecisionsFlag,
     checkTestPyramid: checkTestPyramidFlag,
+    checkReviewSeparation: checkReviewSeparationFlag,
+    checkEscalationPolicy: checkEscalationPolicyFlag,
     dependsOn,
     stateDb,
     phases,
@@ -333,7 +353,7 @@ function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orches
   return registry.create({ taskId, classification, dependsOn: args.dependsOn });
 }
 
-const VERBS = ["run", "status", "approve", "retry", "resume", "pause", "cancel"] as const;
+const VERBS = ["run", "status", "approve", "retry", "resume", "pause", "cancel", "audit"] as const;
 type Verb = (typeof VERBS)[number];
 
 function isVerb(s: string | undefined): s is Verb {
@@ -486,6 +506,40 @@ async function runCancelVerb(rest: string[], defaultProjectRoot: string): Promis
   }
 }
 
+/**
+ * `audit <task-id> [--decisions]` — T37's trail, for the question "why did the
+ * pipeline do that?".
+ *
+ * Read-only and store-only: it never opens an `Orchestrator`, because
+ * reconstructing a task's state to explain its past is both unnecessary and a
+ * way to accidentally advance it while looking at it.
+ */
+async function runAuditVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const stateDb = flagValue(rest, "--state-db");
+  const taskId = positionalArg(rest);
+  if (!taskId) throw new CliUsageError("audit: a task id is required");
+  const decisionsOnly = rest.includes("--decisions");
+
+  const { store, registry } = openStore(projectRoot, stateDb);
+  try {
+    if (!store.loadTask(taskId)) {
+      console.error(`[orchestrator] no such task: ${taskId}`);
+      return 1;
+    }
+    const entries = auditTrail(store, taskId);
+    const actors = actorsIn(entries);
+    console.log(
+      `[orchestrator] audit trail for ${taskId}: ${entries.length} event(s), ` +
+        `${decisionTrail(entries).length} decision(s)${actors.length > 0 ? `, actors: ${actors.join(", ")}` : ""}`,
+    );
+    console.log(formatAuditTrail(entries, { decisionsOnly }));
+    return 0;
+  } finally {
+    registry.close();
+  }
+}
+
 /** Dispatches a T31 verb, translating the ones that are really the existing engine in disguise (`run`, `resume`, `retry`) rather than duplicating the step loop. */
 async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): Promise<number> {
   switch (verb) {
@@ -506,6 +560,8 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
       return runPauseVerb(rest, defaultProjectRoot);
     case "cancel":
       return runCancelVerb(rest, defaultProjectRoot);
+    case "audit":
+      return runAuditVerb(rest, defaultProjectRoot);
   }
 }
 
@@ -585,6 +641,34 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       return 0;
     }
     console.error("[orchestrator] test-pyramid.yaml has problems:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
+  if (args.checkReviewSeparation) {
+    const result = checkReviewSeparation(args.projectRoot);
+    // Notes print either way. An unreviewed pipeline is a right-sizing decision
+    // the user owns (workflows/typo.yml says so outright), so it is shown and not failed.
+    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
+    if (result.ok) {
+      console.log("[orchestrator] no agent can review its own work.");
+      return 0;
+    }
+    console.error("[orchestrator] creator/reviewer separation is broken:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
+  if (args.checkEscalationPolicy) {
+    const result = checkEscalationPolicy(args.projectRoot);
+    // Notes print either way: a severity that can never retry changes how the whole
+    // pipeline behaves, and burying it until something stops is how it stops being known.
+    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
+    if (result.ok) {
+      console.log("[orchestrator] escalation-policy.yaml agrees with the runtime policy.");
+      return 0;
+    }
+    console.error("[orchestrator] escalation-policy.yaml has problems:");
     for (const problem of result.problems) console.error(`  - ${problem}`);
     return 1;
   }

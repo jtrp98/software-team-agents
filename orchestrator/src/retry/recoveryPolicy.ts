@@ -2,6 +2,12 @@ import { AgentStage, TaskState } from "../types.js";
 import { routeFailure, type StructuredFailure } from "../orchestrator/failure.js";
 import type { TaskMachine } from "../state/taskState.js";
 import { MAX_RETRY, type FailureKind, type TaskRun } from "./retryPolicy.js";
+import {
+  DEFAULT_ESCALATION_POLICY,
+  effectiveMaxRetry,
+  policyFor,
+  type EscalationPolicy,
+} from "../escalation/escalationPolicy.js";
 
 /**
  * Decides what actually happens after a failure — the five-way choice T07 asks
@@ -53,6 +59,14 @@ export interface RecoveryInput {
   pipeline: AgentStage[];
   /** The state the task was in when the failure arrived, before any recovery is applied. */
   currentState: TaskState;
+  /**
+   * What each severity is allowed to do on its own (T40). Defaults to the
+   * runtime policy; passed explicitly only by a test or a caller deliberately
+   * running under different rules. Never read from disk here — this function
+   * decides what happens when things are already going wrong, and it must not
+   * be able to fail because a file was missing.
+   */
+  escalation?: EscalationPolicy;
 }
 
 /** States that mean verification is already behind the task — a failure here is a rollback, not a retry. */
@@ -77,6 +91,7 @@ function firstImplementationStage(pipeline: AgentStage[]): AgentStage | null {
  */
 export function decideRecovery(input: RecoveryInput): RecoveryAction {
   const { failure, kind, run, pipeline, currentState } = input;
+  const escalation = input.escalation ?? DEFAULT_ESCALATION_POLICY;
   const used = run.retries[kind];
 
   // 1. Budget first, and it outranks everything. A failure that says "retry me"
@@ -87,6 +102,40 @@ export function decideRecovery(input: RecoveryInput): RecoveryAction {
       strategy: "abort",
       reason: `${kind} retry limit (${MAX_RETRY}) exceeded after ${used} attempts — no further automatic round can help`,
     };
+  }
+
+  // 1a. Then what this severity is allowed to do at all (T40). Above the routing
+  //     decision, not inside it: a critical failure is not a routing question —
+  //     there is no owner to send it to that makes it safe to keep going. All
+  //     three outcomes here ESCALATE rather than ABORT, because the global budget
+  //     is not spent and a person answering can still restart the task.
+  if (failure) {
+    const severityPolicy = policyFor(failure.severity, escalation);
+    if (severityPolicy.stop_pipeline) {
+      return {
+        kind: "ESCALATE",
+        strategy: "escalate_to_human",
+        reason:
+          `severity "${failure.severity}" stops the pipeline — no automatic round runs for it: ${failure.reason}`,
+      };
+    }
+    if (!severityPolicy.autonomous) {
+      return {
+        kind: "ESCALATE",
+        strategy: "escalate_to_human",
+        reason: `severity "${failure.severity}" is never handled autonomously — a person decides: ${failure.reason}`,
+      };
+    }
+    const ceiling = effectiveMaxRetry(failure.severity, escalation);
+    if (used > ceiling) {
+      return {
+        kind: "ESCALATE",
+        strategy: "escalate_to_human",
+        reason:
+          `severity "${failure.severity}" allows at most ${ceiling} automatic round(s) and this is attempt ${used} — ` +
+          `an item that survives that many honest fix attempts is usually misrouted, not badly implemented: ${failure.reason}`,
+      };
+    }
   }
 
   // 2. Already past verification: nothing downstream should be reasoned about
@@ -125,6 +174,7 @@ export function decideRecovery(input: RecoveryInput): RecoveryAction {
       strategy: "retry_same_stage",
       stage,
       attempt: used,
+      // No failure means no severity, so the applicable ceiling is the global one.
       max: MAX_RETRY,
       reason: `${kind} round failed without a structured failure — falling back to the implementation stage`,
     };
@@ -138,7 +188,10 @@ export function decideRecovery(input: RecoveryInput): RecoveryAction {
         strategy: "retry_same_stage",
         stage: route.stage,
         attempt: used,
-        max: MAX_RETRY,
+        // The ceiling this failure actually has (T40), which for a blocking issue
+        // is two rather than the global three — reporting MAX_RETRY here would
+        // tell a caller it has a round it will not be given.
+        max: effectiveMaxRetry(failure.severity, escalation),
         reason: route.reason,
       };
     case "RECOVER":

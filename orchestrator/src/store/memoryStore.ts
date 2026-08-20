@@ -2,7 +2,9 @@ import type { RunRecord } from "../observability/runLog.js";
 import {
   TaskAlreadyExistsError,
   TaskNotFoundError,
+  parseNewEvent,
   parsePersistedTask,
+  type NewEvent,
   type PersistedEvent,
   type PersistedTask,
   type TaskStore,
@@ -55,8 +57,11 @@ export class MemoryTaskStore implements TaskStore {
     return this.runs.filter((r) => r.task_id === taskId).map((r) => ({ ...r }));
   }
 
-  appendEvent(event: PersistedEvent): void {
-    this.events.push(structuredClone(event));
+  appendEvent(event: NewEvent): void {
+    // Normalised on the way in, exactly as the SQLite store does — an event read
+    // back from memory must carry the same audit fields (T37) it would carry
+    // after a round trip through a real database, or the tests stop meaning anything.
+    this.events.push(parseNewEvent(structuredClone(event) as NewEvent));
   }
 
   eventsForTask(taskId: string): PersistedEvent[] {

@@ -7,7 +7,9 @@ import {
   PersistedEventSchema,
   TaskAlreadyExistsError,
   TaskNotFoundError,
+  parseNewEvent,
   parsePersistedTask,
+  type NewEvent,
   type PersistedEvent,
   type PersistedTask,
   type TaskStore,
@@ -33,11 +35,16 @@ import {
  */
 
 // v2 (T26/T28): added runs.model/input_tokens/output_tokens/cache_read_tokens/context_chars.
-// A v1 database opened by this build hits SchemaVersionMismatchError below rather than being
-// silently read with those columns missing — see that class's own comment for why this store
-// fails closed instead of auto-migrating: nothing has been deployed against v1 for real yet, so
-// there is no in-place upgrade to preserve, only a clear signal to recreate the file.
-const SCHEMA_VERSION = 2;
+// v3 (T37): added events.actor/reason/input/output/decision — the audit trail's WHO/WHY/INPUT/
+//           OUTPUT/DECISION.
+//
+// v2 -> v3 is migrated in place (see MIGRATIONS below), unlike v1 -> v2 which still fails closed.
+// The difference is what is being added and what it would cost to get it wrong: v3 adds nullable
+// columns to `events`, so an old row simply has nulls and `audit/auditTrail.ts` derives the same
+// fields from `payload` anyway — nothing is guessed and nothing is lost. v1 -> v2 changed the
+// columns a *run* is read through, where a silent misread would corrupt cost and token accounting
+// that nothing downstream could tell was wrong. An unknown version still refuses to open at all.
+const SCHEMA_VERSION = 3;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -66,14 +73,22 @@ CREATE TABLE IF NOT EXISTS runs (
 );
 CREATE INDEX IF NOT EXISTS runs_task_id ON runs (task_id);
 CREATE TABLE IF NOT EXISTS events (
-  id      INTEGER PRIMARY KEY AUTOINCREMENT,
-  task_id TEXT NOT NULL,
-  at      INTEGER NOT NULL,
-  type    TEXT NOT NULL,
-  payload TEXT NOT NULL
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id  TEXT NOT NULL,
+  at       INTEGER NOT NULL,
+  type     TEXT NOT NULL,
+  payload  TEXT NOT NULL,
+  actor    TEXT,
+  reason   TEXT,
+  input    TEXT,
+  output   TEXT,
+  decision TEXT
 );
 CREATE INDEX IF NOT EXISTS events_task_id ON events (task_id);
 `;
+
+/** The columns T37 adds to `events`. Named once so the DDL above and the migration below cannot drift apart. */
+const EVENT_AUDIT_COLUMNS = ["actor", "reason", "input", "output", "decision"] as const;
 
 export class SchemaVersionMismatchError extends Error {
   constructor(public readonly found: number, public readonly expected: number) {
@@ -113,7 +128,32 @@ interface EventRow {
   at: number;
   type: string;
   payload: string;
+  actor: string | null;
+  reason: string | null;
+  input: string | null;
+  output: string | null;
+  decision: string | null;
 }
+
+/**
+ * Forward migrations, keyed by the version being left.
+ *
+ * Only the steps that can be applied without interpreting existing data live
+ * here. Adding a nullable column qualifies: every existing row keeps exactly the
+ * meaning it had, and the new column reads as "not recorded", which is true.
+ * Anything that would need a row rewritten — a changed unit, a split field —
+ * does not belong in a silent startup path, and this map having no entry for it
+ * is what makes the store refuse to open instead.
+ */
+const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
+  2: (db) => {
+    // `events` predates T37; the DDL above only creates the columns on a fresh file.
+    const existing = new Set((db.pragma("table_info(events)") as { name: string }[]).map((c) => c.name));
+    for (const column of EVENT_AUDIT_COLUMNS) {
+      if (!existing.has(column)) db.exec(`ALTER TABLE events ADD COLUMN ${column} TEXT`);
+    }
+  },
+};
 
 export class SqliteTaskStore implements TaskStore {
   private readonly db: Database.Database;
@@ -132,8 +172,36 @@ export class SqliteTaskStore implements TaskStore {
     if (found === 0) {
       this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
     } else if (found !== SCHEMA_VERSION) {
+      this.migrate(found);
+    }
+  }
+
+  /**
+   * Walks the file forward one version at a time, or refuses to open it.
+   *
+   * Every step runs in one transaction: a half-migrated database is the one
+   * outcome worse than a refused one, because it looks openable and is not.
+   */
+  private migrate(from: number): void {
+    // A file from a *newer* build is not a migration problem, it is a downgrade:
+    // this code cannot know what changed, so walking forward would run off the end.
+    if (from > SCHEMA_VERSION) {
       this.db.close();
-      throw new SchemaVersionMismatchError(found, SCHEMA_VERSION);
+      throw new SchemaVersionMismatchError(from, SCHEMA_VERSION);
+    }
+    let version = from;
+    while (version !== SCHEMA_VERSION) {
+      const step = MIGRATIONS[version];
+      if (!step) {
+        this.db.close();
+        throw new SchemaVersionMismatchError(from, SCHEMA_VERSION);
+      }
+      const next = version + 1;
+      this.db.transaction(() => {
+        step(this.db);
+        this.db.pragma(`user_version = ${next}`);
+      })();
+      version = next;
     }
   }
 
@@ -213,16 +281,40 @@ export class SqliteTaskStore implements TaskStore {
     }));
   }
 
-  appendEvent(event: PersistedEvent): void {
+  appendEvent(event: NewEvent): void {
+    const record = parseNewEvent(event);
     this.db
-      .prepare("INSERT INTO events (task_id, at, type, payload) VALUES (?, ?, ?, ?)")
-      .run(event.taskId, event.at, event.type, JSON.stringify(event.payload));
+      .prepare(
+        `INSERT INTO events (task_id, at, type, payload, actor, reason, input, output, decision)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        record.taskId,
+        record.at,
+        record.type,
+        JSON.stringify(record.payload),
+        record.actor,
+        record.reason,
+        record.input,
+        record.output,
+        record.decision,
+      );
   }
 
   eventsForTask(taskId: string): PersistedEvent[] {
     const rows = this.db.prepare("SELECT * FROM events WHERE task_id = ? ORDER BY id ASC").all(taskId) as EventRow[];
     return rows.map((r) =>
-      PersistedEventSchema.parse({ taskId: r.task_id, at: r.at, type: r.type, payload: JSON.parse(r.payload) }),
+      PersistedEventSchema.parse({
+        taskId: r.task_id,
+        at: r.at,
+        type: r.type,
+        payload: JSON.parse(r.payload),
+        actor: r.actor,
+        reason: r.reason,
+        input: r.input,
+        output: r.output,
+        decision: r.decision,
+      }),
     );
   }
 

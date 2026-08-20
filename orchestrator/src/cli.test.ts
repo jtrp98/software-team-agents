@@ -29,6 +29,8 @@ describe("parseArgs", () => {
       checkProfile: false,
       checkDecisions: false,
       checkTestPyramid: false,
+      checkReviewSeparation: false,
+      checkEscalationPolicy: false,
       dependsOn: [],
       stateDb: undefined,
       phases: [],
@@ -520,5 +522,127 @@ describe("T35 concurrency lock, wired into the CLI", () => {
     const code = await runCli(["status", "T-1", "--project-root", dir], dir);
     expect(code).toBe(0); // status never touches the lock, but this also proves the store isn't wedged
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("T37 audit verb", () => {
+  function tmpDir(): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-audit-"));
+  }
+
+  /** Seeds a task and drives it far enough to produce a trail, without needing a real `claude` binary. */
+  function seedWithEvents(dir: string, taskId: string): void {
+    const store = new SqliteTaskStore(defaultStateDbPath(dir));
+    const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+    const orch = registry.create({
+      taskId,
+      classification: classifyTask({ isClearBugFix: true, touchesBackend: true }),
+    });
+    for (let i = 0; i < 6; i++) {
+      const status = orch.status();
+      if (status.kind !== "RUNNING") break;
+      orch.reportCompletion(status.stage, { outcome: { tokens: 10, cost: 0.01, result: "PASS" } }, { start: 0, end: 1 });
+    }
+    registry.close();
+  }
+
+  it("prints the trail for a task", async () => {
+    const dir = tmpDir();
+    try {
+      seedWithEvents(dir, "T-1");
+      expect(await runCli(["audit", "T-1", "--project-root", dir], dir)).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts --decisions without mistaking it for the task id", async () => {
+    const dir = tmpDir();
+    try {
+      seedWithEvents(dir, "T-1");
+      expect(await runCli(["audit", "--decisions", "T-1", "--project-root", dir], dir)).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails on an unknown task rather than printing an empty trail", async () => {
+    const dir = tmpDir();
+    try {
+      seedWithEvents(dir, "T-1");
+      expect(await runCli(["audit", "ghost", "--project-root", dir], dir)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires a task id", async () => {
+    const dir = tmpDir();
+    try {
+      await expect(runCli(["audit", "--project-root", dir], dir)).rejects.toThrow(CliUsageError);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("is named in the usage text", () => {
+    expect(USAGE).toContain("orchestrate audit");
+  });
+});
+
+describe("runCli --check-review-separation (T39)", () => {
+  it("passes against this repo and names the deliberately-unreviewed workflow as a note", async () => {
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => void logs.push(args.join(" "));
+    try {
+      const code = await runCli(["--check-review-separation"], defaultProjectRoot());
+      expect(code).toBe(0);
+      expect(logs.join("\n")).toContain("no agent can review its own work");
+      // The typo workflow ships an engineer's work with nobody checking it, on purpose.
+      expect(logs.join("\n")).toContain('workflow "typo"');
+    } finally {
+      console.log = original;
+    }
+  });
+
+  it("is parsed as a check flag, so --task-id/--module are not required", () => {
+    const args = parseArgs(["--check-review-separation"], "/repo");
+    expect(args.checkReviewSeparation).toBe(true);
+    expect(args.taskId).toBeUndefined();
+  });
+
+  it("is named in the usage text", () => {
+    expect(USAGE).toContain("--check-review-separation");
+  });
+});
+
+describe("runCli --check-escalation-policy (T40)", () => {
+  it("passes against this repo and notes the severity that never retries", async () => {
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => void logs.push(args.join(" "));
+    try {
+      const code = await runCli(["--check-escalation-policy"], defaultProjectRoot());
+      expect(code).toBe(0);
+      expect(logs.join("\n")).toContain("agrees with the runtime policy");
+      expect(logs.join("\n")).toContain('severity "critical"');
+    } finally {
+      console.log = original;
+    }
+  });
+
+  it("exits non-zero when there is no escalation-policy.yaml, rather than passing quietly", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-ep-"));
+    try {
+      expect(await runCli(["--check-escalation-policy", "--project-root", dir], dir)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("needs neither --task-id nor --module, and is listed in the usage text", () => {
+    expect(parseArgs(["--check-escalation-policy"], "/repo").checkEscalationPolicy).toBe(true);
+    expect(USAGE).toContain("--check-escalation-policy");
   });
 });

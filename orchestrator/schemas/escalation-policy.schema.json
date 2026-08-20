@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/escalation-policy.schema.json",
+  "title": "Human escalation policy (escalation-policy.yaml)",
+  "description": "What a failure's severity is allowed to do without a person (T40). Severity has been carried in every StructuredFailure since T06 and read by nothing; this is what gives it a consequence. The runtime authority is DEFAULT_ESCALATION_POLICY in orchestrator/src/escalation/escalationPolicy.ts — a policy that had to be read off disk to decide a retry would fail closed at the worst moment — and --check-escalation-policy fails when the two disagree.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "severity"],
+  "properties": {
+    "version": {
+      "description": "Schema generation of this file. Bumped only when a change would break an existing reader.",
+      "type": "integer",
+      "minimum": 1
+    },
+    "severity": {
+      "description": "One entry per severity in StructuredFailureSchema. All four must be present: a missing severity would be a failure class with no stated policy, which is exactly the state T40 exists to end.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["low", "medium", "high", "critical"],
+      "properties": {
+        "low": { "$ref": "#/definitions/severityPolicy" },
+        "medium": { "$ref": "#/definitions/severityPolicy" },
+        "high": { "$ref": "#/definitions/severityPolicy" },
+        "critical": { "$ref": "#/definitions/severityPolicy" }
+      }
+    }
+  },
+  "definitions": {
+    "severityPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["autonomous", "max_retry", "approval", "stop_pipeline"],
+      "properties": {
+        "autonomous": {
+          "description": "May the orchestrator retry this by itself at all? False means every occurrence stops for a person, however retryable the failure claims to be.",
+          "type": "boolean"
+        },
+        "max_retry": {
+          "description": "Automatic rounds this severity gets, at most. The global ceiling (MAX_RETRY) still outranks it, so this can only ever be stricter — never a way to buy extra rounds.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "approval": {
+          "description": "When it stops, is a person formally asked — an approval record with a type and a reason — rather than the task going quiet in BLOCKED?",
+          "type": "boolean"
+        },
+        "stop_pipeline": {
+          "description": "Stop the task outright instead of routing the failure to an owner. Stopping is always ESCALATE (a person can answer and the task continues), never ABORT, which is reserved for a spent global budget.",
+          "type": "boolean"
+        },
+        "why": {
+          "description": "Why this severity gets this treatment, specifically. Optional but strongly expected: a policy with no reason is one nobody can evaluate an exception against.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
