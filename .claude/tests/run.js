@@ -349,10 +349,158 @@ withTempProject((tmp) => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. require-green-before-stop.js — conventions.md §5c
+// 6. static-analysis-gate.js — the full sweep before qa-engineer trusts a round (T22)
 // ---------------------------------------------------------------------------
 
-section('6. require-green-before-stop.js — no handing off red code (§5c)');
+section('6. static-analysis-gate.js — lint/format/typecheck/build/test before QA (T22)');
+
+/** A package.json whose scripts each exit with the given codes; missing keys mean "no such script". */
+function writeGatePackage(dir, name, exits) {
+  const scripts = {};
+  for (const [script, code] of Object.entries(exits)) {
+    scripts[script] = `node -e "process.exit(${code})"`;
+  }
+  write(path.join(dir, 'package.json'), JSON.stringify({ name, scripts }, null, 2));
+}
+
+withTempProject((tmp) => {
+  check('no package.json anywhere → passes (nothing to check, nothing failed)', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 0);
+});
+
+withTempProject((tmp) => {
+  writeGatePackage(tmp, 'ok-pkg', { lint: 0, typecheck: 0, build: 0, test: 0 });
+  check('every defined script exits 0 → passes', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 0);
+});
+
+withTempProject((tmp) => {
+  writeGatePackage(tmp, 'red-pkg', { lint: 0, typecheck: 1, build: 0 });
+  check('one script exits non-zero → fails', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 1);
+});
+
+withTempProject((tmp) => {
+  writeGatePackage(tmp, 'partial-pkg', { lint: 0 });
+  check('a package missing format/typecheck/build/test entirely → still passes (skipped, not failed)', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 0);
+});
+
+withTempProject((tmp) => {
+  writeGatePackage(tmp, 'root-pkg', { lint: 0 });
+  writeGatePackage(path.join(tmp, 'packages', 'api'), 'nested-red', { typecheck: 1 });
+  check('a red script in a nested package is not missed by scanning only the root', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 1);
+});
+
+withTempProject((tmp) => {
+  writeGatePackage(tmp, 'json-pkg', { lint: 0 });
+  const res = spawnSync(process.execPath, [path.join(SCRIPTS, 'static-analysis-gate.js'), '--json'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_PROJECT_DIR: tmp },
+    cwd: tmp,
+    timeout: 60000,
+  });
+  let parsed;
+  try {
+    parsed = JSON.parse(res.stdout);
+  } catch {
+    parsed = null;
+  }
+  check(
+    '--json reports security_scan and dependency_scan as real results, not omitting either',
+    parsed &&
+      parsed.ok === true &&
+      parsed.results.some((r) => r.check === 'dependency_scan' && r.status === 'passed') &&
+      parsed.results.some((r) => r.check === 'security_scan' && r.status === 'passed')
+      ? 0
+      : 1,
+    0,
+  );
+});
+
+// ---------------------------------------------------------------------------
+// 6a. static-analysis-gate.js's security_scan — the "Code" checkpoint of T23 (Security as Continuous)
+// ---------------------------------------------------------------------------
+
+section("6a. static-analysis-gate.js's security_scan — curated dangerous-pattern sweep (T23)");
+
+withTempProject((tmp) => {
+  check('no app code at all → security_scan passes (nothing to scan)', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 0);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, 'app', 'api', 'run.ts'), "export function run(input: string) {\n  return eval(input);\n}\n");
+  check('eval() in app/ → security_scan fails the gate', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 1);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, 'components', 'Rich.tsx'), 'export const Rich = ({ html }) => <div dangerouslySetInnerHTML={{ __html: html }} />;\n');
+  check('dangerouslySetInnerHTML → security_scan fails the gate', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 1);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, 'server', 'auth.ts'), "const secret = process.env.JWT_SECRET || 'dev-secret';\n");
+  check('hardcoded JWT-secret fallback → security_scan fails the gate', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 1);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, 'server', 'db.ts'), "await prisma.$queryRawUnsafe(`SELECT * FROM users WHERE id = ${id}`);\n");
+  check('$queryRawUnsafe with interpolation → security_scan fails the gate', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 1);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, 'src', 'safe.ts'), "export const greeting = 'hello ' + name;\nconsole.log(greeting);\n");
+  check('ordinary code with no dangerous pattern → security_scan passes', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 0);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, 'docs', 'README.md'), 'Example: `eval(someString)` is dangerous, do not do it.\n');
+  check('a dangerous pattern mentioned only in docs/ (outside the scanned dirs) is not flagged', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 0);
+});
+
+// ---------------------------------------------------------------------------
+// 6b. static-analysis-gate.js's dependency_scan — offline curated advisory match (T24)
+// ---------------------------------------------------------------------------
+
+section("6b. static-analysis-gate.js's dependency_scan — offline curated advisory match (T24)");
+
+withTempProject((tmp) => {
+  write(path.join(tmp, 'package.json'), JSON.stringify({ name: 'no-deps', dependencies: {} }, null, 2));
+  check('no dependencies at all → dependency_scan passes', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 0);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, 'package.json'), JSON.stringify({ name: 'vuln-pkg', dependencies: { lodash: '4.17.20' } }, null, 2));
+  check('a dependency pinned exactly at the vulnerable ceiling → dependency_scan fails', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 1);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, 'package.json'), JSON.stringify({ name: 'caret-pkg', dependencies: { lodash: '^4.17.15' } }, null, 2));
+  check('a range spec (^4.17.15) resolving below the ceiling → dependency_scan fails', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 1);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, 'package.json'), JSON.stringify({ name: 'fixed-pkg', dependencies: { lodash: '4.17.21' } }, null, 2));
+  check('a version strictly above the vulnerable ceiling → dependency_scan passes', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 0);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, 'package.json'), JSON.stringify({ name: 'devdep-pkg', devDependencies: { minimist: '1.2.0' } }, null, 2));
+  check('a vulnerable devDependency is checked too, not just dependencies', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 1);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, 'package.json'), JSON.stringify({ name: 'unparseable-pkg', dependencies: { lodash: 'latest', minimist: 'workspace:*' } }, null, 2));
+  check('an unparseable version spec ("latest", "workspace:*") is not our call to make — not flagged', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 0);
+});
+
+withTempProject((tmp) => {
+  write(path.join(tmp, 'package.json'), JSON.stringify({ name: 'root-pkg', dependencies: {} }, null, 2));
+  write(path.join(tmp, 'packages', 'api', 'package.json'), JSON.stringify({ name: 'nested-pkg', dependencies: { lodash: '4.17.19' } }, null, 2));
+  check('a vulnerable dependency in a nested package is not missed by scanning only the root', runScript('static-analysis-gate.js', { CLAUDE_PROJECT_DIR: tmp }), 1);
+});
+
+// ---------------------------------------------------------------------------
+// 7. require-green-before-stop.js — conventions.md §5c
+// ---------------------------------------------------------------------------
+
+section('7. require-green-before-stop.js — no handing off red code (§5c)');
 
 // Loop safety and the doc-only filter need no git repo at all.
 check(
@@ -453,10 +601,83 @@ check(
 );
 
 // ---------------------------------------------------------------------------
-// 7. block-path-permissions.js -- each agent writes only what its contract allows (T15)
+// 8. block-secret-leak.js — no handing off a hardcoded secret (T25)
 // ---------------------------------------------------------------------------
 
-section('7. block-path-permissions.js -- per-agent write paths (T15)');
+section('8. block-secret-leak.js — no handing off a hardcoded secret (T25)');
+
+check(
+  'stop_hook_active → always allowed (loop safety, same rail as require-green-before-stop.js)',
+  runHook('block-secret-leak.js', { stop_hook_active: true }),
+  ALLOW,
+);
+
+withTempProject((tmp) => {
+  check(
+    'not a git repo → allowed (guard fails open, never traps)',
+    runHook('block-secret-leak.js', { stop_hook_active: false }, { CLAUDE_PROJECT_DIR: tmp }),
+    ALLOW,
+  );
+});
+
+/** Writes one file into the shared repo fixture, cleans it up afterwards. */
+function withFixtureFile(relPath, contents, fn) {
+  fs.rmSync(FIXTURE, { recursive: true, force: true });
+  try {
+    write(path.join(FIXTURE, relPath), contents);
+    return fn();
+  } finally {
+    fs.rmSync(FIXTURE, { recursive: true, force: true });
+  }
+}
+
+withFixtureFile('leak.ts', "export const key = 'AKIAABCDEFGHIJKLMNOP';\n", () => {
+  check('an AWS access key ID → blocked', runHook('block-secret-leak.js', { stop_hook_active: false }), BLOCK);
+});
+
+withFixtureFile('key.pem', '-----BEGIN RSA PRIVATE KEY-----\nMIIEow...\n-----END RSA PRIVATE KEY-----\n', () => {
+  check('a private key block → blocked', runHook('block-secret-leak.js', { stop_hook_active: false }), BLOCK);
+});
+
+withFixtureFile('db.ts', "export const url = 'postgres://admin:hunter2@db.internal:5432/app';\n", () => {
+  check('a connection string with embedded credentials → blocked', runHook('block-secret-leak.js', { stop_hook_active: false }), BLOCK);
+});
+
+withFixtureFile('auth.ts', "const apiKey = 'sk_live_9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c';\n", () => {
+  check('a hardcoded, secret-shaped api-key assignment → blocked', runHook('block-secret-leak.js', { stop_hook_active: false }), BLOCK);
+});
+
+withFixtureFile('ok-env-ref.ts', "const apiKey = process.env.API_KEY;\n", () => {
+  check('reading the secret from process.env → allowed (the correct pattern, not a leak)', runHook('block-secret-leak.js', { stop_hook_active: false }), ALLOW);
+});
+
+withFixtureFile('.env.example', "API_KEY=changeme\nDATABASE_URL=postgres://user:password@localhost:5432/app\n", () => {
+  check('.env.example with obvious placeholders → allowed', runHook('block-secret-leak.js', { stop_hook_active: false }), ALLOW);
+});
+
+withFixtureFile('.env.example', "API_KEY='sk_live_9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c'\n", () => {
+  check('.env.example with a real-looking secret → blocked (it is committed by convention, unlike .env)', runHook('block-secret-leak.js', { stop_hook_active: false }), BLOCK);
+});
+
+withFixtureFile('.env', "API_KEY='sk_live_9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c'\n", () => {
+  check('.env with a real secret → allowed (it is the convention-approved, gitignored place for one)', runHook('block-secret-leak.js', { stop_hook_active: false }), ALLOW);
+});
+
+withFixtureFile('leak.ts', "export const key = 'AKIAABCDEFGHIJKLMNOP';\n", () => {
+  check('same secret, already retried once → allowed (cannot trap an agent)', runHook('block-secret-leak.js', { stop_hook_active: true }), ALLOW);
+});
+
+check(
+  'doc-only run (this repo currently has no leaked secret) → allowed',
+  runHook('block-secret-leak.js', { stop_hook_active: false }),
+  ALLOW,
+);
+
+// ---------------------------------------------------------------------------
+// 9. block-path-permissions.js -- each agent writes only what its contract allows (T15)
+// ---------------------------------------------------------------------------
+
+section('9. block-path-permissions.js -- per-agent write paths (T15)');
 
 /** Feeds the hook a write attempt, optionally as a named agent. */
 function runPathHook(tool, filePath, role) {

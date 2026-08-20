@@ -192,9 +192,13 @@ Every write resolves under this project's root. No agent writes elsewhere, whate
 
 The dev↔QA round trip is the most expensive thing in this pipeline: a type error `qa-engineer` finds costs a full fresh-context QA run plus a full fresh-context engineer run to fix — and the round after that costs the same again. So `typecheck`/`lint` (plus this repo's two drift scripts) run **before an engineer is allowed to finish**, not after: `.claude/hooks/require-green-before-stop.js` blocks the finish while they're red on a run that touched application code. It forces at most one in-context fix attempt and can never trap you — the next attempt is let through regardless. **It's not a licence to improvise**: if a failure isn't yours to fix (a schema gap, a contract question you must not invent an answer to per §7), say so in your handoff instead of editing around it. Full reasoning — including why "did app code change?" stands in for agent identity — is in the hook's own comments. `build`/`test` stay with `qa-engineer`: too slow to pay for on every stop.
 
+## 5c-1. An agent doesn't hand off a hardcoded secret
+
+Same shape and same cadence as §5c, a separate hook because it catches a different mistake: `.claude/hooks/block-secret-leak.js` scans every file a run changed (git diff/ls-files, read-only) for a curated set of secret-shaped patterns — AWS access key IDs, private-key blocks, database connection strings with a real (non-placeholder) embedded password, and hardcoded `api_key`/`secret`/`token`/`password` literal assignments — and blocks the Stop if it finds one. `.env` is excluded (it's the convention-approved, gitignored place for real values); `.env.example` is not (it's committed by convention and must hold only placeholders). `.claude/` itself is excluded too — its hooks/scripts/self-test deliberately contain secret-shaped literals as their own test fixtures, so scanning it would be self-referential. Same never-trap guarantee as §5c: `stop_hook_active` releases the block on the second attempt.
+
 ## 5d. The guards are themselves tested
 
-§5–5c are the only rules here that don't depend on an agent remembering them — the load-bearing part of the design. `node .claude/tests/run.js` exercises every hook and both checker scripts (69 cases, no dependencies).
+§5–5c-1 are the only rules here that don't depend on an agent remembering them — the load-bearing part of the design. `node .claude/tests/run.js` exercises every hook and every checker script.
 
 **Run it after editing anything under `.claude/hooks/` or `.claude/scripts/`.** A hook with a syntax error exits 1, not 2 — and `PreToolUse` only blocks on exit 2 — so a typo makes a guard **fail open**: still wired up, still looking installed, enforcing nothing. That happened once for real. A failing guard is worse than no guard, because it buys false confidence — treat a red run as blocking.
 

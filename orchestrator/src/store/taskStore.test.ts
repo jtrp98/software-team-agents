@@ -35,11 +35,16 @@ function sampleRun(taskId = "T-1"): RunRecord {
     start_time: 10,
     end_time: 60,
     duration: 50,
+    model: "sonnet",
     tokens: 1234,
     cost: 0.5,
     result: "PASS",
     retry_count: 0,
     failure_reason: null,
+    input_tokens: 1000,
+    output_tokens: 234,
+    cache_read_tokens: null,
+    context_chars: 4000,
   };
 }
 
@@ -130,6 +135,17 @@ describe.each(implementations)("%s", (_name, makeStore) => {
     expect(runs.map((r) => r.agent)).toEqual([AgentStage.BACKEND_ENGINEER, AgentStage.QA_ENGINEER]);
     expect(runs[1].failure_reason).toBe("typecheck");
     expect(store.runsForTask("T-2")).toHaveLength(1);
+    store.close();
+  });
+
+  it("round-trips the T26/T28 fields (model, token breakdown, cache reads, context size), nulls included", () => {
+    const store = makeStore();
+    store.appendRun(sampleRun("T-1"));
+    store.appendRun({ ...sampleRun("T-1"), agent: AgentStage.QA_ENGINEER, model: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, context_chars: null });
+
+    const runs = store.runsForTask("T-1");
+    expect(runs[0]).toMatchObject({ model: "sonnet", input_tokens: 1000, output_tokens: 234, cache_read_tokens: null, context_chars: 4000 });
+    expect(runs[1]).toMatchObject({ model: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, context_chars: null });
     store.close();
   });
 

@@ -44,6 +44,10 @@
           {
             "type": "command",
             "command": "node .claude/hooks/require-green-before-stop.js"
+          },
+          {
+            "type": "command",
+            "command": "node .claude/hooks/block-secret-leak.js"
           }
         ]
       }
@@ -54,6 +58,10 @@
           {
             "type": "command",
             "command": "node .claude/hooks/require-green-before-stop.js"
+          },
+          {
+            "type": "command",
+            "command": "node .claude/hooks/block-secret-leak.js"
           }
         ]
       }

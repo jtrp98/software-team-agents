@@ -32,7 +32,12 @@ import {
  * because those are the rows worth querying (cost per task, why it failed).
  */
 
-const SCHEMA_VERSION = 1;
+// v2 (T26/T28): added runs.model/input_tokens/output_tokens/cache_read_tokens/context_chars.
+// A v1 database opened by this build hits SchemaVersionMismatchError below rather than being
+// silently read with those columns missing — see that class's own comment for why this store
+// fails closed instead of auto-migrating: nothing has been deployed against v1 for real yet, so
+// there is no in-place upgrade to preserve, only a clear signal to recreate the file.
+const SCHEMA_VERSION = 2;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -42,17 +47,22 @@ CREATE TABLE IF NOT EXISTS tasks (
   state      TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS runs (
-  id             INTEGER PRIMARY KEY AUTOINCREMENT,
-  task_id        TEXT NOT NULL,
-  agent          TEXT NOT NULL,
-  start_time     INTEGER NOT NULL,
-  end_time       INTEGER NOT NULL,
-  duration       INTEGER NOT NULL,
-  tokens         INTEGER NOT NULL,
-  cost           REAL NOT NULL,
-  result         TEXT NOT NULL,
-  retry_count    INTEGER NOT NULL,
-  failure_reason TEXT
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id            TEXT NOT NULL,
+  agent              TEXT NOT NULL,
+  start_time         INTEGER NOT NULL,
+  end_time           INTEGER NOT NULL,
+  duration           INTEGER NOT NULL,
+  model              TEXT,
+  tokens             INTEGER NOT NULL,
+  cost               REAL NOT NULL,
+  result             TEXT NOT NULL,
+  retry_count        INTEGER NOT NULL,
+  failure_reason     TEXT,
+  input_tokens       INTEGER,
+  output_tokens      INTEGER,
+  cache_read_tokens  INTEGER,
+  context_chars      INTEGER
 );
 CREATE INDEX IF NOT EXISTS runs_task_id ON runs (task_id);
 CREATE TABLE IF NOT EXISTS events (
@@ -86,11 +96,16 @@ interface RunRow {
   start_time: number;
   end_time: number;
   duration: number;
+  model: string | null;
   tokens: number;
   cost: number;
   result: string;
   retry_count: number;
   failure_reason: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  context_chars: number | null;
 }
 
 interface EventRow {
@@ -155,8 +170,8 @@ export class SqliteTaskStore implements TaskStore {
   appendRun(record: RunRecord): void {
     this.db
       .prepare(
-        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, tokens, cost, result, retry_count, failure_reason)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.task_id,
@@ -164,11 +179,16 @@ export class SqliteTaskStore implements TaskStore {
         record.start_time,
         record.end_time,
         record.duration,
+        record.model,
         record.tokens,
         record.cost,
         record.result,
         record.retry_count,
         record.failure_reason,
+        record.input_tokens,
+        record.output_tokens,
+        record.cache_read_tokens,
+        record.context_chars,
       );
   }
 
@@ -180,11 +200,16 @@ export class SqliteTaskStore implements TaskStore {
       start_time: r.start_time,
       end_time: r.end_time,
       duration: r.duration,
+      model: r.model,
       tokens: r.tokens,
       cost: r.cost,
       result: r.result === "FAIL" ? "FAIL" : "PASS",
       retry_count: r.retry_count,
       failure_reason: r.failure_reason,
+      input_tokens: r.input_tokens,
+      output_tokens: r.output_tokens,
+      cache_read_tokens: r.cache_read_tokens,
+      context_chars: r.context_chars,
     }));
   }
 

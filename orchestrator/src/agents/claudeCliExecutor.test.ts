@@ -101,6 +101,66 @@ describe("createClaudeCliExecutor", () => {
   });
 });
 
+describe("execution log metadata (T26/T28)", () => {
+  function writeAgentFile(root: string, role: string, model: string) {
+    const dir = path.join(root, ".claude", "agents");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${role}.md`), `---\nname: ${role}\nmodel: ${model}\n---\n\nbody\n`, "utf8");
+  }
+
+  it("resolves the stage's model from its own .claude/agents/<role>.md frontmatter", async () => {
+    const root = tmpProject();
+    writeAgentFile(root, "backend-engineer", "sonnet");
+    const spawnSync = fakeCli({ is_error: false, result: "done", total_cost_usd: 0.01, usage: { input_tokens: 10, output_tokens: 5 } });
+    const executor = createClaudeCliExecutor({ projectRoot: root, moduleName: () => "sales-crm", spawnSync });
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-1", context: [] });
+    expect(result.outcome.model).toBe("sonnet");
+  });
+
+  it("reports model: undefined (not a guess) when the agent file doesn't exist", async () => {
+    const root = tmpProject();
+    const spawnSync = fakeCli({ is_error: false, result: "done" });
+    const executor = createClaudeCliExecutor({ projectRoot: root, moduleName: () => "sales-crm", spawnSync });
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-1", context: [] });
+    expect(result.outcome.model).toBeUndefined();
+  });
+
+  it("splits input/output tokens and carries cache_read_tokens through from the CLI's own usage report", async () => {
+    const root = tmpProject();
+    const spawnSync = fakeCli({
+      is_error: false,
+      result: "done",
+      total_cost_usd: 0.05,
+      usage: { input_tokens: 8000, output_tokens: 500, cache_read_input_tokens: 6000 },
+    });
+    const executor = createClaudeCliExecutor({ projectRoot: root, moduleName: () => "sales-crm", spawnSync });
+    const result = await executor({ stage: AgentStage.BUSINESS_ANALYST, taskId: "T-1", context: [] });
+    expect(result.outcome.input_tokens).toBe(8000);
+    expect(result.outcome.output_tokens).toBe(500);
+    expect(result.outcome.cache_read_tokens).toBe(6000);
+    expect(result.outcome.tokens).toBe(8500);
+  });
+
+  it("records context_chars as the length of the prompt actually sent", async () => {
+    const root = tmpProject();
+    const spawnSync = fakeCli({ is_error: false, result: "done" });
+    const executor = createClaudeCliExecutor({ projectRoot: root, moduleName: () => "sales-crm", spawnSync });
+    const result = await executor({ stage: AgentStage.BUSINESS_ANALYST, taskId: "T-1", context: [{ source: ArtifactType.REQUIREMENTS, content: "x".repeat(500) }] });
+    expect(result.outcome.context_chars).toBeGreaterThan(500);
+  });
+
+  it("still reports model/context_chars on a FAIL outcome, not just PASS", async () => {
+    const root = tmpProject();
+    writeAgentFile(root, "backend-engineer", "sonnet");
+    const spawnSync = fakeCli({ is_error: true, result: "boom" }, 1);
+    const executor = createClaudeCliExecutor({ projectRoot: root, moduleName: () => "sales-crm", spawnSync });
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-1", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.model).toBe("sonnet");
+    expect(result.outcome.context_chars).toBeGreaterThan(0);
+  });
+});
+
 
 describe("module-doc slicing in the prompt (T05)", () => {
   const PLAN = [

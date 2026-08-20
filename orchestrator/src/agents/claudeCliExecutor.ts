@@ -3,6 +3,7 @@ import { AgentStage } from "../types.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { getAgent } from "./registry.js";
+import { resolveAgentModel } from "./agentModel.js";
 import { readModuleDoc, parseQaReport, parseSecurityReport } from "./moduleDocs.js";
 import { ContextManager, type SelectedContext } from "../context/contextManager.js";
 import { classifyQaFailure, classifySecurityFailure } from "../orchestrator/failureClassifier.js";
@@ -70,7 +71,7 @@ interface ClaudeCliJsonResult {
   is_error?: boolean;
   result?: string;
   total_cost_usd?: number;
-  usage?: { input_tokens?: number; output_tokens?: number };
+  usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
 }
 
 /**
@@ -154,6 +155,8 @@ export function createClaudeCliExecutor(opts: ClaudeCliExecutorOptions): AgentEx
     }
 
     const prompt = buildPrompt(req, opts.extraInstruction, sliced);
+    const model = resolveAgentModel(opts.projectRoot, agent.role) ?? undefined;
+    const context_chars = prompt.length;
 
     const args = [
       "-p",
@@ -180,45 +183,63 @@ export function createClaudeCliExecutor(opts: ClaudeCliExecutorOptions): AgentEx
         env: { ...process.env, AGENTCLAUDE_ROLE: agent.role },
       });
     } catch (e) {
-      return failResult(`failed to spawn \`claude\` CLI for stage ${req.stage}: ${String(e)}`);
+      return failResult(`failed to spawn \`claude\` CLI for stage ${req.stage}: ${String(e)}`, { model, context_chars });
     }
 
     if (proc.error) {
-      return failResult(`\`claude\` CLI errored for stage ${req.stage}: ${proc.error.message}`);
+      return failResult(`\`claude\` CLI errored for stage ${req.stage}: ${proc.error.message}`, { model, context_chars });
     }
 
     const cli = parseCliOutput(proc.stdout ?? "");
-    const tokens = (cli.usage?.input_tokens ?? 0) + (cli.usage?.output_tokens ?? 0);
-    const cost = cli.total_cost_usd ?? 0;
+    const input_tokens = cli.usage?.input_tokens ?? 0;
+    const output_tokens = cli.usage?.output_tokens ?? 0;
+    const metrics: Metrics = {
+      model,
+      tokens: input_tokens + output_tokens,
+      cost: cli.total_cost_usd ?? 0,
+      input_tokens,
+      output_tokens,
+      cache_read_tokens: cli.usage?.cache_read_input_tokens,
+      context_chars,
+    };
 
     const cliFailed = proc.status !== 0 || cli.is_error === true;
     if (cliFailed) {
       return failResult(
         `\`claude --agent ${agent.role}\` exited ${proc.status ?? "unknown"}: ${(cli.result ?? proc.stderr ?? "").slice(0, 2000)}`,
-        tokens,
-        cost,
+        metrics,
       );
     }
 
     if (req.stage === AgentStage.QA_ENGINEER) {
-      return withQaArtifact(req, tokens, cost, opts.projectRoot, opts.moduleName(req.taskId));
+      return withQaArtifact(req, metrics, opts.projectRoot, opts.moduleName(req.taskId));
     }
     if (req.stage === AgentStage.SECURITY) {
-      return withSecurityArtifact(req, tokens, cost, opts.projectRoot, opts.moduleName(req.taskId));
+      return withSecurityArtifact(req, metrics, opts.projectRoot, opts.moduleName(req.taskId));
     }
 
-    return { outcome: { tokens, cost, result: "PASS" } };
+    return { outcome: { ...metrics, result: "PASS" } };
   };
 }
 
-function failResult(reason: string, tokens = 0, cost = 0): AgentExecutorResult {
-  return { outcome: { tokens, cost, result: "FAIL", failure_reason: reason } };
+/** Everything T26/T28 want logged, threaded as one bundle instead of a growing positional-argument list. */
+interface Metrics {
+  model?: string;
+  tokens: number;
+  cost: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_tokens?: number;
+  context_chars: number;
+}
+
+function failResult(reason: string, metrics: Partial<Metrics> = {}): AgentExecutorResult {
+  return { outcome: { tokens: 0, cost: 0, context_chars: 0, ...metrics, result: "FAIL", failure_reason: reason } };
 }
 
 function withQaArtifact(
   req: AgentExecutorRequest,
-  tokens: number,
-  cost: number,
+  metrics: Metrics,
   projectRoot: string,
   moduleName: string,
 ): AgentExecutorResult {
@@ -226,13 +247,12 @@ function withQaArtifact(
   if (reviewMd === null) {
     return failResult(
       `qa-engineer reported success but _docs/module/${moduleName}/review.md doesn't exist — cannot confirm the round`,
-      tokens,
-      cost,
+      metrics,
     );
   }
   const { artifact } = parseQaReport(req.taskId, reviewMd);
   return {
-    outcome: { tokens, cost, result: artifact.status },
+    outcome: { ...metrics, result: artifact.status },
     artifactType: ArtifactType.QA_REPORT,
     artifact,
     // T06: on a failed round, hand the orchestrator the owner qa-engineer already
@@ -246,8 +266,7 @@ function withQaArtifact(
 
 function withSecurityArtifact(
   req: AgentExecutorRequest,
-  tokens: number,
-  cost: number,
+  metrics: Metrics,
   projectRoot: string,
   moduleName: string,
 ): AgentExecutorResult {
@@ -255,13 +274,12 @@ function withSecurityArtifact(
   if (securityMd === null) {
     return failResult(
       `security reported success but _docs/module/${moduleName}/security.md doesn't exist — cannot confirm findings`,
-      tokens,
-      cost,
+      metrics,
     );
   }
   const artifact = parseSecurityReport(req.taskId, securityMd);
   return {
-    outcome: { tokens, cost, result: artifact.overallStatus },
+    outcome: { ...metrics, result: artifact.overallStatus },
     artifactType: ArtifactType.SECURITY_REPORT,
     artifact,
     failure:

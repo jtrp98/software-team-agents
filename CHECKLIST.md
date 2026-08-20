@@ -32,17 +32,17 @@
 - [x] T21 — Test Pyramid ตาม task type
 
 ## 🟠 P2 — Quality
-- [ ] T22 — Static Analysis Gate
-- [ ] T23 — Security เป็น Continuous
-- [ ] T24 — Dependency Security
-- [ ] T25 — Secret Detection
+- [x] T22 — Static Analysis Gate
+- [x] T23 — Security เป็น Continuous
+- [x] T24 — Dependency Security
+- [x] T25 — Secret Detection
 
 ## 🟠 P2 — Observability
-- [ ] T26 — Agent Execution Log
-- [ ] T27 — Cost Tracking ต่อ feature
-- [ ] T28 — Token / Context Tracking
-- [ ] T29 — Agent Evaluation Benchmark
-- [ ] T30 — Agent Quality Score
+- [x] T26 — Agent Execution Log
+- [x] T27 — Cost Tracking ต่อ feature
+- [x] T28 — Token / Context Tracking
+- [x] T29 — Agent Evaluation Benchmark
+- [x] T30 — Agent Quality Score
 
 ## 🟢 P2 — Developer Experience
 - [ ] T31 — CLI สำหรับ Orchestrator

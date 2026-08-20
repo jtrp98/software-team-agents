@@ -94,6 +94,8 @@ When a feature has rules precise enough that an engineer could implement them wr
 ### Module: <name>
 Features/models in this module. Dependencies on other modules, if any. Note if it handles a sensitive concern (auth / personal data / payments / uploads / untrusted input) — `project-manager` reads this line to decide which phases carry a `🔒 Security gate`.
 
+**When you flag a sensitive concern, add a one- or two-line `Security Considerations:` note under it — not just the flag.** Name the actual threat surface: what's the trust boundary (who/what is untrusted here), what's sensitive about the data, what's the failure mode if the concern is ignored (e.g. "Security Considerations: uploaded files are untrusted input — must not be executed or served with an inferred content-type; validate size/MIME server-side before storage"). This is the design-time half of T23's continuous security model (the others are `static-analysis-gate.js`'s `security_scan` at code time, `qa-engineer`'s functional pass, and `security`'s own audit pre-deploy) — a bare flag tells `project-manager` *that* a phase is sensitive, this note tells `backend-engineer`/`frontend-engineer` *what* to defend against instead of guessing, and gives `security` a starting hypothesis instead of an unscoped read of the whole phase.
+
 ## Risks & Dependencies
 ...
 

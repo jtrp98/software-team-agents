@@ -150,6 +150,23 @@ describe("runBenchmark", () => {
     const result = await runBenchmark([makeAlwaysPassCase("A"), makeSecurityRetryThenPassCase("B")]);
     expect(result.securityFailureRate).toBe(1); // the one security-gated case failed once before passing
   });
+
+  it("computes T29's rework/first-pass metrics from how many stage runs FAILed before settling", async () => {
+    const result = await runBenchmark([makeAlwaysPassCase("A"), makeSecurityRetryThenPassCase("B")]);
+    const clean = result.caseResults.find((r) => r.id === "A")!;
+    const reworked = result.caseResults.find((r) => r.id === "B")!;
+    expect(clean.reworkCount).toBe(0);
+    expect(reworked.reworkCount).toBeGreaterThan(0); // security failed once before passing
+    // both cases deployed; only "A" went through with zero FAILed runs.
+    expect(result.firstPassRate).toBeCloseTo(0.5);
+    expect(result.reworkRate).toBeCloseTo(0.5);
+  });
+
+  it("firstPassRate is 0 on an empty set, not NaN — same convention as successRate", async () => {
+    const result = await runBenchmark([]);
+    expect(result.firstPassRate).toBe(0);
+    expect(result.reworkRate).toBe(0);
+  });
 });
 
 describe("checkConsistency", () => {
@@ -163,6 +180,8 @@ describe("detectRegression", () => {
   const baseline: BenchmarkResult = {
     size: 100,
     successRate: 0.8,
+    firstPassRate: 0.7,
+    reworkRate: 0.2,
     totalTokens: 0,
     totalCost: 0,
     totalDurationMs: 0,
@@ -187,7 +206,7 @@ describe("detectRegression", () => {
 
 describe("formatComparison", () => {
   it("matches task-detail.md item 16's example shape", () => {
-    const baseline: BenchmarkResult = { size: 100, successRate: 0.72, totalTokens: 0, totalCost: 0, totalDurationMs: 0, securityFailureRate: 0, caseResults: [] };
+    const baseline: BenchmarkResult = { size: 100, successRate: 0.72, firstPassRate: 0.6, reworkRate: 0.3, totalTokens: 0, totalCost: 0, totalDurationMs: 0, securityFailureRate: 0, caseResults: [] };
     const afterChange1: BenchmarkResult = { ...baseline, successRate: 0.81 };
     const text = formatComparison({ baseline, after_change_1: afterChange1 });
     expect(text).toContain("benchmark_size: 100 tasks");

@@ -21,6 +21,8 @@ export interface BenchmarkCaseResult {
   tokens: number;
   cost: number;
   durationMs: number;
+  /** T29's "rework" metric: how many stage runs FAILed and had to be redone before this case settled — 0 means it went through clean on the first attempt. */
+  reworkCount: number;
 }
 
 const MAX_STEPS_PER_CASE = 50;
@@ -56,6 +58,7 @@ export async function runBenchmarkCase(bc: BenchmarkCase, now: () => number = Da
     tokens: records.reduce((sum, r) => sum + r.tokens, 0),
     cost: records.reduce((sum, r) => sum + r.cost, 0),
     durationMs: records.reduce((sum, r) => sum + r.duration, 0),
+    reworkCount: records.filter((r) => r.result === "FAIL").length,
   };
 }
 
@@ -63,6 +66,10 @@ export interface BenchmarkResult {
   size: number;
   /** Correctness: fraction of cases that reached DEPLOYED. */
   successRate: number;
+  /** T29's "rework": fraction of DEPLOYED cases that needed zero FAILed stage runs to get there. 0 cases deployed reports 0, same convention as successRate on an empty set. */
+  firstPassRate: number;
+  /** The complement view of the same metric — fraction of ALL cases (deployed or not) that needed at least one FAILed stage run. */
+  reworkRate: number;
   totalTokens: number;
   totalCost: number;
   totalDurationMs: number;
@@ -79,10 +86,13 @@ export async function runBenchmark(cases: BenchmarkCase[]): Promise<BenchmarkRes
 
   const securityGated = caseResults.filter((r) => r.hasSecurityStage);
   const securityFailed = securityGated.filter((r) => r.securityFailedAtLeastOnce);
+  const deployed = caseResults.filter((r) => r.status === "DEPLOYED");
 
   return {
     size: caseResults.length,
-    successRate: caseResults.length === 0 ? 0 : caseResults.filter((r) => r.status === "DEPLOYED").length / caseResults.length,
+    successRate: caseResults.length === 0 ? 0 : deployed.length / caseResults.length,
+    firstPassRate: deployed.length === 0 ? 0 : deployed.filter((r) => r.reworkCount === 0).length / deployed.length,
+    reworkRate: caseResults.length === 0 ? 0 : caseResults.filter((r) => r.reworkCount > 0).length / caseResults.length,
     totalTokens: caseResults.reduce((s, r) => s + r.tokens, 0),
     totalCost: caseResults.reduce((s, r) => s + r.cost, 0),
     totalDurationMs: caseResults.reduce((s, r) => s + r.durationMs, 0),

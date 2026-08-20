@@ -50,14 +50,16 @@ describe("analyzeFailurePatterns", () => {
     const result: BenchmarkResult = {
       size: 3,
       successRate: 1 / 3,
+      firstPassRate: 1 / 3,
+      reworkRate: 0,
       totalTokens: 0,
       totalCost: 0,
       totalDurationMs: 0,
       securityFailureRate: 0,
       caseResults: [
-        { id: "A", status: "BLOCKED", blockedReason: "qa retry limit (3) exceeded", hasSecurityStage: false, securityFailedAtLeastOnce: false, tokens: 0, cost: 0, durationMs: 0 },
-        { id: "B", status: "BLOCKED", blockedReason: "qa retry limit (3) exceeded", hasSecurityStage: false, securityFailedAtLeastOnce: false, tokens: 0, cost: 0, durationMs: 0 },
-        { id: "C", status: "DEPLOYED", hasSecurityStage: false, securityFailedAtLeastOnce: false, tokens: 0, cost: 0, durationMs: 0 },
+        { id: "A", status: "BLOCKED", blockedReason: "qa retry limit (3) exceeded", hasSecurityStage: false, securityFailedAtLeastOnce: false, tokens: 0, cost: 0, durationMs: 0, reworkCount: 0 },
+        { id: "B", status: "BLOCKED", blockedReason: "qa retry limit (3) exceeded", hasSecurityStage: false, securityFailedAtLeastOnce: false, tokens: 0, cost: 0, durationMs: 0, reworkCount: 0 },
+        { id: "C", status: "DEPLOYED", hasSecurityStage: false, securityFailedAtLeastOnce: false, tokens: 0, cost: 0, durationMs: 0, reworkCount: 0 },
       ],
     };
     const patterns = analyzeFailurePatterns(result);
