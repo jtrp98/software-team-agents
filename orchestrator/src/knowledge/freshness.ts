@@ -1,6 +1,3 @@
-import { createHash } from "node:crypto";
-import * as fs from "node:fs";
-import * as path from "node:path";
 import type { KnowledgeItem, SourceRef } from "./knowledgeModel.js";
 import type { KnowledgeBase } from "./knowledgeBase.js";
 import {
@@ -8,6 +5,7 @@ import {
   type KnowledgePolicy,
   freshnessThresholdFor,
 } from "./knowledgePolicy.js";
+import { digestOfSource, parseLocator } from "./sourceDigest.js";
 
 /**
  * Context freshness (T71) — how old is what an agent is about to rely on, and
@@ -55,39 +53,11 @@ export interface Freshness {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** `path#L10-L24` -> the file and the line window it names. */
-export function parseLocator(locator: string): { file: string; from?: number; to?: number } {
-  const match = /^(.*?)#L(\d+)(?:-L(\d+))?$/.exec(locator);
-  if (!match) return { file: locator };
-  return { file: match[1], from: Number(match[2]), to: match[3] ? Number(match[3]) : Number(match[2]) };
-}
-
-/**
- * The digest of what a `file` source points at, or null when there is nothing
- * to read. Hashes only the named lines when the locator names a range: an item
- * derived from lines 48-61 has not gone stale because line 900 changed.
- */
-export function digestOfSource(locator: string, projectRoot: string): string | null {
-  const { file, from, to } = parseLocator(locator);
-  const full = path.isAbsolute(file) ? file : path.join(projectRoot, file);
-
-  let contents: string;
-  try {
-    contents = fs.readFileSync(full, "utf8");
-  } catch {
-    return null;
-  }
-
-  const text =
-    from === undefined
-      ? contents
-      : contents
-          .split(/\r?\n/)
-          .slice(from - 1, to)
-          .join("\n");
-
-  return `sha256:${createHash("sha256").update(text).digest("hex")}`;
-}
+// Both live in `sourceDigest.ts` now, because the side that *records* a digest
+// (discovery, T74-T79) has to compute it with the identical function this side
+// checks it with — see that module's note. Re-exported so the locator/digest
+// helpers stay reachable from the module that defines what they are for.
+export { digestOfSource, parseLocator };
 
 export interface FreshnessOptions {
   /** ISO date-time to measure against. Passed in: an agent does not know today's date, and a test needs it fixed. */

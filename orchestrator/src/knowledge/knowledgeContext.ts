@@ -64,6 +64,12 @@ export interface Provenance {
   derivedFrom: string[];
   /** One line an agent can quote when it uses this: what it is, which version, and where it came from. */
   citation: string;
+  /**
+   * Parts of the provenance the field policy removed for this role. Empty when
+   * nothing was — never absent, so a caller reads a value rather than guessing
+   * from a missing key.
+   */
+  withheld: string[];
 }
 
 export interface RetrievedItem {
@@ -155,8 +161,60 @@ export class KnowledgeContext {
       sources,
       derivedFrom,
       citation: `${item.id} v${item.version} [${item.status}, owned by ${item.owner}] — ${where}`,
+      withheld: [],
     };
   }
+}
+
+/** The identity half of a citation — everything before the "where it came from" part. */
+function citationHead(item: KnowledgeItem): string {
+  return `${item.id} v${item.version} [${item.status}, owned by ${item.owner}]`;
+}
+
+/**
+ * Provenance and freshness carry the same locators the item's `sources` do, so a
+ * policy that redacts `sources` has to redact them here too.
+ *
+ * It did not, and that made the redaction cosmetic: a role reading a sensitive
+ * item got `sources: []` on the item, `withheld: ["body","payload","sources"]`
+ * saying so — and then the full locator list back through `provenance.sources`,
+ * `provenance.citation`, and `freshness.oldestSource`. Three copies of the thing
+ * the policy had just removed, on the same object. `provenance()` already
+ * refused an item the role may not *see at all*; this is the finer case the
+ * module's own note calls a side channel.
+ *
+ * The verdict and the age survive: "this is stale" is a quality signal about the
+ * item, not a fact from the material, and withholding it would leave an agent
+ * relying on something it cannot tell is out of date.
+ */
+function redactProvenance(provenance: Provenance, role: AgentStage, item: KnowledgeItem, withheld: Set<string>): Provenance {
+  const removed: string[] = [];
+  const redacted: Provenance = { ...provenance };
+
+  if (withheld.has("sources")) {
+    removed.push("sources");
+    redacted.sources = [];
+    redacted.citation = `${citationHead(item)} — source withheld from ${role}`;
+  }
+  if (withheld.has("relations")) {
+    // `derivedFrom` is a walk over relations; hiding the edges and then naming
+    // where they lead would be the same leak one step out.
+    removed.push("derivedFrom");
+    redacted.derivedFrom = [];
+  }
+
+  redacted.withheld = removed;
+  return redacted;
+}
+
+function redactFreshness(freshness: Freshness, role: AgentStage): Freshness {
+  return {
+    ...freshness,
+    oldestSource: null,
+    changedSources: [],
+    missingSources: [],
+    reason: `${freshness.verdict} — which source, and where, is withheld from ${role}`,
+  };
 }
 
 export class RoleContext {
@@ -186,14 +244,20 @@ export class RoleContext {
     if (!this.visibleKinds.includes(item.kind)) return null;
     const visible = visibleItemFor(item, this.role, this.policy);
     if (!visible) return null;
+
+    const withheld = new Set(visible.withheld);
+    const provenance = this.context().provenanceOf(item);
+    const freshness = freshnessOf(item, {
+      now: this.options.now,
+      policy: this.policy,
+      projectRoot: this.options.projectRoot,
+    });
+
     return {
       item: visible,
-      provenance: this.context().provenanceOf(item),
-      freshness: freshnessOf(item, {
-        now: this.options.now,
-        policy: this.policy,
-        projectRoot: this.options.projectRoot,
-      }),
+      provenance: redactProvenance(provenance, this.role, item, withheld),
+      // Only the source-bearing half is redacted, and only when the sources are.
+      freshness: withheld.has("sources") ? redactFreshness(freshness, this.role) : freshness,
     };
   }
 

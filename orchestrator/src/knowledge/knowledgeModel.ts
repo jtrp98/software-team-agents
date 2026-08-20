@@ -213,7 +213,9 @@ export const ID_PREFIXES: Record<KnowledgeKind, string[]> = {
   test: ["TEST"],
 };
 
-export const ID_PATTERN = /^[A-Z][A-Z0-9]*-[A-Za-z0-9._/-]+$/;
+// The id pattern itself lives in `knowledge-item.schema.json` and is enforced by
+// Ajv. It used to be duplicated here as an exported `ID_PATTERN` that nothing
+// read — a second copy of a rule, free to drift from the one actually applied.
 
 /** The prefix half of an id — everything before the first hyphen. */
 export function prefixOf(id: string): string {

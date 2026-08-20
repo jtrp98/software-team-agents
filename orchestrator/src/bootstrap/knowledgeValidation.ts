@@ -45,7 +45,15 @@ export interface ValidationSummary {
   bootstrapState: BootstrapState;
 }
 
-function advanceToApproved(item: KnowledgeItem, now: string, projectRoot: string): KnowledgeItem {
+/**
+ * Walks one item through T65's real review path with a person as the actor.
+ *
+ * Exported because V1.3's adoption needs the identical step: its per-stage
+ * checkpoint (T81) is a person looking at what a stage produced, which is what
+ * `approved` means. A second implementation of "take this to approved" would be
+ * a second opinion about a transition matrix that exists to have exactly one.
+ */
+export function advanceToApproved(item: KnowledgeItem, now: string, projectRoot: string): KnowledgeItem {
   let current = item;
   if (current.status === "draft") {
     current = applyTransition(current, "reviewed", AgentStage.HUMAN, now);

@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { AgentStage } from "../../types.js";
 import { KNOWLEDGE_SCHEMA_VERSION, type KnowledgeItemOf } from "../../knowledge/knowledgeModel.js";
 import type { SourceRecord } from "../../knowledge/sourceRegistry.js";
 import { sourceIdFor } from "../../knowledge/sourceRegistry.js";
+import { digestOfSource } from "../../knowledge/sourceDigest.js";
 import type { DiscoveryResult, DiscoveryStage } from "../bootstrapRunner.js";
 
 /**
@@ -125,22 +125,20 @@ function frameworksOf(deps: string[]): string[] {
   return [...found].sort();
 }
 
-function digestOf(absPath: string): string {
-  const hash = createHash("sha256").update(fs.readFileSync(absPath)).digest("hex");
-  return `sha256:${hash.slice(0, 16)}`;
-}
-
 function slugOf(relDir: string): string {
   return relDir === "." ? "ROOT" : relDir.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
 function componentItem(
   manifest: PackageManifest,
+  projectRoot: string,
   now: string,
 ): { item: KnowledgeItemOf<"architecture">; source: SourceRecord } {
   const locator = manifest.relDir === "." ? "package.json" : `${manifest.relDir}/package.json`;
   const frameworks = frameworksOf([...manifest.dependencies, ...manifest.devDependencies]);
-  const digest = digestOf(manifest.absPath);
+  // Computed by the same function T71 will recompute it with, so a re-read of an
+  // untouched manifest matches instead of reporting a change that never happened.
+  const digest = digestOfSource(locator, projectRoot);
 
   const risks: string[] = [];
   if (!manifest.hasTestScript) risks.push("no `test` script defined in package.json");
@@ -226,7 +224,7 @@ export function repositoryDiscoveryStage(now: () => string = () => new Date().to
       const items: KnowledgeItemOf<"architecture">[] = [overviewItem(projectRoot, manifests, timestamp)];
       const sources: SourceRecord[] = [];
       for (const manifest of manifests) {
-        const { item, source } = componentItem(manifest, timestamp);
+        const { item, source } = componentItem(manifest, projectRoot, timestamp);
         items.push(item);
         sources.push(source);
       }

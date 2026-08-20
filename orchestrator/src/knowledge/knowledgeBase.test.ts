@@ -51,6 +51,15 @@ describe("get and query", () => {
   it("returns [] rather than everything when nothing matches", () => {
     expect(base().query({ kinds: ["task"], owner: AgentStage.SECURITY })).toEqual([]);
   });
+
+  // `null` means project-wide; `undefined` has to mean "not filtering on this",
+  // or every caller forwarding an optional value gets a silent empty result.
+  it("treats an explicitly undefined repo/module as no filter at all", () => {
+    const optional: string | undefined = undefined;
+    expect(base().query({ module: optional })).toHaveLength(10);
+    expect(base().query({ repo: optional })).toHaveLength(10);
+    expect(base().query({ module: optional, kinds: ["task"] })).toHaveLength(2);
+  });
 });
 
 describe("graph", () => {

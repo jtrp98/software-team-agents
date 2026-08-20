@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { AgentStage } from "../../types.js";
 import { KNOWLEDGE_SCHEMA_VERSION, type KnowledgeItemOf } from "../../knowledge/knowledgeModel.js";
 import type { SourceRecord } from "../../knowledge/sourceRegistry.js";
 import { sourceIdFor } from "../../knowledge/sourceRegistry.js";
+import { digestOfSource } from "../../knowledge/sourceDigest.js";
 import type { DiscoveryResult, DiscoveryStage } from "../bootstrapRunner.js";
 
 /**
@@ -124,6 +124,7 @@ function slugOf(relPath: string): string {
 
 function docItem(
   doc: DiscoveredDoc,
+  projectRoot: string,
   now: string,
 ): { item: KnowledgeItemOf<"architecture">; source: SourceRecord } | null {
   const content = doc.content.trim();
@@ -132,7 +133,8 @@ function docItem(
   const title = extractTitle(content, doc.relPath);
   const headings = extractHeadings(content);
   const snippet = firstParagraph(content);
-  const digest = `sha256:${createHash("sha256").update(doc.content).digest("hex").slice(0, 16)}`;
+  // The same function T71 recomputes with — see knowledge/sourceDigest.ts.
+  const digest = digestOfSource(doc.relPath, projectRoot);
 
   const source: SourceRecord = {
     schema_version: KNOWLEDGE_SCHEMA_VERSION,
@@ -186,7 +188,7 @@ export function documentationDiscoveryStage(now: () => string = () => new Date()
       const emptied: string[] = [];
 
       for (const doc of docs) {
-        const built = docItem(doc, timestamp);
+        const built = docItem(doc, projectRoot, timestamp);
         if (!built) {
           emptied.push(doc.relPath);
           continue;

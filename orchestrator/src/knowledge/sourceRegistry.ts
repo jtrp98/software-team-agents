@@ -8,6 +8,7 @@ import { AgentStage } from "../types.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import type { KnowledgeItem, SourceType } from "./knowledgeModel.js";
 import { knowledgeDir } from "./knowledgeStore.js";
+import { digestOfSource } from "./sourceDigest.js";
 
 /**
  * The raw-source registry (T62) — `knowledge/_sources/<SRC-id>.yaml`.
@@ -235,6 +236,17 @@ export class SourceRegistry {
 export interface RegistryCrossCheck {
   problems: string[];
   /**
+   * Registered material whose digest no longer matches what is on disk — the
+   * third question the module note above opens with, and the one nothing used to
+   * answer. T71 checks the digest each *item* recorded; this checks the one the
+   * *source* recorded, which is what tells you a file eleven items rest on has
+   * moved without having to ask all eleven.
+   *
+   * Reported as a note rather than an error: files change, that is what files
+   * do. What matters is that somebody can see which ones.
+   */
+  staleSources: string[];
+  /**
    * Registered material nothing has been derived from yet. Not a problem —
    * during discovery this is the queue, and calling it an error would make the
    * check red exactly when it is working. Reported so it can be worked through.
@@ -252,8 +264,18 @@ export interface RegistryCrossCheck {
  * The half of the check that needs both files: items point at sources, sources
  * do not point back. A `source_id` that resolves to nothing is a real error —
  * it is a claim of provenance that cannot be followed.
+ *
+ * `projectRoot` is optional: without it the material itself is not re-read, and
+ * `staleSources` comes back empty because nothing was checked — the same
+ * arrangement `freshnessOf()` uses, and for the same reason. Silently reporting
+ * every source as current when none were examined would be worse than saying
+ * nothing.
  */
-export function crossCheckRegistry(items: KnowledgeItem[], registry: SourceRegistry): RegistryCrossCheck {
+export function crossCheckRegistry(
+  items: KnowledgeItem[],
+  registry: SourceRegistry,
+  projectRoot?: string,
+): RegistryCrossCheck {
   const problems: string[] = [];
   const referenced = new Set<string>();
   const unregistered = new Set<string>();
@@ -281,8 +303,17 @@ export function crossCheckRegistry(items: KnowledgeItem[], registry: SourceRegis
     }
   }
 
+  const staleSources: string[] = [];
+  if (projectRoot !== undefined) {
+    for (const record of registry.records) {
+      if (record.digest === null) continue; // a person, a conversation, a directory: nothing to hash
+      if (digestOfSource(record.locator, projectRoot) !== record.digest) staleSources.push(record.id);
+    }
+  }
+
   return {
     problems,
+    staleSources: staleSources.sort(),
     underived: registry.records.filter((r) => !referenced.has(r.id)),
     unregisteredLocators: [...unregistered].sort(),
   };

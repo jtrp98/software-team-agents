@@ -134,6 +134,44 @@ describe("provenance (T72)", () => {
     expect(ctx.forRole(AgentStage.DEVOPS).citation("DB-Shift")).toBeNull();
   });
 
+  // The finer half of the same rule: `hidden` drops the item, `redacted` keeps
+  // it and removes the sources — and provenance/freshness must not hand the
+  // removed sources back on the very same object.
+  it("withholds the sources from provenance when the policy withheld them from the item", () => {
+    const pm = ctx.forRole(AgentStage.PROJECT_MANAGER);
+    const outcome = pm.get("DB-Shift");
+    expect(outcome.status).toBe("ok");
+    if (outcome.status !== "ok") return;
+
+    expect(outcome.item.item.sources).toEqual([]);
+    expect(outcome.item.provenance.sources).toEqual([]);
+    expect(outcome.item.provenance.withheld).toEqual(["sources"]);
+    expect(outcome.item.provenance.citation).toBe("DB-Shift v1 [draft, owned by system-analyst] — source withheld from project-manager");
+    expect(pm.citation("DB-Shift")).not.toContain("system-analyst (read");
+  });
+
+  it("withholds the locator from freshness too, while still saying how fresh it is", () => {
+    const outcome = ctx.forRole(AgentStage.PROJECT_MANAGER).get("DB-Shift");
+    expect(outcome.status).toBe("ok");
+    if (outcome.status !== "ok") return;
+
+    const freshness = outcome.item.freshness;
+    expect(freshness.oldestSource).toBeNull();
+    expect(freshness.changedSources).toEqual([]);
+    expect(freshness.missingSources).toEqual([]);
+    // The verdict is a quality signal about the item, not a fact from the
+    // material — withholding it would leave the agent unable to tell it is old.
+    expect(freshness.verdict).toBe("fresh");
+    expect(freshness.ageDays).toBe(4);
+    expect(freshness.reason).toContain("withheld from project-manager");
+  });
+
+  it("leaves provenance whole for a role nothing is withheld from", () => {
+    const provenance = ctx.forRole(AgentStage.SYSTEM_ANALYST).provenance("DB-Shift")!;
+    expect(provenance.withheld).toEqual([]);
+    expect(provenance.sources).toHaveLength(1);
+  });
+
   it("gives a one-line citation an agent can quote", () => {
     expect(ctx.forRole(AgentStage.BUSINESS_ANALYST).citation("REQ-003")).toMatch(/^REQ-003 v1 \[approved, owned by business-analyst\]/);
   });

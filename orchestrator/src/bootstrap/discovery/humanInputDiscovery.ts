@@ -41,6 +41,21 @@ import type { DiscoveryResult, DiscoveryStage } from "../bootstrapRunner.js";
  * skipping a typo'd entry would hide the mistake from the person who made
  * it; this stage throws instead, the same "fail closed" choice T61 made for
  * a YAML conflict marker.
+ *
+ * TWO ENTRIES FOR ONE TERM IS SUCH A MISTAKE
+ *
+ * `DOM-<TERM>` is derived from the term itself, so two entries defining "Lead"
+ * differently produce one id — which means one file, which means the second
+ * entry overwrites the first and the disagreement disappears. The original
+ * reasoning was that the collision would be caught downstream by T66's
+ * duplicate-term detector, but that detector groups *items*, and a collision
+ * leaves only one item for it to group. Nothing was ever going to report it.
+ *
+ * The id stays stable and readable (a hash would only hide the collision one
+ * level deeper, and would orphan the old item every time somebody reworded a
+ * definition). The stage refuses the file instead, and says which term is
+ * doubled: this is hand-written input, so the person who can fix it in one edit
+ * is the person running this.
  */
 
 export const HUMAN_INPUT_DIRNAME = "_human-input";
@@ -210,11 +225,26 @@ export function humanInputDiscoveryStage(now: () => string = () => new Date().to
       const file = parsed as HumanInputFile;
       const items: KnowledgeItem[] = [];
       const sources: SourceRecord[] = [];
+      const byId = new Map<string, HumanEntry>();
+      const collisions: string[] = [];
+
       for (const entry of file.entries) {
         const { item, source } = entryItem(entry, timestamp);
+        const previous = byId.get(item.id);
+        if (previous) {
+          collisions.push(
+            entry.kind === "domain"
+              ? `two entries define the term "${entry.term}" (${item.id}) — one term, one definition, or neither is the glossary`
+              : `two entries carry the same business rule statement (${item.id}) — remove the duplicate`,
+          );
+          continue;
+        }
+        byId.set(item.id, entry);
         items.push(item);
         sources.push(source);
       }
+
+      if (collisions.length > 0) throw new HumanInputError(collisions);
 
       if (items.length === 0) {
         return { items: [], sources: [], skipped: true, note: `knowledge/${HUMAN_INPUT_DIRNAME}/${HUMAN_INPUT_FILENAME} has no entries yet` };

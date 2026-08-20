@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parse as parseYaml } from "yaml";
@@ -6,6 +5,7 @@ import { AgentStage } from "../../types.js";
 import { KNOWLEDGE_SCHEMA_VERSION, type ApiPayload, type KnowledgeItemOf } from "../../knowledge/knowledgeModel.js";
 import type { SourceRecord } from "../../knowledge/sourceRegistry.js";
 import { sourceIdFor } from "../../knowledge/sourceRegistry.js";
+import { digestOfSource } from "../../knowledge/sourceDigest.js";
 import type { DiscoveryResult, DiscoveryStage } from "../bootstrapRunner.js";
 
 /**
@@ -56,10 +56,6 @@ function slugOf(text: string): string {
   return text.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
-function digestOf(text: string): string {
-  return `sha256:${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
-}
-
 function lineOf(content: string, index: number): number {
   let line = 1;
   for (let i = 0; i < index; i++) if (content[i] === "\n") line++;
@@ -72,7 +68,7 @@ function apiItem(
   now: string,
   sourceId: string,
   locator: string,
-  digest: string,
+  digest: string | null,
   extra: Partial<ApiPayload> = {},
 ): KnowledgeItemOf<"api"> {
   return {
@@ -145,13 +141,16 @@ function scanRoutes(root: string, now: string): { items: KnowledgeItemOf<"api">[
           locator: relPath,
           captured_at: now,
           captured_by: AgentStage.SYSTEM_ANALYST,
-          digest: digestOf(content),
+          digest: digestOfSource(relPath, root),
         });
       }
       const method = methodOf(match[1]!);
       const route = match[3]!;
       const line = lineOf(content, match.index);
-      items.push(apiItem(method, route, now, sourceIdFor(relPath), `${relPath}#L${line}`, digestOf(match[0])));
+      const locator = `${relPath}#L${line}`;
+      // Hashed from the locator, not from `match[0]`: the regex match is a
+      // fragment of the line it sits on, and T71 recomputes the whole line.
+      items.push(apiItem(method, route, now, sourceIdFor(relPath), locator, digestOfSource(locator, root)));
     }
   }
 
@@ -192,6 +191,11 @@ function scanOpenApiSpec(root: string, now: string): { items: KnowledgeItemOf<"a
   if (!spec.paths || typeof spec.paths !== "object") return { items: [], sources: [] };
 
   const relPath = path.relative(root, specPath).split(path.sep).join("/");
+  // Every operation in the spec cites the file as a whole, so they share its
+  // digest. Line-ranging an operation inside YAML/JSON is real parsing work with
+  // a real chance of being wrong, and a digest that is coarser than it could be
+  // still answers its question — one that cannot be recomputed answers nothing.
+  const specDigest = digestOfSource(relPath, root);
   const source: SourceRecord = {
     schema_version: KNOWLEDGE_SCHEMA_VERSION,
     id: sourceIdFor(relPath),
@@ -199,7 +203,7 @@ function scanOpenApiSpec(root: string, now: string): { items: KnowledgeItemOf<"a
     locator: relPath,
     captured_at: now,
     captured_by: AgentStage.SYSTEM_ANALYST,
-    digest: digestOf(content),
+    digest: specDigest,
   };
 
   const items: KnowledgeItemOf<"api">[] = [];
@@ -211,7 +215,7 @@ function scanOpenApiSpec(root: string, now: string): { items: KnowledgeItemOf<"a
       const requestShape = operation.requestBody?.content ? Object.keys(operation.requestBody.content).join(", ") : null;
       const responseShape = operation.responses ? Object.keys(operation.responses).join(", ") : null;
       items.push(
-        apiItem(methodOf(httpMethod), route, now, source.id, relPath, digestOf(JSON.stringify(operation)), {
+        apiItem(methodOf(httpMethod), route, now, source.id, relPath, specDigest, {
           contract_name: operation.operationId ?? null,
           request_shape: requestShape,
           response_shape: responseShape,

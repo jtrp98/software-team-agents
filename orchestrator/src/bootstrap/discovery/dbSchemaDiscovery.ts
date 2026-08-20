@@ -1,10 +1,10 @@
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { AgentStage } from "../../types.js";
 import { KNOWLEDGE_SCHEMA_VERSION, type KnowledgeItemOf } from "../../knowledge/knowledgeModel.js";
 import type { SourceRecord } from "../../knowledge/sourceRegistry.js";
 import { sourceIdFor } from "../../knowledge/sourceRegistry.js";
+import { digestOfSource } from "../../knowledge/sourceDigest.js";
 import type { DiscoveryResult, DiscoveryStage } from "../bootstrapRunner.js";
 
 /**
@@ -30,7 +30,7 @@ export const SCHEMA_RELATIVE_PATH = "prisma/schema.prisma";
 
 const MODEL_BLOCK = /model\s+(\w+)\s*\{([\s\S]*?)\}/g;
 
-interface ParsedModel {
+export interface ParsedModel {
   name: string;
   fields: Array<{ name: string; type: string; optional: boolean }>;
   startLine: number;
@@ -44,7 +44,17 @@ function lineOf(content: string, index: number): number {
   return line;
 }
 
-function parseModels(content: string): ParsedModel[] {
+/**
+ * Reads `model X { ... }` blocks out of Prisma text.
+ *
+ * Exported because `design.md`'s `## Data Model` section holds the same syntax —
+ * the `system-analyst` template requires real `schema.prisma` syntax there, and
+ * `setup` seeds the actual file from it — so T85's legacy migration reads it
+ * with this function rather than its own. Two readings of one syntax agree until
+ * the first fix to one of them; the T61-T80 review traced both of its worst
+ * defects to exactly that shape of duplication.
+ */
+export function parsePrismaModels(content: string): ParsedModel[] {
   const models: ParsedModel[] = [];
   MODEL_BLOCK.lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -75,11 +85,13 @@ function relationsOf(model: ParsedModel, modelNames: Set<string>): string[] {
   return [...found].sort();
 }
 
-function digestOf(text: string): string {
-  return `sha256:${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
-}
-
-function dbItem(model: ParsedModel, modelNames: Set<string>, now: string, sourceId: string): KnowledgeItemOf<"db-schema"> {
+function dbItem(
+  model: ParsedModel,
+  modelNames: Set<string>,
+  projectRoot: string,
+  now: string,
+  sourceId: string,
+): KnowledgeItemOf<"db-schema"> {
   const locator = `${SCHEMA_RELATIVE_PATH}#L${model.startLine}-L${model.endLine}`;
   const relations = relationsOf(model, modelNames);
 
@@ -99,7 +111,10 @@ function dbItem(model: ParsedModel, modelNames: Set<string>, now: string, source
     version: 1,
     created_at: now,
     updated_at: now,
-    sources: [{ type: "file", locator, captured_at: now, digest: digestOf(model.raw), source_id: sourceId }],
+    // Hashed through the locator, not from `model.raw`: the two are nearly the
+    // same text but not identical (the match starts at `model`, the line range
+    // starts at column 0), and T71 recomputes from the locator.
+    sources: [{ type: "file", locator, captured_at: now, digest: digestOfSource(locator, projectRoot), source_id: sourceId }],
     relations: [],
     payload: {
       model: model.name,
@@ -121,7 +136,7 @@ export function dbSchemaDiscoveryStage(now: () => string = () => new Date().toIS
       }
 
       const content = fs.readFileSync(absPath, "utf8");
-      const models = parseModels(content);
+      const models = parsePrismaModels(content);
       if (models.length === 0) {
         return { items: [], sources: [], skipped: true, note: `${SCHEMA_RELATIVE_PATH} exists but declares no model blocks yet` };
       }
@@ -133,11 +148,13 @@ export function dbSchemaDiscoveryStage(now: () => string = () => new Date().toIS
         locator: SCHEMA_RELATIVE_PATH,
         captured_at: timestamp,
         captured_by: AgentStage.SYSTEM_ANALYST,
-        digest: digestOf(content),
+        // Whole file — the registry answers "did this file move", each item's own
+        // ref answers "did my model move".
+        digest: digestOfSource(SCHEMA_RELATIVE_PATH, projectRoot),
       };
 
       const modelNames = new Set(models.map((m) => m.name));
-      const items = models.map((model) => dbItem(model, modelNames, timestamp, source.id));
+      const items = models.map((model) => dbItem(model, modelNames, projectRoot, timestamp, source.id));
 
       return { items, sources: [source] };
     },

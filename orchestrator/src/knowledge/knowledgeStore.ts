@@ -57,7 +57,7 @@ export const PROJECT_WIDE_DIR = "_project";
  * and guessing wrong means either losing a module's items or reporting the
  * registry as forty malformed items.
  */
-export const RESERVED_DIRS = ["_sources", "_conflicts", "_bootstrap", "_human-input"] as const;
+export const RESERVED_DIRS = ["_sources", "_conflicts", "_bootstrap", "_human-input", "_adoption"] as const;
 
 export function knowledgeDir(projectRoot: string = defaultProjectRoot()): string {
   return path.join(projectRoot, KNOWLEDGE_DIRNAME);
@@ -217,6 +217,19 @@ function stableStringify(value: unknown): string {
 function contentOf(item: KnowledgeItem): string {
   const { version: _version, updated_at: _updatedAt, ...rest } = item;
   return stableStringify(rest);
+}
+
+/**
+ * Whether two items say the same thing, ignoring `version`/`updated_at` — the
+ * same comparison `writeKnowledgeItem` makes to decide whether a version bump is
+ * required. Exported because a caller that re-derives an item from its source
+ * (discovery, T74-T79) has to ask "did anything actually move" *before* writing,
+ * and it must ask with this function rather than its own: a second definition of
+ * "same content" would disagree with the one the write path enforces, and then
+ * every re-run would either bump for nothing or fail the version check.
+ */
+export function sameKnowledgeContent(a: KnowledgeItem, b: KnowledgeItem): boolean {
+  return contentOf(a) === contentOf(b);
 }
 
 function orderedForYaml(item: KnowledgeItem): Record<string, unknown> {

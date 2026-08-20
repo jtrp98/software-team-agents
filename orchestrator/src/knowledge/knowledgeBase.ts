@@ -13,8 +13,11 @@ import { loadKnowledge } from "./knowledgeStore.js";
 import { SourceRegistry, crossCheckRegistry, loadSourceRegistry } from "./sourceRegistry.js";
 import { loadResolutions, reportConflicts } from "./knowledgeConflicts.js";
 import { checkKnowledgePolicyFile } from "./knowledgePolicy.js";
+import { checkOwnership, deprecatedStillDependedOn } from "./ownership.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { readBootstrapState } from "../bootstrap/bootstrapStore.js";
+import { readAdoptionState } from "../adoption/adoptionStore.js";
+import { unapprovedStages as unapprovedAdoptionStages } from "../adoption/adoptionModel.js";
 
 /**
  * The single entry point every agent asks the project knowledge through (T61,
@@ -34,7 +37,12 @@ import { readBootstrapState } from "../bootstrap/bootstrapStore.js";
 
 export interface KnowledgeQuery {
   kinds?: KnowledgeKind[];
-  /** Pass `null` to select project-wide items specifically; omit the key to not filter on it. */
+  /**
+   * `null` selects project-wide items specifically. `undefined` — whether the
+   * key is absent or explicitly set — means "do not filter on this", so passing
+   * a `string | undefined` variable straight through widens the query instead of
+   * emptying it.
+   */
   repo?: string | null;
   module?: string | null;
   owner?: AgentStage;
@@ -116,8 +124,14 @@ export class KnowledgeBase {
 
     return this.items.filter((item) => {
       if (filter.kinds && !filter.kinds.includes(item.kind)) return false;
-      if ("repo" in filter && item.repo !== filter.repo) return false;
-      if ("module" in filter && item.module !== filter.module) return false;
+      // `undefined` is "no filter" even when the key is present. Keying off
+      // `"repo" in filter` instead made `query({ module: maybeUndefined })`
+      // return nothing at all from a base holding everything — a silent empty
+      // result at any call site that forwards an optional value, which is most
+      // of them. `null` still means project-wide, which is why this cannot just
+      // be a truthiness check.
+      if (filter.repo !== undefined && item.repo !== filter.repo) return false;
+      if (filter.module !== undefined && item.module !== filter.module) return false;
       if (filter.owner !== undefined && item.owner !== filter.owner) return false;
       if (statuses && !statuses.includes(item.status)) return false;
       if (filter.sensitive !== undefined && item.sensitive !== filter.sensitive) return false;
@@ -308,6 +322,48 @@ export interface KnowledgeCheckReport extends KnowledgeCheckResult {
 }
 
 /**
+ * Adoption's half of `--check-knowledge` (T81-T89).
+ *
+ * Mirrors what `checkKnowledge` already does for bootstrap state, and blocks on
+ * the same thing for the same reason: a `conflict_ids` entry means an importer
+ * re-read a legacy document and got something different from what a person had
+ * already approved. Nothing downstream can tell which of the two is right, which
+ * is exactly why it has to stop for somebody.
+ */
+function checkAdoptionAgainstItems(projectRoot: string, itemIds: Set<string>): { problems: string[]; notes: string[] } {
+  const { state, problems: stateProblems } = readAdoptionState(projectRoot);
+  const problems = stateProblems.map((p) => `knowledge/_adoption/STATE.yaml: ${p}`);
+  const notes: string[] = [];
+
+  if (!state) {
+    return { problems, notes };
+  }
+
+  for (const stage of state.stages) {
+    for (const id of stage.knowledge_ids) {
+      if (!itemIds.has(id)) {
+        problems.push(`knowledge/_adoption/STATE.yaml: stage "${stage.id}" claims item "${id}" which does not exist`);
+      }
+    }
+    for (const id of stage.conflict_ids ?? []) {
+      problems.push(
+        `${id}: the ${stage.id} stage re-read the legacy document and got something different, but the item is past \`draft\` — ` +
+          "a person decides whether the document or the reviewed item is right",
+      );
+    }
+  }
+
+  notes.push(`adoption (T81) status: ${state.status}`);
+  const waiting = unapprovedAdoptionStages(state.stages).map((s) => s.id);
+  if (waiting.length > 0) notes.push(`adoption stages waiting for an approval: ${waiting.join(", ")}`);
+  const blockers = state.preflight?.blockers ?? [];
+  if (blockers.length > 0 && !state.preflight?.acknowledged_by) {
+    notes.push(`adoption is blocked on ${blockers.length} unacknowledged finding(s) from T86's check`);
+  }
+  return { problems, notes };
+}
+
+/**
  * What `--check-knowledge` runs. A repo with no `knowledge/` yet passes with a
  * note, the same way `--check-doc-structure` treats a project that has not
  * reached `business-analyst` yet: this checks consistency, not progress.
@@ -325,7 +381,7 @@ export function checkKnowledge(projectRoot: string = defaultProjectRoot()): Know
   }
 
   const registryLoad = loadSourceRegistry(projectRoot);
-  const cross = crossCheckRegistry(items, new SourceRegistry(registryLoad.records));
+  const cross = crossCheckRegistry(items, new SourceRegistry(registryLoad.records), projectRoot);
   const kb = new KnowledgeBase(items, problems);
   const base = kb.check();
 
@@ -339,6 +395,11 @@ export function checkKnowledge(projectRoot: string = defaultProjectRoot()): Know
     ...cross.problems,
     ...resolutionLoad.problems,
     ...policy.problems,
+    // T65's rule, actually enforced. `checkOwnership` existed and was tested
+    // from the day it was written, and nothing ever called it — so an item owned
+    // by a role that does not do that kind of work passed this check and CI.
+    // A rule nobody runs is documentation.
+    ...checkOwnership(items).map((p) => `${p.id}: ${p.problem}`),
     // Declared conflicts only. A `conflicts-with` relation was written by
     // somebody who meant it, so an undecided one blocks; a duplicate found by
     // pattern-matching is a suggestion and goes to notes below.
@@ -357,13 +418,42 @@ export function checkKnowledge(projectRoot: string = defaultProjectRoot()): Know
           bootstrapProblems.push(`knowledge/_bootstrap/STATE.yaml: stage "${stage.id}" claims item "${id}" which does not exist`);
         }
       }
+      // Blocking on purpose: discovery re-read the material and it disagrees
+      // with knowledge somebody already reviewed. Nothing downstream can tell
+      // which of the two is right, which is exactly why a person has to.
+      for (const id of stage.conflict_ids ?? []) {
+        bootstrapProblems.push(
+          `${id}: the ${stage.id} stage re-read its source and got something different, but the item is past \`draft\` — ` +
+            "a person decides whether the material or the reviewed item is right",
+        );
+      }
     }
   }
   allProblems.push(...bootstrapProblems);
 
+  // Adoption (T81), checked the same way and for the same reasons as bootstrap
+  // above. Folded into this flag rather than given its own, per the rule this
+  // module's doc states: CI's list of checks is matched to subsystems, not to
+  // files. Written as a separate function only because the two flows are
+  // separate states.
+  const adoption = checkAdoptionAgainstItems(projectRoot, new Set(items.map((i) => i.id)));
+  allProblems.push(...adoption.problems);
+
   const notes: string[] = [...policy.notes];
+  // A note, not a problem: keeping a deprecated item *because* something still
+  // cites it is the intended state. This is the list of citations to re-point
+  // before it can go, which is only useful if somebody can see it.
+  for (const entry of deprecatedStillDependedOn(kb)) {
+    notes.push(`${entry.id} is deprecated but still cited by: ${entry.dependents.join(", ")}`);
+  }
+  if (cross.staleSources.length > 0) {
+    notes.push(
+      `${cross.staleSources.length} registered source(s) no longer match what was read: ${cross.staleSources.join(", ")}`,
+    );
+  }
   if (!bootstrap.state && bootstrap.problems.length === 0) notes.push("bootstrap (T73) has not started — no knowledge/_bootstrap/STATE.yaml yet.");
   else if (bootstrap.state) notes.push(`bootstrap (T73) status: ${bootstrap.state.status}`);
+  notes.push(...adoption.notes);
   if (items.length === 0) notes.push("`knowledge/` holds no items yet.");
   for (const c of conflicts.unresolvedDetected) notes.push(`possible conflict ${c.id}: ${c.summary}`);
   for (const r of conflicts.staleResolutions) {

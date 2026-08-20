@@ -133,6 +133,30 @@ describe("historyOf", () => {
       expect(history.reason).toContain("no commits yet");
     });
 
+    // `--follow` traces the path back past the point where it held a knowledge
+    // item at all, which is routine during a legacy import (T83-T85). That used
+    // to reach `diffItems`, which read `.payload` off it and threw a TypeError
+    // out of a function whose contract is to report a reason instead.
+    it("reports a history rather than throwing when an earlier commit held something else at that path", () => {
+      const target = path.join(root, "knowledge", "sales-crm", "requirement");
+      fs.mkdirSync(target, { recursive: true });
+      fs.writeFileSync(path.join(target, "REQ-003.yaml"), "some: text\nnot: a knowledge item\n", "utf8");
+      commit("something else lived here");
+
+      // `force` is how a migration seeds over legacy content: without it the
+      // store refuses, because what is there cannot be read as an item at all.
+      writeKnowledgeItem(requirement(), root, { force: true });
+      commit("add REQ-003");
+
+      const history = historyOf(requirement(), root);
+      expect(history.available).toBe(true);
+      expect(history.entries.map((e) => e.subject)).toEqual(["add REQ-003", "something else lived here"]);
+      // The unusable revision counts as a commit with no readable version, and
+      // nothing can be diffed against it.
+      expect(history.entries.map((e) => e.version)).toEqual([1, null]);
+      expect(history.entries[0].changes).toEqual([]);
+    });
+
     it("reads the commits that touched the item, newest first, with the version each left behind", () => {
       writeKnowledgeItem(requirement(), root);
       commit("add REQ-003");

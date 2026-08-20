@@ -47,6 +47,11 @@
           "type": "array",
           "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9]*-[A-Za-z0-9._/-]+$" }
         },
+        "conflict_ids": {
+          "description": "Items this stage re-discovered with different content, but did not overwrite because a person had already moved them past `draft`. Recorded rather than resolved: the material and the reviewed knowledge now disagree, and which one is right is not a stage's call. `--check-knowledge` reports these as problems until somebody settles them.",
+          "type": "array",
+          "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9]*-[A-Za-z0-9._/-]+$" }
+        },
         "note": { "type": "string", "minLength": 1 }
       }
     }

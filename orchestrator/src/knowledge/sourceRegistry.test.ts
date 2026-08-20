@@ -6,6 +6,7 @@ import { AgentStage } from "../types.js";
 import { ID_PREFIXES, KNOWLEDGE_KINDS, KNOWLEDGE_SCHEMA_VERSION, type KnowledgeItemOf } from "./knowledgeModel.js";
 import { loadKnowledge, writeKnowledgeItem } from "./knowledgeStore.js";
 import { checkKnowledge } from "./knowledgeBase.js";
+import { digestOfSource } from "./sourceDigest.js";
 import {
   SourceRecordError,
   SourceRegistry,
@@ -174,6 +175,38 @@ describe("cross-check between items and the registry", () => {
   it("lists cited material nobody registered", () => {
     const item = requirement("REQ-003", [undefined], "legacy/undocumented.md");
     expect(crossCheckRegistry([item], registry).unregisteredLocators).toEqual(["legacy/undocumented.md"]);
+  });
+
+  // The third question the module's own note opens with — "one file backs
+  // eleven items; has it changed?" — which nothing answered: the registry's
+  // digest was written on every record and compared by no one.
+  describe("staleSources", () => {
+    function registered(root: string, relPath: string, contents: string): SourceRecord {
+      fs.mkdirSync(path.dirname(path.join(root, relPath)), { recursive: true });
+      fs.writeFileSync(path.join(root, relPath), contents, "utf8");
+      return source(sourceIdFor(relPath), { locator: relPath, digest: digestOfSource(relPath, root) });
+    }
+
+    it("names a record whose material no longer hashes to what was read", () => {
+      const fresh = registered(root, "docs/a.md", "first\n");
+      const moved = registered(root, "docs/b.md", "first\n");
+      fs.writeFileSync(path.join(root, "docs/b.md"), "second\n", "utf8");
+
+      const result = crossCheckRegistry([], new SourceRegistry([fresh, moved]), root);
+      expect(result.staleSources).toEqual([moved.id]);
+      expect(result.problems).toEqual([]);
+    });
+
+    it("says nothing when it was not asked to look — no projectRoot, no claim", () => {
+      const record = registered(root, "docs/a.md", "first\n");
+      fs.writeFileSync(path.join(root, "docs/a.md"), "changed\n", "utf8");
+      expect(crossCheckRegistry([], new SourceRegistry([record])).staleSources).toEqual([]);
+    });
+
+    it("skips a record with nothing to hash rather than calling it stale", () => {
+      const person = source("SRC-HUMAN-ann", { type: "human", locator: "Ann", digest: null });
+      expect(crossCheckRegistry([], new SourceRegistry([person]), root).staleSources).toEqual([]);
+    });
   });
 });
 

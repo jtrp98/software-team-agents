@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { checkKnowledgeItem, type KnowledgeItemOf } from "../../knowledge/knowledgeModel.js";
 import { checkKnowledge } from "../../knowledge/knowledgeBase.js";
+import { digestOfSource } from "../../knowledge/sourceDigest.js";
 import type { DiscoveryResult } from "../bootstrapRunner.js";
 import { initBootstrap, runBootstrapStage } from "../bootstrapRunner.js";
 import { readBootstrapState } from "../bootstrapStore.js";
@@ -110,7 +111,9 @@ describe("documentationDiscoveryStage", () => {
     write(path.join(root, "README.md"), `# Long\n\n${long}`);
     const result = await discover(root);
     expect(result.sources).toHaveLength(1);
-    expect(result.sources[0]!.digest).toMatch(/^sha256:[0-9a-f]{16}$/);
+    // Not a format assertion: the digest has to be the value T71 will recompute
+    // for this locator, which is the whole point of recording one.
+    expect(result.sources[0]!.digest).toBe(digestOfSource(result.sources[0]!.locator, root));
     const item = architectureOf(result, "DES-DOC-README");
     expect(item.body).toContain("…");
     expect(item.body.length).toBeLessThan(long.length);

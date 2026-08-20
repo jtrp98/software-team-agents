@@ -1,5 +1,5 @@
 import type { KnowledgeItem } from "../knowledge/knowledgeModel.js";
-import { writeKnowledgeItem } from "../knowledge/knowledgeStore.js";
+import { emptyLanded, landItem, type LandedItems } from "../knowledge/landing.js";
 import type { SourceRecord } from "../knowledge/sourceRegistry.js";
 import { writeSourceRecord } from "../knowledge/sourceRegistry.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
@@ -71,11 +71,17 @@ function requireState(projectRoot: string): BootstrapState {
 }
 
 /**
- * Runs one discovery stage: writes every item and source it produced, marks
+ * Runs one discovery stage: lands every item and source it produced (through
+ * the shared `landing.ts` rule, which is also what T87's dry run previews with),
+ * marks
  * the stage `done`/`skipped` with the item ids it left behind, and persists
  * the recomputed overall status. Each stage's items land in `knowledge/`
  * through the same `writeKnowledgeItem`/`writeSourceRecord` every other
  * writer uses — bootstrap does not get a second way to write an item.
+ *
+ * A stage that lands new material after somebody has validated this bootstrap
+ * clears that validation: `ready` means a person reviewed what is there, and
+ * there is now something they have not seen.
  */
 export async function runBootstrapStage(
   stage: DiscoveryStage,
@@ -89,12 +95,31 @@ export async function runBootstrapStage(
   const result = await stage.discover(projectRoot);
 
   for (const source of result.sources) writeSourceRecord(source, projectRoot);
-  for (const item of result.items) writeKnowledgeItem(item, projectRoot, { force: true });
+  const landed: LandedItems = emptyLanded();
+  for (const item of result.items) landItem(item, projectRoot, now, landed);
 
   record.status = result.skipped ? "skipped" : "done";
   record.completed_at = now;
+  // Everything the stage found, including what it declined to overwrite: T80
+  // still has to account for those, and dropping them would hide them.
   record.knowledge_ids = result.items.map((i) => i.id);
-  if (result.note !== undefined) record.note = result.note;
+  if (landed.conflicts.length > 0) record.conflict_ids = landed.conflicts;
+  else delete record.conflict_ids;
+
+  const notes: string[] = [];
+  if (result.note !== undefined) notes.push(result.note);
+  if (landed.conflicts.length > 0) {
+    notes.push(
+      `left ${landed.conflicts.length} reviewed item(s) untouched because the material now says something different: ${landed.conflicts.join(", ")}`,
+    );
+  }
+  if (notes.length > 0) record.note = notes.join(" · ");
+  else delete record.note;
+
+  if (landed.written.length > 0 && state.validated_by !== null) {
+    state.validated_by = null;
+    state.validated_at = null;
+  }
 
   state.status = computeStatus(state);
   state.updated_at = now;

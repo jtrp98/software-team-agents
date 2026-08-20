@@ -104,6 +104,35 @@ describe("humanInputDiscoveryStage", () => {
     await expect(discover(root)).rejects.toThrow(HumanInputError);
   });
 
+  // `DOM-<TERM>` is derived from the term, so two entries for one term are one
+  // id, one file, and one surviving definition. Nothing downstream can report
+  // the disagreement — T66 groups items, and a collision leaves one item — so
+  // the refusal has to happen here, where the person who can fix it is looking.
+  it("refuses two entries defining the same term rather than letting one overwrite the other", async () => {
+    writeInput(
+      root,
+      [
+        "schema_version: 1",
+        "entries:",
+        "  - kind: domain",
+        "    term: Lead",
+        "    definition: someone who asked for a quote",
+        "    author: Ann",
+        "  - kind: domain",
+        "    term: lead",
+        "    definition: someone we decided to call",
+        "    author: Bee",
+      ].join("\n"),
+    );
+    await expect(discover(root)).rejects.toThrow(/two entries define the term "lead"/);
+  });
+
+  it("refuses a duplicated business rule statement too", async () => {
+    const entry = ["  - kind: business-rule", "    statement: refunds over 500 need a manager", "    enforcement: manual", "    author: Ann"];
+    writeInput(root, ["schema_version: 1", "entries:", ...entry, ...entry].join("\n"));
+    await expect(discover(root)).rejects.toThrow(/same business rule statement/);
+  });
+
   it("mixes business-rule and domain entries in one file", async () => {
     writeInput(
       root,

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { AgentStage } from "../../types.js";
@@ -112,9 +111,20 @@ function slugOf(relDir: string): string {
   return relDir === "." ? "ROOT" : relDir.toUpperCase().replace(/[^A-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 }
 
-function digestOf(text: string): string {
-  return `sha256:${createHash("sha256").update(text).digest("hex").slice(0, 16)}`;
-}
+/**
+ * This stage's evidence is a set of folder *names*, and its locator is a
+ * directory. There are no bytes at that locator to hash, so the digest is null —
+ * the schema's word for "unhashable" (T61), and the same choice T74's overview
+ * item makes for its directory listing.
+ *
+ * It used to hash the layer-name list instead. That produced a non-null digest
+ * that `freshnessOf()` could only recompute by reading the locator as a file,
+ * which fails on a directory — so every item this stage wrote was reported
+ * `source-missing`: "the material this came from is gone", about a folder that
+ * was right there. A digest nobody can recompute is worse than none, because it
+ * reads as a checkable claim.
+ */
+const FOLDER_SIGNAL_DIGEST = null;
 
 function patternItem(component: ComponentRoot, inference: Inference, now: string): { item: KnowledgeItemOf<"architecture">; source: SourceRecord } {
   const componentLabel = component.name ?? component.relDir;
@@ -130,8 +140,8 @@ function patternItem(component: ComponentRoot, inference: Inference, now: string
     locator,
     captured_at: now,
     captured_by: AgentStage.SYSTEM_ANALYST,
-    digest: digestOf([...inference.layers].sort().join(",")),
-    note: "folder-name layering signal, not a single file",
+    digest: FOLDER_SIGNAL_DIGEST,
+    note: `folder-name layering signal (${[...inference.layers].sort().join(", ")}), not a single file`,
   };
 
   const item: KnowledgeItemOf<"architecture"> = {

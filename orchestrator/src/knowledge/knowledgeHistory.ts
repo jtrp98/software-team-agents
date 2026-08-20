@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { defaultProjectRoot } from "../agents/agentContract.js";
-import type { KnowledgeItem } from "./knowledgeModel.js";
+import { checkKnowledgeItem, type KnowledgeItem } from "./knowledgeModel.js";
 import { pathFor, relativePathFor } from "./knowledgeStore.js";
 
 /**
@@ -81,10 +81,16 @@ export function diffItems(before: KnowledgeItem, after: KnowledgeItem): FieldCha
     }
   }
 
-  const payloadKeys = new Set([...Object.keys(before.payload), ...Object.keys(after.payload)]);
+  // Defaulted rather than assumed: everything this module compares came out of
+  // `git show` on a historical revision, and a revision whose payload is missing
+  // is a thing that exists. The type says otherwise; the bytes on disk decide.
+  const beforePayload = (before.payload ?? {}) as unknown as Record<string, unknown>;
+  const afterPayload = (after.payload ?? {}) as unknown as Record<string, unknown>;
+
+  const payloadKeys = new Set([...Object.keys(beforePayload), ...Object.keys(afterPayload)]);
   for (const key of [...payloadKeys].sort()) {
-    const a = (before.payload as unknown as Record<string, unknown>)[key];
-    const b = (after.payload as unknown as Record<string, unknown>)[key];
+    const a = beforePayload[key];
+    const b = afterPayload[key];
     if (JSON.stringify(a) !== JSON.stringify(b)) {
       changes.push({ field: `payload.${key}`, from: display(a), to: display(b) });
     }
@@ -176,7 +182,13 @@ export function historyOf(
   for (const row of ordered) {
     let snapshot: KnowledgeItem | null = null;
     try {
-      snapshot = parseYaml(git(projectRoot, ["show", `${row.commit}:${relative}`])) as KnowledgeItem;
+      const parsed = parseYaml(git(projectRoot, ["show", `${row.commit}:${relative}`])) as unknown;
+      // Validated, not just cast. `--follow` traces renames back past the point
+      // where the path held a knowledge item at all — routine during a legacy
+      // import (T83-T85) — and a bare cast let a `{some: "text"}` through to
+      // `diffItems`, which reads `.payload` and threw a TypeError out of a
+      // function whose whole contract is to report a reason instead of throwing.
+      snapshot = checkKnowledgeItem(parsed).length === 0 ? (parsed as KnowledgeItem) : null;
     } catch {
       // A commit that deleted or renamed the file, or left it unparseable. The
       // commit still happened, so it stays in the log with version null rather

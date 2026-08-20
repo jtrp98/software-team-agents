@@ -53,6 +53,8 @@ export interface StageRecord {
   status: StageStatus;
   completed_at: string | null;
   knowledge_ids: string[];
+  /** Re-discovered with different content, but left alone because a person had already reviewed them — see the schema and `runBootstrapStage`. */
+  conflict_ids?: string[];
   note?: string;
 }
 

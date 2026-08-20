@@ -1,7 +1,11 @@
-import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import type { KnowledgeStatus } from "./knowledgeModel.js";
-import { KnowledgeBase } from "./knowledgeBase.js";
+import { KnowledgeBase, checkKnowledge } from "./knowledgeBase.js";
+import { writeKnowledgeItem } from "./knowledgeStore.js";
 import { makeItem, sampleKnowledge } from "./sampleKnowledge.js";
 import {
   ALLOWED_OWNERS,
@@ -159,5 +163,41 @@ describe("deprecated knowledge something still relies on", () => {
       { module: null, owner: AgentStage.HUMAN, relations: [{ type: "supersedes", to: "ADR-001" }] },
     );
     expect(deprecatedStillDependedOn(new KnowledgeBase([old, replacement]))).toEqual([]);
+  });
+});
+
+/**
+ * T65's rules were written, tested, and then never called by anything that
+ * runs. These lock them into the check CI actually executes — a rule nobody
+ * runs is documentation, which is the T40 `severity` failure one level up.
+ */
+describe("ownership reaches --check-knowledge", () => {
+  let root: string;
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-ownership-check-"));
+  });
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("fails the check when an item is owned by a role that does not do that kind of work", () => {
+    writeKnowledgeItem(item("draft", AgentStage.DEVOPS), root);
+    const report = checkKnowledge(root);
+    expect(report.ok).toBe(false);
+    expect(report.problems.join("\n")).toContain("which does not own requirement items");
+  });
+
+  it("passes for an owner the kind allows", () => {
+    writeKnowledgeItem(item("draft", AgentStage.BUSINESS_ANALYST), root);
+    expect(checkKnowledge(root).ok).toBe(true);
+  });
+
+  it("notes a deprecated item something still cites, without failing on it", () => {
+    for (const entry of sampleKnowledge()) {
+      writeKnowledgeItem(entry.id === "DES-003" ? { ...entry, status: "deprecated" } : entry, root, { force: true });
+    }
+    const report = checkKnowledge(root);
+    expect(report.notes.join("\n")).toContain("DES-003 is deprecated but still cited by");
+    expect(report.problems.filter((p) => p.includes("deprecated"))).toEqual([]);
   });
 });
