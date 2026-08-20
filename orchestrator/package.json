@@ -11,7 +11,8 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "orchestrate": "npm run build --silent && node dist/cli.js"
+    "orchestrate": "npm run build --silent && node dist/cli.js",
+    "build:templates": "npm run build --silent && node dist/cli.js --build-templates templates"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",

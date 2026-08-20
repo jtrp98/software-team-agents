@@ -37,6 +37,8 @@ describe("parseArgs", () => {
       checkEnvironments: false,
       checkDocStructure: false,
       checkKnowledge: false,
+      checkInstallation: false,
+      buildTemplates: undefined,
       environment: Environment.LOCAL,
       dependsOn: [],
       stateDb: undefined,

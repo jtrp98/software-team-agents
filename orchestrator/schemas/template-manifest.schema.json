@@ -1,0 +1,45 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/template-manifest.schema.json",
+  "title": "Template manifest (templates/manifest.json)",
+  "description": "T90 — one row per file `sta init` materializes into a target project, with the content hash and framework version it was built from. This is the anchor `sta upgrade`/`migrate`/`rollback` (T94-T97) diff against: a file whose on-disk hash in the target project still matches the recorded `sha256` was never edited by the user and is safe to overwrite; one that doesn't is a user edit and upgrade must skip it, not clobber it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "framework_version", "generated_at", "files"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "framework_version": {
+      "description": "orchestrator/package.json's own version at build time — one number, read rather than duplicated.",
+      "type": "string",
+      "minLength": 1
+    },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "files": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/file" }
+    }
+  },
+  "definitions": {
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "size_bytes"],
+      "properties": {
+        "path": {
+          "description": "Repo-root-relative, forward-slashed — identical to where it lands in the target project.",
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._/-]+$"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}

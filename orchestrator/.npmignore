@@ -1,0 +1,12 @@
+# T91 — npm pack/publish walks .gitignore files it finds in the tree even when a package.json's
+# `files` field explicitly lists a directory, so orchestrator/.gitignore's `dist/` rule (correct
+# for git — dist/ is a build artifact, never committed) would otherwise silently strip the
+# compiled CLI out of the tarball too. A directory's own .npmignore replaces its .gitignore for
+# packing purposes, so this file exists purely to *not* say "dist/" — everything else that
+# shouldn't ship (node_modules, test output, source maps for a dev-only build) still shouldn't.
+node_modules/
+coverage/
+*.test.js
+*.test.d.ts
+*.test.d.ts.map
+*.tsbuildinfo

@@ -1,0 +1,31 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/install-manifest.schema.json",
+  "title": "Installed framework manifest (.sta/manifest.json)",
+  "description": "T92/T94 — a project's own copy of templates/manifest.json, written by `sta init` and kept current by `sta upgrade`/`migrate`/`rollback`. `sha256` here is the *pristine framework* hash for each file (what the framework last shipped), not necessarily what's on disk right now — a project may have edited the file since. Comparing this against the file's live hash is exactly what tells upgrade a file is safe to overwrite versus user-modified. `schema_version` is this manifest's own shape version, separate from `framework_version` (which framework release installed it) and from any knowledge/state schema version elsewhere in the project (T94's point: three different things that change independently).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "framework_version", "installed_at", "updated_at", "files"],
+  "properties": {
+    "schema_version": { "type": "integer", "minimum": 1 },
+    "framework_version": { "type": "string", "minLength": 1 },
+    "installed_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "files": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/file" }
+    }
+  },
+  "definitions": {
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "size_bytes"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1, "pattern": "^[A-Za-z0-9._/-]+$" },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "size_bytes": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

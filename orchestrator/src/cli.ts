@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +29,12 @@ import { checkRepoMap, loadStageRoots } from "./repos/repoMap.js";
 import { Environment, checkEnvironmentConfig, describeEnvironment, isEnvironment } from "./environment/environment.js";
 import { checkDocStructure } from "./docs/docStructure.js";
 import { checkKnowledge } from "./knowledge/knowledgeBase.js";
+import { buildTemplates } from "./packaging/templateBuilder.js";
+import { runInit } from "./packaging/initCommand.js";
+import { runUpgrade } from "./packaging/upgradeCommand.js";
+import { migrateSta } from "./packaging/migration.js";
+import { listBackups, rollbackSta } from "./packaging/rollback.js";
+import { validateInstallation } from "./packaging/installValidation.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -79,6 +86,10 @@ export interface CliArgs {
   checkDocStructure: boolean;
   /** Check knowledge/*.yaml against its schema, its id/relation rules and its own cross-links, and exit (T61). Same audience. */
   checkKnowledge: boolean;
+  /** Check .sta/manifest.json and .sta/config.yaml against the project's real files and exit (T98). Same audience. */
+  checkInstallation: boolean;
+  /** Snapshot every framework template file (T90) into an output directory, with manifest.json, and exit. Not a --check-*: it writes, it doesn't just report. */
+  buildTemplates?: string;
   /** local/dev/staging/production (T43). Defaults to Environment.LOCAL; only used when creating a task — a --resume/--retry inherits the task's already-stored environment. */
   environment: Environment;
   dependsOn: string[];
@@ -113,6 +124,11 @@ export const USAGE =
   "  orchestrate cancel <task-id> [--reason <text>] [--project-root <path>]   give up on a task for good; run/resume/retry refuse it permanently\n" +
   "  orchestrate audit  <task-id> [--decisions] [--project-root <path>]   the WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail; --decisions shows only the choices\n" +
   "  orchestrate projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names (T41)\n" +
+  "  orchestrate init    --templates <dir> [--project-root <path>] [--force]   materialize framework template files + .sta/config.yaml + .sta/manifest.json into a target project (T92)\n" +
+  "  orchestrate upgrade --templates <dir> [--project-root <path>]   bring an initialized project's framework files up to <dir>'s version, backing up before overwriting (T95)\n" +
+  "  orchestrate migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending (T96)\n" +
+  "  orchestrate rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups` (T97)\n" +
+  "  orchestrate list-backups [--project-root <path>]   list this project's .sta/backups/ snapshots, oldest first\n" +
   "\n" +
   "underlying flag-based form:\n" +
   "  orchestrate --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] <classification flags>\n" +
@@ -131,6 +147,8 @@ export const USAGE =
   "  orchestrate --check-environments [--project-root <path>]   check environments.yaml (if any) against its schema\n" +
   "  orchestrate --check-doc-structure [--project-root <path>]  check every _docs/module/*/*.md's sections against its schema\n" +
   "  orchestrate --check-knowledge [--project-root <path>]      check knowledge/*.yaml against its schema and cross-links\n" +
+  "  orchestrate --build-templates <out-dir> [--project-root <path>]  snapshot framework template files + manifest.json (T90) into <out-dir>\n" +
+  "  orchestrate --check-installation [--project-root <path>]   check .sta/manifest.json and .sta/config.yaml against the project's real files (T98)\n" +
   `  classification flags: ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
 
 /** Pure argv parser — kept separate from process.argv/console/exit so it's directly testable. */
@@ -154,6 +172,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkEnvironmentsFlag = false;
   let checkDocStructureFlag = false;
   let checkKnowledgeFlag = false;
+  let checkInstallationFlag = false;
+  let buildTemplatesOutDir: string | undefined;
   let environment: Environment = Environment.LOCAL;
   let dependsOn: string[] = [];
   let phases: number[] = [];
@@ -209,6 +229,11 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkDocStructureFlag = true;
     } else if (arg === "--check-knowledge") {
       checkKnowledgeFlag = true;
+    } else if (arg === "--check-installation") {
+      checkInstallationFlag = true;
+    } else if (arg === "--build-templates") {
+      buildTemplatesOutDir = argv[++i];
+      if (!buildTemplatesOutDir) throw new CliUsageError("--build-templates requires an <out-dir> argument");
     } else if (arg === "--env") {
       const value = argv[++i];
       if (!value || !isEnvironment(value)) {
@@ -236,7 +261,9 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkReposFlag &&
     !checkEnvironmentsFlag &&
     !checkDocStructureFlag &&
-    !checkKnowledgeFlag
+    !checkKnowledgeFlag &&
+    !checkInstallationFlag &&
+    !buildTemplatesOutDir
   ) {
     if (!taskId) throw new CliUsageError("--task-id is required");
     if (!moduleName) throw new CliUsageError("--module is required (the _docs/module/<name>/ this task belongs to)");
@@ -265,6 +292,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkEnvironments: checkEnvironmentsFlag,
     checkDocStructure: checkDocStructureFlag,
     checkKnowledge: checkKnowledgeFlag,
+    checkInstallation: checkInstallationFlag,
+    buildTemplates: buildTemplatesOutDir,
     environment,
     dependsOn,
     stateDb,
@@ -410,7 +439,22 @@ function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orches
   return registry.create({ taskId, classification, dependsOn: args.dependsOn, environment: args.environment });
 }
 
-const VERBS = ["run", "status", "approve", "retry", "resume", "pause", "cancel", "audit", "projects"] as const;
+const VERBS = [
+  "run",
+  "status",
+  "approve",
+  "retry",
+  "resume",
+  "pause",
+  "cancel",
+  "audit",
+  "projects",
+  "init",
+  "upgrade",
+  "migrate",
+  "rollback",
+  "list-backups",
+] as const;
 type Verb = (typeof VERBS)[number];
 
 function isVerb(s: string | undefined): s is Verb {
@@ -650,6 +694,105 @@ async function runProjectsVerb(rest: string[], defaultProjectRoot: string): Prom
   return 0;
 }
 
+/** `init --templates <dir> [--force]` — T92. */
+async function runInitVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const templatesDir = flagValue(rest, "--templates");
+  if (!templatesDir) throw new CliUsageError("init: --templates <dir> is required (built by `npm run build:templates`)");
+  const force = rest.includes("--force");
+
+  try {
+    const result = runInit(projectRoot, path.resolve(templatesDir), new Date().toISOString(), { force });
+    console.log(
+      `[orchestrator] initialized ${projectRoot}: ${result.installed.length} file(s) installed` +
+        (result.skippedConflicts.length > 0 ? `, ${result.skippedConflicts.length} conflict(s) left untouched` : "") +
+        (result.seededDirs.length > 0 ? `, seeded ${result.seededDirs.join(", ")}` : "") +
+        (result.configWritten ? ", wrote .sta/config.yaml" : ", .sta/config.yaml already existed"),
+    );
+    for (const conflict of result.skippedConflicts) {
+      console.log(`[orchestrator]   conflict, left as-is: ${conflict} (project already has different content here)`);
+    }
+    return 0;
+  } catch (e) {
+    console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+    return 1;
+  }
+}
+
+/** `upgrade --templates <dir>` — T95. */
+async function runUpgradeVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const templatesDir = flagValue(rest, "--templates");
+  if (!templatesDir) throw new CliUsageError("upgrade: --templates <dir> is required (built by `npm run build:templates`)");
+
+  try {
+    const result = runUpgrade(projectRoot, path.resolve(templatesDir), new Date().toISOString());
+    console.log(
+      `[orchestrator] upgraded ${projectRoot}: ${result.overwritten.length} overwritten, ` +
+        `${result.addedNew.length} new, ${result.restoredDeleted.length} restored, ` +
+        `${result.skippedUserModified.length} skipped (user-modified), backup at ${result.backupDir}`,
+    );
+    for (const skipped of result.skippedUserModified) {
+      console.log(`[orchestrator]   skipped, user-modified: ${skipped}`);
+    }
+    for (const dropped of result.droppedFromFramework) {
+      console.log(`[orchestrator]   note: ${dropped} is no longer part of the framework — left in place, no longer tracked`);
+    }
+    return 0;
+  } catch (e) {
+    console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+    return 1;
+  }
+}
+
+/** `migrate` — T96. A no-op, reported as such, when the project is already on the current .sta/ schema version. */
+async function runMigrateVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  try {
+    const result = migrateSta(projectRoot, new Date().toISOString());
+    if (result.appliedSteps.length === 0) {
+      console.log(`[orchestrator] .sta/ is already at schema_version ${result.to} — nothing to migrate.`);
+      return 0;
+    }
+    console.log(
+      `[orchestrator] migrated .sta/ from schema_version ${result.from} to ${result.to} ` +
+        `(steps: ${result.appliedSteps.join(" -> ")}), backup at ${result.backupDir}`,
+    );
+    return 0;
+  } catch (e) {
+    console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+    return 1;
+  }
+}
+
+/** `rollback [--backup <name>]` — T97. Defaults to the most recent snapshot. */
+async function runRollbackVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const backup = flagValue(rest, "--backup");
+  try {
+    const result = rollbackSta(projectRoot, backup);
+    console.log(
+      `[orchestrator] rolled back ${projectRoot} to backup "${result.fromBackup}": ${result.restoredFiles.length} file(s) restored.`,
+    );
+    return 0;
+  } catch (e) {
+    console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+    return 1;
+  }
+}
+
+/** `list-backups` — read-only listing of .sta/backups/, oldest first. */
+async function runListBackupsVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const backups = listBackups(projectRoot);
+  if (backups.length === 0) {
+    console.log(`[orchestrator] no backups under ${projectRoot}/.sta/backups/ yet.`);
+    return 0;
+  }
+  for (const name of backups) console.log(`  ${name}`);
+  return 0;
+}
+
 /** Dispatches a T31 verb, translating the ones that are really the existing engine in disguise (`run`, `resume`, `retry`) rather than duplicating the step loop. */
 async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): Promise<number> {
   switch (verb) {
@@ -674,6 +817,16 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
       return runAuditVerb(rest, defaultProjectRoot);
     case "projects":
       return runProjectsVerb(rest, defaultProjectRoot);
+    case "init":
+      return runInitVerb(rest, defaultProjectRoot);
+    case "upgrade":
+      return runUpgradeVerb(rest, defaultProjectRoot);
+    case "migrate":
+      return runMigrateVerb(rest, defaultProjectRoot);
+    case "rollback":
+      return runRollbackVerb(rest, defaultProjectRoot);
+    case "list-backups":
+      return runListBackupsVerb(rest, defaultProjectRoot);
   }
 }
 
@@ -854,6 +1007,30 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     console.error("[orchestrator] knowledge/ has problems:");
     for (const problem of result.problems) console.error(`  - ${problem}`);
     return 1;
+  }
+
+  if (args.checkInstallation) {
+    const result = validateInstallation(args.projectRoot);
+    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
+    if (result.ok) {
+      console.log("[orchestrator] .sta/ agrees with the project's real files.");
+      return 0;
+    }
+    console.error("[orchestrator] .sta/ has problems:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
+  if (args.buildTemplates) {
+    const outDir = path.isAbsolute(args.buildTemplates)
+      ? args.buildTemplates
+      : path.resolve(args.projectRoot, args.buildTemplates);
+    const { manifest } = buildTemplates(args.projectRoot, outDir, new Date().toISOString());
+    console.log(
+      `[orchestrator] wrote ${manifest.files.length} template file(s) + manifest.json to ${outDir} ` +
+        `(framework_version ${manifest.framework_version}).`,
+    );
+    return 0;
   }
 
   const store = new SqliteTaskStore(args.stateDb ?? defaultStateDbPath(args.projectRoot));
