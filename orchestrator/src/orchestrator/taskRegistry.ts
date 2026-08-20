@@ -107,6 +107,41 @@ export class TaskRegistry {
     return this.store.loadTask(taskId) !== null;
   }
 
+  /**
+   * T31's `pause` verb — a human-imposed freeze, independent of the pipeline's own state.
+   * `run`/`resume`/`retry` refuse to step a paused task (see cli.ts); `resume`/`retry` clear the
+   * flag automatically, since asking to continue a task IS the un-pause action in a CLI with no
+   * daemon to leave "paused-but-watchable" in the background.
+   */
+  pause(taskId: string): void {
+    const task = this.store.loadTask(taskId);
+    if (!task) throw new TaskNotFoundError(taskId);
+    this.store.saveTask({ ...task, updatedAt: this.now?.() ?? Date.now(), paused: true });
+    this.refreshStateView();
+  }
+
+  /** Clears a pause without otherwise touching the task — what `resume`/`retry` call before stepping it. */
+  unpause(taskId: string): void {
+    const task = this.store.loadTask(taskId);
+    if (!task) throw new TaskNotFoundError(taskId);
+    if (!task.paused) return;
+    this.store.saveTask({ ...task, updatedAt: this.now?.() ?? Date.now(), paused: false });
+    this.refreshStateView();
+  }
+
+  /**
+   * T31's `cancel` verb — final, unlike pause: a cancelled task is not meant to be picked back up
+   * (`resume`/`retry` refuse it too, see cli.ts). Distinct from `BLOCKED`: `BLOCKED` means the
+   * system detected a problem (retry budget spent, an unresolved gate); `cancelled` means a human
+   * deliberately gave up on the task for a reason of their own.
+   */
+  cancel(taskId: string, reason: string): void {
+    const task = this.store.loadTask(taskId);
+    if (!task) throw new TaskNotFoundError(taskId);
+    this.store.saveTask({ ...task, updatedAt: this.now?.() ?? Date.now(), cancelled: true, cancelReason: reason });
+    this.refreshStateView();
+  }
+
   list(): TaskListing[] {
     const tasks = this.store.listTasks();
     return tasks.map((task) => ({ task, status: describeStatus(task, tasks) }));

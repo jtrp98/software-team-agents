@@ -67,6 +67,15 @@ export const PersistedTaskSchema = z.object({
   pipelineCursor: z.number().int().nonnegative(),
   blockedReason: z.string().nullable(),
   lastFailure: StructuredFailureSchema.nullable(),
+  /**
+   * T31's `pause`/`cancel` verbs (Developer Experience) — a human-imposed override, orthogonal
+   * to the pipeline's own state machine. Defaulted so a row written before T31 still loads: an
+   * old task simply was never paused/cancelled, which is true rather than broken, same pattern
+   * as `approvals`'s default above.
+   */
+  paused: z.boolean().default(false),
+  cancelled: z.boolean().default(false),
+  cancelReason: z.string().nullable().default(null),
 });
 export type PersistedTask = z.infer<typeof PersistedTaskSchema>;
 
@@ -155,5 +164,8 @@ export function newPersistedTask(params: {
     pipelineCursor: 0,
     blockedReason: null,
     lastFailure: null,
+    paused: false,
+    cancelled: false,
+    cancelReason: null,
   };
 }

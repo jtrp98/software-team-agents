@@ -74,7 +74,9 @@ export type TaskStatusKind =
   | "WAITING_FOR_HUMAN"
   | "WAITING_FOR_DEPENDENCY"
   | "BLOCKED"
-  | "DEPLOYED";
+  | "DEPLOYED"
+  | "PAUSED"
+  | "CANCELLED";
 
 export interface TaskStatusView {
   kind: TaskStatusKind;
@@ -98,6 +100,13 @@ export interface TaskStatusView {
 export function describeStatus(task: PersistedTask, allTasks?: readonly PersistedTask[]): TaskStatusView {
   const { machine } = task;
   const current = machine.current;
+
+  // A human override outranks everything the state machine itself would report — a cancelled
+  // task stays CANCELLED even if its underlying state would otherwise read as RUNNING, and the
+  // same for a paused one. Checked in this order because cancel is the more final of the two:
+  // a task can be paused, then cancelled, and cancelled must win.
+  if (task.cancelled) return { kind: "CANCELLED", state: current, reason: task.cancelReason ?? "cancelled" };
+  if (task.paused) return { kind: "PAUSED", state: current, reason: "paused — run `resume` or `retry` to continue" };
 
   if (current === TaskState.DEPLOYED) return { kind: "DEPLOYED", state: current };
   if (current === TaskState.BLOCKED) {

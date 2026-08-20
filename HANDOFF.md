@@ -3,9 +3,9 @@
 เอกสารนี้เขียนไว้ให้ session ถัดไป **เริ่มจาก context ว่างเปล่าแล้วทำงานต่อได้ทันที** โดยไม่ต้องอ่าน
 โค้ดทั้งหมดเพื่อเดาว่าอะไรตัดสินใจไปแล้วและเพราะอะไร
 
-- **สถานะ:** 30/60 tasks เสร็จ — P0, P1 ทั้งหมด, และ P2 Quality (T22–T25) + P2 Observability
-  (T26–T30) ครบทั้งคู่
-- **งานถัดไป:** T31 (CLI สำหรับ Orchestrator, P2 — Developer Experience) เป็นต้นไป ดู `CHECKLIST.md`
+- **สถานะ:** 35/60 tasks เสร็จ — P0, P1 ทั้งหมด, และ P2 ทั้งหมด (Quality T22–T25, Observability
+  T26–T30, Developer Experience T31–T35) ครบทั้งสามกลุ่ม
+- **งานถัดไป:** T36 (Event-driven Architecture, P3 — Architecture ขั้นสูง) เป็นต้นไป ดู `CHECKLIST.md`
 - **spec ฉบับเต็มของทุก task:** `TASKS.md` (ID ตรงกับ `CHECKLIST.md`)
 - **โค้ดทั้งหมดยังไม่ commit** — version control เป็นของผู้ใช้ ไม่มี agent ตัวไหนรัน git
 
@@ -31,9 +31,9 @@ cd orchestrator && npm run build --silent && cd .. && node orchestrator/dist/cli
 
 | ตัวตรวจ | ผลที่ถูกต้อง |
 |---|---|
-| `npm test` (orchestrator) | 651 passed / 43 files (T23–T25 ไม่แตะ `orchestrator/` เลย, T26–T30 แตะเยอะ — ดู §4.10) |
+| `npm test` (orchestrator) | 690 passed / 44 files (T23–T25 ไม่แตะ `orchestrator/` เลย, T26–T35 แตะเยอะ — ดู §4.10–4.11) |
 | `npm run typecheck` | exit 0 |
-| `.claude/tests/run.js` | All 118 case(s) passed (T26–T30 ไม่แตะ `.claude/` เลย — ทุกอย่างอยู่ใน `orchestrator/`) |
+| `.claude/tests/run.js` | All 118 case(s) passed (T26–T35 ไม่แตะ `.claude/` เลย — ทุกอย่างอยู่ใน `orchestrator/`) |
 | `--check-contracts` | contracts agree with the agent registry (10 agents now, not 9), and their path rules are sane |
 | `--check-layout` | layout.yaml agrees with the repo |
 | `--check-workflows` | workflows/*.yml agree with the classifier |
@@ -46,7 +46,7 @@ cd orchestrator && npm run build --silent && cd .. && node orchestrator/dist/cli
 
 ---
 
-## 2. โครงสร้างที่มีอยู่ตอนนี้ (T01–T30)
+## 2. โครงสร้างที่มีอยู่ตอนนี้ (T01–T35 — P0/P1/P2 ทั้งหมดเสร็จแล้ว)
 
 ```
 layout.yaml           ← concept map + ตัว validate (T04)
@@ -60,7 +60,7 @@ policies/               ← จองไว้ให้ T49 (มีแค่ REA
 .claude/agents/*.md     ← agent 10 ตัว (T01–T21 = 9 ตัว + test-planner จาก T20)
 .claude/hooks/          ← 6 hooks (block-git, block-outside-repo, block-doc-rewrite, require-green-before-stop, block-path-permissions, block-secret-leak จาก T25)
 .claude/scripts/        ← 3 checker: check-schema-contract.js, check-status-sync.js, static-analysis-gate.js (T22, + security_scan จาก T23, + dependency_scan จาก T24)
-orchestrator/           ← Node/TS package, 651 tests
+orchestrator/           ← Node/TS package, 690 tests
 ```
 
 **หมายเหตุสำคัญที่พบตอน T26**: `orchestrator/src/` มี module ที่สร้างไว้แล้วตั้งแต่ก่อน T26 อ้างอิง
@@ -71,7 +71,7 @@ comment แบบ `item N` (item 7, 11, 12, 13, 14, 15, 16, 17 ฯลฯ) ชี
 กับงานที่กว้างกว่าที่ T26–T30 ต้องการอยู่แล้วเกือบทั้งหมด** ก่อนเริ่ม T26 ควรอ่านโมดูลเหล่านี้ก่อนเขียน
 ใหม่เสมอ (ดู §4.10)
 
-### โมดูลใน `orchestrator/src/` และหน้าที่ (สะสมทั้งหมดถึง T30 — T23–T25 ไม่แตะ `orchestrator/src/` เลย ดู §4.7–4.9; T26–T30 แตะเยอะ ดู §4.10)
+### โมดูลใน `orchestrator/src/` และหน้าที่ (สะสมทั้งหมดถึง T35 — T23–T25 ไม่แตะ `orchestrator/src/` เลย ดู §4.7–4.9; T26–T35 แตะเยอะ ดู §4.10–4.11)
 
 | ไฟล์ | Task | ทำอะไร |
 |---|---|---|
@@ -102,9 +102,20 @@ comment แบบ `item N` (item 7, 11, 12, 13, 14, 15, 16, 17 ฯลฯ) ชี
 | `store/sqliteStore.ts` (แก้) | T26/T28 | เพิ่มคอลัมน์ `model/input_tokens/output_tokens/cache_read_tokens/context_chars` ใน `runs` table, bump `SCHEMA_VERSION` 1→2 (ดู §4.10) |
 | `evaluation/benchmark.ts` (แก้) | T29 | เพิ่ม `reworkCount` ต่อ case + `firstPassRate`/`reworkRate` ต่อ `BenchmarkResult` |
 | `evaluation/agentQualityScore.ts` (ใหม่) | T30 | `computeAgentQualityScores()`/`formatQualityScoreReport()` — per-agent Success/First-pass/Rework/Avg cost ตาม TASKS.md's ตัวอย่างเป๊ะ |
+| `store/taskStore.ts`'s `PersistedTaskSchema` (แก้) | T31 | เพิ่ม `paused`/`cancelled`/`cancelReason` — อยู่ใน JSON blob เดิม ไม่ต้อง SQL migrate (ดู §4.11) |
+| `orchestrator/orchestrator.ts` (แก้) | T31 | carry paused/cancelled ผ่าน constructor/restore/`snapshot()` เฉย ๆ — ตัว class เองไม่ตัดสินใจอะไรกับมัน |
+| `orchestrator/taskRegistry.ts`'s `pause()`/`unpause()`/`cancel()` (ใหม่) | T31 | เขียน flag ตรงเข้า store, ไม่ผ่าน Orchestrator instance |
+| `orchestrator/taskStatus.ts`'s `describeStatus()` (แก้) | T31 | เพิ่ม `PAUSED`/`CANCELLED` ใน `TaskStatusKind`, cancelled ชนะ paused ชนะ state machine เดิม |
+| `cli.ts`'s verb dispatch (ใหม่) | T31 | `run/status/approve/retry/resume/pause/cancel` เป็น wrapper บาง ๆ ครอบ `runCli`/`parseArgs` เดิม ไม่แก้ engine เดิมเลย (ดู §4.11) |
+| `concurrency/taskLock.ts` (ใหม่) | T35 | file lock ต่อ task_id ใน `.workflow/locks/`, stale เคลียร์เองด้วย PID-liveness + TTL (ดู §4.11) |
+| `cli.ts`'s `STATUS_EMOJI`/`watchListing()` (ใหม่) | T32 | ✅🔄⏳⏸️🚫 ต่อแถวใน `--list`/`status`, `status --watch` poll แล้ว re-render — ไม่มี web server ในโปรเจกต์นี้เลย |
+| `schemas/state-view.schema.json` (แก้) | T31 | เพิ่ม `PAUSED`/`CANCELLED` เข้า `status` enum — ลืมจุดนี้ตอนแรกแล้ว `refreshStateView()` throw (ดู §4.11) |
 
 CLI flags สะสม: `--check-contracts` `--check-layout` `--check-workflows` `--check-profile`
 `--check-decisions` (T16) `--check-test-pyramid` (T21)
+
+CLI verbs สะสม (T31): `run` `status [--watch]` `approve` `retry` `resume` `pause` `cancel` — thin
+wrappers, flag-based form เดิมยังใช้ได้ทุกอันเหมือนเดิม (backward compatible)
 
 ---
 
@@ -333,13 +344,65 @@ optional (`field?:`) โดยตั้งใจ: **input** (`RunOutcome`, ส�
 `BenchmarkResult`/`BenchmarkCaseResult`, `benchmark.test.ts`'s literal `BenchmarkResult` × 2 —
 TypeScript ชี้ตำแหน่งให้ครบเองจาก `tsc --noEmit`, ไม่ต้อง grep หาเอง
 
+### 4.11 T31–T35 (P2 — Developer Experience) — `cli.ts`/`orchestrator.ts` เดิมคลุมไปแล้วเกือบหมดอีกครั้ง
+
+**ก่อนเริ่ม T31 พบว่า `orchestrator/src/cli.ts` ทำงานได้เกือบครบตามสเปคอยู่แล้ว** — สร้าง/รัน task,
+`--resume`, `--list`, interactive human-approval loop — เหลือแค่เป็น **flag-based** ไม่ใช่
+verb-based (`agent run/status/...`) ตามที่ TASKS.md อยากได้ ส่วน **T33 (Resume after crash)**
+ทำงานถูกจริงมาตั้งแต่ T01 แล้ว (SQLite persistence + `Orchestrator.fromPersisted()`) และ **T34
+(Idempotency)**'s หลักการสำคัญ (`TaskAlreadyExistsError` กันสร้าง task_id ซ้ำ) ก็มีอยู่แล้วเช่นกัน —
+ทั้งสองอันนี้ทำแค่เพิ่ม test ยืนยันชัด ๆ ไม่ได้เขียน mechanism ใหม่:
+
+- **T31 (CLI verbs)**: เพิ่ม `VERBS`/`runVerb()` เป็นชั้นบางครอบ `runCli`/`parseArgs` เดิม — ตรวจ
+  `argv[0]` ว่าเป็น verb (`run/status/approve/retry/resume/pause/cancel`) หรือไม่ก่อน parse flag
+  ปกติ, **ไม่แก้ `parseArgs`/`runCli`'s engine เดิมเลยแม้แต่บรรทัดเดียว** เพื่อไม่พังเทสต์ 34 เคสที่มี
+  อยู่แล้ว. `run`/`resume`/`retry` เป็นแค่ prepend flag แล้ว delegate กลับเข้า `runCli` ตัวเดิม;
+  `status`/`approve`/`pause`/`cancel` เป็น handler ใหม่ที่ **ไม่แตะ executor เลย** (ไม่ spawn
+  `claude` CLI จริง) จึงเทสต์ได้แน่นอนไม่ flaky
+- **T31 (pause/cancel state)**: เพิ่ม `paused`/`cancelled`/`cancelReason` เข้า `PersistedTaskSchema`
+  — อยู่ใน JSON blob column เดิมของ SQLite (`sqliteStore.ts`'s comment เองบอกไว้ว่า "nothing here
+  queries inside a task's state" คือเหตุผลที่ column เดียวพอ) **ไม่ต้อง bump `SCHEMA_VERSION`
+  เหมือน T26 ทำ** — เป็น field ใหม่ใน object ที่ zod parse จาก JSON text อยู่แล้ว ต่างจาก T26 ที่เพิ่ม
+  column ใหม่ให้ SQL table ตรง ๆ
+- **T31 (pause/cancel enforcement)**: จงใจ**ไม่ใส่ตรรกะนี้ใน `Orchestrator` class เอง** — เป็น human
+  override ที่ตรวจที่ `cli.ts`'s main loop ครั้งเดียว (อ่าน `store.loadTask(taskId).paused/cancelled`
+  ก่อนเรียก `openTask()`) แทน เพราะ `Orchestrator` ควรรู้แค่ pipeline ของตัวเอง ไม่ใช่นโยบายจากข้างนอก
+  — แต่ **`Orchestrator.snapshot()`/constructor ก็ยังต้อง carry ค่าพวกนี้ผ่านไปเฉย ๆ** ไม่งั้น
+  `step()` ที่ save ทับจะรีเซ็ต `paused` กลับเป็น `false` ทุกครั้งโดยไม่ตั้งใจ (บั๊กที่เจอจริงตอน
+  typecheck ก่อน — `snapshot()` ขาด field พวกนี้ทำให้ type ไม่ match)
+- **T32 (Dashboard)**: ไม่มี web server ในโปรเจกต์นี้ (stack คือ Next.js สำหรับ*สินค้า*ที่ pipeline
+  นี้สร้าง ไม่ใช่ tooling ของ pipeline เอง) เลยทำเป็น **CLI live view**: `STATUS_EMOJI` map
+  (✅🔄⏳⏸️🚫) เติมเข้า `printListing()` ทุกแถว + `status --watch [--interval N]` poll แล้ว
+  re-render — `watchListing()` inject `sleep`/`clear`/`iterations` ได้เพื่อเทสต์ได้จริงโดยไม่ต้องรอ
+  infinite loop
+- **T35 (Concurrency Lock)**: ตีความเป็น **task-level lock file** (`.workflow/locks/<taskId>.lock`)
+  ไม่ใช่ per-file lock ทั้งระบบ (ใหญ่เกินสโคปนี้, ต้องผูกกับ write-glob ของแต่ละ contract แยก) —
+  reclaim อัตโนมัติถ้า holder pid ตายแล้ว (`process.kill(pid, 0)` throw ESRCH) หรือ lock เก่าเกิน 1
+  ชั่วโมง (TTL fallback สำหรับกรณี PID-liveness check เชื่อไม่ได้ เช่น cross-platform quirk หรือ pid
+  ถูก reuse) ผูกเข้า `cli.ts`'s main loop: acquire ก่อน `openTask()`, release ใน `finally` เดียวกับ
+  `registry.close()`
+
+**บั๊กจริงที่เจอระหว่างเขียนเทสต์ (สำคัญที่สุดของรอบนี้ — เจอ 2 อัน):**
+
+1. **`positionalArg()` เข้าใจ `--project-root <dir>` ผิด** — ตอนแรก implement แบบ "token แรกที่ไม่ขึ้น
+   ต้นด้วย `--`" ซึ่งจับ **ค่าของ flag** (เช่น path ของ `dir`) มาเป็น task-id โดยไม่ตั้งใจ เพราะ path
+   เองก็ไม่ได้ขึ้นต้นด้วย `--` เหมือนกัน — แก้โดยรู้จัก flag ที่กิน value (`VERB_VALUE_FLAGS`:
+   `--project-root --state-db --reason --interval`) แล้วข้ามค่าตามหลังมันไปด้วย **ถ้าจะเพิ่ม
+   flag ใหม่ที่กิน value ให้ verb ไหนในอนาคต ต้องเติมเข้า set นี้ด้วยเสมอ ไม่งั้น positional
+   parsing จะพังแบบเงียบ ๆ**
+2. **`schemas/state-view.schema.json`'s `status` enum ไม่รู้จัก `PAUSED`/`CANCELLED`** — เพิ่ม
+   `TaskStatusKind` สอง value ใหม่ใน `taskStatus.ts` แล้วลืมว่า mapping เดียวกันต้องไปอัปเดต JSON
+   schema คู่กันด้วย (pattern ใน HANDOFF.md's รูปแบบ #1: "data file ใหม่ต้องมี schema คู่กันเสมอ" —
+   ที่นี่คือ**แก้ enum ที่มีอยู่แล้วก็ต้องแก้ทั้งสองที่เหมือนกัน ไม่ใช่แค่ตอนสร้างใหม่**) พังตอนเทสต์
+   `pause`/`cancel` เรียก `refreshStateView()` แล้ว `StateViewSchemaError` throw ทันที
+
 ---
 
 ## 5. ของค้าง — และมันอยู่ Phase ไหน
 
 | เรื่อง | สถานะ | อยู่ที่ไหน |
 |---|---|---|
-| รัน task ขนานกันจริง | กราฟ + `readyLayers()` + `--list` เสร็จแล้ว แต่ orchestrator ยังรันทีละ task | **T35 — Concurrency Lock (P2)** |
+| รัน task ขนานกันจริง | กราฟ + `readyLayers()` + `--list` เสร็จแล้ว, task-level lock (T35) กันชนกันแล้ว แต่ orchestrator ยังรันทีละ task ไม่ขนาน | **ไม่มี task ใน TASKS.md ที่ครอบคลุม "รันขนานจริง"** — T35 คุ้มครองแค่ไม่ให้สอง process ชนกัน ไม่ใช่ทำให้รันพร้อมกันได้ |
 | ย้าย stack เป็น .NET | บันทึกเป็น `target.blocked_on` แล้ว | **ไม่ใช่ task ใน TASKS.md** — รอผู้ใช้ตัดสินใจ ดู §4.2 |
 | `policies/` ยังว่าง | จองไว้ + README + checker บังคับว่าห้ามมีอะไรเกิน | **T49 (P4)** |
 | `TaskGraph`/`changeImpact.ts` กับ `plan.md` จริง | โมดูลเสร็จ+เทสต์ครบ แต่ยังไม่มีใครอ่าน task จาก `plan.md` มาสร้างกราฟ | **T52 (P4)** |
@@ -349,18 +412,17 @@ TypeScript ชี้ตำแหน่งให้ครบเองจาก `t
 
 ---
 
-## 6. งานถัดไป: T31 (P2 — Developer Experience, ต่อจาก P2 — Observability ที่ครบแล้ว T26–T30)
+## 6. งานถัดไป: T36 (P3 — Architecture ขั้นสูง, ต่อจาก P2 ที่ครบหมดแล้วทั้ง Quality/Observability/Developer Experience)
 
-อ่าน spec เต็มใน `TASKS.md`. T31 (CLI สำหรับ Orchestrator: `agent run feature`, `agent status`,
-`agent approve`, `agent retry`, `agent resume`, `agent pause`, `agent cancel`) — เช็คของเดิมก่อนเสมอ
-(บทเรียนซ้ำทุก task ตั้งแต่ T22): `orchestrator/src/cli.ts` **มีอยู่แล้ว** และมี flag จำนวนมาก
-(`--check-contracts`, `--check-layout`, `--check-workflows`, `--check-profile`, `--check-decisions`,
-`--check-test-pyramid`, `--list` สำหรับ parallel batches) แต่ทั้งหมดเป็น **checker/introspection
-flags** ไม่ใช่ verb-based command ที่ TASKS.md ต้องการ (`run`/`status`/`approve`/`retry`/`resume`/
-`pause`/`cancel`) — น่าจะเป็นช่องว่างจริงที่ต้องเติม ไม่ใช่ของซ้ำ แต่**อ่าน `cli.ts` ทั้งไฟล์ก่อน**
-เพื่อดูว่า `Orchestrator` class (orchestrator.ts) มี method รองรับ verb เหล่านี้ครบหรือยัง
-(`step()`/`provideHumanApproval()`/`status()` มีอยู่แล้วจากบทอ่าน T01 เดิม — อาจจะแค่ต้อง wire เป็น CLI
-verb ไม่ต้องเขียน logic ใหม่)
+อ่าน spec เต็มใน `TASKS.md`. T36 (Event-driven Architecture: `Agent → Event → Orchestrator → Next
+Task` พร้อม event ชนิด `QA_PASSED`/`QA_FAILED`/`SECURITY_FAILED`/`APPROVAL_REQUIRED`/
+`DEPLOY_COMPLETED`) — **เช็คของเดิมก่อนเสมอ** (บทเรียนซ้ำทุก task ตั้งแต่ T22): `orchestrator/src/
+events/eventBus.ts` **มีอยู่แล้ว** (เห็นใน `npm test` output — 5 tests) และ
+`orchestrator.ts`'s `this.emitAndStore("AGENT_COMPLETED", ...)` ก็มีอยู่แล้วที่ `reportCompletion()`
+— อ่าน `eventBus.ts` และทุกจุดที่ `emitAndStore`/`this.events.on(...)` ถูกเรียกใน `orchestrator.ts`
+ก่อนเขียนโค้ดใหม่ ดูว่า event ชนิดที่ TASKS.md ต้องการ (`QA_PASSED` ฯลฯ) มีอยู่แล้วกี่ตัว ขาดกี่ตัว
+(สังเกตจาก `benchmark.ts`'s `orch.events.on("AGENT_COMPLETED", ...)` ที่ใช้อยู่แล้วตอน T29 — event
+bus นี้มีผู้ใช้จริงแล้ว ไม่ใช่แค่โครงว่าง)
 
 ---
 

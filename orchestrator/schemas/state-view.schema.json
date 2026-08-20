@@ -95,7 +95,7 @@
         "task_id": { "type": "string", "minLength": 1 },
         "status": {
           "type": "string",
-          "enum": ["RUNNING", "WAITING_FOR_HUMAN", "WAITING_FOR_DEPENDENCY", "BLOCKED", "DEPLOYED"]
+          "enum": ["RUNNING", "WAITING_FOR_HUMAN", "WAITING_FOR_DEPENDENCY", "BLOCKED", "DEPLOYED", "PAUSED", "CANCELLED"]
         },
         "phase": { "$ref": "#/definitions/phase" },
         "state": { "$ref": "#/definitions/state" },

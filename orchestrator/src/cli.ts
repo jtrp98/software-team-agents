@@ -16,6 +16,9 @@ import { checkAllWorkflows } from "./workflow/workflowDefinition.js";
 import { checkProfile } from "./profile/projectProfile.js";
 import { checkDecisions } from "./decisions/decisionLog.js";
 import { checkTestPyramid } from "./testing/testPyramid.js";
+import { describeStatus, type TaskStatusKind } from "./orchestrator/taskStatus.js";
+import { RunLog } from "./observability/runLog.js";
+import { acquireTaskLock, releaseTaskLock, TaskLockedError } from "./concurrency/taskLock.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -75,7 +78,16 @@ const FLAG_TO_CLASSIFICATION: Record<string, keyof ClassificationInput> = {
 export class CliUsageError extends Error {}
 
 export const USAGE =
-  "usage:\n" +
+  "usage (T31 verbs — thin wrappers over the flag-based form below, prefer these):\n" +
+  "  orchestrate run --task-id <id> --module <name> <classification flags> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>]\n" +
+  "  orchestrate status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
+  "  orchestrate approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
+  "  orchestrate resume  <task-id> --module <name> [--project-root <path>]   continue a task already in the store\n" +
+  "  orchestrate retry   <task-id> --module <name> [--project-root <path>]   same as resume — there is no daemon here for the two to mean different things\n" +
+  "  orchestrate pause  <task-id> [--project-root <path>]   freeze a task; run/resume/retry refuse it until resumed\n" +
+  "  orchestrate cancel <task-id> [--reason <text>] [--project-root <path>]   give up on a task for good; run/resume/retry refuse it permanently\n" +
+  "\n" +
+  "underlying flag-based form:\n" +
   "  orchestrate --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] <classification flags>\n" +
   "  orchestrate --task-id <id> --module <name> --resume        continue a task already in the store\n" +
   "  orchestrate --list [--project-root <path>]                 show every task and stop\n" +
@@ -217,6 +229,17 @@ async function confirm(question: string): Promise<boolean> {
   }
 }
 
+/** TASKS.md T32's own example glyphs: ✅ 🔄 ⏳ — extended with the two states only pause/cancel can produce. */
+const STATUS_EMOJI: Record<TaskStatusKind, string> = {
+  DEPLOYED: "✅",
+  RUNNING: "🔄",
+  WAITING_FOR_HUMAN: "⏳",
+  WAITING_FOR_DEPENDENCY: "⏳",
+  BLOCKED: "❌",
+  PAUSED: "⏸️",
+  CANCELLED: "🚫",
+};
+
 function printListing(registry: TaskRegistry): void {
   const listing = registry.list();
   if (listing.length === 0) {
@@ -239,8 +262,9 @@ function printListing(registry: TaskRegistry): void {
     const waiting = status.waitingOn?.length ? ` waiting_on=${status.waitingOn.join(",")}` : "";
     const reason = status.reason ? ` — ${status.reason}` : "";
     const layer = layerOf.has(task.taskId) ? ` batch=${layerOf.get(task.taskId)}` : "";
+    const emoji = STATUS_EMOJI[status.kind] ?? " ";
     console.log(
-      `  ${task.taskId.padEnd(12)} ${status.kind.padEnd(22)} ${status.state.padEnd(16)}${agent}${layer}${waiting}${reason}`,
+      `  ${emoji} ${task.taskId.padEnd(12)} ${status.kind.padEnd(22)} ${status.state.padEnd(16)}${agent}${layer}${waiting}${reason}`,
     );
   }
 
@@ -248,8 +272,34 @@ function printListing(registry: TaskRegistry): void {
   if (stats && stats.widest > 1) {
     console.log(
       `[orchestrator] ${stats.tasks} tasks in ${stats.layers} batch(es); up to ${stats.widest} could run at once ` +
-        "(the orchestrator still runs one at a time — concurrent execution needs file locking, T35).",
+        "(the orchestrator still runs one task at a time; T35's lock only makes that safe against " +
+        "two processes racing on the same task, it doesn't make batches run concurrently).",
     );
+  }
+}
+
+/**
+ * T32's "real-time" half of the dashboard — polls the store and re-renders `printListing`'s
+ * table. There is no server/UI layer in this project (CLAUDE.md's stack is Next.js for the
+ * *product* this pipeline builds, not for the pipeline's own tooling), so "real-time" here means
+ * a terminal view that refreshes itself, the same shape every other CLI in this space (docker
+ * stats, kubectl get pods --watch) uses for the same job.
+ *
+ * `iterations`/`sleep`/`clear` are injectable so this is actually testable — the default `sleep`
+ * really waits and `clear` really clears the screen, but a test can run a handful of iterations
+ * instantly and assert on what got rendered, rather than needing to kill a runaway process.
+ */
+export async function watchListing(
+  registry: TaskRegistry,
+  opts: { intervalMs: number; iterations: number; sleep?: (ms: number) => Promise<void>; clear?: () => void },
+): Promise<void> {
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const clear = opts.clear ?? (() => console.clear());
+  for (let i = 0; i < opts.iterations; i++) {
+    clear();
+    console.log(`[orchestrator] watching — refreshes every ${Math.round(opts.intervalMs / 1000)}s, Ctrl+C to stop`);
+    printListing(registry);
+    if (i < opts.iterations - 1) await sleep(opts.intervalMs);
   }
 }
 
@@ -283,7 +333,187 @@ function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orches
   return registry.create({ taskId, classification, dependsOn: args.dependsOn });
 }
 
+const VERBS = ["run", "status", "approve", "retry", "resume", "pause", "cancel"] as const;
+type Verb = (typeof VERBS)[number];
+
+function isVerb(s: string | undefined): s is Verb {
+  return s !== undefined && (VERBS as readonly string[]).includes(s);
+}
+
+/** Flags a verb accepts that take a value — their value must never be mistaken for the positional <task-id>. */
+const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval"]);
+
+/** First non-flag token in a verb's remaining args — the positional <task-id>, skipping over any value-flag's own argument. */
+function positionalArg(rest: string[]): string | undefined {
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i].startsWith("--")) {
+      if (VERB_VALUE_FLAGS.has(rest[i])) i++; // skip its value, not just the flag itself
+      continue;
+    }
+    return rest[i];
+  }
+  return undefined;
+}
+
+function flagValue(rest: string[], flag: string): string | undefined {
+  const i = rest.indexOf(flag);
+  return i === -1 ? undefined : rest[i + 1];
+}
+
+function openStore(projectRoot: string, stateDb?: string): { store: SqliteTaskStore; registry: TaskRegistry } {
+  const store = new SqliteTaskStore(stateDb ?? defaultStateDbPath(projectRoot));
+  const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(projectRoot) });
+  return { store, registry };
+}
+
+/** `status [<task-id>] [--watch] [--interval <seconds>]` — no id lists everything, an id shows one task's detail. */
+async function runStatusVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const stateDb = flagValue(rest, "--state-db");
+  const taskId = positionalArg(rest);
+  const watch = rest.includes("--watch");
+  const intervalSeconds = Number(flagValue(rest, "--interval") ?? "5");
+
+  const { store, registry } = openStore(projectRoot, stateDb);
+  try {
+    if (watch) {
+      // Real-time is "until interrupted" outside a test; iterations is only ever overridden by
+      // one, from inside the test suite, to keep watchListing from actually looping forever.
+      await watchListing(registry, { intervalMs: Math.max(1, intervalSeconds) * 1000, iterations: Infinity });
+      return 0;
+    }
+    if (!taskId) {
+      printListing(registry);
+      return 0;
+    }
+    const task = store.loadTask(taskId);
+    if (!task) {
+      console.error(`[orchestrator] no such task: ${taskId}`);
+      return 1;
+    }
+    const status = describeStatus(task, store.listTasks());
+    const agent = status.currentAgent ? ` agent=${status.currentAgent}` : "";
+    console.log(`[orchestrator] task ${taskId}: ${status.kind} at ${status.state}${agent}`);
+    if (status.reason) console.log(`[orchestrator]   ${status.reason}`);
+    if (status.waitingOn?.length) console.log(`[orchestrator]   waiting on: ${status.waitingOn.join(", ")}`);
+    const runs = store.runsForTask(taskId);
+    if (runs.length > 0) console.log(new RunLog(runs).summary(taskId));
+    return 0;
+  } finally {
+    registry.close();
+  }
+}
+
+/** `approve <task-id> [--yes|--no]` — resolves the current WAITING_FOR_HUMAN gate without the full run loop. Interactive (like `run`'s own prompt) if neither flag is given. */
+async function runApproveVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const stateDb = flagValue(rest, "--state-db");
+  const taskId = positionalArg(rest);
+  if (!taskId) throw new CliUsageError("approve: a task id is required");
+  const forcedYes = rest.includes("--yes");
+  const forcedNo = rest.includes("--no");
+
+  const { store, registry } = openStore(projectRoot, stateDb);
+  try {
+    const stored = store.loadTask(taskId);
+    if (!stored) throw new CliUsageError(`approve: task ${taskId} is not in this store`);
+    if (stored.cancelled) {
+      console.log(`[orchestrator] task ${taskId} is cancelled — nothing to approve.`);
+      return 1;
+    }
+
+    const orchestrator = registry.resume(taskId); // read/decide only — does not check cross-task dependencies, same as inspecting any other settled task
+    const status = orchestrator.status();
+    if (status.kind !== "WAITING_FOR_HUMAN") {
+      console.log(`[orchestrator] task ${taskId} is not waiting on a human decision right now (status: ${status.kind}).`);
+      return 1;
+    }
+
+    const field = approvalFieldFor(status.approvalType);
+    const label = status.approvalType ? `${status.approvalType}` : `${status.from} -> ${status.to}`;
+    console.log(`[orchestrator] human decision required (${label}): ${status.reason}`);
+    if (status.approvalType) console.log(`[orchestrator]   ${APPROVAL_PROMPT[status.approvalType]}`);
+
+    const approved = forcedYes ? true : forcedNo ? false : await confirm(`Approve ${label}?`);
+    if (status.approvalType) {
+      orchestrator.decideApproval(status.approvalType, approved, { by: process.env.USER ?? process.env.USERNAME });
+    } else if (field) {
+      orchestrator.provideHumanApproval(field, approved);
+    } else {
+      console.log(`[orchestrator] this CLI doesn't know how to resolve that gate.`);
+      return 2;
+    }
+    registry.refreshStateView();
+    console.log(approved ? `[orchestrator] approved.` : `[orchestrator] rejected — recorded, will not be asked again on resume.`);
+    return approved ? 0 : 3;
+  } finally {
+    registry.close();
+  }
+}
+
+/** `pause <task-id>` */
+async function runPauseVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const stateDb = flagValue(rest, "--state-db");
+  const taskId = positionalArg(rest);
+  if (!taskId) throw new CliUsageError("pause: a task id is required");
+
+  const { registry } = openStore(projectRoot, stateDb);
+  try {
+    registry.pause(taskId);
+    console.log(`[orchestrator] task ${taskId} paused.`);
+    return 0;
+  } finally {
+    registry.close();
+  }
+}
+
+/** `cancel <task-id> [--reason <text>]` */
+async function runCancelVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const stateDb = flagValue(rest, "--state-db");
+  const taskId = positionalArg(rest);
+  if (!taskId) throw new CliUsageError("cancel: a task id is required");
+  const reason = flagValue(rest, "--reason") ?? "no reason given";
+
+  const { registry } = openStore(projectRoot, stateDb);
+  try {
+    registry.cancel(taskId, reason);
+    console.log(`[orchestrator] task ${taskId} cancelled: ${reason}`);
+    return 0;
+  } finally {
+    registry.close();
+  }
+}
+
+/** Dispatches a T31 verb, translating the ones that are really the existing engine in disguise (`run`, `resume`, `retry`) rather than duplicating the step loop. */
+async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): Promise<number> {
+  switch (verb) {
+    case "run":
+      return runCli(rest, defaultProjectRoot);
+    case "resume":
+    case "retry": {
+      const taskId = positionalArg(rest);
+      if (!taskId) throw new CliUsageError(`${verb}: a task id is required`);
+      const flags = rest.filter((a) => a !== taskId);
+      return runCli(["--resume", "--task-id", taskId, ...flags], defaultProjectRoot);
+    }
+    case "status":
+      return runStatusVerb(rest, defaultProjectRoot);
+    case "approve":
+      return runApproveVerb(rest, defaultProjectRoot);
+    case "pause":
+      return runPauseVerb(rest, defaultProjectRoot);
+    case "cancel":
+      return runCancelVerb(rest, defaultProjectRoot);
+  }
+}
+
 export async function runCli(argv: string[], defaultProjectRoot: string): Promise<number> {
+  if (isVerb(argv[0])) {
+    return runVerb(argv[0], argv.slice(1), defaultProjectRoot);
+  }
+
   const args = parseArgs(argv, defaultProjectRoot);
 
   if (args.checkContracts) {
@@ -361,6 +591,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
 
   const store = new SqliteTaskStore(args.stateDb ?? defaultStateDbPath(args.projectRoot));
   const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(args.projectRoot) });
+  let lockedTaskId: string | undefined;
 
   try {
     if (args.list) {
@@ -369,6 +600,37 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     }
 
     const taskId = args.taskId!;
+
+    // T35: refuse to step this task while another orchestrator process already holds it. Held
+    // for the rest of this function, released in the outer `finally` below, alongside the store.
+    try {
+      acquireTaskLock(args.projectRoot, taskId);
+    } catch (e) {
+      if (e instanceof TaskLockedError) {
+        console.error(`[orchestrator] ${e.message}`);
+        return 4;
+      }
+      throw e;
+    }
+    lockedTaskId = taskId;
+
+    // T31: pause/cancel are a human override the orchestrator's own state machine knows nothing
+    // about (see taskRegistry.ts's pause()/cancel()) — enforced here, once, before anything else
+    // touches the task, rather than inside Orchestrator itself.
+    const stored = store.loadTask(taskId);
+    if (stored?.cancelled) {
+      console.log(`[orchestrator] task ${taskId} is cancelled (${stored.cancelReason ?? "no reason recorded"}) — nothing to run.`);
+      return 1;
+    }
+    if (stored?.paused) {
+      if (!args.resume) {
+        console.log(`[orchestrator] task ${taskId} is paused — use \`resume\`/\`retry\` (or --resume) to continue it.`);
+        return 1;
+      }
+      registry.unpause(taskId);
+      console.log(`[orchestrator] task ${taskId} was paused — resuming clears the pause and continues.`);
+    }
+
     const orchestrator = openTask(registry, args, taskId);
     const executor = createClaudeCliExecutor({
       projectRoot: args.projectRoot,
@@ -435,6 +697,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       }
     }
   } finally {
+    if (lockedTaskId) releaseTaskLock(args.projectRoot, lockedTaskId);
     registry.close();
   }
 }

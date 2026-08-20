@@ -142,6 +142,15 @@ export class Orchestrator {
   private lastFailure: StructuredFailure | null;
   private approvals: ApprovalLedger;
   private lastStatusKey: string | undefined;
+  /**
+   * T31's pause/cancel — managed by `TaskRegistry.pause()`/`cancel()` directly against the
+   * store, never by this class itself (they are a human override, orthogonal to the pipeline's
+   * own state machine). Carried here only so a `snapshot()` taken mid-run echoes back whatever
+   * was loaded instead of silently resetting it to false/null on the next save.
+   */
+  private paused: boolean;
+  private cancelled: boolean;
+  private cancelReason: string | null;
   /** The state the task was in when the current failure arrived, captured before retryPolicy moves it. */
   private stateBeforeFailure: TaskState = TaskState.CREATED;
   /** What the last failure resolved to (T07). Exposed for the CLI and the run log; not persisted — it is derived, not state. */
@@ -167,6 +176,9 @@ export class Orchestrator {
       this.blockedReason = restore.blockedReason ?? undefined;
       this.lastFailure = restore.lastFailure;
       this.approvals = [...restore.approvals];
+      this.paused = restore.paused;
+      this.cancelled = restore.cancelled;
+      this.cancelReason = restore.cancelReason;
       // Seeded from the store so budget accounting (item 12) counts what the
       // earlier process already spent — a resumed task must not get a fresh
       // token allowance just because it restarted.
@@ -179,6 +191,9 @@ export class Orchestrator {
       this.blockedReason = undefined;
       this.lastFailure = null;
       this.approvals = [];
+      this.paused = false;
+      this.cancelled = false;
+      this.cancelReason = null;
       this.runLog = new RunLog();
       this.store.createTask(
         newPersistedTask({
@@ -246,6 +261,9 @@ export class Orchestrator {
       pipelineCursor: this.pipelineCursor,
       blockedReason: this.blockedReason ?? null,
       lastFailure: this.lastFailure,
+      paused: this.paused,
+      cancelled: this.cancelled,
+      cancelReason: this.cancelReason,
     };
   }
 

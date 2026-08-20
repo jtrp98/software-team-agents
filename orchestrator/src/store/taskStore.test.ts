@@ -17,6 +17,45 @@ import {
   type TaskStore,
 } from "./taskStore.js";
 import type { RunRecord } from "../observability/runLog.js";
+import { TaskRegistry } from "../orchestrator/taskRegistry.js";
+import type { AgentExecutor, AgentExecutorResult } from "../orchestrator/orchestrator.js";
+import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
+
+// Deliberately a two-stage pipeline (backend-engineer -> qa-engineer) with no human gate at all
+// (no system-analyst/schema-confirmation, no deploy approval) — these tests are about
+// resume/idempotency mechanics, not about driving through the five always-human stops, which
+// are covered elsewhere (gatePolicy.test.ts et al). Same classification sampleTask() already uses.
+const trivial = () => classifyTask({ isClearBugFix: true, touchesBackend: true });
+
+function passingQaReport(): QaReportArtifact {
+  return {
+    taskId: "T-1",
+    status: "PASS",
+    mode: "FULL",
+    requirements: {},
+    tests: { passed: 1, failed: 0 },
+    evidence: ["ok"],
+    risks: [],
+    hasAutomatedTests: true,
+    unverifiedBehaviour: [],
+  };
+}
+
+/** Every stage PASSes immediately (qa-engineer additionally reports a passing QA_REPORT artifact, since the QA->READY_TO_DEPLOY gate checks that, not just outcome.result) — enough to drive a task from CREATED to DEPLOYED without a human gate in the way. */
+function makeExecutor(overrides: Partial<Record<AgentStage, () => AgentExecutorResult>> = {}): AgentExecutor {
+  return (req) => {
+    const override = overrides[req.stage];
+    if (override) return override();
+    if (req.stage === AgentStage.QA_ENGINEER) {
+      return {
+        outcome: { tokens: 10, cost: 0.001, result: "PASS" },
+        artifactType: ArtifactType.QA_REPORT,
+        artifact: passingQaReport(),
+      };
+    }
+    return { outcome: { tokens: 10, cost: 0.001, result: "PASS" } };
+  };
+}
 
 function sampleTask(taskId = "T-1"): PersistedTask {
   const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
@@ -217,6 +256,83 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       db.pragma("user_version = 99");
       db.close();
       expect(() => new SqliteTaskStore(file)).toThrow(SchemaVersionMismatchError);
+    } finally {
+      fs.rmSync(path.dirname(file), { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * T33 (Resume after session death) — the store round-trip test above proves the DATA survives;
+   * this proves a task can actually be picked back up and driven to completion by a brand-new
+   * `Orchestrator`/`TaskRegistry` pair built on a reopened file, simulating the process that was
+   * running it having been killed and a fresh one started in its place.
+   */
+  it("a task interrupted mid-pipeline is fully drivable to DEPLOYED by a fresh process reopening the same file", async () => {
+    const file = tmpDbPath();
+    try {
+      const executor = makeExecutor({});
+
+      const firstStore = new SqliteTaskStore(file);
+      const firstRegistry = new TaskRegistry({ store: firstStore });
+      const orch1 = firstRegistry.create({ taskId: "T-1", classification: trivial() });
+      await orch1.step(executor); // one stage in, then the process "dies"
+      expect(orch1.status().kind).toBe("RUNNING");
+      firstStore.close();
+
+      // A brand-new store instance and a brand-new TaskRegistry — nothing here is the same
+      // in-memory object as above; only the file on disk connects them.
+      const secondStore = new SqliteTaskStore(file);
+      const secondRegistry = new TaskRegistry({ store: secondStore });
+      const orch2 = secondRegistry.open("T-1");
+
+      let status = orch2.status();
+      let steps = 0;
+      while (status.kind !== "DEPLOYED" && steps++ < 20) {
+        if (status.kind === "WAITING_FOR_HUMAN") {
+          // The bugfix pipeline has no schema gate, but deploy approval is always human —
+          // one of the five stops that hold regardless of classification.
+          orch2.provideHumanApproval("humanApproved", true);
+          status = orch2.status();
+          continue;
+        }
+        status = await orch2.step(executor);
+      }
+      expect(status.kind).toBe("DEPLOYED");
+      secondStore.close();
+    } finally {
+      // better-sqlite3's WAL sidecar files can hold a Windows file handle open for a moment
+      // after close() returns, under heavier write activity like this test's — the test's own
+      // assertions above already ran; a leaked temp dir here is harmless, unlike a failed
+      // assertion would be.
+      try {
+        fs.rmSync(path.dirname(file), { recursive: true, force: true });
+      } catch {
+        /* see comment above */
+      }
+    }
+  });
+
+  /**
+   * T34 (Idempotency) — the concrete guarantee TASKS.md asks for ("รันซ้ำต้องไม่สร้าง...ซ้ำ") is
+   * that re-issuing the same task_id never produces a second, competing pipeline for the same
+   * work. `TaskAlreadyExistsError` (already exercised on the in-memory store above) is the same
+   * guard here, backed by SQLite's own `task_id TEXT PRIMARY KEY` — this proves it holds across a
+   * process restart too, not just within one running process's memory.
+   */
+  it("re-creating the same task_id after a restart still throws, rather than silently starting a second pipeline for it", () => {
+    const file = tmpDbPath();
+    try {
+      const first = new SqliteTaskStore(file);
+      const firstRegistry = new TaskRegistry({ store: first });
+      firstRegistry.create({ taskId: "T-1", classification: trivial() });
+      first.close();
+
+      const second = new SqliteTaskStore(file);
+      const secondRegistry = new TaskRegistry({ store: second });
+      expect(() => secondRegistry.create({ taskId: "T-1", classification: trivial() })).toThrow(
+        TaskAlreadyExistsError,
+      );
+      second.close();
     } finally {
       fs.rmSync(path.dirname(file), { recursive: true, force: true });
     }

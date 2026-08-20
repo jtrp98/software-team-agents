@@ -170,3 +170,50 @@ describe("TaskRegistry as a dependency graph (T10/T11 wiring)", () => {
     expect(() => registry.readyLayers()).not.toThrow();
   });
 });
+
+describe("TaskRegistry pause/cancel (T31)", () => {
+  it("pause sets the flag, and the listing reports PAUSED", () => {
+    const reg = registry();
+    reg.create({ taskId: "T-1", classification: trivial() });
+    reg.pause("T-1");
+    expect(reg.list()[0].status.kind).toBe("PAUSED");
+  });
+
+  it("unpause clears the flag, and the listing goes back to a normal status", () => {
+    const reg = registry();
+    reg.create({ taskId: "T-1", classification: trivial() });
+    reg.pause("T-1");
+    reg.unpause("T-1");
+    expect(reg.list()[0].status.kind).not.toBe("PAUSED");
+  });
+
+  it("unpause on a task that was never paused is a no-op, not an error", () => {
+    const reg = registry();
+    reg.create({ taskId: "T-1", classification: trivial() });
+    expect(() => reg.unpause("T-1")).not.toThrow();
+  });
+
+  it("cancel sets the flag and records the reason, and the listing reports CANCELLED", () => {
+    const reg = registry();
+    reg.create({ taskId: "T-1", classification: trivial() });
+    reg.cancel("T-1", "duplicate of T-9, abandoned by the requester");
+    const listing = reg.list()[0];
+    expect(listing.status.kind).toBe("CANCELLED");
+    expect(listing.status.reason).toBe("duplicate of T-9, abandoned by the requester");
+  });
+
+  it("cancel outranks pause when both are set — cancel is the more final of the two", () => {
+    const reg = registry();
+    reg.create({ taskId: "T-1", classification: trivial() });
+    reg.pause("T-1");
+    reg.cancel("T-1", "abandoned");
+    expect(reg.list()[0].status.kind).toBe("CANCELLED");
+  });
+
+  it("pause/cancel/unpause on an unknown task throws TaskNotFoundError, same as every other lookup here", () => {
+    const reg = registry();
+    expect(() => reg.pause("nope")).toThrow(TaskNotFoundError);
+    expect(() => reg.cancel("nope", "x")).toThrow(TaskNotFoundError);
+    expect(() => reg.unpause("nope")).toThrow(TaskNotFoundError);
+  });
+});

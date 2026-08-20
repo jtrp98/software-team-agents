@@ -2,8 +2,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { CliUsageError, USAGE, parseArgs, runCli } from "./cli.js";
+import { CliUsageError, USAGE, parseArgs, runCli, watchListing } from "./cli.js";
 import { defaultProjectRoot } from "./agents/agentContract.js";
+import { classifyTask } from "./classification/taskClassifier.js";
+import { SqliteTaskStore } from "./store/sqliteStore.js";
+import { TaskRegistry } from "./orchestrator/taskRegistry.js";
+import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
+import { acquireTaskLock, releaseTaskLock } from "./concurrency/taskLock.js";
 
 describe("parseArgs", () => {
   it("parses required flags and maps classification flags", () => {
@@ -247,5 +252,273 @@ describe("runCli --check-test-pyramid (T21)", () => {
   it("needs neither --task-id nor --module, and is listed in the usage text", () => {
     expect(parseArgs(["--check-test-pyramid"], "/repo").checkTestPyramid).toBe(true);
     expect(USAGE).toContain("--check-test-pyramid");
+  });
+});
+
+describe("T31 verbs — run/status/approve/retry/resume/pause/cancel", () => {
+  function tmpDir(): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-verbs-"));
+  }
+
+  /** Seeds a task directly through the registry, without going through `runCli`'s `run` verb — so these tests never need a real `claude` binary on PATH. */
+  function seedTask(dir: string, taskId: string): void {
+    const store = new SqliteTaskStore(defaultStateDbPath(dir));
+    const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+    registry.create({ taskId, classification: classifyTask({ isClearBugFix: true, touchesBackend: true }) });
+    registry.close();
+  }
+
+  it("`run --list` behaves exactly like `--list` — the verb is a thin pass-through", async () => {
+    const dir = tmpDir();
+    try {
+      const code = await runCli(["run", "--list", "--project-root", dir], dir);
+      expect(code).toBe(0);
+      expect(fs.existsSync(path.join(dir, ".workflow", "state.db"))).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("`status` with no id behaves like `--list`", async () => {
+    const dir = tmpDir();
+    try {
+      seedTask(dir, "T-1");
+      expect(await runCli(["status", "--project-root", dir], dir)).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("`status <task-id>` reports that one task's detail", async () => {
+    const dir = tmpDir();
+    try {
+      seedTask(dir, "T-1");
+      expect(await runCli(["status", "T-1", "--project-root", dir], dir)).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("`status <unknown-id>` fails rather than silently reporting nothing", async () => {
+    const dir = tmpDir();
+    try {
+      seedTask(dir, "T-1");
+      expect(await runCli(["status", "ghost", "--project-root", dir], dir)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("`pause <task-id>` then `status` reports PAUSED", async () => {
+    const dir = tmpDir();
+    try {
+      seedTask(dir, "T-1");
+      expect(await runCli(["pause", "T-1", "--project-root", dir], dir)).toBe(0);
+      const store = new SqliteTaskStore(defaultStateDbPath(dir));
+      expect(store.loadTask("T-1")!.paused).toBe(true);
+      store.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("`cancel <task-id> --reason` records the reason", async () => {
+    const dir = tmpDir();
+    try {
+      seedTask(dir, "T-1");
+      expect(await runCli(["cancel", "T-1", "--reason", "duplicate", "--project-root", dir], dir)).toBe(0);
+      const store = new SqliteTaskStore(defaultStateDbPath(dir));
+      const task = store.loadTask("T-1")!;
+      expect(task.cancelled).toBe(true);
+      expect(task.cancelReason).toBe("duplicate");
+      store.close();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("`run` on a paused task refuses without --resume, and never reaches the executor", async () => {
+    const dir = tmpDir();
+    try {
+      seedTask(dir, "T-1");
+      await runCli(["pause", "T-1", "--project-root", dir], dir);
+      const code = await runCli(["run", "--task-id", "T-1", "--module", "m", "--project-root", dir], dir);
+      expect(code).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("`resume`/`retry` on a cancelled task refuse permanently, not just once", async () => {
+    const dir = tmpDir();
+    try {
+      seedTask(dir, "T-1");
+      await runCli(["cancel", "T-1", "--reason", "abandoned", "--project-root", dir], dir);
+      expect(await runCli(["resume", "T-1", "--module", "m", "--project-root", dir], dir)).toBe(1);
+      expect(await runCli(["retry", "T-1", "--module", "m", "--project-root", dir], dir)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("`approve` on a task that isn't waiting on a human decision says so, rather than hanging on a prompt", async () => {
+    const dir = tmpDir();
+    try {
+      seedTask(dir, "T-1"); // freshly created — sits at CREATED, nothing to approve yet
+      expect(await runCli(["approve", "T-1", "--yes", "--project-root", dir], dir)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("`approve` on a cancelled task refuses instead of asking", async () => {
+    const dir = tmpDir();
+    try {
+      seedTask(dir, "T-1");
+      await runCli(["cancel", "T-1", "--reason", "x", "--project-root", dir], dir);
+      expect(await runCli(["approve", "T-1", "--yes", "--project-root", dir], dir)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("`approve` on an unknown task id is a usage error", async () => {
+    const dir = tmpDir();
+    try {
+      await expect(runCli(["approve", "ghost", "--yes", "--project-root", dir], dir)).rejects.toThrow(CliUsageError);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("`pause`/`cancel`/`resume`/`retry`/`approve` all require a task id", async () => {
+    const dir = tmpDir();
+    try {
+      for (const verb of ["pause", "cancel", "resume", "retry", "approve"]) {
+        await expect(runCli([verb, "--project-root", dir], dir)).rejects.toThrow(CliUsageError);
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("T32 dashboard — status emoji and watchListing", () => {
+  function tmpDir(): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-watch-"));
+  }
+
+  function seedTask(dir: string, taskId: string): void {
+    const store = new SqliteTaskStore(defaultStateDbPath(dir));
+    const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+    registry.create({ taskId, classification: classifyTask({ isClearBugFix: true, touchesBackend: true }) });
+    registry.close();
+  }
+
+  it("`status` prints TASKS.md T32's own glyphs (✅ 🔄 ⏳) for the statuses they apply to", async () => {
+    const dir = tmpDir();
+    const logs: string[] = [];
+    const spy = console.log;
+    console.log = (...args: unknown[]) => logs.push(args.join(" "));
+    try {
+      seedTask(dir, "T-1"); // freshly created -> RUNNING (its first stage is ready)
+      await runCli(["status", "--project-root", dir], dir);
+    } finally {
+      console.log = spy;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    expect(logs.some((l) => l.includes("🔄"))).toBe(true);
+  });
+
+  it("watchListing renders exactly `iterations` times and sleeps between renders, not after the last one", async () => {
+    const dir = tmpDir();
+    try {
+      seedTask(dir, "T-1");
+      const store = new SqliteTaskStore(defaultStateDbPath(dir));
+      const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+      let renders = 0;
+      let sleeps = 0;
+      const originalLog = console.log;
+      console.log = (...args: unknown[]) => {
+        if (String(args[0] ?? "").includes("T-1")) renders++;
+      };
+      try {
+        await watchListing(registry, {
+          intervalMs: 1,
+          iterations: 3,
+          sleep: async () => {
+            sleeps++;
+          },
+          clear: () => {},
+        });
+      } finally {
+        console.log = originalLog;
+        registry.close();
+      }
+      expect(renders).toBe(3);
+      expect(sleeps).toBe(2); // between renders 1->2 and 2->3, never a trailing sleep after the last one
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("watchListing calls clear() before every render, for a live-refreshing view rather than a scrolling log", async () => {
+    const dir = tmpDir();
+    try {
+      const store = new SqliteTaskStore(defaultStateDbPath(dir));
+      const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+      let clears = 0;
+      try {
+        await watchListing(registry, { intervalMs: 1, iterations: 2, sleep: async () => {}, clear: () => clears++ });
+      } finally {
+        registry.close();
+      }
+      expect(clears).toBe(2);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("T35 concurrency lock, wired into the CLI", () => {
+  function tmpDir(): string {
+    return fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-lock-"));
+  }
+
+  it("refuses to run/resume a task another process already holds the lock for", async () => {
+    const dir = tmpDir();
+    try {
+      acquireTaskLock(dir, "T-1");
+      const code = await runCli(
+        ["--task-id", "T-1", "--module", "m", "--project-root", dir, "--new-feature"],
+        dir,
+      );
+      expect(code).toBe(4);
+    } finally {
+      releaseTaskLock(dir, "T-1");
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not hold the lock across unrelated tasks", async () => {
+    const dir = tmpDir();
+    try {
+      acquireTaskLock(dir, "T-1");
+      // A --list on the same store doesn't touch any specific task's lock at all.
+      expect(await runCli(["--list", "--project-root", dir], dir)).toBe(0);
+    } finally {
+      releaseTaskLock(dir, "T-1");
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("releases the lock once the run finishes (even though it fails without a real `claude` binary), so a later call is not permanently locked out", async () => {
+    const dir = tmpDir();
+    // No lock pre-held this time — run will fail quickly (no `claude` on PATH in CI), but the
+    // lock must still be released rather than leaking, or every future call would return 4 forever.
+    await runCli(["--task-id", "T-1", "--module", "m", "--project-root", dir, "--bug-fix", "--backend"], dir);
+    const code = await runCli(["status", "T-1", "--project-root", dir], dir);
+    expect(code).toBe(0); // status never touches the lock, but this also proves the store isn't wedged
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

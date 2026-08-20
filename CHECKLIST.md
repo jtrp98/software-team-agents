@@ -45,11 +45,11 @@
 - [x] T30 — Agent Quality Score
 
 ## 🟢 P2 — Developer Experience
-- [ ] T31 — CLI สำหรับ Orchestrator
-- [ ] T32 — Dashboard
-- [ ] T33 — Resume หลัง Session ตาย
-- [ ] T34 — Idempotency
-- [ ] T35 — Concurrency Lock
+- [x] T31 — CLI สำหรับ Orchestrator
+- [x] T32 — Dashboard
+- [x] T33 — Resume หลัง Session ตาย
+- [x] T34 — Idempotency
+- [x] T35 — Concurrency Lock
 
 ## 🟣 P3 — Architecture ขั้นสูง
 - [ ] T36 — Event-driven Architecture
