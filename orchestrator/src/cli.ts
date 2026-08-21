@@ -70,6 +70,7 @@ import {
   runAdoptionStage,
 } from "./adoption/adoptionRunner.js";
 import { readAdoptionState } from "./adoption/adoptionStore.js";
+import { validateAdoption } from "./adoption/adoptionValidation.js";
 import type { AdoptionStageId } from "./adoption/adoptionModel.js";
 
 /**
@@ -1259,15 +1260,26 @@ async function runRolesVerb(rest: string[], defaultProjectRoot: string): Promise
  */
 async function runAdoptVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const sourceRoot = flagValue(rest, "--source-root") ?? projectRoot;
+  if (sourceRoot !== projectRoot) {
+    if (!fs.existsSync(projectRoot) || !fs.statSync(projectRoot).isDirectory()) throw new CliUsageError(`adopt: Knowledge root is not an existing directory: ${projectRoot}`);
+    if (!fs.existsSync(sourceRoot) || !fs.statSync(sourceRoot).isDirectory()) throw new CliUsageError(`adopt: legacy source root is not an existing directory: ${sourceRoot}`);
+    const knowledgeCanonical = fs.realpathSync.native(projectRoot);
+    const sourceCanonical = fs.realpathSync.native(sourceRoot);
+    if (knowledgeCanonical === sourceCanonical || knowledgeCanonical.startsWith(`${sourceCanonical}${path.sep}`) || sourceCanonical.startsWith(`${knowledgeCanonical}${path.sep}`)) {
+      throw new CliUsageError("adopt: --source-root must be separate from the Knowledge root; refusing a source/destination overlap");
+    }
+  }
   // T113 pilot finding: not every real adoption target has its own `_docs/`
   // right at the repo root — a monorepo or a per-client subtree may nest it.
   // Repo-relative so a person types the same thing they'd see in a listing
-  // (`--docs-root _docs/hkt`), resolved against `projectRoot` the same way
+  // (`--docs-root _docs/hkt`), resolved against `sourceRoot` so a three-repo
+  // adoption reads the Target while writing only to the Knowledge root.
   // every other path this CLI reports already is. No state persists this
   // across invocations (same as `--project-root` itself) — pass it on every
   // `adopt` call for this project, `plan` included.
   const docsRootFlag = flagValue(rest, "--docs-root");
-  const docsRoot = docsRootFlag !== undefined ? path.join(projectRoot, docsRootFlag) : undefined;
+  const docsRoot = docsRootFlag !== undefined ? path.join(sourceRoot, docsRootFlag) : undefined;
   const args = positionalArgs(rest);
   const now = new Date().toISOString();
   const SUB_COMMANDS = ["plan", "status", "start", "ack", "run", "approve", "validate"];
@@ -1277,7 +1289,7 @@ async function runAdoptVerb(rest: string[], defaultProjectRoot: string): Promise
   }
 
   if (sub === "plan") {
-    const plan = planAdoption(projectRoot, now, docsRoot);
+    const plan = planAdoption(projectRoot, now, docsRoot, sourceRoot);
     if (plan.preflight.blockers.length > 0) {
       console.log(`[orchestrator] preflight found work in flight — this would block \`adopt start\` until acknowledged:`);
       for (const b of plan.preflight.blockers) console.log(`  ! ${b}`);
@@ -1314,7 +1326,7 @@ async function runAdoptVerb(rest: string[], defaultProjectRoot: string): Promise
     }
 
     if (sub === "start") {
-      const state = initAdoption(projectRoot, now, docsRoot);
+      const state = initAdoption(projectRoot, now, docsRoot, sourceRoot);
       console.log(`[orchestrator] adoption started — status: ${state.status}`);
       if (state.preflight && state.preflight.blockers.length > 0) {
         console.log("  blocked on:");
@@ -1337,7 +1349,7 @@ async function runAdoptVerb(rest: string[], defaultProjectRoot: string): Promise
       if (!stageId || !(ALL_ADOPTION_STAGES as readonly string[]).includes(stageId)) {
         throw new CliUsageError(`adopt run: a stage id is required — one of ${ALL_ADOPTION_STAGES.join(", ")}`);
       }
-      const state = runAdoptionStage(stageId as AdoptionStageId, projectRoot, now, docsRoot);
+      const state = runAdoptionStage(stageId as AdoptionStageId, projectRoot, now, docsRoot, sourceRoot);
       const record = state.stages.find((s) => s.id === stageId)!;
       console.log(
         `[orchestrator] ${stageId}: ${record.status}${record.note ? ` — ${record.note}` : ""} — status: ${state.status}`,
@@ -1360,6 +1372,12 @@ async function runAdoptVerb(rest: string[], defaultProjectRoot: string): Promise
     // validate
     const by = flagValue(rest, "--by");
     if (!by) throw new CliUsageError("adopt validate: --by <name> is required");
+    const report = validateAdoption(projectRoot, now, docsRoot, sourceRoot);
+    if (!report.ok) {
+      console.error("[orchestrator] adoption validation failed:");
+      for (const problem of report.problems) console.error(`  ! ${problem}`);
+      return 1;
+    }
     const state = recordAdoptionValidation(by, projectRoot, now);
     console.log(`[orchestrator] adoption validated by ${by} — status: ${state.status}`);
     return 0;

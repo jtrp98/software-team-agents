@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import { classifyTask } from "../classification/taskClassifier.js";
@@ -20,9 +19,7 @@ const registry: TargetRegistry = {
 };
 const both = () => classifyTask({ isClearBugFix: true, touchesBackend: true, touchesFrontend: true });
 function initRepository(directory: string): void {
-  fs.mkdirSync(directory, { recursive: true });
-  const result = spawnSync("git", ["init", "--quiet", directory], { encoding: "utf8" });
-  if (result.status !== 0) throw new Error(result.stderr || "could not create test Git repository");
+  fs.mkdirSync(path.join(directory, ".git"), { recursive: true });
 }
 
 describe("Phase 2 task Target bindings", () => {
@@ -78,6 +75,27 @@ describe("Phase 2 preflight", () => {
       let remoteCalls = 0;
       expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, { frameworkRoot: framework, installationConfigPath: config, verifyRemote: () => { remoteCalls++; } })).toThrow(/frontend.*no local path mapping/);
       expect(remoteCalls).toBe(0);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("verifies the local origin metadata without invoking Git and rejects a mismatch", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "three-repo-origin-"));
+    try {
+      const framework = path.join(root, "framework");
+      const knowledge = path.join(root, "knowledge");
+      const target = path.join(root, "target");
+      initRepository(framework); initRepository(knowledge); initRepository(target);
+      fs.writeFileSync(path.join(target, ".git", "config"), "[remote \"origin\"]\n\turl = https://github.com/acme/backend.git\n");
+      fs.mkdirSync(path.join(knowledge, ".workflow"));
+      fs.writeFileSync(path.join(knowledge, "targets.yaml"), "schema_version: 1\ntargets:\n  - target_id: backend\n    name: Backend\n    remote_url: https://github.com/acme/backend.git\n    status: active\n");
+      fs.writeFileSync(path.join(knowledge, ".workflow", "targets.local.yaml"), `schema_version: 1\ntargets:\n  backend:\n    path: ${JSON.stringify(target)}\n`);
+      const config = path.join(root, "installation.yaml");
+      fs.writeFileSync(config, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\n`);
+      const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+      const task = newPersistedTask({ taskId: "origin", classification, machine: initTaskMachine(classification.pipeline, false), now: 1, targetBindings: { backend_target: "backend", frontend_target: null } });
+      expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, { frameworkRoot: framework, installationConfigPath: config })).not.toThrow();
+      fs.writeFileSync(path.join(target, ".git", "config"), "[remote \"origin\"]\n\turl = https://github.com/acme/other.git\n");
+      expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, { frameworkRoot: framework, installationConfigPath: config })).toThrow(/expected canonical remote_url/);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 });

@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { assertFrameworkManagedPaths, ownerOfPath } from "./ownership.js";
 import { assertStandaloneKnowledgeRoot, configureKnowledgeRoot, loadInstallationConfig } from "./installation.js";
@@ -14,9 +13,7 @@ function tempRoot(): string { const root = fs.mkdtempSync(path.join(os.tmpdir(),
 function write(file: string, body: string): void { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, body, "utf8"); }
 function registryYaml(entries: string): string { return `schema_version: 1\ntargets:\n${entries}`; }
 function initRepository(directory: string): void {
-  fs.mkdirSync(directory, { recursive: true });
-  const result = spawnSync("git", ["init", "--quiet", directory], { encoding: "utf8" });
-  if (result.status !== 0) throw new Error(result.stderr || "could not create test Git repository");
+  fs.mkdirSync(path.join(directory, ".git"), { recursive: true });
 }
 afterEach(() => { while (roots.length) fs.rmSync(roots.pop()!, { recursive: true, force: true }); });
 

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { AgentStage } from "../types.js";
-import { KNOWLEDGE_SCHEMA_VERSION, type KnowledgeItem, type Relation } from "../knowledge/knowledgeModel.js";
+import { KNOWLEDGE_SCHEMA_VERSION, type DbSchemaPayload, type KnowledgeItem, type Relation } from "../knowledge/knowledgeModel.js";
 import { digestOfSource } from "../knowledge/sourceDigest.js";
 import { sourceIdFor, type SourceRecord } from "../knowledge/sourceRegistry.js";
 import { parsePrismaModels } from "../bootstrap/discovery/dbSchemaDiscovery.js";
@@ -246,6 +246,55 @@ function designItemsFor(text: string, ctx: Ctx, notes: string[]): KnowledgeItem[
 }
 
 /**
+ * Legacy design files sometimes repeat a Prisma model while extending it in a
+ * later amendment. Preserve both declarations as one schema item rather than
+ * letting the last write silently erase the earlier fields. A field that is
+ * required in one declaration and optional in another becomes optional — the
+ * only merged form that can represent both declarations. Incompatible base
+ * types remain a hard error rather than a guessed conversion.
+ */
+function mergeRepeatedDbSchemas(items: KnowledgeItem[], notes: string[]): KnowledgeItem[] {
+  const groups = new Map<string, KnowledgeItem[]>();
+  for (const item of items) groups.set(item.id, [...(groups.get(item.id) ?? []), item]);
+  const merged: KnowledgeItem[] = [];
+  const emitted = new Set<string>();
+
+  for (const item of items) {
+    if (emitted.has(item.id)) continue;
+    emitted.add(item.id);
+    const group = groups.get(item.id)!;
+    if (group.length === 1 || item.kind !== "db-schema") { merged.push(item); continue; }
+    if (!group.every((candidate) => candidate.kind === "db-schema")) {
+      throw new Error(`cannot merge legacy item ${item.id}: duplicate ids have different kinds`);
+    }
+    const schemas = group as Array<Extract<KnowledgeItem, { kind: "db-schema" }>>;
+    const first = schemas[0];
+    const fields = new Map<string, DbSchemaPayload["fields"][number]>();
+    for (const schema of schemas) {
+      for (const field of schema.payload.fields) {
+        const previous = fields.get(field.name);
+        if (!previous) { fields.set(field.name, { ...field }); continue; }
+        const previousBase = previous.type.replace(/\?$/, "");
+        const nextBase = field.type.replace(/\?$/, "");
+        if (previousBase !== nextBase) {
+          throw new Error(`cannot merge legacy db schema ${item.id}: field ${field.name} has incompatible types ${previous.type} and ${field.type}`);
+        }
+        const optional = previous.optional || field.optional;
+        fields.set(field.name, { ...previous, type: optional && !previousBase.endsWith("[]") ? `${previousBase}?` : previousBase, optional });
+      }
+    }
+    const sourceKey = (source: typeof first.sources[number]) => `${source.locator}\u0000${source.digest}`;
+    const sources = [...new Map(schemas.flatMap((schema) => schema.sources).map((source) => [sourceKey(source), source])).values()];
+    const payloadRelations = [...new Set(schemas.flatMap((schema) => schema.payload.relations))].sort();
+    const relationKey = (relation: Relation) => `${relation.type}\u0000${relation.to}`;
+    const relations = [...new Map(schemas.flatMap((schema) => schema.relations).map((relation) => [relationKey(relation), relation])).values()];
+    merged.push({ ...first, sources, relations, payload: { ...first.payload, fields: [...fields.values()], relations: payloadRelations } });
+    notes.push(`merged ${schemas.length} repeated declarations of ${item.id} into one db-schema item`);
+  }
+  return merged;
+}
+
+/**
  * Reads every module's `design.md` and migrates it. Never writes.
  *
  * `docsRoot` (defaulting to `<projectRoot>/_docs`) is where `module/` lives —
@@ -299,5 +348,5 @@ export function migrateLegacyDesign(
     items.push(...produced);
   }
 
-  return { items, sources, notes };
+  return { items: mergeRepeatedDbSchemas(items, notes), sources, notes };
 }

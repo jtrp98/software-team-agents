@@ -88,6 +88,23 @@ describe("T87 — the dry run", () => {
     expect(plan.totals.update + plan.totals.unchanged + plan.totals.conflict).toBe(0);
   });
 
+  it("reads a legacy source but plans and writes only to a separate Knowledge root", () => {
+    const source = project();
+    const knowledge = fs.mkdtempSync(path.join(os.tmpdir(), "adoption-knowledge-"));
+    roots.push(knowledge);
+
+    const plan = planAdoption(knowledge, NOW, undefined, source);
+    expect(plan.stages.flatMap((stage) => stage.writes).every((write) => write.path.startsWith("knowledge/"))).toBe(true);
+    expect(fs.existsSync(path.join(source, "knowledge"))).toBe(false);
+
+    initAdoption(knowledge, NOW, undefined, source);
+    acknowledgePreflight("Jaturapat", knowledge, NOW);
+    for (const id of ALL_ADOPTION_STAGES) runAdoptionStage(id, knowledge, NOW, undefined, source);
+    expect(fs.existsSync(path.join(knowledge, "knowledge"))).toBe(true);
+    expect(fs.existsSync(path.join(source, "knowledge"))).toBe(false);
+    expect(fs.existsSync(path.join(source, "_adoption"))).toBe(false);
+  });
+
   it("names the staged contract for a mapped agent and the unmapped file for the other", () => {
     const root = project();
 

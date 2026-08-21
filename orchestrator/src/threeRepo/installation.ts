@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import Ajv, { type ValidateFunction } from "ajv";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
@@ -17,17 +16,15 @@ function isSameOrNested(candidate: string, root: string): boolean {
   return candidate === root || candidate.startsWith(`${root}${path.sep}`);
 }
 
-function gitOutput(repositoryRoot: string, argument: string, label: string): string {
-  const result = spawnSync("git", ["-C", repositoryRoot, "rev-parse", argument], { encoding: "utf8", timeout: 10_000 });
-  if (result.error || result.status !== 0) {
-    throw new InstallationConfigError(`${label} root "${repositoryRoot}" is not a standalone Git repository`);
-  }
-  return (result.stdout ?? "").trim();
-}
-
 /** Validates the repository identity root, not merely the presence of a
  * `.git` marker. Linked worktrees share metadata with another checkout and
- * cannot safely be a Framework, Knowledge, or Target authority root. */
+ * cannot safely be a Framework, Knowledge, or Target authority root.
+ *
+ * This deliberately inspects local metadata rather than invoking Git. The
+ * runtime guard forbids Git commands, so validation must not create the very
+ * policy violation it is supposed to prevent. A directory-form `.git` with no
+ * `commondir` is the fail-closed standalone shape; a file-form marker is a
+ * linked worktree and is rejected. */
 export function assertStandaloneRepositoryRoot(repositoryRoot: string, label: string): string {
   const resolved = path.resolve(repositoryRoot);
   if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
@@ -41,18 +38,8 @@ export function assertStandaloneRepositoryRoot(repositoryRoot: string, label: st
   if (!fs.statSync(gitMarker).isDirectory()) {
     throw new InstallationConfigError(`${label} root "${canonical}" is a Git linked worktree; configure a standalone ${label} repository path instead`);
   }
-
-  const topLevel = fs.realpathSync.native(path.resolve(canonical, gitOutput(canonical, "--show-toplevel", label)));
-  if (topLevel !== canonical) throw new InstallationConfigError(`${label} root "${canonical}" is not the Git top-level`);
-
-  const gitMetadataRoot = fs.realpathSync.native(gitMarker);
-  for (const argument of ["--git-dir", "--git-common-dir"]) {
-    const reported = gitOutput(canonical, argument, label);
-    const metadataPath = path.isAbsolute(reported) ? reported : path.resolve(canonical, reported);
-    const metadataCanonical = fs.realpathSync.native(metadataPath);
-    if (!isSameOrNested(metadataCanonical, gitMetadataRoot)) {
-      throw new InstallationConfigError(`${label} root "${canonical}" uses shared Git metadata and is not a standalone repository`);
-    }
+  if (fs.existsSync(path.join(gitMarker, "commondir"))) {
+    throw new InstallationConfigError(`${label} root "${canonical}" uses shared Git metadata and is not a standalone repository`);
   }
   return canonical;
 }

@@ -129,6 +129,20 @@ describe("migrateLegacyDesign — the Data Model", () => {
     ]);
   });
 
+  it("merges repeated model declarations without losing fields or source locations", () => {
+    const root = project({
+      "_docs/module/m/design.md": "## Feature-by-Feature Feasibility\n- DES-001 — covers REQ-001: fine.\n\n## Data Model\nmodel Target {\n  id String @id\n  salespersonId String\n}\n\nmodel Target {\n  id String @id\n  territoryId String?\n  salespersonId String?\n}\n",
+    });
+    const result = migrateLegacyDesign(root, NOW);
+    const target = result.items.filter((item): item is KnowledgeItemOf<"db-schema"> => item.id === "DB-Target" && item.kind === "db-schema");
+
+    expect(target).toHaveLength(1);
+    expect(target[0].payload.fields.map((field) => field.name)).toEqual(["id", "salespersonId", "territoryId"]);
+    expect(target[0].payload.fields.find((field) => field.name === "salespersonId")).toMatchObject({ type: "String?", optional: true });
+    expect(target[0].sources).toHaveLength(2);
+    expect(result.notes).toContain("merged 2 repeated declarations of DB-Target into one db-schema item");
+  });
+
   it("derives relations from field types that name another model in the same document", () => {
     const root = project({ "_docs/module/sales-crm/design.md": DESIGN });
 

@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import * as fs from "node:fs";
 import { AgentStage } from "../types.js";
 import type { PersistedTask } from "../store/taskStore.js";
 import { assertStandaloneFrameworkRoot, assertStandaloneKnowledgeRoot, loadInstallationConfig } from "./installation.js";
@@ -36,12 +36,37 @@ function normaliseRemote(value: string): string {
   return value.replace(/\\/g, "/").replace(/\.git$/i, "").replace(/\/$/, "").toLowerCase();
 }
 
-function assertRemoteIdentity(targetId: string, targetPath: string, remoteUrl: string): void {
-  const result = spawnSync("git", ["-C", targetPath, "remote", "get-url", "origin"], { encoding: "utf8", timeout: 10_000 });
-  if (result.error || result.status !== 0) {
-    throw new TargetPreflightError(`Target "${targetId}" at "${targetPath}" cannot verify origin remote — configure a cloned repository whose origin is ${remoteUrl}`);
+/** Read just the local `origin.url` field without starting Git. Includes and
+ * duplicate origin URLs are rejected: accepting a configuration we cannot
+ * fully resolve would make the preflight fail open. */
+function readOriginRemote(targetPath: string): string {
+  const configPath = path.join(targetPath, ".git", "config");
+  let config: string;
+  try {
+    config = fs.readFileSync(configPath, "utf8");
+  } catch {
+    throw new TargetPreflightError(`Target at "${targetPath}" cannot read .git/config to verify origin remote`);
   }
-  const actual = (result.stdout ?? "").trim();
+  if (/^\s*\[include(?:If)?\b/im.test(config)) {
+    throw new TargetPreflightError(`Target at "${targetPath}" uses Git config includes; cannot verify origin remote fail-closed`);
+  }
+  let section = "";
+  const urls: string[] = [];
+  for (const line of config.split(/\r?\n/)) {
+    const heading = line.match(/^\s*\[([^\]]+)]\s*$/);
+    if (heading) { section = heading[1].trim().toLowerCase(); continue; }
+    if (section !== 'remote "origin"') continue;
+    const url = line.match(/^\s*url\s*=\s*(.*?)\s*$/i);
+    if (url && url[1]) urls.push(url[1]);
+  }
+  if (urls.length !== 1) {
+    throw new TargetPreflightError(`Target at "${targetPath}" must declare exactly one local origin URL to verify remote identity`);
+  }
+  return urls[0];
+}
+
+function assertRemoteIdentity(targetId: string, targetPath: string, remoteUrl: string): void {
+  const actual = readOriginRemote(targetPath);
   if (normaliseRemote(actual) !== normaliseRemote(remoteUrl)) {
     throw new TargetPreflightError(`Target "${targetId}" at "${targetPath}" has origin "${actual}", expected canonical remote_url "${remoteUrl}" — correct .workflow/targets.local.yaml`);
   }

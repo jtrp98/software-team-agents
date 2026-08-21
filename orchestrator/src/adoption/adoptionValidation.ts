@@ -58,9 +58,9 @@ export interface AdoptionValidationReport {
   state: AdoptionState | null;
 }
 
-function resultsByStage(projectRoot: string, now: string): Map<AdoptionStageId, AdoptionStageResult> {
+function resultsByStage(sourceRoot: string, now: string, docsRoot?: string): Map<AdoptionStageId, AdoptionStageResult> {
   const out = new Map<AdoptionStageId, AdoptionStageResult>();
-  for (const stage of adoptionStages()) out.set(stage.id, stage.run(projectRoot, now));
+  for (const stage of adoptionStages()) out.set(stage.id, stage.run(sourceRoot, now, docsRoot));
   return out;
 }
 
@@ -72,6 +72,8 @@ function resultsByStage(projectRoot: string, now: string): Map<AdoptionStageId, 
 export function validateAdoption(
   projectRoot: string = defaultProjectRoot(),
   now: string = new Date().toISOString(),
+  docsRoot?: string,
+  sourceRoot: string = projectRoot,
 ): AdoptionValidationReport {
   const { state, problems: stateProblems } = readAdoptionState(projectRoot);
   const problems: string[] = [...stateProblems.map((p) => `knowledge/_adoption/STATE.yaml: ${p}`)];
@@ -94,7 +96,7 @@ export function validateAdoption(
   problems.push(...load.problems);
   const onDisk = new Map(load.items.map((i) => [i.id, i]));
 
-  const derived = resultsByStage(projectRoot, now);
+  const derived = resultsByStage(sourceRoot, now, docsRoot);
   const stages: StageValidation[] = [];
 
   for (const [id, result] of derived) {
