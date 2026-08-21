@@ -290,8 +290,8 @@ function walkMarkdown(dir: string, projectRoot: string, out: string[]): void {
   }
 }
 
-function moduleNames(projectRoot: string): string[] {
-  const root = path.join(projectRoot, "_docs", "module");
+function moduleNames(docsRoot: string): string[] {
+  const root = path.join(docsRoot, "module");
   if (!fs.existsSync(root)) return [];
   return fs
     .readdirSync(root, { withFileTypes: true })
@@ -300,8 +300,22 @@ function moduleNames(projectRoot: string): string[] {
     .sort();
 }
 
-/** Reads every legacy document this stage owns and converts it. Never writes. */
-export function importLegacyDocs(projectRoot: string, now: string): LegacyDocsResult {
+/**
+ * Reads every legacy document this stage owns and converts it. Never writes.
+ *
+ * `docsRoot` (defaulting to `<projectRoot>/_docs`) is where the `module/`
+ * directory this stage's module-doc pass (part 3 below) scans actually lives —
+ * separate from `projectRoot` because a real adoption target is not always
+ * laid out with its own `_docs/` at the repo root. A project that nests its
+ * documentation under a namespace (a monorepo, a per-client subtree) still has
+ * `CLAUDE.md`/`README.md`/`docs/`/`wiki/`/`policies/` at `projectRoot` — those
+ * three passes above are deliberately not reparented by this option, only the
+ * module-doc convention is, because that is the one V1.3's design fixed to a
+ * literal `_docs/module/<name>/` path (`legacyDesign.ts`/`legacyPlan.ts` take
+ * the same option for the same reason — T113's pilot against a real project
+ * with a nested `_docs/<namespace>/module/` tree is what surfaced this).
+ */
+export function importLegacyDocs(projectRoot: string, now: string, docsRoot: string = path.join(projectRoot, "_docs")): LegacyDocsResult {
   const items: KnowledgeItem[] = [];
   const sources: SourceRecord[] = [];
   const notes: string[] = [];
@@ -356,15 +370,15 @@ export function importLegacyDocs(projectRoot: string, now: string): LegacyDocsRe
   }
 
   // 3. Module documents, minus plan.md (T84) and design.md (T85).
-  for (const module of moduleNames(projectRoot)) {
-    add(`_docs/module/${module}/requirement.md`, (text, sourceId) =>
-      requirementItems(`_docs/module/${module}/requirement.md`, text, module, projectRoot, now, sourceId),
-    );
-    add(`_docs/module/${module}/test-plan.md`, (text, sourceId) =>
-      testItems(`_docs/module/${module}/test-plan.md`, text, module, projectRoot, now, sourceId),
-    );
+  const moduleRelative = (module: string, file: string): string =>
+    path.relative(projectRoot, path.join(docsRoot, "module", module, file)).split(path.sep).join("/");
+  for (const module of moduleNames(docsRoot)) {
+    const requirementRel = moduleRelative(module, "requirement.md");
+    add(requirementRel, (text, sourceId) => requirementItems(requirementRel, text, module, projectRoot, now, sourceId));
+    const testPlanRel = moduleRelative(module, "test-plan.md");
+    add(testPlanRel, (text, sourceId) => testItems(testPlanRel, text, module, projectRoot, now, sourceId));
     for (const doc of MODULE_PROSE_DOCS) {
-      const rel = `_docs/module/${module}/${doc}`;
+      const rel = moduleRelative(module, doc);
       add(rel, (text, sourceId) => [
         proseItem(rel, text, projectRoot, now, sourceId, { module, idPrefix: "DES-DOC", fullText: false }),
       ]);

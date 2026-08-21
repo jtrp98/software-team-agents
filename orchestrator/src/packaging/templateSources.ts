@@ -41,7 +41,6 @@ export const TEMPLATE_SOURCES: readonly TemplateSourceEntry[] = [
   { relPath: "stacks", kind: "dir" },
   { relPath: "layout.yaml", kind: "file" },
   { relPath: "escalation-policy.yaml", kind: "file" },
-  { relPath: "knowledge-policy.yaml", kind: "file" },
   { relPath: "test-pyramid.yaml", kind: "file" },
 ];
 
@@ -63,6 +62,8 @@ export const NEVER_TEMPLATED: readonly string[] = [
   "_docs",
   "decisions",
   "knowledge",
+  "knowledge-policy.yaml",
+  "targets.yaml",
   ".workflow",
   "project.yaml",
   "README.md",

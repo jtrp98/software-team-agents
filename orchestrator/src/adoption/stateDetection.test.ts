@@ -179,4 +179,17 @@ describe("detectExistingState — the legacy documents", () => {
 
     expect(detectExistingState(root).blockers).toHaveLength(2);
   });
+
+  it("checks a nested docsRoot, and does not see the same module docs at the default one (T113 pilot finding)", () => {
+    const root = project({
+      "_docs/hkt/module/crm/plan.md":
+        "## Phase 1: x\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-001 — a | in_progress | be | — |\n",
+    });
+
+    const nested = detectExistingState(root, path.join(root, "_docs", "hkt"));
+    const atDefault = detectExistingState(root);
+
+    expect(nested.blockers).toHaveLength(1);
+    expect(atDefault.blockers).toEqual([]);
+  });
 });

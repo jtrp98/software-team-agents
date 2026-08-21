@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { readTemplateManifest, sha256Of } from "./templateManifest.js";
 import { CURRENT_STA_SCHEMA_VERSION, isInstalled, writeInstallManifest, type InstallManifest } from "./installManifest.js";
 import { defaultStaConfig, staConfigPath, writeStaConfig } from "./staConfig.js";
+import { assertFrameworkManagedPaths } from "../threeRepo/ownership.js";
 
 /**
  * T92 — `sta init`: materializes `<templatesDir>/**` into `projectRoot`,
@@ -45,6 +46,7 @@ export function runInit(
   }
 
   const templateManifest = readTemplateManifest(templatesDir);
+  assertFrameworkManagedPaths(templateManifest.files.map((file) => file.path), "legacy-project");
   const installed: string[] = [];
   const skippedConflicts: string[] = [];
   const trackedFiles: InstallManifest["files"] = [];

@@ -50,9 +50,27 @@ import type { RoleLane } from "./roles/roleLane.js";
 import { buildTemplates } from "./packaging/templateBuilder.js";
 import { runInit } from "./packaging/initCommand.js";
 import { runUpgrade } from "./packaging/upgradeCommand.js";
+import { runThreeRepoInit, runThreeRepoUpgrade } from "./packaging/threeRepoCommand.js";
 import { migrateSta } from "./packaging/migration.js";
+import { configureKnowledgeRoot, loadInstallationConfig } from "./threeRepo/installation.js";
+import { loadTargetRegistry } from "./threeRepo/targets.js";
+import { preflightThreeRepoTask } from "./threeRepo/preflight.js";
+import { validateNewTaskBindings, type TargetBindings } from "./threeRepo/taskBindings.js";
+import { collectMigrationManifest, confirmCutover, copyMigrationSource, readMigrationManifest, transformMigratedKnowledge, verifyMigration, writeMigrationManifest } from "./threeRepo/knowledgeMigration.js";
 import { listBackups, rollbackSta } from "./packaging/rollback.js";
 import { validateInstallation } from "./packaging/installValidation.js";
+import {
+  acknowledgePreflight,
+  AdoptionBlockedError,
+  ALL_ADOPTION_STAGES,
+  approveAdoptionStage,
+  initAdoption,
+  planAdoption,
+  recordAdoptionValidation,
+  runAdoptionStage,
+} from "./adoption/adoptionRunner.js";
+import { readAdoptionState } from "./adoption/adoptionStore.js";
+import type { AdoptionStageId } from "./adoption/adoptionModel.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -116,6 +134,7 @@ export interface CliArgs {
   stateDb?: string;
   /** Phases of plan.md this run touches, used to slice module docs per `policies/documentation.md` §10. Empty = send the plan whole. */
   phases: number[];
+  targetBindings: TargetBindings;
 }
 
 const FLAG_TO_CLASSIFICATION: Record<string, keyof ClassificationInput> = {
@@ -135,7 +154,7 @@ export class CliUsageError extends Error {}
 
 export const USAGE =
   "usage (T31 verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  orchestrate run --task-id <id> --module <name> <classification flags> [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--project-root <path>] [--state-db <path>]\n" +
+  "  orchestrate run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--project-root <path>] [--state-db <path>]\n" +
   "  orchestrate status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  orchestrate approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
   "  orchestrate resume  <task-id> --module <name> [--project-root <path>]   continue a task already in the store\n" +
@@ -144,9 +163,11 @@ export const USAGE =
   "  orchestrate cancel <task-id> [--reason <text>] [--project-root <path>]   give up on a task for good; run/resume/retry refuse it permanently\n" +
   "  orchestrate audit  <task-id> [--decisions] [--project-root <path>]   the WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail; --decisions shows only the choices\n" +
   "  orchestrate projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names (T41)\n" +
-  "  orchestrate init    --templates <dir> [--project-root <path>] [--force]   materialize framework template files + .sta/config.yaml + .sta/manifest.json into a target project (T92)\n" +
-  "  orchestrate upgrade --templates <dir> [--project-root <path>]   bring an initialized project's framework files up to <dir>'s version, backing up before overwriting (T95)\n" +
+  "  orchestrate init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
+  "  orchestrate configure knowledge-root <path> [--config-path <path>]       validate and save this installation's single Knowledge root\n" +
+  "  orchestrate upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
   "  orchestrate migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending (T96)\n" +
+  "  orchestrate knowledge-migrate <dry-run|copy|verify|cutover> --source-root <path> --knowledge-root <path> [--now <ISO>] [--confirm I_CONFIRM_MIGRATION]   copy–verify–human-confirmed migration\n" +
   "  orchestrate rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups` (T97)\n" +
   "  orchestrate list-backups [--project-root <path>]   list this project's .sta/backups/ snapshots, oldest first\n" +
   "  orchestrate roles [--module <name>] [--project-root <path>]   where BA, SA and DEV each stand against knowledge/ (T99)\n" +
@@ -207,6 +228,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let environment: Environment = Environment.LOCAL;
   let dependsOn: string[] = [];
   let phases: number[] = [];
+  const targetBindings: TargetBindings = { frontend_target: null, backend_target: null };
   const classification: ClassificationInput = {};
 
   for (let i = 0; i < argv.length; i++) {
@@ -219,6 +241,12 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       projectRoot = argv[++i];
     } else if (arg === "--state-db") {
       stateDb = argv[++i];
+    } else if (arg === "--frontend-target") {
+      targetBindings.frontend_target = argv[++i] ?? null;
+      if (!targetBindings.frontend_target) throw new CliUsageError("--frontend-target requires a Target id");
+    } else if (arg === "--backend-target") {
+      targetBindings.backend_target = argv[++i] ?? null;
+      if (!targetBindings.backend_target) throw new CliUsageError("--backend-target requires a Target id");
     } else if (arg === "--depends-on") {
       dependsOn = (argv[++i] ?? "")
         .split(",")
@@ -304,6 +332,9 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   if (resume && dependsOn.length > 0) {
     throw new CliUsageError("--depends-on is set when a task is created and cannot be changed on --resume");
   }
+  if (resume && (targetBindings.frontend_target || targetBindings.backend_target)) {
+    throw new CliUsageError("Target bindings are immutable; --frontend-target/--backend-target cannot be used with --resume");
+  }
 
   return {
     taskId,
@@ -332,6 +363,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     dependsOn,
     stateDb,
     phases,
+    targetBindings,
   };
 }
 
@@ -357,6 +389,7 @@ const APPROVAL_PROMPT: Record<ApprovalType, string> = {
   [ApprovalType.QA_FAILURE]: "A QA round came back ⚠️/❌ and needs a decision",
   [ApprovalType.SECURITY_RISK]: "A Critical/Important security finding is unresolved",
   [ApprovalType.REQUIREMENT_INTERVIEW]: "A requirement needs a person, not an inference",
+  [ApprovalType.UXUI_SIGNOFF]: "Confirm the current UX/UI artifact before frontend work starts",
 };
 
 async function confirm(question: string): Promise<boolean> {
@@ -466,11 +499,29 @@ function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orches
     );
   }
   const classification = classifyTask(args.classification);
+  // A three-repo task records a resolved shared Target identity when created.
+  // Do this before a durable row is written, so malformed/retired/unknown ids
+  // leave no partial task history behind.
+  const isCodeTask = classification.pipeline.some((stage) => stage === AgentStage.BACKEND_ENGINEER || stage === AgentStage.FRONTEND_ENGINEER);
+  if (args.targetBindings.frontend_target || args.targetBindings.backend_target) {
+    const installation = loadInstallationConfig();
+    validateNewTaskBindings(classification, args.targetBindings, loadTargetRegistry(installation.knowledge_root));
+  } else if (isCodeTask) {
+    // Legacy project-mode remains supported when no installation exists. Once
+    // an installation has been configured, however, this is three-repo mode
+    // and a code task without an explicit binding must never be persisted.
+    try {
+      const installation = loadInstallationConfig();
+      validateNewTaskBindings(classification, args.targetBindings, loadTargetRegistry(installation.knowledge_root));
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.startsWith("cannot read installation config")) throw error;
+    }
+  }
   console.log(
     `[orchestrator] task ${taskId}: level=${classification.level} pipeline=${classification.pipeline.join(" -> ")}`,
   );
   for (const reason of classification.reasons) console.log(`[orchestrator]   reason: ${reason}`);
-  return registry.create({ taskId, classification, dependsOn: args.dependsOn, environment: args.environment });
+  return registry.create({ taskId, classification, dependsOn: args.dependsOn, environment: args.environment, targetBindings: args.targetBindings });
 }
 
 const VERBS = [
@@ -486,9 +537,12 @@ const VERBS = [
   "init",
   "upgrade",
   "migrate",
+  "knowledge-migrate",
   "rollback",
   "list-backups",
   "roles",
+  "adopt",
+  "configure",
 ] as const;
 type Verb = (typeof VERBS)[number];
 
@@ -497,7 +551,7 @@ function isVerb(s: string | undefined): s is Verb {
 }
 
 /** Flags a verb accepts that take a value — their value must never be mistaken for the positional <task-id>. */
-const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--by"]);
+const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--by", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--now", "--confirm"]);
 
 /** Every non-flag token in a verb's remaining args, in order, skipping over each value-flag's own argument. */
 function positionalArgs(rest: string[]): string[] {
@@ -738,6 +792,20 @@ async function runProjectsVerb(rest: string[], defaultProjectRoot: string): Prom
 /** `init --templates <dir> [--force]` — T92. */
 async function runInitVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const mode = flagValue(rest, "--mode");
+  if (mode !== "legacy-project" && mode !== "three-repo") {
+    throw new CliUsageError("init: --mode <legacy-project|three-repo> is required; mode is never inferred from directories");
+  }
+  if (mode === "three-repo") {
+    try {
+      const result = runThreeRepoInit(projectRoot);
+      console.log(`[orchestrator] initialized Knowledge root ${projectRoot}: ${result.createdDirectories.length} directory(ies), ${result.createdFiles.length} config file(s)`);
+      return 0;
+    } catch (e) {
+      console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+      return 1;
+    }
+  }
   const templatesDir = flagValue(rest, "--templates");
   if (!templatesDir) throw new CliUsageError("init: --templates <dir> is required (built by `npm run build:templates`)");
   const force = rest.includes("--force");
@@ -760,9 +828,38 @@ async function runInitVerb(rest: string[], defaultProjectRoot: string): Promise<
   }
 }
 
+async function runConfigureVerb(rest: string[], frameworkRoot: string): Promise<number> {
+  const [subject, knowledgeRoot] = positionalArgs(rest);
+  if (subject !== "knowledge-root" || !knowledgeRoot) {
+    throw new CliUsageError("configure: use `configure knowledge-root <path>`");
+  }
+  try {
+    const config = configureKnowledgeRoot(knowledgeRoot, flagValue(rest, "--config-path"), frameworkRoot);
+    console.log(`[orchestrator] configured Knowledge root: ${config.knowledge_root}`);
+    return 0;
+  } catch (error) {
+    console.error(`[orchestrator] ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+}
+
 /** `upgrade --templates <dir>` — T95. */
 async function runUpgradeVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const mode = flagValue(rest, "--mode");
+  if (mode !== "legacy-project" && mode !== "three-repo") {
+    throw new CliUsageError("upgrade: --mode <legacy-project|three-repo> is required; mode is never inferred from directories");
+  }
+  if (mode === "three-repo") {
+    try {
+      const result = runThreeRepoUpgrade(projectRoot);
+      console.log(`[orchestrator] three-repo upgrade leaves ${result.knowledgePathsSkipped.length} Knowledge/Target path(s) untouched; update the installed framework package to update bindings.`);
+      return 0;
+    } catch (e) {
+      console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+      return 1;
+    }
+  }
   const templatesDir = flagValue(rest, "--templates");
   if (!templatesDir) throw new CliUsageError("upgrade: --templates <dir> is required (built by `npm run build:templates`)");
 
@@ -803,6 +900,41 @@ async function runMigrateVerb(rest: string[], defaultProjectRoot: string): Promi
   } catch (e) {
     console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
     return 1;
+  }
+}
+
+async function runKnowledgeMigrateVerb(rest: string[], frameworkRoot: string): Promise<number> {
+  const [action] = positionalArgs(rest);
+  const sourceRoot = flagValue(rest, "--source-root");
+  const knowledgeRoot = flagValue(rest, "--knowledge-root");
+  if (!sourceRoot || !knowledgeRoot || !["dry-run", "copy", "verify", "cutover"].includes(action ?? "")) {
+    throw new CliUsageError("knowledge-migrate: use <dry-run|copy|verify|cutover> --source-root <path> --knowledge-root <path>");
+  }
+  const options = { sourceRoot: path.resolve(sourceRoot), knowledgeRoot: path.resolve(knowledgeRoot), now: flagValue(rest, "--now") ?? new Date().toISOString() };
+  try {
+    if (action === "dry-run") {
+      const manifest = collectMigrationManifest(options);
+      console.log(`[orchestrator] migration dry-run: ${manifest.docs.length} _docs files, ${manifest.knowledge.length} knowledge YAML; no files changed.`);
+      return 0;
+    }
+    if (action === "copy") {
+      const manifest = collectMigrationManifest(options);
+      copyMigrationSource(manifest, options); transformMigratedKnowledge(options); writeMigrationManifest(manifest, options.knowledgeRoot);
+      console.log("[orchestrator] copied migration data; source remains the rollback source. Run verify before cutover.");
+      return 0;
+    }
+    const manifest = readMigrationManifest(options.knowledgeRoot);
+    const verification = verifyMigration(manifest, options);
+    console.log(`[orchestrator] migration verification: ${verification.ok ? "PASS" : "FAIL"}; ${verification.items} items, ${verification.fresh}/${verification.items} fresh.`);
+    for (const problem of verification.problems) console.error(`[orchestrator] ${problem}`);
+    if (action === "verify") return verification.ok ? 0 : 1;
+    const configPath = flagValue(rest, "--config-path");
+    confirmCutover(verification, flagValue(rest, "--confirm"), configPath);
+    configureKnowledgeRoot(options.knowledgeRoot, configPath, frameworkRoot);
+    console.log("[orchestrator] cutover confirmation accepted and installation binding changed. No source deletion was performed.");
+    return 0;
+  } catch (error) {
+    console.error(`[orchestrator] ${error instanceof Error ? error.message : String(error)}`); return 1;
   }
 }
 
@@ -1113,6 +1245,136 @@ async function runRolesVerb(rest: string[], defaultProjectRoot: string): Promise
   return 0;
 }
 
+/**
+ * `adopt` (T81, wired to the CLI as part of T113's pilot — the library existed
+ * since V1.3 but nothing exposed it to a person before this).
+ *
+ * `plan` is deliberately the sub-command with no state requirement and no
+ * writes at all: it is meant to be runnable as the very first thing anyone
+ * does against a real legacy project, before `start` even creates
+ * `knowledge/_adoption/state.json`. Every other sub-command requires the state
+ * `initAdoption()` created, and reports the same "no adoption in progress" a
+ * person would get from calling the library directly rather than a CLI-only
+ * error shape.
+ */
+async function runAdoptVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  // T113 pilot finding: not every real adoption target has its own `_docs/`
+  // right at the repo root — a monorepo or a per-client subtree may nest it.
+  // Repo-relative so a person types the same thing they'd see in a listing
+  // (`--docs-root _docs/hkt`), resolved against `projectRoot` the same way
+  // every other path this CLI reports already is. No state persists this
+  // across invocations (same as `--project-root` itself) — pass it on every
+  // `adopt` call for this project, `plan` included.
+  const docsRootFlag = flagValue(rest, "--docs-root");
+  const docsRoot = docsRootFlag !== undefined ? path.join(projectRoot, docsRootFlag) : undefined;
+  const args = positionalArgs(rest);
+  const now = new Date().toISOString();
+  const SUB_COMMANDS = ["plan", "status", "start", "ack", "run", "approve", "validate"];
+  const sub = args[0];
+  if (sub === undefined || !SUB_COMMANDS.includes(sub)) {
+    throw new CliUsageError(`adopt: a sub-command is required — one of ${SUB_COMMANDS.join(", ")}`);
+  }
+
+  if (sub === "plan") {
+    const plan = planAdoption(projectRoot, now, docsRoot);
+    if (plan.preflight.blockers.length > 0) {
+      console.log(`[orchestrator] preflight found work in flight — this would block \`adopt start\` until acknowledged:`);
+      for (const b of plan.preflight.blockers) console.log(`  ! ${b}`);
+    }
+    for (const stage of plan.stages) {
+      console.log(`\n${stage.id}${stage.skipped ? " (nothing to import)" : ""}`);
+      for (const w of stage.writes) console.log(`  ${w.action.padEnd(9)} ${w.path}  (${w.subject})`);
+      for (const c of stage.conflicts) console.log(`  ! conflict: ${c} — already reviewed, legacy material now disagrees`);
+      for (const n of stage.notes) console.log(`  · ${n}`);
+    }
+    console.log(
+      `\n[orchestrator] plan: ${plan.totals.create} to create, ${plan.totals.update} to update, ` +
+        `${plan.totals.unchanged} unchanged, ${plan.totals.conflict} conflict(s). Nothing was written — this is a dry run (T87).`,
+    );
+    return 0;
+  }
+
+  try {
+    if (sub === "status") {
+      const { state, problems } = readAdoptionState(projectRoot);
+      if (problems.length > 0) {
+        for (const p of problems) console.error(`[orchestrator] ${p}`);
+        return 1;
+      }
+      if (!state) {
+        console.log("[orchestrator] no adoption in progress — run `adopt plan` first, then `adopt start`.");
+        return 0;
+      }
+      console.log(`[orchestrator] status: ${state.status}`);
+      for (const s of state.stages) {
+        console.log(`  ${s.id.padEnd(14)} ${s.status}${s.approved_by ? ` (approved by ${s.approved_by})` : ""}`);
+      }
+      return 0;
+    }
+
+    if (sub === "start") {
+      const state = initAdoption(projectRoot, now, docsRoot);
+      console.log(`[orchestrator] adoption started — status: ${state.status}`);
+      if (state.preflight && state.preflight.blockers.length > 0) {
+        console.log("  blocked on:");
+        for (const b of state.preflight.blockers) console.log(`  ! ${b}`);
+        console.log('  run `adopt ack --by <name>` once a person has decided it is safe to import over this.');
+      }
+      return 0;
+    }
+
+    if (sub === "ack") {
+      const by = flagValue(rest, "--by");
+      if (!by) throw new CliUsageError("adopt ack: --by <name> is required");
+      const state = acknowledgePreflight(by, projectRoot, now);
+      console.log(`[orchestrator] preflight acknowledged by ${by} — status: ${state.status}`);
+      return 0;
+    }
+
+    if (sub === "run") {
+      const stageId = args[1];
+      if (!stageId || !(ALL_ADOPTION_STAGES as readonly string[]).includes(stageId)) {
+        throw new CliUsageError(`adopt run: a stage id is required — one of ${ALL_ADOPTION_STAGES.join(", ")}`);
+      }
+      const state = runAdoptionStage(stageId as AdoptionStageId, projectRoot, now, docsRoot);
+      const record = state.stages.find((s) => s.id === stageId)!;
+      console.log(
+        `[orchestrator] ${stageId}: ${record.status}${record.note ? ` — ${record.note}` : ""} — status: ${state.status}`,
+      );
+      return 0;
+    }
+
+    if (sub === "approve") {
+      const stageId = args[1];
+      const by = flagValue(rest, "--by");
+      if (!stageId || !(ALL_ADOPTION_STAGES as readonly string[]).includes(stageId)) {
+        throw new CliUsageError(`adopt approve: a stage id is required — one of ${ALL_ADOPTION_STAGES.join(", ")}`);
+      }
+      if (!by) throw new CliUsageError("adopt approve: --by <name> is required");
+      const state = approveAdoptionStage(stageId as AdoptionStageId, by, projectRoot, now);
+      console.log(`[orchestrator] ${stageId} approved by ${by} — status: ${state.status}`);
+      return 0;
+    }
+
+    // validate
+    const by = flagValue(rest, "--by");
+    if (!by) throw new CliUsageError("adopt validate: --by <name> is required");
+    const state = recordAdoptionValidation(by, projectRoot, now);
+    console.log(`[orchestrator] adoption validated by ${by} — status: ${state.status}`);
+    return 0;
+  } catch (e) {
+    if (e instanceof AdoptionBlockedError) {
+      console.error("[orchestrator] adoption is blocked:");
+      for (const b of e.blockers) console.error(`  ! ${b}`);
+      console.error('  run `adopt ack --by <name>` once a person has decided it is safe to import over this.');
+      return 1;
+    }
+    console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+    return 1;
+  }
+}
+
 /** Dispatches a T31 verb, translating the ones that are really the existing engine in disguise (`run`, `resume`, `retry`) rather than duplicating the step loop. */
 async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): Promise<number> {
   switch (verb) {
@@ -1143,12 +1405,18 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
       return runUpgradeVerb(rest, defaultProjectRoot);
     case "migrate":
       return runMigrateVerb(rest, defaultProjectRoot);
+    case "knowledge-migrate":
+      return runKnowledgeMigrateVerb(rest, defaultProjectRoot);
     case "rollback":
       return runRollbackVerb(rest, defaultProjectRoot);
     case "list-backups":
       return runListBackupsVerb(rest, defaultProjectRoot);
     case "roles":
       return runRolesVerb(rest, defaultProjectRoot);
+    case "adopt":
+      return runAdoptVerb(rest, defaultProjectRoot);
+    case "configure":
+      return runConfigureVerb(rest, defaultProjectRoot);
   }
 }
 
@@ -1424,6 +1692,26 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       // T42: absent when there's no repos.yaml — every stage then spawns in
       // args.projectRoot exactly as before this task existed.
       stageRoots: loadStageRoots(args.projectRoot),
+      // Three-repo mode is activated by the installation binding, never by a
+      // per-run root override.  The persisted task is reloaded for every stage
+      // so resume observes retirement/mapping changes before any adapter starts.
+      threeRepoTask: (() => {
+        try {
+          loadInstallationConfig();
+          return (id: string, stage: AgentStage) => {
+            const task = store.loadTask(id);
+            if (!task) throw new Error(`task ${id} disappeared from the state store`);
+            return { task, roots: preflightThreeRepoTask(task, stage, { frameworkRoot: args.projectRoot }) };
+          };
+        } catch {
+          return undefined;
+        }
+      })(),
+      // T114: projects with V1.5 role workspaces get the same BA → SA → DEV
+      // handoff protection when the real orchestrator invokes an agent.
+      // An absent knowledge directory means this is a legacy project, whose
+      // pre-V1.5 pipeline remains unchanged.
+      enforceRoleWorkflow: fs.existsSync(path.join(args.projectRoot, "knowledge")),
       // T43: every stage's prompt states which environment this task targets — the task's own
       // stored environment (survives --resume), not args.environment, which only matters on create.
       extraInstruction: `Environment: ${orchestrator.environment} — ${describeEnvironment(orchestrator.environment, args.projectRoot)}`,

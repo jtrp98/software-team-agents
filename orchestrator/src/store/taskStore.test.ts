@@ -391,6 +391,27 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
     }
   });
 
+  it("Phase 2: a v4 task row reads with null Target bindings without rewriting historical JSON", () => {
+    const file = tmpDbPath();
+    try {
+      const initial = new SqliteTaskStore(file);
+      initial.createTask(sampleTask("T-V4"));
+      initial.close();
+      const db = new Database(file);
+      const row = db.prepare("SELECT state FROM tasks WHERE task_id = 'T-V4'").get() as { state: string };
+      const legacy = JSON.parse(row.state) as Record<string, unknown>;
+      delete legacy.targetBindings;
+      db.prepare("UPDATE tasks SET state = ? WHERE task_id = 'T-V4'").run(JSON.stringify(legacy));
+      db.pragma("user_version = 4");
+      db.close();
+
+      const migrated = new SqliteTaskStore(file);
+      try {
+        expect(migrated.loadTask("T-V4")!.targetBindings).toEqual({ frontend_target: null, backend_target: null });
+      } finally { migrated.close(); }
+    } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
+  });
+
   /**
    * T33 (Resume after session death) — the store round-trip test above proves the DATA survives;
    * this proves a task can actually be picked back up and driven to completion by a brand-new

@@ -197,7 +197,7 @@ describe("describeApproval", () => {
 describe("the five approval types", () => {
   it("covers each of CLAUDE.md's always-human points exactly once", () => {
     expect(Object.values(ApprovalType).sort()).toEqual(
-      ["deploy", "qa-failure", "requirement-interview", "schema-confirmation", "security-risk"].sort(),
+      ["deploy", "qa-failure", "requirement-interview", "schema-confirmation", "security-risk", "uxui-signoff"].sort(),
     );
   });
 });

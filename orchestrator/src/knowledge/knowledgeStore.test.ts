@@ -78,6 +78,16 @@ describe("round trip", () => {
     expect(readKnowledgeFile(file)).toEqual(item);
   });
 
+  it("preserves v2 target associations when an item is rewritten", () => {
+    const item = requirement("REQ-005", {
+      schema_version: 2,
+      target_ids: ["sb-web-helper"],
+      sources: [{ type: "file", locator: "_docs/module/sales-crm/requirement.md", captured_at: NOW, digest: "sha256:9f2a", origin: { root: "knowledge", target_id: null } }],
+    });
+    writeKnowledgeItem(item, root);
+    expect(readKnowledgeFile(pathFor(item, root)).target_ids).toEqual(["sb-web-helper"]);
+  });
+
   it("keeps Thai text and the multi-line body intact", () => {
     const item = requirement("REQ-004", { body: "บรรทัดแรก\nบรรทัดที่สอง\n" });
     writeKnowledgeItem(item, root);

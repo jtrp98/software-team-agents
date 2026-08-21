@@ -9,6 +9,7 @@ import { defaultProjectRoot } from "../agents/agentContract.js";
 import type { KnowledgeItem, SourceType } from "./knowledgeModel.js";
 import { knowledgeDir } from "./knowledgeStore.js";
 import { digestOfSource } from "./sourceDigest.js";
+import { resolveSource } from "./sourceResolver.js";
 
 /**
  * The raw-source registry (T62) — `knowledge/_sources/<SRC-id>.yaml`.
@@ -44,6 +45,7 @@ export interface SourceRecord {
   captured_at: string;
   captured_by: AgentStage;
   digest: string | null;
+  origin?: { root: "knowledge" | "target" | "external"; target_id: string | null };
   note?: string;
 }
 
@@ -183,6 +185,7 @@ export function renderSourceRecord(record: SourceRecord): string {
     captured_at: record.captured_at,
     captured_by: record.captured_by,
     digest: record.digest,
+    origin: record.origin,
   };
   if (record.note !== undefined) ordered.note = record.note;
   return stringifyYaml(ordered, { lineWidth: 0 });
@@ -275,6 +278,7 @@ export function crossCheckRegistry(
   items: KnowledgeItem[],
   registry: SourceRegistry,
   projectRoot?: string,
+  targetPaths: ReadonlyMap<string, string> = new Map(),
 ): RegistryCrossCheck {
   const problems: string[] = [];
   const referenced = new Set<string>();
@@ -295,6 +299,12 @@ export function crossCheckRegistry(
               "one of the two is pointing at the wrong material",
           );
         }
+        if (item.schema_version >= 2 && (!record.origin || !ref.origin)) {
+          problems.push(`${item.id}: v2 source ${record.id} requires origin on both item and source registry records`);
+        } else if (item.schema_version >= 2 && record.origin && ref.origin &&
+          (record.origin.root !== ref.origin.root || record.origin.target_id !== ref.origin.target_id)) {
+          problems.push(`${item.id}: source ${record.id} origin does not match its source reference`);
+        }
         continue;
       }
       const byLocator = registry.forLocator(ref.locator);
@@ -307,7 +317,11 @@ export function crossCheckRegistry(
   if (projectRoot !== undefined) {
     for (const record of registry.records) {
       if (record.digest === null) continue; // a person, a conversation, a directory: nothing to hash
-      if (digestOfSource(record.locator, projectRoot) !== record.digest) staleSources.push(record.id);
+      if (record.origin) {
+        const resolved = resolveSource(record, projectRoot, targetPaths);
+        if (resolved.state === "external" || resolved.state === "unavailable") continue;
+        if (resolved.state !== "resolved" || digestOfSource(resolved.path, ".") !== record.digest) staleSources.push(record.id);
+      } else if (digestOfSource(record.locator, projectRoot) !== record.digest) staleSources.push(record.id);
     }
   }
 

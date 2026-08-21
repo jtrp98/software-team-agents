@@ -87,6 +87,10 @@ export const REVIEW_CHECKLIST: Record<KnowledgeKind, string[]> = {
     "the levels chosen match test-pyramid.yaml rather than defaulting to whatever is easiest",
     "`automated: false` is stated honestly — an unautomated test is one qa-engineer has to list as unverified behaviour",
   ],
+  "ux-design": [
+    "the artifact refines approved requirement/design knowledge and is stored under the module uxui directory",
+    "a human UX/UI sign-off will be current before frontend work begins",
+  ],
 };
 
 export function checklistFor(kind: KnowledgeKind): string[] {

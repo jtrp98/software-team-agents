@@ -94,6 +94,15 @@ export const PersistedTaskSchema = z.object({
    * is true rather than broken, same pattern as `paused`/`cancelled` above.
    */
   deployPrepared: z.boolean().default(false),
+  /**
+   * Phase 2: Target identity is part of a task's audit record, not a runtime
+   * hint.  Defaults preserve historical rows; preflight rejects legacy code
+   * tasks that have neither required binding.
+   */
+  targetBindings: z.object({
+    frontend_target: z.string().min(1).nullable().default(null),
+    backend_target: z.string().min(1).nullable().default(null),
+  }).default({ frontend_target: null, backend_target: null }),
 });
 export type PersistedTask = z.infer<typeof PersistedTaskSchema>;
 
@@ -205,6 +214,7 @@ export function newPersistedTask(params: {
   machine: PersistedTask["machine"];
   now: number;
   environment?: Environment;
+  targetBindings?: PersistedTask["targetBindings"];
 }): PersistedTask {
   return {
     taskId: params.taskId,
@@ -225,5 +235,6 @@ export function newPersistedTask(params: {
     cancelReason: null,
     environment: params.environment ?? Environment.LOCAL,
     deployPrepared: false,
+    targetBindings: params.targetBindings ?? { frontend_target: null, backend_target: null },
   };
 }

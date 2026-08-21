@@ -12,6 +12,7 @@ import { MockRuntimeAdapter, okResult } from "./mockAdapter.js";
 import { NO_GUARDS, type RuntimeGuards } from "./runtimeAdapter.js";
 import { GuardResolutionError } from "./runtimeGuards.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
+import { RuntimeCapability } from "./runtimeCapabilities.js";
 
 /**
  * T108's central claim, under test: the orchestrator can run agents through the
@@ -128,6 +129,24 @@ describe("createRuntimeExecutor — what reaches the adapter (T108)", () => {
 
     expect(runtime.requests[0].cwd).toBe(backendRepo);
     expect(runtime.requests[1].cwd).toBe(hub);
+  });
+
+  it("does not invoke a downstream agent when the opt-in T114 role handoff has not happened", async () => {
+    const root = tmpProject();
+    const runtime = new MockRuntimeAdapter();
+    const executor = createRuntimeExecutor({
+      runtime,
+      projectRoot: root,
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+      enforceRoleWorkflow: true,
+    });
+
+    const result = await executor({ stage: AgentStage.SYSTEM_ANALYST, taskId: "T-114", context: [] });
+
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toMatch(/no knowledge\/ directory/);
+    expect(runtime.requests).toEqual([]);
   });
 });
 
@@ -528,6 +547,38 @@ describe("the orchestrator drives a whole task through the interface (T108)", ()
  * run's request lands on the other adapter — nothing about `runtimeExecutor.ts`
  * needed to know either runtime's name for this to happen.
  */
+describe("createRuntimeExecutor — three-repo guard enforcement", () => {
+  it("does not start a Target-write run when the runtime lacks a pre-tool guard", async () => {
+    const runtime = new MockRuntimeAdapter({ capabilities: [RuntimeCapability.NAMED_AGENTS] });
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const task = {
+      taskId: "T-target",
+      classification,
+      targetBindings: { frontend_target: null, backend_target: "api" },
+    } as never;
+    const executor = createRuntimeExecutor({
+      runtime,
+      projectRoot: tmpProject(),
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+      threeRepoTask: () => ({ task, roots: { bindingRoot: "/framework", knowledgeRoot: "/knowledge", workRoots: [{ targetId: "api", path: "/api", access: "write" }] } }),
+    });
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-target", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(runtime.requests).toHaveLength(0);
+  });
+
+  it("passes canonical roots rather than using cwd as Target scope", async () => {
+    const runtime = new MockRuntimeAdapter({ respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const task = { taskId: "T-target", classification, targetBindings: { frontend_target: null, backend_target: "api" } } as never;
+    const executor = createRuntimeExecutor({ runtime, projectRoot: tmpProject(), moduleName: () => "sales-crm", guards: () => NO_GUARDS,
+      threeRepoTask: () => ({ task, roots: { bindingRoot: "/framework", knowledgeRoot: "/knowledge", workRoots: [{ targetId: "api", path: "/api", access: "write" }] } }), });
+    await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-target", context: [] });
+    expect(runtime.requests[0]).toMatchObject({ cwd: "/framework", bindingRoot: "/framework", knowledgeRoot: "/knowledge", workRoots: [{ targetId: "api", path: "/api", access: "write" }] });
+  });
+});
+
 describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
   it("without opts.registry, every run goes to the fixed runtime exactly as before T112", async () => {
     const runtime = new MockRuntimeAdapter({ id: "claude-code" });

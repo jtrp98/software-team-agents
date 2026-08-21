@@ -30,6 +30,7 @@ import { describeEvent } from "../audit/auditTrail.js";
 import { assertIndependentVerdict } from "../review/reviewSeparation.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";
 import { TaskNotFoundError, newPersistedTask, type PersistedTask, type TaskStore } from "../store/taskStore.js";
+import type { TargetBindings } from "../threeRepo/taskBindings.js";
 import { Environment } from "../environment/environment.js";
 import { type StructuredFailure } from "./failure.js";
 import { isAgentAssignedAt, stageStateOf } from "./taskStatus.js";
@@ -105,6 +106,8 @@ export interface OrchestratorOptions {
   restore?: PersistedTask;
   /** T43 — local/dev/staging/production. Defaults to `Environment.LOCAL` when not given (a fresh task) or not stored (an old row, see taskStore.ts). */
   environment?: Environment;
+  /** Phase 2: immutable Target identity captured on task creation. */
+  targetBindings?: TargetBindings;
 }
 
 function assertCanProduce(stage: AgentStage, artifactType: ArtifactType): void {
@@ -176,6 +179,7 @@ export class Orchestrator {
   private taskEnvironment: Environment;
   /** T44 — true once devops's "prepare" run has completed at READY_TO_DEPLOY. See `isAgentAssignedAt` in taskStatus.ts for what this distinguishes and why. */
   private deployPrepared: boolean;
+  private readonly targetBindings: TargetBindings;
   /** The state the task was in when the current failure arrived, captured before retryPolicy moves it. */
   private stateBeforeFailure: TaskState = TaskState.CREATED;
   /** What the last failure resolved to (T07). Exposed for the CLI and the run log; not persisted — it is derived, not state. */
@@ -206,6 +210,7 @@ export class Orchestrator {
       this.cancelReason = restore.cancelReason;
       this.taskEnvironment = restore.environment;
       this.deployPrepared = restore.deployPrepared;
+      this.targetBindings = restore.targetBindings;
       // Seeded from the store so budget accounting (item 12) counts what the
       // earlier process already spent — a resumed task must not get a fresh
       // token allowance just because it restarted.
@@ -223,6 +228,7 @@ export class Orchestrator {
       this.cancelReason = null;
       this.taskEnvironment = opts?.environment ?? Environment.LOCAL;
       this.deployPrepared = false;
+      this.targetBindings = opts?.targetBindings ?? { frontend_target: null, backend_target: null };
       this.runLog = new RunLog();
       this.store.createTask(
         newPersistedTask({
@@ -232,6 +238,7 @@ export class Orchestrator {
           machine: this.run.machine,
           now: this.createdAt,
           environment: this.taskEnvironment,
+          targetBindings: opts?.targetBindings,
         }),
       );
     }
@@ -301,6 +308,7 @@ export class Orchestrator {
       cancelReason: this.cancelReason,
       environment: this.taskEnvironment,
       deployPrepared: this.deployPrepared,
+      targetBindings: this.targetBindings,
     };
   }
 

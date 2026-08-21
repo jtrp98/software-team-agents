@@ -44,12 +44,19 @@ describe("parseArgs", () => {
       dependsOn: [],
       stateDb: undefined,
       phases: [],
+      targetBindings: { frontend_target: null, backend_target: null },
     });
   });
 
   it("--project-root overrides the default", () => {
     const args = parseArgs(["--task-id", "T-1", "--module", "m", "--project-root", "/other"], "/repo");
     expect(args.projectRoot).toBe("/other");
+  });
+
+  it("records explicit frontend/backend Target bindings and refuses changes on resume", () => {
+    const args = parseArgs(["--task-id", "T-1", "--module", "m", "--backend", "--backend-target", "api"], "/repo");
+    expect(args.targetBindings).toEqual({ frontend_target: null, backend_target: "api" });
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--resume", "--backend-target", "api"], "/repo")).toThrow(/immutable/);
   });
 
   it("throws CliUsageError when --task-id is missing", () => {

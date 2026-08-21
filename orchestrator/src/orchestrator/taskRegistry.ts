@@ -5,6 +5,7 @@ import type { Environment } from "../environment/environment.js";
 import { writeStateViewFromStore } from "../store/stateView.js";
 import { TaskNotFoundError, type PersistedTask, type TaskStore } from "../store/taskStore.js";
 import { TaskGraph, type TaskNode } from "../graph/taskGraph.js";
+import type { TargetBindings } from "../threeRepo/taskBindings.js";
 import { Orchestrator } from "./orchestrator.js";
 import { describeStatus, unmetDependencies, type TaskStatusView } from "./taskStatus.js";
 
@@ -77,6 +78,7 @@ export class TaskRegistry {
     classification: ClassificationResult;
     dependsOn?: string[];
     environment?: Environment;
+    targetBindings?: TargetBindings;
   }): Orchestrator {
     const dependsOn = params.dependsOn ?? [];
     const missing = dependsOn.filter((id) => this.store.loadTask(id) === null);
@@ -86,6 +88,7 @@ export class TaskRegistry {
       ...this.orchestratorOptions(),
       dependsOn,
       environment: params.environment,
+      targetBindings: params.targetBindings,
     });
     this.refreshStateView();
     return orchestrator;

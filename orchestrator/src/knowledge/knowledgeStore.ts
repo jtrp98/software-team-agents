@@ -169,12 +169,15 @@ export function loadKnowledge(projectRoot: string = defaultProjectRoot()): Knowl
       continue;
     }
 
-    const previous = seen.get(item.id);
+    // v2 identity is module/id. The same bare ID in two delivery modules is
+    // valid and must remain discoverable as an ambiguous bare lookup.
+    const key = `${item.module ?? PROJECT_WIDE_DIR}/${item.id}`;
+    const previous = seen.get(key);
     if (previous) {
-      problems.push(`${rel}: id "${item.id}" is already declared by ${previous} — an id has to identify one item`);
+      problems.push(`${rel}: qualified id "${key}" is already declared by ${previous}`);
       continue;
     }
-    seen.set(item.id, rel);
+    seen.set(key, rel);
     items.push(item);
   }
 
@@ -246,6 +249,7 @@ function orderedForYaml(item: KnowledgeItem): Record<string, unknown> {
     owner: item.owner,
     module: item.module,
     repo: item.repo,
+    target_ids: item.target_ids,
     sensitive: item.sensitive,
     created_at: item.created_at,
     updated_at: item.updated_at,

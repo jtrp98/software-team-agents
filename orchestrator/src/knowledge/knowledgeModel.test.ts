@@ -56,6 +56,7 @@ const PAYLOADS: Record<KnowledgeKind, unknown> = {
     orchestrator_task_id: "T-1",
   },
   test: { levels: ["api"], automated: false },
+  "ux-design": { artifact: "_docs/module/sales-crm/uxui/design.md", refines: ["DES-003"] },
 };
 
 const SAMPLE_ID: Record<KnowledgeKind, string> = {
@@ -68,6 +69,7 @@ const SAMPLE_ID: Record<KnowledgeKind, string> = {
   decision: "ADR-003",
   task: "BE-014",
   test: "TEST-003",
+  "ux-design": "UX-003",
 };
 
 function item(kind: KnowledgeKind, overrides: Record<string, unknown> = {}): Record<string, unknown> {

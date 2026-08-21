@@ -56,7 +56,7 @@ describe("listTemplateFiles", () => {
     expect(files).toContain("stacks/nextjs-express/stack.yaml");
     expect(files).toContain("layout.yaml");
     expect(files).toContain("escalation-policy.yaml");
-    expect(files).toContain("knowledge-policy.yaml");
+    expect(files).not.toContain("knowledge-policy.yaml");
     expect(files).toContain("test-pyramid.yaml");
   });
 

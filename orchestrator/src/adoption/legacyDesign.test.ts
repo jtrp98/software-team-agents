@@ -220,4 +220,13 @@ describe("migrateLegacyDesign — what survives the import", () => {
     expect(result.items).toEqual([]);
     expect(result.notes).toContain("a has no design.md");
   });
+
+  it("finds a design.md under a nested docsRoot (T113 pilot finding)", () => {
+    const root = project({ "_docs/hkt/module/crm/design.md": DESIGN });
+
+    const result = migrateLegacyDesign(root, NOW, path.join(root, "_docs", "hkt"));
+
+    expect(result.items.length).toBeGreaterThan(0);
+    expect(result.sources[0].locator).toBe("_docs/hkt/module/crm/design.md");
+  });
 });

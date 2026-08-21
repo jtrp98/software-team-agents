@@ -51,6 +51,7 @@ import type { LaneSignoff, RoleWorkspace, SignoffItemRef } from "./roleWorkspace
 export const APPROVAL_TYPE_OF_LANE: Record<RoleLane, ApprovalType> = {
   ba: ApprovalType.REQUIREMENT_INTERVIEW,
   sa: ApprovalType.SCHEMA_CONFIRMATION,
+  uxui: ApprovalType.UXUI_SIGNOFF,
   dev: ApprovalType.DEPLOY,
 };
 

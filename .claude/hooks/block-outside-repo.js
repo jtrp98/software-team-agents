@@ -68,10 +68,19 @@ function check(input) {
   const target = normalize(path.resolve(root, rawPath));
 
   if (isUnder(target, root)) return null;
+  if (writableWorkRoots().some((workRoot) => isUnder(target, workRoot))) return null;
   if (isUnder(target, normalize(path.join(os.tmpdir(), 'claude')))) return null;
   if (isMemoryDir(target)) return null;
 
   return deny(rawPath, root);
+}
+
+/** Canonical Target roots come only from runtime preflight. Invalid input grants nothing. */
+function writableWorkRoots() {
+  let roots;
+  try { roots = JSON.parse(process.env.AGENTCLAUDE_WRITABLE_WORK_ROOTS || '[]'); } catch { return []; }
+  if (!Array.isArray(roots)) return [];
+  return roots.filter((candidate) => typeof candidate === 'string' && path.isAbsolute(candidate)).map(normalize);
 }
 
 /** Allows writes under exactly `~/.claude/projects/<project-key>/memory/...`. */

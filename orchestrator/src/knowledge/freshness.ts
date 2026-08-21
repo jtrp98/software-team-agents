@@ -6,6 +6,7 @@ import {
   freshnessThresholdFor,
 } from "./knowledgePolicy.js";
 import { digestOfSource, parseLocator } from "./sourceDigest.js";
+import { resolveSource } from "./sourceResolver.js";
 
 /**
  * Context freshness (T71) — how old is what an agent is about to rely on, and
@@ -34,7 +35,7 @@ import { digestOfSource, parseLocator } from "./sourceDigest.js";
  * `decision`: the code moves under the first and not under the second.
  */
 
-export type FreshnessVerdict = "fresh" | "aging" | "stale" | "source-changed" | "source-missing" | "unknown";
+export type FreshnessVerdict = "fresh" | "changed" | "unavailable" | "unhashable" | "aging" | "stale" | "source-changed" | "source-missing" | "unknown";
 
 export interface Freshness {
   id: string;
@@ -69,6 +70,8 @@ export interface FreshnessOptions {
    * reporting every source as unchanged.
    */
   projectRoot?: string;
+  knowledgeRoot?: string;
+  targetPaths?: ReadonlyMap<string, string>;
 }
 
 export function freshnessOf(item: KnowledgeItem, options: FreshnessOptions): Freshness {
@@ -80,8 +83,10 @@ export function freshnessOf(item: KnowledgeItem, options: FreshnessOptions): Fre
   let oldestMs = Number.POSITIVE_INFINITY;
   const changedSources: string[] = [];
   const missingSources: string[] = [];
+  const unhashableSources: string[] = [];
 
   for (const source of item.sources) {
+    if (item.schema_version >= 2 && (source.origin?.root === "external" || source.digest === null)) unhashableSources.push(source.locator);
     const capturedMs = Date.parse(source.captured_at);
     if (!Number.isNaN(capturedMs) && capturedMs < oldestMs) {
       oldestMs = capturedMs;
@@ -90,6 +95,17 @@ export function freshnessOf(item: KnowledgeItem, options: FreshnessOptions): Fre
 
     if (options.projectRoot === undefined) continue;
     if (source.type !== "file" && source.type !== "code") continue;
+    if (source.origin && options.knowledgeRoot) {
+      const resolved = resolveSource(source, options.knowledgeRoot, options.targetPaths);
+      if (resolved.state === "unavailable") missingSources.push(source.locator);
+      else if (resolved.state === "invalid") changedSources.push(source.locator);
+      else if (resolved.state === "resolved" && source.digest !== null) {
+        const current = digestOfSource(resolved.path, ".");
+        if (current === null) missingSources.push(source.locator);
+        else if (current !== source.digest) changedSources.push(source.locator);
+      }
+      continue;
+    }
     if (source.digest === null) continue;
 
     const current = digestOfSource(source.locator, options.projectRoot);
@@ -105,7 +121,7 @@ export function freshnessOf(item: KnowledgeItem, options: FreshnessOptions): Fre
   if (missingSources.length > 0) {
     return {
       id: item.id,
-      verdict: "source-missing",
+      verdict: item.sources.some((source) => source.origin?.root === "target") ? "unavailable" : "source-missing",
       ageDays,
       oldestSource,
       changedSources,
@@ -116,13 +132,16 @@ export function freshnessOf(item: KnowledgeItem, options: FreshnessOptions): Fre
   if (changedSources.length > 0) {
     return {
       id: item.id,
-      verdict: "source-changed",
+      verdict: item.schema_version >= 2 ? "changed" : "source-changed",
       ageDays,
       oldestSource,
       changedSources,
       missingSources,
       reason: `changed since it was read: ${changedSources.join(", ")} — whatever this concluded, it concluded about different text`,
     };
+  }
+  if (unhashableSources.length > 0 && item.schema_version >= 2) {
+    return { id: item.id, verdict: "unhashable", ageDays, oldestSource, changedSources, missingSources, reason: `source cannot be hashed locally: ${unhashableSources.join(", ")}` };
   }
   if (ageDays === null) {
     return {
@@ -168,11 +187,14 @@ export function freshnessOf(item: KnowledgeItem, options: FreshnessOptions): Fre
   };
 }
 
-export const NEEDS_ATTENTION: FreshnessVerdict[] = ["aging", "stale", "source-changed", "source-missing", "unknown"];
+export const NEEDS_ATTENTION: FreshnessVerdict[] = ["changed", "unavailable", "unhashable", "aging", "stale", "source-changed", "source-missing", "unknown"];
 
 /** Every item that is not simply fresh, worst first — the order somebody would work through them. */
 export function needsAttention(kb: KnowledgeBase, options: FreshnessOptions): Freshness[] {
   const rank: Record<FreshnessVerdict, number> = {
+    unavailable: 0,
+    changed: 1,
+    unhashable: 4,
     "source-missing": 0,
     "source-changed": 1,
     stale: 2,

@@ -201,7 +201,7 @@ describe("migrateLegacyPlan — what it declines to do", () => {
     const result = migrateLegacyPlan(root, NOW);
 
     expect(result.items).toEqual([]);
-    expect(result.notes).toEqual(["no `_docs/module/` — no legacy plan.md to migrate"]);
+    expect(result.notes).toEqual(["no `module/` under _docs — no legacy plan.md to migrate"]);
   });
 
   it("owns a task with no side to project-manager rather than guessing an engineer", () => {
@@ -216,5 +216,102 @@ describe("migrateLegacyPlan — what it declines to do", () => {
 
     expect(tasks(root)[0].owner).toBe(AgentStage.BACKEND_ENGINEER);
     expect(tasks(withoutSide)[0].payload.tag).toBe("backend");
+  });
+
+  it("finds module docs under a nested docsRoot (T113 pilot finding: not every project's _docs/ sits at the repo root)", () => {
+    const root = project({
+      "_docs/hkt/module/crm/plan.md": `## Phase 1: x\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-001 — a thing | pending | — | — |\n`,
+    });
+
+    const result = migrateLegacyPlan(root, NOW, path.join(root, "_docs", "hkt"));
+
+    expect(result.items).toHaveLength(1);
+    // The locator stays relative to projectRoot (not docsRoot), so git history
+    // (T63) and the digest still resolve against a real repo-relative path.
+    expect(result.items[0].sources[0].locator).toMatch(/^_docs\/hkt\/module\/crm\/plan\.md/);
+  });
+
+  it("does not find the same docs at the default docsRoot once one is given explicitly", () => {
+    const root = project({
+      "_docs/hkt/module/crm/plan.md": `## Phase 1: x\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-001 — a thing | pending | — | — |\n`,
+    });
+
+    expect(migrateLegacyPlan(root, NOW).items).toHaveLength(0);
+  });
+});
+
+describe("migrateLegacyPlan — a [tag] checkbox with no BE-/FE- id (T113 pilot finding)", () => {
+  it("synthesizes a BE-/FE- shaped id from the tag instead of dropping the task", () => {
+    const root = project({
+      "_docs/module/crm/plan.md": [
+        "## Phase 1: x",
+        "- [ ] [backend] เพิ่ม 3 คอลัมน์ใหม่",
+        "- [x] [frontend] scaffold the review page",
+      ].join("\n"),
+    });
+
+    const result = migrateLegacyPlan(root, NOW);
+    const items = result.items.filter((i): i is KnowledgeItemOf<"task"> => i.kind === "task");
+
+    expect(items).toHaveLength(2);
+    expect(items[0].id).toBe("BE-crm-P1-01");
+    expect(items[0].owner).toBe(AgentStage.BACKEND_ENGINEER);
+    expect(items[0].payload.tag).toBe("backend");
+    expect(items[0].payload.plan_status).toBe("pending");
+    expect(items[0].title).toBe("เพิ่ม 3 คอลัมน์ใหม่");
+    expect(items[1].id).toBe("FE-crm-P1-01");
+    expect(items[1].payload.plan_status).toBe("verified");
+    expect(result.notes.some((n) => n.includes("synthesized BE-crm-P1-01"))).toBe(true);
+  });
+
+  it("numbers sequentially per tag within a phase, and resets in the next phase", () => {
+    const root = project({
+      "_docs/module/crm/plan.md": [
+        "## Phase 1: x",
+        "- [ ] [backend] first",
+        "- [ ] [backend] second",
+        "## Phase 2: y",
+        "- [ ] [backend] third",
+      ].join("\n"),
+    });
+
+    const items = migrateLegacyPlan(root, NOW).items.filter((i): i is KnowledgeItemOf<"task"> => i.kind === "task");
+
+    expect(items.map((i) => i.id)).toEqual(["BE-crm-P1-01", "BE-crm-P1-02", "BE-crm-P2-01"]);
+  });
+
+  it("marks the source note as synthesized, distinctly from a real legacy id", () => {
+    const root = project({
+      "_docs/module/crm/plan.md": "## Phase 1: x\n- [ ] [backend] untagged item\n- [ ] BE-001 — a real id\n",
+    });
+
+    const items = migrateLegacyPlan(root, NOW).items.filter((i): i is KnowledgeItemOf<"task"> => i.kind === "task");
+    const synthesized = items.find((i) => i.id === "BE-crm-P1-01")!;
+    const real = items.find((i) => i.id === "BE-001")!;
+
+    expect(synthesized.sources[0].note).toContain("id synthesized from a [tag] prefix");
+    expect(real.sources[0].note).not.toContain("synthesized");
+  });
+
+  it("still skips a checkbox with neither an id nor a [tag] prefix", () => {
+    const root = project({ "_docs/module/crm/plan.md": "## Phase 1: x\n- [ ] no id, no tag, just prose\n" });
+
+    const result = migrateLegacyPlan(root, NOW);
+
+    expect(result.items).toEqual([]);
+    expect(result.notes.some((n) => n.includes("has no BE-/FE- id — skipped"))).toBe(true);
+  });
+
+  it("applies the same fallback to a table row's Task cell, not just checkboxes", () => {
+    const root = project({
+      "_docs/module/crm/plan.md":
+        "## Phase 1: x\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| [backend] no explicit id | pending | — | — |\n",
+    });
+
+    const items = migrateLegacyPlan(root, NOW).items.filter((i): i is KnowledgeItemOf<"task"> => i.kind === "task");
+
+    expect(items).toHaveLength(1);
+    expect(items[0].id).toBe("BE-crm-P1-01");
+    expect(items[0].title).toBe("no explicit id");
   });
 });

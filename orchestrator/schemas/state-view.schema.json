@@ -84,6 +84,7 @@
         "level",
         "pipeline",
         "depends_on",
+        "target_bindings",
         "waiting_on",
         "retry",
         "approvals",
@@ -128,6 +129,15 @@
         "level": { "type": "string", "enum": ["TRIVIAL", "SMALL", "MEDIUM", "LARGE_CRITICAL", "UNKNOWN"] },
         "pipeline": { "type": "array", "items": { "$ref": "#/definitions/agent" } },
         "depends_on": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "target_bindings": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["frontend_target", "backend_target"],
+          "properties": {
+            "frontend_target": { "type": ["string", "null"] },
+            "backend_target": { "type": ["string", "null"] }
+          }
+        },
         "waiting_on": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "retry": {
           "description": "QA and security keep separate budgets, so the flat count/max pair is split rather than summed — a total would be compared against a per-kind ceiling and read wrong.",

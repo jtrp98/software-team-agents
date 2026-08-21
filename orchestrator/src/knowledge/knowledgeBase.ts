@@ -18,6 +18,7 @@ import { defaultProjectRoot } from "../agents/agentContract.js";
 import { readBootstrapState } from "../bootstrap/bootstrapStore.js";
 import { readAdoptionState } from "../adoption/adoptionStore.js";
 import { unapprovedStages as unapprovedAdoptionStages } from "../adoption/adoptionModel.js";
+import { loadTargetRegistry } from "../threeRepo/targets.js";
 
 /**
  * The single entry point every agent asks the project knowledge through (T61,
@@ -80,6 +81,8 @@ interface IncomingEdge {
 
 export class KnowledgeBase {
   private readonly byId = new Map<string, KnowledgeItem>();
+  private readonly byQualifiedId = new Map<string, KnowledgeItem>();
+  private readonly bareMatches = new Map<string, KnowledgeItem[]>();
   private readonly incomingIndex = new Map<string, IncomingEdge[]>();
   readonly items: KnowledgeItem[];
 
@@ -99,6 +102,8 @@ export class KnowledgeBase {
       // Duplicate ids are reported by the loader; last one wins here so a
       // constructed base is never left with a half-built index.
       this.byId.set(item.id, item);
+      this.byQualifiedId.set(qualifiedKnowledgeId(item), item);
+      this.bareMatches.set(item.id, [...(this.bareMatches.get(item.id) ?? []), item]);
     }
     for (const item of items) {
       for (const relation of item.relations) {
@@ -115,7 +120,16 @@ export class KnowledgeBase {
   }
 
   get(id: string): KnowledgeItem | null {
-    return this.byId.get(id) ?? null;
+    if (id.includes("/")) return this.byQualifiedId.get(id) ?? null;
+    const matches = this.bareMatches.get(id) ?? [];
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  resolve(id: string, module: string | null): KnowledgeItem | null {
+    if (id.includes("/")) return this.byQualifiedId.get(id) ?? null;
+    const matches = this.bareMatches.get(id) ?? [];
+    const local = matches.filter((item) => item.module === module);
+    return local.length === 1 ? local[0] : matches.length === 1 ? matches[0] : null;
   }
 
   query(filter: KnowledgeQuery = {}): KnowledgeItem[] {
@@ -151,7 +165,7 @@ export class KnowledgeBase {
     const out: KnowledgeItem[] = [];
     for (const relation of item.relations) {
       if (types && !types.includes(relation.type)) continue;
-      const target = this.byId.get(relation.to);
+      const target = this.resolve(relation.to, relation.to_module ?? item.module);
       if (target) out.push(target);
     }
     return out;
@@ -268,9 +282,16 @@ export class KnowledgeBase {
       }
 
       for (const relation of item.relations) {
-        const target = this.byId.get(relation.to);
+        const target = item.schema_version >= 2 && relation.to_module === undefined
+          ? (this.bareMatches.get(relation.to) ?? []).filter((candidate) => candidate.module === item.module)[0] ?? null
+          : this.resolve(relation.to, relation.to_module ?? item.module);
         if (!target) {
-          problems.push(`${item.id}: ${relation.type} -> "${relation.to}", which is not a knowledge item here`);
+          const candidates = this.bareMatches.get(relation.to) ?? [];
+          const crossModule = item.schema_version >= 2 && relation.to_module === undefined && candidates.some((candidate) => candidate.module !== item.module);
+          const detail = crossModule
+            ? ` — cross-module relations require to_module (candidates: ${candidates.map(qualifiedKnowledgeId).join(", ")})`
+            : candidates.length > 1 ? ` — ambiguous: ${candidates.map(qualifiedKnowledgeId).join(", ")}` : "";
+          problems.push(`${candidates.length > 1 || crossModule ? qualifiedKnowledgeId(item) : item.id}: ${relation.type} -> "${relation.to}", which is not a knowledge item here${detail}`);
           continue;
         }
         if (!isRelationLegal(relation.type, item.kind, target.kind)) {
@@ -315,6 +336,11 @@ function dedupe(items: KnowledgeItem[]): KnowledgeItem[] {
     seen.add(item.id);
     return true;
   });
+}
+
+/** Stable cross-module identity. Bare ids are only safe when unique. */
+export function qualifiedKnowledgeId(item: Pick<KnowledgeItem, "module" | "id">): string {
+  return `${item.module ?? "_project"}/${item.id}`;
 }
 
 export interface KnowledgeCheckReport extends KnowledgeCheckResult {
@@ -384,6 +410,21 @@ export function checkKnowledge(projectRoot: string = defaultProjectRoot()): Know
   const cross = crossCheckRegistry(items, new SourceRegistry(registryLoad.records), projectRoot);
   const kb = new KnowledgeBase(items, problems);
   const base = kb.check();
+  const v2Problems: string[] = [];
+  if (items.some((item) => item.schema_version >= 2)) {
+    try {
+      const registry = loadTargetRegistry(projectRoot);
+      const known = new Set(registry.targets.map((target) => target.target_id));
+      for (const item of items) {
+        for (const targetId of item.target_ids ?? []) if (!known.has(targetId)) v2Problems.push(`${qualifiedKnowledgeId(item)}: unknown target_id "${targetId}"`);
+        if (item.kind === "task" && item.payload.tag !== null && item.payload.target_id !== null && item.payload.target_id !== undefined && !known.has(item.payload.target_id)) {
+          v2Problems.push(`${qualifiedKnowledgeId(item)}: task payload.target_id "${item.payload.target_id}" is not in targets.yaml`);
+        }
+      }
+    } catch (error) {
+      v2Problems.push(`schema v2 knowledge requires valid targets.yaml: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 
   const resolutionLoad = loadResolutions(projectRoot);
   const conflicts = reportConflicts(kb, resolutionLoad.resolutions);
@@ -391,6 +432,7 @@ export function checkKnowledge(projectRoot: string = defaultProjectRoot()): Know
 
   const allProblems = [
     ...base.problems,
+    ...v2Problems,
     ...registryLoad.problems,
     ...cross.problems,
     ...resolutionLoad.problems,

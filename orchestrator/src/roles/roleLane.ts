@@ -29,7 +29,7 @@ import { type ViewName, viewNameFor } from "../knowledge/roleView.js";
  * decide something. No fourth lane, and no identity system.
  */
 
-export const ROLE_LANES = ["ba", "sa", "dev"] as const;
+export const ROLE_LANES = ["ba", "sa", "uxui", "dev"] as const;
 export type RoleLane = (typeof ROLE_LANES)[number];
 
 /** The rename, and the only thing this file declares. `all` has no lane — see the note above. */
@@ -40,7 +40,7 @@ const LANE_OF_VIEW: Record<Exclude<ViewName, "all">, RoleLane> = {
 };
 
 /** What a lane is called in a message to a person. The file format uses the lowercase id. */
-export const LANE_LABEL: Record<RoleLane, string> = { ba: "BA", sa: "SA", dev: "DEV" };
+export const LANE_LABEL: Record<RoleLane, string> = { ba: "BA", sa: "SA", uxui: "UXUI", dev: "DEV" };
 
 export function isRoleLane(value: string): value is RoleLane {
   return (ROLE_LANES as readonly string[]).includes(value);
@@ -62,5 +62,7 @@ export function laneOf(role: AgentStage): RoleLane | null {
  * auto-invoked in any mode is about invocation and is untouched by this file.
  */
 export function rolesInLane(lane: RoleLane): AgentStage[] {
+  // V1 UX/UI is intentionally human-operated; V2 adds an agent/Figma connector.
+  if (lane === "uxui") return [];
   return Object.values(AgentStage).filter((role) => laneOf(role) === lane);
 }

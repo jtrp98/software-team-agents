@@ -20,6 +20,9 @@ import type {
 import type { RuntimeRegistry } from "./runtimeRegistry.js";
 import { resolveRuntimeRoute } from "./runtimeRouting.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import { checkRoleExecutionGate } from "../roles/roleExecutionGate.js";
+import type { PersistedTask } from "../store/taskStore.js";
+import type { ThreeRepoRequestRoots } from "../threeRepo/preflight.js";
 
 /**
  * An `AgentExecutor` built on a `RuntimeAdapter` (T108).
@@ -68,6 +71,14 @@ export interface RuntimeExecutorOptions {
   sliceModuleDocs?: boolean;
   /** T42 — per-stage working directory for a project whose pipeline spans several repos. */
   stageRoots?: Partial<Record<AgentStage, string>>;
+  /** Phase 2's fail-closed resolver. When present it runs before adapter start. */
+  threeRepoTask?: (taskId: string, stage: AgentStage) => { task: PersistedTask; roots: ThreeRepoRequestRoots };
+  /**
+   * T114 — make the BA → SA → DEV human handoffs a prerequisite of the lead
+   * stages. Off by default so a project that has not adopted V1.5 knowledge
+   * workspaces preserves the pre-T114 execution path.
+   */
+  enforceRoleWorkflow?: boolean;
   /**
    * T112 — when given, a role's runtime and model are resolved per run via
    * `runtimeRouting.ts` (`.sta/config.yaml`'s `model_routing`, extended to a
@@ -155,9 +166,26 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     const role = getAgent(req.stage).role;
     const moduleName = opts.moduleName(req.taskId);
 
+    let threeRepo: { task: PersistedTask; roots: ThreeRepoRequestRoots } | undefined;
+    if (opts.threeRepoTask) {
+      try {
+        threeRepo = opts.threeRepoTask(req.taskId, req.stage);
+      } catch (e) {
+        return failResult(`cannot start ${role}: three-repo preflight failed: ${String(e)}`);
+      }
+    }
+
+    if (opts.enforceRoleWorkflow) {
+      // In three-repo mode the workflow and UX artifacts live in Knowledge,
+      // never beside framework bindings. Preflight is read-only and runs before
+      // any adapter work, so resolving it first cannot create side effects.
+      const handoff = checkRoleExecutionGate(threeRepo?.roots.knowledgeRoot ?? opts.projectRoot, moduleName, req.stage);
+      if (!handoff.allowed) return failResult(handoff.reason ?? `cannot start ${role}: role workflow gate failed`);
+    }
+
     const sliced = sliceDocs
       ? sliceModuleDocsFor(req.stage, {
-          projectRoot: opts.projectRoot,
+          projectRoot: threeRepo?.roots.knowledgeRoot ?? opts.projectRoot,
           moduleName,
           phases: opts.phases?.(req.taskId),
         })
@@ -201,10 +229,19 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     }
 
     let result: RuntimeAgentResult;
+    const hasTargetWrite = threeRepo?.roots.workRoots.some((root) => root.access === "write") ?? false;
+    if (hasTargetWrite && !activeRuntime.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)) {
+      return failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot enforce a pre-tool workspace guard for Target write access`, declared);
+    }
     try {
       result = await activeRuntime.executeAgent({
         role,
-        cwd: opts.stageRoots?.[req.stage] ?? opts.projectRoot,
+        // Binding/config lives in the Framework root; workspace access arrives
+        // separately so changing cwd cannot widen a task's write scope.
+        cwd: threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot,
+        bindingRoot: threeRepo?.roots.bindingRoot,
+        knowledgeRoot: threeRepo?.roots.knowledgeRoot,
+        workRoots: threeRepo?.roots.workRoots,
         definitionPath: activeRuntime.binding.definitionPath(role),
         prompt,
         model: declared.model,
@@ -215,7 +252,13 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         // guards need it and none of them can work it out alone — a hook is not
         // told which agent it is guarding. An adapter may add its own variables
         // on top; the contract says it must not drop these.
-        env: { AGENTCLAUDE_ROLE: role },
+        env: {
+          AGENTCLAUDE_ROLE: role,
+          // Guard hooks receive only tool paths, not this task's binding. Give
+          // them the canonical write roots resolved by preflight; never derive
+          // scope from cwd or an agent-provided path.
+          ...(hasTargetWrite ? { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify(threeRepo!.roots.workRoots.filter((root) => root.access === "write").map((root) => root.path)) } : {}),
+        },
         timeoutMs: opts.timeoutMs,
       });
     } catch (e) {
@@ -226,6 +269,13 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     }
 
     const metrics = metricsFrom(result, declared);
+
+    if (hasTargetWrite && !result.guards.enforced.includes(RuntimeCapability.PRE_TOOL_GUARD)) {
+      return failResult(
+        `Target-write run of ${role} was rejected because adapter "${activeRuntime.id}" did not confirm pre-tool guard enforcement${result.guards.reason ? `: ${result.guards.reason}` : ""}`,
+        metrics,
+      );
+    }
 
     if (result.status === "UNAVAILABLE") {
       return {

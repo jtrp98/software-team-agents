@@ -245,11 +245,22 @@ function designItemsFor(text: string, ctx: Ctx, notes: string[]): KnowledgeItem[
   return items;
 }
 
-/** Reads every module's `design.md` and migrates it. Never writes. */
-export function migrateLegacyDesign(projectRoot: string, now: string): LegacyDesignResult {
-  const moduleRoot = path.join(projectRoot, "_docs", "module");
+/**
+ * Reads every module's `design.md` and migrates it. Never writes.
+ *
+ * `docsRoot` (defaulting to `<projectRoot>/_docs`) is where `module/` lives —
+ * see `legacyDocs.ts`'s `importLegacyDocs` doc-comment for why this is a
+ * separate option from `projectRoot` rather than assumed to be `_docs` right
+ * under it.
+ */
+export function migrateLegacyDesign(
+  projectRoot: string,
+  now: string,
+  docsRoot: string = path.join(projectRoot, "_docs"),
+): LegacyDesignResult {
+  const moduleRoot = path.join(docsRoot, "module");
   if (!fs.existsSync(moduleRoot)) {
-    return { items: [], sources: [], notes: ["no `_docs/module/` — no legacy design.md to migrate"] };
+    return { items: [], sources: [], notes: [`no \`module/\` under ${path.relative(projectRoot, docsRoot) || "."} — no legacy design.md to migrate`] };
   }
 
   const items: KnowledgeItem[] = [];
@@ -263,8 +274,8 @@ export function migrateLegacyDesign(projectRoot: string, now: string): LegacyDes
     .sort();
 
   for (const module of modules) {
-    const relativePath = `_docs/module/${module}/design.md`;
-    const abs = path.join(projectRoot, ...relativePath.split("/"));
+    const abs = path.join(moduleRoot, module, "design.md");
+    const relativePath = path.relative(projectRoot, abs).split(path.sep).join("/");
     if (!fs.existsSync(abs)) {
       notes.push(`${module} has no design.md`);
       continue;

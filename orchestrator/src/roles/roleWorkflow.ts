@@ -297,6 +297,17 @@ export const DEV_WORKFLOW: LaneSpec = {
   },
 };
 
+/** V1 UX/UI is deliberately human-operated and supplies a signed artifact just before frontend work. */
+export const UXUI_WORKFLOW: LaneSpec = {
+  lane: "uxui",
+  leadAgent: AgentStage.HUMAN,
+  primaryKind: "ux-design",
+  handoffTo: "dev",
+  humanGate: "a human records uxui-signoff for the current UX artifact",
+  blockers() { return []; },
+  carries() { return []; },
+};
+
 /**
  * One entry per lane.
  *
@@ -308,6 +319,7 @@ export const DEV_WORKFLOW: LaneSpec = {
 export const LANE_WORKFLOWS: Partial<Record<RoleLane, LaneSpec>> = {
   ba: BA_WORKFLOW,
   sa: SA_WORKFLOW,
+  uxui: UXUI_WORKFLOW,
   dev: DEV_WORKFLOW,
 };
 

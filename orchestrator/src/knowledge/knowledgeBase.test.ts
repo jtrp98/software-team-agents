@@ -188,6 +188,19 @@ describe("check", () => {
     expect(result.problems[0]).toContain("REQ-404");
   });
 
+  it("requires to_module for a v2 relation that leaves its module", () => {
+    const local = make("requirement", "REQ-009", { acceptance_criteria: [], actors: [], priority: null, assumption_unconfirmed: false }, {
+      module: "one", schema_version: 2, target_ids: [],
+      sources: [{ type: "human", locator: "Nok", captured_at: "2026-08-21T00:00:00Z", digest: null, origin: { root: "external", target_id: null } }],
+      relations: [{ type: "refines", to: "DES-009" }],
+    });
+    const remote = make("architecture", "DES-009", { feasibility: "feasible", risks: [], component: null }, {
+      module: "two", schema_version: 2, target_ids: [],
+      sources: [{ type: "human", locator: "Nok", captured_at: "2026-08-21T00:00:00Z", digest: null, origin: { root: "external", target_id: null } }],
+    });
+    expect(new KnowledgeBase([local, remote]).check().problems.join("\n")).toContain("require to_module");
+  });
+
   it("reports a relation whose two ends are not a legal pair, and says what would have been", () => {
     const items = [
       ...sampleItems(),

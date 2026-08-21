@@ -39,6 +39,7 @@ import {
 //           OUTPUT/DECISION.
 // v4 (T57): added runs.prompt_version — same nullable-column shape as v2 -> v3, migrated the
 //           same way, for the same reason: an old row simply reads back "not recorded".
+// v5 (three-repo Phase 2): adds targetBindings inside the task JSON document.
 //
 // v2 -> v3 and v3 -> v4 are migrated in place (see MIGRATIONS below), unlike v1 -> v2 which still
 // fails closed. The difference is what is being added and what it would cost to get it wrong: v3
@@ -46,7 +47,7 @@ import {
 // nothing lost. v1 -> v2 changed the columns a *run* is read through, where a silent misread
 // would corrupt cost and token accounting that nothing downstream could tell was wrong. An
 // unknown version still refuses to open at all.
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -188,6 +189,12 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     // `runs` predates T57; the DDL above only creates the column on a fresh file.
     const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
     if (!existing.has("prompt_version")) db.exec("ALTER TABLE runs ADD COLUMN prompt_version INTEGER");
+  },
+  4: (db) => {
+    // Target bindings live in the versioned task JSON document. PersistedTaskSchema
+    // supplies null defaults for historical rows, so this migration intentionally
+    // changes no history bytes and cannot invent a Target identity.
+    void db;
   },
 };
 

@@ -180,11 +180,13 @@ withTempProject((tmp) => {
     ['absolute path inside the repo is allowed', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'app/page.tsx') } }, ALLOW],
     ['the temp scratchpad is allowed (harness convention)', { tool_name: 'Write', tool_input: { file_path: scratch } }, ALLOW],
     ['the auto-memory store is allowed (harness convention)', { tool_name: 'Write', tool_input: { file_path: memory } }, ALLOW],
+    ['a canonical runtime-granted Target work root is allowed', { tool_name: 'Write', tool_input: { file_path: path.join(os.tmpdir(), 'target-work', 'src', 'x.ts') } }, ALLOW, { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([path.join(os.tmpdir(), 'target-work')]) }],
+    ['a sibling of a runtime-granted Target root remains blocked', { tool_name: 'Write', tool_input: { file_path: path.join(os.tmpdir(), 'target-other', 'x.ts') } }, BLOCK, { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([path.join(os.tmpdir(), 'target-work')]) }],
     ['Bash is out of scope for this guard', { tool_name: 'Bash', tool_input: { command: `echo hi > ${outside}` } }, ALLOW],
   ];
 
-  for (const [name, input, expected] of cases) {
-    check(name, runHook('block-outside-repo.js', input, env), expected);
+  for (const [name, input, expected, extraEnv] of cases) {
+    check(name, runHook('block-outside-repo.js', input, { ...env, ...extraEnv }), expected);
   }
 });
 
@@ -697,9 +699,10 @@ check(
 section('9. block-path-permissions.js -- per-agent write paths (T15)');
 
 /** Feeds the hook a write attempt, optionally as a named agent. */
-function runPathHook(tool, filePath, role) {
+function runPathHook(tool, filePath, role, extraEnv) {
   const env = {};
   if (role) env.AGENTCLAUDE_ROLE = role;
+  Object.assign(env, extraEnv || {});
   return runHook('block-path-permissions.js', { tool_name: tool, tool_input: { file_path: filePath } }, env);
 }
 
@@ -763,6 +766,18 @@ check(
 check(
   'qa-engineer writing application code -> blocked (a verifier that fixes is not verifying)',
   runPathHook('Write', path.join(ROOT, 'server', 'routes', 'deal.ts'), 'qa-engineer'),
+  BLOCK,
+);
+
+const targetWorkRoot = path.join(os.tmpdir(), 'agentclaude-target-work');
+check(
+  'backend-engineer may write only the runtime-granted canonical Target root',
+  runPathHook('Write', path.join(targetWorkRoot, 'src', 'route.ts'), 'backend-engineer', { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([targetWorkRoot]) }),
+  ALLOW,
+);
+check(
+  'runtime-granted Target root still blocks .git writes',
+  runPathHook('Write', path.join(targetWorkRoot, '.git', 'config'), 'backend-engineer', { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([targetWorkRoot]) }),
   BLOCK,
 );
 

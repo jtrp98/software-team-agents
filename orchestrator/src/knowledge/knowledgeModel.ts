@@ -43,6 +43,7 @@ import { AgentStage } from "../types.js";
  *      nothing useful, and traverse() would return noise.
  */
 
+/** Default emitted generation remains v1 until Phase 5 performs the explicit migration. */
 export const KNOWLEDGE_SCHEMA_VERSION = 1;
 
 export const KNOWLEDGE_KINDS = [
@@ -55,6 +56,7 @@ export const KNOWLEDGE_KINDS = [
   "decision",
   "task",
   "test",
+  "ux-design",
 ] as const;
 export type KnowledgeKind = (typeof KNOWLEDGE_KINDS)[number];
 
@@ -85,12 +87,15 @@ export interface SourceRef {
   /** The registered raw source (T62) this came from, when there is one. */
   source_id?: string;
   note?: string;
+  origin?: { root: "knowledge" | "target" | "external"; target_id: string | null };
 }
 
 export interface Relation {
   type: RelationType;
   /** Id of the target item. May not exist yet — check() reports that, nothing throws. */
   to: string;
+  /** Required for a cross-module relation. Bare `to` remains same-module only. */
+  to_module?: string;
   note?: string;
 }
 
@@ -101,6 +106,8 @@ export interface KnowledgeEnvelope {
   title: string;
   body: string;
   repo: string | null;
+  /** Target associations are the only routing input in schema v2. */
+  target_ids?: string[];
   module: string | null;
   owner: AgentStage;
   status: KnowledgeStatus;
@@ -170,6 +177,12 @@ export interface TaskPayload {
   contract_version: number | null;
   /** PersistedTask.taskId — the join between this graph and the running state machine. */
   orchestrator_task_id: string | null;
+  target_id?: string | null;
+}
+
+export interface UxDesignPayload {
+  artifact: string;
+  refines: string[];
 }
 
 export interface TestPayload {
@@ -187,6 +200,7 @@ export interface PayloadByKind {
   decision: DecisionPayload;
   task: TaskPayload;
   test: TestPayload;
+  "ux-design": UxDesignPayload;
 }
 
 export interface KnowledgeItemOf<K extends KnowledgeKind> extends KnowledgeEnvelope {
@@ -211,6 +225,7 @@ export const ID_PREFIXES: Record<KnowledgeKind, string[]> = {
   decision: ["ADR"],
   task: ["BE", "FE"],
   test: ["TEST"],
+  "ux-design": ["UX"],
 };
 
 // The id pattern itself lives in `knowledge-item.schema.json` and is enforced by
@@ -364,6 +379,23 @@ export function checkKnowledgeItem(data: unknown): string[] {
   for (const relation of item.relations) {
     if (relation.to === item.id) {
       problems.push(`relation ${relation.type} points at "${item.id}" itself — an item cannot relate to itself`);
+    }
+  }
+  const targetIds = item.target_ids ?? [];
+  if (item.schema_version >= 2 && item.target_ids === undefined) problems.push("schema v2 requires target_ids");
+  if (targetIds.length > 2) problems.push(`target_ids has ${targetIds.length} entries — V1 permits at most two`);
+  if (new Set(targetIds).size !== targetIds.length) problems.push("target_ids contains duplicates");
+  for (const source of item.sources) {
+    if (item.schema_version >= 2 && !source.origin) problems.push(`source "${source.locator}" requires origin in schema v2`);
+    if (source.origin?.root === "target" && !source.origin.target_id) problems.push(`source "${source.locator}" has target origin without target_id`);
+    if (source.origin?.root !== "target" && source.origin?.target_id !== null && source.origin?.target_id !== undefined) problems.push(`source "${source.locator}" has target_id for a non-target origin`);
+  }
+
+  if (item.kind === "task" && item.schema_version >= 2 && item.payload.tag !== null) {
+    if (item.payload.target_id === undefined || item.payload.target_id === null) {
+      problems.push("schema v2 code task requires payload.target_id");
+    } else if (!targetIds.includes(item.payload.target_id)) {
+      problems.push(`schema v2 code task payload.target_id "${item.payload.target_id}" must be one of target_ids`);
     }
   }
 

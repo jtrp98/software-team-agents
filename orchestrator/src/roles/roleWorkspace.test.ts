@@ -385,7 +385,7 @@ describe("checkRoleWorkspaces", () => {
     });
     const result = checkRoleWorkspaces(root);
     expect(result.ok).toBe(false);
-    expect(result.problems.join(" ")).toMatch(/"pm\.yaml" is not one of ba\.yaml, sa\.yaml, dev\.yaml/);
+    expect(result.problems.join(" ")).toMatch(/"pm\.yaml" is not one of ba\.yaml, sa\.yaml, uxui\.yaml, dev\.yaml/);
   });
 
   it("fails a loose file sitting directly under _roles/", () => {
@@ -527,7 +527,7 @@ describe("the roles verb (T99)", () => {
   it("refuses a lane that is not one of the three", async () => {
     const root = project();
     await expect(capture(["roles", "ack", "pm", "DES-003", "--by", "X", "--project-root", root], root)).rejects.toThrow(
-      /one of ba, sa, dev/,
+      /one of ba, sa, uxui, dev/,
     );
   });
 
@@ -568,7 +568,7 @@ describe("the roles verb (T99)", () => {
     for (const lane of ["BA", "SA", "DEV"]) {
       expect(result.out).toMatch(new RegExp(`${lane}\\s+\\w`));
     }
-    expect(result.out.match(/next \(/g)).toHaveLength(3);
+    expect(result.out.match(/next \(/g)).toHaveLength(4);
     expect(result.out).not.toMatch(/no lane workflow defined/);
   });
 

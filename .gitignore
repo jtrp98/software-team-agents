@@ -3,3 +3,4 @@
 # Never hand-edited, never the source of truth (that stays at .claude/agents/, contracts/,
 # workflows/, policies/, stacks/, etc.) — regenerate it, don't commit it.
 /templates/
+.workflow/

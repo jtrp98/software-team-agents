@@ -52,8 +52,8 @@ export interface DetectedState {
   notes: string[];
 }
 
-function moduleDirs(projectRoot: string): string[] {
-  const root = path.join(projectRoot, "_docs", "module");
+function moduleDirs(docsRoot: string): string[] {
+  const root = path.join(docsRoot, "module");
   if (!fs.existsSync(root)) return [];
   return fs
     .readdirSync(root, { withFileTypes: true })
@@ -103,8 +103,8 @@ function detectOrchestratorState(projectRoot: string, out: DetectedState): void 
 }
 
 /** A `plan.md` task table row's Status cell, or a legacy `- [ ]` checkbox line. */
-function detectPlanState(projectRoot: string, module: string, out: DetectedState): void {
-  const file = path.join(projectRoot, "_docs", "module", module, "plan.md");
+function detectPlanState(docsRoot: string, module: string, out: DetectedState): void {
+  const file = path.join(docsRoot, "module", module, "plan.md");
   const text = readIfPresent(file);
   if (text === null) return;
 
@@ -121,8 +121,8 @@ function detectPlanState(projectRoot: string, module: string, out: DetectedState
 }
 
 /** Open QA issues. `review.md`'s `## Open Issues` section outlives its round on purpose (CLAUDE.md), so anything in it is current. */
-function detectReviewState(projectRoot: string, module: string, out: DetectedState): void {
-  const file = path.join(projectRoot, "_docs", "module", module, "review.md");
+function detectReviewState(docsRoot: string, module: string, out: DetectedState): void {
+  const file = path.join(docsRoot, "module", module, "review.md");
   const text = readIfPresent(file);
   if (text === null) return;
 
@@ -142,8 +142,8 @@ function detectReviewState(projectRoot: string, module: string, out: DetectedSta
 }
 
 /** Security findings still 🔵 Open or 🟣 Fix claimed — only the `security` agent may close one. */
-function detectSecurityState(projectRoot: string, module: string, out: DetectedState): void {
-  const file = path.join(projectRoot, "_docs", "module", module, "security.md");
+function detectSecurityState(docsRoot: string, module: string, out: DetectedState): void {
+  const file = path.join(docsRoot, "module", module, "security.md");
   const text = readIfPresent(file);
   if (text === null) return;
 
@@ -162,21 +162,24 @@ function detectSecurityState(projectRoot: string, module: string, out: DetectedS
  * every input here is optional in a real project, and "not present" is an
  * answer.
  */
-export function detectExistingState(projectRoot: string = defaultProjectRoot()): DetectedState {
+export function detectExistingState(
+  projectRoot: string = defaultProjectRoot(),
+  docsRoot: string = path.join(projectRoot, "_docs"),
+): DetectedState {
   const out: DetectedState = { blockers: [], notes: [] };
 
   detectOrchestratorState(projectRoot, out);
 
-  const modules = moduleDirs(projectRoot);
+  const modules = moduleDirs(docsRoot);
   if (modules.length === 0) {
-    out.notes.push("no `_docs/module/` — no legacy module documents to collide with");
+    out.notes.push(`no \`module/\` under ${path.relative(projectRoot, docsRoot) || "."} — no legacy module documents to collide with`);
     return out;
   }
 
   for (const module of modules) {
-    detectPlanState(projectRoot, module, out);
-    detectReviewState(projectRoot, module, out);
-    detectSecurityState(projectRoot, module, out);
+    detectPlanState(docsRoot, module, out);
+    detectReviewState(docsRoot, module, out);
+    detectSecurityState(docsRoot, module, out);
   }
   return out;
 }

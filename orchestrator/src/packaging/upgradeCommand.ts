@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { readTemplateManifest, sha256Of, type TemplateFileEntry } from "./templateManifest.js";
 import { InstallManifestMissingError, installManifestPath, readInstallManifest, writeInstallManifest, type InstallManifest } from "./installManifest.js";
+import { assertFrameworkManagedPaths } from "../threeRepo/ownership.js";
 
 /**
  * T95 — `sta upgrade`: brings a project's framework files up to whatever
@@ -42,6 +43,8 @@ export function runUpgrade(projectRoot: string, templatesDir: string, now: strin
   }
   const oldManifest = readInstallManifest(projectRoot);
   const newTemplateManifest = readTemplateManifest(templatesDir);
+  assertFrameworkManagedPaths(oldManifest.files.map((file) => file.path), "legacy-project");
+  assertFrameworkManagedPaths(newTemplateManifest.files.map((file) => file.path), "legacy-project");
 
   const backupDir = path.join(projectRoot, ".sta", "backups", now.replace(/[:.]/g, "-"));
   fs.mkdirSync(backupDir, { recursive: true });

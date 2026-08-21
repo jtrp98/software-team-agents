@@ -1,0 +1,7 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "knowledge_root"],
+  "properties": { "schema_version": { "const": 1 }, "knowledge_root": { "type": "string", "minLength": 1 } }
+}

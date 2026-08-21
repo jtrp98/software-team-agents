@@ -39,7 +39,7 @@ describe("APPROVAL_TYPE_OF_LANE (T103)", () => {
 
   it("gives every lane a gate", () => {
     for (const lane of ROLE_LANES) expect(APPROVAL_TYPE_OF_LANE[lane]).toBeDefined();
-    expect(new Set(Object.values(APPROVAL_TYPE_OF_LANE)).size).toBe(3);
+    expect(new Set(Object.values(APPROVAL_TYPE_OF_LANE)).size).toBe(4);
   });
 
   /**

@@ -245,4 +245,15 @@ describe("importLegacyDocs — provenance and hygiene", () => {
 
     expect(importLegacyDocs(root, NOW)).toEqual({ items: [], sources: [], notes: [] });
   });
+
+  it("finds a module's review.md under a nested docsRoot, and not at the default one (T113 pilot finding)", () => {
+    const root = project({ "_docs/hkt/module/crm/review.md": "# Review\n\nEverything checks out.\n" });
+
+    const nested = importLegacyDocs(root, NOW, path.join(root, "_docs", "hkt"));
+    const atDefault = importLegacyDocs(root, NOW);
+
+    expect(nested.items.length).toBeGreaterThan(0);
+    expect(nested.sources[0].locator).toBe("_docs/hkt/module/crm/review.md");
+    expect(atDefault.items).toEqual([]);
+  });
 });

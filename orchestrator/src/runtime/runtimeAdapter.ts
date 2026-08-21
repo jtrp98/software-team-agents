@@ -106,6 +106,13 @@ export interface RuntimeGuards {
   readonly exitChecks: readonly RuntimeExitCheck[];
 }
 
+/** A canonical workspace granted to one task after three-repo preflight. */
+export interface RuntimeWorkRoot {
+  readonly targetId: string;
+  readonly path: string;
+  readonly access: "read" | "write";
+}
+
 /** An explicitly empty guard set, for a test or a mock. Named so that no caller reaches it by forgetting to pass one. */
 export const NO_GUARDS: RuntimeGuards = Object.freeze({
   writeAllow: [],
@@ -119,6 +126,10 @@ export interface RuntimeAgentRequest {
   readonly role: string;
   /** Absolute directory the run happens in. Honours `stageRoots` for a multi-repo project (T42). */
   readonly cwd: string;
+  /** Framework, Knowledge and Target roots are explicit; cwd is never scope. */
+  readonly bindingRoot?: string;
+  readonly knowledgeRoot?: string;
+  readonly workRoots?: readonly RuntimeWorkRoot[];
   /** Repo-relative path of this role's definition in this runtime's binding, resolved by `RuntimeBinding.definitionPath`. */
   readonly definitionPath: string;
   /** The task instruction, already assembled and sliced by `agentRunAssembly.ts`. */

@@ -48,6 +48,15 @@
       "type": ["string", "null"],
       "minLength": 1
     },
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "target_id"],
+      "properties": {
+        "root": { "enum": ["knowledge", "target", "external"] },
+        "target_id": { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
     "note": { "type": "string", "minLength": 1 }
   }
 }

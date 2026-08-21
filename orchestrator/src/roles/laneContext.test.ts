@@ -74,7 +74,7 @@ describe("laneContext", () => {
   });
 
   it("reports the kinds outside the lane, so absent and withheld stay distinguishable", () => {
-    expect(laneContext("ba", context()).kindsNotInLane).toEqual(["task", "test"]);
+    expect(laneContext("ba", context()).kindsNotInLane).toEqual(["task", "test", "ux-design"]);
   });
 
   /**

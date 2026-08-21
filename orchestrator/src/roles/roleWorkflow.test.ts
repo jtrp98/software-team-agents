@@ -359,7 +359,7 @@ describe("the lane spec table", () => {
     expect(workflowFor("ba")).toBe(BA_WORKFLOW);
     expect(workflowFor("sa")).toBe(SA_WORKFLOW);
     expect(workflowFor("dev")).toBe(DEV_WORKFLOW);
-    expect(Object.keys(LANE_WORKFLOWS).sort()).toEqual(["ba", "dev", "sa"]);
+    expect(Object.keys(LANE_WORKFLOWS).sort()).toEqual(["ba", "dev", "sa", "uxui"]);
   });
 
   it("chains ba -> sa -> dev and stops", () => {

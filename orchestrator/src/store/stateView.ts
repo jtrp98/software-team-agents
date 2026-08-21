@@ -116,6 +116,7 @@ export function taskToYamlValue(
     level: task.classification.level,
     pipeline: task.classification.pipeline,
     depends_on: task.dependsOn,
+    target_bindings: task.targetBindings,
     waiting_on: status.waitingOn ?? [],
     retry: { qa: task.retries.qa, security: task.retries.security, max: MAX_RETRY },
     approvals: {

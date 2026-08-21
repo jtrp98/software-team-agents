@@ -34,6 +34,8 @@ export enum ApprovalType {
   SECURITY_RISK = "security-risk",
   /** An actual deploy or migration. */
   DEPLOY = "deploy",
+  /** Human UX/UI approval before a frontend stage may start. */
+  UXUI_SIGNOFF = "uxui-signoff",
 }
 
 export const ApprovalStatusSchema = z.enum(["pending", "approved", "rejected"]);

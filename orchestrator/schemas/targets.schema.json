@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "targets"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "targets": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["target_id", "name", "remote_url", "status"], "properties": {
+      "target_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+      "name": { "type": "string", "minLength": 1 },
+      "remote_url": { "type": "string", "minLength": 1, "pattern": "^(?!.*://[^/\\s:@]+:[^/\\s@]+@)(?!.*[?&](token|access_token|password)=).+$" },
+      "status": { "enum": ["active", "retired"] }
+    } } }
+  }
+}

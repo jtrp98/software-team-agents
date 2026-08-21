@@ -88,7 +88,7 @@ export interface AdoptionStageResult {
 
 export interface AdoptionStage {
   id: AdoptionStageId;
-  run(projectRoot: string, now: string): AdoptionStageResult;
+  run(projectRoot: string, now: string, docsRoot?: string): AdoptionStageResult;
 }
 
 export class AdoptionNotStartedError extends Error {
@@ -162,22 +162,22 @@ export function adoptionStages(): AdoptionStage[] {
     },
     {
       id: "legacy-docs",
-      run: (projectRoot, now) => {
-        const result = importLegacyDocs(projectRoot, now);
+      run: (projectRoot, now, docsRoot) => {
+        const result = importLegacyDocs(projectRoot, now, docsRoot);
         return { ...result, skipped: result.items.length === 0 };
       },
     },
     {
       id: "legacy-design",
-      run: (projectRoot, now) => {
-        const result = migrateLegacyDesign(projectRoot, now);
+      run: (projectRoot, now, docsRoot) => {
+        const result = migrateLegacyDesign(projectRoot, now, docsRoot);
         return { ...result, skipped: result.items.length === 0 };
       },
     },
     {
       id: "legacy-plan",
-      run: (projectRoot, now) => {
-        const result = migrateLegacyPlan(projectRoot, now);
+      run: (projectRoot, now, docsRoot) => {
+        const result = migrateLegacyPlan(projectRoot, now, docsRoot);
         return { ...result, skipped: result.items.length === 0 };
       },
     },
@@ -202,13 +202,14 @@ export function adoptionStage(id: AdoptionStageId): AdoptionStage {
 export function initAdoption(
   projectRoot: string = defaultProjectRoot(),
   now: string = new Date().toISOString(),
+  docsRoot?: string,
 ): AdoptionState {
   const existing = readAdoptionState(projectRoot);
   if (existing.problems.length > 0) throw new AdoptionStateError(existing.problems);
   if (existing.state) return existing.state;
 
   const state = newAdoptionState(now);
-  state.preflight = preflightFrom(detectExistingState(projectRoot), now);
+  state.preflight = preflightFrom(detectExistingState(projectRoot, docsRoot), now);
   state.status = computeAdoptionStatus(state);
   writeAdoptionState(state, projectRoot);
   return state;
@@ -282,12 +283,13 @@ function plannedFileWrite(absPath: string, projectRoot: string, subject: string)
 export function planAdoption(
   projectRoot: string = defaultProjectRoot(),
   now: string = new Date().toISOString(),
+  docsRoot?: string,
 ): AdoptionPlan {
   const totals = { create: 0, update: 0, unchanged: 0, conflict: 0 };
   const stages: PlannedStage[] = [];
 
   for (const stage of adoptionStages()) {
-    const result = stage.run(projectRoot, now);
+    const result = stage.run(projectRoot, now, docsRoot);
     const writes: PlannedWrite[] = [];
     const conflicts: string[] = [];
 
@@ -314,7 +316,7 @@ export function planAdoption(
     stages.push({ id: stage.id, writes, conflicts, skipped: result.skipped === true, notes: result.notes });
   }
 
-  const detected = detectExistingState(projectRoot);
+  const detected = detectExistingState(projectRoot, docsRoot);
   return { stages, preflight: { blockers: detected.blockers, notes: detected.notes }, totals };
 }
 
@@ -368,6 +370,7 @@ export function runAdoptionStage(
   id: AdoptionStageId,
   projectRoot: string = defaultProjectRoot(),
   now: string = new Date().toISOString(),
+  docsRoot?: string,
 ): AdoptionState {
   const state = requireState(projectRoot);
   const record = state.stages.find((s) => s.id === id);
@@ -376,7 +379,7 @@ export function runAdoptionStage(
     throw new AdoptionBlockedError(state.preflight?.blockers ?? ["preflight has not run"]);
   }
 
-  const result = adoptionStage(id).run(projectRoot, now);
+  const result = adoptionStage(id).run(projectRoot, now, docsRoot);
   const manifestRead = readAdoptionManifest(projectRoot);
   const manifest = manifestRead.manifest ?? newAdoptionManifest(now);
   const ctx: TrackedWrite = { manifest, stage: id, projectRoot, now };
