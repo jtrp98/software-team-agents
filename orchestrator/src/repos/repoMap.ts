@@ -19,8 +19,8 @@ import { defaultProjectRoot } from "../agents/agentContract.js";
  * place (the project root every other module already resolves against), but
  * `backend-engineer` and `frontend-engineer` may need to run `claude` inside
  * two different working directories to actually commit code where it
- * belongs. `claudeCliExecutor.ts`'s `stageRoots` option is what acts on this
- * — this module only reads and validates the file.
+ * belongs. `runtime/runtimeExecutor.ts`'s `stageRoots` option is what acts on
+ * this — this module only reads and validates the file.
  *
  * Absence is not an error. Most projects keep everything in one repo, the
  * same as before T42 — `checkRepoMap()` reports that as a note, not a
@@ -117,7 +117,7 @@ export function stageRoots(repoMap: RepoMap): Partial<Record<AgentStage, string>
   return result;
 }
 
-/** `loadRepoMap` + `stageRoots` in one call, or `undefined` when there is no repos.yaml — the shape `claudeCliExecutor`'s options want directly. */
+/** `loadRepoMap` + `stageRoots` in one call, or `undefined` when there is no repos.yaml — the shape `createRuntimeExecutor`'s options want directly. */
 export function loadStageRoots(projectRoot: string = defaultProjectRoot()): Partial<Record<AgentStage, string>> | undefined {
   if (!hasRepoMap(projectRoot)) return undefined;
   return stageRoots(loadRepoMap(projectRoot));

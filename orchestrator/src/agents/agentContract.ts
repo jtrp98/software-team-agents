@@ -21,7 +21,7 @@ import type { Capability } from "./capabilities.js";
  * reads at runtime, and these files are checked against it rather than
  * replacing it. That is deliberate for now: `AGENT_REGISTRY` is a pure
  * constant that `orchestrator.ts`, `permissionPolicy.ts` and
- * `claudeCliExecutor.ts` use without knowing what a project root is, and
+ * `runtime/runtimeGuards.ts` use without knowing what a project root is, and
  * making it read files at import time would push that knowledge into all of
  * them. `assertContractsMatchRegistry()` is what keeps the two honest until
  * the folder restructure moves the source of truth here for good.

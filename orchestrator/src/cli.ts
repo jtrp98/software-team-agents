@@ -7,7 +7,9 @@ import { AgentStage, TaskState } from "./types.js";
 import { classifyTask, type ClassificationInput } from "./classification/taskClassifier.js";
 import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
-import { createClaudeCliExecutor } from "./agents/claudeCliExecutor.js";
+import { createRuntimeExecutor } from "./runtime/runtimeExecutor.js";
+import { ClaudeCodeAdapter } from "./runtime/claudeCodeAdapter.js";
+import { contractGuardResolver } from "./runtime/runtimeGuards.js";
 import { DatabaseUnavailableError, SqliteTaskStore } from "./store/sqliteStore.js";
 import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
 import { checkAllContracts } from "./agents/agentContract.js";
@@ -1410,9 +1412,14 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     }
 
     const orchestrator = openTask(registry, args, taskId);
-    const executor = createClaudeCliExecutor({
+    // T109: the executor is now a RuntimeAdapter-driven one (T108) rather than a
+    // Claude-Code-specific spawn — swapping `runtime` here is the whole point of
+    // that seam. `guards` derives from `contracts/<role>.yaml` (T15), same as before.
+    const executor = createRuntimeExecutor({
+      runtime: new ClaudeCodeAdapter({ projectRoot: args.projectRoot }),
       projectRoot: args.projectRoot,
       moduleName: () => args.module!,
+      guards: contractGuardResolver(args.projectRoot),
       phases: () => (args.phases.length > 0 ? args.phases : undefined),
       // T42: absent when there's no repos.yaml — every stage then spawns in
       // args.projectRoot exactly as before this task existed.

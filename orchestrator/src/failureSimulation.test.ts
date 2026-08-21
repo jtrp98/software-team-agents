@@ -34,12 +34,12 @@ import Database from "better-sqlite3";
  * the lower-level function that feeds it.
  *
  * A real "agent timeout" or "API unavailable" never reaches `Orchestrator` as such — by the
- * time `claudeCliExecutor.ts` (T26/T47) turns either one into an `AgentExecutorResult`, it's
- * just a FAIL with a `failure_reason` string, identical in shape to a FAIL for any other cause.
- * That's deliberate: the orchestrator's retry/escalate logic is uniform across failure *causes*
- * on purpose, so it doesn't need one code path per way an agent invocation can go wrong. This
- * file's job for those scenarios is to confirm that uniformity holds, not to re-simulate the
- * subprocess-level detail `claudeCliExecutor.test.ts` already covers.
+ * time `runtime/runtimeExecutor.ts` (T26/T47, and T108/T109 for the adapter split) turns either
+ * one into an `AgentExecutorResult`, it's just a FAIL with a `failure_reason` string, identical in
+ * shape to a FAIL for any other cause. That's deliberate: the orchestrator's retry/escalate logic
+ * is uniform across failure *causes* on purpose, so it doesn't need one code path per way an agent
+ * invocation can go wrong. This file's job for those scenarios is to confirm that uniformity
+ * holds, not to re-simulate the subprocess-level detail `claudeCodeAdapter.test.ts` already covers.
  */
 
 function makeExecutor(overrides: Partial<Record<AgentStage, (callIndex: number) => AgentExecutorResult>>): AgentExecutor {
@@ -130,7 +130,7 @@ describe("Failure Simulation (T56)", () => {
     expect(openApprovals.some((a) => a.type === ApprovalType.SECURITY_RISK)).toBe(true);
   });
 
-  it("scenario: agent timeout — a FAIL from a timed-out invocation is retried like any other FAIL, not treated as a crash (see also claudeCliExecutor.test.ts's ETIMEDOUT test)", async () => {
+  it("scenario: agent timeout — a FAIL from a timed-out invocation is retried like any other FAIL, not treated as a crash (see also claudeCodeAdapter.test.ts's TIMEOUT test)", async () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const orch = new Orchestrator("T-SIM-TIMEOUT", classification);
     const executor = makeExecutor({
@@ -153,7 +153,7 @@ describe("Failure Simulation (T56)", () => {
     expect(status.kind).toBe("DEPLOYED");
   });
 
-  it("scenario: API unavailable (claude CLI's is_error: true) — same uniform FAIL handling as any other cause (see also claudeCliExecutor.test.ts's is_error test)", async () => {
+  it("scenario: API unavailable (claude CLI's is_error: true) — same uniform FAIL handling as any other cause (see also claudeCodeAdapter.test.ts's is_error test)", async () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const orch = new Orchestrator("T-SIM-API", classification);
     const executor = makeExecutor({

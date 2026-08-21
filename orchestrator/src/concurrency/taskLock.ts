@@ -32,7 +32,7 @@ interface LockPayload {
   acquiredAt: number;
 }
 
-/** Lock files older than this are treated as abandoned even if the PID liveness check can't tell — a stage that legitimately runs this long is not realistic (claudeCliExecutor's own default timeout is 30 minutes). */
+/** Lock files older than this are treated as abandoned even if the PID liveness check can't tell — a stage that legitimately runs this long is not realistic (the runtime adapter's own default timeout is 30 minutes, T108/T109). */
 const STALE_AFTER_MS = 60 * 60_000;
 
 export function defaultLockDir(projectRoot: string): string {

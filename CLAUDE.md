@@ -206,7 +206,7 @@ Set in each agent's frontmatter. The split puts the expensive model where a mist
 
 To change one, edit that agent's frontmatter. `inherit` follows the session's `/model`.
 
-**Every agent's frontmatter also carries `version:` (T57)** — a plain integer, starting at 1, bumped by whoever edits that agent's prompt meaningfully. This is log-only: Claude Code resolves a subagent from exactly `.claude/agents/<role>.md`, so only the prompt currently at that path can ever run — nothing here lets a task pin or run an older version. `orchestrator/src/agents/agentModel.ts`'s `resolveAgentVersion()` reads it the same way `resolveAgentModel()` reads `model:`, and `claudeCliExecutor.ts` logs it on every run (`RunRecord.promptVersion`) so a task's history says which prompt version actually ran it.
+**Every agent's frontmatter also carries `version:` (T57)** — a plain integer, starting at 1, bumped by whoever edits that agent's prompt meaningfully. This is log-only: Claude Code resolves a subagent from exactly `.claude/agents/<role>.md`, so only the prompt currently at that path can ever run — nothing here lets a task pin or run an older version. `orchestrator/src/agents/agentModel.ts`'s `resolveAgentVersion()` reads it the same way `resolveAgentModel()` reads `model:`, and `orchestrator/src/runtime/runtimeExecutor.ts` logs it on every run (`RunRecord.promptVersion`) so a task's history says which prompt version actually ran it — via whichever `RuntimeAdapter` (T108) is configured, `claudeCodeAdapter.ts` (T109) today.
 
 ## Fixed stack (summary — the two engineer files are authoritative)
 
