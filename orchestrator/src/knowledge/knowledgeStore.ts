@@ -57,7 +57,7 @@ export const PROJECT_WIDE_DIR = "_project";
  * and guessing wrong means either losing a module's items or reporting the
  * registry as forty malformed items.
  */
-export const RESERVED_DIRS = ["_sources", "_conflicts", "_bootstrap", "_human-input", "_adoption"] as const;
+export const RESERVED_DIRS = ["_sources", "_conflicts", "_bootstrap", "_human-input", "_adoption", "_roles"] as const;
 
 export function knowledgeDir(projectRoot: string = defaultProjectRoot()): string {
   return path.join(projectRoot, KNOWLEDGE_DIRNAME);

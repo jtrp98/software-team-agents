@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agentclaude.local/schemas/role-workspace.schema.json",
+  "title": "Role workspace (knowledge/_roles/<module>/<lane>.yaml)",
+  "description": "One lane's place in the shared knowledge base (T99/T103). A lane is BA, SA or DEV — the three columns of V1.5's diagram — and this file holds only the two things that are lane-local and cannot be derived: the watermark of what the person in that lane has acknowledged, and that person's sign-off on the lane's own output. Everything else a caller might want (what the lane is working on, what changed under it, whether it is waiting on somebody) is computed from knowledge/ every time it is asked, because a stored copy of a derivation is a second source of truth waiting to disagree with the first — and, for a notification list specifically, one that keeps escalating things somebody already fixed (T66's lesson).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "lane", "module", "seen", "updated_at"],
+  "properties": {
+    "schema_version": { "type": "integer", "minimum": 1 },
+    "lane": {
+      "description": "Which of V1.5's three columns this is. Derived from T67's ViewName, not a fourth vocabulary: ba=business, sa=architecture, dev=technical.",
+      "enum": ["ba", "sa", "dev"]
+    },
+    "module": {
+      "description": "The module folder this lane's work belongs to, or null for project-wide. Mirrors a knowledge item's own `module`, and decides the directory the same way: null lives under _project/.",
+      "type": ["string", "null"],
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "seen": {
+      "description": "The watermark: which version of which item the person in this lane has acknowledged. This is the whole input to change propagation — an item that moved past its entry here is what T105/T106 report. It advances by an explicit human acknowledgement and by nothing else: if merely retrieving an item advanced it, every notification would be marked read before anyone saw it.",
+      "type": "array",
+      "items": { "$ref": "#/definitions/seenRef" }
+    },
+    "signoffs": {
+      "description": "This lane's own approval gate (T103), oldest first, last one wins. Only a person writes one — `knowledge/_roles/**` is denied to every agent at the tool level. There is no `pending` status on purpose: 'asked but unanswered' is the derived stage `awaiting-signoff`, and storing it as well would be a second copy free to disagree. A sign-off records the exact item versions it covers, so amending one of them makes it stale automatically rather than leaving a flag that outlives the thing it approved.",
+      "type": "array",
+      "items": { "$ref": "#/definitions/signoff" }
+    },
+    "updated_at": { "type": "string", "format": "date-time" }
+  },
+  "definitions": {
+    "signoff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "status", "items", "at", "by", "note"],
+      "properties": {
+        "type": {
+          "description": "Which of CLAUDE.md's five always-human points this lane's gate is. Reused from the T08 ledger's ApprovalType rather than a parallel vocabulary.",
+          "enum": ["requirement-interview", "schema-confirmation", "qa-failure", "security-risk", "deploy"]
+        },
+        "status": { "enum": ["approved", "rejected"] },
+        "items": {
+          "description": "Exactly what was signed off, at the versions it was signed off at.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "version"],
+            "properties": {
+              "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9]*-[A-Za-z0-9._/-]+$" },
+              "version": { "type": "integer", "minimum": 1 }
+            }
+          }
+        },
+        "at": { "type": "string", "format": "date-time" },
+        "by": { "type": "string", "minLength": 1 },
+        "note": {
+          "description": "What they said beyond yes/no. The reason a rejection is actionable rather than just a stop.",
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "seenRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "at", "by"],
+      "properties": {
+        "id": {
+          "description": "A knowledge item id — the same id space as knowledge-item.schema.json, not a parallel one.",
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9]*-[A-Za-z0-9._/-]+$"
+        },
+        "version": {
+          "description": "The item's version at the moment it was acknowledged. Never a version the item has not reached: staleReferences() calls that `ahead`, which means the two are not talking about the same item.",
+          "type": "integer",
+          "minimum": 1
+        },
+        "at": { "type": "string", "format": "date-time" },
+        "by": {
+          "description": "The person who acknowledged it. Free text, like an approval's decidedBy — this pipeline has no identity system and pretending otherwise would be worse. Required and non-empty because an acknowledgement with nobody attached is the exact thing V1.5 forbids: an agent marking work seen on a human's behalf.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

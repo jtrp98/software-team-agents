@@ -49,7 +49,7 @@ const path = require('path');
 const root = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
 /** Paths no agent may write, whatever its contract says. Mirrors UNIVERSAL_DENY in pathPermissions.ts. */
-const UNIVERSAL_DENY = ['.git/**', 'node_modules/**', '.workflow/**', 'dist/**'];
+const UNIVERSAL_DENY = ['.git/**', 'node_modules/**', '.workflow/**', 'dist/**', 'knowledge/_roles/**'];
 
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 

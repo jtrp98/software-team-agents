@@ -38,6 +38,7 @@ describe("parseArgs", () => {
       checkDocStructure: false,
       checkKnowledge: false,
       checkInstallation: false,
+      checkRoles: false,
       buildTemplates: undefined,
       environment: Environment.LOCAL,
       dependsOn: [],

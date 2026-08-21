@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as readline from "node:readline/promises";
-import { TaskState } from "./types.js";
+import { AgentStage, TaskState } from "./types.js";
 import { classifyTask, type ClassificationInput } from "./classification/taskClassifier.js";
 import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
@@ -28,7 +28,23 @@ import { checkWorkspace, hasWorkspace, loadWorkspace, workspacePath, type Worksp
 import { checkRepoMap, loadStageRoots } from "./repos/repoMap.js";
 import { Environment, checkEnvironmentConfig, describeEnvironment, isEnvironment } from "./environment/environment.js";
 import { checkDocStructure } from "./docs/docStructure.js";
-import { checkKnowledge } from "./knowledge/knowledgeBase.js";
+import { KnowledgeBase, checkKnowledge } from "./knowledge/knowledgeBase.js";
+import { LANE_LABEL, ROLE_LANES, isRoleLane } from "./roles/roleLane.js";
+import {
+  acknowledge,
+  checkRoleWorkspaces,
+  laneView,
+  loadRoleWorkspace,
+  writeRoleWorkspace,
+} from "./roles/roleWorkspace.js";
+import { describeStage, roleWorkflowState, workflowFor, workspacesUnder } from "./roles/roleWorkflow.js";
+import { recordSignoff } from "./roles/roleApproval.js";
+import { approveItem, checklistFor, reviewItem } from "./roles/artifactReview.js";
+import { lanesAffectedBy, notificationsFor } from "./roles/changePropagation.js";
+import { laneContext, laneGet } from "./roles/laneContext.js";
+import { KnowledgeContext } from "./knowledge/knowledgeContext.js";
+import { writeKnowledgeItem } from "./knowledge/knowledgeStore.js";
+import type { RoleLane } from "./roles/roleLane.js";
 import { buildTemplates } from "./packaging/templateBuilder.js";
 import { runInit } from "./packaging/initCommand.js";
 import { runUpgrade } from "./packaging/upgradeCommand.js";
@@ -88,6 +104,8 @@ export interface CliArgs {
   checkKnowledge: boolean;
   /** Check .sta/manifest.json and .sta/config.yaml against the project's real files and exit (T98). Same audience. */
   checkInstallation: boolean;
+  /** Check every role workspace under knowledge/_roles/ — each lane's watermark against the knowledge it refers to — and exit (T99). Same audience. */
+  checkRoles: boolean;
   /** Snapshot every framework template file (T90) into an output directory, with manifest.json, and exit. Not a --check-*: it writes, it doesn't just report. */
   buildTemplates?: string;
   /** local/dev/staging/production (T43). Defaults to Environment.LOCAL; only used when creating a task — a --resume/--retry inherits the task's already-stored environment. */
@@ -129,6 +147,14 @@ export const USAGE =
   "  orchestrate migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending (T96)\n" +
   "  orchestrate rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups` (T97)\n" +
   "  orchestrate list-backups [--project-root <path>]   list this project's .sta/backups/ snapshots, oldest first\n" +
+  "  orchestrate roles [--module <name>] [--project-root <path>]   where BA, SA and DEV each stand against knowledge/ (T99)\n" +
+  "  orchestrate roles ack <ba|sa|dev> <id>[,<id>...] --by <name> [--module <name>]   record that a person in that lane has seen those items\n" +
+  "  orchestrate roles signoff <ba|sa|dev> --by <name> [--reject] [--note <text>] [--module <name>]   that lane's own approval gate (T103)\n" +
+  "  orchestrate roles review <id> --as <agent>   move a knowledge item draft -> reviewed, with its checklist (T104)\n" +
+  "  orchestrate roles approve <id> --by <name>   move a reviewed item to approved — a person only (T104)\n" +
+  "  orchestrate roles inbox [<ba|sa|dev>] [--module <name>]   what each lane has to look at, derived fresh (T106)\n" +
+  "  orchestrate roles impact <id>[,<id>...]   which lanes changing those items would reach, before changing them (T105)\n" +
+  "  orchestrate roles context <ba|sa|dev> [<id>] [--module <name>]   what that lane may see, and via which role (T107)\n" +
   "\n" +
   "underlying flag-based form:\n" +
   "  orchestrate --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] <classification flags>\n" +
@@ -149,6 +175,7 @@ export const USAGE =
   "  orchestrate --check-knowledge [--project-root <path>]      check knowledge/*.yaml against its schema and cross-links\n" +
   "  orchestrate --build-templates <out-dir> [--project-root <path>]  snapshot framework template files + manifest.json (T90) into <out-dir>\n" +
   "  orchestrate --check-installation [--project-root <path>]   check .sta/manifest.json and .sta/config.yaml against the project's real files (T98)\n" +
+  "  orchestrate --check-roles [--project-root <path>]          check each role workspace's watermark against knowledge/ (T99)\n" +
   `  classification flags: ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
 
 /** Pure argv parser — kept separate from process.argv/console/exit so it's directly testable. */
@@ -173,6 +200,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkDocStructureFlag = false;
   let checkKnowledgeFlag = false;
   let checkInstallationFlag = false;
+  let checkRolesFlag = false;
   let buildTemplatesOutDir: string | undefined;
   let environment: Environment = Environment.LOCAL;
   let dependsOn: string[] = [];
@@ -231,6 +259,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkKnowledgeFlag = true;
     } else if (arg === "--check-installation") {
       checkInstallationFlag = true;
+    } else if (arg === "--check-roles") {
+      checkRolesFlag = true;
     } else if (arg === "--build-templates") {
       buildTemplatesOutDir = argv[++i];
       if (!buildTemplatesOutDir) throw new CliUsageError("--build-templates requires an <out-dir> argument");
@@ -263,6 +293,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkDocStructureFlag &&
     !checkKnowledgeFlag &&
     !checkInstallationFlag &&
+    !checkRolesFlag &&
     !buildTemplatesOutDir
   ) {
     if (!taskId) throw new CliUsageError("--task-id is required");
@@ -293,6 +324,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkDocStructure: checkDocStructureFlag,
     checkKnowledge: checkKnowledgeFlag,
     checkInstallation: checkInstallationFlag,
+    checkRoles: checkRolesFlag,
     buildTemplates: buildTemplatesOutDir,
     environment,
     dependsOn,
@@ -454,6 +486,7 @@ const VERBS = [
   "migrate",
   "rollback",
   "list-backups",
+  "roles",
 ] as const;
 type Verb = (typeof VERBS)[number];
 
@@ -462,18 +495,24 @@ function isVerb(s: string | undefined): s is Verb {
 }
 
 /** Flags a verb accepts that take a value — their value must never be mistaken for the positional <task-id>. */
-const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval"]);
+const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--by"]);
 
-/** First non-flag token in a verb's remaining args — the positional <task-id>, skipping over any value-flag's own argument. */
-function positionalArg(rest: string[]): string | undefined {
+/** Every non-flag token in a verb's remaining args, in order, skipping over each value-flag's own argument. */
+function positionalArgs(rest: string[]): string[] {
+  const found: string[] = [];
   for (let i = 0; i < rest.length; i++) {
     if (rest[i].startsWith("--")) {
       if (VERB_VALUE_FLAGS.has(rest[i])) i++; // skip its value, not just the flag itself
       continue;
     }
-    return rest[i];
+    found.push(rest[i]);
   }
-  return undefined;
+  return found;
+}
+
+/** First non-flag token in a verb's remaining args — the positional <task-id> for the verbs that take one. */
+function positionalArg(rest: string[]): string | undefined {
+  return positionalArgs(rest)[0];
 }
 
 function flagValue(rest: string[], flag: string): string | undefined {
@@ -793,6 +832,285 @@ async function runListBackupsVerb(rest: string[], defaultProjectRoot: string): P
   return 0;
 }
 
+/**
+ * The `roles` sub-commands that are not `ack`, split out so `runRolesVerb` stays
+ * the readable "show me the lanes" path it started as (T103-T107).
+ *
+ * Every writing one takes `--by`, and every one of them writes something only a
+ * person may write. That is not politeness: `knowledge/_roles/**` is denied to
+ * every agent at the tool level, and `approve` goes through `applyTransition`,
+ * which refuses any actor but a person.
+ */
+async function runRolesSubCommand(
+  args: string[],
+  rest: string[],
+  projectRoot: string,
+  moduleFlag: string | undefined,
+  kb: KnowledgeBase,
+  now: string,
+): Promise<number> {
+  const module = moduleFlag ?? null;
+  const by = flagValue(rest, "--by");
+  const workspaces = workspacesUnder(projectRoot, module, now);
+
+  const requireLane = (): RoleLane => {
+    const lane = args[1];
+    if (lane === undefined || !isRoleLane(lane)) {
+      throw new CliUsageError(`roles ${args[0]}: a lane is required — one of ${ROLE_LANES.join(", ")}`);
+    }
+    return lane;
+  };
+  const requireBy = (): string => {
+    if (by === undefined) throw new CliUsageError(`roles ${args[0]}: --by <name> is required — this is a person's decision`);
+    return by;
+  };
+
+  switch (args[0]) {
+    case "signoff": {
+      const lane = requireLane();
+      const signer = requireBy();
+      const spec = workflowFor(lane);
+      if (!spec) throw new CliUsageError(`roles signoff: no lane workflow is defined for ${lane}`);
+
+      const state = roleWorkflowState(spec, module, kb, workspaces);
+      const approved = kb.query({ module }).filter((item) => state.approved.includes(item.id));
+      const reject = rest.includes("--reject");
+
+      // Refusing to sign off over a blocker is the whole point of having one: a
+      // person waving through work already known to be unusable spends the single
+      // step in this pipeline that cannot be redone cheaply.
+      if (!reject && state.handoff.blockers.length > 0) {
+        console.error(`[orchestrator] the ${LANE_LABEL[lane]} lane cannot be signed off while these stand:`);
+        for (const blocker of state.handoff.blockers) console.error(`  - ${blocker}`);
+        return 1;
+      }
+
+      try {
+        const updated = recordSignoff(workspaces(lane), {
+          approved,
+          approve: !reject,
+          by: signer,
+          note: flagValue(rest, "--note"),
+          now,
+        });
+        writeRoleWorkspace(updated, projectRoot);
+      } catch (e) {
+        console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+        return 1;
+      }
+
+      console.log(
+        `[orchestrator] ${LANE_LABEL[lane]} on ${module ?? "(project-wide)"}: ${signer} ` +
+          `${reject ? "rejected" : "signed off"} ${state.approved.join(", ")}.`,
+      );
+      for (const carried of state.handoff.carries) console.log(`[orchestrator] carries: ${carried}`);
+      return 0;
+    }
+
+    case "review": {
+      const id = args[1];
+      const as = flagValue(rest, "--as");
+      if (!id) throw new CliUsageError("roles review: an item id is required");
+      if (!as) throw new CliUsageError("roles review: --as <agent> is required — a review's content is which discipline looked");
+      if (!Object.values(AgentStage).includes(as as AgentStage)) {
+        throw new CliUsageError(`roles review: "${as}" is not an agent role`);
+      }
+      const item = kb.get(id);
+      if (!item) {
+        console.error(`[orchestrator] no knowledge item with id ${id}`);
+        return 1;
+      }
+      try {
+        writeKnowledgeItem(reviewItem(item, as as AgentStage, now), projectRoot);
+      } catch (e) {
+        console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+        return 1;
+      }
+      console.log(`[orchestrator] ${id} reviewed as ${as}. It confirmed:`);
+      for (const line of checklistFor(item.kind)) console.log(`  - ${line}`);
+      return 0;
+    }
+
+    case "approve": {
+      const id = args[1];
+      const approver = requireBy();
+      if (!id) throw new CliUsageError("roles approve: an item id is required");
+      const item = kb.get(id);
+      if (!item) {
+        console.error(`[orchestrator] no knowledge item with id ${id}`);
+        return 1;
+      }
+      try {
+        writeKnowledgeItem(approveItem(item, now), projectRoot);
+      } catch (e) {
+        console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+        return 1;
+      }
+      // The approver's name is not written into the item on purpose — see
+      // artifactReview.ts. It is echoed so the person sees their own act recorded
+      // in the terminal, and git carries the rest.
+      console.log(`[orchestrator] ${id} approved by ${approver}. It is binding now; downstream lanes may rely on it.`);
+      return 0;
+    }
+
+    case "inbox": {
+      const lanes = args[1] !== undefined && isRoleLane(args[1]) ? [args[1] as RoleLane] : [...ROLE_LANES];
+      let total = 0;
+      for (const lane of lanes) {
+        const notifications = notificationsFor(lane, module, kb, workspaces(lane));
+        total += notifications.length;
+        console.log(`\n${LANE_LABEL[lane]} — ${notifications.length} to look at`);
+        for (const n of notifications) console.log(`  [${n.reason}] ${n.message}`);
+      }
+      if (total === 0) console.log("\n[orchestrator] every lane is up to date.");
+      return 0;
+    }
+
+    case "impact": {
+      const ids = args.slice(1).flatMap((a) => a.split(",")).filter((a) => a !== "");
+      if (ids.length === 0) throw new CliUsageError("roles impact: name at least one item id");
+      const unknown = ids.filter((id) => kb.get(id) === null);
+      if (unknown.length > 0) {
+        console.error(`[orchestrator] no knowledge item with id ${unknown.join(", ")}`);
+        return 1;
+      }
+      const affected = lanesAffectedBy(kb, ids);
+      console.log(`[orchestrator] changing ${ids.join(", ")} would reach:`);
+      for (const lane of ROLE_LANES) {
+        const items = affected.get(lane) ?? [];
+        console.log(`  ${LANE_LABEL[lane].padEnd(4)} ${items.length === 0 ? "nothing" : items.map((i) => i.id).join(", ")}`);
+      }
+      return 0;
+    }
+
+    case "context": {
+      const lane = requireLane();
+      const id = args[2];
+      const context = KnowledgeContext.load(projectRoot, now);
+
+      if (id !== undefined) {
+        const outcome = laneGet(lane, context, id);
+        if (outcome.status === "not-found") {
+          console.error(`[orchestrator] no knowledge item with id ${id}`);
+          return 1;
+        }
+        if (outcome.status === "withheld") {
+          // Withheld is not an error: the lane asked a legitimate question and the
+          // answer is "not for you". Exit 0 and say which, so it is never confused
+          // with the item not existing.
+          console.log(`[orchestrator] ${id}: withheld — ${outcome.reason}`);
+          return 0;
+        }
+        const { item, viaRole, provenance } = outcome.item;
+        console.log(`[orchestrator] ${id} as the ${LANE_LABEL[lane]} lane sees it (via ${viaRole}):`);
+        console.log(`  ${item.title} [${item.kind}, ${item.status}, owned by ${item.owner}]`);
+        if (item.withheld.length > 0) console.log(`  withheld: ${item.withheld.join(", ")}`);
+        console.log(`  ${provenance.citation}`);
+        return 0;
+      }
+
+      const result = laneContext(lane, context, module === null ? {} : { module });
+      console.log(`[orchestrator] the ${LANE_LABEL[lane]} lane sees ${result.items.length} item(s):`);
+      for (const entry of result.items) {
+        const withheld = entry.item.withheld.length > 0 ? ` (withheld: ${entry.item.withheld.join(", ")})` : "";
+        console.log(`  ${entry.item.id.padEnd(18)} ${entry.item.kind.padEnd(14)} via ${entry.viaRole}${withheld}`);
+      }
+      if (result.hidden.length > 0) console.log(`  hidden from every role in this lane: ${result.hidden.join(", ")}`);
+      if (result.kindsNotInLane.length > 0) console.log(`  kinds outside this lane's view: ${result.kindsNotInLane.join(", ")}`);
+      return 0;
+    }
+  }
+  throw new CliUsageError(`roles: unhandled sub-command "${args[0]}"`);
+}
+
+/**
+ * `roles [--module <name>]` — where each lane stands, and
+ * `roles ack <lane> <id>[,<id>...] --by <name>` — record that a person in that lane has
+ * seen the current version of those items (T99).
+ *
+ * This verb is the *only* writer of a role workspace. `knowledge/_roles/**` is in
+ * `UNIVERSAL_DENY`, so no agent can write one in any mode — an acknowledgement is a human
+ * act, and an agent able to record one could mark its own work seen on a person's behalf.
+ * `--by` is required for the same reason: the file has to say who.
+ */
+async function runRolesVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const moduleFlag = flagValue(rest, "--module");
+  const args = positionalArgs(rest);
+  const kb = KnowledgeBase.load(projectRoot);
+  const now = new Date().toISOString();
+
+  const SUB_COMMANDS = ["ack", "signoff", "review", "approve", "inbox", "impact", "context"];
+  if (args.length > 0 && !SUB_COMMANDS.includes(args[0])) {
+    throw new CliUsageError(`roles: unknown sub-command "${args[0]}" — one of ${SUB_COMMANDS.join(", ")}`);
+  }
+  if (args.length > 0 && args[0] !== "ack") {
+    return runRolesSubCommand(args, rest, projectRoot, moduleFlag, kb, now);
+  }
+
+  if (args.length === 0) {
+    // No --module shows every module that has knowledge in it, so a lane sitting behind
+    // in a module the caller forgot about is still visible.
+    const modules: (string | null)[] =
+      moduleFlag !== undefined
+        ? [moduleFlag]
+        : [...new Set(kb.query({}).map((item) => item.module))].sort((a, b) =>
+            a === null ? -1 : b === null ? 1 : a < b ? -1 : a > b ? 1 : 0,
+          );
+    if (modules.length === 0) {
+      console.log("[orchestrator] no knowledge captured yet — a lane has nothing to stand on.");
+      return 0;
+    }
+    for (const module of modules) {
+      console.log(`\n${module ?? "(project-wide)"}`);
+      const workspaces = workspacesUnder(projectRoot, module, now);
+      for (const lane of ROLE_LANES) {
+        const view = laneView(workspaces(lane), kb);
+        const spec = workflowFor(lane);
+        const state = spec ? roleWorkflowState(spec, module, kb, workspaces) : null;
+
+        // Two different questions, both printed: `stage` is where the lane's own
+        // work has got to (T100), `deps` is whether what it depends on moved
+        // under it (T99). A lane can be `ready` and `behind` at the same time.
+        console.log(`  ${LANE_LABEL[lane].padEnd(4)} ${describeStage(state).padEnd(20)} deps: ${view.status}`);
+        if (state) {
+          console.log(`       next (${state.nextAction.actor}): ${state.nextAction.what}`);
+          for (const carried of state.handoff.carries) console.log(`       carries: ${carried}`);
+        }
+        if (view.stale.length > 0) {
+          console.log(`       changed since acknowledged: ${view.stale.map((s) => `${s.id} v${s.version}->v${s.currentVersion}`).join(", ")}`);
+        }
+        if (view.unseen.length > 0) console.log(`       never acknowledged: ${view.unseen.join(", ")}`);
+        if (view.awaitingApproval.length > 0) console.log(`       waiting on a person: ${view.awaitingApproval.join(", ")}`);
+      }
+    }
+    return 0;
+  }
+
+  const lane = args[1];
+  if (lane === undefined || !isRoleLane(lane)) {
+    throw new CliUsageError(`roles ack: a lane is required — one of ${ROLE_LANES.join(", ")}`);
+  }
+  const ids = args.slice(2).flatMap((a) => a.split(",")).filter((a) => a !== "");
+  const by = flagValue(rest, "--by");
+  if (by === undefined) {
+    throw new CliUsageError("roles ack: --by <name> is required — an acknowledgement records who made it");
+  }
+
+  const module = moduleFlag ?? null;
+  try {
+    const updated = acknowledge(loadRoleWorkspace(lane, module, projectRoot, now), kb, ids, by, now);
+    writeRoleWorkspace(updated, projectRoot);
+  } catch (e) {
+    console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+    return 1;
+  }
+  console.log(
+    `[orchestrator] ${LANE_LABEL[lane]} on ${module ?? "(project-wide)"}: ${by} acknowledged ${ids.join(", ")}.`,
+  );
+  return 0;
+}
+
 /** Dispatches a T31 verb, translating the ones that are really the existing engine in disguise (`run`, `resume`, `retry`) rather than duplicating the step loop. */
 async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): Promise<number> {
   switch (verb) {
@@ -827,6 +1145,8 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
       return runRollbackVerb(rest, defaultProjectRoot);
     case "list-backups":
       return runListBackupsVerb(rest, defaultProjectRoot);
+    case "roles":
+      return runRolesVerb(rest, defaultProjectRoot);
   }
 }
 
@@ -1017,6 +1337,20 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       return 0;
     }
     console.error("[orchestrator] .sta/ has problems:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
+  if (args.checkRoles) {
+    const result = checkRoleWorkspaces(args.projectRoot);
+    // Notes print either way. "BA is behind on sales-crm" is the check working —
+    // it is what a lane needs to be told, not a repo inconsistency to fail on.
+    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
+    if (result.ok) {
+      console.log("[orchestrator] every role workspace agrees with knowledge/.");
+      return 0;
+    }
+    console.error("[orchestrator] role workspaces have problems:");
     for (const problem of result.problems) console.error(`  - ${problem}`);
     return 1;
   }

@@ -87,6 +87,9 @@ jobs:
       - name: Check knowledge/*.yaml (T61)
         run: node orchestrator/dist/cli.js --check-knowledge
 
+      - name: Check role workspaces under knowledge/_roles/ (T99)
+        run: node orchestrator/dist/cli.js --check-roles
+
       - name: Build framework templates (T90)
         run: node orchestrator/dist/cli.js --build-templates templates
 

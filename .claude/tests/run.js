@@ -715,6 +715,21 @@ check(
   BLOCK,
 );
 
+// T99: a role workspace records that a *person* acknowledged a change. An agent
+// that could write one could mark work seen on that person's behalf, which is the
+// one thing V1.5's design forbids -- so it is on the floor, not in a contract.
+check(
+  'no role set -> knowledge/_roles/ is blocked (only a person writes a role workspace)',
+  runPathHook('Write', path.join(ROOT, 'knowledge', '_roles', 'sales-crm', 'ba.yaml')),
+  BLOCK,
+);
+
+check(
+  'business-analyst writing its own lane\'s workspace -> still blocked (no agent, no mode, no exception)',
+  runPathHook('Edit', path.join(ROOT, 'knowledge', '_roles', 'sales-crm', 'ba.yaml'), 'business-analyst'),
+  BLOCK,
+);
+
 check(
   'a non-write tool is never this hook\'s business',
   runPathHook('Read', path.join(ROOT, '_docs', 'module', 'm', 'design.md'), 'backend-engineer'),

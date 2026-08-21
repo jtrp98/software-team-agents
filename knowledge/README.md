@@ -12,11 +12,16 @@ knowledge/
 │   └── <kind>/
 │       └── <ID>.yaml
 ├── _sources/            ← SRC-*.yaml: the raw material that was ingested (T62)
-└── _conflicts/          ← CONF-*.yaml: a person's decision about two facts that contradict (T66)
+├── _conflicts/          ← CONF-*.yaml: a person's decision about two facts that contradict (T66)
+├── _bootstrap/          ← STATE.yaml: how far first-time discovery got (T73)
+├── _human-input/        ← what a person supplied that no file could be read for (T79)
+├── _adoption/           ← the staging area for migrating an existing project in (T81)
+└── _roles/              ← <module>/<lane>.yaml: where BA, SA and DEV each stand (T99)
 ```
 
-`_sources/` and `_conflicts/` are reserved names — the item walk skips them, so they can
-never be mistaken for a module full of malformed items.
+Every `_`-prefixed name above is reserved — the item walk skips them, so they can never be
+mistaken for a module full of malformed items. The list the code enforces is `RESERVED_DIRS`
+in `orchestrator/src/knowledge/knowledgeStore.ts`.
 
 `<ID>` is the id the pipeline already uses — `REQ-003`, `DES-003`, `BE-014`, `TEST-003`,
 `ADR-004` (T19). Not a parallel id: one that differed from the id in `plan.md` would need a
@@ -74,13 +79,57 @@ item may get before it is called stale. Agents read knowledge through
 and the field policy (which parts) **before** returning anything — and always reports what it
 withheld, so an absent fact and a hidden one never look the same.
 
+## Role workspaces (`_roles/`)
+
+V1.5 puts three lanes — BA, SA, DEV — around this one knowledge base, each with a person
+who decides. `_roles/<module>/<lane>.yaml` holds the only two things about a lane that cannot
+be worked out from `knowledge/` itself:
+
+- **`seen`** — which version of which item the person in that lane has acknowledged.
+- **`signoffs`** — that person's own approval gate (T103), and the exact item versions each
+  answer covered. Approving an *item* says a fact is binding; signing off the *lane* says the
+  lane is finished and the next one may start. A sign-off names versions so that amending
+  what it covered makes it stale by arithmetic, rather than leaving a flag that outlives its
+  subject. There is no `pending` status: "asked and unanswered" is the derived stage
+  `awaiting-signoff`.
+
+Everything else — what the lane is drafting, what moved under it, what it is waiting on a
+person for, what it should be told about — is computed from those two every time it is asked.
+
+Two consequences, both deliberate:
+
+- **Nothing writes into another lane's file.** BA amending `REQ-003` does not notify DEV;
+  DEV notices, because DEV's own recorded version of `REQ-003` no longer matches. So "every
+  affected lane is told" is arithmetic rather than a discipline somebody has to keep.
+- **No agent may write one of these files at all.** `knowledge/_roles/**` is in
+  `UNIVERSAL_DENY` (`orchestrator/src/agents/pathPermissions.ts` and the matching hook), so
+  the block holds in every mode, with or without a contract. An acknowledgement and a sign-off
+  each record a human act; an agent that could write one could record it on that person's
+  behalf. The writer is a person, through `sta roles`.
+
+```bash
+sta roles [--module <name>]                     # where each lane stands, and what it is waiting on
+sta roles review <id> --as <agent>              # draft -> reviewed, with that kind's checklist
+sta roles approve <id> --by <name>              # reviewed -> approved; a person only
+sta roles signoff <ba|sa|dev> --by <name>       # that lane's own gate  [--reject] [--note ...]
+sta roles ack <lane> <id>[,<id>...] --by <name> # record the handoff into that lane
+sta roles inbox [<lane>]                        # what each lane has to look at, derived fresh
+sta roles impact <id>[,<id>...]                 # which lanes a change would reach, before making it
+sta roles context <lane> [<id>]                 # what that lane may see, and via which role
+```
+
 ## Checking it
 
 ```bash
 node orchestrator/dist/cli.js --check-knowledge
+node orchestrator/dist/cli.js --check-roles
 ```
 
 Reports dangling relation targets, an id whose prefix does not match its kind, two files
 claiming one id, a relation whose two ends are not a legal pair, an `approved` item with no
 source, a `supersedes` cycle, and any file left holding a git conflict marker. An empty (or
 absent) `knowledge/` passes with a note — this checks consistency, not progress.
+
+`--check-roles` covers `_roles/` separately: a lane file that disagrees with its own path, a
+watermark pointing at an item that no longer exists, or one claiming a version the item never
+reached. A lane simply being *behind* is a note, not a failure — being told is the point.

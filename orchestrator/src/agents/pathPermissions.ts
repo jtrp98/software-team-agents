@@ -38,6 +38,12 @@ export const UNIVERSAL_DENY: string[] = [
   // rewriting the record of what it is allowed to do next.
   ".workflow/**",
   "dist/**",
+  // A role workspace (T99) records that a *person* in a lane acknowledged a
+  // change. An agent that could write one could mark its own work seen on that
+  // person's behalf, which is the one thing V1.5's whole design forbids. So it
+  // is denied at the floor rather than per contract: no agent, no mode, no
+  // exception. The writer is a person, through the CLI.
+  "knowledge/_roles/**",
 ];
 
 /**
