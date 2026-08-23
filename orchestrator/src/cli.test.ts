@@ -27,6 +27,7 @@ describe("parseArgs", () => {
       checkContracts: false,
       checkLayout: false,
       checkWorkflows: false,
+      checkBindings: false,
       checkProfile: false,
       checkDecisions: false,
       checkTestPyramid: false,
@@ -46,6 +47,7 @@ describe("parseArgs", () => {
       phases: [],
       targetBindings: { frontend_target: null, backend_target: null },
       autonomy: undefined,
+      noQaOptimization: false,
     });
   });
 
@@ -555,7 +557,21 @@ describe("T35 concurrency lock, wired into the CLI", () => {
     } finally {
       if (prevConfig === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
       else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = prevConfig;
-      fs.rmSync(dir, { recursive: true, force: true });
+      // Windows can hold a just-used temp dir for a moment (AV/indexer), turning
+      // cleanup into EPERM and an otherwise-green suite red on timing alone.
+      // One short retry; if it still fails, leave the tmpdir — force:true has
+      // already done the meaningful part, and a leaked temp dir is not a
+      // regression signal.
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code === "EPERM") {
+          await new Promise((r) => setTimeout(r, 75));
+          fs.rmSync(dir, { recursive: true, force: true });
+        } else {
+          throw e;
+        }
+      }
     }
   });
 });

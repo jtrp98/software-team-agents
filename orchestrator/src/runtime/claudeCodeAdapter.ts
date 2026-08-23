@@ -14,7 +14,15 @@ import type {
   RuntimeProbe,
   RuntimeUsage,
   RuntimeWorkspace,
+  SpawnSync,
 } from "./runtimeAdapter.js";
+
+/**
+ * The spawn primitive now lives on the port (`runtimeAdapter.ts`) so no adapter
+ * depends on a sibling adapter's module. Re-exported here for the tests and
+ * call sites that historically imported it from this file.
+ */
+export type { SpawnSync } from "./runtimeAdapter.js";
 
 /**
  * The `RuntimeAdapter` for Claude Code (T109) — the Claude-Code-specific half
@@ -30,18 +38,6 @@ import type {
  * only has to answer: how does one run of one role actually happen on this
  * machine, and what did it cost.
  */
-
-export type SpawnSync = (
-  command: string,
-  args: string[],
-  options: {
-    cwd?: string;
-    encoding: "utf8";
-    timeout?: number;
-    maxBuffer?: number;
-    env?: NodeJS.ProcessEnv;
-  },
-) => SpawnSyncReturns<string>;
 
 /**
  * A way to invoke a CLI whose bare name `spawnSync` cannot execute on this machine.
@@ -157,11 +153,51 @@ const PERMISSION_MODE: Record<RuntimeAutonomy, string> = {
   full: "bypassPermissions",
 };
 
+/**
+ * Renders a request's guards as Claude Code `--disallowedTools` permission
+ * rules — the OFF10 M4 hard layer beside the hooks.
+ *
+ * WHY THIS LAYER EXISTS
+ *
+ * Anthropic's own hooks reference states the hook filter is best-effort and
+ * that hard allow/deny belongs to the *permission system* (OFF02 S4). Until now
+ * a contract's deny globs reached a run only through env + PreToolUse hooks,
+ * i.e. only through the best-effort layer. The same rules expressed here ride
+ * the documented flag surface: tool rules are removed from availability before
+ * permissions are ever evaluated, so `Write(.git/**)` denies harder than any
+ * hook can. The mapping is deliberately mechanical:
+ *
+ *   writeDeny glob      → `Write(<glob>)` + `Edit(<glob>)`  (the file-mutating tools)
+ *   forbidCommands cmd  → `Bash(<cmd> *)`                   (any shell use of it)
+ *
+ * The universal deny floor is already merged into `writeDeny` by
+ * `contractGuards`, so floor and role-specific denies travel together. Hooks
+ * stay wired exactly as they were — this layer narrows what can even be
+ * attempted; it does not replace the backstop or the orchestrator-side guard
+ * verification.
+ */
+export function disallowRulesFromGuards(guards: RuntimeGuards): string[] {
+  const rules = new Set<string>();
+  for (const glob of guards.writeDeny) {
+    if (glob.length === 0) continue;
+    rules.add(`Write(${glob})`);
+    rules.add(`Edit(${glob})`);
+  }
+  for (const command of guards.forbidCommands) {
+    const name = command.trim();
+    if (name.length === 0) continue;
+    rules.add(`Bash(${name} *)`);
+  }
+  return [...rules];
+}
+
 interface ClaudeCliJsonResult {
   is_error?: boolean;
   result?: string;
   total_cost_usd?: number;
   usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
+  /** OFF10 M6 — present only when the run passed `--json-schema`. */
+  structured_output?: unknown;
 }
 
 function parseCliOutput(raw: string): { value: ClaudeCliJsonResult; parseFailed: boolean } {
@@ -253,6 +289,15 @@ export interface ClaudeCodeAdapterOptions {
   resolveCommand?: CommandResolver;
   /** Injectable for tests; defaults to `process.platform`. */
   platform?: string;
+  /**
+   * OFF10 M6 — when set, every run passes `--json-schema` and the envelope's
+   * `structured_output` lands on `RuntimeAgentResult.structured`. **Off by
+   * default**: the pipeline's prompt contract promises agents a free-form
+   * summary ("the orchestrator reads … not a special reply format"), so flipping
+   * this on is a caller decision (e.g. a QA03 hardening pass), never a side
+   * effect of using this adapter.
+   */
+  outputSchema?: Record<string, unknown>;
 }
 
 export class ClaudeCodeAdapter implements RuntimeAdapter {
@@ -271,6 +316,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
   private readonly defaultTimeoutMs: number;
   private readonly resolveCommand: CommandResolver;
   private readonly platform: string;
+  private readonly outputSchema?: Record<string, unknown>;
 
   constructor(opts: ClaudeCodeAdapterOptions) {
     this.workspace = new LocalWorkspace({ root: opts.projectRoot });
@@ -278,6 +324,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     this.defaultTimeoutMs = opts.timeoutMs ?? 30 * 60_000;
     this.resolveCommand = opts.resolveCommand ?? resolveNpmCliScript;
     this.platform = opts.platform ?? process.platform;
+    this.outputSchema = opts.outputSchema;
   }
 
   /**
@@ -326,8 +373,14 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       "json",
       "--permission-mode",
       PERMISSION_MODE[req.autonomy],
-      req.prompt,
     ];
+    // M4: contract denies as hard permission rules, not just hook backstops.
+    // Empty guards ⇒ no flag, keeping the no-guard request shape unchanged.
+    const disallowRules = disallowRulesFromGuards(req.guards);
+    if (disallowRules.length > 0) args.push("--disallowedTools", disallowRules.join(","));
+    // M6: only when a schema was requested — default runs stay free-form.
+    if (this.outputSchema) args.push("--json-schema", JSON.stringify(this.outputSchema));
+    args.push(req.prompt);
 
     let proc: SpawnSyncReturns<string>;
     let resolvedThrough: string | null = null;
@@ -386,6 +439,10 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       model: undefined,
       guards,
       diagnostics,
+      // M6: present only on schema-requested runs where the CLI delivered one —
+      // a stray envelope field on a free-form run must not masquerade as a
+      // schema-validated document.
+      structured: this.outputSchema ? cli.structured_output : undefined,
       raw: cli,
     };
   }

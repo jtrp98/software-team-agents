@@ -44,7 +44,7 @@ cd orchestrator && npm ci && npm test && npm run typecheck && npm run build
 npm run build:templates          # (inside orchestrator/) regenerate templates/ snapshot + manifest.json — never hand-edit templates/
 node .claude/tests/run.js        # hook/script self-test — must pass after touching ANY hook or script (139 cases)
 
-# validation flags (all 15 wired into CI)
+# validation flags (all 15 wired into CI; the CLI also has --check-bindings, not in CI)
 node orchestrator/dist/cli.js --check-contracts|--check-layout|--check-workflows|--check-profile|--check-decisions \
   |--check-test-pyramid|--check-review-separation|--check-escalation-policy|--check-workspace|--check-repos \
   |--check-environments|--check-doc-structure|--check-knowledge|--check-installation|--check-roles
@@ -53,7 +53,7 @@ node orchestrator/dist/cli.js --check-contracts|--check-layout|--check-workflows
 node orchestrator/dist/cli.js init --mode <legacy-project|three-repo> [--templates templates]
 node orchestrator/dist/cli.js configure knowledge-root <path>
 node orchestrator/dist/cli.js doctor --project-root <path>
-node orchestrator/dist/cli.js run --task-id <id> --module <name> <classification flags> [--autonomy propose|edit|full]
+node orchestrator/dist/cli.js run --task-id <id> --module <name> <classification flags> [--autonomy read-only|propose|edit|full]
 node orchestrator/dist/cli.js status|approve|resume|retry|pause|cancel|audit <task-id>
 node orchestrator/dist/cli.js roles review|approve|signoff|ack|inbox|impact|context ...
 node orchestrator/dist/cli.js upgrade|migrate|rollback|list-backups|adopt|knowledge-migrate ...

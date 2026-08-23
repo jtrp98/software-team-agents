@@ -41,6 +41,12 @@ export interface AgentExecutorRequest {
   context: ContextItem[];
   /** T44 — only set when stage is DEVOPS: which of the two runs this is, so the executor's prompt can say so. See `isAgentAssignedAt` in taskStatus.ts. */
   deployPhase?: "prepare" | "execute";
+  /**
+   * QA06 — the QA retry count at the time this round starts (0 for the first
+   * round). Only set for QA_ENGINEER; the optimization wrapper uses it to
+   * build the recheck plan instead of re-verifying from scratch.
+   */
+  qaRound?: number;
 }
 
 export interface AgentExecutorResult {
@@ -582,12 +588,23 @@ export class Orchestrator {
       outcome: result.outcome,
       artifactType: result.artifactType ?? null,
     });
+    // QA07: the mode a QA round ran in is recorded with its cost. Read off the
+    // raw artifact before schema validation (which happens below and gates
+    // progression independently) — only a literal FULL/TARGETED counts, so an
+    // invalid value logs as "not recorded" rather than being guessed into shape.
+    const rawQaMode =
+      result.artifactType === ArtifactType.QA_REPORT
+        ? (result.artifact as { mode?: unknown } | undefined)?.mode
+        : undefined;
     const record = this.runLog.record({
       task_id: this.taskId,
       agent: stage,
       start_time: timing.start,
       end_time: timing.end,
-      outcome: result.outcome,
+      outcome: {
+        ...result.outcome,
+        qa_mode: rawQaMode === "FULL" || rawQaMode === "TARGETED" ? rawQaMode : undefined,
+      },
     });
     this.store.appendRun(record);
 
@@ -780,8 +797,10 @@ export class Orchestrator {
     // of these two states (see isAgentAssignedAt) — so the current state alone tells us which run.
     const deployPhase: AgentExecutorRequest["deployPhase"] =
       stage === AgentStage.DEVOPS ? (this.run.machine.current === TaskState.APPROVED ? "execute" : "prepare") : undefined;
+    // QA06: the retry count is the round number a recheck plan is built from.
+    const qaRound = stage === AgentStage.QA_ENGINEER ? this.run.retries.qa : undefined;
     const start = now();
-    const result = await executor({ stage, taskId: this.taskId, context, deployPhase });
+    const result = await executor({ stage, taskId: this.taskId, context, deployPhase, qaRound });
     const end = now();
 
     return this.reportCompletion(stage, result, { start, end });

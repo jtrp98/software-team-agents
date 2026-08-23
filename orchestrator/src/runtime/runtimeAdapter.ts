@@ -1,4 +1,5 @@
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import type { SpawnSyncReturns } from "node:child_process";
 
 /**
  * The seam between this framework and the AI runtime that actually executes an
@@ -201,11 +202,21 @@ export interface RuntimeAgentResult {
   /** The agent's final message, whatever the runtime calls that field. */
   readonly text: string;
   readonly usage: RuntimeUsage;
-  /** The model the runtime says it actually used, when it says. Not the one that was requested. */
+  /**
+   * The model the runtime says it actually used, when it says. Not the one that was requested.
+   */
   readonly model?: string;
   readonly guards: RuntimeGuardReport;
   /** Anything the adapter wants a person to see in the log — a parse that fell back, a flag it had to drop. */
   readonly diagnostics: readonly string[];
+  /**
+   * OFF10 M6 — the structured document a run returns **when a schema was
+   * requested** of the adapter (`outputSchema` option) and the runtime delivered
+   * one. Absent otherwise: undefined is "not requested / not returned", never an
+   * empty placeholder. Neutral by design — neither vendor's envelope field name
+   * (`structured_output`, `-o` file body) reaches past this boundary.
+   */
+  readonly structured?: unknown;
   /**
    * The untouched payload, for logs and debugging. No framework logic may read
    * it: the point of normalising into the fields above is that nothing outside an
@@ -239,6 +250,32 @@ export interface RuntimeCommandResult {
   readonly stderr: string;
   readonly timedOut: boolean;
 }
+
+/**
+ * The one synchronous-spawn signature both current adapters drive their runtime
+ * binary through, named here rather than in either adapter file.
+ *
+ * WHY THE PORT FILE OWNS IT
+ *
+ * It is process plumbing, not provider shape — nothing in it says "claude" or
+ * "codex" — but it was first defined inside `claudeCodeAdapter.ts`, and the
+ * Codex adapter then had to import a Claude-named module to type its own spawn.
+ * That is exactly the provider-to-provider reach this seam exists to prevent:
+ * an adapter may depend on providers; it must not depend on *another* provider.
+ * The type lives beside `RuntimeAdapter` so each adapter depends on the port,
+ * never on a sibling.
+ */
+export type SpawnSync = (
+  command: string,
+  args: string[],
+  options: {
+    cwd?: string;
+    encoding: "utf8";
+    timeout?: number;
+    maxBuffer?: number;
+    env?: NodeJS.ProcessEnv;
+  },
+) => SpawnSyncReturns<string>;
 
 /**
  * Files and commands, in the place the agent's work actually lives.

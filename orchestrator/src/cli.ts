@@ -8,6 +8,12 @@ import { classifyTask, type ClassificationInput } from "./classification/taskCla
 import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
 import { createRuntimeExecutor } from "./runtime/runtimeExecutor.js";
+import { withQaOptimization, riskSignalsFromClassification } from "./qa/optimized.js";
+import { gitChangedFiles } from "./qa/changeSource.js";
+import { buildMetricsExport, compareBaselines, taskQaMetrics } from "./qa/metrics.js";
+import type { QaFindingRecord } from "./qa/evidence.js";
+import { parseOpenIssues } from "./orchestrator/failureClassifier.js";
+import { readModuleDoc } from "./agents/moduleDocs.js";
 import { ClaudeCodeAdapter } from "./runtime/claudeCodeAdapter.js";
 import type { RuntimeAutonomy } from "./runtime/runtimeAdapter.js";
 import { contractGuardResolver } from "./runtime/runtimeGuards.js";
@@ -18,6 +24,7 @@ import { checkPathRules } from "./agents/pathPermissions.js";
 import { checkLayout } from "./layout/repoLayout.js";
 import { ApprovalType } from "./gates/approval.js";
 import { checkAllWorkflows } from "./workflow/workflowDefinition.js";
+import { checkBindings } from "./runtime/bindingGenerator.js";
 import { checkProfile } from "./profile/projectProfile.js";
 import { checkDecisions } from "./decisions/decisionLog.js";
 import { checkTestPyramid } from "./testing/testPyramid.js";
@@ -105,6 +112,8 @@ export interface CliArgs {
   checkLayout: boolean;
   /** Check workflows/*.yml against the classifier and exit. Same audience. */
   checkWorkflows: boolean;
+  /** Check .codex/agents/*.toml renderings against their .claude/agents sources and exit (OFF10 M2). */
+  checkBindings: boolean;
   /** Check project.yaml and stacks/ against the agent roster and exit. Same audience. */
   checkProfile: boolean;
   /** Check decisions/*.md ADRs against the schema and cross-links and exit. Same audience. */
@@ -147,6 +156,12 @@ export interface CliArgs {
    * stay enforced in every mode — this flag widens Claude Code's prompt behaviour only.
    */
   autonomy?: RuntimeAutonomy;
+  /**
+   * QA optimization (change-aware scope, deterministic pre-checks, TARGETED/FULL
+   * routing) is on by default for qa-engineer rounds; this flag restores the exact
+   * V1 executor behaviour for a task where someone explicitly wants it.
+   */
+  noQaOptimization: boolean;
 }
 
 const FLAG_TO_CLASSIFICATION: Record<string, keyof ClassificationInput> = {
@@ -174,6 +189,7 @@ export const USAGE =
   "  orchestrate pause  <task-id> [--project-root <path>]   freeze a task; run/resume/retry refuse it until resumed\n" +
   "  orchestrate cancel <task-id> [--reason <text>] [--project-root <path>]   give up on a task for good; run/resume/retry refuse it permanently\n" +
   "  orchestrate audit  <task-id> [--decisions] [--project-root <path>]   the WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail; --decisions shows only the choices\n" +
+  "  orchestrate qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]   QA token/mode/retry picture per task (QA07); --baseline compares against a saved export\n" +
   "  orchestrate projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names (T41)\n" +
   "  orchestrate init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
   "  orchestrate configure knowledge-root <path> [--config-path <path>]       validate and save this installation's single Knowledge root\n" +
@@ -181,6 +197,7 @@ export const USAGE =
   "  orchestrate upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
   "  orchestrate migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending (T96)\n" +
   "  orchestrate knowledge-migrate <dry-run|copy|verify|cutover> --source-root <path> --knowledge-root <path> [--now <ISO>] [--confirm I_CONFIRM_MIGRATION]   copy–verify–human-confirmed migration\n" +
+  "  orchestrate adopt <plan|status|start|ack|run|approve|validate> [--project-root <path>] [--source-root <path>] [--docs-root <dir>]   import legacy .claude/ docs/ planning/ into the Knowledge root (T82–T85)\n" +
   "  orchestrate rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups` (T97)\n" +
   "  orchestrate list-backups [--project-root <path>]   list this project's .sta/backups/ snapshots, oldest first\n" +
   "  orchestrate roles [--module <name>] [--project-root <path>]   where BA, SA, UXUI and DEV each stand against knowledge/ (T99)\n" +
@@ -195,10 +212,12 @@ export const USAGE =
   "underlying flag-based form:\n" +
   "  orchestrate --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] <classification flags>\n" +
   "  orchestrate --task-id <id> --module <name> --resume        continue a task already in the store\n" +
+  "  orchestrate --task-id <id> --module <name> --no-qa-optimization   run qa-engineer exactly as V1 did (skip change-aware scope/deterministic pre-checks)\n" +
   "  orchestrate --list [--project-root <path>]                 show every task and stop\n" +
   "  orchestrate --check-contracts [--project-root <path>]      check contracts/*.yaml against the agent registry\n" +
   "  orchestrate --check-layout [--project-root <path>]         check layout.yaml against the real directories\n" +
   "  orchestrate --check-workflows [--project-root <path>]      check workflows/*.yml against the classifier\n" +
+  "  orchestrate --check-bindings [--project-root <path>]       check .codex/agents/*.toml match the .claude/agents sources\n" +
   "  orchestrate --check-profile [--project-root <path>]        check project.yaml and stacks/ against the agent roster\n" +
   "  orchestrate --check-decisions [--project-root <path>]      check decisions/*.md ADRs against the schema and cross-links\n" +
   "  orchestrate --check-test-pyramid [--project-root <path>]   check test-pyramid.yaml against its schema\n" +
@@ -225,6 +244,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkContracts = false;
   let checkLayoutFlag = false;
   let checkWorkflowsFlag = false;
+  let checkBindingsFlag = false;
   let checkProfileFlag = false;
   let checkDecisionsFlag = false;
   let checkTestPyramidFlag = false;
@@ -242,6 +262,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let dependsOn: string[] = [];
   let phases: number[] = [];
   let autonomy: RuntimeAutonomy | undefined;
+  let noQaOptimization = false;
   const targetBindings: TargetBindings = { frontend_target: null, backend_target: null };
   const classification: ClassificationInput = {};
 
@@ -281,6 +302,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkLayoutFlag = true;
     } else if (arg === "--check-workflows") {
       checkWorkflowsFlag = true;
+    } else if (arg === "--check-bindings") {
+      checkBindingsFlag = true;
     } else if (arg === "--check-profile") {
       checkProfileFlag = true;
     } else if (arg === "--check-decisions") {
@@ -321,6 +344,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
         throw new CliUsageError(`--autonomy must be one of: ${valid.join(", ")} (got ${value ?? "nothing"})`);
       }
       autonomy = value as RuntimeAutonomy;
+    } else if (arg === "--no-qa-optimization") {
+      noQaOptimization = true;
     } else if (arg in FLAG_TO_CLASSIFICATION) {
       classification[FLAG_TO_CLASSIFICATION[arg]] = true;
     } else {
@@ -333,6 +358,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkContracts &&
     !checkLayoutFlag &&
     !checkWorkflowsFlag &&
+    !checkBindingsFlag &&
     !checkProfileFlag &&
     !checkDecisionsFlag &&
     !checkTestPyramidFlag &&
@@ -367,6 +393,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkContracts,
     checkLayout: checkLayoutFlag,
     checkWorkflows: checkWorkflowsFlag,
+    checkBindings: checkBindingsFlag,
     checkProfile: checkProfileFlag,
     checkDecisions: checkDecisionsFlag,
     checkTestPyramid: checkTestPyramidFlag,
@@ -386,6 +413,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     phases,
     targetBindings,
     autonomy,
+    noQaOptimization,
   };
 }
 
@@ -562,6 +590,7 @@ const VERBS = [
   "audit",
   "projects",
   "init",
+  "qa-metrics",
   "upgrade",
   "migrate",
   "knowledge-migrate",
@@ -579,7 +608,7 @@ function isVerb(s: string | undefined): s is Verb {
 }
 
 /** Flags a verb accepts that take a value — their value must never be mistaken for the positional <task-id>. */
-const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--by", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--now", "--confirm"]);
+const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--by", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects"]);
 
 /** Every non-flag token in a verb's remaining args, in order, skipping over each value-flag's own argument. */
 function positionalArgs(rest: string[]): string[] {
@@ -915,7 +944,13 @@ async function runUpgradeVerb(rest: string[], defaultProjectRoot: string): Promi
 async function runDoctorVerb(rest: string[]): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root");
   try {
-    const report = await runDoctor({ projectRoot: projectRoot ?? undefined });
+    // The composition root is the one place that may name a concrete adapter
+    // (see runtimeAdapter.ts): doctor itself stays provider-blind and receives
+    // the same probe a real run would use.
+    const report = await runDoctor({
+      projectRoot: projectRoot ?? undefined,
+      probe: () => new ClaudeCodeAdapter({ projectRoot: projectRoot ?? process.cwd() }).probe(),
+    });
     for (const c of report.checks) {
       const mark = c.status === "PASS" ? "✓" : c.status === "WARNING" ? "!" : "✗";
       console.log(`${mark} ${c.status.padEnd(7)} ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
@@ -1440,6 +1475,93 @@ async function runAdoptVerb(rest: string[], defaultProjectRoot: string): Promise
   }
 }
 
+/**
+ * The previous failed QA round's findings, read from the module's `review.md`
+ * (`## Open Issues`) — the input a recheck plan needs so round N+1 verifies
+ * the named findings first instead of starting over (QA06).
+ *
+ * Findings carry no file lists today because review.md does not name files;
+ * freshness keys stay unknown, which planRecheck treats as "no cross-boundary
+ * signal" rather than inventing one. Evidence reuse across processes arrives
+ * when deterministic results gain their own persistence.
+ */
+function previousRoundFromDocs(docsRoot: string, moduleName: string, taskId: string): { findings: QaFindingRecord[]; evidence: [] } | undefined {
+  if (!moduleName) return undefined;
+  const reviewMd = readModuleDoc(docsRoot, moduleName, "review.md");
+  if (!reviewMd) return undefined;
+  const rows = parseOpenIssues(reviewMd);
+  if (rows.length === 0) return undefined;
+  const findings: QaFindingRecord[] = rows.map((row, i) => ({
+    id: `F${i + 1}`,
+    description: row.raw.replace(/\s+/g, " ").slice(0, 200),
+    owner: row.owner ?? "unassigned",
+    files: [],
+    createdAt: Date.now(),
+    status: "OPEN",
+  }));
+  void taskId;
+  return { findings, evidence: [] };
+}
+
+/** `qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]` — QA07's cost/effectiveness picture off the run log. */
+async function runQaMetricsVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const stateDb = flagValue(rest, "--state-db");
+  const taskId = positionalArg(rest);
+  const exportPath = flagValue(rest, "--export-json");
+  const baselinePath = flagValue(rest, "--baseline");
+  const escapedRaw = flagValue(rest, "--escaped-defects");
+  const escapedDefects = escapedRaw !== undefined ? Number(escapedRaw) : undefined;
+  if (escapedDefects !== undefined && !Number.isInteger(escapedDefects)) {
+    throw new CliUsageError(`--escaped-defects must be an integer (got ${escapedRaw})`);
+  }
+
+  const { store, registry } = openStore(projectRoot, stateDb);
+  try {
+    const ids = taskId ? [taskId] : store.listTasks().map((t) => t.taskId);
+    if (ids.length === 0) {
+      console.log("[orchestrator] no tasks in this state database yet — nothing to measure.");
+      return 0;
+    }
+    const entries = ids.map((id) => ({ taskId: id, runs: store.runsForTask(id) }));
+    const metricsExport = buildMetricsExport(entries, { escapedDefects });
+
+    for (const t of metricsExport.tasks) {
+      const share = `${(t.qaShare * 100).toFixed(0)}%`;
+      console.log(
+        `[orchestrator] ${t.taskId}: QA ${t.qaRuns} round(s), ${t.qaTokens} tokens ` +
+          `(${share} of task total), FULL=${t.fullRounds} TARGETED=${t.targetedRounds}` +
+          `${t.unrecordedModeRounds > 0 ? ` unrecorded=${t.unrecordedModeRounds}` : ""}, retries=${t.qaRetries}, failures=${t.qaFailures}`,
+      );
+    }
+    const tot = metricsExport.totals;
+    console.log(
+      `[orchestrator] totals: QA ${tot.qaRuns} round(s) — ${tot.qaTokens}/${tot.totalTokens} tokens ` +
+        `(${(tot.qaShare * 100).toFixed(0)}%), FULL=${tot.fullRounds} TARGETED=${tot.targetedRounds} retries=${tot.qaRetries}` +
+        `${tot.escapedDefects !== undefined ? ` escapedDefects=${tot.escapedDefects}` : ""}`,
+    );
+
+    if (exportPath) {
+      fs.writeFileSync(exportPath, JSON.stringify(metricsExport, null, 2), "utf8");
+      console.log(`[orchestrator] wrote baseline JSON to ${exportPath}`);
+    }
+    if (baselinePath) {
+      const before = JSON.parse(fs.readFileSync(baselinePath, "utf8")) as ReturnType<typeof buildMetricsExport>;
+      const delta = compareBaselines(before, metricsExport);
+      console.log(
+        `[orchestrator] vs baseline (${baselinePath}): verdict=${delta.verdict}, ` +
+          `qa tokens ${delta.qaTokenDeltaPct === null ? "n/a" : `${delta.qaTokenDeltaPct.toFixed(1)}%`}, ` +
+          `qa share ${delta.qaShareDeltaPct === null ? "n/a" : `${delta.qaShareDeltaPct.toFixed(1)}%`}, ` +
+          `modes ${delta.targetedVsFullShift}, retry delta ${delta.retryDelta}`,
+      );
+      for (const note of delta.notes) console.log(`[orchestrator]   note: ${note}`);
+    }
+    return 0;
+  } finally {
+    registry.close();
+  }
+}
+
 /** Dispatches a T31 verb, translating the ones that are really the existing engine in disguise (`run`, `resume`, `retry`) rather than duplicating the step loop. */
 async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): Promise<number> {
   switch (verb) {
@@ -1462,6 +1584,8 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
       return runCancelVerb(rest, defaultProjectRoot);
     case "audit":
       return runAuditVerb(rest, defaultProjectRoot);
+    case "qa-metrics":
+      return runQaMetricsVerb(rest, defaultProjectRoot);
     case "projects":
       return runProjectsVerb(rest, defaultProjectRoot);
     case "init":
@@ -1527,6 +1651,17 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       return 0;
     }
     console.error("[orchestrator] workflows/*.yml and the classifier disagree:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
+  if (args.checkBindings) {
+    const result = checkBindings(args.projectRoot);
+    if (result.ok) {
+      console.log("[orchestrator] .codex/agents bindings match the .claude/agents sources.");
+      return 0;
+    }
+    console.error("[orchestrator] codex role bindings have drifted from their sources:");
     for (const problem of result.problems) console.error(`  - ${problem}`);
     return 1;
   }
@@ -1750,7 +1885,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     // T109: the executor is now a RuntimeAdapter-driven one (T108) rather than a
     // Claude-Code-specific spawn — swapping `runtime` here is the whole point of
     // that seam. `guards` derives from `contracts/<role>.yaml` (T15), same as before.
-    const executor = createRuntimeExecutor({
+    const runtimeExecutor = createRuntimeExecutor({
       runtime: new ClaudeCodeAdapter({ projectRoot: args.projectRoot }),
       projectRoot: args.projectRoot,
       moduleName: () => args.module!,
@@ -1787,6 +1922,51 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       // stored environment (survives --resume), not args.environment, which only matters on create.
       extraInstruction: `Environment: ${orchestrator.environment} — ${describeEnvironment(orchestrator.environment, args.projectRoot)}`,
     });
+
+    // QA01–QA06 wrapped around the runtime executor: change-aware scope,
+    // deterministic checks before qa-engineer runs, bounded evidence package,
+    // and the TARGETED/FULL decision the gate enforces. `--no-qa-optimization`
+    // restores the exact V1 behaviour for a caller that wants it.
+    const executor = args.noQaOptimization
+      ? runtimeExecutor
+      : withQaOptimization({
+          inner: runtimeExecutor,
+          changedFiles: async () => {
+            // Read-only git inspection of every writable Target root; legacy
+            // projects have exactly one — the project root itself. A root whose
+            // git fails contributes nothing rather than poisoning the others;
+            // a total failure yields [], which scopes as unbounded → FULL.
+            let roots: string[] = [args.projectRoot];
+            try {
+              loadInstallationConfig(process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined);
+              const task = store.loadTask(taskId);
+              if (task) {
+                const roots3 = preflightThreeRepoTask(task, AgentStage.QA_ENGINEER, {
+                  frameworkRoot: args.projectRoot,
+                  installationConfigPath: process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined,
+                });
+                const writes = roots3.workRoots.filter((r) => r.access === "write").map((r) => r.path);
+                if (writes.length > 0) roots = [...new Set(writes)];
+              }
+            } catch {
+              // legacy project — projectRoot stands
+            }
+            const results = await Promise.allSettled(roots.map((root) => gitChangedFiles(root)));
+            return [...new Set(results.flatMap((r) => (r.status === "fulfilled" ? r.value : [])))];
+          },
+          riskSignals: () => riskSignalsFromClassification(orchestrator.classification),
+          previousRound: () => {
+            // In three-repo mode the module docs live under the Knowledge root.
+            let docsRoot = args.projectRoot;
+            try {
+              const installation = loadInstallationConfig(process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined);
+              if (installation.knowledge_root) docsRoot = installation.knowledge_root;
+            } catch {
+              // legacy project — projectRoot stands
+            }
+            return previousRoundFromDocs(docsRoot, args.module ?? "", taskId);
+          },
+        });
 
     for (;;) {
       const status = orchestrator.status();
@@ -1853,8 +2033,13 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
 }
 
 const isMain = (() => {
+  // Compare realpaths: under `npm link` (a Windows junction) argv[1] carries
+  // the junction path while this module resolves to the checkout — a plain
+  // string compare would silently disable the whole CLI.
   try {
-    return process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+    if (!process.argv[1]) return false;
+    const entry = fs.realpathSync.native(path.resolve(process.argv[1]));
+    return entry === fs.realpathSync.native(fileURLToPath(import.meta.url));
   } catch {
     return false;
   }
@@ -1862,6 +2047,10 @@ const isMain = (() => {
 
 if (isMain) {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  if (process.argv.slice(2).includes("--help") || process.argv.slice(2).includes("-h")) {
+    console.log(USAGE);
+    process.exit(0);
+  }
   runCli(process.argv.slice(2), repoRoot)
     .then((code) => process.exit(code))
     .catch((e) => {

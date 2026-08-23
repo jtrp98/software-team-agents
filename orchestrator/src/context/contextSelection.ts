@@ -2,7 +2,14 @@ import { AgentStage } from "../types.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 
 /** Doc categories reuse ArtifactType; code/infra areas are not artifacts, so they're added here. */
-export type ContextCategory = ArtifactType | "backend-code" | "frontend-code" | "devops-docs" | "ux-research";
+export type ContextCategory =
+  | ArtifactType
+  | "backend-code"
+  | "frontend-code"
+  | "devops-docs"
+  | "ux-research"
+  /** QA01/QA04: the bounded evidence package the orchestrator assembles for a qa-engineer round. Not an artifact any stage produces — the wrapper injects it per run. */
+  | "qa-evidence";
 
 export const ALL_CONTEXT_CATEGORIES: ContextCategory[] = [
   ArtifactType.REQUIREMENTS,
@@ -15,6 +22,7 @@ export const ALL_CONTEXT_CATEGORIES: ContextCategory[] = [
   "frontend-code",
   "devops-docs",
   "ux-research",
+  "qa-evidence",
 ];
 
 export interface ContextPolicy {
@@ -66,6 +74,10 @@ export const CONTEXT_POLICY: Partial<Record<AgentStage, ContextPolicy>> = {
     ArtifactType.QA_REPORT,
     "backend-code",
     "frontend-code",
+    // The evidence package (QA04) is the one extra thing QA reads first; it is
+    // injected by the optimization wrapper per round, never stored in the
+    // artifact store, so selectContext itself yields nothing for it.
+    "qa-evidence",
   ]),
   [AgentStage.SECURITY]: policy([
     ArtifactType.REQUIREMENTS,

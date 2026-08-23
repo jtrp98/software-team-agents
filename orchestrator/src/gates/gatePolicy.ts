@@ -1,6 +1,7 @@
 import { TaskState } from "../types.js";
 import { canTransition, transition, type TaskMachine } from "../state/taskState.js";
 import type { QaReportArtifact, SecurityReportArtifact } from "../artifacts/schemas.js";
+import { canCloseWith, type QaModeDecision } from "../qa/mode.js";
 
 /**
  * Evidence available to gate a transition. This is deliberately separate
@@ -12,6 +13,13 @@ export interface GateContext {
   qaReport?: QaReportArtifact;
   securityReport?: SecurityReportArtifact;
   humanApproved?: boolean;
+  /**
+   * QA02/QA05 — the mode decision made for the current QA round. Absent on
+   * tasks that ran before the optimization layer existed (and on any run of
+   * an executor that does not set it): the gate then behaves exactly as it
+   * did in V1, which is what keeps this backward-compatible.
+   */
+  qaModeDecision?: QaModeDecision;
 }
 
 export interface GateResult {
@@ -38,9 +46,13 @@ export function checkGate(from: TaskState, to: TaskState, ctx: GateContext): Gat
   }
 
   if (from === TaskState.QA && to !== TaskState.QA_FAILED) {
-    return ctx.qaReport?.status === "PASS"
-      ? { allowed: true }
-      : { allowed: false, reason: "QA_PASS required — qa-report.status must be PASS" };
+    if (ctx.qaReport?.status !== "PASS") {
+      return { allowed: false, reason: "QA_PASS required — qa-report.status must be PASS" };
+    }
+    // QA05: a decision of FULL is only discharged by a report that says FULL.
+    // Without a recorded decision this is a no-op — V1 behaviour preserved.
+    const close = canCloseWith(ctx.qaModeDecision, ctx.qaReport.mode);
+    return close.allowed ? { allowed: true } : { allowed: false, reason: close.reason };
   }
 
   if (from === TaskState.SECURITY && to !== TaskState.SECURITY_FAILED) {
