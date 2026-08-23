@@ -1,6 +1,5 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ClaudeCodeAdapter } from "../runtime/claudeCodeAdapter.js";
 import { checkKnowledge } from "../knowledge/knowledgeBase.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { validateInstallation } from "../packaging/installValidation.js";
@@ -60,7 +59,14 @@ export interface DoctorOptions {
   projectRoot?: string;
   /** Overrides where the installation config is read from (tests; unusual setups). */
   installationConfigPath?: string;
-  /** Injectable so tests never spawn the real runtime probe. */
+  /**
+   * Injectable so tests never spawn the real runtime probe — and, since the
+   * capability-contract work (OFF04), the *only* way a runtime is probed at all:
+   * the composition root (cli.ts) wires whichever adapter the run would use.
+   * A doctor that constructed its own adapter would make a core module name a
+   * specific provider, which is the coupling `runtimeAdapter.ts` exists to
+   * prevent. Absent probe ⇒ WARNING, never a guess.
+   */
   probe?: () => Promise<{ available: boolean; version?: string; reason?: string }>;
 }
 
@@ -120,7 +126,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
     );
 
     checks.push(
-      check("Knowledge schema (items load cleanly)", "run: orchestrate --check-knowledge --knowledge-root <path> for the full list", () => {
+      check("Knowledge schema (items load cleanly)", "run: orchestrate --check-knowledge --project-root <path> for the full list", () => {
         const report = checkKnowledge(knowledgeRootValue!);
         if (report.problems.length > 0) {
           return { status: "FAIL", detail: `${report.problems.length} problem(s) — first: ${report.problems[0]}` };
@@ -163,9 +169,10 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
       const name = "Runtime adapter (claude CLI)";
       const fix = "install Claude Code and ensure `claude --version` works in a shell";
       try {
-        const root = projectRoot ?? process.cwd();
-        const probe = options.probe ?? (() => new ClaudeCodeAdapter({ projectRoot: root }).probe());
-        const result = await probe();
+        if (!options.probe) {
+          return { name, status: "WARNING", detail: "skipped — no runtime probe wired by the caller", fix };
+        }
+        const result = await options.probe();
         if (!result.available) return { name, status: "FAIL", detail: result.reason ?? "claude unavailable", fix };
         return { name, status: "PASS", detail: result.version ?? "available" };
       } catch (error) {

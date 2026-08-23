@@ -138,7 +138,8 @@
         "frontend-code",
         "devops-docs",
         "scaffolding",
-        "schema.prisma"
+        "schema.prisma",
+        "qa-evidence"
       ]
     },
     "state": {
@@ -175,6 +176,7 @@
         "no_rule_decisions",
         "evidence_required",
         "must_state_verify_mode",
+        "respect_recorded_mode_decision",
         "escalate_after_second_failure",
         "cannot_close_security_finding",
         "sole_security_finding_closer",

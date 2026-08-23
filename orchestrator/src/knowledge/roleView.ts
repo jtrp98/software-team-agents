@@ -49,6 +49,9 @@ export const KINDS_BY_CATEGORY: Record<ContextCategory, KnowledgeKind[]> = {
   "frontend-code": [],
   "devops-docs": [],
   "ux-research": [],
+  // The QA evidence package is assembled per round by the orchestrator from
+  // artifacts and scope — it carries no knowledge kind of its own.
+  "qa-evidence": [],
 };
 
 /** Everyone sees ADRs — see the note above. */

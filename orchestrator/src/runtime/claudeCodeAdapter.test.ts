@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { SpawnSyncReturns } from "node:child_process";
-import { ClaudeCodeAdapter, resolveNpmCliScript, type SpawnSync } from "./claudeCodeAdapter.js";
+import { ClaudeCodeAdapter, disallowRulesFromGuards, resolveNpmCliScript, type SpawnSync } from "./claudeCodeAdapter.js";
 import { NO_GUARDS, type RuntimeGuards } from "./runtimeAdapter.js";
 
 function tmpProject(): string {
@@ -73,6 +73,81 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
       const idx = capturedArgs.indexOf("--permission-mode");
       expect(capturedArgs[idx + 1]).toBe(expected);
     }
+  });
+
+  it("carries contract denies as hard --disallowedTools permission rules (OFF10 M4)", async () => {
+    let capturedArgs: string[] = [];
+    const spawnSync: SpawnSync = (_cmd, args) => {
+      capturedArgs = args;
+      return cliResult(0, JSON.stringify({ is_error: false, result: "done" }));
+    };
+    const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync });
+
+    await adapter.executeAgent(
+      baseRequest({
+        guards: {
+          writeAllow: [],
+          writeDeny: [".git/**", "knowledge/_roles/**"],
+          forbidCommands: ["git"],
+          exitChecks: ["no-hardcoded-secret"],
+        },
+      }),
+    );
+
+    const idx = capturedArgs.indexOf("--disallowedTools");
+    expect(idx).toBeGreaterThan(-1);
+    expect(capturedArgs[idx + 1]).toBe(
+      "Write(.git/**),Edit(.git/**),Write(knowledge/_roles/**),Edit(knowledge/_roles/**),Bash(git *)",
+    );
+    // The prompt must still be the last positional argument.
+    expect(capturedArgs[capturedArgs.length - 1]).toBe("do the thing");
+  });
+
+  it("passes no --disallowedTools flag when the request carries no guards", async () => {
+    let capturedArgs: string[] = [];
+    const spawnSync: SpawnSync = (_cmd, args) => {
+      capturedArgs = args;
+      return cliResult(0, JSON.stringify({ is_error: false, result: "done" }));
+    };
+    const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync });
+
+    await adapter.executeAgent(baseRequest());
+
+    expect(capturedArgs).not.toContain("--disallowedTools");
+  });
+
+  it("OFF10 M6 — passes --json-schema only on schema-requested runs and surfaces structured_output", async () => {
+    const schema = { type: "object", properties: { verdict: { type: "string" } }, required: ["verdict"] };
+    // Default adapter: no flag, no structured field even when the envelope has one.
+    let plainArgs: string[] = [];
+    const plain = new ClaudeCodeAdapter({
+      projectRoot: tmpProject(),
+      spawnSync: (_cmd, args) => {
+        plainArgs = args;
+        return cliResult(0, JSON.stringify({ is_error: false, result: "done", structured_output: { verdict: "x" } }));
+      },
+    });
+    const plainResult = await plain.executeAgent(baseRequest());
+    expect(plainArgs).not.toContain("--json-schema");
+    expect(plainResult.structured).toBeUndefined();
+
+    // Schema-requested run: flag carries the exact JSON, result carries the document.
+    let schemaArgs: string[] = [];
+    const withSchema = new ClaudeCodeAdapter({
+      projectRoot: tmpProject(),
+      outputSchema: schema,
+      spawnSync: (_cmd, args) => {
+        schemaArgs = args;
+        return cliResult(0, JSON.stringify({ is_error: false, result: "summary text", structured_output: { verdict: "pass" } }));
+      },
+    });
+    const result = await withSchema.executeAgent(baseRequest());
+    const idx = schemaArgs.indexOf("--json-schema");
+    expect(idx).toBeGreaterThan(-1);
+    expect(JSON.parse(schemaArgs[idx + 1])).toEqual(schema);
+    expect(result.text).toBe("summary text");
+    expect(result.structured).toEqual({ verdict: "pass" });
+    expect(schemaArgs[schemaArgs.length - 1]).toBe("do the thing");
   });
 
   it("runs in req.cwd, not the workspace root", async () => {
@@ -438,5 +513,29 @@ describe("ClaudeCodeAdapter — declared shape", () => {
   it("does not claim PARALLEL_EXECUTION — reserved for T35, unimplemented here", () => {
     const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject() });
     expect(adapter.capabilities.has("parallel-execution" as never)).toBe(false);
+  });
+});
+
+describe("disallowRulesFromGuards (OFF10 M4 mapping)", () => {
+  it("maps deny globs onto both file-mutating tools and forbids onto Bash prefix rules", () => {
+    expect(disallowRulesFromGuards({ writeAllow: [], writeDeny: [".git/**"], forbidCommands: ["git"], exitChecks: [] })).toEqual([
+      "Write(.git/**)",
+      "Edit(.git/**)",
+      "Bash(git *)",
+    ]);
+  });
+
+  it("dedupes and skips blank entries while staying order-stable", () => {
+    const rules = disallowRulesFromGuards({
+      writeAllow: [],
+      writeDeny: [".git/**", "", ".git/**"],
+      forbidCommands: [" git ", ""],
+      exitChecks: [],
+    });
+    expect(rules).toEqual(["Write(.git/**)", "Edit(.git/**)", "Bash(git *)"]);
+  });
+
+  it("returns nothing for an empty guard set — no flag noise on unguarded runs", () => {
+    expect(disallowRulesFromGuards({ writeAllow: [], writeDeny: [], forbidCommands: [], exitChecks: [] })).toEqual([]);
   });
 });

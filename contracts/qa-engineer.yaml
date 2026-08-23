@@ -6,7 +6,7 @@ agent:
 input:
   required: [requirements, design, plan]
   # A phase can be backend-only or frontend-only; requiring both would fail a legitimate phase.
-  optional: [backend-code, frontend-code]
+  optional: [backend-code, frontend-code, qa-evidence]
 output:
   required: [qa-report]
 constraints:
@@ -19,6 +19,9 @@ constraints:
   - evidence_required
   # FULL closes a phase; TARGETED never does, and must say what it did not cover.
   - must_state_verify_mode
+  # The orchestrator's TARGETED/FULL decision is binding: a TARGETED round may
+  # not close a task whose recorded decision is FULL (the gate refuses it).
+  - respect_recorded_mode_decision
   # An item that survives two fixes is usually misrouted, not badly implemented.
   - escalate_after_second_failure
   # Its pass is functional; only `security` moves a security finding to Fixed.

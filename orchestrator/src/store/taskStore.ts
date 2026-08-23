@@ -3,6 +3,7 @@ import { AgentStage, TaskLevel, TaskState } from "../types.js";
 import { QaReportArtifactSchema, SecurityReportArtifactSchema } from "../artifacts/schemas.js";
 import { StructuredFailureSchema } from "../orchestrator/failure.js";
 import { ApprovalRecordSchema } from "../gates/approval.js";
+import { QaModeDecisionSchema } from "../qa/mode.js";
 import { Environment } from "../environment/environment.js";
 import type { RunRecord } from "../observability/runLog.js";
 
@@ -54,6 +55,11 @@ export const PersistedTaskSchema = z.object({
     humanApproved: z.boolean().optional(),
     qaReport: QaReportArtifactSchema.optional(),
     securityReport: SecurityReportArtifactSchema.optional(),
+    // QA02/QA05: the mode decision rides with the rest of the gate evidence so a
+    // resumed task still closes (or refuses to close) on the same terms. Optional:
+    // rows written before the optimization layer simply have no decision, which is
+    // true rather than broken.
+    qaModeDecision: QaModeDecisionSchema.optional(),
   }),
   /**
    * Every human decision this task has asked for, with its answer (T08).

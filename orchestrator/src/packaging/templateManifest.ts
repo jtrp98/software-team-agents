@@ -32,12 +32,22 @@ export function sha256Of(content: Buffer | string): string {
   return crypto.createHash("sha256").update(content).digest("hex");
 }
 
-/** Reads `framework_version` from `orchestrator/package.json` — one number, not a second copy of it. */
-export function readFrameworkVersion(orchestratorRoot: string): string {
-  const pkgPath = path.join(orchestratorRoot, "package.json");
-  const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as { version?: string };
-  if (!pkg.version) throw new Error(`${pkgPath} has no "version" field — framework_version needs one`);
-  return pkg.version;
+/**
+ * Reads the Framework version from the *distributable's* package.json at the
+ **repo root** — the single source of truth. The `.tgz` filename npm pack
+ * produces (`<name>-<version>.tgz`) comes from this same file, so the artifact
+ * name and every `framework_version` stamped into templates/manifest.json can
+ * never drift apart. Falls back to the orchestrator dev-package manifest only
+ * when no root package.json exists (templateBuilder unit fixtures).
+ */
+export function readFrameworkVersion(repoRoot: string): string {
+  const candidates = [path.join(repoRoot, "package.json"), path.join(repoRoot, "orchestrator", "package.json")];
+  for (const pkgPath of candidates) {
+    if (!fs.existsSync(pkgPath)) continue;
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as { version?: string };
+    if (pkg.version) return pkg.version;
+  }
+  throw new Error(`no package.json with a "version" field found under ${repoRoot} — framework_version needs one`);
 }
 
 export function buildManifest(

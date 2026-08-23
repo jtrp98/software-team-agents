@@ -40,14 +40,17 @@ import {
 // v4 (T57): added runs.prompt_version — same nullable-column shape as v2 -> v3, migrated the
 //           same way, for the same reason: an old row simply reads back "not recorded".
 // v5 (three-repo Phase 2): adds targetBindings inside the task JSON document.
+// v6 (QA07): adds runs.qa_mode — the verify mode a qa-engineer round ran in, so TARGETED vs
+//            FULL is queryable per run instead of re-parsed out of review.md prose. Same
+//            nullable-column shape as v3 -> v4: an old row reads back null ("not recorded").
 //
-// v2 -> v3 and v3 -> v4 are migrated in place (see MIGRATIONS below), unlike v1 -> v2 which still
-// fails closed. The difference is what is being added and what it would cost to get it wrong: v3
-// and v4 add nullable columns that an old row simply reads as null with nothing guessed and
+// v2 -> v3, v3 -> v4 and v5 -> v6 are migrated in place (see MIGRATIONS below), unlike v1 -> v2
+// which still fails closed. The difference is what is being added and what it would cost to get
+// it wrong: nullable columns that an old row simply reads as null with nothing guessed and
 // nothing lost. v1 -> v2 changed the columns a *run* is read through, where a silent misread
 // would corrupt cost and token accounting that nothing downstream could tell was wrong. An
 // unknown version still refuses to open at all.
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -73,7 +76,8 @@ CREATE TABLE IF NOT EXISTS runs (
   output_tokens      INTEGER,
   cache_read_tokens  INTEGER,
   context_chars      INTEGER,
-  prompt_version     INTEGER
+  prompt_version     INTEGER,
+  qa_mode            TEXT
 );
 CREATE INDEX IF NOT EXISTS runs_task_id ON runs (task_id);
 CREATE TABLE IF NOT EXISTS events (
@@ -153,6 +157,7 @@ interface RunRow {
   cache_read_tokens: number | null;
   context_chars: number | null;
   prompt_version: number | null;
+  qa_mode: string | null;
 }
 
 interface EventRow {
@@ -195,6 +200,11 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     // supplies null defaults for historical rows, so this migration intentionally
     // changes no history bytes and cannot invent a Target identity.
     void db;
+  },
+  5: (db) => {
+    // QA07: runs predating the qa_mode column simply read back "not recorded".
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    if (!existing.has("qa_mode")) db.exec("ALTER TABLE runs ADD COLUMN qa_mode TEXT");
   },
 };
 
@@ -289,8 +299,8 @@ export class SqliteTaskStore implements TaskStore {
   appendRun(record: RunRecord): void {
     this.db
       .prepare(
-        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, prompt_version)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, prompt_version, qa_mode)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.task_id,
@@ -309,6 +319,7 @@ export class SqliteTaskStore implements TaskStore {
         record.cache_read_tokens,
         record.context_chars,
         record.promptVersion,
+        record.qa_mode,
       );
   }
 
@@ -331,6 +342,7 @@ export class SqliteTaskStore implements TaskStore {
       output_tokens: r.output_tokens,
       cache_read_tokens: r.cache_read_tokens,
       context_chars: r.context_chars,
+      qa_mode: r.qa_mode === "FULL" || r.qa_mode === "TARGETED" ? r.qa_mode : null,
     }));
   }
 
