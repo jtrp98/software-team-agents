@@ -166,7 +166,7 @@ describe("assertContractsMatchRegistry", () => {
       throw new Error("expected it to throw");
     } catch (e) {
       expect(e).toBeInstanceOf(ContractRegistryMismatchError);
-      // nine missing files plus the tool mismatch
+      // ten missing files plus the tool mismatch
       expect((e as ContractRegistryMismatchError).problems.length).toBe(10);
     }
   });

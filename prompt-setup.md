@@ -44,7 +44,7 @@ Then, guided by what status reports:
 
 | Fact | How to detect |
 |---|---|
-| Framework root + version | `status --json` → `frameworkRoot`, `frameworkVersion`; missing ⇒ the CLI itself is not installed — tell the user how to install (`npm i -g software-team-agents-<v>.tgz`) and stop |
+| Framework root + version | `status --json` → `frameworkRoot`, `frameworkVersion`; missing ⇒ the CLI is not installed — install it (see below), then continue rather than stopping |
 | Current directory's workspace kind & role | `status --json` → `workspaceKind`, `role`; also read `.agent-team/config.yaml` if present (`role`, `knowledge.path`, `overrides`) |
 | Knowledge root (machine-wide) | `status --json` → `knowledgeRoot` / `knowledgeBinding` (via installation binding) |
 | Registered Targets | read `<knowledgeRoot>/targets.yaml` when a Knowledge root resolved |
@@ -57,6 +57,25 @@ fine — you are likely standing outside any workspace. Note it and continue to
 the role menu; the chosen flow will ask where to work.
 
 Present a one-screen summary of what you found, then show the menu.
+
+### Installing the CLI, if it is missing
+
+From a Framework checkout, one command — no packing, no tarball:
+
+```bash
+cd <framework-checkout> && npm link
+```
+
+`npm link` points the global `software-team-agents` / `sta` binaries at the
+checkout itself, so a later `npm run build` there takes effect immediately with
+nothing to reinstall. Verify with `software-team-agents --version`.
+
+Only when installing from a released package (no checkout on the machine) is the
+tarball path right: `npm i -g software-team-agents-<v>.tgz`.
+
+Do not run `npm run release` just to get the CLI installed — it runs the full
+typecheck + 2000-test suite and packs a tarball, which is a release gate, not a
+setup step.
 
 ---
 
@@ -105,8 +124,10 @@ already said):
 - Write the binding into `.agent-team/config.yaml` (`knowledge:` → relative or
   absolute path), or run `sta configure knowledge-root` if the user wants it
   machine-wide. Show exactly what you are about to write before writing.
-- In the Target: `software-team-agents init` (detects DEV; pass `--role dev`
-  yourself only if detection reported ambiguity) then `software-team-agents sync`.
+- In the Target: `software-team-agents init` then `software-team-agents sync`.
+  Detection normally resolves an app repo on its own; pass `--role dev` only if
+  it actually reports ambiguity (a repo carrying real Knowledge markers —
+  `knowledge/`, `targets.yaml`, `knowledge-policy.yaml` — alongside app source).
 - **Stack reality check.** `sync` only copies the Framework's generic default stack into
   `.claude/agents/frontend-engineer.md`/`backend-engineer.md` — it does not detect or merge
   the Target's actual one, and a fresh `init`/`sync` on an already-built project will not

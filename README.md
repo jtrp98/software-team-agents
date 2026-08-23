@@ -212,7 +212,7 @@ option สำคัญ: `--frontend-target/--backend-target <id>` (immutable ต
 
 ### Human approval gates
 
-gate สำคัญหยุดรอคนจริง — requirement interview, schema confirmation, UXUI sign-off (frontend work), QA ไม่ผ่าน, security finding Critical/Important, deploy/migration จริง การอนุมัติเป็น **record** (type/status/who/when) — reject คือ record ที่ block งาน ไม่ใช่ flag · `qa-engineer` และ `security` ไม่ถูก auto-chain — user เรียกด้วยชื่อทุกครั้ง
+gate สำคัญหยุดรอคนจริง — requirement interview, schema confirmation, UXUI sign-off (frontend work), QA ไม่ผ่าน (รอบ 1-2 วนกลับ engineer อัตโนมัติ; ครั้งที่ 3 หรือ Critical หยุดรอคน), security finding Critical/Important, deploy/migration จริง การอนุมัติเป็น **record** (type/status/who/when) — reject คือ record ที่ block งาน ไม่ใช่ flag · pipeline แบบ orchestrated chain `qa-engineer` (ทุกงานที่แตะ code) และ `security` (sensitive/schema) ให้อัตโนมัติ — ที่เป็น human gate คือ *คำตัดสิน* ของสองตัวนี้ ไม่ใช่การเรียกใช้
 
 ### Roles / Knowledge lanes (BA · SA · UXUI · DEV)
 

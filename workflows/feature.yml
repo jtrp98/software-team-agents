@@ -4,9 +4,13 @@ description: New feature, module or project - the full chain, starting from a re
 trigger:
   kind: signal
   signal: isNewFeatureModuleOrProject
-  priority: 2
+  # Above `schema-change` (priority 2): a brand-new feature/module/project that
+  # also touches the schema still starts from the requirements interview — it
+  # must not silently degrade into the schema-only pipeline that skips
+  # business-analyst and project-manager.
+  priority: 1
 level: LARGE_CRITICAL
-requires_human_approval: false
+requires_human_approval: true
 steps:
   - agent: business-analyst
   - agent: system-analyst

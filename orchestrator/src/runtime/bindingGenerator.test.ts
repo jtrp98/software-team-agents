@@ -197,4 +197,28 @@ describe("checkBindings — hook parity (M3)", () => {
     expect(result.ok).toBe(false);
     expect(result.problems.join("\n")).toMatch(/orphan \.codex\/hooks\/ghost-hook\.js/);
   });
+
+  it("the CommonJS marker is mirrored too — a missing one fails exactly like the hooks were never fixed", () => {
+    // The ESM-host failure mode: both directories' .js guards are present and
+    // identical, but only .claude/hooks carries the package.json that pins them
+    // to CommonJS. Under a "type": "module" host the Codex copies exit 1 and
+    // enforce nothing, invisibly.
+    writeBindingPair("qa-engineer");
+    const marker = JSON.stringify({ "//": "Pins every hook to CommonJS.", type: "commonjs" }, null, 2) + "\n";
+    writeHook("claude", "block-git.js", "x;\n");
+    writeHook("codex", "block-git.js", "x;\n");
+
+    writeHook("claude", "package.json", marker);
+    let result = checkBindings(root);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join("\n")).toMatch(/package\.json: missing \.codex\/hooks\//);
+
+    writeHook("codex", "package.json", marker.replace("commonjs", "module"));
+    result = checkBindings(root);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join("\n")).toMatch(/package\.json differs from its \.claude\/hooks source/);
+
+    writeHook("codex", "package.json", marker);
+    expect(checkBindings(root)).toEqual({ ok: true, problems: [] });
+  });
 });

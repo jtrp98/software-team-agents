@@ -379,6 +379,55 @@ describe("document verdicts read back through the workspace (T108)", () => {
     expect(result.outcome.failure_reason).toMatch(/review\.md doesn't exist/);
   });
 
+  it("fails a business-analyst run that wrote no requirement.md, despite exit 0", async () => {
+    const runtime = new MockRuntimeAdapter();
+    const result = await executorFor(runtime)({ stage: AgentStage.BUSINESS_ANALYST, taskId: "T-1", context: [] });
+
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toMatch(/requirement\.md doesn't exist/);
+  });
+
+  it("passes a business-analyst run whose requirement.md exists in the runtime workspace", async () => {
+    const runtime = new MockRuntimeAdapter({
+      files: { "_docs/module/sales-crm/requirement.md": "# Requirement\n\n## Interview Summary\nanswered\n" },
+    });
+    const result = await executorFor(runtime)({ stage: AgentStage.BUSINESS_ANALYST, taskId: "T-1", context: [] });
+
+    expect(result.outcome.result).toBe("PASS");
+  });
+
+  it("each doc-producing stage is checked against its own artifact, not someone else's", async () => {
+    const runtime = new MockRuntimeAdapter({
+      files: {
+        "_docs/module/sales-crm/design.md": "# Design\n",
+        "_docs/module/sales-crm/plan.md": "# Plan\n",
+        "_docs/module/sales-crm/test-plan.md": "# Test plan\n",
+      },
+    });
+    const executor = executorFor(runtime);
+
+    // system-analyst owns design.md → present → PASS; project-manager owns
+    // plan.md → present → PASS; test-planner owns test-plan.md → present → PASS.
+    for (const stage of [AgentStage.SYSTEM_ANALYST, AgentStage.PROJECT_MANAGER, AgentStage.TEST_PLANNER]) {
+      const result = await executor({ stage, taskId: "T-1", context: [] });
+      expect(result.outcome.result).toBe("PASS");
+    }
+
+    // An engineer owns no module document — its verdict stays exit-status only.
+    const engineer = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-1", context: [] });
+    expect(engineer.outcome.result).toBe("PASS");
+  });
+
+  it("fails a test-planner run that left an empty test-plan.md behind", async () => {
+    const runtime = new MockRuntimeAdapter({
+      files: { "_docs/module/sales-crm/test-plan.md": "   \n" },
+    });
+    const result = await executorFor(runtime)({ stage: AgentStage.TEST_PLANNER, taskId: "T-1", context: [] });
+
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toMatch(/test-plan\.md doesn't exist \(or is empty\)/);
+  });
+
   it("routes a failed round to the owner qa-engineer named, through the interface (T06)", async () => {
     const failedReview = [
       "## Open Issues — all phases",

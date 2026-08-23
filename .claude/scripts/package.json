@@ -1,0 +1,4 @@
+{
+  "//": "Pins every script in this directory to CommonJS — same reason as .claude/hooks/package.json. Without it, `node .claude/scripts/generate-status.js` (and the other three) crash on require() in any target project whose root package.json declares \"type\": \"module\".",
+  "type": "commonjs"
+}

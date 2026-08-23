@@ -73,7 +73,7 @@ export interface DoctorOptions {
 export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [];
   const projectRoot = options.projectRoot;
-  const configureFix = "run: orchestrate configure knowledge-root <path>";
+  const configureFix = "run: sta configure knowledge-root <path>";
 
   // Mode awareness: a Knowledge root never carries framework internals (.sta/,
   // .claude) — `init --mode three-repo` deliberately writes zero template files
@@ -101,7 +101,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
   const naDetail = "n/a — this project IS the Knowledge root; framework internals stay out by design";
 
   checks.push(
-    check("Framework installation (.sta/)", "run: orchestrate init --mode <mode> --templates <dir> --project-root <path>", () => {
+    check("Framework installation (.sta/)", "run: sta init --mode <mode> --templates <dir> --project-root <path>", () => {
       if (!projectRoot) return { status: "WARNING", detail: "no --project-root given — .sta/state/guard checks skipped", fix: "re-run with --project-root <path>" };
       if (sameRealPath(projectRoot, boundKnowledgeRoot)) return { status: "PASS", detail: naDetail };
       const result = validateInstallation(projectRoot);
@@ -126,7 +126,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
     );
 
     checks.push(
-      check("Knowledge schema (items load cleanly)", "run: orchestrate --check-knowledge --project-root <path> for the full list", () => {
+      check("Knowledge schema (items load cleanly)", "run: sta --check-knowledge --project-root <path> for the full list", () => {
         const report = checkKnowledge(knowledgeRootValue!);
         if (report.problems.length > 0) {
           return { status: "FAIL", detail: `${report.problems.length} problem(s) — first: ${report.problems[0]}` };
@@ -199,7 +199,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
   );
 
   checks.push(
-    check("Guard wiring (.claude/settings.json)", "run: orchestrate init --force to restore hook wiring", () => {
+    check("Guard wiring (.claude/settings.json)", "run: sta init --force to restore hook wiring", () => {
       if (!projectRoot) return { status: "WARNING", detail: "skipped — no --project-root given" };
       if (sameRealPath(projectRoot, boundKnowledgeRoot)) return { status: "PASS", detail: naDetail };
       const settingsPath = path.join(projectRoot, ".claude", "settings.json");

@@ -595,7 +595,7 @@ describe("the roles verb (T99)", () => {
   });
 
   it("is listed in the usage text", () => {
-    expect(USAGE).toContain("orchestrate roles");
+    expect(USAGE).toContain("sta roles");
     expect(USAGE).toContain("roles ack");
   });
 });

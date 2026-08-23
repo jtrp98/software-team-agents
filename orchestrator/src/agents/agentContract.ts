@@ -125,7 +125,7 @@ export function loadAgentContract(agent: AgentStage | string, projectRoot: strin
   return contract;
 }
 
-/** Reads all nine. A missing or unreadable one fails the whole load: a partial set would silently exempt an agent from its own rules. */
+/** Reads all ten. A missing or unreadable one fails the whole load: a partial set would silently exempt an agent from its own rules. */
 export function loadAllAgentContracts(projectRoot: string = defaultProjectRoot()): Record<string, AgentContract> {
   const out: Record<string, AgentContract> = {};
   for (const agent of CONTRACTED_AGENTS) {

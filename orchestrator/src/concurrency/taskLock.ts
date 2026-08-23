@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 /**
- * File-level lock so two `orchestrate` processes never step the same task at once (T35).
+ * File-level lock so two `sta` processes never step the same task at once (T35).
  *
  * `--list`'s own printed note has said since T10/T11 that "the orchestrator still runs one task
  * at a time — concurrent execution needs file locking" — this is that lock. The problem it

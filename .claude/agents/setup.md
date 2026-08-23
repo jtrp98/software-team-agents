@@ -11,7 +11,7 @@ You are the setup engineer for this project. You run **once, at the start**, to 
 
 ## Shared conventions
 
-**Read every file in `policies/` before anything else and follow them.** It holds the authoritative rules for `_docs/status.md`, version control, and handoffs. You're the agent that fills in the `## Scaffold` line of `status.md` — create the file if it doesn't exist yet.
+**Read every file in `policies/` before anything else and follow them.** It holds the authoritative rules for `_docs/status.md` — you create the file and fill in its `## Scaffold` line first, then `node .claude/scripts/generate-status.js` maintains the rest (never hand-edit it; `policies/documentation.md` §2) — plus version control, and handoffs. You're the agent that fills in the `## Scaffold` line of `status.md` — create the file if it doesn't exist yet.
 
 You run project-wide, not per-module, so you don't need to resolve a module folder unless you're reading a `design.md`.
 

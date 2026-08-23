@@ -168,8 +168,16 @@ describe("gateEvidenceFrom", () => {
     expect(gateEvidenceFrom(ledger)).toEqual({ humanApproved: true });
   });
 
-  it("has no gate field for the three approvals that are stops rather than edges", () => {
-    for (const type of [ApprovalType.QA_FAILURE, ApprovalType.SECURITY_RISK, ApprovalType.REQUIREMENT_INTERVIEW]) {
+  it("maps the requirement interview to the requirementApproved gate", () => {
+    const ledger = decideApproval(
+      requestApproval([], { type: ApprovalType.REQUIREMENT_INTERVIEW, reason: "interview", now: 1 }),
+      { type: ApprovalType.REQUIREMENT_INTERVIEW, approved: true, now: 2 },
+    );
+    expect(gateEvidenceFrom(ledger)).toEqual({ requirementApproved: true });
+  });
+
+  it("has no gate field for the two approvals that are stops rather than edges", () => {
+    for (const type of [ApprovalType.QA_FAILURE, ApprovalType.SECURITY_RISK]) {
       expect(gateFieldFor(type)).toBeNull();
     }
   });

@@ -64,7 +64,7 @@ describe("classifyTask", () => {
     ]);
   });
 
-  it("classifies a new feature/module/project as LARGE_CRITICAL with the full chain", () => {
+  it("classifies a new feature/module/project as LARGE_CRITICAL with the full chain and the interview gate", () => {
     const result = classifyTask({
       isNewFeatureModuleOrProject: true,
       touchesBackend: true,
@@ -80,7 +80,26 @@ describe("classifyTask", () => {
       AgentStage.FRONTEND_ENGINEER,
       AgentStage.QA_ENGINEER,
     ]);
-    expect(result.requiresHumanApproval).toBe(false);
+    // The requirements interview is always-human point #1 — a new feature never
+    // spawns business-analyst headless without a person answering it.
+    expect(result.requiresHumanApproval).toBe(true);
+  });
+
+  it("a new feature that also touches schema keeps the interview first AND the schema obligations", () => {
+    const result = classifyTask({
+      isNewFeatureModuleOrProject: true,
+      touchesSchema: true,
+      touchesBackend: true,
+      touchesFrontend: true,
+    });
+    // Not the schema-only pipeline: BA and PM stay in.
+    expect(result.pipeline[0]).toBe(AgentStage.BUSINESS_ANALYST);
+    expect(result.pipeline).toContain(AgentStage.PROJECT_MANAGER);
+    // Schema obligations still apply on top.
+    expect(result.touchesSchema).toBe(true);
+    expect(result.requiresHumanApproval).toBe(true);
+    expect(result.sensitiveGate).toBe(true);
+    expect(result.pipeline).toContain(AgentStage.SECURITY);
   });
 
   it("adds security to a sensitive new-feature task without duplicating it", () => {

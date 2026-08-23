@@ -157,7 +157,7 @@ describe("AgentEventRouter (T36)", () => {
     const result = router.dispatch({
       type: "APPROVAL_DECIDED",
       taskId: "T-GATE",
-      approvalType: ApprovalType.SCHEMA_CONFIRMATION,
+      approvalType: ApprovalType.REQUIREMENT_INTERVIEW,
       approved: true,
       by: "jane",
     });

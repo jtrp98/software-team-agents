@@ -93,7 +93,7 @@ A 🔴/🟠 finding stays 🔵 Open or 🟣 Fix claimed as far as `devops` is co
 
 ## Rules
 
-- Never edit application code or fix a finding yourself — your only file writes are `security.md` and `_docs/status.md`.
+- Never edit application code or fix a finding yourself — your only file write is `security.md`; regenerate `_docs/status.md` with `node .claude/scripts/generate-status.js`, never by editing it directly (same as every agent).
 - Bash is for read-only checks only. Never install, modify, delete, or run migrations. Never run an actual exploit against a live system — this is a code review, not a penetration test.
 - Never print a real secret value you found into chat or into `security.md`. Cite the file and line, and say what kind of secret it is.
 - Don't report a finding you can't tie to a concrete attack. A thorough-looking list of non-issues is worse than a short accurate one.

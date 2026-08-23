@@ -9,6 +9,8 @@ import { canCloseWith, type QaModeDecision } from "../qa/mode.js";
  * it has no idea whether a design was approved or a QA report passed.
  */
 export interface GateContext {
+  /** The requirement interview was answered by a person (always-human point #1). */
+  requirementApproved?: boolean;
   designApproved?: boolean;
   qaReport?: QaReportArtifact;
   securityReport?: SecurityReportArtifact;
@@ -33,6 +35,17 @@ export interface GateResult {
  * answer — only the orchestrator (item 13) consults it, same as canTransition.
  */
 export function checkGate(from: TaskState, to: TaskState, ctx: GateContext): GateResult {
+  // Gated on leaving REQUIREMENT at all: a requirement is never inferred
+  // (CLAUDE.md always-human point #1). business-analyst's own run may produce
+  // requirement.md, but the pipeline does not build a design on top of it until
+  // a person has answered the interview. Pipelines without a BA stage never sit
+  // in REQUIREMENT, so they never see this gate.
+  if (from === TaskState.REQUIREMENT) {
+    return ctx.requirementApproved
+      ? { allowed: true }
+      : { allowed: false, reason: "REQUIREMENT_INTERVIEW required — a person answers the requirements interview" };
+  }
+
   // Gated on leaving DESIGN at all, not specifically on landing in IMPLEMENTATION: T20 put
   // test-planner (and project-manager already did, for the "feature" pipeline) between the
   // two, so a task can leave DESIGN into PLAN without ever taking the DESIGN->IMPLEMENTATION

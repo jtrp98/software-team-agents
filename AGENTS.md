@@ -29,9 +29,9 @@ Team onboarding flow: [`TEAM_SETUP_V1.md`](TEAM_SETUP_V1.md).
 - **No write outside the resolved workspace roots**, whatever the reason (`.claude/hooks/block-outside-repo.js`). In three-repo runs the orchestrator passes the writable Target roots via `AGENTCLAUDE_WRITABLE_WORK_ROOTS`.
 - **Write only what your role's contract allows** (`contracts/<role>.yaml` → `.claude/hooks/block-path-permissions.js`). `knowledge/_roles/**` and `.workflow/**` are denied to every agent.
 - **Amend, don't regenerate**: existing module docs under `_docs/` are edited section-by-section with a dated Change Log line (`.claude/hooks/block-doc-rewrite.js`).
-- **Only `qa-engineer` sets a task's Status cell** to `verified`/`blocked` in `plan.md`; an engineer may set `in_progress` on its own row; nobody else touches Status.
+- **Only `qa-engineer` sets a task's Status cell** to `verified`/`blocked` in `plan.md`. Engineers don't edit `plan.md` at all (their contracts deny `_docs/module/**`) — an engineer starting a row says so in its handoff; `project-manager` and `qa-engineer` are the only writers the table has.
 - **Approvals and sign-offs are human acts**, recorded via `sta roles approve|signoff|ack`. An agent writing one would be forging it.
-- **Five points always wait for a person**: requirement interview, schema confirmation, failed QA round, Critical/Important security finding, real deploy/migration. Knowledge-migration cutover additionally requires `--confirm I_CONFIRM_MIGRATION`. `qa-engineer` and `security` are never auto-chained — the user invokes them by name every time.
+- **Five points always wait for a person**: requirement interview, schema confirmation, failed QA round (rounds 1–2 auto-route back; the third failure or any Critical escalates), Critical/Important security finding, real deploy/migration. Knowledge-migration cutover additionally requires `--confirm I_CONFIRM_MIGRATION`. Orchestrated pipelines chain `qa-engineer` (every code change) and `security` (sensitive/schema) automatically — it is their *verdicts* that stop for a person, never bypassed.
 - **Dates come from the user. Engineers never decide rules** — unclear logic goes back to `system-analyst` (business questions on to `business-analyst`), never improvised.
 
 ## Commands
@@ -42,7 +42,7 @@ All commands below are real; verify against `node orchestrator/dist/cli.js` usag
 # framework development
 cd orchestrator && npm ci && npm test && npm run typecheck && npm run build
 npm run build:templates          # (inside orchestrator/) regenerate templates/ snapshot + manifest.json — never hand-edit templates/
-node .claude/tests/run.js        # hook/script self-test — must pass after touching ANY hook or script (139 cases)
+node .claude/tests/run.js        # hook/script self-test — must pass after touching ANY hook or script (covers both runtimes' hook copies)
 
 # validation flags (all 15 wired into CI; the CLI also has --check-bindings, not in CI)
 node orchestrator/dist/cli.js --check-contracts|--check-layout|--check-workflows|--check-profile|--check-decisions \

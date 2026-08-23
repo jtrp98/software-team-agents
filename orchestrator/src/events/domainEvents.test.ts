@@ -175,7 +175,11 @@ describe("Orchestrator emits domain events (T36)", () => {
       const status = await orch.step(executor);
       if (status.kind === "WAITING_FOR_HUMAN") {
         orch.provideHumanApproval(
-          status.approvalType === ApprovalType.SCHEMA_CONFIRMATION ? "designApproved" : "humanApproved",
+          status.approvalType === ApprovalType.REQUIREMENT_INTERVIEW
+            ? "requirementApproved"
+            : status.approvalType === ApprovalType.SCHEMA_CONFIRMATION
+              ? "designApproved"
+              : "humanApproved",
           true,
         );
         continue;
@@ -196,7 +200,8 @@ describe("Orchestrator emits domain events (T36)", () => {
     );
     const events = recordEvents(orch);
 
-    // Walk to the schema-confirmation gate by reporting each stage as done.
+    // Walk to the interview gate (always the first question on this pipeline
+    // since the BA gate exists) by reporting each stage as done.
     for (let i = 0; i < 10; i++) {
       const status = orch.status();
       if (status.kind !== "RUNNING") break;
@@ -213,7 +218,7 @@ describe("Orchestrator emits domain events (T36)", () => {
     expect(required).toHaveLength(1);
     expect(required[0].payload).toMatchObject({
       taskId: "T-GATE",
-      approval: { type: ApprovalType.SCHEMA_CONFIRMATION, status: "pending" },
+      approval: { type: ApprovalType.REQUIREMENT_INTERVIEW, status: "pending" },
     });
   });
 
@@ -229,12 +234,12 @@ describe("Orchestrator emits domain events (T36)", () => {
       orch.reportCompletion(status.stage, { outcome: { tokens: 1, cost: 0, result: "PASS" } }, { start: 0, end: 1 });
     }
 
-    orch.decideApproval(ApprovalType.SCHEMA_CONFIRMATION, false, { by: "jane", note: "model is wrong" });
+    orch.decideApproval(ApprovalType.REQUIREMENT_INTERVIEW, false, { by: "jane", note: "model is wrong" });
 
     const decided = events.filter((e) => e.type === DomainEventType.APPROVAL_DECIDED);
     expect(decided).toHaveLength(1);
     expect(decided[0].payload).toMatchObject({
-      type: ApprovalType.SCHEMA_CONFIRMATION,
+      type: ApprovalType.REQUIREMENT_INTERVIEW,
       approved: false,
       by: "jane",
     });

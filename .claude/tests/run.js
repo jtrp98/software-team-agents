@@ -42,6 +42,7 @@ const { spawnSync } = require('child_process');
 
 const ROOT = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const HOOKS = path.join(ROOT, '.claude', 'hooks');
+const CODEX_HOOKS = path.join(ROOT, '.codex', 'hooks');
 const SCRIPTS = path.join(ROOT, '.claude', 'scripts');
 
 let passed = 0;
@@ -119,6 +120,75 @@ for (const dir of [HOOKS, SCRIPTS, path.join(ROOT, '.claude', 'tests')]) {
 }
 
 // ---------------------------------------------------------------------------
+// 0b. every guard still LOADS inside an ESM target project
+//
+// `node --check` above passes in THIS repo because its root package.json has no
+// "type" field, so .js resolves to CommonJS. A target project that declares
+// "type": "module" flips that resolution: every `require(...)` throws
+// ReferenceError and the hook exits 1 — and PreToolUse only blocks on exit 2,
+// so all six guards stayed wired up and enforced nothing. That shipped, and it
+// is invisible to a syntax check by construction. The fix is the
+// package.json marker pinning each directory to CommonJS; this asserts the
+// marker exists AND that the guards actually run under the hostile condition.
+// ---------------------------------------------------------------------------
+
+section('0b. ESM host — a guard that cannot load fails OPEN, and --check cannot see it');
+
+for (const dir of [HOOKS, SCRIPTS]) {
+  if (!fs.existsSync(dir)) continue;
+  const rel = path.relative(ROOT, dir).replace(/\\/g, '/');
+  const markerPath = path.join(dir, 'package.json');
+  let declaredType = null;
+  if (fs.existsSync(markerPath)) {
+    try {
+      declaredType = JSON.parse(fs.readFileSync(markerPath, 'utf8')).type;
+    } catch {
+      declaredType = '<unparseable>';
+    }
+  }
+  check(`${rel}/package.json pins CommonJS`, declaredType, 'commonjs');
+}
+
+// The .codex/hooks mirrors are the same CommonJS files in a different directory —
+// they need their own marker or an ESM host breaks only the Codex runtime's
+// guards, which no other check here would notice.
+check('.codex/hooks/package.json pins CommonJS', (() => {
+  const markerPath = path.join(CODEX_HOOKS, 'package.json');
+  if (!fs.existsSync(markerPath)) return '<missing>';
+  try {
+    return JSON.parse(fs.readFileSync(markerPath, 'utf8')).type;
+  } catch {
+    return '<unparseable>';
+  }
+})(), 'commonjs');
+
+withTempProject((dir) => {
+  // A target project shaped like the real failure: ESM root, guards copied in —
+  // both runtimes' copies.
+  write(path.join(dir, 'package.json'), JSON.stringify({ name: 'esm-host', type: 'module' }, null, 2));
+  for (const [srcDir, destName] of [[HOOKS, '.claude/hooks'], [SCRIPTS, '.claude/scripts'], [CODEX_HOOKS, '.codex/hooks']]) {
+    if (!fs.existsSync(srcDir)) continue;
+    fs.cpSync(srcDir, path.join(dir, destName), { recursive: true });
+  }
+
+  // Loading is what is under test, so run each guard with input it will not act
+  // on: a crash exits 1, a guard that loaded and declined to block exits 0.
+  for (const hooksDir of [path.join(dir, '.claude', 'hooks'), path.join(dir, '.codex', 'hooks')]) {
+    const rel = path.relative(dir, hooksDir).replace(/\\/g, '/');
+    for (const file of fs.readdirSync(hooksDir).filter((f) => f.endsWith('.js'))) {
+      const res = spawnSync(process.execPath, [path.join(hooksDir, file)], {
+        input: JSON.stringify({ tool_name: 'Read', tool_input: {} }),
+        encoding: 'utf8',
+        env: { ...process.env, CLAUDE_PROJECT_DIR: dir },
+        cwd: dir,
+        timeout: 200000,
+      });
+      check(`loads under "type":"module": ${rel}/${file}`, res.status, 0);
+    }
+  }
+});
+
+// ---------------------------------------------------------------------------
 // 1. block-git.js — `policies/git.md` §5
 // ---------------------------------------------------------------------------
 
@@ -151,6 +221,20 @@ const gitCases = [
   ['writing a CI workflow is allowed', { tool_name: 'Write', tool_input: { file_path: '.github/workflows/ci.yml' } }, ALLOW],
   ['unrelated command is allowed', { tool_name: 'Bash', tool_input: { command: 'npm install' } }, ALLOW],
   ['a repo.git clone URL is not mistaken for .git/', { tool_name: 'Bash', tool_input: { command: 'echo https://example.com/repo.git' } }, ALLOW],
+  ['a pipe inside quotes is not mistaken for two commands', { tool_name: 'Bash', tool_input: { command: `grep "foo|bar" file.txt` } }, ALLOW],
+
+  // PowerShell carries the same commands as Bash — every rule above must hold
+  // for it too, or switching shells is a bypass.
+  ['PowerShell git commit is blocked', { tool_name: 'PowerShell', tool_input: { command: 'git commit -m "x"' } }, BLOCK],
+  ['PowerShell reading .git/ directly is blocked', { tool_name: 'PowerShell', tool_input: { command: 'Get-Content .git/HEAD' } }, BLOCK],
+  ['PowerShell git push is blocked', { tool_name: 'PowerShell', tool_input: { command: 'git push origin main' } }, BLOCK],
+  ['PowerShell git status is allowed (read-only)', { tool_name: 'PowerShell', tool_input: { command: 'git status' } }, ALLOW],
+
+  // Wrappers and indirection that once slipped through.
+  ['bash -c wrapped git commit is blocked', { tool_name: 'Bash', tool_input: { command: 'bash -c "git commit -m x"' } }, BLOCK],
+  ['sh -c wrapped git push is blocked', { tool_name: 'Bash', tool_input: { command: `sh -c 'git push origin main'` } }, BLOCK],
+  ['powershell -Command wrapped git reset is blocked', { tool_name: 'Bash', tool_input: { command: 'powershell -Command "git reset --hard HEAD"' } }, BLOCK],
+  ['a variable holding the git name is resolved ($g=git; $g commit)', { tool_name: 'Bash', tool_input: { command: 'g=git; $g commit -m x' } }, BLOCK],
 ];
 
 for (const [name, input, expected] of gitCases) {
@@ -183,6 +267,9 @@ withTempProject((tmp) => {
     ['a canonical runtime-granted Target work root is allowed', { tool_name: 'Write', tool_input: { file_path: path.join(os.tmpdir(), 'target-work', 'src', 'x.ts') } }, ALLOW, { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([path.join(os.tmpdir(), 'target-work')]) }],
     ['a sibling of a runtime-granted Target root remains blocked', { tool_name: 'Write', tool_input: { file_path: path.join(os.tmpdir(), 'target-other', 'x.ts') } }, BLOCK, { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([path.join(os.tmpdir(), 'target-work')]) }],
     ['Bash is out of scope for this guard', { tool_name: 'Bash', tool_input: { command: `echo hi > ${outside}` } }, ALLOW],
+    ['an array of paths is checked element by element (one outside → blocked)', { tool_name: 'Write', tool_input: { file_path: ['_docs/module/m/plan.md', outside] } }, BLOCK],
+    ['an array of paths all inside the repo is allowed', { tool_name: 'Write', tool_input: { file_path: ['_docs/module/m/plan.md', 'app/x.ts'] } }, ALLOW],
+    ['a non-string, non-array path cannot resolve — fail open, no crash', { tool_name: 'Write', tool_input: { file_path: { nested: outside } } }, ALLOW],
   ];
 
   for (const [name, input, expected, extraEnv] of cases) {
@@ -354,6 +441,17 @@ withTempProject((tmp) => {
   write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), planDoc(['verified', 'verified'], ['verified', 'pending', 'pending']));
   write(path.join(tmp, '_docs', 'status.md'), '# Project Status\n\n## Scaffold\nScaffolded\n');
   check('module missing from status.md entirely → fails', runScript('check-status-sync.js', { CLAUDE_PROJECT_DIR: tmp }), 1);
+});
+
+withTempProject((tmp) => {
+  // The regression this case pins: a heading at the wrong level (`###` instead of
+  // `##`) once made the whole plan unparseable, and the script answered "no drift"
+  // — exit 0 — while status.md went on claiming things no readable plan backed.
+  // An unreadable plan is a failure to report, not a clean bill of health.
+  const badPlan = planDoc(['verified'], []).replace(/## Phase 1/g, '### Phase 1');
+  write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), badPlan);
+  write(path.join(tmp, '_docs', 'status.md'), statusDoc('✅', '⬜', 0, 1));
+  check('a plan.md with no parseable `## Phase N` section → fails (unreadable is not clean)', runScript('check-status-sync.js', { CLAUDE_PROJECT_DIR: tmp }), 1);
 });
 
 // ---------------------------------------------------------------------------

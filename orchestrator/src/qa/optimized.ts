@@ -154,19 +154,20 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
 
 /**
  * Deterministic risk signals from the classification the task already carries
- * (stored, survives resume). Mapping rules mirror `classifyTask`'s own
- * branches rather than reading its prose reasons back:
+ * (stored, survives resume). Mapping rules:
  *
- *   - schema branch   → pipeline starts at system-analyst AND needs approval
- *   - deploy/migration→ single devops stage needing approval
- *   - security        → sensitiveGate
+ *   - schema            → the classification's own `touchesSchema` signal, which
+ *     stays true whether the schema work runs alone or under a new-feature
+ *     pipeline (where it no longer implies "pipeline starts at system-analyst")
+ *   - deploy/migration  → single devops stage needing approval
+ *   - security          → sensitiveGate
  *
  * Shared-contract/cross-target/release-gate stay caller-supplied: those are
  * facts about the change, not about the intake classification.
  */
 export function riskSignalsFromClassification(c: ClassificationResult): QaRiskSignals {
   return {
-    touchesSchema: c.pipeline[0] === AgentStage.SYSTEM_ANALYST && c.requiresHumanApproval,
+    touchesSchema: c.touchesSchema === true,
     migrationOrCutover:
       c.pipeline.length === 1 && c.pipeline[0] === AgentStage.DEVOPS && c.requiresHumanApproval,
     securitySensitive: c.sensitiveGate,

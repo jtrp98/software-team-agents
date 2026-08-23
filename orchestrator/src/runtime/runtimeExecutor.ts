@@ -298,9 +298,41 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       return securityArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "security.md"));
     }
 
+    // The four doc-producing stages each own exactly one module document. Exit 0
+    // alone is not success for them — an agent that answered every question with
+    // prose but never wrote its artifact would otherwise sail through as PASS,
+    // and the next stage would build (or refuse to build) against a document
+    // that does not exist. Same fail-closed rule as the verdict documents above:
+    // a deliverable nobody can read is not a deliverable.
+    const ownedDoc = OWNED_MODULE_DOC[req.stage];
+    if (ownedDoc) {
+      const doc = await readModuleDocVia(activeRuntime, moduleName, ownedDoc);
+      if (doc === null || doc.trim() === "") {
+        return failResult(
+          `${role} reported success but _docs/module/${moduleName}/${ownedDoc} doesn't exist (or is empty) — ` +
+            `cannot confirm the stage produced its artifact`,
+          metrics,
+        );
+      }
+      return { outcome: { ...metrics, result: "PASS" } };
+    }
+
     return { outcome: { ...metrics, result: "PASS" } };
   };
 }
+
+/**
+ * The module document each non-reviewer doc stage must leave behind for its run
+ * to count as successful (`policies/documentation.md` §1). Engineers are
+ * deliberately absent: their deliverable is code across many paths, and their
+ * mechanical gates (typecheck/lint at Stop, QA's own round) are what verify it.
+ */
+const OWNED_MODULE_DOC: Partial<Record<AgentStage, string>> = {
+  [AgentStage.BUSINESS_ANALYST]: "requirement.md",
+  [AgentStage.SYSTEM_ANALYST]: "design.md",
+  [AgentStage.PROJECT_MANAGER]: "plan.md",
+  [AgentStage.TEST_PLANNER]: "test-plan.md",
+};
 
 /** The module-doc path convention (`policies/documentation.md` §1), read through the workspace rather than off disk directly. */
 async function readModuleDocVia(runtime: RuntimeAdapter, moduleName: string, filename: string): Promise<string | null> {

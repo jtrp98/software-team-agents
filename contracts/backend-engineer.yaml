@@ -4,7 +4,7 @@ agent:
   role: backend-engineer
   description: Implements API and database code from design.md's contract and plan.md's tasks.
 input:
-  required: [plan, design, requirements]
+  required: [plan, design, requirements, test-plan]
   optional: [qa-report, backend-code]
 output:
   required: [backend-code]
@@ -25,8 +25,8 @@ constraints:
 permissions:
   capabilities: [read, write_code, test]
   # Writes API and database code, and propagates a confirmed schema amendment. Every module document is denied: an engineer that edits a contract has changed the rule it was meant to implement.
-  read: [".claude/agents/backend-engineer.md", ".claude/shared/**", "policies/**", "CLAUDE.md", "_docs/module/*/design.md", "_docs/module/*/plan.md", "_docs/module/*/requirement.md", "_docs/module/*/review.md", "_docs/status-archive.md", "_docs/status.md", "app/**", "package.json", "prisma/**", "server/**", "src/**"]
-  write: ["server/**", "src/server/**", "src/lib/**", "app/api/**", "prisma/**", "package.json", "_docs/status.md"]
+  read: [".claude/agents/backend-engineer.md", ".claude/shared/**", "policies/**", "CLAUDE.md", "_docs/module/*/design.md", "_docs/module/*/plan.md", "_docs/module/*/requirement.md", "_docs/module/*/review.md", "_docs/module/*/test-plan.md", "_docs/status-archive.md", "_docs/status.md", "app/**", "package.json", "prisma/**", "server/**", "src/**"]
+  write: ["server/**", "src/server/**", "src/lib/**", "app/api/**", "prisma/**", "package.json", "_docs/status.md", "_docs/status-archive.md"]
   deny: ["_docs/module/**", ".claude/**", "contracts/**", "components/**"]
 tools: [Write, Edit, Read, Glob, Grep, Bash]
 states: [IMPLEMENTATION]

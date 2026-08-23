@@ -4,7 +4,7 @@ agent:
   role: frontend-engineer
   description: Implements UI code from design.md and from the API the backend actually built.
 input:
-  required: [plan, design, requirements]
+  required: [plan, design, requirements, test-plan]
   optional: [qa-report, frontend-code]
 output:
   required: [frontend-code]
@@ -23,8 +23,8 @@ constraints:
 permissions:
   capabilities: [read, write_code, test]
   # Writes UI code. prisma/** and the API routes belong to backend-engineer; sharing them is what produced the contract mismatch policies/agent-boundaries.md §6a exists to prevent.
-  read: [".claude/agents/frontend-engineer.md", ".claude/shared/**", "policies/**", "CLAUDE.md", "_docs/module/*/design.md", "_docs/module/*/plan.md", "_docs/module/*/requirement.md", "_docs/module/*/review.md", "_docs/status-archive.md", "_docs/status.md", "app/**", "components/**", "package.json", "public/**", "server/**", "src/**", "styles/**"]
-  write: ["app/**", "components/**", "src/components/**", "src/app/**", "styles/**", "public/**", "_docs/status.md"]
+  read: [".claude/agents/frontend-engineer.md", ".claude/shared/**", "policies/**", "CLAUDE.md", "_docs/module/*/design.md", "_docs/module/*/plan.md", "_docs/module/*/requirement.md", "_docs/module/*/review.md", "_docs/module/*/test-plan.md", "_docs/status-archive.md", "_docs/status.md", "app/**", "components/**", "package.json", "public/**", "server/**", "src/**", "styles/**"]
+  write: ["app/**", "components/**", "src/components/**", "src/app/**", "styles/**", "public/**", "_docs/status.md", "_docs/status-archive.md"]
   deny: ["_docs/module/**", ".claude/**", "contracts/**", "prisma/**", "server/**", "app/api/**"]
 tools: [Write, Edit, Read, Glob, Grep, Bash]
 states: [IMPLEMENTATION]

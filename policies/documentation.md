@@ -42,7 +42,7 @@ When it's genuinely ambiguous, ask the user — and record the reason in `requir
 |---|---|---|
 | `requirement.md` | `business-analyst` | business requirements, scope, declined features, references for any external fact |
 | `design.md` | `system-analyst` | feasibility verdicts, the confirmed Prisma schema, module breakdown |
-| `plan.md` | `project-manager` (task Status: engineer sets `in_progress`, `qa-engineer` sets `verified`/`blocked` — T52) | phased task table |
+| `plan.md` | `project-manager` (task Status: `project-manager` writes rows `pending`, `qa-engineer` sets `verified`/`blocked` — T52; engineers don't edit the table, they report progress in their handoff) | phased task table |
 | `review.md` | `qa-engineer` | open issues (all phases) + the current verify round + undeployed phases' `Unverified Behaviour` |
 | `review/phase-N.md` | `qa-engineer` | archived verify rounds for phases that are closed — read only on demand |
 | `security.md` | `security` | findings, accepted risks |
@@ -126,7 +126,7 @@ Once a document exists, you are amending it, not regenerating it.
 - Update only the sections your change actually affects, **using `Edit`**. Never rewrite a whole document with `Write` in amend mode — that silently destroys history and other agents' work.
 - Append a dated line to that document's `## Change Log`; never rewrite or prune existing entries.
 - Confirm a changed section with the user before saving it.
-- **A task's Status cell in `plan.md`'s task table (T52) has one writer per value.** `project-manager` writes every new row `pending`. The owning `backend-engineer`/`frontend-engineer` may flip its own row to `in_progress` when it starts the task. Only `qa-engineer` sets `verified` or `blocked`, only after inspecting real code. No agent may clear or reorder a row it doesn't own the current value of — and this is exactly why `project-manager` must amend `plan.md` with `Edit` rather than rewriting it.
+- **A task's Status cell in `plan.md`'s task table (T52) has one writer per value.** `project-manager` writes every new row `pending`, and is the only writer of `in_progress` (an engineer that started the row says so in its handoff, and `project-manager`/`qa-engineer` record it — engineers don't edit `plan.md`; their contracts deny `_docs/module/**`). Only `qa-engineer` sets `verified` or `blocked`, only after inspecting real code. No agent may clear or reorder a row it doesn't own the current value of — and this is exactly why `project-manager` must amend `plan.md` with `Edit` rather than rewriting it.
 - **`qa-engineer` may also *add* a `🔒 Security gate` to a phase heading in `plan.md`, never remove one.** `project-manager` can only flag what the design predicted; QA is looking at the code that got built, and `devops` gates on the heading. This is the only other write any agent but `project-manager` makes to `plan.md`.
 
 ### Keeping `review.md` small — it is the one document every agent pays for

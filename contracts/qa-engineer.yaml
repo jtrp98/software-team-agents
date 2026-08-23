@@ -4,7 +4,7 @@ agent:
   role: qa-engineer
   description: Verifies implemented code against requirement.md and design.md with evidence, and is the only role that marks a plan.md task done.
 input:
-  required: [requirements, design, plan]
+  required: [requirements, design, plan, test-plan]
   # A phase can be backend-only or frontend-only; requiring both would fail a legitimate phase.
   optional: [backend-code, frontend-code, qa-evidence]
 output:
@@ -28,7 +28,7 @@ constraints:
   - cannot_close_security_finding
 permissions:
   capabilities: [read, test, write_docs]
-  # Owns review.md, and is the only role that may edit plan.md checkboxes. It writes no application code at all: a verifier that fixes what it finds is no longer verifying.
+  # Owns review.md, and is the only role that may edit a plan.md task's Status cell. It writes no application code at all: a verifier that fixes what it finds is no longer verifying.
   read: [".claude/agents/backend-engineer.md", ".claude/agents/frontend-engineer.md", ".claude/scripts/**", ".claude/shared/**", "policies/**", "CLAUDE.md", "_docs/module/**", "_docs/status-archive.md", "_docs/status.md", "app/**", "components/**", "package.json", "prisma/**", "server/**", "src/**"]
   write: ["_docs/module/*/review.md", "_docs/module/*/review/**", "_docs/module/*/plan.md", "_docs/status.md", "_docs/status-archive.md"]
   deny: ["_docs/module/*/design.md", "_docs/module/*/requirement.md", "_docs/module/*/security.md", "app/**", "server/**", "prisma/**"]

@@ -46,7 +46,12 @@ process.stdin.on('end', () => {
   } catch {
     process.exit(0);
   }
-  const reason = check(input || {});
+  let reason;
+  try {
+    reason = check(input || {});
+  } catch {
+    process.exit(0); // never trap an agent because this guard itself broke — same contract as the other guards
+  }
   if (reason) {
     console.error(reason);
     process.exit(2);
@@ -62,8 +67,22 @@ function check(input) {
 
   const args = input.tool_input || {};
   const rawPath = args.file_path || args.notebook_path || args.path;
-  if (!rawPath || typeof rawPath !== 'string') return null;
+  // An array means several destinations (some MCP file tools): each element gets
+  // the same treatment a plain string would. Anything else non-string can't be
+  // resolved to a path and falls through to this guard's fail-open default.
+  const candidates = Array.isArray(rawPath)
+    ? rawPath.filter((p) => typeof p === 'string' && p !== '')
+    : typeof rawPath === 'string' ? [rawPath] : [];
+  if (candidates.length === 0) return null;
 
+  for (const candidate of candidates) {
+    const reason = checkOne(candidate);
+    if (reason) return reason;
+  }
+  return null;
+}
+
+function checkOne(rawPath) {
   const root = normalize(process.env.CLAUDE_PROJECT_DIR || process.cwd());
   const target = normalize(path.resolve(root, rawPath));
 
@@ -85,7 +104,17 @@ function writableWorkRoots() {
 
 /** Allows writes under exactly `~/.claude/projects/<project-key>/memory/...`. */
 function isMemoryDir(target) {
-  const projectsRoot = normalize(path.join(os.homedir(), '.claude', 'projects'));
+  let home;
+  try {
+    home = os.homedir();
+  } catch {
+    // No resolvable home directory (some containers/service accounts): the memory
+    // store can't exist, so nothing here is exempt — but this guard must not be
+    // what crashes. `null` root matches nothing.
+    return false;
+  }
+  if (!home) return false;
+  const projectsRoot = normalize(path.join(home, '.claude', 'projects'));
   if (!isUnder(target, projectsRoot)) return false;
   if (target === projectsRoot) return false;
   const rel = target.slice(projectsRoot.length + 1);

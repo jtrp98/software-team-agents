@@ -22,7 +22,7 @@ permissions:
   capabilities: [read, build, deploy, rollback]
   # Owns deploy.md and the infrastructure files. Application code is denied: shipping is not the moment to change what is being shipped.
   read: [".claude/shared/**", "policies/**", ".dockerignore", ".github/**", "CLAUDE.md", "Dockerfile", "_docs/module/*/deploy.md", "_docs/module/*/design.md", "_docs/module/*/plan.md", "_docs/module/*/requirement.md", "_docs/module/*/review.md", "_docs/module/*/security.md", "_docs/status-archive.md", "_docs/status.md", "deploy/**", "docker-compose*.yml", "infra/**", "package.json", "prisma/**"]
-  write: ["_docs/module/*/deploy.md", "_docs/status.md", "Dockerfile", "docker-compose*.yml", ".github/**", ".dockerignore", "infra/**", "deploy/**"]
+  write: ["_docs/module/*/deploy.md", "_docs/status.md", "_docs/status-archive.md", "Dockerfile", "docker-compose*.yml", ".github/**", ".dockerignore", "infra/**", "deploy/**"]
   deny: ["_docs/module/*/requirement.md", "_docs/module/*/design.md", "_docs/module/*/plan.md", "_docs/module/*/review.md", "_docs/module/*/security.md", "app/**", "server/**", "prisma/**"]
 tools: [Bash, Read, Write, Edit, Glob, Grep, AskUserQuestion]
 states: [READY_TO_DEPLOY, APPROVED, DEPLOYED]

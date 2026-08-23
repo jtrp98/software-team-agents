@@ -76,7 +76,15 @@ export function filterManifestForRole(manifest: TemplateManifest, role: RoleName
 
 export type WorkspaceKind = "knowledge" | "target" | "ambiguous" | "unrecognized";
 
-const KNOWLEDGE_MARKERS: readonly string[] = ["knowledge", "knowledge-policy.yaml", "targets.yaml", "_docs"];
+/**
+ * Deliberately excludes `_docs/`: this framework writes `_docs/module/<name>/`
+ * into TARGET repositories, so the folder exists in both roles by design and
+ * cannot discriminate between them. Counting it made every app repo that owns a
+ * docs folder — i.e. every target once its first module doc lands — come back
+ * "ambiguous", forcing an explicit `--role` on a repository whose kind was never
+ * actually in doubt. The three markers left are Knowledge-only.
+ */
+const KNOWLEDGE_MARKERS: readonly string[] = ["knowledge", "knowledge-policy.yaml", "targets.yaml"];
 const APP_SOURCE_MARKERS: readonly string[] = [
   "package.json",
   "pyproject.toml",
@@ -104,7 +112,7 @@ function hasFile(dir: string, name: string): boolean {
 }
 
 export function hasKnowledgeMarkers(dir: string): boolean {
-  return KNOWLEDGE_MARKERS.some((m) => (m === "knowledge" || m === "_docs" ? hasDir(dir, m) : hasFile(dir, m)));
+  return KNOWLEDGE_MARKERS.some((m) => (m === "knowledge" ? hasDir(dir, m) : hasFile(dir, m)));
 }
 
 function hasAppSourceMarkers(dir: string): boolean {
@@ -173,7 +181,7 @@ export function resolveKnowledgeBinding(options: {
     }
     if (!looksLikeKnowledgeRoot(resolved)) {
       throw new KnowledgeBindingError(
-        `"${resolved}" is not a Knowledge repository (no knowledge/, _docs/, targets.yaml or knowledge-policy.yaml) — point knowledge.path at the repo cloned from the team's Knowledge remote`,
+        `"${resolved}" is not a Knowledge repository (no knowledge/, targets.yaml or knowledge-policy.yaml) — point knowledge.path at the repo cloned from the team's Knowledge remote`,
       );
     }
     if (isSameOrNested(resolved, options.targetRoot)) {
@@ -190,7 +198,7 @@ export function resolveKnowledgeBinding(options: {
     }
     if (candidate && !looksLikeKnowledgeRoot(candidate)) {
       throw new KnowledgeBindingError(
-        `installation.yaml binds Knowledge root "${candidate}" but it has no knowledge/_docs/targets.yaml markers — re-run \`sta configure knowledge-root <path>\` with the real Knowledge repo`,
+        `installation.yaml binds Knowledge root "${candidate}" but it has no knowledge/targets.yaml/knowledge-policy.yaml markers — re-run \`sta configure knowledge-root <path>\` with the real Knowledge repo`,
       );
     }
     return undefined;

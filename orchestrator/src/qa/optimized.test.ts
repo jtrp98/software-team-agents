@@ -158,11 +158,24 @@ describe("riskSignalsFromClassification", () => {
         pipeline: [AgentStage.SYSTEM_ANALYST, AgentStage.QA_ENGINEER],
         requiresHumanApproval: true,
         sensitiveGate: true,
+        touchesSchema: true,
       }),
     );
     expect(s.touchesSchema).toBe(true);
     expect(s.securitySensitive).toBe(true);
     expect(s.migrationOrCutover).toBe(false);
+  });
+
+  it("a new feature that carries the schema signal stays FULL, even though BA now leads the pipeline", () => {
+    const s = riskSignalsFromClassification(
+      classification({
+        pipeline: [AgentStage.BUSINESS_ANALYST, AgentStage.SYSTEM_ANALYST, AgentStage.QA_ENGINEER],
+        requiresHumanApproval: true,
+        sensitiveGate: true,
+        touchesSchema: true,
+      }),
+    );
+    expect(s.touchesSchema).toBe(true);
   });
 
   it("maps production deploy/migration", () => {

@@ -2,11 +2,12 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|Write|Edit|MultiEdit|NotebookEdit",
+        "matcher": "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "node .claude/hooks/block-git.js"
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/block-git.js"]
           }
         ]
       },
@@ -15,7 +16,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .claude/hooks/block-outside-repo.js"
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/block-outside-repo.js"]
           }
         ]
       },
@@ -24,7 +26,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .claude/hooks/block-doc-rewrite.js"
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/block-doc-rewrite.js"]
           }
         ]
       },
@@ -33,7 +36,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .claude/hooks/block-path-permissions.js"
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/block-path-permissions.js"]
           }
         ]
       }
@@ -43,11 +47,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .claude/hooks/require-green-before-stop.js"
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/require-green-before-stop.js"]
           },
           {
             "type": "command",
-            "command": "node .claude/hooks/block-secret-leak.js"
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/block-secret-leak.js"]
           }
         ]
       }
@@ -57,11 +63,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .claude/hooks/require-green-before-stop.js"
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/require-green-before-stop.js"]
           },
           {
             "type": "command",
-            "command": "node .claude/hooks/block-secret-leak.js"
+            "command": "node",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/block-secret-leak.js"]
           }
         ]
       }

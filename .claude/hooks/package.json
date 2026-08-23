@@ -1,0 +1,4 @@
+{
+  "//": "Pins every hook in this directory to CommonJS. Node resolves a .js file's module system from the NEAREST package.json, so without this marker a target project whose root package.json says \"type\": \"module\" makes these CommonJS hooks throw ReferenceError: require is not defined. That exits 1, and PreToolUse only blocks on exit 2 — so every guard would still look installed while enforcing nothing (policies/security.md 5d: a hook that fails open is the worst outcome available). Renaming the hooks to .cjs would work too; this marker does it without touching 10 files and ~30 references.",
+  "type": "commonjs"
+}

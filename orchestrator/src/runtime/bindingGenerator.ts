@@ -179,10 +179,16 @@ export function checkBindings(projectRoot: string): BindingCheckResult {
   // Removal of the whole construct is a separate, verified decision (OFF05 B4)
   // — until Codex's load behaviour is proven on a real install, the mirror must
   // at least never disagree with what it claims to mirror.
+  //
+  // `package.json` is mirrored too, marker and all: it is what pins both
+  // directories to CommonJS under an ESM host, and a mirror directory missing it
+  // would fail exactly like the hooks themselves were never fixed — invisibly,
+  // exit 1, enforcing nothing.
   const claudeHooksDir = path.join(projectRoot, ".claude", "hooks");
   const codexHooksDir = path.join(projectRoot, ".codex", "hooks");
+  const isHookMirrorFile = (f: string) => f.endsWith(".js") || f === "package.json";
   const hookSources = fs.existsSync(claudeHooksDir)
-    ? fs.readdirSync(claudeHooksDir).filter((f) => f.endsWith(".js")).sort()
+    ? fs.readdirSync(claudeHooksDir).filter(isHookMirrorFile).sort()
     : [];
   if (hookSources.length > 0) {
     for (const f of hookSources) {
@@ -200,7 +206,7 @@ export function checkBindings(projectRoot: string): BindingCheckResult {
     try {
       const mirroredNames = new Set(hookSources);
       for (const f of fs.readdirSync(codexHooksDir)) {
-        if (f.endsWith(".js") && !mirroredNames.has(f)) {
+        if (isHookMirrorFile(f) && !mirroredNames.has(f)) {
           problems.push(`${f}: orphan .codex/hooks/${f} with no .claude/hooks/${f} source`);
         }
       }

@@ -48,7 +48,12 @@ describe("parseArgs", () => {
       targetBindings: { frontend_target: null, backend_target: null },
       autonomy: undefined,
       noQaOptimization: false,
+      version: false,
     });
+  });
+
+  it("parses --version without requiring a task id", () => {
+    expect(parseArgs(["--version"], "/repo").version).toBe(true);
   });
 
   it("parses --autonomy and rejects values Claude Code cannot express", () => {
@@ -637,7 +642,7 @@ describe("T37 audit verb", () => {
   });
 
   it("is named in the usage text", () => {
-    expect(USAGE).toContain("orchestrate audit");
+    expect(USAGE).toContain("sta audit");
   });
 });
 
@@ -792,7 +797,7 @@ describe("T41 projects verb", () => {
   });
 
   it("is listed in the usage text", () => {
-    expect(USAGE).toContain("orchestrate projects");
+    expect(USAGE).toContain("sta projects");
   });
 });
 

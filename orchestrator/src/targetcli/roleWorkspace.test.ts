@@ -43,6 +43,29 @@ describe("workspace kind detection (T-ROLE-16)", () => {
     fs.writeFileSync(path.join(dotnet, "Acme.sln"), "");
     expect(detectWorkspaceKind(dotnet)).toBe("target");
   });
+
+  it("`_docs/` never makes an app repo ambiguous — this framework puts it there itself", () => {
+    // Regression: `_docs` counted as a Knowledge marker, so a target repo with a
+    // docs folder came back "ambiguous" and `init` demanded an explicit --role.
+    // Since module docs live at `_docs/module/<name>/` INSIDE the target, that
+    // eventually described every DEV workspace — the tool's own output made its
+    // own detection undecidable.
+    const target = tmpRoot("docs-target");
+    fs.writeFileSync(path.join(target, "package.json"), "{}");
+    fs.mkdirSync(path.join(target, "_docs", "module", "sales-crm"), { recursive: true });
+    expect(detectWorkspaceKind(target)).toBe("target");
+
+    // A docs folder alone still identifies nothing — Knowledge needs a real marker.
+    const docsOnly = tmpRoot("docs-only");
+    fs.mkdirSync(path.join(docsOnly, "_docs"));
+    expect(detectWorkspaceKind(docsOnly)).toBe("unrecognized");
+
+    // And a genuine Knowledge repo is unaffected.
+    const knowledge = tmpRoot("kb");
+    fs.writeFileSync(path.join(knowledge, "targets.yaml"), "schema_version: 1\ntargets: []\n");
+    fs.mkdirSync(path.join(knowledge, "_docs"));
+    expect(detectWorkspaceKind(knowledge)).toBe("knowledge");
+  });
 });
 
 describe("role asset profiles (T-ROLE-09/10/11)", () => {

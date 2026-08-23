@@ -57,18 +57,34 @@ export interface ParsedQaReport {
 }
 
 /**
+ * The one verdict line `qa-engineer.md` tells the agent to write literally:
+ * `**Status:** ✅ Verified (FULL)` / ⚠️ Partial / ❌ Failed. When it is present
+ * it is the answer — no emoji census needed. Absent (older rounds, hand-edited
+ * docs), parsing falls back to the emoji heuristic below, unchanged from V1.
+ */
+const STATUS_LINE_RE =
+  /\*\*Status:\*\*\s*✅\s*Verified\s*\((FULL|TARGETED)\)|\*\*Status:\*\*\s*⚠️\s*Partial\s*\((FULL|TARGETED)\)|\*\*Status:\*\*\s*❌\s*Failed\s*\((FULL|TARGETED)\)/;
+
+/**
  * Parses `review.md`'s current round into a QaReportArtifact. Never invents a
- * PASS: absence of a recognizable ✅ with no ⚠️/❌ in the current round reads
- * as FAIL, since a doc this parser can't confidently read is not evidence of
- * success.
+ * PASS: absence of a recognizable verdict — either the exact `**Status:**` line
+ * or a bare ✅ with no ⚠️/❌ beside it — reads as FAIL, since a doc this parser
+ * can't confidently read is not evidence of success.
  */
 export function parseQaReport(taskId: string, reviewMd: string): ParsedQaReport {
   const round = tailSection(reviewMd, /^##\s+.*(round|verify|Round)/i) || reviewMd;
 
-  const hasFail = /❌/.test(round);
-  const hasWarn = /⚠️/.test(round);
-  const hasPass = /✅/.test(round);
-  const status: "PASS" | "FAIL" = hasPass && !hasFail && !hasWarn ? "PASS" : "FAIL";
+  // Preferred: the exact Status line the agent prompt mandates.
+  const statusLine = STATUS_LINE_RE.exec(round);
+  let status: "PASS" | "FAIL";
+  if (statusLine) {
+    status = statusLine[0].includes("✅") ? "PASS" : "FAIL";
+  } else {
+    const hasFail = /❌/.test(round);
+    const hasWarn = /⚠️/.test(round);
+    const hasPass = /✅/.test(round);
+    status = hasPass && !hasFail && !hasWarn ? "PASS" : "FAIL";
+  }
 
   const modeMatch = round.match(/\((FULL|TARGETED)\)/);
   const mode: "FULL" | "TARGETED" = (modeMatch?.[1] as "FULL" | "TARGETED") ?? "TARGETED";

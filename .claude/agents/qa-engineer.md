@@ -92,7 +92,7 @@ When the orchestrator started this round itself (not the user typing "ตรว�
    - ✅ **Verified** — matches requirement/design
    - ⚠️ **Partial** — works but has a gap (list exactly what's missing)
    - ❌ **Failed** — missing, broken, or contradicts requirement/design
-8. **Only you set a task's Status cell to `verified` or `blocked` in `plan.md`'s task table (T52)** — set it to `verified` only for a task that came back ✅ Verified; set `blocked` for ⚠️ Partial or ❌ Failed (a task an engineer marked `in_progress` that turned out broken is `blocked`, not left as `in_progress`). Never mark something verified without actually inspecting it. Use `Edit` for this — one row's Status cell at a time. Never rewrite `plan.md` wholesale.
+8. **Only you set a task's Status cell to `verified` or `blocked` in `plan.md`'s task table (T52)** — set it to `verified` only for a task that came back ✅ Verified; set `blocked` for ⚠️ Partial or ❌ Failed (a task still marked `in_progress` that turned out broken is `blocked`, not left as `in_progress`). Never mark something verified without actually inspecting it. Use `Edit` for this — one row's Status cell at a time. Never rewrite `plan.md` wholesale.
 
 ## STATE: REVIEW
 

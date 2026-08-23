@@ -17,8 +17,9 @@
  *
  * Parsing follows the exact status.md template in `policies/documentation.md` §2 and the
  * `## Phase N` / task-table structure every plan.md uses since T52 (a `| Task | Status | Owner |
- * Depends on |` row per task). A module whose section doesn't match that shape is reported as
- * "could not parse" rather than silently skipped or treated as clean.
+ * Depends on |` row per task). A module whose plan has no parseable `## Phase N` section is
+ * reported as DRIFT and fails the run — an unreadable plan is not a clean one — rather than
+ * being silently skipped or treated as passing.
  */
 
 'use strict';
@@ -136,7 +137,12 @@ function main() {
     console.log(`## ${mod.name}`);
     const planPhases = parsePlan(fs.readFileSync(mod.planPath, 'utf8'));
     if (planPhases.size === 0) {
-      console.log('  (no `## Phase N` sections with a task table found in plan.md -- skipped)\n');
+      // Unreadable is not clean: a plan this script cannot parse may say anything,
+      // and status.md keeps claiming things about it — that is drift-shaped
+      // silence, so it fails rather than skipping.
+      console.log('  DRIFT: no `## Phase N` sections with a task table found in plan.md -- the plan could not be parsed');
+      drift = true;
+      console.log('');
       continue;
     }
 

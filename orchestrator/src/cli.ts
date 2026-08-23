@@ -102,6 +102,8 @@ export interface CliArgs {
   module?: string;
   projectRoot: string;
   classification: ClassificationInput;
+  /** Print the Framework version and exit, without touching anything. */
+  version: boolean;
   /** Continue a task that already exists in the store instead of creating one. */
   resume: boolean;
   /** Print every task in the store and exit, without running anything. */
@@ -181,56 +183,58 @@ export class CliUsageError extends Error {}
 
 export const USAGE =
   "usage (T31 verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  orchestrate run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--project-root <path>] [--state-db <path>]\n" +
-  "  orchestrate status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
-  "  orchestrate approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
-  "  orchestrate resume  <task-id> --module <name> [--project-root <path>]   continue a task already in the store\n" +
-  "  orchestrate retry   <task-id> --module <name> [--project-root <path>]   same as resume — there is no daemon here for the two to mean different things\n" +
-  "  orchestrate pause  <task-id> [--project-root <path>]   freeze a task; run/resume/retry refuse it until resumed\n" +
-  "  orchestrate cancel <task-id> [--reason <text>] [--project-root <path>]   give up on a task for good; run/resume/retry refuse it permanently\n" +
-  "  orchestrate audit  <task-id> [--decisions] [--project-root <path>]   the WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail; --decisions shows only the choices\n" +
-  "  orchestrate qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]   QA token/mode/retry picture per task (QA07); --baseline compares against a saved export\n" +
-  "  orchestrate projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names (T41)\n" +
-  "  orchestrate init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
-  "  orchestrate configure knowledge-root <path> [--config-path <path>]       validate and save this installation's single Knowledge root\n" +
-  "  orchestrate doctor [--project-root <path>]                               read-only diagnostics (T166); exit 1 on any FAIL, never mutates\n" +
-  "  orchestrate upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
-  "  orchestrate migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending (T96)\n" +
-  "  orchestrate knowledge-migrate <dry-run|copy|verify|cutover> --source-root <path> --knowledge-root <path> [--now <ISO>] [--confirm I_CONFIRM_MIGRATION]   copy–verify–human-confirmed migration\n" +
-  "  orchestrate adopt <plan|status|start|ack|run|approve|validate> [--project-root <path>] [--source-root <path>] [--docs-root <dir>]   import legacy .claude/ docs/ planning/ into the Knowledge root (T82–T85)\n" +
-  "  orchestrate rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups` (T97)\n" +
-  "  orchestrate list-backups [--project-root <path>]   list this project's .sta/backups/ snapshots, oldest first\n" +
-  "  orchestrate roles [--module <name>] [--project-root <path>]   where BA, SA, UXUI and DEV each stand against knowledge/ (T99)\n" +
-  "  orchestrate roles ack <ba|sa|uxui|dev> <id>[,<id>...] --by <name> [--module <name>]   record that a person in that lane has seen those items\n" +
-  "  orchestrate roles signoff <ba|sa|uxui|dev> --by <name> [--reject] [--note <text>] [--module <name>]   that lane's own approval gate (T103)\n" +
-  "  orchestrate roles review <id> --as <agent>   move a knowledge item draft -> reviewed, with its checklist (T104)\n" +
-  "  orchestrate roles approve <id> --by <name>   move a reviewed item to approved — a person only (T104)\n" +
-  "  orchestrate roles inbox [<ba|sa|uxui|dev>] [--module <name>]   what each lane has to look at, derived fresh (T106)\n" +
-  "  orchestrate roles impact <id>[,<id>...]   which lanes changing those items would reach, before changing them (T105)\n" +
-  "  orchestrate roles context <ba|sa|uxui|dev> [<id>] [--module <name>]   what that lane may see, and via which role (T107)\n" +
+  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--project-root <path>] [--state-db <path>]\n" +
+  "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
+  "  sta approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
+  "  sta resume  <task-id> --module <name> [--project-root <path>]   continue a task already in the store\n" +
+  "  sta retry   <task-id> --module <name> [--project-root <path>]   same as resume — there is no daemon here for the two to mean different things\n" +
+  "  sta pause  <task-id> [--project-root <path>]   freeze a task; run/resume/retry refuse it until resumed\n" +
+  "  sta cancel <task-id> [--reason <text>] [--project-root <path>]   give up on a task for good; run/resume/retry refuse it permanently\n" +
+  "  sta audit  <task-id> [--decisions] [--project-root <path>]   the WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail; --decisions shows only the choices\n" +
+  "  sta qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]   QA token/mode/retry picture per task (QA07); --baseline compares against a saved export\n" +
+  "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names (T41)\n" +
+  "  sta init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
+  "  sta configure knowledge-root <path> [--config-path <path>]       validate and save this installation's single Knowledge root\n" +
+  "  sta doctor [--project-root <path>]                               read-only diagnostics (T166); exit 1 on any FAIL, never mutates\n" +
+  "  sta upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
+  "  sta migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending (T96)\n" +
+  "  sta knowledge-migrate <dry-run|copy|verify|cutover> --source-root <path> --knowledge-root <path> [--now <ISO>] [--confirm I_CONFIRM_MIGRATION]   copy–verify–human-confirmed migration\n" +
+  "  sta adopt <plan|status|start|ack|run|approve|validate> [--project-root <path>] [--source-root <path>] [--docs-root <dir>]   import legacy .claude/ docs/ planning/ into the Knowledge root (T82–T85)\n" +
+  "  sta rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups` (T97)\n" +
+  "  sta list-backups [--project-root <path>]   list this project's .sta/backups/ snapshots, oldest first\n" +
+  "  sta roles [--module <name>] [--project-root <path>]   where BA, SA, UXUI and DEV each stand against knowledge/ (T99)\n" +
+  "  sta roles ack <ba|sa|uxui|dev> <id>[,<id>...] --by <name> [--module <name>]   record that a person in that lane has seen those items\n" +
+  "  sta roles signoff <ba|sa|uxui|dev> --by <name> [--reject] [--note <text>] [--module <name>]   that lane's own approval gate (T103)\n" +
+  "  sta roles review <id> --as <agent>   move a knowledge item draft -> reviewed, with its checklist (T104)\n" +
+  "  sta roles approve <id> --by <name>   move a reviewed item to approved — a person only (T104)\n" +
+  "  sta roles inbox [<ba|sa|uxui|dev>] [--module <name>]   what each lane has to look at, derived fresh (T106)\n" +
+  "  sta roles impact <id>[,<id>...]   which lanes changing those items would reach, before changing them (T105)\n" +
+  "  sta roles context <ba|sa|uxui|dev> [<id>] [--module <name>]   what that lane may see, and via which role (T107)\n" +
   "\n" +
   "underlying flag-based form:\n" +
-  "  orchestrate --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] <classification flags>\n" +
-  "  orchestrate --task-id <id> --module <name> --resume        continue a task already in the store\n" +
-  "  orchestrate --task-id <id> --module <name> --no-qa-optimization   run qa-engineer exactly as V1 did (skip change-aware scope/deterministic pre-checks)\n" +
-  "  orchestrate --list [--project-root <path>]                 show every task and stop\n" +
-  "  orchestrate --check-contracts [--project-root <path>]      check contracts/*.yaml against the agent registry\n" +
-  "  orchestrate --check-layout [--project-root <path>]         check layout.yaml against the real directories\n" +
-  "  orchestrate --check-workflows [--project-root <path>]      check workflows/*.yml against the classifier\n" +
-  "  orchestrate --check-bindings [--project-root <path>]       check .codex/agents/*.toml match the .claude/agents sources\n" +
-  "  orchestrate --check-profile [--project-root <path>]        check project.yaml and stacks/ against the agent roster\n" +
-  "  orchestrate --check-decisions [--project-root <path>]      check decisions/*.md ADRs against the schema and cross-links\n" +
-  "  orchestrate --check-test-pyramid [--project-root <path>]   check test-pyramid.yaml against its schema\n" +
-  "  orchestrate --check-review-separation [--project-root <path>]  check that no agent can review its own work\n" +
-  "  orchestrate --check-escalation-policy [--project-root <path>]  check escalation-policy.yaml against the runtime policy\n" +
-  "  orchestrate --check-workspace [--project-root <path>]      check workspace.yaml (if any) against the filesystem\n" +
-  "  orchestrate --check-repos [--project-root <path>]          check repos.yaml (if any) against the filesystem\n" +
-  "  orchestrate --check-environments [--project-root <path>]   check environments.yaml (if any) against its schema\n" +
-  "  orchestrate --check-doc-structure [--project-root <path>]  check every _docs/module/*/*.md's sections against its schema\n" +
-  "  orchestrate --check-knowledge [--project-root <path>]      check knowledge/*.yaml against its schema and cross-links\n" +
-  "  orchestrate --build-templates <out-dir> [--project-root <path>]  snapshot framework template files + manifest.json (T90) into <out-dir>\n" +
-  "  orchestrate --check-installation [--project-root <path>]   check .sta/manifest.json and .sta/config.yaml against the project's real files (T98)\n" +
-  "  orchestrate --check-roles [--project-root <path>]          check each role workspace's watermark against knowledge/ (T99)\n" +
+  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] <classification flags>\n" +
+  "  sta --task-id <id> --module <name> --resume        continue a task already in the store\n" +
+  "  sta --task-id <id> --module <name> --no-qa-optimization   run qa-engineer exactly as V1 did (skip change-aware scope/deterministic pre-checks)\n" +
+  "  sta --list [--project-root <path>]                 show every task and stop\n" +
+  "  sta --check-contracts [--project-root <path>]      check contracts/*.yaml against the agent registry\n" +
+  "  sta --check-layout [--project-root <path>]         check layout.yaml against the real directories\n" +
+  "  sta --check-workflows [--project-root <path>]      check workflows/*.yml against the classifier\n" +
+  "  sta --check-bindings [--project-root <path>]       check .codex/agents/*.toml match the .claude/agents sources\n" +
+  "  sta --check-profile [--project-root <path>]        check project.yaml and stacks/ against the agent roster\n" +
+  "  sta --check-decisions [--project-root <path>]      check decisions/*.md ADRs against the schema and cross-links\n" +
+  "  sta --check-test-pyramid [--project-root <path>]   check test-pyramid.yaml against its schema\n" +
+  "  sta --check-review-separation [--project-root <path>]  check that no agent can review its own work\n" +
+  "  sta --check-escalation-policy [--project-root <path>]  check escalation-policy.yaml against the runtime policy\n" +
+  "  sta --check-workspace [--project-root <path>]      check workspace.yaml (if any) against the filesystem\n" +
+  "  sta --check-repos [--project-root <path>]          check repos.yaml (if any) against the filesystem\n" +
+  "  sta --check-environments [--project-root <path>]   check environments.yaml (if any) against its schema\n" +
+  "  sta --check-doc-structure [--project-root <path>]  check every _docs/module/*/*.md's sections against its schema\n" +
+  "  sta --check-knowledge [--project-root <path>]      check knowledge/*.yaml against its schema and cross-links\n" +
+  "  sta --build-templates <out-dir> [--project-root <path>]  snapshot framework template files + manifest.json (T90) into <out-dir>\n" +
+  "  sta --check-installation [--project-root <path>]   check .sta/manifest.json and .sta/config.yaml against the project's real files (T98) — needs an initialized Target (.sta/ exists); fails on a bare Framework checkout by design\n" +
+  "  sta --check-roles [--project-root <path>]          check each role workspace's watermark against knowledge/ (T99)\n" +
+  "  sta --version                                      show the Framework version this CLI runs\n" +
+  "run/retry exit codes: 0 deployed · 1 blocked · 2 unknown gate · 3 rejected by a person · 4 parked — a gate awaits `sta approve <task-id> --yes|--no`\n" +
   `  classification flags: ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
 
 /** Pure argv parser — kept separate from process.argv/console/exit so it's directly testable. */
@@ -263,6 +267,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let phases: number[] = [];
   let autonomy: RuntimeAutonomy | undefined;
   let noQaOptimization = false;
+  let version = false;
   const targetBindings: TargetBindings = { frontend_target: null, backend_target: null };
   const classification: ClassificationInput = {};
 
@@ -346,6 +351,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       autonomy = value as RuntimeAutonomy;
     } else if (arg === "--no-qa-optimization") {
       noQaOptimization = true;
+    } else if (arg === "--version") {
+      version = true;
     } else if (arg in FLAG_TO_CLASSIFICATION) {
       classification[FLAG_TO_CLASSIFICATION[arg]] = true;
     } else {
@@ -354,6 +361,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   }
 
   if (
+    !version &&
     !list &&
     !checkContracts &&
     !checkLayoutFlag &&
@@ -414,7 +422,34 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     targetBindings,
     autonomy,
     noQaOptimization,
+    version,
   };
+}
+
+/**
+ * The Framework version this CLI runs, read from the nearest `package.json`
+ * named `software-team-agents` — the published root's version field is the
+ * single source of truth (README). Walking up from this file keeps it correct
+ * in both layouts: a dev checkout and an installed node_modules package. A CLI
+ * that cannot say what version it is has no business failing on it either, so
+ * every failure mode degrades to "unknown".
+ */
+export function cliVersion(startDir: string = path.dirname(fileURLToPath(import.meta.url))): string {
+  let dir = path.resolve(startDir);
+  for (;;) {
+    try {
+      const pkgPath = path.join(dir, "package.json");
+      if (fs.existsSync(pkgPath)) {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8")) as { name?: string; version?: string };
+        if (pkg.name === "software-team-agents" && typeof pkg.version === "string") return pkg.version;
+      }
+    } catch {
+      // unreadable/unparseable package.json — keep walking
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return "unknown";
+    dir = parent;
+  }
 }
 
 /**
@@ -425,7 +460,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
  * PLAN rather than IMPLEMENTATION directly — the approval type is what stays
  * stable, per gatePolicy.ts/approval.ts's matching fix.
  */
-function approvalFieldFor(approvalType: ApprovalType | null): "designApproved" | "humanApproved" | null {
+function approvalFieldFor(approvalType: ApprovalType | null): "requirementApproved" | "designApproved" | "humanApproved" | null {
+  if (approvalType === ApprovalType.REQUIREMENT_INTERVIEW) return "requirementApproved";
   if (approvalType === ApprovalType.SCHEMA_CONFIRMATION) return "designApproved";
   if (approvalType === ApprovalType.DEPLOY) return "humanApproved";
   return null;
@@ -1882,6 +1918,23 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     }
 
     const orchestrator = openTask(registry, args, taskId);
+
+    // A run that resolves to `propose` (the executor's default when the flag is
+    // absent) spawns every stage with Claude Code's `--permission-mode default`,
+    // which headless `-p` children answer with an automatic "no": engineers
+    // cannot write a single file and every stage fails on its first write. Say
+    // so up front instead of letting the run burn tokens discovering it — this
+    // stays a warning (not an error) because read-only stages still work and a
+    // caller may want exactly that.
+    const resolvedAutonomy = args.autonomy ?? "propose";
+    if (resolvedAutonomy === "propose") {
+      console.error(
+        "[orchestrator] WARNING: autonomy is 'propose' (the default), which maps to permission mode 'default' — " +
+          "a headless child cannot approve writes or commands, so engineer stages will fail on their first write. " +
+          "For an unattended run pass --autonomy edit (or full); hooks and contracts stay enforced either way.",
+      );
+    }
+
     // T109: the executor is now a RuntimeAdapter-driven one (T108) rather than a
     // Claude-Code-specific spawn — swapping `runtime` here is the whole point of
     // that seam. `guards` derives from `contracts/<role>.yaml` (T15), same as before.
@@ -1994,6 +2047,20 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
         console.log(`[orchestrator] human decision required (${label}): ${status.reason}`);
         if (status.approvalType) console.log(`[orchestrator]   ${APPROVAL_PROMPT[status.approvalType]}`);
 
+        // No TTY, no question: a headless `run` that called confirm() here would
+        // hang on a stdin nobody is attached to (or crash on a closed one) while
+        // looking alive. The gate stays pending in the ledger either way — the
+        // task is parked, deterministically resumable once a person answers:
+        //   sta approve <task-id> --yes|--no
+        if (!process.stdin.isTTY) {
+          console.log(
+            `[orchestrator] no terminal attached — parking task ${taskId} with the gate unanswered. ` +
+              `Resolve it with: node orchestrator/dist/cli.js approve ${taskId} --yes|--no ` +
+              `(or rerun this command in an interactive terminal), then --resume.`,
+          );
+          return 4; // 4 = PARKED — distinct from blocked(1), stuck(2), rejected(3)
+        }
+
         const approved = await confirm(`Approve ${label}?`);
         if (!approved) {
           // Recorded as a rejection, not left unanswered: resuming must not
@@ -2049,6 +2116,13 @@ if (isMain) {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
   if (process.argv.slice(2).includes("--help") || process.argv.slice(2).includes("-h")) {
     console.log(USAGE);
+    process.exit(0);
+  }
+  // Same short-circuit as --help: a version query must not be answered with a
+  // usage error just because it named no task (the two CLIs stay symmetric —
+  // `software-team-agents --version` does the same on the Target side).
+  if (parseArgs(process.argv.slice(2), repoRoot).version) {
+    console.log(cliVersion());
     process.exit(0);
   }
   runCli(process.argv.slice(2), repoRoot)

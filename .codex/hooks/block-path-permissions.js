@@ -14,7 +14,7 @@
  *
  * Hooks carry no subagent identity -- `block-doc-rewrite.js` and `require-green-before-stop.js`
  * both hit this. `tool_name` and `tool_input` are all there is, so this hook cannot work out on
- * its own which of the nine agents is about to write.
+ * its own which of the ten agents is about to write.
  *
  * So it takes identity from `AGENTCLAUDE_ROLE`, which `orchestrator/src/agents/claudeCliExecutor.ts`
  * sets on the child process before spawning `claude -p --agent <role>`. When the orchestrator is

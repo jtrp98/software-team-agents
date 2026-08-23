@@ -366,8 +366,13 @@ export class Orchestrator {
    * they are answering should use `decideApproval` — this cannot express a
    * rejection distinctly, which is the whole reason T08 exists.
    */
-  provideHumanApproval(field: "designApproved" | "humanApproved", value: boolean): void {
-    const type = field === "designApproved" ? ApprovalType.SCHEMA_CONFIRMATION : ApprovalType.DEPLOY;
+  provideHumanApproval(field: "requirementApproved" | "designApproved" | "humanApproved", value: boolean): void {
+    const type =
+      field === "requirementApproved"
+        ? ApprovalType.REQUIREMENT_INTERVIEW
+        : field === "designApproved"
+          ? ApprovalType.SCHEMA_CONFIRMATION
+          : ApprovalType.DEPLOY;
     if (!findApproval(this.approvals, type)) {
       // The gate has not been reached yet, so there is no question to answer.
       // Record the evidence directly, as this method always did.

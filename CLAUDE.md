@@ -1,6 +1,6 @@
 # AgentClaude — Agent Pipeline
 
-This repo defines a fixed, hand-off-based agent pipeline for building a project from a vague idea through to verified, security-reviewed, deployed code. Each stage is a subagent under `.claude/agents/`, each owns exactly one artifact, and **no agent ever invokes the next one** — structurally true in every mode, since none of them holds the `Agent` tool. By default the user decides every handoff explicitly; an opt-in autonomous mode lets the session chain them instead, but five points (requirement interview, schema confirmation, a failed QA round, a Critical/Important security finding, an actual deploy/migration) always wait for a person regardless. **`qa-engineer` and `security` are never auto-chained in any mode — they run only when the user explicitly asks for them, every time.** See "Rules that hold across every agent" below.
+This repo defines a fixed, hand-off-based agent pipeline for building a project from a vague idea through to verified, security-reviewed, deployed code. Each stage is a subagent under `.claude/agents/`, each owns exactly one artifact, and **no agent ever invokes the next one** — structurally true in every mode, since none of them holds the `Agent` tool. By default the user decides every handoff explicitly; an opt-in autonomous mode lets the session chain them instead, but five points (requirement interview, schema confirmation, a failed QA round, a Critical/Important security finding, an actual deploy/migration) always wait for a person regardless. **In orchestrated runs, `qa-engineer` closes every pipeline that changed code and `security` joins whenever a sensitive area or the data model is touched — they are part of what the workflow chains, not extras a caller must remember**; their *verdicts* are where the always-human points bite. See "Rules that hold across every agent" below.
 
 ## Read this first
 
@@ -71,7 +71,7 @@ business-analyst → system-analyst → project-manager → test-planner → bac
 
 Every agent also reads `_docs/status.md` when it starts and regenerates it (`node .claude/scripts/generate-status.js` — T51, `policies/documentation.md` §2) when it finishes, rather than hand-editing it — that's left out of the table above rather than repeated on all ten rows.
 
-`test-planner` runs after `project-manager`, before the engineers — deciding what needs testing and at what level (unit/integration/API/E2E) so `backend-engineer`/`frontend-engineer` build against a stated strategy instead of each guessing their own, and `qa-engineer` verifies against it instead of inventing one per round. Like every other stage but `qa-engineer`/`security`, it participates in normal auto-chaining — it is not a third exemption. Right-sizing still applies: small work that skips `project-manager` skips `test-planner` too (see below).
+`test-planner` runs after `project-manager`, before the engineers — deciding what needs testing and at what level (unit/integration/API/E2E) so `backend-engineer`/`frontend-engineer` build against a stated strategy instead of each guessing their own, and `qa-engineer` verifies against it instead of inventing one per round. It participates in normal auto-chaining like every other stage — the only things that stop the chain are the five always-human points above. Right-sizing still applies: small work that skips `project-manager` skips `test-planner` too (see below).
 
 `setup` runs once per project, before Phase 1. Everything after that loops per phase.
 
@@ -112,7 +112,7 @@ _docs/
 │   ├── generate-status.js        ← every agent runs this to (re)write status.md — no hand-edits (T51)
 │   └── static-analysis-gate.js   ← run by qa-engineer before a FULL round: lint/format/typecheck/build/test/security_scan/dependency_scan across every package (T22/T23/T24)
 ├── tests/
-│   └── run.js                    ← self-test for every hook + script (139 cases, no deps)
+│   └── run.js                    ← self-test for every hook + script (both runtimes' copies, no deps)
 └── settings.json                ← wires every hook up (checked in, applies to everyone)
 ```
 
@@ -121,7 +121,7 @@ layout.yaml                      ← which concept owns which directory (checked
 contracts/*.yaml                 ← the machine-readable half of each agent
 policies/                        ← conventions.md split per area (T49): coding, git, architecture,
                                    documentation, security, agent-boundaries
-workflows/                       ← reserved for T09 (one YAML per kind of change)
+workflows/                       ← one YAML per kind of change (11 files, live — the classifier is checked against them by --check-workflows)
 ```
 
 `layout.yaml` is the one answer to "where does this file go?". Five concepts, each answering
@@ -147,11 +147,11 @@ A **module folder** is a delivery unit with its own doc set and phase numbering;
 Full text in `policies/*.md`; the short version:
 
 - **`backend-engineer` runs before `frontend-engineer`, never in parallel, within a phase.** The frontend reads its types/API calls off what the backend actually built, not off `design.md` alone — running both at once means frontend has to guess the contract, which is exactly what produced a real `staff-roles/sync` response-shape mismatch that cost an extra fix round. Exception: tasks in the same phase that share no API contract can run in either order. `policies/agent-boundaries.md` §6a has the full rule.
-- **No agent chains to the next — structurally, none of the ten has the `Agent` tool.** By default (manual mode) each finishes by saying what's ready and who should get it, then the user decides. When the user explicitly asks for a continuous/unattended run ("รันข้ามคืนได้เลย"), the session orchestrating the pipeline may chain the handoffs itself, opt-in per run — but five points always stop and wait for a person regardless of mode: `business-analyst` any time it runs, `system-analyst`'s schema confirmation, `qa-engineer` on any ⚠️/❌ result, `security` on any 🔴/🟠 finding, and `devops` before an actual deploy/migration. **`qa-engineer` and `security` are further exempt from auto-chaining altogether, in every mode** — the pipeline never invokes them on its own just because an engineer or a QA round finished; the user must ask for them by name every time. `policies/agent-boundaries.md` §6 has the full rule.
+- **No agent chains to the next — structurally, none of the ten has the `Agent` tool.** By default (manual mode) each finishes by saying what's ready and who should get it, then the user decides. When the user explicitly asks for a continuous/unattended run ("รันข้ามคืนได้เลย"), the session orchestrating the pipeline chains the handoffs itself — and the chain is whatever `workflows/*.yml` declares: **every code-changing pipeline closes with `qa-engineer`, and `security` joins when a sensitive area or the schema is touched**, so verification is part of the automation rather than a step a caller must remember. Five points stop the chain and wait for a person regardless of mode: the requirements interview (`business-analyst` never runs headless past its interview without an answer), `system-analyst`'s schema confirmation, `qa-engineer` on any ⚠️/❌ result (rounds 1–2 route back to the engineer automatically; the third failure — or any Critical-severity failure — escalates to a person immediately), `security` on any 🔴/🟠 finding, and `devops` before an actual deploy/migration. Both reviewers stay invokable by name outside any pipeline too. `policies/agent-boundaries.md` §6 has the full rule.
 - **No git, ever.** No agent runs git or touches `.git`. `setup`/`devops` may *write* a `.gitignore` or CI file — that's writing a file, not running git. This is enforced by a `PreToolUse` hook (`.claude/hooks/block-git.js`), not left to the prompt: state-changing git commands are blocked at the tool call, read-only ones (`status`/`log`/`diff`/`show`) still run.
 - **No agent writes outside this repo.** Every write resolves under the project root, whatever the reason. Enforced by a second `PreToolUse` hook (`.claude/hooks/block-outside-repo.js`) on `Write`/`Edit`/`MultiEdit`/`NotebookEdit` — the one exception is Claude Code's own scratchpad convention under the OS temp dir, which isn't an agent going off scope.
 - **`design.md`'s Data Model is the contract.** `backend-engineer` implements it verbatim, `frontend-engineer` derives types from it, `qa-engineer` fails any drift. A gap goes back to `system-analyst`, never gets improvised. Once `setup` has written the real `schema.prisma`, the engineers work from that file — it's the contract's working copy and the one their queries must agree with — and `qa-engineer` is the agent that reads both and keeps them equal. If they ever disagree, `design.md` wins and the code is wrong. Only `setup` (at scaffold) and `backend-engineer` (propagating a confirmed amendment) ever write `schema.prisma`. Every model in a module's Data Model must exist in `schema.prisma` and match — that direction is absolute regardless of module count. **If more than one module folder exists**, a model `schema.prisma` has that this `design.md` doesn't may belong to another module rather than being drift — `.claude/shared/multi-module-schema-scoping.md` has the exact ownership-check procedure (read it only once that situation applies; a single-module project is fully covered by the rule above already).
-- **Only `qa-engineer` marks tasks done.** It sets a task's Status cell to `verified` (or `blocked`) in `plan.md`'s task table (T52) after inspecting real code; the owning engineer may set `in_progress` on its own row, and nobody else touches Status at all.
+- **Only `qa-engineer` marks tasks done.** It sets a task's Status cell to `verified` (or `blocked`) in `plan.md`'s task table (T52) after inspecting real code. Engineers don't edit `plan.md` at all — their contracts deny `_docs/module/**` — so an engineer starting a row says so in its handoff instead of flipping the cell itself, and `project-manager`/`qa-engineer` are the only writers the table ever sees. Nobody else touches Status.
 - **Amend, don't regenerate.** Existing docs are updated with `Edit`, section by section, with a dated line appended to their `## Change Log`. Never a full rewrite.
 - **`review.md` stays small.** It holds `Open Issues — all phases`, the current verify round, and `Unverified Behaviour` for phases that haven't deployed yet; `qa-engineer` moves closed rounds verbatim into `review/phase-N.md`. Those first and third sections outlive their round on purpose — a later stage reads them after the round that produced them stopped being current. Every engineer/`security`/`devops` run reads `review.md` in full, so closed-phase detail left in it is a tax on the whole pipeline. Nobody opens an archive file as part of normal startup.
 - **Dates come from the user.** No agent can reliably know today's date, so any agent writing a dated entry asks first and reuses that answer for the session.
@@ -178,10 +178,11 @@ The full chain is for building something new. Running ten stages for a copy fix 
 
 | The work is | Start at | Skip |
 |---|---|---|
-| Copy/styling tweak, or a bug where requirement + schema are already clear | `backend-engineer` (if it touches the API) → `frontend-engineer` → `qa-engineer` | BA, SA, PM, test-planner |
-| Adds or alters a field/table/relation | `system-analyst` (amend) → `test-planner` → engineer → `qa-engineer` | BA, PM |
+| Copy/styling tweak | `backend-engineer` (if it touches the API) → `frontend-engineer` — no QA stage by design (`workflows/typo.yml`; `--check-review-separation` reports this on purpose, it does not fail) | BA, SA, PM, test-planner, `qa-engineer` |
+| A bug where requirement + schema are already clear | engineer → `qa-engineer` | BA, SA, PM, test-planner |
+| Adds or alters a field/table/relation | `system-analyst` (amend) → `test-planner` → engineer → `qa-engineer` (+`security`) | BA, PM |
 | Changes a business rule, no schema impact | `business-analyst` (amend) → `system-analyst` (amend) → `test-planner` → engineer → `qa-engineer` | PM |
-| A new feature, module, or project | `business-analyst`, full chain | nothing |
+| A new feature, module, or project | `business-analyst`, full chain — even when it also needs new tables: the interview comes first, the schema confirmation after it | nothing |
 
 `project-manager` only earns its run when there's enough work to need phasing. One or two tasks go straight to an engineer, and `test-planner` goes with it — a change too small for a phased plan is also too small for a separate test strategy pass; the engineer and `qa-engineer` reason about it directly.
 

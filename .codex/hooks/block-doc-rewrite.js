@@ -17,6 +17,13 @@
  *     under a module's `review` subfolder) — this only watches the six live docs conventions.md
  *     §1 names.
  *   - `Edit`/`MultiEdit` on these docs — amending is the allowed path, not the blocked one.
+ *     A `MultiEdit` can still gut a doc, but it goes through the same visible diff an
+ *     `Edit` does, and blocking it wholesale would break every legitimate amend.
+ *   - `NotebookEdit` — it only targets `.ipynb`, which the module-doc rule below never
+ *     matches.
+ *   - Shell redirection (`cat > doc`) — firewalling every path a shell command might
+ *     touch is out of scope by design (same line `block-outside-repo.js` draws); the
+ *     per-agent write contracts and review are the backstops there, not this hook.
  *
  * This hook cannot and does not know *which agent* is calling it — PreToolUse input carries
  * no subagent identity, only tool_name/tool_input. So it can't special-case "except
@@ -43,7 +50,12 @@ process.stdin.on('end', () => {
   } catch {
     process.exit(0);
   }
-  const reason = check(input || {});
+  let reason;
+  try {
+    reason = check(input || {});
+  } catch {
+    process.exit(0); // never trap an agent because this guard itself broke — same contract as the other guards
+  }
   if (reason) {
     console.error(reason);
     process.exit(2);

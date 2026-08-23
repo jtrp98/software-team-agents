@@ -64,11 +64,16 @@ export type ApprovalRecord = z.infer<typeof ApprovalRecordSchema>;
 export type ApprovalLedger = ApprovalRecord[];
 
 /**
- * Which approval an edge needs, if any. Only the two edges `gatePolicy.ts`
+ * Which approval an edge needs, if any. Only the edges `gatePolicy.ts`
  * actually gates appear here — this names what already blocks, and deliberately
  * does not invent new stopping points.
  */
 export function approvalTypeForEdge(from: TaskState, to: TaskState): ApprovalType | null {
+  // A requirement is never inferred (CLAUDE.md's always-human point #1): leaving
+  // the REQUIREMENT state needs a person's answer, whatever pipeline brought a
+  // business-analyst stage into existence. Pipelines that skip BA never enter
+  // the state, so they are unaffected.
+  if (from === TaskState.REQUIREMENT) return ApprovalType.REQUIREMENT_INTERVIEW;
   // Matches gatePolicy.ts's checkGate: gated on leaving DESIGN at all, since PLAN (project-manager
   // and/or test-planner) can sit between DESIGN and IMPLEMENTATION and must not be reachable
   // without the same confirmation IMPLEMENTATION requires.
@@ -78,7 +83,8 @@ export function approvalTypeForEdge(from: TaskState, to: TaskState): ApprovalTyp
 }
 
 /** The `gateContext` boolean an approval type feeds, so the gate keeps its existing shape. */
-export function gateFieldFor(type: ApprovalType): "designApproved" | "humanApproved" | null {
+export function gateFieldFor(type: ApprovalType): "requirementApproved" | "designApproved" | "humanApproved" | null {
+  if (type === ApprovalType.REQUIREMENT_INTERVIEW) return "requirementApproved";
   if (type === ApprovalType.SCHEMA_CONFIRMATION) return "designApproved";
   if (type === ApprovalType.DEPLOY) return "humanApproved";
   return null;
@@ -188,9 +194,9 @@ export function reopenApproval(ledger: ApprovalLedger, type: ApprovalType, now: 
  * independently of the ledger would eventually disagree with it, and then
  * neither would be trustworthy.
  */
-export function gateEvidenceFrom(ledger: ApprovalLedger): { designApproved?: boolean; humanApproved?: boolean } {
-  const evidence: { designApproved?: boolean; humanApproved?: boolean } = {};
-  for (const type of [ApprovalType.SCHEMA_CONFIRMATION, ApprovalType.DEPLOY]) {
+export function gateEvidenceFrom(ledger: ApprovalLedger): { requirementApproved?: boolean; designApproved?: boolean; humanApproved?: boolean } {
+  const evidence: { requirementApproved?: boolean; designApproved?: boolean; humanApproved?: boolean } = {};
+  for (const type of [ApprovalType.REQUIREMENT_INTERVIEW, ApprovalType.SCHEMA_CONFIRMATION, ApprovalType.DEPLOY]) {
     const record = findApproval(ledger, type);
     if (!record || record.status === "pending") continue;
     const field = gateFieldFor(type);

@@ -293,8 +293,14 @@ describe("audit trail over a real run (T37)", () => {
       classifyTask({ isNewFeatureModuleOrProject: true, touchesSchema: true, touchesBackend: true }),
       { store },
     );
-    for (let i = 0; i < 10; i++) {
+    // Walk the run to the schema question: the interview gate now comes first on
+    // this pipeline, so answer it whenever it appears.
+    for (let i = 0; i < 20; i++) {
       const status = orch.status();
+      if (status.kind === "WAITING_FOR_HUMAN" && status.approvalType === ApprovalType.REQUIREMENT_INTERVIEW) {
+        orch.decideApproval(ApprovalType.REQUIREMENT_INTERVIEW, true, { by: "somchai" });
+        continue;
+      }
       if (status.kind !== "RUNNING") break;
       orch.reportCompletion(status.stage, { outcome: { tokens: 1, cost: 0, result: "PASS" } }, { start: 0, end: 1 });
     }
@@ -303,10 +309,11 @@ describe("audit trail over a real run (T37)", () => {
     const trail = auditTrail(store, "T-HUMAN");
     const asked = trail.find((e) => e.type === "APPROVAL_REQUIRED");
     const answered = trail.find((e) => e.type === "APPROVAL_DECIDED");
+    // The first asked-and-answered question on this pipeline is the interview.
     expect(asked!.actor).toBe(ORCHESTRATOR_ACTOR);
-    expect(asked!.decision).toBe(`ask:${ApprovalType.SCHEMA_CONFIRMATION}`);
+    expect(asked!.decision).toBe(`ask:${ApprovalType.REQUIREMENT_INTERVIEW}`);
     expect(answered!.actor).toBe("somchai");
-    expect(answered!.decision).toBe(`approve:${ApprovalType.SCHEMA_CONFIRMATION}`);
+    expect(answered!.decision).toBe(`approve:${ApprovalType.REQUIREMENT_INTERVIEW}`);
   });
 });
 

@@ -35,6 +35,13 @@ export interface ClassificationResult {
   requiresHumanApproval: boolean;
   /** True if SECURITY must run and plan.md-equivalent gets a 🔒 flag. */
   sensitiveGate: boolean;
+  /**
+   * The caller's own `touchesSchema` signal, carried through so downstream
+   * consumers don't have to re-derive it from pipeline shape (which stopped
+   * working once a new-feature task that also touches a schema started with
+   * business-analyst instead of system-analyst).
+   */
+  touchesSchema?: boolean;
   reasons: string[];
 }
 
@@ -85,6 +92,45 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
     };
   }
 
+  if (input.isNewFeatureModuleOrProject) {
+    // A brand-new feature/module/project wins over the schema signal, no matter
+    // how the caller ordered the flags: the most common large task shape is
+    // "new feature that needs new tables", and it must get the full requirements
+    // interview (BA first), not silently degrade into the schema-only pipeline
+    // that skips business-analyst and project-manager. The schema obligations
+    // themselves — human confirmation before code is written against the model,
+    // a security pass — still apply on top.
+    const schemaAlso = Boolean(input.touchesSchema);
+    reasons.push("new feature/module/project — needs full requirements interview, no stage skipped");
+    if (schemaAlso) {
+      reasons.push(
+        "also touches data model — requirements interview comes first, then the same human schema confirmation as any schema change",
+      );
+    }
+    const base = [
+      AgentStage.BUSINESS_ANALYST,
+      AgentStage.SYSTEM_ANALYST,
+      AgentStage.PROJECT_MANAGER,
+      AgentStage.TEST_PLANNER,
+      ...engineerStages(input, reasons),
+      AgentStage.QA_ENGINEER,
+    ];
+    const { pipeline, sensitiveGate } = withSecurityGate(base, {
+      ...input,
+      // A schema-touching feature gets the security pass whether or not the
+      // caller flagged a sensitive area — same rule as a pure schema change.
+      touchesSensitiveArea: input.touchesSensitiveArea || schemaAlso,
+    });
+    return {
+      level: TaskLevel.LARGE_CRITICAL,
+      pipeline,
+      requiresHumanApproval: true,
+      sensitiveGate,
+      touchesSchema: schemaAlso,
+      reasons,
+    };
+  }
+
   if (input.touchesSchema) {
     reasons.push(
       "touches data model — always routes through system-analyst, schema confirmation always requires human approval",
@@ -104,26 +150,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
       pipeline,
       requiresHumanApproval: true,
       sensitiveGate,
-      reasons,
-    };
-  }
-
-  if (input.isNewFeatureModuleOrProject) {
-    reasons.push("new feature/module/project — needs full requirements interview, no stage skipped");
-    const base = [
-      AgentStage.BUSINESS_ANALYST,
-      AgentStage.SYSTEM_ANALYST,
-      AgentStage.PROJECT_MANAGER,
-      AgentStage.TEST_PLANNER,
-      ...engineerStages(input, reasons),
-      AgentStage.QA_ENGINEER,
-    ];
-    const { pipeline, sensitiveGate } = withSecurityGate(base, input);
-    return {
-      level: TaskLevel.LARGE_CRITICAL,
-      pipeline,
-      requiresHumanApproval: false,
-      sensitiveGate,
+      touchesSchema: true,
       reasons,
     };
   }
