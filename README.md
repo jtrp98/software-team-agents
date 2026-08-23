@@ -231,7 +231,7 @@ sta roles inbox sa                                # lane นี้มีอะ�
 sta approve T-1                                   # resolve human gate ของ task
 ```
 
-สคริปต์เดินจริงครบทุก scenario (S0–S5): [`planning/UAT_KIT_V1.md`](planning/UAT_KIT_V1.md)
+สคริปต์เดินจริงครบทุก scenario (S0–S5): [`planning/v1/UAT_KIT_V1.md`](planning/v1/UAT_KIT_V1.md) (internal, gitignored — มีเฉพาะในเครื่องผู้พัฒนา)
 
 ## ตัวอย่างการใช้ในทีม
 
@@ -275,7 +275,7 @@ BA ของทีม clone เฉพาะ Knowledge repo — เขียน r
 - Test suite: **1829 passed** · hook/script harness 139 cases · build/typecheck เขียว
 - **ยังไม่ tag v1.0.0** — release gate เป็นงานของมนุษย์: T117 ตัวเลขสะอาด → T119 UAT sign-off → commit knowledge repo → ตัดสิน publish npm → full CI บน PR → tag
 
-รายละเอียด: [`planning/CHECKLIST_V1_THREE_REPO.md`](planning/CHECKLIST_V1_THREE_REPO.md) · [`planning/CHECKLIST_V1.md`](planning/CHECKLIST_V1.md) · [`planning/HANDOFF_V1.md`](planning/HANDOFF_V1.md) (ไฟล์เหล่านี้เป็นเอกสาร planning ภายใน — gitignore ไว้ ไม่ได้แถมมากับ repo ที่ clone)
+รายละเอียด: [`planning/v1/CHECKLIST_V1_THREE_REPO.md`](planning/v1/CHECKLIST_V1_THREE_REPO.md) · [`planning/v1/CHECKLIST_V1.md`](planning/v1/CHECKLIST_V1.md) · [`planning/v1/HANDOFF_V1.md`](planning/v1/HANDOFF_V1.md) (ไฟล์เหล่านี้เป็นเอกสาร planning ภายใน — gitignore ไว้ ไม่ได้แถมมากับ repo ที่ clone)
 
 ## ข้อจำกัดของ V1
 
@@ -311,10 +311,10 @@ npm run build:templates  # snapshot templates/ + manifest.json
 node ../.claude/tests/run.js   # hook/script self-test — ต้องเขียวเสมอถ้าแตะ hooks/scripts
 ```
 
-- CI: [`.github/workflows/agent-framework-ci.yml`](.github/workflows/agent-framework-ci.yml) รัน self-test + ทุก `--check-*` flag บนทุก PR
+- CI: [`.github/workflows/agent-framework-ci.yml`](.github/workflows/agent-framework-ci.yml) รัน self-test + 15 release-gate `--check-*` flag บนทุก PR
 - โครงสร้าง directory ถูกประกาศใน [`layout.yaml`](layout.yaml) และตรวจด้วย `--check-layout` — เพิ่ม folder ใหม่ต้องประกาศก่อน
 - เอกสารกฎ: [`policies/`](policies/) · machine-readable half ของ agent: [`contracts/`](contracts/)
-- เอกสาร planning/task: [`planning/TASKS_V1_THREE_REPO.md`](planning/TASKS_V1_THREE_REPO.md) · handoff: [`planning/HANDOFF_V1.md`](planning/HANDOFF_V1.md)
+- เอกสาร planning/task (internal, gitignored): [`planning/v1/TASKS_V1_THREE_REPO.md`](planning/v1/TASKS_V1_THREE_REPO.md) · handoff: [`planning/v1/HANDOFF_V1.md`](planning/v1/HANDOFF_V1.md)
 
 ## License
 

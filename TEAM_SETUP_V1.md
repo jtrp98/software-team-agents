@@ -3,7 +3,7 @@
 > Onboarding flow สำหรับสมาชิกใหม่: ติดตั้ง → Configure → Validate → Ready
 > **ทางลัดสำหรับคนที่ไม่อยาก setup เอง:** เปิด Claude แล้วทำงานได้เลยผ่าน [`START.md`](START.md)
 > ทุกขั้น reuse คำสั่งที่มีอยู่ · config ผิด = fail-closed ทันที · ไม่ต้องแก้ framework internals
-> ประกอบด้วย 3 repos ตาม Three-Repo Architecture (`planning/TASKS_V1_THREE_REPO.md`):
+> ประกอบด้วย 3 repos ตาม Three-Repo Architecture (สรุปใน [`AGENTS.md`](AGENTS.md) · รายละเอียดใน [`README.md`](README.md)):
 
 ```
 Framework repo (repo นี้)     Knowledge repo (ต่อบริษัท)      Target repo(s) (โค้ดจริง)
@@ -29,8 +29,8 @@ cd software-team-agents/orchestrator && npm ci && npm run build
 npm run build:templates          # snapshot templates/ + manifest.json
 ```
 
-> ทีมที่ไม่ clone repo ได้ ใช้ `npx software-team-agents init` จาก npm pack tarball แทนได้
-> (`npm pack` ที่ root → ได้ .tgz → `npm i -g <tgz>`) — publish ขึ้น registry ยังไม่เปิด
+> ทีมที่ไม่ clone repo ได้ ติดตั้งจาก tarball แทนได้ (`npm pack` ที่ root → ได้ .tgz → `npm i -g <tgz>` แล้วเรียก `sta init`)
+> — publish ขึ้น npm registry ยังไม่เปิด `npx` จาก registry จึงยังไม่มี
 
 ## Step 2 — Get the Knowledge Repo (clone ครั้งเดียวต่อเครื่อง)
 
@@ -89,7 +89,7 @@ node orchestrator/dist/cli.js run --task-id T-1 --module <module> \
 node orchestrator/dist/cli.js status T-1 --project-root C:\src\schoolbright-knowledge
 ```
 
-BA/SA ทำงานผ่าน `roles review/approve/signoff/ack` — ดู `UAT_KIT_V1.md` S1–S4 เป็นสคริปต์เดินจริง
+BA/SA ทำงานผ่าน `roles review/approve/signoff/ack` — ดู `planning/v1/UAT_KIT_V1.md` S1–S4 เป็นสคริปต์เดินจริง (internal, gitignored)
 
 ---
 

@@ -126,7 +126,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
     );
 
     checks.push(
-      check("Knowledge schema (items load cleanly)", "run: orchestrate --check-knowledge --knowledge-root <path> for the full list", () => {
+      check("Knowledge schema (items load cleanly)", "run: orchestrate --check-knowledge --project-root <path> for the full list", () => {
         const report = checkKnowledge(knowledgeRootValue!);
         if (report.problems.length > 0) {
           return { status: "FAIL", detail: `${report.problems.length} problem(s) — first: ${report.problems[0]}` };

@@ -1,8 +1,8 @@
-# START — เปิด Claude หรือ Codex แล้วทำงานได้เลย
+# START — เปิด Claude Code แล้วทำงานได้เลย (Codex: ยัง experimental)
 
 > ไฟล์นี้ทำหน้าที่สองอย่างพร้อมกัน:
 > 1. **คู่มือฉบับลัด** สำหรับคนที่ไม่อยาก setup framework เอง
-> 2. **Prompt แรก** — copy บล็อกใน §2 ไปวางตอนเปิด Claude Code หรือ Codex รอบแรก แล้ว AI จะถาม–จัดการให้จนพร้อมทำงาน
+> 2. **Prompt แรก** — copy บล็อกใน §2 ไปวางตอนเปิด Claude Code รอบแรก แล้ว AI จะถาม–จัดการให้จนพร้อมทำงาน
 >
 > สำหรับ setup แบบเต็ม (doctor ละเอียด, troubleshooting 9 ประเด็น) ดู [`TEAM_SETUP_V1.md`](TEAM_SETUP_V1.md)
 
@@ -99,12 +99,12 @@ claude
 - `.workflow/**` และ `knowledge/_roles/**` ถูก deny เสมอ ไม่ว่าจะประกาศอะไร
 - devops/deploy ยังโดน gate ของตัวเอง แม้ writable เปิด
 
-## 6. ใช้ได้ทั้ง Claude Code และ Codex
+## 6. Runtime: Claude Code (verified) / Codex (ยังไม่ verify end-to-end)
 
-ทุก flow ในไฟล์นี้ (ทาง A/B/C, prompt แรก, การถาม-ตอบ setup) ใช้ได้กับทั้งสอง runtime — เปิด `claude` หรือ `codex` ก็ได้ ตามถนัดของแต่ละคน
+**Claude Code คือ runtime ที่ verify ครบ** — ทุก flow ในไฟล์นี้ (ทาง A/B/C, prompt แรก, การถาม-ตอบ setup) ผ่านการทดสอบจริงบน Claude Code
 
 - **Claude Code** อ่าน `.claude/agents/*.md` + hooks ผ่าน `.claude/settings.json`
-- **Codex** อ่าน [`AGENTS.md`](AGENTS.md) ที่ root เป็น project context · role prompts อยู่ที่ `.codex/agents/*.toml` · guards wired ผ่าน `.codex/hooks.json`
+- **Codex** อ่าน [`AGENTS.md`](AGENTS.md) ที่ root เป็น project context · role prompts อยู่ที่ `.codex/agents/*.toml` · guards wired ผ่าน `.codex/hooks.json` — **สถานะ: partial/experimental** adapter contract ผ่าน tests แต่ยังไม่เคย verify end-to-end กับ install จริง (ดูสถานะล่าสุดใน [`README.md`](README.md)) — อย่าคาดหวัง parity กับ Claude Code
 
 ข้อแตกต่างเล็กน้อยที่ควรรู้:
 

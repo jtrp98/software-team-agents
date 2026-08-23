@@ -3,7 +3,10 @@ import * as path from "node:path";
 
 const KNOWLEDGE_DIRECTORIES = ["knowledge", "_docs", "decisions"] as const;
 const KNOWLEDGE_FILES: Readonly<Record<string, string>> = {
-  "knowledge-policy.yaml": "schema_version: 1\n",
+  // `version` — the policy file's own schema field (schemas/knowledge-policy.schema.json
+  // requires it and forbids anything else). Do not confuse with the item-level
+  // `schema_version` used inside knowledge/*.yaml items.
+  "knowledge-policy.yaml": "version: 1\n",
   "targets.yaml": "schema_version: 1\ntargets: []\n",
 };
 const WORKFLOW_IGNORE = ".workflow/";

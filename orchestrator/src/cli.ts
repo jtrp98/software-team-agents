@@ -197,6 +197,7 @@ export const USAGE =
   "  orchestrate upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
   "  orchestrate migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending (T96)\n" +
   "  orchestrate knowledge-migrate <dry-run|copy|verify|cutover> --source-root <path> --knowledge-root <path> [--now <ISO>] [--confirm I_CONFIRM_MIGRATION]   copy–verify–human-confirmed migration\n" +
+  "  orchestrate adopt <plan|status|start|ack|run|approve|validate> [--project-root <path>] [--source-root <path>] [--docs-root <dir>]   import legacy .claude/ docs/ planning/ into the Knowledge root (T82–T85)\n" +
   "  orchestrate rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups` (T97)\n" +
   "  orchestrate list-backups [--project-root <path>]   list this project's .sta/backups/ snapshots, oldest first\n" +
   "  orchestrate roles [--module <name>] [--project-root <path>]   where BA, SA, UXUI and DEV each stand against knowledge/ (T99)\n" +
@@ -2041,6 +2042,10 @@ const isMain = (() => {
 
 if (isMain) {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  if (process.argv.slice(2).includes("--help") || process.argv.slice(2).includes("-h")) {
+    console.log(USAGE);
+    process.exit(0);
+  }
   runCli(process.argv.slice(2), repoRoot)
     .then((code) => process.exit(code))
     .catch((e) => {
