@@ -7,7 +7,7 @@ import {
   loadTargetConfig,
   readTargetManifest,
 } from "./targetMeta.js";
-import { planSync, runTargetSync } from "./syncEngine.js";
+import { blockingConflicts, planSync, projectOwnedPaths, runTargetSync } from "./syncEngine.js";
 import { sameMajor } from "./version.js";
 import {
   assetsForRole,
@@ -188,19 +188,24 @@ export function workspacePreflight(role: RoleName, options: RoleRunOptions = {})
       config,
       include: assetsForRole(role),
     });
-    if (plan.conflicts.length > 0) {
-      const names = plan.conflicts.map((c) => c.path).join(", ");
+    // Gate on the same rule `sync` gates on — see isBlockingConflict. A path
+    // the project owns is reported, never a reason to refuse the launch.
+    const blocking = blockingConflicts(plan);
+    if (blocking.length > 0) {
+      const names = blocking.map((c) => c.path).join(", ");
       fail("Managed files", `sync conflicts in ${names} — run software-team-agents sync to review them`);
     }
+    const owned = projectOwnedPaths(plan);
+    const ownedNote = owned.length > 0 ? `; ${owned.length} project-owned path(s) left alone: ${owned.join(", ")}` : "";
     const needsSync = plan.entries.some((e) => ["add", "update", "restore", "remove-stale"].includes(e.action));
     if (needsSync) {
       if (options.autoSync === false) {
         fail("Managed files", "managed assets are outdated — run software-team-agents sync, or drop --no-auto-sync");
       }
       runTargetSync({ targetRoot: roots.targetRoot, templatesDir, manifest, config, include: assetsForRole(role), now: options.now ?? new Date().toISOString() });
-      checks.push({ name: "Managed files", ok: true, detail: `auto-synced to Framework ${plan.frameworkVersion}` });
+      checks.push({ name: "Managed files", ok: true, detail: `auto-synced to Framework ${plan.frameworkVersion}${ownedNote}` });
     } else {
-      checks.push({ name: "Managed files", ok: true, detail: "up to date" });
+      checks.push({ name: "Managed files", ok: true, detail: `up to date${ownedNote}` });
     }
   } catch (e) {
     if (e instanceof PreflightError) throw e;

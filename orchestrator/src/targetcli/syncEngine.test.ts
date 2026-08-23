@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { sha256Of } from "../packaging/templateManifest.js";
 import { renderCodexBinding } from "../runtime/bindingGenerator.js";
 import {
+  blockingConflicts,
   planSync,
   runTargetSync,
   TargetDowngradeBlockedError,
@@ -175,6 +176,33 @@ describe("safe sync engine", () => {
     expect(fs.readFileSync(path.join(target, ".claude", "settings.json"), "utf8")).toBe('{"project":"specific"}');
     expect(result.performed.find((p) => p.path === ".claude/settings.json")?.action).toBe("override");
     expect(() => planSync({ targetRoot: target, templatesDir: v2, manifest: readTargetManifest(target), config: defaultTargetConfig("x", "now") })).not.toThrow();
+  });
+
+  it("keeps a claimed file out of the manifest, so un-claiming it does not mislabel the project's own file", () => {
+    // Regression: an override recorded the TEMPLATE's hash even though sync
+    // never wrote the file. Un-claiming the path then read as "tracked file
+    // edited after sync" (blocking) instead of "the project owns this path"
+    // (skipped) — a workspace that sync had just accepted.
+    const target = gitTarget();
+    const v1 = makeTemplatesDir("1.0.0", V1_FILES);
+    runTargetSync({ targetRoot: target, templatesDir: v1, now: "2026-01-01T00:00:00Z" });
+
+    const settingsPath = path.join(target, ".claude", "settings.json");
+    fs.writeFileSync(settingsPath, '{"project":"specific"}', "utf8");
+    const claimed = { ...defaultTargetConfig("my-project", "2026-01-01T00:00:00Z"), overrides: [".claude/settings.json"] };
+    writeTargetConfig(target, claimed);
+    runTargetSync({ targetRoot: target, templatesDir: v1, config: claimed, manifest: readTargetManifest(target), now: "2026-01-02T00:00:00Z" });
+
+    // A file sync deliberately left alone is not claimed in the manifest.
+    expect(readTargetManifest(target).files.some((f) => f.path === ".claude/settings.json")).toBe(false);
+
+    // Un-claiming it reports the project's ownership instead of blocking.
+    const unclaimed = defaultTargetConfig("my-project", "2026-01-01T00:00:00Z");
+    writeTargetConfig(target, unclaimed);
+    const plan = planSync({ targetRoot: target, templatesDir: v1, manifest: readTargetManifest(target), config: unclaimed });
+    expect(plan.conflicts.map((c) => c.kind)).toEqual(["untracked-file"]);
+    expect(blockingConflicts(plan)).toEqual([]);
+    expect(fs.readFileSync(settingsPath, "utf8")).toBe('{"project":"specific"}');
   });
 
   it("refuses to manage application source or escape the repo root", () => {

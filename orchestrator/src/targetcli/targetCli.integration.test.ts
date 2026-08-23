@@ -252,6 +252,39 @@ describe("software-team-agents — target-first end to end", () => {
     ).toThrow(/conflicts/);
     expect(fs.readFileSync(settings, "utf8")).toContain("locally edited");
   });
+
+  it("dev: a path the project already owned does NOT block the launch — same verdict as sync", async () => {
+    // Regression: the block/skip rule lived inline in runTargetSync and was not
+    // applied by workspacePreflight, so `sync` accepted a workspace that `dev`
+    // refused — one workspace, two verdicts. Both now route through
+    // isBlockingConflict.
+    const target = makeTarget();
+    const knowledge = makeKnowledgeRepo();
+    // The project owns CLAUDE.md before this Framework is ever installed.
+    write(target, "CLAUDE.md", "# the project's own instructions\n");
+
+    const fw = fakeFramework("3.1.0", [
+      { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer") },
+      { relPath: "CLAUDE.md", content: "# Framework instructions\n" },
+    ]);
+    const templatesDir = path.join(fw, "templates");
+
+    expect((await capture(() => runTargetCli(["init"], target, fw))).code).toBe(0);
+    const cfg = defaultTargetConfig(path.basename(target), "2026-01-01T00:00:00Z", "dev");
+    cfg.knowledge = { path: knowledge };
+    writeTargetConfig(target, cfg);
+
+    // `sync` tolerates it (exit 0, file untouched) ...
+    expect((await capture(() => runTargetCli(["sync"], target, fw))).code).toBe(0);
+    expect(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8")).toBe("# the project's own instructions\n");
+
+    // ... so preflight must too, and must say which path it left alone.
+    const ctx = devPreflight({ targetRoot: target, templatesDir, installationConfigPath: NO_INSTALLATION, probe: () => ({ available: true }) });
+    const managed = ctx.checks.find((c) => c.name === "Managed files");
+    expect(managed?.ok).toBe(true);
+    expect(managed?.detail).toContain("CLAUDE.md");
+    expect(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8")).toBe("# the project's own instructions\n");
+  });
 });
 
 describe("role workspace architecture (T-ROLE)", () => {

@@ -107,6 +107,17 @@ already said):
   machine-wide. Show exactly what you are about to write before writing.
 - In the Target: `software-team-agents init` (detects DEV; pass `--role dev`
   yourself only if detection reported ambiguity) then `software-team-agents sync`.
+- **Stack reality check.** `sync` only copies the Framework's generic default stack into
+  `.claude/agents/frontend-engineer.md`/`backend-engineer.md` — it does not detect or merge
+  the Target's actual one, and a fresh `init`/`sync` on an already-built project will not
+  match it by default. Read each file's "Fixed project stack" section and compare against
+  the Target's real markers: `package.json` dependencies/devDependencies, `prisma/schema.prisma`
+  presence, `tailwind.config.*`/`postcss.config.*`, whether the API is a separate server or
+  framework-native route handlers, which auth library is actually wired up. If they disagree,
+  show the specific diff and ask the user to confirm the real stack, then update both files'
+  "Fixed project stack" section in place per that file's own "When the stack needs to change"
+  rule — don't guess, and don't skip this just because `sync` reported `UP_TO_DATE` (sync
+  tracks file versions, not stack accuracy).
 - Verify: Role `DEV`, Knowledge line present via `workspace-config`/`installation`,
   sync `UP_TO_DATE`, runtimes READY.
 - Working command: `cd <target> && software-team-agents dev`.

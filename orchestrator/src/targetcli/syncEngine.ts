@@ -146,6 +146,28 @@ function overrideSet(config: TargetConfig | undefined): Set<string> {
   return new Set((config?.overrides ?? []).map((rel) => rel.replaceAll("\\", "/")));
 }
 
+/**
+ * Whether a conflict may stop a run. Only a file the Framework tracks and the
+ * user then edited qualifies (`user-modified`, `stale-modified`): writing it
+ * would destroy work. An `untracked-file` never does — the Target owned that
+ * path before the Framework ever did (its own CLAUDE.md, its own
+ * .claude/settings.json), so sync skips it and reports it, and a workspace is
+ * not broken for having one.
+ *
+ * This lives in one place on purpose: the rule was previously written inline in
+ * `runTargetSync` and *not* applied by `workspacePreflight`, so `sync` accepted
+ * a workspace that `dev` then refused to launch — the same workspace, two
+ * verdicts. Every caller that gates on conflicts routes through here.
+ */
+export const isBlockingConflict = (conflict: SyncConflict): boolean => conflict.kind !== "untracked-file";
+
+/** The conflicts that actually stop a run, in plan order. */
+export const blockingConflicts = (plan: SyncPlan): SyncConflict[] => plan.conflicts.filter(isBlockingConflict);
+
+/** Managed paths the project owns instead — reported, never blocking. */
+export const projectOwnedPaths = (plan: SyncPlan): string[] =>
+  plan.conflicts.filter((c) => !isBlockingConflict(c)).map((c) => c.path);
+
 export class TargetSyncConflictError extends Error {
   constructor(public readonly plan: SyncPlan) {
     super(
@@ -260,8 +282,7 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
   }
   // Only tracked-but-edited (and stale-modified) files block the run; a
   // pre-existing foreign file never does — it is skipped and reported below.
-  const blockingConflicts = plan.conflicts.filter((c) => c.kind !== "untracked-file");
-  if (blockingConflicts.length > 0 && !options.force) throw new TargetSyncConflictError(plan);
+  if (blockingConflicts(plan).length > 0 && !options.force) throw new TargetSyncConflictError(plan);
 
   // Destructive downgrade guard: moving a workspace backwards across a major
   // boundary changes managed assets in ways older content may not survive —
@@ -321,6 +342,15 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     }
     const plannedFor = plan.entries.find((e) => e.path === file.path);
     if (!plannedFor) continue;
+    if (plannedFor.action === "override") {
+      // Claimed via config `overrides:` — same semantics as `foreign` above:
+      // never written, so never tracked. Recording the template's hash for a
+      // file sync deliberately left alone would assert the Framework's content
+      // is on disk when the project's is, and un-claiming the path later would
+      // then mislabel the project's own file as "edited after sync".
+      performed.push(plannedFor);
+      continue;
+    }
     if (plannedFor.action === "add" || plannedFor.action === "restore") {
       const dest = path.join(options.targetRoot, file.path);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -331,7 +361,7 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
       fs.copyFileSync(path.join(options.templatesDir, file.path), path.join(options.targetRoot, file.path));
       performed.push(plannedFor);
     } else {
-      performed.push(plannedFor); // unchanged / override — reported, not written
+      performed.push(plannedFor); // unchanged — already identical, nothing to write
     }
     managedEntries.push(file);
   }
