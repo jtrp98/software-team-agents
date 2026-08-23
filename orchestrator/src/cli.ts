@@ -2033,8 +2033,13 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
 }
 
 const isMain = (() => {
+  // Compare realpaths: under `npm link` (a Windows junction) argv[1] carries
+  // the junction path while this module resolves to the checkout — a plain
+  // string compare would silently disable the whole CLI.
   try {
-    return process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+    if (!process.argv[1]) return false;
+    const entry = fs.realpathSync.native(path.resolve(process.argv[1]));
+    return entry === fs.realpathSync.native(fileURLToPath(import.meta.url));
   } catch {
     return false;
   }

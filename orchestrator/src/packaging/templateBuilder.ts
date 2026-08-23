@@ -22,7 +22,9 @@ export interface BuildTemplatesResult {
  */
 export function buildTemplates(repoRoot: string, outDir: string, now: string): BuildTemplatesResult {
   const relFiles = listTemplateFiles(repoRoot);
-  const frameworkVersion = readFrameworkVersion(path.join(repoRoot, "orchestrator"));
+  // The version comes from the repo-root distributable package.json — the same
+  // file that names the packed .tgz — so artifact and stamped manifest agree.
+  const frameworkVersion = readFrameworkVersion(repoRoot);
 
   fs.rmSync(outDir, { recursive: true, force: true });
   fs.mkdirSync(outDir, { recursive: true });

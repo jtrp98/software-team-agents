@@ -28,7 +28,15 @@ describe("readFrameworkVersion", () => {
     expect(readFrameworkVersion(root)).toBe("1.2.3");
   });
 
-  it("throws when package.json has no version", () => {
+  it("prefers the repo-root distributable over the orchestrator dev package — one source names both the .tgz and the manifest", () => {
+    const root = fixtureRepo({
+      "package.json": JSON.stringify({ name: "software-team-agents", version: "2.0.0" }),
+      "orchestrator/package.json": JSON.stringify({ version: "0.9.0" }),
+    });
+    expect(readFrameworkVersion(root)).toBe("2.0.0");
+  });
+
+  it("throws when no candidate package.json has a version", () => {
     const root = fixtureRepo({ "package.json": JSON.stringify({ name: "x" }) });
     expect(() => readFrameworkVersion(root)).toThrow(/version/);
   });
