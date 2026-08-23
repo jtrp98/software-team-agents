@@ -108,7 +108,10 @@ export function sliceModuleDocsFor(stage: AgentStage, opts: SliceOptions): strin
 
 export function buildPrompt(req: AgentExecutorRequest, extra?: string, sliced?: string[]): string {
   const parts: string[] = [
-    `Task ${req.taskId} — you are running as the \`${req.stage}\` stage of this repo's pipeline (see CLAUDE.md).`,
+    // Vendor-neutral on purpose (OFF07): this prompt reaches every runtime, and
+    // a provider-named document pointer would leak one vendor's naming into all
+    // the others' context.
+    `Task ${req.taskId} — you are running as the \`${req.stage}\` stage of this repo's pipeline (see the repo's own agent documentation).`,
     "",
   ];
   if (req.context.length === 0) {

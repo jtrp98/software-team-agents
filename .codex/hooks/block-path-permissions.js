@@ -82,6 +82,18 @@ function run(input) {
   const target = (input.tool_input && (input.tool_input.file_path || input.tool_input.notebook_path)) || '';
   if (!target) return null;
 
+  // Three-repo runtime hands this hook only canonical write roots selected by
+  // preflight. A Target path is outside the Framework contract's relative
+  // globs, so evaluate the universal floor relative to that Target and allow
+  // it only after the runtime supplied a matching root.
+  const workRelative = toWritableWorkRelative(target);
+  if (workRelative !== null) {
+    for (const pattern of UNIVERSAL_DENY) {
+      if (matchesGlob(pattern, workRelative)) return deny(workRelative, process.env.AGENTCLAUDE_ROLE || null, `no agent may write \`${pattern}\``);
+    }
+    return null;
+  }
+
   const rel = toRepoRelative(target);
   if (rel === null) return null; // outside the repo -- block-outside-repo.js owns that case
 
@@ -111,6 +123,20 @@ function run(input) {
       ? `\`${role}\`'s contract grants no write paths at all`
       : `\`${role}\` may write: ${rules.write.map((w) => '`' + w + '`').join(', ')}`,
   );
+}
+
+function toWritableWorkRelative(target) {
+  let roots;
+  try { roots = JSON.parse(process.env.AGENTCLAUDE_WRITABLE_WORK_ROOTS || '[]'); } catch { return null; }
+  if (!Array.isArray(roots)) return null;
+  const abs = path.resolve(path.isAbsolute(target) ? target : path.resolve(root, target));
+  for (const rawRoot of roots) {
+    if (typeof rawRoot !== 'string' || !path.isAbsolute(rawRoot)) continue;
+    const rel = path.relative(rawRoot, abs).replace(/\\/g, '/');
+    if (rel === '') return rel;
+    if (!rel.startsWith('../') && !path.isAbsolute(rel)) return rel;
+  }
+  return null;
 }
 
 /** Repo-relative, forward slashes. Null when the path escapes the repo. */

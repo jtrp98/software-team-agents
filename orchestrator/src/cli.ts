@@ -24,6 +24,7 @@ import { checkPathRules } from "./agents/pathPermissions.js";
 import { checkLayout } from "./layout/repoLayout.js";
 import { ApprovalType } from "./gates/approval.js";
 import { checkAllWorkflows } from "./workflow/workflowDefinition.js";
+import { checkBindings } from "./runtime/bindingGenerator.js";
 import { checkProfile } from "./profile/projectProfile.js";
 import { checkDecisions } from "./decisions/decisionLog.js";
 import { checkTestPyramid } from "./testing/testPyramid.js";
@@ -111,6 +112,8 @@ export interface CliArgs {
   checkLayout: boolean;
   /** Check workflows/*.yml against the classifier and exit. Same audience. */
   checkWorkflows: boolean;
+  /** Check .codex/agents/*.toml renderings against their .claude/agents sources and exit (OFF10 M2). */
+  checkBindings: boolean;
   /** Check project.yaml and stacks/ against the agent roster and exit. Same audience. */
   checkProfile: boolean;
   /** Check decisions/*.md ADRs against the schema and cross-links and exit. Same audience. */
@@ -213,6 +216,7 @@ export const USAGE =
   "  orchestrate --check-contracts [--project-root <path>]      check contracts/*.yaml against the agent registry\n" +
   "  orchestrate --check-layout [--project-root <path>]         check layout.yaml against the real directories\n" +
   "  orchestrate --check-workflows [--project-root <path>]      check workflows/*.yml against the classifier\n" +
+  "  orchestrate --check-bindings [--project-root <path>]       check .codex/agents/*.toml match the .claude/agents sources\n" +
   "  orchestrate --check-profile [--project-root <path>]        check project.yaml and stacks/ against the agent roster\n" +
   "  orchestrate --check-decisions [--project-root <path>]      check decisions/*.md ADRs against the schema and cross-links\n" +
   "  orchestrate --check-test-pyramid [--project-root <path>]   check test-pyramid.yaml against its schema\n" +
@@ -239,6 +243,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkContracts = false;
   let checkLayoutFlag = false;
   let checkWorkflowsFlag = false;
+  let checkBindingsFlag = false;
   let checkProfileFlag = false;
   let checkDecisionsFlag = false;
   let checkTestPyramidFlag = false;
@@ -296,6 +301,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkLayoutFlag = true;
     } else if (arg === "--check-workflows") {
       checkWorkflowsFlag = true;
+    } else if (arg === "--check-bindings") {
+      checkBindingsFlag = true;
     } else if (arg === "--check-profile") {
       checkProfileFlag = true;
     } else if (arg === "--check-decisions") {
@@ -350,6 +357,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkContracts &&
     !checkLayoutFlag &&
     !checkWorkflowsFlag &&
+    !checkBindingsFlag &&
     !checkProfileFlag &&
     !checkDecisionsFlag &&
     !checkTestPyramidFlag &&
@@ -384,6 +392,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkContracts,
     checkLayout: checkLayoutFlag,
     checkWorkflows: checkWorkflowsFlag,
+    checkBindings: checkBindingsFlag,
     checkProfile: checkProfileFlag,
     checkDecisions: checkDecisionsFlag,
     checkTestPyramid: checkTestPyramidFlag,
@@ -934,7 +943,13 @@ async function runUpgradeVerb(rest: string[], defaultProjectRoot: string): Promi
 async function runDoctorVerb(rest: string[]): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root");
   try {
-    const report = await runDoctor({ projectRoot: projectRoot ?? undefined });
+    // The composition root is the one place that may name a concrete adapter
+    // (see runtimeAdapter.ts): doctor itself stays provider-blind and receives
+    // the same probe a real run would use.
+    const report = await runDoctor({
+      projectRoot: projectRoot ?? undefined,
+      probe: () => new ClaudeCodeAdapter({ projectRoot: projectRoot ?? process.cwd() }).probe(),
+    });
     for (const c of report.checks) {
       const mark = c.status === "PASS" ? "✓" : c.status === "WARNING" ? "!" : "✗";
       console.log(`${mark} ${c.status.padEnd(7)} ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
@@ -1635,6 +1650,17 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       return 0;
     }
     console.error("[orchestrator] workflows/*.yml and the classifier disagree:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
+  if (args.checkBindings) {
+    const result = checkBindings(args.projectRoot);
+    if (result.ok) {
+      console.log("[orchestrator] .codex/agents bindings match the .claude/agents sources.");
+      return 0;
+    }
+    console.error("[orchestrator] codex role bindings have drifted from their sources:");
     for (const problem of result.problems) console.error(`  - ${problem}`);
     return 1;
   }
