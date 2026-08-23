@@ -168,6 +168,8 @@ Agent prompts เตรียมทั้งฝั่ง `.claude/agents/*.md` �
 
 Prerequisites: **Node.js ≥ 20**, **Git**, **Claude Code CLI** (login แล้ว) — ตรวจด้วย `node --version`, `claude --version`
 
+> แค่อยากเปิด Claude แล้วใช้ agent ทำงานทันที (ba/sa/uxui/dev) โดยไม่ setup เอง — ข้ามไป [`START.md`](START.md) ได้เลย
+
 **วิธีที่ 1 — clone framework repo (สำหรับคนที่มีสิทธิ์เข้าถึง):**
 
 ```bash

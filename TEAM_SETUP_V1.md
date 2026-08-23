@@ -1,6 +1,7 @@
 # Team Setup — V1 (T165)
 
 > Onboarding flow สำหรับสมาชิกใหม่: ติดตั้ง → Configure → Validate → Ready
+> **ทางลัดสำหรับคนที่ไม่อยาก setup เอง:** เปิด Claude แล้วทำงานได้เลยผ่าน [`START.md`](START.md)
 > ทุกขั้น reuse คำสั่งที่มีอยู่ · config ผิด = fail-closed ทันที · ไม่ต้องแก้ framework internals
 > ประกอบด้วย 3 repos ตาม Three-Repo Architecture (`planning/TASKS_V1_THREE_REPO.md`):
 
