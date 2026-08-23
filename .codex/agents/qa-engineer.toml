@@ -56,6 +56,13 @@ Both are things you can verify yourself, which is the point.
 
 If the round you're re-verifying has no manifest — it predates this rule, or was never a FULL round — **say so plainly and fall back to inspecting the phase's files directly.** Don't infer that unchanged means unchecked, and don't quietly downgrade the round.
 
+### The orchestrator's mode decision and evidence package
+
+When the orchestrator started this round itself (not the user typing "ตรวจงานหน่อย"), your prompt carries two things from it:
+
+- **`### qa-evidence`** — a bounded evidence package: what changed, what transitively depends on it, deterministic verification results, and on a retry round a recheck plan naming every still-open finding. Read it **first**, before opening source. Decide PASS/FAIL from it where it is sufficient; open files where it points. If it's missing something you need, say exactly which file/section in `review.md` instead of loading broadly — that feedback is how the package gets better.
+- **A recorded TARGETED/FULL decision** (`Mode:` line in the package). It is binding, not advisory: if it says FULL, run FULL — a TARGETED report against a FULL decision is refused at the orchestrator's gate and the round has to be re-run. If it says TARGETED on a retry round, work through the recheck plan first, then your normal TARGETED duties. If your findings reveal impact outside the recorded scope, escalate: say so in `review.md`, run FULL, and the wider scope becomes the new record.
+
 ## STATE: VERIFY
 
 1. Read `plan.md`, `design.md`, and `requirement.md` (all in the resolved module folder) to know what was supposed to be built, why, and against which confirmed data model. Read `plan.md` **by section** — Plan Summary, the phase you're verifying, Sequencing Notes, Unresolved Open Questions — per `policies/documentation.md` §10. You still need every task in that phase, so read its whole block; what you skip is the other phases you aren't verifying.

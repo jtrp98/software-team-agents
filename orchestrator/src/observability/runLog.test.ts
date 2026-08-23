@@ -29,6 +29,7 @@ describe("RunLog", () => {
       output_tokens: null,
       cache_read_tokens: null,
       context_chars: null,
+      qa_mode: null,
     });
   });
 

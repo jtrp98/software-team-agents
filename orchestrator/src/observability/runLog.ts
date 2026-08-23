@@ -22,6 +22,8 @@ export interface RunRecord {
   cache_read_tokens: number | null;
   /** Size (characters) of the prompt actually sent this run (T28) — the context-size half of "token/context tracking", independent of the response's token usage. */
   context_chars: number | null;
+  /** QA07 — the verify mode this qa-engineer round ran in, from its own report. Null for every non-QA stage (and for QA runs that predate the field). */
+  qa_mode: "FULL" | "TARGETED" | null;
 }
 
 export interface RunOutcome {
@@ -36,6 +38,7 @@ export interface RunOutcome {
   output_tokens?: number;
   cache_read_tokens?: number;
   context_chars?: number;
+  qa_mode?: "FULL" | "TARGETED";
 }
 
 /**
@@ -85,6 +88,7 @@ export class RunLog {
       output_tokens: params.outcome.output_tokens ?? null,
       cache_read_tokens: params.outcome.cache_read_tokens ?? null,
       context_chars: params.outcome.context_chars ?? null,
+      qa_mode: params.outcome.qa_mode ?? null,
     };
     this.records.push(entry);
     return entry;

@@ -46,6 +46,7 @@ describe("parseArgs", () => {
       phases: [],
       targetBindings: { frontend_target: null, backend_target: null },
       autonomy: undefined,
+      noQaOptimization: false,
     });
   });
 

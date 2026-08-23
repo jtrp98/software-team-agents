@@ -174,7 +174,7 @@ const RAW_REGISTRY: Record<AgentStage, AgentRegistryEntry> = {
       "verify implemented code against requirements/design with evidence",
       "mark plan.md tasks done — the only role allowed to",
     ],
-    inputs: ["requirements", "design", "plan", "backend-code", "frontend-code"],
+    inputs: ["requirements", "design", "plan", "backend-code", "frontend-code", "qa-evidence"],
     outputs: ["qa-report"],
     tools: ["Read", "Glob", "Grep", "Bash", "AskUserQuestion", "Write", "Edit"],
     permissions: [Permission.READ, Permission.TEST, Permission.WRITE_DOCS],

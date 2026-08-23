@@ -85,6 +85,7 @@ function sampleRun(taskId = "T-1"): RunRecord {
     output_tokens: 234,
     cache_read_tokens: null,
     context_chars: 4000,
+    qa_mode: null,
   };
 }
 
