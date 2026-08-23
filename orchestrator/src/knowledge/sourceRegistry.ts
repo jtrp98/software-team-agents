@@ -8,7 +8,7 @@ import { AgentStage } from "../types.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import type { KnowledgeItem, SourceType } from "./knowledgeModel.js";
 import { knowledgeDir } from "./knowledgeStore.js";
-import { digestOfSource } from "./sourceDigest.js";
+import { digestOfSource, parseLocator } from "./sourceDigest.js";
 import { resolveSource } from "./sourceResolver.js";
 
 /**
@@ -320,7 +320,11 @@ export function crossCheckRegistry(
       if (record.origin) {
         const resolved = resolveSource(record, projectRoot, targetPaths);
         if (resolved.state === "external" || resolved.state === "unavailable") continue;
-        if (resolved.state !== "resolved" || digestOfSource(resolved.path, ".") !== record.digest) staleSources.push(record.id);
+        // Same fragment rule as freshnessOf: resolved.path drops any #L window
+        // the locator named, so re-attach it before hashing.
+        const { from, to } = parseLocator(record.locator);
+        const window = from === undefined ? "" : to === undefined || to === from ? `#L${from}` : `#L${from}-L${to}`;
+        if (resolved.state !== "resolved" || digestOfSource(`${resolved.path}${window}`, ".") !== record.digest) staleSources.push(record.id);
       } else if (digestOfSource(record.locator, projectRoot) !== record.digest) staleSources.push(record.id);
     }
   }

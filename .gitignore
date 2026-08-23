@@ -4,3 +4,8 @@
 # workflows/, policies/, stacks/, etc.) â€” regenerate it, don't commit it.
 /templates/
 .workflow/
+
+*.tgz
+
+# internal planning docs (T-checklists/handoffs) — local only
+planning/

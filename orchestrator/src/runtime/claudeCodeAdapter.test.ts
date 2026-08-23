@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { SpawnSyncReturns } from "node:child_process";
-import { ClaudeCodeAdapter, type SpawnSync } from "./claudeCodeAdapter.js";
+import { ClaudeCodeAdapter, resolveNpmCliScript, type SpawnSync } from "./claudeCodeAdapter.js";
 import { NO_GUARDS, type RuntimeGuards } from "./runtimeAdapter.js";
 
 function tmpProject(): string {
@@ -249,6 +249,145 @@ describe("ClaudeCodeAdapter — guard report reflects the actual workspace, not 
 
     expect(result.guards.enforced).toContain("exit-guard");
     expect(result.guards.unenforced).toContain("per-agent-exit-guard");
+  });
+});
+
+describe("ClaudeCodeAdapter — Windows npm-shim resolution", () => {
+  function enoentOnce(): { spawnSync: SpawnSync; calls: Array<{ cmd: string; args: string[]; cwd?: string }> } {
+    const calls: Array<{ cmd: string; args: string[]; cwd?: string }> = [];
+    const spawnSync: SpawnSync = (cmd, args, options) => {
+      calls.push({ cmd, args: [...args], cwd: options.cwd });
+      if (cmd === "claude") {
+        const err = Object.assign(new Error("spawnSync claude ENOENT"), { code: "ENOENT" });
+        return cliResult(null, "", err as NodeJS.ErrnoException);
+      }
+      return cliResult(0, JSON.stringify({ is_error: false, result: "done via resolved" }));
+    };
+    return { spawnSync, calls };
+  }
+
+  it("on win32, an ENOENT from the bare command retries once through the resolved entry, keeping args/env/cwd", async () => {
+    const { spawnSync, calls } = enoentOnce();
+    let capturedEnv: NodeJS.ProcessEnv | undefined;
+    const instrumented: SpawnSync = (cmd, args, options) => {
+      capturedEnv = options.env;
+      return spawnSync(cmd, args, options);
+    };
+    const adapter = new ClaudeCodeAdapter({
+      projectRoot: tmpProject(),
+      spawnSync: instrumented,
+      platform: "win32",
+      resolveCommand: (command) => (command === "claude" ? { file: "node-resolved", prefixArgs: ["C:\\npm\\cli.js"] } : null),
+    });
+
+    const result = await adapter.executeAgent(baseRequest({ role: "qa-engineer", env: { FOO: "bar" } }));
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0].cmd).toBe("claude");
+    expect(calls[1].cmd).toBe("node-resolved");
+    expect(calls[1].args[0]).toBe("C:\\npm\\cli.js");
+    expect(calls[1].args.slice(1)).toEqual(calls[0].args);
+    expect(capturedEnv?.AGENTCLAUDE_ROLE).toBe("qa-engineer");
+    expect(capturedEnv?.FOO).toBe("bar");
+    expect(result.status).toBe("OK");
+    expect(result.text).toBe("done via resolved");
+  });
+
+  it("on win32, stays UNAVAILABLE when the resolver finds nothing — one attempt only", async () => {
+    const { spawnSync, calls } = enoentOnce();
+    const adapter = new ClaudeCodeAdapter({
+      projectRoot: tmpProject(),
+      spawnSync,
+      platform: "win32",
+      resolveCommand: () => null,
+    });
+
+    const result = await adapter.executeAgent(baseRequest());
+
+    expect(calls).toHaveLength(1);
+    expect(result.status).toBe("UNAVAILABLE");
+    expect(result.diagnostics.some((d) => /shim/i.test(d))).toBe(true);
+  });
+
+  it("never consults the resolver off Windows", async () => {
+    const { spawnSync, calls } = enoentOnce();
+    let resolverCalls = 0;
+    const adapter = new ClaudeCodeAdapter({
+      projectRoot: tmpProject(),
+      spawnSync,
+      platform: "linux",
+      resolveCommand: () => {
+        resolverCalls += 1;
+        return { file: "node-resolved", prefixArgs: [] };
+      },
+    });
+
+    const result = await adapter.executeAgent(baseRequest());
+
+    expect(resolverCalls).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(result.status).toBe("UNAVAILABLE");
+  });
+
+  it("probe() reports available through the resolved entry too", async () => {
+    const { spawnSync, calls } = enoentOnce();
+    // probe parses stdout as the version line, not JSON — swap the success shape.
+    const versionedSpawn: SpawnSync = (cmd, args, options) => {
+      const r = spawnSync(cmd, args, options);
+      if (r.error) return r;
+      return cliResult(0, "2.1.239 (via shim)\n");
+    };
+    const adapter = new ClaudeCodeAdapter({
+      projectRoot: tmpProject(),
+      spawnSync: versionedSpawn,
+      platform: "win32",
+      resolveCommand: () => ({ file: "node-resolved", prefixArgs: ["cli.js"] }),
+    });
+
+    const probe = await adapter.probe();
+
+    expect(probe.available).toBe(true);
+    expect(probe.version).toBe("2.1.239 (via shim)");
+    expect(calls.map((c) => c.cmd)).toEqual(["claude", "node-resolved"]);
+  });
+});
+
+describe("resolveNpmCliScript", () => {
+  function probeOver(files: string[], dirs: string[], execPath = "node-injected") {
+    return { dirs, exists: (p: string) => files.includes(p), execPath };
+  }
+
+  it("finds the native-binary layout current npm packages ship, and spawns it directly", () => {
+    const npmDir = path.join("C:", "Users", "x", "AppData", "Roaming", "npm");
+    const exe = path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+    const found = resolveNpmCliScript("claude", probeOver([path.join(npmDir, "claude.cmd"), exe], [npmDir]));
+    expect(found).toEqual({ file: exe, prefixArgs: [] });
+  });
+
+  it("falls back to the node-script layout through the injected node executable", () => {
+    const npmDir = path.join("C:", "Users", "x", "AppData", "Roaming", "npm");
+    const jsEntry = path.join(npmDir, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
+    const found = resolveNpmCliScript("claude", probeOver([path.join(npmDir, "claude.ps1"), jsEntry], [npmDir]));
+    expect(found).toEqual({ file: "node-injected", prefixArgs: [jsEntry] });
+  });
+
+  it("requires the shim marker — a bare dependency checkout of the package is not the user's `claude`", () => {
+    const projectDir = path.join("C:", "some", "project");
+    const jsEntry = path.join(projectDir, "node_modules", "@anthropic-ai", "claude-code", "cli.js");
+    const found = resolveNpmCliScript("claude", probeOver([jsEntry], [projectDir]));
+    expect(found).toBeNull();
+  });
+
+  it("returns null when a shim exists but neither entry layout does, and for unknown commands", () => {
+    const npmDir = path.join("C:", "npm");
+    expect(resolveNpmCliScript("claude", probeOver([path.join(npmDir, "claude.cmd")], [npmDir]))).toBeNull();
+    expect(
+      resolveNpmCliScript("codex", {
+        dirs: [npmDir],
+        exists: () => true,
+        execPath: "node-injected",
+      }),
+    ).toBeNull();
   });
 });
 

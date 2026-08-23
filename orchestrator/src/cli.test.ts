@@ -45,7 +45,15 @@ describe("parseArgs", () => {
       stateDb: undefined,
       phases: [],
       targetBindings: { frontend_target: null, backend_target: null },
+      autonomy: undefined,
     });
+  });
+
+  it("parses --autonomy and rejects values Claude Code cannot express", () => {
+    const args = parseArgs(["--task-id", "T-1", "--module", "m", "--autonomy", "edit"], "/repo");
+    expect(args.autonomy).toBe("edit");
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--autonomy", "yolo"], "/repo")).toThrow(CliUsageError);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--autonomy"], "/repo")).toThrow(CliUsageError);
   });
 
   it("--project-root overrides the default", () => {
@@ -533,12 +541,22 @@ describe("T35 concurrency lock, wired into the CLI", () => {
 
   it("releases the lock once the run finishes (even though it fails without a real `claude` binary), so a later call is not permanently locked out", async () => {
     const dir = tmpDir();
+    // A code task with no bindings is legal only in legacy (unconfigured) mode.
+    // This test must not depend on whether THIS machine has an installation
+    // configured, so point the mode check at a path that cannot exist.
+    const prevConfig = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+    process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(dir, "no-installation.yaml");
     // No lock pre-held this time — run will fail quickly (no `claude` on PATH in CI), but the
     // lock must still be released rather than leaking, or every future call would return 4 forever.
-    await runCli(["--task-id", "T-1", "--module", "m", "--project-root", dir, "--bug-fix", "--backend"], dir);
-    const code = await runCli(["status", "T-1", "--project-root", dir], dir);
-    expect(code).toBe(0); // status never touches the lock, but this also proves the store isn't wedged
-    fs.rmSync(dir, { recursive: true, force: true });
+    try {
+      await runCli(["--task-id", "T-1", "--module", "m", "--project-root", dir, "--bug-fix", "--backend"], dir);
+      const code = await runCli(["status", "T-1", "--project-root", dir], dir);
+      expect(code).toBe(0); // status never touches the lock, but this also proves the store isn't wedged
+    } finally {
+      if (prevConfig === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+      else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = prevConfig;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

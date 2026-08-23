@@ -230,3 +230,102 @@ describe("relation legality matrix", () => {
     expect(describeRelationRule("supersedes")).toBe("any -> the same kind");
   });
 });
+
+describe("knowledge item schema v2 — target association (T141/T148)", () => {
+  const v2Sources = [
+    { type: "file", locator: "_docs/module/sales-crm/design.md#L1-L10", captured_at: NOW, digest: null, origin: { root: "knowledge", target_id: null } },
+  ];
+
+  it("accepts a v2 item with target_ids and origin-carrying sources", () => {
+    expect(checkKnowledgeItem(item("requirement", { schema_version: 2, target_ids: ["frontend", "backend"], sources: v2Sources }))).toEqual([]);
+  });
+
+  it("requires target_ids once an item is v2", () => {
+    const problems = checkKnowledgeItem(item("requirement", { schema_version: 2, sources: v2Sources }));
+    expect(problems).toContain("schema v2 requires target_ids");
+  });
+
+  it("still accepts a v1 item without target_ids — the envelope generation is opt-in per item", () => {
+    expect(checkKnowledgeItem(item("requirement"))).toEqual([]);
+  });
+
+  it("rejects more than two target_ids (V1 permits at most two)", () => {
+    const problems = checkKnowledgeItem(
+      item("requirement", { schema_version: 2, target_ids: ["frontend", "backend", "shared"], sources: v2Sources }),
+    );
+    expect(problems.some((p) => p.includes("target_ids"))).toBe(true);
+  });
+
+  it("rejects duplicate target_ids", () => {
+    const problems = checkKnowledgeItem(
+      item("requirement", { schema_version: 2, target_ids: ["backend", "backend"], sources: v2Sources }),
+    );
+    expect(problems.some((p) => p.includes("target_ids"))).toBe(true);
+  });
+
+  it("requires origin on every source once an item is v2", () => {
+    const problems = checkKnowledgeItem(item("requirement", { schema_version: 2, target_ids: ["backend"] }));
+    expect(problems).toContain('source "_docs/module/sales-crm/design.md#L1-L10" requires origin in schema v2');
+  });
+
+  it("rejects a target-origin source that names no target_id", () => {
+    const problems = checkKnowledgeItem(
+      item("requirement", {
+        schema_version: 2,
+        target_ids: ["backend"],
+        sources: [{ ...v2Sources[0], origin: { root: "target", target_id: null } }],
+      }),
+    );
+    expect(problems.join(" ")).toMatch(/target origin without target_id/);
+  });
+
+  it("rejects a non-target source that carries a target_id anyway", () => {
+    const problems = checkKnowledgeItem(
+      item("requirement", {
+        schema_version: 2,
+        target_ids: ["backend"],
+        sources: [{ ...v2Sources[0], origin: { root: "knowledge", target_id: "backend" } }],
+      }),
+    );
+    expect(problems.join(" ")).toMatch(/non-target origin/);
+  });
+
+  it("a v2 code task must name a payload.target_id that is one of its target_ids", () => {
+    const missing = checkKnowledgeItem(
+      item("task", { schema_version: 2, target_ids: ["backend"], sources: v2Sources }),
+    );
+    expect(missing).toContain("schema v2 code task requires payload.target_id");
+
+    const unknown = checkKnowledgeItem(
+      item("task", {
+        schema_version: 2,
+        target_ids: ["backend"],
+        sources: v2Sources,
+        payload: { ...(PAYLOADS.task as Record<string, unknown>), target_id: "frontend" },
+      }),
+    );
+    expect(unknown.join(" ")).toMatch(/must be one of target_ids/);
+
+    const valid = checkKnowledgeItem(
+      item("task", {
+        schema_version: 2,
+        target_ids: ["backend"],
+        sources: v2Sources,
+        payload: { ...(PAYLOADS.task as Record<string, unknown>), target_id: "backend" },
+      }),
+    );
+    expect(valid).toEqual([]);
+  });
+
+  it("a v2 document-only task (tag null) needs no payload.target_id", () => {
+    const problems = checkKnowledgeItem(
+      item("task", {
+        schema_version: 2,
+        target_ids: ["backend"],
+        sources: v2Sources,
+        payload: { ...(PAYLOADS.task as Record<string, unknown>), tag: null },
+      }),
+    );
+    expect(problems).toEqual([]);
+  });
+});

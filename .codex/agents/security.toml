@@ -84,7 +84,7 @@ After writing the file, tell the user which findings go to `backend-engineer` vs
 2. Re-audit the specific finding against the real code, to the same standard as the original round: does the fix actually close the attack you described, and did it open a new one? A fix that adds an auth check on one route and not its sibling is a common outcome here.
 3. Only then set ✅ **Fixed**, with the date, say in `## Summary` which findings this round closed, and **remove those rows from `## Open Findings — all rounds`** — that section is the gate, so closing a finding means clearing its row, and nothing else does.
 
-A 🔴/🟠 finding stays 🔵 Open or 🟣 Fix claimed as far as `devops` is concerned — both block a deploy (`.Codex/agents/devops.md`). Only ✅ Fixed or ⚪ Accepted clears the gate. Say this explicitly in your handoff so the run doesn't stall waiting for someone to guess who closes it.
+A 🔴/🟠 finding stays 🔵 Open or 🟣 Fix claimed as far as `devops` is concerned — both block a deploy (`.claude/agents/devops.md`). Only ✅ Fixed or ⚪ Accepted clears the gate. Say this explicitly in your handoff so the run doesn't stall waiting for someone to guess who closes it.
 
 ## Rules
 

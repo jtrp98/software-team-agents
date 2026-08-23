@@ -83,9 +83,24 @@ export function loadInstallationConfig(configPath = defaultInstallationConfigPat
 export function configureKnowledgeRoot(knowledgeRoot: string, configPath = defaultInstallationConfigPath(), frameworkRoot?: string): InstallationConfig {
   const canonical = assertStandaloneKnowledgeRoot(knowledgeRoot);
   if (frameworkRoot) {
-    const frameworkCanonical = assertStandaloneFrameworkRoot(frameworkRoot);
-    if (isSameOrNested(canonical, frameworkCanonical) || isSameOrNested(frameworkCanonical, canonical)) {
-      throw new InstallationConfigError("Knowledge root must not overlap the Framework root");
+    // Two legitimate shapes for the Framework root:
+    //  - a developer/source checkout (has .git): must be standalone, never a
+    //    linked worktree sharing metadata across machines;
+    //  - an npm-installed package under node_modules (no .git): perfectly
+    //    normal for end users (T91) — requiring Git here made every
+    //    clean-machine install fail before it started (T168 smoke catch).
+    // Either way, Knowledge and Framework must not overlap on disk.
+    const gitMarker = path.join(frameworkRoot, ".git");
+    if (fs.existsSync(gitMarker)) {
+      const frameworkCanonical = assertStandaloneFrameworkRoot(frameworkRoot);
+      if (isSameOrNested(canonical, frameworkCanonical) || isSameOrNested(frameworkCanonical, canonical)) {
+        throw new InstallationConfigError("Knowledge root must not overlap the Framework root");
+      }
+    } else {
+      const frameworkPlain = path.resolve(frameworkRoot);
+      if (isSameOrNested(canonical, frameworkPlain) || isSameOrNested(frameworkPlain, canonical)) {
+        throw new InstallationConfigError("Knowledge root must not overlap the Framework package directory");
+      }
     }
   }
   const configCanonicalCandidate = path.resolve(configPath);

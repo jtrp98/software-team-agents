@@ -132,6 +132,20 @@ describe("freshnessOf — the material underneath", () => {
     expect(result.reason).toContain("different text");
   });
 
+  it("keeps a v2 ranged source fresh through its origin resolution — the window survives the absolute path (T149 migration catch)", () => {
+    fs.writeFileSync(path.join(root, "model.md"), "header\nmodel X {\n  id Int\n}\nfooter\n", "utf8");
+    const locator = "model.md#L2-L4";
+    const digest = digestOfSource(locator, root)!;
+    const item = itemWith([{ ...fileSource(locator, digest, daysAgo(1)), origin: { root: "knowledge" as const, target_id: null } }], "db-schema");
+    const v2 = { ...item, schema_version: 2 as const, target_ids: ["backend"] };
+    // Before the fix, resolution returned the absolute path with the #L window
+    // dropped, so the WHOLE file was hashed and this read as changed.
+    expect(freshnessOf(v2, { now: NOW, projectRoot: root, knowledgeRoot: root }).verdict).toBe("fresh");
+
+    fs.writeFileSync(path.join(root, "model.md"), "header\nmodel X {\n  id String\n}\nfooter\n", "utf8");
+    expect(freshnessOf(v2, { now: NOW, projectRoot: root, knowledgeRoot: root }).verdict).toBe("changed");
+  });
+
   it("reports missing material ahead of everything else", () => {
     const item = itemWith([fileSource("gone.md", "sha256:whatever", daysAgo(1))]);
     expect(freshnessOf(item, { now: NOW, projectRoot: root }).verdict).toBe("source-missing");

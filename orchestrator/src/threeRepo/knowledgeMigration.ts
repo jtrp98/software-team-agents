@@ -81,7 +81,7 @@ export function copyMigrationSource(manifest: MigrationManifest, options: Migrat
   const decisions = path.join(options.knowledgeRoot, "decisions");
   if (!fs.existsSync(decisions)) fs.mkdirSync(decisions, { recursive: true });
   const policy = path.join(options.knowledgeRoot, "knowledge-policy.yaml");
-  if (!fs.existsSync(policy)) fs.writeFileSync(policy, "schema_version: 1\n", "utf8");
+  if (!fs.existsSync(policy)) fs.writeFileSync(policy, "version: 1\n", "utf8");
 }
 
 function migrateItem(file: string, targetId: string, now: string): void {
@@ -94,6 +94,13 @@ function migrateItem(file: string, targetId: string, now: string): void {
     next.origin = locator === "README.md" || locator === "CLAUDE.md" ? { root: "target", target_id: targetId } : { root: "knowledge", target_id: null };
     return next;
   });
+  // A v2 code task must name the Target its code lives in (knowledgeModel.ts):
+  // tag backend/frontend without payload.target_id is exactly the gap the first
+  // real verify run caught across every migrated BE-/FE- item.
+  if (raw.kind === "task" && raw.payload && typeof raw.payload === "object") {
+    const payload = raw.payload as Record<string, unknown>;
+    if (payload.tag !== null && payload.tag !== undefined) payload.target_id = targetId;
+  }
   fs.writeFileSync(file, stringifyYaml(raw, { lineWidth: 0 }), "utf8");
 }
 
@@ -129,8 +136,18 @@ function verifyInventory(entries: MigrationFile[], root: string, label: string, 
 
 export function verifyMigration(manifest: MigrationManifest, options: MigrationOptions): MigrationVerification {
   const problems: string[] = [];
-  if (manifest.docs.length !== 53) problems.push(`expected 53 _docs files in source inventory, found ${manifest.docs.length}`);
-  if (manifest.knowledge.length !== 180) problems.push(`expected 180 knowledge YAML files in source inventory, found ${manifest.knowledge.length}`);
+  // The manifest is the inventory the copy committed to — not a frozen count
+  // from the day this code was written. Re-walk the source and compare: any
+  // drift between copy and verify (file added, removed, or edited) is a real
+  // problem worth naming, while the actual sizes belong in the report, not in
+  // hardcoded constants that go stale the next time the source repo moves.
+  const sourceRoot = fs.realpathSync.native(options.sourceRoot);
+  const currentDocs = inventory(path.join(sourceRoot, "_docs"));
+  const currentKnowledge = inventory(path.join(sourceRoot, "knowledge")).filter((f) => f.path.endsWith(".yaml"));
+  if (currentDocs.length !== manifest.docs.length) problems.push(`source _docs drifted since copy: manifest ${manifest.docs.length}, now ${currentDocs.length}`);
+  if (currentKnowledge.length !== manifest.knowledge.length) problems.push(`source knowledge drifted since copy: manifest ${manifest.knowledge.length}, now ${currentKnowledge.length}`);
+  verifyInventory(currentDocs, path.join(sourceRoot, "_docs"), "source/_docs", problems);
+  verifyInventory(currentKnowledge, path.join(sourceRoot, "knowledge"), "source/knowledge", problems);
   verifyInventory(manifest.docs, path.join(options.knowledgeRoot, "_docs"), "_docs", problems);
   if (!fs.existsSync(path.join(options.knowledgeRoot, "knowledge-policy.yaml"))) problems.push("knowledge-policy.yaml: missing");
   if (!fs.existsSync(path.join(options.knowledgeRoot, "decisions"))) problems.push("decisions/: missing");
@@ -141,7 +158,6 @@ export function verifyMigration(manifest: MigrationManifest, options: MigrationO
   const loaded = loadKnowledge(options.knowledgeRoot);
   problems.push(...loaded.problems);
   const itemCount = loaded.items.length;
-  if (itemCount !== 163) problems.push(`expected 163 migrated knowledge items, found ${itemCount}`);
   const targetPaths = new Map([[manifest.target_id, fs.realpathSync.native(options.sourceRoot)]]);
   for (const item of loaded.items) {
     if (item.schema_version !== 2) problems.push(`${item.id}: expected schema_version 2`);

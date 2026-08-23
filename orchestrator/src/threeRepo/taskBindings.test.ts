@@ -6,6 +6,8 @@ import { AgentStage } from "../types.js";
 import { classifyTask } from "../classification/taskClassifier.js";
 import { initTaskMachine } from "../state/taskState.js";
 import { newPersistedTask } from "../store/taskStore.js";
+import { SqliteTaskStore } from "../store/sqliteStore.js";
+import Database from "better-sqlite3";
 import { assertBindingsImmutable, uniqueBoundTargetIds, validateNewTaskBindings, validatePersistedTaskBindings } from "./taskBindings.js";
 import { preflightThreeRepoTask } from "./preflight.js";
 import type { TargetRegistry } from "./targets.js";
@@ -41,6 +43,61 @@ describe("Phase 2 task Target bindings", () => {
     const legacy = newPersistedTask({ taskId: "legacy", classification, machine: initTaskMachine(classification.pipeline, false), now: 1 });
     expect(legacy.targetBindings).toEqual({ frontend_target: null, backend_target: null });
     expect(() => validatePersistedTaskBindings(legacy, registry)).toThrow(/legacy code task/);
+  });
+
+  it("round-trips bindings through the SQLite store unchanged (T138)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "three-repo-store-"));
+    try {
+      const store = new SqliteTaskStore(path.join(dir, "state.db"));
+      const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+      const task = newPersistedTask({
+        taskId: "bound",
+        classification,
+        machine: initTaskMachine(classification.pipeline, false),
+        now: 1,
+        targetBindings: { frontend_target: null, backend_target: "backend" },
+      });
+      store.createTask(task);
+      expect(store.loadTask("bound")?.targetBindings).toEqual({ frontend_target: null, backend_target: "backend" });
+      expect(store.loadTask("missing") ?? null).toBeNull();
+      store.close();
+    } finally {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* left for the OS — Windows can hold the sqlite handle a beat longer */
+      }
+    }
+  });
+
+  it("reads a pre-bindings row with null defaults and still refuses it as a legacy code task (T138)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "three-repo-store-legacy-"));
+    try {
+      const file = path.join(dir, "state.db");
+      const store = new SqliteTaskStore(file);
+      const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+      store.createTask(newPersistedTask({ taskId: "legacy-row", classification, machine: initTaskMachine(classification.pipeline, false), now: 1 }));
+
+      // Simulate a row written before targetBindings existed by stripping the
+      // field from the persisted state blob behind the store's back.
+      const raw = new Database(file);
+      const row = raw.prepare("SELECT state FROM tasks WHERE task_id = 'legacy-row'").get() as { state: string };
+      const state = JSON.parse(row.state) as Record<string, unknown>;
+      delete state.targetBindings;
+      raw.prepare("UPDATE tasks SET state = ? WHERE task_id = 'legacy-row'").run(JSON.stringify(state));
+      raw.close();
+
+      const loaded = store.loadTask("legacy-row");
+      expect(loaded?.targetBindings).toEqual({ frontend_target: null, backend_target: null });
+      expect(() => validatePersistedTaskBindings(loaded!, registry)).toThrow(/legacy code task/);
+      store.close();
+    } finally {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* left for the OS — Windows can hold the sqlite handle a beat longer */
+      }
+    }
   });
 });
 

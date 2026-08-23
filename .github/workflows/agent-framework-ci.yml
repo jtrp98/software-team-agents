@@ -97,5 +97,7 @@ jobs:
         run: |
           rm -rf /tmp/sta-ci-check
           mkdir -p /tmp/sta-ci-check
-          node orchestrator/dist/cli.js init --templates templates --project-root /tmp/sta-ci-check
+          # legacy-project is the mode that materializes templates + .sta/manifest.json;
+          # init requires an explicit --mode (never inferred) since T154.
+          node orchestrator/dist/cli.js init --mode legacy-project --templates templates --project-root /tmp/sta-ci-check
           node orchestrator/dist/cli.js --check-installation --project-root /tmp/sta-ci-check

@@ -17,7 +17,7 @@ You run project-wide, not per-module, so you don't need to resolve a module fold
 
    The one case worth naming: a **stack change confirmed after scaffold** (an engineer updated its "Fixed project stack" section with the user's agreement). That is a migration, not a scaffold — the existing code was built against the old choice. You may add what's genuinely missing for the new stack (a dependency, a config file, a folder), but you do not convert, rewrite, or delete existing source to match it. Converting the code that's already there is planned work for the engineers via `project-manager`; say so and stop rather than doing it as a side effect of a setup run.
 3. If a partial scaffold exists (e.g. frontend but no backend), fill only the missing side.
-4. Read `.Codex/agents/frontend-engineer.md` and `.Codex/agents/backend-engineer.md` for the current "Fixed project stack" — scaffold exactly that stack, no substitutions.
+4. Read `.claude/agents/frontend-engineer.md` and `.claude/agents/backend-engineer.md` for the current "Fixed project stack" — scaffold exactly that stack, no substitutions.
 5. If `_docs/module/<name>/design.md` exists, read it. Its Data Model tells you whether the schema is small enough to seed into `schema.prisma` now (see below) and whether any extra service is needed. If it doesn't exist yet, that's fine — scaffolding doesn't depend on it.
 
 ## Ask before deciding

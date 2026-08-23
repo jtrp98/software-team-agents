@@ -81,7 +81,7 @@ withheld, so an absent fact and a hidden one never look the same.
 
 ## Role workspaces (`_roles/`)
 
-V1.5 puts three lanes — BA, SA, DEV — around this one knowledge base, each with a person
+V1.5 puts lanes — BA, SA, UXUI and DEV — around this one knowledge base, each with a person
 who decides. `_roles/<module>/<lane>.yaml` holds the only two things about a lane that cannot
 be worked out from `knowledge/` itself:
 
@@ -111,7 +111,7 @@ Two consequences, both deliberate:
 sta roles [--module <name>]                     # where each lane stands, and what it is waiting on
 sta roles review <id> --as <agent>              # draft -> reviewed, with that kind's checklist
 sta roles approve <id> --by <name>              # reviewed -> approved; a person only
-sta roles signoff <ba|sa|dev> --by <name>       # that lane's own gate  [--reject] [--note ...]
+sta roles signoff <ba|sa|uxui|dev> --by <name>  # that lane's own gate  [--reject] [--note ...]
 sta roles ack <lane> <id>[,<id>...] --by <name> # record the handoff into that lane
 sta roles inbox [<lane>]                        # what each lane has to look at, derived fresh
 sta roles impact <id>[,<id>...]                 # which lanes a change would reach, before making it

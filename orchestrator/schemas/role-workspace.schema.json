@@ -9,8 +9,8 @@
   "properties": {
     "schema_version": { "type": "integer", "minimum": 1 },
     "lane": {
-      "description": "Which of V1.5's three columns this is. Derived from T67's ViewName, not a fourth vocabulary: ba=business, sa=architecture, dev=technical.",
-      "enum": ["ba", "sa", "dev"]
+      "description": "Which of V1.5's columns this is. Derived from T67's ViewName, not a fourth vocabulary: ba=business, sa=architecture, dev=technical, uxui=design authority (T145).",
+      "enum": ["ba", "sa", "dev", "uxui"]
     },
     "module": {
       "description": "The module folder this lane's work belongs to, or null for project-wide. Mirrors a knowledge item's own `module`, and decides the directory the same way: null lives under _project/.",
@@ -37,7 +37,7 @@
       "properties": {
         "type": {
           "description": "Which of CLAUDE.md's five always-human points this lane's gate is. Reused from the T08 ledger's ApprovalType rather than a parallel vocabulary.",
-          "enum": ["requirement-interview", "schema-confirmation", "qa-failure", "security-risk", "deploy"]
+          "enum": ["requirement-interview", "schema-confirmation", "qa-failure", "security-risk", "deploy", "uxui-signoff"]
         },
         "status": { "enum": ["approved", "rejected"] },
         "items": {

@@ -9,6 +9,7 @@ import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
 import { createRuntimeExecutor } from "./runtime/runtimeExecutor.js";
 import { ClaudeCodeAdapter } from "./runtime/claudeCodeAdapter.js";
+import type { RuntimeAutonomy } from "./runtime/runtimeAdapter.js";
 import { contractGuardResolver } from "./runtime/runtimeGuards.js";
 import { DatabaseUnavailableError, SqliteTaskStore } from "./store/sqliteStore.js";
 import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
@@ -55,6 +56,7 @@ import { migrateSta } from "./packaging/migration.js";
 import { configureKnowledgeRoot, loadInstallationConfig } from "./threeRepo/installation.js";
 import { loadTargetRegistry } from "./threeRepo/targets.js";
 import { preflightThreeRepoTask } from "./threeRepo/preflight.js";
+import { exitCodeFor, runDoctor } from "./threeRepo/doctor.js";
 import { validateNewTaskBindings, type TargetBindings } from "./threeRepo/taskBindings.js";
 import { collectMigrationManifest, confirmCutover, copyMigrationSource, readMigrationManifest, transformMigratedKnowledge, verifyMigration, writeMigrationManifest } from "./threeRepo/knowledgeMigration.js";
 import { listBackups, rollbackSta } from "./packaging/rollback.js";
@@ -136,6 +138,15 @@ export interface CliArgs {
   /** Phases of plan.md this run touches, used to slice module docs per `policies/documentation.md` §10. Empty = send the plan whole. */
   phases: number[];
   targetBindings: TargetBindings;
+  /**
+   * How much the spawned agent may do without a person answering a permission prompt.
+   * Absent = the executor's own default (`propose`), which is what every run did before
+   * T117 found that headless `propose` runs cannot write files or run commands at all —
+   * every tool request becomes an approval nobody is there to give. Unattended runs need
+   * at least `edit`; the framework's own hooks (block-git, path permissions, green-before-stop)
+   * stay enforced in every mode — this flag widens Claude Code's prompt behaviour only.
+   */
+  autonomy?: RuntimeAutonomy;
 }
 
 const FLAG_TO_CLASSIFICATION: Record<string, keyof ClassificationInput> = {
@@ -155,7 +166,7 @@ export class CliUsageError extends Error {}
 
 export const USAGE =
   "usage (T31 verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  orchestrate run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--project-root <path>] [--state-db <path>]\n" +
+  "  orchestrate run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--project-root <path>] [--state-db <path>]\n" +
   "  orchestrate status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  orchestrate approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
   "  orchestrate resume  <task-id> --module <name> [--project-root <path>]   continue a task already in the store\n" +
@@ -166,22 +177,23 @@ export const USAGE =
   "  orchestrate projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names (T41)\n" +
   "  orchestrate init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
   "  orchestrate configure knowledge-root <path> [--config-path <path>]       validate and save this installation's single Knowledge root\n" +
+  "  orchestrate doctor [--project-root <path>]                               read-only diagnostics (T166); exit 1 on any FAIL, never mutates\n" +
   "  orchestrate upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
   "  orchestrate migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending (T96)\n" +
   "  orchestrate knowledge-migrate <dry-run|copy|verify|cutover> --source-root <path> --knowledge-root <path> [--now <ISO>] [--confirm I_CONFIRM_MIGRATION]   copy–verify–human-confirmed migration\n" +
   "  orchestrate rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups` (T97)\n" +
   "  orchestrate list-backups [--project-root <path>]   list this project's .sta/backups/ snapshots, oldest first\n" +
-  "  orchestrate roles [--module <name>] [--project-root <path>]   where BA, SA and DEV each stand against knowledge/ (T99)\n" +
-  "  orchestrate roles ack <ba|sa|dev> <id>[,<id>...] --by <name> [--module <name>]   record that a person in that lane has seen those items\n" +
-  "  orchestrate roles signoff <ba|sa|dev> --by <name> [--reject] [--note <text>] [--module <name>]   that lane's own approval gate (T103)\n" +
+  "  orchestrate roles [--module <name>] [--project-root <path>]   where BA, SA, UXUI and DEV each stand against knowledge/ (T99)\n" +
+  "  orchestrate roles ack <ba|sa|uxui|dev> <id>[,<id>...] --by <name> [--module <name>]   record that a person in that lane has seen those items\n" +
+  "  orchestrate roles signoff <ba|sa|uxui|dev> --by <name> [--reject] [--note <text>] [--module <name>]   that lane's own approval gate (T103)\n" +
   "  orchestrate roles review <id> --as <agent>   move a knowledge item draft -> reviewed, with its checklist (T104)\n" +
   "  orchestrate roles approve <id> --by <name>   move a reviewed item to approved — a person only (T104)\n" +
-  "  orchestrate roles inbox [<ba|sa|dev>] [--module <name>]   what each lane has to look at, derived fresh (T106)\n" +
+  "  orchestrate roles inbox [<ba|sa|uxui|dev>] [--module <name>]   what each lane has to look at, derived fresh (T106)\n" +
   "  orchestrate roles impact <id>[,<id>...]   which lanes changing those items would reach, before changing them (T105)\n" +
-  "  orchestrate roles context <ba|sa|dev> [<id>] [--module <name>]   what that lane may see, and via which role (T107)\n" +
+  "  orchestrate roles context <ba|sa|uxui|dev> [<id>] [--module <name>]   what that lane may see, and via which role (T107)\n" +
   "\n" +
   "underlying flag-based form:\n" +
-  "  orchestrate --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] <classification flags>\n" +
+  "  orchestrate --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] <classification flags>\n" +
   "  orchestrate --task-id <id> --module <name> --resume        continue a task already in the store\n" +
   "  orchestrate --list [--project-root <path>]                 show every task and stop\n" +
   "  orchestrate --check-contracts [--project-root <path>]      check contracts/*.yaml against the agent registry\n" +
@@ -229,6 +241,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let environment: Environment = Environment.LOCAL;
   let dependsOn: string[] = [];
   let phases: number[] = [];
+  let autonomy: RuntimeAutonomy | undefined;
   const targetBindings: TargetBindings = { frontend_target: null, backend_target: null };
   const classification: ClassificationInput = {};
 
@@ -301,6 +314,13 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
         throw new CliUsageError(`--env must be one of: ${Object.values(Environment).join(", ")} (got ${value ?? "nothing"})`);
       }
       environment = value;
+    } else if (arg === "--autonomy") {
+      const value = argv[++i];
+      const valid: readonly string[] = ["read-only", "propose", "edit", "full"];
+      if (!value || !valid.includes(value)) {
+        throw new CliUsageError(`--autonomy must be one of: ${valid.join(", ")} (got ${value ?? "nothing"})`);
+      }
+      autonomy = value as RuntimeAutonomy;
     } else if (arg in FLAG_TO_CLASSIFICATION) {
       classification[FLAG_TO_CLASSIFICATION[arg]] = true;
     } else {
@@ -365,6 +385,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     stateDb,
     phases,
     targetBindings,
+    autonomy,
   };
 }
 
@@ -504,15 +525,20 @@ function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orches
   // Do this before a durable row is written, so malformed/retired/unknown ids
   // leave no partial task history behind.
   const isCodeTask = classification.pipeline.some((stage) => stage === AgentStage.BACKEND_ENGINEER || stage === AgentStage.FRONTEND_ENGINEER);
+  // AGENTCLAUDE_INSTALLATION_CONFIG lets a test (or an unusual setup) point the
+  // mode check at a specific file instead of the machine's real one — without
+  // it, merely having configured an installation once flips every CLI test that
+  // creates a legacy code task, which the T35 run hit on a configured machine.
+  const installationConfigPath = process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined;
   if (args.targetBindings.frontend_target || args.targetBindings.backend_target) {
-    const installation = loadInstallationConfig();
+    const installation = loadInstallationConfig(installationConfigPath);
     validateNewTaskBindings(classification, args.targetBindings, loadTargetRegistry(installation.knowledge_root));
   } else if (isCodeTask) {
     // Legacy project-mode remains supported when no installation exists. Once
     // an installation has been configured, however, this is three-repo mode
     // and a code task without an explicit binding must never be persisted.
     try {
-      const installation = loadInstallationConfig();
+      const installation = loadInstallationConfig(installationConfigPath);
       validateNewTaskBindings(classification, args.targetBindings, loadTargetRegistry(installation.knowledge_root));
     } catch (error) {
       if (!(error instanceof Error) || !error.message.startsWith("cannot read installation config")) throw error;
@@ -544,6 +570,7 @@ const VERBS = [
   "roles",
   "adopt",
   "configure",
+  "doctor",
 ] as const;
 type Verb = (typeof VERBS)[number];
 
@@ -880,6 +907,26 @@ async function runUpgradeVerb(rest: string[], defaultProjectRoot: string): Promi
     return 0;
   } catch (e) {
     console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+    return 1;
+  }
+}
+
+/** `doctor` (T166) — aggregate read-only diagnostics; never mutates, exits non-zero only on FAIL. */
+async function runDoctorVerb(rest: string[]): Promise<number> {
+  const projectRoot = flagValue(rest, "--project-root");
+  try {
+    const report = await runDoctor({ projectRoot: projectRoot ?? undefined });
+    for (const c of report.checks) {
+      const mark = c.status === "PASS" ? "✓" : c.status === "WARNING" ? "!" : "✗";
+      console.log(`${mark} ${c.status.padEnd(7)} ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
+      if (c.fix && c.status !== "PASS") console.log(`    Fix: ${c.fix}`);
+    }
+    const failed = report.checks.filter((c) => c.status === "FAIL").length;
+    const warned = report.checks.filter((c) => c.status === "WARNING").length;
+    console.log(`[orchestrator] doctor: ${report.ok ? "usable" : "BLOCKED"} (${failed} fail, ${warned} warning)`);
+    return exitCodeFor(report);
+  } catch (error) {
+    console.error(`[orchestrator] ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
 }
@@ -1435,6 +1482,8 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
       return runAdoptVerb(rest, defaultProjectRoot);
     case "configure":
       return runConfigureVerb(rest, defaultProjectRoot);
+    case "doctor":
+      return runDoctorVerb(rest);
   }
 }
 
@@ -1707,6 +1756,10 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       moduleName: () => args.module!,
       guards: contractGuardResolver(args.projectRoot),
       phases: () => (args.phases.length > 0 ? args.phases : undefined),
+      // Absent --autonomy keeps the executor's own default ("propose"), which is
+      // byte-identical to every run before the flag existed. Unattended runs pass
+      // it explicitly — T117's pilot showed headless "propose" cannot act.
+      autonomy: args.autonomy,
       // T42: absent when there's no repos.yaml — every stage then spawns in
       // args.projectRoot exactly as before this task existed.
       stageRoots: loadStageRoots(args.projectRoot),
@@ -1715,11 +1768,11 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       // so resume observes retirement/mapping changes before any adapter starts.
       threeRepoTask: (() => {
         try {
-          loadInstallationConfig();
+          loadInstallationConfig(process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined);
           return (id: string, stage: AgentStage) => {
             const task = store.loadTask(id);
             if (!task) throw new Error(`task ${id} disappeared from the state store`);
-            return { task, roots: preflightThreeRepoTask(task, stage, { frameworkRoot: args.projectRoot }) };
+            return { task, roots: preflightThreeRepoTask(task, stage, { frameworkRoot: args.projectRoot, installationConfigPath: process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined }) };
           };
         } catch {
           return undefined;

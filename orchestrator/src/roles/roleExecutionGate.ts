@@ -61,6 +61,14 @@ export function checkRoleExecutionGate(
       reason: `cannot start ${stage}: knowledge is invalid (${loaded.problems.join("; ")})`,
     };
   }
+  if (loaded.items.length === 0) {
+    // A knowledge/ directory with zero items is what `sta init` seeds into every
+    // fresh project. There is no handoff to verify yet, and enforcing the lane
+    // discipline on an empty model would leave the SA lane at `intake` forever —
+    // which blocked every engineer stage on every newly-initialized project until
+    // T117's real run caught it. Presence of the directory is not adoption.
+    return { allowed: true };
+  }
 
   const workflow = workflowFor(handoff.from);
   if (!workflow) {

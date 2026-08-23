@@ -6,7 +6,7 @@ This repo defines a fixed, hand-off-based agent pipeline for building a project 
 
 `policies/*.md` is the authoritative source for the rules every agent shares: module-folder resolution, the `_docs/status.md` index, dates, amend discipline, version control, handoffs, the design-as-contract rule, and where the stack is defined — split by area (`coding.md`, `git.md`, `architecture.md`, `documentation.md`, `security.md`, `agent-boundaries.md`) since T49. The agent files deliberately don't repeat those rules — they point at those files, so changing a rule means editing one place, not ten. (`.claude/shared/conventions.md` is now a short redirect to the table above — see `policies/README.md`.)
 
-`orchestrator/` (a separate Node/TypeScript package, `npm install`/`npm test` inside it) automates the opt-in autonomous mode described above — it shells out to `claude -p --agent <role>`, so it still runs the exact `.claude/agents/<role>.md` files this document defines, and it still stops at the same five human-approval points via its own gate/retry logic. It never invokes an agent by holding the `Agent` tool itself, and it never edits `.claude/` or `_docs/` directly. See `README.md`'s `orchestrator/` section for how to run it.
+`orchestrator/` (a separate Node/TypeScript package, `npm install`/`npm test` inside it) automates the opt-in autonomous mode described above — its runtime adapter spawns `claude -p --agent <role>`, so it still runs the exact `.claude/agents/<role>.md` files this document defines, and it still stops at the same five human-approval points via its own gate/retry logic. It never invokes an agent by holding the `Agent` tool itself, and it never edits `.claude/` or `_docs/` directly. Run it as `node orchestrator/dist/cli.js <command>` (`sta` when installed from the npm package); every command is listed in its usage output, and team setup is in `TEAM_SETUP_V1.md`.
 
 Since P0 finished, three of its behaviours are worth knowing when you read the agent files:
 
@@ -112,7 +112,7 @@ _docs/
 │   ├── generate-status.js        ← every agent runs this to (re)write status.md — no hand-edits (T51)
 │   └── static-analysis-gate.js   ← run by qa-engineer before a FULL round: lint/format/typecheck/build/test/security_scan/dependency_scan across every package (T22/T23/T24)
 ├── tests/
-│   └── run.js                    ← self-test for every hook + script (133 cases, no deps)
+│   └── run.js                    ← self-test for every hook + script (139 cases, no deps)
 └── settings.json                ← wires every hook up (checked in, applies to everyone)
 ```
 

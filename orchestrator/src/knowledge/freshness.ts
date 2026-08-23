@@ -100,7 +100,15 @@ export function freshnessOf(item: KnowledgeItem, options: FreshnessOptions): Fre
       if (resolved.state === "unavailable") missingSources.push(source.locator);
       else if (resolved.state === "invalid") changedSources.push(source.locator);
       else if (resolved.state === "resolved" && source.digest !== null) {
-        const current = digestOfSource(resolved.path, ".");
+        // resolved.path is absolute and carries no line window; re-attach the
+        // range from the original locator so the slice hashed here is the same
+        // slice digestOfSource hashed when it was recorded. Without this, a
+        // ranged locator gets its WHOLE file hashed and every such item reads
+        // as changed against text nobody touched — which is what the first
+        // real three-repo migration run hit across all of its db-schema items.
+        const { from, to } = parseLocator(source.locator);
+        const window = from === undefined ? "" : to === undefined || to === from ? `#L${from}` : `#L${from}-L${to}`;
+        const current = digestOfSource(`${resolved.path}${window}`, ".");
         if (current === null) missingSources.push(source.locator);
         else if (current !== source.digest) changedSources.push(source.locator);
       }

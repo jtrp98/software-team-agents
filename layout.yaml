@@ -42,7 +42,7 @@
 #   `.workflow/`       T02 specified this path for runtime state and the code writes there.
 #                      Renaming it to `runtime/` would break existing state to gain a synonym.
 #
-#   `.claude/tests/`   The self-test for every hook and script that lives in `.claude/` (118
+#   `.claude/tests/`   The self-test for every hook and script that lives in `.claude/` (139
 #                      cases, `node .claude/tests/run.js`, no deps). It stays next to what it
 #                      tests on purpose — moving it out of `.claude/` doesn't reduce anyone's
 #                      footprint, it just puts the guards and their coverage in different
