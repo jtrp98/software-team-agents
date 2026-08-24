@@ -5,6 +5,7 @@ import type { SpawnSyncReturns } from "node:child_process";
 import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import { CodexAdapter } from "./codexAdapter.js";
+import { OpenCodeAdapter } from "./openCodeAdapter.js";
 import { MockRuntimeAdapter, okResult } from "./mockAdapter.js";
 import { NO_GUARDS } from "./runtimeAdapter.js";
 import type { RuntimeAdapter, RuntimeAgentRequest, SpawnSync } from "./runtimeAdapter.js";
@@ -42,7 +43,7 @@ function spawnResult(over: Partial<SpawnSyncReturns<string>>): SpawnSyncReturns<
 }
 
 /** A spawn that answers `--version` for its binary and a well-formed run result otherwise. */
-function fakeSpawn(binary: "claude" | "codex"): SpawnSync {
+function fakeSpawn(binary: "claude" | "codex" | "opencode"): SpawnSync {
   return ((_command: string, args: string[]) => {
     if (args.includes("--version")) return spawnResult({ stdout: `0.0.0-${binary}-test\n` });
     if (args.includes("-p") || args.includes("exec")) {
@@ -50,8 +51,13 @@ function fakeSpawn(binary: "claude" | "codex"): SpawnSync {
         stdout:
           binary === "claude"
             ? JSON.stringify({ result: "done", is_error: false, usage: { input_tokens: 1, output_tokens: 2 }, total_cost_usd: 0 })
-            : "done",
+            : binary === "opencode"
+              ? JSON.stringify({ type: "text", part: { type: "text", text: "done" } }) + "\n"
+              : "done",
       });
+    }
+    if (args.includes("--format")) {
+      return spawnResult({ stdout: `${JSON.stringify({ type: "text", part: { type: "text", text: "done" } })}\n` });
     }
     return spawnResult({});
   }) as unknown as SpawnSync;
@@ -81,6 +87,7 @@ const implementations: [string, () => RuntimeAdapter][] = [
   ["MockRuntimeAdapter", () => new MockRuntimeAdapter()],
   ["ClaudeCodeAdapter", () => new ClaudeCodeAdapter({ projectRoot, spawnSync: fakeSpawn("claude") })],
   ["CodexAdapter", () => new CodexAdapter({ projectRoot, models: ["gpt-5-test"], spawnSync: fakeSpawn("codex") })],
+  ["OpenCodeAdapter", () => new OpenCodeAdapter({ projectRoot, spawnSync: fakeSpawn("opencode") })],
 ];
 
 describe.each(implementations)("RuntimeAdapter contract โ€” %s", (_name, make) => {
@@ -171,6 +178,14 @@ describe("an unreachable runtime is UNAVAILABLE, never a throw", () => {
       adapter.binding.definitionPath("qa-engineer"),
       'name = "qa-engineer"\ndescription = "contract fixture"\n\ndeveloper_instructions = """\nrole text\n"""\n',
     );
+    const result = await adapter.executeAgent(requestFor(adapter));
+    expect(result.status).toBe("UNAVAILABLE");
+  });
+
+  it("OpenCodeAdapter maps a failed spawn to UNAVAILABLE", async () => {
+    const adapter = new OpenCodeAdapter({ projectRoot, spawnSync: enoentSpawn() });
+    // The binding must exist or the adapter fails fast before ever spawning.
+    await adapter.workspace.writeFile(adapter.binding.definitionPath("qa-engineer"), "role text");
     const result = await adapter.executeAgent(requestFor(adapter));
     expect(result.status).toBe("UNAVAILABLE");
   });

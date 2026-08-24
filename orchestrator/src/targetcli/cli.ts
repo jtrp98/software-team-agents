@@ -36,7 +36,7 @@ export const TARGET_USAGE =
   "  --role <ba|dev>        init: say what this workspace is when markers are ambiguous\n" +
   "  --force                sync/init: overwrite locally-modified managed files (backed up first)\n" +
   "  --no-auto-sync         dev/ba: refuse to run when managed assets are outdated\n" +
-  "  --runtime <name>       dev/ba: claude (default) or codex\n" +
+  "  --runtime <name>       dev/ba: claude (default), codex or opencode\n" +
   "  --json                 status: machine-readable output\n" +
   "  -h, --help             show this help\n" +
   "  --version              show the installed Framework version\n";
@@ -85,7 +85,9 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
         break;
       case "--runtime": {
         const value = argv[++i] as RuntimeName | undefined;
-        if (value !== "claude" && value !== "codex") throw new Error(`--runtime must be claude or codex (got ${value ?? "nothing"})`);
+        if (value !== "claude" && value !== "codex" && value !== "opencode") {
+          throw new Error(`--runtime must be claude, codex or opencode (got ${value ?? "nothing"})`);
+        }
         args.runtime = value;
         break;
       }

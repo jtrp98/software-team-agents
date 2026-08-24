@@ -10,7 +10,8 @@ The **Framework repo** of a Three-Repo architecture — a process/workflow layer
 the `sta` orchestrator CLI that drives ten agent roles (`setup`, `business-analyst`,
 `system-analyst`, `project-manager`, `test-planner`, `backend-engineer`,
 `frontend-engineer`, `qa-engineer`, `security`, `devops`) through a runtime:
-Claude Code reads `.claude/agents/*.md`, Codex reads `.codex/agents/*.toml`.
+Claude Code reads `.claude/agents/*.md`, Codex reads `.codex/agents/*.toml`,
+OpenCode reads `.opencode/agent/*.md` (generated; see `planning/v2/opencode-runtime-TASKS.md`).
 
 | Repo | Owns | Notes |
 |---|---|---|

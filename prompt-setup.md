@@ -1,12 +1,13 @@
 # prompt-setup.md — AI-Assisted Setup Playbook
 
-> **What this is:** a playbook for an AI coding assistant (Claude Code, Codex, or
-> any agent that can read files and run shell commands) to set up
+> **What this is:** a playbook for an AI coding assistant (Claude Code, Codex,
+> OpenCode, or any agent that can read files and run shell commands) to set up
 > **software-team-agents** on this machine for one person's role.
 >
 > **How to use it:** give your assistant this file — e.g. paste its contents into
-> the session, or point Claude Code / Codex at it ("read prompt-setup.md and set me
-> up"). The playbook is runtime-agnostic: it only assumes file access and a shell.
+> the session, or point Claude Code / Codex / OpenCode at it ("read prompt-setup.md
+> and set me up"). The playbook is runtime-agnostic: it only assumes file access
+> and a shell.
 
 ---
 
@@ -50,7 +51,7 @@ Then, guided by what status reports:
 | Registered Targets | read `<knowledgeRoot>/targets.yaml` when a Knowledge root resolved |
 | Local path mappings | read `<knowledgeRoot>/.workflow/targets.local.yaml` if present |
 | Sync status of the current workspace | `status --json` → `syncState`, `syncedVersion`, `conflictCount`, `managedFileCount` |
-| Runtime readiness | `status --json` → `claude.ready`, `codex.ready` |
+| Runtime readiness | `status --json` → `claude.ready`, `codex.ready`, `opencode.ready` (OpenCode needs bindings **and** `.opencode/plugin/sta-guards.js` — its headless default posture is allow-all, so a missing plugin means unguarded, not just incomplete) |
 
 If `status` fails because the current directory is not a Git repository, that is
 fine — you are likely standing outside any workspace. Note it and continue to
@@ -108,8 +109,9 @@ already said):
 - Optionally offer: "Bind this machine's default Knowledge root too?" →
   `sta configure knowledge-root <path>` (affects other flows on this machine).
 - Verify with `software-team-agents status`: expect Role `BA`, `Target: NOT
-  REQUIRED`, sync `UP_TO_DATE`, Claude/Codex READY.
-- Tell the user their working command: `cd <knowledge> && software-team-agents ba`.
+  REQUIRED`, sync `UP_TO_DATE`, Claude/Codex/OpenCode READY.
+- Tell the user their working command: `cd <knowledge> && software-team-agents ba`
+  (add `--runtime opencode` or `--runtime codex` to choose a different runtime).
 
 ## Flow: DEV
 
@@ -141,15 +143,24 @@ already said):
   tracks file versions, not stack accuracy).
 - Verify: Role `DEV`, Knowledge line present via `workspace-config`/`installation`,
   sync `UP_TO_DATE`, runtimes READY.
+- **Runtime choice.** Default is Claude Code; `--runtime opencode` and
+  `--runtime codex` launch the other supported runtimes from the same workspace.
+  Model/effort are the runtime's own configuration (e.g. OpenCode's
+  `opencode.json` `model` key) — never baked into bindings.
 - Working command: `cd <target> && software-team-agents dev`.
 
 ## Flow: QA
 
 **Goal:** same shape as DEV, but requirements are derived, not assumed.
 
-- Read the official sources of truth before asking anything:
-  - `<frameworkRoot>/workflows/*.yml` — which stages participate per change type
-  - `<frameworkRoot>/contracts/qa-engineer.yaml` — QA's declared read/write scope
+- Read the official sources of truth before asking anything (location depends on
+  install shape — check both, use whichever exists):
+  - workflows: `<frameworkRoot>/workflows/*.yml` in a dev checkout, or
+    `<frameworkRoot>/templates/workflows/*.yml` when installed from a package —
+    which stages participate per change type
+  - contract: `<frameworkRoot>/contracts/qa-engineer.yaml` (dev checkout) or
+    `<frameworkRoot>/templates/contracts/qa-engineer.yaml` (installed) — QA's
+    declared read/write scope
 - From those, derive what QA needs on this machine (typically: Knowledge for
   review context + a writable Target checkout to verify against) and state the
   derivation out loud: "workflows X and Y put qa-engineer after engineers, and
@@ -176,8 +187,10 @@ already said):
 
 - Re-run Phase 0 everywhere relevant (each workspace found in Phase 0).
 - For each workspace whose `syncState` is OUTDATED: run `software-team-agents sync`.
-  If conflicts are reported, show them verbatim with the CLI's recovery advice
-  and stop — force only on explicit request.
+  A sync that adds a newly supported runtime's files (e.g. `.opencode/**`) is
+  add-only and conflict-free by design. If conflicts are reported, show them
+  verbatim with the CLI's recovery advice and stop — force only on explicit
+  request.
 - If `syncState` is INCOMPATIBLE (major jump): explain the implication, and let
   the user decide whether to `sync --force` now or wait.
 - If paths moved: jump to Repair.
@@ -230,7 +243,7 @@ Workspace : <workspace path> (<kind>)
 Knowledge : <path or "not required">
 Targets   : <ids> (local paths)
 Sync      : <state>, managed files <n>, conflicts <n>
-Runtimes  : claude <READY/…>, codex <…>
+Runtimes  : claude <READY/…>, codex <…>, opencode <…>
 Next      : cd <workspace> && software-team-agents <command>
 Warnings  : <anything worth watching, else "none">
 ```

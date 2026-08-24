@@ -41,71 +41,14 @@ export type { SpawnSync } from "./runtimeAdapter.js";
 
 /**
  * A way to invoke a CLI whose bare name `spawnSync` cannot execute on this machine.
- */
-export interface ResolvedCommand {
-  /** The executable to spawn instead of the bare command name. */
-  file: string;
-  /** Arguments inserted before the original argument list (e.g. an entry script path). */
-  prefixArgs: string[];
-}
-
-export type CommandResolver = (command: string) => ResolvedCommand | null;
-
-/**
- * What the npm-installed CLI actually wraps, per known install layout. Current
- * `claude-code` npm packages ship a platform binary under `bin/`; older ones
- * shipped a plain node script (`cli.js`) that npm's shim invoked through node.
- */
-const KNOWN_NPM_CLI_PACKAGES: Record<string, readonly string[]> = {
-  claude: ["node_modules", "@anthropic-ai", "claude-code"],
-};
-
-/** Everything `resolveNpmCliScript` touches, injectable so tests stay deterministic on any platform. */
-export interface NpmShimProbe {
-  /** Directories to scan, already split — the caller owns the delimiter. Defaults to PATH. */
-  dirs?: readonly string[];
-  /** Existence check. Defaults to `fs.existsSync`. */
-  exists?: (p: string) => boolean;
-  /** Node executable used to launch JS entries. Defaults to `process.execPath`. */
-  execPath?: string;
-}
-
-/**
- * Windows default: `claude` installed via npm is a `.cmd`/`.ps1` shim, which
- * `spawnSync` cannot execute — it resolves only real executables, and Node's
- * security hardening refuses `.cmd`/`.bat` outright without a shell. Routing
- * the prompt through cmd.exe would subject it to shell parsing (quoting,
- * `%VAR%`, caret escapes), which is what argv-style spawnSync exists to avoid.
  *
- * What the shim wraps is resolvable, though: either a native binary
- * (`bin/<command>.exe` — what today's shim invokes) or a plain node script
- * (`cli.js` — older layouts), both sitting beside the shim under
- * `node_modules/<pkg>/`. Spawning those directly keeps argv semantics intact
- * with no shell in between. A directory counts only when the shim itself is
- * there — that marker is what separates "the `claude` this user put on PATH"
- * from some unrelated project that happens to have the package as a dependency.
- *
- * Returns null when nothing resolvable is found; the caller then reports
- * UNAVAILABLE exactly as it always did.
+ * The resolver now lives in the neutral `npmCliResolver.ts` (no adapter may
+ * depend on a sibling provider's module); re-exported here for the tests and
+ * call sites that historically imported it from this file.
  */
-export function resolveNpmCliScript(command: string, probe: NpmShimProbe = {}): ResolvedCommand | null {
-  const pkgRel = KNOWN_NPM_CLI_PACKAGES[command];
-  if (!pkgRel) return null;
-  const exists = probe.exists ?? fs.existsSync;
-  const dirs = probe.dirs ?? (process.env.PATH ?? process.env.Path ?? "").split(path.delimiter);
-  for (const dir of dirs) {
-    if (!dir) continue;
-    const hasShim =
-      exists(path.join(dir, `${command}.cmd`)) || exists(path.join(dir, `${command}.ps1`));
-    if (!hasShim) continue;
-    const pkgDir = path.join(dir, ...pkgRel);
-    const nativeBinary = path.join(pkgDir, "bin", `${command}.exe`);
-    if (exists(nativeBinary)) return { file: nativeBinary, prefixArgs: [] };
-    const jsEntry = path.join(pkgDir, "cli.js");
-    if (exists(jsEntry)) return { file: probe.execPath ?? process.execPath, prefixArgs: [jsEntry] };
-  }
-  return null;
-}
+export type { CommandResolver, ResolvedCommand } from "./npmCliResolver.js";
+export { resolveNpmCliScript } from "./npmCliResolver.js";
+import { resolveNpmCliScript as resolveNpmCliScriptImpl, type CommandResolver } from "./npmCliResolver.js";
 
 /**
  * Claude Code's subagent frontmatter accepts these four `model:` values
@@ -322,7 +265,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     this.workspace = new LocalWorkspace({ root: opts.projectRoot });
     this.spawn = opts.spawnSync ?? (nodeSpawnSync as unknown as SpawnSync);
     this.defaultTimeoutMs = opts.timeoutMs ?? 30 * 60_000;
-    this.resolveCommand = opts.resolveCommand ?? resolveNpmCliScript;
+    this.resolveCommand = opts.resolveCommand ?? resolveNpmCliScriptImpl;
     this.platform = opts.platform ?? process.platform;
     this.outputSchema = opts.outputSchema;
   }

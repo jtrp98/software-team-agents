@@ -2,7 +2,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { checkBindings, parseAgentMd, renderCodexBinding } from "./bindingGenerator.js";
+import {
+  checkBindings,
+  defaultOpenCodePermissions,
+  GIT_READONLY_BASH_RULES,
+  parseAgentMd,
+  renderCodexBinding,
+  renderOpenCodeBinding,
+  withGitBashRules,
+} from "./bindingGenerator.js";
 import { extractDeveloperInstructions } from "./codexAdapter.js";
 
 /**
@@ -103,6 +111,69 @@ describe("renderCodexBinding", () => {
   });
 });
 
+describe("renderOpenCodeBinding", () => {
+  it("is deterministic, carries description/mode:all/body, and never emits vendor fields", () => {
+    const a = renderOpenCodeBinding(SAMPLE_MD);
+    const b = renderOpenCodeBinding(SAMPLE_MD);
+    expect(a).toBe(b);
+    expect(a).toContain('description: "Verify work against requirement.md and design.md — ask \\"ตรวจงานหน่อย\\" first."');
+    expect(a).toContain("mode: all");
+    expect(a).toContain("You are QA. Never mark verified without inspecting code.");
+    expect(a).not.toContain("sonnet");
+    expect(a).not.toContain("tools:");
+    expect(a).not.toContain("version:");
+    // No `name:` — OpenCode names an agent by its filename.
+    expect(a).not.toMatch(/^name:/m);
+  });
+
+  it("keeps Thai prose lossless in the body", () => {
+    const rendered = renderOpenCodeBinding(SAMPLE_MD + "\nรายงานผลเป็นภาษาไทยเมื่อผู้ใช้ถามเป็นภาษาไทย.");
+    expect(rendered).toContain("รายงานผลเป็นภาษาไทยเมื่อผู้ใช้ถามเป็นภาษาไทย.");
+  });
+
+  it("renders permission rules sorted, with patterns quoted so globs survive YAML", () => {
+    const rendered = renderOpenCodeBinding(SAMPLE_MD, {
+      bash: { "git status*": "allow", "git *": "deny" },
+      write: { "_docs/module/**": "deny", "**": "allow" },
+    });
+    const bashIndex = rendered.indexOf("  bash:");
+    const writeIndex = rendered.indexOf("  write:");
+    expect(bashIndex).toBeGreaterThan(-1);
+    expect(writeIndex).toBeGreaterThan(bashIndex);
+    const bashSection = rendered.slice(bashIndex, rendered.indexOf("  edit:") === -1 ? writeIndex : rendered.indexOf("  edit:"));
+    expect(bashSection.indexOf('"git *"')).toBeLessThan(bashSection.indexOf('"git status*"'));
+    expect(rendered).toContain('"git status*": allow');
+    expect(rendered).toContain('"git *": deny');
+    expect(rendered).toContain('"**": allow');
+  });
+
+  it("omits the permission section entirely when nothing is given", () => {
+    expect(renderOpenCodeBinding(SAMPLE_MD)).not.toContain("permission");
+    expect(renderOpenCodeBinding(SAMPLE_MD, {})).not.toContain("permission");
+  });
+
+  it("refuses a bare '---' line inside the body instead of emitting a self-truncating fence", () => {
+    const tricky = SAMPLE_MD + "\n---\nOops, this reads as a new frontmatter block.\n";
+    expect(() => renderOpenCodeBinding(tricky)).toThrow(/---/);
+  });
+
+  it("round-trips the body byte-for-byte through parseAgentMd", () => {
+    const parsed = parseAgentMd(SAMPLE_MD);
+    const rendered = renderOpenCodeBinding(SAMPLE_MD, { bash: GIT_READONLY_BASH_RULES });
+    const reparsedBody = rendered.slice(rendered.indexOf("\n---\n") + 5).trim();
+    expect(reparsedBody).toBe(parsed.body.trim());
+  });
+
+  it("withGitBashRules layers caller rules over the read-only git set", () => {
+    const merged = withGitBashRules({ "npm test*": "allow" });
+    expect(merged["git *"]).toBe("deny");
+    expect(merged["git status*"]).toBe("allow");
+    expect(merged["npm test*"]).toBe("allow");
+    const overridden = withGitBashRules({ "git push": "ask" });
+    expect(overridden["git push"]).toBe("ask");
+  });
+});
+
 describe("checkBindings", () => {
   function writeSources(role: string): void {
     fs.writeFileSync(path.join(root, ".claude", "agents", `${role}.md`), SAMPLE_MD.replace("qa-engineer", role));
@@ -110,6 +181,11 @@ describe("checkBindings", () => {
   function writeGenerated(role: string): void {
     const md = fs.readFileSync(path.join(root, ".claude", "agents", `${role}.md`), "utf8");
     fs.writeFileSync(path.join(root, ".codex", "agents", `${role}.toml`), renderCodexBinding(md));
+    fs.mkdirSync(path.join(root, ".opencode", "agent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".opencode", "agent", `${role}.md`),
+      renderOpenCodeBinding(md, defaultOpenCodePermissions()),
+    );
   }
 
   it("passes when every binding is the current rendering of its source", () => {
@@ -147,6 +223,35 @@ describe("checkBindings", () => {
     expect(result.ok).toBe(false);
     expect(result.problems[0]).toMatch(/no agent definitions/);
   });
+
+  it("verifies the OpenCode set too: drift, missing twin, and orphan each fail with their fix", () => {
+    writeSources("qa-engineer");
+    writeGenerated("qa-engineer");
+    const opencodePath = path.join(root, ".opencode", "agent", "qa-engineer.md");
+
+    // Drift: the .md source moved but only the codex twin followed.
+    fs.writeFileSync(
+      path.join(root, ".claude", "agents", "qa-engineer.md"),
+      SAMPLE_MD.replace("inspecting code", "inspecting code twice"),
+    );
+    let result = checkBindings(root);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join("\n")).toMatch(/\.opencode\/agent\/qa-engineer\.md does not match/);
+
+    // Missing twin.
+    fs.rmSync(opencodePath);
+    result = checkBindings(root);
+    expect(result.problems.join("\n")).toMatch(/missing \.opencode\/agent\/qa-engineer\.md/);
+
+    // Orphan rendering with no source (another role stays behind so the
+    // no-sources-at-all guard does not short-circuit first).
+    writeSources("setup");
+    writeGenerated("setup");
+    fs.writeFileSync(opencodePath, "---\ndescription: ghost\nmode: all\n---\nghost\n", "utf8");
+    fs.rmSync(path.join(root, ".claude", "agents", "qa-engineer.md"));
+    result = checkBindings(root);
+    expect(result.problems.join("\n")).toMatch(/orphan \.opencode\/agent\/qa-engineer\.md/);
+  });
 });
 
 describe("checkBindings — hook parity (M3)", () => {
@@ -154,6 +259,11 @@ describe("checkBindings — hook parity (M3)", () => {
     const md = SAMPLE_MD.replace("qa-engineer", role);
     fs.writeFileSync(path.join(root, ".claude", "agents", `${role}.md`), md);
     fs.writeFileSync(path.join(root, ".codex", "agents", `${role}.toml`), renderCodexBinding(md));
+    fs.mkdirSync(path.join(root, ".opencode", "agent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".opencode", "agent", `${role}.md`),
+      renderOpenCodeBinding(md, defaultOpenCodePermissions()),
+    );
   }
   function writeHook(dir: "claude" | "codex", name: string, content: string): void {
     fs.mkdirSync(path.join(root, `.${dir}`, "hooks"), { recursive: true });

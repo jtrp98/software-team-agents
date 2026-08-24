@@ -41,7 +41,7 @@ import { isTargetInitialized } from "./targetMeta.js";
  * block-outside-repo guard (T-ROLE-12/13).
  */
 
-export type RuntimeName = "claude" | "codex";
+export type RuntimeName = "claude" | "codex" | "opencode";
 
 export interface PreflightCheck {
   name: string;

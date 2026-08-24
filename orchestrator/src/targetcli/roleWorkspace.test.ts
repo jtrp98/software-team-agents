@@ -78,11 +78,14 @@ describe("role asset profiles (T-ROLE-09/10/11)", () => {
     expect(include(".claude/hooks/block-git.js")).toBe(true);
     expect(include(".claude/settings.json")).toBe(true);
     expect(include(".claude/scripts/check-doc-structure.js")).toBe(true);
+    expect(include(".opencode/plugin/sta-guards.js")).toBe(true);
     expect(include("policies/documentation.md")).toBe(true);
     expect(include("CLAUDE.md")).toBe(true);
 
     expect(include(".claude/agents/backend-engineer.md")).toBe(false);
     expect(include(".claude/agents/frontend-engineer.md")).toBe(false);
+    // Derived renderings never ship in the payload, whatever the lane.
+    expect(include(".opencode/agent/backend-engineer.md")).toBe(false);
     expect(include("contracts/backend.yaml")).toBe(false);
     expect(include("workflows/bugfix.yml")).toBe(false);
     expect(include("stacks/node/stack.yaml")).toBe(false);

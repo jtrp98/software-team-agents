@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { sha256Of } from "../packaging/templateManifest.js";
-import { renderCodexBinding } from "../runtime/bindingGenerator.js";
+import { renderCodexBinding, renderOpenCodeBinding, defaultOpenCodePermissions } from "../runtime/bindingGenerator.js";
 import {
   blockingConflicts,
   planSync,
@@ -251,6 +251,65 @@ describe("safe sync engine", () => {
     runTargetSync({ targetRoot: target, templatesDir: v13, now: "2026-01-04T00:00:00Z" });
     const v12 = makeTemplatesDir("1.2.0", V1_FILES);
     expect(() => runTargetSync({ targetRoot: target, templatesDir: v12, now: "2026-01-05T00:00:00Z" })).not.toThrow();
+  });
+});
+
+describe("safe sync engine — OpenCode renderings (T-OC2)", () => {
+  it("generates .opencode/agent/<role>.md from agent sources on first sync and tracks it", () => {
+    const target = gitTarget();
+    const templatesDir = makeTemplatesDir("1.0.0", V1_FILES);
+
+    runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-01T00:00:00Z" });
+
+    const abs = path.join(target, ".opencode", "agent", "backend-engineer.md");
+    expect(fs.existsSync(abs)).toBe(true);
+    const expected = renderOpenCodeBinding(V1_FILES[0]!.content, defaultOpenCodePermissions());
+    expect(fs.readFileSync(abs, "utf8")).toBe(expected);
+    expect(readTargetManifest(target).files.map((f) => f.path)).toContain(".opencode/agent/backend-engineer.md");
+  });
+
+  it("regenerates the opencode rendering when its source changes", () => {
+    const target = gitTarget();
+    runTargetSync({ targetRoot: target, templatesDir: makeTemplatesDir("1.0.0", V1_FILES), now: "2026-01-01T00:00:00Z" });
+
+    const updated = AGENT_MD("backend-engineer", "builds backend, now better");
+    runTargetSync({ targetRoot: target, templatesDir: makeTemplatesDir("1.1.0", [{ ...V1_FILES[0]!, content: updated }]), now: "2026-01-02T00:00:00Z" });
+
+    const abs = path.join(target, ".opencode", "agent", "backend-engineer.md");
+    expect(fs.readFileSync(abs, "utf8")).toBe(renderOpenCodeBinding(updated, defaultOpenCodePermissions()));
+  });
+
+  it("remove-stale cleans a removed role's pristine rendering; an edited one conflicts instead", () => {
+    const bothAgents: FixtureFile[] = [
+      V1_FILES[0]!,
+      { relPath: ".claude/agents/qa-engineer.md", content: AGENT_MD("qa-engineer", "verifies work") },
+      V1_FILES[1]!,
+    ];
+    const onlyBackend = makeTemplatesDir("1.1.0", [V1_FILES[0]!]);
+
+    // Pristine → removed silently (backed up).
+    const clean = gitTarget();
+    runTargetSync({ targetRoot: clean, templatesDir: makeTemplatesDir("1.0.0", bothAgents), now: "2026-01-01T00:00:00Z" });
+    const result = runTargetSync({ targetRoot: clean, templatesDir: onlyBackend, now: "2026-01-02T00:00:00Z" });
+    expect(fs.existsSync(path.join(clean, ".opencode", "agent", "qa-engineer.md"))).toBe(false);
+    expect(result.performed.some((p) => p.path === ".opencode/agent/qa-engineer.md" && p.action === "remove-stale")).toBe(true);
+
+    // Edited → blocks exactly like any other stale-modified file.
+    const edited = gitTarget();
+    runTargetSync({ targetRoot: edited, templatesDir: makeTemplatesDir("1.0.0", bothAgents), now: "2026-01-01T00:00:00Z" });
+    fs.writeFileSync(path.join(edited, ".opencode", "agent", "qa-engineer.md"), "---\ndescription: mine\nmode: all\n---\nmine\n", "utf8");
+    expect(() => runTargetSync({ targetRoot: edited, templatesDir: onlyBackend, now: "2026-01-03T00:00:00Z" })).toThrow(TargetSyncConflictError);
+  });
+
+  it("leaves a foreign pre-existing opencode agent file alone and unclaimed", () => {
+    const target = gitTarget();
+    fs.mkdirSync(path.join(target, ".opencode", "agent"), { recursive: true });
+    fs.writeFileSync(path.join(target, ".opencode", "agent", "backend-engineer.md"), "---\ndescription: the project's own\nmode: all\n---\nowned\n", "utf8");
+
+    runTargetSync({ targetRoot: target, templatesDir: makeTemplatesDir("1.0.0", V1_FILES), now: "2026-01-01T00:00:00Z" });
+
+    expect(fs.readFileSync(path.join(target, ".opencode", "agent", "backend-engineer.md"), "utf8")).toContain("the project's own");
+    expect(readTargetManifest(target).files.map((f) => f.path)).not.toContain(".opencode/agent/backend-engineer.md");
   });
 });
 

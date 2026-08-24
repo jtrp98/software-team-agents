@@ -2,17 +2,17 @@
 
 **Personal AI. Shared Knowledge. Common Process.**
 
-Process/workflow layer + orchestrator CLI สำหรับทีมซอฟต์แวร์ ที่จัดระเบียบการทำงานร่วมกันระหว่าง Human กับ AI coding tools (Claude Code, Codex) — แต่ละคนใช้ AI/tool ของตัวเองได้ แต่ทั้งทีมทำงานบน Knowledge และ Process ชุดเดียวกัน
+Process/workflow layer + orchestrator CLI สำหรับทีมซอฟต์แวร์ ที่จัดระเบียบการทำงานร่วมกันระหว่าง Human กับ AI coding tools (Claude Code, Codex, OpenCode) — แต่ละคนใช้ AI/tool ของตัวเองได้ แต่ทั้งทีมทำงานบน Knowledge และ Process ชุดเดียวกัน
 
 | ส่วน | หน้าที่ |
 |---|---|
-| Claude Code / Codex | execution runtime — เครื่องมือที่ลงมือทำงาน |
+| Claude Code / Codex / OpenCode | execution runtime — เครื่องมือที่ลงมือทำงาน |
 | **software-team-agents** (repo นี้) | process/workflow layer + orchestrator CLI — จัดว่าใครทำอะไร ต่อกันอย่างไร ตรวจอย่างไร |
 | Knowledge | ความรู้ร่วมขององค์กร/project (git repo แยก) |
 | Target | repository ของ product จริงที่ให้ AI เขียนโค้ด |
 | Human | ผู้กำหนด intent/constraints และผู้ตัดสินใจในจุดสำคัญ |
 
-ไม่ใช่ AI model และไม่ได้มาแทน Claude Code หรือ Codex — ทุก run ของ pipeline ยัง executes ผ่าน runtime จริง (`claude -p --agent <role>`)
+ไม่ใช่ AI model และไม่ได้มาแทน runtime จริง — ทุก run ของ pipeline ยัง executes ผ่าน runtime ที่เลือก (`claude -p --agent <role>` default, `--runtime codex|opencode` สำหรับ runtime อื่น)
 
 ---
 
@@ -34,7 +34,7 @@ Process/workflow layer + orchestrator CLI สำหรับทีมซอฟ�
   - `software-team-agents` — Target-first CLI (v2): `init | sync | status | dev | ba`
   - `sta` — V1 pipeline CLI: `run | status | approve | roles | doctor | ...`
 - **Sync เป็น one-way เสมอ: Framework → Workspace** — ไม่มี Knowledge ⇄ Target content sync ไฟล์ที่ถูก sync track ใน manifest พร้อม sha256
-- **Generated ที่เครื่อง** — `.codex/agents/<role>.toml` ถูก render จาก `.claude/agents/<role>.md` ตอน sync (ไม่ได้ ship มากับ payload)
+- **Generated ที่เครื่อง** — `.codex/agents/<role>.toml` และ `.opencode/agent/<role>.md` ถูก render จาก `.claude/agents/<role>.md` ตอน sync (ไม่ได้ ship มากับ payload); `.opencode/plugin/sta-guards.js` เป็น authored payload ที่ sync copy ให้ทุก workspace
 - **Runtime state** — `.workflow/state.db` (SQLite) local, gitignored, ไม่ sync ข้ามเครื่อง
 
 ### โครงสร้าง Framework repo
@@ -47,6 +47,8 @@ orchestrator/           ← CLI + state store + knowledge engine (Node/TypeScrip
 .claude/shared/         ← redirect ไป policies/ + scoping procedure
 .claude/settings.json   ← wiring hooks ทุกตัว
 .codex/agents/*.toml    ← Codex bindings (checked by --check-bindings)
+.opencode/agent/*.md    ← OpenCode bindings (generated, checked by --check-bindings)
+.opencode/plugin/       ← sta-guards.js — guards ฝั่ง OpenCode (tool.execute.before)
 contracts/*.yaml        ← read/write/deny path globs ต่อ role (machine-readable half ของ agent)
 workflows/*.yml         ← 11 workflows: typo → feature/deploy (right-sizing)
 policies/               ← กฎที่ทุก agent ใช้ร่วมกัน (coding/git/architecture/documentation/security/agent-boundaries)
@@ -65,12 +67,13 @@ project.yaml            ← stack profile ของ project นี้ (current v
 |---|---|
 | **Claude Code** | ✅ implemented + verified (pipeline, guards, capability probe) |
 | **Codex** | ⚠️ partial — `software-team-agents dev\|ba --runtime codex` เปิด interactive session ได้ และ `.codex/agents/*.toml` ถูก generate ครบ แต่ headless pipeline (`sta run`) วิ่งบน Claude Code เป็น default; `CodexAdapter` ฝั่ง orchestrator ยังเป็น implementation ที่ไม่เคย verify กับ install จริง |
+| **OpenCode** | 🧪 new (T-OC, planning/v2) — bindings `.opencode/agent/*.md` + plugin `sta-guards.js` sync ครบ, `dev\|ba --runtime opencode` เปิด session ได้, headless เลือกได้ด้วย `sta run --runtime opencode`; adapter/permission ผ่านการ spike พิสูจน์บน 1.18.21 แล้วแต่ exit checks (typecheck/secret ตอนจบ run) ยังไม่มี in-band — รายงานเป็น GUARD GAP และให้ QA round เป็นตัวครอบ |
 
 ข้อจำกัด: การรัน unattended ต้องใช้ `--autonomy edit` หรือ `full` (default `propose` ติด permission prompt ที่ไม่มีคนกดใน headless run)
 
 ## Installation
 
-Prerequisites: **Node.js ≥ 20**, **Git**, **Claude Code CLI** (login แล้ว) — ตรวจด้วย `node --version`, `claude --version`
+Prerequisites: **Node.js ≥ 20**, **Git** + อย่างน้อยหนึ่ง runtime ที่จะใช้ — **Claude Code CLI** (default; login แล้ว) / **Codex CLI** / **OpenCode CLI ≥ 1.18** — ตรวจด้วย `node --version`, `claude --version`, `codex --version`, `opencode --version`
 
 ### ติดตั้งจาก `.tgz` (วิธีมาตรฐาน — internal distribution)
 
@@ -78,14 +81,14 @@ package เป็น `private`: ไม่ publish ขึ้น registry artifact
 
 ```bash
 # ติดตั้ง (ไฟล์ .tgz แจกกันภายในทีม พร้อมไฟล์ .sha256 สำหรับตรวจ integrity)
-npm i -g ./software-team-agents-0.1.0.tgz
+npm i -g ./software-team-agents-0.2.0.tgz
 software-team-agents --version          # ต้องตรงกับ version ในชื่อไฟล์
 ```
 
 อัปเกรด — ติดตั้ง `.tgz` version ใหม่ทับ แล้ว sync แต่ละ workspace ตาม:
 
 ```bash
-npm i -g ./software-team-agents-0.2.0.tgz
+npm i -g ./software-team-agents-0.3.0.tgz
 cd my-project && software-team-agents sync
 ```
 
@@ -117,11 +120,11 @@ npm run build:templates  # snapshot templates/ + manifest.json
 |---|---|
 | `init` | detect ชนิด workspace (Knowledge markers → BA, app-source markers → DEV), บันทึก identity + role ใน `.agent-team/config.yaml` แล้ว sync managed assets — idempotent, รันซ้ำได้ |
 | `sync` | อัปเดต Framework-managed files ตาม installed version — ไฟล์ที่โดนแก้เอง**ไม่ถูก overwrite เงียบ ๆ** (report + recovery advice; `--force` = overwrite พร้อม backup) |
-| `status` | role, roots (Target/Framework/Knowledge), installed vs synced version, sync state, conflicts, Claude/Codex readiness (`--json` machine-readable) |
-| `dev` | preflight → launch runtime (`claude` default, `codex` เมื่อ `--runtime codex`) จาก Target — Knowledge binding **required** |
+| `status` | role, roots (Target/Framework/Knowledge), installed vs synced version, sync state, conflicts, Claude/Codex/OpenCode readiness (`--json` machine-readable) |
+| `dev` | preflight → launch runtime (`claude` default, `codex`/`opencode` เมื่อ `--runtime`) จาก Target — Knowledge binding **required** |
 | `ba` | preflight → launch runtime จาก Knowledge repo — Target **never required** |
 
-options ร่วม: `--target-root <path>` · `--role <ba|dev>` (init: เมื่อ markers ambiguous) · `--force` · `--no-auto-sync` (dev/ba) · `--runtime <claude|codex>` (dev/ba) · `--json` (status)
+options ร่วม: `--target-root <path>` · `--role <ba|dev>` (init: เมื่อ markers ambiguous) · `--force` · `--no-auto-sync` (dev/ba) · `--runtime <claude|codex|opencode>` (dev/ba) · `--json` (status)
 
 ### Role Workspace — BA ทำงานใน Knowledge, DEV ทำงานใน Target
 
@@ -165,7 +168,7 @@ overrides: []                   # path ที่ประกาศที่น�
 
 ### Ownership model
 
-- **Framework-managed** — เฉพาะ path ที่ record ใน `.agent-team/manifest.json`: `.claude/agents|hooks|scripts|shared`, `.claude/settings.json`, `CLAUDE.md`, `contracts/`, `workflows/`, `policies/`, `stacks/`, `layout.yaml`, `escalation-policy.yaml`, `test-pyramid.yaml` + `.codex/agents/*.toml` (generated)
+- **Framework-managed** — เฉพาะ path ที่ record ใน `.agent-team/manifest.json`: `.claude/agents|hooks|scripts|shared`, `.claude/settings.json`, `CLAUDE.md`, `contracts/`, `workflows/`, `policies/`, `stacks/`, `layout.yaml`, `escalation-policy.yaml`, `test-pyramid.yaml` + `.codex/agents/*.toml` (generated) + `.opencode/agent/*.md` (generated) + `.opencode/plugin/**`
 - **Target-owned เสมอ** — `src/`, `tests/`, `package.json`, business logic, `knowledge/`, `_docs/`, `decisions/`, `.workflow/`, `.git`, `node_modules`, `.agent-team/` — guarded ที่ code level แม้ manifest corrupt sync ก็ปฏิเสธ
 - **Sync rules** — disk == pristine → update (backup ก่อน) · disk != pristine → **conflict** (stop ทั้ง run) จนกว่าจะ revert / claim เป็น override / `--force` · managed file ที่ Framework เลิกใช้ถูก remove เฉพาะเมื่อ pristine · backup ทุกครั้งที่ overwrite/remove ที่ `.agent-team/backups/<timestamp>/`
 
@@ -286,6 +289,7 @@ Knowledge ไม่ใช่ "AI memory" — เป็นข้อมูลร�
 | `block-secret-leak.js` | Stop/SubagentStop | ไฟล์ที่ run แก้ห้ามมี hardcoded secret (`.env.example` รวมด้วย) |
 
 - **Guards ถูกเทสต์** — `node .claude/tests/run.js` (self-test ไม่มี dependencies) — guard ที่ syntax error ต้อง fail loud ไม่ใช่ fail open
+- **ฝั่ง OpenCode** — git deny เป็น declarative `permission.bash` globs ใน binding เอง (specificity wins); outside-root/contract path guards มาจาก `sta-guards.js` plugin (auto-load, throw = deny) · doc-rewrite/secret-leak/exit checks **ยังไม่ enforce in-band** → adapter รายงาน unenforced + executor ตะโกน `GUARD GAP` ให้ QA round เป็นตัวครอบ
 - **Validation flags** — `sta --check-*` 15 ตัว: `contracts, layout, workflows, profile, decisions, test-pyramid, review-separation, escalation-policy, workspace, repos, environments, doc-structure, knowledge, installation, roles` (+ `--check-bindings` มีใน CLI แต่ไม่ได้ wire ใน CI)
 - **doctor** — `sta doctor --project-root <path>` รวม 9 checks แบบ read-only (installation, knowledge binding/schema, targets registry, local mappings, runtime adapter, state store, guard wiring) exit 1 เมื่อมี FAIL พร้อม "Fix:" ทุกข้อ
 - **Audit trail** — `sta audit <task-id>`
@@ -322,7 +326,7 @@ Environment variables ที่ runtime ใช้: `AGENTCLAUDE_ROLE` (role ป�
 
 ```bash
 # 0) ติดตั้ง (ครั้งเดียวต่อเครื่อง)
-npm i -g ./software-team-agents-0.1.0.tgz
+npm i -g ./software-team-agents-0.2.0.tgz
 
 # 1) BA — เขียน requirement ใน Knowledge repo
 git clone https://github.com/<org>/company-knowledge.git C:\src\company-knowledge
@@ -343,15 +347,17 @@ cd C:\src\my-product
 #    .agent-team/config.yaml → knowledge: { path: ../company-knowledge }
 software-team-agents init
 software-team-agents dev                    # preflight → Claude เปิดจาก Target
+software-team-agents dev --runtime opencode # หรือเปิดด้วย OpenCode (bindings sync มาแล้ว)
 
 # 4) รัน task ผ่าน pipeline (headless)
 sta run --task-id T-7 --module demo --bug-fix --backend --autonomy edit \
   --backend-target my-product --project-root C:\src\company-knowledge
+#   (--runtime codex|opencode เลือก runtime ของ headless run; default claude-code)
 sta status T-7 --project-root C:\src\company-knowledge
 sta audit T-7 --project-root C:\src\company-knowledge
 
 # 5) อัปเกรด framework เมื่อมี .tgz ใหม่
-npm i -g ./software-team-agents-0.2.0.tgz
+npm i -g ./software-team-agents-0.3.0.tgz
 cd C:\src\my-product && software-team-agents sync
 software-team-agents status                 # syncState: UP_TO_DATE
 ```
@@ -377,6 +383,7 @@ node ../.claude/tests/run.js   # hook/script self-test — ต้องเขี
 ## ข้อจำกัด
 
 - **Codex runtime partial** — interactive launch ผ่าน `--runtime codex` ได้ แต่ headless adapter ยังไม่เคย verify กับ install จริง UAT ครอบเฉพาะ Claude Code
+- **OpenCode runtime new (0.2.0)** — spike+UAT smoke บน 1.18.21 ผ่าน (probe, headless run, guards report) แต่ exit checks ไม่มี in-band (`GUARD GAP` + QA round คือ coverage), doc-rewrite/secret-leak hooks ยังไม่พอร์ตลง plugin, write/edit arg-shape บน opencode เวอร์ชันอื่นยังไม่เคย verify, full multi-stage pipeline ยังไม่เคย run จริงทั้ง chain
 - **Contract write-globs จำกัด** — pattern ปัจจุบันครอบ `src/lib/**`, `server/**`, `app/api/**`, `prisma/**` ฯลฯ app code นอก pattern นี้ engineer แก้ไม่ได้ (hook บล็อก) — ต้องปรับ contract ให้ตรงโครงสร้าง project จริงก่อนใช้
 - **Unattended run ต้อง `--autonomy edit|full`** — default (`propose`) ติด permission prompt headless
 - **Git เป็น transport เดียว** — knowledge history ต้องมี git ไม่มี real-time collaboration

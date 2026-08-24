@@ -2,27 +2,38 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 /**
- * The role-binding generator (OFF10 M2 / OFF03 P7): one role, two renderings,
- * ONE source of truth.
+ * The role-binding generator (OFF10 M2 / OFF03 P7): one role definition,
+ * several renderings, ONE source of truth.
  *
- * `.claude/agents/<role>.md` is where a role's definition is authored. The
- * `.codex/agents/<role>.toml` file is a *rendering* of the same definition into
- * Codex's official custom-agent schema (OFF02 S6: name/description/
- * developer_instructions) — generated, never hand-maintained, so the two can
- * no longer drift the way they had (OFF05 DP3). `checkBindings()` fails when
- * what is on disk stops matching what this module would generate, and — since
- * OFF10 M3 — it also fails when the straight `.codex/hooks/*.js` mirrors stop
- * matching their `.claude/hooks/*` sources.
+ * `.claude/agents/<role>.md` is where a role's definition is authored. Each
+ * other runtime gets a *rendered* binding generated from it — never
+ * hand-maintained, so they can no longer drift the way they had (OFF05 DP3):
+ *
+ * - `.codex/agents/<role>.toml` — Codex's official custom-agent schema
+ *   (OFF02 S6: name/description/developer_instructions), via
+ *   `renderCodexBinding()`.
+ * - `.opencode/agent/<role>.md` — OpenCode markdown agent (T-OC1), via
+ *   `renderOpenCodeBinding()`. Its frontmatter carries only
+ *   description/mode/permission: OpenCode names an agent by its filename, and
+ *   its own permission system is the runtime half of this framework's guards
+ *   (the spike in planning/v2 proved the headless default posture is
+ *   allow-all, so every binding carries explicit rules).
+ *
+ * `checkBindings()` fails when what is on disk stops matching what this module
+ * would generate, and — since OFF10 M3 — it also fails when the straight
+ * `.codex/hooks/*.js` mirrors stop matching their `.claude/hooks/*` sources.
  *
  * WHAT IS DELIBERATELY NOT CARRIED OVER
- * - `tools` — Claude tool names are provider vocabulary; Codex configures tools
- *   its own way.
+ * - `tools` — Claude tool names are provider vocabulary; each runtime configures
+ *   tools its own way.
  * - `model` — model ids do not translate across vendors, and guessing them is
  *   exactly the "เดายิงมั่ว" the T110 header ruled out. Codex-side models come
- *   from its own `[agents]` defaults or explicit options.
+ *   from its own `[agents]` defaults or explicit options; OpenCode-side from its
+ *   own provider config (`opencode.json` / `-m`), effort via `--variant`.
  * - `version` — Claude frontmatter bookkeeping.
- * - `effort` IS carried over, as `model_reasoning_effort`, because it is a
- *   reasoning-depth intent rather than a vendor id.
+ * - `effort` IS carried over for Codex, as `model_reasoning_effort`, because it
+ *   is a reasoning-depth intent rather than a vendor id. The OpenCode rendering
+ *   leaves it to the launch flag instead.
  */
 
 export interface ParsedAgentMd {
@@ -99,8 +110,102 @@ export function renderCodexBinding(md: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// checkBindings — the `--check-bindings` validator (OFF03 U6)
+// renderOpenCodeBinding — the OpenCode markdown rendering (T-OC1)
 // ---------------------------------------------------------------------------
+
+/** Actions OpenCode's `permission:` frontmatter accepts (verified against 1.18 on the T-OC0 spike). */
+export type OpenCodePermissionAction = "allow" | "ask" | "deny";
+
+/**
+ * Per-tool permission rules for one rendered agent. Keys are glob patterns as
+ * OpenCode matches them (`git status*`, `plans/**`); values are actions.
+ * OpenCode resolves overlapping patterns by specificity, not by listing order
+ * (spike Q1), so this renderer is free to sort keys for stable output.
+ */
+export interface OpenCodePermissions {
+  bash?: Record<string, OpenCodePermissionAction>;
+  edit?: Record<string, OpenCodePermissionAction>;
+  write?: Record<string, OpenCodePermissionAction>;
+}
+
+/**
+ * The no-state-changing-git rule (policies/git.md) expressed as OpenCode bash
+ * globs: the four read-only subcommands pass, every other `git` invocation is
+ * denied. `withGitBashRules()` layers a caller's extra rules over these.
+ */
+export const GIT_READONLY_BASH_RULES: Readonly<Record<string, OpenCodePermissionAction>> = {
+  "git diff*": "allow",
+  "git log*": "allow",
+  "git show*": "allow",
+  "git status*": "allow",
+  "git *": "deny",
+};
+
+/** Merges caller rules over {@link GIT_READONLY_BASH_RULES}. A caller entry replaces a default one — re-allowing `git push`, say, is a visible choice, not a typo the merge hides. */
+export function withGitBashRules(
+  bash: Record<string, OpenCodePermissionAction> = {},
+): Record<string, OpenCodePermissionAction> {
+  return { ...GIT_READONLY_BASH_RULES, ...bash };
+}
+
+/**
+ * The declarative permission set every rendered OpenCode binding carries
+ * (T-OC2). The spike (planning/v2 §7) proved OpenCode's headless default
+ * posture is allow-all, so the git rule travels with every binding; sync and
+ * checkBindings both call this so what is generated and what is verified can
+ * never disagree. Role-specific path rules are runtime-enforced by the
+ * sta-guards plugin reading contracts/, mirroring how the Claude-side hook
+ * works — not frozen into the rendering.
+ */
+export function defaultOpenCodePermissions(): OpenCodePermissions {
+  return { bash: withGitBashRules() };
+}
+
+/** YAML double-quoted scalar — only `\` and `"` need escaping; Thai and colons pass through. */
+function yamlDoubleQuoted(value: string): string {
+  return '"' + value.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+}
+
+/**
+ * Renders `.claude/agents/<role>.md` into an OpenCode markdown agent.
+ *
+ * Deterministic byte-for-byte (sorted permission keys) so `checkBindings`
+ * can diff disk against source. The frontmatter deliberately carries no
+ * `name` — OpenCode names an agent by its filename — and no model/tools/
+ * version fields (see the file header).
+ */
+export function renderOpenCodeBinding(md: string, permissions?: OpenCodePermissions): string {
+  const parsed = parseAgentMd(md);
+  // A bare `---` line inside the body would be read back as the frontmatter
+  // fence by any YAML/markdown reader that re-parses the emitted file
+  // (checkBindings included), silently truncating the instructions. Refuse,
+  // exactly like the TOML renderer refuses ambiguous continuations.
+  if (/^---\s*$/m.test(parsed.body)) {
+    throw new Error(
+      `agent body for ${parsed.name} contains a bare '---' line — use '———' or wording instead; ` +
+        `the generator will not emit a self-truncating frontmatter block`,
+    );
+  }
+
+  const lines: string[] = ["---", `description: ${yamlDoubleQuoted(parsed.description)}`, "mode: all"];
+  const toolOrder = ["bash", "edit", "write"] as const;
+  let permissionEmitted = false;
+  for (const tool of toolOrder) {
+    const rules = permissions?.[tool];
+    const patterns = Object.keys(rules ?? {}).sort();
+    if (patterns.length === 0) continue;
+    if (!permissionEmitted) {
+      lines.push("permission:");
+      permissionEmitted = true;
+    }
+    lines.push(`  ${tool}:`);
+    for (const pattern of patterns) {
+      lines.push(`    ${yamlDoubleQuoted(pattern)}: ${rules![pattern]}`);
+    }
+  }
+  lines.push("---", "", parsed.body.trimEnd(), "");
+  return lines.join("\n");
+}
 
 export interface BindingCheckResult {
   ok: boolean;
@@ -120,54 +225,86 @@ function listRoles(dir: string): string[] {
 }
 
 /**
- * Every `.claude/agents/<role>.md` must have a generated twin at
- * `.codex/agents/<role>.toml` that byte-matches what this module renders today;
- * every `.toml` must have its authoring source. This is what keeps the second
- * rendering from becoming a stale hand-edited copy — the same job
+ * Every generated-from-.claude rendering target, declared once here so
+ * `checkBindings` verifies exactly what `runTargetSync` generates (T-OC2/T-OC3).
+ * Adding a runtime adds one entry plus its renderer above — nowhere else.
+ */
+export const BINDING_RENDERINGS: readonly {
+  /** Repo-relative directory (posix separators) the rendering lives in. */
+  dir: string;
+  fileExtension: string;
+  render(sourceMd: string): string;
+}[] = [
+  { dir: ".codex/agents", fileExtension: ".toml", render: (md) => renderCodexBinding(md) },
+  {
+    dir: ".opencode/agent",
+    fileExtension: ".md",
+    render: (md) => renderOpenCodeBinding(md, defaultOpenCodePermissions()),
+  },
+];
+
+/** One generated rendering family: every source role needs a byte-identical twin, no orphans allowed. */
+function checkRenderingSet(
+  projectRoot: string,
+  claudeDir: string,
+  mdRoles: readonly string[],
+  spec: { dir: string; fileExtension: string; render(md: string): string },
+  problems: string[],
+): void {
+  const targetDir = path.join(projectRoot, ...spec.dir.split("/"));
+  const renderedFiles = new Set<string>();
+  for (const role of mdRoles) {
+    let expected: string;
+    try {
+      expected = spec.render(fs.readFileSync(path.join(claudeDir, `${role}.md`), "utf8"));
+    } catch (e) {
+      problems.push(`${role}: cannot parse .claude/agents/${role}.md — ${e instanceof Error ? e.message : String(e)}`);
+      continue;
+    }
+    renderedFiles.add(`${role}${spec.fileExtension}`);
+
+    const twinPath = path.join(targetDir, `${role}${spec.fileExtension}`);
+    if (!fs.existsSync(twinPath)) {
+      problems.push(`${role}: missing ${spec.dir}/${role}${spec.fileExtension} — regenerate the bindings`);
+      continue;
+    }
+    const actual = fs.readFileSync(twinPath, "utf8").replace(/\r\n/g, "\n");
+    if (actual !== expected) {
+      problems.push(
+        `${role}: ${spec.dir}/${role}${spec.fileExtension} does not match the rendering of .claude/agents/${role}.md — regenerate the bindings`,
+      );
+    }
+  }
+
+  try {
+    for (const f of fs.readdirSync(targetDir)) {
+      if (f.endsWith(spec.fileExtension) && !renderedFiles.has(f)) {
+        problems.push(`${f.slice(0, -spec.fileExtension.length)}: orphan ${spec.dir}/${f} with no .claude/agents/${f.replace(spec.fileExtension, ".md")} source`);
+      }
+    }
+  } catch {
+    problems.push(`no ${spec.dir} directory at ${targetDir} — nothing has been generated yet`);
+  }
+}
+
+/**
+ * Every `.claude/agents/<role>.md` must have a generated twin for each entry in
+ * {@link BINDING_RENDERINGS} that byte-matches what this module renders today;
+ * every rendering must have its authoring source. This is what keeps the
+ * non-Claude renderings from becoming stale hand-edited copies — the same job
  * `--check-workflows` does for workflows against the classifier.
  */
 export function checkBindings(projectRoot: string): BindingCheckResult {
   const problems: string[] = [];
   const claudeDir = path.join(projectRoot, ".claude", "agents");
-  const codexDir = path.join(projectRoot, ".codex", "agents");
 
   const mdRoles = listRoles(claudeDir);
   if (mdRoles.length === 0) {
     return { ok: false, problems: [`no agent definitions found in ${claudeDir}`] };
   }
 
-  const renderedTomls = new Set<string>();
-  for (const role of mdRoles) {
-    let expected: string;
-    try {
-      expected = renderCodexBinding(fs.readFileSync(path.join(claudeDir, `${role}.md`), "utf8"));
-    } catch (e) {
-      problems.push(`${role}: cannot parse .claude/agents/${role}.md — ${e instanceof Error ? e.message : String(e)}`);
-      continue;
-    }
-    renderedTomls.add(`${role}.toml`);
-
-    const tomlPath = path.join(codexDir, `${role}.toml`);
-    if (!fs.existsSync(tomlPath)) {
-      problems.push(`${role}: missing .codex/agents/${role}.toml — regenerate the codex bindings`);
-      continue;
-    }
-    const actual = fs.readFileSync(tomlPath, "utf8").replace(/\r\n/g, "\n");
-    if (actual !== expected) {
-      problems.push(
-        `${role}: .codex/agents/${role}.toml does not match the rendering of .claude/agents/${role}.md — regenerate the codex bindings`,
-      );
-    }
-  }
-
-  try {
-    for (const f of fs.readdirSync(codexDir)) {
-      if (f.endsWith(".toml") && !renderedTomls.has(f)) {
-        problems.push(`${f.slice(0, -".toml".length)}: orphan .codex/agents/${f} with no .claude/agents/${f.replace(".toml", ".md")} source`);
-      }
-    }
-  } catch {
-    problems.push(`no .codex/agents directory at ${codexDir} — nothing has been generated yet`);
+  for (const spec of BINDING_RENDERINGS) {
+    checkRenderingSet(projectRoot, claudeDir, mdRoles, spec, problems);
   }
 
   // --- Hook parity (OFF10 M3 / OFF03 U2) -----------------------------------

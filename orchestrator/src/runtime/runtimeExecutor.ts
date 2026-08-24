@@ -277,6 +277,20 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       );
     }
 
+    // T-OC7 — the post-hoc half of the exit-check contract. A runtime without
+    // an in-band exit guard (OpenCode today, Codex on every build) finishes
+    // runs that requested `code-green`/`no-hardcoded-secret` with nobody
+    // having run them. The gap must be loud where a person reads the run, not
+    // silently absorbed into a PASS: QA's own round is what covers it until a
+    // cross-stack mechanical runner exists.
+    if (guards.exitChecks.length > 0 && result.guards.unenforced.includes(RuntimeCapability.EXIT_GUARD)) {
+      console.error(
+        `[orchestrator] GUARD GAP: ${role} requested exit checks (${guards.exitChecks.join(", ")}) but runtime ` +
+          `"${activeRuntime.id}" enforces none in-band${result.guards.reason ? ` — ${result.guards.reason}` : ""}. ` +
+          `They are NOT verified for this stage; qa-engineer's round and human review are the coverage.`,
+      );
+    }
+
     if (result.status === "UNAVAILABLE") {
       return {
         ...failResult(describeFailure(activeRuntime.id, role, result, routingDiagnostics), metrics),

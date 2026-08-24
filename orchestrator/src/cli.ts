@@ -15,6 +15,8 @@ import type { QaFindingRecord } from "./qa/evidence.js";
 import { parseOpenIssues } from "./orchestrator/failureClassifier.js";
 import { readModuleDoc } from "./agents/moduleDocs.js";
 import { ClaudeCodeAdapter } from "./runtime/claudeCodeAdapter.js";
+import { CodexAdapter } from "./runtime/codexAdapter.js";
+import { OpenCodeAdapter } from "./runtime/openCodeAdapter.js";
 import type { RuntimeAutonomy } from "./runtime/runtimeAdapter.js";
 import { contractGuardResolver } from "./runtime/runtimeGuards.js";
 import { DatabaseUnavailableError, SqliteTaskStore } from "./store/sqliteStore.js";
@@ -159,6 +161,13 @@ export interface CliArgs {
    */
   autonomy?: RuntimeAutonomy;
   /**
+   * Which runtime adapter drives every stage of the headless pipeline
+   * (planning/v2 T-OC5). Absent/`claude-code` keeps the historical behaviour
+   * byte-identical; `codex`/`opencode` route through their adapters — both are
+   * partial (see each adapter's header) and say so via guard reports.
+   */
+  runtime?: "claude-code" | "codex" | "opencode";
+  /**
    * QA optimization (change-aware scope, deterministic pre-checks, TARGETED/FULL
    * routing) is on by default for qa-engineer rounds; this flag restores the exact
    * V1 executor behaviour for a task where someone explicitly wants it.
@@ -212,7 +221,7 @@ export const USAGE =
   "  sta roles context <ba|sa|uxui|dev> [<id>] [--module <name>]   what that lane may see, and via which role (T107)\n" +
   "\n" +
   "underlying flag-based form:\n" +
-  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] <classification flags>\n" +
+  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode>] <classification flags>\n" +
   "  sta --task-id <id> --module <name> --resume        continue a task already in the store\n" +
   "  sta --task-id <id> --module <name> --no-qa-optimization   run qa-engineer exactly as V1 did (skip change-aware scope/deterministic pre-checks)\n" +
   "  sta --list [--project-root <path>]                 show every task and stop\n" +
@@ -266,6 +275,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let dependsOn: string[] = [];
   let phases: number[] = [];
   let autonomy: RuntimeAutonomy | undefined;
+  let runtime: "claude-code" | "codex" | "opencode" | undefined;
   let noQaOptimization = false;
   let version = false;
   const targetBindings: TargetBindings = { frontend_target: null, backend_target: null };
@@ -349,6 +359,13 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
         throw new CliUsageError(`--autonomy must be one of: ${valid.join(", ")} (got ${value ?? "nothing"})`);
       }
       autonomy = value as RuntimeAutonomy;
+    } else if (arg === "--runtime") {
+      const value = argv[++i];
+      const valid: readonly string[] = ["claude-code", "codex", "opencode"];
+      if (!value || !valid.includes(value)) {
+        throw new CliUsageError(`--runtime must be one of: ${valid.join(", ")} (got ${value ?? "nothing"})`);
+      }
+      runtime = value as NonNullable<CliArgs["runtime"]>;
     } else if (arg === "--no-qa-optimization") {
       noQaOptimization = true;
     } else if (arg === "--version") {
@@ -421,6 +438,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     phases,
     targetBindings,
     autonomy,
+    runtime,
     noQaOptimization,
     version,
   };
@@ -644,7 +662,7 @@ function isVerb(s: string | undefined): s is Verb {
 }
 
 /** Flags a verb accepts that take a value — their value must never be mistaken for the positional <task-id>. */
-const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--by", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects"]);
+const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--by", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime"]);
 
 /** Every non-flag token in a verb's remaining args, in order, skipping over each value-flag's own argument. */
 function positionalArgs(rest: string[]): string[] {
@@ -1938,8 +1956,19 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     // T109: the executor is now a RuntimeAdapter-driven one (T108) rather than a
     // Claude-Code-specific spawn — swapping `runtime` here is the whole point of
     // that seam. `guards` derives from `contracts/<role>.yaml` (T15), same as before.
+    // T-OC5: --runtime picks the adapter; the default stays byte-identical to
+    // every run before the flag existed.
     const runtimeExecutor = createRuntimeExecutor({
-      runtime: new ClaudeCodeAdapter({ projectRoot: args.projectRoot }),
+      runtime: (() => {
+        switch (args.runtime ?? "claude-code") {
+          case "codex":
+            return new CodexAdapter({ projectRoot: args.projectRoot });
+          case "opencode":
+            return new OpenCodeAdapter({ projectRoot: args.projectRoot });
+          default:
+            return new ClaudeCodeAdapter({ projectRoot: args.projectRoot });
+        }
+      })(),
       projectRoot: args.projectRoot,
       moduleName: () => args.module!,
       guards: contractGuardResolver(args.projectRoot),

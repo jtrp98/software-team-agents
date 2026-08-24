@@ -86,6 +86,14 @@ concepts:
         per_agent: true
         read_by: orchestrator
         holds: the machine-readable input/output/permission contract for the same role
+      - path: .opencode/agent
+        status: active
+        pattern: "*.md"
+        per_agent: true
+        read_by: opencode
+        holds: >
+          the same role prompts rendered into OpenCode markdown agents (T-OC1/T-OC2,
+          generated from .claude/agents by sync, verified by --check-bindings)
 
   skill:
     answers: "ทำอะไรได้ — a reusable capability a role can invoke"
@@ -125,6 +133,13 @@ concepts:
         status: active
         pattern: "*.md"
         holds: conventions.md split one file per area (T49) — coding, git, architecture, documentation, security, agent-boundaries
+      - path: .opencode/plugin
+        status: active
+        pattern: "*.js"
+        holds: >
+          sta-guards.js — the OpenCode-side enforcement of the same rules (T-OC6):
+          workspace-root and contract path guards at tool.execute.before; shipped
+          into every workspace by sync and auto-loaded by OpenCode
 
   workflow:
     answers: "ทำเมื่อไหร่ — which roles run, in what order, for a kind of change"

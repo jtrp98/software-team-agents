@@ -35,6 +35,7 @@ export const TEMPLATE_SOURCES: readonly TemplateSourceEntry[] = [
   { relPath: ".claude/scripts", kind: "dir" },
   { relPath: ".claude/shared", kind: "dir" },
   { relPath: ".claude/settings.json", kind: "file" },
+  { relPath: ".opencode/plugin", kind: "dir" },
   { relPath: "contracts", kind: "dir" },
   { relPath: "workflows", kind: "dir" },
   { relPath: "policies", kind: "dir" },

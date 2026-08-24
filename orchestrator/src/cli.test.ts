@@ -63,6 +63,12 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--autonomy"], "/repo")).toThrow(CliUsageError);
   });
 
+  it("parses --runtime and rejects runtimes no adapter implements (T-OC5)", () => {
+    expect(parseArgs(["--task-id", "T-1", "--module", "m", "--runtime", "opencode"], "/repo").runtime).toBe("opencode");
+    expect(parseArgs(["--task-id", "T-1", "--module", "m"], "/repo").runtime).toBeUndefined();
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--runtime", "ghost"], "/repo")).toThrow(CliUsageError);
+  });
+
   it("--project-root overrides the default", () => {
     const args = parseArgs(["--task-id", "T-1", "--module", "m", "--project-root", "/other"], "/repo");
     expect(args.projectRoot).toBe("/other");

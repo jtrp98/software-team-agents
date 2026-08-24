@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readTemplateManifest, sha256Of, type TemplateFileEntry, type TemplateManifest } from "../packaging/templateManifest.js";
-import { renderCodexBinding } from "../runtime/bindingGenerator.js";
+import { BINDING_RENDERINGS } from "../runtime/bindingGenerator.js";
 import { parseVersion } from "./version.js";
 import {
   assertManageablePath,
@@ -30,11 +30,15 @@ import {
  * cleanup can never destroy local work either. Files claimed through the
  * config's override list are skipped outright — ownership moved to the user.
  *
- * `.codex/agents/<role>.toml` renderings are generated from the just-synced
- * `.claude/agents/<role>.md` sources (OFF10 M2: one role definition, two
- * renderings) rather than shipped as payload — generated files are owned by
- * declaring their derivation, and they can never drift from their source.
+ * `.codex/agents/<role>.toml` and `.opencode/agent/<role>.md` renderings are
+ * generated from the just-synced `.claude/agents/<role>.md` sources (OFF10 M2:
+ * one role definition, several renderings) rather than shipped as payload —
+ * generated files are owned by declaring their derivation, and they can never
+ * drift from their source.
  */
+
+/** The generated-from-.claude rendering targets, with their sync-log wording. Declared in bindingGenerator (`BINDING_RENDERINGS`) so `checkBindings` verifies exactly what this engine generates. */
+const DERIVED_RENDERINGS = BINDING_RENDERINGS.map((spec) => ({ ...spec, note: "generated from .claude/agents" }));
 
 export type SyncAction = "add" | "update" | "restore" | "remove-stale" | "unchanged" | "override";
 
@@ -126,7 +130,7 @@ function planStaleFiles(
   const planned: PlannedFile[] = [];
   for (const [relPath, tracked] of oldFiles) {
     if (newPathSet.has(relPath)) continue;
-    if (relPath.startsWith(".codex/")) continue; // derived renderings follow their agent sources automatically
+    if (relPath.startsWith(".codex/") || relPath.startsWith(".opencode/agent/")) continue; // derived renderings follow their agent sources automatically
     if (overrides.has(relPath)) {
       planned.push({ entry: { action: "override", path: relPath, note: "dropped by the Framework, kept because the project claimed it" } });
       continue;
@@ -264,20 +268,22 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
       .filter((f) => f.path.startsWith(".claude/agents/") && f.path.endsWith(".md"))
       .map((f) => path.basename(f.path, ".md")),
   );
-  for (const [relPath, tracked] of oldFiles) {
-    if (!relPath.startsWith(".codex/agents/") || !relPath.endsWith(".toml")) continue;
-    const role = path.basename(relPath, ".toml");
-    if (survivingRoles.has(role)) continue; // regenerated below from its source
-    const abs = path.join(options.targetRoot, relPath);
-    if (!fs.existsSync(abs)) continue;
-    if (hashFile(abs) === tracked.sha256) {
-      plan.entries.push({ action: "remove-stale", path: relPath, note: "generated rendering of a removed agent" });
-    } else {
-      plan.conflicts.push({
-        path: relPath,
-        kind: "stale-modified",
-        detail: "this generated file's agent source was removed, but the local copy has been edited",
-      });
+  for (const spec of DERIVED_RENDERINGS) {
+    for (const [relPath, tracked] of oldFiles) {
+      if (!relPath.startsWith(`${spec.dir}/`) || !relPath.endsWith(spec.fileExtension)) continue;
+      const role = path.basename(relPath, spec.fileExtension);
+      if (survivingRoles.has(role)) continue; // regenerated below from its source
+      const abs = path.join(options.targetRoot, relPath);
+      if (!fs.existsSync(abs)) continue;
+      if (hashFile(abs) === tracked.sha256) {
+        plan.entries.push({ action: "remove-stale", path: relPath, note: "generated rendering of a removed agent" });
+      } else {
+        plan.conflicts.push({
+          path: relPath,
+          kind: "stale-modified",
+          detail: "this generated file's agent source was removed, but the local copy has been edited",
+        });
+      }
     }
   }
   // Only tracked-but-edited (and stale-modified) files block the run; a
@@ -369,31 +375,31 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
   // Derived renderings: regenerate from the just-synced agent sources. They carry
   // no independent authorship, so they never conflict with the Framework — but a
   // foreign pre-existing file at the destination stays untouched and unclaimed.
-  const regeneratedCodex = new Set<string>();
-  for (const agentFile of templateManifest.files.filter((f) => f.path.startsWith(".claude/agents/") && f.path.endsWith(".md"))) {
-    const role = path.basename(agentFile.path, ".md");
-    const sourceAbs = path.join(options.targetRoot, ".claude", "agents", `${role}.md`);
-    if (!fs.existsSync(sourceAbs)) continue;
-    const rendered = renderCodexBinding(fs.readFileSync(sourceAbs, "utf8"));
-    const relPath = path.posix.join(".codex", "agents", `${role}.toml`);
-    const dest = path.join(options.targetRoot, relPath);
-    const entry: TemplateFileEntry = { path: relPath, sha256: sha256Of(rendered), size_bytes: Buffer.byteLength(rendered) };
-    if (!fs.existsSync(dest)) {
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, rendered, "utf8");
-      performed.push({ action: "add", path: relPath, note: "generated from .claude/agents" });
-    } else if (hashFile(dest) !== entry.sha256) {
-      const oursBefore = manifest?.files.some((f) => f.path === relPath);
-      if (oursBefore || options.force) {
-        backup(relPath);
+  for (const spec of DERIVED_RENDERINGS) {
+    for (const agentFile of templateManifest.files.filter((f) => f.path.startsWith(".claude/agents/") && f.path.endsWith(".md"))) {
+      const role = path.basename(agentFile.path, ".md");
+      const sourceAbs = path.join(options.targetRoot, ".claude", "agents", `${role}.md`);
+      if (!fs.existsSync(sourceAbs)) continue;
+      const rendered = spec.render(fs.readFileSync(sourceAbs, "utf8"));
+      const relPath = path.posix.join(spec.dir, `${role}${spec.fileExtension}`);
+      const dest = path.join(options.targetRoot, relPath);
+      const entry: TemplateFileEntry = { path: relPath, sha256: sha256Of(rendered), size_bytes: Buffer.byteLength(rendered) };
+      if (!fs.existsSync(dest)) {
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
         fs.writeFileSync(dest, rendered, "utf8");
-        performed.push({ action: "update", path: relPath, note: "regenerated from .claude/agents" });
-      } else {
-        continue; // leave the stranger's file alone, don't claim it
+        performed.push({ action: "add", path: relPath, note: "generated from .claude/agents" });
+      } else if (hashFile(dest) !== entry.sha256) {
+        const oursBefore = manifest?.files.some((f) => f.path === relPath);
+        if (oursBefore || options.force) {
+          backup(relPath);
+          fs.writeFileSync(dest, rendered, "utf8");
+          performed.push({ action: "update", path: relPath, note: "regenerated from .claude/agents" });
+        } else {
+          continue; // leave the stranger's file alone, don't claim it
+        }
       }
+      managedEntries.push(entry);
     }
-    regeneratedCodex.add(relPath);
-    managedEntries.push(entry);
   }
 
   // Stale cleanup — only paths this Target's own manifest proves we manage(d).

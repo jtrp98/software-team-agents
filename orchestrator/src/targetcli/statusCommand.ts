@@ -41,6 +41,7 @@ export interface TargetStatus {
   managedFileCount: number;
   claude: RuntimeReadiness;
   codex: RuntimeReadiness;
+  opencode: RuntimeReadiness;
 }
 
 function countFiles(dir: string, suffix: string): number {
@@ -72,6 +73,23 @@ export function codexReadiness(targetRoot: string): RuntimeReadiness {
   if (md === 0) return { ready: false, detail: "no agent sources synced yet — run software-team-agents sync" };
   if (toml < md) return { ready: false, detail: `${toml}/${md} bindings generated — run software-team-agents sync` };
   return { ready: true, detail: `${toml} binding(s) match ${md} agent source(s)` };
+}
+
+/**
+ * OpenCode readiness (T-OC5): bindings must be present and the sta-guards
+ * plugin wired — OpenCode's headless default posture is allow-all (planning/v2
+ * spike §7), so a workspace without the plugin would run unguarded.
+ */
+export function opencodeReadiness(targetRoot: string): RuntimeReadiness {
+  const md = countFiles(path.join(targetRoot, ".claude", "agents"), ".md");
+  const agents = countFiles(path.join(targetRoot, ".opencode", "agent"), ".md");
+  if (md === 0) return { ready: false, detail: "no agent sources synced yet — run software-team-agents sync" };
+  if (agents < md) return { ready: false, detail: `${agents}/${md} bindings generated — run software-team-agents sync` };
+  const pluginPath = path.join(targetRoot, ".opencode", "plugin", "sta-guards.js");
+  if (!fs.existsSync(pluginPath)) {
+    return { ready: false, detail: `no .opencode/plugin/sta-guards.js — guards unwired (OpenCode's default is allow-all); run software-team-agents sync` };
+  }
+  return { ready: true, detail: `${agents} binding(s) match ${md} agent source(s), plugin wired` };
 }
 
 export function gatherStatus(options: { targetRoot?: string; templatesDir?: string; installationConfigPath?: string } = {}): TargetStatus {
@@ -154,6 +172,7 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     managedFileCount,
     claude: claudeReadiness(roots.targetRoot),
     codex: codexReadiness(roots.targetRoot),
+    opencode: opencodeReadiness(roots.targetRoot),
   };
 }
 
@@ -195,6 +214,7 @@ export function renderStatus(status: TargetStatus): string {
   if (status.conflictCount > 0) lines.push(`  conflicts: ${status.conflictCount} — run software-team-agents sync to see them`);
   lines.push(`Claude: ${status.claude.ready ? "READY" : "NOT READY"} — ${status.claude.detail}`);
   lines.push(`Codex: ${status.codex.ready ? "READY" : "NOT READY"} — ${status.codex.detail}`);
+  lines.push(`OpenCode: ${status.opencode.ready ? "READY" : "NOT READY"} — ${status.opencode.detail}`);
   if (status.role !== "ba" && status.knowledgeRoot) lines.push(`Installation Knowledge root: ${status.knowledgeRoot}`);
   return lines.join("\n");
 }

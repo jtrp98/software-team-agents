@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AgentStage } from "../types.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 import { Orchestrator } from "../orchestrator/orchestrator.js";
@@ -90,6 +90,45 @@ describe("createRuntimeExecutor — what reaches the adapter (T108)", () => {
     await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-1", context: [] });
 
     expect(runtime.requests[0].guards).toEqual(guards);
+  });
+
+  it("announces a GUARD GAP when exit checks were requested but the runtime enforces none in-band (T-OC7)", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const runtime = new MockRuntimeAdapter({
+        respond: () =>
+          okResult({
+            guards: {
+              enforced: [],
+              unenforced: [RuntimeCapability.EXIT_GUARD],
+              reason: "no verified Stop-hook equivalent",
+            },
+          }),
+      });
+      const executor = executorFor(runtime, {
+        guards: () => ({ writeAllow: [], writeDeny: [], forbidCommands: [], exitChecks: ["code-green"] }),
+      });
+      await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-1", context: [] });
+
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("GUARD GAP"));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("code-green"));
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("stays silent about exit checks when they were not requested", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const runtime = new MockRuntimeAdapter({
+        respond: () => okResult({ guards: { enforced: [], unenforced: [RuntimeCapability.EXIT_GUARD] } }),
+      });
+      const executor = executorFor(runtime, { guards: () => NO_GUARDS });
+      await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-1", context: [] });
+      expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining("GUARD GAP"));
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 
   /**

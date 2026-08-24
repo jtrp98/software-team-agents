@@ -59,6 +59,10 @@ export function assetsForRole(role: RoleName): (relPath: string) => boolean {
     }
     if (relPath.startsWith(".claude/hooks/") || relPath.startsWith(".claude/scripts/") || relPath.startsWith(".claude/shared/")) return true;
     if (relPath === ".claude/settings.json") return true;
+    // OpenCode guards travel with every workspace, like the Claude hooks do:
+    // the plugin is authored payload; `.opencode/agent/` files are derived at
+    // sync time and never ship in the template payload at all.
+    if (relPath.startsWith(".opencode/plugin/")) return true;
     if (relPath.startsWith("policies/")) return true;
     // contracts/, workflows/, stacks/, layout.yaml, escalation-policy.yaml,
     // test-pyramid.yaml — engineer-pipeline payload, not BA tooling.
