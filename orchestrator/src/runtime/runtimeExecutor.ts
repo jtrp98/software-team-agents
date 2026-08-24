@@ -1,4 +1,4 @@
-import { AgentStage } from "../types.js";
+import { AgentStage, TaskLevel } from "../types.js";
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { getAgent } from "../agents/registry.js";
 import { resolveAgentModel, resolveAgentVersion } from "../agents/agentModel.js";
@@ -69,7 +69,13 @@ export interface RuntimeExecutorOptions {
   extraInstruction?: string;
   phases?: (taskId: string) => number[] | undefined;
   sliceModuleDocs?: boolean;
-  /** T42 — per-stage working directory for a project whose pipeline spans several repos. */
+  /**
+   * T-UX12 — the task's classification level, when the caller knows it. Fed to
+   * the role-execution gate so TRIVIAL/SMALL frontend work is not blocked on a
+   * UX-artifact precondition the classifier deliberately skipped for it.
+   */
+  taskLevel?: (taskId: string) => TaskLevel | undefined;
+  /** T42 � per-stage working directory for a project whose pipeline spans several repos. */
   stageRoots?: Partial<Record<AgentStage, string>>;
   /** Phase 2's fail-closed resolver. When present it runs before adapter start. */
   threeRepoTask?: (taskId: string, stage: AgentStage) => { task: PersistedTask; roots: ThreeRepoRequestRoots };
@@ -179,7 +185,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       // In three-repo mode the workflow and UX artifacts live in Knowledge,
       // never beside framework bindings. Preflight is read-only and runs before
       // any adapter work, so resolving it first cannot create side effects.
-      const handoff = checkRoleExecutionGate(threeRepo?.roots.knowledgeRoot ?? opts.projectRoot, moduleName, req.stage);
+      const handoff = checkRoleExecutionGate(threeRepo?.roots.knowledgeRoot ?? opts.projectRoot, moduleName, req.stage, undefined, { level: opts.taskLevel?.(req.taskId) });
       if (!handoff.allowed) return failResult(handoff.reason ?? `cannot start ${role}: role workflow gate failed`);
     }
 
@@ -258,6 +264,9 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           // them the canonical write roots resolved by preflight; never derive
           // scope from cwd or an agent-provided path.
           ...(hasTargetWrite ? { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify(threeRepo!.roots.workRoots.filter((root) => root.access === "write").map((root) => root.path)) } : {}),
+          // T-WG7 — the read-only Knowledge context, for prompts/hooks that
+          // need to name where module documents actually live.
+          ...(threeRepo?.roots.knowledgeRoot ? { AGENTCLAUDE_KNOWLEDGE_ROOT: threeRepo.roots.knowledgeRoot } : {}),
         },
         timeoutMs: opts.timeoutMs,
       });
@@ -346,6 +355,9 @@ const OWNED_MODULE_DOC: Partial<Record<AgentStage, string>> = {
   [AgentStage.SYSTEM_ANALYST]: "design.md",
   [AgentStage.PROJECT_MANAGER]: "plan.md",
   [AgentStage.TEST_PLANNER]: "test-plan.md",
+  // The same artifact path `roleExecutionGate.ts` requires to be present and
+  // signed off before frontend work may start — the two must name one file.
+  [AgentStage.UXUI_DESIGNER]: "uxui/design.md",
 };
 
 /** The module-doc path convention (`policies/documentation.md` §1), read through the workspace rather than off disk directly. */

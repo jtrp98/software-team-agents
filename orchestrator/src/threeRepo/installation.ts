@@ -5,9 +5,16 @@ import { fileURLToPath } from "node:url";
 import Ajv, { type ValidateFunction } from "ajv";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
+export interface InstallationIdentities {
+  figma_email: string;
+  claude_email: string;
+}
+
 export interface InstallationConfig {
   schema_version: 1;
   knowledge_root: string;
+  /** Declared design-account identities (T-UX3). Optional: installs that never run the UX/UI stage need none. */
+  identities?: InstallationIdentities;
 }
 
 export class InstallationConfigError extends Error {}
@@ -123,4 +130,63 @@ export function configureKnowledgeRoot(knowledgeRoot: string, configPath = defau
   const config: InstallationConfig = { schema_version: 1, knowledge_root: canonical };
   fs.writeFileSync(configPath, stringifyYaml(config, { sortMapEntries: false }), "utf8");
   return config;
+}
+
+/**
+ * Declares (or replaces) the design-account identities — `sta configure
+ * identity --figma-email <e> --claude-email <e>` (T-UX3). Merges into whatever
+ * config already exists so binding a Knowledge root and declaring identities
+ * are independent acts, in either order.
+ *
+ * Emails only. A token must never be passed here, and none of these functions
+ * has a parameter that could accept one: secrets stay in the environment or
+ * the OS keychain, and installation state stays reproducible from commands.
+ */
+export function configureIdentities(
+  identities: { figma_email?: string; claude_email?: string },
+  configPath = defaultInstallationConfigPath(),
+): InstallationConfig {
+  const figma = identities.figma_email?.trim();
+  const claude = identities.claude_email?.trim();
+  if (!figma && !claude) {
+    throw new InstallationConfigError(
+      "configure identity: give at least one of --figma-email / --claude-email; both accounts must be declared to be the same address",
+    );
+  }
+
+  let config: InstallationConfig;
+  try {
+    config = loadInstallationConfig(configPath);
+  } catch {
+    // No usable existing config: identities extend an installation, they are
+    // not a substitute for one. Binding a Knowledge root remains its own act.
+    throw new InstallationConfigError(
+      `no usable installation config at ${configPath} yet — run \`configure knowledge-root <path>\` first`,
+    );
+  }
+
+  const merged: InstallationIdentities = {
+    figma_email: figma ?? config.identities?.figma_email ?? "",
+    claude_email: claude ?? config.identities?.claude_email ?? "",
+  };
+  if (!merged.figma_email || !merged.claude_email) {
+    throw new InstallationConfigError(
+      "both emails are required for the identity gate — " +
+        `declare them together: sta configure identity --figma-email <email> --claude-email <email>`,
+    );
+  }
+  const next: InstallationConfig = { ...config, identities: merged };
+
+  // Validate through the same schema a later load will use, so an invalid
+  // declaration never reaches disk.
+  const validate = validator();
+  if (!validate(next)) {
+    throw new InstallationConfigError(
+      `identities are invalid: ${(validate.errors ?? []).map((e) => `${e.instancePath || "(root)"} ${e.message}`).join("; ")}`,
+    );
+  }
+
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, stringifyYaml(next, { sortMapEntries: false }), "utf8");
+  return next;
 }

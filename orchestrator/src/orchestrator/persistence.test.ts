@@ -27,7 +27,7 @@ function qaReport(status: "PASS" | "FAIL"): QaReportArtifact {
 
 const pass: AgentExecutorResult = { outcome: { tokens: 100, cost: 0.01, result: "PASS" } };
 
-/** An incremental feature: system-analyst -> backend -> frontend -> qa. */
+/** An incremental feature: system-analyst -> test-planner -> backend -> uxui-designer -> frontend -> qa. */
 function incremental() {
   return classifyTask({ isIncrementalFeature: true, touchesBackend: true, touchesFrontend: true });
 }
@@ -55,6 +55,7 @@ describe("Orchestrator persistence (T01)", () => {
     first.provideHumanApproval("designApproved", true);
     await first.step(() => pass); // test-planner done
     await first.step(() => pass); // backend-engineer done
+    await first.step(() => pass); // uxui-designer done
 
     const resumed = Orchestrator.resume("T-1", store);
     const ran: AgentStage[] = [];
@@ -84,6 +85,7 @@ describe("Orchestrator persistence (T01)", () => {
     first.provideHumanApproval("designApproved", true);
     await first.step(() => pass); // test-planner
     await first.step(() => ({ outcome: { tokens: 5_000, cost: 0.2, result: "PASS" } })); // backend-engineer
+    await first.step(() => ({ outcome: { tokens: 5_000, cost: 0.2, result: "PASS" } })); // uxui-designer
     await first.step(() => ({ outcome: { tokens: 5_000, cost: 0.2, result: "PASS" } })); // frontend-engineer
     await first.step(() => ({
       outcome: { tokens: 1_000, cost: 0.05, result: "FAIL" },
@@ -96,7 +98,7 @@ describe("Orchestrator persistence (T01)", () => {
     const resumed = Orchestrator.resume("T-1", store);
     expect(resumed.retries.qa).toBe(1);
     expect(resumed.runLog.totalTokens("T-1")).toBe(first.runLog.totalTokens("T-1"));
-    expect(resumed.runLog.runsForTask("T-1")).toHaveLength(5);
+    expect(resumed.runLog.runsForTask("T-1")).toHaveLength(6);
   });
 
   it("keeps every routing decision in the store as an audit trail", async () => {
@@ -128,6 +130,7 @@ describe("Orchestrator failure routing (T01)", () => {
     orch.provideHumanApproval("designApproved", true);
     await orch.step(() => pass); // test-planner
     await orch.step(() => pass); // backend
+    await orch.step(() => pass); // uxui-designer
     await orch.step(() => pass); // frontend
     const status = await orch.step(() => ({
       outcome: { tokens: 100, cost: 0.01, result: "FAIL" },
@@ -338,6 +341,7 @@ describe("human approval as first-class state (T08)", () => {
     orch.provideHumanApproval("designApproved", true);
     await orch.step(() => pass); // test-planner
     await orch.step(() => pass); // backend-engineer
+    await orch.step(() => pass); // uxui-designer
     await orch.step(() => pass); // frontend-engineer
     await orch.step(() => ({
       outcome: { tokens: 100, cost: 0.01, result: "FAIL" },

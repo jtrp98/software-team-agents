@@ -43,7 +43,7 @@ export const ALLOWED_OWNERS: Record<KnowledgeKind, AgentStage[]> = {
   decision: [],
   task: [AgentStage.PROJECT_MANAGER, AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER],
   test: [AgentStage.TEST_PLANNER, AgentStage.QA_ENGINEER],
-  "ux-design": [AgentStage.HUMAN],
+  "ux-design": [AgentStage.UXUI_DESIGNER],
 };
 
 export function mayOwn(kind: KnowledgeKind, role: AgentStage): boolean {

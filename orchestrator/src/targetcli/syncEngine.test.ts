@@ -313,6 +313,107 @@ describe("safe sync engine — OpenCode renderings (T-OC2)", () => {
   });
 });
 
+// --- T-WG7 — dev-lane rendering of CLAUDE.md + the generated include --------
+
+const DEV_V1: FixtureFile[] = [
+  { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer", "builds backend") },
+  { relPath: "CLAUDE.md", content: "# Rules\n\nRead `_docs/status.md` first.\n" },
+];
+
+function knowledgeRootFixture(): string {
+  const root = tmpRoot("knowledge");
+  fs.writeFileSync(path.join(root, "targets.yaml"), "schema_version: 1\ntargets: []\n", "utf8");
+  return root;
+}
+
+function installationConfigFixture(knowledgeRoot: string): string {
+  const file = path.join(tmpRoot("install"), "installation.yaml");
+  fs.writeFileSync(file, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledgeRoot)}\n`, "utf8");
+  return file;
+}
+
+describe("dev-lane Knowledge rendering (T-WG7)", () => {
+  it("renders CLAUDE.md with the banner and writes the include for a dev workspace", () => {
+    const target = gitTarget();
+    writeTargetConfig(target, defaultTargetConfig("app", "2026-01-01T00:00:00Z", "dev"));
+    const knowledge = knowledgeRootFixture();
+
+    const result = runTargetSync({
+      targetRoot: target,
+      templatesDir: makeTemplatesDir("1.0.0", DEV_V1),
+      now: "2026-01-01T00:00:00Z",
+      installationConfigPath: installationConfigFixture(knowledge),
+    });
+
+    const claude = fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8");
+    expect(claude.startsWith("<!-- sta:three-repo-dev -->")).toBe(true);
+    expect(claude).toContain(knowledge);
+    expect(claude).toContain("Read `_docs/status.md` first."); // body preserved under the banner
+    const include = fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8");
+    expect(include).toContain(`KNOWLEDGE_ROOT=${knowledge}`);
+    const paths = readTargetManifest(target).files.map((f) => f.path);
+    expect(paths).toContain("CLAUDE.md");
+    expect(paths).toContain(".claude/shared/knowledge-root.md");
+    expect(result.performed.some((p) => p.path === "CLAUDE.md" && p.action === "add")).toBe(true);
+  });
+
+  it("re-sync without changes leaves the rendered workspace untouched (idempotent)", () => {
+    const target = gitTarget();
+    writeTargetConfig(target, defaultTargetConfig("app", "now", "dev"));
+    const installation = installationConfigFixture(knowledgeRootFixture());
+    const templatesDir = makeTemplatesDir("1.0.0", DEV_V1);
+    runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-01T00:00:00Z", installationConfigPath: installation });
+
+    const second = runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-02T00:00:00Z", installationConfigPath: installation });
+
+    expect(second.performed.filter((p) => p.action !== "unchanged")).toEqual([]);
+    expect(second.skippedConflicts).toEqual([]);
+  });
+
+  it("re-renders when the binding moves and reports updates, not conflicts", () => {
+    const target = gitTarget();
+    writeTargetConfig(target, defaultTargetConfig("app", "now", "dev"));
+    const templatesDir = makeTemplatesDir("1.0.0", DEV_V1);
+    runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-01T00:00:00Z", installationConfigPath: installationConfigFixture(knowledgeRootFixture()) });
+
+    const moved = knowledgeRootFixture();
+    const result = runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-02T00:00:00Z", installationConfigPath: installationConfigFixture(moved) });
+
+    expect(result.skippedConflicts).toEqual([]);
+    expect(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8")).toContain(moved);
+    expect(fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8")).toContain(moved);
+  });
+
+  it("leaves a non-dev workspace byte-identical to the template and writes no include", () => {
+    const target = gitTarget();
+    writeTargetConfig(target, defaultTargetConfig("kb", "now", "ba"));
+    const templatesDir = makeTemplatesDir("1.0.0", DEV_V1);
+
+    runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-01T00:00:00Z", installationConfigPath: installationConfigFixture(knowledgeRootFixture()) });
+
+    expect(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8")).toBe(DEV_V1[1]!.content);
+    expect(fs.existsSync(path.join(target, ".claude", "shared", "knowledge-root.md"))).toBe(false);
+  });
+
+  it("never touches a foreign project-owned CLAUDE.md but still records the binding include", () => {
+    const target = gitTarget();
+    writeTargetConfig(target, defaultTargetConfig("app", "now", "dev"));
+    fs.writeFileSync(path.join(target, "CLAUDE.md"), "# The project's own instructions\n", "utf8");
+
+    const result = runTargetSync({
+      targetRoot: target,
+      templatesDir: makeTemplatesDir("1.0.0", DEV_V1),
+      now: "2026-01-01T00:00:00Z",
+      installationConfigPath: installationConfigFixture(knowledgeRootFixture()),
+    });
+
+    expect(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8")).toBe("# The project's own instructions\n");
+    expect(result.skippedConflicts.map((c) => c.path)).toContain("CLAUDE.md");
+    expect(readTargetManifest(target).files.map((f) => f.path)).not.toContain("CLAUDE.md");
+    expect(fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8")).toContain("KNOWLEDGE_ROOT=");
+  });
+});
+
 describe("sync-state classification (packaging checklist: READY/OUTDATED/INCOMPATIBLE)", () => {
   it("distinguishes up-to-date, patch/minor drift, and major incompatibility", () => {
     expect(classifySyncState("1.2.0", "1.2.0")).toBe("UP_TO_DATE");

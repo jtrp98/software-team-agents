@@ -97,6 +97,7 @@
             "enum": [
               "requirements-interview", "feasibility-analysis", "schema-design", "task-phasing",
               "scaffolding", "rest-api", "grpc", "database-access", "auth", "ui", "testing", "test-strategy",
+              "ux-analysis",
               "verification", "security-audit", "deployment", "migration", "ci", "triage", "approval"
             ]
           }
@@ -118,6 +119,7 @@
         "system-analyst",
         "project-manager",
         "test-planner",
+        "uxui-designer",
         "backend-engineer",
         "frontend-engineer",
         "qa-engineer",
@@ -132,6 +134,7 @@
         "design",
         "plan",
         "test-plan",
+        "ux-design",
         "qa-report",
         "security-report",
         "backend-code",
@@ -183,7 +186,9 @@
         "no_deploy_without_verification",
         "human_confirmation_required",
         "unsourced_facts_marked_assumption",
-        "flags_sensitive_phases"
+        "flags_sensitive_phases",
+        "no_design_url_scraping",
+        "figma_read_only_mcp"
       ]
     }
   }

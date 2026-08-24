@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import { AgentStage } from "../types.js";
 import type { PersistedTask } from "../store/taskStore.js";
 import { assertStandaloneFrameworkRoot, assertStandaloneKnowledgeRoot, loadInstallationConfig } from "./installation.js";
+import { checkDeclaredIdentities } from "./identities.js";
 import { loadLocalTargetMapping, type ResolvedLocalTarget } from "./localTargets.js";
 import { loadTargetRegistry, targetById, type TargetRegistry } from "./targets.js";
 import { uniqueBoundTargetIds, validatePersistedTaskBindings } from "./taskBindings.js";
@@ -104,6 +105,16 @@ export function preflightThreeRepoTask(
   }
   if (knowledgeRoot === bindingRoot || knowledgeRoot.startsWith(`${bindingRoot}${path.sep}`) || bindingRoot.startsWith(`${knowledgeRoot}${path.sep}`)) {
     throw new TargetPreflightError(`Knowledge root "${knowledgeRoot}" overlaps Framework root "${bindingRoot}"`);
+  }
+  // The UX/UI stage's identity gate (T-UX3): the declared Figma/Claude emails
+  // must exist, be well-formed, and agree, or the run stops before any agent
+  // starts. The runtime-side half — comparing `get_me` against the declaration
+  // at MCP connect time — sits in identities.ts and fails closed the same way.
+  if (stage === AgentStage.UXUI_DESIGNER) {
+    const verdict = checkDeclaredIdentities(installation);
+    if (!verdict.ok) {
+      throw new TargetPreflightError(`identity gate blocked ${task.taskId}: ${verdict.problems.join("; ")}`);
+    }
   }
   let registry: TargetRegistry;
   try {

@@ -1,4 +1,4 @@
-import { AgentStage } from "../types.js";
+import { AgentStage, TaskLevel } from "../types.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { KnowledgeBase } from "../knowledge/knowledgeBase.js";
@@ -20,6 +20,24 @@ import type { RoleLane } from "./roleLane.js";
 export interface RoleExecutionGateResult {
   allowed: boolean;
   reason?: string;
+}
+
+export interface RoleExecutionGateOptions {
+  /**
+   * The task's classification level, when the caller knows it (T-UX12). The
+   * UX-artifact precondition is a *design-phase* requirement: TRIVIAL and SMALL
+   * work has no design phase (the classifier does not schedule uxui-designer
+   * for it either), so demanding one there would block small fixes on ceremony
+   * the pipeline itself skipped. MEDIUM+ — and an unknown level, fail-closed —
+   * still require the signed artifact. Absent level keeps the old behaviour.
+   */
+  level?: TaskLevel;
+}
+
+/** Whether this task's level carries the UX-artifact precondition. */
+function uxGateApplies(level: TaskLevel | undefined): boolean {
+  if (level === undefined) return true;
+  return level === TaskLevel.MEDIUM || level === TaskLevel.LARGE_CRITICAL || level === TaskLevel.UNKNOWN;
 }
 
 function requiredHandoff(stage: AgentStage): { from: RoleLane; to: RoleLane } | null {
@@ -44,6 +62,7 @@ export function checkRoleExecutionGate(
   moduleName: string,
   stage: AgentStage,
   now: string = new Date().toISOString(),
+  options: RoleExecutionGateOptions = {},
 ): RoleExecutionGateResult {
   const handoff = requiredHandoff(stage);
   if (!handoff) return { allowed: true };
@@ -76,7 +95,7 @@ export function checkRoleExecutionGate(
   }
 
   const knowledge = new KnowledgeBase(loaded.items);
-  if (stage === AgentStage.FRONTEND_ENGINEER) {
+  if (stage === AgentStage.FRONTEND_ENGINEER && uxGateApplies(options.level)) {
     const artifacts = knowledge.query({ module: moduleName, kinds: ["ux-design"], status: "approved" }).filter((item): item is Extract<typeof item, { kind: "ux-design" }> => item.kind === "ux-design");
     const uxui = loadRoleWorkspace("uxui", moduleName, projectRoot, now);
     const expectedPrefix = `_docs/module/${moduleName}/uxui/`;

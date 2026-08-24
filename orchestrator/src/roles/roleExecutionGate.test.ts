@@ -1,8 +1,8 @@
-import * as fs from "node:fs";
+﻿import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { AgentStage } from "../types.js";
+import { AgentStage, TaskLevel } from "../types.js";
 import { KnowledgeBase } from "../knowledge/knowledgeBase.js";
 import { writeKnowledgeItem } from "../knowledge/knowledgeStore.js";
 import { makeItem, sampleKnowledge } from "../knowledge/sampleKnowledge.js";
@@ -73,7 +73,7 @@ describe("checkRoleExecutionGate (T114)", () => {
     expect(blocked.reason).toMatch(/no knowledge\/ directory/);
   });
 
-  it("lets engineers through when the knowledge directory exists but holds nothing — `sta init` seeds it empty", () => {
+  it("lets engineers through when the knowledge directory exists but holds nothing โ€” `sta init` seeds it empty", () => {
     const root = tmpProject();
     fs.mkdirSync(path.join(root, "knowledge"), { recursive: true });
     expect(checkRoleExecutionGate(root, "demo", AgentStage.BACKEND_ENGINEER, NOW)).toEqual({ allowed: true });
@@ -88,7 +88,7 @@ describe("checkRoleExecutionGate (T114)", () => {
     acknowledgeLane(root, kb, "dev", approveLane(root, kb, "sa"));
     expect(checkRoleExecutionGate(root, "sales-crm", AgentStage.BACKEND_ENGINEER, NOW)).toEqual({ allowed: true });
 
-    // No ux-design item at all → blocked, and the reason names the UX requirement.
+    // No ux-design item at all โ’ blocked, and the reason names the UX requirement.
     const noUx = checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW);
     expect(noUx.allowed).toBe(false);
     expect(noUx.reason).toMatch(/UX artifact/);
@@ -115,11 +115,52 @@ describe("checkRoleExecutionGate (T114)", () => {
     );
     expect(checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW)).toEqual({ allowed: true });
 
-    // The artifact moving to a new version invalidates that consent — fail closed again.
+    // The artifact moving to a new version invalidates that consent โ€” fail closed again.
     const nextVersion = { ...ux, version: (ux.version as number) + 1 };
     writeKnowledgeItem(nextVersion, root, { force: true });
     const stale = checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW);
     expect(stale.allowed).toBe(false);
     expect(stale.reason).toMatch(/UX artifact/);
   });
+
+  /**
+   * T-UX12 โ€” the UX-artifact precondition is a design-phase requirement.
+   * TRIVIAL/SMALL work has no design phase (the classifier schedules no
+   * uxui-designer for it either), so a small fix proceeds on the SAโ’DEV
+   * handoff alone; MEDIUM+ and an unknown level stay gated, fail-closed.
+   */
+  it("skips the UX-artifact precondition for TRIVIAL/SMALL tasks but keeps it for MEDIUM+ (T-UX12)", () => {
+    const root = tmpProject();
+    const kb = approvedKnowledge(root);
+    // Full SA handoff so the ONLY remaining gate for FRONTEND is the UX/UI one.
+    acknowledgeLane(root, kb, "sa", approveLane(root, kb, "ba"));
+    acknowledgeLane(root, kb, "dev", approveLane(root, kb, "sa"));
+
+    // No ux-design item exists in this project at all.
+    expect(checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW, { level: TaskLevel.TRIVIAL })).toEqual({ allowed: true });
+    expect(checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW, { level: TaskLevel.SMALL })).toEqual({ allowed: true });
+
+    // MEDIUM+ still demands the signed artifactโ€ฆ
+    const medium = checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW, { level: TaskLevel.MEDIUM });
+    expect(medium.allowed).toBe(false);
+    expect(medium.reason).toMatch(/UX artifact/);
+    const large = checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW, { level: TaskLevel.LARGE_CRITICAL });
+    expect(large.allowed).toBe(false);
+
+    // โ€ฆand an unknown level fails closed rather than skipping the gate.
+    const unknown = checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW, { level: TaskLevel.UNKNOWN });
+    expect(unknown.allowed).toBe(false);
+
+    // Absent level keeps the pre-T-UX12 behaviour exactly.
+    expect(checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW).allowed).toBe(false);
+
+    // The SAโ’DEV handoff itself was never waived by level โ€” only the UX precondition is.
+    const saNotAcknowledged = tmpProject();
+    const kb2 = approvedKnowledge(saNotAcknowledged);
+    approveLane(saNotAcknowledged, kb2, "ba");
+    expect(
+      checkRoleExecutionGate(saNotAcknowledged, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW, { level: TaskLevel.SMALL }).allowed,
+    ).toBe(false);
+  });
 });
+

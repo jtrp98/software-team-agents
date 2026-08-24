@@ -4,21 +4,22 @@ import { VIEW_OF } from "../knowledge/roleView.js";
 import { LANE_LABEL, ROLE_LANES, type RoleLane, isRoleLane, laneOf, rolesInLane } from "./roleLane.js";
 
 describe("laneOf (T99)", () => {
-  it("puts each of the ten roles in exactly one lane", () => {
+  it("puts each of the eleven roles in exactly one lane", () => {
     const stages = Object.values(AgentStage).filter((s) => s !== AgentStage.HUMAN);
     for (const stage of stages) {
       expect(ROLE_LANES).toContain(laneOf(stage) as RoleLane);
     }
-    expect(stages).toHaveLength(10);
+    expect(stages).toHaveLength(11);
   });
 
   it("gives the human no lane — a lane of everything is not a lane", () => {
     expect(laneOf(AgentStage.HUMAN)).toBeNull();
   });
 
-  it("matches V1.5's three columns", () => {
+  it("matches V1.5's columns, with uxui-designer in the UXUI lane", () => {
     expect(laneOf(AgentStage.BUSINESS_ANALYST)).toBe("ba");
     expect(laneOf(AgentStage.SYSTEM_ANALYST)).toBe("sa");
+    expect(laneOf(AgentStage.UXUI_DESIGNER)).toBe("uxui");
     expect(laneOf(AgentStage.BACKEND_ENGINEER)).toBe("dev");
   });
 
@@ -52,10 +53,15 @@ describe("rolesInLane", () => {
     ]);
   });
 
-  it("covers every non-human role exactly once across the three lanes", () => {
+  /** V1 left the UXUI lane empty on purpose; uxui-designer is what fills it (T-UX1). */
+  it("holds exactly uxui-designer in the UXUI lane", () => {
+    expect(rolesInLane("uxui")).toEqual([AgentStage.UXUI_DESIGNER]);
+  });
+
+  it("covers every non-human role exactly once across the four lanes", () => {
     const all = ROLE_LANES.flatMap((lane) => rolesInLane(lane));
     expect(new Set(all).size).toBe(all.length);
-    expect(all).toHaveLength(10);
+    expect(all).toHaveLength(11);
     expect(all).not.toContain(AgentStage.HUMAN);
   });
 });

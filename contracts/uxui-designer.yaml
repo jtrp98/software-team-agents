@@ -1,0 +1,38 @@
+# Contract for the `uxui-designer` agent. Shape: orchestrator/schemas/agent-contract.schema.json
+agent:
+  name: uxui-designer
+  role: uxui-designer
+  description: Read-only UI consultant — analyzes the design source (Figma via read-only MCP, or an exported design handoff) and produces draft UX-* recommendations. Never writes application code and never approves its own work.
+input:
+  required: [requirements, design]
+  optional: []
+output:
+  required: [ux-design]
+constraints:
+  - no_git
+  - stay_inside_repo
+  - no_next_agent_invocation
+  - amend_not_regenerate
+  - dates_from_user
+  # Its whole output is a recommendation — only a person approves it and records the UXUI lane sign-off.
+  - human_confirmation_required
+  # A value/feasibility question is not its to answer: it reports a structured failure the orchestrator routes to ba/sa.
+  - no_rule_decisions
+  # Design material reaches it only through the supported ingestion paths; it never fetches a design URL itself.
+  - no_design_url_scraping
+  # Figma MCP is read-only for this role: no canvas write (Code-to-Canvas), token from env/keychain only.
+  - figma_read_only_mcp
+permissions:
+  capabilities: [read, write_docs]
+  # Writes only its own lane artifact folder and its own knowledge kind. knowledge/_sources/** is read-only:
+  # people place export files there, the agent only reads them.
+  read: [".claude/agents/uxui-designer.md", ".claude/shared/**", "policies/**", "CLAUDE.md", "_docs/module/*/design.md", "_docs/module/*/requirement.md", "_docs/module/*/review.md", "_docs/module/*/uxui/**", "_docs/status-archive.md", "_docs/status.md", "knowledge/*/ux-design/**", "knowledge/_sources/design/**"]
+  write: ["_docs/module/*/uxui/**", "knowledge/*/ux-design/**"]
+  deny: ["_docs/module/*/design.md", "_docs/module/*/plan.md", "_docs/module/*/requirement.md", "_docs/module/*/review.md", "app/**", "src/**", "components/**", "server/**", "prisma/**", "styles/**", "public/**", "contracts/**", ".claude/**", "knowledge/_sources/**", "workflows/**", "stacks/**"]
+tools: [Read, Glob, Grep, Write, Edit]
+states: [IMPLEMENTATION]
+capability:
+  languages: []
+  frameworks: []
+  database: []
+  capabilities: [ux-analysis]

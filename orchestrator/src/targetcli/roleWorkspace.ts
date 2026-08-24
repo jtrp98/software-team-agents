@@ -31,12 +31,16 @@ export const ROLE_WORKSPACE_KIND: Record<RoleName, "knowledge" | "target"> = {
   dev: "target",
 };
 
-/** Which agent prompts a role's workspace materializes. BA lanes don't carry engineer prompts; DEV carries the full roster. */
+/** Which agent prompts a role's workspace materializes. The Knowledge side carries the analysis roles (incl. uxui-designer, whose outputs are knowledge/_docs only); the Target side carries engineers + reviewers. */
 export const BA_LANE_AGENTS: readonly string[] = [
   "business-analyst",
   "system-analyst",
   "project-manager",
   "test-planner",
+  // T-UX1/T-UX13: the UX/UI consultant is a knowledge-side role — its outputs
+  // are draft UX-* items under knowledge/ plus _docs/module/<m>/uxui/**, never
+  // app source, so its prompt belongs beside the other Knowledge-lane roles.
+  "uxui-designer",
 ];
 
 /**
@@ -49,8 +53,19 @@ export const BA_LANE_AGENTS: readonly string[] = [
  * workspace needs because only there does the pipeline drive engineers.
  */
 export function assetsForRole(role: RoleName): (relPath: string) => boolean {
-  if (role === "dev") return () => true;
   const baAgents = new Set(BA_LANE_AGENTS);
+  if (role === "dev") {
+    // T-UX13: a Target workspace carries no BA-lane prompts. A session opened
+    // inside the app repo then cannot pick `business-analyst` and write
+    // requirements into the Target — the wrong-repo failure this split exists
+    // to prevent at the source, not just to detect afterwards.
+    return (relPath) => {
+      if (relPath.startsWith(".claude/agents/") && relPath.endsWith(".md")) {
+        return !baAgents.has(path.basename(relPath, ".md"));
+      }
+      return true;
+    };
+  }
   return (relPath) => {
     if (relPath === "CLAUDE.md") return true;
     if (relPath.startsWith(".claude/agents/")) {
@@ -212,6 +227,56 @@ export function resolveKnowledgeBinding(options: {
   }
 }
 
+// --- Target binding (T-LV1) --------------------------------------------------
+
+export interface TargetBinding {
+  /** Absolute, validated path of the bound Target root. */
+  targetRoot: string;
+  /** Where the binding came from — recovery advice names it. "invalid" carries the problem text in targetRoot instead. */
+  via: "workspace-config" | "invalid";
+}
+
+export class TargetBindingError extends Error {}
+
+function looksLikeTargetRoot(candidate: string): boolean {
+  return hasAppSourceMarkers(candidate);
+}
+
+/**
+ * Resolves the Target root a BA workspace may optionally read from — the
+ * reverse of resolveKnowledgeBinding: `.agent-team/config.yaml` `target.path`,
+ * repo-relative (or absolute) to the Knowledge root. Unlike Knowledge for DEV,
+ * a Target binding is never required for BA (T-ROLE-07): with no
+ * configTargetPath set this returns undefined silently — there is no
+ * installation-wide fallback to try, since a Target binding only ever comes
+ * from this one Knowledge workspace's own config. Every other failure mode
+ * (missing path, wrong repo kind, overlap with the Knowledge root) throws
+ * TargetBindingError so a caller can report it — callers never treat that as
+ * fatal, they only decide how to describe it.
+ */
+export function resolveTargetBinding(options: {
+  knowledgeRoot: string;
+  configTargetPath?: string;
+}): TargetBinding | undefined {
+  if (!options.configTargetPath) return undefined;
+  const raw = options.configTargetPath;
+  const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(options.knowledgeRoot, raw);
+  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
+    throw new TargetBindingError(
+      `Target root not found: "${raw}" resolves to ${resolved} — fix target.path in .agent-team/config.yaml, or clone the app repo there`,
+    );
+  }
+  if (!looksLikeTargetRoot(resolved)) {
+    throw new TargetBindingError(
+      `"${resolved}" is not a Target repository (no package.json/pyproject.toml/... application markers) — point target.path at the app repo`,
+    );
+  }
+  if (isSameOrNested(resolved, options.knowledgeRoot)) {
+    throw new TargetBindingError(`Target root must be separate from the Knowledge workspace — "${raw}" resolves inside it`);
+  }
+  return { targetRoot: fs.realpathSync.native(resolved), via: "workspace-config" };
+}
+
 // --- write policy wiring (T-ROLE-12 / T-ROLE-13) ----------------------------
 
 /**
@@ -223,8 +288,22 @@ export function resolveKnowledgeBinding(options: {
  *
  *   BA  → writable: knowledgeRoot only. Target/Framework writes fail closed.
  *   DEV → writable: targetRoot only. Knowledge/Framework writes fail closed.
+ *
+ * T-WG7 — a DEV session also receives AGENTCLAUDE_KNOWLEDGE_ROOT so prompts,
+ * hooks and generated includes can name the read-only Knowledge context
+ * without hard-coding machine-specific paths.
+ *
+ * T-LV1 — symmetrically, a BA session receives AGENTCLAUDE_TARGET_ROOT
+ * whenever a Target binding resolved, so `system-analyst` (T-LV2) can name a
+ * real Target to read from without hard-coding a machine-specific path. Never
+ * set when no binding resolved — BA must keep working exactly as before.
  */
-export function launchEnv(role: RoleName, existingEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function launchEnv(
+  role: RoleName,
+  existingEnv: NodeJS.ProcessEnv = process.env,
+  knowledgeRoot?: string,
+  targetRoot?: string,
+): NodeJS.ProcessEnv {
   // The role is part of the signature so call sites state whose policy they
   // launch under; today both roles enforce the same shape — own workspace
   // writable, zero cross-root grants — via cwd plus this explicit empty list.
@@ -232,5 +311,7 @@ export function launchEnv(role: RoleName, existingEnv: NodeJS.ProcessEnv = proce
   return {
     ...existingEnv,
     AGENTCLAUDE_WRITABLE_WORK_ROOTS: "[]",
+    ...(knowledgeRoot ? { AGENTCLAUDE_KNOWLEDGE_ROOT: knowledgeRoot } : {}),
+    ...(targetRoot ? { AGENTCLAUDE_TARGET_ROOT: targetRoot } : {}),
   };
 }

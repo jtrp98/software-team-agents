@@ -117,7 +117,12 @@ function requireInitialized(targetRoot: string): ReturnType<typeof readTargetMan
   return readTargetManifest(targetRoot);
 }
 
-export async function runTargetCli(argv: string[], cwd: string, frameworkRootFrom?: string): Promise<number> {
+export async function runTargetCli(
+  argv: string[],
+  cwd: string,
+  frameworkRootFrom?: string,
+  options: { installationConfigPath?: string } = {},
+): Promise<number> {
   const args = parseTargetArgs(argv);
   if (args.help || (!args.command && !args.version)) {
     console.log(TARGET_USAGE);
@@ -150,6 +155,7 @@ export async function runTargetCli(argv: string[], cwd: string, frameworkRootFro
           now: new Date().toISOString(),
           force: args.force,
           role: args.role,
+          installationConfigPath: options.installationConfigPath,
         });
         console.log(
           `[software-team-agents] ${result.role === "ba" ? "Knowledge" : "Target"} workspace ` +
@@ -175,6 +181,8 @@ export async function runTargetCli(argv: string[], cwd: string, frameworkRootFro
             manifest,
             config,
             include: config?.role ? assetsForRole(config.role) : undefined,
+            role: config?.role,
+            installationConfigPath: options.installationConfigPath,
             now: new Date().toISOString(),
             force: args.force,
           });
@@ -196,7 +204,9 @@ export async function runTargetCli(argv: string[], cwd: string, frameworkRootFro
               console.error(
                 conflict.kind === "user-modified"
                   ? "    recovery: revert the edit, claim the file via .agent-team/config.yaml overrides, or re-run with --force"
-                  : "    recovery: move/rename your file aside, then re-run software-team-agents sync",
+                  : conflict.kind === "roster-drift"
+                    ? "    recovery: re-run with --force to remove it (backed up first) — it belongs to another lane and does not belong in this workspace"
+                    : "    recovery: move/rename your file aside, then re-run software-team-agents sync",
               );
             }
             return 2;
@@ -206,7 +216,7 @@ export async function runTargetCli(argv: string[], cwd: string, frameworkRootFro
       }
 
       case "status": {
-        const status = gatherStatus({ targetRoot: targetRootArg, templatesDir: path.join(frameworkRoot, "templates") });
+        const status = gatherStatus({ targetRoot: targetRootArg, templatesDir: path.join(frameworkRoot, "templates"), installationConfigPath: options.installationConfigPath });
         if (args.json) console.log(JSON.stringify(status, null, 2));
         else console.log(renderStatus(status));
         return 0;
@@ -218,6 +228,7 @@ export async function runTargetCli(argv: string[], cwd: string, frameworkRootFro
           templatesDir: path.join(frameworkRoot, "templates"),
           runtime: args.runtime,
           autoSync: args.autoSync,
+          installationConfigPath: options.installationConfigPath,
         });
       }
 
@@ -227,6 +238,7 @@ export async function runTargetCli(argv: string[], cwd: string, frameworkRootFro
           templatesDir: path.join(frameworkRoot, "templates"),
           runtime: args.runtime,
           autoSync: args.autoSync,
+          installationConfigPath: options.installationConfigPath,
         });
       }
 

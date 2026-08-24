@@ -14,7 +14,7 @@ import { pathToFileURL } from "node:url";
 const pluginHref = pathToFileURL(path.resolve(import.meta.dirname, "../../../.opencode/plugin/sta-guards.js")).href;
 
 const roots: string[] = [];
-const envKeys = ["AGENTCLAUDE_ROLE", "AGENTCLAUDE_WRITABLE_WORK_ROOTS"] as const;
+const envKeys = ["AGENTCLAUDE_ROLE", "AGENTCLAUDE_WRITABLE_WORK_ROOTS", "AGENTCLAUDE_KNOWLEDGE_ROOT"] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -131,5 +131,53 @@ describe("sta-guards plugin (OpenCode)", () => {
     const guard = await hookFor(root);
     await expect(guard("write", {})).resolves.toBeUndefined();
     await expect(guard("notebookedit", { notebook_path: 42 })).resolves.toBeUndefined();
+  });
+});
+
+describe("sta-guards plugin — workspace-role tripwire (T-WG3)", () => {
+  function roleWorkspace(role: "ba" | "dev"): string {
+    const root = workspace();
+    fs.mkdirSync(path.join(root, ".agent-team"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".agent-team", "config.yaml"),
+      `schema_version: 1\ntarget_id: t\nregistered_at: 2026-08-24T00:00:00Z\noverrides: []\nrole: ${role}\n`,
+      "utf8",
+    );
+    return root;
+  }
+
+  it("dev workspace blocks analysis artifacts and registry files, interactively included", async () => {
+    const root = roleWorkspace("dev");
+    const guard = await hookFor(root);
+    await expect(guard("write", { filePath: path.join(root, "_docs", "module", "m", "plan.md") })).rejects.toThrow(/Knowledge repository/);
+    await expect(guard("write", { filePath: path.join(root, "_docs", "status.md") })).rejects.toThrow(/Knowledge repository/);
+    await expect(guard("write", { filePath: path.join(root, "decisions", "DR-001.yaml") })).rejects.toThrow(/Knowledge repository/);
+    await expect(guard("write", { filePath: path.join(root, "targets.yaml") })).rejects.toThrow(/Knowledge repository/);
+    // Engineer-owned docs and app code remain writable in a dev workspace.
+    await expect(guard("write", { filePath: path.join(root, "_docs", "module", "m", "review.md") })).resolves.toBeUndefined();
+    await expect(guard("write", { filePath: path.join(root, "src", "a.ts") })).resolves.toBeUndefined();
+  });
+
+  it("deny text names the resolved Knowledge root when the launch provides it (T-WG7 env)", async () => {
+    const root = roleWorkspace("dev");
+    process.env.AGENTCLAUDE_KNOWLEDGE_ROOT = path.join(path.dirname(root), "kb-fixture");
+    const guard = await hookFor(root);
+    const err = await guard("write", { filePath: path.join(root, "_docs", "module", "m", "requirement.md") }).catch((e) => e);
+    expectBlocked(err, /kb-fixture/);
+  });
+
+  it("ba workspace mirrors the rule for engineer/pipeline payload", async () => {
+    const root = roleWorkspace("ba");
+    const guard = await hookFor(root);
+    await expect(guard("write", { filePath: path.join(root, "contracts", "backend-engineer.yaml") })).rejects.toThrow(/Target checkout/);
+    await expect(guard("write", { filePath: path.join(root, "workflows", "feature.yml") })).rejects.toThrow(/Target checkout/);
+    await expect(guard("edit", { file_path: "_docs/module/m/design.md" })).resolves.toBeUndefined();
+  });
+
+  it("without .agent-team/config.yaml nothing changes (legacy workspaces)", async () => {
+    const root = workspace();
+    const guard = await hookFor(root);
+    await expect(guard("write", { filePath: path.join(root, "contracts", "x.yaml") })).resolves.toBeUndefined();
+    await expect(guard("write", { filePath: path.join(root, "_docs", "module", "m", "plan.md") })).resolves.toBeUndefined();
   });
 });

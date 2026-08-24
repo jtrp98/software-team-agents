@@ -56,6 +56,42 @@ describe("installation Knowledge root", () => {
   });
 });
 
+describe("declared identities (T-UX3 identity gate)", () => {
+  it("configures identities through the CLI into the same installation config as the Knowledge root", async () => {
+    const root = tempRoot(); const framework = path.join(root, "framework"); const knowledge = path.join(root, "knowledge"); const config = path.join(root, "local", "installation.yaml");
+    initRepository(framework); initRepository(knowledge);
+    expect(await runCli(["configure", "knowledge-root", knowledge, "--config-path", config], framework)).toBe(0);
+    expect(await runCli(["configure", "identity", "--figma-email", "Same@Person.dev ", "--claude-email", "same@person.dev", "--config-path", config], framework)).toBe(0);
+
+    const loaded = loadInstallationConfig(config);
+    // The Knowledge root binding survives an identity declaration — independent acts, one file.
+    expect(loaded.knowledge_root).toBe(fs.realpathSync.native(knowledge));
+    expect(loaded.identities).toEqual({ figma_email: "Same@Person.dev", claude_email: "same@person.dev" });
+  });
+
+  it("refuses to declare identities without a bound Knowledge root, and without both emails", async () => {
+    const root = tempRoot(); const framework = path.join(root, "framework"); const config = path.join(root, "local", "installation.yaml");
+    initRepository(framework);
+    expect(await runCli(["configure", "identity", "--figma-email", "a@b.dev", "--claude-email", "a@b.dev", "--config-path", config], framework)).toBe(1);
+    expect(fs.existsSync(config)).toBe(false);
+
+    const knowledge = path.join(root, "knowledge");
+    initRepository(knowledge);
+    await runCli(["configure", "knowledge-root", knowledge, "--config-path", config], framework);
+    expect(await runCli(["configure", "identity", "--figma-email", "a@b.dev", "--config-path", config], framework)).toBe(1);
+    expect(loadInstallationConfig(config).identities).toBeUndefined();
+  });
+
+  it("rejects a malformed email through the same schema a later load applies", async () => {
+    const root = tempRoot(); const framework = path.join(root, "framework"); const knowledge = path.join(root, "knowledge"); const config = path.join(root, "installation.yaml");
+    initRepository(framework); initRepository(knowledge);
+    await runCli(["configure", "knowledge-root", knowledge, "--config-path", config], framework);
+    expect(await runCli(["configure", "identity", "--figma-email", "not-an-email", "--claude-email", "a@b.dev", "--config-path", config], framework)).toBe(1);
+    // Nothing half-written: the previous valid state is still what loads.
+    expect(loadInstallationConfig(config).identities).toBeUndefined();
+  });
+});
+
 describe("Target registry", () => {
   it("accepts a second Target without changing framework source and resolves lifecycle correctly", () => {
     const knowledge = tempRoot();

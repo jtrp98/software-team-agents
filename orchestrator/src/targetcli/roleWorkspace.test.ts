@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   assetsForRole,
@@ -8,6 +9,8 @@ import {
   KnowledgeBindingError,
   launchEnv,
   resolveKnowledgeBinding,
+  resolveTargetBinding,
+  TargetBindingError,
 } from "./roleWorkspace.js";
 
 const roots: string[] = [];
@@ -185,6 +188,128 @@ describe("write-policy launch wiring (T-ROLE-12/13)", () => {
       const env = launchEnv(role, { AGENTCLAUDE_WRITABLE_WORK_ROOTS: '["D:\\somewhere-else"]', PATH: "keep" });
       expect(env.AGENTCLAUDE_WRITABLE_WORK_ROOTS).toBe("[]");
       expect(env.PATH).toBe("keep");
+    }
+  });
+
+  it("T-WG7 — a DEV launch carries AGENTCLAUDE_KNOWLEDGE_ROOT; a BA launch without one does not", () => {
+    const dev = launchEnv("dev", {}, "C:\\kb");
+    expect(dev.AGENTCLAUDE_KNOWLEDGE_ROOT).toBe("C:\\kb");
+    expect(launchEnv("ba", {}).AGENTCLAUDE_KNOWLEDGE_ROOT).toBeUndefined();
+  });
+
+  it("T-LV1 — a launch carries AGENTCLAUDE_TARGET_ROOT only when a Target binding resolved", () => {
+    const withTarget = launchEnv("ba", {}, undefined, "C:\\app");
+    expect(withTarget.AGENTCLAUDE_TARGET_ROOT).toBe("C:\\app");
+    expect(launchEnv("ba", {}).AGENTCLAUDE_TARGET_ROOT).toBeUndefined();
+  });
+});
+
+describe("target binding (T-LV1)", () => {
+  function targetRepo(): string {
+    const t = tmpRoot("app");
+    fs.writeFileSync(path.join(t, "package.json"), "{}");
+    return t;
+  }
+
+  it("returns undefined (silently — no throw) when target.path is not set", () => {
+    const knowledge = tmpRoot("kb-no-target");
+    const binding = resolveTargetBinding({ knowledgeRoot: knowledge });
+    expect(binding).toBeUndefined();
+  });
+
+  it("resolves a relative config binding against the knowledge root", () => {
+    const knowledge = tmpRoot("kb");
+    const t = targetRepo();
+    const name = path.basename(t);
+    fs.renameSync(t, path.join(path.dirname(knowledge), name));
+    const binding = resolveTargetBinding({
+      knowledgeRoot: knowledge,
+      configTargetPath: path.join("..", name),
+    });
+    expect(binding?.via).toBe("workspace-config");
+    expect(fs.existsSync(binding!.targetRoot)).toBe(true);
+  });
+
+  it("fails closed (throws) with recovery advice for a missing path", () => {
+    const knowledge = tmpRoot("kb2");
+    expect(() =>
+      resolveTargetBinding({ knowledgeRoot: knowledge, configTargetPath: "../does-not-exist" }),
+    ).toThrow(TargetBindingError);
+    try {
+      resolveTargetBinding({ knowledgeRoot: knowledge, configTargetPath: "../does-not-exist" });
+    } catch (e) {
+      expect((e as Error).message).toMatch(/clone|config\.yaml/);
+    }
+  });
+
+  it("rejects a directory that is not a Target repo (no app-source markers)", () => {
+    const knowledge = tmpRoot("kb3");
+    const plain = tmpRoot("plain2");
+    expect(() =>
+      resolveTargetBinding({ knowledgeRoot: knowledge, configTargetPath: plain }),
+    ).toThrow(/not a Target repository/);
+  });
+
+  it("refuses a binding inside the Knowledge workspace itself (overlap guard)", () => {
+    const knowledge = tmpRoot("kb4");
+    fs.writeFileSync(path.join(knowledge, "package.json"), "{}");
+    expect(() =>
+      resolveTargetBinding({ knowledgeRoot: knowledge, configTargetPath: "." }),
+    ).toThrow(/separate from the Knowledge workspace/);
+  });
+});
+
+describe("T-WG5 — the confirm-workspace checkpoint ships to both lanes' synced payload", () => {
+  // repo root's own templates/ snapshot, rebuilt by `npm run build:templates`
+  // (build:templates is required before this test passes — same as any other
+  // check against generated output; see CLAUDE.md's guardrail against
+  // patching templates/ directly instead of its sources).
+  const templatesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "templates");
+
+  it("policies/documentation.md's §0 checkpoint is included in both the BA and DEV asset profiles", () => {
+    for (const role of ["ba", "dev"] as const) {
+      const include = assetsForRole(role);
+      expect(include("policies/documentation.md")).toBe(true);
+      expect(include("CLAUDE.md")).toBe(true);
+    }
+  });
+
+  it("the checkpoint text is actually present in the synced source files (not just referenced)", () => {
+    const docPolicy = fs.readFileSync(path.join(templatesRoot, "policies", "documentation.md"), "utf8");
+    expect(docPolicy).toMatch(/## 0\. Before writing anything — confirm workspace ↔ lane/);
+    expect(docPolicy).toContain("stop and ask the user before writing any doc file at all");
+
+    const claudeMd = fs.readFileSync(path.join(templatesRoot, "CLAUDE.md"), "utf8");
+    expect(claudeMd).toMatch(/Confirm workspace ↔ lane before writing anything/);
+
+    const setupAgent = fs.readFileSync(path.join(templatesRoot, ".claude", "agents", "setup.md"), "utf8");
+    expect(setupAgent).toContain("T-WG5");
+
+    const baAgent = fs.readFileSync(path.join(templatesRoot, ".claude", "agents", "business-analyst.md"), "utf8");
+    expect(baAgent).toContain("T-WG5");
+  });
+
+  it("T-LV3 — qa-engineer's chosen sync mechanism (review.md -> BA-lane sync) is documented, not aspirational", () => {
+    const qaAgent = fs.readFileSync(path.join(templatesRoot, ".claude", "agents", "qa-engineer.md"), "utf8");
+    expect(qaAgent).toContain("Knowledge / Target / three-repo mode");
+    expect(qaAgent).toContain("Knowledge sync");
+    expect(qaAgent).toMatch(/role: dev/);
+
+    const contract = fs.readFileSync(path.join(templatesRoot, "..", "contracts", "qa-engineer.yaml"), "utf8");
+    expect(contract).toMatch(/T-LV3/);
+
+    const claudeMd = fs.readFileSync(path.join(templatesRoot, "CLAUDE.md"), "utf8");
+    expect(claudeMd).toMatch(/T-LV3/);
+  });
+
+  it("TEAM_SETUP_V1.md exists and every reference to it resolves (no broken canonical link)", () => {
+    const repoRoot = path.resolve(templatesRoot, "..");
+    expect(fs.existsSync(path.join(repoRoot, "TEAM_SETUP_V1.md"))).toBe(true);
+    for (const referencing of ["AGENTS.md", "CLAUDE.md"]) {
+      const content = fs.readFileSync(path.join(repoRoot, referencing), "utf8");
+      if (content.includes("TEAM_SETUP_V1.md")) {
+        expect(fs.existsSync(path.join(repoRoot, "TEAM_SETUP_V1.md"))).toBe(true);
+      }
     }
   });
 });

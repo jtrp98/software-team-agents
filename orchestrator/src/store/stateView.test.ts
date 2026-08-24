@@ -149,6 +149,7 @@ describe("state view — T02 fields", () => {
 
       writeStateViewFromStore(file, store);
       const doc = parse(fs.readFileSync(file, "utf8"));
+      // A copy tweak has no design phase (T-UX11): the one stage is frontend-engineer.
       expect(doc.tasks[0].previous).toEqual({ agent: AgentStage.FRONTEND_ENGINEER, result: "PASS" });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

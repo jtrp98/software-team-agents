@@ -7,8 +7,8 @@ layouts) no longer applies anywhere in this repo.
 ## What this repo is
 
 The **Framework repo** of a Three-Repo architecture — a process/workflow layer plus
-the `sta` orchestrator CLI that drives ten agent roles (`setup`, `business-analyst`,
-`system-analyst`, `project-manager`, `test-planner`, `backend-engineer`,
+the `sta` orchestrator CLI that drives eleven agent roles (`setup`, `business-analyst`,
+`system-analyst`, `project-manager`, `test-planner`, `uxui-designer`, `backend-engineer`,
 `frontend-engineer`, `qa-engineer`, `security`, `devops`) through a runtime:
 Claude Code reads `.claude/agents/*.md`, Codex reads `.codex/agents/*.toml`,
 OpenCode reads `.opencode/agent/*.md` (generated; see `planning/v2/opencode-runtime-TASKS.md`).

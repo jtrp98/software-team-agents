@@ -132,6 +132,27 @@ const RAW_REGISTRY: Record<AgentStage, AgentRegistryEntry> = {
       capabilities: [Capability.TEST_STRATEGY],
     },
   },
+  [AgentStage.UXUI_DESIGNER]: {
+    name: AgentStage.UXUI_DESIGNER,
+    role: "uxui-designer",
+    responsibilities: [
+      "analyze the design source (Figma file via read-only MCP, or an exported design handoff) and produce draft UX-* recommendations",
+      "advise frontend-engineer on UI structure before implementation starts — a consultant, never an implementer",
+    ],
+    inputs: ["requirements", "design"],
+    outputs: ["ux-design"],
+    // No AskUserQuestion: like the engineers, unclear rules route back to
+    // system-analyst/business-analyst rather than being settled in this chat.
+    tools: ["Read", "Glob", "Grep", "Write", "Edit"],
+    permissions: [Permission.READ, Permission.WRITE_DOCS],
+    allowed_states: [TaskState.IMPLEMENTATION],
+    capability: {
+      languages: [],
+      frameworks: [],
+      database: [],
+      capabilities: [Capability.UX_ANALYSIS],
+    },
+  },
   [AgentStage.BACKEND_ENGINEER]: {
     name: AgentStage.BACKEND_ENGINEER,
     role: "backend-engineer",

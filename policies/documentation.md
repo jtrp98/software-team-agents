@@ -6,6 +6,33 @@ it taxes every future run, and what language it's written in.
 
 ---
 
+## 0. Before writing anything — confirm workspace ↔ lane (T-WG5)
+
+**Every analysis/doc-writing run's first action is `software-team-agents status`, before touching
+`§1`'s module-folder resolution.** This isn't optional context-gathering — it's the checkpoint
+that catches a session running in the wrong repository before it writes a single file. The
+sb-compass incident that motivated this rule (`planning/v2/workspace-guardrails-TASKS.md`) was a
+requirement written straight into a Target repo that looked ready but wasn't a Knowledge
+workspace at all; nothing asked first.
+
+Read `status`'s output and confirm two things with the user before writing:
+
+1. **This workspace's role matches the work.** BA-lane work (`business-analyst`,
+   `system-analyst`, `project-manager`, `test-planner`, `uxui-designer`) writes only from a
+   `role: ba` workspace (the Knowledge repo). If `status` reports `role: dev` or no role at all,
+   stop and ask — don't write a module doc into a Target.
+2. **If `status` prints `WARNING: Knowledge root bound in installation.yaml ... has no
+   .agent-team/config.yaml`** (the T-WG1 detector — a Knowledge root is bound but nobody ever ran
+   `init --role ba` there), **stop and ask the user before writing any doc file at all**, even
+   into a folder that already exists. Writing into an uninitialized Knowledge workspace is exactly
+   how the incident happened: the binding looked valid, so nothing else caught it.
+
+This checkpoint is one question, asked once per session, not a rule to re-litigate on every file
+write within that session. `setup` and `business-analyst` — the two agents that can create a
+module folder from nothing — carry this explicitly in their own prompts (`.claude/agents/setup.md`,
+`.claude/agents/business-analyst.md`); every other agent inherits it by resolving the module folder
+per `§1` after this checkpoint has already passed.
+
 ## 1. Resolving the module folder
 
 All project documents live under `_docs/module/<kebab-name>/` — never at the repo root — so past work stays intact instead of getting overwritten by the next thing built.

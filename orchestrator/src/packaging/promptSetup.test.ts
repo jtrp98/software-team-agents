@@ -76,4 +76,20 @@ describe("prompt-setup.md — AI-assisted setup entry point", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as { files?: string[] };
     expect(pkg.files ?? []).toContain("prompt-setup.md");
   });
+
+  it("T-LV4 — Flow: DEV bootstraps a Target that doesn't exist locally yet, with confirmation before any git mutation", () => {
+    // All three Target shapes: already checked out, remote-but-not-cloned, and
+    // a genuinely new project with no remote at all.
+    expect(prompt).toMatch(/Already exists/);
+    expect(prompt).toMatch(/Has a remote, not cloned/);
+    expect(prompt).toMatch(/genuinely new project/);
+    expect(prompt).toContain("git clone <url> <path>");
+    expect(prompt).toContain("git init <path>");
+    // The confirmation rail: shown before running, explicit wait, and it's the
+    // playbook's first (and only) state-changing git command.
+    expect(prompt).toMatch(/never run a state-changing git command without showing it first/);
+    expect(prompt).toMatch(/wait for the user's explicit confirmation|wait for the same explicit confirmation/);
+    // The new-project branch routes to `setup`, not to this playbook, for scaffolding.
+    expect(prompt).toMatch(/`setup` agent has to run/);
+  });
 });

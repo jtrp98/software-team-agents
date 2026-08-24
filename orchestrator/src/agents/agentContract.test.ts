@@ -38,8 +38,8 @@ function asYaml(contract: unknown): string {
 }
 
 describe("the shipped contracts", () => {
-  it("exist for all ten agents, and not for `human` — a gate is not an agent", () => {
-    expect(CONTRACTED_AGENTS).toHaveLength(10);
+  it("exist for all eleven agents, and not for `human` — a gate is not an agent", () => {
+    expect(CONTRACTED_AGENTS).toHaveLength(11);
     expect(CONTRACTED_AGENTS).not.toContain(AgentStage.HUMAN);
     for (const agent of CONTRACTED_AGENTS) {
       expect(fs.existsSync(contractPath(agent))).toBe(true);
@@ -166,8 +166,8 @@ describe("assertContractsMatchRegistry", () => {
       throw new Error("expected it to throw");
     } catch (e) {
       expect(e).toBeInstanceOf(ContractRegistryMismatchError);
-      // ten missing files plus the tool mismatch
-      expect((e as ContractRegistryMismatchError).problems.length).toBe(10);
+      // eleven missing files plus the tool mismatch
+      expect((e as ContractRegistryMismatchError).problems.length).toBe(11);
     }
   });
 

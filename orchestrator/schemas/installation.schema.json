@@ -3,5 +3,18 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "knowledge_root"],
-  "properties": { "schema_version": { "const": 1 }, "knowledge_root": { "type": "string", "minLength": 1 } }
+  "properties": {
+    "schema_version": { "const": 1 },
+    "knowledge_root": { "type": "string", "minLength": 1 },
+    "identities": {
+      "description": "Declared human identities binding external design accounts together (T-UX3). Emails only — a token/PAT must never be written here; it lives in the environment or the runtime's credential store.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["figma_email", "claude_email"],
+      "properties": {
+        "figma_email": { "type": "string", "minLength": 3, "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$" },
+        "claude_email": { "type": "string", "minLength": 3, "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$" }
+      }
+    }
+  }
 }

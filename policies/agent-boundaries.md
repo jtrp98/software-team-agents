@@ -8,7 +8,7 @@ work in front of it.
 
 ## 6. Handoffs
 
-**No agent invokes the next agent.** This is structural, not just a rule: none of the ten agents has the `Agent` tool in its own toolset, so none of them can call another one even if it wanted to. Every run ends the same way — telling the user (or the session driving the pipeline) what was produced, what state it leaves the module in, and which agent should pick it up next — then stops. What differs between the two modes below is **who decides to make that next call**, not whether an agent is allowed to make it itself. It never is.
+**No agent invokes the next agent.** This is structural, not just a rule: none of the eleven agents has the `Agent` tool in its own toolset, so none of them can call another one even if it wanted to. Every run ends the same way — telling the user (or the session driving the pipeline) what was produced, what state it leaves the module in, and which agent should pick it up next — then stops. What differs between the two modes below is **who decides to make that next call**, not whether an agent is allowed to make it itself. It never is.
 
 ### Manual mode (the default)
 

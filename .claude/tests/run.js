@@ -901,7 +901,7 @@ check(
 // dependencies. That agreement is only safe if something checks it: a contract
 // reformatted into block style must fail here rather than silently disabling the guard.
 (function contractsStillReadableByTheHook() {
-  const agents = ['setup', 'business-analyst', 'system-analyst', 'project-manager', 'test-planner', 'backend-engineer',
+  const agents = ['setup', 'business-analyst', 'system-analyst', 'project-manager', 'test-planner', 'uxui-designer', 'backend-engineer',
                   'frontend-engineer', 'qa-engineer', 'security', 'devops'];
   let bad = [];
   for (const agent of agents) {
@@ -916,6 +916,77 @@ check(
     0,
   );
 })();
+
+// ---------------------------------------------------------------------------
+// 9b. T-UX13 — Target-workspace deny of Knowledge-side artifacts
+// ---------------------------------------------------------------------------
+
+section('9b. T-UX13 — role: dev workspace blocks BA artifacts, whatever the session identity');
+
+const DEV_CONFIG = 'schema_version: 1\ntarget_id: t\nregistered_at: 2026-08-24T00:00:00Z\noverrides: []\nrole: dev\n';
+const BA_CONFIG = 'schema_version: 1\ntarget_id: t\nregistered_at: 2026-08-24T00:00:00Z\noverrides: []\nrole: ba\n';
+
+withTempProject((tmp) => {
+  write(path.join(tmp, '.agent-team', 'config.yaml'), DEV_CONFIG);
+  const env = { CLAUDE_PROJECT_DIR: tmp };
+  check(
+    'role:dev workspace -> requirement.md blocked even interactively (no AGENTCLAUDE_ROLE)',
+    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env),
+    BLOCK,
+  );
+  check('  design.md blocked too', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'design.md') } }, env), BLOCK);
+  check('  uxui/ artifacts blocked', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'uxui', 'design.md') } }, env), BLOCK);
+  check('  knowledge items blocked', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'knowledge', 'm', 'ux-design', 'UX-001.yaml') } }, env), BLOCK);
+  check('  engineer-owned review.md still allowed', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'review.md') } }, env), ALLOW);
+  check('  engineer-owned security.md still allowed', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'security.md') } }, env), ALLOW);
+  check('  app source still allowed', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'src', 'app.ts') } }, env), ALLOW);
+
+  // T-WG3 — the extended Knowledge-side set, plus the root-naming deny text.
+  check('  plan.md blocked (Knowledge-side now)', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'plan.md') } }, env), BLOCK);
+  check('  _docs/status.md blocked', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'status.md') } }, env), BLOCK);
+  check('  decisions blocked', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'decisions', 'DR-001.yaml') } }, env), BLOCK);
+  check('  targets.yaml blocked', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'targets.yaml') } }, env), BLOCK);
+  check('  knowledge-policy.yaml blocked', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'knowledge-policy.yaml') } }, env), BLOCK);
+
+  const kbEnv = { ...env, AGENTCLAUDE_KNOWLEDGE_ROOT: path.join(tmp, '..', 'knowledge-root-fixture') };
+  const kbRes = spawnSync(process.execPath, [path.join(HOOKS, 'block-path-permissions.js')], {
+    input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }),
+    encoding: 'utf8',
+    env: { ...process.env, ...kbEnv },
+    cwd: tmp,
+    timeout: 60000,
+  });
+  check('  deny text names the resolved Knowledge root when the launch provides it', kbRes.status === BLOCK && kbRes.stderr.includes('knowledge-root-fixture') ? 0 : 1, 0);
+
+  write(path.join(tmp, '.agent-team', 'config.yaml'), BA_CONFIG);
+  check(
+    'role:ba workspace -> requirement.md allowed (the rule is dev-only)',
+    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env),
+    ALLOW,
+  );
+  check(
+    'role:ba workspace -> contracts blocked (T-WG3 mirror)',
+    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'contracts', 'backend-engineer.yaml') } }, env),
+    BLOCK,
+  );
+  check(
+    'role:ba workspace -> workflows blocked (T-WG3 mirror)',
+    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'workflows', 'feature.yml') } }, env),
+    BLOCK,
+  );
+  check(
+    'role:ba workspace -> requirement doc edits stay allowed',
+    runHook('block-path-permissions.js', { tool_name: 'Edit', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'design.md') } }, env),
+    ALLOW,
+  );
+
+  fs.rmSync(path.join(tmp, '.agent-team'), { recursive: true, force: true });
+  check(
+    'no .agent-team/config.yaml -> legacy behaviour, requirement.md allowed',
+    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env),
+    ALLOW,
+  );
+});
 
 // ---------------------------------------------------------------------------
 // 10. generate-status.js — status.md computed from the real docs, not hand-written (T51)

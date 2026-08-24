@@ -55,6 +55,54 @@ const PATH_ARG_KEYS = ["file_path", "filePath", "notebook_path", "notebookPath",
 /** Paths no agent may write, whatever its contract says. Mirrors UNIVERSAL_DENY in pathPermissions.ts and block-path-permissions.js. */
 const UNIVERSAL_DENY = [".git/**", "node_modules/**", ".workflow/**", "dist/**", "knowledge/_roles/**"];
 
+/** T-UX13/T-WG3: analysis artifacts and registry files whose home is the Knowledge repo, never a Target workspace. Mirrors WORKSPACE_BA_ARTIFACTS in block-path-permissions.js. Engineer-owned docs (review/security/deploy) stay writable here. */
+const WORKSPACE_BA_ARTIFACTS = [
+  "_docs/module/*/requirement.md",
+  "_docs/module/*/design.md",
+  "_docs/module/*/design-archive.md",
+  "_docs/module/*/test-plan.md",
+  "_docs/module/*/plan.md",
+  "_docs/module/*/uxui/**",
+  "_docs/status.md",
+  "knowledge/**",
+  "decisions/**",
+  "targets.yaml",
+  "knowledge-policy.yaml",
+];
+
+/** T-WG3 mirror image: engineer/pipeline payload that belongs to a Target checkout, never a BA workspace. */
+const WORKSPACE_DEV_ARTIFACTS = ["contracts/**", "workflows/**", "stacks/**", "layout.yaml", "test-pyramid.yaml", "escalation-policy.yaml"];
+
+/** Reads `role:` out of .agent-team/config.yaml (written by `software-team-agents init`). Null when absent/unreadable — the rule then stays inactive, like any legacy workspace. */
+function readWorkspaceRole(nodeFs, nodePath, workspaceRoot) {
+  let text;
+  try {
+    text = nodeFs.readFileSync(nodePath.join(workspaceRoot, ".agent-team", "config.yaml"), "utf8");
+  } catch {
+    return null;
+  }
+  const m = /^\s*role:\s*(ba|dev)\s*$/m.exec(text);
+  return m ? m[1] : null;
+}
+
+/** T-WG3 — the why-text for a workspace-role deny, naming the Knowledge root when the launch supplied one. Mirrors block-path-permissions.js. */
+function workspaceDenyWhy(role) {
+  if (role === "dev") {
+    const kb = process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
+    return (
+      "Requirements, designs, plans, test-plans, UX artifacts and registry files live in the Knowledge repository" +
+      (kb ? ` (\`${kb}\`)` : "") +
+      ". Run `software-team-agents ba` from the Knowledge workspace instead; this workspace " +
+      "(`role: dev` in .agent-team/config.yaml) owns app code plus review/security/deploy docs only."
+    );
+  }
+  return (
+    "Contracts, workflows, stacks and pipeline policy are engineer payload for a Target checkout. " +
+    "Run engineering work with `software-team-agents dev` from a Target workspace; this workspace " +
+    "(`role: ba` in .agent-team/config.yaml) owns analysis docs and knowledge items only."
+  );
+}
+
 let rootCache = null;
 
 export const StaGuards = async ({ project }) => {
@@ -121,6 +169,23 @@ export const StaGuards = async ({ project }) => {
     for (const pattern of UNIVERSAL_DENY) {
       if (matchesGlob(pattern, rel)) {
         return denyMessage(rel, process.env.AGENTCLAUDE_ROLE || null, `no agent may write \`${pattern}\``);
+      }
+    }
+
+    // T-WG3 (extends T-UX13): workspace-level rule — identity-independent, so
+    // it holds for interactive sessions too. Mirrors block-path-permissions.js.
+    const wsRole = readWorkspaceRole(nodeFs, nodePath, root);
+    if (wsRole === "dev") {
+      for (const pattern of WORKSPACE_BA_ARTIFACTS) {
+        if (matchesGlob(pattern, rel)) {
+          return denyMessage(rel, null, workspaceDenyWhy("dev"));
+        }
+      }
+    } else if (wsRole === "ba") {
+      for (const pattern of WORKSPACE_DEV_ARTIFACTS) {
+        if (matchesGlob(pattern, rel)) {
+          return denyMessage(rel, null, workspaceDenyWhy("ba"));
+        }
       }
     }
 

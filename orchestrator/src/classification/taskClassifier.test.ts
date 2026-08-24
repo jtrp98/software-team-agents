@@ -6,6 +6,8 @@ describe("classifyTask", () => {
   it("classifies a typo/copy fix as TRIVIAL with engineer-only pipeline", () => {
     const result = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
     expect(result.level).toBe(TaskLevel.TRIVIAL);
+    // No design phase in a copy tweak (T-UX11) — the module's existing signed
+    // UX artifact covers it; uxui-designer runs only in design-bearing pipelines.
     expect(result.pipeline).toEqual([AgentStage.FRONTEND_ENGINEER]);
     expect(result.requiresHumanApproval).toBe(false);
   });
@@ -25,6 +27,37 @@ describe("classifyTask", () => {
     expect(result.pipeline.indexOf(AgentStage.BACKEND_ENGINEER)).toBeLessThan(
       result.pipeline.indexOf(AgentStage.FRONTEND_ENGINEER),
     );
+  });
+
+  it("puts the UX/UI consultant before the frontend engineer it advises (T-UX6)", () => {
+    const result = classifyTask({
+      isIncrementalFeature: true,
+      touchesBackend: true,
+      touchesFrontend: true,
+    });
+    expect(result.pipeline.indexOf(AgentStage.UXUI_DESIGNER)).toBeLessThan(
+      result.pipeline.indexOf(AgentStage.FRONTEND_ENGINEER),
+    );
+    // Backend-only work never pays for a UX pass.
+    const backendOnly = classifyTask({ isIncrementalFeature: true, touchesBackend: true });
+    expect(backendOnly.pipeline).not.toContain(AgentStage.UXUI_DESIGNER);
+  });
+
+  it("runs uxui-designer only in design-bearing pipelines, not small fixes (T-UX11)", () => {
+    for (const signal of [
+      { isNewFeatureModuleOrProject: true },
+      { touchesSchema: true },
+      { touchesBusinessRuleOnly: true },
+      { isIncrementalFeature: true },
+    ] as const) {
+      const withFrontend = classifyTask({ ...signal, touchesFrontend: true });
+      expect(withFrontend.pipeline).toContain(AgentStage.UXUI_DESIGNER);
+    }
+    // Small fixes have no design phase to advise on.
+    const bugFix = classifyTask({ isClearBugFix: true, touchesFrontend: true });
+    expect(bugFix.pipeline).not.toContain(AgentStage.UXUI_DESIGNER);
+    const typo = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
+    expect(typo.pipeline).not.toContain(AgentStage.UXUI_DESIGNER);
   });
 
   it("classifies an incremental feature as MEDIUM, skipping BA and PM", () => {
@@ -77,6 +110,7 @@ describe("classifyTask", () => {
       AgentStage.PROJECT_MANAGER,
       AgentStage.TEST_PLANNER,
       AgentStage.BACKEND_ENGINEER,
+      AgentStage.UXUI_DESIGNER,
       AgentStage.FRONTEND_ENGINEER,
       AgentStage.QA_ENGINEER,
     ]);

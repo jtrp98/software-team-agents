@@ -104,6 +104,8 @@ export const TargetConfigSchema = z.object({
   role: z.enum(["ba", "dev"]).optional(),
   /** T-ROLE-06 — repo-relative (or absolute) path binding to the team's Knowledge repo, committed with this workspace. */
   knowledge: z.object({ path: z.string().min(1) }).optional(),
+  /** T-LV1 — repo-relative (or absolute) path binding to a Target repo, committed with a Knowledge workspace. Optional and read-only: BA never requires it. */
+  target: z.object({ path: z.string().min(1) }).optional(),
   /** Repo-root-relative paths sync must never touch — the user override list (T-TARGET-05). */
   overrides: z.array(z.string().min(1)).default([]),
 });

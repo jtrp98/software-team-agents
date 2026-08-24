@@ -11,7 +11,11 @@ knowledge/
 ├── <module>/            ← _docs/module/<name>, or `_project` for project-wide items
 │   └── <kind>/
 │       └── <ID>.yaml
-├── _sources/            ← SRC-*.yaml: the raw material that was ingested (T62)
+├── _sources/            ← SRC-*.yaml: the raw material that was ingested (T62);
+│                          plus design/ — Claude Design / Figma exports a *person*
+│                          placed for the uxui-designer lane (T-UX5). Agents read
+│                          these files and cite them with sha256 digests; only a
+│                          person writes here.
 ├── _conflicts/          ← CONF-*.yaml: a person's decision about two facts that contradict (T66)
 ├── _bootstrap/          ← STATE.yaml: how far first-time discovery got (T73)
 ├── _human-input/        ← what a person supplied that no file could be read for (T79)

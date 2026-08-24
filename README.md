@@ -14,6 +14,9 @@ Process/workflow layer + orchestrator CLI สำหรับทีมซอฟ�
 
 ไม่ใช่ AI model และไม่ได้มาแทน runtime จริง — ทุก run ของ pipeline ยัง executes ผ่าน runtime ที่เลือก (`claude -p --agent <role>` default, `--runtime codex|opencode` สำหรับ runtime อื่น)
 
+> **ตั้งทีมใหม่?** เดิน onboarding เต็มทีละขั้นที่ [`TEAM_SETUP_V1.md`](TEAM_SETUP_V1.md) (Install → Bind →
+> Init workspace → Validate → Ready + Troubleshooting) — README นี้เป็น reference, ไม่ใช่ walkthrough
+
 ---
 
 ## Architecture: Three-Repo
@@ -41,7 +44,7 @@ Process/workflow layer + orchestrator CLI สำหรับทีมซอฟ�
 
 ```
 orchestrator/           ← CLI + state store + knowledge engine (Node/TypeScript, vitest)
-.claude/agents/*.md     ← agent prompts 10 roles
+.claude/agents/*.md     ← agent prompts 11 roles
 .claude/hooks/*.js      ← guards 6 ตัว (บังคับใช้กฎระดับ tool call)
 .claude/scripts/*.js    ← status generator, schema-contract check, static-analysis gate
 .claude/shared/         ← redirect ไป policies/ + scoping procedure
@@ -81,7 +84,7 @@ package เป็น `private`: ไม่ publish ขึ้น registry artifact
 
 ```bash
 # ติดตั้ง (ไฟล์ .tgz แจกกันภายในทีม พร้อมไฟล์ .sha256 สำหรับตรวจ integrity)
-npm i -g ./software-team-agents-0.2.0.tgz
+npm i -g ./software-team-agents-0.3.0.tgz
 software-team-agents --version          # ต้องตรงกับ version ในชื่อไฟล์
 ```
 
@@ -147,8 +150,9 @@ software-team-agents dev       # preflight (Knowledge required!) → launch จ�
 | Role Workspace | `knowledgeRoot` | `targetRoot` |
 | Target | **NOT REQUIRED** | execution workspace (writable เท่านั้น) |
 | Knowledge | workspace (writable) | read context (**required**) |
-| Sync payload | BA agents (`business-analyst`, `system-analyst`, `project-manager`, `test-planner`) + hooks + scripts + policies + `CLAUDE.md` | full roster + contracts/workflows/stacks/layout YAML |
+| Sync payload | BA agents (`business-analyst`, `system-analyst`, `project-manager`, `test-planner`, `uxui-designer`) + hooks + scripts + policies + `CLAUDE.md` | engineer roster (`backend/frontend-engineer`, `qa-engineer`, `security`, `devops` — **ไม่มี BA-lane prompts**, T-UX13) + contracts/workflows/stacks/layout YAML |
 | Write ที่อื่น | Framework/Target = DENY | Framework/Knowledge = DENY |
+| Knowledge-side artifacts (`_docs/module/*/requirement\|design\|test-plan.md`, `uxui/**`, `knowledge/**`) | ✅ เขียนได้ | **DENY ที่ hook** (T-UX13) — ต้องรันจาก Knowledge workspace |
 
 Write policy บังคับจริงผ่าน launch: session ได้ writable root เดียวคือ Role Workspace ของตัวเอง (cwd + `AGENTCLAUDE_WRITABLE_WORK_ROOTS=[]`) — cross-repo writes hit `block-outside-repo` guard (fail-closed) DEV ไม่มี Knowledge binding = preflight fail พร้อมวิธีแก้ทันที
 
@@ -165,6 +169,20 @@ overrides: []                   # path ที่ประกาศที่น�
 ```
 
 หรือ machine-wide ผ่าน installation binding (ดูหัวข้อ V1): `sta configure knowledge-root <path>`
+
+### Workspace guardrails (planning/v2/workspace-guardrails-TASKS.md)
+
+`status` (และ `--check-workspace`) เตือนก่อนที่ไฟล์จะไปโผล่ผิด repo แทนที่จะให้คนสังเกตทีหลัง — motivated
+โดยเหตุการณ์จริงที่ requirement ถูกเขียนลง Target แทน Knowledge:
+
+| WARNING | ตรวจอะไร | แก้ |
+|---|---|---|
+| Knowledge root bound but never initialized (T-WG1) | `installation.yaml` ผูก Knowledge root ที่มี marker ครบ แต่ไม่เคยมี `.agent-team/config.yaml` ที่นั่น — BA-lane prompt ไม่มีอยู่เลยทั้งเครื่อง | `cd <knowledgeRoot> && software-team-agents init --role ba` (`status` พิมพ์คำสั่งนี้ตรงๆ) |
+| Roster drift (T-WG2) | agent prompt ที่ชื่อเป็นของอีก lane (เช่น `business-analyst.md` ใน workspace `role: dev`) — ไม่มีทาง legitimate ไม่ว่าจะมาจากไหน | `software-team-agents sync --force` (backup ก่อนลบ; `sync` เฉยๆ report conflict ไม่ overwrite เงียบๆ) |
+| Misplaced module docs (T-WG4, `--check-workspace`) | `_docs/module/**` หรือ Modules table ใน `_docs/status.md` อยู่ใน workspace `role: dev` — ที่ถูกคือ Knowledge repo เท่านั้น | copy ไป `<knowledgeRoot>\_docs\module\<name>\`, merge status row, ลบของเดิม |
+
+ทั้งสามรายการนี้เป็น warning ไม่ block การทำงาน — จุดประสงค์คือให้คน (หรือ AI ที่ทำงานแทนคน) เห็นก่อนเขียนไฟล์ผิดที่
+ไม่ใช่หลังจากนั้น รายละเอียด/root-cause analysis เต็มอยู่ที่ `planning/v2/workspace-guardrails-TASKS.md` (internal, gitignored)
 
 ### Ownership model
 
@@ -194,6 +212,8 @@ sta run --task-id T-1 --module demo --bug-fix --backend --autonomy edit \
 | (flags เสริม) | `hotfix.yml`, `refactor.yml`, `security-fix.yml`, `triage.yml` | classifier เลือกตาม signal/priority |
 
 flag เสริมได้แก่ `--sensitive`, `--backend`, `--frontend` — step ภายใน workflow ถูกเลือกด้วย `when:` (เช่น `touchesBackend`) ตามที่ประกาศในไฟล์ workflow เอง
+
+pipeline ที่มี design phase (`--new-feature`, `--schema`, `--business-rule`, `--incremental`) รัน **`uxui-designer` ก่อน `frontend-engineer`** เสมอ (T-UX11); typo/bugfix/hotfix/refactor/security-fix ไม่มี uxui step — frontend work level TRIVIAL/SMALL จึงไม่โดน UX-artifact gate (T-UX12)
 
 ### Task lifecycle commands
 
@@ -275,6 +295,31 @@ Knowledge ไม่ใช่ "AI memory" — เป็นข้อมูลร�
 - **Role-based context** — `knowledge-policy.yaml` กำหนด field ที่แต่ละ role เห็น (default: sensitive items ถูก redact สำหรับ devops/project-manager) และทุก result บอกด้วยว่าอะไรถูก withhold
 - Reserved directories: `_sources/ _conflicts/ _bootstrap/ _human-input/ _adoption/ _roles/`
 
+## Design sources & identities (uxui-designer)
+
+`uxui-designer` (role ที่ 11) เป็น **read-only consultant** — วิเคราะห์ design source แล้วผลิต draft `UX-*` + `_docs/module/<name>/uxui/design.md` เสมอ คนเท่านั้น approve/sign-off (`sta roles signoff uxui`) และ frontend work level MEDIUM+ เริ่มไม่ได้จนกว่า gate นี้ current (ขอบเขตจริงดู bullet Right-sizing/Gate ข้ามงานเล็กด้านล่าง)
+
+- **Right-sizing (T-UX11)**: uxui-designer รันเฉพาะ pipeline ที่มี design phase (feature / business-rule / schema-change / incremental); typo/bugfix/hotfix/refactor/security-fix ใช้ artifact เดิมที่ approved+signed ค้าง
+- **UX gate ข้ามงานเล็ก (T-UX12)**: TRIVIAL/SMALL ไม่ถูก block ที่ UX-artifact precondition (pipeline ไม่ได้จัด uxui ให้อยู่แล้ว — "AI ออกแบบตรง"); MEDIUM+ และ level ไม่ทราบยังต้องมี signed artifact · SA→DEV handoff บังคับทุก level
+- **Routing back (T-UX10)**: คำถามที่ไม่ใช่หน้าที่ uxui (คุ้มค่าไหม → BA · ทำได้ไหม → SA) ถูกรายงานเป็น structured failure แล้ว orchestrator route กลับอัตโนมัติ; ถ้า pipeline นั้นไม่มี BA/SA ให้ถาม → BLOCKED fail-closed
+
+**Design source เข้าถึง agent ได้ 2 ทางเท่านั้น (ห้าม scrape URL):**
+
+1. **Path A — handoff bundle**: คนวาง export/handoff จาก Claude Design ไว้ที่ `knowledge/_sources/design/<module>/handoff/`
+2. **Path B — export files**: คนวาง export file (HTML/MD) ไว้ที่ `knowledge/_sources/design/<module>/` — item ที่ derive จะบันทึก `sha256` digest ผ่าน `digestOfSource()` เดียวกับ freshness model; ไฟล์เปลี่ยน = recommendation นั้น stale ทันที
+
+**Figma ผ่าน MCP แบบ read-only:**
+
+- Tool allowlist: `get_me, get_metadata, get_code, get_screenshot, get_variable_defs` — ไม่มี write tool / Code-to-Canvas (enforce ซ้อนกัน 4 ชั้น: allowlist → PAT read scopes → contract deny → prompt rule)
+- **Identity gate (fail closed)**: `get_me.email` ต้องตรงกับ `figma_email` ที่ declare; `figma_email` และ `claude_email` ต้องเป็นเมลเดียวกัน — preflight ของ stage `uxui-designer` จะ block run ถ้ายังไม่ declare หรือไม่ตรง
+- **PAT (`FIGMA_PAT`) ไม่เข้า repo/config เด็ดขาด** — ใช้ environment variable หรือ OS keychain ของ runtime เท่านั้น; installation config เก็บเฉพาะ email
+
+ตั้งค่า identities ครั้งเดียวต่อเครื่อง:
+
+```bash
+sta configure identity --figma-email <email> --claude-email <email>
+```
+
 ## Guards และการตรวจสอบ
 
 สิ่งที่ implementation บังคับใช้จริง (hook-level, ไม่ใช่แค่ prompt) — wire ผ่าน `.claude/settings.json`:
@@ -284,13 +329,13 @@ Knowledge ไม่ใช่ "AI memory" — เป็นข้อมูลร�
 | `block-git.js` | PreToolUse (Bash/Write/Edit) | state-changing git ถูก block (read-only ผ่าน) |
 | `block-outside-repo.js` | PreToolUse | ทุก write resolve อยู่ใน writable roots เท่านั้น |
 | `block-doc-rewrite.js` | PreToolUse (Write) | doc ที่มีอยู่ต้อง amend ไม่ regenerate |
-| `block-path-permissions.js` | PreToolUse | เขียนได้เฉพาะ path ที่ `contracts/<role>.yaml` ให้ (role อ่านจาก `AGENTCLAUDE_ROLE`) |
+| `block-path-permissions.js` | PreToolUse | เขียนได้เฉพาะ path ที่ `contracts/<role>.yaml` ให้ (role อ่านจาก `AGENTCLAUDE_ROLE`) + **workspace rule (T-UX13)**: workspace `role: dev` block การเขียน requirement/design/test-plan/uxui/knowledge แม้ไม่มี role env — ต้องรันจาก Knowledge workspace |
 | `require-green-before-stop.js` | Stop/SubagentStop | engineer ส่งงานต่อไม่ได้ถ้า typecheck/lint แดง |
 | `block-secret-leak.js` | Stop/SubagentStop | ไฟล์ที่ run แก้ห้ามมี hardcoded secret (`.env.example` รวมด้วย) |
 
 - **Guards ถูกเทสต์** — `node .claude/tests/run.js` (self-test ไม่มี dependencies) — guard ที่ syntax error ต้อง fail loud ไม่ใช่ fail open
 - **ฝั่ง OpenCode** — git deny เป็น declarative `permission.bash` globs ใน binding เอง (specificity wins); outside-root/contract path guards มาจาก `sta-guards.js` plugin (auto-load, throw = deny) · doc-rewrite/secret-leak/exit checks **ยังไม่ enforce in-band** → adapter รายงาน unenforced + executor ตะโกน `GUARD GAP` ให้ QA round เป็นตัวครอบ
-- **Validation flags** — `sta --check-*` 15 ตัว: `contracts, layout, workflows, profile, decisions, test-pyramid, review-separation, escalation-policy, workspace, repos, environments, doc-structure, knowledge, installation, roles` (+ `--check-bindings` มีใน CLI แต่ไม่ได้ wire ใน CI)
+- **Validation flags** — `sta --check-*` 15 ตัว: `contracts, layout, workflows, profile, decisions, test-pyramid, review-separation, escalation-policy, workspace, repos, environments, doc-structure, knowledge, installation, roles` (+ `--check-bindings` มีใน CLI แต่ไม่ได้ wire ใน CI). `--check-workspace` ตรวจสองเรื่องที่ไม่เกี่ยวกัน: `workspace.yaml` (multi-project grouping, T41) และ misplaced-docs scan (T-WG4) — `role: dev` workspace ที่มี `_docs/module/**` หรือ Modules table ใน `status.md` โดนรายงานพร้อม hint ปลายทางใน Knowledge repo
 - **doctor** — `sta doctor --project-root <path>` รวม 9 checks แบบ read-only (installation, knowledge binding/schema, targets registry, local mappings, runtime adapter, state store, guard wiring) exit 1 เมื่อมี FAIL พร้อม "Fix:" ทุกข้อ
 - **Audit trail** — `sta audit <task-id>`
 - **Backup/Rollback** — v2 sync backup ที่ `.agent-team/backups/<ts>/`; V1 upgrade/migrate snapshot ที่ `.sta/backups/` คืนได้ด้วย `sta rollback` / `sta list-backups`
@@ -326,7 +371,7 @@ Environment variables ที่ runtime ใช้: `AGENTCLAUDE_ROLE` (role ป�
 
 ```bash
 # 0) ติดตั้ง (ครั้งเดียวต่อเครื่อง)
-npm i -g ./software-team-agents-0.2.0.tgz
+npm i -g ./software-team-agents-0.3.0.tgz
 
 # 1) BA — เขียน requirement ใน Knowledge repo
 git clone https://github.com/<org>/company-knowledge.git C:\src\company-knowledge

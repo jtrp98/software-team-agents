@@ -33,6 +33,8 @@ export interface TargetInitOptions {
   force?: boolean;
   /** Explicit role override (T-ROLE-16); detection is skipped when given. */
   role?: RoleName;
+  /** Machine-wide installation.yaml override (tests); forwarded to the sync engine's dev-lane binding resolution. */
+  installationConfigPath?: string;
 }
 
 export interface TargetInitResult {
@@ -91,8 +93,10 @@ export function runTargetInit(options: TargetInitOptions): TargetInitResult {
     targetRoot: roots.targetRoot,
     templatesDir,
     include: assetsForRole(role),
+    role,
     manifest: previousManifest,
     config,
+    installationConfigPath: options.installationConfigPath,
     now: options.now,
     force: options.force,
   });

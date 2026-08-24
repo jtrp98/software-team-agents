@@ -45,11 +45,34 @@ export interface ClassificationResult {
   reasons: string[];
 }
 
+/**
+ * Whether this classification carries a design phase at all (T-UX11). Only
+ * these pipelines run uxui-designer: the work is about to decide what gets
+ * built, so a UX pass has something to shape. A copy tweak or bug fix relies
+ * on the module's existing signed UX artifact instead — the lane gate checks
+ * that it is current; it does not demand a fresh round every run.
+ */
+function includesDesignPhase(input: ClassificationInput): boolean {
+  return Boolean(
+    input.isNewFeatureModuleOrProject ||
+      input.touchesSchema ||
+      input.touchesBusinessRuleOnly ||
+      input.isIncrementalFeature,
+  );
+}
+
 function engineerStages(input: ClassificationInput, reasons: string[]): AgentStage[] {
   const stages: AgentStage[] = [];
   // backend-engineer always precedes frontend-engineer within a phase — never parallel.
   if (input.touchesBackend) stages.push(AgentStage.BACKEND_ENGINEER);
-  if (input.touchesFrontend) stages.push(AgentStage.FRONTEND_ENGINEER);
+  if (input.touchesFrontend) {
+    // The UX/UI consultant runs before the frontend engineer it advises
+    // (T-UX6) — but only where there is design work to advise on (T-UX11).
+    if (includesDesignPhase(input)) {
+      stages.push(AgentStage.UXUI_DESIGNER);
+    }
+    stages.push(AgentStage.FRONTEND_ENGINEER);
+  }
   if (stages.length === 0) {
     reasons.push(
       "no engineer stage selected — caller must set touchesBackend and/or touchesFrontend",

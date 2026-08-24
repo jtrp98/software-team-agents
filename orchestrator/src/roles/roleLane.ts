@@ -2,10 +2,13 @@ import { AgentStage } from "../types.js";
 import { type ViewName, viewNameFor } from "../knowledge/roleView.js";
 
 /**
- * The three lanes of V1.5's diagram (T99) — BA, SA, DEV, each with a person
- * under it — expressed as a grouping of the ten AgentStages.
+ * The lanes of the V1.5 diagram (T99) — BA, SA, UXUI, DEV, each with a person
+ * under it — expressed as a grouping of the eleven AgentStages.
  *
- * WHY THIS IS DERIVED FROM T67 AND NOT DECLARED
+ * The UXUI lane held no agent through V1 (UX/UI was human-operated; V2 adds
+ * this one), so `uxui-designer` is what turns the lane from an empty grouping
+ * into a working one — without changing its gate: the person still signs off.
+ * * WHY THIS IS DERIVED FROM T67 AND NOT DECLARED
  *
  * `roleView.ts` already groups the ten roles into three views by what they do:
  * whoever decides *what to build* reads business, whoever decides *how* reads
@@ -36,6 +39,7 @@ export type RoleLane = (typeof ROLE_LANES)[number];
 const LANE_OF_VIEW: Record<Exclude<ViewName, "all">, RoleLane> = {
   business: "ba",
   architecture: "sa",
+  uxui: "uxui",
   technical: "dev",
 };
 
@@ -62,7 +66,5 @@ export function laneOf(role: AgentStage): RoleLane | null {
  * auto-invoked in any mode is about invocation and is untouched by this file.
  */
 export function rolesInLane(lane: RoleLane): AgentStage[] {
-  // V1 UX/UI is intentionally human-operated; V2 adds an agent/Figma connector.
-  if (lane === "uxui") return [];
   return Object.values(AgentStage).filter((role) => laneOf(role) === lane);
 }

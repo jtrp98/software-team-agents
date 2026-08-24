@@ -3,6 +3,8 @@ import type { ClassificationResult } from "../classification/taskClassifier.js";
 import { forceBlock, forwardState, recoverTo, transition, type TaskMachine } from "../state/taskState.js";
 import { MAX_RETRY, initTaskRun, recordFailure, type TaskRun } from "../retry/retryPolicy.js";
 import { decideRecovery, type RecoveryAction } from "../retry/recoveryPolicy.js";
+import { policyFor } from "../escalation/escalationPolicy.js";
+import { routeFailure } from "./failure.js";
 import { checkGate, type GateContext } from "../gates/gatePolicy.js";
 import {
   ApprovalType,
@@ -675,6 +677,17 @@ export class Orchestrator {
       this.applyFailureRoute(failureKind, result.failure);
     }
 
+    // T-UX10: the UX/UI consultant does not fail the way a verifier does — its
+    // "FAIL" is a question that is not its to answer (is this UI worth building
+    // → business-analyst; can it be built → system-analyst). That is pipeline
+    // navigation, not a defect round: it never enters recordFailure's retry
+    // budgets and never touches a QA_FAILED-style state. Without a structured
+    // failure the pre-existing prose handoff stands and the pipeline advances —
+    // only an explicit, classified question routes back.
+    if (stage === AgentStage.UXUI_DESIGNER && result.outcome.result === "FAIL" && result.failure) {
+      return this.routeUxuiQuestionBack(result.failure);
+    }
+
     // T36's verdict events, emitted after the route is decided so a failed round
     // carries the decision with it. A listener that only saw AGENT_COMPLETED
     // would have to re-derive both halves — and could not derive the recovery
@@ -789,6 +802,54 @@ export class Orchestrator {
   private cursorForState(state: TaskState): number {
     const index = this.pipeline.findIndex((stage) => stageStateOf(stage) === state);
     return index === -1 ? this.implementationStartIndex : index;
+  }
+
+  /**
+   * Applies a UX/UI question's structured failure (T-UX10): RECOVER sends the
+   * task back to business-analyst/system-analyst exactly like a qa-reported
+   * contract gap — same guarded back-edge, same cursor arithmetic. Everything
+   * else stops for a person, because these are the fail-closed edges:
+   *  - a severity the escalation policy never handles autonomously (critical),
+   *  - an owner that is not in this pipeline at all (a bugfix has no BA/SA to
+   *    return to), or
+   *  - a state the machine cannot legally reach backwards from here.
+   * No retry budget is consumed on any path: an answer is being sought, not a
+   * defect re-run.
+   */
+  private routeUxuiQuestionBack(failure: StructuredFailure): OrchestratorStatus {
+    const severity = policyFor(failure.severity);
+    if (!severity.autonomous || severity.stop_pipeline) {
+      this.run = { ...this.run, machine: forceBlock(this.run.machine) };
+      this.blockedReason =
+        `severity "${failure.severity}" is never handled autonomously — a person decides: ${failure.reason}`;
+      return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
+    }
+
+    const route = routeFailure(failure, this.pipeline);
+    switch (route.kind) {
+      case "RECOVER": {
+        try {
+          this.run = { ...this.run, machine: recoverTo(this.run.machine, route.toState) };
+        } catch (e) {
+          // recoverTo refuses states this task never passed through — a
+          // small-change pipeline without BA/SA upstream. Stop loudly rather
+          // than let the question evaporate.
+          this.run = { ...this.run, machine: forceBlock(this.run.machine) };
+          this.blockedReason = `cannot route the UX/UI question back to ${route.stage}: ${(e as Error).message}`;
+          return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
+        }
+        const index = this.pipeline.indexOf(route.stage);
+        this.pipelineCursor = index === -1 ? this.implementationStartIndex : index;
+        break;
+      }
+      default:
+        // RETRY_STAGE (an engineer owns it) and ESCALATE are both "no automatic
+        // move answers this" — stop with the reason instead of looping.
+        this.run = { ...this.run, machine: forceBlock(this.run.machine) };
+        this.blockedReason = route.reason;
+        return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
+    }
+    return this.advance();
   }
 
   /** Convenience wrapper for callers that want a direct call/await relationship instead of listening on `events`. */

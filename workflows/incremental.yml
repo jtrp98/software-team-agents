@@ -13,6 +13,8 @@ steps:
   - agent: test-planner
   - agent: backend-engineer
     when: touchesBackend
+  - agent: uxui-designer
+    when: touchesFrontend
   - agent: frontend-engineer
     when: touchesFrontend
   - agent: qa-engineer

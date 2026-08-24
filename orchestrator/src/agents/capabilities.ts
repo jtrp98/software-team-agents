@@ -35,6 +35,8 @@ export enum Capability {
   TESTING = "testing",
   /** Decide what needs testing and how (unit/integration/API/E2E), before implementation starts. */
   TEST_STRATEGY = "test-strategy",
+  /** Analyze a design source (Figma file, design handoff) and turn it into UX recommendations. */
+  UX_ANALYSIS = "ux-analysis",
   /** Check implemented work against what was specified. */
   VERIFICATION = "verification",
   /** Audit code adversarially for security defects. */

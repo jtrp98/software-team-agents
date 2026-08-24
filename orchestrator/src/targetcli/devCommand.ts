@@ -7,18 +7,21 @@ import {
   loadTargetConfig,
   readTargetManifest,
 } from "./targetMeta.js";
-import { blockingConflicts, planSync, projectOwnedPaths, runTargetSync } from "./syncEngine.js";
+import { blockingConflicts, devDerivedContent, planSync, projectOwnedPaths, runTargetSync } from "./syncEngine.js";
 import { sameMajor } from "./version.js";
 import {
   assetsForRole,
   KnowledgeBindingError,
   launchEnv,
   resolveKnowledgeBinding,
+  resolveTargetBinding,
+  TargetBindingError,
   ROLE_LABEL,
   ROLE_WORKSPACE_KIND,
   detectWorkspaceKind,
   type KnowledgeBinding,
   type RoleName,
+  type TargetBinding,
 } from "./roleWorkspace.js";
 import { runTargetInit } from "./initCommand.js";
 import { isTargetInitialized } from "./targetMeta.js";
@@ -99,6 +102,8 @@ export interface WorkspaceContext {
   templatesDir: string;
   /** Resolved for DEV (required); also reported for BA when a machine-wide binding exists (informational only). */
   knowledge?: KnowledgeBinding;
+  /** T-LV1 — resolved for BA when `target.path` is set and valid; always optional, never blocks a BA session. */
+  target?: TargetBinding;
   runtime: RuntimeName;
 }
 
@@ -181,12 +186,23 @@ export function workspacePreflight(role: RoleName, options: RoleRunOptions = {})
   // the user's back).
   try {
     const manifest = readTargetManifest(roots.targetRoot);
+    // T-WG7 — plan against rendered bytes so a dev workspace's CLAUDE.md is
+    // judged by what sync actually writes there, not by the shipped template.
+    const derived = devDerivedContent({
+      targetRoot: roots.targetRoot,
+      templatesDir,
+      config,
+      include: assetsForRole(role),
+      installationConfigPath: options.installationConfigPath,
+    });
     const plan = planSync({
       targetRoot: roots.targetRoot,
       templatesDir,
       manifest,
       config,
       include: assetsForRole(role),
+      role,
+      derivedContent: derived?.content,
     });
     // Gate on the same rule `sync` gates on — see isBlockingConflict. A path
     // the project owns is reported, never a reason to refuse the launch.
@@ -202,7 +218,7 @@ export function workspacePreflight(role: RoleName, options: RoleRunOptions = {})
       if (options.autoSync === false) {
         fail("Managed files", "managed assets are outdated — run software-team-agents sync, or drop --no-auto-sync");
       }
-      runTargetSync({ targetRoot: roots.targetRoot, templatesDir, manifest, config, include: assetsForRole(role), now: options.now ?? new Date().toISOString() });
+      runTargetSync({ targetRoot: roots.targetRoot, templatesDir, manifest, config, include: assetsForRole(role), role, installationConfigPath: options.installationConfigPath, now: options.now ?? new Date().toISOString() });
       checks.push({ name: "Managed files", ok: true, detail: `auto-synced to Framework ${plan.frameworkVersion}${ownedNote}` });
     } else {
       checks.push({ name: "Managed files", ok: true, detail: `up to date${ownedNote}` });
@@ -215,6 +231,8 @@ export function workspacePreflight(role: RoleName, options: RoleRunOptions = {})
   // Role dependencies.
   /** Set exactly when role === "dev" and the binding resolved — the required-dependency result. */
   let devKnowledge: KnowledgeBinding | undefined;
+  /** T-LV1 — set exactly when role === "ba" and a Target binding resolved; always optional. */
+  let baTarget: TargetBinding | undefined;
   if (role === "dev") {
     const resolved: KnowledgeBinding | undefined = (() => {
       try {
@@ -236,6 +254,17 @@ export function workspacePreflight(role: RoleName, options: RoleRunOptions = {})
     }
     devKnowledge = resolved;
     checks.push({ name: "Knowledge", ok: true, detail: `${resolved.knowledgeRoot} (via ${resolved.via})` });
+    // T-WG1 — a valid, marker-complete binding still leaves the BA-lane
+    // entirely unusable if nobody ever ran `init --role ba` there. DEV reads
+    // Knowledge fine either way (it only needs the markers), so this is a
+    // note, not a failing check.
+    if (!isTargetInitialized(resolved.knowledgeRoot)) {
+      checks.push({
+        name: "Knowledge (BA lane)",
+        ok: true,
+        detail: `bound but not initialized as a BA workspace — BA-lane is unusable on this machine until: cd "${resolved.knowledgeRoot}" && software-team-agents init --role ba`,
+      });
+    }
     checks.push({ name: "Target writable", ok: true, detail: roots.targetRoot });
   } else {
     // BA: Target optional (T-ROLE-07) — a machine-wide binding may exist and is
@@ -245,6 +274,23 @@ export function workspacePreflight(role: RoleName, options: RoleRunOptions = {})
     } catch {
       // informational only — never blocks a BA session
     }
+    // T-LV1 — an optional Target binding lets BA read the real app repo
+    // (schema.prisma, code) without ever requiring it. Any problem is
+    // reported as a non-blocking check, exactly like T-WG1's "Knowledge (BA
+    // lane)" note — it is never a reason to fail preflight.
+    try {
+      const resolved = resolveTargetBinding({ knowledgeRoot: roots.targetRoot, configTargetPath: config?.target?.path });
+      if (resolved) {
+        baTarget = resolved;
+        checks.push({ name: "Target (BA lane)", ok: true, detail: `${resolved.targetRoot} (via ${resolved.via}, read-only)` });
+      }
+    } catch (e) {
+      if (e instanceof TargetBindingError) {
+        checks.push({ name: "Target (BA lane)", ok: true, detail: e.message });
+      } else {
+        throw e;
+      }
+    }
   }
 
   const runtime = options.runtime ?? "claude";
@@ -253,7 +299,7 @@ export function workspacePreflight(role: RoleName, options: RoleRunOptions = {})
   if (!verdict.available) fail(`Runtime (${runtime})`, verdict.detail ?? `${runtime} is unavailable`);
   checks.push({ name: `Runtime (${runtime})`, ok: true, detail: verdict.detail });
 
-  return { checks, role, workspaceRoot: roots.targetRoot, frameworkRoot: roots.frameworkRoot, templatesDir, knowledge: devKnowledge, runtime };
+  return { checks, role, workspaceRoot: roots.targetRoot, frameworkRoot: roots.frameworkRoot, templatesDir, knowledge: devKnowledge, target: baTarget, runtime };
 }
 
 /** DEV-only aliases kept for the original callers/tests. */
@@ -280,7 +326,7 @@ async function runRoleSession(role: RoleName, options: RoleRunOptions): Promise<
   for (const c of ctx.checks) console.log(`[software-team-agents] ✓ ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
   console.log(`[software-team-agents] starting ${ctx.runtime} (${ROLE_LABEL[role]}) from ${ctx.workspaceRoot} ...`);
   const launch = options.launch ?? defaultLaunch;
-  return launch(ctx.runtime, [], ctx.workspaceRoot, launchEnv(role));
+  return launch(ctx.runtime, [], ctx.workspaceRoot, launchEnv(role, process.env, ctx.knowledge?.knowledgeRoot, ctx.target?.targetRoot));
 }
 
 export const runDev = (options: RoleRunOptions = {}): Promise<number> => runRoleSession("dev", options);

@@ -15,6 +15,14 @@ export const STAGE_TO_STATE: Partial<Record<AgentStage, TaskState>> = {
   // in the pipeline sharing one TaskState, the same trick backend/frontend already use for
   // IMPLEMENTATION.
   [AgentStage.TEST_PLANNER]: TaskState.PLAN,
+  // Runs inside the implementation phase, immediately before frontend-engineer —
+  // the same shared-state trick as backend/frontend below: the consultant's
+  // ordering (before the engineer it advises) is enforced by pipeline order, not
+  // by a state of its own. Mapping it to PLAN instead would put a PLAN-stage
+  // slot after backend's IMPLEMENTATION in the pipeline, and the advance loop
+  // (which walks states forward while the cursor names the stage) would sail
+  // past it to DEPLOYED.
+  [AgentStage.UXUI_DESIGNER]: TaskState.IMPLEMENTATION,
   [AgentStage.BACKEND_ENGINEER]: TaskState.IMPLEMENTATION,
   [AgentStage.FRONTEND_ENGINEER]: TaskState.IMPLEMENTATION,
   [AgentStage.QA_ENGINEER]: TaskState.QA,

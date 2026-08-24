@@ -62,7 +62,7 @@ import { runInit } from "./packaging/initCommand.js";
 import { runUpgrade } from "./packaging/upgradeCommand.js";
 import { runThreeRepoInit, runThreeRepoUpgrade } from "./packaging/threeRepoCommand.js";
 import { migrateSta } from "./packaging/migration.js";
-import { configureKnowledgeRoot, loadInstallationConfig } from "./threeRepo/installation.js";
+import { configureIdentities, configureKnowledgeRoot, loadInstallationConfig } from "./threeRepo/installation.js";
 import { loadTargetRegistry } from "./threeRepo/targets.js";
 import { preflightThreeRepoTask } from "./threeRepo/preflight.js";
 import { exitCodeFor, runDoctor } from "./threeRepo/doctor.js";
@@ -204,6 +204,7 @@ export const USAGE =
   "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names (T41)\n" +
   "  sta init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
   "  sta configure knowledge-root <path> [--config-path <path>]       validate and save this installation's single Knowledge root\n" +
+    "  sta configure identity --figma-email <email> --claude-email <email> [--config-path <path>]   declare the design accounts (same address; emails only, never a token)\n" +
   "  sta doctor [--project-root <path>]                               read-only diagnostics (T166); exit 1 on any FAIL, never mutates\n" +
   "  sta upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
   "  sta migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending (T96)\n" +
@@ -662,7 +663,7 @@ function isVerb(s: string | undefined): s is Verb {
 }
 
 /** Flags a verb accepts that take a value — their value must never be mistaken for the positional <task-id>. */
-const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--by", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime"]);
+  const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--by", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime"]);
 
 /** Every non-flag token in a verb's remaining args, in order, skipping over each value-flag's own argument. */
 function positionalArgs(rest: string[]): string[] {
@@ -941,8 +942,25 @@ async function runInitVerb(rest: string[], defaultProjectRoot: string): Promise<
 
 async function runConfigureVerb(rest: string[], frameworkRoot: string): Promise<number> {
   const [subject, knowledgeRoot] = positionalArgs(rest);
+  if (subject === "identity") {
+    try {
+      const config = configureIdentities(
+        { figma_email: flagValue(rest, "--figma-email"), claude_email: flagValue(rest, "--claude-email") },
+        flagValue(rest, "--config-path"),
+      );
+      const ids = config.identities!;
+      console.log(`[orchestrator] configured identities: figma_email=${ids.figma_email} claude_email=${ids.claude_email}`);
+      if (ids.figma_email.trim().toLowerCase() !== ids.claude_email.trim().toLowerCase()) {
+        console.error("[orchestrator] WARNING: the two declared emails differ — the UX/UI stage will refuse to run until they match");
+      }
+      return 0;
+    } catch (error) {
+      console.error(`[orchestrator] ${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    }
+  }
   if (subject !== "knowledge-root" || !knowledgeRoot) {
-    throw new CliUsageError("configure: use `configure knowledge-root <path>`");
+    throw new CliUsageError("configure: use `configure knowledge-root <path>` or `configure identity --figma-email <email> --claude-email <email>`");
   }
   try {
     const config = configureKnowledgeRoot(knowledgeRoot, flagValue(rest, "--config-path"), frameworkRoot);
@@ -1973,6 +1991,10 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       moduleName: () => args.module!,
       guards: contractGuardResolver(args.projectRoot),
       phases: () => (args.phases.length > 0 ? args.phases : undefined),
+      // T-UX12: the gate reads the task's own stored level so TRIVIAL/SMALL
+      // frontend work is not blocked on the UX-artifact precondition its
+      // pipeline deliberately skipped.
+      taskLevel: () => stored?.classification.level,
       // Absent --autonomy keeps the executor's own default ("propose"), which is
       // byte-identical to every run before the flag existed. Unattended runs pass
       // it explicitly — T117's pilot showed headless "propose" cannot act.

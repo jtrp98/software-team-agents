@@ -297,10 +297,16 @@ export const DEV_WORKFLOW: LaneSpec = {
   },
 };
 
-/** V1 UX/UI is deliberately human-operated and supplies a signed artifact just before frontend work. */
+/**
+ * The UX/UI lane: the one lane whose primary artefact is a *recommendation*.
+ * `uxui-designer` drafts the UX items (`UX-*`) from the design source; every one
+ * of them still walks T65's path — reviewed by somebody else, approved by a
+ * person — and the lane's own gate stays a person recording uxui-signoff. The
+ * agent proposes; the human authority is untouched.
+ */
 export const UXUI_WORKFLOW: LaneSpec = {
   lane: "uxui",
-  leadAgent: AgentStage.HUMAN,
+  leadAgent: AgentStage.UXUI_DESIGNER,
   primaryKind: "ux-design",
   handoffTo: "dev",
   humanGate: "a human records uxui-signoff for the current UX artifact",

@@ -4,6 +4,13 @@ import { readTemplateManifest, sha256Of, type TemplateFileEntry, type TemplateMa
 import { BINDING_RENDERINGS } from "../runtime/bindingGenerator.js";
 import { parseVersion } from "./version.js";
 import {
+  CLAUDE_MD_PATH,
+  KNOWLEDGE_ROOT_INCLUDE_PATH,
+  renderDevClaude,
+  renderKnowledgeInclude,
+  resolveDevKnowledgeRoot,
+} from "./knowledgeRender.js";
+import {
   assertManageablePath,
   TargetNotInitializedError,
   loadTargetConfig,
@@ -12,6 +19,7 @@ import {
   type TargetConfig,
   type TargetManifest,
 } from "./targetMeta.js";
+import { BA_LANE_AGENTS, type RoleName } from "./roleWorkspace.js";
 
 /**
  * T-TARGET-04 / T-TARGET-07 / T-TARGET-08 — Framework → Target sync.
@@ -50,8 +58,14 @@ export interface SyncPlanEntry {
 
 export interface SyncConflict {
   path: string;
-  /** user-modified: a tracked file was edited locally; untracked-file: the Target already owns this path; stale-modified: a dropped file carries edits. */
-  kind: "user-modified" | "untracked-file" | "stale-modified";
+  /**
+   * user-modified: a tracked file was edited locally; untracked-file: the
+   * Target already owns this path; stale-modified: a dropped file carries
+   * edits; roster-drift (T-WG2): an agent-prompt file on disk whose name
+   * belongs to the OTHER role's lane — never legitimate here, regardless of
+   * how it got there, so it is never treated as an ordinary foreign file.
+   */
+  kind: "user-modified" | "untracked-file" | "stale-modified" | "roster-drift";
   detail: string;
 }
 
@@ -86,6 +100,7 @@ function planPayloadFiles(
   templateManifest: TemplateManifest,
   oldFiles: ReadonlyMap<string, TemplateFileEntry>,
   overrides: ReadonlySet<string>,
+  derivedContent?: ReadonlyMap<string, string>,
 ): PlannedFile[] {
   const planned: PlannedFile[] = [];
   for (const file of templateManifest.files) {
@@ -101,6 +116,14 @@ function planPayloadFiles(
       continue;
     }
     const currentHash = hashFile(dest);
+    // A dev-lane rendering replaces the shipped bytes at the same managed path:
+    // compare against what sync actually writes, so a rendered workspace is
+    // "unchanged" on re-sync instead of perpetually "user-modified".
+    const derivedBytes = derivedContent?.get(file.path);
+    if (derivedBytes !== undefined && currentHash === sha256Of(derivedBytes)) {
+      planned.push({ entry: { action: "unchanged", path: file.path } });
+      continue;
+    }
     if (currentHash === file.sha256) {
       planned.push({ entry: { action: "unchanged", path: file.path } });
       continue;
@@ -125,12 +148,14 @@ function planStaleFiles(
   templateManifest: TemplateManifest,
   oldFiles: ReadonlyMap<string, TemplateFileEntry>,
   overrides: ReadonlySet<string>,
+  derivedContent?: ReadonlyMap<string, string>,
 ): PlannedFile[] {
   const newPathSet = new Set(templateManifest.files.map((f) => f.path));
   const planned: PlannedFile[] = [];
   for (const [relPath, tracked] of oldFiles) {
     if (newPathSet.has(relPath)) continue;
     if (relPath.startsWith(".codex/") || relPath.startsWith(".opencode/agent/")) continue; // derived renderings follow their agent sources automatically
+    if (derivedContent?.has(relPath)) continue; // T-WG7 — regenerated below from the live binding, never stale
     if (overrides.has(relPath)) {
       planned.push({ entry: { action: "override", path: relPath, note: "dropped by the Framework, kept because the project claimed it" } });
       continue;
@@ -144,6 +169,62 @@ function planStaleFiles(
     }
   }
   return planned;
+}
+
+/** Where each runtime's agent-prompt rendering lives, keyed by its file extension. */
+const AGENT_PROMPT_DIRS: readonly { dir: string; ext: string }[] = [
+  { dir: ".claude/agents", ext: ".md" },
+  { dir: ".codex/agents", ext: ".toml" },
+  { dir: ".opencode/agent", ext: ".md" },
+];
+
+/**
+ * T-WG2 — roster drift: an agent-prompt file physically present in a
+ * role-declared workspace whose name belongs to the OTHER lane. This is
+ * distinct from an ordinary foreign file: `planPayloadFiles`/`planStaleFiles`
+ * only ever look at paths the CURRENT role's filtered manifest knows about
+ * (`effectiveTemplateManifest`) or that this Target's own history tracked —
+ * a hand-copied prompt that was never either is invisible to both, which is
+ * exactly how the sb-compass incident's stray BA prompts survived undetected
+ * (F2 in workspace-guardrails-TASKS.md). A name that isn't a known agent at
+ * all (unrelated stray file) is deliberately left alone here — the existing
+ * foreign-file policy already covers it.
+ */
+export function detectRosterDrift(options: { targetRoot: string; templatesDir: string; role: RoleName }): SyncConflict[] {
+  const fullManifest = readTemplateManifest(options.templatesDir);
+  const allAgentNames = new Set(
+    fullManifest.files
+      .filter((f) => f.path.startsWith(".claude/agents/") && f.path.endsWith(".md"))
+      .map((f) => path.basename(f.path, ".md")),
+  );
+  const baAgents = new Set(BA_LANE_AGENTS);
+  // dev: only a BA-lane name is drift. ba: any known engineer/reviewer name is
+  // drift — everything the full roster knows about that isn't BA-lane.
+  const foreignNames = options.role === "dev" ? baAgents : new Set([...allAgentNames].filter((n) => !baAgents.has(n)));
+
+  const conflicts: SyncConflict[] = [];
+  for (const spec of AGENT_PROMPT_DIRS) {
+    const dirAbs = path.join(options.targetRoot, spec.dir);
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(dirAbs);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      if (!name.endsWith(spec.ext)) continue;
+      const base = path.basename(name, spec.ext);
+      if (!foreignNames.has(base)) continue;
+      conflicts.push({
+        path: path.posix.join(spec.dir, name),
+        kind: "roster-drift",
+        detail:
+          `agent prompt "${base}" belongs to the ${options.role === "dev" ? "BA" : "engineer/reviewer"} lane, ` +
+          `not this workspace's role (${options.role}) — never legitimate here regardless of how it arrived`,
+      });
+    }
+  }
+  return conflicts;
 }
 
 function overrideSet(config: TargetConfig | undefined): Set<string> {
@@ -200,6 +281,15 @@ export interface PlanSyncOptions {
   config?: TargetConfig;
   /** Role asset profile (T-ROLE-09/10/11): only matching payload paths are planned, tracked, and cleaned. Absent = full payload. */
   include?: (relPath: string) => boolean;
+  /** T-WG2 — when supplied, plan also flags any on-disk agent-prompt file belonging to the other lane (see `detectRosterDrift`). Absent = no roster-drift scan (legacy/no-role workspaces keep prior behaviour exactly). */
+  role?: RoleName;
+  /**
+   * T-WG7 — final bytes sync writes at otherwise-shipped paths (the dev lane's
+   * rendered CLAUDE.md). Planning compares against these so a rendered
+   * workspace is recognized as current; apply writes the mapped bytes instead
+   * of copying the template file.
+   */
+  derivedContent?: ReadonlyMap<string, string>;
 }
 
 /** The payload this sync actually manages, after the role profile filter. */
@@ -216,13 +306,18 @@ export function planSync(options: PlanSyncOptions): SyncPlan {
   const overrides = overrideSet(options.config);
 
   const planned = [
-    ...planPayloadFiles(options.targetRoot, templateManifest, oldFiles, overrides),
-    ...planStaleFiles(options.targetRoot, templateManifest, oldFiles, overrides),
+    ...planPayloadFiles(options.targetRoot, templateManifest, oldFiles, overrides, options.derivedContent),
+    ...planStaleFiles(options.targetRoot, templateManifest, oldFiles, overrides, options.derivedContent),
   ];
+
+  const conflicts = planned.map((p) => p.conflict).filter((c): c is SyncConflict => c !== undefined);
+  if (options.role) {
+    conflicts.push(...detectRosterDrift({ targetRoot: options.targetRoot, templatesDir: options.templatesDir, role: options.role }));
+  }
 
   return {
     entries: planned.map((p) => p.entry).filter((e): e is SyncPlanEntry => e !== undefined),
-    conflicts: planned.map((p) => p.conflict).filter((c): c is SyncConflict => c !== undefined),
+    conflicts,
     frameworkVersion: templateManifest.framework_version,
   };
 }
@@ -230,6 +325,40 @@ export function planSync(options: PlanSyncOptions): SyncPlan {
 export interface ApplySyncOptions extends PlanSyncOptions {
   now: string;
   force?: boolean;
+  /** Machine-wide installation.yaml override (tests); defaults to the real one when resolving a dev workspace's Knowledge binding. */
+  installationConfigPath?: string;
+}
+
+/**
+ * T-WG7 — the dev-lane derived bytes this sync would write: the rendered
+ * CLAUDE.md keyed by its managed path, plus the resolved root it was rendered
+ * against. Undefined for non-dev workspaces or when no binding resolves.
+ */
+export function devDerivedContent(options: {
+  targetRoot: string;
+  templatesDir: string;
+  config?: TargetConfig;
+  include?: (relPath: string) => boolean;
+  installationConfigPath?: string;
+}): { content: Map<string, string>; knowledgeRoot: string } | undefined {
+  const config = options.config;
+  const knowledgeRoot = resolveDevKnowledgeRoot({
+    targetRoot: options.targetRoot,
+    config,
+    installationConfigPath: options.installationConfigPath,
+  });
+  if (!knowledgeRoot) return undefined;
+  const manifest = readTemplateManifest(options.templatesDir);
+  const files = options.include ? manifest.files.filter((f) => options.include!(f.path)) : manifest.files;
+  if (!files.some((f) => f.path === CLAUDE_MD_PATH)) return undefined;
+  const base = fs.readFileSync(path.join(options.templatesDir, CLAUDE_MD_PATH), "utf8");
+  const content = new Map<string, string>([
+    [CLAUDE_MD_PATH, renderDevClaude(base, knowledgeRoot)],
+    // In the map so planStaleFiles treats it as regenerated (never stale) and
+    // a role flip later cleans it up through the ordinary stale path.
+    [KNOWLEDGE_ROOT_INCLUDE_PATH, renderKnowledgeInclude(knowledgeRoot)],
+  ]);
+  return { content, knowledgeRoot };
 }
 
 /** The Target's own manifest, when one exists. Absent = first sync. */
@@ -256,7 +385,15 @@ export function existingTargetManifest(targetRoot: string): TargetManifest | und
 export function runTargetSync(options: ApplySyncOptions): SyncResult {
   const manifest = options.manifest ?? existingTargetManifest(options.targetRoot);
   const config = options.config ?? loadTargetConfig(options.targetRoot);
-  const plan = planSync({ ...options, manifest, config });
+  const derived = devDerivedContent({
+    targetRoot: options.targetRoot,
+    templatesDir: options.templatesDir,
+    config,
+    include: options.include,
+    installationConfigPath: options.installationConfigPath,
+  });
+  const derivedContent = derived?.content;
+  const plan = planSync({ ...options, manifest, config, derivedContent });
   const oldFiles = new Map((manifest?.files ?? []).map((f) => [f.path, f]));
   const templateManifest = effectiveTemplateManifest(options);
 
@@ -336,6 +473,9 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
       performed.push({ action: "override", path: file.path, note: "the project already owns this path — sync left it alone" });
       continue; // never claimed, never written
     }
+    if (derivedContent?.has(file.path)) {
+      continue; // T-WG7 — written after the loop from rendered bytes, with rendered-hash tracking
+    }
     if (forcedOver.has(file.path)) {
       // Forced over a conflict: same mechanics as an update, including the backup.
       backup(file.path);
@@ -399,6 +539,60 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
         }
       }
       managedEntries.push(entry);
+    }
+  }
+
+  // T-WG7 — dev-lane rendering of CLAUDE.md plus its generated include. Planned
+  // against rendered hashes above, so this mirrors the DERIVED_RENDERINGS
+  // mechanics: a conflict already stopped the run before any write, otherwise
+  // add/update/unchanged with a backup of whatever gets replaced. A project-
+  // owned (foreign) CLAUDE.md stays untouched; the include is still written —
+  // it names the binding, it claims nothing the project authored.
+  if (derived) {
+    const rendered = derivedContent!.get(CLAUDE_MD_PATH)!;
+    const claudeEntry: TemplateFileEntry = { path: CLAUDE_MD_PATH, sha256: sha256Of(rendered), size_bytes: Buffer.byteLength(rendered) };
+    const claudeAbs = path.join(options.targetRoot, CLAUDE_MD_PATH);
+    if (!foreign.has(CLAUDE_MD_PATH)) {
+      if (!fs.existsSync(claudeAbs)) {
+        fs.writeFileSync(claudeAbs, rendered, "utf8");
+        performed.push({ action: "add", path: CLAUDE_MD_PATH, note: "rendered for the dev lane (Knowledge binding)" });
+      } else if (hashFile(claudeAbs) !== claudeEntry.sha256) {
+        backup(CLAUDE_MD_PATH);
+        fs.writeFileSync(claudeAbs, rendered, "utf8");
+        performed.push({ action: "update", path: CLAUDE_MD_PATH, note: "re-rendered for the dev lane (Knowledge binding)" });
+      } else {
+        performed.push({ action: "unchanged", path: CLAUDE_MD_PATH });
+      }
+      managedEntries.push(claudeEntry);
+    }
+    const includeContent = derivedContent!.get(KNOWLEDGE_ROOT_INCLUDE_PATH)!;
+    const includeEntry: TemplateFileEntry = { path: KNOWLEDGE_ROOT_INCLUDE_PATH, sha256: sha256Of(includeContent), size_bytes: Buffer.byteLength(includeContent) };
+    const includeAbs = path.join(options.targetRoot, KNOWLEDGE_ROOT_INCLUDE_PATH);
+    fs.mkdirSync(path.dirname(includeAbs), { recursive: true });
+    if (!fs.existsSync(includeAbs)) {
+      fs.writeFileSync(includeAbs, includeContent, "utf8");
+      performed.push({ action: "add", path: KNOWLEDGE_ROOT_INCLUDE_PATH, note: "generated from the Knowledge binding" });
+    } else if (hashFile(includeAbs) !== includeEntry.sha256) {
+      backup(KNOWLEDGE_ROOT_INCLUDE_PATH);
+      fs.writeFileSync(includeAbs, includeContent, "utf8");
+      performed.push({ action: "update", path: KNOWLEDGE_ROOT_INCLUDE_PATH, note: "regenerated from the Knowledge binding" });
+    } else {
+      performed.push({ action: "unchanged", path: KNOWLEDGE_ROOT_INCLUDE_PATH });
+    }
+    managedEntries.push(includeEntry);
+  }
+
+  // T-WG2 — roster drift has no template source to sync from (the file was
+  // never this role's to receive), so --force removes it outright, backed up
+  // first like any other forced conflict. Without --force it already stopped
+  // the run above via blockingConflicts.
+  if (options.force) {
+    for (const conflict of plan.conflicts.filter((c) => c.kind === "roster-drift")) {
+      const abs = path.join(options.targetRoot, conflict.path);
+      if (!fs.existsSync(abs)) continue;
+      backup(conflict.path);
+      fs.rmSync(abs);
+      performed.push({ action: "remove-stale", path: conflict.path, note: "roster drift — agent prompt from another lane" });
     }
   }
 

@@ -155,4 +155,43 @@ describe("Phase 2 preflight", () => {
       expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, { frameworkRoot: framework, installationConfigPath: config })).toThrow(/expected canonical remote_url/);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
+
+  /** T-UX3: the UX/UI stage's declared-identity gate — fail closed before any agent starts. */
+  it("blocks the uxui-designer stage when identities are undeclared or disagreeing, and passes others through", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "three-repo-identity-"));
+    try {
+      const framework = path.join(root, "framework");
+      const knowledge = path.join(root, "knowledge");
+      const target = path.join(root, "target");
+      initRepository(framework); initRepository(knowledge); initRepository(target);
+      fs.writeFileSync(path.join(target, ".git", "config"), "[remote \"origin\"]\n\turl = https://github.com/acme/backend.git\n");
+      fs.mkdirSync(path.join(knowledge, ".workflow"));
+      fs.writeFileSync(path.join(knowledge, "targets.yaml"), "schema_version: 1\ntargets:\n  - target_id: backend\n    name: Backend\n    remote_url: https://github.com/acme/backend.git\n    status: active\n  - target_id: frontend\n    name: Frontend\n    remote_url: https://github.com/acme/frontend.git\n    status: active\n");
+      fs.writeFileSync(path.join(knowledge, ".workflow", "targets.local.yaml"), `schema_version: 1\ntargets:\n  backend:\n    path: ${JSON.stringify(target)}\n`);
+      const base = { frameworkRoot: framework };
+
+      const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+      const engineerTask = newPersistedTask({ taskId: "eng", classification, machine: initTaskMachine(classification.pipeline, false), now: 1, targetBindings: { backend_target: "backend", frontend_target: null } });
+
+      const uxuiClassification = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
+      const uxuiTask = newPersistedTask({ taskId: "ux", classification: uxuiClassification, machine: initTaskMachine(uxuiClassification.pipeline, false), now: 1, targetBindings: { backend_target: null, frontend_target: "frontend" } });
+
+      // Undeclared → blocked, with the fix named; a stage without the gate runs as before.
+      const noIdentitiesConfig = path.join(root, "installation.yaml");
+      fs.writeFileSync(noIdentitiesConfig, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\n`);
+      expect(() => preflightThreeRepoTask(engineerTask, AgentStage.BACKEND_ENGINEER, { ...base, installationConfigPath: noIdentitiesConfig })).not.toThrow();
+      expect(() => preflightThreeRepoTask(uxuiTask, AgentStage.UXUI_DESIGNER, { ...base, installationConfigPath: noIdentitiesConfig })).toThrow(/identity gate.*sta configure identity/);
+
+      // Declared but disagreeing → blocked.
+      const mismatchConfig = path.join(root, "mismatch.yaml");
+      fs.writeFileSync(mismatchConfig, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\nidentities:\n  figma_email: one@person.dev\n  claude_email: other@person.dev\n`);
+      expect(() => preflightThreeRepoTask(uxuiTask, AgentStage.UXUI_DESIGNER, { ...base, installationConfigPath: mismatchConfig })).toThrow(/different addresses/);
+
+      // Matching declaration → the gate passes (knowledge-only lane acquires no Target work root).
+      const okConfig = path.join(root, "ok.yaml");
+      fs.writeFileSync(okConfig, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\nidentities:\n  figma_email: same@person.dev\n  claude_email: same@person.dev\n`);
+      const result = preflightThreeRepoTask(uxuiTask, AgentStage.UXUI_DESIGNER, { ...base, installationConfigPath: okConfig });
+      expect(result.workRoots).toEqual([]);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
 });

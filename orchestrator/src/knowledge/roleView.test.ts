@@ -63,13 +63,20 @@ describe("kindsFor is derived from the context policy, not declared twice", () =
 });
 
 describe("view names", () => {
-  it("names one of the three V1.1 views for every role", () => {
+  it("names one of the V1.1 views for every role", () => {
     for (const role of Object.values(AgentStage)) {
-      expect(["business", "architecture", "technical", "all"]).toContain(viewNameFor(role));
+      expect(["business", "architecture", "uxui", "technical", "all"]).toContain(viewNameFor(role));
     }
     expect(VIEW_OF[AgentStage.BUSINESS_ANALYST]).toBe("business");
     expect(VIEW_OF[AgentStage.SYSTEM_ANALYST]).toBe("architecture");
+    expect(VIEW_OF[AgentStage.UXUI_DESIGNER]).toBe("uxui");
     expect(VIEW_OF[AgentStage.BACKEND_ENGINEER]).toBe("technical");
+  });
+
+  it("lets the UX/UI consultant see its own ux-design kind (owner union)", () => {
+    expect(canSeeKind(AgentStage.UXUI_DESIGNER, "ux-design")).toBe(true);
+    expect(canSeeKind(AgentStage.UXUI_DESIGNER, "requirement")).toBe(true);
+    expect(canSeeKind(AgentStage.UXUI_DESIGNER, "task")).toBe(false);
   });
 });
 

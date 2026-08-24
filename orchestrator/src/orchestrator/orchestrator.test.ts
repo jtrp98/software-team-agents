@@ -4,6 +4,7 @@ import { classifyTask } from "../classification/taskClassifier.js";
 import { AgentStage, TaskState } from "../types.js";
 import { ArtifactType, type DesignArtifact, type QaReportArtifact, type SecurityReportArtifact } from "../artifacts/schemas.js";
 import { BudgetExceededError } from "../cost/costControl.js";
+import { validateStructuredFailure } from "../orchestrator/failure.js";
 import { ApprovalType } from "../gates/approval.js";
 
 const okDesign: DesignArtifact = {
@@ -68,7 +69,7 @@ async function runToCompletion(orch: Orchestrator, executor: AgentExecutor, maxS
 }
 
 describe("Orchestrator", () => {
-  it("drives a TRIVIAL task straight to DEPLOYED in one step", async () => {
+  it("drives a TRIVIAL frontend task straight to DEPLOYED in one step (no design phase — T-UX11)", async () => {
     const classification = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
     const orch = new Orchestrator("T-TRIVIAL", classification);
     const executor = makeExecutor({});
@@ -414,4 +415,103 @@ describe("T45 — a failed execute blocks instead of silently deploying", () => 
     expect(status.kind).toBe("RUNNING"); // reassigned to prepare again, not BLOCKED
     if (status.kind === "RUNNING") expect(status.stage).toBe(AgentStage.DEVOPS);
   });
+});
+
+describe("uxui-designer routes questions back to ba/sa (T-UX10)", () => {
+  const uxQuestion = (owner: AgentStage, severity: "medium" | "critical" = "medium") =>
+    validateStructuredFailure({
+      category: owner === AgentStage.BUSINESS_ANALYST ? "requirement" : "contract",
+      owner,
+      severity,
+      retryable: true,
+      reason:
+        owner === AgentStage.BUSINESS_ANALYST
+          ? "requirement.md does not say whether the loyalty tier UI is worth building � a business call"
+          : "design.md has no model for the referral widget the design source shows � a schema gap",
+      affected: ["UX-001"],
+      requiresHuman: false,
+    });
+
+  /** Drives a full-chain feature task until uxui-designer is the assigned stage. */
+  async function driveToUxui(orch: Orchestrator, executor: AgentExecutor): Promise<void> {
+    for (let i = 0; i < 20; i++) {
+      const status = await orch.step(executor);
+      if (status.kind === "RUNNING" && status.stage === AgentStage.UXUI_DESIGNER) return;
+      if (status.kind === "WAITING_FOR_HUMAN") {
+        const field =
+          status.approvalType === ApprovalType.REQUIREMENT_INTERVIEW
+            ? "requirementApproved"
+            : status.approvalType === ApprovalType.SCHEMA_CONFIRMATION
+              ? "designApproved"
+              : "humanApproved";
+        orch.provideHumanApproval(field, true);
+        continue;
+      }
+      if (status.kind === "BLOCKED" || status.kind === "DEPLOYED") break;
+    }
+    throw new Error("uxui-designer was never assigned");
+  }
+
+  const feature = () => classifyTask({ isNewFeatureModuleOrProject: true, touchesBackend: true, touchesFrontend: true });
+
+  it("a value question routes back to business-analyst at REQUIREMENT, not forward to frontend", async () => {
+    const orch = new Orchestrator("T-UX-BA", feature());
+    await driveToUxui(orch, makeExecutor({}));
+
+    const status = await orch.step(() => ({
+      outcome: { tokens: 100, cost: 0.01, result: "FAIL" },
+      failure: uxQuestion(AgentStage.BUSINESS_ANALYST),
+    }));
+
+    expect(status).toEqual({ kind: "RUNNING", stage: AgentStage.BUSINESS_ANALYST });
+    expect(orch.machine.current).toBe(TaskState.REQUIREMENT);
+    // No verification budget was touched by a routed question.
+    expect(orch.retries.qa).toBe(0);
+  });
+
+  it("a feasibility question routes back to system-analyst at DESIGN and re-walks the chain", async () => {
+    const orch = new Orchestrator("T-UX-SA", feature());
+    await driveToUxui(orch, makeExecutor({}));
+
+    const status = await orch.step(() => ({
+      outcome: { tokens: 100, cost: 0.01, result: "FAIL" },
+      failure: uxQuestion(AgentStage.SYSTEM_ANALYST),
+    }));
+
+    expect(status).toEqual({ kind: "RUNNING", stage: AgentStage.SYSTEM_ANALYST });
+    expect(orch.machine.current).toBe(TaskState.DESIGN);
+  });
+
+  it("fails closed when the owner is not in this pipeline � an incremental task has no BA to ask", async () => {
+    const classification = classifyTask({ isIncrementalFeature: true, touchesBackend: true, touchesFrontend: true });
+    const orch = new Orchestrator("T-UX-NOBA", classification);
+    // incremental: SA -> TP -> BE -> UXUI -> FE -> QA; the DESIGN->PLAN schema gate still fires.
+    await orch.step(() => pass); // system-analyst
+    orch.provideHumanApproval("designApproved", true);
+    await orch.step(() => pass); // test-planner
+    await orch.step(() => pass); // backend-engineer
+
+    const status = await orch.step(() => ({
+      outcome: { tokens: 100, cost: 0.01, result: "FAIL" },
+      failure: uxQuestion(AgentStage.BUSINESS_ANALYST),
+    }));
+
+    expect(status.kind).toBe("BLOCKED");
+    if (status.kind === "BLOCKED") expect(status.reason).toMatch(/not in this task's pipeline/);
+  });
+
+  it("a critical-severity question stops for a person instead of routing automatically", async () => {
+    const orch = new Orchestrator("T-UX-CRIT", feature());
+    await driveToUxui(orch, makeExecutor({}));
+
+    const status = await orch.step(() => ({
+      outcome: { tokens: 100, cost: 0.01, result: "FAIL" },
+      failure: uxQuestion(AgentStage.BUSINESS_ANALYST, "critical"),
+    }));
+
+    expect(status.kind).toBe("BLOCKED");
+    if (status.kind === "BLOCKED") expect(status.reason).toMatch(/never handled autonomously/);
+  });
+
+  const pass: AgentExecutorResult = { outcome: { tokens: 10, cost: 0.001, result: "PASS" } };
 });

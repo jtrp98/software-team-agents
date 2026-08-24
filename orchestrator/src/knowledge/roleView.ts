@@ -35,7 +35,7 @@ import type { KnowledgeItem } from "./knowledgeModel.js";
  *     exist to prevent.
  */
 
-export type ViewName = "business" | "architecture" | "technical" | "all";
+export type ViewName = "business" | "architecture" | "uxui" | "technical" | "all";
 
 /** Which knowledge kinds a document category carries. `review.md`, `security.md` and code are not knowledge kinds — they are records and artefacts, so they map to nothing. */
 export const KINDS_BY_CATEGORY: Record<ContextCategory, KnowledgeKind[]> = {
@@ -69,6 +69,7 @@ export const VIEW_OF: Record<AgentStage, ViewName> = {
   [AgentStage.PROJECT_MANAGER]: "architecture",
   [AgentStage.TEST_PLANNER]: "architecture",
   [AgentStage.SETUP]: "architecture",
+  [AgentStage.UXUI_DESIGNER]: "uxui",
   [AgentStage.BACKEND_ENGINEER]: "technical",
   [AgentStage.FRONTEND_ENGINEER]: "technical",
   [AgentStage.QA_ENGINEER]: "technical",

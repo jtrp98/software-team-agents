@@ -45,15 +45,15 @@ Since P0 finished, three of its behaviours are worth knowing when you read the a
 ```
 setup (once per project)
    ↓
-business-analyst → system-analyst → project-manager → test-planner → backend-engineer → frontend-engineer
-                                                                                  ↓
-                                                                            qa-engineer
-                                                                  ↓            ↓            ↓
-                                                       implementation bug   schema gap   business gap
-                                                                  ↓            ↓            ↓
-                                                    frontend/backend-engineer  system-analyst  business-analyst
-                                                                                  ↓
-                                                                security (sensitive phases) → devops
+business-analyst → system-analyst → project-manager → test-planner → backend-engineer → uxui-designer → frontend-engineer
+                                                                                                          ↓
+                                                                                                    qa-engineer
+                                                                                          ↓            ↓            ↓
+                                                                               implementation bug   schema gap   business gap
+                                                                                          ↓            ↓            ↓
+                                                                            frontend/backend-engineer  system-analyst  business-analyst
+                                                                                                          ↓
+                                                                                          security (sensitive phases) → devops
 ```
 
 | Agent | Owns | Reads | Writes |
@@ -63,13 +63,20 @@ business-analyst → system-analyst → project-manager → test-planner → bac
 | `system-analyst` | feasibility + data model | `requirement.md`, `review.md`, stack files | `design.md` |
 | `project-manager` | phased task list | `design.md`, `requirement.md`, stack files | `plan.md` |
 | `test-planner` | test strategy | `requirement.md`, `design.md`, `plan.md` | `test-plan.md` |
-| `frontend-engineer` | UI code | `plan.md`, `design.md`, `requirement.md`, `test-plan.md`, `review.md` | app code |
+| `uxui-designer` | UX/UI analysis + recommendations (read-only consultant; drafts only, a person signs off) | `requirement.md`, `design.md`, design sources under `knowledge/_sources/design/<module>/`, Figma via read-only MCP | `_docs/module/*/uxui/**`, `knowledge/*/ux-design/**` (`UX-*` drafts) |
+| `frontend-engineer` | UI code | `plan.md`, `design.md`, `requirement.md`, `test-plan.md`, `review.md`, the module's signed UX artifact | app code |
 | `backend-engineer` | API/DB code | `plan.md`, `design.md`, `requirement.md`, `test-plan.md`, `review.md` | app code |
 | `qa-engineer` | verification | all docs + `schema.prisma` + real code | `review.md`, `review/phase-N.md`, task Status cells and add-only `🔒 Security gate` in `plan.md` |
 | `security` | security audit | `requirement.md`, `design.md`, `review.md`, `schema.prisma`, real code | `security.md` |
 | `devops` | deploy, CI, migrations | `status.md`, `review.md`, `security.md`, `plan.md`, `design.md`, `schema.prisma`, stack files | `deploy.md`, infra files |
 
-Every agent also reads `_docs/status.md` when it starts and regenerates it (`node .claude/scripts/generate-status.js` — T51, `policies/documentation.md` §2) when it finishes, rather than hand-editing it — that's left out of the table above rather than repeated on all ten rows.
+**Three-repo note (T-ROLE/T-WG7):** every path above that sits in the module folder (`_docs/module/<name>/…`) or under `knowledge/` is a **Knowledge-repository** location. Analysis-role Writes columns — requirement/design/plan/test-plan and everything the `business-analyst`…`uxui-designer` rows produce — are written only from the Knowledge workspace (`software-team-agents ba`). A DEV workspace reads those same paths as READ-ONLY context (its rendered CLAUDE.md banner names the root), writes app code plus its own engineer docs (`review.md`, `security.md`, `deploy.md`), and never carries a local `_docs/`. `qa-engineer` runs from the Target (DEV) workspace and cannot write `plan.md` directly there — `.claude/hooks/block-path-permissions.js` denies it unconditionally in a `role: dev` workspace, whatever its contract says. Its Status-cell decision still has to land where `plan.md` lives — the Knowledge repo — so it goes through two stages (T-LV3): `qa-engineer` writes its verdict into `review.md` (fully writable from Target) plus a `## Knowledge sync — three-repo mode` table naming each task's id and new Status, then a BA-lane session applies that table to `plan.md`'s Status cells — a relay of a decision already made, not a second review, and using write access the BA lane already holds over its own `plan.md`. In single-repo/legacy mode (no `role: dev`), none of this applies and `qa-engineer` still edits the Status cell directly, as it always did.
+
+**Lane visibility (T-LV1/T-LV2):** the read direction above also runs the other way, symmetrically and optionally. A BA workspace's `.agent-team/config.yaml` may set `target.path`, mirroring `knowledge.path` on the DEV side; when it resolves, `software-team-agents ba` sets `AGENTCLAUDE_TARGET_ROOT` the same way a DEV launch sets `AGENTCLAUDE_KNOWLEDGE_ROOT`. Unset or unresolved, BA works exactly as before — Target stays optional, nothing about BA's own workflow depends on it. `system-analyst` is the one agent that reads it today: amending a module that's already implemented, with `AGENTCLAUDE_TARGET_ROOT` present, it reads the real schema off the Target (via `backend-engineer.md`'s "Fixed project stack" section, never a hardcoded path) before treating a change as additive/breaking, and reports drift against `design.md` plainly instead of trusting `design.md`'s memory of what got built. No write channel opens either direction — this is read-only, same as `AGENTCLAUDE_KNOWLEDGE_ROOT` is for DEV.
+
+Every agent also reads `_docs/status.md` when it starts and regenerates it (`node .claude/scripts/generate-status.js` — T51, `policies/documentation.md` §2) when it finishes, rather than hand-editing it — that's left out of the table above rather than repeated on all eleven rows.
+
+`uxui-designer` runs immediately before `frontend-engineer`, but only in pipelines that carry a design phase — feature, business-rule, schema-change and incremental work (`workflows/typo.yml`-class small fixes rely on the module's existing signed artifact instead). It analyzes the module's design source (a Figma file over a read-only MCP connection, or export/handoff files a person placed in `knowledge/_sources/design/<module>/`) and produces draft `UX-*` recommendations plus `_docs/module/<name>/uxui/design.md`. Everything it writes is draft — a person reviews, approves, and records the UXUI lane sign-off (`sta roles signoff uxui --by <name>`), and frontend work does not start until that gate is current. The gate itself follows the same right-sizing: TRIVIAL/SMALL tasks skip the UX-artifact precondition (no design phase, no uxui round was scheduled), while MEDIUM+ — and any unknown level, fail-closed — still require it; the SA→DEV handoff checks apply at every level. It never scrapes a design URL and never calls a canvas-write tool; the Figma connection is read-only and identity-gated (see README, "Design sources & identities"). A question that is not its to answer — is this UI worth building, or can it be built — is reported as structured data and routed back to `business-analyst`/`system-analyst` automatically; if this pipeline has no such stage, it stops for a person instead of guessing.
 
 `test-planner` runs after `project-manager`, before the engineers — deciding what needs testing and at what level (unit/integration/API/E2E) so `backend-engineer`/`frontend-engineer` build against a stated strategy instead of each guessing their own, and `qa-engineer` verifies against it instead of inventing one per round. It participates in normal auto-chaining like every other stage — the only things that stop the chain are the five always-human points above. Right-sizing still applies: small work that skips `project-manager` skips `test-planner` too (see below).
 
@@ -88,6 +95,7 @@ _docs/
         ├── design-archive.md    ← (created on demand) closed amend-round Q&A, moved out of design.md's always-read sections
         ├── plan.md              ← project-manager  (task Status cell + added security gates: qa-engineer, T52)
         ├── test-plan.md         ← test-planner
+        ├── uxui/design.md       ← uxui-designer (the lane artifact a person signs off before frontend work)
         ├── review.md            ← qa-engineer  (open issues + current round + unverified behaviour)
         ├── review/
         │   └── phase-N.md       ← qa-engineer  (archived rounds — read on demand only)
@@ -98,7 +106,7 @@ _docs/
 ├── shared/
 │   ├── conventions.md            ← short redirect to policies/ (T49 moved the rules there)
 │   └── multi-module-schema-scoping.md ← schema.prisma vs design.md scoping procedure, read only once >1 module exists
-├── agents/*.md                  ← the ten agents
+├── agents/*.md                  ← the eleven agents
 ├── hooks/
 │   ├── block-git.js              ← PreToolUse guard enforcing the no-git rule
 │   ├── block-outside-repo.js     ← PreToolUse guard keeping every write inside the repo root
@@ -146,12 +154,13 @@ A **module folder** is a delivery unit with its own doc set and phase numbering;
 
 Full text in `policies/*.md`; the short version:
 
+- **Confirm workspace ↔ lane before writing anything (T-WG5).** Every analysis/doc-writing run starts with `software-team-agents status` — a run in the wrong repository (BA-lane work landing in a Target, not the Knowledge repo) is exactly how the sb-compass incident happened, and nothing caught it until it was too late. If `status` warns that a bound Knowledge root was never `init --role ba`'d there, stop and ask the user before writing a single doc file, even into a folder that already exists. `policies/documentation.md` §0 has the full rule; `setup` and `business-analyst` carry it explicitly since they're the two agents that can create a module folder from nothing.
 - **`backend-engineer` runs before `frontend-engineer`, never in parallel, within a phase.** The frontend reads its types/API calls off what the backend actually built, not off `design.md` alone — running both at once means frontend has to guess the contract, which is exactly what produced a real `staff-roles/sync` response-shape mismatch that cost an extra fix round. Exception: tasks in the same phase that share no API contract can run in either order. `policies/agent-boundaries.md` §6a has the full rule.
-- **No agent chains to the next — structurally, none of the ten has the `Agent` tool.** By default (manual mode) each finishes by saying what's ready and who should get it, then the user decides. When the user explicitly asks for a continuous/unattended run ("รันข้ามคืนได้เลย"), the session orchestrating the pipeline chains the handoffs itself — and the chain is whatever `workflows/*.yml` declares: **every code-changing pipeline closes with `qa-engineer`, and `security` joins when a sensitive area or the schema is touched**, so verification is part of the automation rather than a step a caller must remember. Five points stop the chain and wait for a person regardless of mode: the requirements interview (`business-analyst` never runs headless past its interview without an answer), `system-analyst`'s schema confirmation, `qa-engineer` on any ⚠️/❌ result (rounds 1–2 route back to the engineer automatically; the third failure — or any Critical-severity failure — escalates to a person immediately), `security` on any 🔴/🟠 finding, and `devops` before an actual deploy/migration. Both reviewers stay invokable by name outside any pipeline too. `policies/agent-boundaries.md` §6 has the full rule.
+- **No agent chains to the next — structurally, none of the eleven has the `Agent` tool.** By default (manual mode) each finishes by saying what's ready and who should get it, then the user decides. When the user explicitly asks for a continuous/unattended run ("รันข้ามคืนได้เลย"), the session orchestrating the pipeline chains the handoffs itself — and the chain is whatever `workflows/*.yml` declares: **every code-changing pipeline closes with `qa-engineer`, and `security` joins when a sensitive area or the schema is touched**, so verification is part of the automation rather than a step a caller must remember. Five points stop the chain and wait for a person regardless of mode: the requirements interview (`business-analyst` never runs headless past its interview without an answer), `system-analyst`'s schema confirmation, `qa-engineer` on any ⚠️/❌ result (rounds 1–2 route back to the engineer automatically; the third failure — or any Critical-severity failure — escalates to a person immediately), `security` on any 🔴/🟠 finding, and `devops` before an actual deploy/migration. Both reviewers stay invokable by name outside any pipeline too. `policies/agent-boundaries.md` §6 has the full rule.
 - **No git, ever.** No agent runs git or touches `.git`. `setup`/`devops` may *write* a `.gitignore` or CI file — that's writing a file, not running git. This is enforced by a `PreToolUse` hook (`.claude/hooks/block-git.js`), not left to the prompt: state-changing git commands are blocked at the tool call, read-only ones (`status`/`log`/`diff`/`show`) still run.
 - **No agent writes outside this repo.** Every write resolves under the project root, whatever the reason. Enforced by a second `PreToolUse` hook (`.claude/hooks/block-outside-repo.js`) on `Write`/`Edit`/`MultiEdit`/`NotebookEdit` — the one exception is Claude Code's own scratchpad convention under the OS temp dir, which isn't an agent going off scope.
 - **`design.md`'s Data Model is the contract.** `backend-engineer` implements it verbatim, `frontend-engineer` derives types from it, `qa-engineer` fails any drift. A gap goes back to `system-analyst`, never gets improvised. Once `setup` has written the real `schema.prisma`, the engineers work from that file — it's the contract's working copy and the one their queries must agree with — and `qa-engineer` is the agent that reads both and keeps them equal. If they ever disagree, `design.md` wins and the code is wrong. Only `setup` (at scaffold) and `backend-engineer` (propagating a confirmed amendment) ever write `schema.prisma`. Every model in a module's Data Model must exist in `schema.prisma` and match — that direction is absolute regardless of module count. **If more than one module folder exists**, a model `schema.prisma` has that this `design.md` doesn't may belong to another module rather than being drift — `.claude/shared/multi-module-schema-scoping.md` has the exact ownership-check procedure (read it only once that situation applies; a single-module project is fully covered by the rule above already).
-- **Only `qa-engineer` marks tasks done.** It sets a task's Status cell to `verified` (or `blocked`) in `plan.md`'s task table (T52) after inspecting real code. Engineers don't edit `plan.md` at all — their contracts deny `_docs/module/**` — so an engineer starting a row says so in its handoff instead of flipping the cell itself, and `project-manager`/`qa-engineer` are the only writers the table ever sees. Nobody else touches Status.
+- **Only `qa-engineer` marks tasks done.** It sets a task's Status cell to `verified` (or `blocked`) in `plan.md`'s task table (T52) after inspecting real code. Engineers don't edit `plan.md` at all — their contracts deny `_docs/module/**` — so an engineer starting a row says so in its handoff instead of flipping the cell itself, and `project-manager`/`qa-engineer` are the only writers the table ever sees. Nobody else touches Status. **In three-repo mode this decision still originates only with `qa-engineer`** — a BA-lane session applies the Status-cell write mechanically from `review.md`'s sync table (T-LV3, see the Three-repo note above), it never re-judges the verdict.
 - **Amend, don't regenerate.** Existing docs are updated with `Edit`, section by section, with a dated line appended to their `## Change Log`. Never a full rewrite.
 - **`review.md` stays small.** It holds `Open Issues — all phases`, the current verify round, and `Unverified Behaviour` for phases that haven't deployed yet; `qa-engineer` moves closed rounds verbatim into `review/phase-N.md`. Those first and third sections outlive their round on purpose — a later stage reads them after the round that produced them stopped being current. Every engineer/`security`/`devops` run reads `review.md` in full, so closed-phase detail left in it is a tax on the whole pipeline. Nobody opens an archive file as part of normal startup.
 - **Dates come from the user.** No agent can reliably know today's date, so any agent writing a dated entry asks first and reuses that answer for the session.
@@ -174,7 +183,7 @@ Full text in `policies/*.md`; the short version:
 
 ## Right-size the pipeline — don't run all of it for small work
 
-The full chain is for building something new. Running ten stages for a copy fix is waste, not diligence. Pick the entry point by the size of the change:
+The full chain is for building something new. Running eleven stages for a copy fix is waste, not diligence. Pick the entry point by the size of the change:
 
 | The work is | Start at | Skip |
 |---|---|---|
@@ -199,6 +208,7 @@ Set in each agent's frontmatter. The split puts the expensive model where a mist
 | `system-analyst` | opus | high | hardest reasoning in the chain; a wrong schema is the costliest mistake available |
 | `project-manager` | sonnet | medium | decomposition from an already-confirmed design |
 | `test-planner` | sonnet | medium | derives test items from an already-confirmed design/plan — same tier as decomposition, not the same tier as the design decision itself |
+| `uxui-designer` | sonnet | medium | analysis of an already-confirmed design against a design source; output is a draft a person reviews, so a miss costs one review round, not shipped UI |
 | `frontend-engineer` | sonnet | medium | highest volume, highest output — where the savings actually are |
 | `backend-engineer` | sonnet | medium | same |
 | `qa-engineer` | sonnet | high | comparison work, so `effort: high` buys more here than the tier does — but note this is the highest-leverage cost decision in the table: with tests opt-in and usually absent, this agent is the *only* correctness guarantee in the chain and nothing re-checks it. `opus` is the upgrade to reach for first if verification starts missing things |

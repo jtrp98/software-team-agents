@@ -664,6 +664,8 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
       threeRepoTask: () => ({ task, roots: { bindingRoot: "/framework", knowledgeRoot: "/knowledge", workRoots: [{ targetId: "api", path: "/api", access: "write" }] } }), });
     await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-target", context: [] });
     expect(runtime.requests[0]).toMatchObject({ cwd: "/framework", bindingRoot: "/framework", knowledgeRoot: "/knowledge", workRoots: [{ targetId: "api", path: "/api", access: "write" }] });
+    // T-WG7 — the Knowledge root rides on the env so hooks/prompts can name it.
+    expect(runtime.requests[0]!.env).toMatchObject({ AGENTCLAUDE_ROLE: "backend-engineer", AGENTCLAUDE_KNOWLEDGE_ROOT: "/knowledge" });
   });
 });
 

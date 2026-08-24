@@ -1,6 +1,6 @@
 /**
  * Shared identifiers used across the orchestrator.
- * AgentStage names are fixed to the ten roles this platform replaces
+ * AgentStage names are fixed to the eleven roles this platform replaces
  * (see repo root CLAUDE.md) — no generic "Developer"/"SA" stand-ins.
  */
 export enum AgentStage {
@@ -9,6 +9,7 @@ export enum AgentStage {
   SYSTEM_ANALYST = "system-analyst",
   PROJECT_MANAGER = "project-manager",
   TEST_PLANNER = "test-planner",
+  UXUI_DESIGNER = "uxui-designer",
   BACKEND_ENGINEER = "backend-engineer",
   FRONTEND_ENGINEER = "frontend-engineer",
   QA_ENGINEER = "qa-engineer",

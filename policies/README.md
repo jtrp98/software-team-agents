@@ -35,7 +35,7 @@ hook cannot express.
 
 ## Why the split took a whole task, not a rename
 
-Around 150 references across the ten agent prompts, `.claude/hooks/`, `.claude/scripts/`, and
+Around 150 references across the eleven agent prompts, `.claude/hooks/`, `.claude/scripts/`, and
 `orchestrator/src/`'s own comments point at `.claude/shared/conventions.md` by path and section
 number. Every one of those had to either keep working (the section numbers didn't move) or get
 repointed to the new file (the ones that cited `conventions.md` generically, without a number) —

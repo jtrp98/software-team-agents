@@ -1,6 +1,6 @@
 {
   "name": "@agentclaude/orchestrator",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Automates the AgentClaude pipeline's opt-in autonomous mode by driving the real .claude/agents/*.md subagents via the claude CLI",
   "type": "module",
