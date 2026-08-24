@@ -102,6 +102,46 @@ describe("Phase 2 task Target bindings", () => {
 });
 
 describe("Phase 2 preflight", () => {
+  it("T-V1-16 two live Targets: each code stage writes its own and merely reads the other", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "three-repo-two-live-"));
+    try {
+      const framework = path.join(root, "framework");
+      const knowledge = path.join(root, "knowledge");
+      const backendRepo = path.join(root, "backend");
+      const frontendRepo = path.join(root, "frontend");
+      initRepository(framework); initRepository(knowledge); initRepository(backendRepo); initRepository(frontendRepo);
+      fs.writeFileSync(path.join(backendRepo, ".git", "config"), "[remote \"origin\"]\n\turl = https://github.com/acme/backend.git\n");
+      fs.writeFileSync(path.join(frontendRepo, ".git", "config"), "[remote \"origin\"]\n\turl = https://github.com/acme/frontend.git\n");
+      fs.mkdirSync(path.join(knowledge, ".workflow"));
+      fs.writeFileSync(path.join(knowledge, "targets.yaml"), "schema_version: 1\ntargets:\n  - target_id: backend\n    name: Backend\n    remote_url: https://github.com/acme/backend.git\n    status: active\n  - target_id: frontend\n    name: Frontend\n    remote_url: https://github.com/acme/frontend.git\n    status: active\n");
+      fs.writeFileSync(path.join(knowledge, ".workflow", "targets.local.yaml"), `schema_version: 1\ntargets:\n  backend:\n    path: ${JSON.stringify(backendRepo)}\n  frontend:\n    path: ${JSON.stringify(frontendRepo)}\n`);
+      const config = path.join(root, "installation.yaml");
+      fs.writeFileSync(config, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\n`);
+      const classification = both();
+      const task = newPersistedTask({ taskId: "split", classification, machine: initTaskMachine(classification.pipeline, false), now: 1, targetBindings: { backend_target: "backend", frontend_target: "frontend" } });
+      const opts = { frameworkRoot: framework, installationConfigPath: config };
+
+      const forBackend = preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, opts);
+      expect(forBackend.workRoots).toEqual([
+        { targetId: "backend", path: backendRepo, access: "write" },
+        { targetId: "frontend", path: frontendRepo, access: "read" },
+      ]);
+
+      const forFrontend = preflightThreeRepoTask(task, AgentStage.FRONTEND_ENGINEER, opts);
+      expect(forFrontend.workRoots).toEqual([
+        { targetId: "backend", path: backendRepo, access: "read" },
+        { targetId: "frontend", path: frontendRepo, access: "write" },
+      ]);
+
+      // QA verifies both, owns neither.
+      const forQa = preflightThreeRepoTask(task, AgentStage.QA_ENGINEER, opts);
+      expect(forQa.workRoots).toEqual([
+        { targetId: "backend", path: backendRepo, access: "read" },
+        { targetId: "frontend", path: frontendRepo, access: "read" },
+      ]);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("fails closed before any Target lookup when Framework and Knowledge roots overlap", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "three-repo-overlap-"));
     try {

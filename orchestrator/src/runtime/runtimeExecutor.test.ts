@@ -667,6 +667,27 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
     // T-WG7 — the Knowledge root rides on the env so hooks/prompts can name it.
     expect(runtime.requests[0]!.env).toMatchObject({ AGENTCLAUDE_ROLE: "backend-engineer", AGENTCLAUDE_KNOWLEDGE_ROOT: "/knowledge" });
   });
+
+  it("T-V1-16 two-Target isolation: the guard env carries only the write-access root, never the read-only sibling", async () => {
+    const runtime = new MockRuntimeAdapter({ respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true, touchesFrontend: true });
+    const task = { taskId: "T-two", classification, targetBindings: { frontend_target: "web", backend_target: "api" } } as never;
+    const workRoots = [
+      { targetId: "api", path: "/repos/api", access: "write" as const },
+      { targetId: "web", path: "/repos/web", access: "read" as const },
+    ];
+    const executor = createRuntimeExecutor({
+      runtime,
+      projectRoot: tmpProject(),
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+      threeRepoTask: () => ({ task, roots: { bindingRoot: "/framework", knowledgeRoot: "/knowledge", workRoots } }),
+    });
+    await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-two", context: [] });
+    const writable = JSON.parse(runtime.requests[0]!.env!.AGENTCLAUDE_WRITABLE_WORK_ROOTS!);
+    expect(writable).toEqual(["/repos/api"]);
+    expect(JSON.stringify(writable)).not.toContain("/repos/web");
+  });
 });
 
 describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {

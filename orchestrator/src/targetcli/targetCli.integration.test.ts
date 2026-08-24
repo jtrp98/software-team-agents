@@ -137,6 +137,35 @@ describe("software-team-agents — target-first end to end", () => {
     expect(fs.existsSync(path.join(fw, "src", "more.ts"))).toBe(false);
   });
 
+  it("T-V1-16 — two Target workspaces under one Framework stay isolated: init/sync/status in A never touches B", async () => {
+    const targetA = makeTarget();
+    const targetB = makeTarget();
+    const fw = fakeFramework("1.0.0", [
+      { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer") },
+      { relPath: ".claude/settings.json", content: '{"hooks":{"PreToolUse":[{"matcher":"","hooks":[]}]}}' },
+      { relPath: "CLAUDE.md", content: "# Framework instructions\n" },
+    ]);
+
+    expect((await capture(() => runTargetCli(["init"], targetB, fw))).code).toBe(0);
+    const bBefore = [...dirHash(targetB).entries()];
+
+    // A joins later, gets synced and upgraded — B must not move a byte.
+    expect((await capture(() => runTargetCli(["init"], targetA, fw))).code).toBe(0);
+    expect((await capture(() => runTargetCli(["sync"], targetA, fw))).code).toBe(0);
+    const aStatus = JSON.parse((await capture(() => runTargetCli(["status", "--json"], targetA, fw))).out) as { targetRoot: string; targetId: string };
+    expect(aStatus.targetId).not.toBeUndefined();
+
+    const bAfter = [...dirHash(targetB).entries()];
+    expect(bAfter).toEqual(bBefore);
+
+    // Identities are per-workspace: A's config names A, and no manifest claims paths outside its repo.
+    expect(fs.readFileSync(path.join(targetA, ".agent-team", "config.yaml"), "utf8")).toContain(path.basename(targetA));
+    const manifestA = JSON.parse(fs.readFileSync(path.join(targetA, ".agent-team", "manifest.json"), "utf8")) as { files: { path: string }[] };
+    for (const file of manifestA.files) {
+      expect(file.path.startsWith("../") || path.isAbsolute(file.path), `manifest must not reach outside its workspace: ${file.path}`).toBe(false);
+    }
+  });
+
   it("T-WG9 — status names project-owned collisions per path and goes quiet once claimed", async () => {
     const target = makeTarget();
     const fw = fakeFramework("1.0.0", [
