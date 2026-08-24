@@ -94,10 +94,12 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
       }),
     );
 
-    const idx = capturedArgs.indexOf("--disallowedTools");
-    expect(idx).toBeGreaterThan(-1);
-    expect(capturedArgs[idx + 1]).toBe(
-      "Write(.git/**),Edit(.git/**),Write(knowledge/_roles/**),Edit(knowledge/_roles/**),Bash(git *)",
+    // The equals form is required: claude v2.1.241's space form swallows the
+    // following positional prompt (found by the sandbox dogfood, T-V1-15).
+    const flag = capturedArgs.find((a) => a.startsWith("--disallowedTools="));
+    expect(flag).toBeDefined();
+    expect(flag).toBe(
+      "--disallowedTools=Write(.git/**),Edit(.git/**),Write(knowledge/_roles/**),Edit(knowledge/_roles/**),Bash(git *)",
     );
     // The prompt must still be the last positional argument.
     expect(capturedArgs[capturedArgs.length - 1]).toBe("do the thing");
@@ -113,7 +115,7 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
 
     await adapter.executeAgent(baseRequest());
 
-    expect(capturedArgs).not.toContain("--disallowedTools");
+    expect(capturedArgs.some((a) => a.startsWith("--disallowedTools="))).toBe(false);
   });
 
   it("OFF10 M6 — passes --json-schema only on schema-requested runs and surfaces structured_output", async () => {

@@ -319,8 +319,16 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     ];
     // M4: contract denies as hard permission rules, not just hook backstops.
     // Empty guards ⇒ no flag, keeping the no-guard request shape unchanged.
+    //
+    // The rules ride the `--disallowedTools=<rules>` EQUALS form on purpose.
+    // claude v2.1.241 parses the space form greedily and swallows the next
+    // positional — found by the sandbox dogfood (T-V1-15): every run died with
+    // "Input must be provided ... when using --print" and 0 tokens, while a
+    // direct spawn with the same argv shape minus this flag worked. The equals
+    // form keeps the prompt positional intact on builds that parse it correctly
+    // too, so no version split is needed here.
     const disallowRules = disallowRulesFromGuards(req.guards);
-    if (disallowRules.length > 0) args.push("--disallowedTools", disallowRules.join(","));
+    if (disallowRules.length > 0) args.push(`--disallowedTools=${disallowRules.join(",")}`);
     // M6: only when a schema was requested — default runs stay free-form.
     if (this.outputSchema) args.push("--json-schema", JSON.stringify(this.outputSchema));
     args.push(req.prompt);
