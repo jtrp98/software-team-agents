@@ -26,6 +26,8 @@ import { selectContext, type ContextCategory, type ContextItem } from "../contex
 import { RunLog, type RunOutcome } from "../observability/runLog.js";
 import { assertBudget, BudgetExceededError, DEFAULT_BUDGET, type Budget } from "../cost/costControl.js";
 import { AGENT_REGISTRY } from "../agents/registry.js";
+import { Permission } from "../agents/permissions.js";
+import { assertPermission } from "../agents/permissionPolicy.js";
 import { EventBus } from "../events/eventBus.js";
 import { verdictEventFor, type DomainEventMap } from "../events/domainEvents.js";
 import { describeEvent } from "../audit/auditTrail.js";
@@ -865,6 +867,13 @@ export class Orchestrator {
       stage === AgentStage.DEVOPS ? (this.run.machine.current === TaskState.APPROVED ? "execute" : "prepare") : undefined;
     // QA06: the retry count is the round number a recheck plan is built from.
     const qaRound = stage === AgentStage.QA_ENGINEER ? this.run.retries.qa : undefined;
+    // The capability gate's one destructive moment: devops about to run the real
+    // deploy/migration command must hold the `deploy` permission its contract
+    // declares. A contract edited to drop it stops the launch here — fail closed,
+    // not as a prompt-level request the model could talk its way past.
+    if (stage === AgentStage.DEVOPS && deployPhase === "execute") {
+      assertPermission(stage, Permission.DEPLOY);
+    }
     const start = now();
     const result = await executor({ stage, taskId: this.taskId, context, deployPhase, qaRound });
     const end = now();

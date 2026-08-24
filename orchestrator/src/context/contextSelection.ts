@@ -1,6 +1,33 @@
 import { AgentStage } from "../types.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 
+/**
+ * T-V1-13A §8.1 — where the four context classes live in this codebase.
+ *
+ * The classification is not a fourth data structure; each class is a behaviour
+ * that already exists somewhere deterministic. This comment is the index so an
+ * auditor finds them all in one place:
+ *
+ *   MANDATORY — assembled for every run of a stage: role identity and task id
+ *     (`buildPrompt`'s header lines), this policy's `reads` categories, and
+ *     `_docs/status.md` convention pointers.
+ *
+ *   TASK_SPECIFIC — module documents sliced to the run: `ContextManager`
+ *     scopes by module name, `selectDocContext` slices plan.md to the phases
+ *     the run touches (policies/documentation.md §10).
+ *
+ *   ON_DEMAND — never preloaded; handed over as a pointer instead:
+ *     `renderSlicedDocs` names every skipped section with its file path so the
+ *     agent reads exactly what turns out to matter. Historical decisions and
+ *     prior traces are only reachable through explicit tools (`sta audit`,
+ *     `sta qa-metrics`), never through the launch prompt.
+ *
+ *   FORBIDDEN — everything in `doesNotRead` below: `selectContext` refuses to
+ *     return it and throws on an explicit request; write-side equivalents are
+ *     `UNIVERSAL_DENY` + per-contract denies (pathPermissions.ts). Secrets are
+ *     kept out by `.claude/hooks/block-secret-leak.js` exit checks.
+ */
+
 /** Doc categories reuse ArtifactType; code/infra areas are not artifacts, so they're added here. */
 export type ContextCategory =
   | ArtifactType

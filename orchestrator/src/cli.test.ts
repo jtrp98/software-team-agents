@@ -159,6 +159,44 @@ describe("runCli --list (T01 wiring: sqlite store + registry + view)", () => {
   });
 });
 
+describe("runCli verb routing (T-V1-09 — verbs must survive the flag parser)", () => {
+  /**
+   * The main entry once parsed argv for `--version` *before* routing, and the
+   * flag parser rejects bare tokens — so every documented verb form crashed
+   * with "unrecognized argument" before its handler ever ran. These cases pin
+   * the order: verbs route first, the flag form still answers --version.
+   */
+  it("routes `status` without --task-id and reports an empty store", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-verb-"));
+    try {
+      const code = await runCli(["status", "--project-root", dir], dir);
+      expect(code).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("routes the `runtimes` verb (T-V1-04) and exits 0", async () => {
+    expect(await runCli(["runtimes"], defaultProjectRoot())).toBe(0);
+  });
+
+  it("still answers the flag-form `--version` after parsing succeeds", async () => {
+    const logged: string[] = [];
+    const orig = console.log;
+    console.log = (...parts: unknown[]) => logged.push(parts.join(" "));
+    try {
+      expect(await runCli(["--version"], defaultProjectRoot())).toBe(0);
+    } finally {
+      console.log = orig;
+    }
+    expect(logged.join("\n")).toMatch(/\d+\.\d+\.\d+/);
+  });
+
+  it("keeps rejecting an unknown bare token in the flag form", () => {
+    expect(() => parseArgs(["bogus-verb-like-token"], "/repo")).toThrow(CliUsageError);
+  });
+});
+
 describe("runCli --check-contracts (T03)", () => {
   it("passes against this repo's own contracts, without opening a state database", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-cc-"));

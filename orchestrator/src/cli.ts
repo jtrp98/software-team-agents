@@ -17,6 +17,8 @@ import { readModuleDoc } from "./agents/moduleDocs.js";
 import { ClaudeCodeAdapter } from "./runtime/claudeCodeAdapter.js";
 import { CodexAdapter } from "./runtime/codexAdapter.js";
 import { OpenCodeAdapter } from "./runtime/openCodeAdapter.js";
+import { RUNTIME_IDS, describeRuntimeSupport } from "./runtime/runtimeSupport.js";
+import { detectRuntimeCapabilities } from "./runtime/runtimeCapabilityDetection.js";
 import type { RuntimeAutonomy } from "./runtime/runtimeAdapter.js";
 import { contractGuardResolver } from "./runtime/runtimeGuards.js";
 import { DatabaseUnavailableError, SqliteTaskStore } from "./store/sqliteStore.js";
@@ -206,6 +208,7 @@ export const USAGE =
   "  sta configure knowledge-root <path> [--config-path <path>]       validate and save this installation's single Knowledge root\n" +
     "  sta configure identity --figma-email <email> --claude-email <email> [--config-path <path>]   declare the design accounts (same address; emails only, never a token)\n" +
   "  sta doctor [--project-root <path>]                               read-only diagnostics (T166); exit 1 on any FAIL, never mutates\n" +
+  "  sta runtimes                                    which runtimes exist and how well each is supported (T-V1-04)\n" +
   "  sta upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
   "  sta migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending (T96)\n" +
   "  sta knowledge-migrate <dry-run|copy|verify|cutover> --source-root <path> --knowledge-root <path> [--now <ISO>] [--confirm I_CONFIRM_MIGRATION]   copy–verify–human-confirmed migration\n" +
@@ -362,9 +365,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       autonomy = value as RuntimeAutonomy;
     } else if (arg === "--runtime") {
       const value = argv[++i];
-      const valid: readonly string[] = ["claude-code", "codex", "opencode"];
-      if (!value || !valid.includes(value)) {
-        throw new CliUsageError(`--runtime must be one of: ${valid.join(", ")} (got ${value ?? "nothing"})`);
+      if (!value || !(RUNTIME_IDS as readonly string[]).includes(value)) {
+        throw new CliUsageError(`--runtime must be one of: ${RUNTIME_IDS.join(", ")} (got ${value ?? "nothing"})`);
       }
       runtime = value as NonNullable<CliArgs["runtime"]>;
     } else if (arg === "--no-qa-optimization") {
@@ -655,6 +657,7 @@ const VERBS = [
   "adopt",
   "configure",
   "doctor",
+  "runtimes",
 ] as const;
 type Verb = (typeof VERBS)[number];
 
@@ -1018,10 +1021,21 @@ async function runDoctorVerb(rest: string[]): Promise<number> {
   try {
     // The composition root is the one place that may name a concrete adapter
     // (see runtimeAdapter.ts): doctor itself stays provider-blind and receives
-    // the same probe a real run would use.
+    // the same probe a real run would use — and, through that adapter, the
+    // claims-vs-install capability sweep.
     const report = await runDoctor({
       projectRoot: projectRoot ?? undefined,
       probe: () => new ClaudeCodeAdapter({ projectRoot: projectRoot ?? process.cwd() }).probe(),
+      capabilities: async () => {
+        const r = await detectRuntimeCapabilities(new ClaudeCodeAdapter({ projectRoot: projectRoot ?? process.cwd() }));
+        return {
+          runtimeId: r.runtimeId,
+          verified: r.checks.filter((c) => c.verified).map((c) => c.capability),
+          unverified: r.checks.filter((c) => !c.verified).map((c) => c.capability),
+          missingRequired: r.missingRequired,
+          fallbacks: r.fallbacks,
+        };
+      },
     });
     for (const c of report.checks) {
       const mark = c.status === "PASS" ? "✓" : c.status === "WARNING" ? "!" : "✗";
@@ -1680,15 +1694,37 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
       return runConfigureVerb(rest, defaultProjectRoot);
     case "doctor":
       return runDoctorVerb(rest);
+    case "runtimes":
+      return runRuntimesVerb();
   }
 }
 
+/**
+ * T-V1-04 — the support table, from `runtimeSupport.ts` so CLI, README and
+ * tests read one record. A person picking a runtime for a machine should not
+ * have to trust prose that can drift from what the adapters actually do.
+ */
+function runRuntimesVerb(): number {
+  console.log("[orchestrator] runtime support (raise a level only when T-V1-05 conformance passes):");
+  for (const line of describeRuntimeSupport()) console.log(`  ${line}`);
+  return 0;
+}
+
 export async function runCli(argv: string[], defaultProjectRoot: string): Promise<number> {
+  // Verbs route before anything else — the flag parser below rejects bare
+  // tokens, so a version pre-check that parsed argv first (the old main-block
+  // behaviour) made every verb form (`sta status`, `sta doctor`, ...) die with
+  // "unrecognized argument" before routing ever ran.
   if (isVerb(argv[0])) {
     return runVerb(argv[0], argv.slice(1), defaultProjectRoot);
   }
 
   const args = parseArgs(argv, defaultProjectRoot);
+
+  if (args.version) {
+    console.log(cliVersion());
+    return 0;
+  }
 
   if (args.checkContracts) {
     const result = checkAllContracts(args.projectRoot);
@@ -2169,13 +2205,7 @@ if (isMain) {
     console.log(USAGE);
     process.exit(0);
   }
-  // Same short-circuit as --help: a version query must not be answered with a
-  // usage error just because it named no task (the two CLIs stay symmetric —
-  // `software-team-agents --version` does the same on the Target side).
-  if (parseArgs(process.argv.slice(2), repoRoot).version) {
-    console.log(cliVersion());
-    process.exit(0);
-  }
+  // `--version` is answered inside runCli, after verb routing — see the note there.
   runCli(process.argv.slice(2), repoRoot)
     .then((code) => process.exit(code))
     .catch((e) => {

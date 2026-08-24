@@ -6,6 +6,9 @@ import { ArtifactType, type DesignArtifact, type QaReportArtifact, type Security
 import { BudgetExceededError } from "../cost/costControl.js";
 import { validateStructuredFailure } from "../orchestrator/failure.js";
 import { ApprovalType } from "../gates/approval.js";
+import { AGENT_REGISTRY } from "../agents/registry.js";
+import { PermissionDeniedError } from "../agents/permissionPolicy.js";
+import { Permission } from "../agents/permissions.js";
 
 const okDesign: DesignArtifact = {
   taskId: "T",
@@ -324,6 +327,30 @@ describe("T44 — deploy prepare vs execute", () => {
 
     expect(phases).toEqual(["prepare", "execute"]);
     expect(orch.runLog.all().map((r) => r.agent)).toEqual([AgentStage.DEVOPS, AgentStage.DEVOPS]);
+  });
+
+  it("the capability gate refuses the deploy execute launch when devops's contract loses `deploy`", async () => {
+    const classification = classifyTask({ isProductionDeployOrMigration: true });
+    const orch = new Orchestrator("T-DEPLOY-NO-PERM", classification);
+    const executor: AgentExecutor = () => ({ outcome: { tokens: 10, cost: 0, result: "PASS" } });
+    await orch.step(executor); // prepare
+    orch.decideApproval(ApprovalType.DEPLOY, true, { by: "tester" });
+
+    // Simulate a contract edited to drop the destructive permission: the launch
+    // itself must fail closed — no run is recorded as attempted, nothing deploys.
+    const registryEntry = AGENT_REGISTRY[AgentStage.DEVOPS] as { permissions: Permission[] };
+    const original = registryEntry.permissions;
+    registryEntry.permissions = original.filter((p) => p !== Permission.DEPLOY);
+    try {
+      await expect(orch.step(executor)).rejects.toThrow(PermissionDeniedError);
+      // The launch died before any run or transition: still parked at APPROVED
+      // with devops assigned — a person decides what happens next.
+      const stuck = orch.status();
+      expect(stuck.kind).toBe("RUNNING");
+      if (stuck.kind === "RUNNING") expect(stuck.stage).toBe(AgentStage.DEVOPS);
+    } finally {
+      registryEntry.permissions = original;
+    }
   });
 
   it("a failed prepare run is retried as prepare again, never treated as done", async () => {

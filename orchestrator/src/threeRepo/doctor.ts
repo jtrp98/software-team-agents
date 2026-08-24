@@ -68,6 +68,18 @@ export interface DoctorOptions {
    * prevent. Absent probe ⇒ WARNING, never a guess.
    */
   probe?: () => Promise<{ available: boolean; version?: string; reason?: string }>;
+  /**
+   * Same DI shape, for the claims-vs-install capability sweep
+   * (`detectRuntimeCapabilities`). Absent ⇒ the check reports skipped rather
+   * than pretending every claim was verified.
+   */
+  capabilities?: () => Promise<{
+    runtimeId: string;
+    verified: readonly string[];
+    unverified: readonly string[];
+    missingRequired: readonly string[];
+    fallbacks: readonly string[];
+  }>;
 }
 
 export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorReport> {
@@ -182,20 +194,54 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
   );
 
   checks.push(
-    check("State store (.workflow/state.db)", "ensure the project directory is writable, then re-run this check", () => {
-      if (!projectRoot) return { status: "WARNING", detail: "skipped — no --project-root given" };
+    await (async (): Promise<DoctorCheck> => {
+      const name = "Runtime capabilities (claims vs this install)";
+      const fix = "run: sta init --force to restore bindings and guard wiring";
+      try {
+        if (!options.capabilities) {
+          return { name, status: "WARNING", detail: "skipped — no capability check wired by the caller", fix };
+        }
+        const report = await options.capabilities();
+        if (report.missingRequired.length === 0) {
+          return { name, status: "PASS", detail: `${report.runtimeId}: ${report.verified.length} claimed capabilit(y/ies) verified against this install` };
+        }
+        return {
+          name,
+          status: "WARNING",
+          detail:
+            `${report.runtimeId}: unverified claims — ${report.unverified.join(", ")}` +
+            (report.fallbacks.length > 0 ? `; ${report.fallbacks[0]}` : ""),
+          fix,
+        };
+      } catch (error) {
+        return { name, status: "WARNING", detail: error instanceof Error ? error.message : String(error), fix };
+      }
+    })(),
+  );
+
+  checks.push(
+    await (async (): Promise<DoctorCheck> => {
+      const name = "State store (.workflow/state.db)";
+      const fix = "ensure the project directory is writable, then re-run this check";
+      if (!projectRoot) return { name, status: "WARNING", detail: "skipped — no --project-root given", fix };
       const file = path.join(projectRoot, ".workflow", "state.db");
       // Read-only: a doctor that creates state.db on the machine it only
       // examines would violate its own never-mutates contract.
-      if (!fs.existsSync(file)) return { status: "WARNING", detail: `${file} does not exist yet — created automatically on the first task run` };
-      const store = new SqliteTaskStore(file);
-      try {
-        store.loadTask("__doctor-probe__");
-        return { status: "PASS", detail: file };
-      } finally {
-        store.close();
+      if (!fs.existsSync(file)) {
+        return { name, status: "WARNING", detail: `${file} does not exist yet — created automatically on the first task run`, fix };
       }
-    }),
+      try {
+        const store = new SqliteTaskStore(file);
+        try {
+          store.loadTask("__doctor-probe__");
+          return { name, status: "PASS", detail: file };
+        } finally {
+          store.close();
+        }
+      } catch (error) {
+        return { name, status: "WARNING", detail: error instanceof Error ? error.message : String(error), fix };
+      }
+    })(),
   );
 
   checks.push(

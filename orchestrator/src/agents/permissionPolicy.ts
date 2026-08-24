@@ -12,16 +12,6 @@ export class PermissionDeniedError extends Error {
   }
 }
 
-export class ToolDeniedError extends Error {
-  constructor(
-    public readonly stage: AgentStage,
-    public readonly tool: string,
-  ) {
-    super(`${stage} is not allowed to use tool "${tool}"`);
-    this.name = "ToolDeniedError";
-  }
-}
-
 export function hasPermission(stage: AgentStage, permission: Permission): boolean {
   return getAgent(stage).permissions.includes(permission);
 }
@@ -36,15 +26,5 @@ export function hasPermission(stage: AgentStage, permission: Permission): boolea
 export function assertPermission(stage: AgentStage, permission: Permission): void {
   if (!hasPermission(stage, permission)) {
     throw new PermissionDeniedError(stage, permission);
-  }
-}
-
-export function canUseTool(stage: AgentStage, tool: string): boolean {
-  return getAgent(stage).tools.includes(tool);
-}
-
-export function assertTool(stage: AgentStage, tool: string): void {
-  if (!canUseTool(stage, tool)) {
-    throw new ToolDeniedError(stage, tool);
   }
 }

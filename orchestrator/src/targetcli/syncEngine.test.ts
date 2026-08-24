@@ -89,6 +89,34 @@ describe("safe sync engine", () => {
     expect(second.backupDir).toBeUndefined();
   });
 
+  it("an interrupted update (file written, manifest not yet updated) converges on the next sync without a false conflict", () => {
+    // Simulates a crash between the file write and the manifest commit of an
+    // upgrade: disk already carries the V2 bytes, the manifest still claims V1.
+    // The invariant that matters: user work is never lost and the next sync
+    // recognises the state instead of demanding --force.
+    const v2Files: FixtureFile[] = [
+      { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer", "builds backend, v2 edition") },
+      { relPath: ".claude/settings.json", content: '{"hooks":{"PreToolUse":[{"a":2}]}}' },
+    ];
+    const target = gitTarget();
+    const v1 = makeTemplatesDir("1.0.0", V1_FILES);
+    const v2 = makeTemplatesDir("2.0.0", v2Files);
+    runTargetSync({ targetRoot: target, templatesDir: v1, now: "2026-01-01T00:00:00Z" });
+
+    // The crash: the upgrade's new bytes landed on disk but the manifest commit
+    // never happened — so recovery runs against the same shipped v2 templates.
+    for (const file of v2Files) fs.writeFileSync(path.join(target, file.relPath), file.content, "utf8");
+
+    const recovery = runTargetSync({ targetRoot: target, templatesDir: v2, now: "2026-01-03T00:00:00Z" });
+    expect(recovery.skippedConflicts).toEqual([]);
+    // The interrupted primaries are recognised, never re-conflicted or rewritten;
+    // only renderings derived from them may legitimately regenerate.
+    expect(
+      recovery.performed.filter((p) => ["add", "update", "restore"].includes(p.action) && p.path.startsWith(".claude/")),
+    ).toEqual([]);
+    expect(readTargetManifest(target).files.map((f) => f.sha256)).toContain(sha256Of(Buffer.from(v2Files[0]!.content)));
+  });
+
   it("detects a user-modified managed file as a conflict and never overwrites silently", () => {
     const target = gitTarget();
     const templatesDir = makeTemplatesDir("1.0.0", V1_FILES);

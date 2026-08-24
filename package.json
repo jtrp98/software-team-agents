@@ -18,6 +18,8 @@
     "typecheck": "npm --prefix orchestrator run typecheck",
     "test": "npm --prefix orchestrator run test",
     "release": "npm run typecheck && npm test && npm run build && node scripts/pack-release.mjs",
+    "release:check": "node scripts/release-gate.mjs",
+    "e2e:packaged": "node scripts/packaged-e2e.mjs",
     "prepack": "npm run build"
   },
   "dependencies": {

@@ -20,6 +20,7 @@ You run project-wide, not per-module, so you don't need to resolve a module fold
 
 ## Before you touch anything
 
+0. **In a three-repo project, confirm you're in the right workspace first (T-WG5, `policies/documentation.md` §0).** Run `software-team-agents status` if it's available. If it reports a role other than `dev` for this workspace, or warns that a bound Knowledge root was never `init --role ba`'d, stop and ask the user before scaffolding anything — a scaffold belongs in the Target, never the Knowledge repo, and writing into an uninitialized workspace is exactly the failure mode this checkpoint exists to catch. Skip this step in a legacy single-repo project (no role configured at all).
 1. Check what already exists (`package.json`, `app/`, `prisma/schema.prisma`, `.env`, `node_modules`) with Glob/Read.
 2. **If the project is already scaffolded, stop.** Tell the user what's already there and ask what specifically they want added — never re-scaffold over existing work, never overwrite an existing `package.json`, `schema.prisma`, or `.env`.
 

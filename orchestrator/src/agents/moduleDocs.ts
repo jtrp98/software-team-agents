@@ -13,7 +13,33 @@ import type { QaReportArtifact, SecurityReportArtifact } from "../artifacts/sche
  * parser and not a substitute for a human reading the doc.
  */
 
+/**
+ * A module name is untrusted input twice over: it arrives from a CLI flag and
+ * from the `module` field of knowledge items that business-analyst wrote. Both
+ * feed straight into a path join here, so a name like `../..` would walk this
+ * reader out of `_docs/module/` entirely — reading arbitrary files as if they
+ * were module documents. Module names are folder names by definition, so the
+ * rule is structural and cheap: no separators, no dot segments. Fails closed
+ * rather than sanitizing — a mangled name would silently read the wrong
+ * module's documents, which is worse than stopping.
+ */
+export function assertSafeModuleName(moduleName: string): void {
+  const unsafe =
+    moduleName.length === 0 ||
+    /[/\\]/.test(moduleName) ||
+    moduleName === "." ||
+    moduleName === ".." ||
+    /^[A-Za-z]:/.test(moduleName);
+  if (unsafe) {
+    throw new Error(
+      `unsafe module name "${moduleName}" — module names are folder names under _docs/module/, ` +
+        "so they cannot contain path separators or dot segments",
+    );
+  }
+}
+
 export function moduleDocPath(projectRoot: string, moduleName: string, filename: string): string {
+  assertSafeModuleName(moduleName);
   return path.join(projectRoot, "_docs", "module", moduleName, filename);
 }
 

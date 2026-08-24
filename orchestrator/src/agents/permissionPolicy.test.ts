@@ -1,12 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  PermissionDeniedError,
-  ToolDeniedError,
-  assertPermission,
-  assertTool,
-  canUseTool,
-  hasPermission,
-} from "./permissionPolicy.js";
+import { PermissionDeniedError, assertPermission, hasPermission } from "./permissionPolicy.js";
 import { Permission } from "./permissions.js";
 import { AgentStage } from "../types.js";
 
@@ -31,16 +24,5 @@ describe("permission enforcement", () => {
     for (const p of [Permission.DEPLOY, Permission.BUILD, Permission.WRITE_CODE, Permission.ROLLBACK]) {
       expect(hasPermission(AgentStage.BUSINESS_ANALYST, p)).toBe(false);
     }
-  });
-});
-
-describe("tool enforcement", () => {
-  it("business-analyst has no Bash tool, matching the real .claude/agents definition", () => {
-    expect(canUseTool(AgentStage.BUSINESS_ANALYST, "Bash")).toBe(false);
-    expect(() => assertTool(AgentStage.BUSINESS_ANALYST, "Bash")).toThrow(ToolDeniedError);
-  });
-
-  it("backend-engineer has Bash", () => {
-    expect(() => assertTool(AgentStage.BACKEND_ENGINEER, "Bash")).not.toThrow();
   });
 });

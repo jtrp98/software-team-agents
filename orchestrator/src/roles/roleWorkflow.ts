@@ -19,7 +19,7 @@ import { type SignoffVerdict, describeSignoff, signoffVerdict } from "./roleAppr
  *
  * NOT THE SAME THING AS `workflows/*.yml`
  *
- * Those say which of the ten agents run, in what order, for a kind of change —
+ * Those say which of the eleven agents run, in what order, for a kind of change —
  * the cross-lane pipeline. This says what a single lane's work passes through
  * on its way to being something the next lane may rely on. A project has one
  * `workflows/feature.yml`; it has three of these, running at their own pace.

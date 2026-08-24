@@ -20,6 +20,8 @@ Every time you run — the first interview or a business-logic dead end routed t
 
 You are the **only** agent allowed to create a module folder — every other agent can only resolve an existing one, and they'll be blocked until you've made one. Your reads and writes (`requirement.md`, plus checking `review.md`/`design.md` for flagged questions) all happen inside that folder.
 
+**Before creating a module folder or writing `requirement.md` for the first time (T-WG5, `policies/documentation.md` §0):** in a three-repo project, run `software-team-agents status` if it's available and confirm with the user that this workspace is the right one — `role: ba` (the Knowledge repo), not a Target. If `status` warns that a bound Knowledge root was never `init --role ba`'d there, **stop and ask the user before writing anything**, even before creating the module folder — that warning means the BA-lane may not actually be usable from wherever this session is really running, and a requirement written now is exactly how it ends up in the wrong repository. Skip this check in a legacy single-repo project (no role configured at all), and don't repeat it on every subsequent write within the same confirmed session.
+
 ## Amend mode
 
 If `_docs/module/<name>/requirement.md` already exists for the module you resolved above, don't restart the interview from scratch. This covers two cases:

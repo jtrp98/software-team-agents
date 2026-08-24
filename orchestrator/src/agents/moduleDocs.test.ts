@@ -23,6 +23,23 @@ describe("moduleDocPath / readModuleDoc", () => {
     fs.writeFileSync(path.join(modDir, "review.md"), "hello");
     expect(readModuleDoc(dir, "sales-crm", "review.md")).toBe("hello");
   });
+
+  /**
+   * A module name reaches this join from a CLI flag and from BA-written
+   * knowledge items — both untrusted. `../..` must not walk the reader out of
+   * `_docs/module/`; it fails closed instead of sanitizing into some other
+   * module's folder.
+   */
+  it("refuses a module name that would escape _docs/module/", () => {
+    for (const hostile of ["../..", "..", ".", "a/../b", "a/b", "a\\b", "C:\\tmp", "C:tmp"]) {
+      expect(() => moduleDocPath("/root", hostile, "review.md"), hostile).toThrow(/unsafe module name/);
+    }
+  });
+
+  it("still accepts the names real modules use", () => {
+    expect(() => moduleDocPath("/root", "sales-crm", "review.md")).not.toThrow();
+    expect(() => moduleDocPath("/root", "auth_login v2 (th)", "plan.md")).not.toThrow();
+  });
 });
 
 describe("parseQaReport", () => {

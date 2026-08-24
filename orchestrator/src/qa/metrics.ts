@@ -29,6 +29,8 @@ export interface TaskQaMetrics {
   unrecordedModeRounds: number;
   qaRetries: number;
   qaFailures: number;
+  /** T-V1-13A §8.12 — tokens spent on FAILed runs, the retry waste a cheaper pipeline must shrink. Every role's failed runs count, not just QA's. */
+  retryWasteTokens: number;
   avgQaContextChars: number | null;
   qaDurationMs: number;
 }
@@ -50,6 +52,7 @@ export function taskQaMetrics(runs: readonly RunRecord[]): TaskQaMetrics {
     // A retry is every QA round after the first — the first is not a redo.
     qaRetries: Math.max(0, qa.length - 1),
     qaFailures: qa.filter((r) => r.result === "FAIL").length,
+    retryWasteTokens: runs.filter((r) => r.result === "FAIL").reduce((sum, r) => sum + r.tokens, 0),
     avgQaContextChars:
       contextChars.length === 0
         ? null
@@ -69,6 +72,13 @@ export interface QaMetricsExport {
     fullRounds: number;
     targetedRounds: number;
     qaRetries: number;
+    /**
+     * T-V1-13A §8.12 — total tokens over tasks that reached at least one PASS
+     * run, divided by the number of such tasks. Total ÷ *successful* on purpose:
+     * an optimization that quietly fails more tasks must look more expensive per
+     * success, never cheaper overall. Null when no task succeeded.
+     */
+    tokensPerSuccessfulTask: number | null;
     /** Manually supplied by the caller — escaped defects are found outside this system. */
     escapedDefects?: number;
   };
@@ -79,6 +89,10 @@ export function buildMetricsExport(runsByTask: ReadonlyArray<{ taskId: string; r
   const qaTokens = tasks.reduce((s, t) => s + t.qaTokens, 0);
   const totalTokens = tasks.reduce((s, t) => s + t.totalTokens, 0);
   const qaRuns = tasks.reduce((s, t) => s + t.qaRuns, 0);
+  // Success is a run-level fact (a PASS anywhere in the task's history); the
+  // denominator counts tasks, not runs, so rework doesn't inflate it.
+  const successful = runsByTask.filter(({ runs }) => runs.some((r) => r.result === "PASS"));
+  const successfulTokens = successful.reduce((sum, { runs }) => sum + runs.reduce((s, r) => s + r.tokens, 0), 0);
   return {
     exportedAt: (opts?.now ?? Date.now)(),
     tasks,
@@ -90,6 +104,7 @@ export function buildMetricsExport(runsByTask: ReadonlyArray<{ taskId: string; r
       fullRounds: tasks.reduce((s, t) => s + t.fullRounds, 0),
       targetedRounds: tasks.reduce((s, t) => s + t.targetedRounds, 0),
       qaRetries: tasks.reduce((s, t) => s + t.qaRetries, 0),
+      tokensPerSuccessfulTask: successful.length === 0 ? null : successfulTokens / successful.length,
       ...(opts?.escapedDefects !== undefined ? { escapedDefects: opts.escapedDefects } : {}),
     },
   };

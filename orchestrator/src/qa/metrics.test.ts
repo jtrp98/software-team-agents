@@ -42,6 +42,9 @@ describe("taskQaMetrics", () => {
     expect(m.unrecordedModeRounds).toBe(1);
     expect(m.qaRetries).toBe(2);
     expect(m.qaFailures).toBe(1);
+    // T-V1-13A §8.12: only the FAILed run's tokens count as waste — the dev
+    // run and the passing/targeted/unrecorded QA rounds do not.
+    expect(m.retryWasteTokens).toBe(2000);
     expect(m.avgQaContextChars).toBe(7000);
     expect(m.qaDurationMs).toBe(300);
   });
@@ -89,5 +92,23 @@ describe("buildMetricsExport / compareBaselines", () => {
   it("carries escaped defects through the totals when supplied", () => {
     const e = buildMetricsExport([{ taskId: "T1", runs: [run({ agent: AgentStage.QA_ENGINEER, tokens: 10, qa_mode: "FULL" })] }], { now: () => 5, escapedDefects: 2 });
     expect(e.totals.escapedDefects).toBe(2);
+  });
+
+  it("computes tokensPerSuccessfulTask over tasks, so rework never inflates the denominator", () => {
+    // T-ok reached PASS once (6000 tokens total); T-rework burned a FAIL then
+    // passed (4000+1000); T-failed never succeeded and contributes spend to the
+    // numerator of nothing — it is simply excluded from the per-success figure.
+    const e = buildMetricsExport([
+      { taskId: "T-ok", runs: [run({ agent: AgentStage.BACKEND_ENGINEER, tokens: 6000 })] },
+      { taskId: "T-rework", runs: [run({ agent: AgentStage.BACKEND_ENGINEER, tokens: 4000, result: "FAIL" }), run({ agent: AgentStage.QA_ENGINEER, tokens: 1000 })] },
+      { taskId: "T-failed", runs: [run({ agent: AgentStage.BACKEND_ENGINEER, tokens: 9000, result: "FAIL" })] },
+    ], { now: () => 6 });
+    // (6000 + 5000) across the two tasks that ever PASSED.
+    expect(e.totals.tokensPerSuccessfulTask).toBe(11000 / 2);
+  });
+
+  it("reports null tokensPerSuccessfulTask when nothing succeeded", () => {
+    const e = buildMetricsExport([{ taskId: "T-failed", runs: [run({ agent: AgentStage.DEVOPS, tokens: 500, result: "FAIL" })] }], { now: () => 7 });
+    expect(e.totals.tokensPerSuccessfulTask).toBeNull();
   });
 });

@@ -43,14 +43,19 @@ function fixtureRoot(files: Record<string, string>): string {
 }
 
 describe("the shipped decisions/", () => {
-  it("lists the three stack ADRs", () => {
+  it("lists the ADRs in id order", () => {
     const files = listAdrFiles();
-    expect(files).toEqual(["ADR-001-database.md", "ADR-002-authentication.md", "ADR-003-api-versioning.md"]);
+    expect(files).toEqual([
+      "ADR-001-database.md",
+      "ADR-002-authentication.md",
+      "ADR-003-api-versioning.md",
+      "ADR-004-v1-contract.md",
+    ]);
   });
 
   it("all load and validate against the schema", () => {
     const adrs = loadAllAdrs();
-    expect(adrs).toHaveLength(3);
+    expect(adrs).toHaveLength(4);
     for (const adr of adrs) {
       expect(adr.frontmatter.status).toBe("accepted");
     }
