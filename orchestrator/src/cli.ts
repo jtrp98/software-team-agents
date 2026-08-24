@@ -19,6 +19,7 @@ import { CodexAdapter } from "./runtime/codexAdapter.js";
 import { OpenCodeAdapter } from "./runtime/openCodeAdapter.js";
 import { RUNTIME_IDS, describeRuntimeSupport } from "./runtime/runtimeSupport.js";
 import { detectRuntimeCapabilities } from "./runtime/runtimeCapabilityDetection.js";
+import { resolveFrameworkRoot } from "./targetcli/roots.js";
 import type { RuntimeAutonomy } from "./runtime/runtimeAdapter.js";
 import { contractGuardResolver } from "./runtime/runtimeGuards.js";
 import { DatabaseUnavailableError, SqliteTaskStore } from "./store/sqliteStore.js";
@@ -666,7 +667,7 @@ function isVerb(s: string | undefined): s is Verb {
 }
 
 /** Flags a verb accepts that take a value — their value must never be mistaken for the positional <task-id>. */
-  const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--by", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime"]);
+  const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--by", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime", "--as", "--note"]);
 
 /** Every non-flag token in a verb's remaining args, in order, skipping over each value-flag's own argument. */
 function positionalArgs(rest: string[]): string[] {
@@ -992,8 +993,20 @@ async function runUpgradeVerb(rest: string[], defaultProjectRoot: string): Promi
       return 1;
     }
   }
-  const templatesDir = flagValue(rest, "--templates");
-  if (!templatesDir) throw new CliUsageError("upgrade: --templates <dir> is required (built by `npm run build:templates`)");
+  const templatesFlag = flagValue(rest, "--templates");
+  // Dogfood F9: an installed package already ships the templates this upgrade
+  // should apply — walking up from this file to `templates/manifest.json` finds
+  // them whether `sta` runs from a checkout or from node_modules. The explicit
+  // flag stays for pointing at any other snapshot.
+  let templatesDir = templatesFlag;
+  if (!templatesDir) {
+    try {
+      templatesDir = path.join(resolveFrameworkRoot(), "templates");
+      console.log(`[orchestrator] using the installed framework's templates at ${templatesDir}`);
+    } catch {
+      throw new CliUsageError("upgrade: --templates <dir> is required when no installed framework templates can be located (built by `npm run build:templates`)");
+    }
+  }
 
   try {
     const result = runUpgrade(projectRoot, path.resolve(templatesDir), new Date().toISOString());
@@ -1177,6 +1190,17 @@ async function runRolesSubCommand(
 
       const state = roleWorkflowState(spec, module, kb, workspaces);
       const approved = kb.query({ module }).filter((item) => state.approved.includes(item.id));
+      // Dogfood F3: project-wide scope (no --module) sees nothing when the lane's
+      // approved work sits in modules. Say which, instead of the misleading
+      // "nothing approved" that contradicts what `sta roles` just displayed.
+      if (module === null && approved.length === 0) {
+        const withApproved = [...new Set(kb.query({}).filter((i) => i.status === "approved").map((i) => i.module ?? "(project-wide)"))];
+        if (withApproved.length > 0) {
+          throw new CliUsageError(
+            `roles signoff: nothing is approved at project-wide scope; approved items live in module(s): ${withApproved.join(", ")} — add --module <name>`,
+          );
+        }
+      }
       const reject = rest.includes("--reject");
 
       // Refusing to sign off over a blocker is the whole point of having one: a
@@ -1211,48 +1235,55 @@ async function runRolesSubCommand(
     }
 
     case "review": {
-      const id = args[1];
+      // One id-list token: commas separate items, exactly like `roles ack`'s.
+      // Extra positional tokens are ignored rather than mistaken for more ids —
+      // unknown value-flags must never turn their values into item names.
+      const ids = (args[1] ?? "").split(",").filter((a) => a !== "");
       const as = flagValue(rest, "--as");
-      if (!id) throw new CliUsageError("roles review: an item id is required");
+      if (ids.length === 0) throw new CliUsageError("roles review: an item id is required");
       if (!as) throw new CliUsageError("roles review: --as <agent> is required — a review's content is which discipline looked");
       if (!Object.values(AgentStage).includes(as as AgentStage)) {
         throw new CliUsageError(`roles review: "${as}" is not an agent role`);
       }
-      const item = kb.get(id);
-      if (!item) {
-        console.error(`[orchestrator] no knowledge item with id ${id}`);
-        return 1;
+      for (const id of ids) {
+        const item = kb.get(id);
+        if (!item) {
+          console.error(`[orchestrator] no knowledge item with id ${id}`);
+          return 1;
+        }
+        try {
+          writeKnowledgeItem(reviewItem(item, as as AgentStage, now), projectRoot);
+        } catch (e) {
+          console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+          return 1;
+        }
+        console.log(`[orchestrator] ${id} reviewed as ${as}. It confirmed:`);
+        for (const line of checklistFor(item.kind)) console.log(`  - ${line}`);
       }
-      try {
-        writeKnowledgeItem(reviewItem(item, as as AgentStage, now), projectRoot);
-      } catch (e) {
-        console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
-        return 1;
-      }
-      console.log(`[orchestrator] ${id} reviewed as ${as}. It confirmed:`);
-      for (const line of checklistFor(item.kind)) console.log(`  - ${line}`);
       return 0;
     }
 
     case "approve": {
-      const id = args[1];
+      const ids = (args[1] ?? "").split(",").filter((a) => a !== "");
       const approver = requireBy();
-      if (!id) throw new CliUsageError("roles approve: an item id is required");
-      const item = kb.get(id);
-      if (!item) {
-        console.error(`[orchestrator] no knowledge item with id ${id}`);
-        return 1;
+      if (ids.length === 0) throw new CliUsageError("roles approve: an item id is required");
+      for (const id of ids) {
+        const item = kb.get(id);
+        if (!item) {
+          console.error(`[orchestrator] no knowledge item with id ${id}`);
+          return 1;
+        }
+        try {
+          writeKnowledgeItem(approveItem(item, now), projectRoot);
+        } catch (e) {
+          console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+          return 1;
+        }
+        // The approver's name is not written into the item on purpose — see
+        // artifactReview.ts. It is echoed so the person sees their own act recorded
+        // in the terminal, and git carries the rest.
+        console.log(`[orchestrator] ${id} approved by ${approver}. It is binding now; downstream lanes may rely on it.`);
       }
-      try {
-        writeKnowledgeItem(approveItem(item, now), projectRoot);
-      } catch (e) {
-        console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
-        return 1;
-      }
-      // The approver's name is not written into the item on purpose — see
-      // artifactReview.ts. It is echoed so the person sees their own act recorded
-      // in the terminal, and git carries the rest.
-      console.log(`[orchestrator] ${id} approved by ${approver}. It is binding now; downstream lanes may rely on it.`);
       return 0;
     }
 
@@ -2200,13 +2231,17 @@ const isMain = (() => {
 })();
 
 if (isMain) {
-  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+  // The default project is WHERE YOU STAND, not where this CLI is installed.
+  // The old default (this file's package root) made every verb answer
+  // "no knowledge item / no .sta here" when a user ran `sta` inside their own
+  // project without --project-root — the sandbox dogfood's F1.
+  const defaultProjectRoot = process.cwd();
   if (process.argv.slice(2).includes("--help") || process.argv.slice(2).includes("-h")) {
     console.log(USAGE);
     process.exit(0);
   }
   // `--version` is answered inside runCli, after verb routing — see the note there.
-  runCli(process.argv.slice(2), repoRoot)
+  runCli(process.argv.slice(2), defaultProjectRoot)
     .then((code) => process.exit(code))
     .catch((e) => {
       if (e instanceof CliUsageError) {
@@ -2221,7 +2256,11 @@ if (isMain) {
         console.error(`[orchestrator] ${e.message}`);
         process.exit(5);
       }
-      console.error(e);
+      // T-V1-09 (dogfood F6): domain failures answer what/why/how-to-fix on one
+      // line; the stack is debugging detail, shown only when asked for.
+      console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
+      if (process.env.STA_DEBUG) console.error(e);
+      else console.error("[orchestrator] re-run with STA_DEBUG=1 for the full stack trace");
       process.exit(1);
     });
 }
