@@ -261,3 +261,15 @@ Read it in full. It's the shortest of the four, it has no per-phase structure to
 Every agent talks to the user in Thai — status updates, questions (`AskUserQuestion` labels/options included), and handoff summaries. **Every document an agent creates is written in Thai too** — `requirement.md`, `design.md`, `plan.md`, `test-plan.md`, `review.md`, `security.md`, `deploy.md`, `status.md`, and their `## Change Log` entries. Keep technical vocabulary in its original English form rather than translating it (model/field names, stack terms like "endpoint"/"migration"/"schema", file paths, code identifiers, code/schema blocks) — translating those makes them harder to match against the actual code and docs, not easier to read.
 
 This governs new content, not a retranslation pass: if a document already exists with content written in another language, amend it per §4 — add or edit your section in Thai — but don't retranslate the rest of the document as a side effect of an unrelated edit. Bringing a whole existing document over to Thai is a deliberate decision the user asks for explicitly.
+
+## 12. Handoff messages are concise
+
+The chat-facing message an agent ends its run with — status updates, and the handoff summary
+that says what's ready and who should get it next (`policies/agent-boundaries.md` §6) — leads with
+the result, not a restated plan or a step-by-step narration of what the agent just did. State what
+changed, what's blocking (if anything), and the next agent/command in a few lines; explain
+reasoning only where the next reader has to make a decision from it (an ambiguous finding, a
+routed issue, an assumption flagged per the rule in `CLAUDE.md`'s "Rules that hold across every
+agent"). This is a rule about the chat message, not the document being written — `requirement.md`,
+`design.md`, `review.md`, and the rest keep whatever depth `§0`–`§11` and each agent's own file
+call for; a document is a reference asked for later, a handoff message is read once, right now.

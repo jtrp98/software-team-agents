@@ -36,7 +36,12 @@
 4. **Short, actionable interactions.** One question at a time, each with the
    detected default offered ("I found X at … — use it? [Y/n]"). Respond in the
    user's language.
-5. **Report at the end** using the format in the Final Report section, including
+5. **Output style: concise.** Lead with the result, not narration — no "I'm
+   going to check X now" before a command. State detected facts and decisions
+   directly; skip preamble, restating the request, and step-by-step commentary.
+   Explain *why* only when a choice is non-obvious or the user must decide.
+   This applies to every phase, not just the Final Report.
+6. **Report at the end** using the format in the Final Report section, including
    the exact command the user can run to continue working.
 
 ---
