@@ -86,14 +86,14 @@ package เป็น `private`: ไม่ publish ขึ้น registry artifact
 
 ```bash
 # ติดตั้ง (ไฟล์ .tgz แจกกันภายในทีม พร้อมไฟล์ .sha256 สำหรับตรวจ integrity)
-npm i -g ./software-team-agents-0.3.0.tgz
+npm i -g ./software-team-agents-1.0.0-rc.1.tgz
 software-team-agents --version          # ต้องตรงกับ version ในชื่อไฟล์
 ```
 
 อัปเกรด — ติดตั้ง `.tgz` version ใหม่ทับ แล้ว sync แต่ละ workspace ตาม:
 
 ```bash
-npm i -g ./software-team-agents-0.3.0.tgz
+npm i -g ./software-team-agents-1.0.0-rc.1.tgz
 cd my-project && software-team-agents sync
 ```
 
@@ -373,7 +373,7 @@ Environment variables ที่ runtime ใช้: `AGENTCLAUDE_ROLE` (role ป�
 
 ```bash
 # 0) ติดตั้ง (ครั้งเดียวต่อเครื่อง)
-npm i -g ./software-team-agents-0.3.0.tgz
+npm i -g ./software-team-agents-1.0.0-rc.1.tgz
 
 # 1) BA — เขียน requirement ใน Knowledge repo
 git clone https://github.com/<org>/company-knowledge.git C:\src\company-knowledge
@@ -404,7 +404,7 @@ sta status T-7 --project-root C:\src\company-knowledge
 sta audit T-7 --project-root C:\src\company-knowledge
 
 # 5) อัปเกรด framework เมื่อมี .tgz ใหม่
-npm i -g ./software-team-agents-0.3.0.tgz
+npm i -g ./software-team-agents-1.0.0-rc.1.tgz
 cd C:\src\my-product && software-team-agents sync
 software-team-agents status                 # syncState: UP_TO_DATE
 ```
