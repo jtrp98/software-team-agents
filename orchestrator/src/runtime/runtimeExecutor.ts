@@ -12,6 +12,7 @@ import {
   type RunMetrics,
 } from "./agentRunAssembly.js";
 import { codeIntelSlices } from "./codeIntelAssembly.js";
+import { knowledgeBriefFor } from "./knowledgeBriefAssembly.js";
 import type {
   RuntimeAdapter,
   RuntimeAgentResult,
@@ -191,11 +192,20 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     }
 
     const sliced = sliceDocs
-      ? sliceModuleDocsFor(req.stage, {
-          projectRoot: threeRepo?.roots.knowledgeRoot ?? opts.projectRoot,
-          moduleName,
-          phases: opts.phases?.(req.taskId),
-        })
+      ? [
+          ...sliceModuleDocsFor(req.stage, {
+            projectRoot: threeRepo?.roots.knowledgeRoot ?? opts.projectRoot,
+            moduleName,
+            phases: opts.phases?.(req.taskId),
+          }),
+          // T-KA5a: the knowledge-store brief rides the same additive posture —
+          // [] when the store is absent or unreadable, never a failed run.
+          ...knowledgeBriefFor(req.stage, {
+            projectRoot: opts.projectRoot,
+            knowledgeRoot: threeRepo?.roots.knowledgeRoot,
+            moduleName,
+          }),
+        ]
       : [];
 
     // Phase 4 (code-intelligence): additive by design — `[]` unless the feature
