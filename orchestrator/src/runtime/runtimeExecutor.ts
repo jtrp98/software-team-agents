@@ -4,7 +4,7 @@ import { getAgent } from "../agents/registry.js";
 import { resolveAgentModel, resolveAgentVersion } from "../agents/agentModel.js";
 import type { StructuredFailure } from "../orchestrator/failure.js";
 import {
-  buildPrompt,
+  buildPromptParts,
   failResult,
   qaArtifactResult,
   securityArtifactResult,
@@ -135,9 +135,18 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
   model?: string;
   promptVersion?: number;
   context_chars: number;
+  composition: {
+    static_chars: number;
+    handoff_chars: number;
+    doc_chars: number;
+    knowledge_chars: number;
+    code_intel_chars: number;
+    tool_output_chars: number;
+  };
+  runtime: string;
 }): RunMetrics {
-  const input_tokens = result.usage.inputTokens ?? 0;
-  const output_tokens = result.usage.outputTokens ?? 0;
+  const input_tokens = result.usage.inputTokens;
+  const output_tokens = result.usage.outputTokens;
   return {
     // What the runtime says it used, falling back to what was configured. A
     // runtime that reports its own model is the better source: a routing
@@ -145,7 +154,7 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     // frontmatter value, which is the one thing the log must not do.
     model: result.model ?? declared.model,
     promptVersion: declared.promptVersion,
-    tokens: input_tokens + output_tokens,
+    tokens: (input_tokens ?? 0) + (output_tokens ?? 0),
     // `?? 0` here, unlike the `costUsd?: number` in the envelope: the run log's
     // `cost` is a number by contract, and "this runtime does not report cost" is
     // recorded as the absent COST_REPORTING capability, not as a fake figure in
@@ -155,6 +164,9 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     output_tokens,
     cache_read_tokens: result.usage.cachedInputTokens,
     context_chars: declared.context_chars,
+    runtime: declared.runtime,
+    session_kind: "orchestrated",
+    ...declared.composition,
   };
 }
 
@@ -191,13 +203,15 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       if (!handoff.allowed) return failResult(handoff.reason ?? `cannot start ${role}: role workflow gate failed`);
     }
 
-    const sliced = sliceDocs
-      ? [
-          ...sliceModuleDocsFor(req.stage, {
+    const docs = sliceDocs
+      ? sliceModuleDocsFor(req.stage, {
             projectRoot: threeRepo?.roots.knowledgeRoot ?? opts.projectRoot,
             moduleName,
             phases: opts.phases?.(req.taskId),
-          }),
+          })
+      : [];
+    const knowledge = sliceDocs
+      ? [
           // T-KA5a: the knowledge-store brief rides the same additive posture —
           // [] when the store is absent or unreadable, never a failed run.
           ...knowledgeBriefFor(req.stage, {
@@ -224,7 +238,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       codeIntel = [];
     }
 
-    const prompt = buildPrompt(req, opts.extraInstruction, [...sliced, ...codeIntel]);
+    const promptParts = buildPromptParts(req, opts.extraInstruction, { docs, knowledge, codeIntel });
+    const prompt = promptParts.text;
 
     // T112: resolve which runtime and model this run actually goes to. Absent
     // `opts.registry`, `activeRuntime`/`activeModel` are exactly `runtime` and
@@ -250,6 +265,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       model: activeModel,
       promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
       context_chars: prompt.length,
+      composition: promptParts.composition,
+      runtime: activeRuntime.id,
     };
 
     let guards: RuntimeGuards;

@@ -8,6 +8,8 @@ import { isInsideFrameworkRoot, resolveFrameworkRoot, resolveRoots } from "./roo
 import { devPreflight, runBa, runDev } from "./devCommand.js";
 import { readTargetManifest, writeTargetConfig, defaultTargetConfig } from "./targetMeta.js";
 import { configureKnowledgeRoot } from "../threeRepo/installation.js";
+import { SqliteTaskStore } from "../store/sqliteStore.js";
+import { defaultStateDbPath } from "../store/stateView.js";
 
 /**
  * T-TARGET-18/19/20 + T-ROLE-22..26 — end-to-end tests against temporary
@@ -307,6 +309,13 @@ describe("software-team-agents — target-first end to end", () => {
     expect(launchedCwd.toLowerCase()).toBe(fs.realpathSync.native(target).toLowerCase());
     expect(launchedEnv?.AGENTCLAUDE_WRITABLE_WORK_ROOTS).toBe("[]");
     expect(exitCode).toBe(7);
+    const telemetry = new SqliteTaskStore(defaultStateDbPath(target));
+    try {
+      const rows = telemetry.allRuns();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ task_id: expect.stringMatching(/^session:dev:/), session_kind: "interactive", runtime: "claude", input_tokens: null, output_tokens: null });
+      expect(rows[0].static_chars).toBeGreaterThan(0);
+    } finally { telemetry.close(); }
 
     // Missing runtime fails closed.
     expect(() =>
@@ -439,6 +448,24 @@ describe("role workspace architecture (T-ROLE)", () => {
     expect(exitCode).toBe(0);
     expect(launchedCwd.toLowerCase()).toBe(fs.realpathSync.native(knowledge).toLowerCase());
     expect(launchedEnv?.AGENTCLAUDE_WRITABLE_WORK_ROOTS).toBe("[]");
+  });
+
+  it("does not let an observability write failure change an interactive session's exit code", async () => {
+    const knowledge = makeKnowledgeRepo();
+    const fw = fakeFramework("1.0.0", FW_V1_FILES);
+    expect((await capture(() => runTargetCli(["init"], knowledge, fw))).code).toBe(0);
+    const errorSpy = console.error;
+    console.error = () => {};
+    try {
+      await expect(runBa({
+        targetRoot: knowledge,
+        templatesDir: path.join(fw, "templates"),
+        installationConfigPath: NO_INSTALLATION,
+        probe: () => ({ available: true }),
+        launch: () => Promise.resolve(0),
+        recordSession: () => { throw new Error("database locked"); },
+      })).resolves.toBe(0);
+    } finally { console.error = errorSpy; }
   });
 
   it("ba refuses an application repository — that is what --role is for, explicitly (T-ROLE-16)", async () => {

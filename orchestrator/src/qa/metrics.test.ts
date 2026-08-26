@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import type { RunRecord } from "../observability/runLog.js";
-import { buildMetricsExport, compareBaselines, taskQaMetrics } from "./metrics.js";
+import { buildMetricsExport, compareBaselines, compareTokenBaselines, taskQaMetrics, taskTokenMetrics, tokenMetricsExport } from "./metrics.js";
 
 function run(partial: Partial<RunRecord> & { agent: AgentStage }): RunRecord {
   return {
@@ -21,6 +21,14 @@ function run(partial: Partial<RunRecord> & { agent: AgentStage }): RunRecord {
     cache_read_tokens: null,
     context_chars: null,
     qa_mode: null,
+    runtime: null,
+    session_kind: null,
+    static_chars: null,
+    handoff_chars: null,
+    doc_chars: null,
+    knowledge_chars: null,
+    code_intel_chars: null,
+    tool_output_chars: null,
     ...partial,
   };
 }
@@ -110,5 +118,55 @@ describe("buildMetricsExport / compareBaselines", () => {
   it("reports null tokensPerSuccessfulTask when nothing succeeded", () => {
     const e = buildMetricsExport([{ taskId: "T-failed", runs: [run({ agent: AgentStage.DEVOPS, tokens: 500, result: "FAIL" })] }], { now: () => 7 });
     expect(e.totals.tokensPerSuccessfulTask).toBeNull();
+  });
+});
+
+describe("T-V3TOK-003 token metrics", () => {
+  it("aggregates orchestrated and interactive rows without treating missing token usage as zero", () => {
+    const orchestrated = run({
+      agent: AgentStage.BACKEND_ENGINEER,
+      task_id: "T-orch",
+      input_tokens: 100,
+      output_tokens: 20,
+      cache_read_tokens: 50,
+      static_chars: 40,
+      handoff_chars: 10,
+      doc_chars: 20,
+      knowledge_chars: 0,
+      code_intel_chars: 0,
+      tool_output_chars: 0,
+      session_kind: "orchestrated",
+    });
+    const interactive = run({
+      agent: AgentStage.BACKEND_ENGINEER,
+      task_id: "session:dev:2026-08-26T00:00:00.000Z",
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_tokens: null,
+      static_chars: 900,
+      session_kind: "interactive",
+    });
+    const exportData = tokenMetricsExport([orchestrated, interactive], { now: () => 1 });
+    expect(exportData.tasks).toHaveLength(2);
+    expect(exportData.totals.inputTokens).toBeNull();
+    expect(exportData.tasks.find((metric) => metric.taskId === "T-orch")?.totalTokens).toBe(120);
+    expect(exportData.tasks.find((metric) => metric.taskId === "T-orch")?.retryWasteTokens).toBe(0);
+    expect(exportData.tasks.find((metric) => metric.taskId.startsWith("session:"))?.inputTokens).toBeNull();
+    expect(exportData.roles[0]).toMatchObject({ role: AgentStage.BACKEND_ENGINEER, staticChars: 940, retrievedChars: null, staticVsRetrievedRatio: null });
+  });
+
+  it("counts retries and failure spend only when every failed row reported true usage", () => {
+    const metrics = taskTokenMetrics([
+      run({ agent: AgentStage.BACKEND_ENGINEER, result: "FAIL", retry_count: 1, input_tokens: 8, output_tokens: 2 }),
+      run({ agent: AgentStage.BACKEND_ENGINEER, result: "FAIL", retry_count: 1, input_tokens: null, output_tokens: null }),
+    ]);
+    expect(metrics.retryCount).toBe(2);
+    expect(metrics.retryWasteTokens).toBeNull();
+  });
+
+  it("does not calculate a baseline percentage from incomplete token data", () => {
+    const before = tokenMetricsExport([run({ agent: AgentStage.BACKEND_ENGINEER, input_tokens: 10, output_tokens: 2 })]);
+    const after = tokenMetricsExport([run({ agent: AgentStage.BACKEND_ENGINEER, input_tokens: null, output_tokens: null })]);
+    expect(compareTokenBaselines(before, after).inputTokenDeltaPct).toBeNull();
   });
 });

@@ -10,6 +10,7 @@ import { TaskRegistry } from "./orchestrator/taskRegistry.js";
 import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
 import { acquireTaskLock, releaseTaskLock } from "./concurrency/taskLock.js";
 import { Environment } from "./environment/environment.js";
+import { AgentStage } from "./types.js";
 
 describe("parseArgs", () => {
   it("parses required flags and maps classification flags", () => {
@@ -622,6 +623,34 @@ describe("T35 concurrency lock, wired into the CLI", () => {
           throw e;
         }
       }
+    }
+  });
+});
+
+describe("T-V3TOK-003 tokens verb", () => {
+  it("reports interactive unknown token fields as not reported while retaining its static measurement", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-tokens-"));
+    const store = new SqliteTaskStore(defaultStateDbPath(dir));
+    store.appendRun({
+      task_id: "session:dev:2026-08-26T00:00:00.000Z", agent: AgentStage.BACKEND_ENGINEER,
+      start_time: 1, end_time: 2, duration: 1, model: null, promptVersion: null, tokens: 0, cost: 0,
+      result: "PASS", retry_count: 0, failure_reason: null, input_tokens: null, output_tokens: null,
+      cache_read_tokens: null, context_chars: null, qa_mode: null, runtime: "claude", session_kind: "interactive",
+      static_chars: 321, handoff_chars: null, doc_chars: null, knowledge_chars: null, code_intel_chars: null, tool_output_chars: null,
+    });
+    store.close();
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+    try {
+      expect(await runCli(["tokens", "--project-root", dir], dir)).toBe(0);
+      expect(logs.join("\n")).toContain("not reported");
+      expect(logs.join("\n")).toContain("static=321");
+      expect(await runCli(["tokens", "--help"], dir)).toBe(0);
+      expect(USAGE).toContain("sta tokens");
+    } finally {
+      console.log = original;
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

@@ -196,6 +196,8 @@ export interface TaskStore {
   listTasks(): PersistedTask[];
   appendRun(record: RunRecord): void;
   runsForTask(taskId: string): RunRecord[];
+  /** Read-only cross-task run view for observability reports, including interactive session rows that have no task record. */
+  allRuns(): RunRecord[];
   appendEvent(event: NewEvent): void;
   eventsForTask(taskId: string): PersistedEvent[];
   close(): void;

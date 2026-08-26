@@ -50,7 +50,9 @@ import {
 // nothing lost. v1 -> v2 changed the columns a *run* is read through, where a silent misread
 // would corrupt cost and token accounting that nothing downstream could tell was wrong. An
 // unknown version still refuses to open at all.
-const SCHEMA_VERSION = 6;
+// v7 (token observability): adds nullable runtime/session/composition fields. Historical rows
+// remain explicitly "not reported"; this migration never infers a breakdown.
+const SCHEMA_VERSION = 7;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -77,7 +79,15 @@ CREATE TABLE IF NOT EXISTS runs (
   cache_read_tokens  INTEGER,
   context_chars      INTEGER,
   prompt_version     INTEGER,
-  qa_mode            TEXT
+  qa_mode            TEXT,
+  runtime            TEXT,
+  session_kind       TEXT,
+  static_chars       INTEGER,
+  handoff_chars      INTEGER,
+  doc_chars          INTEGER,
+  knowledge_chars    INTEGER,
+  code_intel_chars   INTEGER,
+  tool_output_chars  INTEGER
 );
 CREATE INDEX IF NOT EXISTS runs_task_id ON runs (task_id);
 CREATE TABLE IF NOT EXISTS events (
@@ -158,6 +168,14 @@ interface RunRow {
   context_chars: number | null;
   prompt_version: number | null;
   qa_mode: string | null;
+  runtime: string | null;
+  session_kind: string | null;
+  static_chars: number | null;
+  handoff_chars: number | null;
+  doc_chars: number | null;
+  knowledge_chars: number | null;
+  code_intel_chars: number | null;
+  tool_output_chars: number | null;
 }
 
 interface EventRow {
@@ -205,6 +223,22 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     // QA07: runs predating the qa_mode column simply read back "not recorded".
     const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
     if (!existing.has("qa_mode")) db.exec("ALTER TABLE runs ADD COLUMN qa_mode TEXT");
+  },
+  6: (db) => {
+    // Every T-V3TOK-001 field is nullable. A v6 row did not measure these
+    // values, so null is the only truthful migration result (never zero).
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    const columns: ReadonlyArray<[string, "TEXT" | "INTEGER"]> = [
+      ["runtime", "TEXT"],
+      ["session_kind", "TEXT"],
+      ["static_chars", "INTEGER"],
+      ["handoff_chars", "INTEGER"],
+      ["doc_chars", "INTEGER"],
+      ["knowledge_chars", "INTEGER"],
+      ["code_intel_chars", "INTEGER"],
+      ["tool_output_chars", "INTEGER"],
+    ];
+    for (const [column, type] of columns) if (!existing.has(column)) db.exec(`ALTER TABLE runs ADD COLUMN ${column} ${type}`);
   },
 };
 
@@ -299,8 +333,8 @@ export class SqliteTaskStore implements TaskStore {
   appendRun(record: RunRecord): void {
     this.db
       .prepare(
-        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, prompt_version, qa_mode)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, prompt_version, qa_mode, runtime, session_kind, static_chars, handoff_chars, doc_chars, knowledge_chars, code_intel_chars, tool_output_chars)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.task_id,
@@ -320,12 +354,29 @@ export class SqliteTaskStore implements TaskStore {
         record.context_chars,
         record.promptVersion,
         record.qa_mode,
+        record.runtime,
+        record.session_kind,
+        record.static_chars,
+        record.handoff_chars,
+        record.doc_chars,
+        record.knowledge_chars,
+        record.code_intel_chars,
+        record.tool_output_chars,
       );
   }
 
   runsForTask(taskId: string): RunRecord[] {
     const rows = this.db.prepare("SELECT * FROM runs WHERE task_id = ? ORDER BY id ASC").all(taskId) as RunRow[];
-    return rows.map((r) => ({
+    return rows.map((r) => this.runRecordFromRow(r));
+  }
+
+  allRuns(): RunRecord[] {
+    const rows = this.db.prepare("SELECT * FROM runs ORDER BY id ASC").all() as RunRow[];
+    return rows.map((r) => this.runRecordFromRow(r));
+  }
+
+  private runRecordFromRow(r: RunRow): RunRecord {
+    return {
       task_id: r.task_id,
       agent: r.agent as AgentStage,
       start_time: r.start_time,
@@ -343,7 +394,15 @@ export class SqliteTaskStore implements TaskStore {
       cache_read_tokens: r.cache_read_tokens,
       context_chars: r.context_chars,
       qa_mode: r.qa_mode === "FULL" || r.qa_mode === "TARGETED" ? r.qa_mode : null,
-    }));
+      runtime: r.runtime,
+      session_kind: r.session_kind === "orchestrated" || r.session_kind === "interactive" ? r.session_kind : null,
+      static_chars: r.static_chars,
+      handoff_chars: r.handoff_chars,
+      doc_chars: r.doc_chars,
+      knowledge_chars: r.knowledge_chars,
+      code_intel_chars: r.code_intel_chars,
+      tool_output_chars: r.tool_output_chars,
+    };
   }
 
   appendEvent(event: NewEvent): void {

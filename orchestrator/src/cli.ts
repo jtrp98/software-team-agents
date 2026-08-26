@@ -10,7 +10,7 @@ import { TaskRegistry } from "./orchestrator/taskRegistry.js";
 import { createRuntimeExecutor } from "./runtime/runtimeExecutor.js";
 import { withQaOptimization, riskSignalsFromClassification } from "./qa/optimized.js";
 import { gitChangedFiles } from "./qa/changeSource.js";
-import { buildMetricsExport, compareBaselines, taskQaMetrics } from "./qa/metrics.js";
+import { buildMetricsExport, compareBaselines, compareTokenBaselines, taskQaMetrics, tokenMetricsExport, type TaskTokenMetrics, type TokenMetricsExport } from "./qa/metrics.js";
 import type { QaFindingRecord } from "./qa/evidence.js";
 import { parseOpenIssues } from "./orchestrator/failureClassifier.js";
 import { readModuleDoc } from "./agents/moduleDocs.js";
@@ -207,6 +207,7 @@ export const USAGE =
   "  sta cancel <task-id> [--reason <text>] [--project-root <path>]   give up on a task for good; run/resume/retry refuse it permanently\n" +
   "  sta audit  <task-id> [--decisions] [--project-root <path>]   the WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail; --decisions shows only the choices\n" +
   "  sta qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]   QA token/mode/retry picture per task (QA07); --baseline compares against a saved export\n" +
+  "  sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]   token/context composition across orchestrated and interactive runs\n" +
   "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names (T41)\n" +
   "  sta init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
   "  sta configure knowledge-root <path> [--config-path <path>]       validate and save this installation's single Knowledge root\n" +
@@ -658,6 +659,7 @@ const VERBS = [
   "projects",
   "init",
   "qa-metrics",
+  "tokens",
   "upgrade",
   "migrate",
   "knowledge-migrate",
@@ -676,7 +678,7 @@ function isVerb(s: string | undefined): s is Verb {
 }
 
 /** Flags a verb accepts that take a value — their value must never be mistaken for the positional <task-id>. */
-  const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--by", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime", "--as", "--note"]);
+  const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--by", "--since", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime", "--as", "--note"]);
 
 /** Every non-flag token in a verb's remaining args, in order, skipping over each value-flag's own argument. */
 function positionalArgs(rest: string[]): string[] {
@@ -1688,6 +1690,71 @@ async function runQaMetricsVerb(rest: string[], defaultProjectRoot: string): Pro
   }
 }
 
+function displayMetric(value: number | null): string {
+  return value === null ? "not reported" : value.toLocaleString();
+}
+
+function printTokenTask(metric: TaskTokenMetrics): void {
+  const c = metric.composition;
+  console.log(
+    `[orchestrator] ${metric.taskId}: input=${displayMetric(metric.inputTokens)} output=${displayMetric(metric.outputTokens)} ` +
+      `cached=${displayMetric(metric.cachedTokens)} total=${displayMetric(metric.totalTokens)} stages=${metric.stageCount} retries=${metric.retryCount} retryWaste=${displayMetric(metric.retryWasteTokens)} ` +
+      `sessions=orchestrated:${metric.sessionKinds.orchestrated},interactive:${metric.sessionKinds.interactive},not-reported:${metric.sessionKinds.not_reported}`,
+  );
+  console.log(
+    `[orchestrator]   composition: static=${displayMetric(c.static_chars)} handoff=${displayMetric(c.handoff_chars)} docs=${displayMetric(c.doc_chars)} ` +
+      `knowledge=${displayMetric(c.knowledge_chars)} code-intel=${displayMetric(c.code_intel_chars)} tool-output=${displayMetric(c.tool_output_chars)}`,
+  );
+}
+
+/** `tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]`. */
+async function runTokensVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  if (rest.includes("--help")) {
+    console.log("usage: sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>] [--project-root <path>] [--state-db <path>]");
+    return 0;
+  }
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const stateDb = flagValue(rest, "--state-db");
+  const taskId = positionalArg(rest);
+  const sinceRaw = flagValue(rest, "--since");
+  const since = sinceRaw === undefined ? undefined : Date.parse(sinceRaw);
+  if (sinceRaw !== undefined && Number.isNaN(since)) throw new CliUsageError(`--since must be an ISO timestamp (got ${sinceRaw})`);
+  const by = flagValue(rest, "--by") ?? "task";
+  if (by !== "task" && by !== "role" && by !== "stage" && by !== "session") throw new CliUsageError(`--by must be role, stage, or session (got ${by})`);
+  const exportPath = flagValue(rest, "--export-json");
+  const baselinePath = flagValue(rest, "--baseline");
+  const { store, registry } = openStore(projectRoot, stateDb);
+  try {
+    const runs = store.allRuns().filter((run) => (taskId === undefined || run.task_id === taskId) && (since === undefined || run.start_time >= since));
+    if (runs.length === 0) {
+      console.log("[orchestrator] no recorded runs match this token query — nothing to measure.");
+      return 0;
+    }
+    const report = tokenMetricsExport(runs);
+    if (by === "task") for (const metric of report.tasks) printTokenTask(metric);
+    else if (by === "role" || by === "stage") {
+      for (const role of report.roles) console.log(`[orchestrator] ${by} ${role.role}: runs=${role.runCount} static=${displayMetric(role.staticChars)} retrieved=${displayMetric(role.retrievedChars)} static/retrieved=${role.staticVsRetrievedRatio === null ? "not reported" : role.staticVsRetrievedRatio.toFixed(2)}`);
+    } else {
+      for (const kind of ["orchestrated", "interactive", "not_reported"] as const) {
+        const count = report.tasks.reduce((sum, metric) => sum + metric.sessionKinds[kind], 0);
+        console.log(`[orchestrator] session ${kind === "not_reported" ? "not reported" : kind}: ${count} run(s)`);
+      }
+    }
+    const total = report.totals;
+    console.log(`[orchestrator] totals: input=${displayMetric(total.inputTokens)} output=${displayMetric(total.outputTokens)} cached=${displayMetric(total.cachedTokens)} total=${displayMetric(total.totalTokens)} retries=${total.retryCount} retryWaste=${displayMetric(total.retryWasteTokens)}`);
+    if (exportPath) {
+      fs.writeFileSync(exportPath, JSON.stringify(report, null, 2), "utf8");
+      console.log(`[orchestrator] wrote token metrics JSON to ${exportPath}`);
+    }
+    if (baselinePath) {
+      const before = JSON.parse(fs.readFileSync(baselinePath, "utf8")) as TokenMetricsExport;
+      const delta = compareTokenBaselines(before, report);
+      console.log(`[orchestrator] vs baseline (${baselinePath}): input ${delta.inputTokenDeltaPct === null ? "not reported" : `${delta.inputTokenDeltaPct.toFixed(1)}%`}, retry waste ${delta.retryWasteDeltaPct === null ? "not reported" : `${delta.retryWasteDeltaPct.toFixed(1)}%`}`);
+    }
+    return 0;
+  } finally { registry.close(); }
+}
+
 /** Dispatches a T31 verb, translating the ones that are really the existing engine in disguise (`run`, `resume`, `retry`) rather than duplicating the step loop. */
 async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): Promise<number> {
   switch (verb) {
@@ -1712,6 +1779,8 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
       return runAuditVerb(rest, defaultProjectRoot);
     case "qa-metrics":
       return runQaMetricsVerb(rest, defaultProjectRoot);
+    case "tokens":
+      return runTokensVerb(rest, defaultProjectRoot);
     case "projects":
       return runProjectsVerb(rest, defaultProjectRoot);
     case "init":

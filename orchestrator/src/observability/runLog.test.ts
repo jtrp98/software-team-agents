@@ -29,6 +29,14 @@ describe("RunLog", () => {
       output_tokens: null,
       cache_read_tokens: null,
       context_chars: null,
+      runtime: null,
+      session_kind: null,
+      static_chars: null,
+      handoff_chars: null,
+      doc_chars: null,
+      knowledge_chars: null,
+      code_intel_chars: null,
+      tool_output_chars: null,
       qa_mode: null,
     });
   });
@@ -56,6 +64,18 @@ describe("RunLog", () => {
     expect(record.output_tokens).toBe(1000);
     expect(record.cache_read_tokens).toBe(2500);
     expect(record.context_chars).toBe(18000);
+  });
+
+  it("keeps an omitted composition unknown instead of converting it to zero", () => {
+    const record = new RunLog().record({
+      task_id: "TASK-unknown",
+      agent: AgentStage.BACKEND_ENGINEER,
+      start_time: 0,
+      end_time: 1,
+      outcome: { tokens: 1, cost: 0, result: "PASS" },
+    });
+    expect(record.static_chars).toBeNull();
+    expect(record.doc_chars).toBeNull();
   });
 
   it("defaults retry_count to 0 and failure_reason to null on a PASS", () => {

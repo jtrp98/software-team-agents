@@ -39,6 +39,14 @@ export interface RunMetrics {
   output_tokens?: number;
   cache_read_tokens?: number;
   context_chars: number;
+  runtime?: string;
+  session_kind?: "orchestrated" | "interactive";
+  static_chars?: number;
+  handoff_chars?: number;
+  doc_chars?: number;
+  knowledge_chars?: number;
+  code_intel_chars?: number;
+  tool_output_chars?: number;
 }
 
 /**
@@ -106,30 +114,79 @@ export function sliceModuleDocsFor(stage: AgentStage, opts: SliceOptions): strin
   }
 }
 
-export function buildPrompt(req: AgentExecutorRequest, extra?: string, sliced?: string[]): string {
-  const parts: string[] = [
+export interface PromptComposition {
+  static_chars: number;
+  handoff_chars: number;
+  doc_chars: number;
+  knowledge_chars: number;
+  code_intel_chars: number;
+  tool_output_chars: number;
+}
+
+export interface PromptPartsResult {
+  text: string;
+  composition: PromptComposition;
+}
+
+export interface PromptSources {
+  docs?: string[];
+  knowledge?: string[];
+  codeIntel?: string[];
+  toolOutput?: string[];
+}
+
+type PromptPartKind = keyof PromptComposition;
+interface PromptPart { kind: PromptPartKind; text: string; }
+
+/**
+ * Assembles the prompt and records the source of every character while doing
+ * so. `static_chars` is framework text generated here (header/footer/deploy
+ * note/extra instruction); it deliberately excludes CLAUDE.md, role prompts,
+ * and policies that an interactive runtime loads itself. Those are measured by
+ * T-V3TOK-002's workspace session recorder instead.
+ */
+export function buildPromptParts(req: AgentExecutorRequest, extra?: string, sources: PromptSources = {}): PromptPartsResult {
+  const parts: PromptPart[] = [
     // Vendor-neutral on purpose (OFF07): this prompt reaches every runtime, and
     // a provider-named document pointer would leak one vendor's naming into all
     // the others' context.
-    `Task ${req.taskId} — you are running as the \`${req.stage}\` stage of this repo's pipeline (see the repo's own agent documentation).`,
-    "",
+    { kind: "static_chars", text: `Task ${req.taskId} — you are running as the \`${req.stage}\` stage of this repo's pipeline (see the repo's own agent documentation).` },
+    { kind: "static_chars", text: "" },
   ];
   if (req.context.length === 0) {
-    parts.push("No prior-stage context was supplied for this task — proceed from the repo's own docs (`_docs/status.md` first, per convention).");
+    parts.push({ kind: "handoff_chars", text: "No prior-stage context was supplied for this task — proceed from the repo's own docs (`_docs/status.md` first, per convention)." });
   } else {
-    parts.push("Context assembled for you by the orchestrator (already filtered to what this stage may read):");
+    parts.push({ kind: "handoff_chars", text: "Context assembled for you by the orchestrator (already filtered to what this stage may read):" });
     for (const item of req.context) {
-      parts.push("", `### ${item.source}`, item.content);
+      parts.push({ kind: "handoff_chars", text: "" }, { kind: "handoff_chars", text: `### ${item.source}` }, { kind: "handoff_chars", text: item.content });
     }
   }
-  if (sliced && sliced.length > 0) parts.push(...sliced);
-  if (req.deployPhase) parts.push("", DEPLOY_PHASE_INSTRUCTION[req.deployPhase]);
-  if (extra) parts.push("", extra);
+  for (const text of sources.docs ?? []) parts.push({ kind: "doc_chars", text });
+  for (const text of sources.knowledge ?? []) parts.push({ kind: "knowledge_chars", text });
+  for (const text of sources.codeIntel ?? []) parts.push({ kind: "code_intel_chars", text });
+  for (const text of sources.toolOutput ?? []) parts.push({ kind: "tool_output_chars", text });
+  if (req.deployPhase) parts.push({ kind: "static_chars", text: "" }, { kind: "static_chars", text: DEPLOY_PHASE_INSTRUCTION[req.deployPhase] });
+  if (extra) parts.push({ kind: "static_chars", text: "" }, { kind: "static_chars", text: extra });
   parts.push(
-    "",
-    "Finish by stating clearly what you completed and, per convention, what should happen next — the orchestrator reads your exit status and the docs you wrote, not a special reply format.",
+    { kind: "static_chars", text: "" },
+    { kind: "static_chars", text: "Finish by stating clearly what you completed and, per convention, what should happen next — the orchestrator reads your exit status and the docs you wrote, not a special reply format." },
   );
-  return parts.join("\n");
+  const composition: PromptComposition = {
+    static_chars: 0, handoff_chars: 0, doc_chars: 0, knowledge_chars: 0, code_intel_chars: 0, tool_output_chars: 0,
+  };
+  const text = parts.map((part, index) => {
+    // The delimiter belongs to the incoming source: no separate synthetic
+    // bucket is needed, and the component sum stays exactly prompt.length.
+    const rendered = `${index === 0 ? "" : "\n"}${part.text}`;
+    composition[part.kind] += rendered.length;
+    return rendered;
+  }).join("");
+  return { text, composition };
+}
+
+/** Compatibility wrapper for existing callers/tests using the old sliced array. */
+export function buildPrompt(req: AgentExecutorRequest, extra?: string, sliced?: string[]): string {
+  return buildPromptParts(req, extra, { docs: sliced }).text;
 }
 
 export function failResult(reason: string, metrics: Partial<RunMetrics> = {}): AgentExecutorResult {

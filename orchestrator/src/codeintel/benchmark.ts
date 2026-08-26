@@ -144,3 +144,29 @@ export function renderBenchmarkMarkdown(rows: BenchmarkRow[], header: { targetId
   lines.push("", "_Discovery-level only. Agent-level metrics (wrong-file edits, defects missed, verdict quality) require orchestrated runs with people watching._");
   return lines.join("\n");
 }
+
+/** Shared stable renderer for deterministic token-workload baselines (T-V3TOK-004). */
+export function renderTokenBenchmarkMarkdown(rows: ReadonlyArray<{
+  workload: string;
+  inputTokens: number;
+  modelCalls: number;
+  filesOpened: number;
+  docBytes: number;
+  retries: number;
+  outputTokens: number | null;
+  qualityGatesPassed: number | null;
+}>, header: { date: string }): string {
+  const lines = [
+    "# Token workload benchmark — baseline",
+    "",
+    `Generated ${header.date} · deterministic fixture bytes/4 input-token estimate · no live model calls`,
+    "",
+    "| Workload | Input tok | Output tok | Total tok | Model calls | Files opened | Doc bytes in context | Retries | Quality gates passed |",
+    "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+  ];
+  for (const row of rows) {
+    const unknown = "not reported";
+    lines.push(`| ${row.workload} | ${row.inputTokens.toLocaleString()} | ${row.outputTokens?.toLocaleString() ?? unknown} | ${row.inputTokens.toLocaleString()} (input only) | ${row.modelCalls} | ${row.filesOpened} | ${row.docBytes.toLocaleString()} | ${row.retries} | ${row.qualityGatesPassed?.toLocaleString() ?? unknown} |`);
+  }
+  return lines.join("\n");
+}

@@ -22,6 +22,17 @@ export interface RunRecord {
   cache_read_tokens: number | null;
   /** Size (characters) of the prompt actually sent this run (T28) — the context-size half of "token/context tracking", independent of the response's token usage. */
   context_chars: number | null;
+  /** Runtime id reported by the executor/session launcher. Null for historical rows. */
+  runtime: string | null;
+  /** Whether this row came from an orchestrated stage or an interactive role session. */
+  session_kind: "orchestrated" | "interactive" | null;
+  /** Prompt composition fields are null when that path did not measure the component, never a fabricated zero. */
+  static_chars: number | null;
+  handoff_chars: number | null;
+  doc_chars: number | null;
+  knowledge_chars: number | null;
+  code_intel_chars: number | null;
+  tool_output_chars: number | null;
   /** QA07 — the verify mode this qa-engineer round ran in, from its own report. Null for every non-QA stage (and for QA runs that predate the field). */
   qa_mode: "FULL" | "TARGETED" | null;
 }
@@ -38,6 +49,14 @@ export interface RunOutcome {
   output_tokens?: number;
   cache_read_tokens?: number;
   context_chars?: number;
+  runtime?: string;
+  session_kind?: "orchestrated" | "interactive";
+  static_chars?: number;
+  handoff_chars?: number;
+  doc_chars?: number;
+  knowledge_chars?: number;
+  code_intel_chars?: number;
+  tool_output_chars?: number;
   qa_mode?: "FULL" | "TARGETED";
 }
 
@@ -88,6 +107,14 @@ export class RunLog {
       output_tokens: params.outcome.output_tokens ?? null,
       cache_read_tokens: params.outcome.cache_read_tokens ?? null,
       context_chars: params.outcome.context_chars ?? null,
+      runtime: params.outcome.runtime ?? null,
+      session_kind: params.outcome.session_kind ?? null,
+      static_chars: params.outcome.static_chars ?? null,
+      handoff_chars: params.outcome.handoff_chars ?? null,
+      doc_chars: params.outcome.doc_chars ?? null,
+      knowledge_chars: params.outcome.knowledge_chars ?? null,
+      code_intel_chars: params.outcome.code_intel_chars ?? null,
+      tool_output_chars: params.outcome.tool_output_chars ?? null,
       qa_mode: params.outcome.qa_mode ?? null,
     };
     this.records.push(entry);

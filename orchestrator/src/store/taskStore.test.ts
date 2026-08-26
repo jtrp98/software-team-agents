@@ -86,6 +86,14 @@ function sampleRun(taskId = "T-1"): RunRecord {
     cache_read_tokens: null,
     context_chars: 4000,
     qa_mode: null,
+    runtime: "claude-code",
+    session_kind: "orchestrated",
+    static_chars: 500,
+    handoff_chars: 300,
+    doc_chars: 2500,
+    knowledge_chars: 200,
+    code_intel_chars: 400,
+    tool_output_chars: 100,
   };
 }
 
@@ -187,6 +195,17 @@ describe.each(implementations)("%s", (_name, makeStore) => {
     const runs = store.runsForTask("T-1");
     expect(runs[0]).toMatchObject({ model: "sonnet", input_tokens: 1000, output_tokens: 234, cache_read_tokens: null, context_chars: 4000 });
     expect(runs[1]).toMatchObject({ model: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, context_chars: null });
+    store.close();
+  });
+
+  it("round-trips T-V3TOK-001 runtime and prompt composition fields, including truthful nulls", () => {
+    const store = makeStore();
+    store.appendRun(sampleRun("T-1"));
+    store.appendRun({ ...sampleRun("T-1"), runtime: "codex", session_kind: "interactive", static_chars: 9, handoff_chars: null, doc_chars: null, knowledge_chars: null, code_intel_chars: null, tool_output_chars: null });
+    expect(store.runsForTask("T-1")).toMatchObject([
+      { runtime: "claude-code", session_kind: "orchestrated", static_chars: 500, doc_chars: 2500 },
+      { runtime: "codex", session_kind: "interactive", static_chars: 9, handoff_chars: null, doc_chars: null },
+    ]);
     store.close();
   });
 
@@ -390,6 +409,24 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
     } finally {
       fs.rmSync(path.dirname(file), { recursive: true, force: true });
     }
+  });
+
+  it("T-V3TOK-001: a v6 database migrates in place without changing legacy run facts", () => {
+    const file = tmpDbPath();
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const db = new Database(file);
+      db.exec(`CREATE TABLE tasks (task_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, state TEXT NOT NULL);
+        CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, agent TEXT NOT NULL, start_time INTEGER NOT NULL, end_time INTEGER NOT NULL, duration INTEGER NOT NULL, model TEXT, tokens INTEGER NOT NULL, cost REAL NOT NULL, result TEXT NOT NULL, retry_count INTEGER NOT NULL, failure_reason TEXT, input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, context_chars INTEGER, prompt_version INTEGER, qa_mode TEXT);
+        CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, at INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL, actor TEXT, reason TEXT, input TEXT, output TEXT, decision TEXT);`);
+      db.exec("INSERT INTO runs (task_id, agent, start_time, end_time, duration, tokens, cost, result, retry_count) VALUES ('T-V6', 'backend-engineer', 1, 2, 1, 123, 0, 'PASS', 0)");
+      db.pragma("user_version = 6");
+      db.close();
+      const store = new SqliteTaskStore(file);
+      try {
+        expect(store.runsForTask("T-V6")[0]).toMatchObject({ tokens: 123, runtime: null, session_kind: null, static_chars: null, doc_chars: null });
+      } finally { store.close(); }
+    } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
   });
 
   it("Phase 2: a v4 task row reads with null Target bindings without rewriting historical JSON", () => {

@@ -25,6 +25,7 @@ import {
 } from "./roleWorkspace.js";
 import { runTargetInit } from "./initCommand.js";
 import { isTargetInitialized } from "./targetMeta.js";
+import { recordInteractiveSession } from "../observability/sessionRecord.js";
 
 /**
  * T-ROLE-03 / T-ROLE-04 / T-ROLE-19 — role-aware execution: preflight, then
@@ -64,6 +65,8 @@ export interface RoleRunOptions {
   /** Test seams. */
   probe?: (cmd: string) => { available: boolean; detail?: string };
   launch?: (cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<number>;
+  /** Observability seam: callers/tests may replace the fail-open recorder, never the launch flow. */
+  recordSession?: typeof recordInteractiveSession;
 }
 
 export class PreflightError extends Error {
@@ -326,7 +329,18 @@ async function runRoleSession(role: RoleName, options: RoleRunOptions): Promise<
   for (const c of ctx.checks) console.log(`[software-team-agents] ✓ ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
   console.log(`[software-team-agents] starting ${ctx.runtime} (${ROLE_LABEL[role]}) from ${ctx.workspaceRoot} ...`);
   const launch = options.launch ?? defaultLaunch;
-  return launch(ctx.runtime, [], ctx.workspaceRoot, launchEnv(role, process.env, ctx.knowledge?.knowledgeRoot, ctx.target?.targetRoot));
+  const startedAt = Date.now();
+  try {
+    return await launch(ctx.runtime, [], ctx.workspaceRoot, launchEnv(role, process.env, ctx.knowledge?.knowledgeRoot, ctx.target?.targetRoot));
+  } finally {
+    const record = options.recordSession ?? recordInteractiveSession;
+    try {
+      record({ workspaceRoot: ctx.workspaceRoot, role, runtime: ctx.runtime, startedAt, endedAt: Date.now() });
+    } catch (error) {
+      // A custom recorder is no more authoritative than the production one.
+      console.error(`[software-team-agents] could not record interactive session telemetry: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 }
 
 export const runDev = (options: RoleRunOptions = {}): Promise<number> => runRoleSession("dev", options);

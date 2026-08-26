@@ -153,6 +153,144 @@ export function compareBaselines(before: QaMetricsExport, after: QaMetricsExport
   };
 }
 
+// T-V3TOK-003 deliberately lives beside QA metrics: both are read-only views
+// over the same RunRecord store, not competing telemetry systems.
+export interface TokenCompositionMetrics {
+  static_chars: number | null;
+  handoff_chars: number | null;
+  doc_chars: number | null;
+  knowledge_chars: number | null;
+  code_intel_chars: number | null;
+  tool_output_chars: number | null;
+}
+
+export interface TaskTokenMetrics {
+  taskId: string;
+  runCount: number;
+  stageCount: number;
+  retryCount: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedTokens: number | null;
+  totalTokens: number | null;
+  retryWasteTokens: number | null;
+  composition: TokenCompositionMetrics;
+  sessionKinds: Record<"orchestrated" | "interactive" | "not_reported", number>;
+}
+
+export interface TokenRoleMetrics {
+  role: string;
+  runCount: number;
+  staticChars: number | null;
+  retrievedChars: number | null;
+  staticVsRetrievedRatio: number | null;
+}
+
+export interface TokenMetricsExport {
+  exportedAt: number;
+  tasks: TaskTokenMetrics[];
+  roles: TokenRoleMetrics[];
+  totals: Omit<TaskTokenMetrics, "taskId" | "sessionKinds">;
+}
+
+const COMPOSITION_FIELDS = ["static_chars", "handoff_chars", "doc_chars", "knowledge_chars", "code_intel_chars", "tool_output_chars"] as const;
+
+/** A total is known only when every contributing row reported the field. */
+function strictSum(runs: readonly RunRecord[], value: (run: RunRecord) => number | null): number | null {
+  if (runs.length === 0 || runs.some((run) => value(run) === null)) return null;
+  return runs.reduce((sum, run) => sum + (value(run) ?? 0), 0);
+}
+
+function totalTokensFor(run: RunRecord): number | null {
+  return run.input_tokens === null || run.output_tokens === null ? null : run.input_tokens + run.output_tokens;
+}
+
+function compositionFor(runs: readonly RunRecord[]): TokenCompositionMetrics {
+  return {
+    static_chars: strictSum(runs, (run) => run.static_chars),
+    handoff_chars: strictSum(runs, (run) => run.handoff_chars),
+    doc_chars: strictSum(runs, (run) => run.doc_chars),
+    knowledge_chars: strictSum(runs, (run) => run.knowledge_chars),
+    code_intel_chars: strictSum(runs, (run) => run.code_intel_chars),
+    tool_output_chars: strictSum(runs, (run) => run.tool_output_chars),
+  };
+}
+
+export function taskTokenMetrics(runs: readonly RunRecord[]): TaskTokenMetrics {
+  const sessionKinds = { orchestrated: 0, interactive: 0, not_reported: 0 };
+  for (const run of runs) {
+    if (run.session_kind === "orchestrated" || run.session_kind === "interactive") sessionKinds[run.session_kind]++;
+    else sessionKinds.not_reported++;
+  }
+  const failures = runs.filter((run) => run.result === "FAIL");
+  return {
+    taskId: runs[0]?.task_id ?? "",
+    runCount: runs.length,
+    stageCount: new Set(runs.map((run) => run.agent)).size,
+    retryCount: runs.reduce((sum, run) => sum + run.retry_count, 0),
+    inputTokens: strictSum(runs, (run) => run.input_tokens),
+    outputTokens: strictSum(runs, (run) => run.output_tokens),
+    cachedTokens: strictSum(runs, (run) => run.cache_read_tokens),
+    totalTokens: strictSum(runs, totalTokensFor),
+    // No failed rows is a known zero; one failed row with unreported usage is
+    // unknown, never a fabricated zero.
+    retryWasteTokens: failures.length === 0 ? 0 : strictSum(failures, totalTokensFor),
+    composition: compositionFor(runs),
+    sessionKinds,
+  };
+}
+
+function roleMetrics(runs: readonly RunRecord[]): TokenRoleMetrics[] {
+  const groups = new Map<string, RunRecord[]>();
+  for (const run of runs) groups.set(run.agent, [...(groups.get(run.agent) ?? []), run]);
+  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([role, roleRuns]) => {
+    const staticChars = strictSum(roleRuns, (run) => run.static_chars);
+    const retrievedChars = strictSum(roleRuns, (run) => {
+      const components = [run.handoff_chars, run.doc_chars, run.knowledge_chars, run.code_intel_chars, run.tool_output_chars];
+      return components.some((value) => value === null) ? null : components.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+    });
+    return {
+      role,
+      runCount: roleRuns.length,
+      staticChars,
+      retrievedChars,
+      staticVsRetrievedRatio: staticChars === null || retrievedChars === null || retrievedChars === 0 ? null : staticChars / retrievedChars,
+    };
+  });
+}
+
+export function tokenMetricsExport(runs: readonly RunRecord[], opts?: { now?: () => number }): TokenMetricsExport {
+  const grouped = new Map<string, RunRecord[]>();
+  for (const run of runs) grouped.set(run.task_id, [...(grouped.get(run.task_id) ?? []), run]);
+  const tasks = [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, taskRuns]) => taskTokenMetrics(taskRuns));
+  const aggregate = taskTokenMetrics(runs);
+  return {
+    exportedAt: (opts?.now ?? Date.now)(),
+    tasks,
+    roles: roleMetrics(runs),
+    totals: {
+      runCount: aggregate.runCount,
+      stageCount: aggregate.stageCount,
+      retryCount: aggregate.retryCount,
+      inputTokens: aggregate.inputTokens,
+      outputTokens: aggregate.outputTokens,
+      cachedTokens: aggregate.cachedTokens,
+      totalTokens: aggregate.totalTokens,
+      retryWasteTokens: aggregate.retryWasteTokens,
+      composition: aggregate.composition,
+    },
+  };
+}
+
+export function compareTokenBaselines(before: TokenMetricsExport, after: TokenMetricsExport): { inputTokenDeltaPct: number | null; retryWasteDeltaPct: number | null } {
+  const delta = (oldValue: number | null, newValue: number | null): number | null =>
+    oldValue === null || newValue === null || oldValue === 0 ? null : ((newValue - oldValue) / oldValue) * 100;
+  return {
+    inputTokenDeltaPct: delta(before.totals.inputTokens, after.totals.inputTokens),
+    retryWasteDeltaPct: delta(before.totals.retryWasteTokens, after.totals.retryWasteTokens),
+  };
+}
+
 // -- helpers -----------------------------------------------------------------
 
 function pct(before: number, after: number): number {

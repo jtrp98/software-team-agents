@@ -286,6 +286,16 @@ describe("metrics — normalising any runtime's usage into the run log (T26/T28)
       context: [{ source: ArtifactType.REQUIREMENTS, content: "x".repeat(500) }],
     });
     expect(result.outcome.context_chars).toBeGreaterThan(500);
+    expect(result.outcome.session_kind).toBe("orchestrated");
+    expect(result.outcome.static_chars).toBeTypeOf("number");
+    expect(
+      (result.outcome.static_chars ?? 0) +
+      (result.outcome.handoff_chars ?? 0) +
+      (result.outcome.doc_chars ?? 0) +
+      (result.outcome.knowledge_chars ?? 0) +
+      (result.outcome.code_intel_chars ?? 0) +
+      (result.outcome.tool_output_chars ?? 0),
+    ).toBe(result.outcome.context_chars);
   });
 });
 
