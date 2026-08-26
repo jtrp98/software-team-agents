@@ -192,6 +192,56 @@ relative หรือ absolute ก็ได้) หรือรัน `sta confi
 **แก้:** รัน `software-team-agents sync` แล้ว `status` ซ้ำ — ข้อความ NOT READY บอกไฟล์ที่ขาดตรงๆ (agent
 prompts, `.claude/settings.json`, bindings)
 
+### 6. พิมพ์ `/xxx` แล้วไม่เจอ (slash command หาย)
+
+**เช็ค:**
+1. `.claude/commands/<name>.md` มีอยู่ใน workspace นี้ไหม — ถ้าไม่มี รัน `software-team-agents sync`
+   (ชุด command ship ผ่าน templates เหมือน `.claude/agents/`)
+2. Restart session หลัง sync — Claude Code โหลดรายชื่อ command ตอนเริ่ม session
+3. ชื่อต้องตรงไฟล์ (flat namespace) — ไฟล์ใน `_shared/` เป็น include ไม่ใช่ command
+   (`/_shared/guardrails` type ได้แต่ไม่ใช่จุดประสงค์); ชื่อที่มีทั้งหมดดูที่
+   [`planning/v2/claude-commands-TASKS.md`](planning/v2/claude-commands-TASKS.md) §1.1
+
+### 7. `$xxx` ไม่เจอใน Codex (skills mirror หาย)
+
+**เช็ค:**
+1. `.agents/skills/<name>/SKILL.md` มีครบไหม — ถ้าไม่มี รัน `software-team-agents sync`
+   (mirror เป็น generated file, `sta sync` generate จาก `.claude/commands/**` ให้ใหม่เสมอ)
+2. Codex reload skills เองอัตโนมัติ (detect on change) — ไม่ต้อง restart; เมนูรวมอยู่ที่ `/skills`
+3. Invoke แบบ explicit คือ `$<name>`; การ activate เองโดยโมเดลถูกปิดไว้ (`agents/openai.yaml`
+   → `allow_implicit_invocation: false`) ตั้งใจ ไม่ใช่ bug
+4. ยังไม่เห็น → `sta --check-bindings` — drift/orphan รายงานทีละไฟล์พร้อม fix
+
+### 8. พิมพ์ `/xxx` ใน OpenCode แล้วไม่เจอ (commands mirror หาย)
+
+**เช็ค:**
+1. `.opencode/commands/<name>.md` มีครบ 31 ไฟล์ไหม — ถ้าไม่มี รัน `software-team-agents sync`
+2. OpenCode auto-reload commands ทันที (ต่างจาก Claude ที่ต้อง restart session)
+3. แก้เนื้อหา command ที่ source เดียวเสมอ: `.claude/commands/<name>.md` —
+   ห้าม hand-edit `.opencode/commands/**` (generated; `--check-bindings` จับ byte-diff ได้)
+
+### 9. Claude Design MCP ไม่ connect (uxui-designer Path C)
+
+**อาการ:** uxui-designer run หรือ `/design-*` tool รายงาน MCP server ไม่พร้อม / tools หาย
+
+**เช็ค/แก้:**
+1. เพิ่ม server ครั้งเดียวต่อเครื่อง:
+   `claude mcp add --scope user --transport http claude-design https://api.anthropic.com/v1/design/mcp`
+2. Login: รัน `/design-login` ใน Claude Code — ต้องเห็น ✔ Connected; token หมดอายุ → login ซ้ำ
+3. Identity gate (fail closed): email account ที่ login **ต้องตรง** `claude_email` ที่ declare
+   (`sta configure identity --claude-email <email>`) — ไม่ตรง preflight block run
+4. ยังไม่ผ่าน → ใช้ Path A/B (handoff/export files) แทนได้เสมอ — Path C เป็นช่องทางเสริม ไม่ใช่ dependency
+
+### 10. Knowledge repo เดิม (มีอยู่ก่อน adopt Framework) มีโครงสร้างไฟล์ไม่ตรง canonical shape
+
+**อาการ:** `_docs/`/`knowledge/` มีโฟลเดอร์/ไฟล์ที่ไม่ตรง `layout.yaml`/`CLAUDE.md` — เช่น module tree
+ซ้อนกันสองชุด, ไฟล์ requirement เก่าที่ไม่ได้อยู่ใต้ module folder, ไฟล์แปลกใต้ `_docs/module/` โดยตรง,
+หรือโฟลเดอร์ใต้ `knowledge/<module>/` ที่ `CLAUDE.md` ไม่ได้บันทึกไว้
+
+**แก้:** binding/sync (Troubleshooting #1–4) เป็นคนละเรื่องกับสิ่งนี้ — ใช้
+[`prompt-update-knowledge.md`](prompt-update-knowledge.md) ให้ AI assistant สแกน จัดหมวด และเสนอทางแก้
+ทีละรายการ ไม่มีการลบ/ย้ายอะไรโดยไม่ถามก่อน
+
 ---
 
 ## Canonical References

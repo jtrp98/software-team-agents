@@ -4,11 +4,19 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   checkBindings,
+  CODEX_SKILL_OPENAI_YAML,
+  COMMAND_RENDERINGS,
   defaultOpenCodePermissions,
+  extractGuardrailRules,
   GIT_READONLY_BASH_RULES,
+  listCommands,
+  loadCommandGuardrails,
   parseAgentMd,
+  parseCommandMd,
   renderCodexBinding,
+  renderCodexSkill,
   renderOpenCodeBinding,
+  renderOpenCodeCommand,
   withGitBashRules,
 } from "./bindingGenerator.js";
 import { extractDeveloperInstructions } from "./codexAdapter.js";
@@ -251,6 +259,194 @@ describe("checkBindings", () => {
     fs.rmSync(path.join(root, ".claude", "agents", "qa-engineer.md"));
     result = checkBindings(root);
     expect(result.problems.join("\n")).toMatch(/orphan \.opencode\/agent\/qa-engineer\.md/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Command renderings (T-OCC2 / T-CXC2) — one shortcut source, three runtimes
+// ---------------------------------------------------------------------------
+
+const GUARDRAILS_MD = [
+  "---",
+  "description: Shared guardrails imported by every /command in this repo.",
+  "---",
+  "Shared guardrails for every slash command below (imported via `@_shared/guardrails.md`):",
+  "",
+  "1. This command is a **prompt shortcut only**.",
+  "2. Your role contract and `policies/` always win.",
+  "3. Never decide what is reserved for people.",
+  "4. Engineers never edit `plan.md`.",
+  "5. Never perform state-changing git and never write outside the resolved workspace roots.",
+].join("\n");
+
+const COMMAND_MD = [
+  "---",
+  "description: Summarize a file or topic as tight bullets, hard-capped at 30 lines.",
+  "argument-hint: [file or topic]",
+  "---",
+  "@_shared/guardrails.md",
+  "",
+  "Summarize: $ARGUMENTS",
+  "",
+  "Default output: bullets only, cap **30 lines**.",
+].join("\n");
+
+describe("parseCommandMd", () => {
+  it("reads description/argument-hint and keeps $ARGUMENTS placeholders intact", () => {
+    const parsed = parseCommandMd(COMMAND_MD);
+    expect(parsed.description).toContain("hard-capped at 30 lines");
+    expect(parsed.argumentHint).toBe("[file or topic]");
+    expect(parsed.body).toBe("@_shared/guardrails.md\n\nSummarize: $ARGUMENTS\n\nDefault output: bullets only, cap **30 lines**.");
+  });
+
+  it("fails loudly without a description", () => {
+    expect(() => parseCommandMd("---\nargument-hint: x\n---\nbody")).toThrow(/description/);
+  });
+});
+
+describe("extractGuardrailRules", () => {
+  it("keeps only the numbered rules, dropping the include-specific intro", () => {
+    const rules = extractGuardrailRules(GUARDRAILS_MD);
+    expect(rules.split("\n")[0]).toBe("1. This command is a **prompt shortcut only**.");
+    expect(rules).not.toContain("@_shared/guardrails.md");
+    expect(rules.split("\n")).toHaveLength(5);
+  });
+
+  it("fails closed when the include carries no numbered rules", () => {
+    expect(() => extractGuardrailRules("---\ndescription: x\n---\nprose only")).toThrow(/numbered rules/);
+  });
+});
+
+describe("renderOpenCodeCommand", () => {
+  const rules = extractGuardrailRules(GUARDRAILS_MD);
+
+  it("is deterministic, drops argument-hint, inlines guardrails, keeps the body verbatim", () => {
+    const a = renderOpenCodeCommand("summarize", COMMAND_MD, rules);
+    const b = renderOpenCodeCommand("summarize", COMMAND_MD, rules);
+    expect(a).toBe(b);
+    expect(a).toMatch(/^---\ndescription: "Summarize a file or topic[^"]*"\n---\n\n/);
+    expect(a).not.toContain("argument-hint");
+    expect(a).not.toContain("@_shared/");
+    expect(a).toContain("1. This command is a **prompt shortcut only**.");
+    expect(a).toContain("Summarize: $ARGUMENTS");
+    expect(a).toContain("Default output: bullets only, cap **30 lines**.");
+  });
+
+  it("keeps Thai prose lossless", () => {
+    const rendered = renderOpenCodeCommand("x", COMMAND_MD + "\nสรุปเป็นภาษาไทยเมื่อผู้ใช้ถามเป็นภาษาไทย.", rules);
+    expect(rendered).toContain("สรุปเป็นภาษาไทยเมื่อผู้ใช้ถามเป็นภาษาไทย.");
+  });
+});
+
+describe("renderCodexSkill", () => {
+  const rules = extractGuardrailRules(GUARDRAILS_MD);
+
+  it("emits name+description frontmatter, inlines guardrails, drops Claude-only syntax", () => {
+    const rendered = renderCodexSkill("summarize", COMMAND_MD, rules);
+    expect(rendered).toMatch(/^---\nname: summarize\ndescription: Summarize[^\n]*\n---\n/);
+    expect(rendered).not.toContain("argument-hint");
+    expect(rendered).not.toContain("@_shared/");
+    expect(rendered).toContain("$ARGUMENTS");
+  });
+
+  it("ships the fixed implicit-invocation-off policy beside every SKILL.md", () => {
+    expect(CODEX_SKILL_OPENAI_YAML).toBe("policy:\n  allow_implicit_invocation: false\n");
+  });
+});
+
+describe("COMMAND_RENDERINGS", () => {
+  it("covers both mirror runtimes with their documented layouts", () => {
+    expect(COMMAND_RENDERINGS.map((s) => s.dir)).toEqual([".opencode/commands", ".agents/skills"]);
+    expect(COMMAND_RENDERINGS[0]!.outputs("summarize")).toEqual(["summarize.md"]);
+    expect(COMMAND_RENDERINGS[1]!.outputs("summarize")).toEqual(["summarize/SKILL.md", "summarize/agents/openai.yaml"]);
+  });
+
+  it("renders every declared output for a sample command", () => {
+    const rules = extractGuardrailRules(GUARDRAILS_MD);
+    for (const spec of COMMAND_RENDERINGS) {
+      const rendered = spec.render("checklist", COMMAND_MD, rules);
+      expect([...rendered.keys()].sort()).toEqual([...spec.outputs("checklist")].sort());
+      for (const content of rendered.values()) {
+        expect(content).not.toContain("argument-hint");
+        expect(content).not.toContain("@_shared/");
+      }
+    }
+  });
+});
+
+describe("checkBindings — command renderings (T-OCC3/T-CXC3)", () => {
+  function writeAgentPair(role: string): void {
+    fs.writeFileSync(path.join(root, ".claude", "agents", `${role}.md`), SAMPLE_MD.replace("qa-engineer", role));
+    fs.writeFileSync(path.join(root, ".codex", "agents", `${role}.toml`), renderCodexBinding(SAMPLE_MD.replace("qa-engineer", role)));
+    fs.mkdirSync(path.join(root, ".opencode", "agent"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".opencode", "agent", `${role}.md`),
+      renderOpenCodeBinding(SAMPLE_MD.replace("qa-engineer", role), defaultOpenCodePermissions()),
+    );
+  }
+  function writeCommands(names: string[]): void {
+    fs.mkdirSync(path.join(root, ".claude", "commands", "_shared"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".claude", "commands", "_shared", "guardrails.md"), GUARDRAILS_MD);
+    for (const n of names) fs.writeFileSync(path.join(root, ".claude", "commands", `${n}.md`), COMMAND_MD);
+  }
+  function writeRendered(): void {
+    const rules = extractGuardrailRules(fs.readFileSync(path.join(root, ".claude", "commands", "_shared", "guardrails.md"), "utf8"));
+    for (const spec of COMMAND_RENDERINGS) {
+      for (const name of listCommands(path.join(root, ".claude", "commands"))) {
+        for (const [rel, bytes] of spec.render(name, fs.readFileSync(path.join(root, ".claude", "commands", `${name}.md`), "utf8"), rules)) {
+          const dest = path.join(root, spec.dir, ...rel.split("/"));
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          fs.writeFileSync(dest, bytes);
+        }
+      }
+    }
+  }
+
+  it("passes when both families byte-match their sources", () => {
+    writeAgentPair("qa-engineer");
+    writeCommands(["summarize"]);
+    writeRendered();
+    expect(checkBindings(root)).toEqual({ ok: true, problems: [] });
+  });
+
+  it("catches drift, a missing twin, and an orphan in each family", () => {
+    writeAgentPair("qa-engineer");
+    writeCommands(["summarize", "outline"]);
+    writeRendered();
+
+    // Drift: source moves, mirrors stay.
+    fs.writeFileSync(path.join(root, ".claude", "commands", "summarize.md"), COMMAND_MD.replace("30 lines", "25 lines"));
+    let result = checkBindings(root);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join("\n")).toMatch(/\.opencode\/commands\/summarize\.md does not match/);
+    expect(result.problems.join("\n")).toMatch(/\.agents\/skills\/summarize\/SKILL\.md does not match/);
+
+    // Missing twin (one file of the skills pair).
+    fs.rmSync(path.join(root, ".agents", "skills", "summarize", "agents", "openai.yaml"));
+    result = checkBindings(root);
+    expect(result.problems.join("\n")).toMatch(/missing \.agents\/skills\/summarize\/agents\/openai\.yaml/);
+
+    // Orphan: a rendering whose source is gone (another command stays behind,
+    // so the no-sources-at-all guard does not short-circuit first).
+    fs.rmSync(path.join(root, ".claude", "commands", "summarize.md"));
+    result = checkBindings(root);
+    expect(result.problems.join("\n")).toMatch(/orphan \.opencode\/commands\/summarize\.md/);
+    expect(result.problems.join("\n")).toMatch(/orphan \.agents\/skills\/summarize\//);
+  });
+
+  it("skips command verification entirely when the workspace carries no commands payload", () => {
+    writeAgentPair("qa-engineer");
+    expect(checkBindings(root)).toEqual({ ok: true, problems: [] });
+  });
+
+  it("fails loud when _shared/guardrails.md is broken instead of rendering without guardrails", () => {
+    writeAgentPair("qa-engineer");
+    fs.mkdirSync(path.join(root, ".claude", "commands", "_shared"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".claude", "commands", "summarize.md"), COMMAND_MD);
+    fs.writeFileSync(path.join(root, ".claude", "commands", "_shared", "guardrails.md"), "no fence at all");
+    const result = checkBindings(root);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join("\n")).toMatch(/cannot load _shared\/guardrails\.md/);
   });
 });
 

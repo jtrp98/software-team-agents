@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { sha256Of } from "../packaging/templateManifest.js";
-import { renderCodexBinding, renderOpenCodeBinding, defaultOpenCodePermissions } from "../runtime/bindingGenerator.js";
+import { renderCodexBinding, renderCodexSkill, renderOpenCodeBinding, defaultOpenCodePermissions, extractGuardrailRules } from "../runtime/bindingGenerator.js";
 import {
   blockingConflicts,
   planSync,
@@ -58,6 +58,64 @@ const V1_FILES: FixtureFile[] = [
   { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer", "builds backend") },
   { relPath: ".claude/settings.json", content: '{"hooks":{"PreToolUse":[{"a":1}]}}' },
 ];
+
+const GUARDRAILS: FixtureFile = {
+  relPath: ".claude/commands/_shared/guardrails.md",
+  content:
+    "---\ndescription: shared guardrails\n---\nShared guardrails for every slash command below:\n\n1. Prompt shortcut only.\n2. Contracts and policies win.\n",
+};
+const COMMAND_MD = (name: string): string =>
+  `---\ndescription: Shortcut ${name}.\nargument-hint: [topic]\n---\n@_shared/guardrails.md\n\nRun ${name}: $ARGUMENTS\n`;
+const COMMAND_FILES: FixtureFile[] = [
+  GUARDRAILS,
+  { relPath: ".claude/commands/summarize.md", content: COMMAND_MD("summarize") },
+];
+
+describe("command renderings at sync (T-OCC2..3 / T-CXC2..3)", () => {
+  it("sync generates both command mirror families from the shipped sources", () => {
+    const target = gitTarget();
+    const templatesDir = makeTemplatesDir("1.0.0", [...V1_FILES, ...COMMAND_FILES]);
+
+    runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-01T00:00:00Z" });
+
+    const source = fs.readFileSync(path.join(target, ".claude", "commands", "summarize.md"), "utf8");
+    const rules = extractGuardrailRules(fs.readFileSync(path.join(target, ".claude", "commands", "_shared", "guardrails.md"), "utf8"));
+    expect(fs.readFileSync(path.join(target, ".opencode", "commands", "summarize.md"), "utf8")).toContain("Run summarize: $ARGUMENTS");
+    expect(fs.readFileSync(path.join(target, ".agents", "skills", "summarize", "SKILL.md"), "utf8")).toBe(
+      renderCodexSkill("summarize", source, rules),
+    );
+    expect(fs.readFileSync(path.join(target, ".agents", "skills", "summarize", "agents", "openai.yaml"), "utf8")).toBe(
+      "policy:\n  allow_implicit_invocation: false\n",
+    );
+    const manifest = readTargetManifest(target);
+    expect(manifest.files.map((f) => f.path)).toEqual(expect.arrayContaining([".opencode/commands/summarize.md", ".agents/skills/summarize/SKILL.md"]));
+  });
+
+  it("removing a command from the payload removes its pristine mirrors and conflicts on edited ones", () => {
+    const target = gitTarget();
+    const withCommand = makeTemplatesDir("1.0.0", [...V1_FILES, ...COMMAND_FILES]);
+    runTargetSync({ targetRoot: target, templatesDir: withCommand, now: "2026-01-01T00:00:00Z" });
+
+    const withoutCommand = makeTemplatesDir("1.1.0", [...V1_FILES, GUARDRAILS]);
+    const result = runTargetSync({ targetRoot: target, templatesDir: withoutCommand, now: "2026-01-02T00:00:00Z" });
+    expect(result.performed.filter((p) => p.action === "remove-stale").map((p) => p.path)).toEqual(
+      expect.arrayContaining([".opencode/commands/summarize.md", ".agents/skills/summarize/SKILL.md", ".agents/skills/summarize/agents/openai.yaml"]),
+    );
+    expect(fs.existsSync(path.join(target, ".opencode", "commands", "summarize.md"))).toBe(false);
+  });
+
+  it("an edited mirror of a removed command stops the run instead of silently deleting work", () => {
+    const target = gitTarget();
+    const withCommand = makeTemplatesDir("1.0.0", [...V1_FILES, ...COMMAND_FILES]);
+    runTargetSync({ targetRoot: target, templatesDir: withCommand, now: "2026-01-01T00:00:00Z" });
+
+    const mirrorPath = path.join(target, ".opencode", "commands", "summarize.md");
+    fs.writeFileSync(mirrorPath, "---\ndescription: hand-edited\n---\nlocal work\n");
+    const withoutCommand = makeTemplatesDir("1.1.0", [...V1_FILES, GUARDRAILS]);
+
+    expect(() => runTargetSync({ targetRoot: target, templatesDir: withoutCommand, now: "2026-01-02T00:00:00Z" })).toThrow(TargetSyncConflictError);
+  });
+});
 
 describe("safe sync engine", () => {
   it("first sync adds every managed file and generates codex renderings", () => {

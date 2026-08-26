@@ -7,6 +7,7 @@ import { classifyTask } from "../classification/taskClassifier.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";
 import { TaskNotFoundError } from "../store/taskStore.js";
 import { DependencyNotMetError, TaskRegistry, UnknownDependencyError } from "./taskRegistry.js";
+import { ApprovalType } from "../gates/approval.js";
 
 const trivial = () => classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
 const incremental = () => classifyTask({ isIncrementalFeature: true, touchesBackend: true });
@@ -65,6 +66,22 @@ describe("TaskRegistry", () => {
 
     await first.step(() => pass);
     expect(reg.readyTasks().map((t) => t.taskId)).toEqual(["T-2"]);
+  });
+
+  it("a BLOCKED dependency keeps the dependent task out of readyTasks and open — failed upstream is never satisfied", async () => {
+    const reg = registry();
+    // A task reaches its schema-confirmation human gate; rejecting the gate parks it
+    // in BLOCKED (the same settled state a spent retry budget produces).
+    const first = reg.create({ taskId: "T-1", classification: incremental() });
+    reg.create({ taskId: "T-2", classification: trivial(), dependsOn: ["T-1"] });
+
+    await first.step(() => pass); // system-analyst finishes; leaving DESIGN is gated
+    expect(first.status().kind).toBe("WAITING_FOR_HUMAN");
+    first.decideApproval(ApprovalType.SCHEMA_CONFIRMATION, false, { by: "test" });
+    expect(first.status().kind).toBe("BLOCKED");
+
+    expect(reg.readyTasks().map((t) => t.taskId)).toEqual([]);
+    expect(() => reg.open("T-2")).toThrow(DependencyNotMetError);
   });
 
   it("still resumes a dependency-blocked task for inspection — looking is not running", () => {

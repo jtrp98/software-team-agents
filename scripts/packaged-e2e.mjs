@@ -137,6 +137,16 @@ try {
     `manifest=${manifest.framework_version} package=${pkg.version}`,
   );
 
+  // --- 3b · root prompt files ship and are readable (T-V2R-14) ---------------
+  for (const [file, marker] of [
+    ["prompt-setup.md", "prompt-setup.md"],
+    ["prompt-update-knowledge.md", "# prompt-update-knowledge.md"],
+  ]) {
+    const p = path.join(pkgDir, file);
+    const shipped = fs.existsSync(p) && fs.readFileSync(p, "utf8").includes(marker);
+    expectCond(`shipped payload contains readable ${file}`, shipped, p);
+  }
+
   // --- 4 · missing Knowledge binding fails cleanly before configuration ------
   const missingConfigEnv = { ...baseEnv, AGENTCLAUDE_INSTALLATION_CONFIG: path.join(stage, "does-not-exist.yaml") };
   {

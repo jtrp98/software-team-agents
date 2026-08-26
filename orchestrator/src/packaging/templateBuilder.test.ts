@@ -15,6 +15,8 @@ function fixtureRepo(): string {
   const files: Record<string, string> = {
     "CLAUDE.md": "# rules\n",
     ".claude/agents/business-analyst.md": "---\nname: business-analyst\n---\n",
+    ".claude/commands/critic.md": "---\ndescription: critique\n---\n@_shared/guardrails.md\n",
+    ".claude/commands/_shared/guardrails.md": "# shared guardrails include\n",
     ".claude/tests/run.js": "// self-test, never templated\n",
     "contracts/business-analyst.yaml": "write: []\n",
     "layout.yaml": "version: 1\n",
@@ -44,6 +46,9 @@ describe("buildTemplates", () => {
     expect(fs.readFileSync(path.join(outDir, "CLAUDE.md"), "utf8")).toBe("# rules\n");
     expect(fs.readFileSync(path.join(outDir, ".claude/agents/business-analyst.md"), "utf8")).toContain(
       "business-analyst",
+    );
+    expect(fs.readFileSync(path.join(outDir, ".claude/commands/_shared/guardrails.md"), "utf8")).toContain(
+      "guardrails",
     );
     expect(manifest.framework_version).toBe("0.1.0");
     expect(checkTemplateManifest(manifest)).toEqual([]);
@@ -102,6 +107,7 @@ describe("buildTemplates against the real repo", () => {
     expect(paths).toContain("CLAUDE.md");
     expect(paths).toContain("layout.yaml");
     expect(paths.some((p) => p.startsWith(".claude/agents/"))).toBe(true);
+    expect(paths.some((p) => p.startsWith(".claude/commands/"))).toBe(true);
     expect(paths.some((p) => p.startsWith("contracts/"))).toBe(true);
     expect(paths.some((p) => p.startsWith("orchestrator/"))).toBe(false);
     expect(paths.some((p) => p.startsWith(".claude/tests/"))).toBe(false);

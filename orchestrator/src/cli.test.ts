@@ -37,6 +37,7 @@ describe("parseArgs", () => {
       checkRepos: false,
       checkEnvironments: false,
       checkDocStructure: false,
+      checkPlan: false,
       checkKnowledge: false,
       checkInstallation: false,
       checkRoles: false,
@@ -1033,5 +1034,58 @@ describe("runCli --check-knowledge (T61)", () => {
   it("needs neither --task-id nor --module, and is listed in the usage text", () => {
     expect(parseArgs(["--check-knowledge"], "/repo").checkKnowledge).toBe(true);
     expect(USAGE).toContain("--check-knowledge");
+  });
+});
+
+describe("runCli --check-plan (T-PM1.3)", () => {
+  const PLAN_OK = [
+    "# Plan",
+    "",
+    "## Phase 1: Orders",
+    "",
+    "| Task | Status | Owner | Depends on |",
+    "|---|---|---|---|",
+    "| BE-001 (DES-001) — order CRUD | pending | backend-engineer | — |",
+    "",
+    "## Sequencing Notes",
+    "—",
+    "",
+    "## Unresolved Open Questions",
+    "—",
+    "",
+    "## Change Log",
+    "2026-08-26: created.",
+    "",
+  ].join("\n");
+
+  it("passes a well-formed plan", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-cp-"));
+    try {
+      fs.mkdirSync(path.join(dir, "_docs", "module", "sales"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "_docs", "module", "sales", "plan.md"), PLAN_OK, "utf8");
+      expect(await runCli(["--check-plan"], dir)).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("exits non-zero when a dependency names a task that does not exist", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-cp-"));
+    try {
+      fs.mkdirSync(path.join(dir, "_docs", "module", "sales"), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "_docs", "module", "sales", "plan.md"),
+        PLAN_OK.replace("| — |", "| BE-999 |"),
+        "utf8",
+      );
+      expect(await runCli(["--check-plan"], dir)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("scopes to --module and needs neither --task-id nor a state database", async () => {
+    expect(parseArgs(["--check-plan", "--module", "sales"], "/repo").checkPlan).toBe(true);
+    expect(USAGE).toContain("--check-plan");
   });
 });

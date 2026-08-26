@@ -271,6 +271,7 @@ Common breakages, minimal fixes — canonical identities never change implicitly
 | Stale sync (`OUTDATED`) | plain `software-team-agents sync` |
 | Remote mismatch vs `targets.yaml` | report both URLs, change nothing until the user decides which side is wrong |
 | Config half-lost (manifest without config) | re-run `init` in that workspace |
+| Knowledge repo's own doc tree doesn't match canonical shape (legacy folders, stray files, unrecognized `knowledge/**` subtrees) | binding/sync is a separate concern from this — hand off to `prompt-update-knowledge.md` |
 
 After any repair: `status` again and confirm the specific symptom is gone.
 

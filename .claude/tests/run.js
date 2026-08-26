@@ -1069,8 +1069,226 @@ withTempProject((tmp) => {
 });
 
 // ---------------------------------------------------------------------------
-// report
+// 11. .claude/commands — prompt shortcuts stay frontmattered, guarded, and few
 // ---------------------------------------------------------------------------
+
+// Slash commands are prompts, not code, so nothing here executes one. The drift
+// they risk is silent too: a command losing its guardrails import, a file that
+// tells the model to run state-changing git, or someone growing the set without
+// updating the mapping in planning/v2/claude-commands-TASKS.md §1.1. These cases
+// read the real repo's .claude/commands/ because the shipped content IS the fixture.
+
+section('11. .claude/commands — every command keeps its frontmatter, guardrails import, and the agreed set');
+
+const COMMANDS_DIR = path.join(ROOT, '.claude', 'commands');
+const GUARDRAILS_IMPORT = '@_shared/guardrails.md';
+
+if (!fs.existsSync(COMMANDS_DIR)) {
+  check('.claude/commands exists', 1, 0);
+} else {
+  const dirents = fs.readdirSync(COMMANDS_DIR, { withFileTypes: true });
+  const commandFiles = dirents.filter((e) => e.isFile() && e.name.endsWith('.md')).map((e) => e.name).sort();
+  const subdirs = dirents.filter((e) => e.isDirectory()).map((e) => e.name);
+
+  // Count is pinned to planning/v2/claude-commands-TASKS.md §1.1 (50 catalog − 17 personal/marketing
+  // − rewrite [amend-don't-regenerate policy] − repurpose = 31). Change the number ONLY together
+  // with that mapping document, and record why in the same diff.
+  check(`command count is exactly 31 per TASKS \u00a71.1 (got ${commandFiles.length})`, commandFiles.length === 31 ? 0 : 1, 0);
+
+  // Flat namespace: the only allowed subdirectory is _shared/ (imported fragments, not commands).
+  check(
+    `only _shared/ sits below commands/ (got ${subdirs.join(', ') || 'nothing'})`,
+    subdirs.every((d) => d === '_shared') ? 0 : 1,
+    0,
+  );
+
+  const FORBIDDEN = [
+    [/\bgit\s+(add|commit|push|amend|rebase|merge|reset|revert)\b/i, 'a state-changing git command'],
+    [/\.workflow\//, 'a reference writing into .workflow/ runtime state'],
+    [/knowledge\/_roles\//, 'a reference writing into knowledge/_roles/'],
+  ];
+
+  const allMd = [...commandFiles, ...fs.readdirSync(path.join(COMMANDS_DIR, '_shared')).filter((f) => f.endsWith('.md')).map((f) => path.join('_shared', f))];
+
+  for (const rel of allMd.map((r) => r.split(path.sep).join('/'))) {
+    const body = fs.readFileSync(path.join(COMMANDS_DIR, ...rel.split('/')), 'utf8');
+    const isSharedInclude = rel.startsWith('_shared/');
+    const label = `commands/${rel}`;
+
+    if (!body.startsWith('---')) {
+      check(`${label}: has YAML frontmatter`, 1, 0);
+      continue;
+    }
+    const end = body.indexOf('\n---', 3);
+    const frontmatter = end === -1 ? '' : body.slice(3, end);
+    const content = end === -1 ? body : body.slice(end + 4);
+
+    check(`${label}: frontmatter declares description`, /^\s*description:\s*\S/m.test(frontmatter) ? 0 : 1, 0);
+    if (!isSharedInclude) {
+      check(`${label}: frontmatter declares argument-hint`, /^\s*argument-hint:/m.test(frontmatter) ? 0 : 1, 0);
+      check(`${label}: imports ${GUARDRAILS_IMPORT}`, content.includes(GUARDRAILS_IMPORT) ? 0 : 1, 0);
+    } else {
+      // user-invocable:false on an include breaks the @-import from every command (spike T-CC1-d).
+      check(`${label}: hides behind no user-invocable flag`, /user-invocable\s*:\s*false/.test(frontmatter) ? 1 : 0, 0);
+    }
+
+    for (const [pattern, what] of FORBIDDEN) {
+      check(`${label}: never instructs ${what}`, pattern.test(content) ? 1 : 0, 0);
+    }
+  }
+}
+
+
+
+// ---------------------------------------------------------------------------
+// 11b/11c. rendered command mirrors — .opencode/commands + .agents/skills
+// ---------------------------------------------------------------------------
+
+// The two mirror families are GENERATED from .claude/commands (byte-for-byte
+// verification is `sta --check-bindings`'s job, which needs compiled dist).
+// What this harness pins here is the content contract that survives any
+// rendering: right count, no Claude-only syntax left behind, guardrails
+// actually inlined, and no command instructing forbidden actions.
+
+section('11b. .opencode/commands — OpenCode rendering stays prompt-pure');
+
+const OC_COMMANDS_DIR = path.join(ROOT, '.opencode', 'commands');
+if (!fs.existsSync(OC_COMMANDS_DIR)) {
+  check('.opencode/commands exists', 1, 0);
+} else {
+  const ocFiles = fs.readdirSync(OC_COMMANDS_DIR, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith('.md')).map((e) => e.name).sort();
+  check(`opencode commands count is exactly 31 mirroring TASKS \u00a71.1 (got ${ocFiles.length})`, ocFiles.length === 31 ? 0 : 1, 0);
+
+  for (const name of ocFiles) {
+    const label = `opencode/commands/${name}`;
+    const body = fs.readFileSync(path.join(OC_COMMANDS_DIR, name), 'utf8');
+    if (!body.startsWith('---')) {
+      check(`${label}: has YAML frontmatter`, 1, 0);
+      continue;
+    }
+    const end = body.indexOf('\n---', 3);
+    const frontmatter = end === -1 ? '' : body.slice(3, end);
+    const content = end === -1 ? '' : body.slice(end + 4);
+
+    check(`${label}: frontmatter declares description`, /^\s*description:\s*\S/m.test(frontmatter) ? 0 : 1, 0);
+    // Claude-only fields/syntax must not survive rendering.
+    check(`${label}: drops argument-hint`, /argument-hint/.test(body) ? 1 : 0, 0);
+    check(`${label}: has no @_shared import left`, /@_shared\//.test(body) ? 1 : 0, 0);
+    // Guardrails are inlined: the numbered rules must be present.
+    check(`${label}: guardrails rule 1 inlined`, content.includes('1. This command is a **prompt shortcut only**.') ? 0 : 1, 0);
+  }
+
+  const FORBIDDEN = [
+    [/\bgit\s+(add|commit|push|amend|rebase|merge|reset|revert)\b/i, 'a state-changing git command'],
+    [/\.workflow\//, 'a reference writing into .workflow/ runtime state'],
+    [/knowledge\/_roles\//, 'a reference writing into knowledge/_roles/'],
+  ];
+  for (const name of ocFiles) {
+    const content = fs.readFileSync(path.join(OC_COMMANDS_DIR, name), 'utf8');
+    for (const [pattern, what] of FORBIDDEN) {
+      check(`opencode/commands/${name}: never instructs ${what}`, pattern.test(content) ? 1 : 0, 0);
+    }
+  }
+}
+
+section('11c. .agents/skills — Codex Agent Skills stay human-invoked');
+
+const SKILLS_DIR = path.join(ROOT, '.agents', 'skills');
+if (!fs.existsSync(SKILLS_DIR)) {
+  check('.agents/skills exists', 1, 0);
+} else {
+  const skillDirs = fs.readdirSync(SKILLS_DIR, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+  check(`skill count is exactly 31 mirroring TASKS \u00a71.1 (got ${skillDirs.length})`, skillDirs.length === 31 ? 0 : 1, 0);
+
+  for (const dir of skillDirs) {
+    const skillPath = path.join(SKILLS_DIR, dir, 'SKILL.md');
+    if (!fs.existsSync(skillPath)) {
+      check(`skills/${dir}/SKILL.md exists`, 1, 0);
+      continue;
+    }
+    const body = fs.readFileSync(skillPath, 'utf8');
+    const end = body.startsWith('---') ? body.indexOf('\n---', 3) : -1;
+    const frontmatter = end === -1 ? '' : body.slice(3, end);
+    const content = end === -1 ? '' : body.slice(end + 4);
+
+    check(`skills/${dir}/SKILL.md: frontmatter names the skill`, new RegExp(`^\\s*name:\\s*${dir}\\s*$`, 'm').test(frontmatter) ? 0 : 1, 0);
+    check(`skills/${dir}/SKILL.md: frontmatter declares description`, /^\s*description:\s*\S/m.test(frontmatter) ? 0 : 1, 0);
+    check(`skills/${dir}/SKILL.md: drops argument-hint`, /argument-hint/.test(body) ? 1 : 0, 0);
+    check(`skills/${dir}/SKILL.md: has no @_shared import left`, /@_shared\//.test(body) ? 1 : 0, 0);
+    check(`skills/${dir}/SKILL.md: guardrails rule 1 inlined`, content.includes('1. This command is a **prompt shortcut only**.') ? 0 : 1, 0);
+
+    const policyPath = path.join(SKILLS_DIR, dir, 'agents', 'openai.yaml');
+    const policy = fs.existsSync(policyPath) ? fs.readFileSync(policyPath, 'utf8') : '';
+    check(
+      `skills/${dir}/agents/openai.yaml keeps implicit invocation off`,
+      policy.includes('allow_implicit_invocation') && policy.includes('false') && !policy.match(/allow_implicit_invocation\s*:\s*true/) ? 0 : 1,
+      0,
+    );
+  }
+
+  const FORBIDDEN_SKILLS = [
+    [/\bgit\s+(add|commit|push|amend|rebase|merge|reset|revert)\b/i, 'a state-changing git command'],
+    [/\.workflow\//, 'a reference writing into .workflow/ runtime state'],
+    [/knowledge\/_roles\//, 'a reference writing into knowledge/_roles/'],
+  ];
+  for (const dir of skillDirs) {
+    const skillPath = path.join(SKILLS_DIR, dir, 'SKILL.md');
+    if (!fs.existsSync(skillPath)) continue;
+    const content = fs.readFileSync(skillPath, 'utf8');
+    for (const [pattern, what] of FORBIDDEN_SKILLS) {
+      check(`skills/${dir}/SKILL.md: never instructs ${what}`, pattern.test(content) ? 1 : 0, 0);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 12. pm-improvements — the PM prompt stays a work-graph author, nothing more
+// ---------------------------------------------------------------------------
+
+section('12. pm-improvements — PM prompt/contract boundary regressions (T-PM0.2..T-PM9.2)');
+
+// Each case pins one sentence of the authority model in .claude/agents/project-manager.md.
+// The renderings (.codex/.opencode) are byte-verified against this file by `sta --check-bindings`,
+// so asserting the source here covers every runtime. Delete a rule from the prompt and the
+// corresponding case fails here rather than eroding silently.
+
+const PM_PROMPT = fs.readFileSync(path.join(ROOT, '.claude', 'agents', 'project-manager.md'), 'utf8');
+const PM_CONTRACT = fs.readFileSync(path.join(ROOT, 'contracts', 'project-manager.yaml'), 'utf8');
+
+check('pm: decomposition is one independently verifiable unit, batched by shared boundary (T-PM3.1)',
+  /one task = one independently verifiable unit of work/.test(PM_PROMPT) && /Batch when the boundary is shared/.test(PM_PROMPT) ? 0 : 1, 0);
+// The old imperative sentences are what this pins gone; the words "per endpoint" may
+// still appear inside the negation that replaced them ("nothing mandates one task per endpoint…").
+check('pm: no mandatory per-endpoint/per-component/per-model split left behind',
+  !/tasks — one task per endpoint/.test(PM_PROMPT) && !/that's 6 task rows/.test(PM_PROMPT) && !/one task per Prisma model\/migration/.test(PM_PROMPT) ? 0 : 1, 0);
+check('pm: split rule names dependency/owner/security/migration boundaries (T-PM3.2)',
+  /Split when a boundary differs[\s\S]{0,400}security sensitivity[\s\S]{0,200}deploy\/migration boundary/.test(PM_PROMPT) ? 0 : 1, 0);
+check('pm: scaffolding fact comes from status.md Scaffold line, not Target filesystem inspection (T-PM6.1)',
+  /## Scaffold` line/.test(PM_PROMPT) && !/\(does `package\.json`/.test(PM_PROMPT) && /Don't look for `package\.json`/.test(PM_PROMPT) ? 0 : 1, 0);
+check('pm: Graphify owns code relationships — no inferring source files or impact analysis (T-PM2.2)',
+  /Graphify.*owns source-code relationships/.test(PM_PROMPT) && /Never infer source files/.test(PM_PROMPT) ? 0 : 1, 0);
+check('pm: orchestrator owns runtime readiness — PM never marks a task ready (T-PM5.1)',
+  /orchestrator owns runtime readiness/.test(PM_PROMPT) && /you never mark a task ready/.test(PM_PROMPT) ? 0 : 1, 0);
+check('pm: Plan Mode is an optional engineer-side preflight, never part of PM flow (T-PM9.1)',
+  /Plan Mode is an engineer-side preflight/.test(PM_PROMPT) && /never part of your flow/.test(PM_PROMPT) ? 0 : 1, 0);
+check('pm: re-plan only on meaningful triggers, not progress noise (T-PM9.2)',
+  /Re-plan on meaningful triggers/.test(PM_PROMPT) && /is not a trigger/.test(PM_PROMPT) ? 0 : 1, 0);
+check('pm: Depends on is machine-read and validated by sta --check-plan (T-PM1.1/T-PM1.3)',
+  /`Depends on` is machine-read/.test(PM_PROMPT) && /--check-plan/.test(PM_PROMPT) ? 0 : 1, 0);
+check('pm: waves are derived downstream; PM writes no wave numbers (T-PM1.2)',
+  /Execution waves are derived downstream/.test(PM_PROMPT) ? 0 : 1, 0);
+check('pm: acceptance criteria are references into design.md, not copied prose (T-PM4.2)',
+  /references, not copies/.test(PM_PROMPT) ? 0 : 1, 0);
+check('pm: prompt does not assign status regeneration to PM (no Bash tool exists here) (T-PM7.1)',
+  !/regenerating it with `node \.claude\/scripts\/generate-status\.js`/.test(PM_PROMPT) && /not the one who runs that generator/.test(PM_PROMPT) ? 0 : 1, 0);
+check('pm: contract write list owns plan.md only — generated status files are not writable by PM (T-PM7.2)',
+  /write:\s*\["_docs\/module\/\*\/plan\.md"\]/.test(PM_CONTRACT) && !/_docs\/status[^"']*\]\s*$/.test(PM_CONTRACT.match(/write:.*/)?.[0] ?? '') ? 0 : 1, 0);
+check('pm: blocking ambiguity escalates upstream (user question or back to system-analyst), never guessed (T-PM10.2)',
+  /ask the user directly/.test(PM_PROMPT) && /stop and send it back to `system-analyst`/.test(PM_PROMPT) ? 0 : 1, 0);
+check('pm: security-sensitive uncertainty splits rather than hides inside a batch (T-PM10.2)',
+  /a sensitive endpoint hidden inside a CRUD batch costs a missed gate/.test(PM_PROMPT) ? 0 : 1, 0);
+
+
 
 console.log(`\n${'-'.repeat(70)}`);
 if (failures.length === 0) {

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readTemplateManifest, sha256Of, type TemplateFileEntry, type TemplateManifest } from "../packaging/templateManifest.js";
-import { BINDING_RENDERINGS } from "../runtime/bindingGenerator.js";
+import { BINDING_RENDERINGS, COMMAND_RENDERINGS, loadCommandGuardrails, listCommands } from "../runtime/bindingGenerator.js";
 import { parseVersion } from "./version.js";
 import {
   CLAUDE_MD_PATH,
@@ -47,6 +47,8 @@ import { BA_LANE_AGENTS, type RoleName } from "./roleWorkspace.js";
 
 /** The generated-from-.claude rendering targets, with their sync-log wording. Declared in bindingGenerator (`BINDING_RENDERINGS`) so `checkBindings` verifies exactly what this engine generates. */
 const DERIVED_RENDERINGS = BINDING_RENDERINGS.map((spec) => ({ ...spec, note: "generated from .claude/agents" }));
+/** Same for the prompt-shortcut renderings (`.opencode/commands`, `.agents/skills`), generated from `.claude/commands`. */
+const DERIVED_COMMAND_RENDERINGS = COMMAND_RENDERINGS.map((spec) => ({ ...spec, note: "generated from .claude/commands" }));
 
 export type SyncAction = "add" | "update" | "restore" | "remove-stale" | "unchanged" | "override";
 
@@ -154,7 +156,7 @@ function planStaleFiles(
   const planned: PlannedFile[] = [];
   for (const [relPath, tracked] of oldFiles) {
     if (newPathSet.has(relPath)) continue;
-    if (relPath.startsWith(".codex/") || relPath.startsWith(".opencode/agent/")) continue; // derived renderings follow their agent sources automatically
+    if (relPath.startsWith(".codex/") || relPath.startsWith(".opencode/agent/") || relPath.startsWith(".opencode/commands/") || relPath.startsWith(".agents/skills/")) continue; // derived renderings follow their sources automatically
     if (derivedContent?.has(relPath)) continue; // T-WG7 — regenerated below from the live binding, never stale
     if (overrides.has(relPath)) {
       planned.push({ entry: { action: "override", path: relPath, note: "dropped by the Framework, kept because the project claimed it" } });
@@ -423,6 +425,34 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
       }
     }
   }
+  // Command renderings follow the same rule, one level removed: a generated
+  // file is stale when its command's `.md` source no longer ships. The name
+  // is the first segment under the family dir (`.agents/skills/<name>/...`
+  // nests, `.opencode/commands/<name>.md` doesn't).
+  const survivingCommands = new Set(
+    templateManifest.files
+      .filter((f) => f.path.startsWith(".claude/commands/") && f.path.endsWith(".md") && !f.path.slice(".claude/commands/".length).includes("/"))
+      .map((f) => path.basename(f.path, ".md")),
+  );
+  for (const spec of DERIVED_COMMAND_RENDERINGS) {
+    for (const [relPath, tracked] of oldFiles) {
+      if (!relPath.startsWith(`${spec.dir}/`)) continue;
+      const underDir = relPath.slice(spec.dir.length + 1);
+      const command = underDir.includes("/") ? underDir.split("/")[0]! : path.basename(underDir);
+      if (!command || survivingCommands.has(command)) continue;
+      const abs = path.join(options.targetRoot, relPath);
+      if (!fs.existsSync(abs)) continue;
+      if (hashFile(abs) === tracked.sha256) {
+        plan.entries.push({ action: "remove-stale", path: relPath, note: "generated rendering of a removed command" });
+      } else {
+        plan.conflicts.push({
+          path: relPath,
+          kind: "stale-modified",
+          detail: "this generated file's command source was removed, but the local copy has been edited",
+        });
+      }
+    }
+  }
   // Only tracked-but-edited (and stale-modified) files block the run; a
   // pre-existing foreign file never does — it is skipped and reported below.
   if (blockingConflicts(plan).length > 0 && !options.force) throw new TargetSyncConflictError(plan);
@@ -539,6 +569,54 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
         }
       }
       managedEntries.push(entry);
+    }
+  }
+
+  // Command renderings: regenerate from the just-synced `.claude/commands`
+  // sources with the same mechanics as the agent renderings above — generated
+  // bytes carry no independent authorship, a foreign pre-existing file stays
+  // untouched and unclaimed. Guardrails come from the synced `_shared/` file,
+  // so what lands here is exactly what `--check-bindings` will re-derive.
+  const commandNames = listCommands(path.join(options.targetRoot, ".claude", "commands"));
+  if (commandNames.length > 0) {
+    let guardrailsRules: string;
+    try {
+      guardrailsRules = loadCommandGuardrails(options.targetRoot);
+    } catch {
+      guardrailsRules = ""; // a broken include fails loudly in checkBindings; sync still lands the payload
+    }
+    if (guardrailsRules !== "") {
+      for (const spec of DERIVED_COMMAND_RENDERINGS) {
+        for (const name of commandNames) {
+          let rendered: Map<string, string>;
+          try {
+            rendered = spec.render(name, fs.readFileSync(path.join(options.targetRoot, ".claude", "commands", `${name}.md`), "utf8"), guardrailsRules);
+          } catch {
+            continue; // unparseable source — checkBindings reports it, sync doesn't invent content
+          }
+          for (const [rel, bytes] of rendered) {
+            const relPath = path.posix.join(spec.dir, rel);
+            const dest = path.join(options.targetRoot, ...relPath.split("/"));
+            const entrySha = sha256Of(bytes);
+            const entry: TemplateFileEntry = { path: relPath, sha256: entrySha, size_bytes: Buffer.byteLength(bytes) };
+            if (!fs.existsSync(dest)) {
+              fs.mkdirSync(path.dirname(dest), { recursive: true });
+              fs.writeFileSync(dest, bytes, "utf8");
+              performed.push({ action: "add", path: relPath, note: spec.note });
+            } else if (hashFile(dest) !== entrySha) {
+              const oursBefore = manifest?.files.some((f) => f.path === relPath);
+              if (oursBefore || options.force) {
+                backup(relPath);
+                fs.writeFileSync(dest, bytes, "utf8");
+                performed.push({ action: "update", path: relPath, note: `regenerated (${spec.note})` });
+              } else {
+                continue; // leave the stranger's file alone, don't claim it
+              }
+            }
+            managedEntries.push(entry);
+          }
+        }
+      }
     }
   }
 

@@ -45,10 +45,10 @@ cd orchestrator && npm ci && npm test && npm run typecheck && npm run build
 npm run build:templates          # (inside orchestrator/) regenerate templates/ snapshot + manifest.json — never hand-edit templates/
 node .claude/tests/run.js        # hook/script self-test — must pass after touching ANY hook or script (covers both runtimes' hook copies)
 
-# validation flags (all 15 wired into CI; the CLI also has --check-bindings, not in CI)
+# validation flags (all 16 wired into CI; the CLI also has --check-bindings, not in CI)
 node orchestrator/dist/cli.js --check-contracts|--check-layout|--check-workflows|--check-profile|--check-decisions \
   |--check-test-pyramid|--check-review-separation|--check-escalation-policy|--check-workspace|--check-repos \
-  |--check-environments|--check-doc-structure|--check-knowledge|--check-installation|--check-roles
+  |--check-environments|--check-doc-structure|--check-plan|--check-knowledge|--check-installation|--check-roles
 
 # task lifecycle / installation
 node orchestrator/dist/cli.js init --mode <legacy-project|three-repo> [--templates templates]

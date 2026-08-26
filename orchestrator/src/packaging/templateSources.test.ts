@@ -10,6 +10,8 @@ function fixtureRepo(): string {
   const files: Record<string, string> = {
     "CLAUDE.md": "# rules\n",
     ".claude/agents/business-analyst.md": "---\nname: business-analyst\n---\n",
+    ".claude/commands/critic.md": "---\ndescription: critique\n---\n@_shared/guardrails.md\n",
+    ".claude/commands/_shared/guardrails.md": "# shared guardrails include\n",
     ".claude/hooks/block-git.js": "// hook\n",
     ".claude/scripts/generate-status.js": "// script\n",
     ".claude/shared/multi-module-schema-scoping.md": "# procedure\n",
@@ -46,6 +48,8 @@ describe("listTemplateFiles", () => {
     const files = listTemplateFiles(root);
     expect(files).toContain("CLAUDE.md");
     expect(files).toContain(".claude/agents/business-analyst.md");
+    expect(files).toContain(".claude/commands/critic.md");
+    expect(files).toContain(".claude/commands/_shared/guardrails.md");
     expect(files).toContain(".claude/hooks/block-git.js");
     expect(files).toContain(".claude/scripts/generate-status.js");
     expect(files).toContain(".claude/shared/multi-module-schema-scoping.md");

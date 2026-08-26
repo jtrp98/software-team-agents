@@ -84,6 +84,9 @@ jobs:
       - name: Check every module document's structure (T53)
         run: node orchestrator/dist/cli.js --check-doc-structure
 
+      - name: Check plan.md task graphs (pm-improvements T-PM1.3)
+        run: node orchestrator/dist/cli.js --check-plan
+
       - name: Check knowledge/*.yaml (T61)
         run: node orchestrator/dist/cli.js --check-knowledge
 

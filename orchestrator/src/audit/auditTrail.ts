@@ -186,6 +186,35 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
         decision: "block",
       };
 
+    // Code-intelligence provider events (T-GR13): the optional graphify-backed
+    // context resolver reports through the same trail instead of a parallel
+    // observability system. Payloads carry metadata only — never source text.
+    case "CODE_INTELLIGENCE_QUERY":
+    case "CODE_INTELLIGENCE_HIT":
+    case "CODE_INTELLIGENCE_FALLBACK":
+    case "CODE_INTELLIGENCE_STALE":
+    case "CODE_INTELLIGENCE_ERROR":
+    case "CODE_INTELLIGENCE_DENIED":
+    case "CODE_INTELLIGENCE_SOURCE_VERIFIED": {
+      const operation = str(payload, "operation");
+      const reason = str(payload, "reason");
+      const count = num(payload, "candidates");
+      const role = str(payload, "role");
+      let decision: string | null = null;
+      if (type === "CODE_INTELLIGENCE_DENIED") decision = "deny:code-intelligence";
+      else if (type === "CODE_INTELLIGENCE_FALLBACK") decision = "fallback:search";
+      else if (type === "CODE_INTELLIGENCE_SOURCE_VERIFIED") decision = "source_verified";
+      const output =
+        type === "CODE_INTELLIGENCE_HIT" && count !== null ? `${count} candidate(s)` : null;
+      return {
+        actor: role ?? ORCHESTRATOR_ACTOR,
+        reason,
+        input: operation,
+        output,
+        decision,
+      };
+    }
+
     case "TASK_DEPLOYED":
       return { actor: ORCHESTRATOR_ACTOR, reason: null, input: null, output: null, decision: "deploy" };
 

@@ -43,6 +43,7 @@ import { checkWorkspace, hasWorkspace, loadWorkspace, workspacePath, type Worksp
 import { checkRepoMap, loadStageRoots } from "./repos/repoMap.js";
 import { Environment, checkEnvironmentConfig, describeEnvironment, isEnvironment } from "./environment/environment.js";
 import { checkDocStructure } from "./docs/docStructure.js";
+import { checkPlanGraphs } from "./docs/planGraph.js";
 import { KnowledgeBase, checkKnowledge } from "./knowledge/knowledgeBase.js";
 import { LANE_LABEL, ROLE_LANES, isRoleLane } from "./roles/roleLane.js";
 import {
@@ -139,6 +140,8 @@ export interface CliArgs {
   checkEnvironments: boolean;
   /** Check every module's requirement/design/plan/review/security doc structure against its schema and exit (T53). Same audience. */
   checkDocStructure: boolean;
+  /** Validate every module's plan.md task table as a dependency graph — duplicate ids, missing/self/cyclic dependencies, owners, statuses, DES traceability, wave ordering — and exit (T-PM1.3). `--module <name>` scopes it to one plan. */
+  checkPlan: boolean;
   /** Check knowledge/*.yaml against its schema, its id/relation rules and its own cross-links, and exit (T61). Same audience. */
   checkKnowledge: boolean;
   /** Check .sta/manifest.json and .sta/config.yaml against the project's real files and exit (T98). Same audience. */
@@ -233,7 +236,7 @@ export const USAGE =
   "  sta --check-contracts [--project-root <path>]      check contracts/*.yaml against the agent registry\n" +
   "  sta --check-layout [--project-root <path>]         check layout.yaml against the real directories\n" +
   "  sta --check-workflows [--project-root <path>]      check workflows/*.yml against the classifier\n" +
-  "  sta --check-bindings [--project-root <path>]       check .codex/agents/*.toml match the .claude/agents sources\n" +
+  "  sta --check-bindings [--project-root <path>]       check generated renderings (.codex/agents, .opencode/agent, .opencode/commands, .agents/skills) byte-match their .claude sources\n" +
   "  sta --check-profile [--project-root <path>]        check project.yaml and stacks/ against the agent roster\n" +
   "  sta --check-decisions [--project-root <path>]      check decisions/*.md ADRs against the schema and cross-links\n" +
   "  sta --check-test-pyramid [--project-root <path>]   check test-pyramid.yaml against its schema\n" +
@@ -243,6 +246,7 @@ export const USAGE =
   "  sta --check-repos [--project-root <path>]          check repos.yaml (if any) against the filesystem\n" +
   "  sta --check-environments [--project-root <path>]   check environments.yaml (if any) against its schema\n" +
   "  sta --check-doc-structure [--project-root <path>]  check every _docs/module/*/*.md's sections against its schema\n" +
+  "  sta --check-plan [--module <name>] [--project-root <path>]  validate every module's plan.md as a task DAG (deps/cycle/owner/status/DES/waves)\n" +
   "  sta --check-knowledge [--project-root <path>]      check knowledge/*.yaml against its schema and cross-links\n" +
   "  sta --build-templates <out-dir> [--project-root <path>]  snapshot framework template files + manifest.json (T90) into <out-dir>\n" +
   "  sta --check-installation [--project-root <path>]   check .sta/manifest.json and .sta/config.yaml against the project's real files (T98) — needs an initialized Target (.sta/ exists); fails on a bare Framework checkout by design\n" +
@@ -272,6 +276,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkReposFlag = false;
   let checkEnvironmentsFlag = false;
   let checkDocStructureFlag = false;
+  let checkPlanFlag = false;
   let checkKnowledgeFlag = false;
   let checkInstallationFlag = false;
   let checkRolesFlag = false;
@@ -342,6 +347,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkEnvironmentsFlag = true;
     } else if (arg === "--check-doc-structure") {
       checkDocStructureFlag = true;
+    } else if (arg === "--check-plan") {
+      checkPlanFlag = true;
     } else if (arg === "--check-knowledge") {
       checkKnowledgeFlag = true;
     } else if (arg === "--check-installation") {
@@ -397,6 +404,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkReposFlag &&
     !checkEnvironmentsFlag &&
     !checkDocStructureFlag &&
+    !checkPlanFlag &&
     !checkKnowledgeFlag &&
     !checkInstallationFlag &&
     !checkRolesFlag &&
@@ -432,6 +440,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkRepos: checkReposFlag,
     checkEnvironments: checkEnvironmentsFlag,
     checkDocStructure: checkDocStructureFlag,
+    checkPlan: checkPlanFlag,
     checkKnowledge: checkKnowledgeFlag,
     checkInstallation: checkInstallationFlag,
     checkRoles: checkRolesFlag,
@@ -1922,6 +1931,20 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       return 0;
     }
     console.error("[orchestrator] module documents have structural problems:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
+  if (args.checkPlan) {
+    const result = checkPlanGraphs(args.projectRoot, args.module);
+    // Notes print either way: a project before its first module, or a module
+    // whose plan.md isn't written yet, are normal states — not findings.
+    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
+    if (result.ok) {
+      console.log("[orchestrator] every plan.md checked is a valid task graph.");
+      return 0;
+    }
+    console.error("[orchestrator] plan task graphs have problems:");
     for (const problem of result.problems) console.error(`  - ${problem}`);
     return 1;
   }

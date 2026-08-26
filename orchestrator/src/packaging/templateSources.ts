@@ -31,6 +31,7 @@ export interface TemplateSourceEntry {
 export const TEMPLATE_SOURCES: readonly TemplateSourceEntry[] = [
   { relPath: "CLAUDE.md", kind: "file" },
   { relPath: ".claude/agents", kind: "dir" },
+  { relPath: ".claude/commands", kind: "dir" },
   { relPath: ".claude/hooks", kind: "dir" },
   { relPath: ".claude/scripts", kind: "dir" },
   { relPath: ".claude/shared", kind: "dir" },

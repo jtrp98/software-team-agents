@@ -11,6 +11,7 @@ import {
   sliceModuleDocsFor,
   type RunMetrics,
 } from "./agentRunAssembly.js";
+import { codeIntelSlices } from "./codeIntelAssembly.js";
 import type {
   RuntimeAdapter,
   RuntimeAgentResult,
@@ -197,7 +198,23 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         })
       : [];
 
-    const prompt = buildPrompt(req, opts.extraInstruction, sliced);
+    // Phase 4 (code-intelligence): additive by design — `[]` unless the feature
+    // is explicitly enabled on this machine, so the prompt is unchanged by default.
+    const workRoot = threeRepo?.roots.workRoots.find((root) => root.access === "write") ?? threeRepo?.roots.workRoots[0];
+    let codeIntel: string[] = [];
+    try {
+      codeIntel = await codeIntelSlices({
+        stage: req.stage,
+        taskId: req.taskId,
+        moduleName,
+        targetRoot: workRoot?.path,
+        targetId: workRoot?.targetId,
+      });
+    } catch {
+      codeIntel = [];
+    }
+
+    const prompt = buildPrompt(req, opts.extraInstruction, [...sliced, ...codeIntel]);
 
     // T112: resolve which runtime and model this run actually goes to. Absent
     // `opts.registry`, `activeRuntime`/`activeModel` are exactly `runtime` and

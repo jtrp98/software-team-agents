@@ -18,6 +18,7 @@
 #
 #   agent        ใคร          — which role does this work belong to
 #   skill        ทำอะไรได้     — a reusable capability a role can invoke
+#   command      สั่งยังไง     — a named prompt shortcut any role can invoke
 #   policy       ห้ามอะไร      — what no role may do, written down or enforced
 #   workflow     ทำเมื่อไหร่    — which roles run, in what order, for a kind of change
 #   orchestrator ใครทำต่อ      — the thing that decides what runs next
@@ -109,6 +110,44 @@ concepts:
       - path: .claude/skills
         status: planned
         holds: Claude Code-native skills, if this project ever ships one
+
+  command:
+    answers: "สั่งยังไง — a named prompt shortcut any role can invoke"
+    why: >
+      A slash command is a prompt shortcut a person types (`/critic`, `/checklist`),
+      not a capability an orchestrator routes to and not something any single agent owns.
+      Kept as one flat file per command under `.claude/commands/`, it ships to every
+      target project like the agent prompts do, stays a pure prompt (hooks and contracts
+      keep enforcing everything), and the shared guardrails include lives beside it in
+      `_shared/` so no rule is copied between files. The other two homes are generated
+      renderings of the same sources for runtimes without Claude's `@`-import —
+      never hand-edited; `--check-bindings` fails on drift, `sta sync` regenerates.
+    homes:
+      - path: .claude/commands
+        status: active
+        pattern: "*.md"
+        read_by: claude-code
+        holds: >
+          one markdown file per project slash command (frontmatter description +
+          argument-hint, body imports @_shared/guardrails.md); `_shared/` sits in the
+          same home because its files are imported fragments of commands, not a
+          different concept — this directory is the single source of truth for the
+          two renderings below
+      - path: .opencode/commands
+        status: active
+        pattern: "*.md"
+        read_by: opencode
+        holds: >
+          one markdown file per command rendered for OpenCode (`/name` invocation):
+          argument-hint dropped, guardrails inlined (OpenCode resolves @file from the
+          project root, so the import cannot travel), body otherwise verbatim
+      - path: .agents/skills
+        status: active
+        holds: >
+          one subdirectory per command rendered as a Codex Agent Skill (`$name`
+          invocation): SKILL.md with name/description frontmatter plus a fixed
+          agents/openai.yaml keeping implicit activation off — skills run when a
+          person types them
 
   policy:
     answers: "ห้ามอะไร — what no role may do"

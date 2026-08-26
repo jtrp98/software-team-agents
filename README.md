@@ -52,6 +52,9 @@ orchestrator/           ← CLI + state store + knowledge engine (Node/TypeScrip
 .codex/agents/*.toml    ← Codex bindings (checked by --check-bindings)
 .opencode/agent/*.md    ← OpenCode bindings (generated, checked by --check-bindings)
 .opencode/plugin/       ← sta-guards.js — guards ฝั่ง OpenCode (tool.execute.before)
+.claude/commands/*.md   ← slash command shortcuts 31 ตัว — source of truth (concept `command`)
+.opencode/commands/*.md ← OpenCode rendering ของ commands (generated, checked by --check-bindings)
+.agents/skills/*/       ← Codex Agent Skills rendering ของ commands (generated, checked by --check-bindings)
 contracts/*.yaml        ← read/write/deny path globs ต่อ role (machine-readable half ของ agent)
 workflows/*.yml         ← 11 workflows: typo → feature/deploy (right-sizing)
 policies/               ← กฎที่ทุก agent ใช้ร่วมกัน (coding/git/architecture/documentation/security/agent-boundaries)
@@ -71,8 +74,8 @@ project.yaml            ← stack profile ของ project นี้ (current v
 | Runtime | สถานะ |
 |---|---|
 | **Claude Code** | ✅ **Supported** — implemented + verified (pipeline, guards, capability probe) |
-| **Codex** | ⚠️ **Preview** — `software-team-agents dev\|ba --runtime codex` เปิด interactive session ได้ และ `.codex/agents/*.toml` ถูก generate ครบ แต่ headless pipeline (`sta run`) วิ่งบน Claude Code เป็น default; `CodexAdapter` ฝั่ง orchestrator ยังเป็น implementation ที่ไม่เคย verify กับ install จริง |
-| **OpenCode** | 🧪 **Experimental** (T-OC, planning/v2) — bindings `.opencode/agent/*.md` + plugin `sta-guards.js` sync ครบ, `dev\|ba --runtime opencode` เปิด session ได้, headless เลือกได้ด้วย `sta run --runtime opencode`; adapter/permission ผ่านการ spike พิสูจน์บน 1.18.21 แล้วแต่ exit checks (typecheck/secret ตอนจบ run) ยังไม่มี in-band — รายงานเป็น GUARD GAP และให้ QA round เป็นตัวครอบ |
+| **Codex** | ⚠️ **Preview** — `software-team-agents dev\|ba --runtime codex` เปิด interactive session ได้ และ `.codex/agents/*.toml` + skills mirror `.agents/skills/**` ถูก generate ครบ (skills invoke `$name` ได้จริงบน codex-cli 0.149 — spike T-CXC1) แต่ headless pipeline (`sta run`) วิ่งบน Claude Code เป็น default; `CodexAdapter` ฝั่ง orchestrator ยังเป็น implementation ที่ไม่เคย verify กับ install จริง |
+| **OpenCode** | 🧪 **Experimental** (T-OC, planning/v2) — bindings `.opencode/agent/*.md` + plugin `sta-guards.js` sync ครบ, commands mirror `.opencode/commands/**` generate ครบ (`/name` ผ่าน `opencode run --command` — spike T-OCC1), `dev\|ba --runtime opencode` เปิด session ได้, headless เลือกได้ด้วย `sta run --runtime opencode`; adapter/permission ผ่านการ spike พิสูจน์แล้วแต่ exit checks (typecheck/secret ตอนจบ run) ยังไม่มี in-band — รายงานเป็น GUARD GAP และให้ QA round เป็นตัวครอบ |
 
 ข้อจำกัด: การรัน unattended ต้องใช้ `--autonomy edit` หรือ `full` (default `propose` ติด permission prompt ที่ไม่มีคนกดใน headless run)
 
@@ -305,10 +308,11 @@ Knowledge ไม่ใช่ "AI memory" — เป็นข้อมูลร�
 - **UX gate ข้ามงานเล็ก (T-UX12)**: TRIVIAL/SMALL ไม่ถูก block ที่ UX-artifact precondition (pipeline ไม่ได้จัด uxui ให้อยู่แล้ว — "AI ออกแบบตรง"); MEDIUM+ และ level ไม่ทราบยังต้องมี signed artifact · SA→DEV handoff บังคับทุก level
 - **Routing back (T-UX10)**: คำถามที่ไม่ใช่หน้าที่ uxui (คุ้มค่าไหม → BA · ทำได้ไหม → SA) ถูกรายงานเป็น structured failure แล้ว orchestrator route กลับอัตโนมัติ; ถ้า pipeline นั้นไม่มี BA/SA ให้ถาม → BLOCKED fail-closed
 
-**Design source เข้าถึง agent ได้ 2 ทางเท่านั้น (ห้าม scrape URL):**
+**Design source เข้าถึง agent ได้ 3 ทาง (ห้าม scrape URL):**
 
 1. **Path A — handoff bundle**: คนวาง export/handoff จาก Claude Design ไว้ที่ `knowledge/_sources/design/<module>/handoff/`
 2. **Path B — export files**: คนวาง export file (HTML/MD) ไว้ที่ `knowledge/_sources/design/<module>/` — item ที่ derive จะบันทึก `sha256` digest ผ่าน `digestOfSource()` เดียวกับ freshness model; ไฟล์เปลี่ยน = recommendation นั้น stale ทันที
+3. **Path C — Claude Design via MCP (two-way, draft-only)**: เชื่อม official server (`https://api.anthropic.com/v1/design/mcp`, login ด้วย `/design-login`) — ทิศ IN อ่าน project/files/comments เป็น draft `UX-*`; ทิศ OUT seed brief → draft mockup บน canvas · **allowlist fail-closed** frozen จาก live server (READ 9 tools / WRITE เฉพาะ `copy_files, create_project, write_files`) — destructive/publishing/membership/chat tools ถูก refuse ถาวร (`orchestrator/src/integration/claudeDesignMcp.ts`); output ทุกทิศยังเป็น **draft** ต้องมีคน sign-off เหมือนเดิม · Path A/B ยังใช้ได้ครบเป็น fallback (offline/ไม่ login)
 
 **Figma ผ่าน MCP แบบ read-only:**
 
@@ -337,10 +341,35 @@ sta configure identity --figma-email <email> --claude-email <email>
 
 - **Guards ถูกเทสต์** — `node .claude/tests/run.js` (self-test ไม่มี dependencies) — guard ที่ syntax error ต้อง fail loud ไม่ใช่ fail open
 - **ฝั่ง OpenCode** — git deny เป็น declarative `permission.bash` globs ใน binding เอง (specificity wins); outside-root/contract path guards มาจาก `sta-guards.js` plugin (auto-load, throw = deny) · doc-rewrite/secret-leak/exit checks **ยังไม่ enforce in-band** → adapter รายงาน unenforced + executor ตะโกน `GUARD GAP` ให้ QA round เป็นตัวครอบ
-- **Validation flags** — `sta --check-*` 15 ตัว: `contracts, layout, workflows, profile, decisions, test-pyramid, review-separation, escalation-policy, workspace, repos, environments, doc-structure, knowledge, installation, roles` (+ `--check-bindings` มีใน CLI แต่ไม่ได้ wire ใน CI). `--check-workspace` ตรวจสองเรื่องที่ไม่เกี่ยวกัน: `workspace.yaml` (multi-project grouping, T41) และ misplaced-docs scan (T-WG4) — `role: dev` workspace ที่มี `_docs/module/**` หรือ Modules table ใน `status.md` โดนรายงานพร้อม hint ปลายทางใน Knowledge repo
+- **Validation flags** — `sta --check-*` 16 ตัว: `contracts, layout, workflows, profile, decisions, test-pyramid, review-separation, escalation-policy, workspace, repos, environments, doc-structure, plan, knowledge, installation, roles` (+ `--check-bindings` มีใน CLI แต่ไม่ได้ wire ใน CI). `--check-plan [--module <name>]` ตรวจตาราง task ของทุก `plan.md` เป็น dependency graph แบบ deterministic (duplicate id / dangling·self·duplicate dependency / cycle / owner·status ผิด / DES traceability / wave ordering) — pm-improvements T-PM1.3. `--check-workspace` ตรวจสองเรื่องที่ไม่เกี่ยวกัน: `workspace.yaml` (multi-project grouping, T41) และ misplaced-docs scan (T-WG4) — `role: dev` workspace ที่มี `_docs/module/**` หรือ Modules table ใน `status.md` โดนรายงานพร้อม hint ปลายทางใน Knowledge repo
 - **doctor** — `sta doctor --project-root <path>` รวม 9 checks แบบ read-only (installation, knowledge binding/schema, targets registry, local mappings, runtime adapter, state store, guard wiring) exit 1 เมื่อมี FAIL พร้อม "Fix:" ทุกข้อ
 - **Audit trail** — `sta audit <task-id>`
 - **Backup/Rollback** — v2 sync backup ที่ `.agent-team/backups/<ts>/`; V1 upgrade/migrate snapshot ที่ `.sta/backups/` คืนได้ด้วย `sta rollback` / `sta list-backups`
+
+## Slash command shortcuts (Claude runtime)
+
+`.claude/commands/*.md` คือ prompt shortcut ที่พิมพ์ได้ใน Claude Code (`/critic`, `/checklist`, `/summarize`, …) —
+**31 ตัว** คัดจาก catalog 50 ตัว (ตัดของส่วนตัว/marketing + `/rewrite` ที่ชนนโยบาย amend-don't-regenerate),
+mapping ครบทุก role อยู่ที่ [`planning/v2/claude-commands-TASKS.md`](planning/v2/claude-commands-TASKS.md) §1.1
+
+- **เป็น prompt เท่านั้น** — ไม่แก้ runtime/hook; agent ที่ถูกสั่งผ่าน command ยังโดน guards เดิมทุกตัว
+- **Guardrails รวมไฟล์เดียว** — `@_shared/guardrails.md` ถูก import จากทุก command (บังคับ output format, cap, cite file:line, ask-first)
+- **Ship ไป target project** ผ่าน `sta init`/`sync` (TEMPLATE_SOURCES มี `.claude/commands` เป็น concept `command` ใน layout.yaml)
+- **กัน drift** — `node .claude/tests/run.js` section 11 ตรวจ frontmatter/import/forbidden-instructions/จำนวนไฟล์ = 31
+
+### Runtime mirrors ของ command ชุดเดียวกัน (generated — ห้าม hand-edit)
+
+Source of truth คือ `.claude/commands/*.md` เสมอ · sync (`sta init`/`sync`) generate ให้ทั้งสอง runtime เพิ่มอัตโนมัติ
+และ `sta --check-bindings` ตรวจ byte-match ทุกไฟล์:
+
+| Runtime | ไฟล์ | Invoke | Transform |
+|---|---|---|---|
+| Claude Code | `.claude/commands/<name>.md` | `/name` | source (guardrails ผ่าน `@_shared/` include) |
+| OpenCode | `.opencode/commands/<name>.md` | `/name` | drop `argument-hint` · **inline guardrails 5 ข้อ** (OpenCode resolve `@file` จาก project root — spike T-OCC1) · body verbatim |
+| Codex ≥ 0.117 | `.agents/skills/<name>/SKILL.md` (+ `agents/openai.yaml`) | `$name` / เมนู `/skills` | frontmatter `name`+`description` verbatim · drop `argument-hint` · inline guardrails · openai.yaml ปิด implicit invocation (คนพิมพ์เท่านั้น) |
+
+Regenerate mirror ใน Framework repo เอง: `npm --prefix orchestrator run build && node scripts/regenerate-renderings.mjs`
+(หรือแก้ที่ `.claude/**` แล้ว rerun gates — self-test sections 11b/11c ตรวจ content rules ของทั้งสองชุด mirror)
 
 ## Version Management
 

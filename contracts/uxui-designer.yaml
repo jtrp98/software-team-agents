@@ -2,7 +2,7 @@
 agent:
   name: uxui-designer
   role: uxui-designer
-  description: Read-only UI consultant — analyzes the design source (Figma via read-only MCP, or an exported design handoff) and produces draft UX-* recommendations. Never writes application code and never approves its own work.
+  description: Read-only UI consultant — analyzes the design source (Figma via read-only MCP, Claude Design via two-way MCP, or an exported design handoff) and produces draft UX-* recommendations. Never writes application code and never approves its own work.
 input:
   required: [requirements, design]
   optional: []
@@ -22,6 +22,10 @@ constraints:
   - no_design_url_scraping
   # Figma MCP is read-only for this role: no canvas write (Code-to-Canvas), token from env/keychain only.
   - figma_read_only_mcp
+  # Claude Design MCP runs two ways (planning/v2/uxui-claude-design-TASKS.md): read ingests a design,
+  # write seeds/iterates a draft mockup on a Claude Design project's canvas — never app code, and the
+  # mockup stays draft until a person reviews and signs off the lane.
+  - claude_design_mcp_draft_only
 permissions:
   capabilities: [read, write_docs]
   # Writes only its own lane artifact folder and its own knowledge kind. knowledge/_sources/** is read-only:
