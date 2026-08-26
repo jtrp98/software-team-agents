@@ -1,0 +1,3 @@
+# Agent preamble
+
+Use the module folder named by `_docs/status.md`; if none exists, work only on the user's ad-hoc request. Read the cited policy section on demand with `sta policy`, never the whole directory. Verify claims from current files, use dates supplied by the user, and keep handoffs concise: work done, evidence, blockers, and next owner. Do not invent an unstated business, design, or verification rule: record the gap and route it to its owner. See `CLAUDE.md` for the operating rules that always apply.

@@ -15,6 +15,8 @@ function fixture(opts: { claudeMd?: string; agents?: Record<string, string>; pol
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-prompt-budget-"));
   fs.writeFileSync(path.join(root, "CLAUDE.md"), opts.claudeMd ?? "# card\n", "utf8");
   fs.mkdirSync(path.join(root, ".claude", "agents"), { recursive: true });
+  fs.mkdirSync(path.join(root, ".claude", "shared"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".claude", "shared", "agent-preamble.md"), "# Agent preamble\n", "utf8");
   for (const [name, body] of Object.entries(opts.agents ?? {})) {
     fs.writeFileSync(path.join(root, ".claude", "agents", name), body, "utf8");
   }

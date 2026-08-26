@@ -70,25 +70,24 @@ export const AGENT_PROMPT_TARGET = 4_096;
  * that needs more space is a prompt that needs its rationale moved to `docs/`.
  */
 export const PROMPT_BUDGETS: Record<string, number> = {
-  // Thinned by T-V3TOK-022.
-  "setup.md": 9_395,
-  "test-planner.md": 7_837,
-  "uxui-designer.md": 9_531,
-  // Thinned by T-V3TOK-023 / 024.
-  "backend-engineer.md": 13_641,
-  "frontend-engineer.md": 13_546,
-  // Thinned by T-V3TOK-025 / 026.
-  "business-analyst.md": 18_614,
-  "project-manager.md": 18_128,
-  // Thinned by T-V3TOK-027 / 028; these two keep a raised final target
-  // (6,144) because a design contract and a verification checklist carry more
-  // irreducible content than the other nine.
-  "system-analyst.md": 26_279,
+  // T-V3TOK-022 through 027, 029, and 030 are at the normal final target.
+  "setup.md": AGENT_PROMPT_TARGET,
+  "test-planner.md": AGENT_PROMPT_TARGET,
+  "uxui-designer.md": AGENT_PROMPT_TARGET,
+  "backend-engineer.md": AGENT_PROMPT_TARGET,
+  "frontend-engineer.md": AGENT_PROMPT_TARGET,
+  "business-analyst.md": AGENT_PROMPT_TARGET,
+  "project-manager.md": AGENT_PROMPT_TARGET,
+  // T-V3TOK-027 needs the documented design-contract allowance.
+  "system-analyst.md": 6_144,
+  // T-V3TOK-028 remains at its approved pre-thinning ceiling until P4's
+  // deterministic QA/evidence prerequisites land.
   "qa-engineer.md": 30_458,
-  // Thinned by T-V3TOK-029 / 030.
-  "security.md": 11_879,
-  "devops.md": 14_277,
+  "security.md": AGENT_PROMPT_TARGET,
+  "devops.md": AGENT_PROMPT_TARGET,
 };
+
+const AGENT_PREAMBLE_BUDGET = 800;
 
 /** Guard 3: the global policy pre-read directive, in either of the two forms the prompts used. */
 const POLICY_PREREAD = /Read\s+every\s+file\s+in\s+`?policies\//i;
@@ -130,6 +129,24 @@ function byteSize(file: string): number | null {
   }
 }
 
+/** T-V3TOK-020: repeated role blocks drift; a shared pointer is not a block. */
+function duplicateNamedBlocks(files: readonly { file: string; markdown: string }[]): string[] {
+  const owners = new Map<string, string[]>();
+  for (const { file, markdown } of files) {
+    const parts = markdown.replace(/^---[\s\S]*?\n---\s*/m, "").split(/(?=^## )/m);
+    for (const part of parts) {
+      const normalized = part.trim().replace(/\r\n/g, "\n");
+      if (!normalized.startsWith("## ") || normalized.length < 80) continue;
+      const listed = owners.get(normalized) ?? [];
+      listed.push(file);
+      owners.set(normalized, listed);
+    }
+  }
+  return [...owners.entries()]
+    .filter(([, listed]) => listed.length >= 3)
+    .map(([block, listed]) => `${listed.join(", ")} repeat ${block.slice(0, block.indexOf("\n") === -1 ? 80 : block.indexOf("\n"))}`);
+}
+
 export function checkPromptBudget(projectRoot: string = defaultProjectRoot()): PromptBudgetCheckResult {
   const problems: string[] = [];
   const notes: string[] = [];
@@ -147,9 +164,22 @@ export function checkPromptBudget(projectRoot: string = defaultProjectRoot()): P
   const files = agentPromptFiles(projectRoot);
   if (files.length === 0) problems.push("no .claude/agents/*.md prompts found");
 
-  for (const file of files) {
+  const preamble = byteSize(path.join(projectRoot, ".claude", "shared", "agent-preamble.md"));
+  if (preamble === null) problems.push(".claude/shared/agent-preamble.md is missing (T-V3TOK-020)");
+  else if (preamble > AGENT_PREAMBLE_BUDGET) problems.push(`.claude/shared/agent-preamble.md is ${preamble} B, over its ${AGENT_PREAMBLE_BUDGET} B budget`);
+  else notes.push(`.claude/shared/agent-preamble.md ${preamble} B / ${AGENT_PREAMBLE_BUDGET} B`);
+
+  const promptSources = files.map((file) => ({ file, markdown: fs.readFileSync(path.join(projectRoot, ".claude", "agents", file), "utf8") }));
+  for (const duplicate of duplicateNamedBlocks(promptSources)) {
+    problems.push(`agent prompts retain a named block duplicated in at least three roles: ${duplicate} — extract it or justify it as runtime context`);
+  }
+
+  for (const { file, markdown } of promptSources) {
     const abs = path.join(projectRoot, ".claude", "agents", file);
-    const markdown = fs.readFileSync(abs, "utf8");
+
+    if (/^## Shared conventions\s*$/m.test(markdown)) {
+      problems.push(`.claude/agents/${file} still has a Shared conventions block — use the shared preamble pointer (T-V3TOK-020)`);
+    }
 
     // --- guard 2: per-role prompt budget --------------------------------
     const budget = PROMPT_BUDGETS[file];

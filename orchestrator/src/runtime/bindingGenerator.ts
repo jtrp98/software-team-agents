@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { renderStackDigest, stackDigestPath } from "../profile/stackDigest.js";
 
 /**
  * The role-binding generator (OFF10 M2 / OFF03 P7): one role definition,
@@ -510,6 +511,23 @@ export function checkBindings(projectRoot: string): BindingCheckResult {
 
   for (const spec of BINDING_RENDERINGS) {
     checkRenderingSet(projectRoot, claudeDir, mdRoles, spec, problems);
+  }
+
+  // T-V3TOK-021: the stack digest is generated from the two engineering
+  // prompts, so PM/SA/QA never need to read whole engineering prompts merely
+  // to discover the stack.
+  const stackSources = ["backend-engineer.md", "frontend-engineer.md"];
+  if (stackSources.every((file) => fs.existsSync(path.join(claudeDir, file)))) {
+    try {
+      const expected = renderStackDigest(projectRoot);
+      const digest = stackDigestPath(projectRoot);
+      if (!fs.existsSync(digest)) problems.push("missing .claude/shared/stack.md — regenerate renderings");
+      else if (fs.readFileSync(digest, "utf8").replace(/\r\n/g, "\n") !== expected) {
+        problems.push(".claude/shared/stack.md does not match the engineering-prompt digest — regenerate renderings");
+      }
+    } catch (e) {
+      problems.push(`cannot render .claude/shared/stack.md — ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   // --- Command renderings (T-OCC3 / T-CXC3) --------------------------------

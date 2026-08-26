@@ -22,6 +22,7 @@ import {
   loadCommandGuardrails,
   listCommands,
 } from "../orchestrator/dist/runtime/bindingGenerator.js";
+import { renderStackDigest } from "../orchestrator/dist/profile/stackDigest.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const lf = (s) => s.replace(/\r\n/g, "\n");
@@ -70,6 +71,8 @@ for (const spec of BINDING_RENDERINGS) {
   }
   removeStale(spec.dir, keep);
 }
+
+emit(".claude/shared/stack.md", renderStackDigest(ROOT));
 
 // --- command renderings -----------------------------------------------------
 const commandsDir = path.join(ROOT, ".claude", "commands");
