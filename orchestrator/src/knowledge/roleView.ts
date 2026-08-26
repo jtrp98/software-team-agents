@@ -52,6 +52,9 @@ export const KINDS_BY_CATEGORY: Record<ContextCategory, KnowledgeKind[]> = {
   // The QA evidence package is assembled per round by the orchestrator from
   // artifacts and scope — it carries no knowledge kind of its own.
   "qa-evidence": [],
+  // Same reasoning: the knowledge brief is assembled per module by
+  // knowledgeBriefAssembly from knowledge/ YAML, not a document with kinds.
+  "knowledge-brief": [],
 };
 
 /** Everyone sees ADRs — see the note above. */
