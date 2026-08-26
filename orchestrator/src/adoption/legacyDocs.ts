@@ -244,9 +244,19 @@ function testItems(
     const requirementId = match[1];
 
     const levelsLine = /\*\*Levels:\*\*\s*(.+)$/im.exec(section.body);
+    // A plan writes WHY a level applies after the word ("unit (validate)") —
+    // strip the qualifier before matching the vocabulary instead of dropping
+    // the whole token, which emptied payload.levels and failed the schema for
+    // the entire stage over prose, not structure.
     const levels = (levelsLine ? levelsLine[1] : "")
       .split(/[,/]/)
-      .map((l) => l.trim().toLowerCase())
+      .map((l) =>
+        l
+          .trim()
+          .toLowerCase()
+          .replace(/\s*\([^)]*\)\s*/g, "")
+          .trim(),
+      )
       .filter((l): l is "unit" | "integration" | "api" | "e2e" => ["unit", "integration", "api", "e2e"].includes(l));
 
     const base = `TEST-${requirementId.replace(/^REQ-/, "")}`;

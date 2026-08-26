@@ -171,6 +171,18 @@ describe("importLegacyDocs — the module documents it owns", () => {
     expect(item.payload.automated).toBe(false);
   });
 
+  it("keeps a level whose plan appends the reason after it — unit (validate) is still unit", () => {
+    const root = project({
+      "_docs/module/m/test-plan.md":
+        "**Has automated test framework:** yes\n\n### REQ-002 — analyse + validate\n- **Levels:** unit (validate), integration (persistence), api (call boundary until keys exist)\n- Rejects non-canonical subject names.\n",
+    });
+
+    const items = importLegacyDocs(root, NOW).items as Array<KnowledgeItemOf<"test">>;
+
+    expect(items.map((i) => i.id)).toEqual(["TEST-002"]);
+    expect(items[0].payload.levels).toEqual(["unit", "integration", "api"]);
+  });
+
   it("indexes review/security/deploy as prose under their module", () => {
     const root = project({
       "_docs/module/m/review.md": "# Review\n\n## Open Issues\nNone.\n",

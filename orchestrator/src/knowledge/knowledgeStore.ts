@@ -216,9 +216,21 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
-/** Everything except the two fields that legitimately differ between an item and its own rewrite. */
+/**
+ * Everything except the fields that legitimately differ between an item and its own rewrite:
+ * `version`/`updated_at` move on every accepted write, and `sources[].captured_at` moves on every
+ * re-derivation — each run stamps the moment it read the source file, while `sources[].digest` is
+ * the part that detects a changed document. Comparing captured_at made every re-run see
+ * "different" against what the previous run had just written, so an approved item came back as a
+ * conflict forever and `unchanged` could never happen across runs.
+ */
 function contentOf(item: KnowledgeItem): string {
   const { version: _version, updated_at: _updatedAt, ...rest } = item;
+  if (Array.isArray(rest.sources)) {
+    // Blank the capture stamp rather than deleting it: SourceRef requires the
+    // field, and an equal constant compares equal across every run.
+    rest.sources = rest.sources.map((s) => ("captured_at" in s ? { ...s, captured_at: "" } : s));
+  }
   return stableStringify(rest);
 }
 
