@@ -1,6 +1,6 @@
 {
   "name": "software-team-agents",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0-rc.2",
   "private": true,
   "description": "T90-T91 — the distributable unit for this framework's `sta` / `software-team-agents` CLI: orchestrator/dist (compiled orchestrator/src) plus templates/ (the framework's own .claude/agents, contracts, workflows, policies, stacks, etc., snapshotted by `npm run build`). This is deliberately a *different* package from orchestrator/package.json, which stays the private dev/test package for building and testing this repo's own orchestrator — this one is what `sta init`/`upgrade` (T92/T95) in a target project actually installs from, and its version field is the single source of truth for the Framework version stamped into templates/manifest.json and reported by `software-team-agents --version`. `private: true` on purpose: this file makes the package publishable-shaped, it does not itself decide to publish it to a registry.",
   "bin": {
