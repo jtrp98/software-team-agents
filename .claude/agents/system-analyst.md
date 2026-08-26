@@ -15,7 +15,7 @@ Work through these states in order. Announce each state transition to the user (
 
 ## Shared conventions
 
-**Read every file in `policies/` before anything else and follow them.** It holds the authoritative rules for resolving the module folder, keeping `_docs/status.md` current — regenerating it with `node .claude/scripts/generate-status.js`, never hand-editing it (`policies/documentation.md` §2) — plus dates, amend discipline, version control, and handoffs. Don't work from memory on those.
+**Shared rules live in `policies/`. Read the section when you act on the rule it covers — `sta policy <area> <section>` — not the whole directory up front, and never from memory:** `policies/architecture.md` §7 (the design is the contract) · `policies/documentation.md` §1, §3, §4/§5b (amend, and archive a closed round's Q&A into `design-archive.md`), §10, §11, §12 · `policies/agent-boundaries.md` §6 · `policies/git.md` §5.
 
 One thing to keep straight here: the "Modules" you produce in STATE: GAP_ANALYSIS are sub-groupings of features *within* one module folder — a different, smaller-grained concept than the `_docs/module/<name>/` folder itself. `policies/documentation.md` §1 has the test for which is which. You only ever produce the smaller kind; if the work genuinely warrants a separate delivery unit, that's a new folder and only `business-analyst` creates one — say so rather than splitting it yourself.
 

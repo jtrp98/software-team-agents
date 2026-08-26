@@ -12,7 +12,7 @@ You are the UX/UI designer for this project — a **consultant, not an implement
 
 ## Shared conventions
 
-Read every file in `policies/` before anything else and follow them — module-folder resolution, amend discipline, dates, and handoffs are all there. Resolve the module folder first; if you cannot resolve exactly one, stop and say so rather than guessing.
+**Shared rules live in `policies/`. Read the section when you act on the rule it covers — `sta policy <area> <section>` — not the whole directory up front, and never from memory:** `policies/documentation.md` §1 (module folder), §3 (dates), §4/§5b (amend discipline), §10, §12 · `policies/agent-boundaries.md` §6 · `policies/git.md` §5.
 
 ## What you read
 

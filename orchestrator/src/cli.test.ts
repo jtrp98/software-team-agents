@@ -27,6 +27,7 @@ describe("parseArgs", () => {
       list: false,
       checkContracts: false,
       checkLayout: false,
+      checkPromptBudget: false,
       checkWorkflows: false,
       checkBindings: false,
       checkProfile: false,

@@ -27,6 +27,7 @@ import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
 import { checkAllContracts } from "./agents/agentContract.js";
 import { checkPathRules } from "./agents/pathPermissions.js";
 import { checkLayout } from "./layout/repoLayout.js";
+import { checkPromptBudget } from "./layout/promptBudget.js";
 import { ApprovalType } from "./gates/approval.js";
 import { checkAllWorkflows } from "./workflow/workflowDefinition.js";
 import { checkBindings } from "./runtime/bindingGenerator.js";
@@ -87,6 +88,7 @@ import {
 import { readAdoptionState } from "./adoption/adoptionStore.js";
 import { validateAdoption } from "./adoption/adoptionValidation.js";
 import type { AdoptionStageId } from "./adoption/adoptionModel.js";
+import { getPolicySection, listPolicySections, PolicyIndexError } from "./docs/policyIndex.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -118,6 +120,7 @@ export interface CliArgs {
   checkContracts: boolean;
   /** Check layout.yaml against the directories that actually exist and exit. Same audience. */
   checkLayout: boolean;
+  checkPromptBudget: boolean;
   /** Check workflows/*.yml against the classifier and exit. Same audience. */
   checkWorkflows: boolean;
   /** Check .codex/agents/*.toml renderings against their .claude/agents sources and exit (OFF10 M2). */
@@ -208,6 +211,7 @@ export const USAGE =
   "  sta audit  <task-id> [--decisions] [--project-root <path>]   the WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail; --decisions shows only the choices\n" +
   "  sta qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]   QA token/mode/retry picture per task (QA07); --baseline compares against a saved export\n" +
   "  sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]   token/context composition across orchestrated and interactive runs\n" +
+  "  sta policy [<area>] [<section>] [--json] [--project-root <path>]   read one policies/ section instead of the whole file; no args lists every area and section\n" +
   "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names (T41)\n" +
   "  sta init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
   "  sta configure knowledge-root <path> [--config-path <path>]       validate and save this installation's single Knowledge root\n" +
@@ -236,6 +240,7 @@ export const USAGE =
   "  sta --list [--project-root <path>]                 show every task and stop\n" +
   "  sta --check-contracts [--project-root <path>]      check contracts/*.yaml against the agent registry\n" +
   "  sta --check-layout [--project-root <path>]         check layout.yaml against the real directories\n" +
+  "  sta --check-prompt-budget [--project-root <path>]  check the static prompt floor: CLAUDE.md + agent prompt budgets, no policies pre-read, pointers resolve\n" +
   "  sta --check-workflows [--project-root <path>]      check workflows/*.yml against the classifier\n" +
   "  sta --check-bindings [--project-root <path>]       check generated renderings (.codex/agents, .opencode/agent, .opencode/commands, .agents/skills) byte-match their .claude sources\n" +
   "  sta --check-profile [--project-root <path>]        check project.yaml and stacks/ against the agent roster\n" +
@@ -266,6 +271,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let list = false;
   let checkContracts = false;
   let checkLayoutFlag = false;
+  let checkPromptBudgetFlag = false;
   let checkWorkflowsFlag = false;
   let checkBindingsFlag = false;
   let checkProfileFlag = false;
@@ -326,6 +332,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkContracts = true;
     } else if (arg === "--check-layout") {
       checkLayoutFlag = true;
+    } else if (arg === "--check-prompt-budget") {
+      checkPromptBudgetFlag = true;
     } else if (arg === "--check-workflows") {
       checkWorkflowsFlag = true;
     } else if (arg === "--check-bindings") {
@@ -394,6 +402,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !list &&
     !checkContracts &&
     !checkLayoutFlag &&
+    !checkPromptBudgetFlag &&
     !checkWorkflowsFlag &&
     !checkBindingsFlag &&
     !checkProfileFlag &&
@@ -430,6 +439,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     list,
     checkContracts,
     checkLayout: checkLayoutFlag,
+    checkPromptBudget: checkPromptBudgetFlag,
     checkWorkflows: checkWorkflowsFlag,
     checkBindings: checkBindingsFlag,
     checkProfile: checkProfileFlag,
@@ -660,6 +670,7 @@ const VERBS = [
   "init",
   "qa-metrics",
   "tokens",
+  "policy",
   "upgrade",
   "migrate",
   "knowledge-migrate",
@@ -1708,6 +1719,71 @@ function printTokenTask(metric: TaskTokenMetrics): void {
 }
 
 /** `tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]`. */
+/**
+ * T-V3TOK-013 — `sta policy` reads one section, not one file.
+ *
+ * A miss is exit 0 with the available sections printed: an agent that gets an
+ * error here falls back to reading the whole file, which is exactly the cost
+ * this verb removes.
+ */
+async function runPolicyVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  if (rest.includes("--help")) {
+    console.log("usage: sta policy [<area>] [<section>] [--json] [--project-root <path>]");
+    console.log("  no args        every policy area and the sections inside it");
+    console.log("  <area>         one area's sections (documentation, coding, security, ...)");
+    console.log("  <area> <sec>   that section's text; accepts §10, 10, 5c, or part of the heading");
+    return 0;
+  }
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const json = rest.includes("--json");
+  const [area, section] = positionalArgs(rest);
+
+  try {
+    if (area === undefined) {
+      const index = listPolicySections(projectRoot);
+      if (json) {
+        console.log(JSON.stringify(index, null, 2));
+        return 0;
+      }
+      for (const entry of index) {
+        console.log(`${entry.relPath} (${entry.bytes} B, ${entry.sections.length} section(s))`);
+        for (const s of entry.sections) console.log(`  ${s.number === null ? "-" : `§${s.number}`}  ${s.heading}  (${s.bytes} B)`);
+      }
+      return 0;
+    }
+
+    if (section === undefined) {
+      const entry = listPolicySections(projectRoot).find((e) => e.area === area.replace(/^policies\//, "").replace(/\.md$/, ""));
+      if (!entry) throw new PolicyIndexError(`no policy area "${area}" — available: ${listPolicySections(projectRoot).map((e) => e.area).join(", ")}`);
+      if (json) {
+        console.log(JSON.stringify(entry, null, 2));
+        return 0;
+      }
+      console.log(`${entry.relPath} (${entry.bytes} B)`);
+      for (const s of entry.sections) console.log(`  ${s.number === null ? "-" : `§${s.number}`}  ${s.heading}  (${s.bytes} B)`);
+      return 0;
+    }
+
+    const result = getPolicySection(projectRoot, area, section);
+    if (json) {
+      console.log(JSON.stringify(result, null, 2));
+      return 0;
+    }
+    if (!result.found) {
+      console.log(`[orchestrator] ${result.relPath} has no section matching "${section}". It has:`);
+      for (const s of result.sections) console.log(`  ${s.number === null ? "-" : `§${s.number}`}  ${s.heading}  (${s.bytes} B)`);
+      return 0;
+    }
+    console.log(`# ${result.relPath} — ${result.heading}  (${result.bytes} B of ${result.areaBytes} B)`);
+    console.log("");
+    console.log(result.text);
+    return 0;
+  } catch (error) {
+    if (error instanceof PolicyIndexError) throw new CliUsageError(error.message);
+    throw error;
+  }
+}
+
 async function runTokensVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   if (rest.includes("--help")) {
     console.log("usage: sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>] [--project-root <path>] [--state-db <path>]");
@@ -1781,6 +1857,8 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
       return runQaMetricsVerb(rest, defaultProjectRoot);
     case "tokens":
       return runTokensVerb(rest, defaultProjectRoot);
+    case "policy":
+      return runPolicyVerb(rest, defaultProjectRoot);
     case "projects":
       return runProjectsVerb(rest, defaultProjectRoot);
     case "init":
@@ -1857,6 +1935,18 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       return 0;
     }
     console.error("[orchestrator] layout.yaml and the repo disagree:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
+  if (args.checkPromptBudget) {
+    const result = checkPromptBudget(args.projectRoot);
+    if (result.ok) {
+      console.log("[orchestrator] static prompt budget holds.");
+      for (const note of result.notes) console.log(`  - ${note}`);
+      return 0;
+    }
+    console.error("[orchestrator] static prompt budget exceeded:");
     for (const problem of result.problems) console.error(`  - ${problem}`);
     return 1;
   }

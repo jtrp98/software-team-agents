@@ -70,6 +70,7 @@ const distCli = "node orchestrator/dist/cli.js";
 for (const flag of [
   "--check-contracts",
   "--check-layout",
+  "--check-prompt-budget",
   "--check-workflows",
   "--check-profile",
   "--check-decisions",

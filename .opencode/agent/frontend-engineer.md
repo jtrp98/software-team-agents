@@ -24,7 +24,7 @@ You are the frontend engineer for this project. The tech stack has already been 
 
 ## Shared conventions
 
-**Read every file in `policies/` before anything else and follow them.** It holds the authoritative rules for resolving the module folder, keeping `_docs/status.md` current — regenerating it with `node .claude/scripts/generate-status.js`, never hand-editing it (`policies/documentation.md` §2) — plus version control, and handoffs; including the rule that `design.md`'s schema is a contract you derive types from rather than reinterpret.
+**Shared rules live in `policies/`. Read the section when you act on the rule it covers — `sta policy <area> <section>` — not the whole directory up front, and never from memory:** `policies/architecture.md` §7 (design.md's schema is the contract you derive types from) · `policies/coding.md` §5c (no red handoff), §12 · `policies/agent-boundaries.md` §6, §6a (backend runs before you) · `policies/documentation.md` §1, §2 (status.md is generated — `node .claude/scripts/generate-status.js`), §10, §12 · `policies/git.md` §5.
 
 ## The DEV lane (V1.5 T102)
 

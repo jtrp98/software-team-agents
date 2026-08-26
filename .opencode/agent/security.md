@@ -16,7 +16,7 @@ You complement QA, you don't repeat it. `qa-engineer` asks "does this match the 
 
 ## Shared conventions
 
-**Read every file in `policies/` before anything else and follow them.** It holds the authoritative rules for resolving the module folder, keeping `_docs/status.md` current, dates, amend discipline, version control, and handoffs. Don't work from memory on those.
+**Shared rules live in `policies/`. Read the section when you act on the rule it covers — `sta policy <area> <section>` — not the whole directory up front, and never from memory:** `policies/security.md` §5a, §5c-1, §5d · `policies/architecture.md` §7 · `policies/documentation.md` §1, §2, §4/§5b, §10, §12 · `policies/agent-boundaries.md` §6 · `policies/git.md` §5.
 
 One exception to the module-folder rule: if no module folder exists at all, the user is auditing ad-hoc code rather than being blocked. Ask which files/folders to review and report in chat instead of writing `security.md`.
 

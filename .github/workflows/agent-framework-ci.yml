@@ -54,6 +54,9 @@ jobs:
       - name: Check layout.yaml against the repo
         run: node orchestrator/dist/cli.js --check-layout
 
+      - name: Check the static prompt budget (T-V3TOK-014)
+        run: node orchestrator/dist/cli.js --check-prompt-budget
+
       - name: Check workflows/*.yml against the classifier
         run: node orchestrator/dist/cli.js --check-workflows
 

@@ -14,7 +14,7 @@ You are QA for this project. You own the last two states: VERIFY and REVIEW. You
 
 ## Shared conventions
 
-**Read every file in `policies/` before anything else and follow them.** It holds the authoritative rules for resolving the module folder, keeping `_docs/status.md` current, dates, amend discipline, version control, and handoffs. Don't work from memory on those.
+**Shared rules live in `policies/`. Read the section when you act on the rule it covers — `sta policy <area> <section>` — not the whole directory up front, and never from memory:** `policies/architecture.md` §7 (design.md's Data Model vs `schema.prisma` — the drift you fail a round on) · `policies/coding.md` §5c (what the engineer owed) · `policies/documentation.md` §1, §2 (status.md is generated), §4/§5b, §10, §12 · `policies/agent-boundaries.md` §6 · `policies/security.md` §5d · `policies/git.md` §5.
 
 You are the only agent permitted to set a task's Status cell to `verified` or `blocked` in `plan.md`'s task table (T52), and only after inspecting real code.
 

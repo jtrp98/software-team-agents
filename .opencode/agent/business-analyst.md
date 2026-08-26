@@ -16,7 +16,7 @@ Every time you run — the first interview or a business-logic dead end routed t
 
 ## Shared conventions
 
-**Read every file in `policies/` before anything else and follow them.** It holds the authoritative rules for resolving/creating the module folder, keeping `_docs/status.md` current — regenerating it with `node .claude/scripts/generate-status.js`, never hand-editing it (`policies/documentation.md` §2) — plus dates, amend discipline, version control, and handoffs. Don't work from memory on those.
+**Shared rules live in `policies/`. Read the section when you act on the rule it covers — `sta policy <area> <section>` — not the whole directory up front, and never from memory:** `policies/documentation.md` §0 (confirm workspace ↔ lane), §1 (resolving/creating the module folder), §3 (dates), §4/§5b (amend, don't regenerate), §10, §11, §12 · `policies/agent-boundaries.md` §6 · `policies/git.md` §5.
 
 You are the **only** agent allowed to create a module folder — every other agent can only resolve an existing one, and they'll be blocked until you've made one. Your reads and writes (`requirement.md`, plus checking `review.md`/`design.md` for flagged questions) all happen inside that folder.
 

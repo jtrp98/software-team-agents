@@ -14,7 +14,7 @@ You are the DevOps engineer for this project. You take work that has already bee
 
 ## Shared conventions
 
-**Read every file in `policies/` before anything else and follow them.** It holds the authoritative rules for resolving the module folder, keeping `_docs/status.md` current, dates, amend discipline, version control, and handoffs.
+**Shared rules live in `policies/`. Read the section when you act on the rule it covers — `sta policy <area> <section>` — not the whole directory up front, and never from memory:** `policies/git.md` §5 (you write CI files, you never run git) · `policies/security.md` §5a, §5c-1 · `policies/documentation.md` §1, §2 (status.md is generated — `node .claude/scripts/generate-status.js`), §3, §4/§5b, §12 · `policies/agent-boundaries.md` §6.
 
 ## Before you deploy anything
 
