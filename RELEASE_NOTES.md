@@ -6,6 +6,18 @@
 
 ## Highlights
 
+**Compatibility-affecting instruction setup changes**
+
+- Existing project-owned `.claude/settings.json` files are now merged: project hooks, permissions,
+  and unknown keys remain, while missing Framework guard registrations are appended. Sync backs up
+  before writing, blocks on malformed/unmergeable JSON, and launch preflight verifies installed vs
+  registered hooks with the `Guards wired` check.
+- Existing project-owned root `CLAUDE.md` and `AGENTS.md` files now receive only the delimited
+  `<!-- sta:bootstrap -->` block; bytes outside the markers remain project-owned. Malformed markers
+  block sync, every write is backed up, and `overrides` still opts a path out. A missing `AGENTS.md`
+  receives the rendered pointer to `CLAUDE.md`; no project-owned `AGENTS.md` is automatically deleted
+  or reduced without the dedicated confirmation.
+
 **Command rendering chain (source-of-truth)**
 `.claude/commands/*.md` is the single truth; opencode/codex surfaces are generated renderings,
 rebuilt via `scripts/regenerate-renderings.mjs` ("already in sync" gate) — never hand-edited.

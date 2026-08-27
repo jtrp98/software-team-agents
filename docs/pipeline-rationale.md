@@ -82,7 +82,7 @@ business-analyst → system-analyst → project-manager → test-planner → bac
 
 **Three-repo note (T-ROLE/T-WG7):** every path above that sits in the module folder (`_docs/module/<name>/…`) or under `knowledge/` is a **Knowledge-repository** location. Analysis-role Writes columns — requirement/design/plan/test-plan and everything the `business-analyst`…`uxui-designer` rows produce — are written only from the Knowledge workspace (`software-team-agents ba`). A DEV workspace reads those same paths as READ-ONLY context (its rendered CLAUDE.md banner names the root), writes app code plus its own engineer docs (`review.md`, `security.md`, `deploy.md`), and never carries a local `_docs/`. `qa-engineer` runs from the Target (DEV) workspace and cannot write `plan.md` directly there — `.claude/hooks/block-path-permissions.js` denies it unconditionally in a `role: dev` workspace, whatever its contract says. Its Status-cell decision still has to land where `plan.md` lives — the Knowledge repo — so it goes through two stages (T-LV3): `qa-engineer` writes its verdict into `review.md` (fully writable from Target) plus a `## Knowledge sync — three-repo mode` table naming each task's id and new Status, then a BA-workspace session applies that table to `plan.md`'s Status cells — a relay of a decision already made, not a second review, and using write access the BA workspace role already holds over its own `plan.md`. In single-repo/legacy mode (no `role: dev`), none of this applies and `qa-engineer` still edits the Status cell directly, as it always did.
 
-**Lane visibility (T-LV1/T-LV2):** the read direction above also runs the other way, symmetrically and optionally. A BA workspace's `.agent-team/config.yaml` may set `target.path`, mirroring `knowledge.path` on the DEV side; when it resolves, `software-team-agents ba` sets `AGENTCLAUDE_TARGET_ROOT` the same way a DEV launch sets `AGENTCLAUDE_KNOWLEDGE_ROOT`. Unset or unresolved, BA works exactly as before — Target stays optional, nothing about BA's own workflow depends on it. `system-analyst` is the one agent that reads it today: amending a module that's already implemented, with `AGENTCLAUDE_TARGET_ROOT` present, it reads the real schema off the Target (via `backend-engineer.md`'s "Fixed project stack" section, never a hardcoded path) before treating a change as additive/breaking, and reports drift against `design.md` plainly instead of trusting `design.md`'s memory of what got built. No write channel opens either direction — this is read-only, same as `AGENTCLAUDE_KNOWLEDGE_ROOT` is for DEV.
+**Lane visibility (T-LV1/T-LV2):** the read direction above also runs the other way, symmetrically and optionally. A BA workspace's `.agent-team/config.yaml` may set `target.path`, mirroring `knowledge.path` on the DEV side; when it resolves, `software-team-agents ba` sets `AGENTCLAUDE_TARGET_ROOT` the same way a DEV launch sets `AGENTCLAUDE_KNOWLEDGE_ROOT`. Unset or unresolved, BA works exactly as before — Target stays optional, nothing about BA's own workflow depends on it. `system-analyst` is the one agent that reads it today: amending a module that's already implemented, with `AGENTCLAUDE_TARGET_ROOT` present, it reads the real schema off the Target using the Target-resolved stack metadata rather than a hardcoded path before treating a change as additive/breaking, and reports drift against `design.md` plainly instead of trusting `design.md`'s memory of what got built. No write channel opens either direction — this is read-only, same as `AGENTCLAUDE_KNOWLEDGE_ROOT` is for DEV.
 
 Every agent also reads `_docs/status.md` when it starts and regenerates it (`node .claude/scripts/generate-status.js` — T51, `policies/documentation.md` §2) when it finishes, rather than hand-editing it — that's left out of the table above rather than repeated on all eleven rows. The BA-workspace agents have no `Bash` tool: they keep `status.md` correct by keeping its inputs (their own documents) accurate, and the agents that do hold `Bash` regenerate the file itself. Authority model, one line per layer: **PM = Work Graph · Graphify = Code Graph · Orchestrator = Runtime** — plan.md owns what-work/order/dependency/owner, code intelligence owns source-code relationships, the orchestrator derives runtime readiness and dispatch; no layer implements another's job.
 
@@ -130,10 +130,10 @@ _docs/
 │   ├── check-schema-contract.js  ← run by qa-engineer: diffs schema.prisma against every design.md
 │   ├── check-status-sync.js      ← independent second opinion on an existing status.md (T50)
 │   ├── generate-status.js        ← every agent runs this to (re)write status.md — no hand-edits (T51)
-│   └── static-analysis-gate.js   ← run by qa-engineer before a FULL round: lint/format/typecheck/build/test/security_scan/dependency_scan across every package (T22/T23/T24)
+│   └── static-analysis-gate.js   ← run by qa-engineer before a FULL round: profile commands + source-root security/dependency scans
 ├── tests/
 │   └── run.js                    ← self-test for every hook + script (both runtimes' copies, no deps)
-└── settings.json                ← wires every hook up (checked in, applies to everyone)
+└── settings.json                ← declares Framework hook registrations; sync merges missing entries into effective project settings
 ```
 
 ```
@@ -149,8 +149,11 @@ exactly one question — Agent (ใคร) · Skill (ทำอะไรได้
 Orchestrator (ใครทำต่อ) — plus runtime state and docs. `orchestrator/src/layout/repoLayout.ts`
 checks the declaration against the real filesystem, which is the part that keeps it from
 becoming a diagram that drifts: it catches an agent with a prompt but no contract, two concepts
-claiming one directory, and a hook sitting in `.claude/hooks/` that `settings.json` never wires
-up. Run it with `node orchestrator/dist/cli.js --check-layout`.
+claiming one directory, and a hook sitting in `.claude/hooks/` that the Framework settings source
+never wires up. Run it with `node orchestrator/dist/cli.js --check-layout`. Installation alone is
+not runtime wiring: workspace preflight's `Guards wired` check also compares the installed hook
+registrations with the effective project `.claude/settings.json`; a missing registration blocks
+launch, while an explicit settings override is reported as the user's choice.
 
 Two paths are deliberately **not** moved by it. `.claude/agents/` is where Claude Code resolves
 subagents from, so relocating the prompts would separate the concept by breaking the product;
@@ -188,14 +191,17 @@ To change one, edit that agent's frontmatter. `inherit` follows the session's `/
 
 ---
 
-## Fixed stack (summary — the two engineer files are authoritative)
+## Target-resolved stack
 
-- **Frontend**: Next.js App Router · TypeScript · Tailwind · Zustand
-- **Backend**: Node + Express · PostgreSQL · Prisma · REST · hand-rolled JWT · Zod
-- **Package manager**: npm
-- **Tests**: opt-in — `setup` offers Vitest once and defaults to none. `qa-engineer` runs every check that exists (`typecheck`/`lint`/`build`/`test`) and must state in `review.md` when there are no automated tests, so a ✅ is never mistaken for a tested ✅
+The Target's `.agent-team/config.yaml` `stack:` block is authoritative for its profile, package
+manager/tool, commands, schema paths and source roots. Sync renders the compact
+`.claude/shared/stack.md` digest from that block; engineer prompts implement the resolved stack and
+repository conventions without choosing a replacement. Verification runs the declared commands,
+and a skipped command is not a pass; an all-skipped profile is `unverified`.
 
-Changing the stack means the user confirms it and `frontend-engineer.md`/`backend-engineer.md` get updated in place. Every other agent reads those two files rather than keeping its own copy.
+Changing the stack remains a human decision. The authoritative configuration and detection behavior
+are documented in `README.md` §Configuration Reference; the engineer rationale files only explain why
+their prompts point there rather than repeating a universal stack.
 
 ---
 

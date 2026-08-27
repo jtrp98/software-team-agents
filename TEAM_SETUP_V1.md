@@ -11,7 +11,7 @@ contracts / workflows /          decisions/ targets.yaml
 policies / templates/
 ```
 
-**กฎที่ทั้งไฟล์นี้มีอยู่เพื่อบังคับ:** BA/SA/PM/QA ทำงานใน **Knowledge repo** เท่านั้น
+**กฎที่ทั้งไฟล์นี้มีอยู่เพื่อบังคับ:** BA/SA/PM/test-planner/uxui-designer ทำงานใน **Knowledge repo** เท่านั้น
 (`business-analyst`, `system-analyst`, `project-manager`, `test-planner`, `uxui-designer` — "BA workspace role").
 DEV/DevOps ทำงานใน **Target repo** เท่านั้น (backend/frontend engineer, qa, security, devops — "DEV workspace role").
 ทั้งสองฝั่งอ่าน Knowledge ได้เสมอ (DEV อ่านแบบ read-only ผ่าน binding) แต่ requirement/design/plan
@@ -31,13 +31,15 @@ DEV/DevOps ทำงานใน **Target repo** เท่านั้น (backe
 ## Step 1 — Install the Framework (once per machine)
 
 ```bash
-npm install -g software-team-agents        # หรือ npm pack ที่ repo นี้ + npm i -g <tgz> ถ้ายังไม่ publish
+npm install -g <path>\software-team-agents-<version>.tgz
 sta --version
 software-team-agents --version
 ```
 
 ทั้งสองคำสั่งเป็น bin เดียวกันของ package นี้ (`sta` = orchestrator ทั้งชุด, `software-team-agents` =
 Target-first / role-aware entry point ที่ทุก step ด้านล่างใช้).
+Package นี้เป็น private internal distribution และไม่ publish บน npm registry; ผู้ดูแล Framework สร้าง
+`.tgz` ด้วย `npm run release` แล้วแจกพร้อม checksum.
 
 ## Step 2 — Get the Knowledge Repo (clone ครั้งเดียวต่อเครื่อง, ทุก role)
 
@@ -99,6 +101,19 @@ cd C:\src\<your-target-repo>
 software-team-agents init --role dev
 ```
 
+ถ้า repo มี `.claude/` หรือ root instructions ของตัวเองอยู่แล้ว `init`/`sync` จะไม่ทิ้ง setup เดิม:
+
+- `.claude/settings.json` ยังคง project hooks, permissions และ unknown keys; Framework เติมเฉพาะ guard
+  registrations ที่ขาดและ backup ก่อนเขียน. JSON ที่ parse/merge ไม่ได้เป็น blocking conflict.
+- root `CLAUDE.md`/`AGENTS.md` ยังคง bytes ของ project นอก marker; Framework inject/update เฉพาะ
+  `<!-- sta:bootstrap -->` … `<!-- /sta:bootstrap -->`. Marker ผิดรูปเป็น conflict และไม่ถูกเดาด้วย `--force`.
+- `CLAUDE.local.md` และ nested `AGENTS.md` ถูก detect/report แต่ไม่แก้. Path ใน `overrides` ถูกข้ามและ
+  รายงานว่าเป็น explicit user choice.
+
+ตรวจผลด้วย `software-team-agents status` (`hooks registered/installed` และ instruction surface) ก่อน launch;
+preflight `Guards wired` จะหยุดเมื่อ hook files ถูกติดตั้งแต่ effective settings ยังไม่ register ครบ เว้นแต่
+settings path อยู่ใน `overrides` ซึ่งจะรายงาน explicit user choice ตรงๆ.
+
 ถ้า repo นี้ยังไม่ผูก Knowledge — ให้ตั้ง `knowledge.path` ใน `.agent-team/config.yaml` (relative หรือ
 absolute path ไปยัง Knowledge repo) หรือให้ Step 3's machine-wide binding พอ. `dev` session จะปฏิเสธ
 launch ทันทีถ้าไม่มี Knowledge binding ที่ใช้ได้ — fail-closed พร้อมคำสั่งแก้ตรงตัว.
@@ -148,8 +163,8 @@ default; `--runtime codex|opencode` เลือกอย่างอื่น�
 **ตรวจ:**
 
 ```bash
-software-team-agents status --json | grep -i knowledgeBoundButUninitialized
-software-team-agents status   # หรืออ่านบรรทัด WARNING ตรงๆ
+software-team-agents status --json   # ตรวจ field knowledgeBoundButUninitialized
+software-team-agents status          # หรืออ่านบรรทัด WARNING ตรงๆ
 node orchestrator/dist/cli.js --check-workspace --project-root <target-repo>
 ```
 
@@ -206,7 +221,7 @@ prompts, `.claude/settings.json`, bindings)
 
 **เช็ค:**
 1. `.agents/skills/<name>/SKILL.md` มีครบไหม — ถ้าไม่มี รัน `software-team-agents sync`
-   (mirror เป็น generated file, `sta sync` generate จาก `.claude/commands/**` ให้ใหม่เสมอ)
+   (mirror เป็น generated file, `software-team-agents sync` generate จาก `.claude/commands/**` ให้ใหม่เสมอ)
 2. Codex reload skills เองอัตโนมัติ (detect on change) — ไม่ต้อง restart; เมนูรวมอยู่ที่ `/skills`
 3. Invoke แบบ explicit คือ `$<name>`; การ activate เองโดยโมเดลถูกปิดไว้ (`agents/openai.yaml`
    → `allow_implicit_invocation: false`) ตั้งใจ ไม่ใช่ bug

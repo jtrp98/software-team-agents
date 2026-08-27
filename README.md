@@ -126,13 +126,20 @@ npm run build:templates  # snapshot templates/ + manifest.json
 
 | command | ทำอะไร |
 |---|---|
-| `init` | detect ชนิด workspace (Knowledge markers → BA, app-source markers → DEV), บันทึก identity + role ใน `.agent-team/config.yaml` แล้ว sync managed assets — idempotent, รันซ้ำได้ |
+| `init` | detect ชนิด workspace (Knowledge markers → BA, app-source markers → DEV); สำหรับ DEV จะ resolve Target stack จากหลักฐานใน repo; จากนั้นบันทึก identity + role + profile ใน `.agent-team/config.yaml` แล้ว sync assets — idempotent, รันซ้ำได้ |
 | `sync` | อัปเดต Framework-managed files ตาม installed version — ไฟล์ที่โดนแก้เอง**ไม่ถูก overwrite เงียบ ๆ** (report + recovery advice; `--force` = overwrite พร้อม backup) |
 | `status` | role, roots (Target/Framework/Knowledge), installed vs synced version, sync state, conflicts, Claude/Codex/OpenCode readiness (`--json` machine-readable) |
 | `dev` | preflight → launch runtime (`claude` default, `codex`/`opencode` เมื่อ `--runtime`) จาก Target — Knowledge binding **required** |
 | `ba` | preflight → launch runtime จาก Knowledge repo — Target **never required** |
 
-options ร่วม: `--target-root <path>` · `--role <ba|dev>` (init: เมื่อ markers ambiguous) · `--force` · `--no-auto-sync` (dev/ba) · `--runtime <claude|codex|opencode>` (dev/ba) · `--json` (status)
+options ร่วม: `--target-root <path>` · `--role <ba|dev>` (init: เมื่อ workspace markers ambiguous) · `--stack <name>` (init/sync: เมื่อ Target stack ambiguous หรือ unresolved) · `--force` · `--confirm-agents-pointer` (sync เท่านั้น) · `--no-auto-sync` (dev/ba) · `--runtime <claude|codex|opencode>` (dev/ba) · `--json` (status)
+
+สำหรับ DEV, Harness ตรวจ project/lock files ที่ root และลึกลงไปหนึ่งระดับโดยไม่ตาม symlink แล้ว resolve
+profile ที่ ship อยู่ (`node`/`frontend`, `dotnet`, `python`, `java`) พร้อม package manager, commands,
+source roots และ schema paths. Script ที่ Target ประกาศเองชนะ profile defaults. ถ้าพบหลาย stack families หรือ
+ไม่พบ profile ที่รองรับ `init` จะเขียน **nothing** และพิมพ์หลักฐานพร้อมคำสั่งแก้
+`software-team-agents init --stack <name>`; AI/setup playbook ต้องถามตัวเลือกนี้เฉพาะกรณีนั้น ไม่ detect
+หรือเลือก stack แทน Harness/คน. Profile family ที่เปลี่ยนภายหลังเป็น preflight STOP ไม่ใช่ silent rewrite.
 
 ### Role Workspace — BA ทำงานใน Knowledge, DEV ทำงานใน Target
 
@@ -191,9 +198,22 @@ overrides: []                   # path ที่ประกาศที่น�
 
 ### Ownership model
 
-- **Framework-managed** — เฉพาะ path ที่ record ใน `.agent-team/manifest.json`: `.claude/agents|hooks|scripts|shared`, `.claude/settings.json`, `CLAUDE.md`, `contracts/`, `workflows/`, `policies/`, `stacks/`, `layout.yaml`, `escalation-policy.yaml`, `test-pyramid.yaml` + `.codex/agents/*.toml` (generated) + `.opencode/agent/*.md` (generated) + `.opencode/plugin/**`
-- **Target-owned เสมอ** — `src/`, `tests/`, `package.json`, business logic, `knowledge/`, `_docs/`, `decisions/`, `.workflow/`, `.git`, `node_modules`, `.agent-team/` — guarded ที่ code level แม้ manifest corrupt sync ก็ปฏิเสธ
-- **Sync rules** — disk == pristine → update (backup ก่อน) · disk != pristine → **conflict** (stop ทั้ง run) จนกว่าจะ revert / claim เป็น override / `--force` · managed file ที่ Framework เลิกใช้ถูก remove เฉพาะเมื่อ pristine · backup ทุกครั้งที่ overwrite/remove ที่ `.agent-team/backups/<timestamp>/`
+Instruction ownership มีสี่ precedence classes; `software-team-agents status --json` แสดงทุก path ใน
+`instructionSurface[]` พร้อม `owner`, `precedence`, `frameworkContributionPresent` และ consequence เมื่อขาด:
+
+| precedence | path class | กติกา |
+|---|---|---|
+| `framework-managed` | `.claude/agents/**`, `.codex/**`, `.opencode/**` | bytes มาจาก Framework/rendering และ track ใน manifest |
+| `project-owned-with-framework-block` | root `CLAUDE.md`, root `AGENTS.md` | project prose เป็นของ project; sync แตะเฉพาะ `<!-- sta:bootstrap -->` … `<!-- /sta:bootstrap -->`, backup ก่อนเขียน และ preserve bytes นอก markers (`AGENTS.md` ที่ยังไม่มีได้ rendered pointer ไป `CLAUDE.md`) |
+| `project-owned-merged` | `.claude/settings.json` | preserve project hooks/permissions/unknown keys แล้วเติมเฉพาะ Framework guard registrations ที่ขาด; ไฟล์นี้ไม่กลายเป็น manifest-managed |
+| `project-owned-untouched` | `CLAUDE.local.md`, nested `AGENTS.md` | detect/report ได้แต่ sync ไม่แก้; nested instructions อาจมี precedence เหนือ root block ตาม runtime |
+
+Source code, tests, package metadata, `knowledge/`, `_docs/`, `decisions/`, `.workflow/`, `.git`,
+`node_modules` และ `.agent-team/` ยังเป็น project-owned และ guard ปฏิเสธแม้ manifest เสีย. สำหรับ
+Framework-managed files: disk == pristine → update (backup ก่อน) · disk != pristine → **conflict** จนกว่า
+จะ revert / claim เป็น `overrides` / ยืนยัน `--force` · retired file ถูก remove เฉพาะเมื่อ pristine. Marker
+ผิดรูป/ซ้ำเป็น blocking conflict และ `--force` จะไม่เดา. `software-team-agents status` และ `sta doctor`
+เป็น read-only audit ของ instruction surface เดียวกัน.
 
 ## Workflow ของ pipeline (`sta`)
 
@@ -288,6 +308,13 @@ targets:
 
 preflight ตรวจว่า origin remote ของ local checkout ตรงกับ `remote_url` canonical — ไม่ตรง = reject พร้อมเหตุผล
 
+Knowledge item ที่มี `target_ids: []` เป็น global; item ที่ระบุ Target จะเข้า retrieval/brief เฉพาะ session
+ที่ bind Target นั้น และจำนวนที่ถูก scope ออกจะถูกรายงาน. ใช้
+`sta knowledge reconcile --target <id>` (`--json` ได้) เพื่อคำนวณ current/desired evidence ใหม่แบบ
+read-only โดยไม่บันทึก verdict หรือแก้ repo ใด. นิยาม authoritative ของ scope, origin, freshness และ
+reconciliation อยู่ที่ [`knowledge/README.md`](knowledge/README.md); หัวข้อนี้เป็น authoritative home ของ
+Target registry, local mapping และพฤติกรรมหลาย Target เท่านั้น.
+
 ## Shared Knowledge (สรุป)
 
 Knowledge ไม่ใช่ "AI memory" — เป็นข้อมูลร่วมของทีมที่มีโครงสร้างและ lifecycle รายละเอียดเต็มใน [`knowledge/README.md`](knowledge/README.md):
@@ -341,6 +368,8 @@ sta configure identity --figma-email <email> --claude-email <email>
 | `block-secret-leak.js` | Stop/SubagentStop | ไฟล์ที่ run แก้ห้ามมี hardcoded secret (`.env.example` รวมด้วย) |
 
 - **Guards ถูกเทสต์** — `node .claude/tests/run.js` (self-test ไม่มี dependencies) — guard ที่ syntax error ต้อง fail loud ไม่ใช่ fail open
+- **Installed ≠ registered** — hook script ที่มีอยู่บน disk ยังไม่แปลว่า effective `.claude/settings.json` เรียกมัน. `software-team-agents status`/`software-team-agents status --json` แสดง `hooksRegistered/hooksInstalled`; `sta doctor` ตรวจ surface เดียวกันแบบ read-only.
+- **`Guards wired` เป็น launch gate** — preflight ของ `software-team-agents dev|ba` เทียบ Framework registrations ที่ติดตั้งกับ effective settings; ขาดแม้หนึ่งรายการ = FAIL พร้อม `software-team-agents sync`. ถ้า `.claude/settings.json` อยู่ใน `overrides`, gate รายงาน explicit user choice แทนการนับเป็น pass จาก wiring ที่ไม่มี.
 - **ฝั่ง OpenCode** — git deny เป็น declarative `permission.bash` globs ใน binding เอง (specificity wins); outside-root/contract path guards มาจาก `sta-guards.js` plugin (auto-load, throw = deny) · doc-rewrite/secret-leak/exit checks **ยังไม่ enforce in-band** → adapter รายงาน unenforced + executor ตะโกน `GUARD GAP` ให้ QA round เป็นตัวครอบ
 - **Validation flags** — `sta --check-*` 16 ตัว: `contracts, layout, workflows, profile, decisions, test-pyramid, review-separation, escalation-policy, workspace, repos, environments, doc-structure, plan, knowledge, installation, roles` (+ `--check-bindings` มีใน CLI แต่ไม่ได้ wire ใน CI). `--check-plan [--module <name>]` ตรวจตาราง task ของทุก `plan.md` เป็น dependency graph แบบ deterministic (duplicate id / dangling·self·duplicate dependency / cycle / owner·status ผิด / DES traceability / wave ordering) — pm-improvements T-PM1.3. `--check-workspace` ตรวจสองเรื่องที่ไม่เกี่ยวกัน: `workspace.yaml` (multi-project grouping, T41) และ misplaced-docs scan (T-WG4) — `role: dev` workspace ที่มี `_docs/module/**` หรือ Modules table ใน `status.md` โดนรายงานพร้อม hint ปลายทางใน Knowledge repo
 - **doctor** — `sta doctor --project-root <path>` รวม 9 checks แบบ read-only (installation, knowledge binding/schema, targets registry, local mappings, runtime adapter, state store, guard wiring) exit 1 เมื่อมี FAIL พร้อม "Fix:" ทุกข้อ
@@ -357,12 +386,12 @@ mapping ครบทุก role อยู่ที่ [`planning/v2/claude-comma
 
 - **เป็น prompt เท่านั้น** — ไม่แก้ runtime/hook; agent ที่ถูกสั่งผ่าน command ยังโดน guards เดิมทุกตัว
 - **Guardrails รวมไฟล์เดียว** — `@_shared/guardrails.md` ถูก import จากทุก command (บังคับ output format, cap, cite file:line, ask-first)
-- **Ship ไป target project** ผ่าน `sta init`/`sync` (TEMPLATE_SOURCES มี `.claude/commands` เป็น concept `command` ใน layout.yaml)
+- **Ship ไป target project** ผ่าน `software-team-agents init`/`sync` (TEMPLATE_SOURCES มี `.claude/commands` เป็น concept `command` ใน layout.yaml)
 - **กัน drift** — `node .claude/tests/run.js` section 11 ตรวจ frontmatter/import/forbidden-instructions/จำนวนไฟล์ = 31
 
 ### Runtime mirrors ของ command ชุดเดียวกัน (generated — ห้าม hand-edit)
 
-Source of truth คือ `.claude/commands/*.md` เสมอ · sync (`sta init`/`sync`) generate ให้ทั้งสอง runtime เพิ่มอัตโนมัติ
+Source of truth คือ `.claude/commands/*.md` เสมอ · `software-team-agents init`/`sync` generate ให้ทั้งสอง runtime เพิ่มอัตโนมัติ
 และ `sta --check-bindings` ตรวจ byte-match ทุกไฟล์:
 
 | Runtime | ไฟล์ | Invoke | Transform |
@@ -391,7 +420,7 @@ Regenerate mirror ใน Framework repo เอง: `npm --prefix orchestrator ru
 | ไฟล์ | อยู่ที่ | keys สำคัญ |
 |---|---|---|
 | `installation.yaml` | `%LOCALAPPDATA%\software-team-agents\` (Windows) หรือ `~/.config/software-team-agents/` | `schema_version: 1`, `knowledge_root` (เขียนโดย `sta configure knowledge-root`) |
-| `.agent-team/config.yaml` | Target/Knowledge workspace | `schema_version`, `target_id`, `registered_at`, `role` (`ba\|dev`), `knowledge.path`, `overrides[]` |
+| `.agent-team/config.yaml` | Target/Knowledge workspace | `schema_version`, `target_id`, `registered_at`, `role` (`ba\|dev`), `knowledge.path`, DEV `stack`, `overrides[]` |
 | `.agent-team/manifest.json` | generated, ห้าม hand-edit | `framework_version`, `files[]` (path + pristine sha256) |
 | `targets.yaml` | Knowledge root | registry ของ Target: `target_id/name/remote_url/status` |
 | `.workflow/targets.local.yaml` | Knowledge root (local) | map `target_id → path` |
@@ -400,6 +429,31 @@ Regenerate mirror ใน Framework repo เอง: `npm --prefix orchestrator ru
 | `layout.yaml`, `escalation-policy.yaml`, `test-pyramid.yaml` | Framework repo (+ synced ไป DEV workspace) | directory ownership / recovery policy / test levels |
 
 Environment variables ที่ runtime ใช้: `AGENTCLAUDE_ROLE` (role ปัจจุบันสำหรับ path permissions), `AGENTCLAUDE_WRITABLE_WORK_ROOTS` (JSON array ของ writable roots — launcher ตั้ง `[]` เสมอ)
+
+`stack:` เป็น Target-resolved configuration ที่ engineer prompts และ verification gate ใช้ร่วมกัน ไม่ใช่
+Framework-wide default:
+
+```yaml
+stack:
+  profile: dotnet
+  package_manager: nuget
+  commands:
+    install: dotnet restore
+    build: dotnet build
+    test: dotnet test
+    lint: dotnet format --verify-no-changes
+    typecheck: dotnet build
+  schema_paths: []
+  source_roots: ['.']
+  detected_at: <ISO timestamp>
+  fingerprint: sha256:<evidence digest>
+  generated_hash: sha256:<detector-owned fields digest>
+```
+
+`fingerprint` เปลี่ยนเมื่อ project/lock/script evidence เปลี่ยน; `generated_hash` แยก deterministic output
+จาก block ที่คนแก้เอง. Sync ไม่ rewrite block ที่คนแก้เงียบ ๆ และ profile-family change จะหยุดให้คน review.
+การเปลี่ยน stack เป็น human decision เสมอ. นี่คือ authoritative home ของ Target adaptation; `CLAUDE.md`
+และ role prompts ชี้มาที่ block นี้โดยไม่ทำสำเนาค่า stack.
 
 ## Workflow ตัวอย่าง End-to-End
 
@@ -453,7 +507,7 @@ npm run build:templates  # snapshot templates/ + manifest.json
 node ../.claude/tests/run.js   # hook/script self-test — ต้องเขียวเสมอถ้าแตะ hooks/scripts
 ```
 
-- CI: [`.github/workflows/agent-framework-ci.yml`](.github/workflows/agent-framework-ci.yml) รัน self-test + typecheck + tests + 15 release-gate `--check-*` flag + template build/init check บนทุก PR และทุก push ไป `master` หรือ `release/**` (default branch `release/dev` รวมอยู่ — release path ไม่มีทาง bypass validation)
+- CI: [`.github/workflows/agent-framework-ci.yml`](.github/workflows/agent-framework-ci.yml) รัน self-test + typecheck + tests + release-gate `--check-*` flags + template build/init check บนทุก PR และทุก push ไป `master` หรือ `release/**` (default branch `release/dev` รวมอยู่ — release path ไม่มีทาง bypass validation)
 - โครงสร้าง directory ถูกประกาศใน [`layout.yaml`](layout.yaml) และตรวจด้วย `--check-layout` — เพิ่ม folder ใหม่ต้องประกาศก่อน
 - เอกสารกฎ: [`policies/`](policies/README.md) · machine-readable half ของ agent: [`contracts/`](contracts/) · operating/pipeline rules: [`CLAUDE.md`](CLAUDE.md) · Codex root pointer: [`AGENTS.md`](AGENTS.md) · knowledge model: [`knowledge/README.md`](knowledge/README.md) · V1 contract (guarantees/non-goals): [`decisions/ADR-004-v1-contract.md`](decisions/ADR-004-v1-contract.md)
 - `templates/` เป็น build artifact — แก้ที่ root sources (`.claude/`, `contracts/`, ...) แล้ว regenerate เสมอ
