@@ -16,17 +16,17 @@ import {
   resolveKnowledgeBinding,
   resolveTargetBinding,
   TargetBindingError,
-  ROLE_LABEL,
+  WORKSPACE_ROLE_LABEL,
   ROLE_WORKSPACE_KIND,
   detectWorkspaceKind,
   type KnowledgeBinding,
-  type RoleName,
+  type WorkspaceRole,
   type TargetBinding,
 } from "./roleWorkspace.js";
 import { formatResolvedCommand, resolveBundledStaCli } from "../runtime/npmCliResolver.js";
 import { runTargetInit } from "./initCommand.js";
 import { isTargetInitialized } from "./targetMeta.js";
-import { recordInteractiveSession } from "../observability/sessionRecord.js";
+import { measureWorkspaceStatic, recordInteractiveSession } from "../observability/sessionRecord.js";
 import { CLAUDE_SETTINGS_PATH, inspectGuardWiring } from "./guardSettings.js";
 
 /**
@@ -100,7 +100,7 @@ function defaultLaunch(cmd: string, args: string[], cwd: string, env: NodeJS.Pro
 
 export interface WorkspaceContext {
   checks: PreflightCheck[];
-  role: RoleName;
+  role: WorkspaceRole;
   /** The Role Workspace the session will execute from. */
   workspaceRoot: string;
   frameworkRoot: string;
@@ -117,7 +117,7 @@ export interface WorkspaceContext {
  * PreflightError naming the first failing check; returns everything the
  * launch step needs otherwise.
  */
-export function workspacePreflight(role: RoleName, options: RoleRunOptions = {}): WorkspaceContext {
+export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions = {}): WorkspaceContext {
   const checks: PreflightCheck[] = [];
   // A function declaration, not a const arrow: TS applies never-return CFA
   // (callers may rely on post-fail narrowing) only to this form.
@@ -145,24 +145,24 @@ export function workspacePreflight(role: RoleName, options: RoleRunOptions = {})
   if (!initialized) {
     const kind = detectWorkspaceKind(roots.targetRoot);
     if (kind === "ambiguous") {
-      fail(`${ROLE_LABEL[role]} workspace`, "repository is ambiguous (Knowledge and application markers both present) — run software-team-agents init --role <ba|dev> explicitly");
+      fail(`${WORKSPACE_ROLE_LABEL[role]} workspace`, "repository is ambiguous (Knowledge and application markers both present) — run software-team-agents init --role <ba|dev> explicitly");
     }
     if (kind !== expectedKind && kind !== "unrecognized") {
       fail(
-        `${ROLE_LABEL[role]} workspace`,
+        `${WORKSPACE_ROLE_LABEL[role]} workspace`,
         `this repository looks like a ${kind === "knowledge" ? "Knowledge" : "Target"} repository — run \`software-team-agents init --role ${kind === "knowledge" ? "ba" : "dev"}\` there instead`,
       );
     }
     runTargetInit({ targetRoot: roots.targetRoot, templatesDir: options.templatesDir, now: options.now ?? new Date().toISOString(), role });
-    checks.push({ name: "Initialization", ok: true, detail: `auto-initialized as ${ROLE_LABEL[role]} workspace` });
+    checks.push({ name: "Initialization", ok: true, detail: `auto-initialized as ${WORKSPACE_ROLE_LABEL[role]} workspace` });
   } else {
     if (!config) {
       fail("Initialization", ".agent-team/config.yaml is missing although manifest.json exists — restore it or delete .agent-team and re-init");
     }
     if (config && config.role && config.role !== role) {
       fail(
-        `${ROLE_LABEL[role]} workspace`,
-        `this workspace is registered as ${ROLE_LABEL[config.role as RoleName]} — use software-team-agents ${config.role}, or re-init with --role ${role} if that was wrong`,
+        `${WORKSPACE_ROLE_LABEL[role]} workspace`,
+        `this workspace is registered as ${WORKSPACE_ROLE_LABEL[config.role as WorkspaceRole]} — use software-team-agents ${config.role}, or re-init with --role ${role} if that was wrong`,
       );
     }
     checks.push({ name: "Initialization", ok: true });
@@ -280,15 +280,15 @@ export function workspacePreflight(role: RoleName, options: RoleRunOptions = {})
     }
     devKnowledge = resolved;
     checks.push({ name: "Knowledge", ok: true, detail: `${resolved.knowledgeRoot} (via ${resolved.via})` });
-    // T-WG1 — a valid, marker-complete binding still leaves the BA-lane
+    // T-WG1 — a valid, marker-complete binding still leaves the BA workspace role
     // entirely unusable if nobody ever ran `init --role ba` there. DEV reads
     // Knowledge fine either way (it only needs the markers), so this is a
     // note, not a failing check.
     if (!isTargetInitialized(resolved.knowledgeRoot)) {
       checks.push({
-        name: "Knowledge (BA lane)",
+        name: "Knowledge (BA workspace role)",
         ok: true,
-        detail: `bound but not initialized as a BA workspace — BA-lane is unusable on this machine until: cd "${resolved.knowledgeRoot}" && software-team-agents init --role ba`,
+        detail: `bound but not initialized as a BA workspace — the BA workspace role is unusable on this machine until: cd "${resolved.knowledgeRoot}" && software-team-agents init --role ba`,
       });
     }
     checks.push({ name: "Target writable", ok: true, detail: roots.targetRoot });
@@ -303,16 +303,16 @@ export function workspacePreflight(role: RoleName, options: RoleRunOptions = {})
     // T-LV1 — an optional Target binding lets BA read the real app repo
     // (schema.prisma, code) without ever requiring it. Any problem is
     // reported as a non-blocking check, exactly like T-WG1's "Knowledge (BA
-    // lane)" note — it is never a reason to fail preflight.
+    // workspace role)" note — it is never a reason to fail preflight.
     try {
       const resolved = resolveTargetBinding({ knowledgeRoot: roots.targetRoot, configTargetPath: config?.target?.path });
       if (resolved) {
         baTarget = resolved;
-        checks.push({ name: "Target (BA lane)", ok: true, detail: `${resolved.targetRoot} (via ${resolved.via}, read-only)` });
+        checks.push({ name: "Target (BA workspace role)", ok: true, detail: `${resolved.targetRoot} (via ${resolved.via}, read-only)` });
       }
     } catch (e) {
       if (e instanceof TargetBindingError) {
-        checks.push({ name: "Target (BA lane)", ok: true, detail: e.message });
+        checks.push({ name: "Target (BA workspace role)", ok: true, detail: e.message });
       } else {
         throw e;
       }
@@ -337,7 +337,7 @@ export type DevOptions = RoleRunOptions;
  * Full flow for a role: preflight → launch. Resolves to the launched runtime's
  * exit code; a preflight failure resolves to 1 without launching anything.
  */
-async function runRoleSession(role: RoleName, options: RoleRunOptions): Promise<number> {
+async function runRoleSession(role: WorkspaceRole, options: RoleRunOptions): Promise<number> {
   let ctx: WorkspaceContext;
   try {
     ctx = workspacePreflight(role, options);
@@ -350,9 +350,12 @@ async function runRoleSession(role: RoleName, options: RoleRunOptions): Promise<
     throw e;
   }
   for (const c of ctx.checks) console.log(`[software-team-agents] ✓ ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
-  console.log(`[software-team-agents] starting ${ctx.runtime} (${ROLE_LABEL[role]}) from ${ctx.workspaceRoot} ...`);
+  console.log(`[software-team-agents] starting ${ctx.runtime} (${WORKSPACE_ROLE_LABEL[role]}) from ${ctx.workspaceRoot} ...`);
   const launch = options.launch ?? defaultLaunch;
   const startedAt = Date.now();
+  // Measure before the runtime starts: an interactive session may edit its own
+  // project instructions, but telemetry must describe the bytes it launched with.
+  const measurement = measureWorkspaceStatic(ctx.workspaceRoot, role, ctx.runtime);
   try {
     const sta = resolveBundledStaCli(ctx.frameworkRoot);
     const contextCommand = sta ? `${formatResolvedCommand(sta)} context` : undefined;
@@ -365,7 +368,7 @@ async function runRoleSession(role: RoleName, options: RoleRunOptions): Promise<
   } finally {
     const record = options.recordSession ?? recordInteractiveSession;
     try {
-      record({ workspaceRoot: ctx.workspaceRoot, role, runtime: ctx.runtime, startedAt, endedAt: Date.now() });
+      record({ workspaceRoot: ctx.workspaceRoot, role, runtime: ctx.runtime, startedAt, endedAt: Date.now(), measurement });
     } catch (error) {
       // A custom recorder is no more authoritative than the production one.
       console.error(`[software-team-agents] could not record interactive session telemetry: ${error instanceof Error ? error.message : String(error)}`);

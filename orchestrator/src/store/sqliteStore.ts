@@ -55,7 +55,8 @@ import {
 // v8: records full module-doc bytes alongside the sliced prompt bytes.
 // v9: records deterministic-gate enabled/disabled for optimized QA runs.
 // v10: records warning-only context-budget accounting and overflow telemetry.
-const SCHEMA_VERSION = 10;
+// v11: records launch-time always-on instruction bytes for interactive sessions.
+const SCHEMA_VERSION = 11;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -87,6 +88,7 @@ CREATE TABLE IF NOT EXISTS runs (
   runtime            TEXT,
   session_kind       TEXT,
   static_chars       INTEGER,
+  instruction_surface_bytes INTEGER,
   handoff_chars      INTEGER,
   doc_chars          INTEGER,
   doc_chars_before   INTEGER,
@@ -189,6 +191,7 @@ interface RunRow {
   runtime: string | null;
   session_kind: string | null;
   static_chars: number | null;
+  instruction_surface_bytes: number | null;
   handoff_chars: number | null;
   doc_chars: number | null;
   doc_chars_before: number | null;
@@ -291,6 +294,10 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     ];
     for (const [column, type] of columns) if (!existing.has(column)) db.exec(`ALTER TABLE runs ADD COLUMN ${column} ${type}`);
   },
+  10: (db) => {
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    if (!existing.has("instruction_surface_bytes")) db.exec("ALTER TABLE runs ADD COLUMN instruction_surface_bytes INTEGER");
+  },
 };
 
 export class SqliteTaskStore implements TaskStore {
@@ -384,8 +391,8 @@ export class SqliteTaskStore implements TaskStore {
   appendRun(record: RunRecord): void {
     this.db
       .prepare(
-        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, prompt_version, qa_mode, deterministic_gate, runtime, session_kind, static_chars, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, prompt_version, qa_mode, deterministic_gate, runtime, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.task_id,
@@ -409,6 +416,7 @@ export class SqliteTaskStore implements TaskStore {
         record.runtime,
         record.session_kind,
         record.static_chars,
+        record.instruction_surface_bytes ?? null,
         record.handoff_chars,
         record.doc_chars,
         record.doc_chars_before,
@@ -463,6 +471,7 @@ export class SqliteTaskStore implements TaskStore {
       runtime: r.runtime,
       session_kind: r.session_kind === "orchestrated" || r.session_kind === "interactive" ? r.session_kind : null,
       static_chars: r.static_chars,
+      instruction_surface_bytes: r.instruction_surface_bytes,
       handoff_chars: r.handoff_chars,
       doc_chars: r.doc_chars,
       doc_chars_before: r.doc_chars_before,

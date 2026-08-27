@@ -1854,7 +1854,8 @@ function printTokenTask(metric: TaskTokenMetrics): void {
   console.log(
     `[orchestrator] ${metric.taskId}: input=${displayMetric(metric.inputTokens)} output=${displayMetric(metric.outputTokens)} ` +
       `cached=${displayMetric(metric.cachedTokens)} total=${displayMetric(metric.totalTokens)} stages=${metric.stageCount} retries=${metric.retryCount} retryWaste=${displayMetric(metric.retryWasteTokens)} ` +
-      `sessions=orchestrated:${metric.sessionKinds.orchestrated},interactive:${metric.sessionKinds.interactive},not-reported:${metric.sessionKinds.not_reported}`,
+      `sessions=orchestrated:${metric.sessionKinds.orchestrated},interactive:${metric.sessionKinds.interactive},not-reported:${metric.sessionKinds.not_reported} ` +
+      `always-on-instructions=${displayMetric(metric.instructionSurfaceBytes)} B`,
   );
   console.log(
     `[orchestrator]   composition: static=${displayMetric(c.static_chars)} handoff=${displayMetric(c.handoff_chars)} docs=${displayMetric(c.doc_chars)}/${displayMetric(c.doc_chars_before)} before-slice ` +

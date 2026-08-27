@@ -155,7 +155,7 @@ software-team-agents dev       # preflight (Knowledge required!) → launch จ�
 | Role Workspace | `knowledgeRoot` | `targetRoot` |
 | Target | **NOT REQUIRED** | execution workspace (writable เท่านั้น) |
 | Knowledge | workspace (writable) | read context (**required**) |
-| Sync payload | BA agents (`business-analyst`, `system-analyst`, `project-manager`, `test-planner`, `uxui-designer`) + hooks + scripts + policies + `CLAUDE.md` | engineer roster (`backend/frontend-engineer`, `qa-engineer`, `security`, `devops` — **ไม่มี BA-lane prompts**, T-UX13) + contracts/workflows/stacks/layout YAML |
+| Sync payload | BA agents (`business-analyst`, `system-analyst`, `project-manager`, `test-planner`, `uxui-designer`) + hooks + scripts + policies + `CLAUDE.md` | engineer roster (`backend/frontend-engineer`, `qa-engineer`, `security`, `devops` — **ไม่มี BA-workspace prompts**, T-UX13) + contracts/workflows/stacks/layout YAML |
 | Write ที่อื่น | Framework/Target = DENY | Framework/Knowledge = DENY |
 | Knowledge-side artifacts (`_docs/module/*/requirement\|design\|test-plan.md`, `uxui/**`, `knowledge/**`) | ✅ เขียนได้ | **DENY ที่ hook** (T-UX13) — ต้องรันจาก Knowledge workspace |
 
@@ -182,8 +182,8 @@ overrides: []                   # path ที่ประกาศที่น�
 
 | WARNING | ตรวจอะไร | แก้ |
 |---|---|---|
-| Knowledge root bound but never initialized (T-WG1) | `installation.yaml` ผูก Knowledge root ที่มี marker ครบ แต่ไม่เคยมี `.agent-team/config.yaml` ที่นั่น — BA-lane prompt ไม่มีอยู่เลยทั้งเครื่อง | `cd <knowledgeRoot> && software-team-agents init --role ba` (`status` พิมพ์คำสั่งนี้ตรงๆ) |
-| Roster drift (T-WG2) | agent prompt ที่ชื่อเป็นของอีก lane (เช่น `business-analyst.md` ใน workspace `role: dev`) — ไม่มีทาง legitimate ไม่ว่าจะมาจากไหน | `software-team-agents sync --force` (backup ก่อนลบ; `sync` เฉยๆ report conflict ไม่ overwrite เงียบๆ) |
+| Knowledge root bound but never initialized (T-WG1) | `installation.yaml` ผูก Knowledge root ที่มี marker ครบ แต่ไม่เคยมี `.agent-team/config.yaml` ที่นั่น — BA-workspace prompt ไม่มีอยู่เลยทั้งเครื่อง | `cd <knowledgeRoot> && software-team-agents init --role ba` (`status` พิมพ์คำสั่งนี้ตรงๆ) |
+| Roster drift (T-WG2) | agent prompt ที่ชื่อเป็นของอีก workspace role (เช่น `business-analyst.md` ใน workspace `role: dev`) — ไม่มีทาง legitimate ไม่ว่าจะมาจากไหน | `software-team-agents sync --force` (backup ก่อนลบ; `sync` เฉยๆ report conflict ไม่ overwrite เงียบๆ) |
 | Misplaced module docs (T-WG4, `--check-workspace`) | `_docs/module/**` หรือ Modules table ใน `_docs/status.md` อยู่ใน workspace `role: dev` — ที่ถูกคือ Knowledge repo เท่านั้น | copy ไป `<knowledgeRoot>\_docs\module\<name>\`, merge status row, ลบของเดิม |
 
 ทั้งสามรายการนี้เป็น warning ไม่ block การทำงาน — จุดประสงค์คือให้คน (หรือ AI ที่ทำงานแทนคน) เห็นก่อนเขียนไฟล์ผิดที่
@@ -255,7 +255,7 @@ sta roles impact REQ-101                         # lane ไหนจะโดน
 sta roles context dev                            # lane นี้เห็นอะไรได้บ้าง
 ```
 
-lane ที่มีจริง: `ba | sa | uxui | dev` — acknowledge/signoff เป็น human act บันทึกใน `knowledge/_roles/**` (agent เขียนไฟล์นี้ไม่ได้ทุกกรณี)
+knowledge-visibility lane ที่มีจริง: `ba | sa | uxui | dev` — acknowledge/signoff เป็น human act บันทึกใน `knowledge/_roles/**` (agent เขียนไฟล์นี้ไม่ได้ทุกกรณี)
 
 ### Failure / recovery
 

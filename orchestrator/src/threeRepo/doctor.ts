@@ -6,7 +6,7 @@ import { validateInstallation } from "../packaging/installValidation.js";
 import { assertStandaloneKnowledgeRoot, defaultInstallationConfigPath, loadInstallationConfig } from "./installation.js";
 import { loadLocalTargetMapping } from "./localTargets.js";
 import { loadTargetRegistry } from "./targets.js";
-import { detectInstructionSurface, type InstructionSurfaceEntry } from "./ownership.js";
+import { detectInstructionSurface, isNestedInstruction, type InstructionSurfaceEntry } from "./ownership.js";
 import { isTargetInitialized, loadTargetConfig, readTargetManifest, type TargetConfig, type TargetManifest } from "../targetcli/targetMeta.js";
 import { detectWorkspaceKind } from "../targetcli/roleWorkspace.js";
 import { targetStackWasHumanEdited } from "../targetcli/targetProfile.js";
@@ -312,16 +312,20 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
     instructionSurface = detectInstructionSurface({ targetRoot: projectRoot, frameworkPaths });
     for (const entry of instructionSurface) {
       const contributionExpected = entry.precedence !== "project-owned-untouched";
-      const status: DoctorStatus = contributionExpected && !entry.frameworkContributionPresent ? "WARNING" : "PASS";
+      const nestedWarning = isNestedInstruction(entry);
+      const status: DoctorStatus = nestedWarning || (contributionExpected && !entry.frameworkContributionPresent) ? "WARNING" : "PASS";
       checks.push({
         name: `Instruction surface: ${entry.path}`,
         status,
         detail:
           `owner=${entry.owner}; precedence=${entry.precedence}; Framework contribution=${entry.frameworkContributionPresent ? "present" : "absent"}` +
-          (entry.consequence ? `; ${entry.consequence}` : ""),
+          (entry.consequence ? `; ${entry.consequence}` : "") +
+          (nestedWarning ? "; may shadow or contradict the root bootstrap for files in its scope" : ""),
         fix:
           status === "PASS"
             ? undefined
+            : nestedWarning
+              ? "review this project-owned instruction beside the root bootstrap; doctor remains read-only"
             : entry.precedence === "framework-managed"
               ? "run: software-team-agents sync"
               : "review prompt-setup.md section: Merging with the project's existing Claude setup",

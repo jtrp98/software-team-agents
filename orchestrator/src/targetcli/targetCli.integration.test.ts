@@ -599,6 +599,7 @@ describe("software-team-agents — target-first end to end", () => {
   it("dev: preflight fails closed on conflicts and missing runtime, then launches FROM the Target with policy env", async () => {
     const target = makeTarget();
     const fw = fakeFramework("3.1.0", [
+      { relPath: "CLAUDE.md", content: "# Framework launch instructions ก\n" },
       { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer") },
       { relPath: ".claude/settings.json", content: '{"hooks":{"PreToolUse":[{"matcher":"","hooks":[]}]}}' },
     ]);
@@ -614,6 +615,7 @@ describe("software-team-agents — target-first end to end", () => {
     let launchedCwd = "";
     let launchedEnv: NodeJS.ProcessEnv | undefined;
     let launchedArgs: string[] | undefined;
+    let launchedInstructionBytes = 0;
     const exitCode = await runDev({
       targetRoot: target,
       templatesDir,
@@ -623,6 +625,7 @@ describe("software-team-agents — target-first end to end", () => {
         launchedArgs = args;
         launchedCwd = cwd;
         launchedEnv = env;
+        launchedInstructionBytes = fs.statSync(path.join(cwd, "CLAUDE.md")).size;
         return Promise.resolve(7);
       },
     });
@@ -638,6 +641,7 @@ describe("software-team-agents — target-first end to end", () => {
       expect(rows).toHaveLength(1);
       expect(rows[0]).toMatchObject({ task_id: expect.stringMatching(/^session:dev:/), session_kind: "interactive", runtime: "claude", input_tokens: null, output_tokens: null });
       expect(rows[0].static_chars).toBeGreaterThan(0);
+      expect(rows[0].instruction_surface_bytes).toBe(launchedInstructionBytes);
     } finally { telemetry.close(); }
 
     // Missing runtime fails closed.
@@ -690,7 +694,7 @@ describe("software-team-agents — target-first end to end", () => {
 
 describe("role workspace architecture (T-ROLE)", () => {
   const FW_V1_FILES = [
-    // BA lane agents
+    // BA-workspace agents
     { relPath: ".claude/agents/business-analyst.md", content: AGENT_MD("business-analyst") },
     { relPath: ".claude/agents/system-analyst.md", content: AGENT_MD("system-analyst") },
     // Engineer agents
@@ -715,7 +719,7 @@ describe("role workspace architecture (T-ROLE)", () => {
     expect(initRun.code).toBe(0);
     expect(initRun.out).toMatch(/BA/);
 
-    // Role profile: lane agents land, engineer agents and pipeline payload do not.
+    // Workspace-role profile: BA agents land; engineer agents and pipeline payload do not.
     expect(fs.existsSync(path.join(knowledge, ".claude", "agents", "business-analyst.md"))).toBe(true);
     expect(fs.existsSync(path.join(knowledge, ".claude", "agents", "system-analyst.md"))).toBe(true);
     expect(fs.existsSync(path.join(knowledge, ".claude", "hooks", "block-git.js"))).toBe(true);
@@ -855,11 +859,19 @@ describe("role workspace architecture (T-ROLE)", () => {
     const textRun = await capture(() => runTargetCli(["status"], target, fw, { installationConfigPath: NO_INSTALLATION }));
     expect(textRun.out).not.toContain("Framework routing is not delivered to this workspace");
     expect(textRun.out).toContain("Framework guard registrations: 8/8 registered");
+    expect(textRun.out).toContain("WARNING: nested instructions may shadow or contradict the root bootstrap (2)");
+    expect(textRun.out).toContain("packages/app/AGENTS.md — project-owned and read-only");
 
     const doctor = await runDoctor({ projectRoot: target, templatesDir: path.join(fw, "templates"), installationConfigPath: NO_INSTALLATION });
     expect(doctor.instructionSurface).toEqual(status.instructionSurface);
     for (const row of doctor.checks.filter((entry) => entry.name.startsWith("Instruction surface:"))) {
       if (row.status !== "PASS") expect(row.fix).toBeTruthy();
+    }
+    const nestedChecks = doctor.checks.filter((entry) => /CLAUDE\.local\.md|packages\/app\/AGENTS\.md/.test(entry.name));
+    expect(nestedChecks).toHaveLength(2);
+    for (const row of nestedChecks) {
+      expect(row.status).toBe("WARNING");
+      expect(row.detail).toContain("may shadow or contradict the root bootstrap");
     }
     expect([...dirHash(target).entries()]).toEqual(before);
   });
@@ -1320,14 +1332,14 @@ describe("role workspace architecture (T-ROLE)", () => {
       expect(status.knowledgeBoundButUninitialized?.toLowerCase()).toBe(knowledgeCanonical.toLowerCase());
 
       const rendered = (await capture(() => runTargetCli(["status"], target, fw, { installationConfigPath: configPath }))).out;
-      expect(rendered).toMatch(/WARNING.*BA-lane is not usable/);
+      expect(rendered).toMatch(/WARNING.*BA workspace role is not usable/);
       expect(rendered).toContain("software-team-agents init --role ba");
 
       // DEV preflight: a non-blocking note, not a failure — DEV still reads
       // Knowledge fine on markers alone.
       const templatesDir = path.join(fw, "templates");
       const ctx = devPreflight({ targetRoot: target, templatesDir, installationConfigPath: configPath, probe: () => ({ available: true }) });
-      const note = ctx.checks.find((c) => c.name === "Knowledge (BA lane)");
+      const note = ctx.checks.find((c) => c.name === "Knowledge (BA workspace role)");
       expect(note?.ok).toBe(true);
       expect(note?.detail).toMatch(/software-team-agents init --role ba/);
     });

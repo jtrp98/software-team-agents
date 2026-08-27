@@ -12,8 +12,8 @@ policies / templates/
 ```
 
 **กฎที่ทั้งไฟล์นี้มีอยู่เพื่อบังคับ:** BA/SA/PM/QA ทำงานใน **Knowledge repo** เท่านั้น
-(`business-analyst`, `system-analyst`, `project-manager`, `test-planner`, `uxui-designer` — "BA lane").
-DEV/DevOps ทำงานใน **Target repo** เท่านั้น (backend/frontend engineer, qa, security, devops — "DEV lane").
+(`business-analyst`, `system-analyst`, `project-manager`, `test-planner`, `uxui-designer` — "BA workspace role").
+DEV/DevOps ทำงานใน **Target repo** เท่านั้น (backend/frontend engineer, qa, security, devops — "DEV workspace role").
 ทั้งสองฝั่งอ่าน Knowledge ได้เสมอ (DEV อ่านแบบ read-only ผ่าน binding) แต่ requirement/design/plan
 **เขียนที่ Knowledge repo เท่านั้น** — ไม่ใช่ Target. การเขียนผิดที่คือเหตุการณ์จริงที่ทำให้ไฟล์นี้ถูกเขียนใหม่
 (ดู Troubleshooting #1 ด้านล่าง และ `planning/v2/workspace-guardrails-TASKS.md`).
@@ -64,7 +64,7 @@ sta configure knowledge-root C:\src\<company>-knowledge
 **ทุก workspace ต้องรู้ตัวว่าเป็นฝั่งไหน** (`role: ba` หรือ `role: dev`) — บันทึกไว้ที่
 `.agent-team/config.yaml` ของ workspace นั้นเอง, เขียนครั้งเดียวตอน `init`.
 
-### BA lane (business-analyst / system-analyst / project-manager / test-planner / uxui-designer)
+### BA workspace role (business-analyst / system-analyst / project-manager / test-planner / uxui-designer)
 
 ```bash
 cd C:\src\<company>-knowledge
@@ -75,7 +75,7 @@ software-team-agents init --role ba
 `business-analyst`/`system-analyst` จะไม่มี prompt อยู่เลยในเครื่องนี้ (ดู Troubleshooting #1) และ
 `software-team-agents status` จากทุก workspace ที่ผูกกับ Knowledge root นี้จะเตือนด้วย WARNING ตรงๆ.
 
-### DEV lane (backend/frontend engineer, qa-engineer, security, devops)
+### DEV workspace role (backend/frontend engineer, qa-engineer, security, devops)
 
 **ถ้ายังไม่มี Target repo บนเครื่องนี้เลย — เลือกก่อนว่าอยู่กรณีไหน:**
 
@@ -116,7 +116,7 @@ software-team-agents status
 - `Sync:` — `state: UP_TO_DATE` (ไม่ใช่ `NOT_INITIALIZED`/`INCOMPATIBLE`); `conflicts: 0`
 - `WARNING: Knowledge root bound ... has no .agent-team/config.yaml` — Knowledge root ผูกไว้แล้วแต่ยังไม่
   `init --role ba` ที่นั่น (ดู Troubleshooting #1) — รันคำสั่งที่ status พิมพ์ให้ตรงๆ
-- `WARNING: roster drift` — มี agent prompt จากอีก lane ปนอยู่ใน workspace นี้ (ดู Troubleshooting #2)
+- `WARNING: roster drift` — มี agent prompt จากอีก workspace role ปนอยู่ใน workspace นี้ (ดู Troubleshooting #2)
 - `Claude:`/`Codex:`/`OpenCode:` — ต้อง `READY` สำหรับ runtime ที่จะใช้จริง
 
 `status` ไม่เขียนอะไรเลย — ปลอดภัยรันซ้ำได้ทุกเมื่อ
@@ -124,8 +124,8 @@ software-team-agents status
 ## Step 6 — Start Working
 
 ```bash
-software-team-agents ba     # BA lane — launches from the Knowledge repo
-software-team-agents dev    # DEV lane — launches from this Target
+software-team-agents ba     # BA workspace role — launches from the Knowledge repo
+software-team-agents dev    # DEV workspace role — launches from this Target
 ```
 
 ทั้งสองคำสั่งรัน preflight ให้อัตโนมัติ (auto-sync ถ้าไม่มี conflict), แล้ว launch runtime (`claude` โดย
@@ -141,7 +141,7 @@ default; `--runtime codex|opencode` เลือกอย่างอื่น�
 (repo ที่มี `role: dev`) — ที่ที่ถูกคือ Knowledge repo เท่านั้น.
 
 **สาเหตุที่พบจริง (2026-08-24):** Knowledge root ถูก `configure knowledge-root` ไว้ถูกต้อง แต่ไม่เคยมีใคร
-รัน `init --role ba` ที่นั่นเลย — ไม่มี BA-lane prompt (`business-analyst`, `system-analyst`, ...) อยู่บน
+รัน `init --role ba` ที่นั่นเลย — ไม่มี BA-workspace prompt (`business-analyst`, `system-analyst`, ...) อยู่บน
 เครื่องนี้เลยแม้แต่ที่เดียว, และไม่มีอะไรเตือนเรื่องนี้จนกว่าจะสายไปแล้ว (session ที่เปิดตรงในเครื่องเป้าหมาย
 เขียน `_docs/` ลง Target ได้เพราะ hook ไม่รู้จัก role ของ workspace ในตอนนั้น).
 
@@ -167,10 +167,10 @@ node orchestrator/dist/cli.js --check-workspace --project-root <target-repo>
 
 ### 2. "status เตือน roster drift"
 
-**สัญญาณ:** `status` พิมพ์ `WARNING: roster drift — agent prompt(s) from another lane found in this
+**สัญญาณ:** `status` พิมพ์ `WARNING: roster drift — agent prompt(s) from another workspace role found in this
 workspace`.
 
-**สาเหตุ:** มีคนคัดลอก agent prompt file ของอีก lane เข้ามาด้วยมือ (เช่น `business-analyst.md` ในโฟลเดอร์
+**สาเหตุ:** มีคนคัดลอก agent prompt file ของอีก workspace role เข้ามาด้วยมือ (เช่น `business-analyst.md` ในโฟลเดอร์
 DEV) — ไฟล์แบบนี้ไม่มีทางถูกต้องในเครื่องมือนี้ ไม่ว่าจะมาจากไหน.
 
 **แก้:** `software-team-agents sync --force` — สำรองไฟล์เดิมไว้ที่ `.agent-team/backups/<timestamp>/` ก่อน

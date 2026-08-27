@@ -6,7 +6,7 @@ it taxes every future run, and what language it's written in.
 
 ---
 
-## 0. Before writing anything — confirm workspace ↔ lane (T-WG5)
+## 0. Before writing anything — confirm workspace ↔ workspace role (T-WG5)
 
 **Every analysis/doc-writing run's first action is `software-team-agents status`, before touching
 `§1`'s module-folder resolution.** This isn't optional context-gathering — it's the checkpoint
@@ -17,7 +17,7 @@ workspace at all; nothing asked first.
 
 Read `status`'s output and confirm two things with the user before writing:
 
-1. **This workspace's role matches the work.** BA-lane work (`business-analyst`,
+1. **This workspace's role matches the work.** BA-workspace work (`business-analyst`,
    `system-analyst`, `project-manager`, `test-planner`, `uxui-designer`) writes only from a
    `role: ba` workspace (the Knowledge repo). If `status` reports `role: dev` or no role at all,
    stop and ask — don't write a module doc into a Target.

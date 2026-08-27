@@ -79,7 +79,7 @@ export function resolveNpmCliScript(command: string, probe: NpmShimProbe = {}): 
 
 /**
  * The `sta` binary is bundled beside targetcli in this package, so interactive
- * lane launchers can point at it without relying on a Windows npm `.cmd` shim.
+ * workspace-role launchers can point at it without relying on a Windows npm `.cmd` shim.
  */
 export function resolveBundledStaCli(
   frameworkRoot: string,

@@ -941,7 +941,7 @@ check(
 );
 
 check(
-  'business-analyst writing its own lane\'s workspace -> still blocked (no agent, no mode, no exception)',
+  'business-analyst writing its own knowledge-lane workspace -> still blocked (no agent, no mode, no exception)',
   runPathHook('Edit', path.join(ROOT, 'knowledge', '_roles', 'sales-crm', 'ba.yaml'), 'business-analyst'),
   BLOCK,
 );

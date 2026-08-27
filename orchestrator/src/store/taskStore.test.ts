@@ -90,6 +90,7 @@ function sampleRun(taskId = "T-1"): RunRecord {
     runtime: "claude-code",
     session_kind: "orchestrated",
     static_chars: 500,
+    instruction_surface_bytes: null,
     handoff_chars: 300,
     doc_chars: 2500,
     doc_chars_before: 4000,
@@ -215,10 +216,10 @@ describe.each(implementations)("%s", (_name, makeStore) => {
   it("round-trips T-V3TOK-001 runtime and prompt composition fields, including truthful nulls", () => {
     const store = makeStore();
     store.appendRun(sampleRun("T-1"));
-    store.appendRun({ ...sampleRun("T-1"), runtime: "codex", session_kind: "interactive", static_chars: 9, handoff_chars: null, doc_chars: null, knowledge_chars: null, code_intel_chars: null, tool_output_chars: null });
+    store.appendRun({ ...sampleRun("T-1"), runtime: "codex", session_kind: "interactive", static_chars: 9, instruction_surface_bytes: 17, handoff_chars: null, doc_chars: null, knowledge_chars: null, code_intel_chars: null, tool_output_chars: null });
     expect(store.runsForTask("T-1")).toMatchObject([
       { runtime: "claude-code", session_kind: "orchestrated", static_chars: 500, doc_chars: 2500 },
-      { runtime: "codex", session_kind: "interactive", static_chars: 9, handoff_chars: null, doc_chars: null },
+      { runtime: "codex", session_kind: "interactive", static_chars: 9, instruction_surface_bytes: 17, handoff_chars: null, doc_chars: null },
     ]);
     store.close();
   });

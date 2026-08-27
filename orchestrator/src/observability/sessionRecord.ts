@@ -5,11 +5,13 @@ import { RunLog, type RunRecord } from "./runLog.js";
 import type { TaskStore } from "../store/taskStore.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { defaultStateDbPath } from "../store/stateView.js";
-import { assetsForRole, type RoleName } from "../targetcli/roleWorkspace.js";
+import { assetsForRole, type WorkspaceRole } from "../targetcli/roleWorkspace.js";
 
 export interface WorkspaceStaticMeasurement {
-  /** CLAUDE.md is loaded by the interactive runtime before any session work. */
+  /** Character count of the root instruction files loaded before interactive work. */
   always_loaded_chars: number;
+  /** Exact on-disk bytes of the root instruction files the selected runtime auto-loads at launch. */
+  instruction_surface_bytes: number;
   /** Role-reachable policies and role prompts. This deliberately excludes CLAUDE.md to avoid double counting. */
   reachable_static_chars: number;
 }
@@ -20,6 +22,29 @@ function fileChars(file: string): number {
   } catch {
     return 0;
   }
+}
+
+function fileBytes(file: string): number {
+  try {
+    const stat = fs.lstatSync(file);
+    return stat.isFile() && !stat.isSymbolicLink() ? stat.size : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Root instruction files loaded before the interactive prompt begins. Nested
+ * instructions are reported by status/doctor, but are not counted here: they
+ * become active only when work enters their directory. Agent prompts and
+ * policies remain reachable context, not always-on context.
+ */
+function autoLoadedInstructionFiles(workspaceRoot: string, runtime: string): string[] {
+  if (runtime === "claude") {
+    return [path.join(workspaceRoot, "CLAUDE.md"), path.join(workspaceRoot, "CLAUDE.local.md")];
+  }
+  if (runtime === "codex" || runtime === "opencode") return [path.join(workspaceRoot, "AGENTS.md")];
+  return [];
 }
 
 function walk(root: string, rel: string, include: (relPath: string) => boolean): number {
@@ -58,10 +83,12 @@ function commandDescriptionChars(root: string, include: (relPath: string) => boo
  * when followed" are different observability facts, even though the current
  * run-record schema stores their truthful combined footprint in static_chars.
  */
-export function measureWorkspaceStatic(workspaceRoot: string, role: RoleName): WorkspaceStaticMeasurement {
+export function measureWorkspaceStatic(workspaceRoot: string, role: WorkspaceRole, runtime = "claude"): WorkspaceStaticMeasurement {
   const include = assetsForRole(role);
+  const autoLoaded = autoLoadedInstructionFiles(workspaceRoot, runtime);
   return {
-    always_loaded_chars: fileChars(path.join(workspaceRoot, "CLAUDE.md")),
+    always_loaded_chars: autoLoaded.reduce((total, file) => total + fileChars(file), 0),
+    instruction_surface_bytes: autoLoaded.reduce((total, file) => total + fileBytes(file), 0),
     reachable_static_chars:
       walk(workspaceRoot, "policies", (rel) => include(rel)) +
       walk(workspaceRoot, ".claude/agents", (rel) => include(rel)) +
@@ -69,9 +96,9 @@ export function measureWorkspaceStatic(workspaceRoot: string, role: RoleName): W
   };
 }
 
-const SESSION_AGENT: Record<RoleName, AgentStage> = {
+const SESSION_AGENT: Record<WorkspaceRole, AgentStage> = {
   ba: AgentStage.BUSINESS_ANALYST,
-  // `dev` is the interactive engineering lane rather than a pipeline stage;
+  // `dev` is the interactive engineering workspace role rather than a pipeline stage;
   // backend-engineer is its durable, queryable representative stage.
   dev: AgentStage.BACKEND_ENGINEER,
 };
@@ -79,14 +106,16 @@ const SESSION_AGENT: Record<RoleName, AgentStage> = {
 /** Writes a session row through the existing TaskStore seam. It intentionally never throws. */
 export function recordInteractiveSession(params: {
   workspaceRoot: string;
-  role: RoleName;
+  role: WorkspaceRole;
   runtime: string;
   startedAt: number;
   endedAt: number;
+  /** Captured immediately before launch so edits made during the session cannot rewrite history. */
+  measurement?: WorkspaceStaticMeasurement;
   store?: TaskStore;
 }): void {
   try {
-    const measurement = measureWorkspaceStatic(params.workspaceRoot, params.role);
+    const measurement = params.measurement ?? measureWorkspaceStatic(params.workspaceRoot, params.role, params.runtime);
     const taskId = `session:${params.role}:${new Date(params.startedAt).toISOString()}`;
     // stdio:"inherit" makes real usage inaccessible here. input/output stay
     // null (not zero); the legacy combined `tokens` column remains 0 solely
@@ -106,6 +135,7 @@ export function recordInteractiveSession(params: {
         runtime: params.runtime,
         session_kind: "interactive",
         static_chars: measurement.always_loaded_chars + measurement.reachable_static_chars,
+        instruction_surface_bytes: measurement.instruction_surface_bytes,
       },
     });
     const store = params.store ?? new SqliteTaskStore(defaultStateDbPath(params.workspaceRoot));
@@ -123,10 +153,11 @@ export function recordInteractiveSession(params: {
 
 export function interactiveSessionRecordForTest(params: {
   workspaceRoot: string;
-  role: RoleName;
+  role: WorkspaceRole;
   runtime: string;
   startedAt: number;
   endedAt: number;
+  measurement?: WorkspaceStaticMeasurement;
 }): RunRecord | null {
   // Small test-only capture seam that still exercises the production recorder.
   const records: RunRecord[] = [];

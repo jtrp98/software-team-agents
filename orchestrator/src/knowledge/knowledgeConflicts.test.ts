@@ -22,12 +22,12 @@ import {
 
 const NOW = "2026-08-20T09:00:00Z";
 
-function model(id: string, name: string) {
+function model(id: string, name: string, targetIds?: string[]) {
   return makeItem("db-schema", id, {
     model: name,
     fields: [{ name: "id", type: "String", optional: false }],
     relations: [],
-  });
+  }, targetIds ? { target_ids: targetIds } : {});
 }
 
 function term(id: string, word: string) {
@@ -106,6 +106,41 @@ describe("detectConflicts", () => {
     expect(conflicts).toHaveLength(1);
     expect(conflicts[0].kind).toBe("duplicate-model");
     expect(conflicts[0].declared).toBe(false);
+  });
+
+  it("does not treat the same model name in different explicit Targets as a duplicate", () => {
+    const conflicts = detectConflicts(new KnowledgeBase([
+      model("DB-app-Note", "Note", ["app"]),
+      model("DB-admin-Note", "Note", ["admin"]),
+    ]));
+    expect(conflicts).toEqual([]);
+  });
+
+  it("still treats the same model name in the same Target as a duplicate", () => {
+    const conflicts = detectConflicts(new KnowledgeBase([
+      model("DB-app-Note-a", "Note", ["app"]),
+      model("DB-app-Note-b", "Note", ["app"]),
+    ]));
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0]).toMatchObject({ kind: "duplicate-model", items: ["DB-app-Note-a", "DB-app-Note-b"] });
+  });
+
+  it("keeps an explicit conflicts-with relation across different Targets", () => {
+    const a = makeItem(
+      "requirement",
+      "REQ-app",
+      { acceptance_criteria: [], actors: [], priority: null, assumption_unconfirmed: false },
+      { target_ids: ["app"], relations: [{ type: "conflicts-with", to: "REQ-admin" }] },
+    );
+    const b = makeItem(
+      "requirement",
+      "REQ-admin",
+      { acceptance_criteria: [], actors: [], priority: null, assumption_unconfirmed: false },
+      { target_ids: ["admin"] },
+    );
+    expect(detectConflicts(new KnowledgeBase([a, b]))).toMatchObject([
+      { kind: "declared", declared: true, items: ["REQ-admin", "REQ-app"] },
+    ]);
   });
 
   it("finds two records defining one endpoint", () => {

@@ -69,8 +69,8 @@ Then, guided by what status reports:
 | Local path mappings | read `<knowledgeRoot>/.workflow/targets.local.yaml` if present |
 | Sync status of the current workspace | `status --json` → `syncState`, `syncedVersion`, `conflictCount`, `managedFileCount` |
 | Runtime readiness | `status --json` → `claude.ready`, `codex.ready`, `opencode.ready` (OpenCode needs bindings **and** `.opencode/plugin/sta-guards.js` — its headless default posture is allow-all, so a missing plugin means unguarded, not just incomplete) |
-| Knowledge root bound but never initialized (T-WG1) | `status --json` → `knowledgeBoundButUninitialized` (the bound root's path, or absent) — a machine-wide binding resolves, yet `<knowledgeRoot>/.agent-team/config.yaml` is absent, so BA-lane prompts exist nowhere on this machine yet; `status`'s plain-text output prints the same fact as a `WARNING:` line with the exact fix command |
-| Roster drift in a workspace (T-WG2) | `status --json` → `rosterDriftPaths` (array of paths; empty = none) — agent-prompt files under `.claude/agents/` / `.codex/agents/` / `.opencode/agent/` whose names belong to the *other* lane's roster (analysis prompts in a DEV workspace, engineer/reviewer prompts in a BA one); never legitimate regardless of how they got there |
+| Knowledge root bound but never initialized (T-WG1) | `status --json` → `knowledgeBoundButUninitialized` (the bound root's path, or absent) — a machine-wide binding resolves, yet `<knowledgeRoot>/.agent-team/config.yaml` is absent, so BA-workspace prompts exist nowhere on this machine yet; `status`'s plain-text output prints the same fact as a `WARNING:` line with the exact fix command |
+| Roster drift in a workspace (T-WG2) | `status --json` → `rosterDriftPaths` (array of paths; empty = none) — agent-prompt files under `.claude/agents/` / `.codex/agents/` / `.opencode/agent/` whose names belong to the *other* workspace role's roster (analysis prompts in a DEV workspace, engineer/reviewer prompts in a BA one); never legitimate regardless of how they got there |
 | Module docs stranded in a Target (T-WG4) | `sta --check-workspace --project-root <path>` (the Framework's top-level CLI, not `software-team-agents`) — flags every file under a `role: dev` workspace's `_docs/module/**` plus a `## Modules` table in its `_docs/status.md`, each with the Knowledge-repo destination path |
 
 If `status` fails because the current directory is not a Git repository, that is
@@ -105,9 +105,9 @@ setup step.
 Ask which one applies (**this is the one question always asked**, unless the user
 already said):
 
-1. **BA** — business analysis lane; works in the Knowledge repository
-2. **DEV** — engineering lane; works in a Target repository
-3. **QA** — quality lane; derives its needs from the official workflow definitions
+1. **BA** — analysis workspace role; works in the Knowledge repository
+2. **DEV** — engineering workspace role; works in a Target repository
+3. **QA** — quality-verification flow; derives its needs from the official workflow definitions
 4. **Add Target** — register an additional Target in an existing setup
 5. **Update Setup** — re-inspect and refresh an existing setup (Framework moved/updated)
 6. **Inspect Setup** — full read-only report; change nothing
@@ -134,7 +134,7 @@ already said):
   (auto-detects the BA workspace) followed by `software-team-agents sync`.
 - Optionally offer: "Bind this machine's default Knowledge root too?" →
   `sta configure knowledge-root <path>` (affects other flows on this machine).
-- Verify with `software-team-agents status`: expect Role `BA`, `Target: NOT
+- Verify with `software-team-agents status`: expect Workspace role `BA`, `Target: NOT
   REQUIRED`, sync `UP_TO_DATE`, Claude/Codex/OpenCode READY.
 - **UX/UI consultant.** The BA workspace materializes five prompts —
   `business-analyst`, `system-analyst`, `project-manager`, `test-planner` and
@@ -172,11 +172,11 @@ already said):
   dependencies to perform a second AI stack detection. If the Harness stopped
   on ambiguous or unresolved evidence, ask the user to confirm one profile and
   rerun with `--stack <name>`; otherwise ask nothing about the stack.
-- Verify: Role `DEV`, Knowledge line present via `workspace-config`/`installation`,
+- Verify: Workspace role `DEV`, Knowledge line present via `workspace-config`/`installation`,
   sync `UP_TO_DATE`, runtimes READY.
 - **No analysis prompts here, by design.** A DEV/Target workspace carries only
   the engineer roster (`backend/frontend-engineer`, `qa-engineer`, `security`,
-  `devops`). The BA-lane prompts — including `uxui-designer` — are deliberately
+  `devops`). The BA-workspace prompts — including `uxui-designer` — are deliberately
   absent, and the engineering agents' contracts additionally deny writing
   requirement/design/test-plan docs, the module's `uxui/` folder, or anything
   under `knowledge/` from this workspace (a bare session with no role is not yet
@@ -185,7 +185,7 @@ already said):
   requirements or UX work "here", route them to the BA flow above instead of
   working around the block.
 - **Roster drift & stranded docs.** Before declaring DEV ready, check the two
-  Phase 0 rows: other-lane prompt files present here, and local `_docs/module/**`
+  Phase 0 rows: other-workspace-role prompt files present here, and local `_docs/module/**`
   content. Roster drift is fixed by plain `sync`; if it reports conflicts, show
   them verbatim and wait for the user's explicit "force". Stranded docs are
   migrated, never deleted: propose copying `_docs/module/<name>/` into the
@@ -257,8 +257,8 @@ Common breakages, minimal fixes — canonical identities never change implicitly
 
 | Symptom | Fix |
 |---|---|
-| Requirements/design docs found inside a Target (`_docs/module/**`) | an analysis role wrote into the wrong workspace; migrate to `<knowledgeRoot>/_docs/module/<name>/` (merge status tables), remove the Target-side copy only on explicit confirmation, and find how lane routing failed before continuing |
-| BA-lane prompts present in a DEV workspace (or engineer prompts in a BA one) | roster drift — plain `software-team-agents sync`; escalate to `sync --force` only on the user's explicit word |
+| Requirements/design docs found inside a Target (`_docs/module/**`) | an analysis role wrote into the wrong workspace; migrate to `<knowledgeRoot>/_docs/module/<name>/` (merge status tables), remove the Target-side copy only on explicit confirmation, and find how workspace-role routing failed before continuing |
+| BA-workspace prompts present in a DEV workspace (or engineer prompts in a BA one) | roster drift — plain `software-team-agents sync`; escalate to `sync --force` only on the user's explicit word |
 | BA/UXUI prompts unavailable anywhere despite a bound Knowledge root | the Knowledge repo was never initialized — run the BA flow's bound-but-uninitialized step |
 | Knowledge/Target moved on disk | update `knowledge.path` in the workspace config, or the mapping entry in `.workflow/targets.local.yaml` (show the diff first); identity in `targets.yaml` stays |
 | Missing local mapping | add just that mapping block to `.workflow/targets.local.yaml` |

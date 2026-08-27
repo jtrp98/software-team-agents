@@ -1,13 +1,13 @@
 <!-- sta:bootstrap -->
 # software-team-agents bootstrap
-- Lane/role: resolved at sync (`ba` / `dev`) — writes only artifacts allowed by that lane.
+- Workspace role: resolved at sync (`ba` / `dev`) — writes only artifacts allowed by that role.
 - Workspace root (writable): **resolved at sync**
 - Bound Knowledge/Target root (read-only): **resolved at sync or UNBOUND**
 - Human gates: requirements interview; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.
 - Hard boundary: no state-changing git.
 - Hard boundary: write only inside resolved writable workspace roots.
 - Hard boundary: write only paths allowed by the active role contract.
-- Hard boundary: Confirm workspace ↔ lane before writing anything.
+- Hard boundary: Confirm workspace ↔ workspace role before writing anything.
 - Hard boundary: amend existing module docs section-by-section; never regenerate them.
 - Hard boundary: approvals/sign-offs are human acts; agents never forge them.
 - Hard boundary: dates and unclear business rules come from a person; never improvise them.
@@ -68,7 +68,7 @@ location, written only from the Knowledge workspace (`software-team-agents ba`).
 those paths read-only, writes app code plus `review.md`/`security.md`/`deploy.md`, and carries no local
 `_docs/`. `qa-engineer` runs from the Target and cannot write `plan.md` there — `role: dev` denies it
 unconditionally — so its verdict lands in `review.md` plus a `## Knowledge sync — three-repo mode` table
-naming each task id and new Status, which a BA-lane session then applies to `plan.md` (**T-LV3**: a relay
+naming each task id and new Status, which a BA-workspace session then applies to `plan.md` (**T-LV3**: a relay
 of a decision already made, never a second review). In single-repo mode none of this applies and
 `qa-engineer` edits the Status cell directly. `AGENTCLAUDE_KNOWLEDGE_ROOT` and `AGENTCLAUDE_TARGET_ROOT`
 are read-only in both directions; no write channel opens either way.
@@ -76,7 +76,7 @@ are read-only in both directions; no write channel opens either way.
 ## Runtime entry points
 
 `sta run --task-id <id> --module <name> …` orchestrated pipeline (`sta status`/`approve`/`retry`) ·
-`software-team-agents ba|dev` interactive lanes · `sta policy [<area>] [<section>]` one policy section ·
+`software-team-agents ba|dev` interactive workspace roles · `sta policy [<area>] [<section>]` one policy section ·
 `sta tokens` context composition per run · `sta --check-prompt-budget` this file's budget.
 
 **Stack** (Target-resolved): `.agent-team/config.yaml` `stack:` declares the Target profile, package manager/tool,

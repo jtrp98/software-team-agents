@@ -28,6 +28,8 @@ export interface RunRecord {
   session_kind: "orchestrated" | "interactive" | null;
   /** Prompt composition fields are null when that path did not measure the component, never a fabricated zero. */
   static_chars: number | null;
+  /** Exact always-on instruction bytes measured before an interactive runtime launched. */
+  instruction_surface_bytes?: number | null;
   handoff_chars: number | null;
   doc_chars: number | null;
   /** Full module-document bytes before ContextManager sliced this prompt. */
@@ -70,6 +72,7 @@ export interface RunOutcome {
   runtime?: string;
   session_kind?: "orchestrated" | "interactive";
   static_chars?: number;
+  instruction_surface_bytes?: number;
   handoff_chars?: number;
   doc_chars?: number;
   doc_chars_before?: number;
@@ -142,6 +145,7 @@ export class RunLog {
       runtime: params.outcome.runtime ?? null,
       session_kind: params.outcome.session_kind ?? null,
       static_chars: params.outcome.static_chars ?? null,
+      instruction_surface_bytes: params.outcome.instruction_surface_bytes ?? null,
       handoff_chars: params.outcome.handoff_chars ?? null,
       doc_chars: params.outcome.doc_chars ?? null,
       doc_chars_before: params.outcome.doc_chars_before ?? null,

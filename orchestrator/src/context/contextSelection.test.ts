@@ -48,7 +48,7 @@ describe("CONTEXT_POLICY", () => {
     }
   });
 
-  it("knowledge-brief stays forbidden for the BA-lane roles — they sit inside the Knowledge repo already", () => {
+  it("knowledge-brief stays forbidden for Knowledge-side roles — they sit inside the Knowledge repo already", () => {
     for (const stage of [
       AgentStage.BUSINESS_ANALYST,
       AgentStage.SYSTEM_ANALYST,

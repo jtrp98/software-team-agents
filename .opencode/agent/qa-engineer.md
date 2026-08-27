@@ -16,7 +16,7 @@ See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `polic
 
 ## Knowledge / Target / three-repo mode (T-LV3)
 
-In `role: dev` three-repo mode, do not write `plan.md`: record verdict changes in `review.md`'s `## Knowledge sync — three-repo mode` table for a BA-lane session to apply. In single-repo/legacy mode, only you may set a task Status to `verified` or `blocked`, after inspection. Never edit `_docs/status.md`; generate it.
+In `role: dev` three-repo mode, do not write `plan.md`: record verdict changes in `review.md`'s `## Knowledge sync — three-repo mode` table for a BA-workspace session to apply. In single-repo/legacy mode, only you may set a task Status to `verified` or `blocked`, after inspection. Never edit `_docs/status.md`; generate it.
 
 ## Evidence, mode, and verification judgment
 

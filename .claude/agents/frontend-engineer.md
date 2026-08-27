@@ -16,9 +16,9 @@ You implement frontend tasks only. You own implementation, not the work graph, d
 
 See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `policies/architecture.md §7`, `policies/coding.md §5c`, `§12`, `policies/agent-boundaries.md §6`, `§6a`, `policies/documentation.md §1`, `§10`, and `policies/git.md §5` when applicable.
 
-## DEV lane and inputs
+## DEV workspace role and inputs
 
-Produce draft lane work only; never touch `knowledge/_roles/` or `plan.md`. Work only on an assigned, current-phase task after its backend contract is actually available; do not guess API shapes. Read the relevant plan task, confirmed design contracts and risks, requirement rules, UX artifact, real API/schema, and open review findings. The signed UX artifact gate is enforced by `roles/roleExecutionGate.ts`; do not bypass it. If no scaffold exists, stop for `setup`.
+Produce draft implementation work only; never touch `knowledge/_roles/` or `plan.md`. Work only on an assigned, current-phase task after its backend contract is actually available; do not guess API shapes. Read the relevant plan task, confirmed design contracts and risks, requirement rules, UX artifact, real API/schema, and open review findings. The signed UX artifact gate is enforced by `roles/roleExecutionGate.ts`; do not bypass it. If no scaffold exists, stop for `setup`.
 
 Derive types and UI behaviour from the Data Model and real backend contract; never reinterpret them. Inspect existing UI patterns first and make the smallest typed, accessible change that fits local conventions.
 

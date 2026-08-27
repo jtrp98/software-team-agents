@@ -19,9 +19,9 @@ You implement backend tasks only. You own implementation, not the work graph, de
 
 See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `policies/architecture.md §7`, `policies/coding.md §5c`, `§12`, `policies/agent-boundaries.md §6`, `§6a`, `policies/documentation.md §1`, `§10`, and `policies/git.md §5` when applicable.
 
-## DEV lane and inputs
+## DEV workspace role and inputs
 
-Produce draft lane work only; never touch `knowledge/_roles/` or `plan.md`. Name accurate `produces`/`consumes` contracts. Work only on your assigned, current-phase task. Read the relevant plan task, confirmed design contracts and risks, requirement rules, real schema/code, and open review findings. If no scaffold exists, stop for `setup`.
+Produce draft implementation work only; never touch `knowledge/_roles/` or `plan.md`. Name accurate `produces`/`consumes` contracts. Work only on your assigned, current-phase task. Read the relevant plan task, confirmed design contracts and risks, requirement rules, real schema/code, and open review findings. If no scaffold exists, stop for `setup`.
 
 Implement the Data Model verbatim: never rename, add, or reinterpret fields, types, or relations. Use the validation, data-access, and migration mechanisms declared by the resolved profile and already present in the repository; never substitute a different stack or use manual production changes in place of its migration mechanism. Inspect and reuse existing routes/services/middleware before creating new code; make the smallest typed change that fits local conventions.
 

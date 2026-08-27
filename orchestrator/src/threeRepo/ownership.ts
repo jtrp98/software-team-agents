@@ -20,6 +20,13 @@ export interface InstructionSurfaceEntry {
   consequence?: string;
 }
 
+/** Files whose directory-specific precedence can override the root bootstrap. */
+export function isNestedInstruction(entry: InstructionSurfaceEntry): boolean {
+  const candidate = normalise(entry.path);
+  return candidate !== "AGENTS.md" &&
+    (path.posix.basename(candidate) === "AGENTS.md" || path.posix.basename(candidate) === "CLAUDE.local.md");
+}
+
 interface InstructionPathClass {
   name: string;
   owner: RepositoryOwner;

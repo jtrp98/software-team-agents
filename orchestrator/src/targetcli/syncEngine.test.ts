@@ -411,7 +411,7 @@ describe("safe sync engine — OpenCode renderings (T-OC2)", () => {
   });
 });
 
-// --- T-WG7 — dev-lane rendering of CLAUDE.md + the generated include --------
+// --- T-WG7 — DEV-workspace rendering of CLAUDE.md + the generated include ---
 
 const DEV_V1: FixtureFile[] = [
   { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer", "builds backend") },
@@ -431,7 +431,7 @@ function installationConfigFixture(knowledgeRoot: string): string {
   return file;
 }
 
-describe("dev-lane Knowledge rendering (T-WG7)", () => {
+describe("DEV-workspace Knowledge rendering (T-WG7)", () => {
   it("renders CLAUDE.md with the banner and writes the include for a dev workspace", () => {
     const target = gitTarget();
     writeTargetConfig(target, defaultTargetConfig("app", "2026-01-01T00:00:00Z", "dev"));

@@ -31,6 +31,7 @@ describe("RunLog", () => {
       context_chars: null,
       runtime: null,
       session_kind: null,
+      instruction_surface_bytes: null,
       static_chars: null,
       handoff_chars: null,
       doc_chars: null,

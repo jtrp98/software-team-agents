@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { resolveRoots } from "./roots.js";
-import { detectWorkspaceKind, assetsForRole, type RoleName, type WorkspaceKind } from "./roleWorkspace.js";
+import { detectWorkspaceKind, assetsForRole, type WorkspaceRole, type WorkspaceKind } from "./roleWorkspace.js";
 import {
   defaultTargetConfig,
   isTargetInitialized,
@@ -33,10 +33,10 @@ export interface TargetInitOptions {
   now: string;
   force?: boolean;
   /** Explicit role override (T-ROLE-16); detection is skipped when given. */
-  role?: RoleName;
+  role?: WorkspaceRole;
   /** Explicit stack selection for ambiguous or unsupported Target evidence. */
   stack?: string;
-  /** Machine-wide installation.yaml override (tests); forwarded to the sync engine's dev-lane binding resolution. */
+  /** Machine-wide installation.yaml override (tests); forwarded to the sync engine's DEV-workspace binding resolution. */
   installationConfigPath?: string;
 }
 
@@ -45,7 +45,7 @@ export interface TargetInitResult {
   frameworkRoot: string;
   knowledgeRoot?: string;
   frameworkVersion: string;
-  role: RoleName;
+  role: WorkspaceRole;
   /** How the role was decided. */
   roleVia: "flag" | "config" | "detected";
   detectedKind: WorkspaceKind;
@@ -67,9 +67,9 @@ export function runTargetInit(options: TargetInitOptions): TargetInitResult {
   const createdConfig = existingConfig === undefined;
 
   // Role resolution order: explicit flag > recorded config > marker detection.
-  let role: RoleName | undefined = options.role;
+  let role: WorkspaceRole | undefined = options.role;
   let roleVia: TargetInitResult["roleVia"] = role ? "flag" : "config";
-  if (!role) role = existingConfig?.role as RoleName | undefined;
+  if (!role) role = existingConfig?.role as WorkspaceRole | undefined;
   const detectedKind = detectWorkspaceKind(roots.targetRoot);
   if (!role) {
     if (detectedKind === "knowledge") {

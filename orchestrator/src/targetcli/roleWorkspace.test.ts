@@ -77,7 +77,7 @@ describe("workspace kind detection (T-ROLE-16)", () => {
 });
 
 describe("role asset profiles (T-ROLE-09/10/11)", () => {
-  it("BA carries lane agents + guards + policies, never engineer payload", () => {
+  it("BA carries BA-workspace agents + guards + policies, never engineer payload", () => {
     const include = assetsForRole("ba");
     expect(include(".claude/agents/business-analyst.md")).toBe(true);
     expect(include(".claude/agents/system-analyst.md")).toBe(true);
@@ -92,7 +92,7 @@ describe("role asset profiles (T-ROLE-09/10/11)", () => {
 
     expect(include(".claude/agents/backend-engineer.md")).toBe(false);
     expect(include(".claude/agents/frontend-engineer.md")).toBe(false);
-    // Derived renderings never ship in the payload, whatever the lane.
+    // Derived renderings never ship in the payload, whatever the workspace role.
     expect(include(".opencode/agent/backend-engineer.md")).toBe(false);
     expect(include("contracts/backend.yaml")).toBe(false);
     expect(include("workflows/bugfix.yml")).toBe(false);
@@ -272,7 +272,7 @@ describe("target binding (T-LV1)", () => {
   });
 });
 
-describe("T-WG5 — the confirm-workspace checkpoint ships to both lanes' synced payload", () => {
+describe("T-WG5 — the confirm-workspace checkpoint ships to both workspace roles' synced payload", () => {
   // repo root's own templates/ snapshot, rebuilt by `npm run build:templates`
   // (build:templates is required before this test passes — same as any other
   // check against generated output; see CLAUDE.md's guardrail against
@@ -289,11 +289,11 @@ describe("T-WG5 — the confirm-workspace checkpoint ships to both lanes' synced
 
   it("the checkpoint text is actually present in the synced source files (not just referenced)", () => {
     const docPolicy = fs.readFileSync(path.join(templatesRoot, "policies", "documentation.md"), "utf8");
-    expect(docPolicy).toMatch(/## 0\. Before writing anything — confirm workspace ↔ lane/);
+    expect(docPolicy).toMatch(/## 0\. Before writing anything — confirm workspace ↔ workspace role/);
     expect(docPolicy).toContain("stop and ask the user before writing any doc file at all");
 
     const claudeMd = fs.readFileSync(path.join(templatesRoot, "CLAUDE.md"), "utf8");
-    expect(claudeMd).toMatch(/Confirm workspace ↔ lane before writing anything/);
+    expect(claudeMd).toMatch(/Confirm workspace ↔ workspace role before writing anything/);
 
     const setupAgent = fs.readFileSync(path.join(templatesRoot, ".claude", "agents", "setup.md"), "utf8");
     expect(setupAgent).toContain("T-WG5");
@@ -302,7 +302,7 @@ describe("T-WG5 — the confirm-workspace checkpoint ships to both lanes' synced
     expect(baAgent).toContain("T-WG5");
   });
 
-  it("T-LV3 — qa-engineer's chosen sync mechanism (review.md -> BA-lane sync) is documented, not aspirational", () => {
+  it("T-LV3 — qa-engineer's chosen sync mechanism (review.md -> BA-workspace sync) is documented, not aspirational", () => {
     const qaAgent = fs.readFileSync(path.join(templatesRoot, ".claude", "agents", "qa-engineer.md"), "utf8");
     expect(qaAgent).toContain("Knowledge / Target / three-repo mode");
     expect(qaAgent).toContain("Knowledge sync");

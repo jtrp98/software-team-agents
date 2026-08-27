@@ -9,7 +9,7 @@ import { TargetSyncConflictError, planSync, runTargetSync } from "./syncEngine.j
 import { readTargetManifest, isTargetInitialized, loadTargetConfig, TargetNotInitializedError } from "./targetMeta.js";
 import { installedFrameworkVersion } from "./version.js";
 import { runBa, runDev, type RuntimeName } from "./devCommand.js";
-import { assetsForRole, type RoleName } from "./roleWorkspace.js";
+import { assetsForRole, type WorkspaceRole } from "./roleWorkspace.js";
 
 /**
  * T-TARGET-01 + T-ROLE-03/04 — the Target-first, role-aware entry point.
@@ -46,7 +46,7 @@ export const TARGET_USAGE =
 export interface TargetCliArgs {
   command?: "init" | "sync" | "status" | "dev" | "ba";
   targetRoot?: string;
-  role?: RoleName;
+  role?: WorkspaceRole;
   stack?: string;
   force: boolean;
   confirmAgentsPointer: boolean;
@@ -76,7 +76,7 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
         if (!args.targetRoot) throw new Error("--target-root requires a path");
         break;
       case "--role": {
-        const value = argv[++i] as RoleName | undefined;
+        const value = argv[++i] as WorkspaceRole | undefined;
         if (value !== "ba" && value !== "dev") throw new Error(`--role must be ba or dev (got ${value ?? "nothing"})`);
         args.role = value;
         break;
@@ -227,7 +227,7 @@ export async function runTargetCli(
                   : conflict.kind === "malformed-framework-block"
                     ? "    recovery: restore CLAUDE.md from .agent-team/backups or repair it to exactly one sta:bootstrap marker pair; --force will not guess"
                   : conflict.kind === "roster-drift"
-                    ? "    recovery: re-run with --force to remove it (backed up first) — it belongs to another lane and does not belong in this workspace"
+                    ? "    recovery: re-run with --force to remove it (backed up first) — it belongs to another workspace role and does not belong here"
                     : "    recovery: move/rename your file aside, then re-run software-team-agents sync",
               );
             }

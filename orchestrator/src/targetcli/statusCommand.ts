@@ -18,14 +18,14 @@ import {
   resolveKnowledgeBinding,
   resolveTargetBinding,
   TargetBindingError,
-  ROLE_LABEL,
+  WORKSPACE_ROLE_LABEL,
   type KnowledgeBinding,
-  type RoleName,
+  type WorkspaceRole,
   type TargetBinding,
 } from "./roleWorkspace.js";
 import { classifySyncState, type SyncState } from "./version.js";
 import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
-import { detectInstructionSurface, type InstructionSurfaceEntry } from "../threeRepo/ownership.js";
+import { detectInstructionSurface, isNestedInstruction, type InstructionSurfaceEntry } from "../threeRepo/ownership.js";
 import { targetStackWasHumanEdited } from "./targetProfile.js";
 import { CLAUDE_SETTINGS_PATH, inspectGuardWiring, type GuardWiringStatus } from "./guardSettings.js";
 
@@ -46,11 +46,11 @@ export interface TargetStatus {
   frameworkRoot: string;
   frameworkVersion: string;
   /** Resolved or marker-detected role of this workspace, when determinable. */
-  role?: RoleName;
+  role?: WorkspaceRole;
   workspaceKind: ReturnType<typeof detectWorkspaceKind>;
   knowledgeRoot?: string;
   knowledgeBinding?: { knowledgeRoot: string; via: string };
-  /** T-LV1 — BA-lane only: the optional Target binding resolved from `target.path`, when one is set and valid; "invalid" carries the problem in targetRoot. Absent when unset (silent, never required). */
+  /** T-LV1 — BA-workspace only: the optional Target binding resolved from `target.path`, when one is set and valid; "invalid" carries the problem in targetRoot. Absent when unset (silent, never required). */
   targetBinding?: { targetRoot: string; via: string };
   targetId?: string;
   /** Cached deterministic Target profile; absent means not yet detected. */
@@ -69,7 +69,7 @@ export interface TargetStatus {
   projectOwnedPaths: string[];
   /** Complete read-only inventory of instructions that can affect this workspace. */
   instructionSurface: InstructionSurfaceEntry[];
-  /** T-WG2 — agent-prompt files on disk belonging to the other lane. Never legitimate; sync --force removes them. */
+  /** T-WG2 — agent-prompt files on disk belonging to the other workspace role. Never legitimate; sync --force removes them. */
   rosterDriftPaths: string[];
   managedFileCount: number;
   hooksInstalled: number;
@@ -77,7 +77,7 @@ export interface TargetStatus {
   /**
    * T-WG1 — installation.yaml binds a Knowledge root (marker-complete) that was
    * never `init --role ba`'d there: every command past binding validation
-   * succeeds, so nothing else notices the BA-lane prompts don't exist anywhere
+   * succeeds, so nothing else notices the BA-workspace prompts don't exist anywhere
    * on the machine (F1 in workspace-guardrails-TASKS.md). Set to the bound
    * root's path when this applies; absent otherwise (unbound, or bound and
    * initialized).
@@ -163,7 +163,7 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     }
   })();
   const kind = detectWorkspaceKind(roots.targetRoot);
-  const role: RoleName | undefined =
+  const role: WorkspaceRole | undefined =
     config?.role ??
     (kind === "knowledge" ? "ba" : kind === "target" ? "dev" : undefined);
 
@@ -236,7 +236,7 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     knowledgeBinding = knowledgeBinding ?? { knowledgeRoot: roots.targetRoot, via: "workspace" };
   }
 
-  // T-LV1 — BA-lane-only, optional Target binding. Any resolution problem is
+  // T-LV1 — BA-workspace-only, optional Target binding. Any resolution problem is
   // reported as "invalid" rather than thrown: status must never crash because
   // a Target binding is unset or wrong.
   let targetBinding: TargetBinding | undefined;
@@ -300,7 +300,7 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
 export function renderStatus(status: TargetStatus): string {
   const lines: string[] = [];
   if (status.role) {
-    lines.push(`Role: ${ROLE_LABEL[status.role]} (${status.role})`);
+    lines.push(`Workspace role: ${WORKSPACE_ROLE_LABEL[status.role]} (${status.role})`);
     lines.push(`Workspace: ${status.role === "ba" ? "Knowledge" : "Target"}`);
   }
   lines.push(status.role === "ba" ? "Knowledge:" : "Target:");
@@ -371,14 +371,19 @@ export function renderStatus(status: TargetStatus): string {
       );
     }
   }
+  const nestedInstructions = status.instructionSurface.filter(isNestedInstruction);
+  if (nestedInstructions.length > 0) {
+    lines.push(`WARNING: nested instructions may shadow or contradict the root bootstrap (${nestedInstructions.length}):`);
+    for (const entry of nestedInstructions) lines.push(`  ${entry.path} — project-owned and read-only; review its effective scope`);
+  }
   if (status.rosterDriftPaths.length > 0) {
-    lines.push(`WARNING: roster drift — agent prompt(s) from another lane found in this workspace (${status.rosterDriftPaths.length}):`);
+    lines.push(`WARNING: roster drift — agent prompt(s) from another workspace role found here (${status.rosterDriftPaths.length}):`);
     for (const p of status.rosterDriftPaths) lines.push(`    ${p}`);
     lines.push("    → run `software-team-agents sync --force` to remove them (backed up first)");
   }
   if (status.knowledgeBoundButUninitialized) {
     lines.push(
-      `WARNING: Knowledge root bound in installation.yaml (${status.knowledgeBoundButUninitialized}) has no .agent-team/config.yaml — the BA-lane is not usable anywhere on this machine yet.`,
+      `WARNING: Knowledge root bound in installation.yaml (${status.knowledgeBoundButUninitialized}) has no .agent-team/config.yaml — the BA workspace role is not usable anywhere on this machine yet.`,
     );
     lines.push(`  fix: cd "${status.knowledgeBoundButUninitialized}" && software-team-agents init --role ba`);
   }

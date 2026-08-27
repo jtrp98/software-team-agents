@@ -69,14 +69,14 @@ describe("T-V3-06 bootstrap rendering", () => {
     expect(dev).toMatchInlineSnapshot(`
       "<!-- sta:bootstrap -->
       # software-team-agents bootstrap
-      - Lane/role: **DEV** (\`dev\`) — writes Target application code and DEV-role artifacts only.
+      - Workspace role: **DEV** (\`dev\`) — writes Target application code and DEV-role artifacts only.
       - Workspace root (writable): \`C:\\src\\schoolbright-app\`
       - Knowledge root (read-only): \`C:\\src\\schoolbright-knowledge\`
       - Human gates: requirements interview; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.
       - Hard boundary: no state-changing git.
       - Hard boundary: write only inside resolved writable workspace roots.
       - Hard boundary: write only paths allowed by the active role contract.
-      - Hard boundary: Confirm workspace ↔ lane before writing anything.
+      - Hard boundary: Confirm workspace ↔ workspace role before writing anything.
       - Hard boundary: amend existing module docs section-by-section; never regenerate them.
       - Hard boundary: approvals/sign-offs are human acts; agents never forge them.
       - Hard boundary: dates and unclear business rules come from a person; never improvise them.
@@ -88,14 +88,14 @@ describe("T-V3-06 bootstrap rendering", () => {
     expect(ba).toMatchInlineSnapshot(`
       "<!-- sta:bootstrap -->
       # software-team-agents bootstrap
-      - Lane/role: **BA** (\`ba\`) — writes Knowledge requirements/design/planning artifacts only.
+      - Workspace role: **BA** (\`ba\`) — writes Knowledge requirements/design/planning artifacts only.
       - Workspace root (writable): \`C:\\src\\schoolbright-knowledge\`
       - Target root (optional, read-only): \`C:\\src\\schoolbright-app\`
       - Human gates: requirements interview; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.
       - Hard boundary: no state-changing git.
       - Hard boundary: write only inside resolved writable workspace roots.
       - Hard boundary: write only paths allowed by the active role contract.
-      - Hard boundary: Confirm workspace ↔ lane before writing anything.
+      - Hard boundary: Confirm workspace ↔ workspace role before writing anything.
       - Hard boundary: amend existing module docs section-by-section; never regenerate them.
       - Hard boundary: approvals/sign-offs are human acts; agents never forge them.
       - Hard boundary: dates and unclear business rules come from a person; never improvise them.

@@ -24,7 +24,7 @@ import {
   type TargetStackConfig,
 } from "./targetMeta.js";
 import { CLAUDE_SETTINGS_PATH, mergeFrameworkGuards } from "./guardSettings.js";
-import { BA_LANE_AGENTS, resolveTargetBinding, type RoleName } from "./roleWorkspace.js";
+import { BA_WORKSPACE_AGENTS, resolveTargetBinding, type WorkspaceRole } from "./roleWorkspace.js";
 import { missingInstructionConsequence } from "../threeRepo/ownership.js";
 import { planTargetProfile } from "./targetProfile.js";
 import { renderStackDigest, STACK_DIGEST_RELATIVE_PATH } from "../profile/stackDigest.js";
@@ -75,7 +75,7 @@ export interface SyncConflict {
    * edits; malformed-framework-block: marker corruption that no force mode may
    * guess at; unmergeable-settings: project JSON cannot be safely merged;
    * roster-drift (T-WG2): an agent-prompt file on disk whose name
-   * belongs to the OTHER role's lane — never legitimate here, regardless of
+   * belongs to the OTHER workspace role — never legitimate here, regardless of
    * how it got there, so it is never treated as an ordinary foreign file.
    */
   kind: "user-modified" | "untracked-file" | "stale-modified" | "roster-drift" | "malformed-framework-block" | "unmergeable-settings";
@@ -160,7 +160,7 @@ function planPayloadFiles(
       continue;
     }
     const currentHash = hashFile(dest);
-    // A dev-lane rendering replaces the shipped bytes at the same managed path:
+    // A DEV-workspace rendering replaces the shipped bytes at the same managed path:
     // compare against what sync actually writes, so a rendered workspace is
     // "unchanged" on re-sync instead of perpetually "user-modified".
     const derivedBytes = derivedContent?.get(file.path);
@@ -339,7 +339,7 @@ const AGENT_PROMPT_DIRS: readonly { dir: string; ext: string }[] = [
 
 /**
  * T-WG2 — roster drift: an agent-prompt file physically present in a
- * role-declared workspace whose name belongs to the OTHER lane. This is
+ * role-declared workspace whose name belongs to the OTHER workspace role. This is
  * distinct from an ordinary foreign file: `planPayloadFiles`/`planStaleFiles`
  * only ever look at paths the CURRENT role's filtered manifest knows about
  * (`effectiveTemplateManifest`) or that this Target's own history tracked —
@@ -349,16 +349,16 @@ const AGENT_PROMPT_DIRS: readonly { dir: string; ext: string }[] = [
  * all (unrelated stray file) is deliberately left alone here — the existing
  * foreign-file policy already covers it.
  */
-export function detectRosterDrift(options: { targetRoot: string; templatesDir: string; role: RoleName }): SyncConflict[] {
+export function detectRosterDrift(options: { targetRoot: string; templatesDir: string; role: WorkspaceRole }): SyncConflict[] {
   const fullManifest = readTemplateManifest(options.templatesDir);
   const allAgentNames = new Set(
     fullManifest.files
       .filter((f) => f.path.startsWith(".claude/agents/") && f.path.endsWith(".md"))
       .map((f) => path.basename(f.path, ".md")),
   );
-  const baAgents = new Set(BA_LANE_AGENTS);
-  // dev: only a BA-lane name is drift. ba: any known engineer/reviewer name is
-  // drift — everything the full roster knows about that isn't BA-lane.
+  const baAgents = new Set(BA_WORKSPACE_AGENTS);
+  // dev: only a BA-workspace name is drift. ba: any known engineer/reviewer name is
+  // drift — everything the full roster knows about that isn't assigned to BA workspaces.
   const foreignNames = options.role === "dev" ? baAgents : new Set([...allAgentNames].filter((n) => !baAgents.has(n)));
 
   const conflicts: SyncConflict[] = [];
@@ -378,7 +378,7 @@ export function detectRosterDrift(options: { targetRoot: string; templatesDir: s
         path: path.posix.join(spec.dir, name),
         kind: "roster-drift",
         detail:
-          `agent prompt "${base}" belongs to the ${options.role === "dev" ? "BA" : "engineer/reviewer"} lane, ` +
+          `agent prompt "${base}" belongs to the ${options.role === "dev" ? "BA" : "engineer/reviewer"} workspace role, ` +
           `not this workspace's role (${options.role}) — never legitimate here regardless of how it arrived`,
       });
     }
@@ -447,10 +447,10 @@ export interface PlanSyncOptions {
   config?: TargetConfig;
   /** Role asset profile (T-ROLE-09/10/11): only matching payload paths are planned, tracked, and cleaned. Absent = full payload. */
   include?: (relPath: string) => boolean;
-  /** T-WG2 — when supplied, plan also flags any on-disk agent-prompt file belonging to the other lane (see `detectRosterDrift`). Absent = no roster-drift scan (legacy/no-role workspaces keep prior behaviour exactly). */
-  role?: RoleName;
+  /** T-WG2 — when supplied, plan also flags any on-disk agent-prompt file belonging to the other workspace role (see `detectRosterDrift`). Absent = no roster-drift scan (legacy/no-role workspaces keep prior behaviour exactly). */
+  role?: WorkspaceRole;
   /**
-   * T-WG7 — final bytes sync writes at otherwise-shipped paths (the dev lane's
+   * T-WG7 — final bytes sync writes at otherwise-shipped paths (the DEV workspace's
    * rendered CLAUDE.md). Planning compares against these so a rendered
    * workspace is recognized as current; apply writes the mapped bytes instead
    * of copying the template file.
@@ -515,7 +515,7 @@ export interface ApplySyncOptions extends PlanSyncOptions {
 }
 
 /**
- * T-WG7/T-V3-06 — lane-derived bytes this sync would write. The same
+ * T-WG7/T-V3-06 — workspace-role-derived bytes this sync would write. The same
  * CLAUDE.md renderer serves DEV and BA; the Knowledge include remains DEV-only,
  * and a DEV stack digest is rendered from the resolved Target profile.
  */
@@ -887,7 +887,7 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     }
   }
 
-  // T-WG7/T-V3-06 — lane rendering of CLAUDE.md. A pre-existing project file
+  // T-WG7/T-V3-06 — workspace-role rendering of CLAUDE.md. A pre-existing project file
   // receives only the delimited block and is tracked by the block hash below;
   // a Framework-created file remains whole-file managed. Both paths were
   // planned against these exact rendered bytes before any write.
@@ -1005,7 +1005,7 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
       if (!fs.existsSync(abs)) continue;
       backup(conflict.path);
       fs.rmSync(abs);
-      performed.push({ action: "remove-stale", path: conflict.path, note: "roster drift — agent prompt from another lane" });
+      performed.push({ action: "remove-stale", path: conflict.path, note: "roster drift — agent prompt from another workspace role" });
     }
   }
 

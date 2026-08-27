@@ -185,6 +185,7 @@ export interface TaskTokenMetrics {
   cachedTokens: number | null;
   totalTokens: number | null;
   retryWasteTokens: number | null;
+  instructionSurfaceBytes: number | null;
   composition: TokenCompositionMetrics;
   contextBudget: ContextBudgetMetrics;
   sessionKinds: Record<"orchestrated" | "interactive" | "not_reported", number>;
@@ -285,6 +286,7 @@ export function taskTokenMetrics(runs: readonly RunRecord[]): TaskTokenMetrics {
     // No failed rows is a known zero; one failed row with unreported usage is
     // unknown, never a fabricated zero.
     retryWasteTokens: failures.length === 0 ? 0 : strictSum(failures, totalTokensFor),
+    instructionSurfaceBytes: strictSum(runs, (run) => run.instruction_surface_bytes ?? null),
     composition: compositionFor(runs),
     contextBudget: contextBudgetFor(runs),
     sessionKinds,
@@ -360,6 +362,7 @@ export function tokenMetricsExport(runs: readonly RunRecord[], opts?: { now?: ()
       cachedTokens: aggregate.cachedTokens,
       totalTokens: aggregate.totalTokens,
       retryWasteTokens: aggregate.retryWasteTokens,
+      instructionSurfaceBytes: aggregate.instructionSurfaceBytes,
       composition: aggregate.composition,
       contextBudget: aggregate.contextBudget,
     },
