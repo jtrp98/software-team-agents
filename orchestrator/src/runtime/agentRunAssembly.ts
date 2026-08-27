@@ -1,7 +1,8 @@
 import { AgentStage } from "../types.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 import type { AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
-import { parseQaReport, parseSecurityReport } from "../agents/moduleDocs.js";
+import { parseQaReport, parseSecurityReport, readModuleDoc } from "../agents/moduleDocs.js";
+import { parsePlanTasks } from "../docs/planGraph.js";
 import { ContextManager, type SelectedContext } from "../context/contextManager.js";
 import { classifyQaFailure, classifySecurityFailure } from "../orchestrator/failureClassifier.js";
 import { codeIntelSlices } from "./codeIntelAssembly.js";
@@ -172,6 +173,21 @@ export interface StageContextAssembly extends SlicedModuleDocs {
 }
 
 /**
+ * Design references from the authoritative task row.  Failure is deliberately
+ * additive: the brief remains an index, rather than making stage context fail
+ * because a plan is absent or still being authored.
+ */
+export function referencedKnowledgeIds(docsRoot: string, moduleName: string, taskId: string | undefined): string[] {
+  if (!taskId) return [];
+  try {
+    const plan = readModuleDoc(docsRoot, moduleName, "plan.md");
+    return plan === null ? [] : parsePlanTasks(plan).tasks.find((task) => task.id === taskId)?.designRefs ?? [];
+  } catch {
+    return [];
+  }
+}
+
+/**
  * One context selection/rendering path for both `sta run` and `sta context`.
  * Optional sources keep their established additive posture: any failure yields
  * no enrichment, while document parser uncertainty is handled inside
@@ -188,6 +204,7 @@ export async function assembleStageContext(stage: AgentStage, opts: StageContext
     projectRoot: opts.projectRoot,
     knowledgeRoot: opts.knowledgeRoot,
     moduleName: opts.moduleName,
+    referencedIds: referencedKnowledgeIds(opts.docsRoot, opts.moduleName, opts.taskId),
   });
   let codeIntel: string[] = [];
   try {

@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ArtifactType } from "../artifacts/schemas.js";
 import { AgentStage } from "../types.js";
-import { buildPrompt, buildPromptParts, sliceModuleDocsWithSavings } from "./agentRunAssembly.js";
+import { buildPrompt, buildPromptParts, referencedKnowledgeIds, sliceModuleDocsWithSavings } from "./agentRunAssembly.js";
 
 describe("buildPromptParts (T-V3TOK-001)", () => {
   it("accounts for every character exactly once across prompt composition", () => {
@@ -37,6 +37,30 @@ describe("sliceModuleDocsWithSavings", () => {
       const sliced = sliceModuleDocsWithSavings(AgentStage.BACKEND_ENGINEER, { projectRoot: root, moduleName: "sales", phases: [1] });
       expect(sliced.docCharsBefore).toBeGreaterThan(0);
       expect(sliced.docs.join("\n")).toContain("Import Rules");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("referencedKnowledgeIds", () => {
+  it("uses only the authoritative plan task row's design references", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-knowledge-refs-"));
+    try {
+      const dir = path.join(root, "_docs", "module", "sales");
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, "plan.md"), [
+        "# Plan",
+        "",
+        "## Phase 1: Sales",
+        "",
+        "| Task | Status | Owner | Depends on |",
+        "|---|---|---|---|",
+        "| BE-001 (DES-010, DES-011) — implement | pending | backend-engineer | — |",
+        "",
+      ].join("\n"));
+      expect(referencedKnowledgeIds(root, "sales", "BE-001")).toEqual(["DES-010", "DES-011"]);
+      expect(referencedKnowledgeIds(root, "sales", "BE-999")).toEqual([]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

@@ -64,6 +64,7 @@ import { approveItem, checklistFor, reviewItem } from "./roles/artifactReview.js
 import { lanesAffectedBy, notificationsFor } from "./roles/changePropagation.js";
 import { laneContext, laneGet } from "./roles/laneContext.js";
 import { KnowledgeContext } from "./knowledge/knowledgeContext.js";
+import { renderKnowledgeRetrieval } from "./knowledge/retrievalRender.js";
 import { writeKnowledgeItem } from "./knowledge/knowledgeStore.js";
 import type { RoleLane } from "./roles/roleLane.js";
 import { buildTemplates } from "./packaging/templateBuilder.js";
@@ -223,6 +224,7 @@ export const USAGE =
   "  sta qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]   QA token/mode/retry picture per task (QA07); --baseline compares against a saved export\n" +
   "  sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]   token/context composition across orchestrated and interactive runs\n" +
   "  sta context <role> [--module <name>] [--phase <n,n>] [--task <id>] [--json] [--project-root <path>]   deterministic fail-open module context used by sta run\n" +
+  "  sta knowledge get <id>[,<id>...] [--lane <ba|sa|uxui|dev>] [--json] [--project-root <path>]   retrieve only permitted knowledge fields (default lane: dev)\n" +
   "  sta policy [<area>] [<section>] [--json] [--project-root <path>]   read one policies/ section instead of the whole file; no args lists every area and section\n" +
   "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names (T41)\n" +
   "  sta init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
@@ -243,7 +245,7 @@ export const USAGE =
   "  sta roles approve <id> --by <name>   move a reviewed item to approved — a person only (T104)\n" +
   "  sta roles inbox [<ba|sa|uxui|dev>] [--module <name>]   what each lane has to look at, derived fresh (T106)\n" +
   "  sta roles impact <id>[,<id>...]   which lanes changing those items would reach, before changing them (T105)\n" +
-  "  sta roles context <ba|sa|uxui|dev> [<id>] [--module <name>]   what that lane may see, and via which role (T107)\n" +
+  "  sta roles context <ba|sa|uxui|dev> [<id>] [--full] [--module <name>]   what that lane may see, and via which role (T107)\n" +
   "\n" +
   "underlying flag-based form:\n" +
   "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode>] <classification flags>\n" +
@@ -693,6 +695,7 @@ const VERBS = [
   "qa-metrics",
   "tokens",
   "context",
+  "knowledge",
   "policy",
   "upgrade",
   "migrate",
@@ -712,7 +715,7 @@ function isVerb(s: string | undefined): s is Verb {
 }
 
 /** Flags a verb accepts that take a value — their value must never be mistaken for the positional <task-id>. */
-  const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--phase", "--task", "--by", "--since", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime", "--as", "--note"]);
+  const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--phase", "--task", "--by", "--since", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime", "--as", "--note", "--lane"]);
 
 /** Every non-flag token in a verb's remaining args, in order, skipping over each value-flag's own argument. */
 function positionalArgs(rest: string[]): string[] {
@@ -1386,6 +1389,12 @@ async function runRolesSubCommand(
 
       if (id !== undefined) {
         const outcome = laneGet(lane, context, id);
+        if (rest.includes("--full")) {
+          const rendered = renderKnowledgeRetrieval(lane, id, outcome);
+          if (outcome.status === "not-found") console.error(rendered.text);
+          else console.log(rest.includes("--json") ? JSON.stringify(rendered.json, null, 2) : rendered.text);
+          return outcome.status === "not-found" ? 1 : 0;
+        }
         if (outcome.status === "not-found") {
           console.error(`[orchestrator] no knowledge item with id ${id}`);
           return 1;
@@ -1965,6 +1974,28 @@ async function runContextVerb(rest: string[], defaultProjectRoot: string): Promi
   }
 }
 
+/** `knowledge get <id>[,<id>...] [--lane <lane>] [--json]`: one policy-filtered retrieval door. */
+async function runKnowledgeVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const args = positionalArgs(rest);
+  if (args[0] !== "get") throw new CliUsageError("knowledge: expected sub-command get");
+  const ids = (args[1] ?? "").split(",").map((id) => id.trim()).filter((id) => id !== "");
+  if (ids.length === 0) throw new CliUsageError("knowledge get: an item id is required");
+  if (args.length > 2) throw new CliUsageError("knowledge get: ids must be one comma-separated argument");
+
+  const laneRaw = flagValue(rest, "--lane") ?? "dev";
+  if (!isRoleLane(laneRaw)) {
+    throw new CliUsageError(`knowledge get: "${laneRaw}" is not a lane — use ba, sa, uxui, or dev`);
+  }
+  const lane = laneRaw as RoleLane;
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const context = KnowledgeContext.load(projectRoot, new Date().toISOString());
+  const rendered = ids.map((id) => ({ id, result: renderKnowledgeRetrieval(lane, id, laneGet(lane, context, id)) }));
+  const json = rest.includes("--json");
+  if (json) console.log(JSON.stringify({ lane, items: rendered.map((entry) => entry.result.json) }, null, 2));
+  else for (const entry of rendered) console.log(entry.result.text);
+  return rendered.some((entry) => (entry.result.json.status as string | undefined) === "not_found") ? 1 : 0;
+}
+
 /** Dispatches a T31 verb, translating the ones that are really the existing engine in disguise (`run`, `resume`, `retry`) rather than duplicating the step loop. */
 async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): Promise<number> {
   switch (verb) {
@@ -1993,6 +2024,8 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
       return runTokensVerb(rest, defaultProjectRoot);
     case "context":
       return runContextVerb(rest, defaultProjectRoot);
+    case "knowledge":
+      return runKnowledgeVerb(rest, defaultProjectRoot);
     case "policy":
       return runPolicyVerb(rest, defaultProjectRoot);
     case "projects":

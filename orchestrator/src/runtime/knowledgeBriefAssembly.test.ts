@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { AgentStage } from "../types.js";
 import type { KnowledgeItem } from "../knowledge/knowledgeModel.js";
-import { renderKnowledgeBrief } from "./knowledgeBriefAssembly.js";
+import { knowledgeBriefFor, renderKnowledgeBrief } from "./knowledgeBriefAssembly.js";
 
 const NOW = "2026-08-26T00:00:00Z";
 
@@ -62,7 +65,7 @@ describe("renderKnowledgeBrief", () => {
       AgentStage.QA_ENGINEER,
       { moduleName: "sb-compass", visibleKinds: new Set(["task"]) },
     );
-    expect(parts.join("\n")).toContain("outside this stage's view: ux-design");
+    expect(parts.join("\n")).not.toContain("ux-design");
     expect(parts.join("\n")).not.toContain("UX-001 ✕");
   });
 
@@ -86,6 +89,50 @@ describe("renderKnowledgeBrief", () => {
     const joined = parts.join("\n");
     if (parts.length > 0) {
       expect(joined).not.toContain("- UX-001");
+    }
+  });
+
+  it("expands a bounded body only for an explicitly referenced visible item", () => {
+    const parts = renderKnowledgeBrief(
+      [item("architecture", "DES-001", { body: "referenced architecture body" }), item("api", "API-001", { body: "unreferenced API body" })],
+      AgentStage.QA_ENGINEER,
+      { moduleName: "sb-compass", visibleKinds: ALL, referencedIds: ["DES-001"] },
+    );
+    const joined = parts.join("\n");
+    expect(joined).toContain("referenced architecture body");
+    expect(joined).not.toContain("unreferenced API body");
+  });
+
+  it("does not expand a body the field policy withheld", () => {
+    const redacted = { ...item("architecture", "DES-001", { body: "withheld architecture body" }), withheld: ["body"] };
+    const parts = renderKnowledgeBrief(
+      [redacted],
+      AgentStage.QA_ENGINEER,
+      { moduleName: "sb-compass", visibleKinds: ALL, referencedIds: ["DES-001"] },
+    );
+    expect(parts.join("\n")).not.toContain("withheld architecture body");
+    expect(parts.join("\n")).toContain("withheld: body");
+  });
+
+  it("drops optional body expansions before index lines when the total cap is reached", () => {
+    const parts = renderKnowledgeBrief(
+      [item("architecture", "DES-001", { body: `body that must be removed first ${"x".repeat(400)}` }), item("api", "API-001")],
+      AgentStage.QA_ENGINEER,
+      { moduleName: "sb-compass", visibleKinds: ALL, referencedIds: ["DES-001"], cap: 260 },
+    );
+    const joined = parts.join("\n");
+    expect(joined).toContain("DES-001");
+    expect(joined).toContain("API-001");
+    expect(joined).not.toContain("body that must be removed first");
+  });
+
+  it("keeps the established fail-soft empty brief posture when policy loading fails", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-knowledge-brief-fail-"));
+    try {
+      fs.writeFileSync(path.join(root, "knowledge-policy.yaml"), "not: a valid policy\n", "utf8");
+      expect(knowledgeBriefFor(AgentStage.BACKEND_ENGINEER, { projectRoot: root, moduleName: "sb-compass" })).toEqual([]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 });
