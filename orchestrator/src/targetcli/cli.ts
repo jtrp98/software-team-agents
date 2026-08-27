@@ -36,6 +36,7 @@ export const TARGET_USAGE =
   "  --role <ba|dev>        init: say what this workspace is when markers are ambiguous\n" +
   "  --stack <name>         init/sync: explicitly resolve ambiguous Target stack evidence\n" +
   "  --force                sync/init: overwrite locally-modified managed files (backed up first)\n" +
+  "  --confirm-agents-pointer sync: reduce a provable CLAUDE.md duplicate to the generated AGENTS.md pointer (backed up)\n" +
   "  --no-auto-sync         dev/ba: refuse to run when managed assets are outdated\n" +
   "  --runtime <name>       dev/ba: claude (default), codex or opencode\n" +
   "  --json                 status: machine-readable output\n" +
@@ -48,6 +49,7 @@ export interface TargetCliArgs {
   role?: RoleName;
   stack?: string;
   force: boolean;
+  confirmAgentsPointer: boolean;
   autoSync: boolean;
   runtime: RuntimeName;
   json: boolean;
@@ -57,7 +59,7 @@ export interface TargetCliArgs {
 
 /** Pure argv parser — no console/exit, directly testable. */
 export function parseTargetArgs(argv: string[]): TargetCliArgs {
-  const args: TargetCliArgs = { force: false, autoSync: true, runtime: "claude", json: false, help: false, version: false };
+  const args: TargetCliArgs = { force: false, confirmAgentsPointer: false, autoSync: true, runtime: "claude", json: false, help: false, version: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     switch (arg) {
@@ -85,6 +87,9 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
         break;
       case "--force":
         args.force = true;
+        break;
+      case "--confirm-agents-pointer":
+        args.confirmAgentsPointer = true;
         break;
       case "--no-auto-sync":
         args.autoSync = false;
@@ -196,6 +201,7 @@ export async function runTargetCli(
             now: new Date().toISOString(),
             force: args.force,
             explicitStack: args.stack,
+            confirmAgentsPointer: args.confirmAgentsPointer,
           });
           for (const action of result.performed) {
             if (action.action === "unchanged") continue;

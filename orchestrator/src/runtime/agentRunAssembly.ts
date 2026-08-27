@@ -256,6 +256,7 @@ export async function assembleStageContext(stage: AgentStage, opts: StageContext
     knowledgeRoot: opts.knowledgeRoot,
     moduleName: opts.moduleName,
     referencedIds: referencedKnowledgeIds(opts.docsRoot, opts.moduleName, opts.taskId),
+    targetRoot: opts.targetRoot,
   });
   let codeIntel: string[] = [];
   try {

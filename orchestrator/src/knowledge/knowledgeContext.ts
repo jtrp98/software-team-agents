@@ -85,6 +85,8 @@ export interface RetrievalResult {
   hidden: string[];
   /** Kinds this role's view excludes — so "no API items" is distinguishable from "no API items you may see". */
   kindsNotInView: KnowledgeKind[];
+  /** Items excluded only because they belong to another Target. */
+  scopeExcluded: number;
 }
 
 export type RetrievalOutcome =
@@ -110,6 +112,8 @@ export interface KnowledgeContextOptions {
   registry?: SourceRegistry;
   /** Enables digest checking against the real files. Omit to get age-only freshness. */
   projectRoot?: string;
+  knowledgeRoot?: string;
+  targetPaths?: ReadonlyMap<string, string>;
 }
 
 export class KnowledgeContext {
@@ -125,12 +129,18 @@ export class KnowledgeContext {
   }
 
   /** Everything loaded from one project: items, source registry, field policy. */
-  static load(projectRoot: string = defaultProjectRoot(), now: string = new Date().toISOString()): KnowledgeContext {
+  static load(
+    projectRoot: string = defaultProjectRoot(),
+    now: string = new Date().toISOString(),
+    resolution: { knowledgeRoot?: string; targetPaths?: ReadonlyMap<string, string> } = {},
+  ): KnowledgeContext {
     return new KnowledgeContext(KnowledgeBase.load(projectRoot), {
       now,
       policy: loadKnowledgePolicy(projectRoot),
       registry: SourceRegistry.load(projectRoot),
       projectRoot,
+      knowledgeRoot: resolution.knowledgeRoot,
+      targetPaths: resolution.targetPaths,
     });
   }
 
@@ -251,6 +261,8 @@ export class RoleContext {
       now: this.options.now,
       policy: this.policy,
       projectRoot: this.options.projectRoot,
+      knowledgeRoot: this.options.knowledgeRoot,
+      targetPaths: this.options.targetPaths,
     });
 
     return {
@@ -276,6 +288,12 @@ export class RoleContext {
 
     const items: RetrievedItem[] = [];
     const hidden: string[] = [];
+    const scopeExcluded = filter.target_ids === undefined
+      ? 0
+      : this.kb.query({ ...filter, target_ids: undefined, kinds: requested }).filter((item) => {
+          const scope = item.target_ids ?? [];
+          return scope.length > 0 && !scope.some((targetId) => filter.target_ids!.includes(targetId));
+        }).length;
     for (const item of this.kb.query({ ...filter, kinds: requested })) {
       const retrieved = this.retrieve(item);
       if (retrieved) items.push(retrieved);
@@ -287,6 +305,7 @@ export class RoleContext {
       items,
       hidden,
       kindsNotInView: KNOWLEDGE_KINDS.filter((k) => !this.visibleKinds.includes(k)),
+      scopeExcluded,
     };
   }
 

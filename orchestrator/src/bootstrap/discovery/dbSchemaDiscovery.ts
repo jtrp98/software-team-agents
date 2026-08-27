@@ -91,12 +91,13 @@ function dbItem(
   projectRoot: string,
   now: string,
   sourceId: string,
+  targetId?: string,
 ): KnowledgeItemOf<"db-schema"> {
   const locator = `${SCHEMA_RELATIVE_PATH}#L${model.startLine}-L${model.endLine}`;
   const relations = relationsOf(model, modelNames);
 
   return {
-    schema_version: KNOWLEDGE_SCHEMA_VERSION,
+    schema_version: targetId ? 2 : KNOWLEDGE_SCHEMA_VERSION,
     id: `DB-${model.name}`,
     kind: "db-schema",
     title: `Database model: ${model.name}`,
@@ -114,7 +115,8 @@ function dbItem(
     // Hashed through the locator, not from `model.raw`: the two are nearly the
     // same text but not identical (the match starts at `model`, the line range
     // starts at column 0), and T71 recomputes from the locator.
-    sources: [{ type: "file", locator, captured_at: now, digest: digestOfSource(locator, projectRoot), source_id: sourceId }],
+    ...(targetId ? { target_ids: [targetId] } : {}),
+    sources: [{ type: "file", locator, captured_at: now, digest: digestOfSource(locator, projectRoot), source_id: sourceId, ...(targetId ? { origin: { root: "target" as const, target_id: targetId } } : {}) }],
     relations: [],
     payload: {
       model: model.name,
@@ -125,7 +127,7 @@ function dbItem(
 }
 
 /** `now` is threaded through so callers (and tests) control the timestamp — this module never reads the clock itself. */
-export function dbSchemaDiscoveryStage(now: () => string = () => new Date().toISOString()): DiscoveryStage {
+export function dbSchemaDiscoveryStage(now: () => string = () => new Date().toISOString(), targetId?: string): DiscoveryStage {
   return {
     id: "db-schema",
     discover: (projectRoot: string): DiscoveryResult => {
@@ -142,7 +144,7 @@ export function dbSchemaDiscoveryStage(now: () => string = () => new Date().toIS
       }
 
       const source: SourceRecord = {
-        schema_version: KNOWLEDGE_SCHEMA_VERSION,
+        schema_version: 1,
         id: sourceIdFor(SCHEMA_RELATIVE_PATH),
         type: "file",
         locator: SCHEMA_RELATIVE_PATH,
@@ -151,10 +153,11 @@ export function dbSchemaDiscoveryStage(now: () => string = () => new Date().toIS
         // Whole file — the registry answers "did this file move", each item's own
         // ref answers "did my model move".
         digest: digestOfSource(SCHEMA_RELATIVE_PATH, projectRoot),
+        ...(targetId ? { origin: { root: "target" as const, target_id: targetId } } : {}),
       };
 
       const modelNames = new Set(models.map((m) => m.name));
-      const items = models.map((model) => dbItem(model, modelNames, projectRoot, timestamp, source.id));
+      const items = models.map((model) => dbItem(model, modelNames, projectRoot, timestamp, source.id, targetId));
 
       return { items, sources: [source] };
     },

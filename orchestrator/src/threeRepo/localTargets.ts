@@ -48,3 +48,11 @@ export function loadLocalTargetMapping(knowledgeRoot: string, registry: TargetRe
   }
   return resolved;
 }
+
+/** Reverse lookup used by context assembly; exact canonical roots only, never a basename guess. */
+export function targetIdForLocalPath(entries: readonly ResolvedLocalTarget[], targetRoot: string): string | undefined {
+  let canonical: string;
+  try { canonical = fs.realpathSync.native(path.resolve(targetRoot)); }
+  catch { return undefined; }
+  return entries.find((entry) => entry.path === canonical)?.target_id;
+}

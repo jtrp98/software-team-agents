@@ -113,7 +113,7 @@ export async function buildContextCommand(input: ContextCommandInput): Promise<C
     moduleName: resolved.module,
     phases: phase.phases.length > 0 ? phase.phases : undefined,
     taskId: input.taskId,
-    targetRoot: env.AGENTCLAUDE_TARGET_ROOT,
+    targetRoot: env.AGENTCLAUDE_TARGET_ROOT ?? (docsRoot !== input.projectRoot ? input.projectRoot : undefined),
   });
   return {
     role: input.role,

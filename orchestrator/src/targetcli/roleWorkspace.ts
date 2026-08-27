@@ -47,7 +47,8 @@ export const BA_LANE_AGENTS: readonly string[] = [
  * T-ROLE-10 / T-ROLE-11 — role-aware managed-asset profiles over the template payload.
  *
  * Both roles get hooks + settings (the guards travel with every workspace),
- * skills (.claude/scripts), shared instructions, policies, and CLAUDE.md. They
+ * skills (.claude/scripts), shared instructions, policies, CLAUDE.md, and its
+ * rendered AGENTS.md pointer. They
  * differ in agent roster and in orchestrator-only payload (contracts,
  * workflows, stacks, layout/test-pyramid/escalation YAML) that only a DEV/Target
  * workspace needs because only there does the pipeline drive engineers.
@@ -67,7 +68,7 @@ export function assetsForRole(role: RoleName): (relPath: string) => boolean {
     };
   }
   return (relPath) => {
-    if (relPath === "CLAUDE.md") return true;
+    if (relPath === "CLAUDE.md" || relPath === "AGENTS.md") return true;
     if (relPath.startsWith(".claude/agents/")) {
       if (!relPath.endsWith(".md")) return false; // e.g. README fragments — none today, but stay strict
       return baAgents.has(path.basename(relPath, ".md"));

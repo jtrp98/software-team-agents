@@ -66,6 +66,8 @@ import { laneContext, laneGet } from "./roles/laneContext.js";
 import { KnowledgeContext } from "./knowledge/knowledgeContext.js";
 import { renderKnowledgeRetrieval } from "./knowledge/retrievalRender.js";
 import { writeKnowledgeItem } from "./knowledge/knowledgeStore.js";
+import { migrateKnowledgeSchemaV2 } from "./knowledge/schemaV2Migration.js";
+import { reconcileKnowledge, renderReconciliationReport } from "./knowledge/reconcile.js";
 import type { RoleLane } from "./roles/roleLane.js";
 import { buildTemplates } from "./packaging/templateBuilder.js";
 import { runInit } from "./packaging/initCommand.js";
@@ -225,6 +227,8 @@ export const USAGE =
   "  sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]   token/context composition across orchestrated and interactive runs\n" +
   "  sta context <role> [--module <name>] [--phase <n,n>] [--task <id>] [--json] [--project-root <path>]   deterministic fail-open module context used by sta run\n" +
   "  sta knowledge get <id>[,<id>...] [--lane <ba|sa|uxui|dev>] [--json] [--project-root <path>]   retrieve only permitted knowledge fields (default lane: dev)\n" +
+  "  sta knowledge migrate-v2 [--dry-run] [--json] [--project-root <knowledge-root>]   add origin/target_ids without changing item meaning or lifecycle\n" +
+  "  sta knowledge reconcile --target <id> [--json] [--project-root <knowledge-root>]   read-only current/desired evidence classifier\n" +
   "  sta policy [<area>] [<section>] [--json] [--project-root <path>]   read one policies/ section instead of the whole file; no args lists every area and section\n" +
   "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names (T41)\n" +
   "  sta init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
@@ -749,7 +753,7 @@ function isVerb(s: string | undefined): s is Verb {
 }
 
 /** Flags a verb accepts that take a value — their value must never be mistaken for the positional <task-id>. */
-  const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--phase", "--task", "--by", "--since", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime", "--as", "--note", "--lane"]);
+  const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--phase", "--task", "--target", "--by", "--since", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime", "--as", "--note", "--lane"]);
 
 /** Every non-flag token in a verb's remaining args, in order, skipping over each value-flag's own argument. */
 function positionalArgs(rest: string[]): string[] {
@@ -2021,7 +2025,29 @@ async function runContextVerb(rest: string[], defaultProjectRoot: string): Promi
 /** `knowledge get <id>[,<id>...] [--lane <lane>] [--json]`: one policy-filtered retrieval door. */
 async function runKnowledgeVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const args = positionalArgs(rest);
-  if (args[0] !== "get") throw new CliUsageError("knowledge: expected sub-command get");
+  const subcommand = args[0];
+  const projectRoot = path.resolve(flagValue(rest, "--project-root") ?? defaultProjectRoot);
+  if (subcommand === "migrate-v2") {
+    if (args.length > 1) throw new CliUsageError("knowledge migrate-v2: no positional arguments are accepted");
+    const report = migrateKnowledgeSchemaV2({ knowledgeRoot: projectRoot, dryRun: rest.includes("--dry-run"), now: flagValue(rest, "--now") ?? new Date().toISOString() });
+    if (rest.includes("--json")) console.log(JSON.stringify(report, null, 2));
+    else {
+      console.log(`[orchestrator] knowledge schema v2 ${report.dry_run ? "dry-run" : "migration"}: ${report.changed}/${report.scanned} item(s) would change${report.dry_run ? "" : "; changes written"}.`);
+      for (const item of report.items) console.log(`  ${item.path}: ${item.changes.join(", ")} target_ids=[${item.target_ids.join(",")}]`);
+      console.log(`[orchestrator] ${report.note}`);
+      if (report.backup_manifest) console.log(`[orchestrator] reversible backup manifest: ${report.backup_manifest}`);
+    }
+    return 0;
+  }
+  if (subcommand === "reconcile") {
+    if (args.length > 1) throw new CliUsageError("knowledge reconcile: no positional arguments are accepted");
+    const targetId = flagValue(rest, "--target");
+    if (!targetId) throw new CliUsageError("knowledge reconcile: --target <id> is required");
+    const report = reconcileKnowledge({ knowledgeRoot: projectRoot, frameworkRoot: resolveFrameworkRoot(), targetId, now: flagValue(rest, "--now") ?? new Date().toISOString() });
+    console.log(rest.includes("--json") ? JSON.stringify(report, null, 2) : renderReconciliationReport(report));
+    return 0;
+  }
+  if (subcommand !== "get") throw new CliUsageError("knowledge: expected sub-command get, migrate-v2, or reconcile");
   const ids = (args[1] ?? "").split(",").map((id) => id.trim()).filter((id) => id !== "");
   if (ids.length === 0) throw new CliUsageError("knowledge get: an item id is required");
   if (args.length > 2) throw new CliUsageError("knowledge get: ids must be one comma-separated argument");
@@ -2031,7 +2057,6 @@ async function runKnowledgeVerb(rest: string[], defaultProjectRoot: string): Pro
     throw new CliUsageError(`knowledge get: "${laneRaw}" is not a lane — use ba, sa, uxui, or dev`);
   }
   const lane = laneRaw as RoleLane;
-  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
   const context = KnowledgeContext.load(projectRoot, new Date().toISOString());
   const rendered = ids.map((id) => ({ id, result: renderKnowledgeRetrieval(lane, id, laneGet(lane, context, id)) }));
   const json = rest.includes("--json");

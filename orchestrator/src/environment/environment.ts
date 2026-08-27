@@ -3,7 +3,6 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv, { type ValidateFunction } from "ajv";
 import { parse as parseYaml } from "yaml";
-import { defaultProjectRoot } from "../agents/agentContract.js";
 
 /**
  * local / dev / staging / production (T43) — a fixed, small vocabulary, not
@@ -59,11 +58,11 @@ const SCHEMA_PATH = path.resolve(
   "environments.schema.json",
 );
 
-export function environmentsPath(projectRoot: string = defaultProjectRoot()): string {
+export function environmentsPath(projectRoot: string): string {
   return path.join(projectRoot, "environments.yaml");
 }
 
-export function hasEnvironmentConfig(projectRoot: string = defaultProjectRoot()): boolean {
+export function hasEnvironmentConfig(projectRoot: string): boolean {
   return fs.existsSync(environmentsPath(projectRoot));
 }
 
@@ -85,7 +84,7 @@ function validator(): ValidateFunction {
 }
 
 /** Reads and validates environments.yaml. Throws rather than returning a partly trusted config. */
-export function loadEnvironmentConfig(projectRoot: string = defaultProjectRoot()): EnvironmentConfig {
+export function loadEnvironmentConfig(projectRoot: string): EnvironmentConfig {
   const file = environmentsPath(projectRoot);
   let raw: string;
   try {
@@ -125,7 +124,7 @@ export function loadEnvironmentConfig(projectRoot: string = defaultProjectRoot()
 }
 
 /** The description an agent's prompt should see for this environment — from environments.yaml if it names one, the built-in generic text otherwise. Never empty: an agent must always be told *something*. */
-export function describeEnvironment(env: Environment, projectRoot: string = defaultProjectRoot()): string {
+export function describeEnvironment(env: Environment, projectRoot: string): string {
   if (hasEnvironmentConfig(projectRoot)) {
     try {
       const entry = loadEnvironmentConfig(projectRoot).environments.find((e) => e.name === env);
@@ -139,7 +138,7 @@ export function describeEnvironment(env: Environment, projectRoot: string = defa
 }
 
 /** environments.yaml's declared default, or the built-in default (local) when there is none or no file. */
-export function resolveDefaultEnvironment(projectRoot: string = defaultProjectRoot()): Environment {
+export function resolveDefaultEnvironment(projectRoot: string): Environment {
   if (hasEnvironmentConfig(projectRoot)) {
     try {
       return loadEnvironmentConfig(projectRoot).default ?? Environment.LOCAL;
@@ -162,7 +161,7 @@ export interface EnvironmentConfigCheckResult {
  * to actually work: parse, every declared name distinct, and `default` (if
  * set) naming an environment the file actually declares.
  */
-export function checkEnvironmentConfig(projectRoot: string = defaultProjectRoot()): EnvironmentConfigCheckResult {
+export function checkEnvironmentConfig(projectRoot: string): EnvironmentConfigCheckResult {
   if (!hasEnvironmentConfig(projectRoot)) {
     return {
       ok: true,

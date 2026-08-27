@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { readTemplateManifest, sha256Of, type TemplateFileEntry } from "./templateManifest.js";
 import { InstallManifestMissingError, installManifestPath, readInstallManifest, writeInstallManifest, type InstallManifest } from "./installManifest.js";
 import { assertFrameworkManagedPaths } from "../threeRepo/ownership.js";
+import { LEGACY_AGENTS_POINTER_PATH, mergeAgentsPointer } from "./agentsPointer.js";
 
 /**
  * T95 — `sta upgrade`: brings a project's framework files up to whatever
@@ -62,6 +63,29 @@ export function runUpgrade(projectRoot: string, templatesDir: string, now: strin
     const dest = path.join(projectRoot, relPath);
     const src = path.join(templatesDir, relPath);
     const old = oldByPath.get(relPath);
+
+    if (relPath === LEGACY_AGENTS_POINTER_PATH && fs.existsSync(dest)) {
+      const existing = fs.readFileSync(dest, "utf8");
+      const wasPristineManaged = old !== undefined && sha256Of(existing) === old.sha256;
+      if (!wasPristineManaged) {
+        const merged = mergeAgentsPointer(existing, fs.readFileSync(src, "utf8"));
+        if (merged.state === "malformed") {
+          skippedUserModified.push(relPath);
+          if (old) resultFiles.push(old);
+          continue;
+        }
+        if (merged.state === "project-owned") {
+          if (merged.content !== existing) {
+            const backupDest = path.join(backupDir, relPath);
+            fs.mkdirSync(path.dirname(backupDest), { recursive: true });
+            fs.writeFileSync(backupDest, existing, "utf8");
+            fs.writeFileSync(dest, merged.content, "utf8");
+            overwritten.push(relPath);
+          }
+          continue; // retain project ownership; track only the delimited block semantically
+        }
+      }
+    }
 
     if (!old) {
       fs.mkdirSync(path.dirname(dest), { recursive: true });

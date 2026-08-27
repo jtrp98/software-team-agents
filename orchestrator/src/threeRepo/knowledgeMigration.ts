@@ -84,31 +84,23 @@ export function copyMigrationSource(manifest: MigrationManifest, options: Migrat
   if (!fs.existsSync(policy)) fs.writeFileSync(policy, "version: 1\n", "utf8");
 }
 
-function migrateItem(file: string, targetId: string, now: string): void {
+function migrateItem(file: string, targetId: string, _now: string): void {
   const raw = parseYaml(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
   if (!raw || typeof raw !== "object" || !("kind" in raw)) return;
-  raw.schema_version = 2; raw.target_ids = [targetId]; raw.version = Number(raw.version ?? 0) + 1; raw.updated_at = now;
+  raw.schema_version = 2; raw.target_ids = [targetId];
   const sources = Array.isArray(raw.sources) ? raw.sources : [];
   raw.sources = sources.map((source) => {
-    const next = { ...(source as Record<string, unknown>) }; const locator = String(next.locator ?? "");
-    next.origin = locator === "README.md" || locator === "CLAUDE.md" ? { root: "target", target_id: targetId } : { root: "knowledge", target_id: null };
+    const next = { ...(source as Record<string, unknown>) };
+    next.origin = { root: "knowledge", target_id: null };
     return next;
   });
-  // A v2 code task must name the Target its code lives in (knowledgeModel.ts):
-  // tag backend/frontend without payload.target_id is exactly the gap the first
-  // real verify run caught across every migrated BE-/FE- item.
-  if (raw.kind === "task" && raw.payload && typeof raw.payload === "object") {
-    const payload = raw.payload as Record<string, unknown>;
-    if (payload.tag !== null && payload.tag !== undefined) payload.target_id = targetId;
-  }
   fs.writeFileSync(file, stringifyYaml(raw, { lineWidth: 0 }), "utf8");
 }
 
-function migrateSourceRecord(file: string, targetId: string): void {
+function migrateSourceRecord(file: string, _targetId: string): void {
   const raw = parseYaml(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
   if (!raw || typeof raw !== "object" || !("locator" in raw)) return;
-  const locator = String(raw.locator ?? "");
-  raw.origin = locator === "README.md" || locator === "CLAUDE.md" ? { root: "target", target_id: targetId } : { root: "knowledge", target_id: null };
+  raw.origin = { root: "knowledge", target_id: null };
   fs.writeFileSync(file, stringifyYaml(raw, { lineWidth: 0 }), "utf8");
 }
 
@@ -164,9 +156,7 @@ export function verifyMigration(manifest: MigrationManifest, options: MigrationO
     if (item.target_ids?.length !== 1 || item.target_ids[0] !== manifest.target_id) problems.push(`${item.id}: expected target_ids [${manifest.target_id}]`);
     for (const source of item.sources) {
       if (!source.origin) problems.push(`${item.id}: source ${source.locator} is missing origin`);
-      if ((source.locator === "README.md" || source.locator === "CLAUDE.md") && (source.origin?.root !== "target" || source.origin.target_id !== manifest.target_id)) {
-        problems.push(`${item.id}: ${source.locator} must use target origin ${manifest.target_id}`);
-      }
+      if (source.origin?.root !== "knowledge" || source.origin.target_id !== null) problems.push(`${item.id}: ${source.locator} must use Knowledge origin after migration`);
     }
   }
   const sourceRegistry = loadSourceRegistry(options.knowledgeRoot);

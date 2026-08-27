@@ -416,6 +416,7 @@ describe("safe sync engine — OpenCode renderings (T-OC2)", () => {
 const DEV_V1: FixtureFile[] = [
   { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer", "builds backend") },
   { relPath: "CLAUDE.md", content: "# Rules\n\nRead `_docs/status.md` first.\n" },
+  { relPath: "AGENTS.md", content: "generated at sync\n" },
 ];
 
 function knowledgeRootFixture(): string {
@@ -510,6 +511,61 @@ describe("dev-lane Knowledge rendering (T-WG7)", () => {
     expect(readTargetManifest(target).files.map((f) => f.path)).not.toContain("CLAUDE.md");
     expect(readTargetManifest(target).framework_blocks?.map((block) => block.path)).toContain("CLAUDE.md");
     expect(fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8")).toContain("KNOWLEDGE_ROOT=");
+  });
+});
+
+describe("T-V3-07 AGENTS.md rendered pointer ownership", () => {
+  function sync(target: string, extra: Partial<Parameters<typeof runTargetSync>[0]> = {}) {
+    writeTargetConfig(target, defaultTargetConfig("app", "now", "dev"));
+    return runTargetSync({
+      targetRoot: target,
+      templatesDir: makeTemplatesDir("1.0.0", DEV_V1),
+      now: "2026-01-01T00:00:00Z",
+      installationConfigPath: installationConfigFixture(knowledgeRootFixture()),
+      ...extra,
+    });
+  }
+
+  it("adds and manifest-tracks the short pointer when AGENTS.md is absent", () => {
+    const target = gitTarget();
+    sync(target);
+    const agents = fs.readFileSync(path.join(target, "AGENTS.md"), "utf8");
+    expect(agents).toContain("[CLAUDE.md](CLAUDE.md)");
+    expect(readTargetManifest(target).files.map((entry) => entry.path)).toContain("AGENTS.md");
+  });
+
+  it("injects only the managed block into project-owned AGENTS.md and preserves every outside byte", () => {
+    const target = gitTarget();
+    const own = "# Project rules\r\nKeep this exact.\r\n";
+    fs.writeFileSync(path.join(target, "AGENTS.md"), own, "utf8");
+    sync(target);
+    expect(stripBootstrapBlock(fs.readFileSync(path.join(target, "AGENTS.md"), "utf8"))).toBe(own);
+    expect(readTargetManifest(target).framework_blocks?.map((entry) => entry.path)).toContain("AGENTS.md");
+    expect(readTargetManifest(target).files.map((entry) => entry.path)).not.toContain("AGENTS.md");
+  });
+
+  it("reduces a provable duplicate only with dedicated confirmation, backing up the full prior file", () => {
+    const target = gitTarget();
+    const duplicate = "# Same project rules\n";
+    fs.writeFileSync(path.join(target, "CLAUDE.md"), duplicate, "utf8");
+    fs.writeFileSync(path.join(target, "AGENTS.md"), duplicate, "utf8");
+    const first = sync(target);
+    expect(stripBootstrapBlock(fs.readFileSync(path.join(target, "AGENTS.md"), "utf8"))).toBe(duplicate);
+    const second = sync(target, { now: "2026-01-02T00:00:00Z", manifest: readTargetManifest(target), config: undefined, confirmAgentsPointer: true });
+    const reduced = fs.readFileSync(path.join(target, "AGENTS.md"), "utf8");
+    expect(reduced).toContain("[CLAUDE.md](CLAUDE.md)");
+    expect(stripBootstrapBlock(reduced)).not.toBe(duplicate);
+    expect(second.backupDir).toBeTruthy();
+    expect(fs.readFileSync(path.join(second.backupDir!, "AGENTS.md"), "utf8")).toContain(duplicate);
+  });
+
+  it("never deletes AGENTS.md when a later payload drops it", () => {
+    const target = gitTarget();
+    sync(target);
+    const before = fs.readFileSync(path.join(target, "AGENTS.md"), "utf8");
+    const config = defaultTargetConfig("app", "now", "dev");
+    runTargetSync({ targetRoot: target, templatesDir: makeTemplatesDir("1.1.0", DEV_V1.filter((entry) => entry.relPath !== "AGENTS.md")), manifest: readTargetManifest(target), config, now: "2026-01-03T00:00:00Z", installationConfigPath: installationConfigFixture(knowledgeRootFixture()) });
+    expect(fs.readFileSync(path.join(target, "AGENTS.md"), "utf8")).toBe(before);
   });
 });
 

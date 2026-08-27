@@ -208,7 +208,7 @@ export function ownerOfPath(relativePath: string): RepositoryOwner {
 export function assertFrameworkManagedPaths(paths: readonly string[], mode: InstallMode = "three-repo"): void {
   const isLegacyFrameworkInstruction = (candidate: string): boolean => {
     const normalised = normalise(candidate);
-    return normalised === "CLAUDE.md" || normalised.startsWith(".claude/");
+    return normalised === "CLAUDE.md" || normalised === "AGENTS.md" || normalised.startsWith(".claude/");
   };
   const forbidden = paths.filter((candidate) =>
     ownerOfPath(candidate) !== "framework" && !(mode === "legacy-project" && isLegacyFrameworkInstruction(candidate)),

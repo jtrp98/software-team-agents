@@ -92,4 +92,16 @@ describe("prompt-setup.md — AI-assisted setup entry point", () => {
     // The new-project branch routes to `setup`, not to this playbook, for scaffolding.
     expect(prompt).toMatch(/`setup` agent has to run/);
   });
+
+  it("T-V3-13 — reads the Harness profile, asks only on ambiguity, and delegates managed merges to sync", () => {
+    expect(prompt).toContain("`status --json` → `stack`");
+    expect(prompt).toContain("do not detect the stack yourself");
+    expect(prompt).toMatch(/Ask no stack question when `stack` is resolved/);
+    expect(prompt).toContain("`--stack <name>`");
+    expect(prompt).not.toContain("Merging with the project's existing Claude setup");
+    expect(prompt).not.toContain("Fixed project stack");
+    expect(prompt).toMatch(/sync.*merges|merges[\s\S]*\.claude\/settings\.json/);
+    expect(prompt).toContain("Stack     : <resolved profile");
+    expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(23_171);
+  });
 });

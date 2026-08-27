@@ -93,13 +93,22 @@ for (const flag of [
 // Installation check, the way CI runs it: against a freshly-init'd project,
 // not the framework repo itself (which is a dev checkout, not a sta project).
 {
-  const tmpInit = path.join(os.tmpdir(), `sta-gate-install-${process.pid}`);
-  spawnSync(
-    [q("node"), q(path.join(repoRoot, "orchestrator", "dist", "cli.js")), "init", "--mode", "legacy-project", "--templates", q(path.join(repoRoot, "templates")), "--project-root", q(tmpInit)].join(" "),
-    { encoding: "utf8", shell: true, timeout: 120_000, stdio: ["ignore", "pipe", "pipe"] },
-  );
-  run("checker --check-installation (fresh init)", `${distCli} --check-installation --project-root ${q(tmpInit)}`, { quiet: true });
-  fs.rmSync(tmpInit, { recursive: true, force: true });
+  const tmpInit = fs.mkdtempSync(path.join(os.tmpdir(), "sta-gate-install-"));
+  try {
+    fs.writeFileSync(
+      path.join(tmpInit, "package.json"),
+      JSON.stringify({ name: "sta-installation-check", private: true, scripts: { build: "tsc", test: "node --test" } }, null, 2),
+    );
+    fs.writeFileSync(path.join(tmpInit, "package-lock.json"), JSON.stringify({ name: "sta-installation-check", lockfileVersion: 3 }));
+    run(
+      "initialize installation-check fixture",
+      [q("node"), q(path.join(repoRoot, "orchestrator", "dist", "cli.js")), "init", "--mode", "legacy-project", "--templates", q(path.join(repoRoot, "templates")), "--project-root", q(tmpInit)].join(" "),
+      { quiet: true, timeoutMs: 120_000 },
+    );
+    run("checker --check-installation (fresh init)", `${distCli} --check-installation --project-root ${q(tmpInit)}`, { quiet: true });
+  } finally {
+    fs.rmSync(tmpInit, { recursive: true, force: true });
+  }
 }
 
 // --- 4 · templates snapshot & version consistency ----------------------------

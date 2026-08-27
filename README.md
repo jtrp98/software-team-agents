@@ -297,7 +297,8 @@ Knowledge ไม่ใช่ "AI memory" — เป็นข้อมูลร�
 - **Relations 9 แบบ + legality matrix**: `refines/implements/verifies/references/depends-on/constrains/supersedes/conflicts-with/derived-from` — ผิดกฎ = report โดย `--check-knowledge`
 - **Source/provenance/freshness** — ทุก item อ้าง `sources[]` freshness วัดจาก digest ของ source ก่อนอายุ: source เปลี่ยน = stale ทันที
 - **Status**: `draft → reviewed → approved → deprecated` — approve ได้เฉพาะคน (`sta roles approve`)
-- **Role-based context** — `knowledge-policy.yaml` กำหนด field ที่แต่ละ role เห็น (default: sensitive items ถูก redact สำหรับ devops/project-manager) และทุก result บอกด้วยว่าอะไรถูก withhold
+- **Role/Target-based context** — `knowledge-policy.yaml` กำหนด field ที่แต่ละ role เห็น; `target_ids: []` เป็น global และรายการที่ scoped จะเข้า context เฉพาะ Target ปัจจุบัน พร้อมจำนวนที่ถูก exclude/fallback เมื่อ resolve Target ไม่ได้
+- **Freshness + reconciliation** — brief แสดง verdict จาก `freshnessOf()` ภายใต้เพดาน 16,384 B; `sta knowledge reconcile --target <id>` คำนวณรายงาน current/desired แบบ read-only ทุกครั้งและไม่บันทึก verdict
 - Reserved directories: `_sources/ _conflicts/ _bootstrap/ _human-input/ _adoption/ _roles/`
 
 ## Design sources & identities (uxui-designer)
@@ -382,7 +383,7 @@ Regenerate mirror ใน Framework repo เอง: `npm --prefix orchestrator ru
   - `INCOMPATIBLE` — **major ต่าง** → ต้อง `sync --force` (cross-major jump ต้องตัดสินใจเอง ไม่ happen เงียบ ๆ) และ `dev/ba` preflight จะ fail ทันที
 - **Upgrade flow (v2)**: ติดตั้ง `.tgz` ใหม่ → `software-team-agents sync` ต่อ workspace (auto-sync ก่อน `dev/ba` เมื่อ plan ปลอด conflict)
 - **Legacy install (`.sta/`)**: `sta upgrade --mode legacy-project --templates <dir>` (skip ไฟล์ที่ user แก้, restore ไฟล์ที่ถูกลบ, backup ก่อนเขียน) · `sta migrate` สำหรับ breaking manifest schema change · `sta rollback [--backup <name>]`
-- **Knowledge item schema**: migration `1 → 2` (เพิ่ม `target_ids`) ผ่าน `sta knowledge-migrate <dry-run|copy|verify|cutover>` — cutover ต้อง `--confirm I_CONFIRM_MIGRATION`
+- **Knowledge item schema**: opt-in migration `1 → 2` เพิ่ม `origin` + `target_ids` ผ่าน `sta knowledge migrate-v2 --dry-run` แล้ว `sta knowledge migrate-v2`; ไม่เปลี่ยน body/payload/status/owner/version และรายงาน freshness sweep แรกเป็น baseline. คำสั่ง legacy `sta knowledge-migrate <dry-run|copy|verify|cutover>` ยังเป็น Three-Repo copy/cutover flow และ cutover ต้อง `--confirm I_CONFIRM_MIGRATION`
 - **ยังไม่มี**: publish ขึ้น npm registry, auto-update, lockfile/resolution ข้าม repo — distribution ผ่าน `.tgz` เท่านั้น
 
 ## Configuration Reference
@@ -454,7 +455,7 @@ node ../.claude/tests/run.js   # hook/script self-test — ต้องเขี
 
 - CI: [`.github/workflows/agent-framework-ci.yml`](.github/workflows/agent-framework-ci.yml) รัน self-test + typecheck + tests + 15 release-gate `--check-*` flag + template build/init check บนทุก PR และทุก push ไป `master` หรือ `release/**` (default branch `release/dev` รวมอยู่ — release path ไม่มีทาง bypass validation)
 - โครงสร้าง directory ถูกประกาศใน [`layout.yaml`](layout.yaml) และตรวจด้วย `--check-layout` — เพิ่ม folder ใหม่ต้องประกาศก่อน
-- เอกสารกฎ: [`policies/`](policies/README.md) · machine-readable half ของ agent: [`contracts/`](contracts/) · pipeline detail: [`CLAUDE.md`](CLAUDE.md) · agent operating rules: [`AGENTS.md`](AGENTS.md) · knowledge model: [`knowledge/README.md`](knowledge/README.md) · V1 contract (guarantees/non-goals): [`decisions/ADR-004-v1-contract.md`](decisions/ADR-004-v1-contract.md)
+- เอกสารกฎ: [`policies/`](policies/README.md) · machine-readable half ของ agent: [`contracts/`](contracts/) · operating/pipeline rules: [`CLAUDE.md`](CLAUDE.md) · Codex root pointer: [`AGENTS.md`](AGENTS.md) · knowledge model: [`knowledge/README.md`](knowledge/README.md) · V1 contract (guarantees/non-goals): [`decisions/ADR-004-v1-contract.md`](decisions/ADR-004-v1-contract.md)
 - `templates/` เป็น build artifact — แก้ที่ root sources (`.claude/`, `contracts/`, ...) แล้ว regenerate เสมอ
 - `planning/` เป็น working docs ภายใน (gitignored) ไม่ได้แถมมากับ repo ที่ clone
 

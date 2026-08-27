@@ -22,8 +22,7 @@ afterEach(() => { while (roots.length) fs.rmSync(roots.pop()!, { recursive: true
 describe("three-repo packaging boundary", () => {
   it("rejects Target instructions from a strict framework manifest, while legacy mode is explicit", () => {
     expect(() => assertFrameworkManagedPaths(["CLAUDE.md"])).toThrow(/project-owned/);
-    expect(() => assertFrameworkManagedPaths(["AGENTS.md"], "legacy-project")).toThrow(/project-owned/);
-    expect(() => assertFrameworkManagedPaths(["CLAUDE.md", ".claude/settings.json"], "legacy-project")).not.toThrow();
+    expect(() => assertFrameworkManagedPaths(["CLAUDE.md", "AGENTS.md", ".claude/settings.json"], "legacy-project")).not.toThrow();
   });
 
   it("initializes only missing Knowledge-owned directories and config without application source", () => {

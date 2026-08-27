@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { readTemplateManifest, sha256Of, type TemplateFileEntry, type TemplateManifest } from "../packaging/templateManifest.js";
-import { BINDING_RENDERINGS, COMMAND_RENDERINGS, loadCommandGuardrails, listCommands } from "../runtime/bindingGenerator.js";
+import { BINDING_RENDERINGS, COMMAND_RENDERINGS, isAgentBindingRendering, loadCommandGuardrails, listCommands, renderAgentsPointer } from "../runtime/bindingGenerator.js";
 import { parseVersion } from "./version.js";
 import {
   CLAUDE_MD_PATH,
@@ -54,7 +54,8 @@ import { renderStackDigest, STACK_DIGEST_RELATIVE_PATH } from "../profile/stackD
  */
 
 /** The generated-from-.claude rendering targets, with their sync-log wording. Declared in bindingGenerator (`BINDING_RENDERINGS`) so `checkBindings` verifies exactly what this engine generates. */
-const DERIVED_RENDERINGS = BINDING_RENDERINGS.map((spec) => ({ ...spec, note: "generated from .claude/agents" }));
+const DERIVED_RENDERINGS = BINDING_RENDERINGS.filter(isAgentBindingRendering).map((spec) => ({ ...spec, note: "generated from .claude/agents" }));
+export const AGENTS_MD_PATH = "AGENTS.md";
 /** Same for the prompt-shortcut renderings (`.opencode/commands`, `.agents/skills`), generated from `.claude/commands`. */
 const DERIVED_COMMAND_RENDERINGS = COMMAND_RENDERINGS.map((spec) => ({ ...spec, note: "generated from .claude/commands" }));
 
@@ -117,6 +118,7 @@ function planPayloadFiles(
   overrides: ReadonlySet<string>,
   oldBlockHashes: ReadonlyMap<string, string>,
   derivedContent?: ReadonlyMap<string, string>,
+  confirmAgentsPointer = false,
 ): PlannedFile[] {
   const planned: PlannedFile[] = [];
   for (const file of templateManifest.files) {
@@ -162,7 +164,11 @@ function planPayloadFiles(
     // compare against what sync actually writes, so a rendered workspace is
     // "unchanged" on re-sync instead of perpetually "user-modified".
     const derivedBytes = derivedContent?.get(file.path);
-    if (file.path === CLAUDE_MD_PATH && derivedBytes !== undefined) {
+    if (file.path === AGENTS_MD_PATH && derivedBytes !== undefined && confirmAgentsPointer && isProvableStaleAgentsDuplicate(targetRoot)) {
+      planned.push({ entry: { action: currentHash === sha256Of(derivedBytes) ? "unchanged" : "update", path: file.path, note: "explicitly confirmed reduction of a provable CLAUDE.md duplicate" } });
+      continue;
+    }
+    if ((file.path === CLAUDE_MD_PATH || file.path === AGENTS_MD_PATH) && derivedBytes !== undefined) {
       const current = fs.readFileSync(dest, "utf8");
       const currentBlock = inspectBootstrapBlock(current);
       if (currentBlock.state === "malformed") {
@@ -176,7 +182,7 @@ function planPayloadFiles(
         continue;
       }
       const renderedBlock = inspectBootstrapBlock(derivedBytes);
-      if (renderedBlock.state !== "valid") throw new Error("rendered CLAUDE.md has no valid Framework bootstrap block");
+      if (renderedBlock.state !== "valid") throw new Error(`rendered ${file.path} has no valid Framework bootstrap block`);
       const expectedHash = sha256Of(renderedBlock.block);
       const previousBlockHash = oldBlockHashes.get(file.path);
       // Whole-file tracked CLAUDE.md stays Framework-managed. Only a file with
@@ -253,6 +259,10 @@ function planStaleFiles(
   const planned: PlannedFile[] = [];
   for (const [relPath, tracked] of oldFiles) {
     if (newPathSet.has(relPath)) continue;
+    if (relPath === AGENTS_MD_PATH) {
+      planned.push({ entry: { action: "override", path: relPath, note: "AGENTS.md is never automatically deleted; retained for manual/reversible cleanup" } });
+      continue;
+    }
     if (relPath.startsWith(".codex/") || relPath.startsWith(".opencode/agent/") || relPath.startsWith(".opencode/commands/") || relPath.startsWith(".agents/skills/")) continue; // derived renderings follow their sources automatically
     if (derivedContent?.has(relPath)) continue; // T-WG7 — regenerated below from the live binding, never stale
     if (overrides.has(relPath)) {
@@ -446,6 +456,20 @@ export interface PlanSyncOptions {
    * of copying the template file.
    */
   derivedContent?: ReadonlyMap<string, string>;
+  /** Explicitly shrink a provable AGENTS.md duplicate to the generated pointer. --force never implies this. */
+  confirmAgentsPointer?: boolean;
+}
+
+function isProvableStaleAgentsDuplicate(targetRoot: string): boolean {
+  const agents = path.join(targetRoot, AGENTS_MD_PATH);
+  const claude = path.join(targetRoot, CLAUDE_MD_PATH);
+  if (!fs.existsSync(agents) || !fs.existsSync(claude)) return false;
+  const a = inspectBootstrapBlock(fs.readFileSync(agents, "utf8"));
+  const c = inspectBootstrapBlock(fs.readFileSync(claude, "utf8"));
+  if (a.state === "malformed" || c.state === "malformed") return false;
+  const aOutside = (a.state === "valid" ? a.outside : fs.readFileSync(agents, "utf8")).replace(/\r\n/g, "\n");
+  const cOutside = (c.state === "valid" ? c.outside : fs.readFileSync(claude, "utf8")).replace(/\r\n/g, "\n");
+  return aOutside === cOutside;
 }
 
 /** The payload this sync actually manages, after the role profile filter. */
@@ -464,7 +488,7 @@ export function planSync(options: PlanSyncOptions): SyncPlan {
   const overrides = overrideSet(options.config, options.targetRoot, candidatePaths);
 
   const planned = [
-    ...planPayloadFiles(options.targetRoot, options.templatesDir, templateManifest, oldFiles, overrides, oldBlockHashes, options.derivedContent),
+    ...planPayloadFiles(options.targetRoot, options.templatesDir, templateManifest, oldFiles, overrides, oldBlockHashes, options.derivedContent, options.confirmAgentsPointer),
     ...planStaleFiles(options.targetRoot, templateManifest, oldFiles, overrides, options.derivedContent),
     ...planStaleFrameworkBlocks(options.targetRoot, templateManifest, oldBlockHashes, overrides),
   ];
@@ -524,6 +548,9 @@ export function devDerivedContent(options: {
   if (files.some((f) => f.path === CLAUDE_MD_PATH)) {
     const base = fs.readFileSync(path.join(options.templatesDir, CLAUDE_MD_PATH), "utf8");
     content.set(CLAUDE_MD_PATH, renderWorkspaceClaude(base, { role: config.role, workspaceRoot: options.targetRoot, boundRoot }));
+  }
+  if (files.some((f) => f.path === AGENTS_MD_PATH) && content.has(CLAUDE_MD_PATH)) {
+    content.set(AGENTS_MD_PATH, renderAgentsPointer(content.get(CLAUDE_MD_PATH)!));
   }
   if (config.role === "dev" && files.some((f) => f.path === STACK_DIGEST_RELATIVE_PATH)) {
     content.set(STACK_DIGEST_RELATIVE_PATH, renderStackDigest(config.stack));
@@ -919,6 +946,52 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
         performed.push({ action: "unchanged", path: KNOWLEDGE_ROOT_INCLUDE_PATH });
       }
       managedEntries.push(includeEntry);
+    }
+  }
+
+  // T-V3-07 — the Codex root pointer follows the same ownership split as
+  // CLAUDE.md. Absent files become whole-file managed pointers; existing
+  // project files receive only the delimited block. A whole-file reduction is
+  // possible only for an exact CLAUDE.md duplicate and the dedicated explicit
+  // confirmation option; --force does not broaden that authority.
+  if (derivedContent?.has(AGENTS_MD_PATH)) {
+    const rendered = derivedContent.get(AGENTS_MD_PATH)!;
+    const relPath = AGENTS_MD_PATH;
+    const abs = path.join(options.targetRoot, relPath);
+    const entry: TemplateFileEntry = { path: relPath, sha256: sha256Of(rendered), size_bytes: Buffer.byteLength(rendered) };
+    const overridden = overrideSet(config).has(relPath);
+    const previousBlock = manifest?.framework_blocks?.find((block) => block.path === relPath);
+    const confirmedReduction = options.confirmAgentsPointer === true && isProvableStaleAgentsDuplicate(options.targetRoot);
+    const projectOwned = !confirmedReduction && (previousBlock !== undefined || (!oldFiles.has(relPath) && fs.existsSync(abs)));
+    const renderedBlock = inspectBootstrapBlock(rendered);
+    if (renderedBlock.state !== "valid") throw new Error("rendered AGENTS.md has no valid Framework bootstrap block");
+    if (overridden) {
+      performed.push({ action: "override", path: relPath, note: "explicit user choice in .agent-team/config.yaml — bootstrap block skipped" });
+    } else if (projectOwned) {
+      const current = fs.readFileSync(abs, "utf8");
+      const inspected = inspectBootstrapBlock(current);
+      if (inspected.state === "malformed") throw new Error("malformed AGENTS.md bootstrap block reached apply after preflight");
+      const next = renderedBlock.block + (inspected.state === "valid" ? inspected.outside : current);
+      if (next !== current) {
+        backup(relPath);
+        fs.writeFileSync(abs, next, "utf8");
+        performed.push({ action: "update", path: relPath, note: "Framework bootstrap block updated; project bytes preserved" });
+      } else {
+        performed.push({ action: "unchanged", path: relPath, note: "project-owned bytes with current Framework block" });
+      }
+      frameworkBlocks.push({ path: relPath, sha256: sha256Of(renderedBlock.block) });
+    } else if (!fs.existsSync(abs)) {
+      fs.writeFileSync(abs, rendered, "utf8");
+      performed.push({ action: "add", path: relPath, note: "generated pointer to CLAUDE.md" });
+      managedEntries.push(entry);
+    } else if (hashFile(abs) !== entry.sha256) {
+      backup(relPath);
+      fs.writeFileSync(abs, rendered, "utf8");
+      performed.push({ action: "update", path: relPath, note: confirmedReduction ? "confirmed reduction to generated pointer (backed up)" : "regenerated pointer" });
+      managedEntries.push(entry);
+    } else {
+      performed.push({ action: "unchanged", path: relPath });
+      managedEntries.push(entry);
     }
   }
 

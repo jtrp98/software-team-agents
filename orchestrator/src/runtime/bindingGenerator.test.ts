@@ -14,6 +14,7 @@ import {
   parseAgentMd,
   parseCommandMd,
   renderCodexBinding,
+  renderAgentsPointer,
   renderCodexSkill,
   renderOpenCodeBinding,
   renderOpenCodeCommand,
@@ -50,6 +51,9 @@ beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-bindings-"));
   fs.mkdirSync(path.join(root, ".claude", "agents"), { recursive: true });
   fs.mkdirSync(path.join(root, ".codex", "agents"), { recursive: true });
+  const claude = "<!-- sta:bootstrap -->\n# bootstrap\n<!-- /sta:bootstrap -->\n\n# Full rules\n";
+  fs.writeFileSync(path.join(root, "CLAUDE.md"), claude, "utf8");
+  fs.writeFileSync(path.join(root, "AGENTS.md"), renderAgentsPointer(claude), "utf8");
 });
 
 afterEach(() => {
@@ -202,6 +206,16 @@ describe("checkBindings", () => {
     writeSources("setup");
     writeGenerated("setup");
     expect(checkBindings(root)).toEqual({ ok: true, problems: [] });
+  });
+
+  it("renders AGENTS.md as the bootstrap block plus a CLAUDE.md pointer and detects drift", () => {
+    writeSources("qa-engineer");
+    writeGenerated("qa-engineer");
+    const pointer = fs.readFileSync(path.join(root, "AGENTS.md"), "utf8");
+    expect(pointer).toContain("<!-- sta:bootstrap -->");
+    expect(pointer).toContain("[CLAUDE.md](CLAUDE.md)");
+    fs.writeFileSync(path.join(root, "AGENTS.md"), pointer.replace("# bootstrap", "# drifted bootstrap"), "utf8");
+    expect(checkBindings(root).problems.join("\n")).toMatch(/AGENTS\.md does not match/);
   });
 
   it("fails on drift when the .md source moves and the .toml does not follow", () => {

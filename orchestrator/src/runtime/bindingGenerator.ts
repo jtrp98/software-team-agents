@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { renderStackDigest, stackDigestPath } from "../profile/stackDigest.js";
+import { inspectBootstrapBlock } from "../targetcli/knowledgeRender.js";
 
 /**
  * The role-binding generator (OFF10 M2 / OFF03 P7): one role definition,
@@ -435,19 +436,44 @@ function listRoles(dir: string): string[] {
  * `checkBindings` verifies exactly what `runTargetSync` generates (T-OC2/T-OC3).
  * Adding a runtime adds one entry plus its renderer above — nowhere else.
  */
-export const BINDING_RENDERINGS: readonly {
+export interface AgentBindingRendering {
+  kind: "agent-set";
   /** Repo-relative directory (posix separators) the rendering lives in. */
   dir: string;
   fileExtension: string;
   render(sourceMd: string): string;
-}[] = [
-  { dir: ".codex/agents", fileExtension: ".toml", render: (md) => renderCodexBinding(md) },
+}
+
+export interface RootBindingRendering {
+  kind: "root-file";
+  sourcePath: string;
+  targetPath: string;
+  render(sourceMd: string): string;
+}
+
+export type BindingRendering = AgentBindingRendering | RootBindingRendering;
+
+/** The Codex root instruction is a rendering of CLAUDE.md's managed bootstrap block, not another authored rules document. */
+export function renderAgentsPointer(claudeMd: string): string {
+  const inspected = inspectBootstrapBlock(claudeMd);
+  if (inspected.state !== "valid") throw new Error("CLAUDE.md has no valid sta:bootstrap block");
+  return `${inspected.block}Full operating rules: see [CLAUDE.md](CLAUDE.md).\n`;
+}
+
+export const BINDING_RENDERINGS: readonly BindingRendering[] = [
+  { kind: "agent-set", dir: ".codex/agents", fileExtension: ".toml", render: (md) => renderCodexBinding(md) },
   {
+    kind: "agent-set",
     dir: ".opencode/agent",
     fileExtension: ".md",
     render: (md) => renderOpenCodeBinding(md, defaultOpenCodePermissions()),
   },
+  { kind: "root-file", sourcePath: "CLAUDE.md", targetPath: "AGENTS.md", render: renderAgentsPointer },
 ];
+
+export function isAgentBindingRendering(spec: BindingRendering): spec is AgentBindingRendering {
+  return spec.kind === "agent-set";
+}
 
 /** One generated rendering family: every source role needs a byte-identical twin, no orphans allowed. */
 function checkRenderingSet(
@@ -510,7 +536,30 @@ export function checkBindings(projectRoot: string): BindingCheckResult {
   }
 
   for (const spec of BINDING_RENDERINGS) {
-    checkRenderingSet(projectRoot, claudeDir, mdRoles, spec, problems);
+    if (spec.kind === "agent-set") {
+      checkRenderingSet(projectRoot, claudeDir, mdRoles, spec, problems);
+      continue;
+    }
+    const source = path.join(projectRoot, spec.sourcePath);
+    const target = path.join(projectRoot, spec.targetPath);
+    try {
+      const expected = spec.render(fs.readFileSync(source, "utf8"));
+      if (!fs.existsSync(target)) {
+        problems.push(`missing ${spec.targetPath} — regenerate the bindings`);
+        continue;
+      }
+      const actual = fs.readFileSync(target, "utf8").replace(/\r\n/g, "\n");
+      if (actual === expected) continue;
+      // A Target-owned root file may carry its own prose. In that ownership
+      // class only the delimited Framework block is compared.
+      const expectedBlock = inspectBootstrapBlock(expected);
+      const actualBlock = inspectBootstrapBlock(actual);
+      if (expectedBlock.state !== "valid" || actualBlock.state !== "valid" || actualBlock.block !== expectedBlock.block) {
+        problems.push(`${spec.targetPath} does not match the rendering of ${spec.sourcePath} — regenerate the bindings`);
+      }
+    } catch (e) {
+      problems.push(`cannot render ${spec.targetPath} from ${spec.sourcePath} — ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   // T-V3TOK-021: the stack digest is generated from the two engineering

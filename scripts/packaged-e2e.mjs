@@ -118,7 +118,11 @@ try {
   for (const dir of [knowledgeRepo, targetRepo]) fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
   fs.mkdirSync(path.join(knowledgeRepo, "knowledge"), { recursive: true });
   fs.writeFileSync(path.join(knowledgeRepo, "targets.yaml"), "schema_version: 1\ntargets: []\n");
-  fs.writeFileSync(path.join(targetRepo, "package.json"), JSON.stringify({ name: "target-app", version: "0.1.0" }));
+  fs.writeFileSync(
+    path.join(targetRepo, "package.json"),
+    JSON.stringify({ name: "target-app", version: "0.1.0", scripts: { build: "tsc", test: "node --test" } }),
+  );
+  fs.writeFileSync(path.join(targetRepo, "package-lock.json"), JSON.stringify({ name: "target-app", lockfileVersion: 3 }));
   fs.mkdirSync(path.join(targetRepo, "src"), { recursive: true });
   fs.writeFileSync(path.join(targetRepo, "src", "index.ts"), 'export const app = () => "hello";\n');
 
@@ -140,7 +144,8 @@ try {
   // --- 3b · root prompt files ship and are readable (T-V2R-14) ---------------
   for (const [file, marker] of [
     ["prompt-setup.md", "prompt-setup.md"],
-    ["prompt-update-knowledge.md", "# prompt-update-knowledge.md"],
+    ["prompt-update-knowledge.md", "# Compatibility pointer"],
+    ["prompt-reconcile-knowledge-layout.md", "# prompt-reconcile-knowledge-layout.md"],
   ]) {
     const p = path.join(pkgDir, file);
     const shipped = fs.existsSync(p) && fs.readFileSync(p, "utf8").includes(marker);

@@ -12,7 +12,8 @@
     "orchestrator/schemas",
     "templates",
     "prompt-setup.md",
-    "prompt-update-knowledge.md"
+    "prompt-update-knowledge.md",
+    "prompt-reconcile-knowledge-layout.md"
   ],
   "scripts": {
     "build": "npm --prefix orchestrator run build:templates",

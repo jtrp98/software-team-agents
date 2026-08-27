@@ -106,4 +106,23 @@ describe("runUpgrade", () => {
     expect(fs.existsSync(path.join(project, "policies/old.md"))).toBe(true);
     expect(readInstallManifest(project).files.map((f) => f.path)).not.toContain("policies/old.md");
   });
+
+  it("updates only the AGENTS.md block for a project-owned file and backs up the exact prior bytes", () => {
+    const block1 = "<!-- sta:bootstrap -->\n# v1 block\n<!-- /sta:bootstrap -->\nSee CLAUDE.md.\n";
+    const block2 = "<!-- sta:bootstrap -->\n# v2 block\n<!-- /sta:bootstrap -->\nSee CLAUDE.md.\n";
+    const project = tmpDir("sta-upgrade-project-");
+    fs.writeFileSync(path.join(project, "AGENTS.md"), "# Project-owned\r\nExact.\r\n", "utf8");
+    const v1 = fixtureTemplatesDir("0.1.0", { "CLAUDE.md": "# v1\n", "AGENTS.md": block1 });
+    runInit(project, v1, "2026-08-20T09:00:00Z");
+    const before = fs.readFileSync(path.join(project, "AGENTS.md"), "utf8");
+
+    const v2 = fixtureTemplatesDir("0.2.0", { "CLAUDE.md": "# v2\n", "AGENTS.md": block2 });
+    const result = runUpgrade(project, v2, "2026-08-21T09:00:00Z");
+
+    expect(fs.readFileSync(path.join(project, "AGENTS.md"), "utf8")).toBe(
+      "<!-- sta:bootstrap -->\n# v2 block\n<!-- /sta:bootstrap -->\n# Project-owned\r\nExact.\r\n",
+    );
+    expect(fs.readFileSync(path.join(result.backupDir, "AGENTS.md"), "utf8")).toBe(before);
+    expect(readInstallManifest(project).files.map((file) => file.path)).not.toContain("AGENTS.md");
+  });
 });

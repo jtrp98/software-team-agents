@@ -2,7 +2,7 @@
 
 > Onboarding flow สำหรับสมาชิกใหม่: Install → Bind → Init your workspace → Validate → Ready
 > ทุกขั้นตอน reuse คำสั่งจริงของ `sta`/`software-team-agents` — ไม่มีขั้นไหนแก้ framework internals
-> สถาปัตยกรรม Three-Repo (สรุปเต็มใน [`AGENTS.md`](AGENTS.md), รายละเอียดใน [`README.md`](README.md)):
+> สถาปัตยกรรม Three-Repo (กฎการทำงานใน [`CLAUDE.md`](CLAUDE.md), รายละเอียดใน [`README.md`](README.md); [`AGENTS.md`](AGENTS.md) เป็น Codex pointer):
 
 ```
 Framework repo (repo นี้)        Knowledge repo (ต่อบริษัท)              Target repo(s) (โค้ดจริง)
@@ -239,7 +239,7 @@ prompts, `.claude/settings.json`, bindings)
 หรือโฟลเดอร์ใต้ `knowledge/<module>/` ที่ `CLAUDE.md` ไม่ได้บันทึกไว้
 
 **แก้:** binding/sync (Troubleshooting #1–4) เป็นคนละเรื่องกับสิ่งนี้ — ใช้
-[`prompt-update-knowledge.md`](prompt-update-knowledge.md) ให้ AI assistant สแกน จัดหมวด และเสนอทางแก้
+[`prompt-reconcile-knowledge-layout.md`](prompt-reconcile-knowledge-layout.md) ให้ AI assistant สแกน จัดหมวด และเสนอทางแก้
 ทีละรายการ ไม่มีการลบ/ย้ายอะไรโดยไม่ถามก่อน
 
 ---
@@ -250,5 +250,5 @@ prompts, `.claude/settings.json`, bindings)
 - Shared agent rules → [`policies/`](policies/README.md)
 - Knowledge model → [`knowledge/README.md`](knowledge/README.md)
 - Product overview & runtime support status → [`README.md`](README.md)
-- Full command reference → [`AGENTS.md`](AGENTS.md) `## Commands`, or `software-team-agents --help` /
+- Full command reference → `software-team-agents --help` / `sta --help`; operating rules → [`CLAUDE.md`](CLAUDE.md)
   `sta --help`

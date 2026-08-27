@@ -32,7 +32,11 @@ Cache is machine-local outside every repo; nothing graph-related ships in the pa
 compiled provider module. Deferred rollout item: agent-level benchmark rounds + go/no-go opt-in
 (human-run) before any default-on consideration — see `decisions/ADR-006`.
 
-**New packaged surface: `prompt-update-knowledge.md`**
+**Packaged layout playbook: `prompt-reconcile-knowledge-layout.md`**
+
+The former `prompt-update-knowledge.md` path remains a one-release compatibility
+pointer. Evidence reconciliation is the read-only `sta knowledge reconcile
+--target <id>` command.
 Knowledge-repo reconciliation playbook shipped in the package root (added to `files[]`),
 cross-linked from `prompt-setup.md` ↔ `TEAM_SETUP_V1.md` #10; verified present and readable from
 a fresh install by the packaged E2E (22/22 steps, Windows real-path/quoting coverage).
@@ -62,7 +66,7 @@ CI runs 16 validation flags including `--check-plan`.
 | graphify agent-level benchmark rounds & default-on rollout | human-run sessions required (API cost, supervision) — ADR-006 rollout sequence |
 | uxui T-CD5 two-directional smoke | requires `sb-compass` Target workspace cloned locally |
 | `doctor` per-artifact mirror warnings | enhancement, not release-blocking |
-| `prompt-update-knowledge.md` consistency test (`promptSetup.test.ts` analogue) | deferred-with-note; add before next edit of that file |
+| layout reconciliation prompt consistency test (`promptSetup.test.ts` analogue) | deferred-with-note; add before its next structural edit |
 
 ## Install
 

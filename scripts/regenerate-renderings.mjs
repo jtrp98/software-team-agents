@@ -64,7 +64,7 @@ const roleFiles = fs.existsSync(agentsDir)
   ? fs.readdirSync(agentsDir).filter((f) => f.endsWith(".md")).sort()
   : [];
 if (roleFiles.length === 0) throw new Error("no .claude/agents/*.md sources found");
-for (const spec of BINDING_RENDERINGS) {
+for (const spec of BINDING_RENDERINGS.filter((candidate) => candidate.kind === "agent-set")) {
   const keep = new Set();
   for (const f of roleFiles) {
     const md = fs.readFileSync(path.join(agentsDir, f), "utf8");
@@ -73,6 +73,9 @@ for (const spec of BINDING_RENDERINGS) {
     emit(`${spec.dir}/${role}${spec.fileExtension}`, spec.render(md));
   }
   removeStale(spec.dir, keep);
+}
+for (const spec of BINDING_RENDERINGS.filter((candidate) => candidate.kind === "root-file")) {
+  emit(spec.targetPath, spec.render(fs.readFileSync(path.join(ROOT, spec.sourcePath), "utf8")));
 }
 
 emit(".claude/shared/stack.md", renderStackDigest(ROOT));

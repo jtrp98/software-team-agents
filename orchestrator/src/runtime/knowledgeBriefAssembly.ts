@@ -2,6 +2,10 @@ import { AgentStage } from "../types.js";
 import type { KnowledgeItem } from "../knowledge/knowledgeModel.js";
 import { KnowledgeContext } from "../knowledge/knowledgeContext.js";
 import { canSeeKind } from "../knowledge/roleView.js";
+import { freshnessOf, type Freshness } from "../knowledge/freshness.js";
+import { defaultProjectRoot } from "../agents/agentContract.js";
+import { loadTargetRegistry } from "../threeRepo/targets.js";
+import { loadLocalTargetMapping, targetIdForLocalPath } from "../threeRepo/localTargets.js";
 
 /**
  * The knowledge-store brief (T-KA5a): a compact, bounded rendering of what
@@ -37,6 +41,11 @@ export interface KnowledgeBriefOptions {
   moduleName: string;
   /** Authoritative task/handoff references only; arbitrary prose is never mined for ids. */
   referencedIds?: readonly string[];
+  /** The active application root. When absent/unresolvable, retrieval preserves legacy breadth and reports the fallback. */
+  targetRoot?: string;
+  now?: string;
+  /** Injection seam for deterministic tests; production uses freshnessOf. */
+  freshnessResolver?: typeof freshnessOf;
 }
 
 export interface RenderOptions {
@@ -50,9 +59,11 @@ export interface RenderOptions {
   referencedIds?: readonly string[];
   /** Test-only cap override; production keeps the bounded default above. */
   cap?: number;
+  scopeNote?: string;
+  scopeExcluded?: number;
 }
 
-type BriefItem = Pick<KnowledgeItem, "id" | "kind" | "title" | "body" | "module" | "status"> & { withheld?: readonly string[] };
+type BriefItem = Pick<KnowledgeItem, "id" | "kind" | "title" | "body" | "module" | "status"> & { withheld?: readonly string[]; freshness?: Freshness };
 
 function boundedBody(body: string): string {
   return body.length <= BODY_CAP ? body : `${body.slice(0, BODY_CAP - 1)}…`;
@@ -63,7 +74,7 @@ function appendWithinCap(parts: string[], additions: readonly string[], cap: num
   const result = [...parts];
   for (const line of additions) {
     const candidate = result.length === 0 ? line : `${result.join("\n")}\n${line}`;
-    if (candidate.length > cap) break;
+    if (Buffer.byteLength(candidate, "utf8") > cap) break;
     result.push(line);
   }
   return result;
@@ -74,7 +85,13 @@ export function renderKnowledgeBrief(items: readonly BriefItem[], stage: AgentSt
   const visible = opts.visibleKinds
     ? mine.filter((i) => opts.visibleKinds!.has(i.kind))
     : mine.filter((i) => canSeeKind(stage, i.kind));
-  if (visible.length === 0) return [];
+  if (visible.length === 0) {
+    const scopeOnly = [
+      ...(opts.scopeNote ? [`Knowledge scope: ${opts.scopeNote}`] : []),
+      ...((opts.scopeExcluded ?? 0) > 0 ? [`Scope-excluded: ${opts.scopeExcluded} item(s) belonging only to another Target.`] : []),
+    ];
+    return appendWithinCap([], scopeOnly, opts.cap ?? BRIEF_CAP);
+  }
 
   const byKind = new Map<string, BriefItem[]>();
   for (const item of visible) {
@@ -87,6 +104,8 @@ export function renderKnowledgeBrief(items: readonly BriefItem[], stage: AgentSt
     "",
     `Knowledge store brief — module \`${opts.moduleName}\`. Retrieve a visible item with \`sta knowledge get <ID>\`:`,
   ];
+  if (opts.scopeNote) index.push(`Scope: ${opts.scopeNote}`);
+  if ((opts.scopeExcluded ?? 0) > 0) index.push(`Scope-excluded: ${opts.scopeExcluded} item(s) belonging only to another Target.`);
   for (const kind of kindOrder) {
     const list = byKind.get(kind)!.sort((a, b) => a.id.localeCompare(b.id));
     index.push("", `### ${kind} (${list.length})`);
@@ -95,7 +114,11 @@ export function renderKnowledgeBrief(items: readonly BriefItem[], stage: AgentSt
       const mark = STATUS_MARK[item.status] ?? "?";
       const title = item.title.length > TITLE_CAP ? item.title.slice(0, TITLE_CAP - 1) + "…" : item.title;
       const withheld = item.withheld?.length ? ` (withheld: ${item.withheld.join(", ")})` : "";
-      index.push(`- ${item.id} ${mark} ${title}${withheld}`);
+      const freshness = item.freshness ? ` [${item.freshness.verdict}]` : "";
+      index.push(`- ${item.id} ${mark}${freshness} ${title}${withheld}`);
+      if (item.freshness && (item.freshness.verdict === "changed" || item.freshness.verdict === "unavailable")) {
+        index.push(`  freshness: ${item.freshness.reason}`);
+      }
     }
     if (list.length > shown.length) {
       index.push(`_+${list.length - shown.length} more ${kind} items — retrieve one with \`sta knowledge get <ID>\`._`);
@@ -117,11 +140,39 @@ export function renderKnowledgeBrief(items: readonly BriefItem[], stage: AgentSt
 export function knowledgeBriefFor(stage: AgentStage, opts: KnowledgeBriefOptions): string[] {
   try {
     const root = opts.knowledgeRoot ?? opts.projectRoot;
+    let targetId: string | undefined;
+    let targetPaths = new Map<string, string>();
+    let scopeNote: string | undefined;
+    if (opts.targetRoot) {
+      try {
+        const registry = loadTargetRegistry(root);
+        const mapped = loadLocalTargetMapping(root, registry, defaultProjectRoot());
+        targetPaths = new Map(mapped.map((entry) => [entry.target_id, entry.path]));
+        targetId = targetIdForLocalPath(mapped, opts.targetRoot);
+        scopeNote = targetId ? `Target \`${targetId}\`.` : "Target id could not be resolved; legacy unscoped fallback is active.";
+      } catch {
+        scopeNote = "Target id could not be resolved; legacy unscoped fallback is active.";
+      }
+    }
     const context = KnowledgeContext.load(root);
-    const retrieved = context.forRole(stage).query({ module: opts.moduleName });
-    return renderKnowledgeBrief(retrieved.items.map((entry) => entry.item), stage, {
+    const retrieved = context.forRole(stage).query({ module: opts.moduleName, ...(targetId ? { target_ids: [targetId] } : {}) });
+    const rawById = new Map(context.kb.items.map((item) => [item.id, item]));
+    let freshness = new Map<string, Freshness>();
+    try {
+      freshness = new Map(retrieved.items.map((entry) => {
+        const raw = rawById.get(entry.item.id)!;
+        return [entry.item.id, (opts.freshnessResolver ?? freshnessOf)(raw, { now: opts.now ?? new Date().toISOString(), projectRoot: root, knowledgeRoot: root, targetPaths })];
+      }));
+    } catch {
+      // Additive-on-failure: omit every marker so rendering is byte-identical
+      // to the pre-freshness brief for the same retrieval result.
+      freshness = new Map();
+    }
+    return renderKnowledgeBrief(retrieved.items.map((entry) => ({ ...entry.item, freshness: freshness.get(entry.item.id) })), stage, {
       moduleName: opts.moduleName,
       referencedIds: opts.referencedIds,
+      scopeNote,
+      scopeExcluded: retrieved.scopeExcluded,
     });
   } catch {
     return [];

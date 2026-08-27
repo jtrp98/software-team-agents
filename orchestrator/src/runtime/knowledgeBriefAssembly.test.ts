@@ -5,6 +5,8 @@ import * as path from "node:path";
 import { AgentStage } from "../types.js";
 import type { KnowledgeItem } from "../knowledge/knowledgeModel.js";
 import { knowledgeBriefFor, renderKnowledgeBrief } from "./knowledgeBriefAssembly.js";
+import { writeKnowledgeItem } from "../knowledge/knowledgeStore.js";
+import { digestOfSource } from "../knowledge/sourceDigest.js";
 
 const NOW = "2026-08-26T00:00:00Z";
 
@@ -126,6 +128,21 @@ describe("renderKnowledgeBrief", () => {
     expect(joined).not.toContain("body that must be removed first");
   });
 
+  it("surfaces compact freshness markers, reasons only for changed/unavailable, and stays within the byte cap", () => {
+    const fresh = { id: "DES-001", verdict: "fresh" as const, ageDays: 0, oldestSource: null, changedSources: [], missingSources: [], reason: "read today" };
+    const changed = { id: "API-001", verdict: "changed" as const, ageDays: 1, oldestSource: null, changedSources: ["api.md"], missingSources: [], reason: "changed since it was read: api.md" };
+    const parts = renderKnowledgeBrief([
+      { ...item("architecture", "DES-001"), freshness: fresh },
+      { ...item("api", "API-001"), freshness: changed },
+    ], AgentStage.QA_ENGINEER, { moduleName: "sb-compass", visibleKinds: ALL, cap: 16_384 });
+    const text = parts.join("\n");
+    expect(text).toContain("[fresh]");
+    expect(text).toContain("[changed]");
+    expect(text).toContain("freshness: changed since it was read: api.md");
+    expect(text).not.toContain("freshness: read today");
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(16_384);
+  });
+
   it("keeps the established fail-soft empty brief posture when policy loading fails", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-knowledge-brief-fail-"));
     try {
@@ -133,6 +150,48 @@ describe("renderKnowledgeBrief", () => {
       expect(knowledgeBriefFor(AgentStage.BACKEND_ENGINEER, { projectRoot: root, moduleName: "sb-compass" })).toEqual([]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("T-V3-09/T-V3-11 assembled retrieval", () => {
+  function root(prefix: string): string {
+    const value = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
+    fs.mkdirSync(path.join(value, ".git"));
+    return value;
+  }
+  function req(id: string, targetIds: string[], source: KnowledgeItem["sources"]): KnowledgeItem {
+    return {
+      schema_version: 2, target_ids: targetIds, id, kind: "requirement", title: id, body: "body", repo: null, module: "sb-compass",
+      owner: AgentStage.BUSINESS_ANALYST, status: "approved", sensitive: false, version: 1, created_at: NOW, updated_at: NOW,
+      sources: source, relations: [], payload: { acceptance_criteria: ["works"], actors: ["user"], priority: "must", assumption_unconfirmed: false },
+    };
+  }
+  it("excludes another Target, keeps globals, reports the count, and fails open by name when resolution fails", () => {
+    const knowledge = root("brief-k"); const targetA = root("brief-a"); const targetB = root("brief-b"); const unmapped = root("brief-unmapped");
+    try {
+      fs.writeFileSync(path.join(knowledge, "targets.yaml"), JSON.stringify({ schema_version: 1, targets: [
+        { target_id: "node-app", name: "Node", remote_url: "https://example.com/node.git", status: "active" },
+        { target_id: "dotnet-app", name: "Dotnet", remote_url: "https://example.com/dotnet.git", status: "active" },
+      ] }));
+      fs.mkdirSync(path.join(knowledge, ".workflow"), { recursive: true });
+      fs.writeFileSync(path.join(knowledge, ".workflow", "targets.local.yaml"), JSON.stringify({ schema_version: 1, targets: { "node-app": { path: targetA }, "dotnet-app": { path: targetB } } }));
+      fs.writeFileSync(path.join(knowledge, "global.md"), "global", "utf8");
+      fs.writeFileSync(path.join(targetA, "fact.md"), "node", "utf8");
+      fs.writeFileSync(path.join(targetB, "fact.md"), "dotnet", "utf8");
+      const source = (locator: string, origin: "knowledge" | "target", targetId: string | null, digestRoot: string) => [{ type: "file" as const, locator, captured_at: NOW, digest: digestOfSource(locator, digestRoot), origin: { root: origin, target_id: targetId } }];
+      writeKnowledgeItem(req("REQ-GLOBAL", [], source("global.md", "knowledge", null, knowledge)), knowledge, { force: true });
+      writeKnowledgeItem(req("REQ-NODE", ["node-app"], source("fact.md", "target", "node-app", targetA)), knowledge, { force: true });
+      writeKnowledgeItem(req("REQ-DOTNET", ["dotnet-app"], source("fact.md", "target", "dotnet-app", targetB)), knowledge, { force: true });
+      const scoped = knowledgeBriefFor(AgentStage.BACKEND_ENGINEER, { projectRoot: targetA, knowledgeRoot: knowledge, targetRoot: targetA, moduleName: "sb-compass", now: NOW }).join("\n");
+      expect(scoped).toContain("REQ-GLOBAL"); expect(scoped).toContain("REQ-NODE"); expect(scoped).not.toContain("REQ-DOTNET");
+      expect(scoped).toContain("Scope-excluded: 1");
+      const fallback = knowledgeBriefFor(AgentStage.BACKEND_ENGINEER, { projectRoot: unmapped, knowledgeRoot: knowledge, targetRoot: unmapped, moduleName: "sb-compass", now: NOW }).join("\n");
+      expect(fallback).toContain("legacy unscoped fallback"); expect(fallback).toContain("REQ-NODE"); expect(fallback).toContain("REQ-DOTNET");
+      const noFreshness = knowledgeBriefFor(AgentStage.BACKEND_ENGINEER, { projectRoot: targetA, knowledgeRoot: knowledge, targetRoot: targetA, moduleName: "sb-compass", now: NOW, freshnessResolver: () => { throw new Error("fixture failure"); } }).join("\n");
+      expect(noFreshness).not.toContain("[fresh]"); expect(noFreshness).toContain("REQ-NODE");
+    } finally {
+      for (const value of [knowledge, targetA, targetB, unmapped]) fs.rmSync(value, { recursive: true, force: true });
     }
   });
 });
