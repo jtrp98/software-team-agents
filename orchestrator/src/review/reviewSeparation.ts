@@ -3,7 +3,8 @@ import { AGENT_REGISTRY } from "../agents/registry.js";
 import { Permission } from "../agents/permissions.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
-import { loadAllWorkflows, pipelineFromWorkflow, type WorkflowDefinition } from "../workflow/workflowDefinition.js";
+import { pipelineFromWorkflow, type WorkflowDefinition } from "../workflow/workflowDefinition.js";
+import { catalogWorkflows } from "../workflow/workflowCatalog.js";
 import type { ClassificationInput } from "../classification/taskClassifier.js";
 
 /**
@@ -171,12 +172,17 @@ export interface ReviewSeparationResult {
 /**
  * The check `--check-review-separation` runs.
  *
- * Reads the workflow files as well as the registry, because "is the creator
+ * Reads the workflow catalog as well as the registry, because "is the creator
  * separate from the reviewer?" is only half a question when asked of the roster
  * alone — the other half is whether the pipeline a given kind of change actually
  * runs contains a reviewer at all.
+ *
+ * `projectRoot` is accepted and ignored: both halves are now derived from code
+ * (the registry and the classifier), so the answer no longer depends on which
+ * directory the check is pointed at. Keeping the parameter keeps every caller —
+ * the CLI flag, the release gate, the assert wrapper — unchanged.
  */
-export function checkReviewSeparation(projectRoot: string = defaultProjectRoot()): ReviewSeparationResult {
+export function checkReviewSeparation(_projectRoot: string = defaultProjectRoot()): ReviewSeparationResult {
   const problems: string[] = [];
   const notes: string[] = [];
 
@@ -222,12 +228,16 @@ export function checkReviewSeparation(projectRoot: string = defaultProjectRoot()
     }
   }
 
-  // The pipelines each kind of change actually runs.
-  let workflows: ReturnType<typeof loadAllWorkflows>;
+  // The pipelines each kind of change actually runs, read from the workflow
+  // catalog rather than by parsing `workflows/*.yml` (T-V3TOK-110, ADR-007).
+  // Those files are generated from this same catalog, so parsing them would ask
+  // the question one indirection away from the answer — and would make this
+  // check depend on a project root having been synced.
+  let workflows: Record<string, WorkflowDefinition>;
   try {
-    workflows = loadAllWorkflows(projectRoot);
+    workflows = catalogWorkflows();
   } catch (e) {
-    problems.push(`could not read workflows/: ${(e as Error).message}`);
+    problems.push(`could not derive the workflow catalog: ${(e as Error).message}`);
     return { ok: false, problems, notes };
   }
 

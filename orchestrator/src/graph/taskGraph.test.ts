@@ -17,11 +17,13 @@ function fe(id: string, over: Partial<TaskNode> = {}): TaskNode {
 }
 
 const ids = (nodes: TaskNode[]) => nodes.map((n) => n.id).sort();
+/** The edges pointing at one task. Was `TaskGraph.edgesInto`, removed in T-V3TOK-111 as a dead production API — the assertions it carried are about `resolveEdges`, so they stay. */
+const edgesInto = (graph: TaskGraph, id: string) => graph.edges.filter((e) => e.to === id);
 
 describe("declared dependencies (T11)", () => {
   it("orders a chain of tasks", () => {
     const graph = new TaskGraph([be("BE-001"), be("BE-002", { dependsOn: ["BE-001"] }), be("BE-003", { dependsOn: ["BE-002"] })]);
-    expect(graph.topologicalOrder().map((n) => n.id)).toEqual(["BE-001", "BE-002", "BE-003"]);
+    expect(graph.parallelLayers().flat().map((n) => n.id)).toEqual(["BE-001", "BE-002", "BE-003"]);
   });
 
   it("reports the actual cycle, not just that one exists", () => {
@@ -46,7 +48,7 @@ describe("declared dependencies (T11)", () => {
 
   it("explains why a task is waiting", () => {
     const graph = new TaskGraph([be("BE-001"), be("BE-002", { dependsOn: ["BE-001"] })]);
-    const edge = graph.edgesInto("BE-002")[0];
+    const edge = edgesInto(graph, "BE-002")[0];
     expect(edge.kind).toBe("declared");
     expect(edge.reason).toContain("BE-001");
   });
@@ -60,7 +62,7 @@ describe("contract edges — §6a computed rather than remembered", () => {
       fe("FE-010", { consumes: ["staff-roles/sync"] }),
     ]);
     expect(graph.dependenciesOf("FE-010")).toEqual(["BE-004"]);
-    expect(graph.edgesInto("FE-010")[0].kind).toBe("contract");
+    expect(edgesInto(graph, "FE-010")[0].kind).toBe("contract");
   });
 
   /** §6a's exception, finally actionable: no shared contract means no edge. */
@@ -92,7 +94,7 @@ describe("phase edges", () => {
   it("keeps a later phase behind an earlier one", () => {
     const graph = new TaskGraph([be("BE-001", { phase: 1 }), be("BE-010", { phase: 2 })]);
     expect(graph.dependenciesOf("BE-010")).toEqual(["BE-001"]);
-    expect(graph.edgesInto("BE-010")[0].kind).toBe("phase");
+    expect(edgesInto(graph, "BE-010")[0].kind).toBe("phase");
   });
 
   it("still runs independent tasks within one phase together", () => {
@@ -131,16 +133,6 @@ describe("parallel scheduling (T10)", () => {
 
   it("ignores ids it does not know about, so a caller tracking more than this graph still works", () => {
     expect(() => graph().readyTasks(["BE-001", "SOMETHING-ELSE"])).not.toThrow();
-  });
-
-  it("caps a batch to what the caller can actually run at once", () => {
-    const capped = graph().parallelLayersCapped(2);
-    expect(capped.every((layer) => layer.length <= 2)).toBe(true);
-    expect(capped.flat()).toHaveLength(5);
-  });
-
-  it("refuses a nonsensical cap rather than silently running nothing", () => {
-    expect(() => graph().parallelLayersCapped(0)).toThrow(TaskGraphError);
   });
 
   /** A scheduler whose parallelism collapsed to 1 looks correct from outside; this is how you see it. */
@@ -193,6 +185,6 @@ describe("buildPlanGraph — the unannotated case", () => {
   it("does not apply the fallback across phases", () => {
     const graph = buildPlanGraph([be("BE-001", { phase: 1 }), fe("FE-001", { phase: 2 })]);
     // Phase order already covers it; no extra same-phase backend edge is invented.
-    expect(graph.edgesInto("FE-001").map((e) => e.kind)).toEqual(["phase"]);
+    expect(edgesInto(graph, "FE-001").map((e) => e.kind)).toEqual(["phase"]);
   });
 });

@@ -17,6 +17,14 @@ import {
   workflowPath,
   type WorkflowDefinition,
 } from "./workflowDefinition.js";
+import { generateWorkflowFiles } from "./workflowCatalog.js";
+
+/** A throwaway project holding exactly what the catalog generates — the green starting point. */
+function generatedFixtureRoot(): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-wf-gen-"));
+  generateWorkflowFiles(root);
+  return root;
+}
 
 /** Writes a throwaway project with a workflows/ folder. */
 function fixtureRoot(files: Record<string, unknown>): string {
@@ -217,40 +225,50 @@ describe("checkAllWorkflows", () => {
     expect(checkAllWorkflows(root).problems.join()).toContain("priority 5");
   });
 
-  /** The drift this exists to catch: the file says one thing, the code does another. */
-  it("reports a file whose steps no longer match the classifier", () => {
-    const root = fixtureRoot({
-      "bugfix.yml": {
-        workflow: "bugfix",
-        description: "wrong on purpose",
-        trigger: { kind: "signal", signal: "isClearBugFix", priority: 5 },
-        level: TaskLevel.SMALL,
-        requires_human_approval: false,
-        // Missing qa-engineer, which the classifier really does include.
-        steps: [{ agent: AgentStage.BACKEND_ENGINEER, when: "touchesBackend" }],
-      },
-    });
+  /** The drift this exists to catch: the file says one thing, the code generates another. */
+  it("reports a file whose steps no longer match what the catalog renders", () => {
+    const root = generatedFixtureRoot();
+    // Drop qa-engineer, which the classifier really does include.
+    const file = workflowPath("bugfix", root);
+    const dropped = fs
+      .readFileSync(file, "utf8")
+      .split(/\r?\n/)
+      .filter((line) => line !== "  - agent: qa-engineer")
+      .join("\n");
+    fs.writeFileSync(file, dropped, "utf8");
+
     const problems = checkAllWorkflows(root).problems.join("\n");
     expect(problems).toContain("bugfix");
-    expect(problems).toContain("classifier produces");
+    expect(problems).toContain("regenerate-renderings");
   });
 
   it("reports a level that disagrees with the classifier", () => {
-    const root = fixtureRoot({
-      "typo.yml": {
-        workflow: "typo",
-        description: "wrong level",
-        trigger: { kind: "signal", signal: "isTypoOrCopyOnly", priority: 6 },
-        level: TaskLevel.LARGE_CRITICAL,
-        requires_human_approval: false,
-        steps: [
-          { agent: AgentStage.BACKEND_ENGINEER, when: "touchesBackend" },
-          { agent: AgentStage.FRONTEND_ENGINEER, when: "touchesFrontend" },
-          { agent: AgentStage.SECURITY, when: "touchesSensitiveArea" },
-        ],
-      },
-    });
-    expect(checkAllWorkflows(root).problems.join()).toContain("level LARGE_CRITICAL");
+    const root = generatedFixtureRoot();
+    const file = workflowPath("typo", root);
+    fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace("level: TRIVIAL", "level: LARGE_CRITICAL"), "utf8");
+    expect(checkAllWorkflows(root).problems.join()).toContain("workflows/typo.yml");
+  });
+
+  /**
+   * The byte check sees changes the semantic comparison it replaced could not:
+   * prose is exactly what those four flag probes never looked at, and prose is
+   * most of what these files carry.
+   */
+  it("reports an edited note, which the semantic comparison could not see", () => {
+    const root = generatedFixtureRoot();
+    const file = workflowPath("schema-change", root);
+    fs.writeFileSync(
+      file,
+      fs.readFileSync(file, "utf8").replace("a schema change gets a security pass", "security is optional here"),
+      "utf8",
+    );
+    expect(checkAllWorkflows(root).problems.join()).toContain("workflows/schema-change.yml");
+  });
+
+  it("reports an orphan workflow file the catalog does not define", () => {
+    const root = generatedFixtureRoot();
+    fs.writeFileSync(workflowPath("invented", root), "workflow: invented\n", "utf8");
+    expect(checkAllWorkflows(root).problems.join()).toContain("orphan workflows/invented.yml");
   });
 
   it("throws with every problem attached, for a caller that wants to fail hard", () => {

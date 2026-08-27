@@ -221,11 +221,6 @@ export class TaskGraph {
     return [...set];
   }
 
-  /** Why this task waits for that one — the edge's own explanation, for a person asking. */
-  edgesInto(id: string): ResolvedEdge[] {
-    return this.edges.filter((e) => e.to === id);
-  }
-
   /**
    * The tasks that could start right now, given what has already finished.
    * Unknown ids in `completed` are ignored rather than rejected: a caller
@@ -260,21 +255,6 @@ export class TaskGraph {
       for (const node of ready) done.add(node.id);
     }
     return layers;
-  }
-
-  /** Layers capped to a maximum width, for a caller that can only run so many agents at once. */
-  parallelLayersCapped(maxParallel: number): TaskNode[][] {
-    if (maxParallel < 1) throw new TaskGraphError(`maxParallel must be at least 1, got ${maxParallel}`);
-    return this.parallelLayers().flatMap((layer) => {
-      const chunks: TaskNode[][] = [];
-      for (let i = 0; i < layer.length; i += maxParallel) chunks.push(layer.slice(i, i + maxParallel));
-      return chunks;
-    });
-  }
-
-  /** A single valid order, for a caller that will not run anything in parallel. */
-  topologicalOrder(): TaskNode[] {
-    return this.parallelLayers().flat();
   }
 
   /**

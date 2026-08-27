@@ -11,7 +11,7 @@ description: Reframe a problem from genuinely different angles before redesignin
 
 Reframe before redesigning: $ARGUMENTS
 
-Produce 3 genuinely different framings of the problem — not three phrasings of one framing:
+Produce 3 genuinely different framings of the problem — not three phrasings of one framing. Cap 15 lines total:
 
 `| Framing | The real question it asks | What becomes easy | What becomes hard |`
 

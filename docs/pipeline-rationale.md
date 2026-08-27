@@ -141,7 +141,7 @@ layout.yaml                      ← which concept owns which directory (checked
 contracts/*.yaml                 ← the machine-readable half of each agent
 policies/                        ← conventions.md split per area (T49): coding, git, architecture,
                                    documentation, security, agent-boundaries
-workflows/                       ← one YAML per kind of change (11 files, live — the classifier is checked against them by --check-workflows)
+workflows/                       ← one YAML per kind of change (11 files, generated from taskClassifier.ts + workflowCatalog.ts, byte-checked by --check-workflows — ADR-007)
 ```
 
 `layout.yaml` is the one answer to "where does this file go?". Five concepts, each answering

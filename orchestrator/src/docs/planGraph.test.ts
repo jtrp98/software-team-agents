@@ -8,6 +8,7 @@ import {
   deriveWaves,
   readinessOf,
   checkPlanGraphs,
+  planReadinessAdvisory,
   type PlanTaskRow,
 } from "./planGraph.js";
 
@@ -319,5 +320,45 @@ describe("checkPlanGraphs", () => {
 
   it("treats a project before its first module as the normal empty state", () => {
     expect(checkPlanGraphs(project({}))).toEqual({ ok: true, problems: [], notes: ["no `_docs/module/` yet — nothing to check."] });
+  });
+});
+
+describe("planReadinessAdvisory — T-V3TOK-111", () => {
+  const withStatus = (id: string, status: string): string =>
+    TABLE_PLAN.replace(new RegExp(`\\| ${id} ([^|]*)\\| pending \\|`), `| ${id} $1| ${status} |`);
+
+  it("says nothing about a task the plan considers ready", () => {
+    expect(planReadinessAdvisory(TABLE_PLAN, "BE-001")).toBeNull();
+  });
+
+  it("names the unfinished dependency and its status", () => {
+    const advisory = planReadinessAdvisory(TABLE_PLAN, "FE-001");
+    expect(advisory?.waitingOn).toEqual(["BE-001"]);
+    expect(advisory?.reason).toContain("BE-001 (pending)");
+  });
+
+  it("stops warning once the dependency is verified", () => {
+    expect(planReadinessAdvisory(withStatus("BE-001", "verified"), "FE-001")).toBeNull();
+  });
+
+  it("reports work sitting behind a blocked dependency", () => {
+    const advisory = planReadinessAdvisory(withStatus("BE-001", "blocked"), "FE-001");
+    expect(advisory?.reason).toContain("blocked work");
+    expect(advisory?.waitingOn).toEqual(["BE-001"]);
+  });
+
+  it("reports a row the plan already marks verified or in_progress", () => {
+    expect(planReadinessAdvisory(withStatus("BE-001", "verified"), "BE-001")?.reason).toContain("verified");
+    expect(planReadinessAdvisory(withStatus("BE-001", "in_progress"), "BE-001")?.reason).toContain("in_progress");
+  });
+
+  /** Ad-hoc work is the ordinary case; warning on it would train the operator to ignore the line. */
+  it("says nothing about a task id the plan never lists", () => {
+    expect(planReadinessAdvisory(TABLE_PLAN, "BE-999")).toBeNull();
+  });
+
+  it("says nothing rather than throwing on an unusable plan", () => {
+    expect(planReadinessAdvisory("", "BE-001")).toBeNull();
+    expect(planReadinessAdvisory("not a plan at all", "BE-001")).toBeNull();
   });
 });

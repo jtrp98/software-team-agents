@@ -34,6 +34,16 @@ import { extractIds } from "../traceability/traceability.js";
  * "what may start now" from the document as it stands. Nothing here writes
  * runtime state — that remains the orchestrator's store's job (T-PM5.1); this
  * is the plan-side mirror a person or a driver reads before creating tasks.
+ *
+ * T-V3TOK-111 promoted that mirror from "exported and unused" to something a
+ * run actually consults — as an **advisory** and nothing more. `sta run` prints
+ * {@link planReadinessAdvisory} when the task it was handed is behind an
+ * unfinished dependency, and then runs it anyway. The authority model is the
+ * reason for the restraint: PM owns the Work Graph, the orchestrator owns
+ * runtime. A plan document is an LLM-authored artifact that can be stale or
+ * simply not cover the task at hand, so letting it decide what may execute
+ * would move a gate into the wrong layer. It tells the operator what the plan
+ * believes; the store still decides what runs.
  */
 
 export type PlanTaskStatus = "pending" | "in_progress" | "verified" | "blocked";
@@ -398,6 +408,74 @@ export function readinessOf(tasks: PlanTaskRow[]): PlanReadiness {
     waves = new Map(); // an invalid graph still gets a readiness answer; validatePlanTasks reports why
   }
   return { ready, started, done, stalledByBlocked, waiting, waves };
+}
+
+export interface PlanReadinessAdvisory {
+  taskId: string;
+  /** Why the plan does not consider this task startable, in one operator-readable line. */
+  reason: string;
+  /** Dependency ids the plan says are not `verified` yet. Empty when the row is blocked or already running. */
+  waitingOn: string[];
+}
+
+/**
+ * What the plan document believes about one task, for `sta run` to print before
+ * it starts (T-V3TOK-111).
+ *
+ * Returns `null` in every case where the plan has nothing useful to say — no
+ * plan, an unparseable one, a task id the plan never mentions, or a row that is
+ * ready. Silence matters as much as the warning: an ad-hoc task that was never
+ * a plan row is normal, and warning on those would train the operator to ignore
+ * the line that does matter.
+ *
+ * This is advice, never a gate. The caller prints it and proceeds; nothing here
+ * returns a failure, sets an exit code, or touches the store — runtime readiness
+ * stays the orchestrator's, per the authority model (PM = Work Graph,
+ * Orchestrator = Runtime).
+ */
+export function planReadinessAdvisory(planMd: string, taskId: string): PlanReadinessAdvisory | null {
+  let parsed: ParsedPlan;
+  try {
+    parsed = parsePlanTasks(planMd);
+  } catch {
+    return null;
+  }
+  if (!parsed.tasks.some((task) => task.id === taskId)) return null;
+
+  const readiness = readinessOf(parsed.tasks);
+  if (readiness.ready.some((task) => task.id === taskId)) return null;
+  if (readiness.done.some((task) => task.id === taskId)) {
+    return { taskId, reason: "plan.md already marks it verified", waitingOn: [] };
+  }
+  if (readiness.started.some((task) => task.id === taskId)) {
+    return { taskId, reason: "plan.md already marks it in_progress", waitingOn: [] };
+  }
+
+  const waiting = readiness.waiting.find((entry) => entry.task.id === taskId);
+  if (waiting) {
+    const statusOf = (id: string) => parsed.tasks.find((task) => task.id === id)?.status ?? "unknown";
+    return {
+      taskId,
+      reason: `plan.md says it waits on ${waiting.waitingOn.map((id) => `${id} (${statusOf(id)})`).join(", ")}`,
+      waitingOn: [...waiting.waitingOn],
+    };
+  }
+
+  const stalled = readiness.stalledByBlocked.find((task) => task.id === taskId);
+  if (stalled) {
+    const blocked = stalled.dependsOn.filter((dep) =>
+      parsed.tasks.some((task) => task.id === dep && task.status === "blocked"),
+    );
+    return {
+      taskId,
+      reason:
+        blocked.length > 0
+          ? `plan.md says it is behind blocked work: ${blocked.join(", ")}`
+          : "plan.md marks it blocked",
+      waitingOn: blocked,
+    };
+  }
+  return null;
 }
 
 export interface PlanGraphModuleResult {

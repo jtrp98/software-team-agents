@@ -5,6 +5,8 @@
  *   .claude/agents/<role>.md   → .codex/agents/<role>.toml · .opencode/agent/<role>.md
  *   .claude/commands/<name>.md → .opencode/commands/<name>.md · .agents/skills/<name>/SKILL.md
  *                                (+ <name>/agents/openai.yaml)
+ *   taskClassifier.ts +        → workflows/<id>.yml   (T-V3TOK-110, ADR-007)
+ *   workflowCatalog.ts
  *
  * Target projects get the same bytes at `sta sync` time (syncEngine); this
  * script exists for the Framework repo itself, where the mirrors are committed.
@@ -23,6 +25,7 @@ import {
   listCommands,
 } from "../orchestrator/dist/runtime/bindingGenerator.js";
 import { renderStackDigest } from "../orchestrator/dist/profile/stackDigest.js";
+import { generateWorkflowFiles } from "../orchestrator/dist/workflow/workflowCatalog.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const lf = (s) => s.replace(/\r\n/g, "\n");
@@ -89,6 +92,21 @@ if (fs.existsSync(commandsDir)) {
       }
     }
     removeStale(spec.dir, keep);
+  }
+}
+
+// --- workflow files ---------------------------------------------------------
+// `workflows/*.yml` is generated from the classifier plus the workflow catalog
+// (ADR-007); hand-editing one is what `--check-workflows` now refuses.
+{
+  const result = generateWorkflowFiles(ROOT);
+  for (const rel of result.written) {
+    console.log(`update ${rel}`);
+    written++;
+  }
+  for (const rel of result.removed) {
+    console.log(`remove stale ${rel}`);
+    written++;
   }
 }
 

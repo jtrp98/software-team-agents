@@ -23,7 +23,7 @@ import { CodexAdapter } from "./runtime/codexAdapter.js";
 import { OpenCodeAdapter } from "./runtime/openCodeAdapter.js";
 import { RUNTIME_IDS, describeRuntimeSupport } from "./runtime/runtimeSupport.js";
 import { detectRuntimeCapabilities } from "./runtime/runtimeCapabilityDetection.js";
-import { resolveFrameworkRoot } from "./targetcli/roots.js";
+import { resolveContextDocsRoot, resolveFrameworkRoot } from "./targetcli/roots.js";
 import type { RuntimeAutonomy } from "./runtime/runtimeAdapter.js";
 import { contractGuardResolver } from "./runtime/runtimeGuards.js";
 import { DatabaseUnavailableError, SqliteTaskStore } from "./store/sqliteStore.js";
@@ -33,7 +33,7 @@ import { checkPathRules } from "./agents/pathPermissions.js";
 import { checkLayout } from "./layout/repoLayout.js";
 import { checkPromptBudget } from "./layout/promptBudget.js";
 import { ApprovalType } from "./gates/approval.js";
-import { checkAllWorkflows } from "./workflow/workflowDefinition.js";
+import { checkAllWorkflows, resolveWorkflowId } from "./workflow/workflowDefinition.js";
 import { checkBindings } from "./runtime/bindingGenerator.js";
 import { checkProfile } from "./profile/projectProfile.js";
 import { checkDecisions } from "./decisions/decisionLog.js";
@@ -48,7 +48,7 @@ import { checkWorkspace, hasWorkspace, loadWorkspace, workspacePath, type Worksp
 import { checkRepoMap, loadStageRoots } from "./repos/repoMap.js";
 import { Environment, checkEnvironmentConfig, describeEnvironment, isEnvironment } from "./environment/environment.js";
 import { checkDocStructure } from "./docs/docStructure.js";
-import { checkPlanGraphs } from "./docs/planGraph.js";
+import { checkPlanGraphs, planReadinessAdvisory } from "./docs/planGraph.js";
 import { KnowledgeBase, checkKnowledge } from "./knowledge/knowledgeBase.js";
 import { LANE_LABEL, ROLE_LANES, isRoleLane } from "./roles/roleLane.js";
 import {
@@ -255,7 +255,7 @@ export const USAGE =
   "  sta --check-contracts [--project-root <path>]      check contracts/*.yaml against the agent registry\n" +
   "  sta --check-layout [--project-root <path>]         check layout.yaml against the real directories\n" +
   "  sta --check-prompt-budget [--project-root <path>]  check the static prompt floor: CLAUDE.md + agent prompt budgets, no policies pre-read, pointers resolve\n" +
-  "  sta --check-workflows [--project-root <path>]      check workflows/*.yml against the classifier\n" +
+  "  sta --check-workflows [--project-root <path>]      check generated workflows/*.yml byte-match the classifier\n" +
   "  sta --check-bindings [--project-root <path>]       check generated renderings (.codex/agents, .opencode/agent, .opencode/commands, .agents/skills) byte-match their .claude sources\n" +
   "  sta --check-profile [--project-root <path>]        check project.yaml and stacks/ against the agent roster\n" +
   "  sta --check-decisions [--project-root <path>]      check decisions/*.md ADRs against the schema and cross-links\n" +
@@ -629,6 +629,35 @@ export async function watchListing(
 }
 
 /**
+ * What the module's plan.md thinks of the task about to start (T-V3TOK-111).
+ *
+ * A warning, deliberately: the plan is PM's Work Graph and the store is the
+ * orchestrator's runtime, and letting an LLM-authored document decide what may
+ * execute would move a gate across that boundary. Silent whenever the plan has
+ * nothing to say — no module flag, no plan.md, or a task the plan never listed,
+ * which is the ordinary case for ad-hoc work.
+ *
+ * Never throws. A malformed plan is `--check-plan`'s problem to report; it must
+ * not stop a run that was otherwise going to work.
+ */
+function warnIfPlanSaysNotReady(args: CliArgs, taskId: string): void {
+  if (!args.module) return;
+  try {
+    const docsRoot = resolveContextDocsRoot(args.projectRoot);
+    const planMd = readModuleDoc(docsRoot, args.module, "plan.md");
+    if (planMd === null) return;
+    const advisory = planReadinessAdvisory(planMd, taskId);
+    if (!advisory) return;
+    console.warn(
+      `[orchestrator] plan readiness: ${advisory.taskId} is not ready — ${advisory.reason}. ` +
+        "Running anyway; this is advice from plan.md, not a gate (PM owns the work graph, the orchestrator owns runtime).",
+    );
+  } catch {
+    // Advisory only — an unreadable plan never stops a run.
+  }
+}
+
+/**
  * Resolves the orchestrator to drive: resumes the stored task with --resume,
  * refuses to silently restart one that already exists otherwise. Re-running a
  * task id from scratch would re-pay for every stage that already ran, so it
@@ -674,8 +703,13 @@ function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orches
       if (!(error instanceof Error) || !error.message.startsWith("cannot read installation config")) throw error;
     }
   }
+  warnIfPlanSaysNotReady(args, taskId);
+  // Naming the workflow makes the generated `workflows/<id>.yml` reachable from
+  // a run: the file that explains *why* this pipeline is shaped this way is one
+  // `cat` away, rather than something a reader has to match up by eye.
   console.log(
-    `[orchestrator] task ${taskId}: level=${classification.level} pipeline=${classification.pipeline.join(" -> ")}`,
+    `[orchestrator] task ${taskId}: workflow=${resolveWorkflowId(args.classification)} ` +
+      `level=${classification.level} pipeline=${classification.pipeline.join(" -> ")}`,
   );
   for (const reason of classification.reasons) console.log(`[orchestrator]   reason: ${reason}`);
   return registry.create({ taskId, classification, dependsOn: args.dependsOn, environment: args.environment, targetBindings: args.targetBindings });

@@ -15,4 +15,4 @@ Business-model sketch for: $ARGUMENTS
 
 Nine blocks, one line each, in canvas order: Customer Segments · Value Propositions · Channels · Customer Relationships · Revenue Streams · Key Resources · Key Activities · Key Partnerships · Cost Structure.
 Fill only from user-supplied context or repo docs (cite file:line); unknown blocks get `<ask user>` — never invented.
-Close by flagging the weakest block as the next interview topic.
+Close by flagging the weakest block as the next interview topic. Cap 12 lines total.
