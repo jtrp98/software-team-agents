@@ -30,6 +30,8 @@ export interface TargetManifest {
   installed_at: string;
   updated_at: string;
   files: TemplateFileEntry[];
+  /** Framework-owned delimited contributions inside otherwise project-owned files. */
+  framework_blocks?: { path: string; sha256: string }[];
 }
 
 export class TargetNotInitializedError extends Error {}
@@ -90,6 +92,15 @@ export function checkTargetManifest(data: unknown): string[] {
     if (seen.has(file.path)) problems.push(`"${file.path}" is listed more than once`);
     seen.add(file.path);
   }
+  const blockPaths = new Set<string>();
+  for (const block of manifest.framework_blocks ?? []) {
+    if (!block || typeof block.path !== "string" || typeof block.sha256 !== "string") {
+      problems.push("a framework_blocks entry lacks path/sha256");
+      continue;
+    }
+    if (blockPaths.has(block.path)) problems.push(`framework block "${block.path}" is listed more than once`);
+    blockPaths.add(block.path);
+  }
   return problems;
 }
 
@@ -106,10 +117,29 @@ export const TargetConfigSchema = z.object({
   knowledge: z.object({ path: z.string().min(1) }).optional(),
   /** T-LV1 — repo-relative (or absolute) path binding to a Target repo, committed with a Knowledge workspace. Optional and read-only: BA never requires it. */
   target: z.object({ path: z.string().min(1) }).optional(),
+  /** Deterministic Target stack cache (T-V3-03). Absent means not yet detected. */
+  stack: z.object({
+    profile: z.string().min(1),
+    package_manager: z.string().min(1),
+    commands: z.object({
+      install: z.string().min(1),
+      build: z.string().min(1),
+      test: z.string().min(1),
+      lint: z.string().min(1),
+      typecheck: z.string().min(1),
+    }).passthrough(),
+    schema_paths: z.array(z.string()),
+    source_roots: z.array(z.string().min(1)),
+    detected_at: z.string().min(1),
+    fingerprint: z.string().startsWith("sha256:"),
+    /** Hash of detector-owned fields; a mismatch proves a person changed the block and makes their values authoritative. */
+    generated_hash: z.string().startsWith("sha256:").optional(),
+  }).passthrough().optional(),
   /** Repo-root-relative paths sync must never touch — the user override list (T-TARGET-05). */
   overrides: z.array(z.string().min(1)).default([]),
 });
 export type TargetConfig = z.infer<typeof TargetConfigSchema>;
+export type TargetStackConfig = NonNullable<TargetConfig["stack"]>;
 
 export function defaultTargetConfig(targetId: string, now: string, role?: "ba" | "dev"): TargetConfig {
   return { schema_version: 1, target_id: targetId, registered_at: now, overrides: [], role };

@@ -1,5 +1,31 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+
 export type RepositoryOwner = "framework" | "knowledge" | "target";
 export type InstallMode = "legacy-project" | "three-repo";
+
+export const INSTRUCTION_PRECEDENCE = [
+  "framework-managed",
+  "project-owned-with-framework-block",
+  "project-owned-merged",
+  "project-owned-untouched",
+] as const;
+export type InstructionPrecedence = (typeof INSTRUCTION_PRECEDENCE)[number];
+
+export interface InstructionSurfaceEntry {
+  path: string;
+  owner: RepositoryOwner;
+  precedence: InstructionPrecedence;
+  frameworkContributionPresent: boolean;
+  consequence?: string;
+}
+
+interface InstructionPathClass {
+  name: string;
+  owner: RepositoryOwner;
+  precedence: InstructionPrecedence;
+  matches: (relativePath: string) => boolean;
+}
 
 export const KNOWLEDGE_OWNED_PATHS = [
   "knowledge",
@@ -18,6 +44,151 @@ export const TARGET_OWNED_PATHS = ["AGENTS.md", "CLAUDE.md", ".claude", ".codex"
 
 function normalise(relativePath: string): string {
   return relativePath.replaceAll("\\", "/").replace(/^\.\//, "").replace(/\/+$/, "");
+}
+
+/**
+ * The instruction precedence model is deliberately data, not scattered branch
+ * logic. Repository ownership (`ownerOfPath`) remains unchanged: this narrower
+ * table declares who controls instruction bytes when both the Framework and a
+ * Target have a legitimate interest in the same file.
+ */
+export const INSTRUCTION_PATH_CLASSES: readonly InstructionPathClass[] = [
+  {
+    name: "root-claude",
+    owner: "target",
+    precedence: "project-owned-with-framework-block",
+    matches: (candidate) => candidate === "CLAUDE.md",
+  },
+  {
+    name: "root-agents",
+    owner: "target",
+    precedence: "project-owned-with-framework-block",
+    matches: (candidate) => candidate === "AGENTS.md",
+  },
+  {
+    name: "local-claude",
+    owner: "target",
+    precedence: "project-owned-untouched",
+    matches: (candidate) => path.posix.basename(candidate) === "CLAUDE.local.md",
+  },
+  {
+    name: "nested-agents",
+    owner: "target",
+    precedence: "project-owned-untouched",
+    matches: (candidate) => candidate !== "AGENTS.md" && path.posix.basename(candidate) === "AGENTS.md",
+  },
+  {
+    name: "claude-settings",
+    owner: "target",
+    precedence: "project-owned-merged",
+    matches: (candidate) => candidate === ".claude/settings.json",
+  },
+  {
+    name: "claude-agents",
+    owner: "framework",
+    precedence: "framework-managed",
+    matches: (candidate) => candidate.startsWith(".claude/agents/"),
+  },
+  {
+    name: "codex-instructions",
+    owner: "framework",
+    precedence: "framework-managed",
+    matches: (candidate) => candidate.startsWith(".codex/"),
+  },
+  {
+    name: "opencode-instructions",
+    owner: "framework",
+    precedence: "framework-managed",
+    matches: (candidate) => candidate.startsWith(".opencode/"),
+  },
+] as const;
+
+export function instructionPathClass(relativePath: string): InstructionPathClass | undefined {
+  const candidate = normalise(relativePath);
+  return INSTRUCTION_PATH_CLASSES.find((entry) => entry.matches(candidate));
+}
+
+/** Matches the static gate's bounded tree-walk exclusions. */
+export const INSTRUCTION_SCAN_SKIP_DIRS = new Set(["node_modules", ".git", "dist", ".workflow", ".next", "build"]);
+
+function installedFrameworkHookCount(targetRoot: string): number {
+  const hooksDir = path.join(targetRoot, ".claude", "hooks");
+  try {
+    return fs
+      .readdirSync(hooksDir, { withFileTypes: true })
+      .filter((entry) => !entry.isSymbolicLink() && entry.isFile() && entry.name.endsWith(".js"))
+      .length;
+  } catch {
+    return 0;
+  }
+}
+
+export function missingInstructionConsequence(targetRoot: string, relativePath: string): string | undefined {
+  const candidate = normalise(relativePath);
+  if (candidate === "CLAUDE.md") return "Framework routing is not delivered to this workspace";
+  if (candidate === ".claude/settings.json") {
+    return `${installedFrameworkHookCount(targetRoot)} framework hooks are installed but not registered`;
+  }
+  if (candidate === "AGENTS.md") return "Framework routing is not delivered to Codex in this workspace";
+  const pathClass = instructionPathClass(candidate);
+  if (pathClass?.precedence === "framework-managed") return "Framework does not manage this instruction file";
+  return undefined;
+}
+
+function containsOneBootstrapBlock(file: string): boolean {
+  try {
+    const body = fs.readFileSync(file, "utf8");
+    const open = "<!-- sta:bootstrap -->";
+    const close = "<!-- /sta:bootstrap -->";
+    return body.split(open).length - 1 === 1 &&
+      body.split(close).length - 1 === 1 &&
+      body.indexOf(close) > body.indexOf(open);
+  } catch {
+    return false;
+  }
+}
+
+/** Read-only, symlink-avoiding inventory of the complete Target instruction surface. */
+export function detectInstructionSurface(options: {
+  targetRoot: string;
+  frameworkPaths?: ReadonlySet<string>;
+}): InstructionSurfaceEntry[] {
+  const targetRoot = path.resolve(options.targetRoot);
+  const frameworkPaths = new Set([...(options.frameworkPaths ?? [])].map(normalise));
+  const found: InstructionSurfaceEntry[] = [];
+
+  const walk = (directory: string, relativeDirectory: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) continue;
+      const relative = normalise(relativeDirectory ? `${relativeDirectory}/${entry.name}` : entry.name);
+      const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (!INSTRUCTION_SCAN_SKIP_DIRS.has(entry.name)) walk(absolute, relative);
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const pathClass = instructionPathClass(relative);
+      if (!pathClass) continue;
+      const frameworkContributionPresent =
+        frameworkPaths.has(relative) ||
+        (pathClass.precedence === "project-owned-with-framework-block" && containsOneBootstrapBlock(absolute));
+      found.push({
+        path: relative,
+        owner: pathClass.owner,
+        precedence: pathClass.precedence,
+        frameworkContributionPresent,
+        consequence: frameworkContributionPresent ? undefined : missingInstructionConsequence(targetRoot, relative),
+      });
+    }
+  };
+  walk(targetRoot, "");
+  return found.sort((a, b) => a.path.localeCompare(b.path));
 }
 
 export function ownerOfPath(relativePath: string): RepositoryOwner {

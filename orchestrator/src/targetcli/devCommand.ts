@@ -27,6 +27,7 @@ import { formatResolvedCommand, resolveBundledStaCli } from "../runtime/npmCliRe
 import { runTargetInit } from "./initCommand.js";
 import { isTargetInitialized } from "./targetMeta.js";
 import { recordInteractiveSession } from "../observability/sessionRecord.js";
+import { CLAUDE_SETTINGS_PATH, inspectGuardWiring } from "./guardSettings.js";
 
 /**
  * T-ROLE-03 / T-ROLE-04 / T-ROLE-19 — role-aware execution: preflight, then
@@ -184,6 +185,27 @@ export function workspacePreflight(role: RoleName, options: RoleRunOptions = {})
     );
   }
   checks.push({ name: "Framework compatibility", ok: true, detail: installedVersion });
+
+  // Claude hook files being present is not evidence that Claude will execute
+  // them. Check effective settings before any auto-sync so an already-installed
+  // but unregistered guard fails closed with this exact diagnosis.
+  if ((options.runtime ?? "claude") === "claude") {
+    const currentManifest = readTargetManifest(roots.targetRoot);
+    const currentConfig = loadTargetConfig(roots.targetRoot);
+    const wiring = inspectGuardWiring({ targetRoot: roots.targetRoot, templatesDir, manifest: currentManifest, config: currentConfig });
+    if (wiring.overridden) {
+      checks.push({ name: "Guards wired", ok: true, detail: `${CLAUDE_SETTINGS_PATH} is in overrides — explicit user choice; Framework guards are not required` });
+    } else if (wiring.hooksInstalled === 0) {
+      checks.push({ name: "Guards wired", ok: true, detail: "0/0 Framework guard registrations shipped for this profile" });
+    } else if (wiring.settingsError) {
+      fail("Guards wired", `${wiring.settingsError} — run software-team-agents sync; if deliberate, claim .claude/settings.json in overrides`);
+    } else if (wiring.missingRegistrations.length > 0) {
+      const missing = wiring.missingRegistrations.map((registration) => `${registration.event}:${registration.hookPath}`).join(", ");
+      fail("Guards wired", `${wiring.hooksRegistered}/${wiring.hooksInstalled} Framework guard registration(s) active; missing ${missing} — run software-team-agents sync`);
+    } else {
+      checks.push({ name: "Guards wired", ok: true, detail: `${wiring.hooksRegistered}/${wiring.hooksInstalled} Framework guard registration(s) active` });
+    }
+  }
 
   // Managed-file integrity under this role's asset profile: auto-sync only
   // what is provably safe; a conflict stops everything (no forced sync behind

@@ -6,6 +6,12 @@ import { validateInstallation } from "../packaging/installValidation.js";
 import { assertStandaloneKnowledgeRoot, defaultInstallationConfigPath, loadInstallationConfig } from "./installation.js";
 import { loadLocalTargetMapping } from "./localTargets.js";
 import { loadTargetRegistry } from "./targets.js";
+import { detectInstructionSurface, type InstructionSurfaceEntry } from "./ownership.js";
+import { isTargetInitialized, loadTargetConfig, readTargetManifest, type TargetConfig, type TargetManifest } from "../targetcli/targetMeta.js";
+import { detectWorkspaceKind } from "../targetcli/roleWorkspace.js";
+import { targetStackWasHumanEdited } from "../targetcli/targetProfile.js";
+import { defaultProjectRoot } from "../agents/agentContract.js";
+import { inspectGuardWiring } from "../targetcli/guardSettings.js";
 
 /**
  * `sta doctor` (T166) — read-only diagnostics for one machine's installation.
@@ -46,6 +52,7 @@ function check(name: string, fix: string | undefined, run: () => DoctorCheckBody
 
 export interface DoctorReport {
   checks: DoctorCheck[];
+  instructionSurface: InstructionSurfaceEntry[];
   /** False when at least one check is FAIL — the only state that blocks work. */
   ok: boolean;
 }
@@ -59,6 +66,8 @@ export interface DoctorOptions {
   projectRoot?: string;
   /** Overrides where the installation config is read from (tests; unusual setups). */
   installationConfigPath?: string;
+  /** Framework template root override for deterministic fixture diagnostics. */
+  templatesDir?: string;
   /**
    * Injectable so tests never spawn the real runtime probe — and, since the
    * capability-contract work (OFF04), the *only* way a runtime is probed at all:
@@ -85,6 +94,7 @@ export interface DoctorOptions {
 export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [];
   const projectRoot = options.projectRoot;
+  let instructionSurface: InstructionSurfaceEntry[] = [];
   const configureFix = "run: sta configure knowledge-root <path>";
 
   // Mode awareness: a Knowledge root never carries framework internals (.sta/,
@@ -245,17 +255,102 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
   );
 
   checks.push(
-    check("Guard wiring (.claude/settings.json)", "run: sta init --force to restore hook wiring", () => {
+    check("Guard wiring (.claude/settings.json)", "run: software-team-agents sync to restore hook wiring", () => {
       if (!projectRoot) return { status: "WARNING", detail: "skipped — no --project-root given" };
       if (sameRealPath(projectRoot, boundKnowledgeRoot)) return { status: "PASS", detail: naDetail };
-      const settingsPath = path.join(projectRoot, ".claude", "settings.json");
-      if (!fs.existsSync(settingsPath)) return { status: "WARNING", detail: "no .claude/settings.json in this project" };
-      const parsed = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as { hooks?: Record<string, unknown[]> };
-      const wired = ["PreToolUse", "Stop", "SubagentStop"].filter((event) => Array.isArray(parsed.hooks?.[event]) && parsed.hooks[event]!.length > 0);
-      if (wired.length === 0) return { status: "WARNING", detail: "settings.json exists but wires no PreToolUse/Stop/SubagentStop hooks" };
-      return { status: "PASS", detail: wired.join(", ") };
+      let manifest: TargetManifest | undefined;
+      try {
+        manifest = isTargetInitialized(projectRoot) ? readTargetManifest(projectRoot) : undefined;
+      } catch {
+        manifest = undefined;
+      }
+      let config: TargetConfig | undefined;
+      try {
+        config = loadTargetConfig(projectRoot);
+      } catch {
+        config = undefined;
+      }
+      const wiring = inspectGuardWiring({
+        targetRoot: projectRoot,
+        templatesDir: options.templatesDir ?? path.join(defaultProjectRoot(), "templates"),
+        manifest,
+        config,
+      });
+      if (wiring.overridden) return { status: "PASS", detail: ".claude/settings.json override is an explicit user choice; Framework guards declined" };
+      if (wiring.settingsError && wiring.hooksInstalled > 0) return { status: "WARNING", detail: wiring.settingsError };
+      if (wiring.missingRegistrations.length > 0) {
+        return { status: "WARNING", detail: `${wiring.hooksRegistered}/${wiring.hooksInstalled} Framework guard registration(s) active` };
+      }
+      return { status: "PASS", detail: `${wiring.hooksRegistered}/${wiring.hooksInstalled} Framework guard registration(s) active` };
     }),
   );
 
-  return { checks, ok: !checks.some((c) => c.status === "FAIL") };
+  if (projectRoot) {
+    let frameworkPaths = new Set<string>();
+    try {
+      if (isTargetInitialized(projectRoot)) {
+        frameworkPaths = new Set(readTargetManifest(projectRoot).files.map((file) => file.path));
+      }
+    } catch {
+      // The existing installation checks report malformed metadata independently.
+    }
+    try {
+      const manifest = isTargetInitialized(projectRoot) ? readTargetManifest(projectRoot) : undefined;
+      const config = loadTargetConfig(projectRoot);
+      const wiring = inspectGuardWiring({
+        targetRoot: projectRoot,
+        templatesDir: options.templatesDir ?? path.join(defaultProjectRoot(), "templates"),
+        manifest,
+        config,
+      });
+      if (!wiring.overridden && wiring.hooksInstalled > 0 && wiring.missingRegistrations.length === 0) {
+        frameworkPaths.add(".claude/settings.json");
+      }
+    } catch {
+      // Guard wiring check above reports the actionable problem.
+    }
+    instructionSurface = detectInstructionSurface({ targetRoot: projectRoot, frameworkPaths });
+    for (const entry of instructionSurface) {
+      const contributionExpected = entry.precedence !== "project-owned-untouched";
+      const status: DoctorStatus = contributionExpected && !entry.frameworkContributionPresent ? "WARNING" : "PASS";
+      checks.push({
+        name: `Instruction surface: ${entry.path}`,
+        status,
+        detail:
+          `owner=${entry.owner}; precedence=${entry.precedence}; Framework contribution=${entry.frameworkContributionPresent ? "present" : "absent"}` +
+          (entry.consequence ? `; ${entry.consequence}` : ""),
+        fix:
+          status === "PASS"
+            ? undefined
+            : entry.precedence === "framework-managed"
+              ? "run: software-team-agents sync"
+              : "review prompt-setup.md section: Merging with the project's existing Claude setup",
+      });
+    }
+
+    checks.push(
+      check("Target profile (.agent-team/config.yaml stack)", "run: software-team-agents init --stack <name>", () => {
+        let config;
+        try {
+          config = loadTargetConfig(projectRoot);
+        } catch (error) {
+          return { status: "WARNING", detail: error instanceof Error ? error.message : String(error) };
+        }
+        const kind = detectWorkspaceKind(projectRoot);
+        const isDevTarget = config?.role === "dev" || (config?.role === undefined && kind === "target");
+        if (!isDevTarget) return { status: "PASS", detail: "n/a — this is not a DEV Target workspace" };
+        if (!config?.stack) return { status: "WARNING", detail: "Target stack is unresolved; no profile is cached" };
+        if (targetStackWasHumanEdited(config.stack)) {
+          return {
+            status: "WARNING",
+            detail: `${config.stack.profile}; stack config differs from deterministic detection and human-edited values remain authoritative`,
+            fix: "review the stack block, then run software-team-agents sync --stack <name> if the profile choice should change",
+          };
+        }
+        return { status: "PASS", detail: `${config.stack.profile}; ${config.stack.fingerprint}` };
+      }),
+    );
+  }
+
+  return { checks, instructionSurface, ok: !checks.some((c) => c.status === "FAIL") };
 }

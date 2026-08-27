@@ -45,6 +45,11 @@ describe("workspace kind detection (T-ROLE-16)", () => {
     const dotnet = tmpRoot("dotnet");
     fs.writeFileSync(path.join(dotnet, "Acme.sln"), "");
     expect(detectWorkspaceKind(dotnet)).toBe("target");
+
+    const nestedDotnet = tmpRoot("nested-dotnet");
+    fs.mkdirSync(path.join(nestedDotnet, "ClassOnlineWeb"));
+    fs.writeFileSync(path.join(nestedDotnet, "ClassOnlineWeb", "ClassOnlineWeb.csproj"), "");
+    expect(detectWorkspaceKind(nestedDotnet)).toBe("target");
   });
 
   it("`_docs/` never makes an app repo ambiguous — this framework puts it there itself", () => {

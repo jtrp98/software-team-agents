@@ -2,8 +2,10 @@
 /*
  * Static Analysis Gate (T22) — the automated sweep that runs once, right before qa-engineer
  * trusts a round, instead of "lint/typecheck/build/test" being a checklist re-derived from
- * memory every time. Runs `lint`, `format`, `typecheck`, `build`, `test` in every package.json
- * this repo has that defines the script, plus a repo-wide `security_scan` (T23 — Security as
+ * memory every time. With a resolved Target profile it runs `lint`, `format`, `typecheck`,
+ * `build`, and `test` from `.agent-team/config.yaml` `stack.commands`; without a profile it
+ * preserves the legacy per-package `package.json` walk. It also runs a profile-scoped
+ * `security_scan` (T23 — Security as
  * Continuous: this is the "Code" checkpoint, independent of whatever `security` audits later)
  * and `dependency_scan` (T24 — Dependency Security).
  *
@@ -32,8 +34,9 @@
  * substitute for it — a clean scan here is not a security sign-off.
  *
  * Run standalone: `node .claude/scripts/static-analysis-gate.js [--json]`
- * Exit 0 = every check that ran passed. Exit 1 = at least one failed. `--json` prints a
- * machine-readable report instead of the human-readable one.
+ * Exit 0 = every check that ran passed. Exit 1 = at least one failed. Exit 2 = a
+ * resolved profile ran no verification command, so the Target remains unverified.
+ * `--json` prints a machine-readable report instead of the human-readable one.
  */
 
 'use strict';
@@ -47,7 +50,7 @@ const asJson = process.argv.includes('--json');
 
 const CHECKS = ['lint', 'format', 'typecheck', 'build', 'test'];
 const NOT_YET_IMPLEMENTED = [];
-const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.workflow', '.next', 'build']);
+const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', '.workflow', '.next', 'build', '.agent-team', '.agents', '.claude', '.codex', '.opencode', 'templates']);
 
 // Curated, not exhaustive — a handful of real historical advisories against packages this
 // stack's own dependency tree is likely to pull in, kept as illustration of the mechanism
@@ -67,8 +70,8 @@ const KNOWN_VULNERABLE_PACKAGES = [
 // Directories the security scan actually reads code from — everywhere app/API code and the
 // schema live, per CLAUDE.md's stack. Anything else (docs, config, this script's own folder) is
 // out of scope: scanning the whole repo would flag this file's own pattern list as a match.
-const SECURITY_SCAN_DIRS = ['app', 'components', 'server', 'src', 'pages', 'prisma'];
-const SECURITY_SCAN_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.prisma']);
+const LEGACY_SECURITY_SCAN_DIRS = ['app', 'components', 'server', 'src', 'pages', 'prisma'];
+const LEGACY_SECURITY_SCAN_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.prisma']);
 
 // Curated, not exhaustive — constructs that are wrong in essentially every context in this
 // stack, not project-specific style. Each pattern names the risk it flags, not just what it
@@ -82,6 +85,75 @@ const SECURITY_PATTERNS = [
   { name: 'hardcoded fallback secret (JWT/session)', pattern: /(?:JWT_SECRET|SESSION_SECRET|process\.env\.\w*SECRET\w*)\s*(?:\|\||\?\?)\s*['"`][^'"`]+['"`]/ },
   { name: 'CORS wildcard origin combined with credentials', pattern: /Access-Control-Allow-Origin['"`]?\s*[:=]\s*['"`]\*/ },
 ];
+
+function yamlScalar(value) {
+  const text = String(value || '').trim();
+  if (text.startsWith('"') && text.endsWith('"')) {
+    try { return JSON.parse(text); } catch { return text.slice(1, -1); }
+  }
+  if (text.startsWith("'") && text.endsWith("'")) return text.slice(1, -1).replace(/''/g, "'");
+  return text.replace(/\s+#.*$/, '').trim();
+}
+
+/** Reads only the generated `stack:` shape; no dependency on a Target's node_modules. */
+function loadTargetProfile() {
+  let lines;
+  try {
+    lines = fs.readFileSync(path.join(root, '.agent-team', 'config.yaml'), 'utf8').split(/\r?\n/);
+  } catch {
+    return null;
+  }
+  let inStack = false;
+  let section = '';
+  const profile = { name: '', commands: {}, sourceRoots: [] };
+  for (const line of lines) {
+    if (!inStack) {
+      if (/^stack:\s*(?:#.*)?$/.test(line)) inStack = true;
+      continue;
+    }
+    if (/^\S/.test(line)) break;
+    const field = /^  ([A-Za-z_][\w-]*):\s*(.*)$/.exec(line);
+    if (field) {
+      section = field[1];
+      if (section === 'profile') profile.name = yamlScalar(field[2]);
+      continue;
+    }
+    const command = section === 'commands' ? /^    ([A-Za-z_][\w-]*):\s*(.+)$/.exec(line) : null;
+    if (command) {
+      profile.commands[command[1]] = yamlScalar(command[2]);
+      continue;
+    }
+    const sourceRoot = section === 'source_roots' ? /^    -\s*(.+)$/.exec(line) : null;
+    if (sourceRoot) profile.sourceRoots.push(yamlScalar(sourceRoot[1]));
+  }
+  return profile.name ? profile : null;
+}
+
+function scanExtensionsFor(profileName) {
+  let lines;
+  try {
+    lines = fs.readFileSync(path.join(root, 'stacks', profileName, 'stack.yaml'), 'utf8').split(/\r?\n/);
+  } catch {
+    return [];
+  }
+  const extensions = [];
+  let inList = false;
+  for (const line of lines) {
+    const flow = /^scan_extensions:\s*\[(.*)\]\s*(?:#.*)?$/.exec(line);
+    if (flow) return flow[1].split(',').map(yamlScalar).filter((item) => /^\.[A-Za-z0-9]+$/.test(item));
+    if (/^scan_extensions:\s*(?:#.*)?$/.test(line)) {
+      inList = true;
+      continue;
+    }
+    if (inList) {
+      const item = /^\s+-\s*(.+)$/.exec(line);
+      if (!item) break;
+      const extension = yamlScalar(item[1]);
+      if (/^\.[A-Za-z0-9]+$/.test(extension)) extensions.push(extension);
+    }
+  }
+  return extensions;
+}
 
 /** Every file under `dir` whose extension is in `exts`, SKIP_DIRS pruned from the walk. */
 function findFiles(dir, exts, out) {
@@ -103,9 +175,24 @@ function findFiles(dir, exts, out) {
 }
 
 /** Scans every matching file under the security-relevant dirs for the curated pattern list. */
-function runSecurityScan() {
+function runSecurityScan(profile) {
+  const extensions = profile ? scanExtensionsFor(profile.name) : [...LEGACY_SECURITY_SCAN_EXTS];
+  if (profile && extensions.length === 0) {
+    return { dir: '(repo)', check: 'security_scan', status: 'skipped', reason: `no security scan extensions declared for profile ${profile.name}` };
+  }
+  const sourceRoots = profile ? profile.sourceRoots : LEGACY_SECURITY_SCAN_DIRS;
+  if (profile && sourceRoots.length === 0) {
+    return { dir: '(repo)', check: 'security_scan', status: 'skipped', reason: `no source_roots declared for profile ${profile.name}` };
+  }
+  const invalidRoot = sourceRoots.find((sourceRoot) => {
+    const relative = path.relative(root, path.resolve(root, sourceRoot));
+    return relative.startsWith('..') || path.isAbsolute(relative);
+  });
+  if (invalidRoot) {
+    return { dir: '(repo)', check: 'security_scan', status: 'failed', output: `source_root escapes the Target: ${invalidRoot}` };
+  }
   const files = [];
-  for (const dir of SECURITY_SCAN_DIRS) findFiles(path.join(root, dir), SECURITY_SCAN_EXTS, files);
+  for (const dir of sourceRoots) findFiles(path.resolve(root, dir), new Set(extensions), files);
 
   const hits = [];
   for (const file of files) {
@@ -147,7 +234,10 @@ function compareVersions(a, b) {
 }
 
 /** Scans every found package.json's declared dependencies against the curated advisory list. */
-function runDependencyScan(packageDirs) {
+function runDependencyScan(packageDirs, profile) {
+  if (profile && !['node', 'frontend'].includes(profile.name)) {
+    return { dir: '(repo)', check: 'dependency_scan', status: 'skipped', reason: `no dependency manifest this scan understands for profile ${profile.name}` };
+  }
   const hits = [];
 
   for (const dir of packageDirs) {
@@ -224,30 +314,64 @@ function runOne(dir, check) {
   };
 }
 
+function runProfileOne(check, command) {
+  const res = spawnSync(command, [], {
+    cwd: root,
+    encoding: 'utf8',
+    shell: true,
+    timeout: 300000,
+  });
+  const passed = !res.error && res.status === 0;
+  return {
+    dir: '(repo)',
+    check,
+    command,
+    status: passed ? 'passed' : 'failed',
+    output: passed ? undefined : tail((res.stdout || '') + (res.stderr || '') + (res.error ? `\n${res.error.message}` : ''), 40),
+  };
+}
+
 function main() {
+  const profile = loadTargetProfile();
   const packageDirs = findPackageDirs(root, []);
   const results = [];
 
-  for (const dir of packageDirs) {
-    const scripts = scriptsIn(dir);
+  if (profile) {
     for (const check of CHECKS) {
-      if (typeof scripts[check] !== 'string') {
-        results.push({ dir: path.relative(root, dir) || '.', check, status: 'skipped', reason: 'no such script' });
+      const command = profile.commands[check];
+      if (typeof command !== 'string' || command.length === 0) {
+        results.push({ dir: '(repo)', check, status: 'skipped', reason: 'no such profile command' });
         continue;
       }
-      results.push(runOne(dir, check));
+      results.push(runProfileOne(check, command));
+    }
+  } else {
+    for (const dir of packageDirs) {
+      const scripts = scriptsIn(dir);
+      for (const check of CHECKS) {
+        if (typeof scripts[check] !== 'string') {
+          results.push({ dir: path.relative(root, dir) || '.', check, status: 'skipped', reason: 'no such script' });
+          continue;
+        }
+        results.push(runOne(dir, check));
+      }
     }
   }
 
-  results.push(runSecurityScan());
-  results.push(runDependencyScan(packageDirs));
+  results.push(runSecurityScan(profile));
+  results.push(runDependencyScan(packageDirs, profile));
 
   for (const { check, reason } of NOT_YET_IMPLEMENTED) {
     results.push({ dir: '(repo)', check, status: 'not_implemented', reason });
   }
 
-  const ok = results.every((r) => r.status !== 'failed');
-  const report = { ok, results };
+  const failed = results.some((r) => r.status === 'failed');
+  const verificationRows = results.filter((r) => CHECKS.includes(r.check));
+  const unverified = Boolean(profile) && verificationRows.every((r) => r.status === 'skipped');
+  const ok = !failed && !unverified;
+  const report = profile
+    ? { ok, verification: failed ? 'failed' : unverified ? 'unverified' : 'passed', profile: profile.name, results }
+    : { ok, results };
 
   if (asJson) {
     console.log(JSON.stringify(report, null, 2));
@@ -262,10 +386,10 @@ function main() {
         for (const line of (r.output || '').split('\n')) console.log(`        ${line}`);
       }
     }
-    console.log(ok ? '\nstatic analysis gate: PASS' : '\nstatic analysis gate: FAIL');
+    console.log(unverified ? '\nstatic analysis gate: UNVERIFIED' : ok ? '\nstatic analysis gate: PASS' : '\nstatic analysis gate: FAIL');
   }
 
-  process.exit(ok ? 0 : 1);
+  process.exit(failed ? 1 : unverified ? 2 : 0);
 }
 
 main();

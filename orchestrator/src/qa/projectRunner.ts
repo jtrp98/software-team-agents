@@ -1,8 +1,14 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { parse as parseYaml } from "yaml";
 import type { RuntimeWorkspace } from "../runtime/runtimeAdapter.js";
+import { TargetConfigSchema } from "../targetcli/targetMeta.js";
 import type { DeterministicCheckId, DeterministicCheckResult, DeterministicRunner } from "./deterministic.js";
 
 /** The machine-readable subset of the existing static-analysis gate report. */
 interface StaticGateReport {
+  verification?: "passed" | "failed" | "unverified";
+  profile?: string;
   results: Array<{ check: string; status: "passed" | "failed" | "skipped"; output?: string }>;
 }
 
@@ -40,7 +46,7 @@ export function createProjectRunner(opts: ProjectRunnerOptions): DeterministicRu
   const outputLimit = opts.outputLimit ?? 8_000;
   let gateReport: Promise<StaticGateReport | null> | undefined;
   let scripts: Promise<Record<string, unknown>> | undefined;
-  const npmCliPath = opts.npmCliPath ?? path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
+  let profileCommands: Promise<Record<string, string> | null> | undefined;
 
   const summary = (stdout: string, stderr: string): string => tail([stdout, stderr].filter(Boolean).join("\n"), outputLimit);
 
@@ -78,6 +84,21 @@ export function createProjectRunner(opts: ProjectRunnerOptions): DeterministicRu
     return scripts;
   };
 
+  const loadProfileCommands = async (): Promise<Record<string, string> | null> => {
+    if (!profileCommands) {
+      profileCommands = opts.workspace.readFile(".agent-team/config.yaml").then((text) => {
+        if (!text) return null;
+        try {
+          const parsed = TargetConfigSchema.safeParse(parseYaml(text));
+          return parsed.success && parsed.data.stack ? parsed.data.stack.commands as Record<string, string> : null;
+        } catch {
+          return null;
+        }
+      });
+    }
+    return profileCommands;
+  };
+
   return async (id): Promise<DeterministicCheckResult | null> => {
     // `npm test` is deliberately the one test check.  A project without a
     // separate integration script has no evidence to claim here, so it stays
@@ -88,6 +109,14 @@ export function createProjectRunner(opts: ProjectRunnerOptions): DeterministicRu
     const report = await gate;
     const check = CHECK_FOR[id];
     if (report) {
+      if (report.verification === "unverified") {
+        return {
+          id,
+          status: "FAIL",
+          durationMs: now() - started,
+          outputSummary: `static-analysis gate: profile ${report.profile ?? "unknown"} is unverified because every verification command was skipped`,
+        };
+      }
       const rows = report.results.filter((row) => row.check === check);
       if (rows.length === 0 || rows.every((row) => row.status === "skipped")) return null;
       const failures = rows.filter((row) => row.status === "failed");
@@ -99,8 +128,28 @@ export function createProjectRunner(opts: ProjectRunnerOptions): DeterministicRu
       };
     }
 
+    const resolvedCommands = await loadProfileCommands();
+    const resolvedCommand = resolvedCommands?.[check];
+    if (typeof resolvedCommand === "string") {
+      try {
+        const shell = process.platform === "win32"
+          ? { command: process.env.ComSpec || "cmd.exe", args: ["/d", "/s", "/c", resolvedCommand] }
+          : { command: "/bin/sh", args: ["-c", resolvedCommand] };
+        const result = await opts.workspace.runCommand({ ...shell, cwd: opts.root, timeoutMs: 5 * 60_000 });
+        return {
+          id,
+          status: result.exitCode === 0 && !result.timedOut ? "PASS" : "FAIL",
+          durationMs: now() - started,
+          outputSummary: summary(result.stdout, result.stderr) || (result.timedOut ? `${check} timed out` : `${check} exited ${result.exitCode ?? "unknown"}`),
+        };
+      } catch (error) {
+        return { id, status: "FAIL", durationMs: now() - started, outputSummary: `could not run ${check}: ${error instanceof Error ? error.message : String(error)}` };
+      }
+    }
+
     const configured = await loadScripts();
     if (typeof configured[check] !== "string") return null;
+    const npmCliPath = opts.npmCliPath ?? path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
     try {
       const result = await opts.workspace.runCommand({
         command: fs.existsSync(npmCliPath) ? process.execPath : "npm",
@@ -139,5 +188,3 @@ export function combineProjectRunners(runners: readonly { root: string; runner: 
 function tail(value: string, maxChars: number): string {
   return value.length <= maxChars ? value : `…${value.slice(-maxChars)}`;
 }
-import * as fs from "node:fs";
-import * as path from "node:path";

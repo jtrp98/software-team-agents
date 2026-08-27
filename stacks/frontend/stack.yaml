@@ -14,4 +14,5 @@ commands:
   test: npm test
   lint: npm run lint
   typecheck: npm run typecheck
+scan_extensions: [.ts, .tsx, .js, .jsx]
 capabilities: [ui, testing]

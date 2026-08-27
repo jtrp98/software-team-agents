@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { policyPointerResolves } from "../docs/policyIndex.js";
 import Ajv from "ajv";
+import { BOOTSTRAP_BUDGET_BYTES, inspectBootstrapBlock } from "../targetcli/knowledgeRender.js";
 
 /**
  * T-V3TOK-014 — the static-context floor cannot grow back silently.
@@ -179,6 +180,17 @@ export function checkPromptBudget(projectRoot: string = defaultProjectRoot()): P
     problems.push(`CLAUDE.md is ${claudeMd} B, over its ${CLAUDE_MD_BUDGET} B budget by ${claudeMd - CLAUDE_MD_BUDGET} B — move rationale to docs/, do not raise the budget`);
   } else {
     notes.push(`CLAUDE.md ${claudeMd} B / ${CLAUDE_MD_BUDGET} B`);
+  }
+  try {
+    const bootstrap = inspectBootstrapBlock(fs.readFileSync(path.join(projectRoot, "CLAUDE.md"), "utf8"));
+    if (bootstrap.state === "malformed") problems.push(`CLAUDE.md bootstrap markers are malformed: ${bootstrap.detail}`);
+    if (bootstrap.state === "valid") {
+      const bytes = Buffer.byteLength(bootstrap.block, "utf8");
+      if (bytes > BOOTSTRAP_BUDGET_BYTES) problems.push(`CLAUDE.md bootstrap block is ${bytes} B, over its ${BOOTSTRAP_BUDGET_BYTES} B budget`);
+      else notes.push(`CLAUDE.md bootstrap block ${bytes} B / ${BOOTSTRAP_BUDGET_BYTES} B`);
+    }
+  } catch {
+    // The missing-file problem above is the actionable result.
   }
 
   const files = agentPromptFiles(projectRoot);

@@ -2,7 +2,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { assertFrameworkManagedPaths, ownerOfPath } from "./ownership.js";
+import {
+  assertFrameworkManagedPaths,
+  detectInstructionSurface,
+  INSTRUCTION_PATH_CLASSES,
+  INSTRUCTION_PRECEDENCE,
+  KNOWLEDGE_OWNED_PATHS,
+  ownerOfPath,
+  TARGET_OWNED_PATHS,
+} from "./ownership.js";
 import { assertStandaloneKnowledgeRoot, configureKnowledgeRoot, loadInstallationConfig } from "./installation.js";
 import { assertTargetCanStartNewTask, assertTargetIdsImmutable, loadTargetRegistry, writeTargetRegistry, type TargetRegistry } from "./targets.js";
 import { loadLocalTargetMapping } from "./localTargets.js";
@@ -18,12 +26,69 @@ function initRepository(directory: string): void {
 afterEach(() => { while (roots.length) fs.rmSync(roots.pop()!, { recursive: true, force: true }); });
 
 describe("three-repo ownership", () => {
+  it("characterizes ownerOfPath for every pre-V3 ownership root without changing its prefix semantics", () => {
+    for (const owned of KNOWLEDGE_OWNED_PATHS) {
+      expect(ownerOfPath(owned), owned).toBe("knowledge");
+      expect(ownerOfPath(`${owned}/nested/item.yaml`), `${owned}/nested/item.yaml`).toBe("knowledge");
+    }
+    for (const owned of TARGET_OWNED_PATHS) {
+      expect(ownerOfPath(owned), owned).toBe("target");
+      expect(ownerOfPath(`${owned}/nested/instruction.md`), `${owned}/nested/instruction.md`).toBe("target");
+    }
+    expect(ownerOfPath("policies/coding.md")).toBe("framework");
+    expect(ownerOfPath("./.claude\\settings.json")).toBe("target");
+    expect(ownerOfPath("knowledge-base/item.yaml")).toBe("framework");
+  });
+
   it("keeps Knowledge and Target owned paths out of framework manifests", () => {
     expect(ownerOfPath("targets.yaml")).toBe("knowledge");
     expect(ownerOfPath("knowledge/_roles/ba.yaml")).toBe("knowledge");
     expect(ownerOfPath("AGENTS.md")).toBe("target");
     expect(ownerOfPath(".claude/settings.json")).toBe("target");
     expect(() => assertFrameworkManagedPaths(["policies/coding.md", "knowledge-policy.yaml"])).toThrow(/project-owned/);
+  });
+
+  it("declares exactly one allowed precedence for every known instruction path class", () => {
+    expect(INSTRUCTION_PATH_CLASSES.map(({ name, precedence }) => ({ name, precedence }))).toEqual([
+      { name: "root-claude", precedence: "project-owned-with-framework-block" },
+      { name: "root-agents", precedence: "project-owned-with-framework-block" },
+      { name: "local-claude", precedence: "project-owned-untouched" },
+      { name: "nested-agents", precedence: "project-owned-untouched" },
+      { name: "claude-settings", precedence: "project-owned-merged" },
+      { name: "claude-agents", precedence: "framework-managed" },
+      { name: "codex-instructions", precedence: "framework-managed" },
+      { name: "opencode-instructions", precedence: "framework-managed" },
+    ]);
+    expect(new Set(INSTRUCTION_PATH_CLASSES.map((entry) => entry.name)).size).toBe(INSTRUCTION_PATH_CLASSES.length);
+    for (const entry of INSTRUCTION_PATH_CLASSES) expect(INSTRUCTION_PRECEDENCE).toContain(entry.precedence);
+  });
+
+  it("detects the complete instruction surface while pruning skip dirs and never following symlinks", () => {
+    const target = tempRoot();
+    const outside = tempRoot();
+    write(path.join(target, "CLAUDE.md"), "# project\n");
+    write(path.join(target, "AGENTS.md"), "# root agents\n");
+    write(path.join(target, "src", "AGENTS.md"), "# nested agents\n");
+    write(path.join(target, "src", "CLAUDE.local.md"), "# local\n");
+    write(path.join(target, ".claude", "settings.json"), "{}\n");
+    write(path.join(target, ".claude", "agents", "dev.md"), "# dev\n");
+    write(path.join(target, ".codex", "agents", "dev.toml"), "name='dev'\n");
+    write(path.join(target, ".opencode", "agent", "dev.md"), "# dev\n");
+    write(path.join(target, "node_modules", "AGENTS.md"), "# ignored\n");
+    write(path.join(target, "dist", "CLAUDE.local.md"), "# ignored\n");
+    write(path.join(outside, "AGENTS.md"), "# outside\n");
+    fs.symlinkSync(outside, path.join(target, "linked"), "junction");
+
+    expect(detectInstructionSurface({ targetRoot: target }).map((entry) => entry.path)).toEqual([
+      ".claude/agents/dev.md",
+      ".claude/settings.json",
+      ".codex/agents/dev.toml",
+      ".opencode/agent/dev.md",
+      "AGENTS.md",
+      "CLAUDE.md",
+      "src/AGENTS.md",
+      "src/CLAUDE.local.md",
+    ]);
   });
 });
 

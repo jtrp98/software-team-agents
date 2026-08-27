@@ -1,33 +1,53 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
-import { sectionMap } from "../context/contextManager.js";
+import { loadTargetConfig, type TargetStackConfig } from "../targetcli/targetMeta.js";
 
-const SOURCE_ROLES = ["backend-engineer", "frontend-engineer"] as const;
-const HEADING = "fixed project stack";
+export const STACK_DIGEST_RELATIVE_PATH = ".claude/shared/stack.md";
+export const STACK_DIGEST_BUDGET_BYTES = 1_500;
 
-function fixedStackSection(markdown: string, role: string): string {
-  const section = sectionMap(markdown).find((candidate) => candidate.heading.trim().toLowerCase() === HEADING);
-  if (!section) throw new Error(`${role}.md has no ## Fixed project stack section`);
-  const lines = markdown.split(/\r?\n/);
-  return lines.slice(section.start + 1, section.end).join("\n").trim();
+function resolvedDigest(stack: TargetStackConfig): string {
+  const commands = Object.entries(stack.commands)
+    .map(([name, command]) => `- ${name}: \`${command}\``)
+    .join("\n");
+  const sourceRoots = stack.source_roots.length > 0 ? stack.source_roots.map((root) => `\`${root}\``).join(", ") : "none declared";
+  const schemaPaths = stack.schema_paths.length > 0 ? stack.schema_paths.map((schema) => `\`${schema}\``).join(", ") : "none detected";
+  return [
+    "<!-- GENERATED from .agent-team/config.yaml stack; do not edit by hand. -->",
+    "# Target-resolved stack",
+    "",
+    `- Profile: \`${stack.profile}\``,
+    `- Package manager/tool: \`${stack.package_manager}\``,
+    `- Source roots: ${sourceRoots}`,
+    `- Schema paths: ${schemaPaths}`,
+    "",
+    "## Commands",
+    "",
+    commands,
+    "",
+    "Use this repository's existing libraries and conventions. Implement the resolved stack; do not choose a replacement. A stack change is a human decision.",
+    "",
+  ].join("\n");
+}
+
+function unresolvedDigest(): string {
+  return [
+    "<!-- GENERATED from .agent-team/config.yaml stack; do not edit by hand. -->",
+    "# Target-resolved stack",
+    "",
+    "Stack not yet detected. Run `software-team-agents sync` to resolve and record this Target's profile; do not assume a default stack.",
+    "",
+  ].join("\n");
 }
 
 /** Deterministically renders the compact stack lookup that non-engineering roles need. */
-export function renderStackDigest(projectRoot: string): string {
-  const sections = SOURCE_ROLES.map((role) => {
-    const file = path.join(projectRoot, ".claude", "agents", `${role}.md`);
-    return { role, text: fixedStackSection(fs.readFileSync(file, "utf8"), role) };
-  });
-  const rendered = [
-    "<!-- GENERATED from .claude/agents/{backend,frontend}-engineer.md; do not edit by hand. -->",
-    "# Fixed project stack",
-    ...sections.flatMap(({ role, text }) => [`## ${role}`, text]),
-    "",
-  ].join("\n\n");
-  if (Buffer.byteLength(rendered, "utf8") > 1_500) throw new Error("generated stack.md exceeds its 1,500 B budget");
+export function renderStackDigest(source?: string | TargetStackConfig): string {
+  const stack = typeof source === "string" ? loadTargetConfig(source)?.stack : source;
+  const rendered = stack ? resolvedDigest(stack) : unresolvedDigest();
+  if (Buffer.byteLength(rendered, "utf8") > STACK_DIGEST_BUDGET_BYTES) {
+    throw new Error(`generated stack.md exceeds its ${STACK_DIGEST_BUDGET_BYTES.toLocaleString("en-US")} B budget`);
+  }
   return rendered;
 }
 
 export function stackDigestPath(projectRoot: string): string {
-  return path.join(projectRoot, ".claude", "shared", "stack.md");
+  return path.join(projectRoot, ...STACK_DIGEST_RELATIVE_PATH.split("/"));
 }

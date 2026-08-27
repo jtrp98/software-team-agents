@@ -7,7 +7,7 @@ Split from `.claude/shared/conventions.md` by T49. One rule: `design.md`'s Data 
 
 ## 7. The design is the contract
 
-`design.md`'s Data Model section is the confirmed Prisma schema, agreed with the user by `system-analyst`. `backend-engineer` implements it verbatim, `frontend-engineer` derives its types from it, `qa-engineer` fails any drift from it.
+`design.md`'s Data Model section is the confirmed schema contract, agreed with the user by `system-analyst`. `backend-engineer` implements it verbatim using the Target-resolved stack and its declared `schema_paths`, `frontend-engineer` derives its types from it, and `qa-engineer` fails any drift from it. For a Prisma profile, `schema.prisma` is that stack's working copy; it is not a universal stack choice.
 
 No agent invents, renames, or "improves" a field, type, or relation. If a task needs something the schema doesn't cover, stop and route it back to `system-analyst` — don't improvise a schema change and don't work around the gap.
 

@@ -1,3 +1,20 @@
+<!-- sta:bootstrap -->
+# software-team-agents bootstrap
+- Lane/role: resolved at sync (`ba` / `dev`) — writes only artifacts allowed by that lane.
+- Workspace root (writable): **resolved at sync**
+- Bound Knowledge/Target root (read-only): **resolved at sync or UNBOUND**
+- Human gates: requirements interview; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.
+- Hard boundary: no state-changing git.
+- Hard boundary: write only inside resolved writable workspace roots.
+- Hard boundary: write only paths allowed by the active role contract.
+- Hard boundary: Confirm workspace ↔ lane before writing anything.
+- Hard boundary: amend existing module docs section-by-section; never regenerate them.
+- Hard boundary: approvals/sign-offs are human acts; agents never forge them.
+- Hard boundary: dates and unclear business rules come from a person; never improvise them.
+- Context: run the command named by `AGENTCLAUDE_CONTEXT_CMD` with `<your-role> --module <name> --phase <n>`.
+- Everything else: read only the needed section with `sta policy <area> <section>`.
+<!-- /sta:bootstrap -->
+
 # AgentClaude — Agent Pipeline
 
 Eleven agents, each owning one artifact. No agent invokes the next — none holds the `Agent` tool.
@@ -25,44 +42,12 @@ phase. `test-planner` runs after `project-manager`. Every agent reads `_docs/sta
 regenerates it (`node .claude/scripts/generate-status.js`) on finish.
 Authority: **PM = Work Graph · Graphify = Code Graph · Orchestrator = Runtime**.
 
-## Human gates — always a person, in every mode
-
-1. The requirements interview — `business-analyst` never runs headless past it.
-2. `system-analyst`'s schema confirmation.
-3. `qa-engineer` on any ⚠️/❌ — rounds 1–2 route back to the owner; the third failure, or any Critical, escalates.
-4. `security` on any 🔴/🟠 finding.
-5. `devops` before an actual deploy or migration.
-
-## Hard boundaries
-
-A hook, gate, contract or checker enforces each line and explains itself when it blocks. An
-*italicised* half is not enforced and is yours.
-
-- **No git, ever.** Writing a `.gitignore` or CI file is not running git.
-- **No writes outside the workspace roots.**
-- **No agent chains to the next.** Finish by naming what is ready and who gets it.
-- **Amend, don't regenerate** — `Edit` an existing module doc section by section, *and append a dated line to its `## Change Log`*.
-- **Never hand off red code.** `typecheck`/`lint` run before you finish.
-- **Never hand off a hardcoded secret.** `.env` holds real values; `.env.example` placeholders only.
-- **Only `qa-engineer` marks a task done** — `plan.md`'s Status cell, after reading real code. Engineers never edit `plan.md`; *say in the handoff that you started a row*.
-- **Only `security` closes a `security` finding.** A fix reaches 🟣 and no further; `devops` blocks on 🔵 and 🟣 alike.
-- **Nothing ships unverified.** `devops` refuses a phase QA has not accepted, one last verified by TARGETED, or one with open Critical/Important findings.
-- **QA runs FULL or TARGETED and says which.** Only FULL closes a phase; TARGETED needs a prior FULL's manifest *and must state what it did not cover*.
-- **A fix that fails twice is escalated, not re-sent** — *it is usually misrouted, not badly implemented*.
-- **`backend-engineer` before `frontend-engineer`, never parallel, in a phase** — tasks sharing no API contract may run either order. *The frontend derives its types from what the backend built.*
-- **`design.md`'s Data Model is the contract**; `schema.prisma` is its working copy, written only by `setup` and `backend-engineer`. *A gap goes back to `system-analyst`, never improvised; if they disagree, `design.md` wins and the code is wrong.*
-- **Engineers never decide a rule — they implement or they stop.** Neither has `AskUserQuestion`. *Unclear logic goes to `system-analyst`, which routes on to `business-analyst` for a business question.*
-- **Confirm workspace ↔ lane before writing anything** — start with `software-team-agents status`; *if it warns a bound Knowledge root was never `init --role ba`'d, stop and ask*.
-- **Sensitive phases are flagged in writing** — `## Phase N: <name> 🔒 Security gate` for auth, personal data, payments, uploads, untrusted input. Only the user removes one.
-- **Security is continuous:** design note → code scan → QA's functional read → `security`'s audit. *A clean scan is a check passing, not a sign-off.*
-- **`status.md` is an index, not a truth** — docs and code win. *Keep each module's section to `Docs:`, the phase table, `**Now**:`, `**Blocked on**:`; move anything beyond them verbatim into `status-archive.md` the moment you notice it.*
-
 ## Rules nothing enforces — yours alone
 
 - **Dates come from the user.** No agent can reliably know today's date, so any agent writing a dated entry asks first and reuses that answer for the session.
 - **Verify against real state, not memory.** A recalled fact from an earlier turn, a summary, or "I remember this does X" is a hypothesis, not a fact — read the actual current file/schema/code before stating or acting on it. If it disagrees with what's recalled, the file/code wins and the stale belief is corrected on the spot. `policies/coding.md` §12 has the full rule.
 - **Handoff messages are concise.** The chat message an agent ends with — status updates and the "here's what's ready, here's who's next" handoff — leads with the result, not a restated plan or step-by-step narration; explain reasoning only where the next reader must decide something from it. This governs the chat message, not the documents themselves. `policies/documentation.md` §12 has the full rule.
-- **Nothing reaches a FULL QA round without the full static-analysis sweep, not just typecheck/lint.** `qa-engineer` runs `node .claude/scripts/static-analysis-gate.js` before verifying — lint, format, typecheck, build, and test across every package that defines the script, in one command instead of five remembered separately (T22), plus a repo-wide `security_scan` (T23 — see below) and `dependency_scan` (T24 — an offline match of every `package.json`'s declared dependencies against a small bundled list of known-vulnerable version floors; deliberately not a live `npm audit`/registry call, since a check `qa-engineer` runs every FULL round has to stay deterministic and work offline).
+- **Nothing reaches a FULL QA round without the full static-analysis sweep, not just typecheck/lint.** `qa-engineer` runs `node .claude/scripts/static-analysis-gate.js` before verifying — lint, format, typecheck, build, and test from the Target-resolved `stack.commands` (falling back to the legacy per-package scripts only when no profile exists), plus `security_scan` over the profile's source roots/extensions and an offline `dependency_scan`. A skipped check is not a pass; if every verification command is skipped the gate reports `unverified` and exits distinctly instead of producing a green round. The gate stays deterministic and offline; it never installs tools or calls a registry.
 - **No test suite means nothing ever executes the logic.** Tests are opt-in and default to none, so `qa-engineer` verifies by reading code plus `typecheck`/`lint`/`build` — which cannot tell a right answer from a wrong one. When there's no suite, QA lists the specific rules it could only read under `## Unverified Behaviour — undeployed phases`, and `devops` puts that list in front of the user before deploying.
 - **An unsourced number is an assumption, in writing.** `business-analyst` has no web access by design; external facts come from the user and land in `requirement.md`'s `## References` table with their source. Anything used as a fact without a row there is written `(สมมติฐาน — ยังไม่ยืนยัน)`, and `system-analyst` must resolve it with the user before designing around it instead of promoting it to fact by using it.
 - **`review.md` stays small.** It holds `Open Issues — all phases`, the current verify round, and `Unverified Behaviour` for phases that haven't deployed; `qa-engineer` moves closed rounds verbatim into `review/phase-N.md`. The first and third sections outlive their round on purpose — a later stage reads them after the round that produced them stopped being current, so they are never archived. Every engineer/`security`/`devops` run reads `review.md` in full, so closed-phase detail left in it taxes the whole pipeline. Nobody opens an archive file at normal startup.
@@ -94,9 +79,9 @@ are read-only in both directions; no write channel opens either way.
 `software-team-agents ba|dev` interactive lanes · `sta policy [<area>] [<section>]` one policy section ·
 `sta tokens` context composition per run · `sta --check-prompt-budget` this file's budget.
 
-**Stack** (fixed): Next.js App Router · TypeScript · Tailwind · Zustand · Node + Express · PostgreSQL ·
-Prisma · REST · hand-rolled JWT · Zod · npm · tests opt-in. `frontend-engineer.md`/`backend-engineer.md`
-are authoritative; changing it means the user confirms and those two files are edited in place.
+**Stack** (Target-resolved): `.agent-team/config.yaml` `stack:` declares the Target profile, package manager/tool,
+commands, source roots, and schema paths. Engineer prompts implement that resolved stack without choosing a
+replacement; changing the stack remains a human decision.
 
 ## Right-size the pipeline
 

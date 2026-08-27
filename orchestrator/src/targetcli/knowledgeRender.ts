@@ -1,32 +1,118 @@
 import { resolveKnowledgeBinding } from "./roleWorkspace.js";
 
-/**
- * T-WG7 — the DEV lane reads module documents through the Knowledge repo.
- *
- * Two generated artifacts carry the resolved binding into every session so no
- * prompt has to hard-code a machine-specific path:
- *
- *   `CLAUDE.md`                        — the shared rules doc, prefixed with an
- *                                        authoritative three-repo banner that
- *                                        re-points every `_docs/**` reference
- *                                        at the Knowledge root (READ-ONLY)
- *   `.claude/shared/knowledge-root.md` — a tiny generated include naming the
- *                                        root, regenerated on every dev sync
- *
- * Both derive from the binding exactly like BINDING_RENDERINGS derive from
- * agent sources: owned by declaring their derivation, never hand-edited. The
- * manifest tracks the *rendered* hashes, so a plain (non-dev) sync after a
- * role change sees a tracked-but-changed file and reports a loud conflict
- * instead of silently flipping the doc between shapes.
- */
-
 export const KNOWLEDGE_ROOT_INCLUDE_PATH = ".claude/shared/knowledge-root.md";
 export const CLAUDE_MD_PATH = "CLAUDE.md";
+export const BOOTSTRAP_OPEN = "<!-- sta:bootstrap -->";
+export const BOOTSTRAP_CLOSE = "<!-- /sta:bootstrap -->";
+export const BOOTSTRAP_BUDGET_BYTES = 4_096;
 
-const BANNER_OPEN = "<!-- sta:three-repo-dev -->";
-const BANNER_CLOSE = "<!-- /sta:three-repo-dev -->";
+const LEGACY_OPEN = "<!-- sta:three-repo-dev -->";
+const LEGACY_CLOSE = "<!-- /sta:three-repo-dev -->";
 
-/** The generated include's body — one obvious place a prompt can cite. */
+export type BootstrapInspection =
+  | { state: "absent" }
+  | { state: "malformed"; detail: string }
+  | { state: "valid"; block: string; outside: string };
+
+export class MalformedBootstrapBlockError extends Error {}
+
+function markerCount(content: string, marker: string): number {
+  return content.split(marker).length - 1;
+}
+
+/** Locates one exact block without parsing or normalizing project-owned bytes around it. */
+export function inspectBootstrapBlock(content: string): BootstrapInspection {
+  const opens = markerCount(content, BOOTSTRAP_OPEN);
+  const closes = markerCount(content, BOOTSTRAP_CLOSE);
+  if (opens === 0 && closes === 0) return { state: "absent" };
+  if (opens !== 1 || closes !== 1) {
+    return { state: "malformed", detail: `expected one bootstrap marker pair; found ${opens} opening and ${closes} closing markers` };
+  }
+  const open = content.indexOf(BOOTSTRAP_OPEN);
+  const close = content.indexOf(BOOTSTRAP_CLOSE);
+  if (close < open) return { state: "malformed", detail: "bootstrap closing marker appears before its opening marker" };
+  let end = close + BOOTSTRAP_CLOSE.length;
+  if (content.startsWith("\r\n", end)) end += 2;
+  else if (content.startsWith("\n", end)) end += 1;
+  return { state: "valid", block: content.slice(open, end), outside: content.slice(0, open) + content.slice(end) };
+}
+
+function stripLegacyBanner(content: string): string {
+  const opens = markerCount(content, LEGACY_OPEN);
+  const closes = markerCount(content, LEGACY_CLOSE);
+  if (opens === 0 && closes === 0) return content;
+  if (opens !== 1 || closes !== 1) return content;
+  const open = content.indexOf(LEGACY_OPEN);
+  const close = content.indexOf(LEGACY_CLOSE, open);
+  if (close < open) return content;
+  let end = close + LEGACY_CLOSE.length;
+  if (content.startsWith("\r\n", end)) end += 2;
+  else if (content.startsWith("\n", end)) end += 1;
+  return content.slice(0, open) + content.slice(end);
+}
+
+function displayPath(value: string | undefined): string {
+  return value ? `\`${value.replaceAll("`", "\\`")}\`` : "**UNBOUND**";
+}
+
+export interface BootstrapRenderOptions {
+  role: "ba" | "dev";
+  workspaceRoot: string;
+  /** Knowledge root for DEV; optional Target root for BA. */
+  boundRoot?: string;
+}
+
+/** The complete always-on Framework context. Keep details behind `sta policy`. */
+export function renderBootstrapBlock(options: BootstrapRenderOptions): string {
+  const lane = options.role.toUpperCase();
+  const boundLabel = options.role === "dev" ? "Knowledge root (read-only)" : "Target root (optional, read-only)";
+  const writes = options.role === "dev" ? "Target application code and DEV-role artifacts only" : "Knowledge requirements/design/planning artifacts only";
+  const block = [
+    BOOTSTRAP_OPEN,
+    "# software-team-agents bootstrap",
+    `- Lane/role: **${lane}** (\`${options.role}\`) — writes ${writes}.`,
+    `- Workspace root (writable): ${displayPath(options.workspaceRoot)}`,
+    `- ${boundLabel}: ${displayPath(options.boundRoot)}`,
+    "- Human gates: requirements interview; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.",
+    "- Hard boundary: no state-changing git.",
+    "- Hard boundary: write only inside resolved writable workspace roots.",
+    "- Hard boundary: write only paths allowed by the active role contract.",
+    "- Hard boundary: Confirm workspace ↔ lane before writing anything.",
+    "- Hard boundary: amend existing module docs section-by-section; never regenerate them.",
+    "- Hard boundary: approvals/sign-offs are human acts; agents never forge them.",
+    "- Hard boundary: dates and unclear business rules come from a person; never improvise them.",
+    "- Context: run the command named by `AGENTCLAUDE_CONTEXT_CMD` with `<your-role> --module <name> --phase <n>`.",
+    "- Everything else: read only the needed section with `sta policy <area> <section>`.",
+    BOOTSTRAP_CLOSE,
+    "",
+  ].join("\n");
+  const bytes = Buffer.byteLength(block, "utf8");
+  if (bytes > BOOTSTRAP_BUDGET_BYTES) throw new Error(`bootstrap block is ${bytes} B, over its ${BOOTSTRAP_BUDGET_BYTES} B budget`);
+  return block;
+}
+
+/** Removes the Framework block and restores the exact surrounding byte sequence. */
+export function stripBootstrapBlock(content: string): string {
+  const inspected = inspectBootstrapBlock(content);
+  if (inspected.state === "malformed") throw new MalformedBootstrapBlockError(inspected.detail);
+  return inspected.state === "valid" ? inspected.outside : content;
+}
+
+/** Prefixes exactly one current block; malformed project files are never guessed at. */
+export function renderWorkspaceClaude(baseContent: string, options: BootstrapRenderOptions): string {
+  return renderBootstrapBlock(options) + stripBootstrapBlock(stripLegacyBanner(baseContent));
+}
+
+/** Backward-compatible name retained for callers/tests while the marker is generalized. */
+export function stripDevClaudeBanner(content: string): string {
+  return stripBootstrapBlock(stripLegacyBanner(content));
+}
+
+/** Backward-compatible DEV wrapper; production uses `renderWorkspaceClaude`. */
+export function renderDevClaude(baseContent: string, knowledgeRoot: string, workspaceRoot = "<Target workspace>"): string {
+  return renderWorkspaceClaude(baseContent, { role: "dev", workspaceRoot, boundRoot: knowledgeRoot });
+}
+
 export function renderKnowledgeInclude(knowledgeRoot: string): string {
   return (
     "# Knowledge root (generated — do not edit)\n" +
@@ -43,52 +129,6 @@ export function renderKnowledgeInclude(knowledgeRoot: string): string {
   );
 }
 
-function banner(knowledgeRoot: string): string {
-  return (
-    `${BANNER_OPEN}\n` +
-    "> **THREE-REPO WORKSPACE — role: dev.** Every module document\n" +
-    "> (`requirement.md`, `design.md`, `plan.md`, `review.md`, `security.md`,\n" +
-    "> `deploy.md`) and `_docs/status.md` lives in the **Knowledge repository** —\n" +
-    "> not in this repository:\n" +
-    ">\n" +
-    `> **Knowledge root:** \`${knowledgeRoot}\`\n` +
-    ">\n" +
-    "> Wherever the rules below say to read or open `_docs/…`, read that path\n" +
-    "> **inside the Knowledge root above**, as READ-ONLY context. This repository\n" +
-    "> carries no `_docs/` of its own: anything found under a local `_docs/` is\n" +
-    "> stale legacy — never write it, never update it; report it instead\n" +
-    "> (`software-team-agents status`). Documents are written by analysis roles\n" +
-    "> in the Knowledge workspace (`software-team-agents ba`), never here.\n" +
-    "> Before opening module documents, run the command named by\n" +
-    "> `AGENTCLAUDE_CONTEXT_CMD` with `<your-role> --module <name> --phase <n>`;\n" +
-    "> it is the same fail-open context path used by `sta run`.\n" +
-    `${BANNER_CLOSE}\n`
-  );
-}
-
-/** Removes a previously rendered banner so re-rendering is idempotent. */
-export function stripDevClaudeBanner(content: string): string {
-  const open = content.indexOf(BANNER_OPEN);
-  if (open === -1) return content;
-  const close = content.indexOf(BANNER_CLOSE, open);
-  if (close === -1) return content; // unterminated banner — leave untouched rather than guess
-  let rest = content.slice(close + BANNER_CLOSE.length);
-  if (rest.startsWith("\n")) rest = rest.slice(1); // banner always ends with exactly one newline
-  return content.slice(0, open) + rest;
-}
-
-/** Prefixes the authoritative banner; safe to apply over already-rendered content. */
-export function renderDevClaude(baseContent: string, knowledgeRoot: string): string {
-  return banner(knowledgeRoot) + stripDevClaudeBanner(baseContent);
-}
-
-/**
- * Resolves the Knowledge root a dev workspace renders against, or undefined
- * when this is not a dev workspace or nothing valid resolves. Binding problems
- * deliberately do not throw here — they surface fail-closed in the dev/ba
- * preflight with recovery advice; sync must still be able to refresh assets on
- * a machine whose installation binding is mid-repair.
- */
 export function resolveDevKnowledgeRoot(options: {
   targetRoot: string;
   config?: { role?: "ba" | "dev"; knowledge?: { path: string } };

@@ -9,6 +9,7 @@ import {
   writeTargetConfig,
 } from "./targetMeta.js";
 import { runTargetSync, type SyncResult } from "./syncEngine.js";
+import { planTargetProfile } from "./targetProfile.js";
 
 /**
  * T-TARGET-03 + T-ROLE-16 — `software-team-agents init`, run from inside a Role
@@ -33,6 +34,8 @@ export interface TargetInitOptions {
   force?: boolean;
   /** Explicit role override (T-ROLE-16); detection is skipped when given. */
   role?: RoleName;
+  /** Explicit stack selection for ambiguous or unsupported Target evidence. */
+  stack?: string;
   /** Machine-wide installation.yaml override (tests); forwarded to the sync engine's dev-lane binding resolution. */
   installationConfigPath?: string;
 }
@@ -84,9 +87,18 @@ export function runTargetInit(options: TargetInitOptions): TargetInitResult {
     }
   }
 
-  const config =
-    existingConfig ??
-    defaultTargetConfig(path.basename(roots.targetRoot), options.now, role);
+  let config = existingConfig ?? defaultTargetConfig(path.basename(roots.targetRoot), options.now, role);
+  // A new DEV config is not written until deterministic stack resolution has
+  // succeeded. This preserves init's existing "nothing on refusal" contract.
+  if (createdConfig && role === "dev") {
+    const profile = planTargetProfile({
+      targetRoot: roots.targetRoot,
+      templatesDir,
+      explicitProfile: options.stack,
+      now: options.now,
+    });
+    config = { ...config, stack: profile.stack };
+  }
   if (createdConfig) writeTargetConfig(roots.targetRoot, config);
 
   const sync = runTargetSync({
@@ -99,6 +111,7 @@ export function runTargetInit(options: TargetInitOptions): TargetInitResult {
     installationConfigPath: options.installationConfigPath,
     now: options.now,
     force: options.force,
+    explicitStack: options.stack,
   });
 
   return {

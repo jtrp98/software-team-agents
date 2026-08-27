@@ -346,6 +346,8 @@ sta configure identity --figma-email <email> --claude-email <email>
 - **Audit trail** — `sta audit <task-id>`
 - **Backup/Rollback** — v2 sync backup ที่ `.agent-team/backups/<ts>/`; V1 upgrade/migrate snapshot ที่ `.sta/backups/` คืนได้ด้วย `sta rollback` / `sta list-backups`
 
+- **Profile-aware static analysis** — `.claude/scripts/static-analysis-gate.js` reads the resolved Target's `stack.commands`, scans only its declared source roots/extensions, and reports `unverified` (exit 2) when every verification command is skipped. With no resolved profile, the legacy Node/package-script report remains unchanged. The gate is offline and never installs a toolchain.
+
 ## Slash command shortcuts (Claude runtime)
 
 `.claude/commands/*.md` คือ prompt shortcut ที่พิมพ์ได้ใน Claude Code (`/critic`, `/checklist`, `/summarize`, …) —

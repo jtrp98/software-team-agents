@@ -15,4 +15,5 @@ commands:
   test: mvn test
   lint: mvn checkstyle:check
   typecheck: mvn compile
+scan_extensions: [.java]
 capabilities: [rest-api, grpc, database-access, auth, testing]

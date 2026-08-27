@@ -5,21 +5,29 @@ import { BINDING_RENDERINGS, COMMAND_RENDERINGS, loadCommandGuardrails, listComm
 import { parseVersion } from "./version.js";
 import {
   CLAUDE_MD_PATH,
+  inspectBootstrapBlock,
   KNOWLEDGE_ROOT_INCLUDE_PATH,
-  renderDevClaude,
   renderKnowledgeInclude,
+  renderWorkspaceClaude,
   resolveDevKnowledgeRoot,
 } from "./knowledgeRender.js";
 import {
   assertManageablePath,
   TargetNotInitializedError,
+  isUserOverridden,
   loadTargetConfig,
   readTargetManifest,
   writeTargetManifest,
+  writeTargetConfig,
   type TargetConfig,
   type TargetManifest,
+  type TargetStackConfig,
 } from "./targetMeta.js";
-import { BA_LANE_AGENTS, type RoleName } from "./roleWorkspace.js";
+import { CLAUDE_SETTINGS_PATH, mergeFrameworkGuards } from "./guardSettings.js";
+import { BA_LANE_AGENTS, resolveTargetBinding, type RoleName } from "./roleWorkspace.js";
+import { missingInstructionConsequence } from "../threeRepo/ownership.js";
+import { planTargetProfile } from "./targetProfile.js";
+import { renderStackDigest, STACK_DIGEST_RELATIVE_PATH } from "../profile/stackDigest.js";
 
 /**
  * T-TARGET-04 / T-TARGET-07 / T-TARGET-08 — Framework → Target sync.
@@ -63,11 +71,13 @@ export interface SyncConflict {
   /**
    * user-modified: a tracked file was edited locally; untracked-file: the
    * Target already owns this path; stale-modified: a dropped file carries
-   * edits; roster-drift (T-WG2): an agent-prompt file on disk whose name
+   * edits; malformed-framework-block: marker corruption that no force mode may
+   * guess at; unmergeable-settings: project JSON cannot be safely merged;
+   * roster-drift (T-WG2): an agent-prompt file on disk whose name
    * belongs to the OTHER role's lane — never legitimate here, regardless of
    * how it got there, so it is never treated as an ordinary foreign file.
    */
-  kind: "user-modified" | "untracked-file" | "stale-modified" | "roster-drift";
+  kind: "user-modified" | "untracked-file" | "stale-modified" | "roster-drift" | "malformed-framework-block" | "unmergeable-settings";
   detail: string;
 }
 
@@ -83,6 +93,8 @@ export interface SyncResult {
   previousVersion: string | undefined;
   frameworkVersion: string;
   backupDir: string | undefined;
+  stackProfile?: TargetStackConfig;
+  stackProfileMismatch?: string;
 }
 
 function hashFile(abs: string): string {
@@ -99,9 +111,11 @@ interface PlannedFile {
 
 function planPayloadFiles(
   targetRoot: string,
+  templatesDir: string,
   templateManifest: TemplateManifest,
   oldFiles: ReadonlyMap<string, TemplateFileEntry>,
   overrides: ReadonlySet<string>,
+  oldBlockHashes: ReadonlyMap<string, string>,
   derivedContent?: ReadonlyMap<string, string>,
 ): PlannedFile[] {
   const planned: PlannedFile[] = [];
@@ -117,11 +131,86 @@ function planPayloadFiles(
       planned.push(tracked ? { entry: { action: "restore", path: file.path }, copyFromTemplates: true } : { entry: { action: "add", path: file.path }, copyFromTemplates: true });
       continue;
     }
+    if (file.path === CLAUDE_SETTINGS_PATH && !tracked) {
+      const merged = mergeFrameworkGuards(
+        fs.readFileSync(dest, "utf8"),
+        fs.readFileSync(path.join(templatesDir, ...file.path.split("/")), "utf8"),
+      );
+      if (!merged.ok) {
+        planned.push({
+          conflict: {
+            path: file.path,
+            kind: "unmergeable-settings",
+            detail:
+              `${merged.error}; recovery: fix/merge the JSON manually, claim ${CLAUDE_SETTINGS_PATH} in .agent-team/config.yaml overrides, ` +
+              "or re-run with --force to replace it after backup",
+          },
+        });
+      } else {
+        planned.push({
+          entry: {
+            action: merged.changed ? "update" : "unchanged",
+            path: file.path,
+            note: merged.changed ? "merge missing Framework guard registrations" : "project-owned settings with all Framework guards registered",
+          },
+        });
+      }
+      continue;
+    }
     const currentHash = hashFile(dest);
     // A dev-lane rendering replaces the shipped bytes at the same managed path:
     // compare against what sync actually writes, so a rendered workspace is
     // "unchanged" on re-sync instead of perpetually "user-modified".
     const derivedBytes = derivedContent?.get(file.path);
+    if (file.path === CLAUDE_MD_PATH && derivedBytes !== undefined) {
+      const current = fs.readFileSync(dest, "utf8");
+      const currentBlock = inspectBootstrapBlock(current);
+      if (currentBlock.state === "malformed") {
+        planned.push({
+          conflict: {
+            path: file.path,
+            kind: "malformed-framework-block",
+            detail: `${currentBlock.detail}; file left untouched — restore the latest backup or repair the marker pair manually`,
+          },
+        });
+        continue;
+      }
+      const renderedBlock = inspectBootstrapBlock(derivedBytes);
+      if (renderedBlock.state !== "valid") throw new Error("rendered CLAUDE.md has no valid Framework bootstrap block");
+      const expectedHash = sha256Of(renderedBlock.block);
+      const previousBlockHash = oldBlockHashes.get(file.path);
+      // Whole-file tracked CLAUDE.md stays Framework-managed. Only a file with
+      // no whole-file entry (or an existing block entry) takes block semantics.
+      if (!tracked || previousBlockHash !== undefined) {
+        if (currentBlock.state === "absent") {
+          planned.push(
+            previousBlockHash
+              ? { conflict: { path: file.path, kind: "user-modified", detail: "the Framework bootstrap block was removed; restore it from backup or re-run with --force" } }
+              : { entry: { action: "update", path: file.path, note: "inject delimited Framework bootstrap block" } },
+          );
+          continue;
+        }
+        const currentBlockHash = sha256Of(currentBlock.block);
+        if (previousBlockHash === undefined) {
+          planned.push(
+            currentBlockHash === expectedHash
+              ? { entry: { action: "unchanged", path: file.path, note: "project-owned prose with current Framework block" } }
+              : { conflict: { path: file.path, kind: "user-modified", detail: "an untracked sta:bootstrap block already exists with different bytes; restore/remove it manually before sync" } },
+          );
+        } else if (currentBlockHash !== previousBlockHash && currentBlockHash !== expectedHash) {
+          planned.push({
+            conflict: {
+              path: file.path,
+              kind: "user-modified",
+              detail: "the project edited inside the Framework bootstrap markers; restore the block from backup or re-run with --force",
+            },
+          });
+        } else {
+          planned.push({ entry: { action: currentBlockHash === expectedHash ? "unchanged" : "update", path: file.path, note: "Framework bootstrap block only; project prose preserved" } });
+        }
+        continue;
+      }
+    }
     if (derivedBytes !== undefined && currentHash === sha256Of(derivedBytes)) {
       planned.push({ entry: { action: "unchanged", path: file.path } });
       continue;
@@ -133,7 +222,15 @@ function planPayloadFiles(
     if (!tracked) {
       // Untracked file with different content: the Target owned this path before
       // the Framework ever did (its own CLAUDE.md, its own .claude/settings.json).
-      planned.push({ conflict: { path: file.path, kind: "untracked-file", detail: "the project already has its own file at this managed path" } });
+      planned.push({
+        conflict: {
+          path: file.path,
+          kind: "untracked-file",
+          detail:
+            missingInstructionConsequence(targetRoot, file.path) ??
+            "the project already has its own file at this managed path",
+        },
+      });
       continue;
     }
     if (currentHash === tracked.sha256) {
@@ -168,6 +265,56 @@ function planStaleFiles(
       planned.push({ entry: { action: "remove-stale", path: relPath }, remove: true });
     } else {
       planned.push({ conflict: { path: relPath, kind: "stale-modified", detail: "the Framework no longer manages this file, but the local copy has been edited" } });
+    }
+  }
+  return planned;
+}
+
+/**
+ * A project-owned CLAUDE.md is not a managed file, so its Framework block is
+ * absent from `oldFiles`. When a later payload no longer supplies CLAUDE.md,
+ * plan removal of that block through the ordinary stale lifecycle instead of
+ * leaving an orphaned contribution behind.
+ */
+function planStaleFrameworkBlocks(
+  targetRoot: string,
+  templateManifest: TemplateManifest,
+  oldBlockHashes: ReadonlyMap<string, string>,
+  overrides: ReadonlySet<string>,
+): PlannedFile[] {
+  const newPathSet = new Set(templateManifest.files.map((file) => file.path));
+  const planned: PlannedFile[] = [];
+  for (const [relPath, trackedHash] of oldBlockHashes) {
+    if (newPathSet.has(relPath)) continue;
+    if (overrides.has(relPath)) {
+      planned.push({ entry: { action: "override", path: relPath, note: "Framework block kept because the project claimed this path" } });
+      continue;
+    }
+    const abs = path.join(targetRoot, relPath);
+    if (!fs.existsSync(abs)) continue;
+    const inspected = inspectBootstrapBlock(fs.readFileSync(abs, "utf8"));
+    if (inspected.state === "malformed") {
+      planned.push({
+        conflict: {
+          path: relPath,
+          kind: "malformed-framework-block",
+          detail: `${inspected.detail}; file left untouched — restore the latest backup or repair the marker pair manually`,
+        },
+      });
+    } else if (inspected.state === "absent") {
+      // The user already removed precisely the Framework-owned range. Forget
+      // the stale manifest record without touching the project file.
+      continue;
+    } else if (sha256Of(inspected.block) === trackedHash) {
+      planned.push({ entry: { action: "remove-stale", path: relPath, note: "remove obsolete Framework bootstrap block" }, remove: true });
+    } else {
+      planned.push({
+        conflict: {
+          path: relPath,
+          kind: "stale-modified",
+          detail: "the Framework no longer supplies this block, but its marked bytes were edited; restore from backup or remove the marker pair manually",
+        },
+      });
     }
   }
   return planned;
@@ -229,8 +376,14 @@ export function detectRosterDrift(options: { targetRoot: string; templatesDir: s
   return conflicts;
 }
 
-function overrideSet(config: TargetConfig | undefined): Set<string> {
-  return new Set((config?.overrides ?? []).map((rel) => rel.replaceAll("\\", "/")));
+function overrideSet(config: TargetConfig | undefined, targetRoot?: string, candidatePaths: readonly string[] = []): Set<string> {
+  const overrides = new Set((config?.overrides ?? []).map((rel) => rel.replaceAll("\\", "/")));
+  if (targetRoot) {
+    for (const relPath of candidatePaths) {
+      if (isUserOverridden(targetRoot, relPath, config)) overrides.add(relPath);
+    }
+  }
+  return overrides;
 }
 
 /**
@@ -259,6 +412,7 @@ export class TargetSyncConflictError extends Error {
   constructor(public readonly plan: SyncPlan) {
     super(
       `${plan.conflicts.length} conflicted file(s) — nothing was written. ` +
+        `${plan.conflicts.map((conflict) => `${conflict.path}: ${conflict.detail}`).join("; ")}. ` +
         "Re-run with --force to keep the Framework version (local copies are backed up first), " +
         "claim the files under .agent-team/config.yaml overrides, or revert the local edits.",
     );
@@ -305,11 +459,14 @@ function effectiveTemplateManifest(options: PlanSyncOptions): TemplateManifest {
 export function planSync(options: PlanSyncOptions): SyncPlan {
   const templateManifest = effectiveTemplateManifest(options);
   const oldFiles = new Map((options.manifest?.files ?? []).map((f) => [f.path, f]));
-  const overrides = overrideSet(options.config);
+  const oldBlockHashes = new Map((options.manifest?.framework_blocks ?? []).map((block) => [block.path, block.sha256]));
+  const candidatePaths = [...templateManifest.files.map((file) => file.path), ...oldFiles.keys(), ...oldBlockHashes.keys()];
+  const overrides = overrideSet(options.config, options.targetRoot, candidatePaths);
 
   const planned = [
-    ...planPayloadFiles(options.targetRoot, templateManifest, oldFiles, overrides, options.derivedContent),
+    ...planPayloadFiles(options.targetRoot, options.templatesDir, templateManifest, oldFiles, overrides, oldBlockHashes, options.derivedContent),
     ...planStaleFiles(options.targetRoot, templateManifest, oldFiles, overrides, options.derivedContent),
+    ...planStaleFrameworkBlocks(options.targetRoot, templateManifest, oldBlockHashes, overrides),
   ];
 
   const conflicts = planned.map((p) => p.conflict).filter((c): c is SyncConflict => c !== undefined);
@@ -329,12 +486,14 @@ export interface ApplySyncOptions extends PlanSyncOptions {
   force?: boolean;
   /** Machine-wide installation.yaml override (tests); defaults to the real one when resolving a dev workspace's Knowledge binding. */
   installationConfigPath?: string;
+  /** Explicit resolution for an ambiguous/unrecognized Target profile. */
+  explicitStack?: string;
 }
 
 /**
- * T-WG7 — the dev-lane derived bytes this sync would write: the rendered
- * CLAUDE.md keyed by its managed path, plus the resolved root it was rendered
- * against. Undefined for non-dev workspaces or when no binding resolves.
+ * T-WG7/T-V3-06 — lane-derived bytes this sync would write. The same
+ * CLAUDE.md renderer serves DEV and BA; the Knowledge include remains DEV-only,
+ * and a DEV stack digest is rendered from the resolved Target profile.
  */
 export function devDerivedContent(options: {
   targetRoot: string;
@@ -342,25 +501,39 @@ export function devDerivedContent(options: {
   config?: TargetConfig;
   include?: (relPath: string) => boolean;
   installationConfigPath?: string;
-}): { content: Map<string, string>; knowledgeRoot: string } | undefined {
+}): { content: Map<string, string>; boundRoot?: string } | undefined {
   const config = options.config;
-  const knowledgeRoot = resolveDevKnowledgeRoot({
-    targetRoot: options.targetRoot,
-    config,
-    installationConfigPath: options.installationConfigPath,
-  });
-  if (!knowledgeRoot) return undefined;
+  if (!config?.role) return undefined;
+  let boundRoot: string | undefined;
+  if (config.role === "dev") {
+    boundRoot = resolveDevKnowledgeRoot({
+      targetRoot: options.targetRoot,
+      config,
+      installationConfigPath: options.installationConfigPath,
+    });
+  } else {
+    try {
+      boundRoot = resolveTargetBinding({ knowledgeRoot: options.targetRoot, configTargetPath: config.target?.path })?.targetRoot;
+    } catch {
+      boundRoot = undefined;
+    }
+  }
   const manifest = readTemplateManifest(options.templatesDir);
   const files = options.include ? manifest.files.filter((f) => options.include!(f.path)) : manifest.files;
-  if (!files.some((f) => f.path === CLAUDE_MD_PATH)) return undefined;
-  const base = fs.readFileSync(path.join(options.templatesDir, CLAUDE_MD_PATH), "utf8");
-  const content = new Map<string, string>([
-    [CLAUDE_MD_PATH, renderDevClaude(base, knowledgeRoot)],
+  const content = new Map<string, string>();
+  if (files.some((f) => f.path === CLAUDE_MD_PATH)) {
+    const base = fs.readFileSync(path.join(options.templatesDir, CLAUDE_MD_PATH), "utf8");
+    content.set(CLAUDE_MD_PATH, renderWorkspaceClaude(base, { role: config.role, workspaceRoot: options.targetRoot, boundRoot }));
+  }
+  if (config.role === "dev" && files.some((f) => f.path === STACK_DIGEST_RELATIVE_PATH)) {
+    content.set(STACK_DIGEST_RELATIVE_PATH, renderStackDigest(config.stack));
+  }
+  if (config.role === "dev" && boundRoot) {
     // In the map so planStaleFiles treats it as regenerated (never stale) and
     // a role flip later cleans it up through the ordinary stale path.
-    [KNOWLEDGE_ROOT_INCLUDE_PATH, renderKnowledgeInclude(knowledgeRoot)],
-  ]);
-  return { content, knowledgeRoot };
+    content.set(KNOWLEDGE_ROOT_INCLUDE_PATH, renderKnowledgeInclude(boundRoot));
+  }
+  return content.size > 0 ? { content, boundRoot } : undefined;
 }
 
 /** The Target's own manifest, when one exists. Absent = first sync. */
@@ -386,7 +559,17 @@ export function existingTargetManifest(targetRoot: string): TargetManifest | und
  */
 export function runTargetSync(options: ApplySyncOptions): SyncResult {
   const manifest = options.manifest ?? existingTargetManifest(options.targetRoot);
-  const config = options.config ?? loadTargetConfig(options.targetRoot);
+  const originalConfig = options.config ?? loadTargetConfig(options.targetRoot);
+  const profilePlan = (options.role ?? originalConfig?.role) === "dev"
+    ? planTargetProfile({
+        targetRoot: options.targetRoot,
+        templatesDir: options.templatesDir,
+        existing: originalConfig?.stack,
+        explicitProfile: options.explicitStack,
+        now: options.now,
+      })
+    : undefined;
+  const config = profilePlan && originalConfig ? { ...originalConfig, stack: profilePlan.stack } : originalConfig;
   const derived = devDerivedContent({
     targetRoot: options.targetRoot,
     templatesDir: options.templatesDir,
@@ -455,6 +638,10 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
   }
   // Only tracked-but-edited (and stale-modified) files block the run; a
   // pre-existing foreign file never does — it is skipped and reported below.
+  // Marker corruption is never forceable: there is no safe byte range to own.
+  if (plan.conflicts.some((conflict) => conflict.kind === "malformed-framework-block")) {
+    throw new TargetSyncConflictError(plan);
+  }
   if (blockingConflicts(plan).length > 0 && !options.force) throw new TargetSyncConflictError(plan);
 
   // Destructive downgrade guard: moving a workspace backwards across a major
@@ -473,6 +660,10 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
   if (!options.force && from !== undefined && to !== undefined && to < from) {
     throw new TargetDowngradeBlockedError(previousVersion!, templateManifest.framework_version);
   }
+  // Profile persistence occurs only after every preflight stop above. An
+  // ambiguous/unknown/family-changing tree, or an ordinary sync conflict,
+  // therefore cannot partially update config.yaml.
+  if (profilePlan?.changed && config) writeTargetConfig(options.targetRoot, config);
   // Two conflict kinds, two behaviours: a locally-modified tracked file is
   // overwritten only when --force accepts it; a pre-existing foreign file is
   // NEVER written — the Target owned that path first, so it is skipped and
@@ -497,6 +688,7 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
 
   const performed: SyncPlanEntry[] = [];
   const managedEntries: TemplateFileEntry[] = [];
+  const frameworkBlocks: { path: string; sha256: string }[] = [];
 
   for (const file of templateManifest.files) {
     if (foreign.has(file.path)) {
@@ -527,6 +719,20 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
       performed.push(plannedFor);
       continue;
     }
+    if (file.path === CLAUDE_SETTINGS_PATH && !oldFiles.has(file.path) && fs.existsSync(path.join(options.targetRoot, file.path))) {
+      const dest = path.join(options.targetRoot, file.path);
+      const current = fs.readFileSync(dest, "utf8");
+      const merged = mergeFrameworkGuards(current, fs.readFileSync(path.join(options.templatesDir, ...file.path.split("/")), "utf8"));
+      if (!merged.ok || merged.content === undefined) throw new Error(`settings merge reached apply after preflight: ${merged.error ?? "no merged content"}`);
+      if (merged.changed) {
+        backup(file.path);
+        fs.writeFileSync(dest, merged.content, "utf8");
+        performed.push({ action: "update", path: file.path, note: "merged Framework guards; project settings byte-preserved" });
+      } else {
+        performed.push(plannedFor);
+      }
+      continue; // project-owned file: contribution is recomputed, never whole-file tracked
+    }
     if (plannedFor.action === "add" || plannedFor.action === "restore") {
       const dest = path.join(options.targetRoot, file.path);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -540,6 +746,40 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
       performed.push(plannedFor); // unchanged — already identical, nothing to write
     }
     managedEntries.push(file);
+  }
+
+  // T-V3-04 — stack.md is shipped as a managed path but its Target bytes are
+  // derived from that Target's resolved stack config, never from prompt prose.
+  // The ordinary planner still owns conflict/override decisions and compares
+  // against these exact bytes before this write phase runs.
+  const stackDigest = derivedContent?.get(STACK_DIGEST_RELATIVE_PATH);
+  if (stackDigest !== undefined) {
+    const relPath = STACK_DIGEST_RELATIVE_PATH;
+    const plannedFor = plan.entries.find((entry) => entry.path === relPath);
+    const entry: TemplateFileEntry = {
+      path: relPath,
+      sha256: sha256Of(stackDigest),
+      size_bytes: Buffer.byteLength(stackDigest),
+    };
+    if (foreign.has(relPath)) {
+      // Already reported by the main payload loop; project-owned bytes stay unclaimed.
+    } else if (plannedFor?.action === "override") {
+      performed.push(plannedFor);
+    } else if (plannedFor || forcedOver.has(relPath)) {
+      const dest = path.join(options.targetRoot, ...relPath.split("/"));
+      if (!fs.existsSync(dest)) {
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, stackDigest, "utf8");
+        performed.push(plannedFor ?? { action: "add", path: relPath });
+      } else if (hashFile(dest) !== entry.sha256) {
+        backup(relPath);
+        fs.writeFileSync(dest, stackDigest, "utf8");
+        performed.push({ action: "update", path: relPath, note: forcedOver.has(relPath) ? "forced over local modifications (backed up)" : "rendered from the resolved Target profile" });
+      } else {
+        performed.push(plannedFor ?? { action: "unchanged", path: relPath });
+      }
+      managedEntries.push(entry);
+    }
   }
 
   // Derived renderings: regenerate from the just-synced agent sources. They carry
@@ -620,44 +860,66 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     }
   }
 
-  // T-WG7 — dev-lane rendering of CLAUDE.md plus its generated include. Planned
-  // against rendered hashes above, so this mirrors the DERIVED_RENDERINGS
-  // mechanics: a conflict already stopped the run before any write, otherwise
-  // add/update/unchanged with a backup of whatever gets replaced. A project-
-  // owned (foreign) CLAUDE.md stays untouched; the include is still written —
-  // it names the binding, it claims nothing the project authored.
-  if (derived) {
+  // T-WG7/T-V3-06 — lane rendering of CLAUDE.md. A pre-existing project file
+  // receives only the delimited block and is tracked by the block hash below;
+  // a Framework-created file remains whole-file managed. Both paths were
+  // planned against these exact rendered bytes before any write.
+  if (derivedContent?.has(CLAUDE_MD_PATH)) {
     const rendered = derivedContent!.get(CLAUDE_MD_PATH)!;
     const claudeEntry: TemplateFileEntry = { path: CLAUDE_MD_PATH, sha256: sha256Of(rendered), size_bytes: Buffer.byteLength(rendered) };
     const claudeAbs = path.join(options.targetRoot, CLAUDE_MD_PATH);
-    if (!foreign.has(CLAUDE_MD_PATH)) {
+    const plannedClaude = plan.entries.find((entry) => entry.path === CLAUDE_MD_PATH);
+    const claudeOverridden = overrideSet(config).has(CLAUDE_MD_PATH);
+    const previousBlock = manifest?.framework_blocks?.find((block) => block.path === CLAUDE_MD_PATH);
+    const projectOwnedClaude = previousBlock !== undefined || (!oldFiles.has(CLAUDE_MD_PATH) && fs.existsSync(claudeAbs));
+    const renderedBlock = inspectBootstrapBlock(rendered);
+    if (renderedBlock.state !== "valid") throw new Error("rendered CLAUDE.md has no valid Framework bootstrap block");
+    if (claudeOverridden) {
+      performed.push({ action: "override", path: CLAUDE_MD_PATH, note: "explicit user choice in .agent-team/config.yaml — bootstrap block skipped" });
+    } else if (projectOwnedClaude) {
+      const current = fs.readFileSync(claudeAbs, "utf8");
+      const inspected = inspectBootstrapBlock(current);
+      if (inspected.state === "malformed") throw new Error("malformed bootstrap block reached apply after preflight");
+      const outside = inspected.state === "valid" ? inspected.outside : current;
+      const next = renderedBlock.block + outside;
+      if (next !== current) {
+        backup(CLAUDE_MD_PATH);
+        fs.writeFileSync(claudeAbs, next, "utf8");
+        performed.push({ action: "update", path: CLAUDE_MD_PATH, note: "Framework bootstrap block updated; project prose byte-preserved" });
+      } else {
+        performed.push({ action: "unchanged", path: CLAUDE_MD_PATH, note: plannedClaude?.note });
+      }
+      frameworkBlocks.push({ path: CLAUDE_MD_PATH, sha256: sha256Of(renderedBlock.block) });
+    } else {
       if (!fs.existsSync(claudeAbs)) {
         fs.writeFileSync(claudeAbs, rendered, "utf8");
-        performed.push({ action: "add", path: CLAUDE_MD_PATH, note: "rendered for the dev lane (Knowledge binding)" });
+        performed.push({ action: "add", path: CLAUDE_MD_PATH, note: "rendered with the Framework bootstrap block" });
       } else if (hashFile(claudeAbs) !== claudeEntry.sha256) {
         backup(CLAUDE_MD_PATH);
         fs.writeFileSync(claudeAbs, rendered, "utf8");
-        performed.push({ action: "update", path: CLAUDE_MD_PATH, note: "re-rendered for the dev lane (Knowledge binding)" });
+        performed.push({ action: "update", path: CLAUDE_MD_PATH, note: "re-rendered with the Framework bootstrap block" });
       } else {
         performed.push({ action: "unchanged", path: CLAUDE_MD_PATH });
       }
       managedEntries.push(claudeEntry);
     }
-    const includeContent = derivedContent!.get(KNOWLEDGE_ROOT_INCLUDE_PATH)!;
-    const includeEntry: TemplateFileEntry = { path: KNOWLEDGE_ROOT_INCLUDE_PATH, sha256: sha256Of(includeContent), size_bytes: Buffer.byteLength(includeContent) };
-    const includeAbs = path.join(options.targetRoot, KNOWLEDGE_ROOT_INCLUDE_PATH);
-    fs.mkdirSync(path.dirname(includeAbs), { recursive: true });
-    if (!fs.existsSync(includeAbs)) {
-      fs.writeFileSync(includeAbs, includeContent, "utf8");
-      performed.push({ action: "add", path: KNOWLEDGE_ROOT_INCLUDE_PATH, note: "generated from the Knowledge binding" });
-    } else if (hashFile(includeAbs) !== includeEntry.sha256) {
-      backup(KNOWLEDGE_ROOT_INCLUDE_PATH);
-      fs.writeFileSync(includeAbs, includeContent, "utf8");
-      performed.push({ action: "update", path: KNOWLEDGE_ROOT_INCLUDE_PATH, note: "regenerated from the Knowledge binding" });
-    } else {
-      performed.push({ action: "unchanged", path: KNOWLEDGE_ROOT_INCLUDE_PATH });
+    const includeContent = derivedContent!.get(KNOWLEDGE_ROOT_INCLUDE_PATH);
+    if (includeContent !== undefined) {
+      const includeEntry: TemplateFileEntry = { path: KNOWLEDGE_ROOT_INCLUDE_PATH, sha256: sha256Of(includeContent), size_bytes: Buffer.byteLength(includeContent) };
+      const includeAbs = path.join(options.targetRoot, KNOWLEDGE_ROOT_INCLUDE_PATH);
+      fs.mkdirSync(path.dirname(includeAbs), { recursive: true });
+      if (!fs.existsSync(includeAbs)) {
+        fs.writeFileSync(includeAbs, includeContent, "utf8");
+        performed.push({ action: "add", path: KNOWLEDGE_ROOT_INCLUDE_PATH, note: "generated from the Knowledge binding" });
+      } else if (hashFile(includeAbs) !== includeEntry.sha256) {
+        backup(KNOWLEDGE_ROOT_INCLUDE_PATH);
+        fs.writeFileSync(includeAbs, includeContent, "utf8");
+        performed.push({ action: "update", path: KNOWLEDGE_ROOT_INCLUDE_PATH, note: "regenerated from the Knowledge binding" });
+      } else {
+        performed.push({ action: "unchanged", path: KNOWLEDGE_ROOT_INCLUDE_PATH });
+      }
+      managedEntries.push(includeEntry);
     }
-    managedEntries.push(includeEntry);
   }
 
   // T-WG2 — roster drift has no template source to sync from (the file was
@@ -674,8 +936,27 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     }
   }
 
+  // Stale block cleanup — remove only the delimited range that the block hash
+  // proves we last wrote. The backup contains the complete pre-removal file.
+  const staleFrameworkBlockPaths = new Set(
+    (manifest?.framework_blocks ?? [])
+      .map((block) => block.path)
+      .filter((relPath) => !templateManifest.files.some((file) => file.path === relPath)),
+  );
+  for (const plannedFor of plan.entries.filter((entry) => entry.action === "remove-stale" && staleFrameworkBlockPaths.has(entry.path))) {
+    const abs = path.join(options.targetRoot, plannedFor.path);
+    if (!fs.existsSync(abs)) continue;
+    const current = fs.readFileSync(abs, "utf8");
+    const inspected = inspectBootstrapBlock(current);
+    if (inspected.state !== "valid") continue; // preflight already refused malformed input
+    backup(plannedFor.path);
+    fs.writeFileSync(abs, inspected.outside, "utf8");
+    performed.push(plannedFor);
+  }
+
   // Stale cleanup — only paths this Target's own manifest proves we manage(d).
   for (const plannedFor of plan.entries.filter((e) => e.action === "remove-stale")) {
+    if (staleFrameworkBlockPaths.has(plannedFor.path)) continue;
     const abs = path.join(options.targetRoot, plannedFor.path);
     const tracked = manifest?.files.find((f) => f.path === plannedFor.path);
     if (!tracked || !fs.existsSync(abs)) continue;
@@ -690,6 +971,7 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     installed_at: manifest?.installed_at ?? options.now,
     updated_at: options.now,
     files: managedEntries,
+    ...(frameworkBlocks.length > 0 ? { framework_blocks: frameworkBlocks } : {}),
   };
   writeTargetManifest(options.targetRoot, freshManifest);
 
@@ -699,5 +981,7 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     previousVersion,
     frameworkVersion: templateManifest.framework_version,
     backupDir,
+    stackProfile: profilePlan?.stack,
+    stackProfileMismatch: profilePlan?.mismatch,
   };
 }

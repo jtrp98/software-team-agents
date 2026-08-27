@@ -104,12 +104,15 @@ export type WorkspaceKind = "knowledge" | "target" | "ambiguous" | "unrecognized
  * actually in doubt. The three markers left are Knowledge-only.
  */
 const KNOWLEDGE_MARKERS: readonly string[] = ["knowledge", "knowledge-policy.yaml", "targets.yaml"];
-const APP_SOURCE_MARKERS: readonly string[] = [
+export const APP_SOURCE_MARKERS: readonly string[] = [
   "package.json",
   "pyproject.toml",
+  "requirements.txt",
   "setup.py",
   "pom.xml",
   "build.gradle",
+  "build.gradle.kts",
+  "Directory.Build.props",
   "go.mod",
   "Cargo.toml",
 ];
@@ -124,7 +127,7 @@ function hasDir(dir: string, name: string): boolean {
 
 function hasFile(dir: string, name: string): boolean {
   try {
-    return fs.statSync(path.join(dir, name)).isFile();
+    return fs.lstatSync(path.join(dir, name)).isFile();
   } catch {
     return false;
   }
@@ -135,10 +138,22 @@ export function hasKnowledgeMarkers(dir: string): boolean {
 }
 
 function hasAppSourceMarkers(dir: string): boolean {
-  if (APP_SOURCE_MARKERS.some((m) => hasFile(dir, m))) return true;
-  // .NET solutions/projects live as directories-of-files with distinctive extensions.
+  const hasDirectMarker = (candidate: string): boolean => {
+    if (APP_SOURCE_MARKERS.some((m) => hasFile(candidate, m))) return true;
+    try {
+      return fs.readdirSync(candidate, { withFileTypes: true }).some(
+        (entry) => !entry.isSymbolicLink() && entry.isFile() && (entry.name.endsWith(".sln") || entry.name.endsWith(".csproj")),
+      );
+    } catch {
+      return false;
+    }
+  };
+  if (hasDirectMarker(dir)) return true;
+  const skip = new Set(["node_modules", ".git", "dist", ".workflow", ".next", "build"]);
   try {
-    return fs.readdirSync(dir).some((f) => f.endsWith(".sln") || f.endsWith(".csproj"));
+    return fs.readdirSync(dir, { withFileTypes: true }).some(
+      (entry) => !entry.isSymbolicLink() && entry.isDirectory() && !skip.has(entry.name) && hasDirectMarker(path.join(dir, entry.name)),
+    );
   } catch {
     return false;
   }

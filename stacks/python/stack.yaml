@@ -15,4 +15,5 @@ commands:
   test: pytest
   lint: ruff check
   typecheck: mypy .
+scan_extensions: [.py]
 capabilities: [rest-api, database-access, auth, testing]

@@ -13,6 +13,7 @@ import {
 } from "./syncEngine.js";
 import { classifySyncState } from "./version.js";
 import { defaultTargetConfig, readTargetManifest, writeTargetConfig } from "./targetMeta.js";
+import { stripBootstrapBlock } from "./knowledgeRender.js";
 
 const roots: string[] = [];
 function tmpRoot(prefix: string): string {
@@ -45,18 +46,27 @@ function makeTemplatesDir(version: string, files: FixtureFile[]): string {
     `${JSON.stringify({ schema_version: 1, framework_version: version, generated_at: "2026-01-01T00:00:00Z", files: entries.sort((a, b) => a.path.localeCompare(b.path)) }, null, 2)}\n`,
     "utf8",
   );
+  const stack = path.join(dir, "stacks", "node", "stack.yaml");
+  fs.mkdirSync(path.dirname(stack), { recursive: true });
+  fs.writeFileSync(
+    stack,
+    "stack: node\nkind: backend\nlanguage: typescript\nruntime: node\nframeworks: [express]\ndatabase: []\napi: [rest]\npackage_manager: npm\ncommands:\n  install: npm install\n  build: npm run build\n  test: npm test\n  lint: npm run lint\n  typecheck: npm run typecheck\ncapabilities: [testing]\n",
+    "utf8",
+  );
   return dir;
 }
 
 function gitTarget(): string {
   const target = tmpRoot("target");
   fs.mkdirSync(path.join(target, ".git")); // standalone-repo marker, inspected locally like installation.ts does
+  fs.writeFileSync(path.join(target, "package.json"), '{"name":"fixture"}\n', "utf8");
+  fs.writeFileSync(path.join(target, "package-lock.json"), '{"lockfileVersion":3}\n', "utf8");
   return target;
 }
 
 const V1_FILES: FixtureFile[] = [
   { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer", "builds backend") },
-  { relPath: ".claude/settings.json", content: '{"hooks":{"PreToolUse":[{"a":1}]}}' },
+  { relPath: ".claude/settings.json", content: '{"hooks":{"PreToolUse":[{"matcher":"Write","hooks":[{"type":"command","command":"node","args":["${CLAUDE_PROJECT_DIR}/.claude/hooks/block-git.js"]}]}]}}' },
 ];
 
 const GUARDRAILS: FixtureFile = {
@@ -264,7 +274,7 @@ describe("safe sync engine", () => {
     expect(() => planSync({ targetRoot: target, templatesDir: v2, manifest: readTargetManifest(target), config: defaultTargetConfig("x", "now") })).not.toThrow();
   });
 
-  it("keeps a claimed file out of the manifest, so un-claiming it does not mislabel the project's own file", () => {
+  it("keeps a claimed file out of the manifest, then safely merges it when the project removes the override", () => {
     // Regression: an override recorded the TEMPLATE's hash even though sync
     // never wrote the file. Un-claiming the path then read as "tracked file
     // edited after sync" (blocking) instead of "the project owns this path"
@@ -282,12 +292,14 @@ describe("safe sync engine", () => {
     // A file sync deliberately left alone is not claimed in the manifest.
     expect(readTargetManifest(target).files.some((f) => f.path === ".claude/settings.json")).toBe(false);
 
-    // Un-claiming it reports the project's ownership instead of blocking.
+    // Un-claiming it plans the structured guard merge instead of claiming the
+    // whole file or mislabelling the project's bytes as a local edit.
     const unclaimed = defaultTargetConfig("my-project", "2026-01-01T00:00:00Z");
     writeTargetConfig(target, unclaimed);
     const plan = planSync({ targetRoot: target, templatesDir: v1, manifest: readTargetManifest(target), config: unclaimed });
-    expect(plan.conflicts.map((c) => c.kind)).toEqual(["untracked-file"]);
+    expect(plan.conflicts).toEqual([]);
     expect(blockingConflicts(plan)).toEqual([]);
+    expect(plan.entries).toContainEqual(expect.objectContaining({ action: "update", path: ".claude/settings.json" }));
     expect(fs.readFileSync(settingsPath, "utf8")).toBe('{"project":"specific"}');
   });
 
@@ -432,7 +444,7 @@ describe("dev-lane Knowledge rendering (T-WG7)", () => {
     });
 
     const claude = fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8");
-    expect(claude.startsWith("<!-- sta:three-repo-dev -->")).toBe(true);
+    expect(claude.startsWith("<!-- sta:bootstrap -->")).toBe(true);
     expect(claude).toContain(knowledge);
     expect(claude).toContain("Read `_docs/status.md` first."); // body preserved under the banner
     const include = fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8");
@@ -470,18 +482,18 @@ describe("dev-lane Knowledge rendering (T-WG7)", () => {
     expect(fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8")).toContain(moved);
   });
 
-  it("leaves a non-dev workspace byte-identical to the template and writes no include", () => {
+  it("renders the BA bootstrap over a byte-identical template body and writes no Knowledge include", () => {
     const target = gitTarget();
     writeTargetConfig(target, defaultTargetConfig("kb", "now", "ba"));
     const templatesDir = makeTemplatesDir("1.0.0", DEV_V1);
 
     runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-01T00:00:00Z", installationConfigPath: installationConfigFixture(knowledgeRootFixture()) });
 
-    expect(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8")).toBe(DEV_V1[1]!.content);
+    expect(stripBootstrapBlock(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8"))).toBe(DEV_V1[1]!.content);
     expect(fs.existsSync(path.join(target, ".claude", "shared", "knowledge-root.md"))).toBe(false);
   });
 
-  it("never touches a foreign project-owned CLAUDE.md but still records the binding include", () => {
+  it("injects only the delimited block into a foreign project-owned CLAUDE.md and records the binding include", () => {
     const target = gitTarget();
     writeTargetConfig(target, defaultTargetConfig("app", "now", "dev"));
     fs.writeFileSync(path.join(target, "CLAUDE.md"), "# The project's own instructions\n", "utf8");
@@ -493,9 +505,10 @@ describe("dev-lane Knowledge rendering (T-WG7)", () => {
       installationConfigPath: installationConfigFixture(knowledgeRootFixture()),
     });
 
-    expect(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8")).toBe("# The project's own instructions\n");
-    expect(result.skippedConflicts.map((c) => c.path)).toContain("CLAUDE.md");
+    expect(stripBootstrapBlock(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8"))).toBe("# The project's own instructions\n");
+    expect(result.skippedConflicts.map((c) => c.path)).not.toContain("CLAUDE.md");
     expect(readTargetManifest(target).files.map((f) => f.path)).not.toContain("CLAUDE.md");
+    expect(readTargetManifest(target).framework_blocks?.map((block) => block.path)).toContain("CLAUDE.md");
     expect(fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8")).toContain("KNOWLEDGE_ROOT=");
   });
 });

@@ -85,6 +85,18 @@ function runScript(scriptFile, env) {
   return res.status;
 }
 
+function runStaticGateJson(projectRoot, env) {
+  const res = spawnSync(process.execPath, [path.join(SCRIPTS, 'static-analysis-gate.js'), '--json'], {
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_PROJECT_DIR: projectRoot, ...(env || {}) },
+    cwd: projectRoot,
+    timeout: 60000,
+  });
+  let report = null;
+  try { report = JSON.parse(res.stdout); } catch { /* asserted by callers */ }
+  return { status: res.status, stdout: res.stdout, report };
+}
+
 /** Makes a throwaway project root, runs fn(dir), always removes it afterwards. */
 function withTempProject(fn) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentclaude-selftest-'));
@@ -98,6 +110,28 @@ function withTempProject(fn) {
 function write(file, contents) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, contents, 'utf8');
+}
+
+function writeProfileFixture(root, name, commands, sourceRoots, extensions) {
+  const commandLines = Object.entries(commands).map(([key, value]) => `    ${key}: ${value}`).join('\n');
+  const sourceLines = sourceRoots.map((sourceRoot) => `    - ${sourceRoot}`).join('\n');
+  write(path.join(root, '.agent-team', 'config.yaml'), `schema_version: 1\ntarget_id: fixture\nregistered_at: 2026-08-27T00:00:00Z\nrole: dev\nstack:\n  profile: ${name}\n  package_manager: fixture\n  commands:\n${commandLines}\n  schema_paths: []\n  source_roots:\n${sourceLines}\n  detected_at: 2026-08-27T00:00:00Z\n  fingerprint: sha256:fixture\noverrides: []\n`);
+  write(path.join(root, 'stacks', name, 'stack.yaml'), `stack: ${name}\nscan_extensions: [${extensions.join(', ')}]\n`);
+}
+
+function commandStubEnvironment(root, names) {
+  const bin = path.join(root, 'stub-bin');
+  fs.mkdirSync(bin, { recursive: true });
+  for (const name of names) {
+    if (process.platform === 'win32') {
+      write(path.join(bin, `${name}.cmd`), '@exit /b 0\r\n');
+    } else {
+      const executable = path.join(bin, name);
+      write(executable, '#!/bin/sh\nexit 0\n');
+      fs.chmodSync(executable, 0o755);
+    }
+  }
+  return { PATH: `${bin}${path.delimiter}${process.env.PATH || ''}` };
 }
 
 function section(title) {
@@ -518,6 +552,87 @@ withTempProject((tmp) => {
       : 1,
     0,
   );
+});
+
+withTempProject((tmp) => {
+  writeGatePackage(tmp, 'legacy-node', { lint: 0 });
+  const result = runStaticGateJson(tmp);
+  const golden = {
+    ok: true,
+    results: [
+      { dir: '.', check: 'lint', status: 'passed' },
+      { dir: '.', check: 'format', status: 'skipped', reason: 'no such script' },
+      { dir: '.', check: 'typecheck', status: 'skipped', reason: 'no such script' },
+      { dir: '.', check: 'build', status: 'skipped', reason: 'no such script' },
+      { dir: '.', check: 'test', status: 'skipped', reason: 'no such script' },
+      { dir: '(repo)', check: 'security_scan', status: 'passed' },
+      { dir: '(repo)', check: 'dependency_scan', status: 'passed' },
+    ],
+  };
+  check('no-profile Node --json output stays byte-identical to the legacy golden', result.stdout === `${JSON.stringify(golden, null, 2)}\n` ? 0 : 1, 0);
+});
+
+for (const fixture of [
+  {
+    name: 'dotnet',
+    tools: ['dotnet'],
+    commands: { lint: 'dotnet format --verify-no-changes', typecheck: 'dotnet build', build: 'dotnet build', test: 'dotnet test' },
+    extension: '.cs',
+    sourceFile: 'src/Program.cs',
+  },
+  {
+    name: 'python',
+    tools: ['ruff', 'mypy', 'uv', 'pytest'],
+    commands: { lint: 'ruff check', typecheck: 'mypy .', build: 'uv build', test: 'pytest' },
+    extension: '.py',
+    sourceFile: 'src/main.py',
+  },
+  {
+    name: 'node',
+    tools: ['npm'],
+    commands: { lint: 'npm run lint', typecheck: 'npm run typecheck', build: 'npm run build', test: 'npm run test' },
+    extension: '.ts',
+    sourceFile: 'src/index.ts',
+  },
+]) {
+  withTempProject((tmp) => {
+    writeProfileFixture(tmp, fixture.name, fixture.commands, ['src'], [fixture.extension]);
+    write(path.join(tmp, fixture.sourceFile), '// safe fixture\n');
+    if (fixture.name === 'node') write(path.join(tmp, 'package.json'), '{"name":"node-fixture"}\n');
+    const result = runStaticGateJson(tmp, commandStubEnvironment(tmp, fixture.tools));
+    const expectedRows = [
+      { dir: '(repo)', check: 'lint', command: fixture.commands.lint, status: 'passed' },
+      { dir: '(repo)', check: 'format', status: 'skipped', reason: 'no such profile command' },
+      { dir: '(repo)', check: 'typecheck', command: fixture.commands.typecheck, status: 'passed' },
+      { dir: '(repo)', check: 'build', command: fixture.commands.build, status: 'passed' },
+      { dir: '(repo)', check: 'test', command: fixture.commands.test, status: 'passed' },
+      { dir: '(repo)', check: 'security_scan', status: 'passed' },
+      fixture.name === 'node'
+        ? { dir: '(repo)', check: 'dependency_scan', status: 'passed' }
+        : { dir: '(repo)', check: 'dependency_scan', status: 'skipped', reason: `no dependency manifest this scan understands for profile ${fixture.name}` },
+    ];
+    const golden = { ok: true, verification: 'passed', profile: fixture.name, results: expectedRows };
+    check(`${fixture.name} profile gate uses resolved commands and matches its JSON golden`, result.status === 0 && JSON.stringify(result.report) === JSON.stringify(golden) ? 0 : 1, 0);
+  });
+}
+
+withTempProject((tmp) => {
+  const commands = { lint: 'dotnet format --verify-no-changes', typecheck: 'dotnet build', build: 'dotnet build', test: 'dotnet test' };
+  writeProfileFixture(tmp, 'dotnet', commands, ['src'], ['.cs']);
+  write(path.join(tmp, 'outside', 'Evil.cs'), 'class Evil { void Run(string input) { eval(input); } }\n');
+  write(path.join(tmp, 'src', 'Ignored.ts'), 'eval(input);\n');
+  const env = commandStubEnvironment(tmp, ['dotnet']);
+  check('profile security_scan excludes files outside source_roots and extensions', runStaticGateJson(tmp, env).status, 0);
+  write(path.join(tmp, 'src', 'Evil.cs'), 'class Evil { void Run(string input) { eval(input); } }\n');
+  check('profile security_scan reads declared source_roots and extensions', runStaticGateJson(tmp, env).status, 1);
+});
+
+withTempProject((tmp) => {
+  writeProfileFixture(tmp, 'unsupported', {}, [], []);
+  const result = runStaticGateJson(tmp);
+  check('all profile checks skipped exits 2 and reports unverified, never passed', result.status === 2 && result.report && result.report.ok === false && result.report.verification === 'unverified' ? 0 : 1, 0);
+  check('a profile without scan extensions reports security_scan skipped', result.report && result.report.results.some((row) => row.check === 'security_scan' && row.status === 'skipped' && /no security scan extensions/.test(row.reason)) ? 0 : 1, 0);
+  check('an unsupported dependency profile reports dependency_scan skipped with a reason', result.report && result.report.results.some((row) => row.check === 'dependency_scan' && row.status === 'skipped' && /no dependency manifest/.test(row.reason)) ? 0 : 1, 0);
 });
 
 // ---------------------------------------------------------------------------

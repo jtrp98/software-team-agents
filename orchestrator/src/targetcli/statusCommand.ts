@@ -7,6 +7,8 @@ import {
   loadTargetConfig,
   readTargetManifest,
   type TargetConfig,
+  type TargetManifest,
+  type TargetStackConfig,
 } from "./targetMeta.js";
 import { devDerivedContent, planSync } from "./syncEngine.js";
 import {
@@ -23,6 +25,9 @@ import {
 } from "./roleWorkspace.js";
 import { classifySyncState, type SyncState } from "./version.js";
 import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
+import { detectInstructionSurface, type InstructionSurfaceEntry } from "../threeRepo/ownership.js";
+import { targetStackWasHumanEdited } from "./targetProfile.js";
+import { CLAUDE_SETTINGS_PATH, inspectGuardWiring, type GuardWiringStatus } from "./guardSettings.js";
 
 /**
  * T-TARGET-10 + T-ROLE-18 — `software-team-agents status`: the whole
@@ -48,6 +53,9 @@ export interface TargetStatus {
   /** T-LV1 — BA-lane only: the optional Target binding resolved from `target.path`, when one is set and valid; "invalid" carries the problem in targetRoot. Absent when unset (silent, never required). */
   targetBinding?: { targetRoot: string; via: string };
   targetId?: string;
+  /** Cached deterministic Target profile; absent means not yet detected. */
+  stack?: TargetStackConfig;
+  stackProfileMismatch?: string;
   syncedVersion?: string;
   syncState: SyncState;
   /** Managed paths whose on-disk content matches neither pristine nor shipped. */
@@ -59,9 +67,13 @@ export interface TargetStatus {
    * merge protocol can reconcile them; never a blocking condition.
    */
   projectOwnedPaths: string[];
+  /** Complete read-only inventory of instructions that can affect this workspace. */
+  instructionSurface: InstructionSurfaceEntry[];
   /** T-WG2 — agent-prompt files on disk belonging to the other lane. Never legitimate; sync --force removes them. */
   rosterDriftPaths: string[];
   managedFileCount: number;
+  hooksInstalled: number;
+  hooksRegistered: number;
   /**
    * T-WG1 — installation.yaml binds a Knowledge root (marker-complete) that was
    * never `init --role ba`'d there: every command past binding validation
@@ -84,9 +96,20 @@ function countFiles(dir: string, suffix: string): number {
   }
 }
 
-export function claudeReadiness(targetRoot: string): RuntimeReadiness {
+export function claudeReadiness(targetRoot: string, guardWiring?: GuardWiringStatus): RuntimeReadiness {
   const agents = countFiles(path.join(targetRoot, ".claude", "agents"), ".md");
   if (agents === 0) return { ready: false, detail: "no .claude/agents/*.md — run software-team-agents sync" };
+  if (guardWiring?.overridden) {
+    return { ready: true, detail: `${agents} agent(s); Framework guard wiring explicitly declined via overrides` };
+  }
+  if (guardWiring) {
+    if (guardWiring.hooksInstalled === 0) return { ready: true, detail: `${agents} agent(s); no Framework guard registrations shipped for this profile` };
+    if (guardWiring.settingsError) return { ready: false, detail: `${guardWiring.settingsError} — run software-team-agents sync` };
+    if (guardWiring.missingRegistrations.length > 0) {
+      return { ready: false, detail: `${guardWiring.hooksRegistered}/${guardWiring.hooksInstalled} Framework guard registration(s) wired — run software-team-agents sync` };
+    }
+    return { ready: true, detail: `${agents} agent(s), Framework guards wired (${guardWiring.hooksRegistered}/${guardWiring.hooksInstalled})` };
+  }
   const settingsPath = path.join(targetRoot, ".claude", "settings.json");
   if (!fs.existsSync(settingsPath)) return { ready: false, detail: "no .claude/settings.json — hooks unwired" };
   try {
@@ -150,8 +173,12 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
   let rosterDriftPaths: string[] = [];
   let managedFileCount = 0;
   let syncState: SyncState = "NOT_INITIALIZED";
+  let frameworkInstructionPaths = new Set<string>();
+  let targetManifest: TargetManifest | undefined;
   if (initialized) {
     const manifest = readTargetManifest(roots.targetRoot);
+    targetManifest = manifest;
+    frameworkInstructionPaths = new Set(manifest.files.map((file) => file.path));
     syncedVersion = manifest.framework_version;
     managedFileCount = manifest.files.length;
     syncState = classifySyncState(manifest.framework_version, frameworkVersion);
@@ -179,6 +206,11 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     } catch {
       // An unreadable payload must not make status crash; conflicts stay visible via version drift.
     }
+  }
+
+  const guardWiring = inspectGuardWiring({ targetRoot: roots.targetRoot, templatesDir, manifest: targetManifest, config });
+  if (!guardWiring.overridden && guardWiring.hooksInstalled > 0 && guardWiring.missingRegistrations.length === 0) {
+    frameworkInstructionPaths.add(CLAUDE_SETTINGS_PATH);
   }
 
   // Knowledge picture depends on the role: required-and-validated for DEV,
@@ -241,14 +273,25 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     knowledgeBinding,
     targetBinding,
     targetId: config?.target_id,
+    stack: config?.stack,
+    stackProfileMismatch:
+      config?.stack && targetStackWasHumanEdited(config.stack)
+        ? "stack config differs from the last detected profile; human-edited values are authoritative"
+        : undefined,
     syncedVersion,
     syncState,
     conflictCount,
     projectOwnedPaths,
+    instructionSurface: detectInstructionSurface({
+      targetRoot: roots.targetRoot,
+      frameworkPaths: frameworkInstructionPaths,
+    }),
     rosterDriftPaths,
     managedFileCount,
+    hooksInstalled: guardWiring.hooksInstalled,
+    hooksRegistered: guardWiring.hooksRegistered,
     knowledgeBoundButUninitialized,
-    claude: claudeReadiness(roots.targetRoot),
+    claude: claudeReadiness(roots.targetRoot, guardWiring),
     codex: codexReadiness(roots.targetRoot),
     opencode: opencodeReadiness(roots.targetRoot),
   };
@@ -295,7 +338,17 @@ export function renderStatus(status: TargetStatus): string {
     lines.push("  installed and synced Framework versions differ in major — review the changelog before re-syncing (sync --force)");
   }
   if (status.syncedVersion !== undefined) lines.push(`  synced Framework version: ${status.syncedVersion}`);
+  if (status.role === "dev") {
+    if (status.stack) {
+      lines.push(`  Target stack: ${status.stack.profile} (${status.stack.package_manager}; ${status.stack.fingerprint})`);
+      if (status.stackProfileMismatch) lines.push(`  WARNING: ${status.stackProfileMismatch}`);
+    } else {
+      lines.push("  Target stack: UNRESOLVED — run software-team-agents init --stack <name>");
+    }
+  }
+
   lines.push(`  managed files: ${status.managedFileCount}`);
+  lines.push(`  Framework guard registrations: ${status.hooksRegistered}/${status.hooksInstalled} registered`);
   if (status.conflictCount > 0) lines.push(`  conflicts: ${status.conflictCount} — run software-team-agents sync to see them`);
   // T-WG9 — collision-aware reporting: paths the project owns are never a
   // blocking condition, but leaving them silent is how a workspace ends up
@@ -303,8 +356,20 @@ export function renderStatus(status: TargetStatus): string {
   // at the merge protocol.
   if (status.projectOwnedPaths.length > 0) {
     lines.push(`  project-owned paths left alone (${status.projectOwnedPaths.length}):`);
-    for (const p of status.projectOwnedPaths) lines.push(`    ${p}`);
+    for (const p of status.projectOwnedPaths) {
+      const consequence = status.instructionSurface.find((entry) => entry.path === p)?.consequence;
+      lines.push(`    ${p}${consequence ? ` — ${consequence}` : ""}`);
+    }
     lines.push("    → reconcile via prompt-setup.md (\"Merging with the project's existing Claude setup\"), then claim them in .agent-team/config.yaml overrides");
+  }
+  if (status.instructionSurface.length > 0) {
+    lines.push(`Instruction surface (${status.instructionSurface.length}):`);
+    for (const entry of status.instructionSurface) {
+      lines.push(
+        `  ${entry.path} — owner=${entry.owner}, precedence=${entry.precedence}, Framework contribution=${entry.frameworkContributionPresent ? "present" : "absent"}` +
+          (entry.consequence ? `; ${entry.consequence}` : ""),
+      );
+    }
   }
   if (status.rosterDriftPaths.length > 0) {
     lines.push(`WARNING: roster drift — agent prompt(s) from another lane found in this workspace (${status.rosterDriftPaths.length}):`);

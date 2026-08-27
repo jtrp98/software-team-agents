@@ -53,6 +53,8 @@ export const StackProfileSchema = z.object({
     lint: z.string().min(1),
     typecheck: z.string().min(1),
   }),
+  /** File extensions the offline security pattern sweep may inspect for this profile. Empty means unsupported, never clean. */
+  scan_extensions: z.array(z.string().regex(/^\.[A-Za-z0-9]+$/)).default([]),
   capabilities: z.array(z.enum(Capability)),
 });
 export type StackProfile = z.infer<typeof StackProfileSchema>;
