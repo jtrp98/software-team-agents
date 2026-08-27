@@ -303,6 +303,7 @@ export function launchEnv(
   existingEnv: NodeJS.ProcessEnv = process.env,
   knowledgeRoot?: string,
   targetRoot?: string,
+  contextCommand?: string,
 ): NodeJS.ProcessEnv {
   // The role is part of the signature so call sites state whose policy they
   // launch under; today both roles enforce the same shape — own workspace
@@ -313,5 +314,6 @@ export function launchEnv(
     AGENTCLAUDE_WRITABLE_WORK_ROOTS: "[]",
     ...(knowledgeRoot ? { AGENTCLAUDE_KNOWLEDGE_ROOT: knowledgeRoot } : {}),
     ...(targetRoot ? { AGENTCLAUDE_TARGET_ROOT: targetRoot } : {}),
+    ...(contextCommand ? { AGENTCLAUDE_CONTEXT_CMD: contextCommand } : {}),
   };
 }

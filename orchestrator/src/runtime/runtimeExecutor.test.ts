@@ -13,6 +13,8 @@ import { NO_GUARDS, type RuntimeGuards } from "./runtimeAdapter.js";
 import { GuardResolutionError } from "./runtimeGuards.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import { buildContextCommand } from "../context/contextCommand.js";
+import { buildPromptParts } from "./agentRunAssembly.js";
 
 /**
  * T108's central claim, under test: the orchestrator can run agents through the
@@ -296,6 +298,32 @@ describe("metrics — normalising any runtime's usage into the run log (T26/T28)
       (result.outcome.code_intel_chars ?? 0) +
       (result.outcome.tool_output_chars ?? 0),
     ).toBe(result.outcome.context_chars);
+  });
+
+  it("T-V3TOK-052 property 8 — sta context fragments produce the byte-identical sta run prompt", async () => {
+    const root = tmpProject();
+    const docs = path.join(root, "_docs", "module", "sales-crm");
+    fs.mkdirSync(docs, { recursive: true });
+    fs.writeFileSync(path.join(docs, "requirement.md"), "# Req\n\n## Scope\nMVP\n", "utf8");
+    fs.writeFileSync(path.join(docs, "design.md"), "# Design\n\n## Risks & Dependencies\nnone\n\n## Open Questions\nnone\n", "utf8");
+    fs.writeFileSync(path.join(docs, "plan.md"), "# Plan\n\n## Plan Summary\nall\n\n## Phase 1: Work\nwork\n\n## Open Questions\nnone\n", "utf8");
+    const runtime = new MockRuntimeAdapter();
+    const executor = createRuntimeExecutor({
+      runtime,
+      projectRoot: root,
+      moduleName: () => "sales-crm",
+      phases: () => [1],
+      guards: () => NO_GUARDS,
+    });
+    const req = { stage: AgentStage.BACKEND_ENGINEER, taskId: "T-ctx", context: [] };
+    const command = await buildContextCommand({ role: "backend-engineer", moduleHint: "sales-crm", phases: [1], projectRoot: root, env: {} });
+    await executor(req);
+    const expected = buildPromptParts(req, undefined, {
+      docs: command.context.docs,
+      knowledge: command.context.knowledge,
+      codeIntel: command.context.codeIntel,
+    }).text;
+    expect(runtime.requests[0].prompt).toBe(expected);
   });
 });
 

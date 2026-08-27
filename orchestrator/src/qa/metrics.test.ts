@@ -21,11 +21,13 @@ function run(partial: Partial<RunRecord> & { agent: AgentStage }): RunRecord {
     cache_read_tokens: null,
     context_chars: null,
     qa_mode: null,
+    deterministic_gate: null,
     runtime: null,
     session_kind: null,
     static_chars: null,
     handoff_chars: null,
     doc_chars: null,
+    doc_chars_before: null,
     knowledge_chars: null,
     code_intel_chars: null,
     tool_output_chars: null,
@@ -168,5 +170,16 @@ describe("T-V3TOK-003 token metrics", () => {
     const before = tokenMetricsExport([run({ agent: AgentStage.BACKEND_ENGINEER, input_tokens: 10, output_tokens: 2 })]);
     const after = tokenMetricsExport([run({ agent: AgentStage.BACKEND_ENGINEER, input_tokens: null, output_tokens: null })]);
     expect(compareTokenBaselines(before, after).inputTokenDeltaPct).toBeNull();
+  });
+
+  it("reports measured slicing savings per role and leaves incomplete rows unknown", () => {
+    const measured = tokenMetricsExport([
+      run({ agent: AgentStage.BACKEND_ENGINEER, doc_chars: 600, doc_chars_before: 1_000 }),
+    ]);
+    expect(measured.roles[0]).toMatchObject({ docChars: 600, docCharsBefore: 1_000, slicingSavedPct: 40 });
+    const unknown = tokenMetricsExport([
+      run({ agent: AgentStage.BACKEND_ENGINEER, doc_chars: 600, doc_chars_before: null }),
+    ]);
+    expect(unknown.roles[0].slicingSavedPct).toBeNull();
   });
 });

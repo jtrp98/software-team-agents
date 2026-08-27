@@ -30,11 +30,15 @@ export interface RunRecord {
   static_chars: number | null;
   handoff_chars: number | null;
   doc_chars: number | null;
+  /** Full module-document bytes before ContextManager sliced this prompt. */
+  doc_chars_before: number | null;
   knowledge_chars: number | null;
   code_intel_chars: number | null;
   tool_output_chars: number | null;
   /** QA07 — the verify mode this qa-engineer round ran in, from its own report. Null for every non-QA stage (and for QA runs that predate the field). */
   qa_mode: "FULL" | "TARGETED" | null;
+  /** Whether this optimized QA round ran deterministic checks, or used the explicit escape hatch. */
+  deterministic_gate: "enabled" | "disabled" | null;
 }
 
 export interface RunOutcome {
@@ -54,10 +58,12 @@ export interface RunOutcome {
   static_chars?: number;
   handoff_chars?: number;
   doc_chars?: number;
+  doc_chars_before?: number;
   knowledge_chars?: number;
   code_intel_chars?: number;
   tool_output_chars?: number;
   qa_mode?: "FULL" | "TARGETED";
+  deterministic_gate?: "enabled" | "disabled";
 }
 
 /**
@@ -112,10 +118,12 @@ export class RunLog {
       static_chars: params.outcome.static_chars ?? null,
       handoff_chars: params.outcome.handoff_chars ?? null,
       doc_chars: params.outcome.doc_chars ?? null,
+      doc_chars_before: params.outcome.doc_chars_before ?? null,
       knowledge_chars: params.outcome.knowledge_chars ?? null,
       code_intel_chars: params.outcome.code_intel_chars ?? null,
       tool_output_chars: params.outcome.tool_output_chars ?? null,
       qa_mode: params.outcome.qa_mode ?? null,
+      deterministic_gate: params.outcome.deterministic_gate ?? null,
     };
     this.records.push(entry);
     return entry;

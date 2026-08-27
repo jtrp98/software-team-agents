@@ -159,6 +159,7 @@ export interface TokenCompositionMetrics {
   static_chars: number | null;
   handoff_chars: number | null;
   doc_chars: number | null;
+  doc_chars_before: number | null;
   knowledge_chars: number | null;
   code_intel_chars: number | null;
   tool_output_chars: number | null;
@@ -184,6 +185,9 @@ export interface TokenRoleMetrics {
   staticChars: number | null;
   retrievedChars: number | null;
   staticVsRetrievedRatio: number | null;
+  docChars: number | null;
+  docCharsBefore: number | null;
+  slicingSavedPct: number | null;
 }
 
 export interface TokenMetricsExport {
@@ -210,6 +214,7 @@ function compositionFor(runs: readonly RunRecord[]): TokenCompositionMetrics {
     static_chars: strictSum(runs, (run) => run.static_chars),
     handoff_chars: strictSum(runs, (run) => run.handoff_chars),
     doc_chars: strictSum(runs, (run) => run.doc_chars),
+    doc_chars_before: strictSum(runs, (run) => run.doc_chars_before),
     knowledge_chars: strictSum(runs, (run) => run.knowledge_chars),
     code_intel_chars: strictSum(runs, (run) => run.code_intel_chars),
     tool_output_chars: strictSum(runs, (run) => run.tool_output_chars),
@@ -249,12 +254,20 @@ function roleMetrics(runs: readonly RunRecord[]): TokenRoleMetrics[] {
       const components = [run.handoff_chars, run.doc_chars, run.knowledge_chars, run.code_intel_chars, run.tool_output_chars];
       return components.some((value) => value === null) ? null : components.reduce<number>((sum, value) => sum + (value ?? 0), 0);
     });
+    const docChars = strictSum(roleRuns, (run) => run.doc_chars);
+    const docCharsBefore = strictSum(roleRuns, (run) => run.doc_chars_before);
     return {
       role,
       runCount: roleRuns.length,
       staticChars,
       retrievedChars,
       staticVsRetrievedRatio: staticChars === null || retrievedChars === null || retrievedChars === 0 ? null : staticChars / retrievedChars,
+      docChars,
+      docCharsBefore,
+      slicingSavedPct:
+        docChars === null || docCharsBefore === null || docCharsBefore === 0
+          ? null
+          : Math.round(((docCharsBefore - docChars) / docCharsBefore) * 100),
     };
   });
 }

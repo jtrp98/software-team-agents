@@ -72,6 +72,8 @@ export interface QaOptimizationOptions {
   packageInputs?: (req: AgentExecutorRequest) => Partial<EvidencePackageInput> | undefined;
   /** Scope enrichment (dependency map, knowledge refs, task-graph impact). */
   scopeInputs?: (req: AgentExecutorRequest) => Partial<QaScopeInput> | undefined;
+  /** Recorded on the QA run so the explicit deterministic escape hatch is auditable. */
+  deterministicGate?: "enabled" | "disabled";
 }
 
 export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
@@ -120,10 +122,11 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
       // structured failure on purpose: recoveryPolicy's no-failure route sends
       // the round back to the implementation stage, which is who owns a red
       // typecheck.
-      return failResult(
+      const failed = failResult(
         "deterministic verification failed before LLM QA — qa-engineer was not invoked. Fix these, then re-run:\n" +
           renderDeterministicVerification(deterministic).join("\n"),
       );
+      return { ...failed, outcome: { ...failed.outcome, deterministic_gate: opts.deterministicGate ?? "enabled" } };
     }
 
     const pkgExtra = opts.packageInputs?.(req) ?? {};
@@ -147,6 +150,7 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
 
     return {
       ...result,
+      outcome: { ...result.outcome, deterministic_gate: opts.deterministicGate ?? (opts.deterministicRunner ? "enabled" : "disabled") },
       gateEvidence: { ...(result.gateEvidence ?? {}), qaModeDecision: decision },
     };
   };

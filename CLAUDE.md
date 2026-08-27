@@ -70,9 +70,10 @@ A hook, gate, contract or checker enforces each line and explains itself when it
 
 ## Where documents live
 
-Every module doc lives under `_docs/module/<name>/`; nothing is written at the repo root. Resolve your
-module folder first: one → use it; several → ask; none → back to `business-analyst`. A module folder is
-a delivery unit; `design.md`'s **Modules** are feature groupings inside one (`policies/documentation.md` §1).
+Every module doc lives under `_docs/module/<name>/`; nothing is written at the repo root. Use `sta context`
+to resolve the module deterministically; do not glob and guess. Its actionable many/none result either names
+the exact candidates or routes missing requirements to `business-analyst`. A module folder is a delivery unit;
+`design.md`'s **Modules** are feature groupings inside one (`policies/documentation.md` §1).
 
 Who owns which file is the Roles table's Writes column. `design.md`, `review.md` and `status.md` each
 have an archive companion; nobody opens one at normal startup.

@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { CliUsageError, USAGE, parseArgs, runCli, watchListing } from "./cli.js";
+import { CliUsageError, USAGE, parseArgs, productionQaInputs, runCli, watchListing } from "./cli.js";
 import { defaultProjectRoot } from "./agents/agentContract.js";
 import { classifyTask } from "./classification/taskClassifier.js";
 import { SqliteTaskStore } from "./store/sqliteStore.js";
@@ -50,7 +50,10 @@ describe("parseArgs", () => {
       phases: [],
       targetBindings: { frontend_target: null, backend_target: null },
       autonomy: undefined,
+      runtime: undefined,
       noQaOptimization: false,
+      noDeterministicGate: false,
+      tokenBudget: undefined,
       version: false,
     });
   });
@@ -70,6 +73,13 @@ describe("parseArgs", () => {
     expect(parseArgs(["--task-id", "T-1", "--module", "m", "--runtime", "opencode"], "/repo").runtime).toBe("opencode");
     expect(parseArgs(["--task-id", "T-1", "--module", "m"], "/repo").runtime).toBeUndefined();
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--runtime", "ghost"], "/repo")).toThrow(CliUsageError);
+  });
+
+  it("parses the post-hoc token budget and deterministic-gate escape hatch", () => {
+    const args = parseArgs(["--task-id", "T-1", "--module", "m", "--token-budget", "42000", "--no-deterministic-gate"], "/repo");
+    expect(args.tokenBudget).toBe(42_000);
+    expect(args.noDeterministicGate).toBe(true);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--token-budget", "0"], "/repo")).toThrow(CliUsageError);
   });
 
   it("--project-root overrides the default", () => {
@@ -93,6 +103,27 @@ describe("parseArgs", () => {
 
   it("throws CliUsageError on an unrecognized flag", () => {
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--nope"], "/repo")).toThrow(CliUsageError);
+  });
+});
+
+describe("productionQaInputs (T-V3TOK-062)", () => {
+  it("uses plan/design references and a compact diff summary without blank evidence placeholders", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-qa-inputs-"));
+    try {
+      const docs = path.join(root, "_docs", "module", "sales");
+      fs.mkdirSync(docs, { recursive: true });
+      fs.writeFileSync(path.join(docs, "plan.md"), "## Phase 1\n\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-001 (DES-002) — import invoices | pending | backend-engineer | — |\n");
+      fs.writeFileSync(path.join(docs, "design.md"), "# Design\n\n## Risks & Dependencies\n\n- external API\n");
+      const inputs = await productionQaInputs({ docsRoot: root, moduleName: "sales", taskId: "BE-001", roots: [root] });
+      const pkg = inputs.packageInputs();
+      expect(pkg.taskIntent).toContain("import invoices");
+      expect(pkg.acceptanceCriteria).toContain("design.md#DES-002");
+      expect(pkg.knownRisks).toEqual(["design.md#Risks-&-Dependencies"]);
+      expect(pkg.diffSummary).not.toContain("(none supplied)");
+      expect(Buffer.byteLength(pkg.diffSummary)).toBeLessThan(2_000);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -637,7 +668,8 @@ describe("T-V3TOK-003 tokens verb", () => {
       start_time: 1, end_time: 2, duration: 1, model: null, promptVersion: null, tokens: 0, cost: 0,
       result: "PASS", retry_count: 0, failure_reason: null, input_tokens: null, output_tokens: null,
       cache_read_tokens: null, context_chars: null, qa_mode: null, runtime: "claude", session_kind: "interactive",
-      static_chars: 321, handoff_chars: null, doc_chars: null, knowledge_chars: null, code_intel_chars: null, tool_output_chars: null,
+      deterministic_gate: null,
+      static_chars: 321, handoff_chars: null, doc_chars: null, doc_chars_before: null, knowledge_chars: null, code_intel_chars: null, tool_output_chars: null,
     });
     store.close();
     const logs: string[] = [];
@@ -652,6 +684,30 @@ describe("T-V3TOK-003 tokens verb", () => {
     } finally {
       console.log = original;
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("T-V3TOK-041 context verb", () => {
+  it("routes through the CLI and emits machine-readable composition", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-context-cli-"));
+    const dir = path.join(root, "_docs", "module", "sales");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "requirement.md"), "# Req\n\n## Scope\nMVP\n", "utf8");
+    fs.writeFileSync(path.join(dir, "design.md"), "# Design\n\n## Risks & Dependencies\nnone\n\n## Open Questions\nnone\n", "utf8");
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+    try {
+      expect(await runCli(["context", "backend-engineer", "--module", "sales", "--phase", "1", "--json", "--project-root", root], root)).toBe(0);
+      const output = JSON.parse(logs.join("\n")) as { module: string; composition: { doc_chars_before: number; direct_file_reads: number } };
+      expect(output.module).toBe("sales");
+      expect(output.composition.doc_chars_before).toBeGreaterThan(0);
+      expect(output.composition.direct_file_reads).toBeGreaterThan(0);
+      expect(USAGE).toContain("sta context <role>");
+    } finally {
+      console.log = original;
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 });

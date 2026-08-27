@@ -4,6 +4,8 @@ import type { AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/
 import { parseQaReport, parseSecurityReport } from "../agents/moduleDocs.js";
 import { ContextManager, type SelectedContext } from "../context/contextManager.js";
 import { classifyQaFailure, classifySecurityFailure } from "../orchestrator/failureClassifier.js";
+import { codeIntelSlices } from "./codeIntelAssembly.js";
+import { knowledgeBriefFor } from "./knowledgeBriefAssembly.js";
 
 /**
  * Everything about running a stage that is *this framework's* business rather
@@ -44,6 +46,7 @@ export interface RunMetrics {
   static_chars?: number;
   handoff_chars?: number;
   doc_chars?: number;
+  doc_chars_before?: number;
   knowledge_chars?: number;
   code_intel_chars?: number;
   tool_output_chars?: number;
@@ -80,8 +83,15 @@ export function renderSlicedDocs(selected: SelectedContext[], cm: ContextManager
     parts.push("", `### ${s.doc}.md`);
     if (!s.fullDocument && s.skipped.length > 0) {
       parts.push(
-        `_Sections not included: ${s.skipped.join(", ")}. ` +
+        `_Known-irrelevant sections not included: ${s.skipped.join(", ")}. ` +
           `The full file is at \`${cm.path(s.doc)}\` — read it if one of those turns out to matter._`,
+        "",
+      );
+    }
+    if (s.unknownSections.length > 0) {
+      parts.push(
+        `_Kept because relevance is unknown: ${s.unknownSections.join(", ")}. ` +
+          `Nothing in this list was dropped; read the module's \`${s.doc}\` in the workspace for the full file._`,
         "",
       );
     }
@@ -95,6 +105,7 @@ export interface SliceOptions {
   moduleName: string;
   /** Which phases of `plan.md` this run touches. Undefined is safe: the plan then comes through whole rather than sliced wrong. */
   phases?: number[];
+  taskId?: string;
 }
 
 /**
@@ -106,12 +117,91 @@ export interface SliceOptions {
  * correctness requirement.
  */
 export function sliceModuleDocsFor(stage: AgentStage, opts: SliceOptions): string[] {
+  return sliceModuleDocsWithSavings(stage, opts).docs;
+}
+
+/** Slices once and keeps the measured before/after bytes for run observability. */
+export interface SlicedModuleDocs {
+  docs: string[];
+  selected: SelectedContext[];
+  docCharsBefore: number;
+  savings: { bytesBefore: number; bytesAfter: number; savedPct: number };
+  directFileReads: number;
+}
+
+export function sliceModuleDocsWithSavings(stage: AgentStage, opts: SliceOptions): SlicedModuleDocs {
   try {
     const cm = new ContextManager({ projectRoot: opts.projectRoot, moduleName: opts.moduleName });
-    return renderSlicedDocs(cm.forStage(stage, opts.phases), cm);
+    const selected = cm.forStage(stage, opts.phases, opts.taskId);
+    // `savings()` is the single source of the before/after calculation. The
+    // after side is prompt composition's doc_chars; the before side is carried
+    // into the run metric below, so token reports can show the actual slice.
+    const savings = cm.savings(selected);
+    return {
+      docs: renderSlicedDocs(selected, cm),
+      selected,
+      docCharsBefore: savings.bytesBefore,
+      savings,
+      directFileReads: cm.directFileReads(),
+    };
   } catch {
-    return [];
+    return {
+      docs: [],
+      selected: [],
+      docCharsBefore: 0,
+      savings: { bytesBefore: 0, bytesAfter: 0, savedPct: 0 },
+      directFileReads: 0,
+    };
   }
+}
+
+export interface StageContextOptions extends SliceOptions {
+  /** Root used for framework/legacy knowledge lookup; docs may live elsewhere. */
+  projectRoot: string;
+  /** Explicit module-doc root (Knowledge in three-repo mode, projectRoot otherwise). */
+  docsRoot: string;
+  taskId?: string;
+  knowledgeRoot?: string;
+  targetRoot?: string;
+  targetId?: string;
+}
+
+export interface StageContextAssembly extends SlicedModuleDocs {
+  knowledge: string[];
+  codeIntel: string[];
+}
+
+/**
+ * One context selection/rendering path for both `sta run` and `sta context`.
+ * Optional sources keep their established additive posture: any failure yields
+ * no enrichment, while document parser uncertainty is handled inside
+ * ContextManager by returning the complete document.
+ */
+export async function assembleStageContext(stage: AgentStage, opts: StageContextOptions): Promise<StageContextAssembly> {
+  const sliced = sliceModuleDocsWithSavings(stage, {
+    projectRoot: opts.docsRoot,
+    moduleName: opts.moduleName,
+    phases: opts.phases,
+    taskId: opts.taskId,
+  });
+  const knowledge = knowledgeBriefFor(stage, {
+    projectRoot: opts.projectRoot,
+    knowledgeRoot: opts.knowledgeRoot,
+    moduleName: opts.moduleName,
+  });
+  let codeIntel: string[] = [];
+  try {
+    codeIntel = await codeIntelSlices({
+      stage,
+      taskId: opts.taskId,
+      moduleName: opts.moduleName,
+      targetRoot: opts.targetRoot,
+      targetId: opts.targetId,
+    });
+  } catch {
+    codeIntel = [];
+  }
+  return { ...sliced, knowledge, codeIntel };
 }
 
 export interface PromptComposition {

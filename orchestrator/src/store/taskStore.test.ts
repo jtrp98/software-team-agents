@@ -86,11 +86,13 @@ function sampleRun(taskId = "T-1"): RunRecord {
     cache_read_tokens: null,
     context_chars: 4000,
     qa_mode: null,
+    deterministic_gate: null,
     runtime: "claude-code",
     session_kind: "orchestrated",
     static_chars: 500,
     handoff_chars: 300,
     doc_chars: 2500,
+    doc_chars_before: 4000,
     knowledge_chars: 200,
     code_intel_chars: 400,
     tool_output_chars: 100,
@@ -206,6 +208,15 @@ describe.each(implementations)("%s", (_name, makeStore) => {
       { runtime: "claude-code", session_kind: "orchestrated", static_chars: 500, doc_chars: 2500 },
       { runtime: "codex", session_kind: "interactive", static_chars: 9, handoff_chars: null, doc_chars: null },
     ]);
+    store.close();
+  });
+
+  it("records whether optimized QA used the deterministic gate or its explicit escape hatch", () => {
+    const store = makeStore();
+    store.appendRun({ ...sampleRun("T-1"), agent: AgentStage.QA_ENGINEER, deterministic_gate: "enabled" });
+    store.appendRun({ ...sampleRun("T-1"), agent: AgentStage.QA_ENGINEER, deterministic_gate: "disabled" });
+
+    expect(store.runsForTask("T-1").map((run) => run.deterministic_gate)).toEqual(["enabled", "disabled"]);
     store.close();
   });
 

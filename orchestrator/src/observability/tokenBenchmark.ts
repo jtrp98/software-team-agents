@@ -37,6 +37,12 @@ function fixedDocument(seed: string, bytes: number): string {
   return `${seed}${"x".repeat(bytes - seed.length)}`;
 }
 
+function fixedMiddleDocument(prefix: string, suffix: string, bytes: number, fill = "x"): string {
+  const padding = bytes - prefix.length - suffix.length;
+  if (padding < 0) throw new Error(`fixture seed exceeds fixed size ${bytes}`);
+  return `${prefix}${fill.repeat(padding)}${suffix}`;
+}
+
 function fixedDesignDocument(bytes: number): string {
   // 19 KB is a Data Model block (not read by BE/FE); 21 KB is a Feasibility
   // Summary (not read by any consumer under the current slicer). The rest is
@@ -57,6 +63,54 @@ export function createTokenBenchmarkFixture(root = fs.mkdtempSync(path.join(os.t
     "requirement.md": fixedDocument("# Requirement\n\n## Scope\nPinned benchmark requirement.\n\n## References\nFixture.\n\n", TOKEN_BENCHMARK_DOC_BYTES.requirement),
     "design.md": fixedDesignDocument(TOKEN_BENCHMARK_DOC_BYTES.design),
     "plan.md": fixedDocument("# Plan\n\n## Plan Summary\nPinned plan.\n\n## Phase 1: Delivery\nPinned work.\n\n## Sequencing Notes\nPinned.\n\n## Open Questions\nNone.\n\n", TOKEN_BENCHMARK_DOC_BYTES.plan),
+    "review.md": fixedDocument("# Review\n\n## Open Issues\nNone.\n\n## Round 1\nPinned review.\n\n", TOKEN_BENCHMARK_DOC_BYTES.review),
+    "test-plan.md": fixedDocument("# Test Plan\n\n## Coverage\nPinned tests.\n\n", TOKEN_BENCHMARK_DOC_BYTES.testPlan),
+  };
+  for (const [name, content] of Object.entries(docs)) fs.writeFileSync(path.join(dir, name), content, "utf8");
+  return { root, moduleName };
+}
+
+/**
+ * Same exact P0 document sizes, but with a complete REQ → DES → phase graph.
+ * P3B uses this variant because unknown content must remain kept: measuring a
+ * relationship-based slicer on an untraceable padding blob would reward unsafe
+ * guessing rather than the optimization implemented here.
+ */
+export function createTraceableTokenBenchmarkFixture(
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-token-trace-benchmark-")),
+  moduleName = "token-fixture",
+): { root: string; moduleName: string } {
+  const dir = path.join(root, "_docs", "module", moduleName);
+  fs.mkdirSync(dir, { recursive: true });
+  const requirementPrefix = [
+    "# Requirement\n\n## Overview\nPinned.\n\n## Target Users & Roles\nAdmin.\n\n## Core Features\n| Rule | Detail |\n|---|---|\n| REQ-001 | selected import |\n| REQ-002 | ",
+  ].join("");
+  const requirementSuffix = [
+    " |\n| REQ-003 | later archive |\n\n## Scope — MVP vs Nice-to-have\nPinned scope.\n\n## Constraints & Assumptions\nPinned.\n\n## Open Questions\nNone.\n\n## Declined / Not Pursuing\nNone.\n\n## References\nFixture.\n\n## Change Log\n- 2026-08-27\n",
+  ].join("");
+  const requirement = fixedMiddleDocument(requirementPrefix, requirementSuffix, TOKEN_BENCHMARK_DOC_BYTES.requirement, "q");
+
+  const designPrefix = [
+    "# Design\n\n## Feature-by-Feature Feasibility\nDES-001 covers REQ-001\nDES-002 covers REQ-002\nDES-003 covers REQ-003\n\n",
+    "## Import Contract — DES-001\n", "i".repeat(8_000), "\n\n",
+    "## Data Model\n", "d".repeat(5_000), "\n\n",
+    `## Modules\n### ${moduleName}\nselected module\n### other-module\n`, "m".repeat(4_000), "\n\n",
+    "## Risks & Dependencies\nPinned risks.\n\n## Open Questions\nNone.\n\n## Change Log\n- 2026-08-27\n\n",
+    "## Reporting Contract — DES-002\n",
+  ].join("");
+  const design = fixedDocument(designPrefix, TOKEN_BENCHMARK_DOC_BYTES.design);
+
+  const planPrefix = [
+    "# Plan\n\n## Plan Summary\nPinned.\n\n",
+    "## Phase 1: Import\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-001 (DES-001) — import | pending | backend-engineer | — |\n\n",
+    "## Open Questions\nNone.\n\n",
+    "## Phase 2: Reporting\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-002 (DES-002) — report | pending | backend-engineer | BE-001 |\n| FE-003 (DES-003) — archive | pending | frontend-engineer | BE-002 |\n",
+  ].join("");
+  const plan = fixedDocument(planPrefix, TOKEN_BENCHMARK_DOC_BYTES.plan);
+  const docs: Record<string, string> = {
+    "requirement.md": requirement,
+    "design.md": design,
+    "plan.md": plan,
     "review.md": fixedDocument("# Review\n\n## Open Issues\nNone.\n\n## Round 1\nPinned review.\n\n", TOKEN_BENCHMARK_DOC_BYTES.review),
     "test-plan.md": fixedDocument("# Test Plan\n\n## Coverage\nPinned tests.\n\n", TOKEN_BENCHMARK_DOC_BYTES.testPlan),
   };

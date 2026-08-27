@@ -76,6 +76,8 @@ describe("parsers — locked to v0.9.49 output shapes", () => {
       provenance: "extracted",
     });
     expect(parsed[0].score).toBeGreaterThan(parsed[1].score);
+    expect(parsed[0].span).toBeUndefined();
+    expect(parsed[0].signature).toBeUndefined();
     // banner and truncation lines produce nothing
     expect(parseNodeLines("[!] TRUNCATED: showing 1 of 2 nodes")).toHaveLength(0);
     expect(parseNodeLines("Graph: x | Traversal: BFS depth=2 | Start: ['a'] | 5 nodes found")).toHaveLength(0);

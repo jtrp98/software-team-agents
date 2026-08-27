@@ -76,3 +76,26 @@ export function resolveNpmCliScript(command: string, probe: NpmShimProbe = {}): 
   }
   return null;
 }
+
+/**
+ * The `sta` binary is bundled beside targetcli in this package, so interactive
+ * lane launchers can point at it without relying on a Windows npm `.cmd` shim.
+ */
+export function resolveBundledStaCli(
+  frameworkRoot: string,
+  probe: Pick<NpmShimProbe, "exists" | "execPath"> = {},
+): ResolvedCommand | null {
+  const exists = probe.exists ?? fs.existsSync;
+  const entry = path.join(frameworkRoot, "orchestrator", "dist", "cli.js");
+  if (!exists(entry)) return null;
+  return { file: probe.execPath ?? process.execPath, prefixArgs: [entry] };
+}
+
+function quoteCommandPart(value: string): string {
+  return /[\s"]/u.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value;
+}
+
+/** Shell-display form used only as an environment pointer; launches still use argv arrays. */
+export function formatResolvedCommand(command: ResolvedCommand): string {
+  return [command.file, ...command.prefixArgs].map(quoteCommandPart).join(" ");
+}

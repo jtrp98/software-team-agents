@@ -70,7 +70,7 @@ describe("codeIntelSlices", () => {
     expect(slices).toHaveLength(2);
     const block = slices[1];
     expect(block).toContain("Graphify discovers → Source confirms → Compiler checks → Tests verify.");
-    expect(block).toContain("DEV: open and read each relevant file below BEFORE writing or changing any code.");
+    expect(block).toContain("Open the real file when (a) the required edit lies outside the span");
     expect(block).toContain("src/a.ts:L4");
   });
 

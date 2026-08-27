@@ -34,10 +34,12 @@ describe("RunLog", () => {
       static_chars: null,
       handoff_chars: null,
       doc_chars: null,
+      doc_chars_before: null,
       knowledge_chars: null,
       code_intel_chars: null,
       tool_output_chars: null,
       qa_mode: null,
+      deterministic_gate: null,
     });
   });
 

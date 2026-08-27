@@ -59,6 +59,9 @@ function banner(knowledgeRoot: string): string {
     "> stale legacy — never write it, never update it; report it instead\n" +
     "> (`software-team-agents status`). Documents are written by analysis roles\n" +
     "> in the Knowledge workspace (`software-team-agents ba`), never here.\n" +
+    "> Before opening module documents, run the command named by\n" +
+    "> `AGENTCLAUDE_CONTEXT_CMD` with `<your-role> --module <name> --phase <n>`;\n" +
+    "> it is the same fail-open context path used by `sta run`.\n" +
     `${BANNER_CLOSE}\n`
   );
 }

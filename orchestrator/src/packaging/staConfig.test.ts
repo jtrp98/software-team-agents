@@ -37,11 +37,13 @@ describe("defaultStaConfig / writeStaConfig / loadStaConfig", () => {
       stack: "nextjs-express",
       model_routing: { "qa-engineer": "opus" },
       permission_overrides: { "backend-engineer": { write: ["extra/**"] } },
+      token_budget: 42_000,
     });
     const loaded = loadStaConfig(root);
     expect(loaded.stack).toBe("nextjs-express");
     expect(loaded.model_routing).toEqual({ "qa-engineer": "opus" });
     expect(loaded.permission_overrides).toEqual({ "backend-engineer": { write: ["extra/**"] } });
+    expect(loaded.token_budget).toBe(42_000);
   });
 
   it("throws StaConfigMissingError when there is no config yet", () => {

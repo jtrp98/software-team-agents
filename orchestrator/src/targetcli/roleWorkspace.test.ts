@@ -202,6 +202,14 @@ describe("write-policy launch wiring (T-ROLE-12/13)", () => {
     expect(withTarget.AGENTCLAUDE_TARGET_ROOT).toBe("C:\\app");
     expect(launchEnv("ba", {}).AGENTCLAUDE_TARGET_ROOT).toBeUndefined();
   });
+
+  it("T-V3TOK-042 — BA and DEV launches carry the resolved context command without changing other env", () => {
+    for (const role of ["ba", "dev"] as const) {
+      const env = launchEnv(role, { PATH: "keep" }, undefined, undefined, '"C:\\Program Files\\node.exe" C:\\sta\\cli.js context');
+      expect(env.AGENTCLAUDE_CONTEXT_CMD).toContain("cli.js context");
+      expect(env.PATH).toBe("keep");
+    }
+  });
 });
 
 describe("target binding (T-LV1)", () => {

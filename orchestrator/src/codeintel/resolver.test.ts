@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { AgentStage } from "../types.js";
 import {
   CodeCandidate,
@@ -8,6 +11,10 @@ import {
 } from "./provider.js";
 import {
   CODE_INTEL_EVENTS,
+  DEFAULT_MAX_EVIDENCE_BLOCK_BYTES,
+  DEFAULT_MAX_EVIDENCE_CANDIDATES,
+  DEFAULT_MAX_SPAN_BYTES,
+  DEFAULT_SPAN_LINES,
   FallbackReason,
   rankAndTrim,
   renderEvidenceBlock,
@@ -188,6 +195,156 @@ describe("T-GR5 — rank, top-N, dedupe, permission filter", () => {
   });
 });
 
+describe("T-V3TOK-070 — working-tree source enrichment", () => {
+  it("filters denied candidates before source reads and discards provider source payloads", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codeintel-source-filter-"));
+    const sourceFile = path.join(root, "src", "inside.ts");
+    fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
+    fs.writeFileSync(sourceFile, "export const current = 1;\n", "utf8");
+    const reads: string[] = [];
+    try {
+      const result = await resolveCodeContext(
+        {
+          enabled: true,
+          provider: fakeProvider({
+            getImpact: async () => [
+              { ...candidate("../outside.ts", 1), signature: "stale outside", span: { startLine: 1, endLine: 1, text: "secret" } },
+              { ...candidate(".git/config", 1), signature: "stale denied", span: { startLine: 1, endLine: 1, text: "secret" } },
+              { ...candidate("src/inside.ts", 1), signature: "stale index", span: { startLine: 1, endLine: 1, text: "old bytes" } },
+            ],
+          }) as never,
+          readSourceFile: async (absolute) => {
+            reads.push(absolute);
+            return fs.promises.readFile(absolute, "utf8");
+          },
+        },
+        { role: AgentStage.BACKEND_ENGINEER, operation: "getImpact", target: { ...TARGET, rootPath: root }, symbol: "x" },
+      );
+      expect(reads).toEqual([fs.realpathSync(sourceFile)]);
+      expect(result.candidates).toHaveLength(1);
+      expect(result.candidates[0].signature).toBe("export const current = 1;");
+      expect(result.candidates[0].span?.text).toBe("export const current = 1;\n");
+      expect(result.evidenceBlock).not.toContain("old bytes");
+      expect(result.evidenceBlock).not.toContain("secret");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a lexically allowed symlink that resolves outside the allowed root before reading", async () => {
+    const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), "codeintel-source-symlink-"));
+    const root = path.join(sandbox, "target");
+    const outside = path.join(sandbox, "outside");
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.mkdirSync(outside, { recursive: true });
+    fs.writeFileSync(path.join(outside, "secret.ts"), "do not read\n", "utf8");
+    fs.symlinkSync(outside, path.join(root, "src", "escape"), process.platform === "win32" ? "junction" : "dir");
+    let reads = 0;
+    try {
+      const result = await resolveCodeContext(
+        {
+          enabled: true,
+          provider: fakeProvider({ getImpact: async () => [candidate("src/escape/secret.ts", 1)] }) as never,
+          readSourceFile: async () => {
+            reads += 1;
+            return "should not happen";
+          },
+        },
+        { role: AgentStage.BACKEND_ENGINEER, operation: "getImpact", target: { ...TARGET, rootPath: root }, symbol: "x" },
+      );
+      expect(result.used).toBe(false);
+      expect(result.fallbackReason).toBe("no-allowed-candidates");
+      expect(reads).toBe(0);
+      expect(result.candidates).toEqual([]);
+    } finally {
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it("reports real line bounds and exact current source text", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codeintel-source-lines-"));
+    const sourceFile = path.join(root, "src", "lines.ts");
+    const lines = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`);
+    fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
+    fs.writeFileSync(sourceFile, lines.join("\n"), "utf8");
+    try {
+      const result = await resolveCodeContext(
+        { enabled: true, provider: fakeProvider({ getImpact: async () => [candidate("src/lines.ts", 7)] }) as never, spanLines: 5 },
+        { role: AgentStage.BACKEND_ENGINEER, operation: "getImpact", target: { ...TARGET, rootPath: root }, symbol: "x" },
+      );
+      expect(result.candidates[0].span).toEqual({ startLine: 5, endLine: 9, text: lines.slice(4, 9).join("\n") });
+      expect(result.candidates[0].signature).toBe("line 7");
+      expect(result.evidenceBlock).toContain("src/lines.ts:L5-L9");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("unreadable and stale out-of-range source locations degrade without throwing", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codeintel-source-unreadable-"));
+    const sourceFile = path.join(root, "src", "a.ts");
+    fs.mkdirSync(path.dirname(sourceFile), { recursive: true });
+    fs.writeFileSync(sourceFile, "current line\n", "utf8");
+    try {
+      const unreadable = await resolveCodeContext(
+        {
+          enabled: true,
+          provider: fakeProvider({ getImpact: async () => [candidate("src/a.ts", 1)] }) as never,
+          readSourceFile: async () => { throw new Error("EACCES"); },
+        },
+        { role: AgentStage.BACKEND_ENGINEER, operation: "getImpact", target: { ...TARGET, rootPath: root }, symbol: "x" },
+      );
+      expect(unreadable.used).toBe(true);
+      expect(unreadable.candidates[0].span).toBeUndefined();
+      expect(unreadable.candidates[0].signature).toBeUndefined();
+
+      const staleLocation = await resolveCodeContext(
+        { enabled: true, provider: fakeProvider({ getImpact: async () => [{ ...candidate("src/a.ts", 99), signature: "old", span: { startLine: 99, endLine: 99, text: "old" } }] }) as never },
+        { role: AgentStage.BACKEND_ENGINEER, operation: "getImpact", target: { ...TARGET, rootPath: root }, symbol: "x" },
+      );
+      expect(staleLocation.candidates[0].span).toBeUndefined();
+      expect(staleLocation.candidates[0].signature).toBeUndefined();
+      expect(staleLocation.evidenceBlock).not.toContain("old");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("enforces line, candidate, per-span byte, and total evidence caps", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "codeintel-source-caps-"));
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    const candidates = Array.from({ length: DEFAULT_MAX_EVIDENCE_CANDIDATES + 3 }, (_, index) => {
+      const file = `src/${index}.ts`;
+      fs.writeFileSync(path.join(root, file), Array.from({ length: DEFAULT_SPAN_LINES + 10 }, (__, line) => `${line}: ${"x".repeat(90)}`).join("\n"), "utf8");
+      return candidate(file, 20, 1 - index / 100);
+    });
+    try {
+      const result = await resolveCodeContext(
+        { enabled: true, provider: fakeProvider({ getImpact: async () => candidates }) as never },
+        { role: AgentStage.BACKEND_ENGINEER, operation: "getImpact", target: { ...TARGET, rootPath: root }, symbol: "x" },
+      );
+      expect(result.candidates).toHaveLength(DEFAULT_MAX_EVIDENCE_CANDIDATES);
+      for (const hit of result.candidates) {
+        expect((hit.span?.endLine ?? 0) - (hit.span?.startLine ?? 0) + 1).toBeLessThanOrEqual(DEFAULT_SPAN_LINES);
+        expect(Buffer.byteLength(hit.span?.text ?? "", "utf8")).toBeLessThanOrEqual(DEFAULT_MAX_SPAN_BYTES);
+      }
+      expect(Buffer.byteLength(result.evidenceBlock, "utf8")).toBeLessThanOrEqual(DEFAULT_MAX_EVIDENCE_BLOCK_BYTES);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back when a configured block cap cannot hold the guardrail", async () => {
+    const result = await resolveCodeContext(
+      { enabled: true, provider: fakeProvider() as never, maxEvidenceBlockBytes: 100 },
+      { role: AgentStage.BACKEND_ENGINEER, operation: "getDependencies", target: TARGET, symbol: "x" },
+    );
+    expect(result.used).toBe(false);
+    expect(result.fallbackReason).toBe("oversized");
+    expect(result.evidenceBlock).toBe("");
+  });
+});
+
 describe("T-GR6 — source verification guardrail", () => {
   it("evidence block carries the principle sentence and the graph-is-not-truth rule", async () => {
     const result = await resolveCodeContext(
@@ -203,11 +360,10 @@ describe("T-GR6 — source verification guardrail", () => {
     const dev = renderEvidenceBlock(AgentStage.BACKEND_ENGINEER, "t", [candidate("src/a.ts", 1)]);
     const sa = renderEvidenceBlock(AgentStage.SYSTEM_ANALYST, "t", [candidate("src/a.ts", 1)]);
     const qa = renderEvidenceBlock(AgentStage.QA_ENGINEER, "t", [candidate("src/a.ts", 1)]);
-    expect(dev).toMatch(/read each relevant file.*BEFORE writing/i);
-    expect(sa).toMatch(/cross-check.*requirement\/design documents AND the actual source/i);
+    expect(dev).toContain("Open the real file when (a) the required edit lies outside the span, (b) surrounding imports/types are necessary, (c) the evidence conflicts with expectations, or (d) you are about to edit that file.");
+    expect(sa).toContain("- You are SA: cross-check every statement below against requirement/design documents AND the actual source files before drawing any conclusion.");
     // The QA rule must make it impossible to read the block as a verdict source.
-    expect(qa).toMatch(/verify each finding against real source files and test results BEFORE any verdict/i);
-    expect(qa).toMatch(/NEVER decides pass\/fail/i);
+    expect(qa).toContain("- You are QA: verify each finding against real source files and test results BEFORE any verdict. A graph hit NEVER decides pass/fail.");
     expect(renderEvidenceBlock(AgentStage.FRONTEND_ENGINEER, "t", [])).toMatch(/DEV:/);
   });
 

@@ -5,14 +5,12 @@ import { resolveAgentModel, resolveAgentVersion } from "../agents/agentModel.js"
 import type { StructuredFailure } from "../orchestrator/failure.js";
 import {
   buildPromptParts,
+  assembleStageContext,
   failResult,
   qaArtifactResult,
   securityArtifactResult,
-  sliceModuleDocsFor,
   type RunMetrics,
 } from "./agentRunAssembly.js";
-import { codeIntelSlices } from "./codeIntelAssembly.js";
-import { knowledgeBriefFor } from "./knowledgeBriefAssembly.js";
 import type {
   RuntimeAdapter,
   RuntimeAgentResult,
@@ -143,6 +141,7 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     code_intel_chars: number;
     tool_output_chars: number;
   };
+  doc_chars_before: number;
   runtime: string;
 }): RunMetrics {
   const input_tokens = result.usage.inputTokens;
@@ -167,6 +166,7 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     runtime: declared.runtime,
     session_kind: "orchestrated",
     ...declared.composition,
+    doc_chars_before: declared.doc_chars_before,
   };
 }
 
@@ -203,42 +203,29 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       if (!handoff.allowed) return failResult(handoff.reason ?? `cannot start ${role}: role workflow gate failed`);
     }
 
-    const docs = sliceDocs
-      ? sliceModuleDocsFor(req.stage, {
-            projectRoot: threeRepo?.roots.knowledgeRoot ?? opts.projectRoot,
-            moduleName,
-            phases: opts.phases?.(req.taskId),
-          })
-      : [];
-    const knowledge = sliceDocs
-      ? [
-          // T-KA5a: the knowledge-store brief rides the same additive posture —
-          // [] when the store is absent or unreadable, never a failed run.
-          ...knowledgeBriefFor(req.stage, {
-            projectRoot: opts.projectRoot,
-            knowledgeRoot: threeRepo?.roots.knowledgeRoot,
-            moduleName,
-          }),
-        ]
-      : [];
-
-    // Phase 4 (code-intelligence): additive by design — `[]` unless the feature
-    // is explicitly enabled on this machine, so the prompt is unchanged by default.
     const workRoot = threeRepo?.roots.workRoots.find((root) => root.access === "write") ?? threeRepo?.roots.workRoots[0];
-    let codeIntel: string[] = [];
-    try {
-      codeIntel = await codeIntelSlices({
-        stage: req.stage,
-        taskId: req.taskId,
-        moduleName,
-        targetRoot: workRoot?.path,
-        targetId: workRoot?.targetId,
-      });
-    } catch {
-      codeIntel = [];
-    }
+    const stageContext = sliceDocs
+      ? await assembleStageContext(req.stage, {
+          projectRoot: opts.projectRoot,
+          docsRoot: threeRepo?.roots.knowledgeRoot ?? opts.projectRoot,
+          knowledgeRoot: threeRepo?.roots.knowledgeRoot,
+          moduleName,
+          phases: opts.phases?.(req.taskId),
+          taskId: req.taskId,
+          targetRoot: workRoot?.path,
+          targetId: workRoot?.targetId,
+        })
+      : {
+          docs: [], knowledge: [], codeIntel: [], selected: [], docCharsBefore: 0,
+          savings: { bytesBefore: 0, bytesAfter: 0, savedPct: 0 },
+          directFileReads: 0,
+        };
 
-    const promptParts = buildPromptParts(req, opts.extraInstruction, { docs, knowledge, codeIntel });
+    const promptParts = buildPromptParts(req, opts.extraInstruction, {
+      docs: stageContext.docs,
+      knowledge: stageContext.knowledge,
+      codeIntel: stageContext.codeIntel,
+    });
     const prompt = promptParts.text;
 
     // T112: resolve which runtime and model this run actually goes to. Absent
@@ -266,6 +253,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
       context_chars: prompt.length,
       composition: promptParts.composition,
+      doc_chars_before: stageContext.docCharsBefore,
       runtime: activeRuntime.id,
     };
 

@@ -9,7 +9,11 @@ import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
 import { createRuntimeExecutor } from "./runtime/runtimeExecutor.js";
 import { withQaOptimization, riskSignalsFromClassification } from "./qa/optimized.js";
-import { gitChangedFiles } from "./qa/changeSource.js";
+import { gitChangedFiles, gitDiffSummary } from "./qa/changeSource.js";
+import { combineProjectRunners, createProjectRunner } from "./qa/projectRunner.js";
+import { LocalWorkspace } from "./runtime/localWorkspace.js";
+import { DEFAULT_BUDGET, type Budget } from "./cost/costControl.js";
+import { loadStaConfig, StaConfigMissingError } from "./packaging/staConfig.js";
 import { buildMetricsExport, compareBaselines, compareTokenBaselines, taskQaMetrics, tokenMetricsExport, type TaskTokenMetrics, type TokenMetricsExport } from "./qa/metrics.js";
 import type { QaFindingRecord } from "./qa/evidence.js";
 import { parseOpenIssues } from "./orchestrator/failureClassifier.js";
@@ -89,6 +93,9 @@ import { readAdoptionState } from "./adoption/adoptionStore.js";
 import { validateAdoption } from "./adoption/adoptionValidation.js";
 import type { AdoptionStageId } from "./adoption/adoptionModel.js";
 import { getPolicySection, listPolicySections, PolicyIndexError } from "./docs/policyIndex.js";
+import { buildPlanGraph, type TaskNode } from "./graph/taskGraph.js";
+import { parsePlanTasks } from "./docs/planGraph.js";
+import { buildContextCommand, ContextCommandError, contextCommandJson, renderContextCommand } from "./context/contextCommand.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -182,6 +189,10 @@ export interface CliArgs {
    * V1 executor behaviour for a task where someone explicitly wants it.
    */
   noQaOptimization: boolean;
+  /** Escape hatch for a Target whose deterministic tools are known-broken. */
+  noDeterministicGate: boolean;
+  /** Post-hoc task token budget; pre-spawn caps remain T-V3TOK-100/101. */
+  tokenBudget?: number;
 }
 
 const FLAG_TO_CLASSIFICATION: Record<string, keyof ClassificationInput> = {
@@ -211,6 +222,7 @@ export const USAGE =
   "  sta audit  <task-id> [--decisions] [--project-root <path>]   the WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail; --decisions shows only the choices\n" +
   "  sta qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]   QA token/mode/retry picture per task (QA07); --baseline compares against a saved export\n" +
   "  sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]   token/context composition across orchestrated and interactive runs\n" +
+  "  sta context <role> [--module <name>] [--phase <n,n>] [--task <id>] [--json] [--project-root <path>]   deterministic fail-open module context used by sta run\n" +
   "  sta policy [<area>] [<section>] [--json] [--project-root <path>]   read one policies/ section instead of the whole file; no args lists every area and section\n" +
   "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names (T41)\n" +
   "  sta init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
@@ -236,7 +248,7 @@ export const USAGE =
   "underlying flag-based form:\n" +
   "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode>] <classification flags>\n" +
   "  sta --task-id <id> --module <name> --resume        continue a task already in the store\n" +
-  "  sta --task-id <id> --module <name> --no-qa-optimization   run qa-engineer exactly as V1 did (skip change-aware scope/deterministic pre-checks)\n" +
+  "  sta --task-id <id> --module <name> [--token-budget <n>] [--no-qa-optimization|--no-deterministic-gate]   run with optional QA/budget controls\n" +
   "  sta --list [--project-root <path>]                 show every task and stop\n" +
   "  sta --check-contracts [--project-root <path>]      check contracts/*.yaml against the agent registry\n" +
   "  sta --check-layout [--project-root <path>]         check layout.yaml against the real directories\n" +
@@ -294,6 +306,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let autonomy: RuntimeAutonomy | undefined;
   let runtime: "claude-code" | "codex" | "opencode" | undefined;
   let noQaOptimization = false;
+  let noDeterministicGate = false;
+  let tokenBudget: number | undefined;
   let version = false;
   const targetBindings: TargetBindings = { frontend_target: null, backend_target: null };
   const classification: ClassificationInput = {};
@@ -388,6 +402,12 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       runtime = value as NonNullable<CliArgs["runtime"]>;
     } else if (arg === "--no-qa-optimization") {
       noQaOptimization = true;
+    } else if (arg === "--no-deterministic-gate") {
+      noDeterministicGate = true;
+    } else if (arg === "--token-budget") {
+      const value = Number(argv[++i]);
+      if (!Number.isInteger(value) || value <= 0) throw new CliUsageError("--token-budget must be a positive integer");
+      tokenBudget = value;
     } else if (arg === "--version") {
       version = true;
     } else if (arg in FLAG_TO_CLASSIFICATION) {
@@ -464,6 +484,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     autonomy,
     runtime,
     noQaOptimization,
+    noDeterministicGate,
+    tokenBudget,
     version,
   };
 }
@@ -670,6 +692,7 @@ const VERBS = [
   "init",
   "qa-metrics",
   "tokens",
+  "context",
   "policy",
   "upgrade",
   "migrate",
@@ -689,7 +712,7 @@ function isVerb(s: string | undefined): s is Verb {
 }
 
 /** Flags a verb accepts that take a value — their value must never be mistaken for the positional <task-id>. */
-  const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--by", "--since", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime", "--as", "--note"]);
+  const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--phase", "--task", "--by", "--since", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime", "--as", "--note"]);
 
 /** Every non-flag token in a verb's remaining args, in order, skipping over each value-flag's own argument. */
 function positionalArgs(rest: string[]): string[] {
@@ -718,6 +741,23 @@ function openStore(projectRoot: string, stateDb?: string): { store: SqliteTaskSt
   const store = new SqliteTaskStore(stateDb ?? defaultStateDbPath(projectRoot));
   const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(projectRoot) });
   return { store, registry };
+}
+
+/** Resolves only the existing post-hoc budget model; it never pre-emptively caps a spawn. */
+function budgetFor(args: CliArgs): Budget {
+  return { ...DEFAULT_BUDGET, token_budget: args.tokenBudget ?? configuredTokenBudget(args.projectRoot) };
+}
+
+function configuredTokenBudget(projectRoot: string): number {
+  let configured: number | undefined;
+  try {
+    configured = loadStaConfig(projectRoot).token_budget;
+  } catch (error) {
+    // A config is optional for legacy Targets.  Invalid present configs remain
+    // an installation concern; do not turn an absent one into a fake value.
+    if (!(error instanceof StaConfigMissingError)) throw error;
+  }
+  return configured ?? DEFAULT_BUDGET.token_budget;
 }
 
 /** `status [<task-id>] [--watch] [--interval <seconds>]` — no id lists everything, an id shows one task's detail. */
@@ -1642,6 +1682,62 @@ function previousRoundFromDocs(docsRoot: string, moduleName: string, taskId: str
   return { findings, evidence: [] };
 }
 
+/**
+ * Builds concise QA inputs from the module's existing plan/design and the
+ * already-derived task graph.  These are references and summaries, not copied
+ * requirements or source payloads; QA may still request the named source.
+ */
+export async function productionQaInputs(opts: { docsRoot: string; moduleName: string; taskId: string; roots: readonly string[] }) {
+  const planMd = readModuleDoc(opts.docsRoot, opts.moduleName, "plan.md") ?? "";
+  const designMd = readModuleDoc(opts.docsRoot, opts.moduleName, "design.md") ?? "";
+  const parsed = parsePlanTasks(planMd);
+  const task = parsed.tasks.find((row) => row.id === opts.taskId);
+  const nodes: TaskNode[] = parsed.tasks.map((row) => ({
+    id: row.id,
+    phase: row.phase,
+    dependsOn: row.dependsOn,
+    agent: Object.values(AgentStage).includes(row.owner as AgentStage) ? row.owner as AgentStage : undefined,
+    description: row.description,
+  }));
+  let affectedTaskIds: string[] = [];
+  let affectedPhases: number[] = [];
+  if (task) {
+    try {
+      const graph = buildPlanGraph(nodes);
+      affectedTaskIds = graph.edges
+        .filter((edge) => edge.from === task.id || edge.to === task.id)
+        .flatMap((edge) => [edge.from, edge.to])
+        .filter((id) => id !== task.id)
+        .filter((id, index, all) => all.indexOf(id) === index)
+        .sort();
+      affectedPhases = [...new Set([task.phase, ...affectedTaskIds.map((id) => graph.nodes.get(id)?.phase).filter((phase): phase is number => phase !== undefined)])].sort((a, b) => a - b);
+    } catch {
+      // Invalid plan graph is itself visible to QA through its plan reference;
+      // do not invent graph impact from malformed metadata.
+    }
+  }
+  const riskRef = /^##\s+Risks\s*&\s*Dependencies\s*$/im.test(designMd) ? ["design.md#Risks-&-Dependencies"] : [];
+  const diffParts = await Promise.all(opts.roots.map(async (root) => {
+    try {
+      return `[${root}]\n${await gitDiffSummary(root)}`;
+    } catch {
+      return `[${root}] No git diff stat available; inspect the scoped files directly.`;
+    }
+  }));
+
+  return {
+    packageInputs: () => ({
+      taskIntent: task ? task.description : `Task ${opts.taskId} in module ${opts.moduleName}; no matching plan row was found.`,
+      acceptanceCriteria: task
+        ? [...task.designRefs.map((ref) => `design.md#${ref}`), `plan.md#${task.id}`]
+        : [`plan.md#${opts.taskId}`],
+      diffSummary: diffParts.length > 0 ? diffParts.join("\n") : "No writable Target root was resolved; inspect the scoped files directly.",
+      knownRisks: riskRef,
+    }),
+    scopeInputs: () => ({ affectedTaskIds, affectedPhases }),
+  };
+}
+
 /** `qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]` — QA07's cost/effectiveness picture off the run log. */
 async function runQaMetricsVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
@@ -1713,7 +1809,7 @@ function printTokenTask(metric: TaskTokenMetrics): void {
       `sessions=orchestrated:${metric.sessionKinds.orchestrated},interactive:${metric.sessionKinds.interactive},not-reported:${metric.sessionKinds.not_reported}`,
   );
   console.log(
-    `[orchestrator]   composition: static=${displayMetric(c.static_chars)} handoff=${displayMetric(c.handoff_chars)} docs=${displayMetric(c.doc_chars)} ` +
+    `[orchestrator]   composition: static=${displayMetric(c.static_chars)} handoff=${displayMetric(c.handoff_chars)} docs=${displayMetric(c.doc_chars)}/${displayMetric(c.doc_chars_before)} before-slice ` +
       `knowledge=${displayMetric(c.knowledge_chars)} code-intel=${displayMetric(c.code_intel_chars)} tool-output=${displayMetric(c.tool_output_chars)}`,
   );
 }
@@ -1809,7 +1905,11 @@ async function runTokensVerb(rest: string[], defaultProjectRoot: string): Promis
     const report = tokenMetricsExport(runs);
     if (by === "task") for (const metric of report.tasks) printTokenTask(metric);
     else if (by === "role" || by === "stage") {
-      for (const role of report.roles) console.log(`[orchestrator] ${by} ${role.role}: runs=${role.runCount} static=${displayMetric(role.staticChars)} retrieved=${displayMetric(role.retrievedChars)} static/retrieved=${role.staticVsRetrievedRatio === null ? "not reported" : role.staticVsRetrievedRatio.toFixed(2)}`);
+      for (const role of report.roles) console.log(
+        `[orchestrator] ${by} ${role.role}: runs=${role.runCount} static=${displayMetric(role.staticChars)} retrieved=${displayMetric(role.retrievedChars)} ` +
+          `static/retrieved=${role.staticVsRetrievedRatio === null ? "not reported" : role.staticVsRetrievedRatio.toFixed(2)} ` +
+          `docs=${displayMetric(role.docChars)}/${displayMetric(role.docCharsBefore)} before-slice slicing-saved=${role.slicingSavedPct === null ? "not reported" : `${role.slicingSavedPct}%`}`,
+      );
     } else {
       for (const kind of ["orchestrated", "interactive", "not_reported"] as const) {
         const count = report.tasks.reduce((sum, metric) => sum + metric.sessionKinds[kind], 0);
@@ -1818,6 +1918,8 @@ async function runTokensVerb(rest: string[], defaultProjectRoot: string): Promis
     }
     const total = report.totals;
     console.log(`[orchestrator] totals: input=${displayMetric(total.inputTokens)} output=${displayMetric(total.outputTokens)} cached=${displayMetric(total.cachedTokens)} total=${displayMetric(total.totalTokens)} retries=${total.retryCount} retryWaste=${displayMetric(total.retryWasteTokens)}`);
+    const budget = configuredTokenBudget(projectRoot);
+    console.log(`[orchestrator] configured post-hoc token budget: ${budget.toLocaleString()} vs actual input ${displayMetric(total.inputTokens)} (pre-spawn caps are not part of this control)`);
     if (exportPath) {
       fs.writeFileSync(exportPath, JSON.stringify(report, null, 2), "utf8");
       console.log(`[orchestrator] wrote token metrics JSON to ${exportPath}`);
@@ -1829,6 +1931,38 @@ async function runTokensVerb(rest: string[], defaultProjectRoot: string): Promis
     }
     return 0;
   } finally { registry.close(); }
+}
+
+/** `context <role> [--module <m>] [--phase <n,n>] [--task <id>] [--json]`. */
+async function runContextVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const role = positionalArg(rest);
+  if (!role) throw new CliUsageError("context: an agent role is required");
+  const projectRoot = path.resolve(flagValue(rest, "--project-root") ?? defaultProjectRoot);
+  const phaseRaw = flagValue(rest, "--phase");
+  let phases: number[] | undefined;
+  if (phaseRaw !== undefined) {
+    phases = phaseRaw.split(",").map((value) => Number(value.trim()));
+    if (phases.length === 0 || phases.some((value) => !Number.isInteger(value) || value <= 0)) {
+      throw new CliUsageError("context: --phase must be a comma-separated list of positive integers");
+    }
+  }
+  try {
+    const result = await buildContextCommand({
+      role,
+      moduleHint: flagValue(rest, "--module"),
+      phases,
+      taskId: flagValue(rest, "--task"),
+      projectRoot,
+    });
+    console.log(rest.includes("--json") ? JSON.stringify(contextCommandJson(result), null, 2) : renderContextCommand(result));
+    return 0;
+  } catch (error) {
+    if (error instanceof ContextCommandError) {
+      console.error(`[orchestrator] ${error.message}`);
+      return error.exitCode;
+    }
+    throw error;
+  }
 }
 
 /** Dispatches a T31 verb, translating the ones that are really the existing engine in disguise (`run`, `resume`, `retry`) rather than duplicating the step loop. */
@@ -1857,6 +1991,8 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
       return runQaMetricsVerb(rest, defaultProjectRoot);
     case "tokens":
       return runTokensVerb(rest, defaultProjectRoot);
+    case "context":
+      return runContextVerb(rest, defaultProjectRoot);
     case "policy":
       return runPolicyVerb(rest, defaultProjectRoot);
     case "projects":
@@ -2161,7 +2297,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
   }
 
   const store = new SqliteTaskStore(args.stateDb ?? defaultStateDbPath(args.projectRoot));
-  const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(args.projectRoot) });
+  const registry = new TaskRegistry({ store, budget: budgetFor(args), stateViewPath: defaultStateViewPath(args.projectRoot) });
   let lockedTaskId: string | undefined;
 
   try {
@@ -2280,6 +2416,33 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     // deterministic checks before qa-engineer runs, bounded evidence package,
     // and the TARGETED/FULL decision the gate enforces. `--no-qa-optimization`
     // restores the exact V1 behaviour for a caller that wants it.
+    // Resolve the same writable roots for change discovery, deterministic
+    // checks, and evidence. In three-repo mode this remains the Target, never
+    // the Framework binding root.
+    let qaRoots: string[] = [args.projectRoot];
+    try {
+      loadInstallationConfig(process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined);
+      const task = store.loadTask(taskId);
+      if (task) {
+        const roots3 = preflightThreeRepoTask(task, AgentStage.QA_ENGINEER, {
+          frameworkRoot: args.projectRoot,
+          installationConfigPath: process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined,
+        });
+        const writes = roots3.workRoots.filter((root) => root.access === "write").map((root) => root.path);
+        if (writes.length > 0) qaRoots = [...new Set(writes)];
+      }
+    } catch {
+      // legacy project: projectRoot stands
+    }
+    let qaDocsRoot = args.projectRoot;
+    try {
+      const installation = loadInstallationConfig(process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined);
+      if (installation.knowledge_root) qaDocsRoot = installation.knowledge_root;
+    } catch {
+      // legacy project: projectRoot stands
+    }
+    const qaInputs = await productionQaInputs({ docsRoot: qaDocsRoot, moduleName: args.module ?? "", taskId, roots: qaRoots });
+
     const executor = args.noQaOptimization
       ? runtimeExecutor
       : withQaOptimization({
@@ -2289,7 +2452,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
             // projects have exactly one — the project root itself. A root whose
             // git fails contributes nothing rather than poisoning the others;
             // a total failure yields [], which scopes as unbounded → FULL.
-            let roots: string[] = [args.projectRoot];
+            let roots: string[] = qaRoots;
             try {
               loadInstallationConfig(process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined);
               const task = store.loadTask(taskId);
@@ -2307,6 +2470,21 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
             const results = await Promise.allSettled(roots.map((root) => gitChangedFiles(root)));
             return [...new Set(results.flatMap((r) => (r.status === "fulfilled" ? r.value : [])))];
           },
+          ...(args.noDeterministicGate
+            ? { deterministicGate: "disabled" as const }
+            : {
+                deterministicGate: "enabled" as const,
+                deterministicRunner: combineProjectRunners(qaRoots.map((root) => ({
+                  root,
+                  runner: createProjectRunner({
+                    root,
+                    workspace: new LocalWorkspace({ root }),
+                    staticGatePath: path.join(args.projectRoot, ".claude", "scripts", "static-analysis-gate.js"),
+                  }),
+                }))),
+              }),
+          packageInputs: qaInputs.packageInputs,
+          scopeInputs: qaInputs.scopeInputs,
           riskSignals: () => riskSignalsFromClassification(orchestrator.classification),
           previousRound: () => {
             // In three-repo mode the module docs live under the Knowledge root.

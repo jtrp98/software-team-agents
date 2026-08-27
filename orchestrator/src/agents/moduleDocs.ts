@@ -52,6 +52,65 @@ export function readModuleDoc(projectRoot: string, moduleName: string, filename:
   }
 }
 
+function isFile(file: string): boolean {
+  try {
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Lists delivery modules in deterministic folder-name order. A directory is a
+ * module only after requirement.md or design.md establishes it; empty/stale
+ * folders are not candidates an agent should reason over.
+ */
+export function listModules(docsRoot: string): string[] {
+  const parent = path.join(docsRoot, "_docs", "module");
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(parent, { withFileTypes: true });
+  } catch (error) {
+    if (!fs.existsSync(parent)) return [];
+    throw error;
+  }
+
+  const modules = entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => {
+      assertSafeModuleName(name);
+      const dir = path.join(parent, name);
+      return isFile(path.join(dir, "requirement.md")) || isFile(path.join(dir, "design.md"));
+    })
+    .sort();
+  for (const moduleName of modules) assertSafeModuleName(moduleName);
+  return modules;
+}
+
+export type ModuleResolution =
+  | { status: "one"; module: string; candidates: string[] }
+  | { status: "many"; candidates: string[] }
+  | { status: "none"; candidates: string[] };
+
+/** Resolves an exact hint or the only available module; never guesses among candidates. */
+export function resolveModule(docsRoot: string, hint?: string): ModuleResolution {
+  if (hint !== undefined) assertSafeModuleName(hint);
+  const candidates = listModules(docsRoot);
+  if (hint !== undefined) {
+    if (candidates.includes(hint)) {
+      assertSafeModuleName(hint);
+      return { status: "one", module: hint, candidates };
+    }
+    return { status: "none", candidates };
+  }
+  if (candidates.length === 1) {
+    assertSafeModuleName(candidates[0]);
+    return { status: "one", module: candidates[0], candidates };
+  }
+  return candidates.length === 0 ? { status: "none", candidates } : { status: "many", candidates };
+}
+
 /** The current round is everything after the last `## `-level round/heading before EOF — good enough for the markers this reads. */
 function tailSection(markdown: string, headingPattern: RegExp): string {
   const lines = markdown.split(/\r?\n/);

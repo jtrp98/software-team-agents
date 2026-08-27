@@ -52,6 +52,7 @@ const AGENT_MD = (name: string): string => `---\nname: ${name}\ndescription: doe
 /** A fake installed-Framework package: `<fwRoot>/templates/**` + manifest.json. */
 function fakeFramework(version: string, files: { relPath: string; content: string }[]): string {
   const fwRoot = tmpRoot("fw");
+  write(fwRoot, path.join("orchestrator", "dist", "cli.js"), "#!/usr/bin/env node\n");
   const entries = files.map((f) => {
     write(fwRoot, path.join("templates", f.relPath), f.content);
     const content = fs.readFileSync(path.join(fwRoot, "templates", f.relPath));
@@ -295,12 +296,14 @@ describe("software-team-agents — target-first end to end", () => {
 
     let launchedCwd = "";
     let launchedEnv: NodeJS.ProcessEnv | undefined;
+    let launchedArgs: string[] | undefined;
     const exitCode = await runDev({
       targetRoot: target,
       templatesDir,
       installationConfigPath: NO_INSTALLATION,
       probe: () => ({ available: true, detail: "claude 1.2.3" }),
-      launch: (_cmd, _args, cwd, env) => {
+      launch: (_cmd, args, cwd, env) => {
+        launchedArgs = args;
         launchedCwd = cwd;
         launchedEnv = env;
         return Promise.resolve(7);
@@ -308,6 +311,9 @@ describe("software-team-agents — target-first end to end", () => {
     });
     expect(launchedCwd.toLowerCase()).toBe(fs.realpathSync.native(target).toLowerCase());
     expect(launchedEnv?.AGENTCLAUDE_WRITABLE_WORK_ROOTS).toBe("[]");
+    expect(launchedEnv?.AGENTCLAUDE_CONTEXT_CMD).toContain("orchestrator");
+    expect(launchedEnv?.AGENTCLAUDE_CONTEXT_CMD).toContain("context");
+    expect(launchedArgs).toEqual([]);
     expect(exitCode).toBe(7);
     const telemetry = new SqliteTaskStore(defaultStateDbPath(target));
     try {
@@ -434,12 +440,14 @@ describe("role workspace architecture (T-ROLE)", () => {
 
     let launchedCwd = "";
     let launchedEnv: NodeJS.ProcessEnv | undefined;
+    let launchedArgs: string[] | undefined;
     const exitCode = await runBa({
       targetRoot: knowledge,
       templatesDir: path.join(fw, "templates"),
       installationConfigPath: NO_INSTALLATION,
       probe: (cmd) => ({ available: true, detail: `${cmd} ready` }),
-      launch: (_cmd, _args, cwd, env) => {
+      launch: (_cmd, args, cwd, env) => {
+        launchedArgs = args;
         launchedCwd = cwd;
         launchedEnv = env;
         return Promise.resolve(0);
@@ -448,6 +456,8 @@ describe("role workspace architecture (T-ROLE)", () => {
     expect(exitCode).toBe(0);
     expect(launchedCwd.toLowerCase()).toBe(fs.realpathSync.native(knowledge).toLowerCase());
     expect(launchedEnv?.AGENTCLAUDE_WRITABLE_WORK_ROOTS).toBe("[]");
+    expect(launchedEnv?.AGENTCLAUDE_CONTEXT_CMD).toContain("context");
+    expect(launchedArgs).toEqual([]);
   });
 
   it("does not let an observability write failure change an interactive session's exit code", async () => {

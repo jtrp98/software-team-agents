@@ -80,9 +80,8 @@ export const PROMPT_BUDGETS: Record<string, number> = {
   "project-manager.md": AGENT_PROMPT_TARGET,
   // T-V3TOK-027 needs the documented design-contract allowance.
   "system-analyst.md": 6_144,
-  // T-V3TOK-028 remains at its approved pre-thinning ceiling until P4's
-  // deterministic QA/evidence prerequisites land.
-  "qa-engineer.md": 30_458,
+  // T-V3TOK-028: QA retains the documented verification-checklist allowance.
+  "qa-engineer.md": 6_144,
   "security.md": AGENT_PROMPT_TARGET,
   "devops.md": AGENT_PROMPT_TARGET,
 };

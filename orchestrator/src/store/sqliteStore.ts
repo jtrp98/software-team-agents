@@ -52,7 +52,9 @@ import {
 // unknown version still refuses to open at all.
 // v7 (token observability): adds nullable runtime/session/composition fields. Historical rows
 // remain explicitly "not reported"; this migration never infers a breakdown.
-const SCHEMA_VERSION = 7;
+// v8: records full module-doc bytes alongside the sliced prompt bytes.
+// v9: records deterministic-gate enabled/disabled for optimized QA runs.
+const SCHEMA_VERSION = 9;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -80,11 +82,13 @@ CREATE TABLE IF NOT EXISTS runs (
   context_chars      INTEGER,
   prompt_version     INTEGER,
   qa_mode            TEXT,
+  deterministic_gate TEXT,
   runtime            TEXT,
   session_kind       TEXT,
   static_chars       INTEGER,
   handoff_chars      INTEGER,
   doc_chars          INTEGER,
+  doc_chars_before   INTEGER,
   knowledge_chars    INTEGER,
   code_intel_chars   INTEGER,
   tool_output_chars  INTEGER
@@ -168,11 +172,13 @@ interface RunRow {
   context_chars: number | null;
   prompt_version: number | null;
   qa_mode: string | null;
+  deterministic_gate: string | null;
   runtime: string | null;
   session_kind: string | null;
   static_chars: number | null;
   handoff_chars: number | null;
   doc_chars: number | null;
+  doc_chars_before: number | null;
   knowledge_chars: number | null;
   code_intel_chars: number | null;
   tool_output_chars: number | null;
@@ -239,6 +245,14 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
       ["tool_output_chars", "INTEGER"],
     ];
     for (const [column, type] of columns) if (!existing.has(column)) db.exec(`ALTER TABLE runs ADD COLUMN ${column} ${type}`);
+  },
+  7: (db) => {
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    if (!existing.has("doc_chars_before")) db.exec("ALTER TABLE runs ADD COLUMN doc_chars_before INTEGER");
+  },
+  8: (db) => {
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    if (!existing.has("deterministic_gate")) db.exec("ALTER TABLE runs ADD COLUMN deterministic_gate TEXT");
   },
 };
 
@@ -333,8 +347,8 @@ export class SqliteTaskStore implements TaskStore {
   appendRun(record: RunRecord): void {
     this.db
       .prepare(
-        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, prompt_version, qa_mode, runtime, session_kind, static_chars, handoff_chars, doc_chars, knowledge_chars, code_intel_chars, tool_output_chars)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, prompt_version, qa_mode, deterministic_gate, runtime, session_kind, static_chars, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.task_id,
@@ -354,11 +368,13 @@ export class SqliteTaskStore implements TaskStore {
         record.context_chars,
         record.promptVersion,
         record.qa_mode,
+        record.deterministic_gate,
         record.runtime,
         record.session_kind,
         record.static_chars,
         record.handoff_chars,
         record.doc_chars,
+        record.doc_chars_before,
         record.knowledge_chars,
         record.code_intel_chars,
         record.tool_output_chars,
@@ -394,11 +410,13 @@ export class SqliteTaskStore implements TaskStore {
       cache_read_tokens: r.cache_read_tokens,
       context_chars: r.context_chars,
       qa_mode: r.qa_mode === "FULL" || r.qa_mode === "TARGETED" ? r.qa_mode : null,
+      deterministic_gate: r.deterministic_gate === "enabled" || r.deterministic_gate === "disabled" ? r.deterministic_gate : null,
       runtime: r.runtime,
       session_kind: r.session_kind === "orchestrated" || r.session_kind === "interactive" ? r.session_kind : null,
       static_chars: r.static_chars,
       handoff_chars: r.handoff_chars,
       doc_chars: r.doc_chars,
+      doc_chars_before: r.doc_chars_before,
       knowledge_chars: r.knowledge_chars,
       code_intel_chars: r.code_intel_chars,
       tool_output_chars: r.tool_output_chars,

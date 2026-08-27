@@ -23,6 +23,7 @@ import {
   type RoleName,
   type TargetBinding,
 } from "./roleWorkspace.js";
+import { formatResolvedCommand, resolveBundledStaCli } from "../runtime/npmCliResolver.js";
 import { runTargetInit } from "./initCommand.js";
 import { isTargetInitialized } from "./targetMeta.js";
 import { recordInteractiveSession } from "../observability/sessionRecord.js";
@@ -331,7 +332,14 @@ async function runRoleSession(role: RoleName, options: RoleRunOptions): Promise<
   const launch = options.launch ?? defaultLaunch;
   const startedAt = Date.now();
   try {
-    return await launch(ctx.runtime, [], ctx.workspaceRoot, launchEnv(role, process.env, ctx.knowledge?.knowledgeRoot, ctx.target?.targetRoot));
+    const sta = resolveBundledStaCli(ctx.frameworkRoot);
+    const contextCommand = sta ? `${formatResolvedCommand(sta)} context` : undefined;
+    return await launch(
+      ctx.runtime,
+      [],
+      ctx.workspaceRoot,
+      launchEnv(role, process.env, ctx.knowledge?.knowledgeRoot, ctx.target?.targetRoot, contextCommand),
+    );
   } finally {
     const record = options.recordSession ?? recordInteractiveSession;
     try {

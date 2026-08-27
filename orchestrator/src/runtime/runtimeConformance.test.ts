@@ -93,12 +93,13 @@ interface ConformanceRow {
 interface CapturedCall {
   readonly args: readonly string[];
   readonly env: NodeJS.ProcessEnv | undefined;
+  readonly input: string | undefined;
 }
 
 /** Records every spawn and answers each binary's well-shaped success envelope. */
 function capturingSpawn(binary: "claude" | "codex" | "opencode", calls: CapturedCall[]): SpawnSync {
-  return ((_command: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
-    calls.push({ args, env: options.env });
+  return ((_command: string, args: string[], options: { env?: NodeJS.ProcessEnv; input?: string }) => {
+    calls.push({ args, env: options.env, input: options.input });
     const stdout =
       binary === "claude"
         ? JSON.stringify({ result: "done", is_error: false, usage: { input_tokens: 3, output_tokens: 4 }, total_cost_usd: 0 })
@@ -272,7 +273,7 @@ async function runConformance(impl: Implementation): Promise<ConformanceRow[]> {
             : "FAIL",
       detail: impl.id === "codex" ? "developer_instructions folded from the binding into the prompt" : "--agent <role> names the binding entry",
     },
-    { caseId: "context-injection", verdict: surface.includes(PROMPT) ? "PASS" : "FAIL" },
+    { caseId: "context-injection", verdict: surface.includes(PROMPT) || calls.some((c) => c.input === PROMPT) ? "PASS" : "FAIL" },
     {
       caseId: "knowledge-binding",
       verdict: env.AGENTCLAUDE_KNOWLEDGE_ROOT === KNOWLEDGE_ROOT ? "PASS" : "FAIL",

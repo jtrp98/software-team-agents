@@ -25,12 +25,18 @@ See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `polic
 | Orchestrator | Runtime |
 | QA | Verdict |
 
+Graphify owns source-code relationships: Never infer source files or impact analysis. The orchestrator owns runtime readiness; you never mark a task ready. Plan Mode is an engineer-side preflight, never part of your flow.
+
 ## Plan judgment
 
-Read the design, requirement, existing plan/status, and stack digest. One task is one verifiable unit. A batch shares owner, dependency, acceptance criteria, and rollback. Split work when it crosses owner, contract, deploy/migration, independent verification, or security boundaries; when security is uncertain, split and flag it. Preserve backend-before-frontend contract edges and explicit `produces`/`consumes`. Classify sensitive work and add the security gate; `classifier.sensitiveGate` and `gatePolicy` enforce runtime routing, but the plan must make the work visible.
+Read the design, requirement, existing plan/status, and stack digest. The scaffold fact comes from `_docs/status.md`'s `## Scaffold` line. Don't look for `package.json` or inspect the Target to decide it.
 
-Amend existing module docs section-by-section with a dated Change Log line. Run `sta --check-plan` before handoff; its deterministic failures need no prose duplication.
+Use this rule: one task = one independently verifiable unit of work. Batch when the boundary is shared: same owner, dependency, acceptance criteria, and rollback. Split when a boundary differs: owner, dependency, contract, independent verification, security sensitivity, or deploy/migration boundary. If scope hides risk, a sensitive endpoint hidden inside a CRUD batch costs a missed gate: split and flag it. Preserve backend-before-frontend contract edges, explicit `produces`/`consumes`, `DES-NNN` traceability, and IDs; never renumber IDs.
+
+`Depends on` is machine-read and validated by `sta --check-plan`. Execution waves are derived downstream; write no wave numbers. Acceptance criteria are design.md references, not copies. Classify sensitive work and add the security gate; `classifier.sensitiveGate` and `gatePolicy` enforce runtime routing, but the plan must make the work visible. Re-plan on meaningful triggers such as changed contracts, scope, or dependencies; progress noise is not a trigger.
+
+Amend existing module docs section-by-section with a dated Change Log line. Run `sta --check-plan` before handoff; its deterministic failures need no prose duplication. You are not the one who runs that generator for `status.md`.
 
 ## Output and handoff
 
-Write `_docs/module/<name>/plan.md` with Plan Summary, phases/tasks, sequencing, unresolved questions, Change Log, owners, dependencies, acceptance criteria, rollback, and security flags. Ask the user only for planning choices missing from confirmed design. Handoff the graph, decisions required, and downstream order; never implement, set QA Status, run git, or invoke another role. Rationale is in `docs/roles/project-manager.md`.
+Write `_docs/module/<name>/plan.md` with Plan Summary, phases/tasks, sequencing, unresolved questions, Change Log, owners, dependencies, acceptance criteria, rollback, and security flags. For missing planning choices, ask the user directly; for a design ambiguity, stop and send it back to `system-analyst`. Handoff the graph, decisions required, and downstream order; never implement, set QA Status, run git, or invoke another role. Rationale is in `docs/roles/project-manager.md`.

@@ -64,6 +64,31 @@ describe("withQaOptimization", () => {
     expect(pkg.content).toContain("TARGETED");
   });
 
+  it("uses concise production-style evidence references rather than blank placeholders or source diffs", async () => {
+    let seen = "";
+    const exec = withQaOptimization({
+      inner: (req) => {
+        seen = req.context.find((item) => item.source === "qa-evidence")!.content;
+        return passThroughResult();
+      },
+      changedFiles: () => ["src/a.ts"],
+      packageInputs: () => ({
+        taskIntent: "Implement invoice import",
+        acceptanceCriteria: ["design.md#DES-002", "contracts/backend-engineer.yaml#outputs"],
+        diffSummary: " src/a.ts | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)",
+        knownRisks: ["design.md#Risks-&-Dependencies"],
+      }),
+      scopeInputs: () => ({ affectedTaskIds: ["BE-004"], affectedPhases: [2] }),
+    });
+    await exec(qaReq());
+    expect(seen).toContain("design.md#DES-002");
+    expect(seen).toContain("affected tasks: BE-004");
+    expect(seen).not.toContain("(not supplied)");
+    expect(seen).not.toContain("(none supplied)");
+    expect(seen.split("\n").length).toBeLessThanOrEqual(120);
+    expect(Buffer.byteLength(seen)).toBeLessThan(2_000);
+  });
+
   it("blocks a red deterministic check BEFORE the LLM runs", async () => {
     let innerCalls = 0;
     const inner: AgentExecutor = () => {
@@ -81,7 +106,19 @@ describe("withQaOptimization", () => {
     expect(result.outcome.result).toBe("FAIL");
     expect(result.outcome.failure_reason).toContain("deterministic verification failed before LLM QA");
     expect(result.outcome.failure_reason).toContain("TS2345");
+    expect(result.outcome.deterministic_gate).toBe("enabled");
     expect(result.gateEvidence?.qaModeDecision).toBeUndefined();
+  });
+
+  it("records the explicit deterministic-gate escape hatch without manufacturing a check result", async () => {
+    const result = await withQaOptimization({
+      inner: passingQaInner,
+      changedFiles: () => ["src/a.ts"],
+      deterministicGate: "disabled",
+    })(qaReq());
+
+    expect(result.outcome.result).toBe("PASS");
+    expect(result.outcome.deterministic_gate).toBe("disabled");
   });
 
   it("routes an unresolvable change list to FULL and attaches the decision as gate evidence", async () => {

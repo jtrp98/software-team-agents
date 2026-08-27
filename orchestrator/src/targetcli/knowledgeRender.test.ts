@@ -22,6 +22,8 @@ describe("renderDevClaude", () => {
     expect(rendered.endsWith(BASE)).toBe(true);
     // The stale-local warning is explicit: a found local _docs/ is legacy.
     expect(rendered).toContain("stale legacy");
+    expect(rendered).toContain("AGENTCLAUDE_CONTEXT_CMD");
+    expect(rendered).toContain("same fail-open context path used by `sta run`");
   });
 
   it("is idempotent — rendering over rendered content does not stack banners", () => {

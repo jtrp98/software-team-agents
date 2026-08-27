@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { moduleDocPath, readModuleDoc, parseQaReport, parseSecurityReport } from "./moduleDocs.js";
+import { listModules, moduleDocPath, readModuleDoc, parseQaReport, parseSecurityReport, resolveModule } from "./moduleDocs.js";
 
 describe("moduleDocPath / readModuleDoc", () => {
   it("resolves under _docs/module/<name>/", () => {
@@ -39,6 +39,43 @@ describe("moduleDocPath / readModuleDoc", () => {
   it("still accepts the names real modules use", () => {
     expect(() => moduleDocPath("/root", "sales-crm", "review.md")).not.toThrow();
     expect(() => moduleDocPath("/root", "auth_login v2 (th)", "plan.md")).not.toThrow();
+  });
+});
+
+describe("listModules / resolveModule (T-V3TOK-040)", () => {
+  function fixture(modules: Record<string, string[]>): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "module-resolver-"));
+    for (const [name, files] of Object.entries(modules)) {
+      const dir = path.join(root, "_docs", "module", name);
+      fs.mkdirSync(dir, { recursive: true });
+      for (const file of files) fs.writeFileSync(path.join(dir, file), `# ${name}\n`, "utf8");
+    }
+    return root;
+  }
+
+  it("returns one module, ignoring empty folders and non-establishing documents", () => {
+    const root = fixture({ empty: [], stale: ["review.md"], sales: ["requirement.md"] });
+    expect(listModules(root)).toEqual(["sales"]);
+    expect(resolveModule(root)).toEqual({ status: "one", module: "sales", candidates: ["sales"] });
+  });
+
+  it("returns many candidates in deterministic order and honors an exact hint", () => {
+    const root = fixture({ zebra: ["design.md"], alpha: ["requirement.md"] });
+    expect(resolveModule(root)).toEqual({ status: "many", candidates: ["alpha", "zebra"] });
+    expect(resolveModule(root, "zebra")).toEqual({ status: "one", module: "zebra", candidates: ["alpha", "zebra"] });
+  });
+
+  it("returns none for an absent module tree or an unmatched exact hint", () => {
+    const root = fixture({ sales: ["design.md"] });
+    expect(resolveModule(path.join(root, "missing"))).toEqual({ status: "none", candidates: [] });
+    expect(resolveModule(root, "billing")).toEqual({ status: "none", candidates: ["sales"] });
+  });
+
+  it("validates hints with the same traversal guard used by document reads", () => {
+    const root = fixture({ sales: ["design.md"] });
+    for (const hostile of ["../sales", "a/b", "a\\b", "C:\\tmp"]) {
+      expect(() => resolveModule(root, hostile), hostile).toThrow(/unsafe module name/);
+    }
   });
 });
 

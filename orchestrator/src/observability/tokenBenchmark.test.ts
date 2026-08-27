@@ -2,7 +2,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { TOKEN_BENCHMARK_DOC_BYTES, createTokenBenchmarkFixture, renderTokenBenchmarkBaseline, runTokenBenchmark } from "./tokenBenchmark.js";
+import { ContextManager } from "../context/contextManager.js";
+import { AgentStage } from "../types.js";
+import { TOKEN_BENCHMARK_DOC_BYTES, createTokenBenchmarkFixture, createTraceableTokenBenchmarkFixture, renderTokenBenchmarkBaseline, runTokenBenchmark } from "./tokenBenchmark.js";
 
 function frameworkFixture(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-token-framework-"));
@@ -35,5 +37,18 @@ describe("T-V3TOK-004 token benchmark", () => {
       expect(output).toContain("| Large |");
       expect(output).toContain("not reported");
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("P3B traceable fixture meets design and requirement targets without changing P0 file sizes", () => {
+    const fixture = createTraceableTokenBenchmarkFixture();
+    try {
+      const cm = new ContextManager({ projectRoot: fixture.root, moduleName: fixture.moduleName });
+      const design = cm.read(AgentStage.BACKEND_ENGINEER, "design", [1])!;
+      const requirement = cm.read(AgentStage.BACKEND_ENGINEER, "requirement", [1])!;
+      expect(design.bytesBefore).toBe(TOKEN_BENCHMARK_DOC_BYTES.design);
+      expect(requirement.bytesBefore).toBe(TOKEN_BENCHMARK_DOC_BYTES.requirement);
+      expect(design.bytesAfter / design.bytesBefore).toBeLessThanOrEqual(0.45);
+      expect(requirement.bytesAfter / requirement.bytesBefore).toBeLessThanOrEqual(0.6);
+    } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
   });
 });

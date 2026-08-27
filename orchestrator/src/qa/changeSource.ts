@@ -22,3 +22,13 @@ export async function gitChangedFiles(cwd: string): Promise<string[]> {
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 }
+
+/**
+ * Concise evidence for QA: git's file/line stat, never the full diff payload.
+ * Callers may combine several writable Targets; each stat remains bounded here.
+ */
+export async function gitDiffSummary(cwd: string, maxChars = 1_800): Promise<string> {
+  const { stdout } = await execFileAsync("git", ["diff", "--stat", "HEAD"], { cwd, maxBuffer: 16 * 1024 * 1024 });
+  const text = stdout.trim() || "No tracked changes detected.";
+  return text.length <= maxChars ? text : `${text.slice(0, maxChars - 48)}\n…(diff stat truncated; request specific files if needed)`;
+}

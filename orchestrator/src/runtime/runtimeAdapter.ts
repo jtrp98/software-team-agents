@@ -274,6 +274,8 @@ export type SpawnSync = (
     timeout?: number;
     maxBuffer?: number;
     env?: NodeJS.ProcessEnv;
+    /** Text sent to the child process's stdin instead of inflating argv. */
+    input?: string;
   },
 ) => SpawnSyncReturns<string>;
 

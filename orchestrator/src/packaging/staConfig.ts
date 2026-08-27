@@ -29,6 +29,8 @@ export const StaConfigSchema = z.object({
       }),
     )
     .optional(),
+  /** Post-hoc token ceiling for a task. Pre-spawn context caps are separate. */
+  token_budget: z.number().int().positive().optional(),
 });
 export type StaConfig = z.infer<typeof StaConfigSchema>;
 

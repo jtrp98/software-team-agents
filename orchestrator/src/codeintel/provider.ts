@@ -33,6 +33,13 @@ export interface CodeLocation {
   line?: number;
 }
 
+/** A bounded, line-addressable excerpt read from the current working tree. */
+export interface CodeSpan {
+  startLine: number;
+  endLine: number;
+  text: string;
+}
+
 /** One candidate context item. Deliberately boring — this crosses the whole pipeline. */
 export interface CodeCandidate {
   location: CodeLocation;
@@ -40,6 +47,10 @@ export interface CodeCandidate {
   symbol?: string;
   /** Relation that produced the hit (e.g. `imports_from`, `calls`) — informational. */
   relation?: string;
+  /** Source declaration line when it can be recovered safely from the working tree. */
+  signature?: string;
+  /** Bounded source evidence recovered from the working tree after path validation. */
+  span?: CodeSpan;
   /**
    * Relative ranking in (0, 1], higher is better. Derived from the tool's own
    * ordering; consumers must only compare scores within one result set.

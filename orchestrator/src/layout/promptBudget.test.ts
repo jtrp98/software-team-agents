@@ -2,6 +2,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { AgentStage } from "../types.js";
+import type { CodeCandidate } from "../codeintel/provider.js";
+import {
+  DEFAULT_MAX_EVIDENCE_BLOCK_BYTES,
+  DEFAULT_MAX_EVIDENCE_CANDIDATES,
+  renderEvidenceBlock,
+} from "../codeintel/resolver.js";
 import { AGENT_PROMPT_TARGET, CLAUDE_MD_BUDGET, PROMPT_BUDGETS, checkPromptBudget } from "./promptBudget.js";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
@@ -110,6 +117,22 @@ describe("guard 4 — every policy pointer resolves", () => {
   it("passes a pointer at a heading that does", () => {
     const root = fixture({ agents: { "setup.md": agentFile("Read, Write", "See `policies/coding.md` §5c.\n") } });
     expect(checkPromptBudget(root).ok).toBe(true);
+  });
+});
+
+describe("guard 6 — code-intelligence evidence budget", () => {
+  it("caps both candidate count and total UTF-8 bytes", () => {
+    const candidates: CodeCandidate[] = Array.from({ length: 50 }, (_, index) => ({
+      location: { file: `src/${index}.ts`, line: index + 1 },
+      symbol: `symbol${index}`,
+      score: 1 - index / 100,
+      provenance: "extracted",
+      span: { startLine: 1, endLine: 40, text: "const value = true;\n".repeat(40) },
+    }));
+    const block = renderEvidenceBlock(AgentStage.BACKEND_ENGINEER, "budget", candidates);
+    const declared = Number(/Candidates \((\d+),/.exec(block)?.[1]);
+    expect(declared).toBeLessThanOrEqual(DEFAULT_MAX_EVIDENCE_CANDIDATES);
+    expect(Buffer.byteLength(block, "utf8")).toBeLessThanOrEqual(DEFAULT_MAX_EVIDENCE_BLOCK_BYTES);
   });
 });
 

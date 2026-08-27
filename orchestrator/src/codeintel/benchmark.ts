@@ -42,6 +42,20 @@ export interface BenchmarkRow {
   tokenReduction: number;
 }
 
+export interface EngineeringRetrievalSide {
+  /** Agent-level full-file source opens; resolver span reads are not agent reopens. */
+  fileOpens: number;
+  /** UTF-8 bytes entering agent context from evidence plus full-file opens. */
+  contextBytes: number;
+}
+
+export interface EngineeringRetrievalBenchmark {
+  off: EngineeringRetrievalSide;
+  on: EngineeringRetrievalSide;
+  evidenceBlockBytes: number;
+  codeResultEquivalent: boolean;
+}
+
 const CODE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".vue", ".svelte"]);
 
 function walkCodeFiles(root: string, dir: string, out: string[]): void {
@@ -75,6 +89,50 @@ export function measureNaive(targetRoot: string, scopeDirs: string[], wallMs: nu
 
 function uniqueFiles(candidates: { location: { file: string } }[]): string[] {
   return [...new Set(candidates.map((candidate) => candidate.location.file))];
+}
+
+function bytesForFiles(targetRoot: string, files: readonly string[]): number {
+  return [...new Set(files)].reduce((sum, file) => {
+    try {
+      return sum + fs.statSync(path.join(targetRoot, file)).size;
+    } catch {
+      return sum;
+    }
+  }, 0);
+}
+
+/**
+ * Same-task A/B accounting for T-V3TOK-071.
+ *
+ * OFF models the pre-retrieval engineer opening every relevant candidate in
+ * full. ON includes the bounded evidence block and still charges every file
+ * the engineer will edit as a mandatory full-file open. Callers provide the
+ * independently produced code results so equivalence is explicit rather than
+ * inferred from token savings.
+ */
+export function measureEngineeringRetrieval(opts: {
+  targetRoot: string;
+  candidateFiles: readonly string[];
+  editedFiles: readonly string[];
+  evidenceBlock: string;
+  codeResultOff: string | Buffer;
+  codeResultOn: string | Buffer;
+}): EngineeringRetrievalBenchmark {
+  const candidateFiles = [...new Set(opts.candidateFiles)];
+  const editedFiles = [...new Set(opts.editedFiles)];
+  const evidenceBlockBytes = Buffer.byteLength(opts.evidenceBlock, "utf8");
+  return {
+    off: {
+      fileOpens: candidateFiles.length,
+      contextBytes: bytesForFiles(opts.targetRoot, candidateFiles),
+    },
+    on: {
+      fileOpens: editedFiles.length,
+      contextBytes: evidenceBlockBytes + bytesForFiles(opts.targetRoot, editedFiles),
+    },
+    evidenceBlockBytes,
+    codeResultEquivalent: Buffer.from(opts.codeResultOff).equals(Buffer.from(opts.codeResultOn)),
+  };
 }
 
 /** Side B — what the graph says to read instead. */
