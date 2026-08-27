@@ -85,6 +85,15 @@ describe("parsePlanTasks", () => {
     );
     expect(problems.join("\n")).toContain("no BE-/FE- id");
   });
+
+  it("retains explicit Produces/Consumes columns for the existing task graph", () => {
+    const { tasks, problems } = parsePlanTasks(
+      "## Phase 1: x\n| Task | Status | Owner | Depends on | Produces | Consumes |\n|---|---|---|---|---|---|\n| BE-001 (DES-001) — API | pending | backend-engineer | — | orders/create, orders/read | auth/session |\n",
+    );
+    expect(problems).toEqual([]);
+    expect(tasks[0].produces).toEqual(["orders/create", "orders/read"]);
+    expect(tasks[0].consumes).toEqual(["auth/session"]);
+  });
 });
 
 describe("validatePlanTasks — T-PM10.1", () => {

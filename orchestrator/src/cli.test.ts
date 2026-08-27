@@ -670,6 +670,8 @@ describe("T-V3TOK-003 tokens verb", () => {
       cache_read_tokens: null, context_chars: null, qa_mode: null, runtime: "claude", session_kind: "interactive",
       deterministic_gate: null,
       static_chars: 321, handoff_chars: null, doc_chars: null, doc_chars_before: null, knowledge_chars: null, code_intel_chars: null, tool_output_chars: null,
+      context_budget_chars: 100, context_budget_source: "role", context_overflow_chars: 221, context_budget_warning: true,
+      context_base_chars: 321, context_task_chars: 0, context_safety_chars: 0, context_docs_chars: 0, context_knowledge_chars: 0, context_code_chars: 0, context_tool_output_chars: 0, context_reserve_chars: 0,
     });
     store.close();
     const logs: string[] = [];
@@ -679,6 +681,7 @@ describe("T-V3TOK-003 tokens verb", () => {
       expect(await runCli(["tokens", "--project-root", dir], dir)).toBe(0);
       expect(logs.join("\n")).toContain("not reported");
       expect(logs.join("\n")).toContain("static=321");
+      expect(logs.join("\n")).toContain("context-budget warnings: 1/1 measured run(s), overflow=221");
       expect(await runCli(["tokens", "--help"], dir)).toBe(0);
       expect(USAGE).toContain("sta tokens");
     } finally {

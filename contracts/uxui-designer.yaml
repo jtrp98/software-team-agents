@@ -7,7 +7,7 @@ input:
   required: [requirements, design]
   optional: []
 output:
-  required: [ux-design]
+  required: [ux-design, handoff]
 constraints:
   - no_git
   - stay_inside_repo

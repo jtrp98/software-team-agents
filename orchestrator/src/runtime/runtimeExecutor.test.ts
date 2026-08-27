@@ -15,6 +15,7 @@ import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { buildContextCommand } from "../context/contextCommand.js";
 import { buildPromptParts } from "./agentRunAssembly.js";
+import { auditTrail } from "../audit/auditTrail.js";
 
 /**
  * T108's central claim, under test: the orchestrator can run agents through the
@@ -300,6 +301,58 @@ describe("metrics — normalising any runtime's usage into the run log (T26/T28)
     ).toBe(result.outcome.context_chars);
   });
 
+  it("warns for an over-budget prompt without changing a single prompt character", async () => {
+    const root = tmpProject();
+    fs.mkdirSync(path.join(root, ".sta"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".sta", "config.yaml"), "schema_version: 1\ncontext_budget:\n  roles:\n    business-analyst: 1\n", "utf8");
+    const runtime = new MockRuntimeAdapter();
+    const executor = executorFor(runtime, { projectRoot: root });
+    const req = { stage: AgentStage.BUSINESS_ANALYST, taskId: "T-warning", context: [{ source: ArtifactType.REQUIREMENTS, content: "x".repeat(500) }] };
+    const expected = buildPromptParts(req).text;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = await executor(req);
+      expect(runtime.requests[0].prompt).toBe(expected);
+      expect(result.outcome.context_chars).toBe(expected.length);
+      expect(result.outcome.context_budget_chars).toBe(1);
+      expect(result.outcome.context_overflow_chars).toBe(expected.length - 1);
+      expect(result.outcome.context_budget_warning).toBe(true);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Prompt is unchanged (warning mode)"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("fails before adapter execution when HANDOFF explicitly references a forbidden document", async () => {
+    const runtime = new MockRuntimeAdapter();
+    const handoff = {
+      task_id: "T-42", implements: [], module: "sales-crm", phase: 1,
+      constraint_refs: ["security.md#Open-Findings"],
+      contract_refs: { produces: [], consumes: [] }, decision_refs: [], test_refs: [],
+      artifact_refs: [], open_findings: [], budget: null,
+    };
+    const result = await executorFor(runtime)({
+      stage: AgentStage.SYSTEM_ANALYST,
+      taskId: "T-42",
+      context: [{ source: ArtifactType.HANDOFF, content: JSON.stringify(handoff) }],
+    });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain("not allowed to read \"security-report\"");
+    expect(runtime.requests).toHaveLength(0);
+  });
+
+  it("fails before adapter execution when persisted HANDOFF JSON is schema-invalid", async () => {
+    const runtime = new MockRuntimeAdapter();
+    const result = await executorFor(runtime)({
+      stage: AgentStage.SYSTEM_ANALYST,
+      taskId: "T-42",
+      context: [{ source: ArtifactType.HANDOFF, content: JSON.stringify({ task_id: "T-42" }) }],
+    });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain("failed contract validation");
+    expect(runtime.requests).toHaveLength(0);
+  });
+
   it("T-V3TOK-052 property 8 — sta context fragments produce the byte-identical sta run prompt", async () => {
     const root = tmpProject();
     const docs = path.join(root, "_docs", "module", "sales-crm");
@@ -476,23 +529,58 @@ describe("document verdicts read back through the workspace (T108)", () => {
   it("each doc-producing stage is checked against its own artifact, not someone else's", async () => {
     const runtime = new MockRuntimeAdapter({
       files: {
-        "_docs/module/sales-crm/design.md": "# Design\n",
-        "_docs/module/sales-crm/plan.md": "# Plan\n",
-        "_docs/module/sales-crm/test-plan.md": "# Test plan\n",
+        "_docs/module/sales-crm/requirement.md": "# Requirement\n\n## Core Features\nREQ-001\n",
+        "_docs/module/sales-crm/design.md": "# Design\n\n## Orders Contract — DES-001\nrule\n",
+        "_docs/module/sales-crm/plan.md": "# Plan\n\n## Phase 1: x\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-001 (DES-001) — x | pending | backend-engineer | — |\n",
+        "_docs/module/sales-crm/test-plan.md": "# Test plan\n\n## Coverage\nTP-001\n",
+        "_docs/module/sales-crm/uxui/design.md": "# UX\n\n## Draft\nUX-001\n",
       },
     });
     const executor = executorFor(runtime);
 
-    // system-analyst owns design.md → present → PASS; project-manager owns
-    // plan.md → present → PASS; test-planner owns test-plan.md → present → PASS.
-    for (const stage of [AgentStage.SYSTEM_ANALYST, AgentStage.PROJECT_MANAGER, AgentStage.TEST_PLANNER]) {
+    for (const stage of [
+      AgentStage.BUSINESS_ANALYST,
+      AgentStage.SYSTEM_ANALYST,
+      AgentStage.PROJECT_MANAGER,
+      AgentStage.TEST_PLANNER,
+      AgentStage.UXUI_DESIGNER,
+    ]) {
       const result = await executor({ stage, taskId: "T-1", context: [] });
       expect(result.outcome.result).toBe("PASS");
+      expect(result.artifactType).toBe(ArtifactType.HANDOFF);
     }
 
     // An engineer owns no module document — its verdict stays exit-status only.
     const engineer = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-1", context: [] });
     expect(engineer.outcome.result).toBe("PASS");
+  });
+
+  it("logs a derivation note but keeps a doc-stage run passing when optional references are absent", async () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const runtime = new MockRuntimeAdapter({ files: { "_docs/module/sales-crm/design.md": "# Design only\n" } });
+      const result = await executorFor(runtime)({ stage: AgentStage.SYSTEM_ANALYST, taskId: "T-1", context: [] });
+      expect(result.outcome.result).toBe("PASS");
+      expect(result.artifactType).toBe(ArtifactType.HANDOFF);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("HANDOFF NOTE"));
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it("writes the runtime-derived BA handoff into the orchestrator artifactStore", async () => {
+    const runtime = new MockRuntimeAdapter({
+      files: { "_docs/module/sales-crm/requirement.md": "# Requirement\n\n## Core Features\nREQ-001\n" },
+    });
+    const orch = new Orchestrator(
+      "T-BA-HANDOFF",
+      classifyTask({ isNewFeatureModuleOrProject: true, touchesBackend: true }),
+    );
+    await orch.step(executorFor(runtime));
+    const stored = orch.snapshot().artifacts[ArtifactType.HANDOFF];
+    expect(stored).toBeDefined();
+    expect(JSON.parse(stored)).toMatchObject({ task_id: "T-BA-HANDOFF", implements: ["REQ-001"] });
+    expect(auditTrail(orch.store, "T-BA-HANDOFF").find((event) => event.type === "AGENT_COMPLETED")?.output).toContain("handoff");
   });
 
   it("fails a test-planner run that left an empty test-plan.md behind", async () => {

@@ -45,6 +45,8 @@ export const KINDS_BY_CATEGORY: Record<ContextCategory, KnowledgeKind[]> = {
   [ArtifactType.TEST_PLAN]: ["test"],
   [ArtifactType.QA_REPORT]: [],
   [ArtifactType.SECURITY_REPORT]: [],
+  // A handoff only points at authoritative items; it carries no new kind.
+  [ArtifactType.HANDOFF]: [],
   "backend-code": [],
   "frontend-code": [],
   "devops-docs": [],

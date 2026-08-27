@@ -12,7 +12,73 @@ export enum ArtifactType {
   TEST_PLAN = "test-plan",
   QA_REPORT = "qa-report",
   SECURITY_REPORT = "security-report",
+  HANDOFF = "handoff",
 }
+
+/** P6 handoffs are compact indexes, never another authored document. */
+export const HANDOFF_MAX_BYTES = 2_048;
+const HandoffIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+const HandoffModuleSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[^/\\\r\n]+$/)
+  .refine((value) => value !== "." && value !== ".." && !/^[A-Za-z]:/.test(value), "must be a safe module folder name");
+const HandoffReferenceSchema = z
+  .string()
+  .min(1)
+  .max(192)
+  .regex(/^[A-Za-z0-9%][A-Za-z0-9%._~:/#-]*$/, "must be a compact reference, not prose");
+const HandoffImplementationSchema = z.string().min(1).max(64).regex(/^(?:REQ|DES)-[A-Za-z0-9._-]+$/);
+const HandoffDecisionSchema = z.string().min(1).max(64).regex(/^(?:ADR|RULE)-[A-Za-z0-9._-]+$/);
+const HandoffTestSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^(?:TP-[A-Za-z0-9._-]+|test-plan\.md#TP-[A-Za-z0-9._-]+)$/);
+
+export const HandoffArtifactSchema = z
+  .object({
+    task_id: HandoffIdSchema,
+    implements: z.array(HandoffImplementationSchema).max(64),
+    module: HandoffModuleSchema,
+    phase: z.number().int().nonnegative().max(10_000).nullable(),
+    constraint_refs: z.array(HandoffReferenceSchema).max(32),
+    contract_refs: z
+      .object({
+        produces: z.array(HandoffReferenceSchema).max(32),
+        consumes: z.array(HandoffReferenceSchema).max(32),
+      })
+      .strict(),
+    decision_refs: z.array(HandoffDecisionSchema).max(32),
+    test_refs: z.array(HandoffTestSchema).max(64),
+    artifact_refs: z.array(HandoffReferenceSchema).max(32),
+    open_findings: z
+      .array(
+        z
+          .object({
+            id: HandoffIdSchema,
+            owner: HandoffReferenceSchema,
+            // Despite the legacy field name, this stores a resolvable pointer,
+            // not a copied finding summary.
+            summary: HandoffReferenceSchema,
+          })
+          .strict(),
+      )
+      .max(16),
+    budget: z.number().int().nonnegative().max(1_000_000).nullable(),
+  })
+  .strict()
+  .superRefine((record, ctx) => {
+    const bytes = Buffer.byteLength(JSON.stringify(record), "utf8");
+    if (bytes > HANDOFF_MAX_BYTES) {
+      ctx.addIssue({
+        code: "custom",
+        message: `serialized handoff is ${bytes} bytes; maximum is ${HANDOFF_MAX_BYTES}`,
+      });
+    }
+  });
+export type HandoffArtifact = z.infer<typeof HandoffArtifactSchema>;
 
 export const RequirementsArtifactSchema = z.object({
   taskId: z.string().min(1),
@@ -169,6 +235,7 @@ export const ARTIFACT_SCHEMAS = {
   [ArtifactType.TEST_PLAN]: TestPlanArtifactSchema,
   [ArtifactType.QA_REPORT]: QaReportArtifactSchema,
   [ArtifactType.SECURITY_REPORT]: SecurityReportArtifactSchema,
+  [ArtifactType.HANDOFF]: HandoffArtifactSchema,
 } as const;
 
 export class ArtifactValidationError extends Error {
@@ -188,6 +255,7 @@ interface ArtifactDataMap {
   [ArtifactType.TEST_PLAN]: TestPlanArtifact;
   [ArtifactType.QA_REPORT]: QaReportArtifact;
   [ArtifactType.SECURITY_REPORT]: SecurityReportArtifact;
+  [ArtifactType.HANDOFF]: HandoffArtifact;
 }
 
 /**

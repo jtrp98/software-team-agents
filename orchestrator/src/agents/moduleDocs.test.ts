@@ -2,7 +2,76 @@ import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { listModules, moduleDocPath, readModuleDoc, parseQaReport, parseSecurityReport, resolveModule } from "./moduleDocs.js";
+import { deriveHandoff, listModules, moduleDocPath, readModuleDoc, parseQaReport, parseSecurityReport, resolveModule } from "./moduleDocs.js";
+import { AgentStage } from "../types.js";
+
+describe("deriveHandoff (T-V3TOK-091)", () => {
+  it("derives BA and SA references from their authoritative documents", () => {
+    const ba = deriveHandoff(AgentStage.BUSINESS_ANALYST, "sales", [
+      "# Requirement",
+      "## Core Features",
+      "- REQ-001 create order",
+      "## Constraints & Assumptions",
+      "- REQ-002 admin only",
+      "## Open Questions",
+      "- Who owns refunds?",
+    ].join("\n"), undefined, { taskId: "T-1" });
+    expect(ba.complete).toBe(true);
+    expect(ba.artifact.implements).toEqual(["REQ-001", "REQ-002"]);
+    expect(ba.artifact.constraint_refs).toEqual([
+      "requirement.md#Core-Features",
+      "requirement.md#Constraints-%26-Assumptions",
+    ]);
+    expect(ba.artifact.open_findings[0].summary).toBe("requirement.md#Open-Questions:1");
+
+    const sa = deriveHandoff(AgentStage.SYSTEM_ANALYST, "sales", [
+      "# Design",
+      "## Feature Contract — DES-010",
+      "Covers REQ-001 and ADR-005 under RULE-031.",
+      "## Unresolved Open Questions",
+      "—",
+    ].join("\n"), undefined, { taskId: "T-1" });
+    expect(sa.complete).toBe(true);
+    expect(sa.artifact.implements).toEqual(["DES-010"]);
+    expect(sa.artifact.contract_refs.produces).toEqual(["design.md#Feature-Contract-%E2%80%94-DES-010"]);
+    expect(sa.artifact.decision_refs).toEqual(["ADR-005", "RULE-031"]);
+  });
+
+  it("derives PM contract references through the parsed plan and plan graph", () => {
+    const plan = [
+      "# Plan",
+      "## Phase 1: Orders",
+      "| Task | Status | Owner | Depends on | Produces | Consumes |",
+      "|---|---|---|---|---|---|",
+      "| BE-001 (DES-010) — API | pending | backend-engineer | — | orders/create | auth/session |",
+      "## Phase 2: UI",
+      "| Task | Status | Owner | Depends on | Produces | Consumes |",
+      "|---|---|---|---|---|---|",
+      "| FE-001 (DES-011) — form | pending | frontend-engineer | BE-001 | — | orders/create |",
+    ].join("\n");
+    const derived = deriveHandoff(AgentStage.PROJECT_MANAGER, "sales", plan, plan, { taskId: "T-1", phases: [1] });
+    expect(derived.complete).toBe(true);
+    expect(derived.artifact.phase).toBe(1);
+    expect(derived.artifact.implements).toEqual(["DES-010"]);
+    expect(derived.artifact.contract_refs).toEqual({ produces: ["orders/create"], consumes: ["auth/session"] });
+  });
+
+  it("derives test-planner and UX/UI references without copied prose", () => {
+    const tests = deriveHandoff(AgentStage.TEST_PLANNER, "sales", "# Test Plan\n\n## Coverage\n- TP-009 verifies REQ-001\n", undefined, { taskId: "T-1" });
+    expect(tests.artifact.test_refs).toEqual(["TP-009"]);
+
+    const ux = deriveHandoff(AgentStage.UXUI_DESIGNER, "sales", "# UX\n\n## Recommendations\n- UX-003\n- UX-004\n", undefined, { taskId: "T-1" });
+    expect(ux.artifact.artifact_refs).toEqual(["uxui/design.md", "UX-003", "UX-004"]);
+  });
+
+  it("returns a schema-valid minimal record and note when optional references cannot be derived", () => {
+    const result = deriveHandoff(AgentStage.SYSTEM_ANALYST, "auth_login v2 (th)", "# Design only\n", undefined, { taskId: "T-1", phases: [3] });
+    expect(result.complete).toBe(false);
+    expect(result.notes.join(" ")).toContain("minimal handoff");
+    expect(result.artifact).toMatchObject({ task_id: "T-1", module: "auth_login v2 (th)", phase: 3 });
+    expect(result.artifact.implements).toEqual([]);
+  });
+});
 
 describe("moduleDocPath / readModuleDoc", () => {
   it("resolves under _docs/module/<name>/", () => {

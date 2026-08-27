@@ -24,6 +24,11 @@ function fixture(opts: { claudeMd?: string; agents?: Record<string, string>; pol
   fs.mkdirSync(path.join(root, ".claude", "agents"), { recursive: true });
   fs.mkdirSync(path.join(root, ".claude", "shared"), { recursive: true });
   fs.writeFileSync(path.join(root, ".claude", "shared", "agent-preamble.md"), "# Agent preamble\n", "utf8");
+  fs.mkdirSync(path.join(root, "orchestrator", "schemas"), { recursive: true });
+  fs.copyFileSync(
+    path.join(REPO_ROOT, "orchestrator", "schemas", "handoff.schema.json"),
+    path.join(root, "orchestrator", "schemas", "handoff.schema.json"),
+  );
   for (const [name, body] of Object.entries(opts.agents ?? {})) {
     fs.writeFileSync(path.join(root, ".claude", "agents", name), body, "utf8");
   }
@@ -117,6 +122,21 @@ describe("guard 4 — every policy pointer resolves", () => {
   it("passes a pointer at a heading that does", () => {
     const root = fixture({ agents: { "setup.md": agentFile("Read, Write", "See `policies/coding.md` §5c.\n") } });
     expect(checkPromptBudget(root).ok).toBe(true);
+  });
+});
+
+describe("guard 9 — handoff schema validation", () => {
+  it("fails when the external handoff schema is missing", () => {
+    const root = fixture({ agents: { "setup.md": agentFile("Read, Write") } });
+    fs.rmSync(path.join(root, "orchestrator", "schemas", "handoff.schema.json"));
+    expect(checkPromptBudget(root).problems.some((problem) => problem.includes("handoff.schema.json is missing or invalid"))).toBe(true);
+  });
+
+  it("compiles the shipped schema and proves prose references are rejected", () => {
+    const root = fixture({ agents: { "setup.md": agentFile("Read, Write") } });
+    const result = checkPromptBudget(root);
+    expect(result.problems.filter((problem) => problem.includes("handoff.schema.json"))).toEqual([]);
+    expect(result.notes).toContain("handoff.schema.json compiled and validated guard 9 fixtures");
   });
 });
 

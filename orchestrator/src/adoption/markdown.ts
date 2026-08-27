@@ -66,9 +66,16 @@ export function sections(text: string, level: 2 | 3): MarkdownSection[] {
  * which is the honest answer — "no rows" rather than "one row that is a
  * sentence".
  */
-export function tableRows(text: string): string[][] {
+export interface MarkdownTable {
+  header: string[];
+  rows: string[][];
+}
+
+/** First table, retaining its header so authoritative optional columns remain addressable by name. */
+export function firstTable(text: string): MarkdownTable {
   const lines = text.split(/\r?\n/).map((l) => l.trim());
   const rows: string[][] = [];
+  let header: string[] = [];
   let seenSeparator = false;
   let started = false;
 
@@ -88,10 +95,17 @@ export function tableRows(text: string): string[][] {
       seenSeparator = true;
       continue;
     }
-    if (!seenSeparator) continue; // the header row
+    if (!seenSeparator) {
+      if (header.length === 0) header = cells;
+      continue;
+    }
     rows.push(cells);
   }
-  return rows;
+  return { header, rows };
+}
+
+export function tableRows(text: string): string[][] {
+  return firstTable(text).rows;
 }
 
 /**

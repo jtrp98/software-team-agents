@@ -48,6 +48,7 @@ export const ALL_CONTEXT_CATEGORIES: ContextCategory[] = [
   ArtifactType.TEST_PLAN,
   ArtifactType.QA_REPORT,
   ArtifactType.SECURITY_REPORT,
+  ArtifactType.HANDOFF,
   "backend-code",
   "frontend-code",
   "devops-docs",
@@ -62,7 +63,10 @@ export interface ContextPolicy {
 }
 
 function policy(reads: ContextCategory[]): ContextPolicy {
-  return { reads, doesNotRead: ALL_CONTEXT_CATEGORIES.filter((c) => !reads.includes(c)) };
+  // A handoff is a bounded pointer set, not authority. Every stage may inspect
+  // it; selectContext still applies this policy to every referenced source.
+  const permitted = [...new Set([...reads, ArtifactType.HANDOFF])];
+  return { reads: permitted, doesNotRead: ALL_CONTEXT_CATEGORIES.filter((c) => !permitted.includes(c)) };
 }
 
 /**

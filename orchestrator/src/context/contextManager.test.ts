@@ -7,13 +7,26 @@ import {
   CATEGORY_TO_DOC,
   ContextManager,
   DOC_FILENAME,
+  HANDOFF_REFERENCE_MAX_SECTION_RATIO,
+  handoffReferencedSections,
   sectionMap,
   selectDocContext,
   type DocKind,
 } from "./contextManager.js";
+import type { HandoffArtifact } from "../artifacts/schemas.js";
+import { ContextLeakageError } from "./contextSelection.js";
 import { renderSlicedDocs } from "../runtime/agentRunAssembly.js";
 import { sliceModuleDocsWithSavings } from "../runtime/agentRunAssembly.js";
 import { buildContextCommand } from "./contextCommand.js";
+
+function handoff(over: Partial<HandoffArtifact> = {}): HandoffArtifact {
+  return {
+    task_id: "T-1", implements: [], module: "sales-crm", phase: 1,
+    constraint_refs: [], contract_refs: { produces: [], consumes: [] },
+    decision_refs: [], test_refs: [], artifact_refs: [], open_findings: [], budget: null,
+    ...over,
+  };
+}
 
 const PLAN = `# แผนงาน sales-crm
 
@@ -722,5 +735,80 @@ describe("T-V3TOK-051 traceability-backed requirement slicing", () => {
     const broken = new ContextManager({ projectRoot: root, moduleName: "sales-crm" }).read(AgentStage.BACKEND_ENGINEER, "requirement", [1])!;
     expect(broken.fullDocument).toBe(true);
     expect(broken.reason).toContain("incomplete");
+  });
+});
+
+describe("T-V3TOK-092 handoff-reference narrowing", () => {
+  function project(): string {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-handoff-slice-"));
+    const dir = path.join(root, "_docs", "module", "sales-crm");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "requirement.md"), TRACE_REQUIREMENT, "utf8");
+    fs.writeFileSync(
+      path.join(dir, "design.md"),
+      TRACE_DESIGN.replace("## Data Model", "## Future Contract — DES-999\n" + "future ".repeat(500) + "\n\n## Data Model"),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(dir, "plan.md"), TRACE_PLAN, "utf8");
+    return root;
+  }
+
+  it("keeps referenced and always-read sections while dropping unreferenced unknown excess", () => {
+    const cm = new ContextManager({ projectRoot: project(), moduleName: "sales-crm" });
+    const normal = cm.forStage(AgentStage.BACKEND_ENGINEER, [1]);
+    const refs = handoffReferencedSections(
+      AgentStage.BACKEND_ENGINEER,
+      handoff({ contract_refs: { produces: ["design.md#Import-Contract-%E2%80%94-DES-001"], consumes: [] } }),
+    );
+    const narrowed = cm.forStage(AgentStage.BACKEND_ENGINEER, [1], undefined, refs);
+    const normalDesign = normal.find((doc) => doc.doc === "design")!;
+    const narrowedDesign = narrowed.find((doc) => doc.doc === "design")!;
+    expect(normalDesign.text).toContain("Future Contract — DES-999");
+    expect(narrowedDesign.text).not.toContain("Future Contract — DES-999");
+    expect(narrowedDesign.text).toContain("Import Contract — DES-001");
+    expect(narrowedDesign.text).toContain("## Risks & Dependencies");
+    expect(narrowedDesign.text).toContain("## Open Questions");
+    expect(narrowedDesign.bytesAfter).toBeLessThan(normalDesign.bytesAfter);
+    expect(narrowedDesign.skipped).toContain("Future Contract — DES-999");
+  });
+
+  it("rejects an explicitly qualified reference outside CONTEXT_POLICY", () => {
+    expect(() => handoffReferencedSections(
+      AgentStage.SYSTEM_ANALYST,
+      handoff({ constraint_refs: ["security.md#Open-Findings"] }),
+    )).toThrow(ContextLeakageError);
+  });
+
+  it("falls back to the normal slice when references cover more than the declared ratio", () => {
+    expect(HANDOFF_REFERENCE_MAX_SECTION_RATIO).toBe(0.6);
+    const cm = new ContextManager({ projectRoot: project(), moduleName: "sales-crm" });
+    const normal = cm.forStage(AgentStage.BACKEND_ENGINEER, [1]);
+    const allDesignHeadings = sectionMap(normal.find((doc) => doc.doc === "design")!.text)
+      .map((section) => `design.md#${encodeURIComponent(section.heading.replace(/\s+/g, "-"))}`);
+    const refs = handoffReferencedSections(
+      AgentStage.BACKEND_ENGINEER,
+      handoff({ contract_refs: { produces: allDesignHeadings, consumes: [] } }),
+    );
+    const broad = cm.forStage(AgentStage.BACKEND_ENGINEER, [1], undefined, refs);
+    expect(broad.find((doc) => doc.doc === "design")!.text).toBe(normal.find((doc) => doc.doc === "design")!.text);
+  });
+
+  it("does not change any no-handoff ContextManager output", () => {
+    const cm = new ContextManager({ projectRoot: project(), moduleName: "sales-crm" });
+    expect(cm.forStage(AgentStage.BACKEND_ENGINEER, [1])).toEqual(
+      cm.forStage(AgentStage.BACKEND_ENGINEER, [1], undefined, undefined),
+    );
+  });
+
+  it("falls back to the normal slice for a minimal handoff with no references", () => {
+    const cm = new ContextManager({ projectRoot: project(), moduleName: "sales-crm" });
+    const normal = cm.forStage(AgentStage.BACKEND_ENGINEER, [1]);
+    const minimal = cm.forStage(
+      AgentStage.BACKEND_ENGINEER,
+      [1],
+      undefined,
+      handoffReferencedSections(AgentStage.BACKEND_ENGINEER, handoff()),
+    );
+    expect(minimal).toEqual(normal);
   });
 });

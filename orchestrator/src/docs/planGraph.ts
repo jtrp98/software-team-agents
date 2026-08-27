@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { AgentStage } from "../types.js";
 import { TaskGraph, TaskGraphError, CircularDependencyError, UnknownTaskError, type TaskNode } from "../graph/taskGraph.js";
-import { sections, tableRows, checkboxLines } from "../adoption/markdown.js";
+import { sections, firstTable, checkboxLines } from "../adoption/markdown.js";
 import { extractIds } from "../traceability/traceability.js";
 
 /**
@@ -62,6 +62,9 @@ export interface PlanTaskRow {
   description: string;
   /** True when the row came from a legacy `- [ ]` line rather than a T52 table. */
   fromCheckbox: boolean;
+  /** Explicit contract columns from the authoritative task table; undefined means the plan did not make the claim. */
+  produces?: string[];
+  consumes?: string[];
 }
 
 export interface ParsedPlan {
@@ -100,6 +103,13 @@ function waveOf(cell: string | undefined): number | null | "invalid" {
   return Number.isInteger(value) && value >= 1 ? value : "invalid";
 }
 
+function contractsOf(cell: string | undefined): string[] | undefined {
+  if (cell === undefined) return undefined;
+  const text = cell.trim();
+  if (text === "" || text === "—" || text === "-") return [];
+  return [...new Set(text.split(/\s*(?:,|;|<br\s*\/?>)\s*/i).map((value) => value.replace(/^`|`$/g, "").trim()).filter(Boolean))];
+}
+
 function rowsForPhase(phaseNumber: number, body: string, problems: string[]): PlanTaskRow[] {
   const rows: PlanTaskRow[] = [];
   const push = (
@@ -108,6 +118,8 @@ function rowsForPhase(phaseNumber: number, body: string, problems: string[]): Pl
     ownerCell: string,
     dependsCell: string,
     waveCell: string | undefined,
+    producesCell: string | undefined,
+    consumesCell: string | undefined,
     fromCheckbox: boolean,
   ): void => {
     const parsed = parseTaskCell(taskCell);
@@ -127,6 +139,8 @@ function rowsForPhase(phaseNumber: number, body: string, problems: string[]): Pl
       wave: wave === "invalid" ? null : wave,
       description: parsed.description || parsed.id,
       fromCheckbox,
+      produces: contractsOf(producesCell),
+      consumes: contractsOf(consumesCell),
     });
     if (status === null) {
       problems.push(`task ${parsed.id}: Status "${statusCell.trim()}" is not one of ${PLAN_STATUSES.join(", ")}`);
@@ -136,10 +150,30 @@ function rowsForPhase(phaseNumber: number, body: string, problems: string[]): Pl
     }
   };
 
-  const rows_ = tableRows(body);
-  if (rows_.length > 0) {
-    for (const cells of rows_) {
-      push(cells[0] ?? "", cells[1] ?? "", cells[2] ?? "", cells[3] ?? "", cells[4], false);
+  const table = firstTable(body);
+  if (table.rows.length > 0) {
+    const column = (name: string, fallback: number): number => {
+      const found = table.header.findIndex((heading) => heading.trim().toLowerCase() === name);
+      return found === -1 ? fallback : found;
+    };
+    const task = column("task", 0);
+    const status = column("status", 1);
+    const owner = column("owner", 2);
+    const depends = column("depends on", 3);
+    const wave = table.header.findIndex((heading) => heading.trim().toLowerCase() === "wave");
+    const produces = table.header.findIndex((heading) => heading.trim().toLowerCase() === "produces");
+    const consumes = table.header.findIndex((heading) => heading.trim().toLowerCase() === "consumes");
+    for (const cells of table.rows) {
+      push(
+        cells[task] ?? "",
+        cells[status] ?? "",
+        cells[owner] ?? "",
+        cells[depends] ?? "",
+        wave === -1 ? undefined : cells[wave],
+        produces === -1 ? undefined : cells[produces],
+        consumes === -1 ? undefined : cells[consumes],
+        false,
+      );
     }
     return rows;
   }
@@ -147,7 +181,7 @@ function rowsForPhase(phaseNumber: number, body: string, problems: string[]): Pl
   // Legacy checkbox shape (pre-T52). Still parsed so --check-plan says something
   // useful about an unmigrated plan instead of silently passing it.
   for (const line of checkboxLines(body)) {
-    push(line.text, "", "", "", undefined, true);
+    push(line.text, "", "", "", undefined, undefined, undefined, true);
   }
   return rows;
 }

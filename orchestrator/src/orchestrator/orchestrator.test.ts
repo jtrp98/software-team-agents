@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Orchestrator, type AgentExecutor, type AgentExecutorResult } from "./orchestrator.js";
 import { classifyTask } from "../classification/taskClassifier.js";
 import { AgentStage, TaskState } from "../types.js";
-import { ArtifactType, type DesignArtifact, type QaReportArtifact, type SecurityReportArtifact } from "../artifacts/schemas.js";
+import { ArtifactType, ArtifactValidationError, type DesignArtifact, type QaReportArtifact, type SecurityReportArtifact } from "../artifacts/schemas.js";
 import { BudgetExceededError } from "../cost/costControl.js";
 import { validateStructuredFailure } from "../orchestrator/failure.js";
 import { ApprovalType } from "../gates/approval.js";
@@ -494,6 +494,22 @@ describe("uxui-designer routes questions back to ba/sa (T-UX10)", () => {
     expect(orch.machine.current).toBe(TaskState.REQUIREMENT);
     // No verification budget was touched by a routed question.
     expect(orch.retries.qa).toBe(0);
+  });
+
+  it("fails closed when a doc stage returns an invalid handoff instead of silently storing it", () => {
+    const classification = classifyTask({ touchesSchema: true, touchesBackend: true });
+    const orch = new Orchestrator("T-BAD-HANDOFF", classification);
+    const status = orch.status();
+    expect(status).toEqual({ kind: "RUNNING", stage: AgentStage.SYSTEM_ANALYST });
+    expect(() => orch.reportCompletion(
+      AgentStage.SYSTEM_ANALYST,
+      {
+        outcome: { tokens: 1, cost: 0, result: "PASS" },
+        artifactType: ArtifactType.HANDOFF,
+        artifact: { task_id: "T-BAD-HANDOFF", module: "sales" },
+      },
+      { start: 0, end: 1 },
+    )).toThrow(ArtifactValidationError);
   });
 
   it("a feasibility question routes back to system-analyst at DESIGN and re-walks the chain", async () => {

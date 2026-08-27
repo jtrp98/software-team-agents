@@ -90,6 +90,10 @@ export class SelfReviewError extends Error {
  * true because of a lookup elsewhere is one edit away from not being a rule.
  */
 export function assertIndependentVerdict(stage: AgentStage, artifactType: ArtifactType): void {
+  // A handoff is a machine-derived reference index for the stage's own output,
+  // not a judgment of that output. Keep this exception narrow: verdict
+  // artifacts below still require an independent reviewer.
+  if (artifactType === ArtifactType.HANDOFF) return;
   if (!VERDICT_ARTIFACTS.includes(artifactType)) return;
   if (!isReviewer(stage)) throw new SelfReviewError(stage, artifactType);
 }

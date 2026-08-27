@@ -35,6 +35,20 @@ export interface RunRecord {
   knowledge_chars: number | null;
   code_intel_chars: number | null;
   tool_output_chars: number | null;
+  /** T-V3TOK-100 warning-mode context threshold and outcome; null means no authoritative budget was configured. */
+  context_budget_chars: number | null;
+  context_budget_source: "role" | "model_context_window" | null;
+  context_overflow_chars: number | null;
+  context_budget_warning: boolean | null;
+  /** Complete priority-class accounting. These sum exactly to context_chars when measured. */
+  context_base_chars: number | null;
+  context_task_chars: number | null;
+  context_safety_chars: number | null;
+  context_docs_chars: number | null;
+  context_knowledge_chars: number | null;
+  context_code_chars: number | null;
+  context_tool_output_chars: number | null;
+  context_reserve_chars: number | null;
   /** QA07 — the verify mode this qa-engineer round ran in, from its own report. Null for every non-QA stage (and for QA runs that predate the field). */
   qa_mode: "FULL" | "TARGETED" | null;
   /** Whether this optimized QA round ran deterministic checks, or used the explicit escape hatch. */
@@ -62,6 +76,18 @@ export interface RunOutcome {
   knowledge_chars?: number;
   code_intel_chars?: number;
   tool_output_chars?: number;
+  context_budget_chars?: number;
+  context_budget_source?: "role" | "model_context_window";
+  context_overflow_chars?: number;
+  context_budget_warning?: boolean;
+  context_base_chars?: number;
+  context_task_chars?: number;
+  context_safety_chars?: number;
+  context_docs_chars?: number;
+  context_knowledge_chars?: number;
+  context_code_chars?: number;
+  context_tool_output_chars?: number;
+  context_reserve_chars?: number;
   qa_mode?: "FULL" | "TARGETED";
   deterministic_gate?: "enabled" | "disabled";
 }
@@ -122,6 +148,18 @@ export class RunLog {
       knowledge_chars: params.outcome.knowledge_chars ?? null,
       code_intel_chars: params.outcome.code_intel_chars ?? null,
       tool_output_chars: params.outcome.tool_output_chars ?? null,
+      context_budget_chars: params.outcome.context_budget_chars ?? null,
+      context_budget_source: params.outcome.context_budget_source ?? null,
+      context_overflow_chars: params.outcome.context_overflow_chars ?? null,
+      context_budget_warning: params.outcome.context_budget_warning ?? null,
+      context_base_chars: params.outcome.context_base_chars ?? null,
+      context_task_chars: params.outcome.context_task_chars ?? null,
+      context_safety_chars: params.outcome.context_safety_chars ?? null,
+      context_docs_chars: params.outcome.context_docs_chars ?? null,
+      context_knowledge_chars: params.outcome.context_knowledge_chars ?? null,
+      context_code_chars: params.outcome.context_code_chars ?? null,
+      context_tool_output_chars: params.outcome.context_tool_output_chars ?? null,
+      context_reserve_chars: params.outcome.context_reserve_chars ?? null,
       qa_mode: params.outcome.qa_mode ?? null,
       deterministic_gate: params.outcome.deterministic_gate ?? null,
     };

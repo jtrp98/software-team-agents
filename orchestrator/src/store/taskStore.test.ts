@@ -96,6 +96,18 @@ function sampleRun(taskId = "T-1"): RunRecord {
     knowledge_chars: 200,
     code_intel_chars: 400,
     tool_output_chars: 100,
+    context_budget_chars: null,
+    context_budget_source: null,
+    context_overflow_chars: null,
+    context_budget_warning: null,
+    context_base_chars: null,
+    context_task_chars: null,
+    context_safety_chars: null,
+    context_docs_chars: null,
+    context_knowledge_chars: null,
+    context_code_chars: null,
+    context_tool_output_chars: null,
+    context_reserve_chars: null,
   };
 }
 

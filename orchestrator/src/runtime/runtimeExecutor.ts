@@ -6,6 +6,7 @@ import type { StructuredFailure } from "../orchestrator/failure.js";
 import {
   buildPromptParts,
   assembleStageContext,
+  handoffFromContext,
   failResult,
   qaArtifactResult,
   securityArtifactResult,
@@ -23,6 +24,9 @@ import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { checkRoleExecutionGate } from "../roles/roleExecutionGate.js";
 import type { PersistedTask } from "../store/taskStore.js";
 import type { ThreeRepoRequestRoots } from "../threeRepo/preflight.js";
+import { deriveHandoff } from "../agents/moduleDocs.js";
+import { ArtifactType } from "../artifacts/schemas.js";
+import { assessContextBudget, resolveContextBudgetFromProject, type ContextBudgetComposition } from "../context/contextBudget.js";
 
 /**
  * An `AgentExecutor` built on a `RuntimeAdapter` (T108).
@@ -143,6 +147,8 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
   };
   doc_chars_before: number;
   runtime: string;
+  contextBudget: ReturnType<typeof assessContextBudget>;
+  budgetComposition: ContextBudgetComposition;
 }): RunMetrics {
   const input_tokens = result.usage.inputTokens;
   const output_tokens = result.usage.outputTokens;
@@ -167,6 +173,18 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     session_kind: "orchestrated",
     ...declared.composition,
     doc_chars_before: declared.doc_chars_before,
+    context_budget_chars: declared.contextBudget.budgetChars ?? undefined,
+    context_budget_source: declared.contextBudget.budgetSource ?? undefined,
+    context_overflow_chars: declared.contextBudget.overflowChars ?? undefined,
+    context_budget_warning: declared.contextBudget.warning ?? undefined,
+    context_base_chars: declared.budgetComposition.base,
+    context_task_chars: declared.budgetComposition.task,
+    context_safety_chars: declared.budgetComposition.safety,
+    context_docs_chars: declared.budgetComposition.docs,
+    context_knowledge_chars: declared.budgetComposition.knowledge,
+    context_code_chars: declared.budgetComposition.code,
+    context_tool_output_chars: declared.budgetComposition.tool_output,
+    context_reserve_chars: declared.budgetComposition.reserve,
   };
 }
 
@@ -185,6 +203,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
   return async function runtimeExecutor(req: AgentExecutorRequest): Promise<AgentExecutorResult> {
     const role = getAgent(req.stage).role;
     const moduleName = opts.moduleName(req.taskId);
+    const phases = opts.phases?.(req.taskId);
 
     let threeRepo: { task: PersistedTask; roots: ThreeRepoRequestRoots } | undefined;
     if (opts.threeRepoTask) {
@@ -204,22 +223,34 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     }
 
     const workRoot = threeRepo?.roots.workRoots.find((root) => root.access === "write") ?? threeRepo?.roots.workRoots[0];
-    const stageContext = sliceDocs
-      ? await assembleStageContext(req.stage, {
-          projectRoot: opts.projectRoot,
-          docsRoot: threeRepo?.roots.knowledgeRoot ?? opts.projectRoot,
-          knowledgeRoot: threeRepo?.roots.knowledgeRoot,
-          moduleName,
-          phases: opts.phases?.(req.taskId),
-          taskId: req.taskId,
-          targetRoot: workRoot?.path,
-          targetId: workRoot?.targetId,
-        })
-      : {
-          docs: [], knowledge: [], codeIntel: [], selected: [], docCharsBefore: 0,
-          savings: { bytesBefore: 0, bytesAfter: 0, savedPct: 0 },
-          directFileReads: 0,
-        };
+    let incomingHandoff;
+    try {
+      incomingHandoff = handoffFromContext(req.context);
+    } catch (error) {
+      return failResult(`cannot use prior-stage handoff: ${String(error)}`);
+    }
+    let stageContext;
+    try {
+      stageContext = sliceDocs
+        ? await assembleStageContext(req.stage, {
+            projectRoot: opts.projectRoot,
+            docsRoot: threeRepo?.roots.knowledgeRoot ?? opts.projectRoot,
+            knowledgeRoot: threeRepo?.roots.knowledgeRoot,
+            moduleName,
+            phases,
+            taskId: req.taskId,
+            handoff: incomingHandoff ?? undefined,
+            targetRoot: workRoot?.path,
+            targetId: workRoot?.targetId,
+          })
+        : {
+            docs: [], knowledge: [], codeIntel: [], selected: [], docCharsBefore: 0,
+            savings: { bytesBefore: 0, bytesAfter: 0, savedPct: 0 },
+            directFileReads: 0,
+          };
+    } catch (error) {
+      return failResult(`cannot assemble authorized handoff context: ${String(error)}`);
+    }
 
     const promptParts = buildPromptParts(req, opts.extraInstruction, {
       docs: stageContext.docs,
@@ -248,6 +279,20 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       routingDiagnostics.push(...route.diagnostics);
     }
 
+    const contextBudget = assessContextBudget(
+      prompt.length,
+      promptParts.budgetComposition,
+      resolveContextBudgetFromProject(opts.projectRoot, role, activeModel),
+    );
+    if (contextBudget.warning) {
+      // T-V3TOK-100 is deliberately observation-only. In particular, this
+      // happens after assembly and before execution without editing `prompt`.
+      console.warn(
+        `[orchestrator] WARNING: ${role} context budget exceeded: ${contextBudget.contextChars} chars > ` +
+          `${contextBudget.budgetChars} (${contextBudget.budgetSource}); overflow=${contextBudget.overflowChars}. Prompt is unchanged (warning mode).`,
+      );
+    }
+
     const declared = {
       model: activeModel,
       promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
@@ -255,6 +300,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       composition: promptParts.composition,
       doc_chars_before: stageContext.docCharsBefore,
       runtime: activeRuntime.id,
+      contextBudget,
+      budgetComposition: promptParts.budgetComposition,
     };
 
     let guards: RuntimeGuards;
@@ -353,7 +400,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       return securityArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "security.md"));
     }
 
-    // The four doc-producing stages each own exactly one module document. Exit 0
+    // The five doc-producing stages each own exactly one module document. Exit 0
     // alone is not success for them — an agent that answered every question with
     // prose but never wrote its artifact would otherwise sail through as PASS,
     // and the next stage would build (or refuse to build) against a document
@@ -369,7 +416,18 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           metrics,
         );
       }
-      return { outcome: { ...metrics, result: "PASS" } };
+      const handoff = deriveHandoff(req.stage, moduleName, doc, ownedDoc === "plan.md" ? doc : undefined, {
+        taskId: req.taskId,
+        phases,
+      });
+      for (const note of handoff.notes) {
+        console.error(`[orchestrator] HANDOFF NOTE (${role}): ${note}`);
+      }
+      return {
+        outcome: { ...metrics, result: "PASS" },
+        artifactType: ArtifactType.HANDOFF,
+        artifact: handoff.artifact,
+      };
     }
 
     return { outcome: { ...metrics, result: "PASS" } };

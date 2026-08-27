@@ -31,6 +31,18 @@ function run(partial: Partial<RunRecord> & { agent: AgentStage }): RunRecord {
     knowledge_chars: null,
     code_intel_chars: null,
     tool_output_chars: null,
+    context_budget_chars: null,
+    context_budget_source: null,
+    context_overflow_chars: null,
+    context_budget_warning: null,
+    context_base_chars: null,
+    context_task_chars: null,
+    context_safety_chars: null,
+    context_docs_chars: null,
+    context_knowledge_chars: null,
+    context_code_chars: null,
+    context_tool_output_chars: null,
+    context_reserve_chars: null,
     ...partial,
   };
 }
@@ -120,6 +132,26 @@ describe("buildMetricsExport / compareBaselines", () => {
   it("reports null tokensPerSuccessfulTask when nothing succeeded", () => {
     const e = buildMetricsExport([{ taskId: "T-failed", runs: [run({ agent: AgentStage.DEVOPS, tokens: 500, result: "FAIL" })] }], { now: () => 7 });
     expect(e.totals.tokensPerSuccessfulTask).toBeNull();
+  });
+});
+
+describe("T-V3TOK-100 context budget token reporting", () => {
+  it("reports warning frequency, overflow, and the complete priority composition", () => {
+    const metric = taskTokenMetrics([run({
+      agent: AgentStage.BACKEND_ENGINEER, context_chars: 100, context_budget_chars: 90, context_budget_source: "role",
+      context_overflow_chars: 10, context_budget_warning: true,
+      context_base_chars: 10, context_task_chars: 20, context_safety_chars: 0, context_docs_chars: 30,
+      context_knowledge_chars: 15, context_code_chars: 10, context_tool_output_chars: 15, context_reserve_chars: 0,
+    })]);
+    expect(metric.contextBudget).toMatchObject({ measuredRuns: 1, warningRuns: 1, contextChars: 100, budgetChars: 90, overflowChars: 10 });
+    expect(Object.values(metric.contextBudget.composition).reduce<number>((sum, value) => sum + (value ?? 0), 0)).toBe(100);
+    const exported = tokenMetricsExport([run({
+      agent: AgentStage.BACKEND_ENGINEER, context_chars: 100, context_budget_chars: 90, context_budget_source: "role",
+      context_overflow_chars: 10, context_budget_warning: true,
+      context_base_chars: 10, context_task_chars: 20, context_safety_chars: 0, context_docs_chars: 30,
+      context_knowledge_chars: 15, context_code_chars: 10, context_tool_output_chars: 15, context_reserve_chars: 0,
+    })]);
+    expect(exported.contextBudgetRuns).toEqual([expect.objectContaining({ role: AgentStage.BACKEND_ENGINEER, contextChars: 100, budgetChars: 90, overflowChars: 10, warning: true })]);
   });
 });
 

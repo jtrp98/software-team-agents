@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { policyPointerResolves } from "../docs/policyIndex.js";
+import Ajv from "ajv";
 
 /**
  * T-V3TOK-014 — the static-context floor cannot grow back silently.
@@ -149,6 +150,26 @@ function duplicateNamedBlocks(files: readonly { file: string; markdown: string }
 export function checkPromptBudget(projectRoot: string = defaultProjectRoot()): PromptBudgetCheckResult {
   const problems: string[] = [];
   const notes: string[] = [];
+
+  // --- guard 9: the external HANDOFF contract must remain loadable and must
+  // reject a prose-shaped invalid record. Runtime uses the stricter Zod schema;
+  // this guard keeps tooling's JSON Schema from disappearing or becoming `{}`.
+  const handoffSchemaPath = path.join(projectRoot, "orchestrator", "schemas", "handoff.schema.json");
+  try {
+    const schema = JSON.parse(fs.readFileSync(handoffSchemaPath, "utf8"));
+    const validate = new Ajv({ allErrors: true, strict: true }).compile(schema);
+    const valid = {
+      task_id: "T-GUARD-9", implements: [], module: "guard", phase: null,
+      constraint_refs: [], contract_refs: { produces: [], consumes: [] },
+      decision_refs: [], test_refs: [], artifact_refs: [], open_findings: [], budget: null,
+    };
+    if (!validate(valid)) problems.push(`handoff.schema.json rejects the minimal reference record: ${JSON.stringify(validate.errors)}`);
+    const malformed = { ...valid, constraint_refs: ["this is copied prose"] };
+    if (validate(malformed)) problems.push("handoff.schema.json accepts prose in constraint_refs — guard 9 requires reference validation");
+    if (validate(valid)) notes.push("handoff.schema.json compiled and validated guard 9 fixtures");
+  } catch (error) {
+    problems.push(`handoff.schema.json is missing or invalid: ${String(error)}`);
+  }
 
   // --- guard 1: CLAUDE.md -----------------------------------------------
   const claudeMd = byteSize(path.join(projectRoot, "CLAUDE.md"));

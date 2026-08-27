@@ -165,6 +165,16 @@ export interface TokenCompositionMetrics {
   tool_output_chars: number | null;
 }
 
+/** Warning-mode context budget telemetry; no value here implies enforcement. */
+export interface ContextBudgetMetrics {
+  measuredRuns: number;
+  warningRuns: number;
+  contextChars: number | null;
+  budgetChars: number | null;
+  overflowChars: number | null;
+  composition: Record<"base" | "task" | "safety" | "docs" | "knowledge" | "code" | "tool_output" | "reserve", number | null>;
+}
+
 export interface TaskTokenMetrics {
   taskId: string;
   runCount: number;
@@ -176,6 +186,7 @@ export interface TaskTokenMetrics {
   totalTokens: number | null;
   retryWasteTokens: number | null;
   composition: TokenCompositionMetrics;
+  contextBudget: ContextBudgetMetrics;
   sessionKinds: Record<"orchestrated" | "interactive" | "not_reported", number>;
 }
 
@@ -188,12 +199,28 @@ export interface TokenRoleMetrics {
   docChars: number | null;
   docCharsBefore: number | null;
   slicingSavedPct: number | null;
+  contextBudget: ContextBudgetMetrics;
+}
+
+/** One warning-mode observation, retained in JSON export for role/p95 analysis. */
+export interface ContextBudgetRunMetric {
+  taskId: string;
+  role: string;
+  startTime: number;
+  contextChars: number | null;
+  budgetChars: number;
+  budgetSource: "role" | "model_context_window";
+  overflowChars: number | null;
+  warning: boolean | null;
+  composition: ContextBudgetMetrics["composition"];
 }
 
 export interface TokenMetricsExport {
   exportedAt: number;
   tasks: TaskTokenMetrics[];
   roles: TokenRoleMetrics[];
+  /** Every run with an authoritative context budget, never synthetic aggregate rows. */
+  contextBudgetRuns: ContextBudgetRunMetric[];
   totals: Omit<TaskTokenMetrics, "taskId" | "sessionKinds">;
 }
 
@@ -221,6 +248,24 @@ function compositionFor(runs: readonly RunRecord[]): TokenCompositionMetrics {
   };
 }
 
+function contextBudgetFor(runs: readonly RunRecord[]): ContextBudgetMetrics {
+  const measured = runs.filter((run) => run.context_budget_chars !== null);
+  const composition = (field: keyof Pick<RunRecord, "context_base_chars" | "context_task_chars" | "context_safety_chars" | "context_docs_chars" | "context_knowledge_chars" | "context_code_chars" | "context_tool_output_chars" | "context_reserve_chars">) =>
+    strictSum(measured, (run) => run[field]);
+  return {
+    measuredRuns: measured.length,
+    warningRuns: measured.filter((run) => run.context_budget_warning === true).length,
+    contextChars: strictSum(measured, (run) => run.context_chars),
+    budgetChars: strictSum(measured, (run) => run.context_budget_chars),
+    overflowChars: strictSum(measured, (run) => run.context_overflow_chars),
+    composition: {
+      base: composition("context_base_chars"), task: composition("context_task_chars"), safety: composition("context_safety_chars"),
+      docs: composition("context_docs_chars"), knowledge: composition("context_knowledge_chars"), code: composition("context_code_chars"),
+      tool_output: composition("context_tool_output_chars"), reserve: composition("context_reserve_chars"),
+    },
+  };
+}
+
 export function taskTokenMetrics(runs: readonly RunRecord[]): TaskTokenMetrics {
   const sessionKinds = { orchestrated: 0, interactive: 0, not_reported: 0 };
   for (const run of runs) {
@@ -241,6 +286,7 @@ export function taskTokenMetrics(runs: readonly RunRecord[]): TaskTokenMetrics {
     // unknown, never a fabricated zero.
     retryWasteTokens: failures.length === 0 ? 0 : strictSum(failures, totalTokensFor),
     composition: compositionFor(runs),
+    contextBudget: contextBudgetFor(runs),
     sessionKinds,
   };
 }
@@ -256,6 +302,7 @@ function roleMetrics(runs: readonly RunRecord[]): TokenRoleMetrics[] {
     });
     const docChars = strictSum(roleRuns, (run) => run.doc_chars);
     const docCharsBefore = strictSum(roleRuns, (run) => run.doc_chars_before);
+    const contextBudget = contextBudgetFor(roleRuns);
     return {
       role,
       runCount: roleRuns.length,
@@ -268,8 +315,30 @@ function roleMetrics(runs: readonly RunRecord[]): TokenRoleMetrics[] {
         docChars === null || docCharsBefore === null || docCharsBefore === 0
           ? null
           : Math.round(((docCharsBefore - docChars) / docCharsBefore) * 100),
+      contextBudget,
     };
   });
+}
+
+function contextBudgetRunsFor(runs: readonly RunRecord[]): ContextBudgetRunMetric[] {
+  return runs
+    .filter((run): run is RunRecord & { context_budget_chars: number; context_budget_source: "role" | "model_context_window" } =>
+      run.context_budget_chars !== null && run.context_budget_source !== null,
+    )
+    .map((run) => ({
+      taskId: run.task_id,
+      role: run.agent,
+      startTime: run.start_time,
+      contextChars: run.context_chars,
+      budgetChars: run.context_budget_chars,
+      budgetSource: run.context_budget_source,
+      overflowChars: run.context_overflow_chars,
+      warning: run.context_budget_warning,
+      composition: {
+        base: run.context_base_chars, task: run.context_task_chars, safety: run.context_safety_chars, docs: run.context_docs_chars,
+        knowledge: run.context_knowledge_chars, code: run.context_code_chars, tool_output: run.context_tool_output_chars, reserve: run.context_reserve_chars,
+      },
+    }));
 }
 
 export function tokenMetricsExport(runs: readonly RunRecord[], opts?: { now?: () => number }): TokenMetricsExport {
@@ -281,6 +350,7 @@ export function tokenMetricsExport(runs: readonly RunRecord[], opts?: { now?: ()
     exportedAt: (opts?.now ?? Date.now)(),
     tasks,
     roles: roleMetrics(runs),
+    contextBudgetRuns: contextBudgetRunsFor(runs),
     totals: {
       runCount: aggregate.runCount,
       stageCount: aggregate.stageCount,
@@ -291,6 +361,7 @@ export function tokenMetricsExport(runs: readonly RunRecord[], opts?: { now?: ()
       totalTokens: aggregate.totalTokens,
       retryWasteTokens: aggregate.retryWasteTokens,
       composition: aggregate.composition,
+      contextBudget: aggregate.contextBudget,
     },
   };
 }

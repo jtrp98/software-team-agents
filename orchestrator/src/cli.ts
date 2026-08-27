@@ -1812,6 +1812,7 @@ function displayMetric(value: number | null): string {
 
 function printTokenTask(metric: TaskTokenMetrics): void {
   const c = metric.composition;
+  const budget = metric.contextBudget;
   console.log(
     `[orchestrator] ${metric.taskId}: input=${displayMetric(metric.inputTokens)} output=${displayMetric(metric.outputTokens)} ` +
       `cached=${displayMetric(metric.cachedTokens)} total=${displayMetric(metric.totalTokens)} stages=${metric.stageCount} retries=${metric.retryCount} retryWaste=${displayMetric(metric.retryWasteTokens)} ` +
@@ -1820,6 +1821,13 @@ function printTokenTask(metric: TaskTokenMetrics): void {
   console.log(
     `[orchestrator]   composition: static=${displayMetric(c.static_chars)} handoff=${displayMetric(c.handoff_chars)} docs=${displayMetric(c.doc_chars)}/${displayMetric(c.doc_chars_before)} before-slice ` +
       `knowledge=${displayMetric(c.knowledge_chars)} code-intel=${displayMetric(c.code_intel_chars)} tool-output=${displayMetric(c.tool_output_chars)}`,
+  );
+  console.log(
+    `[orchestrator]   context budget (warning-only): measured-runs=${budget.measuredRuns} warnings=${budget.warningRuns} ` +
+      `actual=${displayMetric(budget.contextChars)} budget=${displayMetric(budget.budgetChars)} overflow=${displayMetric(budget.overflowChars)} ` +
+      `composition=base:${displayMetric(budget.composition.base)} task:${displayMetric(budget.composition.task)} safety:${displayMetric(budget.composition.safety)} ` +
+      `docs:${displayMetric(budget.composition.docs)} knowledge:${displayMetric(budget.composition.knowledge)} code:${displayMetric(budget.composition.code)} ` +
+      `tool_output:${displayMetric(budget.composition.tool_output)} reserve:${displayMetric(budget.composition.reserve)}`,
   );
 }
 
@@ -1917,7 +1925,8 @@ async function runTokensVerb(rest: string[], defaultProjectRoot: string): Promis
       for (const role of report.roles) console.log(
         `[orchestrator] ${by} ${role.role}: runs=${role.runCount} static=${displayMetric(role.staticChars)} retrieved=${displayMetric(role.retrievedChars)} ` +
           `static/retrieved=${role.staticVsRetrievedRatio === null ? "not reported" : role.staticVsRetrievedRatio.toFixed(2)} ` +
-          `docs=${displayMetric(role.docChars)}/${displayMetric(role.docCharsBefore)} before-slice slicing-saved=${role.slicingSavedPct === null ? "not reported" : `${role.slicingSavedPct}%`}`,
+          `docs=${displayMetric(role.docChars)}/${displayMetric(role.docCharsBefore)} before-slice slicing-saved=${role.slicingSavedPct === null ? "not reported" : `${role.slicingSavedPct}%`} ` +
+          `context-budget-warnings=${role.contextBudget.warningRuns}/${role.contextBudget.measuredRuns} overflow=${displayMetric(role.contextBudget.overflowChars)}`,
       );
     } else {
       for (const kind of ["orchestrated", "interactive", "not_reported"] as const) {
@@ -1929,6 +1938,7 @@ async function runTokensVerb(rest: string[], defaultProjectRoot: string): Promis
     console.log(`[orchestrator] totals: input=${displayMetric(total.inputTokens)} output=${displayMetric(total.outputTokens)} cached=${displayMetric(total.cachedTokens)} total=${displayMetric(total.totalTokens)} retries=${total.retryCount} retryWaste=${displayMetric(total.retryWasteTokens)}`);
     const budget = configuredTokenBudget(projectRoot);
     console.log(`[orchestrator] configured post-hoc token budget: ${budget.toLocaleString()} vs actual input ${displayMetric(total.inputTokens)} (pre-spawn caps are not part of this control)`);
+    console.log(`[orchestrator] context-budget warnings: ${total.contextBudget.warningRuns}/${total.contextBudget.measuredRuns} measured run(s), overflow=${displayMetric(total.contextBudget.overflowChars)} (warning-only; prompts were not changed)`);
     if (exportPath) {
       fs.writeFileSync(exportPath, JSON.stringify(report, null, 2), "utf8");
       console.log(`[orchestrator] wrote token metrics JSON to ${exportPath}`);

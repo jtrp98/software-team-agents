@@ -1,7 +1,7 @@
 import { AgentStage } from "../types.js";
-import { ArtifactType } from "../artifacts/schemas.js";
+import { ArtifactType, type HandoffArtifact } from "../artifacts/schemas.js";
 import { moduleDocPath, readModuleDoc } from "../agents/moduleDocs.js";
-import { CONTEXT_POLICY, type ContextCategory } from "./contextSelection.js";
+import { CONTEXT_POLICY, ContextLeakageError, type ContextCategory } from "./contextSelection.js";
 import { parsePlanTasks } from "../docs/planGraph.js";
 import { buildTraceChain, extractIds } from "../traceability/traceability.js";
 
@@ -54,7 +54,53 @@ export const CATEGORY_TO_DOC: Partial<Record<ContextCategory, DocKind>> = {
   [ArtifactType.TEST_PLAN]: "test-plan",
   [ArtifactType.QA_REPORT]: "review",
   [ArtifactType.SECURITY_REPORT]: "security",
+  // HANDOFF intentionally has no entry: it indexes authoritative documents,
+  // but is not itself a module document for §10 slicing.
 };
+
+const DOC_TO_CATEGORY: Partial<Record<DocKind, ArtifactType>> = {
+  requirement: ArtifactType.REQUIREMENTS,
+  design: ArtifactType.DESIGN,
+  plan: ArtifactType.PLAN,
+  "test-plan": ArtifactType.TEST_PLAN,
+  review: ArtifactType.QA_REPORT,
+  security: ArtifactType.SECURITY_REPORT,
+};
+
+export type ReferencedSections = Partial<Record<DocKind, string[]>>;
+
+/**
+ * Resolves only the three reference fields P6 authorizes for document
+ * narrowing. An explicit filename outside the role's policy is an attempted
+ * authorization expansion and fails closed. Unqualified semantic references
+ * are ignored when their default document is not already permitted.
+ */
+export function handoffReferencedSections(stage: AgentStage, handoff: HandoffArtifact): ReferencedSections {
+  const policy = CONTEXT_POLICY[stage];
+  if (!policy) return {};
+  const out: ReferencedSections = {};
+  const qualifiedDocs = (Object.keys(DOC_FILENAME) as DocKind[])
+    .filter((doc) => doc !== "deploy")
+    .sort((a, b) => DOC_FILENAME[b].length - DOC_FILENAME[a].length);
+
+  const add = (reference: string, fallback: DocKind): void => {
+    const qualified = qualifiedDocs.find((doc) => reference.startsWith(`${DOC_FILENAME[doc]}#`));
+    const doc = qualified ?? fallback;
+    const category = DOC_TO_CATEGORY[doc];
+    if (!category) return;
+    if (!policy.reads.includes(category)) {
+      if (qualified) throw new ContextLeakageError(stage, category);
+      return;
+    }
+    (out[doc] ??= []).push(reference);
+  };
+
+  for (const reference of handoff.constraint_refs) add(reference, "requirement");
+  for (const reference of [...handoff.contract_refs.produces, ...handoff.contract_refs.consumes]) add(reference, "design");
+  for (const reference of handoff.test_refs) add(reference, "test-plan");
+  for (const [doc, references] of Object.entries(out) as Array<[DocKind, string[]]>) out[doc] = [...new Set(references)];
+  return out;
+}
 
 export interface Section {
   heading: string;
@@ -604,6 +650,92 @@ export function selectDocContext(req: ContextRequest, markdown: string): Selecte
   };
 }
 
+/** Above this heading ratio the reference index costs more complexity than it saves. */
+export const HANDOFF_REFERENCE_MAX_SECTION_RATIO = 0.6;
+
+function decodedReferencePart(reference: string): string {
+  const part = reference.includes("#") ? reference.slice(reference.indexOf("#") + 1) : reference;
+  try {
+    return decodeURIComponent(part).replace(/:\d+$/, "");
+  } catch {
+    return part;
+  }
+}
+
+function comparableReference(value: string): string {
+  return decodedReferencePart(value).trim().toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "");
+}
+
+function sectionMatchesReference(markdown: string, section: Section, references: readonly string[]): boolean {
+  const heading = comparableReference(section.heading);
+  const text = sectionText(markdown, section);
+  return references.some((reference) => {
+    const needle = comparableReference(reference);
+    if (needle !== "" && (heading === needle || heading.includes(needle) || needle.includes(heading))) return true;
+    const ids = [...reference.matchAll(/\b(?:REQ|DES|TP)-[A-Za-z0-9._-]+\b/gi)].map((match) => match[0]);
+    return ids.some((id) => new RegExp(`\\b${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(text));
+  });
+}
+
+function isHandoffAlwaysRead(doc: DocKind, heading: string, stage: AgentStage, isLast: boolean): boolean {
+  if (doc === "design") {
+    return isAlwaysReadDesignSection(heading) || MODULES_HEADING.test(heading) ||
+      (DATA_MODEL.test(heading) && (stage === AgentStage.QA_ENGINEER || stage === AgentStage.PROJECT_MANAGER));
+  }
+  if (doc === "requirement") return REQUIREMENT_ALWAYS.some((matcher) => matcher.test(heading));
+  if (doc === "plan") return PLAN_ALWAYS.some((matcher) => matcher.test(heading));
+  if (doc === "review") return OPEN_ISSUES.test(heading) || /unverified\s+behaviour/i.test(heading) || isLast;
+  // security.md has no safe section-level rule in §10, so a handoff never
+  // narrows it. The normal whole-document result remains the ceiling and floor.
+  if (doc === "security") return true;
+  return false;
+}
+
+/**
+ * Intersects the normal §10 result with handoff references. Positive P3/P3B
+ * selections and the always-read set remain mandatory; only unknown or
+ * whole-document excess can be removed. Any ambiguity falls back to `normal`.
+ */
+function narrowSelectedContext(
+  normal: SelectedContext,
+  references: readonly string[],
+  stage: AgentStage,
+): SelectedContext {
+  if (normal.fullDocument && /owns|reads requirement\.md in full/i.test(normal.reason)) return normal;
+  // A minimal/incomplete handoff proves no section irrelevant. Treat it as an
+  // unresolved index and preserve the exact normal slice.
+  if (references.length === 0) return normal;
+  const source = normal.text;
+  const mapped = sectionMap(source);
+  if (mapped.length === 0) return normal;
+
+  const normalUnknown = new Set(normal.unknownSections);
+  const referenceMatched = mapped.filter((section) => sectionMatchesReference(source, section, references));
+  if (references.length > 0 && referenceMatched.length === 0) return normal;
+  if (referenceMatched.length / mapped.length > HANDOFF_REFERENCE_MAX_SECTION_RATIO) return normal;
+  const kept = mapped.filter((section, index) => {
+    const always = isHandoffAlwaysRead(normal.doc, section.heading, stage, index === mapped.length - 1);
+    const positivelySelected = !normal.fullDocument && normal.kept.includes(section.heading) && !normalUnknown.has(section.heading);
+    return always || positivelySelected || sectionMatchesReference(source, section, references);
+  });
+  if (kept.length === 0) return normal;
+
+  const narrowedOut = mapped.filter((section) => !kept.includes(section)).map((section) => section.heading);
+  const parts = [preamble(source, mapped), ...kept.map((section) => sectionText(source, section))];
+  const text = parts.filter((part) => part.trim() !== "").join("\n\n");
+  if (text.length >= normal.text.length) return normal;
+  return {
+    ...normal,
+    text,
+    kept: kept.map((section) => section.heading),
+    skipped: [...new Set([...normal.skipped, ...narrowedOut])],
+    unknownSections: normal.unknownSections.filter((heading) => kept.some((section) => section.heading === heading)),
+    fullDocument: false,
+    reason: `${normal.reason}; narrowed by HANDOFF references within CONTEXT_POLICY`,
+    bytesAfter: text.length,
+  };
+}
+
 export interface ContextManagerOptions {
   projectRoot: string;
   moduleName: string;
@@ -652,7 +784,7 @@ export class ContextManager {
    * which documents, §10 decides how much of each. This is the composition T05
    * asks for — a role gets its relevant context, not the project's.
    */
-  forStage(stage: AgentStage, phases?: number[], taskId?: string): SelectedContext[] {
+  forStage(stage: AgentStage, phases?: number[], taskId?: string, referencedSections?: ReferencedSections): SelectedContext[] {
     const policy = CONTEXT_POLICY[stage];
     if (!policy) return [];
 
@@ -671,7 +803,8 @@ export class ContextManager {
       if (!doc) continue; // code/infra categories are not module documents
       const markdown = load(doc);
       if (markdown !== null) {
-        out.push(selectDocContext({ stage, doc, phases, moduleName: this.opts.moduleName, traceability }, markdown));
+        const normal = selectDocContext({ stage, doc, phases, moduleName: this.opts.moduleName, traceability }, markdown);
+        out.push(referencedSections === undefined ? normal : narrowSelectedContext(normal, referencedSections[doc] ?? [], stage));
       }
     }
     this.lastReadCount = cache.size;

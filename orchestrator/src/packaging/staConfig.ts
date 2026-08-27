@@ -31,6 +31,14 @@ export const StaConfigSchema = z.object({
     .optional(),
   /** Post-hoc token ceiling for a task. Pre-spawn context caps are separate. */
   token_budget: z.number().int().positive().optional(),
+  /** T-V3TOK-100 warning thresholds, all measured in prompt characters. */
+  context_budget: z
+    .object({
+      roles: z.record(z.string().min(1), z.number().int().positive()).optional(),
+      /** Project-declared because model aliases alone are not authoritative limits. */
+      model_context_windows: z.record(z.string().min(1), z.number().int().positive()).optional(),
+    })
+    .optional(),
 });
 export type StaConfig = z.infer<typeof StaConfigSchema>;
 

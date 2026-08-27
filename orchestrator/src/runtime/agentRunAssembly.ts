@@ -1,12 +1,18 @@
 import { AgentStage } from "../types.js";
-import { ArtifactType } from "../artifacts/schemas.js";
+import { ArtifactType, validateArtifact, type HandoffArtifact } from "../artifacts/schemas.js";
 import type { AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { parseQaReport, parseSecurityReport, readModuleDoc } from "../agents/moduleDocs.js";
 import { parsePlanTasks } from "../docs/planGraph.js";
-import { ContextManager, type SelectedContext } from "../context/contextManager.js";
+import {
+  ContextManager,
+  handoffReferencedSections,
+  type SelectedContext,
+} from "../context/contextManager.js";
+import { ContextLeakageError, type ContextItem } from "../context/contextSelection.js";
 import { classifyQaFailure, classifySecurityFailure } from "../orchestrator/failureClassifier.js";
 import { codeIntelSlices } from "./codeIntelAssembly.js";
 import { knowledgeBriefFor } from "./knowledgeBriefAssembly.js";
+import { assertContextComposition, emptyContextBudgetComposition, type ContextBudgetComposition } from "../context/contextBudget.js";
 
 /**
  * Everything about running a stage that is *this framework's* business rather
@@ -51,6 +57,18 @@ export interface RunMetrics {
   knowledge_chars?: number;
   code_intel_chars?: number;
   tool_output_chars?: number;
+  context_budget_chars?: number;
+  context_budget_source?: "role" | "model_context_window";
+  context_overflow_chars?: number;
+  context_budget_warning?: boolean;
+  context_base_chars?: number;
+  context_task_chars?: number;
+  context_safety_chars?: number;
+  context_docs_chars?: number;
+  context_knowledge_chars?: number;
+  context_code_chars?: number;
+  context_tool_output_chars?: number;
+  context_reserve_chars?: number;
 }
 
 /**
@@ -76,10 +94,25 @@ export const DEPLOY_PHASE_INSTRUCTION: Record<"prepare" | "execute", string> = {
  * Naming the skipped headings and the file they came from keeps the filter an
  * optimization the agent can undo, rather than a silent edit of its inputs.
  */
-export function renderSlicedDocs(selected: SelectedContext[], cm: ContextManager): string[] {
+export interface HandoffSliceNotice {
+  stage: AgentStage;
+  moduleName: string;
+  phases?: number[];
+}
+
+export function renderSlicedDocs(selected: SelectedContext[], cm: ContextManager, handoff?: HandoffSliceNotice): string[] {
   if (selected.length === 0) return [];
 
   const parts: string[] = ["", "Module documents, sliced to what this stage needs (`policies/documentation.md` §10):"];
+  if (handoff) {
+    const phase = handoff.phases?.length ? handoff.phases.join(",") : "<n>";
+    parts.push(
+      "",
+      "_This is the slice pointed to by the structured HANDOFF, plus the always-read safety set. " +
+        "References never widen CONTEXT_POLICY; broad or unresolved references fall back to normal §10 slicing. " +
+        `For other allowed sections run \`sta context ${handoff.stage} --module ${handoff.moduleName} --phase ${phase}\`._`,
+    );
+  }
   for (const s of selected) {
     parts.push("", `### ${s.doc}.md`);
     if (!s.fullDocument && s.skipped.length > 0) {
@@ -107,6 +140,8 @@ export interface SliceOptions {
   /** Which phases of `plan.md` this run touches. Undefined is safe: the plan then comes through whole rather than sliced wrong. */
   phases?: number[];
   taskId?: string;
+  /** Validated machine-derived reference record from the prior stage. */
+  handoff?: HandoffArtifact;
 }
 
 /**
@@ -133,19 +168,27 @@ export interface SlicedModuleDocs {
 export function sliceModuleDocsWithSavings(stage: AgentStage, opts: SliceOptions): SlicedModuleDocs {
   try {
     const cm = new ContextManager({ projectRoot: opts.projectRoot, moduleName: opts.moduleName });
-    const selected = cm.forStage(stage, opts.phases, opts.taskId);
+    const referenced = opts.handoff ? handoffReferencedSections(stage, opts.handoff) : undefined;
+    const selected = cm.forStage(stage, opts.phases, opts.taskId, referenced);
     // `savings()` is the single source of the before/after calculation. The
     // after side is prompt composition's doc_chars; the before side is carried
     // into the run metric below, so token reports can show the actual slice.
     const savings = cm.savings(selected);
     return {
-      docs: renderSlicedDocs(selected, cm),
+      docs: renderSlicedDocs(
+        selected,
+        cm,
+        opts.handoff ? { stage, moduleName: opts.moduleName, phases: opts.phases } : undefined,
+      ),
       selected,
       docCharsBefore: savings.bytesBefore,
       savings,
       directFileReads: cm.directFileReads(),
     };
-  } catch {
+  } catch (error) {
+    // Authorization violations are not optional enrichment failures. A
+    // malicious qualified reference must stop before the runtime starts.
+    if (error instanceof ContextLeakageError) throw error;
     return {
       docs: [],
       selected: [],
@@ -154,6 +197,13 @@ export function sliceModuleDocsWithSavings(stage: AgentStage, opts: SliceOptions
       directFileReads: 0,
     };
   }
+}
+
+/** The one validated HANDOFF item in orchestrator context, if a prior doc stage produced one. */
+export function handoffFromContext(context: readonly ContextItem[]): HandoffArtifact | null {
+  const item = context.find((candidate) => candidate.source === ArtifactType.HANDOFF);
+  if (!item) return null;
+  return validateArtifact(ArtifactType.HANDOFF, JSON.parse(item.content));
 }
 
 export interface StageContextOptions extends SliceOptions {
@@ -199,6 +249,7 @@ export async function assembleStageContext(stage: AgentStage, opts: StageContext
     moduleName: opts.moduleName,
     phases: opts.phases,
     taskId: opts.taskId,
+    handoff: opts.handoff,
   });
   const knowledge = knowledgeBriefFor(stage, {
     projectRoot: opts.projectRoot,
@@ -233,9 +284,12 @@ export interface PromptComposition {
 export interface PromptPartsResult {
   text: string;
   composition: PromptComposition;
+  budgetComposition: ContextBudgetComposition;
 }
 
 export interface PromptSources {
+  /** Explicit safety/gate text, when a caller needs it in the assembled prompt. */
+  safety?: string[];
   docs?: string[];
   knowledge?: string[];
   codeIntel?: string[];
@@ -243,7 +297,18 @@ export interface PromptSources {
 }
 
 type PromptPartKind = keyof PromptComposition;
-interface PromptPart { kind: PromptPartKind; text: string; }
+interface PromptPart { kind: PromptPartKind; budgetKind?: keyof ContextBudgetComposition; text: string; }
+
+function budgetClassFor(kind: PromptPartKind): keyof ContextBudgetComposition {
+  switch (kind) {
+    case "static_chars": return "base";
+    case "handoff_chars": return "task";
+    case "doc_chars": return "docs";
+    case "knowledge_chars": return "knowledge";
+    case "code_intel_chars": return "code";
+    case "tool_output_chars": return "tool_output";
+  }
+}
 
 /**
  * Assembles the prompt and records the source of every character while doing
@@ -268,12 +333,17 @@ export function buildPromptParts(req: AgentExecutorRequest, extra?: string, sour
       parts.push({ kind: "handoff_chars", text: "" }, { kind: "handoff_chars", text: `### ${item.source}` }, { kind: "handoff_chars", text: item.content });
     }
   }
+  // Safety is currently loaded by runtime bindings rather than appended here,
+  // but this explicit source keeps a future injected gate from being folded
+  // into misleading generic static accounting.
+  for (const text of sources.safety ?? []) parts.push({ kind: "static_chars", budgetKind: "safety", text });
   for (const text of sources.docs ?? []) parts.push({ kind: "doc_chars", text });
   for (const text of sources.knowledge ?? []) parts.push({ kind: "knowledge_chars", text });
   for (const text of sources.codeIntel ?? []) parts.push({ kind: "code_intel_chars", text });
   for (const text of sources.toolOutput ?? []) parts.push({ kind: "tool_output_chars", text });
-  if (req.deployPhase) parts.push({ kind: "static_chars", text: "" }, { kind: "static_chars", text: DEPLOY_PHASE_INSTRUCTION[req.deployPhase] });
-  if (extra) parts.push({ kind: "static_chars", text: "" }, { kind: "static_chars", text: extra });
+  if (req.deployPhase) parts.push({ kind: "static_chars", budgetKind: "task", text: "" }, { kind: "static_chars", budgetKind: "task", text: DEPLOY_PHASE_INSTRUCTION[req.deployPhase] });
+  // `extra` is the task-specific operating instruction seam (production uses it for environment), not an unclassified static bucket.
+  if (extra) parts.push({ kind: "static_chars", budgetKind: "task", text: "" }, { kind: "static_chars", budgetKind: "task", text: extra });
   parts.push(
     { kind: "static_chars", text: "" },
     { kind: "static_chars", text: "Finish by stating clearly what you completed and, per convention, what should happen next — the orchestrator reads your exit status and the docs you wrote, not a special reply format." },
@@ -281,14 +351,17 @@ export function buildPromptParts(req: AgentExecutorRequest, extra?: string, sour
   const composition: PromptComposition = {
     static_chars: 0, handoff_chars: 0, doc_chars: 0, knowledge_chars: 0, code_intel_chars: 0, tool_output_chars: 0,
   };
+  const budgetComposition = emptyContextBudgetComposition();
   const text = parts.map((part, index) => {
     // The delimiter belongs to the incoming source: no separate synthetic
     // bucket is needed, and the component sum stays exactly prompt.length.
     const rendered = `${index === 0 ? "" : "\n"}${part.text}`;
     composition[part.kind] += rendered.length;
+    budgetComposition[part.budgetKind ?? budgetClassFor(part.kind)] += rendered.length;
     return rendered;
   }).join("");
-  return { text, composition };
+  assertContextComposition(budgetComposition, text.length);
+  return { text, composition, budgetComposition };
 }
 
 /** Compatibility wrapper for existing callers/tests using the old sliced array. */

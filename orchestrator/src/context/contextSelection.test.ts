@@ -30,6 +30,12 @@ describe("CONTEXT_POLICY", () => {
     }
   });
 
+  it("lets every runtime role read the bounded handoff reference", () => {
+    for (const stage of Object.values(AgentStage).filter((stage) => stage !== AgentStage.HUMAN)) {
+      expect(CONTEXT_POLICY[stage]!.reads).toContain(ArtifactType.HANDOFF);
+    }
+  });
+
   it("knowledge-brief is readable by every dev-side role (T-KA5a)", () => {
     for (const stage of [
       AgentStage.QA_ENGINEER,

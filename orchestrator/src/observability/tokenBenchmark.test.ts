@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ContextManager } from "../context/contextManager.js";
 import { AgentStage } from "../types.js";
-import { TOKEN_BENCHMARK_DOC_BYTES, createTokenBenchmarkFixture, createTraceableTokenBenchmarkFixture, renderTokenBenchmarkBaseline, runTokenBenchmark } from "./tokenBenchmark.js";
+import { TOKEN_BENCHMARK_DOC_BYTES, createTokenBenchmarkFixture, createTraceableTokenBenchmarkFixture, renderTokenBenchmarkBaseline, runLargeHandoffBenchmark, runTokenBenchmark } from "./tokenBenchmark.js";
 
 function frameworkFixture(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-token-framework-"));
@@ -50,5 +50,19 @@ describe("T-V3TOK-004 token benchmark", () => {
       expect(design.bytesAfter / design.bytesBefore).toBeLessThanOrEqual(0.45);
       expect(requirement.bytesAfter / requirement.bytesBefore).toBeLessThanOrEqual(0.6);
     } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+
+  it("P6 Large workload measures the real handoff prompt path and meets amplification limits", () => {
+    const root = frameworkFixture();
+    try {
+      const comparison = runLargeHandoffBenchmark(root);
+      expect(comparison).toEqual(runLargeHandoffBenchmark(root));
+      expect(comparison.withHandoff.docChars).toBeLessThan(comparison.withoutHandoff.docChars);
+      expect(comparison.withHandoff.designAmplification).toBeLessThanOrEqual(2);
+      expect(comparison.withHandoff.requirementAmplification).toBeLessThanOrEqual(3);
+      expect(comparison.withHandoff.totalAmplification).toBeLessThanOrEqual(2.5);
+      expect(comparison.withHandoff.retries).toBe(0);
+      expect(comparison.withHandoff.routeBacks).toBe(0);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 });

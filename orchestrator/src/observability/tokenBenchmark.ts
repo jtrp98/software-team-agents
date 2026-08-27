@@ -1,9 +1,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { deriveHandoff } from "../agents/moduleDocs.js";
+import { ArtifactType, type HandoffArtifact } from "../artifacts/schemas.js";
 import { renderTokenBenchmarkMarkdown } from "../codeintel/benchmark.js";
 import { ContextManager } from "../context/contextManager.js";
-import { renderSlicedDocs, buildPromptParts } from "../runtime/agentRunAssembly.js";
+import { renderSlicedDocs, buildPromptParts, sliceModuleDocsWithSavings } from "../runtime/agentRunAssembly.js";
 import { AgentStage } from "../types.js";
 
 export const TOKEN_BENCHMARK_DOC_BYTES = {
@@ -24,6 +26,28 @@ export interface TokenBenchmarkRow {
   docBytes: number;
   retries: number;
   qualityGatesPassed: null;
+}
+
+export interface LargeHandoffBenchmarkSnapshot {
+  /** Raw authoritative document characters selected across the nine-stage pipeline. */
+  docChars: number;
+  /** Total input characters: managed static files plus buildPromptParts() output. */
+  promptChars: number;
+  /** HANDOFF plus rendered document context inside those prompts. */
+  contextChars: number;
+  handoffChars: number;
+  designChars: number;
+  requirementChars: number;
+  totalAmplification: number;
+  designAmplification: number;
+  requirementAmplification: number;
+  retries: number;
+  routeBacks: number;
+}
+
+export interface LargeHandoffBenchmarkComparison {
+  withoutHandoff: LargeHandoffBenchmarkSnapshot;
+  withHandoff: LargeHandoffBenchmarkSnapshot;
 }
 
 const WORKLOAD_STAGES: Record<TokenBenchmarkRow["workload"], readonly AgentStage[]> = {
@@ -64,7 +88,7 @@ export function createTokenBenchmarkFixture(root = fs.mkdtempSync(path.join(os.t
     "design.md": fixedDesignDocument(TOKEN_BENCHMARK_DOC_BYTES.design),
     "plan.md": fixedDocument("# Plan\n\n## Plan Summary\nPinned plan.\n\n## Phase 1: Delivery\nPinned work.\n\n## Sequencing Notes\nPinned.\n\n## Open Questions\nNone.\n\n", TOKEN_BENCHMARK_DOC_BYTES.plan),
     "review.md": fixedDocument("# Review\n\n## Open Issues\nNone.\n\n## Round 1\nPinned review.\n\n", TOKEN_BENCHMARK_DOC_BYTES.review),
-    "test-plan.md": fixedDocument("# Test Plan\n\n## Coverage\nPinned tests.\n\n", TOKEN_BENCHMARK_DOC_BYTES.testPlan),
+    "test-plan.md": fixedDocument("# Test Plan\n\n## Coverage\nTP-001 covers DES-001.\n\n", TOKEN_BENCHMARK_DOC_BYTES.testPlan),
   };
   for (const [name, content] of Object.entries(docs)) fs.writeFileSync(path.join(dir, name), content, "utf8");
   return { root, moduleName };
@@ -72,9 +96,9 @@ export function createTokenBenchmarkFixture(root = fs.mkdtempSync(path.join(os.t
 
 /**
  * Same exact P0 document sizes, but with a complete REQ → DES → phase graph.
- * P3B uses this variant because unknown content must remain kept: measuring a
- * relationship-based slicer on an untraceable padding blob would reward unsafe
- * guessing rather than the optimization implemented here.
+ * It also has an explicitly headed legacy appendix. P3B must keep that unknown
+ * section; P6 may remove it only when a validated handoff supplies the
+ * narrower task index, so the fixture measures both safety postures.
  */
 export function createTraceableTokenBenchmarkFixture(
   root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-token-trace-benchmark-")),
@@ -96,13 +120,14 @@ export function createTraceableTokenBenchmarkFixture(
     "## Data Model\n", "d".repeat(5_000), "\n\n",
     `## Modules\n### ${moduleName}\nselected module\n### other-module\n`, "m".repeat(4_000), "\n\n",
     "## Risks & Dependencies\nPinned risks.\n\n## Open Questions\nNone.\n\n## Change Log\n- 2026-08-27\n\n",
+    "## Legacy Design Appendix\n", "l".repeat(5_000), "\n\n",
     "## Reporting Contract — DES-002\n",
   ].join("");
   const design = fixedDocument(designPrefix, TOKEN_BENCHMARK_DOC_BYTES.design);
 
   const planPrefix = [
     "# Plan\n\n## Plan Summary\nPinned.\n\n",
-    "## Phase 1: Import\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-001 (DES-001) — import | pending | backend-engineer | — |\n\n",
+    "## Phase 1: Import\n| Task | Status | Owner | Depends on | Produces | Consumes |\n|---|---|---|---|---|---|\n| BE-001 (DES-001) — import | pending | backend-engineer | — | design.md#Import-Contract-%E2%80%94-DES-001 | — |\n\n",
     "## Open Questions\nNone.\n\n",
     "## Phase 2: Reporting\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-002 (DES-002) — report | pending | backend-engineer | BE-001 |\n| FE-003 (DES-003) — archive | pending | frontend-engineer | BE-002 |\n",
   ].join("");
@@ -144,6 +169,91 @@ export function runTokenBenchmark(frameworkRoot: string): TokenBenchmarkRow[] {
       const inputTokens = Math.ceil(inputChars / 4);
       return { workload, inputTokens, outputTokens: null, totalTokens: inputTokens, modelCalls: WORKLOAD_STAGES[workload].length, filesOpened, docBytes, retries: 0, qualityGatesPassed: null };
     });
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+function largeHandoffs(fixture: { root: string; moduleName: string }): Partial<Record<AgentStage, HandoffArtifact>> {
+  const moduleDir = path.join(fixture.root, "_docs", "module", fixture.moduleName);
+  const read = (name: string): string => fs.readFileSync(path.join(moduleDir, name), "utf8");
+  const options = { taskId: "BE-001", phases: [1] };
+  const ba = deriveHandoff(AgentStage.BUSINESS_ANALYST, fixture.moduleName, read("requirement.md"), undefined, options).artifact;
+  const sa = deriveHandoff(AgentStage.SYSTEM_ANALYST, fixture.moduleName, read("design.md"), undefined, options).artifact;
+  const pm = deriveHandoff(AgentStage.PROJECT_MANAGER, fixture.moduleName, read("plan.md"), read("plan.md"), options).artifact;
+  const tests = deriveHandoff(AgentStage.TEST_PLANNER, fixture.moduleName, read("test-plan.md"), undefined, options).artifact;
+  const ux = deriveHandoff(AgentStage.UXUI_DESIGNER, fixture.moduleName, "# UX\n\n## Import flow UX-001\n", undefined, options).artifact;
+  return {
+    [AgentStage.SYSTEM_ANALYST]: ba,
+    [AgentStage.PROJECT_MANAGER]: sa,
+    [AgentStage.TEST_PLANNER]: pm,
+    [AgentStage.BACKEND_ENGINEER]: tests,
+    [AgentStage.UXUI_DESIGNER]: tests,
+    [AgentStage.FRONTEND_ENGINEER]: ux,
+    [AgentStage.QA_ENGINEER]: ux,
+    [AgentStage.SECURITY]: ux,
+  };
+}
+
+function largeSnapshot(
+  frameworkRoot: string,
+  fixture: { root: string; moduleName: string },
+  handoffs: Partial<Record<AgentStage, HandoffArtifact>>,
+): LargeHandoffBenchmarkSnapshot {
+  let docChars = 0;
+  let promptChars = 0;
+  let contextChars = 0;
+  let handoffChars = 0;
+  let designChars = 0;
+  let requirementChars = 0;
+  for (const stage of WORKLOAD_STAGES.Large) {
+    const handoff = handoffs[stage];
+    const sliced = sliceModuleDocsWithSavings(stage, {
+      projectRoot: fixture.root,
+      moduleName: fixture.moduleName,
+      phases: [1],
+      taskId: "BE-001",
+      handoff,
+    });
+    for (const selected of sliced.selected) {
+      docChars += selected.text.length;
+      if (selected.doc === "design") designChars += selected.text.length;
+      if (selected.doc === "requirement") requirementChars += selected.text.length;
+    }
+    const context = handoff ? [{ source: ArtifactType.HANDOFF, content: JSON.stringify(handoff) }] : [];
+    const prompt = buildPromptParts(
+      { taskId: "BE-001", stage, context },
+      undefined,
+      { docs: sliced.docs },
+    );
+    promptChars += staticChars(frameworkRoot, stage) + prompt.text.length;
+    handoffChars += prompt.composition.handoff_chars;
+    contextChars += prompt.composition.handoff_chars + prompt.composition.doc_chars;
+  }
+  const totalSourceChars = Object.values(TOKEN_BENCHMARK_DOC_BYTES).reduce((sum, bytes) => sum + bytes, 0);
+  return {
+    docChars,
+    promptChars,
+    contextChars,
+    handoffChars,
+    designChars,
+    requirementChars,
+    totalAmplification: docChars / totalSourceChars,
+    designAmplification: designChars / TOKEN_BENCHMARK_DOC_BYTES.design,
+    requirementAmplification: requirementChars / TOKEN_BENCHMARK_DOC_BYTES.requirement,
+    retries: 0,
+    routeBacks: 0,
+  };
+}
+
+/** Counterfactual no-handoff vs structured-handoff comparison on the pinned Large workload. */
+export function runLargeHandoffBenchmark(frameworkRoot: string): LargeHandoffBenchmarkComparison {
+  const fixture = createTraceableTokenBenchmarkFixture();
+  try {
+    return {
+      withoutHandoff: largeSnapshot(frameworkRoot, fixture, {}),
+      withHandoff: largeSnapshot(frameworkRoot, fixture, largeHandoffs(fixture)),
+    };
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }

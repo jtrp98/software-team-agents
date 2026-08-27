@@ -7,7 +7,7 @@ input:
   required: [design, requirements]
   optional: []
 output:
-  required: [plan]
+  required: [plan, handoff]
 constraints:
   - no_git
   - stay_inside_repo
