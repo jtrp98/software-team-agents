@@ -24,6 +24,16 @@ export interface RunRecord {
   context_chars: number | null;
   /** Runtime id reported by the executor/session launcher. Null for historical rows. */
   runtime: string | null;
+  /** Runtime requested before routing/fallback. Null when that decision was not reported. */
+  requested_runtime: string | null;
+  /** Model requested before routing/fallback. Null when that decision was not reported. */
+  requested_model: string | null;
+  /** Precedence level that selected the route. Null for pre-V3 and unreported runs. */
+  routing_basis: string | null;
+  /** Why the requested route changed. Null means no reason was reported, not that fallback did not occur. */
+  fallback_reason: string | null;
+  /** Number of fallback hops. Null when routing did not report a count. */
+  fallback_count: number | null;
   /** Whether this row came from an orchestrated stage or an interactive role session. */
   session_kind: "orchestrated" | "interactive" | null;
   /** Prompt composition fields are null when that path did not measure the component, never a fabricated zero. */
@@ -70,6 +80,11 @@ export interface RunOutcome {
   cache_read_tokens?: number;
   context_chars?: number;
   runtime?: string;
+  requested_runtime?: string;
+  requested_model?: string;
+  routing_basis?: string;
+  fallback_reason?: string;
+  fallback_count?: number;
   session_kind?: "orchestrated" | "interactive";
   static_chars?: number;
   instruction_surface_bytes?: number;
@@ -143,6 +158,11 @@ export class RunLog {
       cache_read_tokens: params.outcome.cache_read_tokens ?? null,
       context_chars: params.outcome.context_chars ?? null,
       runtime: params.outcome.runtime ?? null,
+      requested_runtime: params.outcome.requested_runtime ?? null,
+      requested_model: params.outcome.requested_model ?? null,
+      routing_basis: params.outcome.routing_basis ?? null,
+      fallback_reason: params.outcome.fallback_reason ?? null,
+      fallback_count: params.outcome.fallback_count ?? null,
       session_kind: params.outcome.session_kind ?? null,
       static_chars: params.outcome.static_chars ?? null,
       instruction_surface_bytes: params.outcome.instruction_surface_bytes ?? null,

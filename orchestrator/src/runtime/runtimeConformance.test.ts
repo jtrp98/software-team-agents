@@ -3,11 +3,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { SpawnSyncReturns } from "node:child_process";
 import { afterAll, describe, expect, it } from "vitest";
+import { AgentStage } from "../types.js";
 import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import { CodexAdapter } from "./codexAdapter.js";
+import { createRuntimeExecutor } from "./runtimeExecutor.js";
+import { MockRuntimeAdapter } from "./mockAdapter.js";
 import { OpenCodeAdapter } from "./openCodeAdapter.js";
-import type { RuntimeAdapter, RuntimeAgentRequest, RuntimeGuardReport, RuntimeWorkRoot, SpawnSync } from "./runtimeAdapter.js";
+import { NO_GUARDS, type RuntimeAdapter, type RuntimeAgentRequest, type RuntimeGuardReport, type RuntimeWorkRoot, type SpawnSync } from "./runtimeAdapter.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import { RuntimeRegistry } from "./runtimeRegistry.js";
 
 /**
  * T-V1-05 — the runtime conformance suite: one mandatory-case matrix run
@@ -59,6 +63,7 @@ const WORK_ROOTS: readonly RuntimeWorkRoot[] = [{ targetId: "target-a", path: TA
 // Exactly what `runtimeExecutor.ts` puts in `req.env` for a Target-write run —
 // this suite mirrors the production caller, never an invented request shape.
 const EXECUTOR_ENV = {
+  AGENTCLAUDE_ROLE: ROLE,
   AGENTCLAUDE_KNOWLEDGE_ROOT: KNOWLEDGE_ROOT,
   AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([TARGET_ROOT]),
 };
@@ -388,6 +393,72 @@ describe("T-V1-05 runtime conformance — one matrix, every runtime", () => {
         expect(report.find((r) => r.caseId === caseId)?.verdict, `${impl.id} ${caseId}`).toBe("PASS");
       }
     }
+  });
+
+  it("T-V3R-001 criterion 1 — no routed Target-write stage reaches a runtime missing its required guard capability", async () => {
+    const root = newFixture();
+    fs.mkdirSync(path.join(root, ".sta"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".sta", "config.yaml"),
+      "schema_version: 1\nmodel_routing:\n  backend-engineer: unsafe:mock-model\n",
+      "utf8",
+    );
+    const fallback = new MockRuntimeAdapter({ id: "claude-code" });
+    const unsafe = new MockRuntimeAdapter({ id: "unsafe", models: ["mock-model"], capabilities: [] });
+    const registry = new RuntimeRegistry([fallback, unsafe]);
+    const executor = createRuntimeExecutor({
+      runtime: fallback,
+      registry,
+      projectRoot: root,
+      moduleName: () => "phase-0",
+      guards: () => NO_GUARDS,
+      sliceModuleDocs: false,
+      threeRepoTask: () => ({
+        task: { taskId: "T-V3R-001" } as never,
+        roots: {
+          bindingRoot: root,
+          knowledgeRoot: KNOWLEDGE_ROOT,
+          workRoots: [...WORK_ROOTS],
+        },
+      }),
+    });
+
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-V3R-001", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect((result.outcome as { failure_reason?: string }).failure_reason).toMatch(/cannot enforce a pre-tool workspace guard/);
+    expect(fallback.requests).toHaveLength(0);
+    expect(unsafe.requests).toHaveLength(0);
+  });
+
+  it("T-V3R-001 criterion 3 — every registered adapter passes role and writable-root guard env unmodified", async () => {
+    const root = newFixture();
+    const callsByRuntime = new Map<string, CapturedCall[]>();
+    const adapters: RuntimeAdapter[] = IMPLEMENTATIONS.map((impl) => {
+      const calls: CapturedCall[] = [];
+      callsByRuntime.set(impl.id, calls);
+      return impl.make(root, capturingSpawn(impl.binary, calls));
+    });
+    const mock = new MockRuntimeAdapter({ id: "mock" });
+    adapters.push(mock);
+    const registry = new RuntimeRegistry(adapters);
+
+    for (const adapter of registry.list()) {
+      await adapter.executeAgent({
+        role: ROLE,
+        cwd: root,
+        knowledgeRoot: KNOWLEDGE_ROOT,
+        workRoots: WORK_ROOTS,
+        definitionPath: adapter.binding.definitionPath(ROLE),
+        prompt: PROMPT,
+        autonomy: "edit",
+        guards: GUARDS,
+        env: EXECUTOR_ENV,
+      });
+      const observed = adapter === mock ? mock.requests.at(-1)?.env : callsByRuntime.get(adapter.id)?.at(-1)?.env;
+      expect(observed?.AGENTCLAUDE_ROLE, adapter.id).toBe(EXECUTOR_ENV.AGENTCLAUDE_ROLE);
+      expect(observed?.AGENTCLAUDE_WRITABLE_WORK_ROOTS, adapter.id).toBe(EXECUTOR_ENV.AGENTCLAUDE_WRITABLE_WORK_ROOTS);
+    }
+    expect(registry.ids()).toEqual(["claude-code", "codex", "opencode", "mock"]);
   });
 
   it("reports the orchestrator-owned axes as covered elsewhere, naming the owning suites", async () => {

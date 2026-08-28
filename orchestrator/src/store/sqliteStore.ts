@@ -56,7 +56,9 @@ import {
 // v9: records deterministic-gate enabled/disabled for optimized QA runs.
 // v10: records warning-only context-budget accounting and overflow telemetry.
 // v11: records launch-time always-on instruction bytes for interactive sessions.
-const SCHEMA_VERSION = 11;
+// v12 (T-V3R-002): records requested-vs-actual routing and fallback decisions. All five fields
+// are nullable because historical runs did not report them and must not be backfilled.
+const SCHEMA_VERSION = 12;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -86,6 +88,11 @@ CREATE TABLE IF NOT EXISTS runs (
   qa_mode            TEXT,
   deterministic_gate TEXT,
   runtime            TEXT,
+  requested_runtime  TEXT,
+  requested_model    TEXT,
+  routing_basis      TEXT,
+  fallback_reason    TEXT,
+  fallback_count     INTEGER,
   session_kind       TEXT,
   static_chars       INTEGER,
   instruction_surface_bytes INTEGER,
@@ -189,6 +196,11 @@ interface RunRow {
   qa_mode: string | null;
   deterministic_gate: string | null;
   runtime: string | null;
+  requested_runtime: string | null;
+  requested_model: string | null;
+  routing_basis: string | null;
+  fallback_reason: string | null;
+  fallback_count: number | null;
   session_kind: string | null;
   static_chars: number | null;
   instruction_surface_bytes: number | null;
@@ -298,6 +310,20 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
     if (!existing.has("instruction_surface_bytes")) db.exec("ALTER TABLE runs ADD COLUMN instruction_surface_bytes INTEGER");
   },
+  11: (db) => {
+    // T-V3R-002: old rows have no truthful requested route or fallback facts.
+    // Nullable columns preserve every legacy value byte-for-byte and read as
+    // "not reported" without inventing a backfill.
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    const columns: ReadonlyArray<[string, "TEXT" | "INTEGER"]> = [
+      ["requested_runtime", "TEXT"],
+      ["requested_model", "TEXT"],
+      ["routing_basis", "TEXT"],
+      ["fallback_reason", "TEXT"],
+      ["fallback_count", "INTEGER"],
+    ];
+    for (const [column, type] of columns) if (!existing.has(column)) db.exec(`ALTER TABLE runs ADD COLUMN ${column} ${type}`);
+  },
 };
 
 export class SqliteTaskStore implements TaskStore {
@@ -391,8 +417,8 @@ export class SqliteTaskStore implements TaskStore {
   appendRun(record: RunRecord): void {
     this.db
       .prepare(
-        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, prompt_version, qa_mode, deterministic_gate, runtime, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, prompt_version, qa_mode, deterministic_gate, runtime, requested_runtime, requested_model, routing_basis, fallback_reason, fallback_count, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.task_id,
@@ -414,6 +440,11 @@ export class SqliteTaskStore implements TaskStore {
         record.qa_mode,
         record.deterministic_gate,
         record.runtime,
+        record.requested_runtime,
+        record.requested_model,
+        record.routing_basis,
+        record.fallback_reason,
+        record.fallback_count,
         record.session_kind,
         record.static_chars,
         record.instruction_surface_bytes ?? null,
@@ -469,6 +500,11 @@ export class SqliteTaskStore implements TaskStore {
       qa_mode: r.qa_mode === "FULL" || r.qa_mode === "TARGETED" ? r.qa_mode : null,
       deterministic_gate: r.deterministic_gate === "enabled" || r.deterministic_gate === "disabled" ? r.deterministic_gate : null,
       runtime: r.runtime,
+      requested_runtime: r.requested_runtime,
+      requested_model: r.requested_model,
+      routing_basis: r.routing_basis,
+      fallback_reason: r.fallback_reason,
+      fallback_count: r.fallback_count,
       session_kind: r.session_kind === "orchestrated" || r.session_kind === "interactive" ? r.session_kind : null,
       static_chars: r.static_chars,
       instruction_surface_bytes: r.instruction_surface_bytes,

@@ -44,6 +44,24 @@ export const KNOWLEDGE_OWNED_PATHS = [
   ".workflow",
 ] as const;
 
+/**
+ * Regenerable execution artifacts are Local Runtime State, never Knowledge.
+ * Keep this deny ahead of the broad `.workflow` Knowledge classification:
+ * `.workflow` also contains installation-local bindings that predate V3, but
+ * packets, verification evidence and runner output must never inherit durable
+ * Knowledge ownership from that compatibility root.
+ */
+export const KNOWLEDGE_DENIED_RUNTIME_DIRS = ["packets", "evidence", "runs"] as const;
+
+export class RuntimeStateOwnershipError extends Error {
+  constructor(relativePath: string, kind: string) {
+    super(
+      `refusing to classify "${relativePath}" as Knowledge-owned — regenerable ${kind} artifacts belong under .workflow/${kind}/ in Local Runtime State`,
+    );
+    this.name = "RuntimeStateOwnershipError";
+  }
+}
+
 /** Instructions that belong to a target project even when their basename is shared
  * with a framework instruction.  The install/upgrade manifest is relative to a
  * target, so these can never be framework-managed payload. */
@@ -200,7 +218,13 @@ export function detectInstructionSurface(options: {
 
 export function ownerOfPath(relativePath: string): RepositoryOwner {
   const candidate = normalise(relativePath);
-  if (KNOWLEDGE_OWNED_PATHS.some((owned) => candidate === owned || candidate.startsWith(`${owned}/`))) {
+  const segments = candidate.split("/");
+  const hasKnowledgePrefix = KNOWLEDGE_OWNED_PATHS.some((owned) => candidate === owned || candidate.startsWith(`${owned}/`));
+  const runtimeKind = KNOWLEDGE_DENIED_RUNTIME_DIRS.find(
+    (kind) => candidate === kind || candidate.startsWith(`${kind}/`) || (hasKnowledgePrefix && segments.includes(kind)),
+  );
+  if (runtimeKind) throw new RuntimeStateOwnershipError(relativePath, runtimeKind);
+  if (hasKnowledgePrefix) {
     return "knowledge";
   }
   if (TARGET_OWNED_PATHS.some((owned) => candidate === owned || candidate.startsWith(`${owned}/`))) {

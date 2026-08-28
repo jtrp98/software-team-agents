@@ -30,6 +30,11 @@ describe("RunLog", () => {
       cache_read_tokens: null,
       context_chars: null,
       runtime: null,
+      requested_runtime: null,
+      requested_model: null,
+      routing_basis: null,
+      fallback_reason: null,
+      fallback_count: null,
       session_kind: null,
       instruction_surface_bytes: null,
       static_chars: null,
@@ -79,6 +84,50 @@ describe("RunLog", () => {
     expect(record.output_tokens).toBe(1000);
     expect(record.cache_read_tokens).toBe(2500);
     expect(record.context_chars).toBe(18000);
+  });
+
+  it("T-V3R-002 records requested route and fallback fields without changing omitted callers", () => {
+    const log = new RunLog();
+    const reported = log.record({
+      task_id: "TASK-ROUTED",
+      agent: AgentStage.BACKEND_ENGINEER,
+      start_time: 0,
+      end_time: 1,
+      outcome: {
+        tokens: 1,
+        cost: 0,
+        result: "PASS",
+        runtime: "codex",
+        model: "gpt-5",
+        requested_runtime: "claude-code",
+        requested_model: "sonnet",
+        routing_basis: "policy",
+        fallback_reason: "requested runtime unavailable",
+        fallback_count: 1,
+      },
+    });
+    expect(reported).toMatchObject({
+      requested_runtime: "claude-code",
+      requested_model: "sonnet",
+      routing_basis: "policy",
+      fallback_reason: "requested runtime unavailable",
+      fallback_count: 1,
+    });
+
+    const unreported = log.record({
+      task_id: "TASK-LEGACY",
+      agent: AgentStage.BACKEND_ENGINEER,
+      start_time: 1,
+      end_time: 2,
+      outcome: { tokens: 1, cost: 0, result: "PASS" },
+    });
+    expect(unreported).toMatchObject({
+      requested_runtime: null,
+      requested_model: null,
+      routing_basis: null,
+      fallback_reason: null,
+      fallback_count: null,
+    });
   });
 
   it("keeps an omitted composition unknown instead of converting it to zero", () => {

@@ -88,6 +88,11 @@ function sampleRun(taskId = "T-1"): RunRecord {
     qa_mode: null,
     deterministic_gate: null,
     runtime: "claude-code",
+    requested_runtime: null,
+    requested_model: null,
+    routing_basis: null,
+    fallback_reason: null,
+    fallback_count: null,
     session_kind: "orchestrated",
     static_chars: 500,
     instruction_surface_bytes: null,
@@ -451,6 +456,66 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
         expect(store.runsForTask("T-V6")[0]).toMatchObject({ tokens: 123, runtime: null, session_kind: null, static_chars: null, doc_chars: null });
       } finally { store.close(); }
     } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
+  });
+
+  it("T-V3R-002: a v11 fixture migrates to v12, preserves every legacy run fact, and round-trips nullable routing fields", () => {
+    const file = tmpDbPath();
+    const routingColumns = [
+      "requested_runtime",
+      "requested_model",
+      "routing_basis",
+      "fallback_reason",
+      "fallback_count",
+    ] as const;
+    try {
+      // Start from the real current DDL, then remove only the v12 columns. This
+      // keeps the fixture locked to the complete v11 shape without duplicating
+      // forty legacy column declarations in the test.
+      const seed = new SqliteTaskStore(file);
+      const legacy = sampleRun("T-V11");
+      seed.appendRun(legacy);
+      seed.close();
+
+      const rawV11 = new Database(file);
+      for (const column of routingColumns) rawV11.exec(`ALTER TABLE runs DROP COLUMN ${column}`);
+      rawV11.pragma("user_version = 11");
+      rawV11.close();
+
+      const migrated = new SqliteTaskStore(file);
+      const routed: RunRecord = {
+        ...sampleRun("T-V12"),
+        runtime: "codex",
+        model: "gpt-5",
+        requested_runtime: "claude-code",
+        requested_model: "sonnet",
+        routing_basis: "policy",
+        fallback_reason: "requested runtime unavailable",
+        fallback_count: 1,
+      };
+      try {
+        expect(migrated.runsForTask("T-V11")).toEqual([legacy]);
+        migrated.appendRun(routed);
+        expect(migrated.runsForTask("T-V12")).toEqual([routed]);
+      } finally {
+        migrated.close();
+      }
+
+      const versionCheck = new Database(file, { readonly: true });
+      expect(versionCheck.pragma("user_version", { simple: true })).toBe(12);
+      expect((versionCheck.pragma("table_info(runs)") as { name: string }[]).filter((column) => routingColumns.includes(column.name as typeof routingColumns[number])).map((column) => column.name)).toEqual([...routingColumns]);
+      versionCheck.close();
+
+      // Opening v12 again must not re-run the v11 migration or disturb data.
+      const reopened = new SqliteTaskStore(file);
+      try {
+        expect(reopened.runsForTask("T-V11")).toEqual([legacy]);
+        expect(reopened.runsForTask("T-V12")).toEqual([routed]);
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      fs.rmSync(path.dirname(file), { recursive: true, force: true });
+    }
   });
 
   it("Phase 2: a v4 task row reads with null Target bindings without rewriting historical JSON", () => {

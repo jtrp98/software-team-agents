@@ -7,10 +7,13 @@ import {
   detectInstructionSurface,
   INSTRUCTION_PATH_CLASSES,
   INSTRUCTION_PRECEDENCE,
+  KNOWLEDGE_DENIED_RUNTIME_DIRS,
   KNOWLEDGE_OWNED_PATHS,
   ownerOfPath,
+  RuntimeStateOwnershipError,
   TARGET_OWNED_PATHS,
 } from "./ownership.js";
+import { assertManageablePath } from "../targetcli/targetMeta.js";
 import { assertStandaloneKnowledgeRoot, configureKnowledgeRoot, loadInstallationConfig } from "./installation.js";
 import { assertTargetCanStartNewTask, assertTargetIdsImmutable, loadTargetRegistry, writeTargetRegistry, type TargetRegistry } from "./targets.js";
 import { loadLocalTargetMapping } from "./localTargets.js";
@@ -46,6 +49,22 @@ describe("three-repo ownership", () => {
     expect(ownerOfPath("AGENTS.md")).toBe("target");
     expect(ownerOfPath(".claude/settings.json")).toBe("target");
     expect(() => assertFrameworkManagedPaths(["policies/coding.md", "knowledge-policy.yaml"])).toThrow(/project-owned/);
+  });
+
+  it("T-V3R-003 denies packet, evidence and run artifacts from Knowledge and names their Local Runtime State home", () => {
+    for (const kind of KNOWLEDGE_DENIED_RUNTIME_DIRS) {
+      for (const candidate of [`${kind}/T-1/item.json`, `knowledge/${kind}/T-1/item.json`, `.workflow/${kind}/T-1/item.json`]) {
+        expect(() => ownerOfPath(candidate), candidate).toThrow(RuntimeStateOwnershipError);
+        expect(() => ownerOfPath(candidate), candidate).toThrow(`.workflow/${kind}/`);
+      }
+    }
+    expect(ownerOfPath("orchestrator/src/runs/report.ts")).toBe("framework");
+  });
+
+  it("T-V3R-003 keeps every runtime artifact home unreachable by Target sync", () => {
+    for (const kind of KNOWLEDGE_DENIED_RUNTIME_DIRS) {
+      expect(() => assertManageablePath(`.workflow/${kind}/T-1/item.json`), kind).toThrow(/runtime state are Target-owned, always/);
+    }
   });
 
   it("declares exactly one allowed precedence for every known instruction path class", () => {
