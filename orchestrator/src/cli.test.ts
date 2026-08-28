@@ -11,6 +11,8 @@ import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
 import { acquireTaskLock, releaseTaskLock } from "./concurrency/taskLock.js";
 import { Environment } from "./environment/environment.js";
 import { AgentStage } from "./types.js";
+import type { ExecutionPacket } from "./artifacts/schemas.js";
+import { writeExecutionPacket } from "./state/runtimeArtifacts.js";
 
 describe("parseArgs", () => {
   it("parses required flags and maps classification flags", () => {
@@ -712,6 +714,36 @@ describe("T-V3TOK-041 context verb", () => {
       expect(output.composition.doc_chars_before).toBeGreaterThan(0);
       expect(output.composition.direct_file_reads).toBeGreaterThan(0);
       expect(USAGE).toContain("sta context <role>");
+    } finally {
+      console.log = original;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("renders the latest persisted packet without reopening module documents", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-context-packet-"));
+    const text = "Task T-PACKET\n## Acceptance Criteria\n- inspectable";
+    const packet: ExecutionPacket = {
+      text,
+      composition: { static_chars: text.length, handoff_chars: 0, doc_chars: 0, knowledge_chars: 0, code_intel_chars: 0, tool_output_chars: 0 },
+      budgetComposition: { base: text.length, task: 0, safety: 0, docs: 0, knowledge: 0, code: 0, tool_output: 0, reserve: 0 },
+      task_id: "T-PACKET",
+      stage: AgentStage.BACKEND_ENGINEER,
+      role: "backend-engineer",
+      acceptance_criteria: ["inspectable"],
+      required_verification: [],
+      stop_conditions: ["STOP on invalid state"],
+      scope: { allow: ["server/**"], deny: [".git/**"] },
+      sources: ["runtime-task"],
+    };
+    writeExecutionPacket({ projectRoot: root, packet });
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+    try {
+      expect(await runCli(["context", "backend-engineer", "--task", "T-PACKET", "--packet", "--json", "--project-root", root], root)).toBe(0);
+      expect(JSON.parse(logs.join("\n"))).toMatchObject({ task_id: "T-PACKET", scope: { allow: ["server/**"] } });
+      expect(USAGE).toContain("--packet");
     } finally {
       console.log = original;
       fs.rmSync(root, { recursive: true, force: true });

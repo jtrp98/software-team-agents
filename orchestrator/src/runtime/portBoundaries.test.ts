@@ -75,8 +75,8 @@ describe("runtime port boundary", () => {
     expect(violations).toEqual([]);
   });
 
-  it("the runtime layer's shared assembly never names a runtime", () => {
+  it("the Task Compiler imports no runtime adapter or concrete adapter", () => {
     const content = fs.readFileSync(path.join(SRC_ROOT, "runtime", "agentRunAssembly.ts"), "utf8");
-    expect(content).not.toMatch(/from\s+"[^"]*(claudeCodeAdapter|codexAdapter|mockAdapter)\.js"/);
+    expect(content).not.toMatch(/from\s+"[^"]*(?:runtimeAdapter|claudeCodeAdapter|codexAdapter|mockAdapter|openCodeAdapter)\.js"/);
   });
 });

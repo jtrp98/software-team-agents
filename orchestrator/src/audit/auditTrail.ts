@@ -96,11 +96,12 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
       const result = str(outcome, "result");
       const tokens = num(outcome, "tokens");
       const artifact = str(payload, "artifactType");
+      const packetPath = str(payload, "packetPath");
       const parts = [artifact, result, tokens === null ? null : `${tokens} tokens`].filter((p) => p !== null);
       return {
         actor: str(payload, "stage"),
         reason: str(outcome, "failure_reason"),
-        input: null,
+        input: packetPath === null ? null : `execution-packet:${packetPath}`,
         output: parts.length > 0 ? parts.join(", ") : null,
         decision: null,
       };

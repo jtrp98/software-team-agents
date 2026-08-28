@@ -1,5 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { ArtifactType, validateArtifact, type ExecutionPacket } from "../artifacts/schemas.js";
+import { AgentStage } from "../types.js";
 
 /** Regenerable V3 artifact classes stored below the VCS-ignored runtime-state root. */
 export const RUNTIME_ARTIFACT_KINDS = ["packets", "evidence", "runs"] as const;
@@ -96,4 +98,136 @@ export function pruneRuntimeArtifacts(options: PruneRuntimeArtifactsOptions): st
     .sort((a, b) => a.name.localeCompare(b.name));
   for (const entry of removed) fs.unlinkSync(entry.absolute);
   return removed.map((entry) => entry.absolute);
+}
+
+function canonicalProspectivePath(candidate: string): string {
+  let existing = path.resolve(candidate);
+  const tail: string[] = [];
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) throw new Error(`cannot resolve runtime artifact ancestor for ${candidate}`);
+    tail.unshift(path.basename(existing));
+    existing = parent;
+  }
+  return path.resolve(fs.realpathSync.native(existing), ...tail);
+}
+
+function pathIsInside(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+}
+
+/**
+ * Refuses packet storage whose physical path would enter Knowledge or any
+ * resolved Target root. The prospective-path resolution also catches an
+ * existing `.workflow` symlink/junction before a packet is written.
+ */
+export function assertPacketStorageOwnership(
+  packetPath: string,
+  forbiddenRoots: readonly string[],
+  runtimeStateRoot?: string,
+): void {
+  const canonicalPacket = canonicalProspectivePath(packetPath);
+  if (runtimeStateRoot) {
+    const canonicalRuntimeRoot = fs.realpathSync.native(path.resolve(runtimeStateRoot));
+    if (!pathIsInside(canonicalPacket, canonicalRuntimeRoot)) {
+      throw new Error(`execution packet storage escapes Local Runtime State root ${canonicalRuntimeRoot}: ${canonicalPacket}`);
+    }
+  }
+  for (const root of forbiddenRoots) {
+    const canonicalRoot = fs.realpathSync.native(path.resolve(root));
+    if (pathIsInside(canonicalPacket, canonicalRoot)) {
+      throw new Error(`execution packet storage must remain Local Runtime State; ${canonicalPacket} resolves inside ${canonicalRoot}`);
+    }
+  }
+}
+
+function stageFilePrefix(stage: AgentStage): string {
+  return `${stage}-`;
+}
+
+function nextPacketAttempt(taskDirectory: string, stage: AgentStage): number {
+  if (!fs.existsSync(taskDirectory)) return 1;
+  const prefix = stageFilePrefix(stage);
+  const attempts = fs
+    .readdirSync(taskDirectory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(".json"))
+    .map((entry) => Number(entry.name.slice(prefix.length, -".json".length)))
+    .filter((attempt) => Number.isInteger(attempt) && attempt > 0);
+  return attempts.length === 0 ? 1 : Math.max(...attempts) + 1;
+}
+
+export interface WriteExecutionPacketOptions {
+  projectRoot: string;
+  packet: ExecutionPacket;
+  /** Canonical Knowledge and Target roots resolved by three-repo preflight. */
+  forbiddenRoots?: readonly string[];
+  maxRunsPerTask?: number;
+}
+
+export interface PersistedExecutionPacket {
+  path: string;
+  attempt: number;
+  removed: string[];
+}
+
+/** Validates, writes atomically-by-name, validates from disk, then prunes. */
+export function writeExecutionPacket(options: WriteExecutionPacketOptions): PersistedExecutionPacket {
+  if (options.maxRunsPerTask !== undefined && (!Number.isInteger(options.maxRunsPerTask) || options.maxRunsPerTask < 1)) {
+    throw new Error(`runtime artifact retention must be a positive integer, got ${String(options.maxRunsPerTask)}`);
+  }
+  const packet = validateArtifact(ArtifactType.EXECUTION_PACKET, options.packet);
+  const taskDirectory = runtimeArtifactPaths(options.projectRoot, packet.task_id).packets;
+  let attempt = nextPacketAttempt(taskDirectory, packet.stage);
+  assertPacketStorageOwnership(taskDirectory, options.forbiddenRoots ?? [], options.projectRoot);
+  fs.mkdirSync(taskDirectory, { recursive: true });
+
+  // Re-resolve after mkdir so a pre-existing junction cannot become trusted by
+  // virtue of the directory now existing.
+  assertPacketStorageOwnership(taskDirectory, options.forbiddenRoots ?? [], options.projectRoot);
+  let packetPath: string;
+  while (true) {
+    packetPath = path.join(taskDirectory, `${stageFilePrefix(packet.stage)}${attempt}.json`);
+    assertPacketStorageOwnership(packetPath, options.forbiddenRoots ?? [], options.projectRoot);
+    try {
+      fs.writeFileSync(packetPath, `${JSON.stringify(packet, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      attempt += 1;
+    }
+  }
+
+  // A packet is not considered persisted until the on-disk bytes pass the
+  // same public artifact schema used at compile time.
+  readExecutionPacket(packetPath);
+  const removed = pruneRuntimeArtifacts({
+    taskDirectory,
+    currentArtifact: packetPath,
+    maxRunsPerTask: options.maxRunsPerTask,
+  });
+  return { path: packetPath, attempt, removed };
+}
+
+export function readExecutionPacket(packetPath: string): ExecutionPacket {
+  const stat = fs.lstatSync(packetPath);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`execution packet is not a regular file: ${packetPath}`);
+  return validateArtifact(ArtifactType.EXECUTION_PACKET, JSON.parse(fs.readFileSync(packetPath, "utf8")));
+}
+
+/** Latest regular packet for a stage, ordered by its numeric attempt. */
+export function latestExecutionPacketPath(projectRoot: string, taskId: string, stage: AgentStage): string | null {
+  const taskDirectory = runtimeArtifactPaths(projectRoot, taskId).packets;
+  if (!fs.existsSync(taskDirectory)) return null;
+  const prefix = stageFilePrefix(stage);
+  const candidates = fs
+    .readdirSync(taskDirectory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.startsWith(prefix) && entry.name.endsWith(".json"))
+    .map((entry) => ({
+      path: path.join(taskDirectory, entry.name),
+      attempt: Number(entry.name.slice(prefix.length, -".json".length)),
+    }))
+    .filter((entry) => Number.isInteger(entry.attempt) && entry.attempt > 0)
+    .sort((a, b) => b.attempt - a.attempt);
+  return candidates[0]?.path ?? null;
 }

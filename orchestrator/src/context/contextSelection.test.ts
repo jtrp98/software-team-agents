@@ -36,6 +36,13 @@ describe("CONTEXT_POLICY", () => {
     }
   });
 
+  it("keeps ExecutionPacket out of prior-stage context for every role", () => {
+    for (const policy of Object.values(CONTEXT_POLICY)) {
+      expect(policy.reads).not.toContain(ArtifactType.EXECUTION_PACKET);
+      expect(policy.doesNotRead).toContain(ArtifactType.EXECUTION_PACKET);
+    }
+  });
+
   it("knowledge-brief is readable by every dev-side role (T-KA5a)", () => {
     for (const stage of [
       AgentStage.QA_ENGINEER,

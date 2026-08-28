@@ -49,6 +49,9 @@ export const ALL_CONTEXT_CATEGORIES: ContextCategory[] = [
   ArtifactType.QA_REPORT,
   ArtifactType.SECURITY_REPORT,
   ArtifactType.HANDOFF,
+  // Compiler-to-runtime only. Including it in the category universe makes
+  // every role's doesNotRead deny explicit; no CONTEXT_POLICY grants it.
+  ArtifactType.EXECUTION_PACKET,
   "backend-code",
   "frontend-code",
   "devops-docs",

@@ -47,6 +47,8 @@ export const KINDS_BY_CATEGORY: Record<ContextCategory, KnowledgeKind[]> = {
   [ArtifactType.SECURITY_REPORT]: [],
   // A handoff only points at authoritative items; it carries no new kind.
   [ArtifactType.HANDOFF]: [],
+  // Execution packets are Local Runtime State, not durable knowledge.
+  [ArtifactType.EXECUTION_PACKET]: [],
   "backend-code": [],
   "frontend-code": [],
   "devops-docs": [],

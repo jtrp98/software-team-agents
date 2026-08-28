@@ -4,6 +4,7 @@ import { readModuleDoc, resolveModule } from "../agents/moduleDocs.js";
 import { parsePlanTasks } from "../docs/planGraph.js";
 import { resolveContextDocsRoot } from "../targetcli/roots.js";
 import { assembleStageContext, type StageContextAssembly } from "../runtime/agentRunAssembly.js";
+import type { ExecutionPacket } from "../artifacts/schemas.js";
 
 export interface ContextCommandInput {
   role: string;
@@ -48,7 +49,7 @@ export class ContextCommandError extends Error {
   }
 }
 
-function stageForRole(role: string): AgentStage {
+export function stageForRole(role: string): AgentStage {
   const entry = Object.values(AGENT_REGISTRY).find((candidate) => candidate.role === role);
   if (!entry || entry.name === AgentStage.HUMAN) {
     throw new ContextCommandError(
@@ -151,6 +152,11 @@ export function renderContextCommand(result: ContextCommandResult): string {
     `- knowledge=${c.knowledge_chars} chars; code_intel=${c.code_intel_chars} chars; direct_file_reads=${c.direct_file_reads}; fallback_to_full=${c.fallback_to_full_documents}`,
   ].join("\n");
   return `${body}${report}`;
+}
+
+/** `sta context --packet` renders the exact validated prompt handed to a runtime. */
+export function renderContextPacket(packet: ExecutionPacket): string {
+  return packet.text;
 }
 
 export function contextCommandJson(result: ContextCommandResult): object {

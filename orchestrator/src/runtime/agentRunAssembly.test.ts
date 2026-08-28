@@ -4,7 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { ArtifactType, type HandoffArtifact } from "../artifacts/schemas.js";
 import { AgentStage } from "../types.js";
-import { buildPrompt, buildPromptParts, handoffFromContext, referencedKnowledgeIds, sliceModuleDocsWithSavings } from "./agentRunAssembly.js";
+import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
+import { buildPrompt, buildPromptParts, compileExecutionPacket, handoffFromContext, referencedKnowledgeIds, renderExecutionPacketSections, sliceModuleDocsWithSavings } from "./agentRunAssembly.js";
 
 describe("buildPromptParts (T-V3TOK-001)", () => {
   it("accounts for every character exactly once across prompt composition", () => {
@@ -40,6 +41,65 @@ describe("buildPromptParts (T-V3TOK-001)", () => {
       "Finish by stating clearly what you completed and, per convention, what should happen next — the orchestrator reads your exit status and the docs you wrote, not a special reply format.",
     ].join("\n");
     expect(buildPrompt(req, undefined, ["doc"])).toBe(expected);
+  });
+});
+
+describe("T-V3R-020 deterministic Task Compiler", () => {
+  it("keeps the prior prompt byte-identical except for the three RuntimeTask sections", () => {
+    const req = {
+      stage: AgentStage.BACKEND_ENGINEER,
+      taskId: "T-V3R-020",
+      context: [{ source: ArtifactType.HANDOFF, content: "handoff" }],
+    };
+    const runtimeTask: RuntimeTask = {
+      task_id: req.taskId,
+      workflow: "feature",
+      pm_mode: "full",
+      why: "formalize packet",
+      goal: "formalize packet",
+      source_of_truth: { status: "resolved", paths: ["requirement.md", "design.md"], reason: null },
+      dependencies: { task_ids: [], plan_readiness: "ready", waiting_on: [], reason: null },
+      scope: {
+        status: "resolved",
+        work_roots: [{
+          stage: req.stage,
+          target_id: "target",
+          root: "C:/target",
+          allow: [
+            { contract_glob: "server/**", effective_glob: "C:/target/server/**" },
+            { contract_glob: "widened/**", effective_glob: "C:/target/widened/**" },
+          ],
+        }],
+        reason: null,
+      },
+      do_not_touch: [".git/**"],
+      acceptance_criteria: { status: "resolved", items: ["packet validates", "scope stays narrow"], reason: null },
+      required_verification: { status: "deferred", levels: ["unit", "typecheck"], reason: "fixture" },
+      evidence_required: ["focused tests"],
+      stop_conditions: ["STOP on an unresolved rule"],
+    };
+    const sources = { docs: ["design context"], knowledge: ["knowledge context"] };
+    const before = buildPromptParts(req, "environment", sources);
+    const packet = compileExecutionPacket({
+      req,
+      role: "backend-engineer",
+      runtimeTask,
+      contractScope: { allow: ["server/**"], deny: [".git/**"] },
+      extra: "environment",
+      sources,
+    });
+    const sections = renderExecutionPacketSections(packet);
+    const withoutSections = sections.reduce((text, section) => text.replace(`\n${section}`, ""), packet.text);
+
+    expect(withoutSections).toBe(before.text);
+    expect(sections.map((section) => section.split("\n")[0])).toEqual([
+      "## Acceptance Criteria",
+      "## Required Verification",
+      "## Stop Conditions",
+    ]);
+    expect(packet.scope.allow).toEqual(["server/**"]);
+    expect(packet.scope.allow).not.toContain("widened/**");
+    expect(packet.sources).toEqual(expect.arrayContaining(["runtime-task", "requirement.md", "module-docs", "knowledge-brief"]));
   });
 });
 

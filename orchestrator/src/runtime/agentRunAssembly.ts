@@ -1,6 +1,12 @@
 import { AgentStage } from "../types.js";
-import { ArtifactType, validateArtifact, type HandoffArtifact } from "../artifacts/schemas.js";
+import {
+  ArtifactType,
+  validateArtifact,
+  type ExecutionPacket,
+  type HandoffArtifact,
+} from "../artifacts/schemas.js";
 import type { AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
+import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { parseQaReport, parseSecurityReport, readModuleDoc } from "../agents/moduleDocs.js";
 import { parsePlanTasks } from "../docs/planGraph.js";
 import {
@@ -15,7 +21,8 @@ import { knowledgeBriefFor } from "./knowledgeBriefAssembly.js";
 import { assertContextComposition, emptyContextBudgetComposition, type ContextBudgetComposition } from "../context/contextBudget.js";
 
 /**
- * Everything about running a stage that is *this framework's* business rather
+ * This module is the deterministic Task Compiler: everything about running a
+ * stage that is *this framework's* business rather
  * than any runtime's (T108).
  *
  * Extracted from `agents/claudeCliExecutor.ts`, where it sat next to the
@@ -289,6 +296,8 @@ export interface PromptPartsResult {
 }
 
 export interface PromptSources {
+  /** RuntimeTask-derived packet sections. Accounted as task/handoff text. */
+  task?: string[];
   /** Explicit safety/gate text, when a caller needs it in the assembled prompt. */
   safety?: string[];
   docs?: string[];
@@ -334,6 +343,7 @@ export function buildPromptParts(req: AgentExecutorRequest, extra?: string, sour
       parts.push({ kind: "handoff_chars", text: "" }, { kind: "handoff_chars", text: `### ${item.source}` }, { kind: "handoff_chars", text: item.content });
     }
   }
+  for (const text of sources.task ?? []) parts.push({ kind: "handoff_chars", budgetKind: "task", text });
   // Safety is currently loaded by runtime bindings rather than appended here,
   // but this explicit source keeps a future injected gate from being folded
   // into misleading generic static accounting.
@@ -363,6 +373,85 @@ export function buildPromptParts(req: AgentExecutorRequest, extra?: string, sour
   }).join("");
   assertContextComposition(budgetComposition, text.length);
   return { text, composition, budgetComposition };
+}
+
+export interface ExecutionPacketScopeContract {
+  readonly allow: readonly string[];
+  readonly deny: readonly string[];
+}
+
+function unique(values: readonly string[]): string[] {
+  return [...new Set(values)];
+}
+
+/** The only prompt additions made by V3 Phase 2. */
+export function renderExecutionPacketSections(fields: Pick<ExecutionPacket, "acceptance_criteria" | "required_verification" | "stop_conditions">): string[] {
+  const section = (title: string, values: readonly string[], empty: string): string =>
+    [`## ${title}`, ...(values.length > 0 ? values.map((value) => `- ${value}`) : [`- ${empty}`])].join("\n");
+  return [
+    section("Acceptance Criteria", fields.acceptance_criteria, "unavailable"),
+    section("Required Verification", fields.required_verification, "deferred"),
+    section("Stop Conditions", fields.stop_conditions, "none declared"),
+  ];
+}
+
+export interface CompileExecutionPacketInput {
+  req: AgentExecutorRequest;
+  role: string;
+  runtimeTask: RuntimeTask;
+  contractScope: ExecutionPacketScopeContract;
+  extra?: string;
+  sources?: Omit<PromptSources, "task">;
+}
+
+/**
+ * Compiles one execution-ready packet with deterministic lookup/select/filter/
+ * compose/template operations only. This module deliberately has no runtime
+ * adapter import, constructor, registry, or model call.
+ */
+export function compileExecutionPacket(input: CompileExecutionPacketInput): ExecutionPacket {
+  if (input.runtimeTask.task_id !== input.req.taskId) {
+    throw new Error(`RuntimeTask ${input.runtimeTask.task_id} cannot compile packet for ${input.req.taskId}`);
+  }
+  const contractAllow = new Set(input.contractScope.allow);
+  const allow = unique(
+    input.runtimeTask.scope.work_roots
+      .filter((root) => root.stage === input.req.stage)
+      .flatMap((root) => root.allow.map((entry) => entry.contract_glob))
+      .filter((glob) => contractAllow.has(glob)),
+  );
+  const fields = {
+    acceptance_criteria: [...input.runtimeTask.acceptance_criteria.items],
+    required_verification: [...input.runtimeTask.required_verification.levels],
+    stop_conditions: [...input.runtimeTask.stop_conditions],
+  };
+  const prompt = buildPromptParts(input.req, input.extra, {
+    ...input.sources,
+    task: renderExecutionPacketSections(fields),
+  });
+  const sourceKinds = [
+    "runtime-task",
+    ...input.runtimeTask.source_of_truth.paths,
+    ...input.req.context.map((item) => item.source),
+    ...(input.sources?.docs?.length ? ["module-docs"] : []),
+    ...(input.sources?.knowledge?.length ? ["knowledge-brief"] : []),
+    ...(input.sources?.codeIntel?.length ? ["code-intelligence"] : []),
+    ...(input.sources?.toolOutput?.length ? ["tool-output"] : []),
+  ];
+  return validateArtifact(ArtifactType.EXECUTION_PACKET, {
+    ...prompt,
+    task_id: input.req.taskId,
+    stage: input.req.stage,
+    role: input.role,
+    ...fields,
+    scope: {
+      // RuntimeTask proposes the stage scope; the current role contract is the
+      // authority. Filtering here means stale task state can only narrow.
+      allow,
+      deny: unique([...input.runtimeTask.do_not_touch, ...input.contractScope.deny]),
+    },
+    sources: unique(sourceKinds),
+  });
 }
 
 /** Compatibility wrapper for existing callers/tests using the old sliced array. */

@@ -16,6 +16,8 @@ import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { buildContextCommand } from "../context/contextCommand.js";
 import { buildPromptParts } from "./agentRunAssembly.js";
 import { auditTrail } from "../audit/auditTrail.js";
+import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
+import { latestExecutionPacketPath, readExecutionPacket } from "../state/runtimeArtifacts.js";
 
 /**
  * T108's central claim, under test: the orchestrator can run agents through the
@@ -78,6 +80,58 @@ describe("createRuntimeExecutor — what reaches the adapter (T108)", () => {
     expect(prompt).toContain("Task T-42");
     expect(prompt).toContain("backend-engineer");
     expect(prompt).toContain("REQ-001 refunds");
+  });
+
+  it("persists a validated ExecutionPacket before the adapter receives it", async () => {
+    const root = tmpProject();
+    let existedBeforeExecute = false;
+    const runtime = new MockRuntimeAdapter({
+      respond: () => {
+        existedBeforeExecute = latestExecutionPacketPath(root, "T-PACKET", AgentStage.BACKEND_ENGINEER) !== null;
+        return okResult();
+      },
+    });
+    const runtimeTask: RuntimeTask = {
+      task_id: "T-PACKET",
+      workflow: "bugfix",
+      pm_mode: "lightweight",
+      why: "persist packet",
+      goal: "persist packet",
+      source_of_truth: { status: "unavailable", paths: [], reason: "fixture" },
+      dependencies: { task_ids: [], plan_readiness: "untracked", waiting_on: [], reason: "fixture" },
+      scope: {
+        status: "resolved",
+        work_roots: [{
+          stage: AgentStage.BACKEND_ENGINEER,
+          target_id: "legacy",
+          root,
+          allow: [{ contract_glob: "server/**", effective_glob: path.join(root, "server", "**") }],
+        }],
+        reason: null,
+      },
+      do_not_touch: [".git/**"],
+      acceptance_criteria: { status: "resolved", items: ["packet round-trips"], reason: null },
+      required_verification: { status: "deferred", levels: [], reason: "fixture" },
+      evidence_required: ["packet JSON"],
+      stop_conditions: ["STOP on invalid packet"],
+    };
+    const executor = createRuntimeExecutor({
+      runtime,
+      projectRoot: root,
+      moduleName: () => "sales-crm",
+      guards: () => ({ ...NO_GUARDS, writeAllow: ["server/**"] }),
+      runtimeTask: () => runtimeTask,
+      sliceModuleDocs: false,
+    });
+
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-PACKET", context: [] });
+    const persistedPath = latestExecutionPacketPath(root, "T-PACKET", AgentStage.BACKEND_ENGINEER)!;
+    const persisted = readExecutionPacket(persistedPath);
+
+    expect(existedBeforeExecute).toBe(true);
+    expect(result.packetPath).toBe(".workflow/packets/T-PACKET/backend-engineer-1.json");
+    expect(persisted.text).toBe(runtime.requests[0].prompt);
+    expect(persisted.scope.allow).toEqual(["server/**"]);
   });
 
   it("passes the guard set through untouched, so the adapter can wire it into its own binding", async () => {

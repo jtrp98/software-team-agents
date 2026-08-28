@@ -61,9 +61,11 @@ describe("describeEvent (T37)", () => {
     const fields = describeEvent("AGENT_COMPLETED", {
       stage: "qa-engineer",
       artifactType: "qa-report",
+      packetPath: ".workflow/packets/T-1/qa-engineer-1.json",
       outcome: { result: "PASS", tokens: 1200 },
     });
     expect(fields.actor).toBe("qa-engineer");
+    expect(fields.input).toBe("execution-packet:.workflow/packets/T-1/qa-engineer-1.json");
     expect(fields.output).toBe("qa-report, PASS, 1200 tokens");
     // Finishing is a fact, not a choice — so it carries no decision.
     expect(fields.decision).toBeNull();

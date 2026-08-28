@@ -369,12 +369,29 @@ export function tokenMetricsExport(runs: readonly RunRecord[], opts?: { now?: ()
   };
 }
 
-export function compareTokenBaselines(before: TokenMetricsExport, after: TokenMetricsExport): { inputTokenDeltaPct: number | null; retryWasteDeltaPct: number | null } {
+export interface PromptCharacterBaseline {
+  promptCharacters: number;
+}
+
+function promptCharactersOf(baseline: TokenMetricsExport | PromptCharacterBaseline): number | null {
+  if ("promptCharacters" in baseline) return baseline.promptCharacters;
+  const values = COMPOSITION_FIELDS.map((field) => baseline.totals.composition[field]);
+  return values.some((value) => value === null)
+    ? null
+    : values.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+}
+
+export function compareTokenBaselines(
+  before: TokenMetricsExport | PromptCharacterBaseline,
+  after: TokenMetricsExport | PromptCharacterBaseline,
+): { inputTokenDeltaPct: number | null; retryWasteDeltaPct: number | null; promptCharacterDeltaPct: number | null } {
   const delta = (oldValue: number | null, newValue: number | null): number | null =>
     oldValue === null || newValue === null || oldValue === 0 ? null : ((newValue - oldValue) / oldValue) * 100;
+  const tokenExport = (value: TokenMetricsExport | PromptCharacterBaseline): value is TokenMetricsExport => "totals" in value;
   return {
-    inputTokenDeltaPct: delta(before.totals.inputTokens, after.totals.inputTokens),
-    retryWasteDeltaPct: delta(before.totals.retryWasteTokens, after.totals.retryWasteTokens),
+    inputTokenDeltaPct: tokenExport(before) && tokenExport(after) ? delta(before.totals.inputTokens, after.totals.inputTokens) : null,
+    retryWasteDeltaPct: tokenExport(before) && tokenExport(after) ? delta(before.totals.retryWasteTokens, after.totals.retryWasteTokens) : null,
+    promptCharacterDeltaPct: delta(promptCharactersOf(before), promptCharactersOf(after)),
   };
 }
 

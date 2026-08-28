@@ -98,8 +98,9 @@ import type { AdoptionStageId } from "./adoption/adoptionModel.js";
 import { getPolicySection, listPolicySections, PolicyIndexError } from "./docs/policyIndex.js";
 import { buildPlanGraph, type TaskNode } from "./graph/taskGraph.js";
 import { parsePlanTasks } from "./docs/planGraph.js";
-import { buildContextCommand, ContextCommandError, contextCommandJson, renderContextCommand } from "./context/contextCommand.js";
+import { buildContextCommand, ContextCommandError, contextCommandJson, renderContextCommand, renderContextPacket, stageForRole } from "./context/contextCommand.js";
 import type { RuntimeTaskWorkRoot } from "./orchestrator/runtimeTask.js";
+import { latestExecutionPacketPath, readExecutionPacket } from "./state/runtimeArtifacts.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -226,7 +227,7 @@ export const USAGE =
   "  sta audit  <task-id> [--decisions] [--project-root <path>]   the WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail; --decisions shows only the choices\n" +
   "  sta qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]   QA token/mode/retry picture per task (QA07); --baseline compares against a saved export\n" +
   "  sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]   token/context composition across orchestrated and interactive runs\n" +
-  "  sta context <role> [--module <name>] [--phase <n,n>] [--task <id>] [--json] [--project-root <path>]   deterministic fail-open module context used by sta run\n" +
+  "  sta context <role> [--module <name>] [--phase <n,n>] [--task <id>] [--packet] [--json] [--project-root <path>]   deterministic context, or the latest validated execution packet\n" +
   "  sta knowledge get <id>[,<id>...] [--lane <ba|sa|uxui|dev>] [--json] [--project-root <path>]   retrieve only permitted knowledge fields (default lane: dev)\n" +
   "  sta knowledge migrate-v2 [--dry-run] [--json] [--project-root <knowledge-root>]   add origin/target_ids without changing item meaning or lifecycle\n" +
   "  sta knowledge reconcile --target <id> [--json] [--project-root <knowledge-root>]   read-only current/desired evidence classifier\n" +
@@ -2055,13 +2056,13 @@ async function runTokensVerb(rest: string[], defaultProjectRoot: string): Promis
     if (baselinePath) {
       const before = JSON.parse(fs.readFileSync(baselinePath, "utf8")) as TokenMetricsExport;
       const delta = compareTokenBaselines(before, report);
-      console.log(`[orchestrator] vs baseline (${baselinePath}): input ${delta.inputTokenDeltaPct === null ? "not reported" : `${delta.inputTokenDeltaPct.toFixed(1)}%`}, retry waste ${delta.retryWasteDeltaPct === null ? "not reported" : `${delta.retryWasteDeltaPct.toFixed(1)}%`}`);
+      console.log(`[orchestrator] vs baseline (${baselinePath}): input ${delta.inputTokenDeltaPct === null ? "not reported" : `${delta.inputTokenDeltaPct.toFixed(1)}%`}, prompt chars ${delta.promptCharacterDeltaPct === null ? "not reported" : `${delta.promptCharacterDeltaPct.toFixed(1)}%`}, retry waste ${delta.retryWasteDeltaPct === null ? "not reported" : `${delta.retryWasteDeltaPct.toFixed(1)}%`}`);
     }
     return 0;
   } finally { registry.close(); }
 }
 
-/** `context <role> [--module <m>] [--phase <n,n>] [--task <id>] [--json]`. */
+/** `context <role> [--module <m>] [--phase <n,n>] [--task <id>] [--packet] [--json]`. */
 async function runContextVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const role = positionalArg(rest);
   if (!role) throw new CliUsageError("context: an agent role is required");
@@ -2075,11 +2076,21 @@ async function runContextVerb(rest: string[], defaultProjectRoot: string): Promi
     }
   }
   try {
+    const taskId = flagValue(rest, "--task");
+    if (rest.includes("--packet")) {
+      if (!taskId) throw new CliUsageError("context: --packet requires --task <id>");
+      const stage = stageForRole(role);
+      const packetPath = latestExecutionPacketPath(projectRoot, taskId, stage);
+      if (!packetPath) throw new ContextCommandError(`no persisted execution packet for ${taskId}/${stage}`, 4);
+      const packet = readExecutionPacket(packetPath);
+      console.log(rest.includes("--json") ? JSON.stringify(packet, null, 2) : renderContextPacket(packet));
+      return 0;
+    }
     const result = await buildContextCommand({
       role,
       moduleHint: flagValue(rest, "--module"),
       phases,
-      taskId: flagValue(rest, "--task"),
+      taskId,
       projectRoot,
     });
     console.log(rest.includes("--json") ? JSON.stringify(contextCommandJson(result), null, 2) : renderContextCommand(result));
@@ -2553,6 +2564,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       // frontend work is not blocked on the UX-artifact precondition its
       // pipeline deliberately skipped.
       taskLevel: () => stored?.classification.level,
+      runtimeTask: (id) => store.loadTask(id)?.runtimeTask,
       // Absent --autonomy keeps the executor's own default ("propose"), which is
       // byte-identical to every run before the flag existed. Unattended runs pass
       // it explicitly — T117's pilot showed headless "propose" cannot act.

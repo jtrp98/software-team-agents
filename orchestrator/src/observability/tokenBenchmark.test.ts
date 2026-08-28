@@ -4,7 +4,8 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ContextManager } from "../context/contextManager.js";
 import { AgentStage } from "../types.js";
-import { TOKEN_BENCHMARK_DOC_BYTES, createTokenBenchmarkFixture, createTraceableTokenBenchmarkFixture, renderTokenBenchmarkBaseline, runLargeHandoffBenchmark, runTokenBenchmark } from "./tokenBenchmark.js";
+import { TOKEN_BENCHMARK_DOC_BYTES, createTokenBenchmarkFixture, createTraceableTokenBenchmarkFixture, renderTokenBenchmarkBaseline, runExecutionPacketPromptBenchmark, runLargeHandoffBenchmark, runTokenBenchmark } from "./tokenBenchmark.js";
+import { compareTokenBaselines } from "../qa/metrics.js";
 
 function frameworkFixture(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-token-framework-"));
@@ -63,6 +64,23 @@ describe("T-V3TOK-004 token benchmark", () => {
       expect(comparison.withHandoff.totalAmplification).toBeLessThanOrEqual(2.5);
       expect(comparison.withHandoff.retries).toBe(0);
       expect(comparison.withHandoff.routeBacks).toBe(0);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("T-V3R-020 keeps the ExecutionPacket prompt-character regression within 3%", () => {
+    const root = frameworkFixture();
+    try {
+      const benchmark = runExecutionPacketPromptBenchmark(root);
+      const repeat = runExecutionPacketPromptBenchmark(root);
+      const delta = compareTokenBaselines(
+        { promptCharacters: benchmark.beforePromptCharacters },
+        { promptCharacters: benchmark.afterPromptCharacters },
+      );
+
+      expect(benchmark).toEqual(repeat);
+      expect(benchmark.afterPromptCharacters).toBeGreaterThan(benchmark.beforePromptCharacters);
+      expect(delta.promptCharacterDeltaPct).not.toBeNull();
+      expect(delta.promptCharacterDeltaPct!).toBeLessThanOrEqual(3);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 });

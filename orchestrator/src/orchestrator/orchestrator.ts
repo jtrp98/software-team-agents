@@ -58,6 +58,8 @@ export interface AgentExecutorResult {
   outcome: RunOutcome;
   artifactType?: ArtifactType;
   artifact?: unknown;
+  /** Runtime-state path of the exact packet used for this attempt. */
+  packetPath?: string;
   /** Evidence a human, not this agent, actually supplied (e.g. relayed approval) — rare; usually set via provideHumanApproval instead. */
   gateEvidence?: Partial<GateContext>;
   /**
@@ -94,7 +96,7 @@ export interface OrchestratorEventMap extends DomainEventMap {
   /** `inputs` is the artifact categories this stage is actually handed (T37's INPUT) — the same slice `step()` passes to the executor. */
   AGENT_ASSIGNED: { taskId: string; stage: AgentStage; inputs: ContextCategory[] };
   /** `artifactType` is what the stage produced (T37's OUTPUT), or null for a stage whose work is only code on disk. */
-  AGENT_COMPLETED: { taskId: string; stage: AgentStage; outcome: RunOutcome; artifactType: ArtifactType | null };
+  AGENT_COMPLETED: { taskId: string; stage: AgentStage; outcome: RunOutcome; artifactType: ArtifactType | null; packetPath: string | null };
   WAITING_FOR_HUMAN: { taskId: string; from: TaskState; to: TaskState; reason: string; approvalType: ApprovalType | null };
   TASK_BLOCKED: { taskId: string; reason: string };
   TASK_DEPLOYED: { taskId: string };
@@ -603,6 +605,7 @@ export class Orchestrator {
       stage,
       outcome: result.outcome,
       artifactType: result.artifactType ?? null,
+      packetPath: result.packetPath ?? null,
     });
     // QA07: the mode a QA round ran in is recorded with its cost. Read off the
     // raw artifact before schema validation (which happens below and gates

@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { AgentStage, TaskLevel } from "../types.js";
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { getAgent } from "../agents/registry.js";
@@ -5,11 +6,13 @@ import { resolveAgentModel, resolveAgentVersion } from "../agents/agentModel.js"
 import type { StructuredFailure } from "../orchestrator/failure.js";
 import {
   buildPromptParts,
+  compileExecutionPacket,
   assembleStageContext,
   handoffFromContext,
   failResult,
   qaArtifactResult,
   securityArtifactResult,
+  type PromptPartsResult,
   type RunMetrics,
 } from "./agentRunAssembly.js";
 import type {
@@ -23,10 +26,12 @@ import { resolveRuntimeRoute } from "./runtimeRouting.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { checkRoleExecutionGate } from "../roles/roleExecutionGate.js";
 import type { PersistedTask } from "../store/taskStore.js";
+import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import type { ThreeRepoRequestRoots } from "../threeRepo/preflight.js";
 import { deriveHandoff } from "../agents/moduleDocs.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 import { assessContextBudget, resolveContextBudgetFromProject, type ContextBudgetComposition } from "../context/contextBudget.js";
+import { writeExecutionPacket } from "../state/runtimeArtifacts.js";
 
 /**
  * An `AgentExecutor` built on a `RuntimeAdapter` (T108).
@@ -83,6 +88,10 @@ export interface RuntimeExecutorOptions {
   stageRoots?: Partial<Record<AgentStage, string>>;
   /** Phase 2's fail-closed resolver. When present it runs before adapter start. */
   threeRepoTask?: (taskId: string, stage: AgentStage) => { task: PersistedTask; roots: ThreeRepoRequestRoots };
+  /** Stored Phase-1 task contract. Production supplies this for every runnable task. */
+  runtimeTask?: (taskId: string) => RuntimeTask | null | undefined;
+  /** Optional bounded retention override; the runtime-artifact default otherwise applies. */
+  packetRetention?: number;
   /**
    * T114 — make the BA → SA → DEV human handoffs a prerequisite of the lead
    * stages. Off by default so a project that has not adopted V1.5 knowledge
@@ -252,12 +261,58 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       return failResult(`cannot assemble authorized handoff context: ${String(error)}`);
     }
 
-    const promptParts = buildPromptParts(req, opts.extraInstruction, {
-      docs: stageContext.docs,
-      knowledge: stageContext.knowledge,
-      codeIntel: stageContext.codeIntel,
-    });
+    let guards: RuntimeGuards;
+    try {
+      guards = opts.guards(role);
+    } catch (e) {
+      // The current role contract is the authority packet scope narrows. A run
+      // with no resolved contract must not compile a packet or start an adapter.
+      return failResult(`cannot start ${role}: ${String(e)}`);
+    }
+
+    const runtimeTask = threeRepo?.task.runtimeTask ?? opts.runtimeTask?.(req.taskId) ?? null;
+    let packetPath: string | undefined;
+    let promptParts: PromptPartsResult;
+    if (runtimeTask) {
+      try {
+        const packet = compileExecutionPacket({
+          req,
+          role,
+          runtimeTask,
+          contractScope: { allow: guards.writeAllow, deny: guards.writeDeny },
+          extra: opts.extraInstruction,
+          sources: {
+            docs: stageContext.docs,
+            knowledge: stageContext.knowledge,
+            codeIntel: stageContext.codeIntel,
+          },
+        });
+        const runtimeStateRoot = threeRepo?.roots.bindingRoot ?? opts.projectRoot;
+        const persisted = writeExecutionPacket({
+          projectRoot: runtimeStateRoot,
+          packet,
+          forbiddenRoots: threeRepo
+            ? [threeRepo.roots.knowledgeRoot, ...threeRepo.roots.workRoots.map((root) => root.path)]
+            : [],
+          maxRunsPerTask: opts.packetRetention,
+        });
+        packetPath = path.relative(runtimeStateRoot, persisted.path).replace(/\\/g, "/");
+        promptParts = packet;
+      } catch (error) {
+        return failResult(`cannot compile or persist execution packet for ${role}: ${String(error)}`);
+      }
+    } else {
+      // Historical or embedded callers may have no RuntimeTask. Production
+      // tasks created since state schema v13 always take the packet path above.
+      promptParts = buildPromptParts(req, opts.extraInstruction, {
+        docs: stageContext.docs,
+        knowledge: stageContext.knowledge,
+        codeIntel: stageContext.codeIntel,
+      });
+    }
     const prompt = promptParts.text;
+    const finish = (result: AgentExecutorResult): AgentExecutorResult =>
+      packetPath ? { ...result, packetPath } : result;
 
     // T112: resolve which runtime and model this run actually goes to. Absent
     // `opts.registry`, `activeRuntime`/`activeModel` are exactly `runtime` and
@@ -304,19 +359,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       budgetComposition: promptParts.budgetComposition,
     };
 
-    let guards: RuntimeGuards;
-    try {
-      guards = opts.guards(role);
-    } catch (e) {
-      // A run whose write scope could not be resolved must not start. This is
-      // the one place the executor refuses before reaching the runtime at all.
-      return failResult(`cannot start ${role}: ${String(e)}`, declared);
-    }
-
     let result: RuntimeAgentResult;
     const hasTargetWrite = threeRepo?.roots.workRoots.some((root) => root.access === "write") ?? false;
     if (hasTargetWrite && !activeRuntime.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)) {
-      return failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot enforce a pre-tool workspace guard for Target write access`, declared);
+      return finish(failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot enforce a pre-tool workspace guard for Target write access`, declared));
     }
     try {
       result = await activeRuntime.executeAgent({
@@ -353,16 +399,16 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       // `executeAgent` is contracted never to throw. If one does, that is an
       // adapter bug — and it still must not take the task down, so it lands as a
       // FAIL that names the adapter rather than the agent.
-      return failResult(`adapter "${activeRuntime.id}" threw instead of returning a result: ${String(e)}`, declared);
+      return finish(failResult(`adapter "${activeRuntime.id}" threw instead of returning a result: ${String(e)}`, declared));
     }
 
     const metrics = metricsFrom(result, declared);
 
     if (hasTargetWrite && !result.guards.enforced.includes(RuntimeCapability.PRE_TOOL_GUARD)) {
-      return failResult(
+      return finish(failResult(
         `Target-write run of ${role} was rejected because adapter "${activeRuntime.id}" did not confirm pre-tool guard enforcement${result.guards.reason ? `: ${result.guards.reason}` : ""}`,
         metrics,
-      );
+      ));
     }
 
     // T-OC7 — the post-hoc half of the exit-check contract. A runtime without
@@ -380,13 +426,13 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     }
 
     if (result.status === "UNAVAILABLE") {
-      return {
+      return finish({
         ...failResult(describeFailure(activeRuntime.id, role, result, routingDiagnostics), metrics),
         failure: unavailableFailure(activeRuntime.id, result.diagnostics.join("; ") || result.text || "no reason given"),
-      };
+      });
     }
     if (result.status !== "OK") {
-      return failResult(describeFailure(activeRuntime.id, role, result, routingDiagnostics), metrics);
+      return finish(failResult(describeFailure(activeRuntime.id, role, result, routingDiagnostics), metrics));
     }
 
     // qa-engineer and security report their verdict in a document, not in an
@@ -394,10 +440,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // works wherever the run happened, not only where the orchestrator's `fs`
     // can reach.
     if (req.stage === AgentStage.QA_ENGINEER) {
-      return qaArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "review.md"));
+      return finish(qaArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "review.md")));
     }
     if (req.stage === AgentStage.SECURITY) {
-      return securityArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "security.md"));
+      return finish(securityArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "security.md")));
     }
 
     // The five doc-producing stages each own exactly one module document. Exit 0
@@ -410,11 +456,11 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     if (ownedDoc) {
       const doc = await readModuleDocVia(activeRuntime, moduleName, ownedDoc);
       if (doc === null || doc.trim() === "") {
-        return failResult(
+        return finish(failResult(
           `${role} reported success but _docs/module/${moduleName}/${ownedDoc} doesn't exist (or is empty) — ` +
             `cannot confirm the stage produced its artifact`,
           metrics,
-        );
+        ));
       }
       const handoff = deriveHandoff(req.stage, moduleName, doc, ownedDoc === "plan.md" ? doc : undefined, {
         taskId: req.taskId,
@@ -423,14 +469,14 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       for (const note of handoff.notes) {
         console.error(`[orchestrator] HANDOFF NOTE (${role}): ${note}`);
       }
-      return {
+      return finish({
         outcome: { ...metrics, result: "PASS" },
         artifactType: ArtifactType.HANDOFF,
         artifact: handoff.artifact,
-      };
+      });
     }
 
-    return { outcome: { ...metrics, result: "PASS" } };
+    return finish({ outcome: { ...metrics, result: "PASS" } });
   };
 }
 

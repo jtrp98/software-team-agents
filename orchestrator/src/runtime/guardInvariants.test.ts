@@ -9,6 +9,8 @@ import { createRuntimeExecutor } from "./runtimeExecutor.js";
 import { MockRuntimeAdapter } from "./mockAdapter.js";
 import type { RuntimeGuards } from "./runtimeAdapter.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
+import { compileExecutionPacket } from "./agentRunAssembly.js";
+import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const RUNTIME_ROOT = path.join(REPO_ROOT, "orchestrator", "src", "runtime");
@@ -43,19 +45,48 @@ afterEach(() => {
 });
 
 describe("T-V3R-001 guardrail invariants", () => {
-  it("criterion 2 — execution scope is always a subset of the role contract, with a tripwire for the future packet scope", async () => {
-    const packetImplementations = productionTypescriptFiles(path.join(REPO_ROOT, "orchestrator", "src"))
-      .filter((file) => /\b(?:interface|type|class)\s+ExecutionPacket\b/.test(fs.readFileSync(file, "utf8")));
-    expect(
-      packetImplementations,
-      "ExecutionPacket now exists: replace the Phase-0 tripwire with an assertion over its declared scope before landing it",
-    ).toEqual([]);
-
+  it("criterion 2 — execution packet and adapter scopes are subsets of the role contract", async () => {
     const roles = Object.values(AgentStage).filter((stage) => stage !== AgentStage.HUMAN);
     expect(roles.length).toBeGreaterThan(0);
     for (const stage of roles) {
       const role = stage;
       const contract = contractGuards(role, REPO_ROOT);
+      const runtimeTask: RuntimeTask = {
+        task_id: `T-SCOPE-${role}`,
+        workflow: "scope-invariant",
+        pm_mode: "lightweight",
+        why: "prove packet scope",
+        goal: "prove packet scope",
+        source_of_truth: { status: "unavailable", paths: [], reason: "fixture" },
+        dependencies: { task_ids: [], plan_readiness: "untracked", waiting_on: [], reason: "fixture" },
+        scope: {
+          status: "resolved",
+          work_roots: [{
+            stage,
+            target_id: "fixture",
+            root: tempProject(),
+            allow: [
+              ...contract.writeAllow.map((glob) => ({ contract_glob: glob, effective_glob: `fixture/${glob}` })),
+              { contract_glob: "widened/**", effective_glob: "fixture/widened/**" },
+            ],
+          }],
+          reason: null,
+        },
+        do_not_touch: contract.writeDeny.length > 0 ? [...contract.writeDeny] : [".git/**"],
+        acceptance_criteria: { status: "resolved", items: ["scope stays narrow"], reason: null },
+        required_verification: { status: "deferred", levels: [], reason: "fixture" },
+        evidence_required: ["packet scope"],
+        stop_conditions: ["STOP on scope widening"],
+      };
+      const packet = compileExecutionPacket({
+        req: { stage, taskId: runtimeTask.task_id, context: [] },
+        role,
+        runtimeTask,
+        contractScope: { allow: contract.writeAllow, deny: contract.writeDeny },
+      });
+      expect(packet.scope.allow, role).not.toContain("widened/**");
+      for (const glob of packet.scope.allow) expect(contract.writeAllow, `${role}: packet ${glob}`).toContain(glob);
+
       const runtime = new MockRuntimeAdapter();
       const executor = createRuntimeExecutor({
         runtime,

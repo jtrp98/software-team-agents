@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { AgentStage } from "../types.js";
 
 /**
  * Required-field schemas for every artifact type in the pipeline. An agent's
@@ -13,7 +14,68 @@ export enum ArtifactType {
   QA_REPORT = "qa-report",
   SECURITY_REPORT = "security-report",
   HANDOFF = "handoff",
+  EXECUTION_PACKET = "execution-packet",
 }
+
+const PromptCompositionSchema = z
+  .object({
+    static_chars: z.number().int().nonnegative(),
+    handoff_chars: z.number().int().nonnegative(),
+    doc_chars: z.number().int().nonnegative(),
+    knowledge_chars: z.number().int().nonnegative(),
+    code_intel_chars: z.number().int().nonnegative(),
+    tool_output_chars: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const ContextBudgetCompositionSchema = z
+  .object({
+    base: z.number().int().nonnegative(),
+    task: z.number().int().nonnegative(),
+    safety: z.number().int().nonnegative(),
+    docs: z.number().int().nonnegative(),
+    knowledge: z.number().int().nonnegative(),
+    code: z.number().int().nonnegative(),
+    tool_output: z.number().int().nonnegative(),
+    reserve: z.number().int().nonnegative(),
+  })
+  .strict();
+
+/**
+ * The deterministic handoff from Task Compiler to runtime execution. It is a
+ * regenerable Local Runtime State artifact, never an authored module document.
+ */
+export const ExecutionPacketSchema = z
+  .object({
+    text: z.string().min(1),
+    composition: PromptCompositionSchema,
+    budgetComposition: ContextBudgetCompositionSchema,
+    task_id: z.string().min(1),
+    stage: z.enum(AgentStage),
+    role: z.string().min(1),
+    acceptance_criteria: z.array(z.string().min(1)),
+    required_verification: z.array(z.string().min(1)),
+    stop_conditions: z.array(z.string().min(1)),
+    scope: z
+      .object({
+        allow: z.array(z.string().min(1)),
+        deny: z.array(z.string().min(1)),
+      })
+      .strict(),
+    sources: z.array(z.string().min(1)),
+  })
+  .strict()
+  .superRefine((packet, ctx) => {
+    const compositionChars = Object.values(packet.composition).reduce((sum, chars) => sum + chars, 0);
+    const budgetChars = Object.values(packet.budgetComposition).reduce((sum, chars) => sum + chars, 0);
+    if (compositionChars !== packet.text.length) {
+      ctx.addIssue({ code: "custom", path: ["composition"], message: `composition totals ${compositionChars}, expected text length ${packet.text.length}` });
+    }
+    if (budgetChars !== packet.text.length) {
+      ctx.addIssue({ code: "custom", path: ["budgetComposition"], message: `budget composition totals ${budgetChars}, expected text length ${packet.text.length}` });
+    }
+  });
+export type ExecutionPacket = z.infer<typeof ExecutionPacketSchema>;
 
 /** P6 handoffs are compact indexes, never another authored document. */
 export const HANDOFF_MAX_BYTES = 2_048;
@@ -236,6 +298,7 @@ export const ARTIFACT_SCHEMAS = {
   [ArtifactType.QA_REPORT]: QaReportArtifactSchema,
   [ArtifactType.SECURITY_REPORT]: SecurityReportArtifactSchema,
   [ArtifactType.HANDOFF]: HandoffArtifactSchema,
+  [ArtifactType.EXECUTION_PACKET]: ExecutionPacketSchema,
 } as const;
 
 export class ArtifactValidationError extends Error {
@@ -256,6 +319,7 @@ interface ArtifactDataMap {
   [ArtifactType.QA_REPORT]: QaReportArtifact;
   [ArtifactType.SECURITY_REPORT]: SecurityReportArtifact;
   [ArtifactType.HANDOFF]: HandoffArtifact;
+  [ArtifactType.EXECUTION_PACKET]: ExecutionPacket;
 }
 
 /**

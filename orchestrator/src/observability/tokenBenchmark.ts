@@ -5,7 +5,8 @@ import { deriveHandoff } from "../agents/moduleDocs.js";
 import { ArtifactType, type HandoffArtifact } from "../artifacts/schemas.js";
 import { renderTokenBenchmarkMarkdown } from "../codeintel/benchmark.js";
 import { ContextManager } from "../context/contextManager.js";
-import { renderSlicedDocs, buildPromptParts, sliceModuleDocsWithSavings } from "../runtime/agentRunAssembly.js";
+import { renderSlicedDocs, buildPromptParts, compileExecutionPacket, sliceModuleDocsWithSavings } from "../runtime/agentRunAssembly.js";
+import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { AgentStage } from "../types.js";
 
 export const TOKEN_BENCHMARK_DOC_BYTES = {
@@ -254,6 +255,78 @@ export function runLargeHandoffBenchmark(frameworkRoot: string): LargeHandoffBen
       withoutHandoff: largeSnapshot(frameworkRoot, fixture, {}),
       withHandoff: largeSnapshot(frameworkRoot, fixture, largeHandoffs(fixture)),
     };
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+export interface ExecutionPacketPromptBenchmark {
+  beforePromptCharacters: number;
+  afterPromptCharacters: number;
+}
+
+function benchmarkRuntimeTask(fixture: { root: string; moduleName: string }, stages: readonly AgentStage[]): RuntimeTask {
+  const sourceRoot = path.join(fixture.root, "_docs", "module", fixture.moduleName);
+  return {
+    task_id: "BE-001",
+    workflow: "feature",
+    pm_mode: "full",
+    why: "deliver the pinned benchmark task",
+    goal: "deliver the pinned benchmark task",
+    source_of_truth: {
+      status: "resolved",
+      paths: ["requirement.md", "design.md", "plan.md", "test-plan.md"].map((name) => path.join(sourceRoot, name)),
+      reason: null,
+    },
+    dependencies: { task_ids: [], plan_readiness: "ready", waiting_on: [], reason: null },
+    scope: {
+      status: "resolved",
+      work_roots: stages.map((stage) => ({
+        stage,
+        target_id: "benchmark-target",
+        root: fixture.root,
+        allow: [{ contract_glob: "**/*", effective_glob: path.join(fixture.root, "**", "*") }],
+      })),
+      reason: null,
+    },
+    do_not_touch: [".git/**"],
+    acceptance_criteria: { status: "resolved", items: ["pinned acceptance criterion"], reason: null },
+    required_verification: { status: "deferred", levels: [], reason: "test-pyramid selection is deferred" },
+    evidence_required: ["record verification evidence"],
+    stop_conditions: ["STOP on an unresolved business rule", "STOP before a state-changing git command"],
+  };
+}
+
+/** Exact legacy prompt vs ExecutionPacket prompt on the pinned Large workload. */
+export function runExecutionPacketPromptBenchmark(frameworkRoot: string): ExecutionPacketPromptBenchmark {
+  const fixture = createTraceableTokenBenchmarkFixture();
+  try {
+    const handoffs = largeHandoffs(fixture);
+    const runtimeTask = benchmarkRuntimeTask(fixture, WORKLOAD_STAGES.Large);
+    let beforePromptCharacters = 0;
+    let afterPromptCharacters = 0;
+    for (const stage of WORKLOAD_STAGES.Large) {
+      const handoff = handoffs[stage];
+      const sliced = sliceModuleDocsWithSavings(stage, {
+        projectRoot: fixture.root,
+        moduleName: fixture.moduleName,
+        phases: [1],
+        taskId: "BE-001",
+        handoff,
+      });
+      const context = handoff ? [{ source: ArtifactType.HANDOFF, content: JSON.stringify(handoff) }] : [];
+      const req = { taskId: "BE-001", stage, context };
+      const sources = { docs: sliced.docs };
+      beforePromptCharacters += staticChars(frameworkRoot, stage) + buildPromptParts(req, undefined, sources).text.length;
+      afterPromptCharacters += staticChars(frameworkRoot, stage) + compileExecutionPacket({
+        req,
+        role: stage,
+        runtimeTask,
+        contractScope: { allow: ["**/*"], deny: [".git/**"] },
+        sources,
+      }).text.length;
+    }
+    return { beforePromptCharacters, afterPromptCharacters };
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }
