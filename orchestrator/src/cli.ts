@@ -43,7 +43,7 @@ import { checkProfile } from "./profile/projectProfile.js";
 import { checkDecisions } from "./decisions/decisionLog.js";
 import { checkTestPyramid } from "./testing/testPyramid.js";
 import { describeStatus, type TaskStatusKind } from "./orchestrator/taskStatus.js";
-import { RunLog } from "./observability/runLog.js";
+import { formatRunRouting, RunLog } from "./observability/runLog.js";
 import { acquireTaskLock, releaseTaskLock, TaskLockedError } from "./concurrency/taskLock.js";
 import { actorsIn, auditTrail, decisionTrail, formatAuditTrail } from "./audit/auditTrail.js";
 import { checkReviewSeparation } from "./review/reviewSeparation.js";
@@ -613,8 +613,10 @@ function printListing(registry: TaskRegistry): void {
     const reason = status.reason ? ` — ${status.reason}` : "";
     const layer = layerOf.has(task.taskId) ? ` batch=${layerOf.get(task.taskId)}` : "";
     const emoji = STATUS_EMOJI[status.kind] ?? " ";
+    const latestRun = registry.runsForTask(task.taskId).at(-1);
+    const route = latestRun ? ` ${formatRunRouting(latestRun)}` : "";
     console.log(
-      `  ${emoji} ${task.taskId.padEnd(12)} ${status.kind.padEnd(22)} ${status.state.padEnd(16)}${agent}${layer}${waiting}${reason}`,
+      `  ${emoji} ${task.taskId.padEnd(12)} ${status.kind.padEnd(22)} ${status.state.padEnd(16)}${agent}${layer}${waiting}${route}${reason}`,
     );
   }
 
@@ -1038,7 +1040,7 @@ async function runAuditVerb(rest: string[], defaultProjectRoot: string): Promise
       `[orchestrator] audit trail for ${taskId}: ${entries.length} event(s), ` +
         `${decisionTrail(entries).length} decision(s)${actors.length > 0 ? `, actors: ${actors.join(", ")}` : ""}`,
     );
-    console.log(formatAuditTrail(entries, { decisionsOnly }));
+    console.log(formatAuditTrail(entries, { decisionsOnly, runs: store.runsForTask(taskId) }));
     return 0;
   } finally {
     registry.close();
@@ -1958,6 +1960,14 @@ function displayMetric(value: number | null): string {
   return value === null ? "not reported" : value.toLocaleString();
 }
 
+function displayRate(value: number | null): string {
+  return value === null ? "not reported" : `${(value * 100).toFixed(1)}%`;
+}
+
+function displayPercentDelta(value: number | null): string {
+  return value === null ? "not reported" : `${value.toFixed(1)}%`;
+}
+
 function printTokenTask(metric: TaskTokenMetrics): void {
   const c = metric.composition;
   const budget = metric.contextBudget;
@@ -2068,7 +2078,10 @@ async function runTokensVerb(rest: string[], defaultProjectRoot: string): Promis
       console.log("[orchestrator] no recorded runs match this token query — nothing to measure.");
       return 0;
     }
-    const report = tokenMetricsExport(runs);
+    const completedTaskIds = new Set(
+      store.listTasks().filter((task) => task.machine.current === TaskState.DEPLOYED).map((task) => task.taskId),
+    );
+    const report = tokenMetricsExport(runs, { completedTaskIds });
     if (by === "task") for (const metric of report.tasks) printTokenTask(metric);
     else if (by === "role" || by === "stage") {
       for (const role of report.roles) console.log(
@@ -2085,6 +2098,10 @@ async function runTokensVerb(rest: string[], defaultProjectRoot: string): Promis
     }
     const total = report.totals;
     console.log(`[orchestrator] totals: input=${displayMetric(total.inputTokens)} output=${displayMetric(total.outputTokens)} cached=${displayMetric(total.cachedTokens)} total=${displayMetric(total.totalTokens)} retries=${total.retryCount} retryWaste=${displayMetric(total.retryWasteTokens)}`);
+    console.log(
+      `[orchestrator] V3 rollups: total_token_per_completed_task=${displayMetric(total.total_token_per_completed_task)} ` +
+        `first_pass_success_rate=${displayRate(total.first_pass_success_rate)} fallback_rate=${displayRate(total.fallback_rate)}`,
+    );
     const budget = configuredTokenBudget(projectRoot);
     console.log(`[orchestrator] configured post-hoc token budget: ${budget.toLocaleString()} vs actual input ${displayMetric(total.inputTokens)} (pre-spawn caps are not part of this control)`);
     console.log(`[orchestrator] context-budget warnings: ${total.contextBudget.warningRuns}/${total.contextBudget.measuredRuns} measured run(s), overflow=${displayMetric(total.contextBudget.overflowChars)} (warning-only; prompts were not changed)`);
@@ -2096,6 +2113,10 @@ async function runTokensVerb(rest: string[], defaultProjectRoot: string): Promis
       const before = JSON.parse(fs.readFileSync(baselinePath, "utf8")) as TokenMetricsExport;
       const delta = compareTokenBaselines(before, report);
       console.log(`[orchestrator] vs baseline (${baselinePath}): input ${delta.inputTokenDeltaPct === null ? "not reported" : `${delta.inputTokenDeltaPct.toFixed(1)}%`}, prompt chars ${delta.promptCharacterDeltaPct === null ? "not reported" : `${delta.promptCharacterDeltaPct.toFixed(1)}%`}, retry waste ${delta.retryWasteDeltaPct === null ? "not reported" : `${delta.retryWasteDeltaPct.toFixed(1)}%`}`);
+      console.log(
+        `[orchestrator] V3 rollup deltas: total_token_per_completed_task=${displayPercentDelta(delta.totalTokenPerCompletedTaskDeltaPct)} ` +
+          `first_pass_success_rate=${displayPercentDelta(delta.firstPassSuccessRateDeltaPct)} fallback_rate=${displayPercentDelta(delta.fallbackRateDeltaPct)}`,
+      );
     }
     return 0;
   } finally { registry.close(); }

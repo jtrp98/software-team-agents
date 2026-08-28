@@ -10,9 +10,10 @@ import { TaskRegistry } from "./orchestrator/taskRegistry.js";
 import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
 import { acquireTaskLock, releaseTaskLock } from "./concurrency/taskLock.js";
 import { Environment } from "./environment/environment.js";
-import { AgentStage } from "./types.js";
+import { AgentStage, TaskState } from "./types.js";
 import type { ExecutionPacket } from "./artifacts/schemas.js";
 import { writeExecutionPacket } from "./state/runtimeArtifacts.js";
+import { RunLog } from "./observability/runLog.js";
 
 describe("parseArgs", () => {
   it("parses required flags and maps classification flags", () => {
@@ -710,8 +711,38 @@ describe("T-V3TOK-003 tokens verb", () => {
       expect(logs.join("\n")).toContain("static=321");
       expect(logs.join("\n")).toContain("always-on-instructions=123 B");
       expect(logs.join("\n")).toContain("context-budget warnings: 1/1 measured run(s), overflow=221");
+      expect(logs.join("\n")).toContain(
+        "V3 rollups: total_token_per_completed_task=not reported first_pass_success_rate=not reported fallback_rate=not reported",
+      );
       expect(await runCli(["tokens", "--help"], dir)).toBe(0);
       expect(USAGE).toContain("sta tokens");
+    } finally {
+      console.log = original;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("T-V3R-080 renders known completed-task and fallback rollups", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-v3-rollups-"));
+    const store = new SqliteTaskStore(defaultStateDbPath(dir));
+    const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+    registry.create({ taskId: "T-done", classification: classifyTask({ isClearBugFix: true, touchesBackend: true }) });
+    const task = store.loadTask("T-done")!;
+    store.saveTask({ ...task, machine: { ...task.machine, current: TaskState.DEPLOYED } });
+    store.appendRun(new RunLog().record({
+      task_id: "T-done", agent: AgentStage.BACKEND_ENGINEER, start_time: 1, end_time: 2,
+      outcome: { tokens: 100, input_tokens: 80, output_tokens: 20, cost: 0, result: "PASS", retry_count: 0, fallback_count: 0 },
+    }));
+    registry.close();
+
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+    try {
+      expect(await runCli(["tokens", "--project-root", dir], dir)).toBe(0);
+      expect(logs.join("\n")).toContain(
+        "V3 rollups: total_token_per_completed_task=100 first_pass_success_rate=100.0% fallback_rate=0.0%",
+      );
     } finally {
       console.log = original;
       fs.rmSync(dir, { recursive: true, force: true });
@@ -789,17 +820,35 @@ describe("T37 audit verb", () => {
     for (let i = 0; i < 6; i++) {
       const status = orch.status();
       if (status.kind !== "RUNNING") break;
-      orch.reportCompletion(status.stage, { outcome: { tokens: 10, cost: 0.01, result: "PASS" } }, { start: 0, end: 1 });
+      orch.reportCompletion(status.stage, {
+        outcome: {
+          tokens: 10, cost: 0.01, result: "PASS",
+          requested_runtime: "claude-code", runtime: "codex",
+          requested_model: "sonnet", model: "gpt-5.6-codex",
+          routing_basis: "role-policy", fallback_count: 1,
+          fallback_reason: "requested runner unavailable",
+        },
+      }, { start: 0, end: 1 });
     }
     registry.close();
   }
 
-  it("prints the trail for a task", async () => {
+  it("T-V3R-081 prints requested to actual routing in list, status, and audit views", async () => {
     const dir = tmpDir();
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
     try {
       seedWithEvents(dir, "T-1");
+      expect(await runCli(["status", "--project-root", dir], dir)).toBe(0);
+      expect(await runCli(["status", "T-1", "--project-root", dir], dir)).toBe(0);
       expect(await runCli(["audit", "T-1", "--project-root", dir], dir)).toBe(0);
+      const rendered = logs.join("\n");
+      expect(rendered).toContain("runner=claude-code → codex");
+      expect(rendered).toContain("model=sonnet → gpt-5.6-codex");
+      expect(rendered).toContain("fallback_reason=requested runner unavailable");
     } finally {
+      console.log = original;
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

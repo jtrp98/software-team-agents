@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import type { RunRecord } from "../observability/runLog.js";
-import { buildMetricsExport, compareBaselines, compareTokenBaselines, taskQaMetrics, taskTokenMetrics, tokenMetricsExport } from "./metrics.js";
+import { buildMetricsExport, compareBaselines, compareTokenBaselines, taskQaMetrics, taskTokenMetrics, tokenMetricsExport, type TokenMetricsExport } from "./metrics.js";
 
 function run(partial: Partial<RunRecord> & { agent: AgentStage }): RunRecord {
   return {
@@ -219,5 +219,69 @@ describe("T-V3TOK-003 token metrics", () => {
       run({ agent: AgentStage.BACKEND_ENGINEER, doc_chars: 600, doc_chars_before: null }),
     ]);
     expect(unknown.roles[0].slicingSavedPct).toBeNull();
+  });
+});
+
+describe("T-V3R-080 optimization rollups", () => {
+  it("uses only completed tasks and reports the three named rollups", () => {
+    const runs = [
+      run({ task_id: "T-done-1", agent: AgentStage.BACKEND_ENGINEER, input_tokens: 80, output_tokens: 20, fallback_count: 0 }),
+      run({ task_id: "T-done-2", agent: AgentStage.BACKEND_ENGINEER, input_tokens: 160, output_tokens: 40, retry_count: 1, fallback_count: 1 }),
+      run({ task_id: "T-open", agent: AgentStage.BACKEND_ENGINEER, input_tokens: 900, output_tokens: 100, fallback_count: 0 }),
+    ];
+    const report = tokenMetricsExport(runs, { completedTaskIds: new Set(["T-done-1", "T-done-2"]) });
+
+    expect(report.totals.total_token_per_completed_task).toBe(150);
+    expect(report.totals.first_pass_success_rate).toBe(0.5);
+    expect(report.totals.fallback_rate).toBeCloseTo(1 / 3);
+  });
+
+  it("propagates missing completion, token, and fallback facts as null rather than zero", () => {
+    const historical = run({
+      task_id: "T-old",
+      agent: AgentStage.BACKEND_ENGINEER,
+      input_tokens: null,
+      output_tokens: null,
+      fallback_count: null,
+    });
+
+    const withoutTaskState = tokenMetricsExport([historical]);
+    expect(withoutTaskState.totals).toMatchObject({
+      total_token_per_completed_task: null,
+      first_pass_success_rate: null,
+      fallback_rate: null,
+    });
+
+    const withCompletion = tokenMetricsExport([historical], { completedTaskIds: new Set(["T-old"]) });
+    expect(withCompletion.totals.total_token_per_completed_task).toBeNull();
+    expect(withCompletion.totals.first_pass_success_rate).toBe(1);
+    expect(withCompletion.totals.fallback_rate).toBeNull();
+
+    const noCompletedRows = tokenMetricsExport([
+      run({ task_id: "T-open", agent: AgentStage.BACKEND_ENGINEER, input_tokens: 1, output_tokens: 1, fallback_count: 0 }),
+    ], { completedTaskIds: new Set() });
+    expect(noCompletedRows.totals.total_token_per_completed_task).toBeNull();
+    expect(noCompletedRows.totals.first_pass_success_rate).toBeNull();
+    expect(noCompletedRows.totals.fallback_rate).toBe(0);
+  });
+
+  it("compares every V3 rollup and treats historical baselines without the fields as unreported", () => {
+    const before = tokenMetricsExport([
+      run({ task_id: "T1", agent: AgentStage.BACKEND_ENGINEER, input_tokens: 80, output_tokens: 20, fallback_count: 1 }),
+    ], { completedTaskIds: new Set(["T1"]) });
+    const after = tokenMetricsExport([
+      run({ task_id: "T1", agent: AgentStage.BACKEND_ENGINEER, input_tokens: 40, output_tokens: 10, fallback_count: 1 }),
+      run({ task_id: "T2", agent: AgentStage.BACKEND_ENGINEER, input_tokens: 40, output_tokens: 10, retry_count: 1, fallback_count: 0 }),
+    ], { completedTaskIds: new Set(["T1", "T2"]) });
+
+    expect(compareTokenBaselines(before, after)).toMatchObject({
+      totalTokenPerCompletedTaskDeltaPct: -50,
+      firstPassSuccessRateDeltaPct: -50,
+      fallbackRateDeltaPct: -50,
+    });
+
+    const historical = structuredClone(before) as TokenMetricsExport;
+    delete (historical.totals as Partial<TokenMetricsExport["totals"]>).fallback_rate;
+    expect(compareTokenBaselines(historical, after).fallbackRateDeltaPct).toBeNull();
   });
 });

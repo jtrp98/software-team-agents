@@ -1,5 +1,6 @@
 import { AgentStage } from "../types.js";
 import type { PersistedEvent, TaskStore } from "../store/taskStore.js";
+import { formatRunRouting, type RunRecord } from "../observability/runLog.js";
 
 /**
  * The audit trail (T37): WHO / WHAT / WHEN / WHY / INPUT / OUTPUT / DECISION for
@@ -312,6 +313,8 @@ function timestamp(at: number): string {
 export interface FormatAuditOptions {
   /** Show only entries that recorded a decision. */
   decisionsOnly?: boolean;
+  /** Existing run-log rows; routing is a decision view over the same state DB. */
+  runs?: readonly RunRecord[];
 }
 
 /**
@@ -323,9 +326,14 @@ export interface FormatAuditOptions {
  */
 export function formatAuditTrail(entries: readonly AuditEntry[], opts: FormatAuditOptions = {}): string {
   const shown = opts.decisionsOnly ? decisionTrail(entries) : entries;
-  if (shown.length === 0) return "(no events recorded for this task)";
+  const runs = opts.runs ?? [];
+  if (shown.length === 0 && runs.length === 0) return "(no events recorded for this task)";
 
   const lines: string[] = [];
+  for (const run of runs) {
+    lines.push(`${timestamp(run.start_time)}  EXECUTION_ROUTE  who=${run.agent}`);
+    lines.push(`    route:    ${formatRunRouting(run)}`);
+  }
   for (const entry of shown) {
     lines.push(`${timestamp(entry.at)}  ${entry.type}${entry.actor ? `  who=${entry.actor}` : ""}`);
     if (entry.decision) lines.push(`    decision: ${entry.decision}`);

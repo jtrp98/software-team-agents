@@ -14,6 +14,7 @@ import {
   type RuntimeTaskBuildInput,
   type RuntimeTaskWorkRoot,
 } from "./runtimeTask.js";
+import type { RunRecord } from "../observability/runLog.js";
 
 export class UnknownDependencyError extends Error {
   constructor(public readonly taskId: string, public readonly missing: string[]) {
@@ -182,6 +183,11 @@ export class TaskRegistry {
   list(): TaskListing[] {
     const tasks = this.store.listTasks();
     return tasks.map((task) => ({ task, status: describeStatus(task, tasks) }));
+  }
+
+  /** Existing run-log rows for execution/status views; copied by the store. */
+  runsForTask(taskId: string): RunRecord[] {
+    return this.store.runsForTask(taskId);
   }
 
   /** Tasks that could be worked on right now: not finished, not blocked, every dependency DEPLOYED. */

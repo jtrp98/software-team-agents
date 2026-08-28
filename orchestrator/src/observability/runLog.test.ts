@@ -223,6 +223,33 @@ describe("RunLog", () => {
     expect(summary).toContain("TASK-123");
     expect(summary).toContain("Total: 132k tokens");
     expect(summary).toContain("FAIL");
+    expect(summary).toContain("runner=not reported → not reported");
+    expect(summary).toContain("model=not reported → not reported");
+  });
+
+  it("T-V3R-081 renders requested to actual routing and fallback reason in execution summaries", () => {
+    const log = new RunLog();
+    log.record({
+      task_id: "TASK-ROUTE",
+      agent: AgentStage.BACKEND_ENGINEER,
+      start_time: 0,
+      end_time: 1,
+      outcome: {
+        tokens: 1,
+        cost: 0,
+        result: "PASS",
+        requested_runtime: "claude-code",
+        runtime: "codex",
+        requested_model: "sonnet",
+        model: "gpt-5.6-codex",
+        routing_basis: "level-4-default",
+        fallback_count: 1,
+        fallback_reason: "claude-code unavailable",
+      },
+    });
+    expect(log.summary("TASK-ROUTE")).toContain(
+      "runner=claude-code → codex model=sonnet → gpt-5.6-codex basis=level-4-default fallback_count=1 fallback_reason=claude-code unavailable",
+    );
   });
 
   it("costSummary renders TASKS.md T27's own per-agent + total format", () => {

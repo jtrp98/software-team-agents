@@ -113,6 +113,24 @@ export interface RunOutcome {
   deterministic_gate?: "enabled" | "disabled";
 }
 
+const NOT_REPORTED = "not reported";
+
+function reported(value: string | number | null): string {
+  return value === null ? NOT_REPORTED : String(value);
+}
+
+/**
+ * One canonical requested-to-actual route rendering for status, list, and
+ * audit views. Nullable historical fields are deliberately explicit: blank
+ * output would make an unknown route look like a same-runner decision.
+ */
+export function formatRunRouting(run: RunRecord): string {
+  return `runner=${reported(run.requested_runtime)} → ${reported(run.runtime)} ` +
+    `model=${reported(run.requested_model)} → ${reported(run.model)} ` +
+    `basis=${reported(run.routing_basis)} fallback_count=${reported(run.fallback_count)} ` +
+    `fallback_reason=${reported(run.fallback_reason)}`;
+}
+
 /**
  * In-memory recorder for the per-run metrics item 11 requires. Deliberately
  * append-only and never mutates a past record — item 15 (Run History) reads
@@ -215,7 +233,9 @@ export class RunLog {
   summary(taskId: string): string {
     const runs = this.runsForTask(taskId);
     const toK = (n: number) => `${Math.round(n / 1000)}k`;
-    const lines = runs.map((r) => `  ${r.agent.padEnd(18)} ${toK(r.tokens).padStart(6)} tokens  ${r.result}`);
+    const lines = runs.map((r) =>
+      `  ${r.agent.padEnd(18)} ${toK(r.tokens).padStart(6)} tokens  ${r.result}  ${formatRunRouting(r)}`,
+    );
     return [taskId, ...lines, "", `Total: ${toK(this.totalTokens(taskId))} tokens`].join("\n");
   }
 

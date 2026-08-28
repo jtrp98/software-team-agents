@@ -222,7 +222,17 @@ export interface TokenMetricsExport {
   roles: TokenRoleMetrics[];
   /** Every run with an authoritative context budget, never synthetic aggregate rows. */
   contextBudgetRuns: ContextBudgetRunMetric[];
-  totals: Omit<TaskTokenMetrics, "taskId" | "sessionKinds">;
+  totals: Omit<TaskTokenMetrics, "taskId" | "sessionKinds"> & V3OptimizationRollups;
+}
+
+/** V3 Phase 8 read-only derivations over task state plus the existing run log. */
+export interface V3OptimizationRollups {
+  /** Strict token spend across completed tasks divided by completed task count. */
+  total_token_per_completed_task: number | null;
+  /** Completed tasks with no reported retry divided by completed task count. */
+  first_pass_success_rate: number | null;
+  /** Runs with at least one reported fallback hop divided by all runs. */
+  fallback_rate: number | null;
 }
 
 const COMPOSITION_FIELDS = ["static_chars", "handoff_chars", "doc_chars", "knowledge_chars", "code_intel_chars", "tool_output_chars"] as const;
@@ -343,11 +353,24 @@ function contextBudgetRunsFor(runs: readonly RunRecord[]): ContextBudgetRunMetri
     }));
 }
 
-export function tokenMetricsExport(runs: readonly RunRecord[], opts?: { now?: () => number }): TokenMetricsExport {
+export function tokenMetricsExport(
+  runs: readonly RunRecord[],
+  opts?: { now?: () => number; completedTaskIds?: ReadonlySet<string> },
+): TokenMetricsExport {
   const grouped = new Map<string, RunRecord[]>();
   for (const run of runs) grouped.set(run.task_id, [...(grouped.get(run.task_id) ?? []), run]);
   const tasks = [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, taskRuns]) => taskTokenMetrics(taskRuns));
   const aggregate = taskTokenMetrics(runs);
+  // Completion is not inferred from a PASS run: only the persisted task state
+  // can truthfully say a task reached DEPLOYED/DONE. Callers without that state
+  // therefore get null rather than a fabricated historical completion metric.
+  const completed = opts?.completedTaskIds === undefined
+    ? null
+    : tasks.filter((task) => opts.completedTaskIds!.has(task.taskId));
+  const completedTokens = completed === null || completed.length === 0 || completed.some((task) => task.totalTokens === null)
+    ? null
+    : completed.reduce((sum, task) => sum + task.totalTokens!, 0);
+  const fallbackCount = strictSum(runs, (run) => run.fallback_count);
   return {
     exportedAt: (opts?.now ?? Date.now)(),
     tasks,
@@ -365,6 +388,15 @@ export function tokenMetricsExport(runs: readonly RunRecord[], opts?: { now?: ()
       instructionSurfaceBytes: aggregate.instructionSurfaceBytes,
       composition: aggregate.composition,
       contextBudget: aggregate.contextBudget,
+      total_token_per_completed_task:
+        completed === null || completed.length === 0 || completedTokens === null
+          ? null
+          : completedTokens / completed.length,
+      first_pass_success_rate:
+        completed === null || completed.length === 0
+          ? null
+          : completed.filter((task) => task.retryCount === 0).length / completed.length,
+      fallback_rate: fallbackCount === null ? null : runs.filter((run) => run.fallback_count! > 0).length / runs.length,
     },
   };
 }
@@ -384,7 +416,14 @@ function promptCharactersOf(baseline: TokenMetricsExport | PromptCharacterBaseli
 export function compareTokenBaselines(
   before: TokenMetricsExport | PromptCharacterBaseline,
   after: TokenMetricsExport | PromptCharacterBaseline,
-): { inputTokenDeltaPct: number | null; retryWasteDeltaPct: number | null; promptCharacterDeltaPct: number | null } {
+): {
+  inputTokenDeltaPct: number | null;
+  retryWasteDeltaPct: number | null;
+  promptCharacterDeltaPct: number | null;
+  totalTokenPerCompletedTaskDeltaPct: number | null;
+  firstPassSuccessRateDeltaPct: number | null;
+  fallbackRateDeltaPct: number | null;
+} {
   const delta = (oldValue: number | null, newValue: number | null): number | null =>
     oldValue === null || newValue === null || oldValue === 0 ? null : ((newValue - oldValue) / oldValue) * 100;
   const tokenExport = (value: TokenMetricsExport | PromptCharacterBaseline): value is TokenMetricsExport => "totals" in value;
@@ -392,6 +431,15 @@ export function compareTokenBaselines(
     inputTokenDeltaPct: tokenExport(before) && tokenExport(after) ? delta(before.totals.inputTokens, after.totals.inputTokens) : null,
     retryWasteDeltaPct: tokenExport(before) && tokenExport(after) ? delta(before.totals.retryWasteTokens, after.totals.retryWasteTokens) : null,
     promptCharacterDeltaPct: delta(promptCharactersOf(before), promptCharactersOf(after)),
+    totalTokenPerCompletedTaskDeltaPct: tokenExport(before) && tokenExport(after)
+      ? delta(before.totals.total_token_per_completed_task ?? null, after.totals.total_token_per_completed_task ?? null)
+      : null,
+    firstPassSuccessRateDeltaPct: tokenExport(before) && tokenExport(after)
+      ? delta(before.totals.first_pass_success_rate ?? null, after.totals.first_pass_success_rate ?? null)
+      : null,
+    fallbackRateDeltaPct: tokenExport(before) && tokenExport(after)
+      ? delta(before.totals.fallback_rate ?? null, after.totals.fallback_rate ?? null)
+      : null,
   };
 }
 
