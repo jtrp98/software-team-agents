@@ -223,7 +223,7 @@ export class CliUsageError extends Error {}
 
 export const USAGE =
   "usage (T31 verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--mode <single|auto|manual>] [--runtime <claude-code|codex|opencode|paid-api>] [--project-root <path>] [--state-db <path>]\n" +
+  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--mode <single|auto|manual>] [--runtime <claude-code|codex|opencode|paid-api>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  sta approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
   "  sta resume  <task-id> --module <name> [--project-root <path>]   continue a task already in the store\n" +
@@ -258,6 +258,8 @@ export const USAGE =
   "  sta roles inbox [<ba|sa|uxui|dev>] [--module <name>]   what each lane has to look at, derived fresh (T106)\n" +
   "  sta roles impact <id>[,<id>...]   which lanes changing those items would reach, before changing them (T105)\n" +
   "  sta roles context <ba|sa|uxui|dev> [<id>] [--full] [--module <name>]   what that lane may see, and via which role (T107)\n" +
+  "\n" +
+  "V3 execution: --mode defaults to single; --runtime without --mode also means single. auto alone may hand off after UNAVAILABLE (never ERROR/TIMEOUT); manual requires an explicit per-role runner+model in .sta/config.yaml. paid-api additionally requires execution.allow_paid_fallback: true (default false). If no eligible runner remains, the task stops for a person.\n" +
   "\n" +
   "underlying flag-based form:\n" +
   "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--mode <single|auto|manual>] [--runtime <claude-code|codex|opencode|paid-api>] <classification flags>\n" +

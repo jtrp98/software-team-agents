@@ -1,15 +1,18 @@
-# Team Setup — V1
+# Team Setup — V3
 
 > Onboarding flow สำหรับสมาชิกใหม่: Install → Bind → Init your workspace → Validate → Ready
 > ทุกขั้นตอน reuse คำสั่งจริงของ `sta`/`software-team-agents` — ไม่มีขั้นไหนแก้ framework internals
-> สถาปัตยกรรม Three-Repo (กฎการทำงานใน [`CLAUDE.md`](CLAUDE.md), รายละเอียดใน [`README.md`](README.md); [`AGENTS.md`](AGENTS.md) เป็น Codex pointer):
+> สถาปัตยกรรม Three-Repo + Local Runtime State (กฎการทำงานใน [`CLAUDE.md`](CLAUDE.md), รายละเอียดใน [`README.md`](README.md); [`AGENTS.md`](AGENTS.md) เป็น Codex pointer):
 
 ```
 Framework repo (repo นี้)        Knowledge repo (ต่อบริษัท)              Target repo(s) (โค้ดจริง)
 orchestrator / .claude /         knowledge/ _docs/module/**/            sb-web-helper ฯลฯ — real source code
 contracts / workflows /          decisions/ targets.yaml
 policies / templates/
+Local Runtime State: .workflow/state.db + packets/evidence/runs — local, regenerable, gitignored
 ```
+
+V3 จึงมี ownership **สี่ domain**: Framework, Knowledge, Target และ Runtime State. สามอันแรกเป็น repository ownership; Runtime State ไม่ sync/commit และ packet/evidence/run output ห้ามกลายเป็น Knowledge หรือ Target data.
 
 **กฎที่ทั้งไฟล์นี้มีอยู่เพื่อบังคับ:** BA/SA/PM/test-planner/uxui-designer ทำงานใน **Knowledge repo** เท่านั้น
 (`business-analyst`, `system-analyst`, `project-manager`, `test-planner`, `uxui-designer` — "BA workspace role").
@@ -47,8 +50,8 @@ Package นี้เป็น private internal distribution และไม่ p
 git clone <ทีมของคุณ>/knowledge-<company>.git C:\src\<company>-knowledge
 ```
 
-BA/SA/PM/QA **แค่นี้พอ** — ไม่ต้อง clone Target repo เลย (ไม่แตะโค้ดแอป)
-DEV/DevOps clone Target repo(s) เพิ่มใน Step 4
+BA/SA/PM/test-planner/uxui-designer **แค่นี้พอ** — ไม่ต้อง clone Target repo เลย (ไม่แตะโค้ดแอป)
+backend/frontend engineer, **qa-engineer**, security และ devops clone Target repo(s) เพิ่มใน Step 4
 
 ## Step 3 — Bind This Machine to the Knowledge Root (ครั้งเดียวต่อเครื่อง)
 
@@ -145,6 +148,85 @@ software-team-agents dev    # DEV workspace role — launches from this Target
 
 ทั้งสองคำสั่งรัน preflight ให้อัตโนมัติ (auto-sync ถ้าไม่มี conflict), แล้ว launch runtime (`claude` โดย
 default; `--runtime codex|opencode` เลือกอย่างอื่นได้) จาก workspace ที่ถูกต้องให้เอง — cd เองไม่ต้องคิด.
+
+### V3 defaults ที่ setup ไม่เปลี่ยนให้เอง
+
+V3 config เป็น additive; workspace ก่อน V3 ทำงานต่อได้โดยไม่เพิ่ม block ใด. ค่าที่ **OFF by default** คือ:
+
+- **Auto mode** — config ว่างทำให้ `sta run` ใช้ Single + Claude Code. `--mode auto`, `execution.mode: auto`, หรือการเพิ่ม `routing.strategy`/`routing.order` โดยไม่กำหนด mode ล้วนเป็น explicit config act ที่เปิด Auto.
+- **Pyramid enforcement** — `test-pyramid.yaml` ที่ไม่ระบุ `enforcement` เป็น `warn`; เลือก verification floor แต่ไม่ block จาก missing evidence จนกว่าคนแก้เป็น `enforcement: enforce`.
+- **QA `skip`** — production CLI ไม่มี flag/config สำหรับเปิด; low-risk QA ยังเรียก model แบบ `lightweight`. Internal opt-in seam จะ skip ได้ต่อเมื่อ deterministic evidence ผ่าน แต่ยังไม่ใช่ user-facing V3 feature.
+- **Paid fallback** — `execution.allow_paid_fallback` default **`false`**; ต่อให้ใช้ Auto ก็ไม่ invoke API. การเปิดต้องตั้ง `true` โดยชัดเจนและ embedding host ต้อง inject official authenticated transport.
+
+Deterministic verification เปิดโดย default. `--no-deterministic-gate` เป็น per-task escape hatch ที่มีจริงแต่ไม่ใช่ default และไม่เท่ากับ QA skip. ถ้า Auto ไม่มี eligible runner เหลือ pipeline **STOP → Human**; `ERROR`/`TIMEOUT` ก็ไม่ trigger handoff.
+
+---
+
+## Upgrade Existing Teams to V3
+
+V3 ไม่มี config/schema rewrite แบบบังคับ: `.agent-team/config.yaml` และ `.sta/config.yaml` แบบก่อน V3 ยัง parse, defaults resolve ใน memory, Knowledge schema อยู่ version 1 และ Runtime State DB migrate forward ตอนถูกเปิด. ทำตาม path ที่ installation ใช้อยู่จริง:
+
+### A. Role-aware Three-Repo workspaces (`.agent-team/`)
+
+```bash
+npm install -g <path>\software-team-agents-<version>.tgz
+
+cd C:\src\<company>-knowledge
+software-team-agents status
+software-team-agents sync
+software-team-agents status
+
+cd C:\src\<target-repo>
+software-team-agents status
+software-team-agents sync
+software-team-agents status
+sta doctor --project-root C:\src\<target-repo>
+```
+
+ทำซ้ำ `status → sync → status` ทุก BA/DEV workspace. `sync` ใช้ three-hash diff: locally modified managed file จะ block และคง bytes เดิม; อย่าใช้ `--force` จนกว่าจะ review conflict เพราะ `--force` คือ explicit confirmation ให้ overwrite/remove หลัง backup ที่ `.agent-team/backups/<timestamp>/`. V3 block ที่ omitted แสดงใน status/doctor ว่า defaults apply; ไม่ต้องเพิ่ม YAML เพียงเพื่อให้อัปเกรดผ่าน.
+
+### B. Legacy project installation (`.sta/manifest.json`)
+
+คำสั่งนี้ตรงกับ T-V3R-072 upgrade fixture: pre-V3 managed bytes ถูก upgrade, config เดิมไม่ถูกเติม default, task DB v11 migrate ผ่าน v13+ ตอนเปิด และ task resume ที่ stage เดิม.
+
+```bash
+sta upgrade --mode legacy-project \
+  --templates <installed-package>\templates \
+  --project-root C:\src\<legacy-project>
+
+sta status <task-id> --project-root C:\src\<legacy-project>
+sta resume <task-id> --module <module-name> --project-root C:\src\<legacy-project>
+```
+
+`<installed-package>\templates` คือ `templates` directory ของ package `.tgz` version ที่เพิ่งติดตั้ง (หา global package root ได้ด้วย `npm root -g`). Upgrade backup managed files และ manifest ไว้ใต้ `.sta/backups/<timestamp>/`, overwrite เฉพาะ pristine files, ข้าม user-modified files, restore tracked file ที่หาย และปล่อย retired files ไว้แต่เลิก track. Runtime DB migration เป็น forward migration และไม่ rewrite `.sta/config.yaml`.
+
+ถ้าต้องคืน **upgrade-owned managed files**:
+
+```bash
+sta list-backups --project-root C:\src\<legacy-project>
+sta rollback --project-root C:\src\<legacy-project>
+```
+
+`rollback` คืน managed files/manifest จาก backup ล่าสุดแบบ byte-for-byte; ไม่ย้อน Runtime State DB. ตรวจ `sta status`/`sta audit` ก่อนทำงานต่อ. `sta migrate` ใช้เฉพาะเมื่อ `.sta/manifest.json` มี breaking schema migration ที่ build นั้นลงทะเบียนไว้; V3 ปัจจุบันยังใช้ manifest `schema_version: 1` จึงไม่ต้องรันคำสั่งนี้เป็นขั้นอัปเกรดปกติ.
+
+### C. เปิด V3 behavior ภายหลัง (optional)
+
+สำหรับ headless `sta run`, แก้ project-owned `.sta/config.yaml` เฉพาะเมื่อต้องการ opt in. ตัวอย่าง Auto แบบ subscription-first ที่ยังปิด paid fallback:
+
+```yaml
+schema_version: 1
+execution:
+  mode: auto
+  runner: claude-code
+  allow_handoff: true
+  allow_paid_fallback: false
+routing:
+  strategy: subscription-first
+  order: [claude-code, codex, opencode]
+  allow_below_supported: [codex, opencode]
+```
+
+`routing.allow_below_supported` จำเป็นเพราะ Codex ยัง Preview และ OpenCode ยัง Experimental; support level ไม่ถูกยกเพียงเพราะอัปเกรด V3. Manual ต้องกำหนดทั้ง `runtime` และ `model` ต่อ role ใน `routing.by_role`. Interactive `software-team-agents dev|ba --runtime ...` ไม่อ่าน router นี้ — คนเลือก runtime โดยตรงเหมือนเดิม.
 
 ---
 

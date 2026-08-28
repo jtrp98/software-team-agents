@@ -1,10 +1,52 @@
-# Release Notes — software-team-agents v1.0.0-rc.2
+# Release Notes
+
+## Unreleased — V3
+
+V3 is additive and preserves pre-V3 behavior when its optional configuration is absent: `sta run`
+uses Single mode on `claude-code`, deterministic verification remains enabled, test-pyramid
+enforcement remains warning-only, QA `skip` is not exposed to production CLI/config, and
+`execution.allow_paid_fallback` resolves to `false`.
+
+### Runner and routing behavior
+
+- `sta run --mode <single|auto|manual>` is the new orchestrated execution selector.
+  `--runtime <claude-code|codex|opencode|paid-api>` still exists; used alone, it means Single.
+- `sta context <role> --task <id> --packet [--json]` reads the latest validated V3 execution
+  packet from Local Runtime State.
+- Auto is opt-in and hands off only after `UNAVAILABLE`, never after `ERROR` or `TIMEOUT`. Preview
+  and Experimental runners require explicit `routing.allow_below_supported` consent for automatic
+  routing.
+- Manual requires a per-role runner and model in `routing.by_role` (legacy `model_routing` remains
+  readable). There is no user-facing `--model` flag.
+- Paid API is Experimental, has no bundled credential lookup, requires an injected official
+  transport, is refused for Target writes without the required guard capability, and is unreachable
+  until `execution.allow_paid_fallback: true`. If no eligible runner remains, execution stops for a
+  person with the recorded reason.
+
+### Ownership and upgrades
+
+- Three-Repo now names four ownership domains: Framework, Knowledge, Target, and Local Runtime
+  State. `.workflow/packets/`, `.workflow/evidence/`, `.workflow/runs/`, and the task DB are local,
+  regenerable, gitignored state; runtime artifacts never become Knowledge-owned.
+- Existing `.agent-team/config.yaml` and `.sta/config.yaml` files remain valid. V3 defaults resolve
+  in memory and upgrade does not insert behavior-changing config.
+- The packed migration fixtures prove existing Knowledge unchanged, existing Target sync with
+  overrides preserved, fresh init/bind/sync/status, and legacy upgrade with DB v11 → v13+, same-stage
+  resume, and byte-identical rollback of upgrade-owned files. Runtime DB migration is forward-only;
+  `sta rollback` restores managed install files/manifest, not the DB.
+
+Deferred V3.1 ideas such as dynamic optimization, quota/usage-aware routing, parallel agents,
+provider benchmarking, and adaptive QA are not implemented or documented as available.
+
+---
+
+## software-team-agents v1.0.0-rc.2
 
 > Product version `1.0.0-rc.2` (semver; follows `v1.0.0-rc.1`) · 2026-08-26
 > This release closes the framework's internal **v2 improvement cycle** (`planning/v2/`) —
 > "v2" there is a planning-generation label, not the product version.
 
-## Highlights
+### Highlights
 
 **Compatibility-affecting instruction setup changes**
 
@@ -53,7 +95,7 @@ Knowledge-repo reconciliation playbook shipped in the package root (added to `fi
 cross-linked from `prompt-setup.md` ↔ `TEAM_SETUP_V1.md` #10; verified present and readable from
 a fresh install by the packaged E2E (22/22 steps, Windows real-path/quoting coverage).
 
-## New / changed flags
+### New / changed flags
 
 | Flag | Purpose |
 |---|---|
@@ -62,7 +104,7 @@ a fresh install by the packaged E2E (22/22 steps, Windows real-path/quoting cove
 
 CI runs 16 validation flags including `--check-plan`.
 
-## Validation summary (tree @ `2647b48` + version bump)
+### Validation summary (tree @ `2647b48` + version bump)
 
 - orchestrator suite: 2132 tests / 141 files · typecheck ✓ · build ✓
 - hook/script self-test: 891 cases
@@ -71,7 +113,7 @@ CI runs 16 validation flags including `--check-plan`.
 - packaged distribution E2E: 22/22 steps on Windows (fresh install → configure → init → status →
   sync conflict/force → fail-closed launch surface), payload includes both prompt playbooks
 
-## Deferred (explicit)
+### Deferred (explicit)
 
 | Item | Reason |
 |---|---|
@@ -80,7 +122,7 @@ CI runs 16 validation flags including `--check-plan`.
 | `doctor` per-artifact mirror warnings | enhancement, not release-blocking |
 | layout reconciliation prompt consistency test (`promptSetup.test.ts` analogue) | deferred-with-note; add before its next structural edit |
 
-## Install
+### Install
 
 ```bash
 npm pack   # software-team-agents-1.0.0-rc.2.tgz
