@@ -25,7 +25,7 @@ import { assertContextComposition, emptyContextBudgetComposition, type ContextBu
  * stage that is *this framework's* business rather
  * than any runtime's (T108).
  *
- * Extracted from `agents/claudeCliExecutor.ts`, where it sat next to the
+ * Extracted from the legacy Claude executor, where it sat next to the
  * `spawnSync("claude", ...)` call. That co-location is what made the framework
  * look Claude-Code-shaped when almost none of it was: assembling a prompt,
  * slicing module docs to the sections a stage may read, reading `review.md` back
@@ -34,7 +34,7 @@ import { assertContextComposition, emptyContextBudgetComposition, type ContextBu
  * spawned were `codex`.
  *
  * Moved rather than copied. A second copy would drift from the first the moment
- * one of those policies changed, and the existing `claudeCliExecutor.test.ts`
+ * one of those policies changed, and the legacy executor tests
  * cases are the guard that the move changed no behaviour: they still exercise
  * this code, through the same executor, and still pass unchanged.
  *

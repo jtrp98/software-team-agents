@@ -56,9 +56,9 @@ export interface TaskNode {
   /**
    * The `design.md` Contract Version this task was planned against (T18).
    * Not used by the graph itself — `dependsOn`/`produces`/`consumes` are what
-   * scheduling reads — but carried on the node so `contracts/contractVersion.ts`
-   * can flag a task whose plan predates a later schema amendment, without a
-   * second parallel data structure to keep in sync with this one.
+   * scheduling reads — but carried on the node so consumers can flag a task
+   * whose plan predates a later schema amendment, without a second parallel
+   * data structure to keep in sync with this one.
    */
   contractVersion?: number;
   description?: string;

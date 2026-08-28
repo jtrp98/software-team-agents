@@ -37,7 +37,7 @@ export interface QaScopeInput {
   dependents?: Readonly<Record<string, readonly string[]>>;
   /** Candidate knowledge items; only relevant ones survive into the scope. */
   knowledge?: readonly QaKnowledgeRef[];
-  /** Task-graph impact (`graph/changeImpact.ts`), carried through for the report. */
+  /** Task-graph impact, carried through for the report. */
   affectedTaskIds?: readonly string[];
   affectedPhases?: readonly number[];
   /** Budget on changed+impacted files before the scope is declared unbounded. */
@@ -91,7 +91,7 @@ export function buildQaScope(input: QaScopeInput): QaScope {
   }
 
   // BFS over reverse dependencies: impact spreads one import hop at a time,
-  // and cycles must not loop forever, so visited-set semantics like changeImpact.ts.
+  // and cycles must not loop forever, so use visited-set semantics.
   const changedSet = new Set(changedFiles);
   const impactedSet = new Set<string>();
   const queue = [...changedFiles];

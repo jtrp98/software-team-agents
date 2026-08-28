@@ -49,10 +49,7 @@ import { writeExecutionPacket } from "../state/runtimeArtifacts.js";
  * in this file names a runtime, reads a runtime's flag, or parses a runtime's
  * envelope — swap the adapter and every line here still applies.
  *
- * `agents/claudeCliExecutor.ts` remains as it was and is still what `cli.ts`
- * uses. Repointing it is T109's job, together with the Claude Code adapter it
- * would point at; doing both in this task would have removed the only evidence
- * that the extraction into `agentRunAssembly.ts` changed nothing.
+ * `cli.ts` constructs this executor with the runtime selected for the task.
  */
 
 export interface RuntimeExecutorOptions {

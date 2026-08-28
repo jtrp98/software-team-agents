@@ -26,7 +26,7 @@ export type { SpawnSync } from "./runtimeAdapter.js";
 
 /**
  * The `RuntimeAdapter` for Claude Code (T109) — the Claude-Code-specific half
- * that `agents/claudeCliExecutor.ts` used to hold before T108 split it. This is
+ * that the legacy executor used to hold before T108 split it. This is
  * that file's `spawnSync("claude", ...)` call, its JSON envelope, and its
  * `AGENTCLAUDE_ROLE` environment variable, now behind the seam `runtimeAdapter.ts`
  * defines instead of welded to `agents/registry.ts` and `orchestrator.ts` directly.
@@ -81,7 +81,7 @@ const CLAUDE_CODE_CAPABILITIES: readonly RuntimeCapability[] = [
  * `RuntimeAutonomy` onto Claude Code's actual `--permission-mode` values
  * (`default`/`acceptEdits`/`plan`/`bypassPermissions`).
  *
- * `propose` -> `default` preserves `claudeCliExecutor.ts`'s old hardcoded
+ * `propose` -> `default` preserves the legacy executor's hardcoded
  * `"manual"` default exactly: `createRuntimeExecutor` also defaults `autonomy` to
  * `"propose"`, so an unconfigured caller sees identical behaviour to before this
  * task. `read-only` maps to `plan` as the closest available mode — Claude Code has
