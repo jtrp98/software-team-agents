@@ -2756,6 +2756,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
           packageInputs: qaInputs.packageInputs,
           scopeInputs: qaInputs.scopeInputs,
           riskSignals: () => riskSignalsFromClassification(orchestrator.classification),
+          taskLevel: () => orchestrator.classification.level,
           previousRound: () => {
             // In three-repo mode the module docs live under the Knowledge root.
             let docsRoot = args.projectRoot;

@@ -58,7 +58,8 @@ import {
 // v11: records launch-time always-on instruction bytes for interactive sessions.
 // v12 (T-V3R-002): records requested-vs-actual routing and fallback decisions. All five fields
 // are nullable because historical runs did not report them and must not be backfilled.
-const SCHEMA_VERSION = 13;
+// v14 (T-V3R-060): records the orthogonal QA effort decision. Historical rows stay null.
+const SCHEMA_VERSION = 14;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS runs (
   context_chars      INTEGER,
   prompt_version     INTEGER,
   qa_mode            TEXT,
+  qa_effort          TEXT,
   deterministic_gate TEXT,
   runtime            TEXT,
   requested_runtime  TEXT,
@@ -194,6 +196,7 @@ interface RunRow {
   context_chars: number | null;
   prompt_version: number | null;
   qa_mode: string | null;
+  qa_effort: string | null;
   deterministic_gate: string | null;
   runtime: string | null;
   requested_runtime: string | null;
@@ -330,6 +333,12 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     // is additive and deliberately does not rewrite their state bytes.
     void db;
   },
+  13: (db) => {
+    // T-V3R-060: a pre-v14 run has no recorded effort decision; null is the
+    // only truthful value and keeps the mode/effort axes independently queryable.
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    if (!existing.has("qa_effort")) db.exec("ALTER TABLE runs ADD COLUMN qa_effort TEXT");
+  },
 };
 
 export class SqliteTaskStore implements TaskStore {
@@ -423,8 +432,8 @@ export class SqliteTaskStore implements TaskStore {
   appendRun(record: RunRecord): void {
     this.db
       .prepare(
-        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, prompt_version, qa_mode, deterministic_gate, runtime, requested_runtime, requested_model, routing_basis, fallback_reason, fallback_count, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, prompt_version, qa_mode, qa_effort, deterministic_gate, runtime, requested_runtime, requested_model, routing_basis, fallback_reason, fallback_count, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.task_id,
@@ -444,6 +453,7 @@ export class SqliteTaskStore implements TaskStore {
         record.context_chars,
         record.promptVersion,
         record.qa_mode,
+        record.qa_effort,
         record.deterministic_gate,
         record.runtime,
         record.requested_runtime,
@@ -504,6 +514,7 @@ export class SqliteTaskStore implements TaskStore {
       cache_read_tokens: r.cache_read_tokens,
       context_chars: r.context_chars,
       qa_mode: r.qa_mode === "FULL" || r.qa_mode === "TARGETED" ? r.qa_mode : null,
+      qa_effort: r.qa_effort === "skip" || r.qa_effort === "lightweight" || r.qa_effort === "full" ? r.qa_effort : null,
       deterministic_gate: r.deterministic_gate === "enabled" || r.deterministic_gate === "disabled" ? r.deterministic_gate : null,
       runtime: r.runtime,
       requested_runtime: r.requested_runtime,

@@ -21,6 +21,7 @@ function run(partial: Partial<RunRecord> & { agent: AgentStage }): RunRecord {
     cache_read_tokens: null,
     context_chars: null,
     qa_mode: null,
+    qa_effort: null,
     deterministic_gate: null,
     runtime: null,
     requested_runtime: null,

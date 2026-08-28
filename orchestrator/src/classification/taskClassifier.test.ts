@@ -7,6 +7,10 @@ import { catalogWorkflows } from "../workflow/workflowCatalog.js";
 import { pipelineFromWorkflow } from "../workflow/workflowDefinition.js";
 
 describe("classifyTask", () => {
+  it("keeps typo pipeline free of a QA stage (T-V3R-060 INV-10)", () => {
+    const result = classifyTask({ isTypoOrCopyOnly: true, touchesBackend: true });
+    expect(result.pipeline).not.toContain(AgentStage.QA_ENGINEER);
+  });
   it("classifies a typo/copy fix as TRIVIAL with engineer-only pipeline", () => {
     const result = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
     expect(result.level).toBe(TaskLevel.TRIVIAL);

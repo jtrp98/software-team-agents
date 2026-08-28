@@ -86,6 +86,7 @@ function sampleRun(taskId = "T-1"): RunRecord {
     cache_read_tokens: null,
     context_chars: 4000,
     qa_mode: null,
+    qa_effort: null,
     deterministic_gate: null,
     runtime: "claude-code",
     requested_runtime: null,
@@ -458,7 +459,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
     } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
   });
 
-  it("T-V3R-002: a v11 fixture migrates through v12 to v13, preserves every legacy run fact, and round-trips nullable routing fields", () => {
+  it("T-V3R-002: a v11 fixture migrates through v12 to v14, preserves every legacy run fact, and round-trips nullable routing fields", () => {
     const file = tmpDbPath();
     const routingColumns = [
       "requested_runtime",
@@ -501,11 +502,11 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       }
 
       const versionCheck = new Database(file, { readonly: true });
-      expect(versionCheck.pragma("user_version", { simple: true })).toBe(13);
+      expect(versionCheck.pragma("user_version", { simple: true })).toBe(14);
       expect((versionCheck.pragma("table_info(runs)") as { name: string }[]).filter((column) => routingColumns.includes(column.name as typeof routingColumns[number])).map((column) => column.name)).toEqual([...routingColumns]);
       versionCheck.close();
 
-      // Opening v13 again must not re-run either migration or disturb data.
+      // Opening v14 again must not re-run either migration or disturb data.
       const reopened = new SqliteTaskStore(file);
       try {
         expect(reopened.runsForTask("T-V11")).toEqual([legacy]);
@@ -518,7 +519,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
     }
   });
 
-  it("T-V3R-010: a v12 task fixture migrates to v13 without rewriting legacy task JSON", () => {
+  it("T-V3R-010/T-V3R-060: a v12 task fixture migrates to v14 without rewriting legacy task JSON", () => {
     const file = tmpDbPath();
     try {
       const seed = new SqliteTaskStore(file);
@@ -543,10 +544,37 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
 
       const verify = new Database(file, { readonly: true });
       try {
-        expect(verify.pragma("user_version", { simple: true })).toBe(13);
+        expect(verify.pragma("user_version", { simple: true })).toBe(14);
         expect((verify.prepare("SELECT state FROM tasks WHERE task_id = ?").get("T-V12") as { state: string }).state).toBe(legacyBytes);
       } finally {
         verify.close();
+      }
+    } finally {
+      fs.rmSync(path.dirname(file), { recursive: true, force: true });
+    }
+  });
+
+  it("T-V3R-060: a v13 run migrates with null effort and new effort values round-trip independently", () => {
+    const file = tmpDbPath();
+    try {
+      const seed = new SqliteTaskStore(file);
+      const legacy = sampleRun("T-V13");
+      seed.appendRun(legacy);
+      seed.close();
+
+      const raw = new Database(file);
+      raw.exec("ALTER TABLE runs DROP COLUMN qa_effort");
+      raw.pragma("user_version = 13");
+      raw.close();
+
+      const migrated = new SqliteTaskStore(file);
+      const decided = { ...sampleRun("T-V14"), qa_mode: "FULL", qa_effort: "lightweight" } as RunRecord;
+      try {
+        expect(migrated.runsForTask("T-V13")).toEqual([legacy]);
+        migrated.appendRun(decided);
+        expect(migrated.runsForTask("T-V14")).toEqual([decided]);
+      } finally {
+        migrated.close();
       }
     } finally {
       fs.rmSync(path.dirname(file), { recursive: true, force: true });

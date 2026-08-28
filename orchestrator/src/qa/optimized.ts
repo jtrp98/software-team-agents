@@ -8,6 +8,9 @@ import {
   type QaModeDecision,
   type QaRiskSignals,
 } from "./mode.js";
+import { selectQaEffort } from "./riskGate.js";
+import type { TaskLevel } from "../types.js";
+import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
 import {
   renderDeterministicVerification,
   type DeterministicVerification,
@@ -63,6 +66,10 @@ export interface QaOptimizationOptions {
   deterministicVerification?: (req: AgentExecutorRequest) => DeterministicVerification | undefined;
   /** Extra risk signals beyond the classification-derived defaults. */
   riskSignals?: (req: AgentExecutorRequest) => QaRiskSignals | undefined;
+  /** Stored deterministic classification level used by the orthogonal effort gate. */
+  taskLevel?: (req: AgentExecutorRequest) => TaskLevel | undefined;
+  /** Low-risk skip is opt-in; absent preserves the pre-V3 model-QA path. */
+  allowQaSkip?: boolean;
   /** Previous failed round's findings/evidence; absent on round 0. */
   previousRound?: (req: AgentExecutorRequest) => PreviousQaRound | undefined;
   /** Caller extras for the evidence package (task intent, diff summary…). */
@@ -110,6 +117,7 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
     }
 
     const decision: QaModeDecision = selectQaMode(req.taskId, scope, signals, { now });
+    const effort = selectQaEffort(opts.taskLevel?.(req), signals, { allowSkip: opts.allowQaSkip });
 
     const deterministic = opts.deterministicVerification?.(req);
     if (deterministic && !deterministic.passed) {
@@ -121,13 +129,52 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
         "deterministic verification failed before LLM QA — qa-engineer was not invoked. Fix these, then re-run:\n" +
           renderDeterministicVerification(deterministic).join("\n"),
       );
-      return { ...failed, outcome: { ...failed.outcome, deterministic_gate: opts.deterministicGate ?? "enabled" } };
+      return {
+        ...failed,
+        outcome: {
+          ...failed.outcome,
+          qa_effort: effort.effort,
+          deterministic_gate: opts.deterministicGate ?? "enabled",
+        },
+      };
+    }
+
+    if (effort.effort === "skip") {
+      if (!deterministic?.passed) {
+        const failed = failResult(
+          "QA effort selected skip, but no passing deterministic verification was available; refusing to close without evidence",
+        );
+        return {
+          ...failed,
+          outcome: { ...failed.outcome, qa_effort: "skip", deterministic_gate: opts.deterministicGate ?? "disabled" },
+          gateEvidence: { ...(failed.gateEvidence ?? {}), qaModeDecision: decision },
+        };
+      }
+      const report: QaReportArtifact = {
+        taskId: req.taskId,
+        status: "PASS",
+        mode: decision.mode,
+        requirements: {},
+        tests: { passed: deterministic.ran.length, failed: deterministic.failures.length },
+        evidence: renderDeterministicVerification(deterministic),
+        risks: [],
+        hasAutomatedTests: deterministic.ran.some((check) => check.id === "unit-tests" || check.id === "integration-tests"),
+        unverifiedBehaviour: [],
+      };
+      return {
+        outcome: { tokens: 0, cost: 0, result: "PASS", qa_effort: "skip", deterministic_gate: "enabled" },
+        artifactType: ArtifactType.QA_REPORT,
+        artifact: report,
+        gateEvidence: { qaModeDecision: decision },
+      };
     }
 
     const pkgExtra = opts.packageInputs?.(req) ?? {};
     const pkg = buildEvidencePackage({
       taskId: req.taskId,
       mode: decision,
+      effort,
+      deterministicGate: opts.deterministicGate ?? (opts.deterministicVerification ? "enabled" : "disabled"),
       scope,
       taskIntent: "",
       acceptanceCriteria: [],
@@ -145,7 +192,11 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
 
     return {
       ...result,
-      outcome: { ...result.outcome, deterministic_gate: opts.deterministicGate ?? (opts.deterministicVerification ? "enabled" : "disabled") },
+      outcome: {
+        ...result.outcome,
+        qa_effort: effort.effort,
+        deterministic_gate: opts.deterministicGate ?? (opts.deterministicVerification ? "enabled" : "disabled"),
+      },
       gateEvidence: { ...(result.gateEvidence ?? {}), qaModeDecision: decision },
     };
   };

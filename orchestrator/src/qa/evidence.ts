@@ -19,6 +19,7 @@
  */
 
 import type { QaModeDecision } from "./mode.js";
+import type { QaEffortDecision } from "./riskGate.js";
 import type { DeterministicVerification } from "./deterministic.js";
 import { renderDeterministicVerification } from "./deterministic.js";
 import type { QaScope } from "./scope.js";
@@ -98,6 +99,10 @@ export function planRecheck(
 export interface EvidencePackageInput {
   taskId: string;
   mode: QaModeDecision;
+  /** Model-reasoning effort, independent from mode's verification surface. */
+  effort?: QaEffortDecision;
+  /** Controls the one mechanical instruction that exists only on the escape-hatch path. */
+  deterministicGate?: "enabled" | "disabled";
   scope: QaScope;
   /** One-paragraph statement of what this task was supposed to achieve. */
   taskIntent: string;
@@ -122,12 +127,28 @@ export function buildEvidencePackage(input: EvidencePackageInput): string {
   const cap = input.maxLines ?? DEFAULT_MAX_LINES;
   const sections: string[][] = [
     [`QA evidence package for ${input.taskId} (read this before opening source files)`],
-    ["## Mode", `- ${input.mode.mode} — ${input.mode.reasons.join("; ")}`],
+    [
+      "## QA policy",
+      `- Mode: ${input.mode.mode} — ${input.mode.reasons.join("; ")}`,
+      ...(input.effort ? [`- Effort: ${input.effort.effort} — ${input.effort.reasons.join("; ")}`] : []),
+    ],
     renderQaScope(input.scope).map((l) => `- ${l}`),
     ["## Task intent", wrap(input.taskIntent)],
     ["## Acceptance criteria", ...input.acceptanceCriteria.map((c) => `- ${c}`)],
     ["## Diff summary", wrap(input.diffSummary || "(none supplied)")],
   ];
+
+  if (input.deterministicGate === "disabled") {
+    sections.push([
+      "## Deterministic gate: disabled",
+      "Run `node .claude/scripts/static-analysis-gate.js` before verifying — lint, format, typecheck, build, and test from the Target-resolved `stack.commands` (falling back to the legacy per-package scripts only when no profile exists), plus `security_scan` over the profile's source roots/extensions and an offline `dependency_scan`. A skipped check is not a pass; if every verification command is skipped the gate reports `unverified` and exits distinctly instead of producing a green round. The gate stays deterministic and offline; it never installs tools or calls a registry.",
+    ]);
+  } else if (input.deterministicGate === "enabled") {
+    sections.push([
+      "## Deterministic gate: enabled",
+      "Consume the supplied structured verification result; do not re-run the mechanical checks.",
+    ]);
+  }
 
   if (input.deterministic) {
     sections.push(["## Deterministic verification (ran before this round)", ...renderDeterministicVerification(input.deterministic)]);

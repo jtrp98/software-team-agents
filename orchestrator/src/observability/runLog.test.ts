@@ -57,6 +57,7 @@ describe("RunLog", () => {
       context_tool_output_chars: null,
       context_reserve_chars: null,
       qa_mode: null,
+      qa_effort: null,
       deterministic_gate: null,
     });
   });
@@ -84,6 +85,18 @@ describe("RunLog", () => {
     expect(record.output_tokens).toBe(1000);
     expect(record.cache_read_tokens).toBe(2500);
     expect(record.context_chars).toBe(18000);
+  });
+
+  it("T-V3R-060 records QA effort independently from QA mode", () => {
+    const record = new RunLog().record({
+      task_id: "TASK-QA",
+      agent: AgentStage.QA_ENGINEER,
+      start_time: 0,
+      end_time: 1,
+      outcome: { tokens: 1, cost: 0, result: "PASS", qa_mode: "FULL", qa_effort: "lightweight" },
+    });
+    expect(record.qa_mode).toBe("FULL");
+    expect(record.qa_effort).toBe("lightweight");
   });
 
   it("T-V3R-002 records requested route and fallback fields without changing omitted callers", () => {

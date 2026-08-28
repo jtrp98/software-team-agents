@@ -63,6 +63,8 @@ export interface RunRecord {
   context_reserve_chars: number | null;
   /** QA07 — the verify mode this qa-engineer round ran in, from its own report. Null for every non-QA stage (and for QA runs that predate the field). */
   qa_mode: "FULL" | "TARGETED" | null;
+  /** Orthogonal model-reasoning effort selected by the deterministic risk gate. */
+  qa_effort: "skip" | "lightweight" | "full" | null;
   /** Whether this optimized QA round ran deterministic checks, or used the explicit escape hatch. */
   deterministic_gate: "enabled" | "disabled" | null;
 }
@@ -107,6 +109,7 @@ export interface RunOutcome {
   context_tool_output_chars?: number;
   context_reserve_chars?: number;
   qa_mode?: "FULL" | "TARGETED";
+  qa_effort?: "skip" | "lightweight" | "full";
   deterministic_gate?: "enabled" | "disabled";
 }
 
@@ -185,6 +188,7 @@ export class RunLog {
       context_tool_output_chars: params.outcome.context_tool_output_chars ?? null,
       context_reserve_chars: params.outcome.context_reserve_chars ?? null,
       qa_mode: params.outcome.qa_mode ?? null,
+      qa_effort: params.outcome.qa_effort ?? null,
       deterministic_gate: params.outcome.deterministic_gate ?? null,
     };
     this.records.push(entry);

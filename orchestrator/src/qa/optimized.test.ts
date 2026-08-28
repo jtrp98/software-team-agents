@@ -40,6 +40,96 @@ const passingQaInner: AgentExecutor = (req) => {
 };
 
 describe("withQaOptimization", () => {
+  it("logs effort independently from mode and includes both decisions in QA evidence", async () => {
+    let evidence = "";
+    const exec = withQaOptimization({
+      inner: async (req) => {
+        evidence = req.context.find((item) => item.source === "qa-evidence")!.content;
+        return { outcome: { tokens: 1, cost: 0, result: "PASS" } };
+      },
+      changedFiles: () => ["src/a.ts"],
+      taskLevel: () => "MEDIUM" as ClassificationResult["level"],
+    });
+
+    const result = await exec(qaReq());
+    expect(result.outcome.qa_effort).toBe("lightweight");
+    expect(result.gateEvidence?.qaModeDecision?.mode).toBe("TARGETED");
+    expect(evidence).toContain("Mode: TARGETED");
+    expect(evidence).toContain("Effort: lightweight");
+  });
+
+  it("opt-in low-risk skip consumes passing deterministic evidence without a model call", async () => {
+    let modelCalls = 0;
+    const exec = withQaOptimization({
+      inner: async () => {
+        modelCalls++;
+        return { outcome: { tokens: 99, cost: 1, result: "PASS" } };
+      },
+      changedFiles: () => ["src/a.ts"],
+      taskLevel: () => "SMALL" as ClassificationResult["level"],
+      allowQaSkip: true,
+      deterministicGate: "enabled",
+      deterministicVerification: () => ({
+        required: ["unit-tests"],
+        status: "passed",
+        ran: [{ id: "unit-tests", status: "PASS", durationMs: 1, outputSummary: "1 passed" }],
+        failures: [],
+        skipped: [],
+        missingRequired: [],
+        enforcement: "warn",
+        passed: true,
+      }),
+    });
+
+    const result = await exec(qaReq());
+    expect(modelCalls).toBe(0);
+    expect(result.outcome).toMatchObject({ result: "PASS", tokens: 0, qa_effort: "skip" });
+    expect(result.artifactType).toBe("qa-report");
+    expect(result.gateEvidence?.qaModeDecision?.mode).toBe("TARGETED");
+  });
+
+  it("refuses opt-in skip when passing deterministic evidence is absent", async () => {
+    const result = await withQaOptimization({
+      inner: async () => ({ outcome: { tokens: 99, cost: 1, result: "PASS" } }),
+      changedFiles: () => ["src/a.ts"],
+      taskLevel: () => "SMALL" as ClassificationResult["level"],
+      allowQaSkip: true,
+    })(qaReq());
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toMatch(/refusing to close without evidence/);
+  });
+
+  it("removes the mechanical rerun instruction when the deterministic gate is enabled", async () => {
+    let evidence = "";
+    await withQaOptimization({
+      inner: async (req) => {
+        evidence = req.context.find((item) => item.source === "qa-evidence")!.content;
+        return { outcome: { tokens: 1, cost: 0, result: "PASS" } };
+      },
+      changedFiles: () => ["src/a.ts"],
+      deterministicGate: "enabled",
+      taskLevel: () => "LARGE_CRITICAL" as ClassificationResult["level"],
+    })(qaReq());
+    expect(evidence).toContain("Deterministic gate: enabled");
+    expect(evidence).not.toContain("static-analysis-gate.js");
+  });
+
+  it("keeps the complete mechanical instruction when the deterministic gate is disabled", async () => {
+    let evidence = "";
+    await withQaOptimization({
+      inner: async (req) => {
+        evidence = req.context.find((item) => item.source === "qa-evidence")!.content;
+        return { outcome: { tokens: 1, cost: 0, result: "PASS" } };
+      },
+      changedFiles: () => ["src/a.ts"],
+      deterministicGate: "disabled",
+      taskLevel: () => "LARGE_CRITICAL" as ClassificationResult["level"],
+    })(qaReq());
+    expect(evidence).toContain("Deterministic gate: disabled");
+    expect(evidence).toContain("node .claude/scripts/static-analysis-gate.js");
+    expect(evidence).toContain("lint, format, typecheck, build, and test");
+  });
+
   it("passes non-QA stages through untouched", async () => {
     let innerCalls = 0;
     const inner: AgentExecutor = (req) => {
