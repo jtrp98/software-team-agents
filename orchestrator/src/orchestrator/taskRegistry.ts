@@ -8,6 +8,12 @@ import { TaskGraph, type TaskNode } from "../graph/taskGraph.js";
 import type { TargetBindings } from "../threeRepo/taskBindings.js";
 import { Orchestrator } from "./orchestrator.js";
 import { describeStatus, unmetDependencies, type TaskStatusView } from "./taskStatus.js";
+import { defaultProjectRoot } from "../agents/agentContract.js";
+import {
+  buildRuntimeTask,
+  type RuntimeTaskBuildInput,
+  type RuntimeTaskWorkRoot,
+} from "./runtimeTask.js";
 
 export class UnknownDependencyError extends Error {
   constructor(public readonly taskId: string, public readonly missing: string[]) {
@@ -79,16 +85,37 @@ export class TaskRegistry {
     dependsOn?: string[];
     environment?: Environment;
     targetBindings?: TargetBindings;
+    /** Exact workflow identity; defaults only for legacy programmatic callers. */
+    workflow?: string;
+    /** Caller-supplied task/issue text. Existing callers may keep using taskId. */
+    taskText?: RuntimeTaskBuildInput["taskText"];
+    projectRoot?: string;
+    docsRoot?: string;
+    moduleName?: string;
+    targetWorkRoots?: readonly RuntimeTaskWorkRoot[];
   }): Orchestrator {
     const dependsOn = params.dependsOn ?? [];
     const missing = dependsOn.filter((id) => this.store.loadTask(id) === null);
     if (missing.length > 0) throw new UnknownDependencyError(params.taskId, missing);
+
+    const runtimeTask = buildRuntimeTask({
+      taskId: params.taskId,
+      workflow: params.workflow ?? `classification:${params.classification.level.toLowerCase()}`,
+      classification: params.classification,
+      dependsOn,
+      projectRoot: params.projectRoot ?? defaultProjectRoot(),
+      docsRoot: params.docsRoot,
+      moduleName: params.moduleName,
+      taskText: params.taskText,
+      targetWorkRoots: params.targetWorkRoots,
+    });
 
     const orchestrator = new Orchestrator(params.taskId, params.classification, {
       ...this.orchestratorOptions(),
       dependsOn,
       environment: params.environment,
       targetBindings: params.targetBindings,
+      runtimeTask,
     });
     this.refreshStateView();
     return orchestrator;

@@ -38,6 +38,7 @@ import type { TargetBindings } from "../threeRepo/taskBindings.js";
 import { Environment } from "../environment/environment.js";
 import { type StructuredFailure } from "./failure.js";
 import { isAgentAssignedAt, stageStateOf } from "./taskStatus.js";
+import type { RuntimeTask } from "./runtimeTask.js";
 
 export interface AgentExecutorRequest {
   stage: AgentStage;
@@ -118,6 +119,8 @@ export interface OrchestratorOptions {
   environment?: Environment;
   /** Phase 2: immutable Target identity captured on task creation. */
   targetBindings?: TargetBindings;
+  /** V3 Phase 1: deterministic execution contract built by TaskRegistry before persistence. */
+  runtimeTask?: RuntimeTask | null;
 }
 
 function assertCanProduce(stage: AgentStage, artifactType: ArtifactType): void {
@@ -163,6 +166,7 @@ export class Orchestrator {
   readonly store: TaskStore;
   readonly dependsOn: string[];
   readonly classification: ClassificationResult;
+  readonly runtimeTask: RuntimeTask | null;
   private readonly pipeline: AgentStage[];
   private readonly implementationStartIndex: number;
   private readonly budget: Budget;
@@ -202,6 +206,7 @@ export class Orchestrator {
     this.store = opts?.store ?? new MemoryTaskStore();
     this.budget = opts?.budget ?? DEFAULT_BUDGET;
     this.classification = classification;
+    this.runtimeTask = restore?.runtimeTask ?? opts?.runtimeTask ?? null;
     this.createdAt = restore?.createdAt ?? this.now();
     this.dependsOn = restore ? [...restore.dependsOn] : [...(opts?.dependsOn ?? [])];
     this.pipeline = restore ? restore.machine.pipeline : classification.pipeline;
@@ -249,6 +254,7 @@ export class Orchestrator {
           now: this.createdAt,
           environment: this.taskEnvironment,
           targetBindings: opts?.targetBindings,
+          runtimeTask: this.runtimeTask,
         }),
       );
     }
@@ -305,6 +311,7 @@ export class Orchestrator {
       updatedAt: this.now(),
       dependsOn: [...this.dependsOn],
       classification: this.classification,
+      runtimeTask: this.runtimeTask,
       machine: this.run.machine,
       retries: { ...this.run.retries },
       gateContext: { ...this.gateContext },

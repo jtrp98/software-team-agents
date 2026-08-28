@@ -38,7 +38,10 @@ export function validateNewTaskBindings(
 }
 
 /** Resume-time validation permits only an already-known active identity. */
-export function validatePersistedTaskBindings(task: PersistedTask, registry: TargetRegistry): void {
+export function validatePersistedTaskBindings(
+  task: Pick<PersistedTask, "taskId" | "classification" | "targetBindings">,
+  registry: TargetRegistry,
+): void {
   const bindings = task.targetBindings;
   const touchesFrontend = task.classification.pipeline.includes(AgentStage.FRONTEND_ENGINEER);
   const touchesBackend = task.classification.pipeline.includes(AgentStage.BACKEND_ENGINEER);

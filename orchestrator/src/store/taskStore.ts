@@ -6,6 +6,7 @@ import { ApprovalRecordSchema } from "../gates/approval.js";
 import { QaModeDecisionSchema } from "../qa/mode.js";
 import { Environment } from "../environment/environment.js";
 import type { RunRecord } from "../observability/runLog.js";
+import { RuntimeTaskSchema } from "../orchestrator/runtimeTask.js";
 
 /**
  * Everything the orchestrator holds about one task, in a form that survives
@@ -32,6 +33,11 @@ export const PersistedTaskSchema = z.object({
     sensitiveGate: z.boolean(),
     reasons: z.array(z.string()),
   }),
+  /**
+   * V3 Phase 1 deterministic execution contract. Null is intentional for
+   * historical rows and human-triage tasks; v12 rows load without a rewrite.
+   */
+  runtimeTask: RuntimeTaskSchema.nullable().default(null),
   machine: z.object({
     pipeline: z.array(z.enum(AgentStage)),
     requiresHumanApproval: z.boolean(),
@@ -223,6 +229,7 @@ export function newPersistedTask(params: {
   now: number;
   environment?: Environment;
   targetBindings?: PersistedTask["targetBindings"];
+  runtimeTask?: PersistedTask["runtimeTask"];
 }): PersistedTask {
   return {
     taskId: params.taskId,
@@ -230,6 +237,7 @@ export function newPersistedTask(params: {
     updatedAt: params.now,
     dependsOn: params.dependsOn ?? [],
     classification: params.classification,
+    runtimeTask: params.runtimeTask ?? null,
     machine: params.machine,
     retries: { qa: 0, security: 0 },
     gateContext: {},

@@ -58,7 +58,7 @@ import {
 // v11: records launch-time always-on instruction bytes for interactive sessions.
 // v12 (T-V3R-002): records requested-vs-actual routing and fallback decisions. All five fields
 // are nullable because historical runs did not report them and must not be backfilled.
-const SCHEMA_VERSION = 12;
+const SCHEMA_VERSION = 13;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -323,6 +323,12 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
       ["fallback_count", "INTEGER"],
     ];
     for (const [column, type] of columns) if (!existing.has(column)) db.exec(`ALTER TABLE runs ADD COLUMN ${column} ${type}`);
+  },
+  12: (db) => {
+    // T-V3R-010: RuntimeTask lives in the existing versioned task JSON.
+    // PersistedTaskSchema supplies null for historical v12 rows, so migration
+    // is additive and deliberately does not rewrite their state bytes.
+    void db;
   },
 };
 

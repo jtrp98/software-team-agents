@@ -9,7 +9,7 @@ import {
   type SecurityReportArtifact,
 } from "../artifacts/schemas.js";
 import { AgentStage } from "../types.js";
-import { sections } from "../adoption/markdown.js";
+import { firstTable, sections } from "../adoption/markdown.js";
 import { parsePlanTasks } from "../docs/planGraph.js";
 import { buildPlanGraph, type TaskNode } from "../graph/taskGraph.js";
 import { extractIds } from "../traceability/traceability.js";
@@ -62,6 +62,55 @@ export function readModuleDoc(projectRoot: string, moduleName: string, filename:
   } catch {
     return null;
   }
+}
+
+/**
+ * Reads acceptance criteria from the authored requirement document without
+ * interpreting or completing them. The preferred shape is a dedicated
+ * `## Acceptance Criteria` section; the Core Features table shape remains
+ * supported because existing module documents commonly keep the criterion in
+ * a named table column instead.
+ *
+ * Empty is an honest result. RuntimeTask records the accompanying reason
+ * rather than asking a model to invent criteria that a person never wrote.
+ */
+export function extractAcceptanceCriteria(requirementMd: string): string[] {
+  const clean = (value: string): string =>
+    value
+      .replace(/^\s*[-*+]\s+(?:\[[ xX]\]\s*)?/, "")
+      .replace(/^\s*\d+[.)]\s+/, "")
+      .replace(/^`|`$/g, "")
+      .trim();
+  const unique = (values: string[]): string[] => [...new Set(values.map(clean).filter(Boolean))];
+
+  const explicit = sections(requirementMd, 2).find((section) =>
+    /^(?:acceptance criteria|เกณฑ์การยอมรับ)\b/i.test(section.title),
+  );
+  if (explicit) {
+    const table = firstTable(explicit.body);
+    if (table.rows.length > 0) {
+      const criterionIndex = table.header.findIndex((heading) =>
+        /acceptance|criteria|criterion|expected|เกณฑ์/i.test(heading),
+      );
+      const index = criterionIndex >= 0 ? criterionIndex : table.header.length === 1 ? 0 : -1;
+      if (index >= 0) return unique(table.rows.map((row) => row[index] ?? ""));
+    }
+    return unique(
+      explicit.body
+        .split(/\r?\n/)
+        .filter((line) => /^\s*(?:[-*+]|\d+[.)])\s+/.test(line)),
+    );
+  }
+
+  const coreFeatures = sections(requirementMd, 2).find((section) =>
+    /^(?:core features?|features?|ความสามารถหลัก)\b/i.test(section.title),
+  );
+  if (!coreFeatures) return [];
+  const table = firstTable(coreFeatures.body);
+  const criterionIndex = table.header.findIndex((heading) =>
+    /acceptance|criteria|criterion|expected|เกณฑ์/i.test(heading),
+  );
+  return criterionIndex < 0 ? [] : unique(table.rows.map((row) => row[criterionIndex] ?? ""));
 }
 
 function isFile(file: string): boolean {

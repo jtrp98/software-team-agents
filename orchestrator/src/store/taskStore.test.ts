@@ -458,7 +458,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
     } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
   });
 
-  it("T-V3R-002: a v11 fixture migrates to v12, preserves every legacy run fact, and round-trips nullable routing fields", () => {
+  it("T-V3R-002: a v11 fixture migrates through v12 to v13, preserves every legacy run fact, and round-trips nullable routing fields", () => {
     const file = tmpDbPath();
     const routingColumns = [
       "requested_runtime",
@@ -501,17 +501,52 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       }
 
       const versionCheck = new Database(file, { readonly: true });
-      expect(versionCheck.pragma("user_version", { simple: true })).toBe(12);
+      expect(versionCheck.pragma("user_version", { simple: true })).toBe(13);
       expect((versionCheck.pragma("table_info(runs)") as { name: string }[]).filter((column) => routingColumns.includes(column.name as typeof routingColumns[number])).map((column) => column.name)).toEqual([...routingColumns]);
       versionCheck.close();
 
-      // Opening v12 again must not re-run the v11 migration or disturb data.
+      // Opening v13 again must not re-run either migration or disturb data.
       const reopened = new SqliteTaskStore(file);
       try {
         expect(reopened.runsForTask("T-V11")).toEqual([legacy]);
         expect(reopened.runsForTask("T-V12")).toEqual([routed]);
       } finally {
         reopened.close();
+      }
+    } finally {
+      fs.rmSync(path.dirname(file), { recursive: true, force: true });
+    }
+  });
+
+  it("T-V3R-010: a v12 task fixture migrates to v13 without rewriting legacy task JSON", () => {
+    const file = tmpDbPath();
+    try {
+      const seed = new SqliteTaskStore(file);
+      seed.createTask(sampleTask("T-V12"));
+      seed.close();
+
+      const legacyDb = new Database(file);
+      const before = (legacyDb.prepare("SELECT state FROM tasks WHERE task_id = ?").get("T-V12") as { state: string }).state;
+      const legacy = JSON.parse(before) as Record<string, unknown>;
+      delete legacy.runtimeTask;
+      const legacyBytes = JSON.stringify(legacy);
+      legacyDb.prepare("UPDATE tasks SET state = ? WHERE task_id = ?").run(legacyBytes, "T-V12");
+      legacyDb.pragma("user_version = 12");
+      legacyDb.close();
+
+      const migrated = new SqliteTaskStore(file);
+      try {
+        expect(migrated.loadTask("T-V12")!.runtimeTask).toBeNull();
+      } finally {
+        migrated.close();
+      }
+
+      const verify = new Database(file, { readonly: true });
+      try {
+        expect(verify.pragma("user_version", { simple: true })).toBe(13);
+        expect((verify.prepare("SELECT state FROM tasks WHERE task_id = ?").get("T-V12") as { state: string }).state).toBe(legacyBytes);
+      } finally {
+        verify.close();
       }
     } finally {
       fs.rmSync(path.dirname(file), { recursive: true, force: true });

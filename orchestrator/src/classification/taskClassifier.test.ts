@@ -1,6 +1,10 @@
+import * as fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { classifyTask } from "./taskClassifier.js";
+import { classifyTask, pmMode, type ClassificationInput } from "./taskClassifier.js";
 import { AgentStage, TaskLevel } from "../types.js";
+import { catalogWorkflows } from "../workflow/workflowCatalog.js";
+import { pipelineFromWorkflow } from "../workflow/workflowDefinition.js";
 
 describe("classifyTask", () => {
   it("classifies a typo/copy fix as TRIVIAL with engineer-only pipeline", () => {
@@ -172,5 +176,69 @@ describe("classifyTask", () => {
   it("flags a missing engineer selection instead of silently producing an empty stage", () => {
     const result = classifyTask({ isClearBugFix: true });
     expect(result.reasons.some((r) => r.includes("no engineer stage selected"))).toBe(true);
+  });
+
+  it("names the existing Lightweight/Full PM boundary without changing it", () => {
+    expect(pmMode(classifyTask({}))).toBe("none");
+    expect(pmMode(classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true }))).toBe("lightweight");
+    expect(pmMode(classifyTask({ isClearBugFix: true, touchesBackend: true }))).toBe("lightweight");
+    expect(pmMode(classifyTask({ isNewFeatureModuleOrProject: true, touchesBackend: true }))).toBe("full");
+    expect(
+      pmMode({
+        level: TaskLevel.LARGE_CRITICAL,
+        pipeline: [AgentStage.PROJECT_MANAGER],
+        requiresHumanApproval: false,
+        sensitiveGate: false,
+        reasons: [],
+      }),
+    ).toBe("full");
+  });
+
+  it("keeps all ten workflow stage/level/approval outputs byte-identical to the Phase 1 baseline", () => {
+    const signalInputs: Record<string, ClassificationInput> = {
+      typo: { isTypoOrCopyOnly: true, touchesBackend: true, touchesFrontend: true },
+      bugfix: { isClearBugFix: true, touchesBackend: true, touchesFrontend: true },
+      incremental: { isIncrementalFeature: true, touchesBackend: true, touchesFrontend: true },
+      "business-rule": { touchesBusinessRuleOnly: true, touchesBackend: true, touchesFrontend: true },
+      feature: { isNewFeatureModuleOrProject: true, touchesBackend: true, touchesFrontend: true },
+      "schema-change": { touchesSchema: true, touchesBackend: true, touchesFrontend: true },
+      deploy: { isProductionDeployOrMigration: true },
+    };
+    const ids = [
+      "typo",
+      "bugfix",
+      "incremental",
+      "business-rule",
+      "feature",
+      "schema-change",
+      "deploy",
+      "hotfix",
+      "refactor",
+      "security-fix",
+    ];
+    const catalog = catalogWorkflows();
+    const actual = ids.map((workflow) => {
+      const signal = signalInputs[workflow];
+      const result = signal
+        ? classifyTask(signal)
+        : {
+            level: catalog[workflow].level,
+            pipeline: pipelineFromWorkflow(catalog[workflow], {
+              touchesBackend: true,
+              touchesFrontend: true,
+              touchesSensitiveArea: workflow === "security-fix",
+            }),
+            requiresHumanApproval: catalog[workflow].requires_human_approval,
+          };
+      return {
+        workflow,
+        level: result.level,
+        pipeline: result.pipeline,
+        requiresHumanApproval: result.requiresHumanApproval,
+      };
+    });
+    const bytes = `${JSON.stringify(actual, null, 2)}\n`;
+    const goldenPath = fileURLToPath(new URL("./fixtures/v3-phase1-classification.golden.json", import.meta.url));
+    expect(bytes).toBe(fs.readFileSync(goldenPath, "utf8").replace(/\r\n/g, "\n"));
   });
 });

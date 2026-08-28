@@ -22,7 +22,11 @@ function needsCode(stage: AgentStage): boolean {
   return [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER, AgentStage.QA_ENGINEER, AgentStage.SECURITY, AgentStage.DEVOPS].includes(stage);
 }
 
-function accessFor(stage: AgentStage, targetId: string, task: PersistedTask): WorkspaceAccess {
+function accessFor(
+  stage: AgentStage,
+  targetId: string,
+  task: Pick<PersistedTask, "targetBindings">,
+): WorkspaceAccess {
   if (stage === AgentStage.BACKEND_ENGINEER) return targetId === task.targetBindings.backend_target ? "write" : "read";
   if (stage === AgentStage.FRONTEND_ENGINEER) return targetId === task.targetBindings.frontend_target ? "write" : "read";
   if (stage === AgentStage.DEVOPS) return "write";
@@ -81,7 +85,7 @@ export interface ThreeRepoPreflightOptions {
 
 /** Resolves every root before an adapter is started.  It never writes. */
 export function preflightThreeRepoTask(
-  task: PersistedTask,
+  task: Pick<PersistedTask, "taskId" | "classification" | "targetBindings">,
   stage: AgentStage,
   opts: ThreeRepoPreflightOptions,
 ): ThreeRepoRequestRoots {

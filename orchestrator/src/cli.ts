@@ -99,6 +99,7 @@ import { getPolicySection, listPolicySections, PolicyIndexError } from "./docs/p
 import { buildPlanGraph, type TaskNode } from "./graph/taskGraph.js";
 import { parsePlanTasks } from "./docs/planGraph.js";
 import { buildContextCommand, ContextCommandError, contextCommandJson, renderContextCommand } from "./context/contextCommand.js";
+import type { RuntimeTaskWorkRoot } from "./orchestrator/runtimeTask.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -661,6 +662,61 @@ function warnIfPlanSaysNotReady(args: CliArgs, taskId: string): void {
   }
 }
 
+/** Deterministic task text: prefer the caller-named plan row, preserve taskId for ad-hoc work. */
+function runtimeTaskText(args: CliArgs, taskId: string, docsRoot: string): string {
+  if (!args.module) return taskId;
+  try {
+    const planMd = readModuleDoc(docsRoot, args.module, "plan.md");
+    if (planMd === null) return taskId;
+    return parsePlanTasks(planMd).tasks.find((task) => task.id === taskId)?.description || taskId;
+  } catch {
+    return taskId;
+  }
+}
+
+/**
+ * Resolves the Target side of `contract globs ∩ Target work roots` before
+ * RuntimeTask is persisted. This is the existing three-repo preflight, not a
+ * second root resolver. Legacy single-repo runs retain their one shared root.
+ */
+function runtimeTaskWorkRoots(
+  args: CliArgs,
+  taskId: string,
+  classification: ReturnType<typeof classifyTask>,
+): RuntimeTaskWorkRoot[] {
+  const stages = classification.pipeline.filter((stage) => stage !== AgentStage.HUMAN);
+  if (!args.targetBindings.frontend_target && !args.targetBindings.backend_target) {
+    return stages.map((stage) => ({ stage, targetId: "legacy-project", path: args.projectRoot }));
+  }
+
+  const preview = { taskId, classification, targetBindings: args.targetBindings };
+  const installationConfigPath = process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined;
+  const roots: RuntimeTaskWorkRoot[] = [];
+  for (const stage of stages) {
+    // Knowledge-only stages deliberately have no Target work roots. UX identity
+    // remains checked at its existing execution boundary, not moved to creation.
+    if (
+      ![
+        AgentStage.BACKEND_ENGINEER,
+        AgentStage.FRONTEND_ENGINEER,
+        AgentStage.QA_ENGINEER,
+        AgentStage.SECURITY,
+        AgentStage.DEVOPS,
+      ].includes(stage)
+    ) {
+      continue;
+    }
+    const resolved = preflightThreeRepoTask(preview, stage, {
+      frameworkRoot: args.projectRoot,
+      installationConfigPath,
+    });
+    for (const root of resolved.workRoots) {
+      if (root.access === "write") roots.push({ stage, targetId: root.targetId, path: root.path });
+    }
+  }
+  return roots;
+}
+
 /**
  * Resolves the orchestrator to drive: resumes the stored task with --resume,
  * refuses to silently restart one that already exists otherwise. Re-running a
@@ -716,7 +772,21 @@ function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orches
       `level=${classification.level} pipeline=${classification.pipeline.join(" -> ")}`,
   );
   for (const reason of classification.reasons) console.log(`[orchestrator]   reason: ${reason}`);
-  return registry.create({ taskId, classification, dependsOn: args.dependsOn, environment: args.environment, targetBindings: args.targetBindings });
+  const docsRoot = resolveContextDocsRoot(args.projectRoot);
+  return registry.create({
+    taskId,
+    classification,
+    dependsOn: args.dependsOn,
+    environment: args.environment,
+    targetBindings: args.targetBindings,
+    workflow: resolveWorkflowId(args.classification),
+    taskText: runtimeTaskText(args, taskId, docsRoot),
+    // Contracts are Framework-owned even when --project-root is a Target.
+    projectRoot: resolveFrameworkRoot(),
+    docsRoot,
+    moduleName: args.module,
+    targetWorkRoots: runtimeTaskWorkRoots(args, taskId, classification),
+  });
 }
 
 const VERBS = [
