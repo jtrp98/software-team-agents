@@ -7,6 +7,8 @@ import {
   StaConfigMissingError,
   checkStaConfig,
   defaultStaConfig,
+  effectiveExecutionConfig,
+  inspectStaConfig,
   loadStaConfig,
   staConfigPath,
   writeStaConfig,
@@ -43,6 +45,8 @@ describe("defaultStaConfig / writeStaConfig / loadStaConfig", () => {
         by_role: { "backend-engineer": { runtime: "codex", model: "gpt-5" } },
         allow_below_supported: ["codex"],
       },
+      qa: { strategy: "risk-based" },
+      verification: { baseline: ["unit", "typecheck", "build"] },
       permission_overrides: { "backend-engineer": { write: ["extra/**"] } },
       token_budget: 42_000,
       context_budget: { roles: { "qa-engineer": 90_000 }, model_context_windows: { opus: 120_000 } },
@@ -57,6 +61,8 @@ describe("defaultStaConfig / writeStaConfig / loadStaConfig", () => {
       by_role: { "backend-engineer": { runtime: "codex", model: "gpt-5" } },
       allow_below_supported: ["codex"],
     });
+    expect(loaded.qa).toEqual({ strategy: "risk-based" });
+    expect(loaded.verification).toEqual({ baseline: ["unit", "typecheck", "build"] });
     expect(loaded.permission_overrides).toEqual({ "backend-engineer": { write: ["extra/**"] } });
     expect(loaded.token_budget).toBe(42_000);
     expect(loaded.context_budget).toEqual({ roles: { "qa-engineer": 90_000 }, model_context_windows: { opus: 120_000 } });
@@ -65,9 +71,17 @@ describe("defaultStaConfig / writeStaConfig / loadStaConfig", () => {
   it("keeps V3 execution defaults additive and paid fallback off when the block is absent", () => {
     const config = defaultStaConfig();
     expect(config).toEqual({ schema_version: 1 });
-    expect(config.execution?.mode ?? "single").toBe("single");
-    expect(config.execution?.runner ?? "claude-code").toBe("claude-code");
-    expect(config.execution?.allow_paid_fallback ?? false).toBe(false);
+    expect(effectiveExecutionConfig(config.execution)).toEqual({
+      mode: "single",
+      runner: "claude-code",
+      allow_handoff: true,
+      allow_paid_fallback: false,
+      deterministic_gate_enabled: true,
+    });
+  });
+
+  it("defaults paid fallback off when execution exists without that key", () => {
+    expect(effectiveExecutionConfig({ mode: "auto" }).allow_paid_fallback).toBe(false);
   });
 
   it("throws StaConfigMissingError when there is no config yet", () => {
@@ -100,5 +114,19 @@ describe("checkStaConfig", () => {
     const root = tmpRoot();
     writeStaConfig(root, defaultStaConfig());
     expect(checkStaConfig(root)).toEqual([]);
+  });
+
+  it("a pre-V3 schema warns about every additive V3 block and never errors", () => {
+    const root = tmpRoot();
+    fs.mkdirSync(path.dirname(staConfigPath(root)), { recursive: true });
+    fs.writeFileSync(
+      staConfigPath(root),
+      "schema_version: 1\nexecution:\n  mode: auto\nrouting:\n  strategy: subscription-first\nqa:\n  strategy: risk-based\nverification:\n  baseline: [unit]\n",
+      "utf8",
+    );
+    const result = inspectStaConfig(root, "pre-v3");
+    expect(result.problems).toEqual([]);
+    expect(result.warnings).toHaveLength(1);
+    expect(result.warnings[0]).toMatch(/execution.*qa.*routing.*verification/);
   });
 });

@@ -21,6 +21,7 @@
     "test": "npm --prefix orchestrator run test",
     "release": "npm run typecheck && npm test && npm run build && node scripts/pack-release.mjs",
     "release:check": "node scripts/release-gate.mjs",
+    "test:migrations": "node scripts/migration-fixtures.mjs",
     "e2e:packaged": "node scripts/packaged-e2e.mjs",
     "prepack": "npm run build"
   },

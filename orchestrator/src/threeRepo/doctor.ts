@@ -12,6 +12,7 @@ import { detectWorkspaceKind } from "../targetcli/roleWorkspace.js";
 import { targetStackWasHumanEdited } from "../targetcli/targetProfile.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { inspectGuardWiring } from "../targetcli/guardSettings.js";
+import { loadStaConfig } from "../packaging/staConfig.js";
 
 /**
  * `sta doctor` (T166) — read-only diagnostics for one machine's installation.
@@ -282,6 +283,36 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
         return { status: "WARNING", detail: `${wiring.hooksRegistered}/${wiring.hooksInstalled} Framework guard registration(s) active` };
       }
       return { status: "PASS", detail: `${wiring.hooksRegistered}/${wiring.hooksInstalled} Framework guard registration(s) active` };
+    }),
+  );
+
+  checks.push(
+    check("V3 configuration", "fix the V3 blocks in .sta/config.yaml or .agent-team/config.yaml", () => {
+      if (!projectRoot) return { status: "WARNING", detail: "skipped — no --project-root given", fix: "re-run with --project-root <path>" };
+      let staConfig: ReturnType<typeof loadStaConfig> | undefined;
+      let targetConfig: TargetConfig | undefined;
+      try {
+        staConfig = fs.existsSync(path.join(projectRoot, ".sta", "config.yaml")) ? loadStaConfig(projectRoot) : undefined;
+        targetConfig = loadTargetConfig(projectRoot);
+      } catch (error) {
+        return { status: "FAIL", detail: error instanceof Error ? error.message : String(error) };
+      }
+      const configured = Boolean(
+        staConfig?.execution || staConfig?.routing || staConfig?.qa || staConfig?.verification || targetConfig?.execution,
+      );
+      if (!configured) {
+        return {
+          status: "PASS",
+          detail: "V3 config not configured — defaults apply (single / claude-code / deterministic gate enabled / paid fallback disabled)",
+        };
+      }
+      const execution = targetConfig?.execution ?? staConfig?.execution;
+      return {
+        status: "PASS",
+        detail:
+          `configured explicitly; mode=${execution?.mode ?? "single"}, runner=${execution?.runner ?? "claude-code"}, ` +
+          `paid fallback=${execution?.allow_paid_fallback === true ? "enabled" : "disabled"}`,
+      };
     }),
   );
 

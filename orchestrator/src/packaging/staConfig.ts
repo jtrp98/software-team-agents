@@ -13,6 +13,34 @@ import { z } from "zod";
  * Human-editable YAML, like `project.yaml` (`projectProfile.ts`), not the
  * machine-only JSON `.sta/manifest.json` uses.
  */
+export const ExecutionConfigSchema = z.object({
+  mode: z.enum(["single", "auto", "manual"]).optional(),
+  runner: z.string().min(1).optional(),
+  allow_handoff: z.boolean().optional(),
+  allow_paid_fallback: z.boolean().optional(),
+});
+
+export type ExecutionConfig = z.infer<typeof ExecutionConfigSchema>;
+
+export interface EffectiveExecutionConfig {
+  mode: "single" | "auto" | "manual";
+  runner: string;
+  allow_handoff: boolean;
+  allow_paid_fallback: boolean;
+  deterministic_gate_enabled: true;
+}
+
+/** Resolve V3 defaults in memory without rewriting a pre-V3 user config. */
+export function effectiveExecutionConfig(config?: ExecutionConfig): EffectiveExecutionConfig {
+  return {
+    mode: config?.mode ?? "single",
+    runner: config?.runner ?? "claude-code",
+    allow_handoff: config?.allow_handoff ?? true,
+    allow_paid_fallback: config?.allow_paid_fallback ?? false,
+    deterministic_gate_enabled: true,
+  };
+}
+
 export const StaConfigSchema = z.object({
   schema_version: z.literal(1),
   /** Overrides project.yaml's stack pointer for orchestrator purposes only, if a project needs to diverge. Unset = defer to project.yaml. */
@@ -23,17 +51,7 @@ export const StaConfigSchema = z.object({
    * V3 execution policy. Optional and additive: an older config with no block
    * resolves to Single on claude-code, with paid fallback disabled.
    */
-  execution: z
-    .object({
-      mode: z.enum(["single", "auto", "manual"]).optional(),
-      /** The one runtime Single mode uses when no CLI --runtime is present. */
-      runner: z.string().min(1).optional(),
-      /** Auto-mode subscription handoff. Ignored by Single and Manual. */
-      allow_handoff: z.boolean().optional(),
-      /** Spending gate. Absence is deliberately false. */
-      allow_paid_fallback: z.boolean().optional(),
-    })
-    .optional(),
+  execution: ExecutionConfigSchema.optional(),
   /**
    * V3 runner/model routing. All fields are optional so a pre-V3 config keeps
    * its exact behaviour. `by_role` accepts the existing `runtime:model` spelling
@@ -60,6 +78,10 @@ export const StaConfigSchema = z.object({
       allow_below_supported: z.array(z.string().min(1)).optional(),
     })
     .optional(),
+  /** Risk-based QA remains the only V3 strategy; omission keeps today's gate. */
+  qa: z.object({ strategy: z.literal("risk-based").optional() }).optional(),
+  /** Named deterministic levels supplement the task contract when configured. */
+  verification: z.object({ baseline: z.array(z.string().min(1)).optional() }).optional(),
   /** role -> extra write/deny globs layered over contracts/<role>.yaml, never replacing them. */
   permission_overrides: z
     .record(
@@ -104,6 +126,17 @@ export class StaConfigInvalidError extends Error {
   }
 }
 
+export interface StaConfigInspection {
+  problems: string[];
+  warnings: string[];
+}
+
+export type StaConfigReader = "current" | "pre-v3";
+
+const PreV3StaConfigSchema = StaConfigSchema.omit({ execution: true, routing: true, qa: true, verification: true });
+const CURRENT_STA_CONFIG_KEYS = new Set<string>(StaConfigSchema.keyof().options);
+const PRE_V3_STA_CONFIG_KEYS = new Set<string>(PreV3StaConfigSchema.keyof().options);
+
 export function loadStaConfig(projectRoot: string): StaConfig {
   const target = staConfigPath(projectRoot);
   if (!fs.existsSync(target)) throw new StaConfigMissingError(`${target} does not exist — run \`sta init\` first`);
@@ -116,16 +149,31 @@ export function loadStaConfig(projectRoot: string): StaConfig {
 }
 
 /** Non-throwing check, for T98's installation validation — a bad config is a reported problem, not a crash. */
-export function checkStaConfig(projectRoot: string): string[] {
+export function inspectStaConfig(projectRoot: string, reader: StaConfigReader = "current"): StaConfigInspection {
   const target = staConfigPath(projectRoot);
-  if (!fs.existsSync(target)) return [`${target} is missing`];
+  if (!fs.existsSync(target)) return { problems: [`${target} is missing`], warnings: [] };
   let parsed: unknown;
   try {
     parsed = parseYaml(fs.readFileSync(target, "utf8"));
   } catch (e) {
-    return [`${target} is not valid YAML: ${e instanceof Error ? e.message : String(e)}`];
+    return { problems: [`${target} is not valid YAML: ${e instanceof Error ? e.message : String(e)}`], warnings: [] };
   }
-  const result = StaConfigSchema.safeParse(parsed);
-  if (result.success) return [];
-  return result.error.issues.map((i) => `${target} ${i.path.join(".") || "(root)"}: ${i.message}`);
+  const schema = reader === "pre-v3" ? PreV3StaConfigSchema : StaConfigSchema;
+  const knownKeys = reader === "pre-v3" ? PRE_V3_STA_CONFIG_KEYS : CURRENT_STA_CONFIG_KEYS;
+  const result = schema.safeParse(parsed);
+  const problems = result.success
+    ? []
+    : result.error.issues.map((i) => `${target} ${i.path.join(".") || "(root)"}: ${i.message}`);
+  const unknownKeys = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? Object.keys(parsed).filter((key) => !knownKeys.has(key)).sort()
+    : [];
+  const warnings = unknownKeys.length === 0
+    ? []
+    : [`${target} contains optional key(s) not understood by the ${reader} schema: ${unknownKeys.join(", ")} — ignored; upgrade the CLI to configure them`];
+  return { problems, warnings };
+}
+
+/** Non-throwing problem-only API retained for existing T98 callers. */
+export function checkStaConfig(projectRoot: string): string[] {
+  return inspectStaConfig(projectRoot).problems;
 }

@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 import type { TemplateFileEntry } from "../packaging/templateManifest.js";
+import { ExecutionConfigSchema } from "../packaging/staConfig.js";
 
 /**
  * T-TARGET-06 / T-TARGET-05 — Target-side Framework metadata, under one home:
@@ -135,11 +136,46 @@ export const TargetConfigSchema = z.object({
     /** Hash of detector-owned fields; a mismatch proves a person changed the block and makes their values authoritative. */
     generated_hash: z.string().startsWith("sha256:").optional(),
   }).passthrough().optional(),
+  /** V3 execution policy; additive and absent in every pre-V3 Target config. */
+  execution: ExecutionConfigSchema.optional(),
   /** Repo-root-relative paths sync must never touch — the user override list (T-TARGET-05). */
   overrides: z.array(z.string().min(1)).default([]),
 });
 export type TargetConfig = z.infer<typeof TargetConfigSchema>;
 export type TargetStackConfig = NonNullable<TargetConfig["stack"]>;
+
+export interface TargetConfigCompatibility {
+  problems: string[];
+  warnings: string[];
+}
+
+const PreV3TargetConfigSchema = TargetConfigSchema.omit({ execution: true });
+const PRE_V3_TARGET_CONFIG_KEYS = new Set<string>(PreV3TargetConfigSchema.keyof().options);
+
+/** Proves that an older schema ignores additive V3 keys with a warning. */
+export function inspectTargetConfigAsPreV3(targetRoot: string): TargetConfigCompatibility {
+  const target = targetConfigPath(targetRoot);
+  if (!fs.existsSync(target)) return { problems: [], warnings: [] };
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(fs.readFileSync(target, "utf8"));
+  } catch (error) {
+    return { problems: [`${target} is not valid YAML: ${error instanceof Error ? error.message : String(error)}`], warnings: [] };
+  }
+  const result = PreV3TargetConfigSchema.safeParse(parsed);
+  const problems = result.success
+    ? []
+    : result.error.issues.map((issue) => `${target} ${issue.path.join(".") || "(root)"}: ${issue.message}`);
+  const unknownKeys = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? Object.keys(parsed).filter((key) => !PRE_V3_TARGET_CONFIG_KEYS.has(key)).sort()
+    : [];
+  return {
+    problems,
+    warnings: unknownKeys.length === 0
+      ? []
+      : [`${target} contains optional key(s) not understood by the pre-v3 schema: ${unknownKeys.join(", ")} — ignored; upgrade the CLI to configure them`],
+  };
+}
 
 export function defaultTargetConfig(targetId: string, now: string, role?: "ba" | "dev"): TargetConfig {
   return { schema_version: 1, target_id: targetId, registered_at: now, overrides: [], role };

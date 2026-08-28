@@ -87,4 +87,21 @@ describe("validateInstallation", () => {
     expect(result.ok).toBe(false);
     expect(result.problems.some((p) => p.includes("config.yaml"))).toBe(true);
   });
+
+  it("validates V3 blocks when present without changing schema_version", () => {
+    const templatesDir = fixtureTemplatesDir();
+    const project = tmpDir("sta-validate-project-");
+    runInit(project, templatesDir, "2026-08-20T09:00:00Z");
+    fs.writeFileSync(
+      path.join(project, ".sta", "config.yaml"),
+      "schema_version: 1\nexecution:\n  mode: auto\n  allow_paid_fallback: false\nqa:\n  strategy: risk-based\nverification:\n  baseline: [unit]\n",
+      "utf8",
+    );
+    expect(validateInstallation(project).ok).toBe(true);
+
+    fs.writeFileSync(path.join(project, ".sta", "config.yaml"), "schema_version: 1\nexecution:\n  mode: automatic\n", "utf8");
+    const invalid = validateInstallation(project);
+    expect(invalid.ok).toBe(false);
+    expect(invalid.problems.join("\n")).toMatch(/execution\.mode/);
+  });
 });

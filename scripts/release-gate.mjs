@@ -16,7 +16,8 @@
  *   3. every repository-consistency checker (the 15 `--check-*` gates + bindings)
  *   4. templates snapshot is exactly what the current sources regenerate
  *      — plus version consistency between package.json and the stamped manifest
- *   5. packaged-distribution E2E against the real .tgz (packs its own artifact;
+ *   5. four V3 migration fixtures against a packed install
+ *   6. packaged-distribution E2E against the real .tgz (packs its own artifact;
  *      proves install→init→bind→sync→launch-surface without this repo)
  */
 import { spawnSync } from "node:child_process";
@@ -135,7 +136,8 @@ run("templates snapshot regenerates byte-identically", `${distCli} --build-templ
   }
 }
 
-// --- 5 · packaged distribution E2E -------------------------------------------
+// --- 5/6 · packed migration fixtures and packaged distribution E2E -----------
+run("four packed V3 migration fixtures", "node scripts/migration-fixtures.mjs");
 run("packaged .tgz E2E (fresh env, real bins)", "node scripts/packaged-e2e.mjs");
 
 console.log("\n=========================================");

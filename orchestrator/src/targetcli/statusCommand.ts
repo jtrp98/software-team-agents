@@ -28,6 +28,7 @@ import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeR
 import { detectInstructionSurface, isNestedInstruction, type InstructionSurfaceEntry } from "../threeRepo/ownership.js";
 import { targetStackWasHumanEdited } from "./targetProfile.js";
 import { CLAUDE_SETTINGS_PATH, inspectGuardWiring, type GuardWiringStatus } from "./guardSettings.js";
+import { effectiveExecutionConfig, loadStaConfig, type StaConfig } from "../packaging/staConfig.js";
 
 /**
  * T-TARGET-10 + T-ROLE-18 — `software-team-agents status`: the whole
@@ -86,6 +87,29 @@ export interface TargetStatus {
   claude: RuntimeReadiness;
   codex: RuntimeReadiness;
   opencode: RuntimeReadiness;
+  /** V3 omission is healthy: the effective values reproduce pre-V3 behavior. */
+  v3Configuration: { configured: boolean; detail: string };
+}
+
+export function v3ExecutionStatus(
+  config: TargetConfig | undefined,
+  staConfig?: StaConfig,
+): TargetStatus["v3Configuration"] {
+  const execution = config?.execution ?? staConfig?.execution;
+  const effective = effectiveExecutionConfig(execution);
+  const configured = Boolean(execution || staConfig?.routing || staConfig?.qa || staConfig?.verification);
+  if (!configured) {
+    return {
+      configured: false,
+      detail: "not configured — defaults apply (single / claude-code / deterministic gate enabled / paid fallback disabled)",
+    };
+  }
+  return {
+    configured: true,
+    detail:
+      `configured (mode=${effective.mode}, runner=${effective.runner}, ` +
+      `handoff=${effective.allow_handoff ? "enabled" : "disabled"}, paid fallback=${effective.allow_paid_fallback ? "enabled" : "disabled"})`,
+  };
 }
 
 function countFiles(dir: string, suffix: string): number {
@@ -158,6 +182,15 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
   const config: TargetConfig | undefined = (() => {
     try {
       return loadTargetConfig(roots.targetRoot);
+    } catch {
+      return undefined;
+    }
+  })();
+  const staConfig: StaConfig | undefined = (() => {
+    try {
+      return fs.existsSync(path.join(roots.targetRoot, ".sta", "config.yaml"))
+        ? loadStaConfig(roots.targetRoot)
+        : undefined;
     } catch {
       return undefined;
     }
@@ -294,6 +327,7 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     claude: claudeReadiness(roots.targetRoot, guardWiring),
     codex: codexReadiness(roots.targetRoot),
     opencode: opencodeReadiness(roots.targetRoot),
+    v3Configuration: v3ExecutionStatus(config, staConfig),
   };
 }
 
@@ -322,6 +356,7 @@ export function renderStatus(status: TargetStatus): string {
   lines.push("Framework:");
   lines.push(`  ${status.frameworkRoot}`);
   lines.push(`  installed version: ${status.frameworkVersion}`);
+  lines.push(`V3 config: ${status.v3Configuration.detail}`);
   if (status.role === "dev") {
     if (!status.knowledgeBinding) {
       lines.push("Knowledge: NOT BOUND — required for DEV (set knowledge.path in .agent-team/config.yaml)");

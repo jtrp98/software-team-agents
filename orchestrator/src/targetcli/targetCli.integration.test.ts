@@ -1121,8 +1121,24 @@ describe("role workspace architecture (T-ROLE)", () => {
     const fw = fakeFramework("1.0.0", []);
     const target = makeBunTarget();
     expect((await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
-    const status = JSON.parse((await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out) as { stack?: { profile: string; package_manager: string } };
+    const status = JSON.parse((await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out) as {
+      stack?: { profile: string; package_manager: string };
+      v3Configuration?: { configured: boolean; detail: string };
+    };
     expect(status.stack).toMatchObject({ profile: "node", package_manager: "bun" });
+    expect(status.v3Configuration).toEqual({
+      configured: false,
+      detail: expect.stringContaining("not configured — defaults apply"),
+    });
+
+    write(target, ".sta/config.yaml", "schema_version: 1\nexecution:\n  mode: auto\n  allow_paid_fallback: false\n");
+    const configuredStatus = JSON.parse(
+      (await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out,
+    ) as { v3Configuration: { configured: boolean; detail: string } };
+    expect(configuredStatus.v3Configuration).toEqual({
+      configured: true,
+      detail: expect.stringContaining("mode=auto"),
+    });
 
     const unresolved = makeTarget();
     writeTargetConfig(unresolved, defaultTargetConfig(path.basename(unresolved), "2026-01-01T00:00:00Z", "dev"));
