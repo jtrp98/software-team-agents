@@ -22,8 +22,15 @@ import type {
   RuntimeGuards,
 } from "./runtimeAdapter.js";
 import type { RuntimeRegistry } from "./runtimeRegistry.js";
-import { resolveRuntimeRoute } from "./runtimeRouting.js";
+import {
+  resolveRuntimeRoute,
+  type PreviousRuntimeFailure,
+  type RoutingMode,
+  type RuntimeRouteFlags,
+} from "./runtimeRouting.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import type { ClassificationResult } from "../classification/taskClassifier.js";
+import type { QaRiskSignals } from "../qa/mode.js";
 import { checkRoleExecutionGate } from "../roles/roleExecutionGate.js";
 import type { PersistedTask } from "../store/taskStore.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
@@ -99,22 +106,18 @@ export interface RuntimeExecutorOptions {
    */
   enforceRoleWorkflow?: boolean;
   /**
-   * T112 — when given, a role's runtime and model are resolved per run via
-   * `runtimeRouting.ts` (`.sta/config.yaml`'s `model_routing`, extended to a
-   * `runtime:model` syntax) instead of always executing on `runtime`. `runtime`
-   * stays the fallback a route resolves to when its override names an
-   * unregistered runtime, or when there is no override at all. Left unset,
-   * behaviour is identical to before T112: every run goes to `runtime` with the
-   * model `opts.model` (or the role's own frontmatter) picked.
-   *
-   * Deliberately opt-in rather than wired into `cli.ts`'s production path — see
-   * `HANDOFF_V1.md` §21 for why: routing to a second runtime is only as trustworthy
-   * as that runtime's adapter, and `codexAdapter.ts` (T110) is an explicitly
-   * partial, unverified implementation. Turning this on for a real pipeline run
-   * is a decision for whoever configures `model_routing`, not a default this
-   * executor should assume.
+   * V3 production routing. When present, runtime/model selection, cached
+   * availability, support policy and write-stage capabilities are resolved per
+   * run. Left unset only for embedded compatibility callers and focused tests.
    */
   registry?: RuntimeRegistry;
+  /** Explicit CLI runner/model constraints (precedence level 1). */
+  routingFlags?: RuntimeRouteFlags;
+  classification?: (taskId: string) => ClassificationResult | undefined;
+  riskSignals?: (taskId: string) => QaRiskSignals | undefined;
+  previousFailures?: (taskId: string) => readonly PreviousRuntimeFailure[] | undefined;
+  routingMode?: RoutingMode;
+  allowHandoff?: boolean;
   /** T111's verified capability picture per runtime id, passed through to `resolveRuntimeRoute` so its capability-policy diagnostic uses confirmed facts instead of a static claim, when available. */
   verifiedCapabilities?: Readonly<Record<string, ReadonlySet<RuntimeCapability>>>;
 }
@@ -156,6 +159,11 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
   };
   doc_chars_before: number;
   runtime: string;
+  requested_runtime?: string;
+  requested_model?: string;
+  routing_basis?: string;
+  fallback_reason?: string;
+  fallback_count?: number;
   contextBudget: ReturnType<typeof assessContextBudget>;
   budgetComposition: ContextBudgetComposition;
 }): RunMetrics {
@@ -179,6 +187,11 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     cache_read_tokens: result.usage.cachedInputTokens,
     context_chars: declared.context_chars,
     runtime: declared.runtime,
+    requested_runtime: declared.requested_runtime,
+    requested_model: declared.requested_model,
+    routing_basis: declared.routing_basis,
+    fallback_reason: declared.fallback_reason,
+    fallback_count: declared.fallback_count,
     session_kind: "orchestrated",
     ...declared.composition,
     doc_chars_before: declared.doc_chars_before,
@@ -314,12 +327,15 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     const finish = (result: AgentExecutorResult): AgentExecutorResult =>
       packetPath ? { ...result, packetPath } : result;
 
-    // T112: resolve which runtime and model this run actually goes to. Absent
-    // `opts.registry`, `activeRuntime`/`activeModel` are exactly `runtime` and
-    // `resolveModel(role)` — identical to pre-T112 behaviour.
+    // V3 routing remains above the orchestrator seam. Embedded callers that do
+    // not supply a registry retain the fixed-runtime compatibility behaviour.
+    const hasTargetWrite = threeRepo?.roots.workRoots.some((root) => root.access === "write") ?? false;
     let activeRuntime = runtime;
     let activeModel = resolveModel(role);
     const routingDiagnostics: string[] = [];
+    let requestedRuntime: string | undefined;
+    let requestedModel: string | undefined;
+    let routingBasis: string | undefined;
     if (opts.registry) {
       const route = resolveRuntimeRoute({
         role,
@@ -327,11 +343,45 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         projectRoot: opts.projectRoot,
         registry: opts.registry,
         defaultRuntimeId: runtime.id,
+        flags: opts.routingFlags,
+        classification: opts.classification?.(req.taskId),
+        riskSignals: opts.riskSignals?.(req.taskId),
+        availability: await opts.registry.probeAll(),
+        previousFailures: opts.previousFailures?.(req.taskId),
+        mode: opts.routingMode,
+        allowHandoff: opts.allowHandoff,
+        hasTargetWrite,
         verifiedCapabilities: opts.verifiedCapabilities,
       });
-      activeRuntime = route.runtime;
-      activeModel = route.model ?? activeModel;
       routingDiagnostics.push(...route.diagnostics);
+      requestedRuntime = route.requested.runtimeId;
+      requestedModel = route.requested.model;
+      routingBasis = `level-${route.precedenceLevel}`;
+      if (route.precedenceLevel === 5) {
+        return finish(failResult(
+          `cannot start ${role}: a fallback candidate was resolved, but fallback execution is not enabled in Phase 3`,
+          {
+            requested_runtime: requestedRuntime,
+            requested_model: requestedModel,
+            routing_basis: routingBasis,
+            fallback_count: 0,
+          },
+        ));
+      }
+      if (route.error || !route.selected) {
+        const routeFailure = [route.error ?? "runtime route resolved no selected candidate", ...route.diagnostics].join(" | ");
+        return finish(failResult(
+          `cannot start ${role}: ${routeFailure}`,
+          {
+            requested_runtime: requestedRuntime,
+            requested_model: requestedModel,
+            routing_basis: routingBasis,
+            fallback_count: 0,
+          },
+        ));
+      }
+      activeRuntime = route.selected.runtime;
+      activeModel = route.selected.model ?? activeModel;
     }
 
     const contextBudget = assessContextBudget(
@@ -355,12 +405,15 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       composition: promptParts.composition,
       doc_chars_before: stageContext.docCharsBefore,
       runtime: activeRuntime.id,
+      requested_runtime: requestedRuntime,
+      requested_model: requestedModel,
+      routing_basis: routingBasis,
+      fallback_count: opts.registry ? 0 : undefined,
       contextBudget,
       budgetComposition: promptParts.budgetComposition,
     };
 
     let result: RuntimeAgentResult;
-    const hasTargetWrite = threeRepo?.roots.workRoots.some((root) => root.access === "write") ?? false;
     if (hasTargetWrite && !activeRuntime.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)) {
       return finish(failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot enforce a pre-tool workspace guard for Target write access`, declared));
     }

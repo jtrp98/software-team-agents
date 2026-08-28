@@ -22,6 +22,7 @@ import { ClaudeCodeAdapter } from "./runtime/claudeCodeAdapter.js";
 import { CodexAdapter } from "./runtime/codexAdapter.js";
 import { OpenCodeAdapter } from "./runtime/openCodeAdapter.js";
 import { RUNTIME_IDS, describeRuntimeSupport } from "./runtime/runtimeSupport.js";
+import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "./runtime/runtimeRegistry.js";
 import { detectRuntimeCapabilities } from "./runtime/runtimeCapabilityDetection.js";
 import { resolveContextDocsRoot, resolveFrameworkRoot } from "./targetcli/roots.js";
 import type { RuntimeAutonomy } from "./runtime/runtimeAdapter.js";
@@ -1202,6 +1203,15 @@ async function runUpgradeVerb(rest: string[], defaultProjectRoot: string): Promi
   }
 }
 
+/** The production composition root for every subscription CLI runtime. */
+export function createProductionRuntimeRegistry(projectRoot: string): RuntimeRegistry {
+  return RuntimeRegistry.forProcess([
+    new ClaudeCodeAdapter({ projectRoot }),
+    new CodexAdapter({ projectRoot }),
+    new OpenCodeAdapter({ projectRoot }),
+  ]);
+}
+
 /** `doctor` (T166) — aggregate read-only diagnostics; never mutates, exits non-zero only on FAIL. */
 async function runDoctorVerb(rest: string[]): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root");
@@ -1210,11 +1220,15 @@ async function runDoctorVerb(rest: string[]): Promise<number> {
     // (see runtimeAdapter.ts): doctor itself stays provider-blind and receives
     // the same probe a real run would use — and, through that adapter, the
     // claims-vs-install capability sweep.
+    const resolvedProjectRoot = projectRoot ?? process.cwd();
+    const runtimeRegistry = createProductionRuntimeRegistry(resolvedProjectRoot);
+    const claude = runtimeRegistry.get(DEFAULT_RUNTIME_ID);
     const report = await runDoctor({
       projectRoot: projectRoot ?? undefined,
-      probe: () => new ClaudeCodeAdapter({ projectRoot: projectRoot ?? process.cwd() }).probe(),
+      probe: () => runtimeRegistry.probe(DEFAULT_RUNTIME_ID),
       capabilities: async () => {
-        const r = await detectRuntimeCapabilities(new ClaudeCodeAdapter({ projectRoot: projectRoot ?? process.cwd() }));
+        const probe = await runtimeRegistry.probe(DEFAULT_RUNTIME_ID);
+        const r = await detectRuntimeCapabilities(claude, { probe });
         return {
           runtimeId: r.runtimeId,
           verified: r.checks.filter((c) => c.verified).map((c) => c.capability),
@@ -2202,7 +2216,7 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
     case "doctor":
       return runDoctorVerb(rest);
     case "runtimes":
-      return runRuntimesVerb();
+      return runRuntimesVerb(rest, defaultProjectRoot);
   }
 }
 
@@ -2211,9 +2225,19 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
  * tests read one record. A person picking a runtime for a machine should not
  * have to trust prose that can drift from what the adapters actually do.
  */
-function runRuntimesVerb(): number {
+async function runRuntimesVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const projectRoot = path.resolve(flagValue(rest, "--project-root") ?? defaultProjectRoot);
+  const runtimeRegistry = createProductionRuntimeRegistry(projectRoot);
+  const probes = await runtimeRegistry.probeAll();
   console.log("[orchestrator] runtime support (raise a level only when T-V1-05 conformance passes):");
-  for (const line of describeRuntimeSupport()) console.log(`  ${line}`);
+  for (const line of describeRuntimeSupport()) {
+    const id = line.slice(0, line.indexOf(":"));
+    const probe = probes[id];
+    const availability = probe?.available
+      ? `available${probe.version ? ` (${probe.version})` : ""}`
+      : `unavailable: ${probe?.reason ?? "no unavailability reason was reported"}`;
+    console.log(`  ${line}; ${availability}`);
+  }
   return 0;
 }
 
@@ -2545,17 +2569,17 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     // that seam. `guards` derives from `contracts/<role>.yaml` (T15), same as before.
     // T-OC5: --runtime picks the adapter; the default stays byte-identical to
     // every run before the flag existed.
+    const runtimeRegistry = createProductionRuntimeRegistry(args.projectRoot);
     const runtimeExecutor = createRuntimeExecutor({
-      runtime: (() => {
-        switch (args.runtime ?? "claude-code") {
-          case "codex":
-            return new CodexAdapter({ projectRoot: args.projectRoot });
-          case "opencode":
-            return new OpenCodeAdapter({ projectRoot: args.projectRoot });
-          default:
-            return new ClaudeCodeAdapter({ projectRoot: args.projectRoot });
-        }
-      })(),
+      runtime: runtimeRegistry.get(args.runtime ?? DEFAULT_RUNTIME_ID),
+      registry: runtimeRegistry,
+      routingFlags: args.runtime ? { runtime: args.runtime } : undefined,
+      classification: (id) => store.loadTask(id)?.classification,
+      riskSignals: (id) => {
+        const classification = store.loadTask(id)?.classification;
+        return classification ? riskSignalsFromClassification(classification) : undefined;
+      },
+      routingMode: "single",
       projectRoot: args.projectRoot,
       moduleName: () => args.module!,
       guards: contractGuardResolver(args.projectRoot),

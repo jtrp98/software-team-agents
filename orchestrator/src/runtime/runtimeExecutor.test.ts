@@ -726,6 +726,38 @@ describe("the orchestrator drives a whole task through the interface (T108)", ()
     expect(runtime.rolesRun()).toEqual(classification.pipeline.map((s) => s.toString()));
   });
 
+  it("T-V3R-032 compatibility evidence: wiring a no-config registry preserves stage sequence, runtime and model", async () => {
+    const projectRoot = tmpProject();
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    for (const stage of classification.pipeline) writeAgentFile(projectRoot, stage, "model: sonnet");
+
+    async function execute(withRegistry: boolean) {
+      const runtime = new MockRuntimeAdapter({
+        id: "claude-code",
+        models: ["sonnet"],
+        files: { "_docs/module/sales-crm/review.md": PASSING_REVIEW },
+      });
+      const orch = new Orchestrator(`T-COMPAT-${withRegistry ? "AFTER" : "BEFORE"}`, classification);
+      const executor = createRuntimeExecutor({
+        runtime,
+        projectRoot,
+        moduleName: () => "sales-crm",
+        guards: () => NO_GUARDS,
+        ...(withRegistry ? { registry: new RuntimeRegistry([runtime]) } : {}),
+      });
+      const status = await runToCompletion(orch, executor);
+      return {
+        status: status.kind,
+        trace: runtime.requests.map((request) => ({ stage: request.role, runtime: runtime.id, model: request.model })),
+      };
+    }
+
+    const before = await execute(false);
+    const after = await execute(true);
+    expect(after).toEqual(before);
+    expect(after.trace).toEqual(classification.pipeline.map((stage) => ({ stage, runtime: "claude-code", model: "sonnet" })));
+  });
+
   it("the same task on a second, differently-named adapter behaves identically", async () => {
     const files = { "_docs/module/sales-crm/review.md": PASSING_REVIEW };
     const results: string[] = [];
@@ -817,7 +849,7 @@ describe("the orchestrator drives a whole task through the interface (T108)", ()
  */
 describe("createRuntimeExecutor — three-repo guard enforcement", () => {
   it("does not start a Target-write run when the runtime lacks a pre-tool guard", async () => {
-    const runtime = new MockRuntimeAdapter({ capabilities: [RuntimeCapability.NAMED_AGENTS] });
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", capabilities: [RuntimeCapability.NAMED_AGENTS] });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const task = {
       taskId: "T-target",
@@ -829,10 +861,13 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
       projectRoot: tmpProject(),
       moduleName: () => "sales-crm",
       guards: () => NO_GUARDS,
+      registry: new RuntimeRegistry([runtime]),
       threeRepoTask: () => ({ task, roots: { bindingRoot: "/framework", knowledgeRoot: "/knowledge", workRoots: [{ targetId: "api", path: "/api", access: "write" }] } }),
     });
     const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-target", context: [] });
     expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain('runtime "claude-code"');
+    expect(result.outcome.failure_reason).toContain(RuntimeCapability.PRE_TOOL_GUARD);
     expect(runtime.requests).toHaveLength(0);
   });
 
@@ -890,6 +925,90 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
 
     expect(primary.requests).toHaveLength(1);
     expect(secondary.requests).toHaveLength(0);
+  });
+
+  it("records requested == actual and automatic precedence on the no-config production path", async () => {
+    const projectRoot = tmpProject();
+    writeAgentFile(projectRoot, "backend-engineer", "model: sonnet");
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
+    const executor = createRuntimeExecutor({
+      runtime,
+      registry: new RuntimeRegistry([runtime]),
+      projectRoot,
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+    });
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-NO-CONFIG", context: [] });
+    expect(result.outcome).toMatchObject({
+      runtime: "claude-code",
+      model: "sonnet",
+      requested_runtime: "claude-code",
+      requested_model: "sonnet",
+      routing_basis: "level-4",
+      fallback_count: 0,
+    });
+  });
+
+  it("refuses an unavailable selected runtime before adapter start and preserves the probe reason", async () => {
+    const exactReason = "claude executable unavailable — exact diagnostic";
+    const runtime = new MockRuntimeAdapter({
+      id: "claude-code",
+      probe: { available: false, reason: exactReason },
+    });
+    const result = await executorFor(runtime, { registry: new RuntimeRegistry([runtime]) })({
+      stage: AgentStage.BACKEND_ENGINEER,
+      taskId: "T-UNAVAILABLE-PROBE",
+      context: [],
+    });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain(exactReason);
+    expect(runtime.requests).toEqual([]);
+  });
+
+  it("refuses an automatic preview route before either adapter starts", async () => {
+    const projectRoot = tmpProject();
+    fs.mkdirSync(path.join(projectRoot, ".sta"), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, ".sta", "config.yaml"), "schema_version: 1\nrouting:\n  order: [codex]\n", "utf8");
+    const primary = new MockRuntimeAdapter({ id: "claude-code" });
+    const preview = new MockRuntimeAdapter({ id: "codex" });
+    const result = await createRuntimeExecutor({
+      runtime: primary,
+      registry: new RuntimeRegistry([primary, preview]),
+      projectRoot,
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-SUPPORT-GATE", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain('support level "preview"');
+    expect(primary.requests).toEqual([]);
+    expect(preview.requests).toEqual([]);
+  });
+
+  it("does not execute a resolved fallback candidate before Phase 4", async () => {
+    const projectRoot = tmpProject();
+    fs.mkdirSync(path.join(projectRoot, ".sta"), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectRoot, ".sta", "config.yaml"),
+      "schema_version: 1\nrouting:\n  allow_below_supported: [codex]\n",
+      "utf8",
+    );
+    const unavailable = new MockRuntimeAdapter({
+      id: "claude-code",
+      probe: { available: false, reason: "automatic runtime unavailable" },
+    });
+    const fallback = new MockRuntimeAdapter({ id: "codex" });
+    const result = await createRuntimeExecutor({
+      runtime: unavailable,
+      registry: new RuntimeRegistry([unavailable, fallback]),
+      projectRoot,
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+      previousFailures: () => [{ runtimeId: "claude-code", status: "UNAVAILABLE" }],
+      allowHandoff: true,
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-NO-PHASE-4", context: [] });
+    expect(result.outcome.failure_reason).toContain("fallback execution is not enabled in Phase 3");
+    expect(unavailable.requests).toEqual([]);
+    expect(fallback.requests).toEqual([]);
   });
 
   it("routes a run to the second registered runtime when .sta/config.yaml's model_routing names it", async () => {

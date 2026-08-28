@@ -36,6 +36,12 @@ describe("defaultStaConfig / writeStaConfig / loadStaConfig", () => {
       schema_version: 1,
       stack: "nextjs-express",
       model_routing: { "qa-engineer": "opus" },
+      routing: {
+        strategy: "subscription-first",
+        order: ["claude-code", "codex"],
+        by_role: { "backend-engineer": { runtime: "codex", model: "gpt-5" } },
+        allow_below_supported: ["codex"],
+      },
       permission_overrides: { "backend-engineer": { write: ["extra/**"] } },
       token_budget: 42_000,
       context_budget: { roles: { "qa-engineer": 90_000 }, model_context_windows: { opus: 120_000 } },
@@ -43,6 +49,12 @@ describe("defaultStaConfig / writeStaConfig / loadStaConfig", () => {
     const loaded = loadStaConfig(root);
     expect(loaded.stack).toBe("nextjs-express");
     expect(loaded.model_routing).toEqual({ "qa-engineer": "opus" });
+    expect(loaded.routing).toEqual({
+      strategy: "subscription-first",
+      order: ["claude-code", "codex"],
+      by_role: { "backend-engineer": { runtime: "codex", model: "gpt-5" } },
+      allow_below_supported: ["codex"],
+    });
     expect(loaded.permission_overrides).toEqual({ "backend-engineer": { write: ["extra/**"] } });
     expect(loaded.token_budget).toBe(42_000);
     expect(loaded.context_budget).toEqual({ roles: { "qa-engineer": 90_000 }, model_context_windows: { opus: 120_000 } });

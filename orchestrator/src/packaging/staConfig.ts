@@ -19,6 +19,32 @@ export const StaConfigSchema = z.object({
   stack: z.string().min(1).optional(),
   /** role -> model override, layered over each agent's frontmatter default (CLAUDE.md's "model per agent" table). */
   model_routing: z.record(z.string().min(1), z.string().min(1)).optional(),
+  /**
+   * V3 runner/model routing. All fields are optional so a pre-V3 config keeps
+   * its exact behaviour. `by_role` accepts the existing `runtime:model` spelling
+   * as well as a structured target; the latter avoids parsing when both fields
+   * are configured explicitly.
+   */
+  routing: z
+    .object({
+      strategy: z.literal("subscription-first").optional(),
+      order: z.array(z.string().min(1)).min(1).optional(),
+      by_role: z
+        .record(
+          z.string().min(1),
+          z.union([
+            z.string().min(1),
+            z.object({
+              runtime: z.string().min(1),
+              model: z.string().min(1).optional(),
+            }),
+          ]),
+        )
+        .optional(),
+      /** Explicit per-runtime consent for automatic routing below `supported`. */
+      allow_below_supported: z.array(z.string().min(1)).optional(),
+    })
+    .optional(),
   /** role -> extra write/deny globs layered over contracts/<role>.yaml, never replacing them. */
   permission_overrides: z
     .record(

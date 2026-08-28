@@ -56,6 +56,11 @@ export interface RunMetrics {
   cache_read_tokens?: number;
   context_chars: number;
   runtime?: string;
+  requested_runtime?: string;
+  requested_model?: string;
+  routing_basis?: string;
+  fallback_reason?: string;
+  fallback_count?: number;
   session_kind?: "orchestrated" | "interactive";
   static_chars?: number;
   handoff_chars?: number;

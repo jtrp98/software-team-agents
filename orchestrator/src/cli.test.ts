@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { CliUsageError, USAGE, parseArgs, productionQaInputs, runCli, watchListing } from "./cli.js";
+import { CliUsageError, USAGE, createProductionRuntimeRegistry, parseArgs, productionQaInputs, runCli, watchListing } from "./cli.js";
 import { defaultProjectRoot } from "./agents/agentContract.js";
 import { classifyTask } from "./classification/taskClassifier.js";
 import { SqliteTaskStore } from "./store/sqliteStore.js";
@@ -105,6 +105,15 @@ describe("parseArgs", () => {
 
   it("throws CliUsageError on an unrecognized flag", () => {
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--nope"], "/repo")).toThrow(CliUsageError);
+  });
+});
+
+describe("T-V3R-032 production runtime composition", () => {
+  it("constructs the complete runtime registry used by the real CLI executor call site", () => {
+    expect(createProductionRuntimeRegistry(defaultProjectRoot()).ids()).toEqual(["claude-code", "codex", "opencode"]);
+    const source = fs.readFileSync(path.join(defaultProjectRoot(), "orchestrator", "src", "cli.ts"), "utf8");
+    expect(source).toContain("registry: runtimeRegistry");
+    expect(source).toContain("runtime: runtimeRegistry.get(args.runtime ?? DEFAULT_RUNTIME_ID)");
   });
 });
 

@@ -1,5 +1,5 @@
 import { RuntimeCapability, missingRequiredCapabilities } from "./runtimeCapabilities.js";
-import type { RuntimeAdapter, RuntimeWorkspace } from "./runtimeAdapter.js";
+import type { RuntimeAdapter, RuntimeProbe, RuntimeWorkspace } from "./runtimeAdapter.js";
 
 /**
  * Checks what a runtime *claims* against what its actual installation shows
@@ -164,10 +164,12 @@ const GUARD_CAPABILITIES: readonly RuntimeCapability[] = [
  */
 export async function detectRuntimeCapabilities(
   adapter: RuntimeAdapter,
-  opts: { deepGuardCheckers?: Record<string, DeepGuardChecker> } = {},
+  opts: { deepGuardCheckers?: Record<string, DeepGuardChecker>; probe?: RuntimeProbe } = {},
 ): Promise<RuntimeCapabilityReport> {
   const claimed = adapter.capabilities;
-  const probe = await adapter.probe();
+  // A process-owned RuntimeRegistry may already have the installation probe.
+  // Reuse it so doctor/capability diagnostics do not spawn the same CLI twice.
+  const probe = opts.probe ?? await adapter.probe();
 
   if (!probe.available) {
     const checks: CapabilityCheck[] = [...claimed].map((capability) => ({
