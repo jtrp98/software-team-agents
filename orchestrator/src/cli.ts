@@ -11,6 +11,7 @@ import { createRuntimeExecutor } from "./runtime/runtimeExecutor.js";
 import { withQaOptimization, riskSignalsFromClassification } from "./qa/optimized.js";
 import { gitChangedFiles, gitDiffSummary } from "./qa/changeSource.js";
 import { combineProjectRunners, createProjectRunner } from "./qa/projectRunner.js";
+import { createPostDevVerificationHook, withPostDevVerificationDisabled } from "./qa/verificationHook.js";
 import { LocalWorkspace } from "./runtime/localWorkspace.js";
 import { DEFAULT_BUDGET, type Budget } from "./cost/costControl.js";
 import { loadStaConfig, StaConfigMissingError } from "./packaging/staConfig.js";
@@ -2703,10 +2704,26 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     }
     const qaInputs = await productionQaInputs({ docsRoot: qaDocsRoot, moduleName: args.module ?? "", taskId, roots: qaRoots });
 
-    const executor = args.noQaOptimization
-      ? runtimeExecutor
-      : withQaOptimization({
+    const verificationHook = args.noDeterministicGate
+      ? null
+      : createPostDevVerificationHook({
           inner: runtimeExecutor,
+          deterministicRunner: () => combineProjectRunners(qaRoots.map((root) => ({
+            root,
+            runner: createProjectRunner({
+              root,
+              workspace: new LocalWorkspace({ root }),
+              staticGatePath: path.join(args.projectRoot, ".claude", "scripts", "static-analysis-gate.js"),
+            }),
+          }))),
+          requiredVerification: () => orchestrator.runtimeTask?.required_verification,
+        });
+    const postDevExecutor = verificationHook?.executor ?? withPostDevVerificationDisabled(runtimeExecutor);
+
+    const executor = args.noQaOptimization
+      ? postDevExecutor
+      : withQaOptimization({
+          inner: postDevExecutor,
           changedFiles: async () => {
             // Read-only git inspection of every writable Target root; legacy
             // projects have exactly one — the project root itself. A root whose
@@ -2734,14 +2751,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
             ? { deterministicGate: "disabled" as const }
             : {
                 deterministicGate: "enabled" as const,
-                deterministicRunner: combineProjectRunners(qaRoots.map((root) => ({
-                  root,
-                  runner: createProjectRunner({
-                    root,
-                    workspace: new LocalWorkspace({ root }),
-                    staticGatePath: path.join(args.projectRoot, ".claude", "scripts", "static-analysis-gate.js"),
-                  }),
-                }))),
+                deterministicVerification: verificationHook!.verificationFor,
               }),
           packageInputs: qaInputs.packageInputs,
           scopeInputs: qaInputs.scopeInputs,

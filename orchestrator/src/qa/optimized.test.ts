@@ -4,6 +4,7 @@ import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from ".
 import { withQaOptimization, riskSignalsFromClassification } from "./optimized.js";
 import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
+import { runDeterministicVerification } from "./deterministic.js";
 
 function qaReq(overrides: Partial<AgentExecutorRequest> = {}): AgentExecutorRequest {
   return {
@@ -95,11 +96,13 @@ describe("withQaOptimization", () => {
       innerCalls += 1;
       return passThroughResult();
     };
+    const deterministic = await runDeterministicVerification((id) =>
+      id === "typecheck" ? { id, status: "FAIL", durationMs: 5, outputSummary: "TS2345 in a.ts" } : null,
+    );
     const exec = withQaOptimization({
       inner,
       changedFiles: () => ["src/a.ts"],
-      deterministicRunner: (id) =>
-        id === "typecheck" ? { id, status: "FAIL", durationMs: 5, outputSummary: "TS2345 in a.ts" } : null,
+      deterministicVerification: () => deterministic,
     });
     const result = await exec(qaReq());
     expect(innerCalls).toBe(0);

@@ -12,9 +12,9 @@ import { defaultProjectRoot } from "../agents/agentContract.js";
  *
  * Lives at the repo root, unclaimed by any `layout.yaml` concept — the same
  * tier as `project.yaml` and `layout.yaml` itself. It answers a project-wide
- * policy question but isn't machine-checked against running code the way
- * `workflows/*.yml` is against the classifier, so it doesn't need a directory
- * of its own the way `contracts/`/`stacks/` do.
+ * policy question. `runtimeVerificationFor()` is the execution entry point:
+ * it turns the authored task-type floor into the RuntimeTask contract while
+ * preserving the historical full deterministic order for unknown types.
  */
 
 export type TestLevel = "unit" | "integration" | "api" | "e2e";
@@ -27,7 +27,34 @@ export interface TaskTypePolicy {
 
 export interface TestPyramid {
   version: number;
+  /** V3 ships warning-only. A project must explicitly opt in to enforcement. */
+  enforcement?: "warn" | "enforce";
   task_types: Record<string, TaskTypePolicy>;
+}
+
+export type RuntimeVerificationLevel = TestLevel | "lint" | "typecheck" | "build";
+
+/** Non-test mechanical checks remain the always-on deterministic baseline. */
+export const ALWAYS_ON_VERIFICATION_LEVELS: readonly RuntimeVerificationLevel[] = [
+  "lint",
+  "typecheck",
+  "build",
+];
+
+/** The level vocabulary represented by the historical deterministic runner. */
+export const FULL_RUNTIME_VERIFICATION_LEVELS: readonly RuntimeVerificationLevel[] = [
+  "lint",
+  "typecheck",
+  "unit",
+  "integration",
+  "build",
+];
+
+export interface RuntimeVerificationSelection {
+  levels: RuntimeVerificationLevel[];
+  enforcement: "warn" | "enforce";
+  source: "test-pyramid" | "full-order";
+  reason: string;
 }
 
 const SCHEMA_PATH = path.resolve(
@@ -86,6 +113,51 @@ export function loadTestPyramid(projectRoot: string = defaultProjectRoot()): Tes
 /** The required levels for one task type, or null when this file doesn't name it — an unclassified task type is a fact, not an error. */
 export function requiredLevelsFor(taskType: string, pyramid: TestPyramid): TestLevel[] | null {
   return pyramid.task_types[taskType]?.required_levels ?? null;
+}
+
+/**
+ * Execution-time selection for one RuntimeTask.
+ *
+ * `requiredLevelsFor()` is deliberately called here rather than re-reading the
+ * YAML shape at a second call site. Unknown task types retain the exact prior
+ * full order. Known types keep lint/typecheck/build as the mechanical baseline
+ * and add only their declared test levels; API/E2E remain visible requirements
+ * even though V3 deliberately defers runners for those levels.
+ */
+export function runtimeVerificationFor(
+  taskType: string,
+  pyramid: TestPyramid,
+): RuntimeVerificationSelection {
+  const required = requiredLevelsFor(taskType, pyramid);
+  const enforcement = pyramid.enforcement ?? "warn";
+  if (required === null) {
+    return {
+      levels: [...FULL_RUNTIME_VERIFICATION_LEVELS],
+      enforcement,
+      source: "full-order",
+      reason: `task type "${taskType}" is absent from test-pyramid.yaml; preserving the historical full deterministic order`,
+    };
+  }
+
+  const selected = new Set<RuntimeVerificationLevel>([
+    ...ALWAYS_ON_VERIFICATION_LEVELS,
+    ...required,
+  ]);
+  const order: readonly RuntimeVerificationLevel[] = [
+    "lint",
+    "typecheck",
+    "unit",
+    "integration",
+    "api",
+    "e2e",
+    "build",
+  ];
+  return {
+    levels: order.filter((level) => selected.has(level)),
+    enforcement,
+    source: "test-pyramid",
+    reason: `selected from test-pyramid.yaml task type "${taskType}" with the always-on mechanical baseline`,
+  };
 }
 
 /** Every level named by at least one task type — the vocabulary `test-plan.md`'s `**Levels:**` lines actually draw from. */

@@ -9,9 +9,8 @@ import {
   type QaRiskSignals,
 } from "./mode.js";
 import {
-  runDeterministicVerification,
   renderDeterministicVerification,
-  type DeterministicRunner,
+  type DeterministicVerification,
 } from "./deterministic.js";
 import {
   buildEvidencePackage,
@@ -32,9 +31,7 @@ import {
  *   1. a change-aware scope built from this round's changed files (QA01);
  *   2. a deterministic TARGETED/FULL decision with recorded reasons (QA02),
  *      escalated when a fix reached outside the previous findings (QA06);
- *   3. deterministic verification run BEFORE any model is invoked, whose
- *      failure returns the round to implementation without spending a token
- *      on qa-engineer (QA03);
+ *   3. the post-Dev deterministic result supplied as evidence (QA03);
  *   4. a bounded evidence package injected as the `qa-evidence` context item
  *      the QA prompt reads first (QA04);
  *   5. the mode decision attached to the gate evidence, where `gatePolicy`
@@ -62,8 +59,8 @@ export interface QaOptimizationOptions {
    * production provider.
    */
   changedFiles: (req: AgentExecutorRequest) => Promise<readonly string[]> | readonly string[];
-  /** Configured project checks; absent = nothing configured (recorded as skipped). */
-  deterministicRunner?: DeterministicRunner;
+  /** Result captured by the stage-agnostic post-Dev verification hook. */
+  deterministicVerification?: (req: AgentExecutorRequest) => DeterministicVerification | undefined;
   /** Extra risk signals beyond the classification-derived defaults. */
   riskSignals?: (req: AgentExecutorRequest) => QaRiskSignals | undefined;
   /** Previous failed round's findings/evidence; absent on round 0. */
@@ -114,9 +111,7 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
 
     const decision: QaModeDecision = selectQaMode(req.taskId, scope, signals, { now });
 
-    const deterministic = opts.deterministicRunner
-      ? await runDeterministicVerification(opts.deterministicRunner)
-      : undefined;
+    const deterministic = opts.deterministicVerification?.(req);
     if (deterministic && !deterministic.passed) {
       // No LLM call happens here — the tool output IS the explanation. No
       // structured failure on purpose: recoveryPolicy's no-failure route sends
@@ -150,7 +145,7 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
 
     return {
       ...result,
-      outcome: { ...result.outcome, deterministic_gate: opts.deterministicGate ?? (opts.deterministicRunner ? "enabled" : "disabled") },
+      outcome: { ...result.outcome, deterministic_gate: opts.deterministicGate ?? (opts.deterministicVerification ? "enabled" : "disabled") },
       gateEvidence: { ...(result.gateEvidence ?? {}), qaModeDecision: decision },
     };
   };

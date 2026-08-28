@@ -13,6 +13,11 @@ import { pmMode, type ClassificationResult } from "../classification/taskClassif
 import { parsePlanTasks, readinessOf } from "../docs/planGraph.js";
 import { DEFAULT_ESCALATION_POLICY, type Severity } from "../escalation/escalationPolicy.js";
 import { FORBIDDEN_COMMANDS } from "../runtime/runtimeGuards.js";
+import {
+  FULL_RUNTIME_VERIFICATION_LEVELS,
+  loadTestPyramid,
+  runtimeVerificationFor,
+} from "../testing/testPyramid.js";
 import { AgentStage, TaskLevel } from "../types.js";
 
 const AvailabilitySchema = z.object({
@@ -55,9 +60,11 @@ export const RuntimeTaskSchema = z.object({
   do_not_touch: z.array(z.string().min(1)).min(1),
   acceptance_criteria: AvailabilitySchema.extend({ items: z.array(z.string().min(1)) }),
   required_verification: z.object({
-    status: z.literal("deferred"),
+    // `deferred` remains readable for state created before T-V3R-050.
+    status: z.enum(["selected", "full-order", "deferred"]),
     levels: z.array(z.string()),
     reason: z.string().min(1),
+    enforcement: z.enum(["warn", "enforce"]).optional(),
   }),
   evidence_required: z.array(z.string().min(1)).min(1),
   stop_conditions: z.array(z.string().min(1)).min(1),
@@ -237,6 +244,28 @@ function acceptanceCriteria(input: RuntimeTaskBuildInput): RuntimeTask["acceptan
       };
 }
 
+function requiredVerification(input: RuntimeTaskBuildInput): RuntimeTask["required_verification"] {
+  try {
+    const selection = runtimeVerificationFor(input.workflow, loadTestPyramid(input.projectRoot));
+    return {
+      status: selection.source === "test-pyramid" ? "selected" : "full-order",
+      levels: selection.levels,
+      reason: selection.reason,
+      enforcement: selection.enforcement,
+    };
+  } catch (error) {
+    // Embedded/legacy callers can point projectRoot at a Target which predates
+    // the Framework policy file. Preserving the historical order is safer than
+    // silently selecting nothing, and records exactly why selection fell back.
+    return {
+      status: "full-order",
+      levels: [...FULL_RUNTIME_VERIFICATION_LEVELS],
+      reason: `test-pyramid policy unavailable; preserving the historical full deterministic order: ${error instanceof Error ? error.message : String(error)}`,
+      enforcement: "warn",
+    };
+  }
+}
+
 function severityFor(level: TaskLevel): Severity {
   switch (level) {
     case TaskLevel.TRIVIAL:
@@ -270,6 +299,7 @@ export function buildRuntimeTask(input: RuntimeTaskBuildInput): RuntimeTask | nu
   const mode = pmMode(input.classification);
   if (mode === "none") return null;
   const text = taskText(input);
+  const verification = requiredVerification(input);
   return RuntimeTaskSchema.parse({
     task_id: input.taskId,
     workflow: input.workflow,
@@ -281,12 +311,8 @@ export function buildRuntimeTask(input: RuntimeTaskBuildInput): RuntimeTask | nu
     scope: scopeFor(input),
     do_not_touch: doNotTouch(input),
     acceptance_criteria: acceptanceCriteria(input),
-    required_verification: {
-      status: "deferred",
-      levels: [],
-      reason: "T-V3R-050 will select test-pyramid levels; Phase 1 must not invent them",
-    },
-    evidence_required: ["record the result of every selected required_verification level"],
+    required_verification: verification,
+    evidence_required: verification.levels.map((level) => `record the deterministic result for required verification level: ${level}`),
     stop_conditions: stopConditions(input),
   });
 }

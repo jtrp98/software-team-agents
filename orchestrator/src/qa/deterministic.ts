@@ -33,11 +33,25 @@ export interface DeterministicCheckResult {
 }
 
 export interface DeterministicVerification {
+  /** Checks selected for this task, already normalized into fixed execution order. */
+  required: DeterministicCheckId[];
   ran: DeterministicCheckResult[];
   failures: DeterministicCheckResult[];
   /** Checks not configured for this project — recorded so absence stays visible. */
   skipped: DeterministicCheckId[];
+  /** Required policy levels which produced no executable evidence. */
+  missingRequired: string[];
+  /** `skipped` is deliberately distinct from a successful verification. */
+  status: "passed" | "failed" | "skipped";
+  enforcement: "warn" | "enforce";
   passed: boolean;
+}
+
+export interface DeterministicVerificationOptions {
+  /** RuntimeTask.required_verification levels. Omitted preserves the full historical order. */
+  levels?: readonly string[];
+  /** V3 defaults to warning-only; enforcement requires an explicit policy value. */
+  enforcement?: "warn" | "enforce";
 }
 
 /**
@@ -48,12 +62,38 @@ export type DeterministicRunner = (
   id: DeterministicCheckId,
 ) => Promise<DeterministicCheckResult | null> | DeterministicCheckResult | null;
 
-export async function runDeterministicVerification(runner: DeterministicRunner): Promise<DeterministicVerification> {
+function checkForLevel(level: string): DeterministicCheckId | null {
+  switch (level) {
+    case "lint": return "lint";
+    case "typecheck": return "typecheck";
+    case "unit":
+    case "unit-tests": return "unit-tests";
+    case "integration":
+    case "integration-tests": return "integration-tests";
+    case "build": return "build";
+    default: return null;
+  }
+}
+
+export function deterministicChecksForLevels(levels: readonly string[]): DeterministicCheckId[] {
+  const selected = new Set(levels.map(checkForLevel).filter((id): id is DeterministicCheckId => id !== null));
+  return DETERMINISTIC_ORDER.filter((id) => selected.has(id));
+}
+
+export async function runDeterministicVerification(
+  runner: DeterministicRunner,
+  options: DeterministicVerificationOptions = {},
+): Promise<DeterministicVerification> {
   const ran: DeterministicCheckResult[] = [];
   const failures: DeterministicCheckResult[] = [];
   const skipped: DeterministicCheckId[] = [];
+  const enforcement = options.enforcement ?? "warn";
+  const required = options.levels === undefined
+    ? [...DETERMINISTIC_ORDER]
+    : deterministicChecksForLevels(options.levels);
+  const unsupportedRequired = (options.levels ?? []).filter((level) => checkForLevel(level) === null);
 
-  for (const id of DETERMINISTIC_ORDER) {
+  for (const id of required) {
     let result: DeterministicCheckResult | null;
     try {
       result = await runner(id);
@@ -75,27 +115,40 @@ export async function runDeterministicVerification(runner: DeterministicRunner):
       // Later checks would fail on the same root cause — spend nothing more on
       // them, but record them as not-run rather than letting their absence read
       // as "passed implicitly".
-      const failedAt = DETERMINISTIC_ORDER.indexOf(id);
-      skipped.push(...DETERMINISTIC_ORDER.slice(failedAt + 1));
+      const failedAt = required.indexOf(id);
+      skipped.push(...required.slice(failedAt + 1));
       break;
     }
   }
 
-  return { ran, failures, skipped, passed: failures.length === 0 };
+  const missingRequired = [...unsupportedRequired, ...skipped];
+  const status = failures.length > 0 ? "failed" : ran.length === 0 ? "skipped" : "passed";
+  const passed = failures.length === 0 && !(enforcement === "enforce" && missingRequired.length > 0);
+  return { required, ran, failures, skipped, missingRequired, status, enforcement, passed };
 }
 
 /** One-line summary for prompts / logs / the evidence package. */
 export function renderDeterministicVerification(v: DeterministicVerification): string[] {
-  if (v.ran.length === 0 && v.skipped.length === DETERMINISTIC_ORDER.length) {
-    return ["deterministic verification: no checks configured for this project"];
+  if (v.status === "skipped") {
+    const lines = ["deterministic verification: no checks configured for this project — SKIPPED (not PASS)"];
+    if (v.enforcement === "enforce" && v.missingRequired.length > 0) {
+      lines.push(`BLOCKED by test-pyramid enforcement; missing required evidence: ${v.missingRequired.join(", ")}`);
+    }
+    return lines;
   }
   const lines = v.ran.map(
     (r) => `- ${r.id}: ${r.status} (${r.durationMs}ms)${r.outputSummary ? ` — ${firstLine(r.outputSummary)}` : ""}`,
   );
   for (const id of v.skipped) lines.push(`- ${id}: SKIPPED (not configured)`);
+  for (const level of v.missingRequired.filter((level) => checkForLevel(level) === null)) {
+    lines.push(`- ${level}: SKIPPED (no V3 runtime runner)`);
+  }
   if (!v.passed) {
     const f = v.failures[0];
-    lines.push(`BLOCKED before LLM QA by deterministic check \`${f.id}\`:`, tail(f.outputSummary));
+    if (f) lines.push(`BLOCKED before LLM QA by deterministic check \`${f.id}\`:`, tail(f.outputSummary));
+    else lines.push(`BLOCKED by test-pyramid enforcement; missing required evidence: ${v.missingRequired.join(", ")}`);
+  } else if (v.missingRequired.length > 0) {
+    lines.push(`WARNING (warn-only): missing required evidence: ${v.missingRequired.join(", ")}`);
   }
   return lines;
 }

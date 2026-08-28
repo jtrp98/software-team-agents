@@ -12,6 +12,11 @@
       "type": "integer",
       "minimum": 1
     },
+    "enforcement": {
+      "description": "Runtime posture for a configured required level that cannot run. Omitted or warn preserves V3 compatibility; enforce is an explicit opt-in that makes the missing check fail deterministic verification.",
+      "type": "string",
+      "enum": ["warn", "enforce"]
+    },
     "task_types": {
       "description": "Task type id -> its declaration. Ids are stable identifiers referenced from test-plan.md, so they are lower-case and unpunctuated.",
       "type": "object",

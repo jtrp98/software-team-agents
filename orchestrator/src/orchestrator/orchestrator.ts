@@ -62,6 +62,8 @@ export interface AgentExecutorResult {
   packetPath?: string;
   /** Evidence a human, not this agent, actually supplied (e.g. relayed approval) — rare; usually set via provideHumanApproval instead. */
   gateEvidence?: Partial<GateContext>;
+  /** Internal marker: post-Dev deterministic failure keeps the cursor on this Dev stage. */
+  postDevVerificationFailed?: boolean;
   /**
    * A failure as structured data: what broke, who owns it, whether a person
    * must look. The agent supplies the facts; the orchestrator decides where
@@ -666,7 +668,7 @@ export class Orchestrator {
       result.failure.category === "infrastructure";
     if (isDevopsPrepareCompletion) {
       if (result.outcome.result !== "FAIL") this.deployPrepared = true;
-    } else if (!requiresHumanStop) {
+    } else if (!requiresHumanStop && result.postDevVerificationFailed !== true) {
       this.pipelineCursor += 1;
     }
     if (result.outcome.result === "FAIL" && result.failure) {

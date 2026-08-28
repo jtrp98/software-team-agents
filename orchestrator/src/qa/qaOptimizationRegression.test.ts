@@ -9,6 +9,7 @@ import { selectQaMode, type QaRiskSignals } from "./mode.js";
 import { planRecheck } from "./evidence.js";
 import { buildQaScope } from "./scope.js";
 import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
+import { runDeterministicVerification } from "./deterministic.js";
 
 /**
  * QA08 โ€” the QA optimization regression suite.
@@ -71,14 +72,16 @@ describe("QA08 routing table", () => {
     resetChangeSet(["src/small.ts"]);
     setSignals({});
     let qaRan = false;
+    const deterministic = await runDeterministicVerification((id) =>
+      id === "unit-tests" ? { id, status: "FAIL", durationMs: 4, outputSummary: "3 tests failed" } : null,
+    );
     const exec = withQaOptimization({
       inner: () => {
         qaRan = true;
         return Promise.resolve({ outcome: { tokens: 1, cost: 0, result: "PASS" } });
       },
       changedFiles: changed,
-      deterministicRunner: (id) =>
-        id === "unit-tests" ? { id, status: "FAIL", durationMs: 4, outputSummary: "3 tests failed" } : null,
+      deterministicVerification: () => deterministic,
     });
     const result = await exec({
       stage: AgentStage.QA_ENGINEER,

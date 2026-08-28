@@ -9,6 +9,7 @@ import { Orchestrator } from "../orchestrator/orchestrator.js";
 import { LocalWorkspace } from "../runtime/localWorkspace.js";
 import { withQaOptimization } from "./optimized.js";
 import { createProjectRunner } from "./projectRunner.js";
+import { createPostDevVerificationHook } from "./verificationHook.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -29,36 +30,60 @@ describe("production deterministic QA regression", () => {
 
     const orchestrator = new Orchestrator("T-REAL-TSC", classifyTask({ isClearBugFix: true, touchesBackend: true }));
     let qaModelCalls = 0;
-    const execute = withQaOptimization({
+    const verification = createPostDevVerificationHook({
       inner: async (req) => {
         if (req.stage === AgentStage.QA_ENGINEER) qaModelCalls++;
         return { outcome: { tokens: 99, cost: 1, result: "PASS" } };
       },
+      deterministicRunner: () => createProjectRunner({ root, workspace: new LocalWorkspace({ root }) }),
+      requiredVerification: () => ({
+        status: "full-order",
+        levels: ["lint", "typecheck", "unit", "integration", "build"],
+        reason: "fixture",
+        enforcement: "warn",
+      }),
+    });
+    const execute = withQaOptimization({
+      inner: verification.executor,
       changedFiles: () => ["broken.ts"],
-      deterministicRunner: createProjectRunner({ root, workspace: new LocalWorkspace({ root }) }),
+      deterministicVerification: verification.verificationFor,
     });
 
-    await orchestrator.step(execute); // implementation pass
-    await orchestrator.step(execute); // deterministic typecheck fail
+    await orchestrator.step(execute); // implementation model pass, then deterministic typecheck fail
     expect(qaModelCalls).toBe(0);
     expect(orchestrator.machine.current).toBe("IMPLEMENTATION");
-    const qaRun = orchestrator.runLog.runsForTask("T-REAL-TSC").find((run) => run.agent === AgentStage.QA_ENGINEER)!;
-    expect(qaRun.result).toBe("FAIL");
-    expect(qaRun.failure_reason).toContain("TS2322");
-    expect(qaRun.input_tokens).toBeNull();
+    const devRun = orchestrator.runLog.runsForTask("T-REAL-TSC").find((run) => run.agent === AgentStage.BACKEND_ENGINEER)!;
+    expect(devRun.result).toBe("FAIL");
+    expect(devRun.failure_reason).toContain("TS2322");
+    expect(devRun.deterministic_gate).toBe("enabled");
   });
 
   it("an all-skipped Target still invokes QA instead of manufacturing a green result", async () => {
-    const execute = withQaOptimization({
+    const verification = createPostDevVerificationHook({
       inner: async () => ({ outcome: { tokens: 7, cost: 0, result: "PASS" } }),
-      changedFiles: () => ["src/unknown.ts"],
-      deterministicRunner: createProjectRunner({
+      deterministicRunner: () => createProjectRunner({
         root: "/target",
         workspace: {
           readFile: async () => JSON.stringify({ scripts: {} }), writeFile: async () => undefined, exists: async () => false,
           runCommand: async () => ({ exitCode: 0, stdout: "", stderr: "", timedOut: false }),
         },
       }),
+      requiredVerification: () => ({
+        status: "full-order",
+        levels: ["lint", "typecheck", "unit", "integration", "build"],
+        reason: "fixture",
+        enforcement: "warn",
+      }),
+    });
+    const devRequest = { stage: AgentStage.BACKEND_ENGINEER, taskId: "T-SKIP", context: [] };
+    const devResult = await verification.executor(devRequest);
+    expect(devResult.outcome.result).toBe("PASS");
+    expect(verification.verificationFor(devRequest)?.status).toBe("skipped");
+
+    const execute = withQaOptimization({
+      inner: verification.executor,
+      changedFiles: () => ["src/unknown.ts"],
+      deterministicVerification: verification.verificationFor,
     });
     const result = await execute({ stage: AgentStage.QA_ENGINEER, taskId: "T-SKIP", context: [] });
     expect(result.outcome.result).toBe("PASS");

@@ -189,6 +189,32 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
     expect(runtimeTask.stop_conditions.join(" ")).toMatch(/STOP rather than inventing/);
   });
 
+  it("populates required verification from the executable pyramid and preserves unknown full order", () => {
+    const known = buildRuntimeTask({
+      taskId: "T-PYRAMID-KNOWN",
+      workflow: "business-rule",
+      classification: classifyTask({ touchesBusinessRuleOnly: true, touchesBackend: true }),
+      projectRoot: defaultProjectRoot(),
+    })!;
+    expect(known.required_verification).toMatchObject({
+      status: "selected",
+      levels: ["lint", "typecheck", "unit", "build"],
+      enforcement: "warn",
+    });
+
+    const unknown = buildRuntimeTask({
+      taskId: "T-PYRAMID-UNKNOWN",
+      workflow: "bugfix",
+      classification: classifyTask({ isClearBugFix: true, touchesBackend: true }),
+      projectRoot: defaultProjectRoot(),
+    })!;
+    expect(unknown.required_verification).toMatchObject({
+      status: "full-order",
+      levels: ["lint", "typecheck", "unit", "integration", "build"],
+      enforcement: "warn",
+    });
+  });
+
   it("triage persists no RuntimeTask and keeps the existing human-stop sequence", () => {
     const store = new MemoryTaskStore();
     const registry = new TaskRegistry({ store });
