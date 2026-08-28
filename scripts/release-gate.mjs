@@ -12,6 +12,10 @@
  *   1. typecheck + full test suite + build (orchestrator)
  *      — includes the AI-boundary, context-scope and runtime-conformance suites,
  *        which live inside `npm test` by design rather than as parallel tracks.
+ *   1b. the three V3 property gates (T-V3R-110): the six guardrail invariants,
+ *      the Single/Auto/Manual execution-mode matrix against mock runners, and
+ *      paid-fallback unreachability — named so a failure says which property broke.
+ *      Each is runnable alone: node scripts/v3-gate.mjs <gate>.
  *   2. hooks/scripts self-test (.claude/tests/run.js)
  *   3. every repository-consistency checker (the 15 `--check-*` gates + bindings)
  *   4. templates snapshot is exactly what the current sources regenerate
@@ -62,6 +66,15 @@ function run(name, command, options = {}) {
 run("typecheck (orchestrator)", "npm run typecheck", { cwd: path.join(repoRoot, "orchestrator"), quiet: true });
 run("test suite (incl. AI boundary, context scope, runtime conformance)", "npm test", { cwd: path.join(repoRoot, "orchestrator"), quiet: true });
 run("build (orchestrator)", "npm run build", { cwd: path.join(repoRoot, "orchestrator"), quiet: true });
+
+// --- 1b · V3 property gates (T-V3R-110) --------------------------------------
+// Named, independently runnable steps so a V3 property that stopped being
+// asserted fails legibly here instead of disappearing into the suite total.
+// Each pins the assertions it requires by name; none needs a runner login or a
+// dogfood run — every runtime they touch is a mock or a process fixture.
+run("V3 guardrail invariant suite (six criteria)", "node scripts/v3-gate.mjs guardrails", { quiet: true });
+run("V3 execution-mode matrix (mock runners)", "node scripts/v3-gate.mjs modes", { quiet: true });
+run("V3 paid-fallback unreachability", "node scripts/v3-gate.mjs paid-fallback", { quiet: true });
 
 // --- 2 · hooks & scripts -----------------------------------------------------
 run("hooks/scripts self-test", "node .claude/tests/run.js");

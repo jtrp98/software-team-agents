@@ -1,6 +1,12 @@
 # Release Notes
 
-## Unreleased — V3
+## software-team-agents v1.0.0-rc.3
+
+> Product version `1.0.0-rc.3` (semver; follows `v1.0.0-rc.2`) · 2026-08-28
+> This release closes the framework's internal **V3 architecture cycle** (`planning/v3/`) —
+> "V3" there is a planning-generation label, not the product version. It stays an `rc` on purpose:
+> only `claude-code` is `supported`; `codex` is `preview` and `opencode`/`paid-api` are
+> `experimental`, and automatic routing to any of them still requires explicit consent.
 
 V3 is additive and preserves pre-V3 behavior when its optional configuration is absent: `sta run`
 uses Single mode on `claude-code`, deterministic verification remains enabled, test-pyramid
@@ -37,6 +43,33 @@ enforcement remains warning-only, QA `skip` is not exposed to production CLI/con
 
 Deferred V3.1 ideas such as dynamic optimization, quota/usage-aware routing, parallel agents,
 provider benchmarking, and adaptive QA are not implemented or documented as available.
+
+### Validation summary (V3 release gate, 2026-08-28)
+
+- `npm run release:check` → exit 0, `RELEASABLE — all 30 steps passed`; transcript archived at
+  `release/evidence/v3-release-gate-2026-08-28.log`
+- orchestrator suite: 2,493 tests / 169 files (1 skipped) · typecheck ✓ · build ✓
+- hook/script self-test: 900/900 cases · 16 `--check-*` validation flags exit 0
+- three new named V3 property gates (T-V3R-110), each independently runnable and each pinning its
+  required assertions by name so a deleted assertion fails the gate: `npm run test:guardrails`
+  (6/6 guardrail invariants), `npm run test:modes` (9/9 Single/Auto/Manual against mock runners),
+  `npm run test:paid-fallback` (6/6 paid-path unreachability)
+- four packed migration fixtures: 34 assertions — existing Knowledge unchanged, existing Target
+  zero conflicts with overrides preserved, fresh install `UP_TO_DATE`, upgrade v11 → v14 with
+  same-stage resume and 102 byte-identical rollback paths
+- packaged distribution E2E: 23/23 steps on Windows, including fail-closed launch with the runtime
+  binary absent
+- prompt characters did not regress: 761,407 → 763,108 (+0.2234%, gate ≤3%), and the pre-packet
+  baseline is 2,609 characters lower than the Phase 2 measurement
+- no real runner login and no dogfood run is required by any gate step
+
+### Install
+
+```bash
+npm pack   # software-team-agents-1.0.0-rc.3.tgz
+# then in a target project:
+npm install -D <path>/software-team-agents-1.0.0-rc.3.tgz
+```
 
 ---
 

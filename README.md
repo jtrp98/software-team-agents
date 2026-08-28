@@ -564,6 +564,7 @@ npm run build:templates  # snapshot templates/ + manifest.json
 node ../.claude/tests/run.js   # hook/script self-test — ต้องเขียวเสมอถ้าแตะ hooks/scripts
 ```
 
+- Release gate: `npm run release:check` (root) รันทุก step ตามลำดับ release. V3 property gates สาม step แยกรันเดี่ยวได้เพื่อ debug: `npm run test:guardrails` (guardrail invariants หกข้อ), `npm run test:modes` (Single/Auto/Manual matrix บน mock runner), `npm run test:paid-fallback` (paid API ไปไม่ถึงเมื่อ `allow_paid_fallback` เป็น false) — ไม่มี step ไหนต้อง login runner จริงหรือรัน dogfood
 - CI: [`.github/workflows/agent-framework-ci.yml`](.github/workflows/agent-framework-ci.yml) รัน self-test + typecheck + tests + release-gate `--check-*` flags + template build/init check บนทุก PR และทุก push ไป `master` หรือ `release/**` (default branch `release/dev` รวมอยู่ — release path ไม่มีทาง bypass validation)
 - โครงสร้าง directory ถูกประกาศใน [`layout.yaml`](layout.yaml) และตรวจด้วย `--check-layout` — เพิ่ม folder ใหม่ต้องประกาศก่อน
 - เอกสารกฎ: [`policies/`](policies/README.md) · machine-readable half ของ agent: [`contracts/`](contracts/) · operating/pipeline rules: [`CLAUDE.md`](CLAUDE.md) · Codex root pointer: [`AGENTS.md`](AGENTS.md) · knowledge model: [`knowledge/README.md`](knowledge/README.md) · V1 contract (guarantees/non-goals): [`decisions/ADR-004-v1-contract.md`](decisions/ADR-004-v1-contract.md)

@@ -128,6 +128,35 @@ describe("T-V3R-040 execution-mode matrix", () => {
     });
     expect(exact.candidates.map((candidate) => [candidate.runtime.id, candidate.model])).toEqual([["codex", "gpt-5"]]);
   });
+
+  it("Manual executes only the runner and model the user named", async () => {
+    const root = project(
+      "schema_version: 1\nexecution:\n  mode: manual\nrouting:\n  by_role:\n    backend-engineer:\n      runtime: codex\n      model: gpt-5\n",
+    );
+    const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
+    const codex = new MockRuntimeAdapter({ id: "codex", models: ["gpt-5"] });
+    const result = await createRuntimeExecutor({
+      runtime: claude,
+      registry: new RuntimeRegistry([claude, codex]),
+      routingMode: "manual",
+      allowHandoff: true,
+      allowPaidFallback: false,
+      projectRoot: root,
+      moduleName: () => "phase-4",
+      guards: () => NO_GUARDS,
+      sliceModuleDocs: false,
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-MATRIX", context: [] });
+
+    expect(result.outcome).toMatchObject({
+      result: "PASS",
+      requested_runtime: "codex",
+      runtime: "codex",
+      fallback_count: 0,
+    });
+    expect(claude.requests).toHaveLength(0);
+    expect(codex.requests).toHaveLength(1);
+    expect(codex.requests[0]?.model).toBe("gpt-5");
+  });
 });
 
 describe("T-V3R-041 fallback evidence matrix", () => {
