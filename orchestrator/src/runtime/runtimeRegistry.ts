@@ -1,4 +1,4 @@
-import type { RuntimeAdapter } from "./runtimeAdapter.js";
+import type { RuntimeAdapter, RuntimeProbe } from "./runtimeAdapter.js";
 
 /**
  * Which runtimes this process knows about (T108).
@@ -20,6 +20,13 @@ import type { RuntimeAdapter } from "./runtimeAdapter.js";
 
 export const DEFAULT_RUNTIME_ID = "claude-code";
 
+/**
+ * Production CLI invocations can share one Node process (for example tests or
+ * an embedding host). Keep their probe promises here so a binary is still
+ * probed at most once per process, not once per `runCli()` call.
+ */
+const PROCESS_PROBE_CACHE = new Map<string, Promise<RuntimeProbe>>();
+
 export class RuntimeNotRegisteredError extends Error {
   constructor(id: string, known: readonly string[]) {
     super(
@@ -40,9 +47,20 @@ export class DuplicateRuntimeError extends Error {
 
 export class RuntimeRegistry {
   private readonly adapters = new Map<string, RuntimeAdapter>();
+  /** Promise-valued so concurrent callers still cause only one subprocess. */
+  private readonly probeCache: Map<string, Promise<RuntimeProbe>>;
 
-  constructor(initial: readonly RuntimeAdapter[] = []) {
+  constructor(
+    initial: readonly RuntimeAdapter[] = [],
+    probeCache: Map<string, Promise<RuntimeProbe>> = new Map(),
+  ) {
+    this.probeCache = probeCache;
     for (const a of initial) this.register(a);
+  }
+
+  /** Production construction: all registries created in this process share probes by runtime id. */
+  static forProcess(initial: readonly RuntimeAdapter[] = []): RuntimeRegistry {
+    return new RuntimeRegistry(initial, PROCESS_PROBE_CACHE);
   }
 
   /** Throws on a duplicate id rather than replacing: a run log records which runtime ran a stage, so silently swapping what an id means would rewrite the meaning of records already written. */
@@ -73,6 +91,43 @@ export class RuntimeRegistry {
 
   list(): RuntimeAdapter[] {
     return [...this.adapters.values()];
+  }
+
+  /**
+   * Probe one runtime at most once for this process-owned registry. Adapter
+   * probes are contracted not to throw; a contract violation is normalised to
+   * an explicit unavailable result instead of escaping as an unhandled error.
+   */
+  probe(id: string): Promise<RuntimeProbe> {
+    const cached = this.probeCache.get(id);
+    if (cached) return cached;
+    const adapter = this.get(id);
+    const pending = adapter.probe().catch((error: unknown) => ({
+      available: false,
+      reason: error instanceof Error ? error.message : String(error),
+    }));
+    this.probeCache.set(id, pending);
+    return pending;
+  }
+
+  /** Probe every registered runtime, preserving registration order and reasons verbatim. */
+  async probeAll(): Promise<Readonly<Record<string, RuntimeProbe>>> {
+    const entries = await Promise.all(this.ids().map(async (id) => [id, await this.probe(id)] as const));
+    return Object.fromEntries(entries);
+  }
+
+  /** Every currently available runtime and its cached probe result. */
+  async available(): Promise<Array<{ runtime: RuntimeAdapter; probe: RuntimeProbe }>> {
+    const probes = await this.probeAll();
+    return this.list()
+      .filter((runtime) => probes[runtime.id]?.available)
+      .map((runtime) => ({ runtime, probe: probes[runtime.id]! }));
+  }
+
+  /** Explicit cache invalidation for diagnostics that intentionally re-check installation state. */
+  invalidateProbe(id?: string): void {
+    if (id === undefined) this.probeCache.clear();
+    else this.probeCache.delete(id);
   }
 
   /**

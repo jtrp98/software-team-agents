@@ -9,12 +9,14 @@ import { loadStaConfig } from "./staConfig.js";
 
 const NOW = "2026-08-20T09:00:00Z";
 const roots: string[] = [];
+const AGENTS_POINTER = "<!-- sta:bootstrap -->\n# bootstrap\n<!-- /sta:bootstrap -->\nSee CLAUDE.md.\n";
 
 function fixtureTemplatesDir(): string {
   const source = fs.mkdtempSync(path.join(os.tmpdir(), "sta-init-source-"));
   roots.push(source);
   const files: Record<string, string> = {
     "CLAUDE.md": "# rules\n",
+    "AGENTS.md": AGENTS_POINTER,
     ".claude/agents/business-analyst.md": "---\nname: business-analyst\n---\n",
     "layout.yaml": "version: 1\n",
     "orchestrator/package.json": JSON.stringify({ name: "@agentclaude/orchestrator", version: "0.1.0" }),
@@ -73,6 +75,7 @@ describe("runInit", () => {
     expect(result.seededDirs).toContain("knowledge");
     expect(result.seededDirs).toContain("decisions");
     expect(result.seededDirs).not.toContain("_docs");
+    expect(fs.existsSync(path.join(project, "project.yaml"))).toBe(false);
     expect(fs.readFileSync(path.join(project, "_docs", "module", "sales", "requirement.md"), "utf8")).toBe(
       "# existing work\n",
     );
@@ -91,6 +94,22 @@ describe("runInit", () => {
     );
     const manifest = readInstallManifest(project);
     expect(manifest.files.map((f) => f.path)).not.toContain("CLAUDE.md");
+  });
+
+  it("injects only the AGENTS.md managed block, preserves project bytes, and backs up before writing", () => {
+    const templatesDir = fixtureTemplatesDir();
+    const project = tmpProjectRoot();
+    const owned = "# Project rules\r\nKeep these bytes.\r\n";
+    fs.writeFileSync(path.join(project, "AGENTS.md"), owned, "utf8");
+
+    const result = runInit(project, templatesDir, NOW);
+
+    expect(fs.readFileSync(path.join(project, "AGENTS.md"), "utf8")).toBe(
+      "<!-- sta:bootstrap -->\n# bootstrap\n<!-- /sta:bootstrap -->\n" + owned,
+    );
+    expect(fs.readFileSync(path.join(project, ".sta/backups/2026-08-20T09-00-00Z/AGENTS.md"), "utf8")).toBe(owned);
+    expect(result.installed).toContain("AGENTS.md");
+    expect(readInstallManifest(project).files.map((file) => file.path)).not.toContain("AGENTS.md");
   });
 
   it("refuses to re-init an already-initialized project without --force", () => {

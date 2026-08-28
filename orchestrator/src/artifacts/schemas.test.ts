@@ -2,8 +2,79 @@ import { describe, expect, it } from "vitest";
 import {
   ArtifactType,
   ArtifactValidationError,
+  HANDOFF_MAX_BYTES,
   validateArtifact,
 } from "./schemas.js";
+
+describe("HandoffArtifact", () => {
+  const valid = {
+    task_id: "T-V3TOK-090",
+    implements: ["REQ-001"],
+    module: "sales-crm",
+    phase: 1,
+    constraint_refs: ["requirement.md#Business-Rules"],
+    contract_refs: { produces: ["orders/create"], consumes: [] },
+    decision_refs: ["ADR-005"],
+    test_refs: ["test-plan.md#TP-009"],
+    artifact_refs: ["uxui/design.md#UX-001"],
+    open_findings: [{ id: "OPEN-001", owner: "business-analyst", summary: "requirement.md#Open-Questions" }],
+    budget: null,
+  };
+
+  it("accepts a bounded reference record", () => {
+    expect(validateArtifact(ArtifactType.HANDOFF, valid)).toEqual(valid);
+    expect(Buffer.byteLength(JSON.stringify(valid), "utf8")).toBeLessThanOrEqual(HANDOFF_MAX_BYTES);
+  });
+
+  it("rejects prose and unknown fields instead of silently accepting a malformed handoff", () => {
+    expect(() => validateArtifact(ArtifactType.HANDOFF, {
+      ...valid,
+      constraint_refs: ["copy all of the business rules into this field"],
+      summary: "not part of the contract",
+    })).toThrow(ArtifactValidationError);
+  });
+
+  it("enforces the 2048-byte serialized record cap even when each field is individually bounded", () => {
+    const oversized = {
+      ...valid,
+      constraint_refs: Array.from({ length: 32 }, (_, index) => `requirement.md#${index}-${"x".repeat(150)}`),
+    };
+    expect(Buffer.byteLength(JSON.stringify(oversized), "utf8")).toBeGreaterThan(HANDOFF_MAX_BYTES);
+    expect(() => validateArtifact(ArtifactType.HANDOFF, oversized)).toThrow(/maximum is 2048/);
+  });
+});
+
+describe("ExecutionPacket", () => {
+  const text = "Task T-V3R-020\n## Acceptance Criteria\n- packet validates";
+  const valid = {
+    text,
+    composition: {
+      static_chars: text.length, handoff_chars: 0, doc_chars: 0,
+      knowledge_chars: 0, code_intel_chars: 0, tool_output_chars: 0,
+    },
+    budgetComposition: {
+      base: text.length, task: 0, safety: 0, docs: 0, knowledge: 0,
+      code: 0, tool_output: 0, reserve: 0,
+    },
+    task_id: "T-V3R-020",
+    stage: "backend-engineer",
+    role: "backend-engineer",
+    acceptance_criteria: ["packet validates"],
+    required_verification: ["unit", "typecheck"],
+    stop_conditions: ["STOP on an unresolved rule"],
+    scope: { allow: ["orchestrator/src/**"], deny: [".git/**"] },
+    sources: ["runtime-task", "module-docs"],
+  };
+
+  it("validates the complete deterministic execution handoff", () => {
+    expect(validateArtifact(ArtifactType.EXECUTION_PACKET, valid)).toEqual(valid);
+  });
+
+  it("rejects unknown fields and malformed scope", () => {
+    expect(() => validateArtifact(ArtifactType.EXECUTION_PACKET, { ...valid, runtime: "claude-code" })).toThrow(ArtifactValidationError);
+    expect(() => validateArtifact(ArtifactType.EXECUTION_PACKET, { ...valid, scope: { allow: [""], deny: [] } })).toThrow(ArtifactValidationError);
+  });
+});
 
 describe("RequirementsArtifact", () => {
   const valid = {

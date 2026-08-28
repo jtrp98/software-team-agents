@@ -12,7 +12,7 @@ import type { SpawnSyncReturns } from "node:child_process";
  * the core hands it a stage and takes back an outcome, and nothing in
  * `orchestrator.ts` contains the string "claude". So swapping runtimes never
  * required a new seam — it required splitting the *one* implementation of that
- * seam (`agents/claudeCliExecutor.ts`) into the part that is about this
+ * legacy executor seam into the part that is about this
  * framework and the part that is about Claude Code, because those were welded
  * together in one 318-line file.
  *
@@ -155,8 +155,8 @@ export type RuntimeRunStatus =
    * The runtime itself could not be used — binary missing, not authenticated,
    * spawn refused.
    *
-   * Split from ERROR deliberately. `claudeCliExecutor` currently turns a failed
-   * spawn into a plain `FAIL`, which spends the task's retry budget and can
+   * Split from ERROR deliberately. The legacy executor turned a failed spawn
+   * into a plain `FAIL`, which spent the task's retry budget and could
    * trigger recovery for something the task did nothing to cause. Separating the
    * two lets the retry policy leave the budget alone, and lets T112 try the other
    * runtime instead of failing the task.
@@ -274,6 +274,8 @@ export type SpawnSync = (
     timeout?: number;
     maxBuffer?: number;
     env?: NodeJS.ProcessEnv;
+    /** Text sent to the child process's stdin instead of inflating argv. */
+    input?: string;
   },
 ) => SpawnSyncReturns<string>;
 

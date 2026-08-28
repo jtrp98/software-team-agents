@@ -71,6 +71,10 @@ describe("runDoctor (T166)", () => {
       probe: passingProbe,
     });
     const byName = Object.fromEntries(report.checks.map((c) => [c.name, c]));
+    expect(byName["V3 configuration"]).toMatchObject({
+      status: "PASS",
+      detail: expect.stringContaining("not configured — defaults apply"),
+    });
     expect(byName["Installation config (Knowledge root binding)"].status).toBe("PASS");
     expect(byName["Knowledge root standalone"].status).toBe("PASS");
     expect(byName["Target registry (targets.yaml)"].status).toBe("PASS");
@@ -79,6 +83,26 @@ describe("runDoctor (T166)", () => {
     expect(byName["Local Target mappings (.workflow/targets.local.yaml)"].fix).toMatch(/targets\.local\.yaml/);
     expect(byName["Runtime adapter (claude CLI)"].status).toBe("PASS");
     expect(exitCodeFor(report)).toBe(0);
+  });
+
+  it("reports pre-V3 omission as PASS and remains byte-for-byte read-only", async () => {
+    gitInit(knowledgeRoot);
+    fs.mkdirSync(path.join(projectRoot, ".sta"), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectRoot, ".sta", "manifest.json"),
+      JSON.stringify({ schema_version: 1, framework_version: "pre-v3", installed_at: NOW, updated_at: NOW, files: [] }),
+    );
+    fs.writeFileSync(path.join(projectRoot, ".sta", "config.yaml"), "schema_version: 1\n");
+    fs.writeFileSync(path.join(knowledgeRoot, "targets.yaml"), "schema_version: 1\ntargets: []\n");
+    fs.writeFileSync(configPath, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledgeRoot)}\n`);
+    const before = fs.readFileSync(path.join(projectRoot, ".sta", "config.yaml"));
+
+    const report = await runDoctor({ projectRoot, installationConfigPath: configPath, probe: passingProbe });
+    expect(report.checks.find((entry) => entry.name === "V3 configuration")).toMatchObject({
+      status: "PASS",
+      detail: expect.stringContaining("V3 config not configured — defaults apply"),
+    });
+    expect(fs.readFileSync(path.join(projectRoot, ".sta", "config.yaml"))).toEqual(before);
   });
 
   it("reports an invalid Knowledge schema as FAIL while naming the first problem", async () => {

@@ -4,6 +4,7 @@ import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from ".
 import { withQaOptimization, riskSignalsFromClassification } from "./optimized.js";
 import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
+import { runDeterministicVerification } from "./deterministic.js";
 
 function qaReq(overrides: Partial<AgentExecutorRequest> = {}): AgentExecutorRequest {
   return {
@@ -39,6 +40,96 @@ const passingQaInner: AgentExecutor = (req) => {
 };
 
 describe("withQaOptimization", () => {
+  it("logs effort independently from mode and includes both decisions in QA evidence", async () => {
+    let evidence = "";
+    const exec = withQaOptimization({
+      inner: async (req) => {
+        evidence = req.context.find((item) => item.source === "qa-evidence")!.content;
+        return { outcome: { tokens: 1, cost: 0, result: "PASS" } };
+      },
+      changedFiles: () => ["src/a.ts"],
+      taskLevel: () => "MEDIUM" as ClassificationResult["level"],
+    });
+
+    const result = await exec(qaReq());
+    expect(result.outcome.qa_effort).toBe("lightweight");
+    expect(result.gateEvidence?.qaModeDecision?.mode).toBe("TARGETED");
+    expect(evidence).toContain("Mode: TARGETED");
+    expect(evidence).toContain("Effort: lightweight");
+  });
+
+  it("opt-in low-risk skip consumes passing deterministic evidence without a model call", async () => {
+    let modelCalls = 0;
+    const exec = withQaOptimization({
+      inner: async () => {
+        modelCalls++;
+        return { outcome: { tokens: 99, cost: 1, result: "PASS" } };
+      },
+      changedFiles: () => ["src/a.ts"],
+      taskLevel: () => "SMALL" as ClassificationResult["level"],
+      allowQaSkip: true,
+      deterministicGate: "enabled",
+      deterministicVerification: () => ({
+        required: ["unit-tests"],
+        status: "passed",
+        ran: [{ id: "unit-tests", status: "PASS", durationMs: 1, outputSummary: "1 passed" }],
+        failures: [],
+        skipped: [],
+        missingRequired: [],
+        enforcement: "warn",
+        passed: true,
+      }),
+    });
+
+    const result = await exec(qaReq());
+    expect(modelCalls).toBe(0);
+    expect(result.outcome).toMatchObject({ result: "PASS", tokens: 0, qa_effort: "skip" });
+    expect(result.artifactType).toBe("qa-report");
+    expect(result.gateEvidence?.qaModeDecision?.mode).toBe("TARGETED");
+  });
+
+  it("refuses opt-in skip when passing deterministic evidence is absent", async () => {
+    const result = await withQaOptimization({
+      inner: async () => ({ outcome: { tokens: 99, cost: 1, result: "PASS" } }),
+      changedFiles: () => ["src/a.ts"],
+      taskLevel: () => "SMALL" as ClassificationResult["level"],
+      allowQaSkip: true,
+    })(qaReq());
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toMatch(/refusing to close without evidence/);
+  });
+
+  it("removes the mechanical rerun instruction when the deterministic gate is enabled", async () => {
+    let evidence = "";
+    await withQaOptimization({
+      inner: async (req) => {
+        evidence = req.context.find((item) => item.source === "qa-evidence")!.content;
+        return { outcome: { tokens: 1, cost: 0, result: "PASS" } };
+      },
+      changedFiles: () => ["src/a.ts"],
+      deterministicGate: "enabled",
+      taskLevel: () => "LARGE_CRITICAL" as ClassificationResult["level"],
+    })(qaReq());
+    expect(evidence).toContain("Deterministic gate: enabled");
+    expect(evidence).not.toContain("static-analysis-gate.js");
+  });
+
+  it("keeps the complete mechanical instruction when the deterministic gate is disabled", async () => {
+    let evidence = "";
+    await withQaOptimization({
+      inner: async (req) => {
+        evidence = req.context.find((item) => item.source === "qa-evidence")!.content;
+        return { outcome: { tokens: 1, cost: 0, result: "PASS" } };
+      },
+      changedFiles: () => ["src/a.ts"],
+      deterministicGate: "disabled",
+      taskLevel: () => "LARGE_CRITICAL" as ClassificationResult["level"],
+    })(qaReq());
+    expect(evidence).toContain("Deterministic gate: disabled");
+    expect(evidence).toContain("node .claude/scripts/static-analysis-gate.js");
+    expect(evidence).toContain("lint, format, typecheck, build, and test");
+  });
+
   it("passes non-QA stages through untouched", async () => {
     let innerCalls = 0;
     const inner: AgentExecutor = (req) => {
@@ -64,24 +155,63 @@ describe("withQaOptimization", () => {
     expect(pkg.content).toContain("TARGETED");
   });
 
+  it("uses concise production-style evidence references rather than blank placeholders or source diffs", async () => {
+    let seen = "";
+    const exec = withQaOptimization({
+      inner: (req) => {
+        seen = req.context.find((item) => item.source === "qa-evidence")!.content;
+        return passThroughResult();
+      },
+      changedFiles: () => ["src/a.ts"],
+      packageInputs: () => ({
+        taskIntent: "Implement invoice import",
+        acceptanceCriteria: ["design.md#DES-002", "contracts/backend-engineer.yaml#outputs"],
+        diffSummary: " src/a.ts | 2 +-\n 1 file changed, 1 insertion(+), 1 deletion(-)",
+        knownRisks: ["design.md#Risks-&-Dependencies"],
+      }),
+      scopeInputs: () => ({ affectedTaskIds: ["BE-004"], affectedPhases: [2] }),
+    });
+    await exec(qaReq());
+    expect(seen).toContain("design.md#DES-002");
+    expect(seen).toContain("affected tasks: BE-004");
+    expect(seen).not.toContain("(not supplied)");
+    expect(seen).not.toContain("(none supplied)");
+    expect(seen.split("\n").length).toBeLessThanOrEqual(120);
+    expect(Buffer.byteLength(seen)).toBeLessThan(2_000);
+  });
+
   it("blocks a red deterministic check BEFORE the LLM runs", async () => {
     let innerCalls = 0;
     const inner: AgentExecutor = () => {
       innerCalls += 1;
       return passThroughResult();
     };
+    const deterministic = await runDeterministicVerification((id) =>
+      id === "typecheck" ? { id, status: "FAIL", durationMs: 5, outputSummary: "TS2345 in a.ts" } : null,
+    );
     const exec = withQaOptimization({
       inner,
       changedFiles: () => ["src/a.ts"],
-      deterministicRunner: (id) =>
-        id === "typecheck" ? { id, status: "FAIL", durationMs: 5, outputSummary: "TS2345 in a.ts" } : null,
+      deterministicVerification: () => deterministic,
     });
     const result = await exec(qaReq());
     expect(innerCalls).toBe(0);
     expect(result.outcome.result).toBe("FAIL");
     expect(result.outcome.failure_reason).toContain("deterministic verification failed before LLM QA");
     expect(result.outcome.failure_reason).toContain("TS2345");
+    expect(result.outcome.deterministic_gate).toBe("enabled");
     expect(result.gateEvidence?.qaModeDecision).toBeUndefined();
+  });
+
+  it("records the explicit deterministic-gate escape hatch without manufacturing a check result", async () => {
+    const result = await withQaOptimization({
+      inner: passingQaInner,
+      changedFiles: () => ["src/a.ts"],
+      deterministicGate: "disabled",
+    })(qaReq());
+
+    expect(result.outcome.result).toBe("PASS");
+    expect(result.outcome.deterministic_gate).toBe("disabled");
   });
 
   it("routes an unresolvable change list to FULL and attaches the decision as gate evidence", async () => {

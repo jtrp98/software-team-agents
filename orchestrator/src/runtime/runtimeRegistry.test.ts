@@ -70,4 +70,58 @@ describe("RuntimeRegistry (T108)", () => {
   it("the default runtime id is the one this framework was built against", () => {
     expect(DEFAULT_RUNTIME_ID).toBe("claude-code");
   });
+
+  it("probes each runtime at most once across repeated and concurrent process calls", async () => {
+    const first = new MockRuntimeAdapter({ id: "claude-code" });
+    const second = new MockRuntimeAdapter({ id: "codex" });
+    let firstProbes = 0;
+    let secondProbes = 0;
+    first.probe = async () => { firstProbes++; return { available: true, version: "1" }; };
+    second.probe = async () => { secondProbes++; return { available: false, reason: "codex missing exactly" }; };
+    const registry = new RuntimeRegistry([first, second]);
+
+    const [allA, allB, one] = await Promise.all([
+      registry.probeAll(),
+      registry.probeAll(),
+      registry.probe("claude-code"),
+    ]);
+
+    expect(firstProbes).toBe(1);
+    expect(secondProbes).toBe(1);
+    expect(one).toEqual({ available: true, version: "1" });
+    expect(allA.codex?.reason).toBe("codex missing exactly");
+    expect(allB).toEqual(allA);
+    expect((await registry.available()).map(({ runtime }) => runtime.id)).toEqual(["claude-code"]);
+    expect(firstProbes).toBe(1);
+    expect(secondProbes).toBe(1);
+  });
+
+  it("supports explicit invalidation when a diagnostic intentionally re-checks installation state", async () => {
+    const adapter = new MockRuntimeAdapter({ id: "claude-code" });
+    let probes = 0;
+    adapter.probe = async () => ({ available: true, version: String(++probes) });
+    const registry = new RuntimeRegistry([adapter]);
+    expect((await registry.probe("claude-code")).version).toBe("1");
+    registry.invalidateProbe("claude-code");
+    expect((await registry.probe("claude-code")).version).toBe("2");
+  });
+
+  it("shares production probes across registry instances in the same process", async () => {
+    const first = new MockRuntimeAdapter({ id: "process-shared-test" });
+    const second = new MockRuntimeAdapter({ id: "process-shared-test" });
+    let firstProbes = 0;
+    let secondProbes = 0;
+    first.probe = async () => ({ available: true, version: String(++firstProbes) });
+    second.probe = async () => ({ available: true, version: String(++secondProbes) });
+    const firstRegistry = RuntimeRegistry.forProcess([first]);
+    const secondRegistry = RuntimeRegistry.forProcess([second]);
+
+    firstRegistry.invalidateProbe("process-shared-test");
+    expect(await firstRegistry.probe("process-shared-test")).toEqual({ available: true, version: "1" });
+    expect(await secondRegistry.probe("process-shared-test")).toEqual({ available: true, version: "1" });
+    expect(firstProbes).toBe(1);
+    expect(secondProbes).toBe(0);
+
+    secondRegistry.invalidateProbe("process-shared-test");
+  });
 });

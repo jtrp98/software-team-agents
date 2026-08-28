@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { resolveRoots } from "./roots.js";
-import { detectWorkspaceKind, assetsForRole, type RoleName, type WorkspaceKind } from "./roleWorkspace.js";
+import { detectWorkspaceKind, assetsForRole, type WorkspaceRole, type WorkspaceKind } from "./roleWorkspace.js";
 import {
   defaultTargetConfig,
   isTargetInitialized,
@@ -9,6 +9,7 @@ import {
   writeTargetConfig,
 } from "./targetMeta.js";
 import { runTargetSync, type SyncResult } from "./syncEngine.js";
+import { planTargetProfile } from "./targetProfile.js";
 
 /**
  * T-TARGET-03 + T-ROLE-16 — `software-team-agents init`, run from inside a Role
@@ -32,8 +33,10 @@ export interface TargetInitOptions {
   now: string;
   force?: boolean;
   /** Explicit role override (T-ROLE-16); detection is skipped when given. */
-  role?: RoleName;
-  /** Machine-wide installation.yaml override (tests); forwarded to the sync engine's dev-lane binding resolution. */
+  role?: WorkspaceRole;
+  /** Explicit stack selection for ambiguous or unsupported Target evidence. */
+  stack?: string;
+  /** Machine-wide installation.yaml override (tests); forwarded to the sync engine's DEV-workspace binding resolution. */
   installationConfigPath?: string;
 }
 
@@ -42,7 +45,7 @@ export interface TargetInitResult {
   frameworkRoot: string;
   knowledgeRoot?: string;
   frameworkVersion: string;
-  role: RoleName;
+  role: WorkspaceRole;
   /** How the role was decided. */
   roleVia: "flag" | "config" | "detected";
   detectedKind: WorkspaceKind;
@@ -64,9 +67,9 @@ export function runTargetInit(options: TargetInitOptions): TargetInitResult {
   const createdConfig = existingConfig === undefined;
 
   // Role resolution order: explicit flag > recorded config > marker detection.
-  let role: RoleName | undefined = options.role;
+  let role: WorkspaceRole | undefined = options.role;
   let roleVia: TargetInitResult["roleVia"] = role ? "flag" : "config";
-  if (!role) role = existingConfig?.role as RoleName | undefined;
+  if (!role) role = existingConfig?.role as WorkspaceRole | undefined;
   const detectedKind = detectWorkspaceKind(roots.targetRoot);
   if (!role) {
     if (detectedKind === "knowledge") {
@@ -84,9 +87,18 @@ export function runTargetInit(options: TargetInitOptions): TargetInitResult {
     }
   }
 
-  const config =
-    existingConfig ??
-    defaultTargetConfig(path.basename(roots.targetRoot), options.now, role);
+  let config = existingConfig ?? defaultTargetConfig(path.basename(roots.targetRoot), options.now, role);
+  // A new DEV config is not written until deterministic stack resolution has
+  // succeeded. This preserves init's existing "nothing on refusal" contract.
+  if (createdConfig && role === "dev") {
+    const profile = planTargetProfile({
+      targetRoot: roots.targetRoot,
+      templatesDir,
+      explicitProfile: options.stack,
+      now: options.now,
+    });
+    config = { ...config, stack: profile.stack };
+  }
   if (createdConfig) writeTargetConfig(roots.targetRoot, config);
 
   const sync = runTargetSync({
@@ -99,6 +111,7 @@ export function runTargetInit(options: TargetInitOptions): TargetInitResult {
     installationConfigPath: options.installationConfigPath,
     now: options.now,
     force: options.force,
+    explicitStack: options.stack,
   });
 
   return {

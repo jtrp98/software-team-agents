@@ -290,31 +290,16 @@ describe("knowledge item schema v2 — target association (T141/T148)", () => {
     expect(problems.join(" ")).toMatch(/non-target origin/);
   });
 
-  it("a v2 code task must name a payload.target_id that is one of its target_ids", () => {
-    const missing = checkKnowledgeItem(
-      item("task", { schema_version: 2, target_ids: ["backend"], sources: v2Sources }),
-    );
-    expect(missing).toContain("schema v2 code task requires payload.target_id");
-
-    const unknown = checkKnowledgeItem(
-      item("task", {
-        schema_version: 2,
-        target_ids: ["backend"],
-        sources: v2Sources,
-        payload: { ...(PAYLOADS.task as Record<string, unknown>), target_id: "frontend" },
-      }),
-    );
-    expect(unknown.join(" ")).toMatch(/must be one of target_ids/);
-
-    const valid = checkKnowledgeItem(
+  it("keeps the legacy task payload optional while target_ids owns routing", () => {
+    expect(checkKnowledgeItem(item("task", { schema_version: 2, target_ids: ["backend"], sources: v2Sources }))).toEqual([]);
+    expect(checkKnowledgeItem(
       item("task", {
         schema_version: 2,
         target_ids: ["backend"],
         sources: v2Sources,
         payload: { ...(PAYLOADS.task as Record<string, unknown>), target_id: "backend" },
       }),
-    );
-    expect(valid).toEqual([]);
+    )).toEqual([]);
   });
 
   it("a v2 document-only task (tag null) needs no payload.target_id", () => {

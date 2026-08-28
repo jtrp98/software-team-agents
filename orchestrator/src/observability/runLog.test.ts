@@ -29,7 +29,36 @@ describe("RunLog", () => {
       output_tokens: null,
       cache_read_tokens: null,
       context_chars: null,
+      runtime: null,
+      requested_runtime: null,
+      requested_model: null,
+      routing_basis: null,
+      fallback_reason: null,
+      fallback_count: null,
+      session_kind: null,
+      instruction_surface_bytes: null,
+      static_chars: null,
+      handoff_chars: null,
+      doc_chars: null,
+      doc_chars_before: null,
+      knowledge_chars: null,
+      code_intel_chars: null,
+      tool_output_chars: null,
+      context_budget_chars: null,
+      context_budget_source: null,
+      context_overflow_chars: null,
+      context_budget_warning: null,
+      context_base_chars: null,
+      context_task_chars: null,
+      context_safety_chars: null,
+      context_docs_chars: null,
+      context_knowledge_chars: null,
+      context_code_chars: null,
+      context_tool_output_chars: null,
+      context_reserve_chars: null,
       qa_mode: null,
+      qa_effort: null,
+      deterministic_gate: null,
     });
   });
 
@@ -56,6 +85,74 @@ describe("RunLog", () => {
     expect(record.output_tokens).toBe(1000);
     expect(record.cache_read_tokens).toBe(2500);
     expect(record.context_chars).toBe(18000);
+  });
+
+  it("T-V3R-060 records QA effort independently from QA mode", () => {
+    const record = new RunLog().record({
+      task_id: "TASK-QA",
+      agent: AgentStage.QA_ENGINEER,
+      start_time: 0,
+      end_time: 1,
+      outcome: { tokens: 1, cost: 0, result: "PASS", qa_mode: "FULL", qa_effort: "lightweight" },
+    });
+    expect(record.qa_mode).toBe("FULL");
+    expect(record.qa_effort).toBe("lightweight");
+  });
+
+  it("T-V3R-002 records requested route and fallback fields without changing omitted callers", () => {
+    const log = new RunLog();
+    const reported = log.record({
+      task_id: "TASK-ROUTED",
+      agent: AgentStage.BACKEND_ENGINEER,
+      start_time: 0,
+      end_time: 1,
+      outcome: {
+        tokens: 1,
+        cost: 0,
+        result: "PASS",
+        runtime: "codex",
+        model: "gpt-5",
+        requested_runtime: "claude-code",
+        requested_model: "sonnet",
+        routing_basis: "policy",
+        fallback_reason: "requested runtime unavailable",
+        fallback_count: 1,
+      },
+    });
+    expect(reported).toMatchObject({
+      requested_runtime: "claude-code",
+      requested_model: "sonnet",
+      routing_basis: "policy",
+      fallback_reason: "requested runtime unavailable",
+      fallback_count: 1,
+    });
+
+    const unreported = log.record({
+      task_id: "TASK-LEGACY",
+      agent: AgentStage.BACKEND_ENGINEER,
+      start_time: 1,
+      end_time: 2,
+      outcome: { tokens: 1, cost: 0, result: "PASS" },
+    });
+    expect(unreported).toMatchObject({
+      requested_runtime: null,
+      requested_model: null,
+      routing_basis: null,
+      fallback_reason: null,
+      fallback_count: null,
+    });
+  });
+
+  it("keeps an omitted composition unknown instead of converting it to zero", () => {
+    const record = new RunLog().record({
+      task_id: "TASK-unknown",
+      agent: AgentStage.BACKEND_ENGINEER,
+      start_time: 0,
+      end_time: 1,
+      outcome: { tokens: 1, cost: 0, result: "PASS" },
+    });
+    expect(record.static_chars).toBeNull();
+    expect(record.doc_chars).toBeNull();
   });
 
   it("defaults retry_count to 0 and failure_reason to null on a PASS", () => {
@@ -126,6 +223,33 @@ describe("RunLog", () => {
     expect(summary).toContain("TASK-123");
     expect(summary).toContain("Total: 132k tokens");
     expect(summary).toContain("FAIL");
+    expect(summary).toContain("runner=not reported → not reported");
+    expect(summary).toContain("model=not reported → not reported");
+  });
+
+  it("T-V3R-081 renders requested to actual routing and fallback reason in execution summaries", () => {
+    const log = new RunLog();
+    log.record({
+      task_id: "TASK-ROUTE",
+      agent: AgentStage.BACKEND_ENGINEER,
+      start_time: 0,
+      end_time: 1,
+      outcome: {
+        tokens: 1,
+        cost: 0,
+        result: "PASS",
+        requested_runtime: "claude-code",
+        runtime: "codex",
+        requested_model: "sonnet",
+        model: "gpt-5.6-codex",
+        routing_basis: "level-4-default",
+        fallback_count: 1,
+        fallback_reason: "claude-code unavailable",
+      },
+    });
+    expect(log.summary("TASK-ROUTE")).toContain(
+      "runner=claude-code → codex model=sonnet → gpt-5.6-codex basis=level-4-default fallback_count=1 fallback_reason=claude-code unavailable",
+    );
   });
 
   it("costSummary renders TASKS.md T27's own per-agent + total format", () => {

@@ -153,6 +153,296 @@ export function compareBaselines(before: QaMetricsExport, after: QaMetricsExport
   };
 }
 
+// T-V3TOK-003 deliberately lives beside QA metrics: both are read-only views
+// over the same RunRecord store, not competing telemetry systems.
+export interface TokenCompositionMetrics {
+  static_chars: number | null;
+  handoff_chars: number | null;
+  doc_chars: number | null;
+  doc_chars_before: number | null;
+  knowledge_chars: number | null;
+  code_intel_chars: number | null;
+  tool_output_chars: number | null;
+}
+
+/** Warning-mode context budget telemetry; no value here implies enforcement. */
+export interface ContextBudgetMetrics {
+  measuredRuns: number;
+  warningRuns: number;
+  contextChars: number | null;
+  budgetChars: number | null;
+  overflowChars: number | null;
+  composition: Record<"base" | "task" | "safety" | "docs" | "knowledge" | "code" | "tool_output" | "reserve", number | null>;
+}
+
+export interface TaskTokenMetrics {
+  taskId: string;
+  runCount: number;
+  stageCount: number;
+  retryCount: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedTokens: number | null;
+  totalTokens: number | null;
+  retryWasteTokens: number | null;
+  instructionSurfaceBytes: number | null;
+  composition: TokenCompositionMetrics;
+  contextBudget: ContextBudgetMetrics;
+  sessionKinds: Record<"orchestrated" | "interactive" | "not_reported", number>;
+}
+
+export interface TokenRoleMetrics {
+  role: string;
+  runCount: number;
+  staticChars: number | null;
+  retrievedChars: number | null;
+  staticVsRetrievedRatio: number | null;
+  docChars: number | null;
+  docCharsBefore: number | null;
+  slicingSavedPct: number | null;
+  contextBudget: ContextBudgetMetrics;
+}
+
+/** One warning-mode observation, retained in JSON export for role/p95 analysis. */
+export interface ContextBudgetRunMetric {
+  taskId: string;
+  role: string;
+  startTime: number;
+  contextChars: number | null;
+  budgetChars: number;
+  budgetSource: "role" | "model_context_window";
+  overflowChars: number | null;
+  warning: boolean | null;
+  composition: ContextBudgetMetrics["composition"];
+}
+
+export interface TokenMetricsExport {
+  exportedAt: number;
+  tasks: TaskTokenMetrics[];
+  roles: TokenRoleMetrics[];
+  /** Every run with an authoritative context budget, never synthetic aggregate rows. */
+  contextBudgetRuns: ContextBudgetRunMetric[];
+  totals: Omit<TaskTokenMetrics, "taskId" | "sessionKinds"> & V3OptimizationRollups;
+}
+
+/** V3 Phase 8 read-only derivations over task state plus the existing run log. */
+export interface V3OptimizationRollups {
+  /** Strict token spend across completed tasks divided by completed task count. */
+  total_token_per_completed_task: number | null;
+  /** Completed tasks with no reported retry divided by completed task count. */
+  first_pass_success_rate: number | null;
+  /** Runs with at least one reported fallback hop divided by all runs. */
+  fallback_rate: number | null;
+}
+
+const COMPOSITION_FIELDS = ["static_chars", "handoff_chars", "doc_chars", "knowledge_chars", "code_intel_chars", "tool_output_chars"] as const;
+
+/** A total is known only when every contributing row reported the field. */
+function strictSum(runs: readonly RunRecord[], value: (run: RunRecord) => number | null): number | null {
+  if (runs.length === 0 || runs.some((run) => value(run) === null)) return null;
+  return runs.reduce((sum, run) => sum + (value(run) ?? 0), 0);
+}
+
+function totalTokensFor(run: RunRecord): number | null {
+  return run.input_tokens === null || run.output_tokens === null ? null : run.input_tokens + run.output_tokens;
+}
+
+function compositionFor(runs: readonly RunRecord[]): TokenCompositionMetrics {
+  return {
+    static_chars: strictSum(runs, (run) => run.static_chars),
+    handoff_chars: strictSum(runs, (run) => run.handoff_chars),
+    doc_chars: strictSum(runs, (run) => run.doc_chars),
+    doc_chars_before: strictSum(runs, (run) => run.doc_chars_before),
+    knowledge_chars: strictSum(runs, (run) => run.knowledge_chars),
+    code_intel_chars: strictSum(runs, (run) => run.code_intel_chars),
+    tool_output_chars: strictSum(runs, (run) => run.tool_output_chars),
+  };
+}
+
+function contextBudgetFor(runs: readonly RunRecord[]): ContextBudgetMetrics {
+  const measured = runs.filter((run) => run.context_budget_chars !== null);
+  const composition = (field: keyof Pick<RunRecord, "context_base_chars" | "context_task_chars" | "context_safety_chars" | "context_docs_chars" | "context_knowledge_chars" | "context_code_chars" | "context_tool_output_chars" | "context_reserve_chars">) =>
+    strictSum(measured, (run) => run[field]);
+  return {
+    measuredRuns: measured.length,
+    warningRuns: measured.filter((run) => run.context_budget_warning === true).length,
+    contextChars: strictSum(measured, (run) => run.context_chars),
+    budgetChars: strictSum(measured, (run) => run.context_budget_chars),
+    overflowChars: strictSum(measured, (run) => run.context_overflow_chars),
+    composition: {
+      base: composition("context_base_chars"), task: composition("context_task_chars"), safety: composition("context_safety_chars"),
+      docs: composition("context_docs_chars"), knowledge: composition("context_knowledge_chars"), code: composition("context_code_chars"),
+      tool_output: composition("context_tool_output_chars"), reserve: composition("context_reserve_chars"),
+    },
+  };
+}
+
+export function taskTokenMetrics(runs: readonly RunRecord[]): TaskTokenMetrics {
+  const sessionKinds = { orchestrated: 0, interactive: 0, not_reported: 0 };
+  for (const run of runs) {
+    if (run.session_kind === "orchestrated" || run.session_kind === "interactive") sessionKinds[run.session_kind]++;
+    else sessionKinds.not_reported++;
+  }
+  const failures = runs.filter((run) => run.result === "FAIL");
+  return {
+    taskId: runs[0]?.task_id ?? "",
+    runCount: runs.length,
+    stageCount: new Set(runs.map((run) => run.agent)).size,
+    retryCount: runs.reduce((sum, run) => sum + run.retry_count, 0),
+    inputTokens: strictSum(runs, (run) => run.input_tokens),
+    outputTokens: strictSum(runs, (run) => run.output_tokens),
+    cachedTokens: strictSum(runs, (run) => run.cache_read_tokens),
+    totalTokens: strictSum(runs, totalTokensFor),
+    // No failed rows is a known zero; one failed row with unreported usage is
+    // unknown, never a fabricated zero.
+    retryWasteTokens: failures.length === 0 ? 0 : strictSum(failures, totalTokensFor),
+    instructionSurfaceBytes: strictSum(runs, (run) => run.instruction_surface_bytes ?? null),
+    composition: compositionFor(runs),
+    contextBudget: contextBudgetFor(runs),
+    sessionKinds,
+  };
+}
+
+function roleMetrics(runs: readonly RunRecord[]): TokenRoleMetrics[] {
+  const groups = new Map<string, RunRecord[]>();
+  for (const run of runs) groups.set(run.agent, [...(groups.get(run.agent) ?? []), run]);
+  return [...groups.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([role, roleRuns]) => {
+    const staticChars = strictSum(roleRuns, (run) => run.static_chars);
+    const retrievedChars = strictSum(roleRuns, (run) => {
+      const components = [run.handoff_chars, run.doc_chars, run.knowledge_chars, run.code_intel_chars, run.tool_output_chars];
+      return components.some((value) => value === null) ? null : components.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+    });
+    const docChars = strictSum(roleRuns, (run) => run.doc_chars);
+    const docCharsBefore = strictSum(roleRuns, (run) => run.doc_chars_before);
+    const contextBudget = contextBudgetFor(roleRuns);
+    return {
+      role,
+      runCount: roleRuns.length,
+      staticChars,
+      retrievedChars,
+      staticVsRetrievedRatio: staticChars === null || retrievedChars === null || retrievedChars === 0 ? null : staticChars / retrievedChars,
+      docChars,
+      docCharsBefore,
+      slicingSavedPct:
+        docChars === null || docCharsBefore === null || docCharsBefore === 0
+          ? null
+          : Math.round(((docCharsBefore - docChars) / docCharsBefore) * 100),
+      contextBudget,
+    };
+  });
+}
+
+function contextBudgetRunsFor(runs: readonly RunRecord[]): ContextBudgetRunMetric[] {
+  return runs
+    .filter((run): run is RunRecord & { context_budget_chars: number; context_budget_source: "role" | "model_context_window" } =>
+      run.context_budget_chars !== null && run.context_budget_source !== null,
+    )
+    .map((run) => ({
+      taskId: run.task_id,
+      role: run.agent,
+      startTime: run.start_time,
+      contextChars: run.context_chars,
+      budgetChars: run.context_budget_chars,
+      budgetSource: run.context_budget_source,
+      overflowChars: run.context_overflow_chars,
+      warning: run.context_budget_warning,
+      composition: {
+        base: run.context_base_chars, task: run.context_task_chars, safety: run.context_safety_chars, docs: run.context_docs_chars,
+        knowledge: run.context_knowledge_chars, code: run.context_code_chars, tool_output: run.context_tool_output_chars, reserve: run.context_reserve_chars,
+      },
+    }));
+}
+
+export function tokenMetricsExport(
+  runs: readonly RunRecord[],
+  opts?: { now?: () => number; completedTaskIds?: ReadonlySet<string> },
+): TokenMetricsExport {
+  const grouped = new Map<string, RunRecord[]>();
+  for (const run of runs) grouped.set(run.task_id, [...(grouped.get(run.task_id) ?? []), run]);
+  const tasks = [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, taskRuns]) => taskTokenMetrics(taskRuns));
+  const aggregate = taskTokenMetrics(runs);
+  // Completion is not inferred from a PASS run: only the persisted task state
+  // can truthfully say a task reached DEPLOYED/DONE. Callers without that state
+  // therefore get null rather than a fabricated historical completion metric.
+  const completed = opts?.completedTaskIds === undefined
+    ? null
+    : tasks.filter((task) => opts.completedTaskIds!.has(task.taskId));
+  const completedTokens = completed === null || completed.length === 0 || completed.some((task) => task.totalTokens === null)
+    ? null
+    : completed.reduce((sum, task) => sum + task.totalTokens!, 0);
+  const fallbackCount = strictSum(runs, (run) => run.fallback_count);
+  return {
+    exportedAt: (opts?.now ?? Date.now)(),
+    tasks,
+    roles: roleMetrics(runs),
+    contextBudgetRuns: contextBudgetRunsFor(runs),
+    totals: {
+      runCount: aggregate.runCount,
+      stageCount: aggregate.stageCount,
+      retryCount: aggregate.retryCount,
+      inputTokens: aggregate.inputTokens,
+      outputTokens: aggregate.outputTokens,
+      cachedTokens: aggregate.cachedTokens,
+      totalTokens: aggregate.totalTokens,
+      retryWasteTokens: aggregate.retryWasteTokens,
+      instructionSurfaceBytes: aggregate.instructionSurfaceBytes,
+      composition: aggregate.composition,
+      contextBudget: aggregate.contextBudget,
+      total_token_per_completed_task:
+        completed === null || completed.length === 0 || completedTokens === null
+          ? null
+          : completedTokens / completed.length,
+      first_pass_success_rate:
+        completed === null || completed.length === 0
+          ? null
+          : completed.filter((task) => task.retryCount === 0).length / completed.length,
+      fallback_rate: fallbackCount === null ? null : runs.filter((run) => run.fallback_count! > 0).length / runs.length,
+    },
+  };
+}
+
+export interface PromptCharacterBaseline {
+  promptCharacters: number;
+}
+
+function promptCharactersOf(baseline: TokenMetricsExport | PromptCharacterBaseline): number | null {
+  if ("promptCharacters" in baseline) return baseline.promptCharacters;
+  const values = COMPOSITION_FIELDS.map((field) => baseline.totals.composition[field]);
+  return values.some((value) => value === null)
+    ? null
+    : values.reduce<number>((sum, value) => sum + (value ?? 0), 0);
+}
+
+export function compareTokenBaselines(
+  before: TokenMetricsExport | PromptCharacterBaseline,
+  after: TokenMetricsExport | PromptCharacterBaseline,
+): {
+  inputTokenDeltaPct: number | null;
+  retryWasteDeltaPct: number | null;
+  promptCharacterDeltaPct: number | null;
+  totalTokenPerCompletedTaskDeltaPct: number | null;
+  firstPassSuccessRateDeltaPct: number | null;
+  fallbackRateDeltaPct: number | null;
+} {
+  const delta = (oldValue: number | null, newValue: number | null): number | null =>
+    oldValue === null || newValue === null || oldValue === 0 ? null : ((newValue - oldValue) / oldValue) * 100;
+  const tokenExport = (value: TokenMetricsExport | PromptCharacterBaseline): value is TokenMetricsExport => "totals" in value;
+  return {
+    inputTokenDeltaPct: tokenExport(before) && tokenExport(after) ? delta(before.totals.inputTokens, after.totals.inputTokens) : null,
+    retryWasteDeltaPct: tokenExport(before) && tokenExport(after) ? delta(before.totals.retryWasteTokens, after.totals.retryWasteTokens) : null,
+    promptCharacterDeltaPct: delta(promptCharactersOf(before), promptCharactersOf(after)),
+    totalTokenPerCompletedTaskDeltaPct: tokenExport(before) && tokenExport(after)
+      ? delta(before.totals.total_token_per_completed_task ?? null, after.totals.total_token_per_completed_task ?? null)
+      : null,
+    firstPassSuccessRateDeltaPct: tokenExport(before) && tokenExport(after)
+      ? delta(before.totals.first_pass_success_rate ?? null, after.totals.first_pass_success_rate ?? null)
+      : null,
+    fallbackRateDeltaPct: tokenExport(before) && tokenExport(after)
+      ? delta(before.totals.fallback_rate ?? null, after.totals.fallback_rate ?? null)
+      : null,
+  };
+}
+
 // -- helpers -----------------------------------------------------------------
 
 function pct(before: number, after: number): number {

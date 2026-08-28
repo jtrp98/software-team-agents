@@ -45,6 +45,20 @@ export interface ClassificationResult {
   reasons: string[];
 }
 
+export type PmMode = "none" | "lightweight" | "full";
+
+/**
+ * The existing PM boundary, now named so it cannot be mistaken for a missing
+ * planner. Classification is Lightweight PM for every executable task; the
+ * Full PM agent/document path is selected exactly when the already-shipped
+ * pipeline contains project-manager. UNKNOWN remains human triage and has no
+ * RuntimeTask.
+ */
+export function pmMode(classification: ClassificationResult): PmMode {
+  if (classification.level === TaskLevel.UNKNOWN) return "none";
+  return classification.pipeline.includes(AgentStage.PROJECT_MANAGER) ? "full" : "lightweight";
+}
+
 /**
  * Whether this classification carries a design phase at all (T-UX11). Only
  * these pipelines run uxui-designer: the work is about to decide what gets

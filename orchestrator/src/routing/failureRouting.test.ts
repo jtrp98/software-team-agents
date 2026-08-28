@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
-import { CATEGORY_DESTINATION, routeByCategory, stagesFromAffected } from "./dynamicRouter.js";
+import { CATEGORY_DESTINATION, routeByCategory, stagesFromAffected } from "./failureRouting.js";
 import { classifyQaFailure, parseOpenIssues } from "../orchestrator/failureClassifier.js";
 
 const FULL_PIPELINE = [

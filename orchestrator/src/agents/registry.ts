@@ -2,6 +2,7 @@ import { z } from "zod";
 import { AgentStage, TaskState } from "../types.js";
 import { Permission } from "./permissions.js";
 import { Capability } from "./capabilities.js";
+import { ArtifactType } from "../artifacts/schemas.js";
 
 /**
  * What an agent can actually do, beyond which stage it occupies (T12).
@@ -70,7 +71,7 @@ const RAW_REGISTRY: Record<AgentStage, AgentRegistryEntry> = {
     role: "business-analyst",
     responsibilities: ["interview the user and produce/amend requirements.md"],
     inputs: ["qa-report", "design"],
-    outputs: ["requirements"],
+    outputs: ["requirements", ArtifactType.HANDOFF],
     tools: ["AskUserQuestion", "Write", "Edit", "Read", "Glob", "Grep"],
     permissions: [Permission.READ, Permission.WRITE_DOCS],
     allowed_states: [TaskState.REQUIREMENT],
@@ -86,7 +87,7 @@ const RAW_REGISTRY: Record<AgentStage, AgentRegistryEntry> = {
     role: "system-analyst",
     responsibilities: ["analyze feasibility and design the data model in design.md"],
     inputs: ["requirements", "qa-report"],
-    outputs: ["design"],
+    outputs: ["design", ArtifactType.HANDOFF],
     tools: ["Read", "Glob", "Grep", "AskUserQuestion", "Write", "Edit"],
     permissions: [Permission.READ, Permission.WRITE_DOCS],
     allowed_states: [TaskState.DESIGN],
@@ -102,7 +103,7 @@ const RAW_REGISTRY: Record<AgentStage, AgentRegistryEntry> = {
     role: "project-manager",
     responsibilities: ["turn a confirmed design into a phased plan.md"],
     inputs: ["design", "requirements"],
-    outputs: ["plan"],
+    outputs: ["plan", ArtifactType.HANDOFF],
     tools: ["Read", "Glob", "Grep", "AskUserQuestion", "Write", "Edit"],
     permissions: [Permission.READ, Permission.WRITE_DOCS],
     allowed_states: [TaskState.PLAN],
@@ -121,7 +122,7 @@ const RAW_REGISTRY: Record<AgentStage, AgentRegistryEntry> = {
       "write test-plan.md so engineers and qa-engineer share one test strategy instead of each guessing their own",
     ],
     inputs: ["requirements", "design", "plan"],
-    outputs: ["test-plan"],
+    outputs: ["test-plan", ArtifactType.HANDOFF],
     tools: ["Read", "Glob", "Grep", "Write", "Edit"],
     permissions: [Permission.READ, Permission.WRITE_DOCS],
     allowed_states: [TaskState.PLAN],
@@ -140,7 +141,7 @@ const RAW_REGISTRY: Record<AgentStage, AgentRegistryEntry> = {
       "advise frontend-engineer on UI structure before implementation starts — a consultant, never an implementer",
     ],
     inputs: ["requirements", "design"],
-    outputs: ["ux-design"],
+    outputs: ["ux-design", ArtifactType.HANDOFF],
     // No AskUserQuestion: like the engineers, unclear rules route back to
     // system-analyst/business-analyst rather than being settled in this chat.
     tools: ["Read", "Glob", "Grep", "Write", "Edit"],

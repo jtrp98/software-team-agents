@@ -1,15 +1,31 @@
 import { AgentStage } from "../types.js";
-import { ArtifactType } from "../artifacts/schemas.js";
+import {
+  ArtifactType,
+  validateArtifact,
+  type ExecutionPacket,
+  type HandoffArtifact,
+} from "../artifacts/schemas.js";
 import type { AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
-import { parseQaReport, parseSecurityReport } from "../agents/moduleDocs.js";
-import { ContextManager, type SelectedContext } from "../context/contextManager.js";
+import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
+import { parseQaReport, parseSecurityReport, readModuleDoc } from "../agents/moduleDocs.js";
+import { parsePlanTasks } from "../docs/planGraph.js";
+import {
+  ContextManager,
+  handoffReferencedSections,
+  type SelectedContext,
+} from "../context/contextManager.js";
+import { ContextLeakageError, type ContextItem } from "../context/contextSelection.js";
 import { classifyQaFailure, classifySecurityFailure } from "../orchestrator/failureClassifier.js";
+import { codeIntelSlices } from "./codeIntelAssembly.js";
+import { knowledgeBriefFor } from "./knowledgeBriefAssembly.js";
+import { assertContextComposition, emptyContextBudgetComposition, type ContextBudgetComposition } from "../context/contextBudget.js";
 
 /**
- * Everything about running a stage that is *this framework's* business rather
+ * This module is the deterministic Task Compiler: everything about running a
+ * stage that is *this framework's* business rather
  * than any runtime's (T108).
  *
- * Extracted from `agents/claudeCliExecutor.ts`, where it sat next to the
+ * Extracted from the legacy Claude executor, where it sat next to the
  * `spawnSync("claude", ...)` call. That co-location is what made the framework
  * look Claude-Code-shaped when almost none of it was: assembling a prompt,
  * slicing module docs to the sections a stage may read, reading `review.md` back
@@ -18,7 +34,7 @@ import { classifyQaFailure, classifySecurityFailure } from "../orchestrator/fail
  * spawned were `codex`.
  *
  * Moved rather than copied. A second copy would drift from the first the moment
- * one of those policies changed, and the existing `claudeCliExecutor.test.ts`
+ * one of those policies changed, and the legacy executor tests
  * cases are the guard that the move changed no behaviour: they still exercise
  * this code, through the same executor, and still pass unchanged.
  *
@@ -39,6 +55,32 @@ export interface RunMetrics {
   output_tokens?: number;
   cache_read_tokens?: number;
   context_chars: number;
+  runtime?: string;
+  requested_runtime?: string;
+  requested_model?: string;
+  routing_basis?: string;
+  fallback_reason?: string;
+  fallback_count?: number;
+  session_kind?: "orchestrated" | "interactive";
+  static_chars?: number;
+  handoff_chars?: number;
+  doc_chars?: number;
+  doc_chars_before?: number;
+  knowledge_chars?: number;
+  code_intel_chars?: number;
+  tool_output_chars?: number;
+  context_budget_chars?: number;
+  context_budget_source?: "role" | "model_context_window";
+  context_overflow_chars?: number;
+  context_budget_warning?: boolean;
+  context_base_chars?: number;
+  context_task_chars?: number;
+  context_safety_chars?: number;
+  context_docs_chars?: number;
+  context_knowledge_chars?: number;
+  context_code_chars?: number;
+  context_tool_output_chars?: number;
+  context_reserve_chars?: number;
 }
 
 /**
@@ -64,16 +106,38 @@ export const DEPLOY_PHASE_INSTRUCTION: Record<"prepare" | "execute", string> = {
  * Naming the skipped headings and the file they came from keeps the filter an
  * optimization the agent can undo, rather than a silent edit of its inputs.
  */
-export function renderSlicedDocs(selected: SelectedContext[], cm: ContextManager): string[] {
+export interface HandoffSliceNotice {
+  stage: AgentStage;
+  moduleName: string;
+  phases?: number[];
+}
+
+export function renderSlicedDocs(selected: SelectedContext[], cm: ContextManager, handoff?: HandoffSliceNotice): string[] {
   if (selected.length === 0) return [];
 
   const parts: string[] = ["", "Module documents, sliced to what this stage needs (`policies/documentation.md` §10):"];
+  if (handoff) {
+    const phase = handoff.phases?.length ? handoff.phases.join(",") : "<n>";
+    parts.push(
+      "",
+      "_This is the slice pointed to by the structured HANDOFF, plus the always-read safety set. " +
+        "References never widen CONTEXT_POLICY; broad or unresolved references fall back to normal §10 slicing. " +
+        `For other allowed sections run \`sta context ${handoff.stage} --module ${handoff.moduleName} --phase ${phase}\`._`,
+    );
+  }
   for (const s of selected) {
     parts.push("", `### ${s.doc}.md`);
     if (!s.fullDocument && s.skipped.length > 0) {
       parts.push(
-        `_Sections not included: ${s.skipped.join(", ")}. ` +
+        `_Known-irrelevant sections not included: ${s.skipped.join(", ")}. ` +
           `The full file is at \`${cm.path(s.doc)}\` — read it if one of those turns out to matter._`,
+        "",
+      );
+    }
+    if (s.unknownSections.length > 0) {
+      parts.push(
+        `_Kept because relevance is unknown: ${s.unknownSections.join(", ")}. ` +
+          `Nothing in this list was dropped; read the module's \`${s.doc}\` in the workspace for the full file._`,
         "",
       );
     }
@@ -87,6 +151,9 @@ export interface SliceOptions {
   moduleName: string;
   /** Which phases of `plan.md` this run touches. Undefined is safe: the plan then comes through whole rather than sliced wrong. */
   phases?: number[];
+  taskId?: string;
+  /** Validated machine-derived reference record from the prior stage. */
+  handoff?: HandoffArtifact;
 }
 
 /**
@@ -98,38 +165,303 @@ export interface SliceOptions {
  * correctness requirement.
  */
 export function sliceModuleDocsFor(stage: AgentStage, opts: SliceOptions): string[] {
+  return sliceModuleDocsWithSavings(stage, opts).docs;
+}
+
+/** Slices once and keeps the measured before/after bytes for run observability. */
+export interface SlicedModuleDocs {
+  docs: string[];
+  selected: SelectedContext[];
+  docCharsBefore: number;
+  savings: { bytesBefore: number; bytesAfter: number; savedPct: number };
+  directFileReads: number;
+}
+
+export function sliceModuleDocsWithSavings(stage: AgentStage, opts: SliceOptions): SlicedModuleDocs {
   try {
     const cm = new ContextManager({ projectRoot: opts.projectRoot, moduleName: opts.moduleName });
-    return renderSlicedDocs(cm.forStage(stage, opts.phases), cm);
+    const referenced = opts.handoff ? handoffReferencedSections(stage, opts.handoff) : undefined;
+    const selected = cm.forStage(stage, opts.phases, opts.taskId, referenced);
+    // `savings()` is the single source of the before/after calculation. The
+    // after side is prompt composition's doc_chars; the before side is carried
+    // into the run metric below, so token reports can show the actual slice.
+    const savings = cm.savings(selected);
+    return {
+      docs: renderSlicedDocs(
+        selected,
+        cm,
+        opts.handoff ? { stage, moduleName: opts.moduleName, phases: opts.phases } : undefined,
+      ),
+      selected,
+      docCharsBefore: savings.bytesBefore,
+      savings,
+      directFileReads: cm.directFileReads(),
+    };
+  } catch (error) {
+    // Authorization violations are not optional enrichment failures. A
+    // malicious qualified reference must stop before the runtime starts.
+    if (error instanceof ContextLeakageError) throw error;
+    return {
+      docs: [],
+      selected: [],
+      docCharsBefore: 0,
+      savings: { bytesBefore: 0, bytesAfter: 0, savedPct: 0 },
+      directFileReads: 0,
+    };
+  }
+}
+
+/** The one validated HANDOFF item in orchestrator context, if a prior doc stage produced one. */
+export function handoffFromContext(context: readonly ContextItem[]): HandoffArtifact | null {
+  const item = context.find((candidate) => candidate.source === ArtifactType.HANDOFF);
+  if (!item) return null;
+  return validateArtifact(ArtifactType.HANDOFF, JSON.parse(item.content));
+}
+
+export interface StageContextOptions extends SliceOptions {
+  /** Root used for framework/legacy knowledge lookup; docs may live elsewhere. */
+  projectRoot: string;
+  /** Explicit module-doc root (Knowledge in three-repo mode, projectRoot otherwise). */
+  docsRoot: string;
+  taskId?: string;
+  knowledgeRoot?: string;
+  targetRoot?: string;
+  targetId?: string;
+}
+
+export interface StageContextAssembly extends SlicedModuleDocs {
+  knowledge: string[];
+  codeIntel: string[];
+}
+
+/**
+ * Design references from the authoritative task row.  Failure is deliberately
+ * additive: the brief remains an index, rather than making stage context fail
+ * because a plan is absent or still being authored.
+ */
+export function referencedKnowledgeIds(docsRoot: string, moduleName: string, taskId: string | undefined): string[] {
+  if (!taskId) return [];
+  try {
+    const plan = readModuleDoc(docsRoot, moduleName, "plan.md");
+    return plan === null ? [] : parsePlanTasks(plan).tasks.find((task) => task.id === taskId)?.designRefs ?? [];
   } catch {
     return [];
   }
 }
 
-export function buildPrompt(req: AgentExecutorRequest, extra?: string, sliced?: string[]): string {
-  const parts: string[] = [
+/**
+ * One context selection/rendering path for both `sta run` and `sta context`.
+ * Optional sources keep their established additive posture: any failure yields
+ * no enrichment, while document parser uncertainty is handled inside
+ * ContextManager by returning the complete document.
+ */
+export async function assembleStageContext(stage: AgentStage, opts: StageContextOptions): Promise<StageContextAssembly> {
+  const sliced = sliceModuleDocsWithSavings(stage, {
+    projectRoot: opts.docsRoot,
+    moduleName: opts.moduleName,
+    phases: opts.phases,
+    taskId: opts.taskId,
+    handoff: opts.handoff,
+  });
+  const knowledge = knowledgeBriefFor(stage, {
+    projectRoot: opts.projectRoot,
+    knowledgeRoot: opts.knowledgeRoot,
+    moduleName: opts.moduleName,
+    referencedIds: referencedKnowledgeIds(opts.docsRoot, opts.moduleName, opts.taskId),
+    targetRoot: opts.targetRoot,
+  });
+  let codeIntel: string[] = [];
+  try {
+    codeIntel = await codeIntelSlices({
+      stage,
+      taskId: opts.taskId,
+      moduleName: opts.moduleName,
+      targetRoot: opts.targetRoot,
+      targetId: opts.targetId,
+    });
+  } catch {
+    codeIntel = [];
+  }
+  return { ...sliced, knowledge, codeIntel };
+}
+
+export interface PromptComposition {
+  static_chars: number;
+  handoff_chars: number;
+  doc_chars: number;
+  knowledge_chars: number;
+  code_intel_chars: number;
+  tool_output_chars: number;
+}
+
+export interface PromptPartsResult {
+  text: string;
+  composition: PromptComposition;
+  budgetComposition: ContextBudgetComposition;
+}
+
+export interface PromptSources {
+  /** RuntimeTask-derived packet sections. Accounted as task/handoff text. */
+  task?: string[];
+  /** Explicit safety/gate text, when a caller needs it in the assembled prompt. */
+  safety?: string[];
+  docs?: string[];
+  knowledge?: string[];
+  codeIntel?: string[];
+  toolOutput?: string[];
+}
+
+type PromptPartKind = keyof PromptComposition;
+interface PromptPart { kind: PromptPartKind; budgetKind?: keyof ContextBudgetComposition; text: string; }
+
+function budgetClassFor(kind: PromptPartKind): keyof ContextBudgetComposition {
+  switch (kind) {
+    case "static_chars": return "base";
+    case "handoff_chars": return "task";
+    case "doc_chars": return "docs";
+    case "knowledge_chars": return "knowledge";
+    case "code_intel_chars": return "code";
+    case "tool_output_chars": return "tool_output";
+  }
+}
+
+/**
+ * Assembles the prompt and records the source of every character while doing
+ * so. `static_chars` is framework text generated here (header/footer/deploy
+ * note/extra instruction); it deliberately excludes CLAUDE.md, role prompts,
+ * and policies that an interactive runtime loads itself. Those are measured by
+ * T-V3TOK-002's workspace session recorder instead.
+ */
+export function buildPromptParts(req: AgentExecutorRequest, extra?: string, sources: PromptSources = {}): PromptPartsResult {
+  const parts: PromptPart[] = [
     // Vendor-neutral on purpose (OFF07): this prompt reaches every runtime, and
     // a provider-named document pointer would leak one vendor's naming into all
     // the others' context.
-    `Task ${req.taskId} — you are running as the \`${req.stage}\` stage of this repo's pipeline (see the repo's own agent documentation).`,
-    "",
+    { kind: "static_chars", text: `Task ${req.taskId} — you are running as the \`${req.stage}\` stage of this repo's pipeline (see the repo's own agent documentation).` },
+    { kind: "static_chars", text: "" },
   ];
   if (req.context.length === 0) {
-    parts.push("No prior-stage context was supplied for this task — proceed from the repo's own docs (`_docs/status.md` first, per convention).");
+    parts.push({ kind: "handoff_chars", text: "No prior-stage context was supplied for this task — proceed from the repo's own docs (`_docs/status.md` first, per convention)." });
   } else {
-    parts.push("Context assembled for you by the orchestrator (already filtered to what this stage may read):");
+    parts.push({ kind: "handoff_chars", text: "Context assembled for you by the orchestrator (already filtered to what this stage may read):" });
     for (const item of req.context) {
-      parts.push("", `### ${item.source}`, item.content);
+      parts.push({ kind: "handoff_chars", text: "" }, { kind: "handoff_chars", text: `### ${item.source}` }, { kind: "handoff_chars", text: item.content });
     }
   }
-  if (sliced && sliced.length > 0) parts.push(...sliced);
-  if (req.deployPhase) parts.push("", DEPLOY_PHASE_INSTRUCTION[req.deployPhase]);
-  if (extra) parts.push("", extra);
+  for (const text of sources.task ?? []) parts.push({ kind: "handoff_chars", budgetKind: "task", text });
+  // Safety is currently loaded by runtime bindings rather than appended here,
+  // but this explicit source keeps a future injected gate from being folded
+  // into misleading generic static accounting.
+  for (const text of sources.safety ?? []) parts.push({ kind: "static_chars", budgetKind: "safety", text });
+  for (const text of sources.docs ?? []) parts.push({ kind: "doc_chars", text });
+  for (const text of sources.knowledge ?? []) parts.push({ kind: "knowledge_chars", text });
+  for (const text of sources.codeIntel ?? []) parts.push({ kind: "code_intel_chars", text });
+  for (const text of sources.toolOutput ?? []) parts.push({ kind: "tool_output_chars", text });
+  if (req.deployPhase) parts.push({ kind: "static_chars", budgetKind: "task", text: "" }, { kind: "static_chars", budgetKind: "task", text: DEPLOY_PHASE_INSTRUCTION[req.deployPhase] });
+  // `extra` is the task-specific operating instruction seam (production uses it for environment), not an unclassified static bucket.
+  if (extra) parts.push({ kind: "static_chars", budgetKind: "task", text: "" }, { kind: "static_chars", budgetKind: "task", text: extra });
   parts.push(
-    "",
-    "Finish by stating clearly what you completed and, per convention, what should happen next — the orchestrator reads your exit status and the docs you wrote, not a special reply format.",
+    { kind: "static_chars", text: "" },
+    { kind: "static_chars", text: "Finish by stating clearly what you completed and, per convention, what should happen next — the orchestrator reads your exit status and the docs you wrote, not a special reply format." },
   );
-  return parts.join("\n");
+  const composition: PromptComposition = {
+    static_chars: 0, handoff_chars: 0, doc_chars: 0, knowledge_chars: 0, code_intel_chars: 0, tool_output_chars: 0,
+  };
+  const budgetComposition = emptyContextBudgetComposition();
+  const text = parts.map((part, index) => {
+    // The delimiter belongs to the incoming source: no separate synthetic
+    // bucket is needed, and the component sum stays exactly prompt.length.
+    const rendered = `${index === 0 ? "" : "\n"}${part.text}`;
+    composition[part.kind] += rendered.length;
+    budgetComposition[part.budgetKind ?? budgetClassFor(part.kind)] += rendered.length;
+    return rendered;
+  }).join("");
+  assertContextComposition(budgetComposition, text.length);
+  return { text, composition, budgetComposition };
+}
+
+export interface ExecutionPacketScopeContract {
+  readonly allow: readonly string[];
+  readonly deny: readonly string[];
+}
+
+function unique(values: readonly string[]): string[] {
+  return [...new Set(values)];
+}
+
+/** The only prompt additions made by V3 Phase 2. */
+export function renderExecutionPacketSections(fields: Pick<ExecutionPacket, "acceptance_criteria" | "required_verification" | "stop_conditions">): string[] {
+  const section = (title: string, values: readonly string[], empty: string): string =>
+    [`## ${title}`, ...(values.length > 0 ? values.map((value) => `- ${value}`) : [`- ${empty}`])].join("\n");
+  return [
+    section("Acceptance Criteria", fields.acceptance_criteria, "unavailable"),
+    section("Required Verification", fields.required_verification, "deferred"),
+    section("Stop Conditions", fields.stop_conditions, "none declared"),
+  ];
+}
+
+export interface CompileExecutionPacketInput {
+  req: AgentExecutorRequest;
+  role: string;
+  runtimeTask: RuntimeTask;
+  contractScope: ExecutionPacketScopeContract;
+  extra?: string;
+  sources?: Omit<PromptSources, "task">;
+}
+
+/**
+ * Compiles one execution-ready packet with deterministic lookup/select/filter/
+ * compose/template operations only. This module deliberately has no runtime
+ * adapter import, constructor, registry, or model call.
+ */
+export function compileExecutionPacket(input: CompileExecutionPacketInput): ExecutionPacket {
+  if (input.runtimeTask.task_id !== input.req.taskId) {
+    throw new Error(`RuntimeTask ${input.runtimeTask.task_id} cannot compile packet for ${input.req.taskId}`);
+  }
+  const contractAllow = new Set(input.contractScope.allow);
+  const allow = unique(
+    input.runtimeTask.scope.work_roots
+      .filter((root) => root.stage === input.req.stage)
+      .flatMap((root) => root.allow.map((entry) => entry.contract_glob))
+      .filter((glob) => contractAllow.has(glob)),
+  );
+  const fields = {
+    acceptance_criteria: [...input.runtimeTask.acceptance_criteria.items],
+    required_verification: [...input.runtimeTask.required_verification.levels],
+    stop_conditions: [...input.runtimeTask.stop_conditions],
+  };
+  const prompt = buildPromptParts(input.req, input.extra, {
+    ...input.sources,
+    task: renderExecutionPacketSections(fields),
+  });
+  const sourceKinds = [
+    "runtime-task",
+    ...input.runtimeTask.source_of_truth.paths,
+    ...input.req.context.map((item) => item.source),
+    ...(input.sources?.docs?.length ? ["module-docs"] : []),
+    ...(input.sources?.knowledge?.length ? ["knowledge-brief"] : []),
+    ...(input.sources?.codeIntel?.length ? ["code-intelligence"] : []),
+    ...(input.sources?.toolOutput?.length ? ["tool-output"] : []),
+  ];
+  return validateArtifact(ArtifactType.EXECUTION_PACKET, {
+    ...prompt,
+    task_id: input.req.taskId,
+    stage: input.req.stage,
+    role: input.role,
+    ...fields,
+    scope: {
+      // RuntimeTask proposes the stage scope; the current role contract is the
+      // authority. Filtering here means stale task state can only narrow.
+      allow,
+      deny: unique([...input.runtimeTask.do_not_touch, ...input.contractScope.deny]),
+    },
+    sources: unique(sourceKinds),
+  });
+}
+
+/** Compatibility wrapper for existing callers/tests using the old sliced array. */
+export function buildPrompt(req: AgentExecutorRequest, extra?: string, sliced?: string[]): string {
+  return buildPromptParts(req, extra, { docs: sliced }).text;
 }
 
 export function failResult(reason: string, metrics: Partial<RunMetrics> = {}): AgentExecutorResult {

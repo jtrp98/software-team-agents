@@ -123,11 +123,23 @@ export function detectConflicts(kb: KnowledgeBase): Conflict[] {
   }
 
   for (const group of duplicatesBy(kb.items, (i) => (i.kind === "db-schema" ? i.payload.model : null))) {
+    // A model name is Target-local. Two explicitly scoped, disjoint Targets
+    // may both define `Note`; global/legacy scope and overlapping Target scope
+    // retain the historical duplicate behaviour.
+    const sameScope = (left: KnowledgeItem, right: KnowledgeItem): boolean => {
+      const leftTargets = left.target_ids ?? [];
+      const rightTargets = right.target_ids ?? [];
+      return leftTargets.length === 0 || rightTargets.length === 0 || leftTargets.some((id) => rightTargets.includes(id));
+    };
+    const conflictingItems = group.items.filter((item, index, items) =>
+      items.some((other, otherIndex) => index !== otherIndex && sameScope(item, other)),
+    );
+    if (conflictingItems.length < 2) continue;
     push(
       conflict(
         "duplicate-model",
-        group.items.map((i) => i.id),
-        `${group.items.length} records define the model "${group.key}" — design.md is the contract, so only one of them can be it`,
+        conflictingItems.map((i) => i.id),
+        `${conflictingItems.length} records define the model "${group.key}" in overlapping Target scope — design.md is the contract, so only one of them can be it`,
       ),
     );
   }

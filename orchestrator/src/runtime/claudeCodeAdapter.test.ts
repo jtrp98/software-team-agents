@@ -38,10 +38,12 @@ function baseRequest(overrides: Partial<Parameters<ClaudeCodeAdapter["executeAge
 }
 
 describe("ClaudeCodeAdapter.executeAgent", () => {
-  it("spawns `claude -p --agent <role> --output-format json` with the prompt as the last arg", async () => {
+  it("spawns `claude -p --agent <role> --output-format json` and sends the prompt through stdin", async () => {
     let capturedArgs: string[] = [];
-    const spawnSync: SpawnSync = (_cmd, args) => {
+    let capturedInput: string | undefined;
+    const spawnSync: SpawnSync = (_cmd, args, options) => {
       capturedArgs = args;
+      capturedInput = options.input as string | undefined;
       return cliResult(0, JSON.stringify({ is_error: false, result: "done" }));
     };
     const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync });
@@ -52,7 +54,8 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
     expect(capturedArgs).toContain("backend-engineer");
     expect(capturedArgs).toContain("--output-format");
     expect(capturedArgs).toContain("json");
-    expect(capturedArgs[capturedArgs.length - 1]).toBe("hello world");
+    expect(capturedArgs).not.toContain("hello world");
+    expect(capturedInput).toBe("hello world");
   });
 
   it("maps autonomy onto Claude Code's own --permission-mode values", async () => {
@@ -101,8 +104,8 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
     expect(flag).toBe(
       "--disallowedTools=Write(.git/**),Edit(.git/**),Write(knowledge/_roles/**),Edit(knowledge/_roles/**),Bash(git *)",
     );
-    // The prompt must still be the last positional argument.
-    expect(capturedArgs[capturedArgs.length - 1]).toBe("do the thing");
+    // The prompt uses stdin so Windows command-line length cannot discard it.
+    expect(capturedArgs).not.toContain("do the thing");
   });
 
   it("passes no --disallowedTools flag when the request carries no guards", async () => {
@@ -149,7 +152,7 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
     expect(JSON.parse(schemaArgs[idx + 1])).toEqual(schema);
     expect(result.text).toBe("summary text");
     expect(result.structured).toEqual({ verdict: "pass" });
-    expect(schemaArgs[schemaArgs.length - 1]).toBe("do the thing");
+    expect(schemaArgs).not.toContain("do the thing");
   });
 
   it("runs in req.cwd, not the workspace root", async () => {

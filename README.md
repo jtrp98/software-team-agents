@@ -12,22 +12,23 @@ Process/workflow layer + orchestrator CLI สำหรับทีมซอฟ�
 | Target | repository ของ product จริงที่ให้ AI เขียนโค้ด |
 | Human | ผู้กำหนด intent/constraints และผู้ตัดสินใจในจุดสำคัญ |
 
-ไม่ใช่ AI model และไม่ได้มาแทน runtime จริง — ทุก run ของ pipeline ยัง executes ผ่าน runtime ที่เลือก (`claude -p --agent <role>` default, `--runtime codex|opencode` สำหรับ runtime อื่น)
+ไม่ใช่ AI model และไม่ได้มาแทน runtime จริง — ทุก run ของ pipeline ยัง execute ผ่าน runner adapter ที่เลือก. `sta run` default เป็น **Single + Claude Code**; `software-team-agents dev|ba` เป็น interactive lane ที่คนเลือก runtime โดยตรงและไม่ผ่าน V3 router
 
 > **ตั้งทีมใหม่?** เดิน onboarding เต็มทีละขั้นที่ [`TEAM_SETUP_V1.md`](TEAM_SETUP_V1.md) (Install → Bind →
 > Init workspace → Validate → Ready + Troubleshooting) — README นี้เป็น reference, ไม่ใช่ walkthrough
 
 ---
 
-## Architecture: Three-Repo
+## Architecture: Three-Repo + Local Runtime State
 
-แยกสามอย่างที่ lifecycle ต่างกันออกจากกัน:
+Three-Repo แยก repository สามประเภท และ V3 แยก **Local Runtime State** เป็น ownership domain ที่สี่เพราะ lifecycle/สิทธิ์ต่างจากทั้งสาม repo:
 
-| Repo | เก็บอะไร | Lifecycle |
+| Domain | เก็บอะไร | Lifecycle |
 |---|---|---|
 | **Framework** (repo นี้) | orchestrator CLI, agent prompts, hooks, contracts, workflows, policies, stacks — pack เป็น npm package `software-team-agents` | อัปเดตโดยติดตั้ง `.tgz` version ใหม่ + `sync` |
 | **Knowledge** (ต่อบริษัท) | `knowledge/`, `_docs/`, `decisions/`, `targets.yaml`, `knowledge-policy.yaml` | commit + merge ผ่าน git โดยทีม |
 | **Target** (ต่อ product) | source code จริง + `.agent-team/` metadata | git flow ปกติของ project นั้น |
+| **Runtime State** (local ต่อเครื่อง/run) | `.workflow/state.db`, `.workflow/state.yaml`, `.workflow/packets/`, `.workflow/evidence/`, `.workflow/runs/` | สร้าง/ย้าย schema โดย orchestrator, bounded retention, gitignored; ห้าม classify เป็น Knowledge/Target และไม่ sync/commit |
 
 ผลที่ได้: คนที่ไม่แตะโค้ด (BA / SA / PM / test-planner) clone แค่ Knowledge repo — ไม่ต้อง clone Target และ framework internals ไม่ติดเข้า git history ของ repo ลูก
 
@@ -35,10 +36,10 @@ Process/workflow layer + orchestrator CLI สำหรับทีมซอฟ�
 
 - **Global install** — `.tgz` ให้ CLI 2 ตัวจาก package เดียว:
   - `software-team-agents` — Target-first CLI (v2): `init | sync | status | dev | ba`
-  - `sta` — V1 pipeline CLI: `run | status | approve | roles | doctor | ...`
+  - `sta` — orchestrated pipeline CLI: `run | status | approve | roles | doctor | ...`
 - **Sync เป็น one-way เสมอ: Framework → Workspace** — ไม่มี Knowledge ⇄ Target content sync ไฟล์ที่ถูก sync track ใน manifest พร้อม sha256
 - **Generated ที่เครื่อง** — `.codex/agents/<role>.toml` และ `.opencode/agent/<role>.md` ถูก render จาก `.claude/agents/<role>.md` ตอน sync (ไม่ได้ ship มากับ payload); `.opencode/plugin/sta-guards.js` เป็น authored payload ที่ sync copy ให้ทุก workspace
-- **Runtime state** — `.workflow/state.db` (SQLite) local, gitignored, ไม่ sync ข้ามเครื่อง
+- **Runtime State เป็น domain ที่สี่** — task state, execution packets, verification evidence และ runner output ใต้ `.workflow/` เป็น local/regenerable, gitignored และไม่ sync ข้ามเครื่อง; `.workflow/targets.local.yaml` เป็น machine-local Target mapping เช่นกัน
 
 ### โครงสร้าง Framework repo
 
@@ -52,6 +53,9 @@ orchestrator/           ← CLI + state store + knowledge engine (Node/TypeScrip
 .codex/agents/*.toml    ← Codex bindings (checked by --check-bindings)
 .opencode/agent/*.md    ← OpenCode bindings (generated, checked by --check-bindings)
 .opencode/plugin/       ← sta-guards.js — guards ฝั่ง OpenCode (tool.execute.before)
+.claude/commands/*.md   ← slash command shortcuts 31 ตัว — source of truth (concept `command`)
+.opencode/commands/*.md ← OpenCode rendering ของ commands (generated, checked by --check-bindings)
+.agents/skills/*/       ← Codex Agent Skills rendering ของ commands (generated, checked by --check-bindings)
 contracts/*.yaml        ← read/write/deny path globs ต่อ role (machine-readable half ของ agent)
 workflows/*.yml         ← 11 workflows: typo → feature/deploy (right-sizing)
 policies/               ← กฎที่ทุก agent ใช้ร่วมกัน (coding/git/architecture/documentation/security/agent-boundaries)
@@ -71,10 +75,37 @@ project.yaml            ← stack profile ของ project นี้ (current v
 | Runtime | สถานะ |
 |---|---|
 | **Claude Code** | ✅ **Supported** — implemented + verified (pipeline, guards, capability probe) |
-| **Codex** | ⚠️ **Preview** — `software-team-agents dev\|ba --runtime codex` เปิด interactive session ได้ และ `.codex/agents/*.toml` ถูก generate ครบ แต่ headless pipeline (`sta run`) วิ่งบน Claude Code เป็น default; `CodexAdapter` ฝั่ง orchestrator ยังเป็น implementation ที่ไม่เคย verify กับ install จริง |
-| **OpenCode** | 🧪 **Experimental** (T-OC, planning/v2) — bindings `.opencode/agent/*.md` + plugin `sta-guards.js` sync ครบ, `dev\|ba --runtime opencode` เปิด session ได้, headless เลือกได้ด้วย `sta run --runtime opencode`; adapter/permission ผ่านการ spike พิสูจน์บน 1.18.21 แล้วแต่ exit checks (typecheck/secret ตอนจบ run) ยังไม่มี in-band — รายงานเป็น GUARD GAP และให้ QA round เป็นตัวครอบ |
+| **Codex** | ⚠️ **Preview** — `software-team-agents dev\|ba --runtime codex` เปิด interactive session ได้ และ `.codex/agents/*.toml` + skills mirror `.agents/skills/**` ถูก generate ครบ (skills invoke `$name` ได้จริงบน codex-cli 0.149 — spike T-CXC1) แต่ headless pipeline (`sta run`) วิ่งบน Claude Code เป็น default; `CodexAdapter` ฝั่ง orchestrator ยังเป็น implementation ที่ไม่เคย verify กับ install จริง |
+| **OpenCode** | 🧪 **Experimental** (T-OC, planning/v2) — bindings `.opencode/agent/*.md` + plugin `sta-guards.js` sync ครบ, commands mirror `.opencode/commands/**` generate ครบ (`/name` ผ่าน `opencode run --command` — spike T-OCC1), `dev\|ba --runtime opencode` เปิด session ได้, headless เลือกได้ด้วย `sta run --runtime opencode`; adapter/permission ผ่านการ spike พิสูจน์แล้วแต่ exit checks (typecheck/secret ตอนจบ run) ยังไม่มี in-band — รายงานเป็น GUARD GAP และให้ QA round เป็นตัวครอบ |
+| **Paid API** | 🧪 **Experimental** — fallback สำหรับ read-only/document stages ผ่าน official transport ที่ embedding host inject ให้เท่านั้น; ปิดโดย default, ไม่อ่าน credential เอง และไม่มี Target-write guard จึงถูกปฏิเสธก่อน API invocation |
 
 ข้อจำกัด: การรัน unattended ต้องใช้ `--autonomy edit` หรือ `full` (default `propose` ติด permission prompt ที่ไม่มีคนกดใน headless run)
+
+### Execution modes, routing และ fallback (V3)
+
+`--mode <single|auto|manual>` ใช้กับ `sta run` เท่านั้น; interactive `software-team-agents dev|ba --runtime <claude|codex|opencode>` ยังเป็น direct user choice และไม่ใช้ router.
+
+| Mode | พฤติกรรมจริง |
+|---|---|
+| `single` | **default**. ใช้ runner เดียวจาก `--runtime`, `execution.runner`, หรือ `claude-code` ตามลำดับ; ไม่ hand off |
+| `auto` | opt-in ด้วย `--mode auto`, `execution.mode: auto`, หรือการประกาศ `routing.strategy`/`routing.order` โดยไม่กำหนด mode; เดิน candidate order เฉพาะเมื่อ runner คืน `UNAVAILABLE`. `ERROR`/`TIMEOUT` ไม่ trigger fallback |
+| `manual` | opt-in; ต้องมี runner **และ model** ชัดเจนต่อ role ใน `routing.by_role` หรือ legacy `model_routing`. `--runtime` ไม่มี `--model` คู่ใน CLI จึงไม่พอสำหรับ strict Manual |
+
+Routing precedence ที่ implementation ใช้คือ `--runtime` → `routing.by_role` (เหนือ `model_routing`) → `routing.order`/`routing.strategy` → default `claude-code`; candidate ต้อง registered, available, มี capability ที่ stage ต้องใช้ และ automatic routing ไป runtime ต่ำกว่า `supported` ต้อง opt in ราย runtime ผ่าน `routing.allow_below_supported`. `--runtime <id>` โดยไม่มี `--mode` รักษา behavior เดิมด้วยการหมายถึง Single.
+
+Auto fallback เดินต่อได้เฉพาะ candidate ที่ผ่าน guard/capability policy. Paid API ไม่ถูกสร้างเป็น usable transport เอง: embedding host ต้อง inject official authenticated transport และตั้ง `execution.allow_paid_fallback: true`; default คือ **`false`**. ถ้า requested runner ใช้ไม่ได้และไม่มี eligible candidate เหลือ (รวม paid fallback ที่ยังปิด) pipeline **STOP → Human** พร้อมเหตุผล — ไม่เลือก provider หรือจ่ายเงินเงียบ ๆ.
+
+V3 flags ที่ `sta run` รับจริง:
+
+| Flag | ค่า/ผล |
+|---|---|
+| `--mode <single|auto|manual>` | เลือก execution mode; default `single` |
+| `--runtime <claude-code|codex|opencode|paid-api>` | เลือก runner; ถ้าไม่มี `--mode` จะบังคับ Single. `paid-api` ยังต้องเปิด config opt-in |
+| `--no-qa-optimization` | กลับไปใช้ executor QA แบบก่อน optimization สำหรับ task นี้; ไม่ใช่ QA skip |
+| `--no-deterministic-gate` | explicit escape hatch ปิด deterministic pre-check สำหรับ task นี้; default gate เปิด |
+| `--token-budget <n>` | positive integer, post-hoc task token ceiling; ไม่ใช่ pre-spawn context cap |
+
+ดู surface ทั้งหมดที่ build นี้รับจริงด้วย `sta --help`, runtime/support จริงด้วย `sta runtimes`, และผล routing/fallback ที่บันทึกด้วย `sta status <task-id>` / `sta audit <task-id>`.
 
 ## Installation
 
@@ -123,13 +154,20 @@ npm run build:templates  # snapshot templates/ + manifest.json
 
 | command | ทำอะไร |
 |---|---|
-| `init` | detect ชนิด workspace (Knowledge markers → BA, app-source markers → DEV), บันทึก identity + role ใน `.agent-team/config.yaml` แล้ว sync managed assets — idempotent, รันซ้ำได้ |
+| `init` | detect ชนิด workspace (Knowledge markers → BA, app-source markers → DEV); สำหรับ DEV จะ resolve Target stack จากหลักฐานใน repo; จากนั้นบันทึก identity + role + profile ใน `.agent-team/config.yaml` แล้ว sync assets — idempotent, รันซ้ำได้ |
 | `sync` | อัปเดต Framework-managed files ตาม installed version — ไฟล์ที่โดนแก้เอง**ไม่ถูก overwrite เงียบ ๆ** (report + recovery advice; `--force` = overwrite พร้อม backup) |
 | `status` | role, roots (Target/Framework/Knowledge), installed vs synced version, sync state, conflicts, Claude/Codex/OpenCode readiness (`--json` machine-readable) |
 | `dev` | preflight → launch runtime (`claude` default, `codex`/`opencode` เมื่อ `--runtime`) จาก Target — Knowledge binding **required** |
 | `ba` | preflight → launch runtime จาก Knowledge repo — Target **never required** |
 
-options ร่วม: `--target-root <path>` · `--role <ba|dev>` (init: เมื่อ markers ambiguous) · `--force` · `--no-auto-sync` (dev/ba) · `--runtime <claude|codex|opencode>` (dev/ba) · `--json` (status)
+options ร่วม: `--target-root <path>` · `--role <ba|dev>` (init: เมื่อ workspace markers ambiguous) · `--stack <name>` (init/sync: เมื่อ Target stack ambiguous หรือ unresolved) · `--force` · `--confirm-agents-pointer` (sync เท่านั้น) · `--no-auto-sync` (dev/ba) · `--runtime <claude|codex|opencode>` (dev/ba) · `--json` (status)
+
+สำหรับ DEV, Harness ตรวจ project/lock files ที่ root และลึกลงไปหนึ่งระดับโดยไม่ตาม symlink แล้ว resolve
+profile ที่ ship อยู่ (`node`/`frontend`, `dotnet`, `python`, `java`) พร้อม package manager, commands,
+source roots และ schema paths. Script ที่ Target ประกาศเองชนะ profile defaults. ถ้าพบหลาย stack families หรือ
+ไม่พบ profile ที่รองรับ `init` จะเขียน **nothing** และพิมพ์หลักฐานพร้อมคำสั่งแก้
+`software-team-agents init --stack <name>`; AI/setup playbook ต้องถามตัวเลือกนี้เฉพาะกรณีนั้น ไม่ detect
+หรือเลือก stack แทน Harness/คน. Profile family ที่เปลี่ยนภายหลังเป็น preflight STOP ไม่ใช่ silent rewrite.
 
 ### Role Workspace — BA ทำงานใน Knowledge, DEV ทำงานใน Target
 
@@ -152,11 +190,11 @@ software-team-agents dev       # preflight (Knowledge required!) → launch จ�
 | Role Workspace | `knowledgeRoot` | `targetRoot` |
 | Target | **NOT REQUIRED** | execution workspace (writable เท่านั้น) |
 | Knowledge | workspace (writable) | read context (**required**) |
-| Sync payload | BA agents (`business-analyst`, `system-analyst`, `project-manager`, `test-planner`, `uxui-designer`) + hooks + scripts + policies + `CLAUDE.md` | engineer roster (`backend/frontend-engineer`, `qa-engineer`, `security`, `devops` — **ไม่มี BA-lane prompts**, T-UX13) + contracts/workflows/stacks/layout YAML |
+| Sync payload | BA agents (`business-analyst`, `system-analyst`, `project-manager`, `test-planner`, `uxui-designer`) + hooks + scripts + policies + `CLAUDE.md` | engineer roster (`backend/frontend-engineer`, `qa-engineer`, `security`, `devops` — **ไม่มี BA-workspace prompts**, T-UX13) + contracts/workflows/stacks/layout YAML |
 | Write ที่อื่น | Framework/Target = DENY | Framework/Knowledge = DENY |
 | Knowledge-side artifacts (`_docs/module/*/requirement\|design\|test-plan.md`, `uxui/**`, `knowledge/**`) | ✅ เขียนได้ | **DENY ที่ hook** (T-UX13) — ต้องรันจาก Knowledge workspace |
 
-Write policy บังคับจริงผ่าน launch: session ได้ writable root เดียวคือ Role Workspace ของตัวเอง (cwd + `AGENTCLAUDE_WRITABLE_WORK_ROOTS=[]`) — cross-repo writes hit `block-outside-repo` guard (fail-closed) DEV ไม่มี Knowledge binding = preflight fail พร้อมวิธีแก้ทันที
+Write policy บังคับจริงผ่าน interactive launch: session ได้ writable root เดียวคือ Role Workspace ของตัวเอง (cwd + `AGENTCLAUDE_WRITABLE_WORK_ROOTS=[]`) — cross-repo writes hit `block-outside-repo` guard (fail-closed) DEV ไม่มี Knowledge binding = preflight fail พร้อมวิธีแก้ทันที. สำหรับ orchestrated V3 run executor ใส่เฉพาะ canonical Target write roots ที่ three-repo preflight resolve แล้ว
 
 DEV bind Knowledge ได้ 2 ทาง — repo-relative (commit ไปกับ Target):
 
@@ -179,8 +217,8 @@ overrides: []                   # path ที่ประกาศที่น�
 
 | WARNING | ตรวจอะไร | แก้ |
 |---|---|---|
-| Knowledge root bound but never initialized (T-WG1) | `installation.yaml` ผูก Knowledge root ที่มี marker ครบ แต่ไม่เคยมี `.agent-team/config.yaml` ที่นั่น — BA-lane prompt ไม่มีอยู่เลยทั้งเครื่อง | `cd <knowledgeRoot> && software-team-agents init --role ba` (`status` พิมพ์คำสั่งนี้ตรงๆ) |
-| Roster drift (T-WG2) | agent prompt ที่ชื่อเป็นของอีก lane (เช่น `business-analyst.md` ใน workspace `role: dev`) — ไม่มีทาง legitimate ไม่ว่าจะมาจากไหน | `software-team-agents sync --force` (backup ก่อนลบ; `sync` เฉยๆ report conflict ไม่ overwrite เงียบๆ) |
+| Knowledge root bound but never initialized (T-WG1) | `installation.yaml` ผูก Knowledge root ที่มี marker ครบ แต่ไม่เคยมี `.agent-team/config.yaml` ที่นั่น — BA-workspace prompt ไม่มีอยู่เลยทั้งเครื่อง | `cd <knowledgeRoot> && software-team-agents init --role ba` (`status` พิมพ์คำสั่งนี้ตรงๆ) |
+| Roster drift (T-WG2) | agent prompt ที่ชื่อเป็นของอีก workspace role (เช่น `business-analyst.md` ใน workspace `role: dev`) — ไม่มีทาง legitimate ไม่ว่าจะมาจากไหน | `software-team-agents sync --force` (backup ก่อนลบ; `sync` เฉยๆ report conflict ไม่ overwrite เงียบๆ) |
 | Misplaced module docs (T-WG4, `--check-workspace`) | `_docs/module/**` หรือ Modules table ใน `_docs/status.md` อยู่ใน workspace `role: dev` — ที่ถูกคือ Knowledge repo เท่านั้น | copy ไป `<knowledgeRoot>\_docs\module\<name>\`, merge status row, ลบของเดิม |
 
 ทั้งสามรายการนี้เป็น warning ไม่ block การทำงาน — จุดประสงค์คือให้คน (หรือ AI ที่ทำงานแทนคน) เห็นก่อนเขียนไฟล์ผิดที่
@@ -188,9 +226,22 @@ overrides: []                   # path ที่ประกาศที่น�
 
 ### Ownership model
 
-- **Framework-managed** — เฉพาะ path ที่ record ใน `.agent-team/manifest.json`: `.claude/agents|hooks|scripts|shared`, `.claude/settings.json`, `CLAUDE.md`, `contracts/`, `workflows/`, `policies/`, `stacks/`, `layout.yaml`, `escalation-policy.yaml`, `test-pyramid.yaml` + `.codex/agents/*.toml` (generated) + `.opencode/agent/*.md` (generated) + `.opencode/plugin/**`
-- **Target-owned เสมอ** — `src/`, `tests/`, `package.json`, business logic, `knowledge/`, `_docs/`, `decisions/`, `.workflow/`, `.git`, `node_modules`, `.agent-team/` — guarded ที่ code level แม้ manifest corrupt sync ก็ปฏิเสธ
-- **Sync rules** — disk == pristine → update (backup ก่อน) · disk != pristine → **conflict** (stop ทั้ง run) จนกว่าจะ revert / claim เป็น override / `--force` · managed file ที่ Framework เลิกใช้ถูก remove เฉพาะเมื่อ pristine · backup ทุกครั้งที่ overwrite/remove ที่ `.agent-team/backups/<timestamp>/`
+Instruction ownership มีสี่ precedence classes; `software-team-agents status --json` แสดงทุก path ใน
+`instructionSurface[]` พร้อม `owner`, `precedence`, `frameworkContributionPresent` และ consequence เมื่อขาด:
+
+| precedence | path class | กติกา |
+|---|---|---|
+| `framework-managed` | `.claude/agents/**`, `.codex/**`, `.opencode/**` | bytes มาจาก Framework/rendering และ track ใน manifest |
+| `project-owned-with-framework-block` | root `CLAUDE.md`, root `AGENTS.md` | project prose เป็นของ project; sync แตะเฉพาะ `<!-- sta:bootstrap -->` … `<!-- /sta:bootstrap -->`, backup ก่อนเขียน และ preserve bytes นอก markers (`AGENTS.md` ที่ยังไม่มีได้ rendered pointer ไป `CLAUDE.md`) |
+| `project-owned-merged` | `.claude/settings.json` | preserve project hooks/permissions/unknown keys แล้วเติมเฉพาะ Framework guard registrations ที่ขาด; ไฟล์นี้ไม่กลายเป็น manifest-managed |
+| `project-owned-untouched` | `CLAUDE.local.md`, nested `AGENTS.md` | detect/report ได้แต่ sync ไม่แก้; nested instructions อาจมี precedence เหนือ root block ตาม runtime |
+
+Source code, tests, package metadata, `knowledge/`, `_docs/`, `decisions/`, `.workflow/`, `.git`,
+`node_modules` และ `.agent-team/` ยังเป็น project-owned และ guard ปฏิเสธแม้ manifest เสีย. สำหรับ
+Framework-managed files: disk == pristine → update (backup ก่อน) · disk != pristine → **conflict** จนกว่า
+จะ revert / claim เป็น `overrides` / ยืนยัน `--force` · retired file ถูก remove เฉพาะเมื่อ pristine. Marker
+ผิดรูป/ซ้ำเป็น blocking conflict และ `--force` จะไม่เดา. `software-team-agents status` และ `sta doctor`
+เป็น read-only audit ของ instruction surface เดียวกัน.
 
 ## Workflow ของ pipeline (`sta`)
 
@@ -220,7 +271,7 @@ pipeline ที่มี design phase (`--new-feature`, `--schema`, `--business-
 ### Task lifecycle commands
 
 ```bash
-sta run      --task-id <id> --module <name> <classification flags> [--autonomy read-only|propose|edit|full]
+sta run      --task-id <id> --module <name> <classification flags> [--autonomy read-only|propose|edit|full] [--mode single|auto|manual] [--runtime claude-code|codex|opencode|paid-api]
 sta resume   --task-id <id> --module <name>          # continue task ใน store
 sta retry    --task-id <id> --module <name>          # same as resume
 sta pause    --task-id <id>                          # freeze; run/resume/retry refuse
@@ -229,11 +280,12 @@ sta status   [<task-id>] [--watch]                   # ทุก task หรื�
 sta approve  <task-id> [--yes|--no]                  # resolve human gate ของ task
 sta audit    <task-id> [--decisions]                 # WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail
 sta qa-metrics [<task-id>] [--export-json <p>] [--baseline <p>]
+sta context <role> [--module <name>] [--phase <n,n>] [--task <id> --packet] [--json]
 sta projects                                     # status summary ทุก project ใน workspace.yaml
 sta --list                                       # ทุก task + batch ที่รันพร้อมกันได้
 ```
 
-option สำคัญ: `--frontend-target/--backend-target <id>` (immutable ต่อ task), `--phase <n,n>`, `--depends-on <id,id>`, `--env <local|dev|staging|production>`, `--state-db <path>`
+option สำคัญ: `--frontend-target/--backend-target <id>` (immutable ต่อ task), `--phase <n,n>`, `--depends-on <id,id>`, `--env <local|dev|staging|production>`, `--state-db <path>`, `--token-budget <n>`, `--no-qa-optimization`, `--no-deterministic-gate`. `sta context --task <id> --packet` อ่าน latest validated V3 execution packet จาก Runtime State. ความหมายของ V3 execution flags อยู่ในตารางด้านบน; ไม่มี user-facing `--model` หรือ `--qa-skip` ใน CLI นี้
 
 ### Human approval gates
 
@@ -252,7 +304,7 @@ sta roles impact REQ-101                         # lane ไหนจะโดน
 sta roles context dev                            # lane นี้เห็นอะไรได้บ้าง
 ```
 
-lane ที่มีจริง: `ba | sa | uxui | dev` — acknowledge/signoff เป็น human act บันทึกใน `knowledge/_roles/**` (agent เขียนไฟล์นี้ไม่ได้ทุกกรณี)
+knowledge-visibility lane ที่มีจริง: `ba | sa | uxui | dev` — acknowledge/signoff เป็น human act บันทึกใน `knowledge/_roles/**` (agent เขียนไฟล์นี้ไม่ได้ทุกกรณี)
 
 ### Failure / recovery
 
@@ -285,6 +337,13 @@ targets:
 
 preflight ตรวจว่า origin remote ของ local checkout ตรงกับ `remote_url` canonical — ไม่ตรง = reject พร้อมเหตุผล
 
+Knowledge item ที่มี `target_ids: []` เป็น global; item ที่ระบุ Target จะเข้า retrieval/brief เฉพาะ session
+ที่ bind Target นั้น และจำนวนที่ถูก scope ออกจะถูกรายงาน. ใช้
+`sta knowledge reconcile --target <id>` (`--json` ได้) เพื่อคำนวณ current/desired evidence ใหม่แบบ
+read-only โดยไม่บันทึก verdict หรือแก้ repo ใด. นิยาม authoritative ของ scope, origin, freshness และ
+reconciliation อยู่ที่ [`knowledge/README.md`](knowledge/README.md); หัวข้อนี้เป็น authoritative home ของ
+Target registry, local mapping และพฤติกรรมหลาย Target เท่านั้น.
+
 ## Shared Knowledge (สรุป)
 
 Knowledge ไม่ใช่ "AI memory" — เป็นข้อมูลร่วมของทีมที่มีโครงสร้างและ lifecycle รายละเอียดเต็มใน [`knowledge/README.md`](knowledge/README.md):
@@ -294,7 +353,8 @@ Knowledge ไม่ใช่ "AI memory" — เป็นข้อมูลร�
 - **Relations 9 แบบ + legality matrix**: `refines/implements/verifies/references/depends-on/constrains/supersedes/conflicts-with/derived-from` — ผิดกฎ = report โดย `--check-knowledge`
 - **Source/provenance/freshness** — ทุก item อ้าง `sources[]` freshness วัดจาก digest ของ source ก่อนอายุ: source เปลี่ยน = stale ทันที
 - **Status**: `draft → reviewed → approved → deprecated` — approve ได้เฉพาะคน (`sta roles approve`)
-- **Role-based context** — `knowledge-policy.yaml` กำหนด field ที่แต่ละ role เห็น (default: sensitive items ถูก redact สำหรับ devops/project-manager) และทุก result บอกด้วยว่าอะไรถูก withhold
+- **Role/Target-based context** — `knowledge-policy.yaml` กำหนด field ที่แต่ละ role เห็น; `target_ids: []` เป็น global และรายการที่ scoped จะเข้า context เฉพาะ Target ปัจจุบัน พร้อมจำนวนที่ถูก exclude/fallback เมื่อ resolve Target ไม่ได้
+- **Freshness + reconciliation** — brief แสดง verdict จาก `freshnessOf()` ภายใต้เพดาน 16,384 B; `sta knowledge reconcile --target <id>` คำนวณรายงาน current/desired แบบ read-only ทุกครั้งและไม่บันทึก verdict
 - Reserved directories: `_sources/ _conflicts/ _bootstrap/ _human-input/ _adoption/ _roles/`
 
 ## Design sources & identities (uxui-designer)
@@ -305,10 +365,11 @@ Knowledge ไม่ใช่ "AI memory" — เป็นข้อมูลร�
 - **UX gate ข้ามงานเล็ก (T-UX12)**: TRIVIAL/SMALL ไม่ถูก block ที่ UX-artifact precondition (pipeline ไม่ได้จัด uxui ให้อยู่แล้ว — "AI ออกแบบตรง"); MEDIUM+ และ level ไม่ทราบยังต้องมี signed artifact · SA→DEV handoff บังคับทุก level
 - **Routing back (T-UX10)**: คำถามที่ไม่ใช่หน้าที่ uxui (คุ้มค่าไหม → BA · ทำได้ไหม → SA) ถูกรายงานเป็น structured failure แล้ว orchestrator route กลับอัตโนมัติ; ถ้า pipeline นั้นไม่มี BA/SA ให้ถาม → BLOCKED fail-closed
 
-**Design source เข้าถึง agent ได้ 2 ทางเท่านั้น (ห้าม scrape URL):**
+**Design source เข้าถึง agent ได้ 3 ทาง (ห้าม scrape URL):**
 
 1. **Path A — handoff bundle**: คนวาง export/handoff จาก Claude Design ไว้ที่ `knowledge/_sources/design/<module>/handoff/`
 2. **Path B — export files**: คนวาง export file (HTML/MD) ไว้ที่ `knowledge/_sources/design/<module>/` — item ที่ derive จะบันทึก `sha256` digest ผ่าน `digestOfSource()` เดียวกับ freshness model; ไฟล์เปลี่ยน = recommendation นั้น stale ทันที
+3. **Path C — Claude Design via MCP (two-way, draft-only)**: เชื่อม official server (`https://api.anthropic.com/v1/design/mcp`, login ด้วย `/design-login`) — ทิศ IN อ่าน project/files/comments เป็น draft `UX-*`; ทิศ OUT seed brief → draft mockup บน canvas · **allowlist fail-closed** frozen จาก live server (READ 9 tools / WRITE เฉพาะ `copy_files, create_project, write_files`) — destructive/publishing/membership/chat tools ถูก refuse ถาวร (`orchestrator/src/integration/claudeDesignMcp.ts`); output ทุกทิศยังเป็น **draft** ต้องมีคน sign-off เหมือนเดิม · Path A/B ยังใช้ได้ครบเป็น fallback (offline/ไม่ login)
 
 **Figma ผ่าน MCP แบบ read-only:**
 
@@ -336,11 +397,40 @@ sta configure identity --figma-email <email> --claude-email <email>
 | `block-secret-leak.js` | Stop/SubagentStop | ไฟล์ที่ run แก้ห้ามมี hardcoded secret (`.env.example` รวมด้วย) |
 
 - **Guards ถูกเทสต์** — `node .claude/tests/run.js` (self-test ไม่มี dependencies) — guard ที่ syntax error ต้อง fail loud ไม่ใช่ fail open
+- **Installed ≠ registered** — hook script ที่มีอยู่บน disk ยังไม่แปลว่า effective `.claude/settings.json` เรียกมัน. `software-team-agents status`/`software-team-agents status --json` แสดง `hooksRegistered/hooksInstalled`; `sta doctor` ตรวจ surface เดียวกันแบบ read-only.
+- **`Guards wired` เป็น launch gate** — preflight ของ `software-team-agents dev|ba` เทียบ Framework registrations ที่ติดตั้งกับ effective settings; ขาดแม้หนึ่งรายการ = FAIL พร้อม `software-team-agents sync`. ถ้า `.claude/settings.json` อยู่ใน `overrides`, gate รายงาน explicit user choice แทนการนับเป็น pass จาก wiring ที่ไม่มี.
 - **ฝั่ง OpenCode** — git deny เป็น declarative `permission.bash` globs ใน binding เอง (specificity wins); outside-root/contract path guards มาจาก `sta-guards.js` plugin (auto-load, throw = deny) · doc-rewrite/secret-leak/exit checks **ยังไม่ enforce in-band** → adapter รายงาน unenforced + executor ตะโกน `GUARD GAP` ให้ QA round เป็นตัวครอบ
-- **Validation flags** — `sta --check-*` 15 ตัว: `contracts, layout, workflows, profile, decisions, test-pyramid, review-separation, escalation-policy, workspace, repos, environments, doc-structure, knowledge, installation, roles` (+ `--check-bindings` มีใน CLI แต่ไม่ได้ wire ใน CI). `--check-workspace` ตรวจสองเรื่องที่ไม่เกี่ยวกัน: `workspace.yaml` (multi-project grouping, T41) และ misplaced-docs scan (T-WG4) — `role: dev` workspace ที่มี `_docs/module/**` หรือ Modules table ใน `status.md` โดนรายงานพร้อม hint ปลายทางใน Knowledge repo
+- **Validation flags** — `sta --check-*` 16 ตัว: `contracts, layout, workflows, profile, decisions, test-pyramid, review-separation, escalation-policy, workspace, repos, environments, doc-structure, plan, knowledge, installation, roles` (+ `--check-bindings` มีใน CLI แต่ไม่ได้ wire ใน CI). `--check-plan [--module <name>]` ตรวจตาราง task ของทุก `plan.md` เป็น dependency graph แบบ deterministic (duplicate id / dangling·self·duplicate dependency / cycle / owner·status ผิด / DES traceability / wave ordering) — pm-improvements T-PM1.3. `--check-workspace` ตรวจสองเรื่องที่ไม่เกี่ยวกัน: `workspace.yaml` (multi-project grouping, T41) และ misplaced-docs scan (T-WG4) — `role: dev` workspace ที่มี `_docs/module/**` หรือ Modules table ใน `status.md` โดนรายงานพร้อม hint ปลายทางใน Knowledge repo
 - **doctor** — `sta doctor --project-root <path>` รวม 9 checks แบบ read-only (installation, knowledge binding/schema, targets registry, local mappings, runtime adapter, state store, guard wiring) exit 1 เมื่อมี FAIL พร้อม "Fix:" ทุกข้อ
 - **Audit trail** — `sta audit <task-id>`
-- **Backup/Rollback** — v2 sync backup ที่ `.agent-team/backups/<ts>/`; V1 upgrade/migrate snapshot ที่ `.sta/backups/` คืนได้ด้วย `sta rollback` / `sta list-backups`
+- **Backup/Rollback** — role-aware sync backup ที่ `.agent-team/backups/<ts>/`; legacy upgrade/migrate snapshot ที่ `.sta/backups/` คืนได้ด้วย `sta rollback` / `sta list-backups`
+
+- **Profile-aware static analysis** — `.claude/scripts/static-analysis-gate.js` reads the resolved Target's `stack.commands`, scans only its declared source roots/extensions, and reports `unverified` (exit 2) when every verification command is skipped. With no resolved profile, the legacy Node/package-script report remains unchanged. The gate is offline and never installs a toolchain.
+
+## Slash command shortcuts (Claude runtime)
+
+`.claude/commands/*.md` คือ prompt shortcut ที่พิมพ์ได้ใน Claude Code (`/critic`, `/checklist`, `/summarize`, …) —
+**31 ตัว** คัดจาก catalog 50 ตัว (ตัดของส่วนตัว/marketing + `/rewrite` ที่ชนนโยบาย amend-don't-regenerate),
+mapping ครบทุก role อยู่ที่ [`planning/v2/claude-commands-TASKS.md`](planning/v2/claude-commands-TASKS.md) §1.1
+
+- **เป็น prompt เท่านั้น** — ไม่แก้ runtime/hook; agent ที่ถูกสั่งผ่าน command ยังโดน guards เดิมทุกตัว
+- **Guardrails รวมไฟล์เดียว** — `@_shared/guardrails.md` ถูก import จากทุก command (บังคับ output format, cap, cite file:line, ask-first)
+- **Ship ไป target project** ผ่าน `software-team-agents init`/`sync` (TEMPLATE_SOURCES มี `.claude/commands` เป็น concept `command` ใน layout.yaml)
+- **กัน drift** — `node .claude/tests/run.js` section 11 ตรวจ frontmatter/import/forbidden-instructions/จำนวนไฟล์ = 31
+
+### Runtime mirrors ของ command ชุดเดียวกัน (generated — ห้าม hand-edit)
+
+Source of truth คือ `.claude/commands/*.md` เสมอ · `software-team-agents init`/`sync` generate ให้ทั้งสอง runtime เพิ่มอัตโนมัติ
+และ `sta --check-bindings` ตรวจ byte-match ทุกไฟล์:
+
+| Runtime | ไฟล์ | Invoke | Transform |
+|---|---|---|---|
+| Claude Code | `.claude/commands/<name>.md` | `/name` | source (guardrails ผ่าน `@_shared/` include) |
+| OpenCode | `.opencode/commands/<name>.md` | `/name` | drop `argument-hint` · **inline guardrails 5 ข้อ** (OpenCode resolve `@file` จาก project root — spike T-OCC1) · body verbatim |
+| Codex ≥ 0.117 | `.agents/skills/<name>/SKILL.md` (+ `agents/openai.yaml`) | `$name` / เมนู `/skills` | frontmatter `name`+`description` verbatim · drop `argument-hint` · inline guardrails · openai.yaml ปิด implicit invocation (คนพิมพ์เท่านั้น) |
+
+Regenerate mirror ใน Framework repo เอง: `npm --prefix orchestrator run build && node scripts/regenerate-renderings.mjs`
+(หรือแก้ที่ `.claude/**` แล้ว rerun gates — self-test sections 11b/11c ตรวจ content rules ของทั้งสองชุด mirror)
 
 ## Version Management
 
@@ -349,9 +439,9 @@ sta configure identity --figma-email <email> --claude-email <email>
   - `UP_TO_DATE` — ตรงกัน
   - `OUTDATED` — minor/patch ต่าง → `software-team-agents sync` ได้เลย
   - `INCOMPATIBLE` — **major ต่าง** → ต้อง `sync --force` (cross-major jump ต้องตัดสินใจเอง ไม่ happen เงียบ ๆ) และ `dev/ba` preflight จะ fail ทันที
-- **Upgrade flow (v2)**: ติดตั้ง `.tgz` ใหม่ → `software-team-agents sync` ต่อ workspace (auto-sync ก่อน `dev/ba` เมื่อ plan ปลอด conflict)
+- **Current workspace upgrade flow**: ติดตั้ง `.tgz` ใหม่ → `software-team-agents status` → `software-team-agents sync` ต่อ BA/DEV workspace; locally modified managed files block จนกว่าจะ resolve หรือยืนยัน `--force` (backup ก่อนเขียน)
 - **Legacy install (`.sta/`)**: `sta upgrade --mode legacy-project --templates <dir>` (skip ไฟล์ที่ user แก้, restore ไฟล์ที่ถูกลบ, backup ก่อนเขียน) · `sta migrate` สำหรับ breaking manifest schema change · `sta rollback [--backup <name>]`
-- **Knowledge item schema**: migration `1 → 2` (เพิ่ม `target_ids`) ผ่าน `sta knowledge-migrate <dry-run|copy|verify|cutover>` — cutover ต้อง `--confirm I_CONFIRM_MIGRATION`
+- **Knowledge item schema**: opt-in migration `1 → 2` เพิ่ม `origin` + `target_ids` ผ่าน `sta knowledge migrate-v2 --dry-run` แล้ว `sta knowledge migrate-v2`; ไม่เปลี่ยน body/payload/status/owner/version และรายงาน freshness sweep แรกเป็น baseline. คำสั่ง legacy `sta knowledge-migrate <dry-run|copy|verify|cutover>` ยังเป็น Three-Repo copy/cutover flow และ cutover ต้อง `--confirm I_CONFIRM_MIGRATION`
 - **ยังไม่มี**: publish ขึ้น npm registry, auto-update, lockfile/resolution ข้าม repo — distribution ผ่าน `.tgz` เท่านั้น
 
 ## Configuration Reference
@@ -359,15 +449,66 @@ sta configure identity --figma-email <email> --claude-email <email>
 | ไฟล์ | อยู่ที่ | keys สำคัญ |
 |---|---|---|
 | `installation.yaml` | `%LOCALAPPDATA%\software-team-agents\` (Windows) หรือ `~/.config/software-team-agents/` | `schema_version: 1`, `knowledge_root` (เขียนโดย `sta configure knowledge-root`) |
-| `.agent-team/config.yaml` | Target/Knowledge workspace | `schema_version`, `target_id`, `registered_at`, `role` (`ba\|dev`), `knowledge.path`, `overrides[]` |
+| `.agent-team/config.yaml` | Target/Knowledge workspace | `schema_version`, `target_id`, `registered_at`, `role` (`ba\|dev`), `knowledge.path`, DEV `stack`, optional `execution`, `overrides[]` |
 | `.agent-team/manifest.json` | generated, ห้าม hand-edit | `framework_version`, `files[]` (path + pristine sha256) |
+| `.sta/config.yaml` | orchestrated/legacy project root | `schema_version: 1`, optional `execution`, `routing`, `qa`, `verification`, `token_budget`, `context_budget`; upgrade ไม่ rewrite ค่า project-owned นี้ |
 | `targets.yaml` | Knowledge root | registry ของ Target: `target_id/name/remote_url/status` |
 | `.workflow/targets.local.yaml` | Knowledge root (local) | map `target_id → path` |
 | `knowledge-policy.yaml` | Knowledge root | field visibility ต่อ role + freshness thresholds |
 | `project.yaml` | Framework repo | `current` (stack ที่ agents สร้างได้จริง) vs `target` (stack อนาคต — checked ต่างมาตรฐาน) |
 | `layout.yaml`, `escalation-policy.yaml`, `test-pyramid.yaml` | Framework repo (+ synced ไป DEV workspace) | directory ownership / recovery policy / test levels |
 
-Environment variables ที่ runtime ใช้: `AGENTCLAUDE_ROLE` (role ปัจจุบันสำหรับ path permissions), `AGENTCLAUDE_WRITABLE_WORK_ROOTS` (JSON array ของ writable roots — launcher ตั้ง `[]` เสมอ)
+Environment variables ที่ runtime ใช้: `AGENTCLAUDE_ROLE` (role ปัจจุบันสำหรับ path permissions), `AGENTCLAUDE_WRITABLE_WORK_ROOTS` (JSON array — interactive `dev|ba` ตั้ง `[]`; orchestrated Target-write stage ได้เฉพาะ canonical roots จาก three-repo preflight), และ `AGENTCLAUDE_KNOWLEDGE_ROOT` (read-only Knowledge context เมื่อ resolve ได้)
+
+V3 config ทั้งหมดเป็น optional; config ก่อน V3 ที่มีเพียง `schema_version: 1` ยัง parse และ resolve เป็น Single/Claude Code. ตัวอย่างที่เปิด Auto โดยยังไม่เปิด paid fallback:
+
+```yaml
+schema_version: 1
+execution:
+  mode: auto
+  runner: claude-code
+  allow_handoff: true
+  allow_paid_fallback: false
+routing:
+  strategy: subscription-first
+  order: [claude-code, codex, opencode]
+  allow_below_supported: [codex, opencode]
+  by_role:
+    backend-engineer:
+      runtime: codex
+      model: gpt-5
+qa:
+  strategy: risk-based
+verification:
+  baseline: [unit]
+```
+
+ค่าที่ **OFF by default** และ V3 ไม่เปิดให้เอง: Auto (config ว่าง resolve เป็น `single`; การเพิ่ม `routing.strategy`/`routing.order` ถือเป็น opt-in เช่นกัน) · pyramid enforcement (`test-pyramid.yaml` omitted `enforcement` = `warn`) · QA `skip` (production CLI ไม่มี flag/config เปิด; low-risk QA ยังเป็น `lightweight`) · paid fallback (`execution.allow_paid_fallback` default `false`). Deterministic gate ตรงข้ามกันคือเปิดโดย default และปิดเฉพาะ task ด้วย `--no-deterministic-gate`.
+
+`stack:` เป็น Target-resolved configuration ที่ engineer prompts และ verification gate ใช้ร่วมกัน ไม่ใช่
+Framework-wide default:
+
+```yaml
+stack:
+  profile: dotnet
+  package_manager: nuget
+  commands:
+    install: dotnet restore
+    build: dotnet build
+    test: dotnet test
+    lint: dotnet format --verify-no-changes
+    typecheck: dotnet build
+  schema_paths: []
+  source_roots: ['.']
+  detected_at: <ISO timestamp>
+  fingerprint: sha256:<evidence digest>
+  generated_hash: sha256:<detector-owned fields digest>
+```
+
+`fingerprint` เปลี่ยนเมื่อ project/lock/script evidence เปลี่ยน; `generated_hash` แยก deterministic output
+จาก block ที่คนแก้เอง. Sync ไม่ rewrite block ที่คนแก้เงียบ ๆ และ profile-family change จะหยุดให้คน review.
+การเปลี่ยน stack เป็น human decision เสมอ. นี่คือ authoritative home ของ Target adaptation; `CLAUDE.md`
+และ role prompts ชี้มาที่ block นี้โดยไม่ทำสำเนาค่า stack.
 
 ## Workflow ตัวอย่าง End-to-End
 
@@ -399,13 +540,15 @@ software-team-agents dev --runtime opencode # หรือเปิดด้ว�
 # 4) รัน task ผ่าน pipeline (headless)
 sta run --task-id T-7 --module demo --bug-fix --backend --autonomy edit \
   --backend-target my-product --project-root C:\src\company-knowledge
-#   (--runtime codex|opencode เลือก runtime ของ headless run; default claude-code)
+#   default: --mode single + claude-code
+#   --runtime codex|opencode โดยไม่มี --mode ยังหมายถึง Single; Auto ต้อง --mode auto
 sta status T-7 --project-root C:\src\company-knowledge
 sta audit T-7 --project-root C:\src\company-knowledge
 
 # 5) อัปเกรด framework เมื่อมี .tgz ใหม่
-npm i -g ./software-team-agents-1.0.0-rc.1.tgz
-cd C:\src\my-product && software-team-agents sync
+npm i -g ./software-team-agents-<version>.tgz
+cd C:\src\my-product && software-team-agents status
+software-team-agents sync
 software-team-agents status                 # syncState: UP_TO_DATE
 ```
 
@@ -421,9 +564,10 @@ npm run build:templates  # snapshot templates/ + manifest.json
 node ../.claude/tests/run.js   # hook/script self-test — ต้องเขียวเสมอถ้าแตะ hooks/scripts
 ```
 
-- CI: [`.github/workflows/agent-framework-ci.yml`](.github/workflows/agent-framework-ci.yml) รัน self-test + typecheck + tests + 15 release-gate `--check-*` flag + template build/init check บนทุก PR และทุก push ไป `master` หรือ `release/**` (default branch `release/dev` รวมอยู่ — release path ไม่มีทาง bypass validation)
+- Release gate: `npm run release:check` (root) รันทุก step ตามลำดับ release. V3 property gates สาม step แยกรันเดี่ยวได้เพื่อ debug: `npm run test:guardrails` (guardrail invariants หกข้อ), `npm run test:modes` (Single/Auto/Manual matrix บน mock runner), `npm run test:paid-fallback` (paid API ไปไม่ถึงเมื่อ `allow_paid_fallback` เป็น false) — ไม่มี step ไหนต้อง login runner จริงหรือรัน dogfood
+- CI: [`.github/workflows/agent-framework-ci.yml`](.github/workflows/agent-framework-ci.yml) รัน self-test + typecheck + tests + release-gate `--check-*` flags + template build/init check บนทุก PR และทุก push ไป `master` หรือ `release/**` (default branch `release/dev` รวมอยู่ — release path ไม่มีทาง bypass validation)
 - โครงสร้าง directory ถูกประกาศใน [`layout.yaml`](layout.yaml) และตรวจด้วย `--check-layout` — เพิ่ม folder ใหม่ต้องประกาศก่อน
-- เอกสารกฎ: [`policies/`](policies/README.md) · machine-readable half ของ agent: [`contracts/`](contracts/) · pipeline detail: [`CLAUDE.md`](CLAUDE.md) · agent operating rules: [`AGENTS.md`](AGENTS.md) · knowledge model: [`knowledge/README.md`](knowledge/README.md) · V1 contract (guarantees/non-goals): [`decisions/ADR-004-v1-contract.md`](decisions/ADR-004-v1-contract.md)
+- เอกสารกฎ: [`policies/`](policies/README.md) · machine-readable half ของ agent: [`contracts/`](contracts/) · operating/pipeline rules: [`CLAUDE.md`](CLAUDE.md) · Codex root pointer: [`AGENTS.md`](AGENTS.md) · knowledge model: [`knowledge/README.md`](knowledge/README.md) · V1 contract (guarantees/non-goals): [`decisions/ADR-004-v1-contract.md`](decisions/ADR-004-v1-contract.md)
 - `templates/` เป็น build artifact — แก้ที่ root sources (`.claude/`, `contracts/`, ...) แล้ว regenerate เสมอ
 - `planning/` เป็น working docs ภายใน (gitignored) ไม่ได้แถมมากับ repo ที่ clone
 

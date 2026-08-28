@@ -7,6 +7,8 @@ import {
   loadTargetConfig,
   readTargetManifest,
   type TargetConfig,
+  type TargetManifest,
+  type TargetStackConfig,
 } from "./targetMeta.js";
 import { devDerivedContent, planSync } from "./syncEngine.js";
 import {
@@ -16,13 +18,17 @@ import {
   resolveKnowledgeBinding,
   resolveTargetBinding,
   TargetBindingError,
-  ROLE_LABEL,
+  WORKSPACE_ROLE_LABEL,
   type KnowledgeBinding,
-  type RoleName,
+  type WorkspaceRole,
   type TargetBinding,
 } from "./roleWorkspace.js";
 import { classifySyncState, type SyncState } from "./version.js";
 import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
+import { detectInstructionSurface, isNestedInstruction, type InstructionSurfaceEntry } from "../threeRepo/ownership.js";
+import { targetStackWasHumanEdited } from "./targetProfile.js";
+import { CLAUDE_SETTINGS_PATH, inspectGuardWiring, type GuardWiringStatus } from "./guardSettings.js";
+import { effectiveExecutionConfig, loadStaConfig, type StaConfig } from "../packaging/staConfig.js";
 
 /**
  * T-TARGET-10 + T-ROLE-18 — `software-team-agents status`: the whole
@@ -41,13 +47,16 @@ export interface TargetStatus {
   frameworkRoot: string;
   frameworkVersion: string;
   /** Resolved or marker-detected role of this workspace, when determinable. */
-  role?: RoleName;
+  role?: WorkspaceRole;
   workspaceKind: ReturnType<typeof detectWorkspaceKind>;
   knowledgeRoot?: string;
   knowledgeBinding?: { knowledgeRoot: string; via: string };
-  /** T-LV1 — BA-lane only: the optional Target binding resolved from `target.path`, when one is set and valid; "invalid" carries the problem in targetRoot. Absent when unset (silent, never required). */
+  /** T-LV1 — BA-workspace only: the optional Target binding resolved from `target.path`, when one is set and valid; "invalid" carries the problem in targetRoot. Absent when unset (silent, never required). */
   targetBinding?: { targetRoot: string; via: string };
   targetId?: string;
+  /** Cached deterministic Target profile; absent means not yet detected. */
+  stack?: TargetStackConfig;
+  stackProfileMismatch?: string;
   syncedVersion?: string;
   syncState: SyncState;
   /** Managed paths whose on-disk content matches neither pristine nor shipped. */
@@ -59,13 +68,17 @@ export interface TargetStatus {
    * merge protocol can reconcile them; never a blocking condition.
    */
   projectOwnedPaths: string[];
-  /** T-WG2 — agent-prompt files on disk belonging to the other lane. Never legitimate; sync --force removes them. */
+  /** Complete read-only inventory of instructions that can affect this workspace. */
+  instructionSurface: InstructionSurfaceEntry[];
+  /** T-WG2 — agent-prompt files on disk belonging to the other workspace role. Never legitimate; sync --force removes them. */
   rosterDriftPaths: string[];
   managedFileCount: number;
+  hooksInstalled: number;
+  hooksRegistered: number;
   /**
    * T-WG1 — installation.yaml binds a Knowledge root (marker-complete) that was
    * never `init --role ba`'d there: every command past binding validation
-   * succeeds, so nothing else notices the BA-lane prompts don't exist anywhere
+   * succeeds, so nothing else notices the BA-workspace prompts don't exist anywhere
    * on the machine (F1 in workspace-guardrails-TASKS.md). Set to the bound
    * root's path when this applies; absent otherwise (unbound, or bound and
    * initialized).
@@ -74,6 +87,29 @@ export interface TargetStatus {
   claude: RuntimeReadiness;
   codex: RuntimeReadiness;
   opencode: RuntimeReadiness;
+  /** V3 omission is healthy: the effective values reproduce pre-V3 behavior. */
+  v3Configuration: { configured: boolean; detail: string };
+}
+
+export function v3ExecutionStatus(
+  config: TargetConfig | undefined,
+  staConfig?: StaConfig,
+): TargetStatus["v3Configuration"] {
+  const execution = config?.execution ?? staConfig?.execution;
+  const effective = effectiveExecutionConfig(execution);
+  const configured = Boolean(execution || staConfig?.routing || staConfig?.qa || staConfig?.verification);
+  if (!configured) {
+    return {
+      configured: false,
+      detail: "not configured — defaults apply (single / claude-code / deterministic gate enabled / paid fallback disabled)",
+    };
+  }
+  return {
+    configured: true,
+    detail:
+      `configured (mode=${effective.mode}, runner=${effective.runner}, ` +
+      `handoff=${effective.allow_handoff ? "enabled" : "disabled"}, paid fallback=${effective.allow_paid_fallback ? "enabled" : "disabled"})`,
+  };
 }
 
 function countFiles(dir: string, suffix: string): number {
@@ -84,9 +120,20 @@ function countFiles(dir: string, suffix: string): number {
   }
 }
 
-export function claudeReadiness(targetRoot: string): RuntimeReadiness {
+export function claudeReadiness(targetRoot: string, guardWiring?: GuardWiringStatus): RuntimeReadiness {
   const agents = countFiles(path.join(targetRoot, ".claude", "agents"), ".md");
   if (agents === 0) return { ready: false, detail: "no .claude/agents/*.md — run software-team-agents sync" };
+  if (guardWiring?.overridden) {
+    return { ready: true, detail: `${agents} agent(s); Framework guard wiring explicitly declined via overrides` };
+  }
+  if (guardWiring) {
+    if (guardWiring.hooksInstalled === 0) return { ready: true, detail: `${agents} agent(s); no Framework guard registrations shipped for this profile` };
+    if (guardWiring.settingsError) return { ready: false, detail: `${guardWiring.settingsError} — run software-team-agents sync` };
+    if (guardWiring.missingRegistrations.length > 0) {
+      return { ready: false, detail: `${guardWiring.hooksRegistered}/${guardWiring.hooksInstalled} Framework guard registration(s) wired — run software-team-agents sync` };
+    }
+    return { ready: true, detail: `${agents} agent(s), Framework guards wired (${guardWiring.hooksRegistered}/${guardWiring.hooksInstalled})` };
+  }
   const settingsPath = path.join(targetRoot, ".claude", "settings.json");
   if (!fs.existsSync(settingsPath)) return { ready: false, detail: "no .claude/settings.json — hooks unwired" };
   try {
@@ -139,8 +186,17 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
       return undefined;
     }
   })();
+  const staConfig: StaConfig | undefined = (() => {
+    try {
+      return fs.existsSync(path.join(roots.targetRoot, ".sta", "config.yaml"))
+        ? loadStaConfig(roots.targetRoot)
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
   const kind = detectWorkspaceKind(roots.targetRoot);
-  const role: RoleName | undefined =
+  const role: WorkspaceRole | undefined =
     config?.role ??
     (kind === "knowledge" ? "ba" : kind === "target" ? "dev" : undefined);
 
@@ -150,8 +206,12 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
   let rosterDriftPaths: string[] = [];
   let managedFileCount = 0;
   let syncState: SyncState = "NOT_INITIALIZED";
+  let frameworkInstructionPaths = new Set<string>();
+  let targetManifest: TargetManifest | undefined;
   if (initialized) {
     const manifest = readTargetManifest(roots.targetRoot);
+    targetManifest = manifest;
+    frameworkInstructionPaths = new Set(manifest.files.map((file) => file.path));
     syncedVersion = manifest.framework_version;
     managedFileCount = manifest.files.length;
     syncState = classifySyncState(manifest.framework_version, frameworkVersion);
@@ -181,6 +241,11 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     }
   }
 
+  const guardWiring = inspectGuardWiring({ targetRoot: roots.targetRoot, templatesDir, manifest: targetManifest, config });
+  if (!guardWiring.overridden && guardWiring.hooksInstalled > 0 && guardWiring.missingRegistrations.length === 0) {
+    frameworkInstructionPaths.add(CLAUDE_SETTINGS_PATH);
+  }
+
   // Knowledge picture depends on the role: required-and-validated for DEV,
   // informational for BA.
   let knowledgeBinding: KnowledgeBinding | undefined;
@@ -204,7 +269,7 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     knowledgeBinding = knowledgeBinding ?? { knowledgeRoot: roots.targetRoot, via: "workspace" };
   }
 
-  // T-LV1 — BA-lane-only, optional Target binding. Any resolution problem is
+  // T-LV1 — BA-workspace-only, optional Target binding. Any resolution problem is
   // reported as "invalid" rather than thrown: status must never crash because
   // a Target binding is unset or wrong.
   let targetBinding: TargetBinding | undefined;
@@ -241,23 +306,35 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     knowledgeBinding,
     targetBinding,
     targetId: config?.target_id,
+    stack: config?.stack,
+    stackProfileMismatch:
+      config?.stack && targetStackWasHumanEdited(config.stack)
+        ? "stack config differs from the last detected profile; human-edited values are authoritative"
+        : undefined,
     syncedVersion,
     syncState,
     conflictCount,
     projectOwnedPaths,
+    instructionSurface: detectInstructionSurface({
+      targetRoot: roots.targetRoot,
+      frameworkPaths: frameworkInstructionPaths,
+    }),
     rosterDriftPaths,
     managedFileCount,
+    hooksInstalled: guardWiring.hooksInstalled,
+    hooksRegistered: guardWiring.hooksRegistered,
     knowledgeBoundButUninitialized,
-    claude: claudeReadiness(roots.targetRoot),
+    claude: claudeReadiness(roots.targetRoot, guardWiring),
     codex: codexReadiness(roots.targetRoot),
     opencode: opencodeReadiness(roots.targetRoot),
+    v3Configuration: v3ExecutionStatus(config, staConfig),
   };
 }
 
 export function renderStatus(status: TargetStatus): string {
   const lines: string[] = [];
   if (status.role) {
-    lines.push(`Role: ${ROLE_LABEL[status.role]} (${status.role})`);
+    lines.push(`Workspace role: ${WORKSPACE_ROLE_LABEL[status.role]} (${status.role})`);
     lines.push(`Workspace: ${status.role === "ba" ? "Knowledge" : "Target"}`);
   }
   lines.push(status.role === "ba" ? "Knowledge:" : "Target:");
@@ -279,6 +356,7 @@ export function renderStatus(status: TargetStatus): string {
   lines.push("Framework:");
   lines.push(`  ${status.frameworkRoot}`);
   lines.push(`  installed version: ${status.frameworkVersion}`);
+  lines.push(`V3 config: ${status.v3Configuration.detail}`);
   if (status.role === "dev") {
     if (!status.knowledgeBinding) {
       lines.push("Knowledge: NOT BOUND — required for DEV (set knowledge.path in .agent-team/config.yaml)");
@@ -295,7 +373,17 @@ export function renderStatus(status: TargetStatus): string {
     lines.push("  installed and synced Framework versions differ in major — review the changelog before re-syncing (sync --force)");
   }
   if (status.syncedVersion !== undefined) lines.push(`  synced Framework version: ${status.syncedVersion}`);
+  if (status.role === "dev") {
+    if (status.stack) {
+      lines.push(`  Target stack: ${status.stack.profile} (${status.stack.package_manager}; ${status.stack.fingerprint})`);
+      if (status.stackProfileMismatch) lines.push(`  WARNING: ${status.stackProfileMismatch}`);
+    } else {
+      lines.push("  Target stack: UNRESOLVED — run software-team-agents init --stack <name>");
+    }
+  }
+
   lines.push(`  managed files: ${status.managedFileCount}`);
+  lines.push(`  Framework guard registrations: ${status.hooksRegistered}/${status.hooksInstalled} registered`);
   if (status.conflictCount > 0) lines.push(`  conflicts: ${status.conflictCount} — run software-team-agents sync to see them`);
   // T-WG9 — collision-aware reporting: paths the project owns are never a
   // blocking condition, but leaving them silent is how a workspace ends up
@@ -303,17 +391,34 @@ export function renderStatus(status: TargetStatus): string {
   // at the merge protocol.
   if (status.projectOwnedPaths.length > 0) {
     lines.push(`  project-owned paths left alone (${status.projectOwnedPaths.length}):`);
-    for (const p of status.projectOwnedPaths) lines.push(`    ${p}`);
+    for (const p of status.projectOwnedPaths) {
+      const consequence = status.instructionSurface.find((entry) => entry.path === p)?.consequence;
+      lines.push(`    ${p}${consequence ? ` — ${consequence}` : ""}`);
+    }
     lines.push("    → reconcile via prompt-setup.md (\"Merging with the project's existing Claude setup\"), then claim them in .agent-team/config.yaml overrides");
   }
+  if (status.instructionSurface.length > 0) {
+    lines.push(`Instruction surface (${status.instructionSurface.length}):`);
+    for (const entry of status.instructionSurface) {
+      lines.push(
+        `  ${entry.path} — owner=${entry.owner}, precedence=${entry.precedence}, Framework contribution=${entry.frameworkContributionPresent ? "present" : "absent"}` +
+          (entry.consequence ? `; ${entry.consequence}` : ""),
+      );
+    }
+  }
+  const nestedInstructions = status.instructionSurface.filter(isNestedInstruction);
+  if (nestedInstructions.length > 0) {
+    lines.push(`WARNING: nested instructions may shadow or contradict the root bootstrap (${nestedInstructions.length}):`);
+    for (const entry of nestedInstructions) lines.push(`  ${entry.path} — project-owned and read-only; review its effective scope`);
+  }
   if (status.rosterDriftPaths.length > 0) {
-    lines.push(`WARNING: roster drift — agent prompt(s) from another lane found in this workspace (${status.rosterDriftPaths.length}):`);
+    lines.push(`WARNING: roster drift — agent prompt(s) from another workspace role found here (${status.rosterDriftPaths.length}):`);
     for (const p of status.rosterDriftPaths) lines.push(`    ${p}`);
     lines.push("    → run `software-team-agents sync --force` to remove them (backed up first)");
   }
   if (status.knowledgeBoundButUninitialized) {
     lines.push(
-      `WARNING: Knowledge root bound in installation.yaml (${status.knowledgeBoundButUninitialized}) has no .agent-team/config.yaml — the BA-lane is not usable anywhere on this machine yet.`,
+      `WARNING: Knowledge root bound in installation.yaml (${status.knowledgeBoundButUninitialized}) has no .agent-team/config.yaml — the BA workspace role is not usable anywhere on this machine yet.`,
     );
     lines.push(`  fix: cd "${status.knowledgeBoundButUninitialized}" && software-team-agents init --role ba`);
   }

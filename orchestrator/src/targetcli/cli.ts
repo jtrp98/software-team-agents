@@ -9,7 +9,7 @@ import { TargetSyncConflictError, planSync, runTargetSync } from "./syncEngine.j
 import { readTargetManifest, isTargetInitialized, loadTargetConfig, TargetNotInitializedError } from "./targetMeta.js";
 import { installedFrameworkVersion } from "./version.js";
 import { runBa, runDev, type RuntimeName } from "./devCommand.js";
-import { assetsForRole, type RoleName } from "./roleWorkspace.js";
+import { assetsForRole, type WorkspaceRole } from "./roleWorkspace.js";
 
 /**
  * T-TARGET-01 + T-ROLE-03/04 — the Target-first, role-aware entry point.
@@ -34,7 +34,9 @@ export const TARGET_USAGE =
   "options:\n" +
   "  --target-root <path>   operate on <path> instead of the current directory\n" +
   "  --role <ba|dev>        init: say what this workspace is when markers are ambiguous\n" +
+  "  --stack <name>         init/sync: explicitly resolve ambiguous Target stack evidence\n" +
   "  --force                sync/init: overwrite locally-modified managed files (backed up first)\n" +
+  "  --confirm-agents-pointer sync: reduce a provable CLAUDE.md duplicate to the generated AGENTS.md pointer (backed up)\n" +
   "  --no-auto-sync         dev/ba: refuse to run when managed assets are outdated\n" +
   "  --runtime <name>       dev/ba: claude (default), codex or opencode\n" +
   "  --json                 status: machine-readable output\n" +
@@ -44,8 +46,10 @@ export const TARGET_USAGE =
 export interface TargetCliArgs {
   command?: "init" | "sync" | "status" | "dev" | "ba";
   targetRoot?: string;
-  role?: RoleName;
+  role?: WorkspaceRole;
+  stack?: string;
   force: boolean;
+  confirmAgentsPointer: boolean;
   autoSync: boolean;
   runtime: RuntimeName;
   json: boolean;
@@ -55,7 +59,7 @@ export interface TargetCliArgs {
 
 /** Pure argv parser — no console/exit, directly testable. */
 export function parseTargetArgs(argv: string[]): TargetCliArgs {
-  const args: TargetCliArgs = { force: false, autoSync: true, runtime: "claude", json: false, help: false, version: false };
+  const args: TargetCliArgs = { force: false, confirmAgentsPointer: false, autoSync: true, runtime: "claude", json: false, help: false, version: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     switch (arg) {
@@ -72,13 +76,20 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
         if (!args.targetRoot) throw new Error("--target-root requires a path");
         break;
       case "--role": {
-        const value = argv[++i] as RoleName | undefined;
+        const value = argv[++i] as WorkspaceRole | undefined;
         if (value !== "ba" && value !== "dev") throw new Error(`--role must be ba or dev (got ${value ?? "nothing"})`);
         args.role = value;
         break;
       }
+      case "--stack":
+        args.stack = argv[++i];
+        if (!args.stack) throw new Error("--stack requires a profile name");
+        break;
       case "--force":
         args.force = true;
+        break;
+      case "--confirm-agents-pointer":
+        args.confirmAgentsPointer = true;
         break;
       case "--no-auto-sync":
         args.autoSync = false;
@@ -155,6 +166,7 @@ export async function runTargetCli(
           now: new Date().toISOString(),
           force: args.force,
           role: args.role,
+          stack: args.stack,
           installationConfigPath: options.installationConfigPath,
         });
         console.log(
@@ -166,6 +178,9 @@ export async function runTargetCli(
         const updated = result.sync.performed.filter((p) => p.action === "update").length;
         const unchanged = result.sync.performed.filter((p) => p.action === "unchanged").length;
         console.log(`[software-team-agents]   managed assets: ${added} added, ${updated} updated, ${unchanged} already current`);
+        for (const action of result.sync.performed.filter((entry) => entry.action === "override")) {
+          console.log(`[software-team-agents]   override     ${action.path} (${action.note ?? "explicit user choice"})`);
+        }
         if (result.sync.backupDir) console.log(`[software-team-agents]   previous copies backed up in ${result.sync.backupDir}`);
         return 0;
       }
@@ -185,6 +200,8 @@ export async function runTargetCli(
             installationConfigPath: options.installationConfigPath,
             now: new Date().toISOString(),
             force: args.force,
+            explicitStack: args.stack,
+            confirmAgentsPointer: args.confirmAgentsPointer,
           });
           for (const action of result.performed) {
             if (action.action === "unchanged") continue;
@@ -195,6 +212,7 @@ export async function runTargetCli(
               `${result.previousVersion && result.previousVersion !== result.frameworkVersion ? ` (was ${result.previousVersion})` : ""}`,
           );
           if (result.backupDir) console.log(`[software-team-agents] previous copies backed up in ${result.backupDir}`);
+          if (result.stackProfileMismatch) console.log(`[software-team-agents] WARNING: ${result.stackProfileMismatch}`);
           return 0;
         } catch (e) {
           if (e instanceof TargetSyncConflictError) {
@@ -204,8 +222,12 @@ export async function runTargetCli(
               console.error(
                 conflict.kind === "user-modified"
                   ? "    recovery: revert the edit, claim the file via .agent-team/config.yaml overrides, or re-run with --force"
+                  : conflict.kind === "unmergeable-settings"
+                    ? "    recovery: fix/merge .claude/settings.json manually, claim it in .agent-team/config.yaml overrides, or re-run with --force (backup first)"
+                  : conflict.kind === "malformed-framework-block"
+                    ? "    recovery: restore CLAUDE.md from .agent-team/backups or repair it to exactly one sta:bootstrap marker pair; --force will not guess"
                   : conflict.kind === "roster-drift"
-                    ? "    recovery: re-run with --force to remove it (backed up first) — it belongs to another lane and does not belong in this workspace"
+                    ? "    recovery: re-run with --force to remove it (backed up first) — it belongs to another workspace role and does not belong here"
                     : "    recovery: move/rename your file aside, then re-run software-team-agents sync",
               );
             }

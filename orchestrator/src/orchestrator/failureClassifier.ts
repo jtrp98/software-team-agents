@@ -1,7 +1,7 @@
 import { AgentStage } from "../types.js";
 import { sectionMap } from "../context/contextManager.js";
 import { parseSecurityReport } from "../agents/moduleDocs.js";
-import { routeByCategory, type FailureCategory } from "../routing/dynamicRouter.js";
+import { routeByCategory, type FailureCategory } from "../routing/failureRouting.js";
 import type { StructuredFailure } from "./failure.js";
 
 /**
@@ -187,8 +187,8 @@ export interface QaClassificationOptions {
    * The stages this task actually runs (T38). Given, a stated category resolves
    * to a stage the task can genuinely reach; withheld, it resolves to the
    * category's canonical destination and `routeFailure` still refuses it if this
-   * pipeline has no such stage. Optional because the real caller
-   * (`claudeCliExecutor`) is handed a stage and a task id, not a pipeline.
+   * pipeline has no such stage. Optional because the runtime executor is handed
+   * a stage and a task id, not a pipeline.
    */
   pipeline?: readonly AgentStage[];
 }

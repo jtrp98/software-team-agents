@@ -3,11 +3,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { SpawnSyncReturns } from "node:child_process";
 import { afterAll, describe, expect, it } from "vitest";
+import { AgentStage } from "../types.js";
 import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import { CodexAdapter } from "./codexAdapter.js";
+import { createRuntimeExecutor } from "./runtimeExecutor.js";
+import { MockRuntimeAdapter } from "./mockAdapter.js";
 import { OpenCodeAdapter } from "./openCodeAdapter.js";
-import type { RuntimeAdapter, RuntimeAgentRequest, RuntimeGuardReport, RuntimeWorkRoot, SpawnSync } from "./runtimeAdapter.js";
+import { ApiAdapter } from "./apiAdapter.js";
+import { NO_GUARDS, type RuntimeAdapter, type RuntimeAgentRequest, type RuntimeGuardReport, type RuntimeWorkRoot, type SpawnSync } from "./runtimeAdapter.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import { RuntimeRegistry } from "./runtimeRegistry.js";
 
 /**
  * T-V1-05 — the runtime conformance suite: one mandatory-case matrix run
@@ -59,6 +64,7 @@ const WORK_ROOTS: readonly RuntimeWorkRoot[] = [{ targetId: "target-a", path: TA
 // Exactly what `runtimeExecutor.ts` puts in `req.env` for a Target-write run —
 // this suite mirrors the production caller, never an invented request shape.
 const EXECUTOR_ENV = {
+  AGENTCLAUDE_ROLE: ROLE,
   AGENTCLAUDE_KNOWLEDGE_ROOT: KNOWLEDGE_ROOT,
   AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([TARGET_ROOT]),
 };
@@ -93,12 +99,13 @@ interface ConformanceRow {
 interface CapturedCall {
   readonly args: readonly string[];
   readonly env: NodeJS.ProcessEnv | undefined;
+  readonly input: string | undefined;
 }
 
 /** Records every spawn and answers each binary's well-shaped success envelope. */
-function capturingSpawn(binary: "claude" | "codex" | "opencode", calls: CapturedCall[]): SpawnSync {
-  return ((_command: string, args: string[], options: { env?: NodeJS.ProcessEnv }) => {
-    calls.push({ args, env: options.env });
+function capturingSpawn(binary: "claude" | "codex" | "opencode" | "paid-api", calls: CapturedCall[]): SpawnSync {
+  return ((_command: string, args: string[], options: { env?: NodeJS.ProcessEnv; input?: string }) => {
+    calls.push({ args, env: options.env, input: options.input });
     const stdout =
       binary === "claude"
         ? JSON.stringify({ result: "done", is_error: false, usage: { input_tokens: 3, output_tokens: 4 }, total_cost_usd: 0 })
@@ -131,7 +138,7 @@ function enoentSpawn(): SpawnSync {
 
 interface Implementation {
   readonly id: string;
-  readonly binary: "claude" | "codex" | "opencode";
+  readonly binary: "claude" | "codex" | "opencode" | "paid-api";
   /** `resolveCommand: () => null` keeps the Windows npm-shim retry out — this suite measures surfaces, not PATH resolution. */
   readonly make: (projectRoot: string, spawn: SpawnSync) => RuntimeAdapter;
 }
@@ -151,6 +158,28 @@ const IMPLEMENTATIONS: readonly Implementation[] = [
     id: "opencode",
     binary: "opencode",
     make: (root, spawn) => new OpenCodeAdapter({ projectRoot: root, spawnSync: spawn, resolveCommand: () => null }),
+  },
+  {
+    id: "paid-api",
+    binary: "paid-api",
+    make: (root, spawn) => new ApiAdapter({
+      projectRoot: root,
+      models: ["api-model"],
+      probe: async () => ({ available: true, version: "mock-api" }),
+      invoke: async (request) => {
+        const proc = spawn("paid-api", [request.role, request.prompt], {
+          cwd: request.cwd,
+          encoding: "utf8",
+          timeout: request.timeoutMs,
+          env: { ...process.env, ...request.env },
+          input: request.prompt,
+        });
+        if (proc.error) {
+          return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [proc.error.message] };
+        }
+        return { status: "OK", exitCode: 0, text: "done", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [] };
+      },
+    }),
   },
 ];
 
@@ -179,7 +208,7 @@ function writeFixture(root: string): void {
     }),
     "utf8",
   );
-  fs.writeFileSync(path.join(root, ".claude", "agents", `${ROLE}.md`), "role text");
+  fs.writeFileSync(path.join(root, ".claude", "agents", `${ROLE}.md`), `role text\n${INSTRUCTIONS_MARKER}`);
   fs.mkdirSync(path.join(root, ".codex", "agents"), { recursive: true });
   fs.writeFileSync(
     path.join(root, ".codex", "agents", `${ROLE}.toml`),
@@ -263,16 +292,16 @@ async function runConformance(impl: Implementation): Promise<ConformanceRow[]> {
     {
       caseId: "role-contract-loading",
       verdict:
-        impl.id === "codex"
+        impl.id === "codex" || impl.id === "paid-api"
           ? surface.includes(INSTRUCTIONS_MARKER)
             ? "PASS"
             : "FAIL"
           : surface.split("\u0000").includes("--agent") && surface.split("\u0000").includes(ROLE)
             ? "PASS"
             : "FAIL",
-      detail: impl.id === "codex" ? "developer_instructions folded from the binding into the prompt" : "--agent <role> names the binding entry",
+      detail: impl.id === "codex" || impl.id === "paid-api" ? "role instructions folded into the prompt" : "--agent <role> names the binding entry",
     },
-    { caseId: "context-injection", verdict: surface.includes(PROMPT) ? "PASS" : "FAIL" },
+    { caseId: "context-injection", verdict: surface.includes(PROMPT) || calls.some((c) => c.input === PROMPT) ? "PASS" : "FAIL" },
     {
       caseId: "knowledge-binding",
       verdict: env.AGENTCLAUDE_KNOWLEDGE_ROOT === KNOWLEDGE_ROOT ? "PASS" : "FAIL",
@@ -361,6 +390,13 @@ describe("T-V1-05 runtime conformance — one matrix, every runtime", () => {
           "hook-plugin-execution": "ENFORCED",
           "exit-handling": "REPORTED_UNENFORCED",
         },
+        "paid-api": {
+          "allowed-write-guard": "REPORTED_UNENFORCED",
+          "forbidden-write-guard": "REPORTED_UNENFORCED",
+          "state-changing-git-protection": "REPORTED_UNENFORCED",
+          "hook-plugin-execution": "REPORTED_UNENFORCED",
+          "exit-handling": "REPORTED_UNENFORCED",
+        },
       };
 
       it(`earns its declared guard verdicts (${JSON.stringify(expectations[impl.id])})`, async () => {
@@ -387,6 +423,72 @@ describe("T-V1-05 runtime conformance — one matrix, every runtime", () => {
         expect(report.find((r) => r.caseId === caseId)?.verdict, `${impl.id} ${caseId}`).toBe("PASS");
       }
     }
+  });
+
+  it("T-V3R-001 criterion 1 — no routed Target-write stage reaches a runtime missing its required guard capability", async () => {
+    const root = newFixture();
+    fs.mkdirSync(path.join(root, ".sta"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".sta", "config.yaml"),
+      "schema_version: 1\nmodel_routing:\n  backend-engineer: unsafe:mock-model\n",
+      "utf8",
+    );
+    const fallback = new MockRuntimeAdapter({ id: "claude-code" });
+    const unsafe = new MockRuntimeAdapter({ id: "unsafe", models: ["mock-model"], capabilities: [] });
+    const registry = new RuntimeRegistry([fallback, unsafe]);
+    const executor = createRuntimeExecutor({
+      runtime: fallback,
+      registry,
+      projectRoot: root,
+      moduleName: () => "phase-0",
+      guards: () => NO_GUARDS,
+      sliceModuleDocs: false,
+      threeRepoTask: () => ({
+        task: { taskId: "T-V3R-001" } as never,
+        roots: {
+          bindingRoot: root,
+          knowledgeRoot: KNOWLEDGE_ROOT,
+          workRoots: [...WORK_ROOTS],
+        },
+      }),
+    });
+
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-V3R-001", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect((result.outcome as { failure_reason?: string }).failure_reason).toMatch(/cannot enforce a pre-tool workspace guard/);
+    expect(fallback.requests).toHaveLength(0);
+    expect(unsafe.requests).toHaveLength(0);
+  });
+
+  it("T-V3R-001 criterion 3 — every registered adapter passes role and writable-root guard env unmodified", async () => {
+    const root = newFixture();
+    const callsByRuntime = new Map<string, CapturedCall[]>();
+    const adapters: RuntimeAdapter[] = IMPLEMENTATIONS.map((impl) => {
+      const calls: CapturedCall[] = [];
+      callsByRuntime.set(impl.id, calls);
+      return impl.make(root, capturingSpawn(impl.binary, calls));
+    });
+    const mock = new MockRuntimeAdapter({ id: "mock" });
+    adapters.push(mock);
+    const registry = new RuntimeRegistry(adapters);
+
+    for (const adapter of registry.list()) {
+      await adapter.executeAgent({
+        role: ROLE,
+        cwd: root,
+        knowledgeRoot: KNOWLEDGE_ROOT,
+        workRoots: WORK_ROOTS,
+        definitionPath: adapter.binding.definitionPath(ROLE),
+        prompt: PROMPT,
+        autonomy: "edit",
+        guards: GUARDS,
+        env: EXECUTOR_ENV,
+      });
+      const observed = adapter === mock ? mock.requests.at(-1)?.env : callsByRuntime.get(adapter.id)?.at(-1)?.env;
+      expect(observed?.AGENTCLAUDE_ROLE, adapter.id).toBe(EXECUTOR_ENV.AGENTCLAUDE_ROLE);
+      expect(observed?.AGENTCLAUDE_WRITABLE_WORK_ROOTS, adapter.id).toBe(EXECUTOR_ENV.AGENTCLAUDE_WRITABLE_WORK_ROOTS);
+    }
+    expect(registry.ids()).toEqual(["claude-code", "codex", "opencode", "paid-api", "mock"]);
   });
 
   it("reports the orchestrator-owned axes as covered elsewhere, naming the owning suites", async () => {

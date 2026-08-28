@@ -1,0 +1,118 @@
+[
+  {
+    "workflow": "typo",
+    "level": "TRIVIAL",
+    "pipeline": [
+      "backend-engineer",
+      "frontend-engineer"
+    ],
+    "requiresHumanApproval": false
+  },
+  {
+    "workflow": "bugfix",
+    "level": "SMALL",
+    "pipeline": [
+      "backend-engineer",
+      "frontend-engineer",
+      "qa-engineer"
+    ],
+    "requiresHumanApproval": false
+  },
+  {
+    "workflow": "incremental",
+    "level": "MEDIUM",
+    "pipeline": [
+      "system-analyst",
+      "test-planner",
+      "backend-engineer",
+      "uxui-designer",
+      "frontend-engineer",
+      "qa-engineer"
+    ],
+    "requiresHumanApproval": false
+  },
+  {
+    "workflow": "business-rule",
+    "level": "MEDIUM",
+    "pipeline": [
+      "business-analyst",
+      "system-analyst",
+      "test-planner",
+      "backend-engineer",
+      "uxui-designer",
+      "frontend-engineer",
+      "qa-engineer"
+    ],
+    "requiresHumanApproval": false
+  },
+  {
+    "workflow": "feature",
+    "level": "LARGE_CRITICAL",
+    "pipeline": [
+      "business-analyst",
+      "system-analyst",
+      "project-manager",
+      "test-planner",
+      "backend-engineer",
+      "uxui-designer",
+      "frontend-engineer",
+      "qa-engineer"
+    ],
+    "requiresHumanApproval": true
+  },
+  {
+    "workflow": "schema-change",
+    "level": "LARGE_CRITICAL",
+    "pipeline": [
+      "system-analyst",
+      "test-planner",
+      "backend-engineer",
+      "uxui-designer",
+      "frontend-engineer",
+      "qa-engineer",
+      "security"
+    ],
+    "requiresHumanApproval": true
+  },
+  {
+    "workflow": "deploy",
+    "level": "LARGE_CRITICAL",
+    "pipeline": [
+      "devops"
+    ],
+    "requiresHumanApproval": true
+  },
+  {
+    "workflow": "hotfix",
+    "level": "MEDIUM",
+    "pipeline": [
+      "backend-engineer",
+      "frontend-engineer",
+      "qa-engineer",
+      "devops"
+    ],
+    "requiresHumanApproval": true
+  },
+  {
+    "workflow": "refactor",
+    "level": "SMALL",
+    "pipeline": [
+      "backend-engineer",
+      "frontend-engineer",
+      "qa-engineer"
+    ],
+    "requiresHumanApproval": false
+  },
+  {
+    "workflow": "security-fix",
+    "level": "LARGE_CRITICAL",
+    "pipeline": [
+      "backend-engineer",
+      "frontend-engineer",
+      "qa-engineer",
+      "security",
+      "devops"
+    ],
+    "requiresHumanApproval": true
+  }
+]

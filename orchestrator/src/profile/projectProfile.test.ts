@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import { Capability } from "../agents/capabilities.js";
+import { defaultProjectRoot } from "../agents/agentContract.js";
 import {
   ProfileError,
   agentsForCurrentStack,
@@ -96,13 +97,13 @@ describe("the shipped profiles", () => {
   });
 
   it("resolves the real build commands for each side", () => {
-    expect(commandsFor("backend").typecheck).toContain("npm");
-    expect(commandsFor("frontend").build).toContain("npm");
+    expect(commandsFor("backend", defaultProjectRoot()).typecheck).toContain("npm");
+    expect(commandsFor("frontend", defaultProjectRoot()).build).toContain("npm");
   });
 
   it("names the agents that can take work on the current stack", () => {
-    expect(agentsForCurrentStack("backend")).toContain(AgentStage.BACKEND_ENGINEER);
-    expect(agentsForCurrentStack("frontend")).toContain(AgentStage.FRONTEND_ENGINEER);
+    expect(agentsForCurrentStack("backend", defaultProjectRoot())).toContain(AgentStage.BACKEND_ENGINEER);
+    expect(agentsForCurrentStack("frontend", defaultProjectRoot())).toContain(AgentStage.FRONTEND_ENGINEER);
   });
 
   it("gives the dotnet profile the gRPC capability nothing implements yet", () => {

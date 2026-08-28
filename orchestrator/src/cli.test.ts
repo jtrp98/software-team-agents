@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { CliUsageError, USAGE, parseArgs, runCli, watchListing } from "./cli.js";
+import { CliUsageError, USAGE, createProductionRuntimeRegistry, parseArgs, productionQaInputs, runCli, watchListing } from "./cli.js";
 import { defaultProjectRoot } from "./agents/agentContract.js";
 import { classifyTask } from "./classification/taskClassifier.js";
 import { SqliteTaskStore } from "./store/sqliteStore.js";
@@ -10,6 +10,10 @@ import { TaskRegistry } from "./orchestrator/taskRegistry.js";
 import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
 import { acquireTaskLock, releaseTaskLock } from "./concurrency/taskLock.js";
 import { Environment } from "./environment/environment.js";
+import { AgentStage, TaskState } from "./types.js";
+import type { ExecutionPacket } from "./artifacts/schemas.js";
+import { writeExecutionPacket } from "./state/runtimeArtifacts.js";
+import { RunLog } from "./observability/runLog.js";
 
 describe("parseArgs", () => {
   it("parses required flags and maps classification flags", () => {
@@ -26,6 +30,7 @@ describe("parseArgs", () => {
       list: false,
       checkContracts: false,
       checkLayout: false,
+      checkPromptBudget: false,
       checkWorkflows: false,
       checkBindings: false,
       checkProfile: false,
@@ -37,6 +42,7 @@ describe("parseArgs", () => {
       checkRepos: false,
       checkEnvironments: false,
       checkDocStructure: false,
+      checkPlan: false,
       checkKnowledge: false,
       checkInstallation: false,
       checkRoles: false,
@@ -47,7 +53,11 @@ describe("parseArgs", () => {
       phases: [],
       targetBindings: { frontend_target: null, backend_target: null },
       autonomy: undefined,
+      runtime: undefined,
+      mode: undefined,
       noQaOptimization: false,
+      noDeterministicGate: false,
+      tokenBudget: undefined,
       version: false,
     });
   });
@@ -64,9 +74,25 @@ describe("parseArgs", () => {
   });
 
   it("parses --runtime and rejects runtimes no adapter implements (T-OC5)", () => {
-    expect(parseArgs(["--task-id", "T-1", "--module", "m", "--runtime", "opencode"], "/repo").runtime).toBe("opencode");
+    const explicit = parseArgs(["--task-id", "T-1", "--module", "m", "--runtime", "opencode"], "/repo");
+    expect(explicit.runtime).toBe("opencode");
+    expect(explicit.mode).toBe("single");
     expect(parseArgs(["--task-id", "T-1", "--module", "m"], "/repo").runtime).toBeUndefined();
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--runtime", "ghost"], "/repo")).toThrow(CliUsageError);
+  });
+
+  it("parses all three orchestrated modes and rejects unknown modes", () => {
+    for (const mode of ["single", "auto", "manual"] as const) {
+      expect(parseArgs(["--task-id", "T-1", "--module", "m", "--mode", mode], "/repo").mode).toBe(mode);
+    }
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--mode", "silent"], "/repo")).toThrow(CliUsageError);
+  });
+
+  it("parses the post-hoc token budget and deterministic-gate escape hatch", () => {
+    const args = parseArgs(["--task-id", "T-1", "--module", "m", "--token-budget", "42000", "--no-deterministic-gate"], "/repo");
+    expect(args.tokenBudget).toBe(42_000);
+    expect(args.noDeterministicGate).toBe(true);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--token-budget", "0"], "/repo")).toThrow(CliUsageError);
   });
 
   it("--project-root overrides the default", () => {
@@ -90,6 +116,39 @@ describe("parseArgs", () => {
 
   it("throws CliUsageError on an unrecognized flag", () => {
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--nope"], "/repo")).toThrow(CliUsageError);
+  });
+});
+
+describe("T-V3R-032 production runtime composition", () => {
+  it("constructs the complete runtime registry used by the real CLI executor call site", () => {
+    expect(createProductionRuntimeRegistry(defaultProjectRoot()).ids()).toEqual(["claude-code", "codex", "opencode"]);
+    expect(createProductionRuntimeRegistry(defaultProjectRoot(), { allowPaidFallback: true }).ids()).toEqual([
+      "claude-code", "codex", "opencode", "paid-api",
+    ]);
+    const source = fs.readFileSync(path.join(defaultProjectRoot(), "orchestrator", "src", "cli.ts"), "utf8");
+    expect(source).toContain("registry: runtimeRegistry");
+    expect(source).toContain("runtime: defaultRuntime");
+  });
+});
+
+describe("productionQaInputs (T-V3TOK-062)", () => {
+  it("uses plan/design references and a compact diff summary without blank evidence placeholders", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-qa-inputs-"));
+    try {
+      const docs = path.join(root, "_docs", "module", "sales");
+      fs.mkdirSync(docs, { recursive: true });
+      fs.writeFileSync(path.join(docs, "plan.md"), "## Phase 1\n\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-001 (DES-002) — import invoices | pending | backend-engineer | — |\n");
+      fs.writeFileSync(path.join(docs, "design.md"), "# Design\n\n## Risks & Dependencies\n\n- external API\n");
+      const inputs = await productionQaInputs({ docsRoot: root, moduleName: "sales", taskId: "BE-001", roots: [root] });
+      const pkg = inputs.packageInputs();
+      expect(pkg.taskIntent).toContain("import invoices");
+      expect(pkg.acceptanceCriteria).toContain("design.md#DES-002");
+      expect(pkg.knownRisks).toEqual(["design.md#Risks-&-Dependencies"]);
+      expect(pkg.diffSummary).not.toContain("(none supplied)");
+      expect(Buffer.byteLength(pkg.diffSummary)).toBeLessThan(2_000);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
@@ -625,6 +684,126 @@ describe("T35 concurrency lock, wired into the CLI", () => {
   });
 });
 
+describe("T-V3TOK-003 tokens verb", () => {
+  it("reports interactive unknown token fields as not reported while retaining its static measurement", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-tokens-"));
+    const store = new SqliteTaskStore(defaultStateDbPath(dir));
+    store.appendRun({
+      task_id: "session:dev:2026-08-26T00:00:00.000Z", agent: AgentStage.BACKEND_ENGINEER,
+      start_time: 1, end_time: 2, duration: 1, model: null, promptVersion: null, tokens: 0, cost: 0,
+      result: "PASS", retry_count: 0, failure_reason: null, input_tokens: null, output_tokens: null,
+      cache_read_tokens: null, context_chars: null, qa_mode: null, qa_effort: null, runtime: "claude",
+      requested_runtime: null, requested_model: null, routing_basis: null, fallback_reason: null, fallback_count: null,
+      session_kind: "interactive",
+      deterministic_gate: null,
+      instruction_surface_bytes: 123,
+      static_chars: 321, handoff_chars: null, doc_chars: null, doc_chars_before: null, knowledge_chars: null, code_intel_chars: null, tool_output_chars: null,
+      context_budget_chars: 100, context_budget_source: "role", context_overflow_chars: 221, context_budget_warning: true,
+      context_base_chars: 321, context_task_chars: 0, context_safety_chars: 0, context_docs_chars: 0, context_knowledge_chars: 0, context_code_chars: 0, context_tool_output_chars: 0, context_reserve_chars: 0,
+    });
+    store.close();
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+    try {
+      expect(await runCli(["tokens", "--project-root", dir], dir)).toBe(0);
+      expect(logs.join("\n")).toContain("not reported");
+      expect(logs.join("\n")).toContain("static=321");
+      expect(logs.join("\n")).toContain("always-on-instructions=123 B");
+      expect(logs.join("\n")).toContain("context-budget warnings: 1/1 measured run(s), overflow=221");
+      expect(logs.join("\n")).toContain(
+        "V3 rollups: total_token_per_completed_task=not reported first_pass_success_rate=not reported fallback_rate=not reported",
+      );
+      expect(await runCli(["tokens", "--help"], dir)).toBe(0);
+      expect(USAGE).toContain("sta tokens");
+    } finally {
+      console.log = original;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("T-V3R-080 renders known completed-task and fallback rollups", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-v3-rollups-"));
+    const store = new SqliteTaskStore(defaultStateDbPath(dir));
+    const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+    registry.create({ taskId: "T-done", classification: classifyTask({ isClearBugFix: true, touchesBackend: true }) });
+    const task = store.loadTask("T-done")!;
+    store.saveTask({ ...task, machine: { ...task.machine, current: TaskState.DEPLOYED } });
+    store.appendRun(new RunLog().record({
+      task_id: "T-done", agent: AgentStage.BACKEND_ENGINEER, start_time: 1, end_time: 2,
+      outcome: { tokens: 100, input_tokens: 80, output_tokens: 20, cost: 0, result: "PASS", retry_count: 0, fallback_count: 0 },
+    }));
+    registry.close();
+
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+    try {
+      expect(await runCli(["tokens", "--project-root", dir], dir)).toBe(0);
+      expect(logs.join("\n")).toContain(
+        "V3 rollups: total_token_per_completed_task=100 first_pass_success_rate=100.0% fallback_rate=0.0%",
+      );
+    } finally {
+      console.log = original;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("T-V3TOK-041 context verb", () => {
+  it("routes through the CLI and emits machine-readable composition", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-context-cli-"));
+    const dir = path.join(root, "_docs", "module", "sales");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "requirement.md"), "# Req\n\n## Scope\nMVP\n", "utf8");
+    fs.writeFileSync(path.join(dir, "design.md"), "# Design\n\n## Risks & Dependencies\nnone\n\n## Open Questions\nnone\n", "utf8");
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+    try {
+      expect(await runCli(["context", "backend-engineer", "--module", "sales", "--phase", "1", "--json", "--project-root", root], root)).toBe(0);
+      const output = JSON.parse(logs.join("\n")) as { module: string; composition: { doc_chars_before: number; direct_file_reads: number } };
+      expect(output.module).toBe("sales");
+      expect(output.composition.doc_chars_before).toBeGreaterThan(0);
+      expect(output.composition.direct_file_reads).toBeGreaterThan(0);
+      expect(USAGE).toContain("sta context <role>");
+    } finally {
+      console.log = original;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("renders the latest persisted packet without reopening module documents", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-context-packet-"));
+    const text = "Task T-PACKET\n## Acceptance Criteria\n- inspectable";
+    const packet: ExecutionPacket = {
+      text,
+      composition: { static_chars: text.length, handoff_chars: 0, doc_chars: 0, knowledge_chars: 0, code_intel_chars: 0, tool_output_chars: 0 },
+      budgetComposition: { base: text.length, task: 0, safety: 0, docs: 0, knowledge: 0, code: 0, tool_output: 0, reserve: 0 },
+      task_id: "T-PACKET",
+      stage: AgentStage.BACKEND_ENGINEER,
+      role: "backend-engineer",
+      acceptance_criteria: ["inspectable"],
+      required_verification: [],
+      stop_conditions: ["STOP on invalid state"],
+      scope: { allow: ["server/**"], deny: [".git/**"] },
+      sources: ["runtime-task"],
+    };
+    writeExecutionPacket({ projectRoot: root, packet });
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+    try {
+      expect(await runCli(["context", "backend-engineer", "--task", "T-PACKET", "--packet", "--json", "--project-root", root], root)).toBe(0);
+      expect(JSON.parse(logs.join("\n"))).toMatchObject({ task_id: "T-PACKET", scope: { allow: ["server/**"] } });
+      expect(USAGE).toContain("--packet");
+    } finally {
+      console.log = original;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("T37 audit verb", () => {
   function tmpDir(): string {
     return fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-audit-"));
@@ -641,17 +820,35 @@ describe("T37 audit verb", () => {
     for (let i = 0; i < 6; i++) {
       const status = orch.status();
       if (status.kind !== "RUNNING") break;
-      orch.reportCompletion(status.stage, { outcome: { tokens: 10, cost: 0.01, result: "PASS" } }, { start: 0, end: 1 });
+      orch.reportCompletion(status.stage, {
+        outcome: {
+          tokens: 10, cost: 0.01, result: "PASS",
+          requested_runtime: "claude-code", runtime: "codex",
+          requested_model: "sonnet", model: "gpt-5.6-codex",
+          routing_basis: "role-policy", fallback_count: 1,
+          fallback_reason: "requested runner unavailable",
+        },
+      }, { start: 0, end: 1 });
     }
     registry.close();
   }
 
-  it("prints the trail for a task", async () => {
+  it("T-V3R-081 prints requested to actual routing in list, status, and audit views", async () => {
     const dir = tmpDir();
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
     try {
       seedWithEvents(dir, "T-1");
+      expect(await runCli(["status", "--project-root", dir], dir)).toBe(0);
+      expect(await runCli(["status", "T-1", "--project-root", dir], dir)).toBe(0);
       expect(await runCli(["audit", "T-1", "--project-root", dir], dir)).toBe(0);
+      const rendered = logs.join("\n");
+      expect(rendered).toContain("runner=claude-code → codex");
+      expect(rendered).toContain("model=sonnet → gpt-5.6-codex");
+      expect(rendered).toContain("fallback_reason=requested runner unavailable");
     } finally {
+      console.log = original;
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -1033,5 +1230,58 @@ describe("runCli --check-knowledge (T61)", () => {
   it("needs neither --task-id nor --module, and is listed in the usage text", () => {
     expect(parseArgs(["--check-knowledge"], "/repo").checkKnowledge).toBe(true);
     expect(USAGE).toContain("--check-knowledge");
+  });
+});
+
+describe("runCli --check-plan (T-PM1.3)", () => {
+  const PLAN_OK = [
+    "# Plan",
+    "",
+    "## Phase 1: Orders",
+    "",
+    "| Task | Status | Owner | Depends on |",
+    "|---|---|---|---|",
+    "| BE-001 (DES-001) — order CRUD | pending | backend-engineer | — |",
+    "",
+    "## Sequencing Notes",
+    "—",
+    "",
+    "## Unresolved Open Questions",
+    "—",
+    "",
+    "## Change Log",
+    "2026-08-26: created.",
+    "",
+  ].join("\n");
+
+  it("passes a well-formed plan", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-cp-"));
+    try {
+      fs.mkdirSync(path.join(dir, "_docs", "module", "sales"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "_docs", "module", "sales", "plan.md"), PLAN_OK, "utf8");
+      expect(await runCli(["--check-plan"], dir)).toBe(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("exits non-zero when a dependency names a task that does not exist", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-cp-"));
+    try {
+      fs.mkdirSync(path.join(dir, "_docs", "module", "sales"), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, "_docs", "module", "sales", "plan.md"),
+        PLAN_OK.replace("| — |", "| BE-999 |"),
+        "utf8",
+      );
+      expect(await runCli(["--check-plan"], dir)).toBe(1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("scopes to --module and needs neither --task-id nor a state database", async () => {
+    expect(parseArgs(["--check-plan", "--module", "sales"], "/repo").checkPlan).toBe(true);
+    expect(USAGE).toContain("--check-plan");
   });
 });

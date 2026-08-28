@@ -1,5 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { renderStackDigest, stackDigestPath } from "../profile/stackDigest.js";
+import { inspectBootstrapBlock } from "../targetcli/knowledgeRender.js";
 
 /**
  * The role-binding generator (OFF10 M2 / OFF03 P7): one role definition,
@@ -18,6 +20,11 @@ import * as path from "node:path";
  *   its own permission system is the runtime half of this framework's guards
  *   (the spike in planning/v2 proved the headless default posture is
  *   allow-all, so every binding carries explicit rules).
+ *
+ * The same one-source rule covers prompt shortcuts (T-OCC2/T-CXC2): each
+ * `.claude/commands/<name>.md` renders into `.opencode/commands/<name>.md`
+ * and `.agents/skills/<name>/SKILL.md` (+ a fixed `agents/openai.yaml`) —
+ * see `COMMAND_RENDERINGS` below.
  *
  * `checkBindings()` fails when what is on disk stops matching what this module
  * would generate, and — since OFF10 M3 — it also fails when the straight
@@ -207,6 +214,206 @@ export function renderOpenCodeBinding(md: string, permissions?: OpenCodePermissi
   return lines.join("\n");
 }
 
+// ---------------------------------------------------------------------------
+// Command renderings (T-OCC2 / T-CXC2) — `.claude/commands/*.md` is also a
+// one-source-of-truth family, rendered per runtime that has no Claude-style
+// `@`-import:
+//
+// - `.opencode/commands/<name>.md` — OpenCode discovers these natively and
+//   invokes them as `/name`. Its `@file` references resolve from the project
+//   root, not from the command file's directory (T-OCC1 spike), so the shared
+//   guardrails are inlined into the rendered body rather than imported.
+// - `.agents/skills/<name>/SKILL.md` — Codex Agent Skills (custom prompts were
+//   removed from codex-cli 0.117.0). Invoked explicitly as `$name`; the extra
+//   `agents/openai.yaml` turns implicit activation off so a skill only runs
+//   when a person types it (T-CXC1 spike proved the file parses and explicit
+//   invocation still works).
+//
+// Both renderings drop `argument-hint:` — a Claude frontmatter field with no
+// counterpart in either runtime — and replace the `@_shared/guardrails.md`
+// import line with the guardrails' numbered rules inline.
+// ---------------------------------------------------------------------------
+
+export interface ParsedCommandMd {
+  description: string;
+  argumentHint?: string;
+  /** The markdown body after the frontmatter fence, LF-normalized. */
+  body: string;
+}
+
+/** Parses the `key: value` frontmatter the command sources use (no `name` — commands are named by filename). */
+export function parseCommandMd(md: string): ParsedCommandMd {
+  const normalized = md.replace(/\r\n/g, "\n");
+  if (!normalized.match(/^---\n/)) throw new Error("command file has no frontmatter fence");
+  const closeIndex = normalized.indexOf("\n---\n", 4);
+  if (closeIndex === -1) throw new Error("command file frontmatter is never closed");
+  const header = normalized.slice(4, closeIndex);
+  const body = normalized.slice(closeIndex + "\n---\n".length);
+
+  const fields = new Map<string, string>();
+  for (const line of header.split("\n")) {
+    const colon = line.indexOf(":");
+    if (colon === -1) continue;
+    const key = line.slice(0, colon).trim();
+    const value = line.slice(colon + 1).trim();
+    if (key.length > 0 && value.length > 0 && !fields.has(key)) fields.set(key, value);
+  }
+
+  const description = fields.get("description");
+  if (!description) throw new Error("command frontmatter has no description field");
+  return { description, argumentHint: fields.get("argument-hint"), body };
+}
+
+/**
+ * The numbered guardrail rules from `_shared/guardrails.md`, ready to inline.
+ * Only the numbered items survive — the include's own intro sentence talks
+ * about `@`-imports, which no rendering below has.
+ */
+export function extractGuardrailRules(guardrailsMd: string): string {
+  const parsed = parseCommandMd(guardrailsMd);
+  const rules = parsed.body.split("\n").filter((l) => /^\d+\.\s/.test(l));
+  if (rules.length === 0) throw new Error("_shared/guardrails.md carries no numbered rules to inline");
+  return rules.join("\n");
+}
+
+/** Strips the `@_shared/guardrails.md` import line and surrounding blank lines from a command body. */
+function bodyWithoutGuardrailsImport(body: string): string {
+  return body
+    .split("\n")
+    .filter((l) => l.trim() !== "@_shared/guardrails.md")
+    .join("\n")
+    .replace(/^\n+/, "");
+}
+
+function withInlinedGuardrails(parsed: ParsedCommandMd, guardrailsRules: string): string {
+  return `${guardrailsRules}\n\n${bodyWithoutGuardrailsImport(parsed.body).trimEnd()}\n`;
+}
+
+/** Renders one OpenCode slash command. Deterministic byte-for-byte; `$ARGUMENTS`/`$1..$n` pass through untouched. */
+export function renderOpenCodeCommand(name: string, sourceMd: string, guardrailsRules: string): string {
+  void name;
+  const parsed = parseCommandMd(sourceMd);
+  return ["---", `description: ${yamlDoubleQuoted(parsed.description)}`, "---", "", withInlinedGuardrails(parsed, guardrailsRules)].join("\n");
+}
+
+/** The fixed per-skill policy file: skills are human-typed shortcuts, never model-initiated (T-CXC1-d). */
+export const CODEX_SKILL_OPENAI_YAML = "policy:\n  allow_implicit_invocation: false\n";
+
+/** Renders one Codex Agent Skill's SKILL.md (`name` comes from the directory; `description` passes through verbatim). */
+export function renderCodexSkill(name: string, sourceMd: string, guardrailsRules: string): string {
+  const parsed = parseCommandMd(sourceMd);
+  return ["---", `name: ${name}`, `description: ${parsed.description}`, "---", "", withInlinedGuardrails(parsed, guardrailsRules)].join("\n");
+}
+
+/**
+ * Every generated-from-.claude/commands rendering target. One entry per
+ * runtime; each maps a command name to the full set of files it generates
+ * (Codex's skill layout is one subdirectory per command, not flat).
+ */
+export interface CommandRenderingSpec {
+  /** Repo-relative directory (posix separators) the renderings live in. */
+  dir: string;
+  /** Paths relative to {@link dir} generated for one command name. */
+  outputs(commandName: string): string[];
+  render(commandName: string, sourceMd: string, guardrailsRules: string): Map<string, string>;
+}
+
+export const COMMAND_RENDERINGS: readonly CommandRenderingSpec[] = [
+  {
+    dir: ".opencode/commands",
+    outputs: (n) => [`${n}.md`],
+    render: (n, md, g) => new Map([[`${n}.md`, renderOpenCodeCommand(n, md, g)]]),
+  },
+  {
+    dir: ".agents/skills",
+    outputs: (n) => [`${n}/SKILL.md`, `${n}/agents/openai.yaml`],
+    render: (n, md, g) =>
+      new Map([
+        [`${n}/SKILL.md`, renderCodexSkill(n, md, g)],
+        [`${n}/agents/openai.yaml`, CODEX_SKILL_OPENAI_YAML],
+      ]),
+  },
+];
+
+/** Reads `_shared/guardrails.md` beside the command sources and returns its rules for inlining. */
+export function loadCommandGuardrails(projectRoot: string): string {
+  const md = fs.readFileSync(path.join(projectRoot, ".claude", "commands", "_shared", "guardrails.md"), "utf8");
+  return extractGuardrailRules(md);
+}
+
+/** Top-level command names (flat `*.md`, `_shared/` excluded) sorted. */
+export function listCommands(commandsDir: string): string[] {
+  try {
+    return fs
+      .readdirSync(commandsDir, { withFileTypes: true })
+      .filter((e) => e.isFile() && e.name.endsWith(".md"))
+      .map((e) => e.name.slice(0, -".md".length))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+function listFilesRecursive(dir: string): string[] {
+  const out: string[] = [];
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const e of entries) {
+    if (e.isDirectory()) out.push(...listFilesRecursive(path.join(dir, e.name)).map((f) => path.posix.join(e.name, f)));
+    else if (e.isFile()) out.push(e.name);
+  }
+  return out;
+}
+
+/**
+ * One command-rendering family: every source command needs a byte-identical
+ * generated set, and every generated file needs its authoring source.
+ * Mirrors {@link checkRenderingSet} but multi-file per command and recursive
+ * (the skills layout nests).
+ */
+function checkCommandRenderingSet(
+  projectRoot: string,
+  claudeDir: string,
+  names: readonly string[],
+  guardrailsRules: string,
+  spec: CommandRenderingSpec,
+  problems: string[],
+): void {
+  const targetDir = path.join(projectRoot, ...spec.dir.split("/"));
+  const expectedFiles = new Set<string>();
+  for (const name of names) {
+    let rendered: Map<string, string>;
+    try {
+      rendered = spec.render(name, fs.readFileSync(path.join(claudeDir, `${name}.md`), "utf8"), guardrailsRules);
+    } catch (e) {
+      problems.push(`${name}: cannot parse .claude/commands/${name}.md — ${e instanceof Error ? e.message : String(e)}`);
+      continue;
+    }
+    for (const [rel, content] of rendered) {
+      expectedFiles.add(rel);
+      const twinPath = path.join(targetDir, ...rel.split("/"));
+      if (!fs.existsSync(twinPath)) {
+        problems.push(`${name}: missing ${spec.dir}/${rel} — regenerate the command bindings`);
+        continue;
+      }
+      const actual = fs.readFileSync(twinPath, "utf8").replace(/\r\n/g, "\n");
+      if (actual !== content) {
+        problems.push(`${name}: ${spec.dir}/${rel} does not match the rendering of .claude/commands/${name}.md — regenerate the command bindings`);
+      }
+    }
+  }
+
+  for (const actualRel of listFilesRecursive(targetDir)) {
+    if (!expectedFiles.has(actualRel)) {
+      problems.push(`orphan ${spec.dir}/${actualRel} with no .claude/commands source — regenerate the command bindings`);
+    }
+  }
+}
+
 export interface BindingCheckResult {
   ok: boolean;
   problems: string[];
@@ -229,19 +436,44 @@ function listRoles(dir: string): string[] {
  * `checkBindings` verifies exactly what `runTargetSync` generates (T-OC2/T-OC3).
  * Adding a runtime adds one entry plus its renderer above — nowhere else.
  */
-export const BINDING_RENDERINGS: readonly {
+export interface AgentBindingRendering {
+  kind: "agent-set";
   /** Repo-relative directory (posix separators) the rendering lives in. */
   dir: string;
   fileExtension: string;
   render(sourceMd: string): string;
-}[] = [
-  { dir: ".codex/agents", fileExtension: ".toml", render: (md) => renderCodexBinding(md) },
+}
+
+export interface RootBindingRendering {
+  kind: "root-file";
+  sourcePath: string;
+  targetPath: string;
+  render(sourceMd: string): string;
+}
+
+export type BindingRendering = AgentBindingRendering | RootBindingRendering;
+
+/** The Codex root instruction is a rendering of CLAUDE.md's managed bootstrap block, not another authored rules document. */
+export function renderAgentsPointer(claudeMd: string): string {
+  const inspected = inspectBootstrapBlock(claudeMd);
+  if (inspected.state !== "valid") throw new Error("CLAUDE.md has no valid sta:bootstrap block");
+  return `${inspected.block}Full operating rules: see [CLAUDE.md](CLAUDE.md).\n`;
+}
+
+export const BINDING_RENDERINGS: readonly BindingRendering[] = [
+  { kind: "agent-set", dir: ".codex/agents", fileExtension: ".toml", render: (md) => renderCodexBinding(md) },
   {
+    kind: "agent-set",
     dir: ".opencode/agent",
     fileExtension: ".md",
     render: (md) => renderOpenCodeBinding(md, defaultOpenCodePermissions()),
   },
+  { kind: "root-file", sourcePath: "CLAUDE.md", targetPath: "AGENTS.md", render: renderAgentsPointer },
 ];
+
+export function isAgentBindingRendering(spec: BindingRendering): spec is AgentBindingRendering {
+  return spec.kind === "agent-set";
+}
 
 /** One generated rendering family: every source role needs a byte-identical twin, no orphans allowed. */
 function checkRenderingSet(
@@ -304,7 +536,72 @@ export function checkBindings(projectRoot: string): BindingCheckResult {
   }
 
   for (const spec of BINDING_RENDERINGS) {
-    checkRenderingSet(projectRoot, claudeDir, mdRoles, spec, problems);
+    if (spec.kind === "agent-set") {
+      checkRenderingSet(projectRoot, claudeDir, mdRoles, spec, problems);
+      continue;
+    }
+    const source = path.join(projectRoot, spec.sourcePath);
+    const target = path.join(projectRoot, spec.targetPath);
+    try {
+      const expected = spec.render(fs.readFileSync(source, "utf8"));
+      if (!fs.existsSync(target)) {
+        problems.push(`missing ${spec.targetPath} — regenerate the bindings`);
+        continue;
+      }
+      const actual = fs.readFileSync(target, "utf8").replace(/\r\n/g, "\n");
+      if (actual === expected) continue;
+      // A Target-owned root file may carry its own prose. In that ownership
+      // class only the delimited Framework block is compared.
+      const expectedBlock = inspectBootstrapBlock(expected);
+      const actualBlock = inspectBootstrapBlock(actual);
+      if (expectedBlock.state !== "valid" || actualBlock.state !== "valid" || actualBlock.block !== expectedBlock.block) {
+        problems.push(`${spec.targetPath} does not match the rendering of ${spec.sourcePath} — regenerate the bindings`);
+      }
+    } catch (e) {
+      problems.push(`cannot render ${spec.targetPath} from ${spec.sourcePath} — ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // T-V3TOK-021: the stack digest is generated from the two engineering
+  // prompts, so PM/SA/QA never need to read whole engineering prompts merely
+  // to discover the stack.
+  const stackSources = ["backend-engineer.md", "frontend-engineer.md"];
+  if (stackSources.every((file) => fs.existsSync(path.join(claudeDir, file)))) {
+    try {
+      const expected = renderStackDigest(projectRoot);
+      const digest = stackDigestPath(projectRoot);
+      if (!fs.existsSync(digest)) problems.push("missing .claude/shared/stack.md — regenerate renderings");
+      else if (fs.readFileSync(digest, "utf8").replace(/\r\n/g, "\n") !== expected) {
+        problems.push(".claude/shared/stack.md does not match the engineering-prompt digest — regenerate renderings");
+      }
+    } catch (e) {
+      problems.push(`cannot render .claude/shared/stack.md — ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  // --- Command renderings (T-OCC3 / T-CXC3) --------------------------------
+  // `.claude/commands/*.md` renders into every runtime that lacks Claude's
+  // `@`-import. Skipped entirely when the source dir is absent: a workspace
+  // that never received the commands payload has nothing to verify.
+  const claudeCommandsDir = path.join(projectRoot, ".claude", "commands");
+  if (fs.existsSync(claudeCommandsDir)) {
+    const names = listCommands(claudeCommandsDir);
+    if (names.length === 0) {
+      problems.push(`no command definitions found in ${claudeCommandsDir}`);
+    } else {
+      let guardrailsRules: string;
+      try {
+        guardrailsRules = loadCommandGuardrails(projectRoot);
+      } catch (e) {
+        problems.push(`cannot load _shared/guardrails.md — ${e instanceof Error ? e.message : String(e)}`);
+        guardrailsRules = "";
+      }
+      if (guardrailsRules !== "") {
+        for (const spec of COMMAND_RENDERINGS) {
+          checkCommandRenderingSet(projectRoot, claudeCommandsDir, names, guardrailsRules, spec, problems);
+        }
+      }
+    }
   }
 
   // --- Hook parity (OFF10 M3 / OFF03 U2) -----------------------------------

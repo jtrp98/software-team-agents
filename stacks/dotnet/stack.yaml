@@ -19,4 +19,5 @@ commands:
   test: dotnet test
   lint: dotnet format --verify-no-changes
   typecheck: dotnet build
+scan_extensions: [.cs, .cshtml, .razor]
 capabilities: [rest-api, grpc, database-access, auth, testing]

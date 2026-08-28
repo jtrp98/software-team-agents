@@ -94,7 +94,10 @@ export function validateAdoption(
 
   const load = loadKnowledge(projectRoot);
   problems.push(...load.problems);
-  const onDisk = new Map(load.items.map((i) => [i.id, i]));
+  // Qualified by module/id: two delivery modules may hold the same bare id,
+  // and a bare-id map let one module's copy answer for the other's.
+  const qualifiedKey = (m: string | null, id: string) => `${m ?? "_project"}/${id}`;
+  const onDisk = new Map(load.items.map((i) => [qualifiedKey(i.module, i.id), i]));
 
   const derived = resultsByStage(sourceRoot, now, docsRoot);
   const stages: StageValidation[] = [];
@@ -107,18 +110,18 @@ export function validateAdoption(
     const missingItems: string[] = [];
     const approvedItems: string[] = [];
     for (const item of result.items) {
-      if (!onDisk.has(item.id)) {
+      if (!onDisk.has(qualifiedKey(item.module, item.id))) {
         // A conflict is not a drop: the item is deliberately absent from this
         // import because a reviewed copy of it already exists, or deliberately
         // untouched. Only an item nobody accounted for is a drop.
         if (!conflicts.has(item.id)) missingItems.push(item.id);
         continue;
       }
-      if (onDisk.get(item.id)!.status === "approved") approvedItems.push(item.id);
+      if (onDisk.get(qualifiedKey(item.module, item.id))!.status === "approved") approvedItems.push(item.id);
     }
 
     const unclaimedItems = result.items
-      .filter((i) => onDisk.has(i.id) && record !== undefined && !claimed.has(i.id))
+      .filter((i) => onDisk.has(qualifiedKey(i.module, i.id)) && record !== undefined && !claimed.has(i.id))
       .map((i) => i.id);
 
     const missingSources = result.sources.filter((s) => !fs.existsSync(sourcePath(s.id, projectRoot))).map((s) => s.id);
@@ -135,7 +138,7 @@ export function validateAdoption(
       conflicts: [...conflicts],
       approvedItems,
       derivedCount: result.items.length,
-      onDiskCount: result.items.filter((i) => onDisk.has(i.id)).length,
+      onDiskCount: result.items.filter((i) => onDisk.has(qualifiedKey(i.module, i.id))).length,
     });
 
     if (!record) {

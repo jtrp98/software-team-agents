@@ -105,6 +105,13 @@ describe("assertIndependentVerdict — the runtime rule", () => {
     expect(() => assertIndependentVerdict(AgentStage.SYSTEM_ANALYST, ArtifactType.DESIGN)).not.toThrow();
     expect(VERDICT_ARTIFACTS).not.toContain(ArtifactType.DESIGN);
   });
+
+  it("narrowly exempts HANDOFF because it is an index, while self-verdict remains forbidden", () => {
+    expect(() => assertIndependentVerdict(AgentStage.BUSINESS_ANALYST, ArtifactType.HANDOFF)).not.toThrow();
+    expect(VERDICT_ARTIFACTS).not.toContain(ArtifactType.HANDOFF);
+    expect(() => assertIndependentVerdict(AgentStage.BACKEND_ENGINEER, ArtifactType.QA_REPORT)).toThrow(SelfReviewError);
+    expect(() => assertIndependentVerdict(AgentStage.BACKEND_ENGINEER, ArtifactType.SECURITY_REPORT)).toThrow(SelfReviewError);
+  });
 });
 
 describe("the orchestrator refuses a self-review at runtime", () => {

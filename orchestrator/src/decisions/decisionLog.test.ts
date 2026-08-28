@@ -50,12 +50,17 @@ describe("the shipped decisions/", () => {
       "ADR-002-authentication.md",
       "ADR-003-api-versioning.md",
       "ADR-004-v1-contract.md",
+      "ADR-005-v2-command-rendering-and-mcp-boundaries.md",
+      "ADR-006-code-intelligence-provider.md",
+      "ADR-007-workflow-source-of-truth.md",
+      "ADR-008-plan-graph-promote.md",
+      "ADR-021-shared-agent-preamble.md",
     ]);
   });
 
   it("all load and validate against the schema", () => {
     const adrs = loadAllAdrs();
-    expect(adrs).toHaveLength(4);
+    expect(adrs).toHaveLength(9);
     for (const adr of adrs) {
       expect(adr.frontmatter.status).toBe("accepted");
     }

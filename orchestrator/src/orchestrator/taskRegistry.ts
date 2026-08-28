@@ -8,6 +8,13 @@ import { TaskGraph, type TaskNode } from "../graph/taskGraph.js";
 import type { TargetBindings } from "../threeRepo/taskBindings.js";
 import { Orchestrator } from "./orchestrator.js";
 import { describeStatus, unmetDependencies, type TaskStatusView } from "./taskStatus.js";
+import { defaultProjectRoot } from "../agents/agentContract.js";
+import {
+  buildRuntimeTask,
+  type RuntimeTaskBuildInput,
+  type RuntimeTaskWorkRoot,
+} from "./runtimeTask.js";
+import type { RunRecord } from "../observability/runLog.js";
 
 export class UnknownDependencyError extends Error {
   constructor(public readonly taskId: string, public readonly missing: string[]) {
@@ -79,16 +86,37 @@ export class TaskRegistry {
     dependsOn?: string[];
     environment?: Environment;
     targetBindings?: TargetBindings;
+    /** Exact workflow identity; defaults only for legacy programmatic callers. */
+    workflow?: string;
+    /** Caller-supplied task/issue text. Existing callers may keep using taskId. */
+    taskText?: RuntimeTaskBuildInput["taskText"];
+    projectRoot?: string;
+    docsRoot?: string;
+    moduleName?: string;
+    targetWorkRoots?: readonly RuntimeTaskWorkRoot[];
   }): Orchestrator {
     const dependsOn = params.dependsOn ?? [];
     const missing = dependsOn.filter((id) => this.store.loadTask(id) === null);
     if (missing.length > 0) throw new UnknownDependencyError(params.taskId, missing);
+
+    const runtimeTask = buildRuntimeTask({
+      taskId: params.taskId,
+      workflow: params.workflow ?? `classification:${params.classification.level.toLowerCase()}`,
+      classification: params.classification,
+      dependsOn,
+      projectRoot: params.projectRoot ?? defaultProjectRoot(),
+      docsRoot: params.docsRoot,
+      moduleName: params.moduleName,
+      taskText: params.taskText,
+      targetWorkRoots: params.targetWorkRoots,
+    });
 
     const orchestrator = new Orchestrator(params.taskId, params.classification, {
       ...this.orchestratorOptions(),
       dependsOn,
       environment: params.environment,
       targetBindings: params.targetBindings,
+      runtimeTask,
     });
     this.refreshStateView();
     return orchestrator;
@@ -155,6 +183,11 @@ export class TaskRegistry {
   list(): TaskListing[] {
     const tasks = this.store.listTasks();
     return tasks.map((task) => ({ task, status: describeStatus(task, tasks) }));
+  }
+
+  /** Existing run-log rows for execution/status views; copied by the store. */
+  runsForTask(taskId: string): RunRecord[] {
+    return this.store.runsForTask(taskId);
   }
 
   /** Tasks that could be worked on right now: not finished, not blocked, every dependency DEPLOYED. */

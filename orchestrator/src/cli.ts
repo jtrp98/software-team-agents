@@ -9,17 +9,25 @@ import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
 import { createRuntimeExecutor } from "./runtime/runtimeExecutor.js";
 import { withQaOptimization, riskSignalsFromClassification } from "./qa/optimized.js";
-import { gitChangedFiles } from "./qa/changeSource.js";
-import { buildMetricsExport, compareBaselines, taskQaMetrics } from "./qa/metrics.js";
+import { gitChangedFiles, gitDiffSummary } from "./qa/changeSource.js";
+import { combineProjectRunners, createProjectRunner } from "./qa/projectRunner.js";
+import { createPostDevVerificationHook, withPostDevVerificationDisabled } from "./qa/verificationHook.js";
+import { LocalWorkspace } from "./runtime/localWorkspace.js";
+import { DEFAULT_BUDGET, type Budget } from "./cost/costControl.js";
+import { loadStaConfig, StaConfigMissingError } from "./packaging/staConfig.js";
+import { buildMetricsExport, compareBaselines, compareTokenBaselines, taskQaMetrics, tokenMetricsExport, type TaskTokenMetrics, type TokenMetricsExport } from "./qa/metrics.js";
 import type { QaFindingRecord } from "./qa/evidence.js";
 import { parseOpenIssues } from "./orchestrator/failureClassifier.js";
 import { readModuleDoc } from "./agents/moduleDocs.js";
 import { ClaudeCodeAdapter } from "./runtime/claudeCodeAdapter.js";
 import { CodexAdapter } from "./runtime/codexAdapter.js";
 import { OpenCodeAdapter } from "./runtime/openCodeAdapter.js";
-import { RUNTIME_IDS, describeRuntimeSupport } from "./runtime/runtimeSupport.js";
+import { ApiAdapter, PAID_API_RUNTIME_ID } from "./runtime/apiAdapter.js";
+import { RUNTIME_IDS, describeRuntimeSupport, type RuntimeId } from "./runtime/runtimeSupport.js";
+import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "./runtime/runtimeRegistry.js";
+import type { RoutingMode } from "./runtime/runtimeRouting.js";
 import { detectRuntimeCapabilities } from "./runtime/runtimeCapabilityDetection.js";
-import { resolveFrameworkRoot } from "./targetcli/roots.js";
+import { resolveContextDocsRoot, resolveFrameworkRoot } from "./targetcli/roots.js";
 import type { RuntimeAutonomy } from "./runtime/runtimeAdapter.js";
 import { contractGuardResolver } from "./runtime/runtimeGuards.js";
 import { DatabaseUnavailableError, SqliteTaskStore } from "./store/sqliteStore.js";
@@ -27,14 +35,15 @@ import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
 import { checkAllContracts } from "./agents/agentContract.js";
 import { checkPathRules } from "./agents/pathPermissions.js";
 import { checkLayout } from "./layout/repoLayout.js";
+import { checkPromptBudget } from "./layout/promptBudget.js";
 import { ApprovalType } from "./gates/approval.js";
-import { checkAllWorkflows } from "./workflow/workflowDefinition.js";
+import { checkAllWorkflows, resolveWorkflowId } from "./workflow/workflowDefinition.js";
 import { checkBindings } from "./runtime/bindingGenerator.js";
 import { checkProfile } from "./profile/projectProfile.js";
 import { checkDecisions } from "./decisions/decisionLog.js";
 import { checkTestPyramid } from "./testing/testPyramid.js";
 import { describeStatus, type TaskStatusKind } from "./orchestrator/taskStatus.js";
-import { RunLog } from "./observability/runLog.js";
+import { formatRunRouting, RunLog } from "./observability/runLog.js";
 import { acquireTaskLock, releaseTaskLock, TaskLockedError } from "./concurrency/taskLock.js";
 import { actorsIn, auditTrail, decisionTrail, formatAuditTrail } from "./audit/auditTrail.js";
 import { checkReviewSeparation } from "./review/reviewSeparation.js";
@@ -43,6 +52,7 @@ import { checkWorkspace, hasWorkspace, loadWorkspace, workspacePath, type Worksp
 import { checkRepoMap, loadStageRoots } from "./repos/repoMap.js";
 import { Environment, checkEnvironmentConfig, describeEnvironment, isEnvironment } from "./environment/environment.js";
 import { checkDocStructure } from "./docs/docStructure.js";
+import { checkPlanGraphs, planReadinessAdvisory } from "./docs/planGraph.js";
 import { KnowledgeBase, checkKnowledge } from "./knowledge/knowledgeBase.js";
 import { LANE_LABEL, ROLE_LANES, isRoleLane } from "./roles/roleLane.js";
 import {
@@ -58,7 +68,10 @@ import { approveItem, checklistFor, reviewItem } from "./roles/artifactReview.js
 import { lanesAffectedBy, notificationsFor } from "./roles/changePropagation.js";
 import { laneContext, laneGet } from "./roles/laneContext.js";
 import { KnowledgeContext } from "./knowledge/knowledgeContext.js";
+import { renderKnowledgeRetrieval } from "./knowledge/retrievalRender.js";
 import { writeKnowledgeItem } from "./knowledge/knowledgeStore.js";
+import { migrateKnowledgeSchemaV2 } from "./knowledge/schemaV2Migration.js";
+import { reconcileKnowledge, renderReconciliationReport } from "./knowledge/reconcile.js";
 import type { RoleLane } from "./roles/roleLane.js";
 import { buildTemplates } from "./packaging/templateBuilder.js";
 import { runInit } from "./packaging/initCommand.js";
@@ -86,6 +99,12 @@ import {
 import { readAdoptionState } from "./adoption/adoptionStore.js";
 import { validateAdoption } from "./adoption/adoptionValidation.js";
 import type { AdoptionStageId } from "./adoption/adoptionModel.js";
+import { getPolicySection, listPolicySections, PolicyIndexError } from "./docs/policyIndex.js";
+import { buildPlanGraph, type TaskNode } from "./graph/taskGraph.js";
+import { parsePlanTasks } from "./docs/planGraph.js";
+import { buildContextCommand, ContextCommandError, contextCommandJson, renderContextCommand, renderContextPacket, stageForRole } from "./context/contextCommand.js";
+import type { RuntimeTaskWorkRoot } from "./orchestrator/runtimeTask.js";
+import { latestExecutionPacketPath, readExecutionPacket } from "./state/runtimeArtifacts.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -117,6 +136,7 @@ export interface CliArgs {
   checkContracts: boolean;
   /** Check layout.yaml against the directories that actually exist and exit. Same audience. */
   checkLayout: boolean;
+  checkPromptBudget: boolean;
   /** Check workflows/*.yml against the classifier and exit. Same audience. */
   checkWorkflows: boolean;
   /** Check .codex/agents/*.toml renderings against their .claude/agents sources and exit (OFF10 M2). */
@@ -139,6 +159,8 @@ export interface CliArgs {
   checkEnvironments: boolean;
   /** Check every module's requirement/design/plan/review/security doc structure against its schema and exit (T53). Same audience. */
   checkDocStructure: boolean;
+  /** Validate every module's plan.md task table as a dependency graph — duplicate ids, missing/self/cyclic dependencies, owners, statuses, DES traceability, wave ordering — and exit (T-PM1.3). `--module <name>` scopes it to one plan. */
+  checkPlan: boolean;
   /** Check knowledge/*.yaml against its schema, its id/relation rules and its own cross-links, and exit (T61). Same audience. */
   checkKnowledge: boolean;
   /** Check .sta/manifest.json and .sta/config.yaml against the project's real files and exit (T98). Same audience. */
@@ -169,13 +191,19 @@ export interface CliArgs {
    * byte-identical; `codex`/`opencode` route through their adapters — both are
    * partial (see each adapter's header) and say so via guard reports.
    */
-  runtime?: "claude-code" | "codex" | "opencode";
+  runtime?: RuntimeId;
+  /** Named V3 orchestrated execution mode. Interactive dev/ba lanes do not use this parser. */
+  mode?: RoutingMode;
   /**
    * QA optimization (change-aware scope, deterministic pre-checks, TARGETED/FULL
    * routing) is on by default for qa-engineer rounds; this flag restores the exact
    * V1 executor behaviour for a task where someone explicitly wants it.
    */
   noQaOptimization: boolean;
+  /** Escape hatch for a Target whose deterministic tools are known-broken. */
+  noDeterministicGate: boolean;
+  /** Post-hoc task token budget; pre-spawn caps remain T-V3TOK-100/101. */
+  tokenBudget?: number;
 }
 
 const FLAG_TO_CLASSIFICATION: Record<string, keyof ClassificationInput> = {
@@ -195,7 +223,7 @@ export class CliUsageError extends Error {}
 
 export const USAGE =
   "usage (T31 verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--project-root <path>] [--state-db <path>]\n" +
+  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--mode <single|auto|manual>] [--runtime <claude-code|codex|opencode|paid-api>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  sta approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
   "  sta resume  <task-id> --module <name> [--project-root <path>]   continue a task already in the store\n" +
@@ -204,6 +232,12 @@ export const USAGE =
   "  sta cancel <task-id> [--reason <text>] [--project-root <path>]   give up on a task for good; run/resume/retry refuse it permanently\n" +
   "  sta audit  <task-id> [--decisions] [--project-root <path>]   the WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail; --decisions shows only the choices\n" +
   "  sta qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]   QA token/mode/retry picture per task (QA07); --baseline compares against a saved export\n" +
+  "  sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]   token/context composition across orchestrated and interactive runs\n" +
+  "  sta context <role> [--module <name>] [--phase <n,n>] [--task <id>] [--packet] [--json] [--project-root <path>]   deterministic context, or the latest validated execution packet\n" +
+  "  sta knowledge get <id>[,<id>...] [--lane <ba|sa|uxui|dev>] [--json] [--project-root <path>]   retrieve only permitted knowledge fields (default lane: dev)\n" +
+  "  sta knowledge migrate-v2 [--dry-run] [--json] [--project-root <knowledge-root>]   add origin/target_ids without changing item meaning or lifecycle\n" +
+  "  sta knowledge reconcile --target <id> [--json] [--project-root <knowledge-root>]   read-only current/desired evidence classifier\n" +
+  "  sta policy [<area>] [<section>] [--json] [--project-root <path>]   read one policies/ section instead of the whole file; no args lists every area and section\n" +
   "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names (T41)\n" +
   "  sta init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
   "  sta configure knowledge-root <path> [--config-path <path>]       validate and save this installation's single Knowledge root\n" +
@@ -223,17 +257,20 @@ export const USAGE =
   "  sta roles approve <id> --by <name>   move a reviewed item to approved — a person only (T104)\n" +
   "  sta roles inbox [<ba|sa|uxui|dev>] [--module <name>]   what each lane has to look at, derived fresh (T106)\n" +
   "  sta roles impact <id>[,<id>...]   which lanes changing those items would reach, before changing them (T105)\n" +
-  "  sta roles context <ba|sa|uxui|dev> [<id>] [--module <name>]   what that lane may see, and via which role (T107)\n" +
+  "  sta roles context <ba|sa|uxui|dev> [<id>] [--full] [--module <name>]   what that lane may see, and via which role (T107)\n" +
+  "\n" +
+  "V3 execution: --mode defaults to single; --runtime without --mode also means single. auto alone may hand off after UNAVAILABLE (never ERROR/TIMEOUT); manual requires an explicit per-role runner+model in .sta/config.yaml. paid-api additionally requires execution.allow_paid_fallback: true (default false). If no eligible runner remains, the task stops for a person.\n" +
   "\n" +
   "underlying flag-based form:\n" +
-  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode>] <classification flags>\n" +
+  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--mode <single|auto|manual>] [--runtime <claude-code|codex|opencode|paid-api>] <classification flags>\n" +
   "  sta --task-id <id> --module <name> --resume        continue a task already in the store\n" +
-  "  sta --task-id <id> --module <name> --no-qa-optimization   run qa-engineer exactly as V1 did (skip change-aware scope/deterministic pre-checks)\n" +
+  "  sta --task-id <id> --module <name> [--token-budget <n>] [--no-qa-optimization|--no-deterministic-gate]   run with optional QA/budget controls\n" +
   "  sta --list [--project-root <path>]                 show every task and stop\n" +
   "  sta --check-contracts [--project-root <path>]      check contracts/*.yaml against the agent registry\n" +
   "  sta --check-layout [--project-root <path>]         check layout.yaml against the real directories\n" +
-  "  sta --check-workflows [--project-root <path>]      check workflows/*.yml against the classifier\n" +
-  "  sta --check-bindings [--project-root <path>]       check .codex/agents/*.toml match the .claude/agents sources\n" +
+  "  sta --check-prompt-budget [--project-root <path>]  check the static prompt floor: CLAUDE.md + agent prompt budgets, no policies pre-read, pointers resolve\n" +
+  "  sta --check-workflows [--project-root <path>]      check generated workflows/*.yml byte-match the classifier\n" +
+  "  sta --check-bindings [--project-root <path>]       check generated renderings (.codex/agents, .opencode/agent, .opencode/commands, .agents/skills) byte-match their .claude sources\n" +
   "  sta --check-profile [--project-root <path>]        check project.yaml and stacks/ against the agent roster\n" +
   "  sta --check-decisions [--project-root <path>]      check decisions/*.md ADRs against the schema and cross-links\n" +
   "  sta --check-test-pyramid [--project-root <path>]   check test-pyramid.yaml against its schema\n" +
@@ -243,6 +280,7 @@ export const USAGE =
   "  sta --check-repos [--project-root <path>]          check repos.yaml (if any) against the filesystem\n" +
   "  sta --check-environments [--project-root <path>]   check environments.yaml (if any) against its schema\n" +
   "  sta --check-doc-structure [--project-root <path>]  check every _docs/module/*/*.md's sections against its schema\n" +
+  "  sta --check-plan [--module <name>] [--project-root <path>]  validate every module's plan.md as a task DAG (deps/cycle/owner/status/DES/waves)\n" +
   "  sta --check-knowledge [--project-root <path>]      check knowledge/*.yaml against its schema and cross-links\n" +
   "  sta --build-templates <out-dir> [--project-root <path>]  snapshot framework template files + manifest.json (T90) into <out-dir>\n" +
   "  sta --check-installation [--project-root <path>]   check .sta/manifest.json and .sta/config.yaml against the project's real files (T98) — needs an initialized Target (.sta/ exists); fails on a bare Framework checkout by design\n" +
@@ -261,6 +299,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let list = false;
   let checkContracts = false;
   let checkLayoutFlag = false;
+  let checkPromptBudgetFlag = false;
   let checkWorkflowsFlag = false;
   let checkBindingsFlag = false;
   let checkProfileFlag = false;
@@ -272,6 +311,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkReposFlag = false;
   let checkEnvironmentsFlag = false;
   let checkDocStructureFlag = false;
+  let checkPlanFlag = false;
   let checkKnowledgeFlag = false;
   let checkInstallationFlag = false;
   let checkRolesFlag = false;
@@ -280,8 +320,11 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let dependsOn: string[] = [];
   let phases: number[] = [];
   let autonomy: RuntimeAutonomy | undefined;
-  let runtime: "claude-code" | "codex" | "opencode" | undefined;
+  let runtime: RuntimeId | undefined;
+  let mode: RoutingMode | undefined;
   let noQaOptimization = false;
+  let noDeterministicGate = false;
+  let tokenBudget: number | undefined;
   let version = false;
   const targetBindings: TargetBindings = { frontend_target: null, backend_target: null };
   const classification: ClassificationInput = {};
@@ -320,6 +363,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkContracts = true;
     } else if (arg === "--check-layout") {
       checkLayoutFlag = true;
+    } else if (arg === "--check-prompt-budget") {
+      checkPromptBudgetFlag = true;
     } else if (arg === "--check-workflows") {
       checkWorkflowsFlag = true;
     } else if (arg === "--check-bindings") {
@@ -342,6 +387,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkEnvironmentsFlag = true;
     } else if (arg === "--check-doc-structure") {
       checkDocStructureFlag = true;
+    } else if (arg === "--check-plan") {
+      checkPlanFlag = true;
     } else if (arg === "--check-knowledge") {
       checkKnowledgeFlag = true;
     } else if (arg === "--check-installation") {
@@ -370,8 +417,21 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
         throw new CliUsageError(`--runtime must be one of: ${RUNTIME_IDS.join(", ")} (got ${value ?? "nothing"})`);
       }
       runtime = value as NonNullable<CliArgs["runtime"]>;
+    } else if (arg === "--mode") {
+      const value = argv[++i];
+      const valid: readonly RoutingMode[] = ["single", "auto", "manual"];
+      if (!value || !valid.includes(value as RoutingMode)) {
+        throw new CliUsageError(`--mode must be one of: ${valid.join(", ")} (got ${value ?? "nothing"})`);
+      }
+      mode = value as RoutingMode;
     } else if (arg === "--no-qa-optimization") {
       noQaOptimization = true;
+    } else if (arg === "--no-deterministic-gate") {
+      noDeterministicGate = true;
+    } else if (arg === "--token-budget") {
+      const value = Number(argv[++i]);
+      if (!Number.isInteger(value) || value <= 0) throw new CliUsageError("--token-budget must be a positive integer");
+      tokenBudget = value;
     } else if (arg === "--version") {
       version = true;
     } else if (arg in FLAG_TO_CLASSIFICATION) {
@@ -386,6 +446,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !list &&
     !checkContracts &&
     !checkLayoutFlag &&
+    !checkPromptBudgetFlag &&
     !checkWorkflowsFlag &&
     !checkBindingsFlag &&
     !checkProfileFlag &&
@@ -397,6 +458,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkReposFlag &&
     !checkEnvironmentsFlag &&
     !checkDocStructureFlag &&
+    !checkPlanFlag &&
     !checkKnowledgeFlag &&
     !checkInstallationFlag &&
     !checkRolesFlag &&
@@ -412,6 +474,10 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     throw new CliUsageError("Target bindings are immutable; --frontend-target/--backend-target cannot be used with --resume");
   }
 
+  // Backward compatibility: --runtime by itself has always meant one fixed
+  // adapter. Naming that behaviour must not silently turn handoff on.
+  if (runtime && mode === undefined) mode = "single";
+
   return {
     taskId,
     module: moduleName,
@@ -421,6 +487,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     list,
     checkContracts,
     checkLayout: checkLayoutFlag,
+    checkPromptBudget: checkPromptBudgetFlag,
     checkWorkflows: checkWorkflowsFlag,
     checkBindings: checkBindingsFlag,
     checkProfile: checkProfileFlag,
@@ -432,6 +499,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkRepos: checkReposFlag,
     checkEnvironments: checkEnvironmentsFlag,
     checkDocStructure: checkDocStructureFlag,
+    checkPlan: checkPlanFlag,
     checkKnowledge: checkKnowledgeFlag,
     checkInstallation: checkInstallationFlag,
     checkRoles: checkRolesFlag,
@@ -443,7 +511,10 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     targetBindings,
     autonomy,
     runtime,
+    mode,
     noQaOptimization,
+    noDeterministicGate,
+    tokenBudget,
     version,
   };
 }
@@ -544,8 +615,10 @@ function printListing(registry: TaskRegistry): void {
     const reason = status.reason ? ` — ${status.reason}` : "";
     const layer = layerOf.has(task.taskId) ? ` batch=${layerOf.get(task.taskId)}` : "";
     const emoji = STATUS_EMOJI[status.kind] ?? " ";
+    const latestRun = registry.runsForTask(task.taskId).at(-1);
+    const route = latestRun ? ` ${formatRunRouting(latestRun)}` : "";
     console.log(
-      `  ${emoji} ${task.taskId.padEnd(12)} ${status.kind.padEnd(22)} ${status.state.padEnd(16)}${agent}${layer}${waiting}${reason}`,
+      `  ${emoji} ${task.taskId.padEnd(12)} ${status.kind.padEnd(22)} ${status.state.padEnd(16)}${agent}${layer}${waiting}${route}${reason}`,
     );
   }
 
@@ -582,6 +655,90 @@ export async function watchListing(
     printListing(registry);
     if (i < opts.iterations - 1) await sleep(opts.intervalMs);
   }
+}
+
+/**
+ * What the module's plan.md thinks of the task about to start (T-V3TOK-111).
+ *
+ * A warning, deliberately: the plan is PM's Work Graph and the store is the
+ * orchestrator's runtime, and letting an LLM-authored document decide what may
+ * execute would move a gate across that boundary. Silent whenever the plan has
+ * nothing to say — no module flag, no plan.md, or a task the plan never listed,
+ * which is the ordinary case for ad-hoc work.
+ *
+ * Never throws. A malformed plan is `--check-plan`'s problem to report; it must
+ * not stop a run that was otherwise going to work.
+ */
+function warnIfPlanSaysNotReady(args: CliArgs, taskId: string): void {
+  if (!args.module) return;
+  try {
+    const docsRoot = resolveContextDocsRoot(args.projectRoot);
+    const planMd = readModuleDoc(docsRoot, args.module, "plan.md");
+    if (planMd === null) return;
+    const advisory = planReadinessAdvisory(planMd, taskId);
+    if (!advisory) return;
+    console.warn(
+      `[orchestrator] plan readiness: ${advisory.taskId} is not ready — ${advisory.reason}. ` +
+        "Running anyway; this is advice from plan.md, not a gate (PM owns the work graph, the orchestrator owns runtime).",
+    );
+  } catch {
+    // Advisory only — an unreadable plan never stops a run.
+  }
+}
+
+/** Deterministic task text: prefer the caller-named plan row, preserve taskId for ad-hoc work. */
+function runtimeTaskText(args: CliArgs, taskId: string, docsRoot: string): string {
+  if (!args.module) return taskId;
+  try {
+    const planMd = readModuleDoc(docsRoot, args.module, "plan.md");
+    if (planMd === null) return taskId;
+    return parsePlanTasks(planMd).tasks.find((task) => task.id === taskId)?.description || taskId;
+  } catch {
+    return taskId;
+  }
+}
+
+/**
+ * Resolves the Target side of `contract globs ∩ Target work roots` before
+ * RuntimeTask is persisted. This is the existing three-repo preflight, not a
+ * second root resolver. Legacy single-repo runs retain their one shared root.
+ */
+function runtimeTaskWorkRoots(
+  args: CliArgs,
+  taskId: string,
+  classification: ReturnType<typeof classifyTask>,
+): RuntimeTaskWorkRoot[] {
+  const stages = classification.pipeline.filter((stage) => stage !== AgentStage.HUMAN);
+  if (!args.targetBindings.frontend_target && !args.targetBindings.backend_target) {
+    return stages.map((stage) => ({ stage, targetId: "legacy-project", path: args.projectRoot }));
+  }
+
+  const preview = { taskId, classification, targetBindings: args.targetBindings };
+  const installationConfigPath = process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined;
+  const roots: RuntimeTaskWorkRoot[] = [];
+  for (const stage of stages) {
+    // Knowledge-only stages deliberately have no Target work roots. UX identity
+    // remains checked at its existing execution boundary, not moved to creation.
+    if (
+      ![
+        AgentStage.BACKEND_ENGINEER,
+        AgentStage.FRONTEND_ENGINEER,
+        AgentStage.QA_ENGINEER,
+        AgentStage.SECURITY,
+        AgentStage.DEVOPS,
+      ].includes(stage)
+    ) {
+      continue;
+    }
+    const resolved = preflightThreeRepoTask(preview, stage, {
+      frameworkRoot: args.projectRoot,
+      installationConfigPath,
+    });
+    for (const root of resolved.workRoots) {
+      if (root.access === "write") roots.push({ stage, targetId: root.targetId, path: root.path });
+    }
+  }
+  return roots;
 }
 
 /**
@@ -630,11 +787,30 @@ function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orches
       if (!(error instanceof Error) || !error.message.startsWith("cannot read installation config")) throw error;
     }
   }
+  warnIfPlanSaysNotReady(args, taskId);
+  // Naming the workflow makes the generated `workflows/<id>.yml` reachable from
+  // a run: the file that explains *why* this pipeline is shaped this way is one
+  // `cat` away, rather than something a reader has to match up by eye.
   console.log(
-    `[orchestrator] task ${taskId}: level=${classification.level} pipeline=${classification.pipeline.join(" -> ")}`,
+    `[orchestrator] task ${taskId}: workflow=${resolveWorkflowId(args.classification)} ` +
+      `level=${classification.level} pipeline=${classification.pipeline.join(" -> ")}`,
   );
   for (const reason of classification.reasons) console.log(`[orchestrator]   reason: ${reason}`);
-  return registry.create({ taskId, classification, dependsOn: args.dependsOn, environment: args.environment, targetBindings: args.targetBindings });
+  const docsRoot = resolveContextDocsRoot(args.projectRoot);
+  return registry.create({
+    taskId,
+    classification,
+    dependsOn: args.dependsOn,
+    environment: args.environment,
+    targetBindings: args.targetBindings,
+    workflow: resolveWorkflowId(args.classification),
+    taskText: runtimeTaskText(args, taskId, docsRoot),
+    // Contracts are Framework-owned even when --project-root is a Target.
+    projectRoot: resolveFrameworkRoot(),
+    docsRoot,
+    moduleName: args.module,
+    targetWorkRoots: runtimeTaskWorkRoots(args, taskId, classification),
+  });
 }
 
 const VERBS = [
@@ -649,6 +825,10 @@ const VERBS = [
   "projects",
   "init",
   "qa-metrics",
+  "tokens",
+  "context",
+  "knowledge",
+  "policy",
   "upgrade",
   "migrate",
   "knowledge-migrate",
@@ -667,7 +847,7 @@ function isVerb(s: string | undefined): s is Verb {
 }
 
 /** Flags a verb accepts that take a value — their value must never be mistaken for the positional <task-id>. */
-  const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--by", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime", "--as", "--note"]);
+  const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--phase", "--task", "--target", "--by", "--since", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime", "--mode", "--as", "--note", "--lane"]);
 
 /** Every non-flag token in a verb's remaining args, in order, skipping over each value-flag's own argument. */
 function positionalArgs(rest: string[]): string[] {
@@ -696,6 +876,23 @@ function openStore(projectRoot: string, stateDb?: string): { store: SqliteTaskSt
   const store = new SqliteTaskStore(stateDb ?? defaultStateDbPath(projectRoot));
   const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(projectRoot) });
   return { store, registry };
+}
+
+/** Resolves only the existing post-hoc budget model; it never pre-emptively caps a spawn. */
+function budgetFor(args: CliArgs): Budget {
+  return { ...DEFAULT_BUDGET, token_budget: args.tokenBudget ?? configuredTokenBudget(args.projectRoot) };
+}
+
+function configuredTokenBudget(projectRoot: string): number {
+  let configured: number | undefined;
+  try {
+    configured = loadStaConfig(projectRoot).token_budget;
+  } catch (error) {
+    // A config is optional for legacy Targets.  Invalid present configs remain
+    // an installation concern; do not turn an absent one into a fake value.
+    if (!(error instanceof StaConfigMissingError)) throw error;
+  }
+  return configured ?? DEFAULT_BUDGET.token_budget;
 }
 
 /** `status [<task-id>] [--watch] [--interval <seconds>]` — no id lists everything, an id shows one task's detail. */
@@ -845,7 +1042,7 @@ async function runAuditVerb(rest: string[], defaultProjectRoot: string): Promise
       `[orchestrator] audit trail for ${taskId}: ${entries.length} event(s), ` +
         `${decisionTrail(entries).length} decision(s)${actors.length > 0 ? `, actors: ${actors.join(", ")}` : ""}`,
     );
-    console.log(formatAuditTrail(entries, { decisionsOnly }));
+    console.log(formatAuditTrail(entries, { decisionsOnly, runs: store.runsForTask(taskId) }));
     return 0;
   } finally {
     registry.close();
@@ -1028,6 +1225,22 @@ async function runUpgradeVerb(rest: string[], defaultProjectRoot: string): Promi
   }
 }
 
+/** The production composition root. Paid transport is absent unless explicitly enabled. */
+export function createProductionRuntimeRegistry(
+  projectRoot: string,
+  options: { allowPaidFallback?: boolean } = {},
+): RuntimeRegistry {
+  const adapters = [
+    new ClaudeCodeAdapter({ projectRoot }),
+    new CodexAdapter({ projectRoot }),
+    new OpenCodeAdapter({ projectRoot }),
+  ];
+  return RuntimeRegistry.forProcess([
+    ...adapters,
+    ...(options.allowPaidFallback ? [new ApiAdapter({ projectRoot })] : []),
+  ]);
+}
+
 /** `doctor` (T166) — aggregate read-only diagnostics; never mutates, exits non-zero only on FAIL. */
 async function runDoctorVerb(rest: string[]): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root");
@@ -1036,11 +1249,15 @@ async function runDoctorVerb(rest: string[]): Promise<number> {
     // (see runtimeAdapter.ts): doctor itself stays provider-blind and receives
     // the same probe a real run would use — and, through that adapter, the
     // claims-vs-install capability sweep.
+    const resolvedProjectRoot = projectRoot ?? process.cwd();
+    const runtimeRegistry = createProductionRuntimeRegistry(resolvedProjectRoot);
+    const claude = runtimeRegistry.get(DEFAULT_RUNTIME_ID);
     const report = await runDoctor({
       projectRoot: projectRoot ?? undefined,
-      probe: () => new ClaudeCodeAdapter({ projectRoot: projectRoot ?? process.cwd() }).probe(),
+      probe: () => runtimeRegistry.probe(DEFAULT_RUNTIME_ID),
       capabilities: async () => {
-        const r = await detectRuntimeCapabilities(new ClaudeCodeAdapter({ projectRoot: projectRoot ?? process.cwd() }));
+        const probe = await runtimeRegistry.probe(DEFAULT_RUNTIME_ID);
+        const r = await detectRuntimeCapabilities(claude, { probe });
         return {
           runtimeId: r.runtimeId,
           verified: r.checks.filter((c) => c.verified).map((c) => c.capability),
@@ -1324,6 +1541,12 @@ async function runRolesSubCommand(
 
       if (id !== undefined) {
         const outcome = laneGet(lane, context, id);
+        if (rest.includes("--full")) {
+          const rendered = renderKnowledgeRetrieval(lane, id, outcome);
+          if (outcome.status === "not-found") console.error(rendered.text);
+          else console.log(rest.includes("--json") ? JSON.stringify(rendered.json, null, 2) : rendered.text);
+          return outcome.status === "not-found" ? 1 : 0;
+        }
         if (outcome.status === "not-found") {
           console.error(`[orchestrator] no knowledge item with id ${id}`);
           return 1;
@@ -1620,6 +1843,62 @@ function previousRoundFromDocs(docsRoot: string, moduleName: string, taskId: str
   return { findings, evidence: [] };
 }
 
+/**
+ * Builds concise QA inputs from the module's existing plan/design and the
+ * already-derived task graph.  These are references and summaries, not copied
+ * requirements or source payloads; QA may still request the named source.
+ */
+export async function productionQaInputs(opts: { docsRoot: string; moduleName: string; taskId: string; roots: readonly string[] }) {
+  const planMd = readModuleDoc(opts.docsRoot, opts.moduleName, "plan.md") ?? "";
+  const designMd = readModuleDoc(opts.docsRoot, opts.moduleName, "design.md") ?? "";
+  const parsed = parsePlanTasks(planMd);
+  const task = parsed.tasks.find((row) => row.id === opts.taskId);
+  const nodes: TaskNode[] = parsed.tasks.map((row) => ({
+    id: row.id,
+    phase: row.phase,
+    dependsOn: row.dependsOn,
+    agent: Object.values(AgentStage).includes(row.owner as AgentStage) ? row.owner as AgentStage : undefined,
+    description: row.description,
+  }));
+  let affectedTaskIds: string[] = [];
+  let affectedPhases: number[] = [];
+  if (task) {
+    try {
+      const graph = buildPlanGraph(nodes);
+      affectedTaskIds = graph.edges
+        .filter((edge) => edge.from === task.id || edge.to === task.id)
+        .flatMap((edge) => [edge.from, edge.to])
+        .filter((id) => id !== task.id)
+        .filter((id, index, all) => all.indexOf(id) === index)
+        .sort();
+      affectedPhases = [...new Set([task.phase, ...affectedTaskIds.map((id) => graph.nodes.get(id)?.phase).filter((phase): phase is number => phase !== undefined)])].sort((a, b) => a - b);
+    } catch {
+      // Invalid plan graph is itself visible to QA through its plan reference;
+      // do not invent graph impact from malformed metadata.
+    }
+  }
+  const riskRef = /^##\s+Risks\s*&\s*Dependencies\s*$/im.test(designMd) ? ["design.md#Risks-&-Dependencies"] : [];
+  const diffParts = await Promise.all(opts.roots.map(async (root) => {
+    try {
+      return `[${root}]\n${await gitDiffSummary(root)}`;
+    } catch {
+      return `[${root}] No git diff stat available; inspect the scoped files directly.`;
+    }
+  }));
+
+  return {
+    packageInputs: () => ({
+      taskIntent: task ? task.description : `Task ${opts.taskId} in module ${opts.moduleName}; no matching plan row was found.`,
+      acceptanceCriteria: task
+        ? [...task.designRefs.map((ref) => `design.md#${ref}`), `plan.md#${task.id}`]
+        : [`plan.md#${opts.taskId}`],
+      diffSummary: diffParts.length > 0 ? diffParts.join("\n") : "No writable Target root was resolved; inspect the scoped files directly.",
+      knownRisks: riskRef,
+    }),
+    scopeInputs: () => ({ affectedTaskIds, affectedPhases }),
+  };
+}
+
 /** `qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]` — QA07's cost/effectiveness picture off the run log. */
 async function runQaMetricsVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
@@ -1679,6 +1958,257 @@ async function runQaMetricsVerb(rest: string[], defaultProjectRoot: string): Pro
   }
 }
 
+function displayMetric(value: number | null): string {
+  return value === null ? "not reported" : value.toLocaleString();
+}
+
+function displayRate(value: number | null): string {
+  return value === null ? "not reported" : `${(value * 100).toFixed(1)}%`;
+}
+
+function displayPercentDelta(value: number | null): string {
+  return value === null ? "not reported" : `${value.toFixed(1)}%`;
+}
+
+function printTokenTask(metric: TaskTokenMetrics): void {
+  const c = metric.composition;
+  const budget = metric.contextBudget;
+  console.log(
+    `[orchestrator] ${metric.taskId}: input=${displayMetric(metric.inputTokens)} output=${displayMetric(metric.outputTokens)} ` +
+      `cached=${displayMetric(metric.cachedTokens)} total=${displayMetric(metric.totalTokens)} stages=${metric.stageCount} retries=${metric.retryCount} retryWaste=${displayMetric(metric.retryWasteTokens)} ` +
+      `sessions=orchestrated:${metric.sessionKinds.orchestrated},interactive:${metric.sessionKinds.interactive},not-reported:${metric.sessionKinds.not_reported} ` +
+      `always-on-instructions=${displayMetric(metric.instructionSurfaceBytes)} B`,
+  );
+  console.log(
+    `[orchestrator]   composition: static=${displayMetric(c.static_chars)} handoff=${displayMetric(c.handoff_chars)} docs=${displayMetric(c.doc_chars)}/${displayMetric(c.doc_chars_before)} before-slice ` +
+      `knowledge=${displayMetric(c.knowledge_chars)} code-intel=${displayMetric(c.code_intel_chars)} tool-output=${displayMetric(c.tool_output_chars)}`,
+  );
+  console.log(
+    `[orchestrator]   context budget (warning-only): measured-runs=${budget.measuredRuns} warnings=${budget.warningRuns} ` +
+      `actual=${displayMetric(budget.contextChars)} budget=${displayMetric(budget.budgetChars)} overflow=${displayMetric(budget.overflowChars)} ` +
+      `composition=base:${displayMetric(budget.composition.base)} task:${displayMetric(budget.composition.task)} safety:${displayMetric(budget.composition.safety)} ` +
+      `docs:${displayMetric(budget.composition.docs)} knowledge:${displayMetric(budget.composition.knowledge)} code:${displayMetric(budget.composition.code)} ` +
+      `tool_output:${displayMetric(budget.composition.tool_output)} reserve:${displayMetric(budget.composition.reserve)}`,
+  );
+}
+
+/** `tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]`. */
+/**
+ * T-V3TOK-013 — `sta policy` reads one section, not one file.
+ *
+ * A miss is exit 0 with the available sections printed: an agent that gets an
+ * error here falls back to reading the whole file, which is exactly the cost
+ * this verb removes.
+ */
+async function runPolicyVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  if (rest.includes("--help")) {
+    console.log("usage: sta policy [<area>] [<section>] [--json] [--project-root <path>]");
+    console.log("  no args        every policy area and the sections inside it");
+    console.log("  <area>         one area's sections (documentation, coding, security, ...)");
+    console.log("  <area> <sec>   that section's text; accepts §10, 10, 5c, or part of the heading");
+    return 0;
+  }
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const json = rest.includes("--json");
+  const [area, section] = positionalArgs(rest);
+
+  try {
+    if (area === undefined) {
+      const index = listPolicySections(projectRoot);
+      if (json) {
+        console.log(JSON.stringify(index, null, 2));
+        return 0;
+      }
+      for (const entry of index) {
+        console.log(`${entry.relPath} (${entry.bytes} B, ${entry.sections.length} section(s))`);
+        for (const s of entry.sections) console.log(`  ${s.number === null ? "-" : `§${s.number}`}  ${s.heading}  (${s.bytes} B)`);
+      }
+      return 0;
+    }
+
+    if (section === undefined) {
+      const entry = listPolicySections(projectRoot).find((e) => e.area === area.replace(/^policies\//, "").replace(/\.md$/, ""));
+      if (!entry) throw new PolicyIndexError(`no policy area "${area}" — available: ${listPolicySections(projectRoot).map((e) => e.area).join(", ")}`);
+      if (json) {
+        console.log(JSON.stringify(entry, null, 2));
+        return 0;
+      }
+      console.log(`${entry.relPath} (${entry.bytes} B)`);
+      for (const s of entry.sections) console.log(`  ${s.number === null ? "-" : `§${s.number}`}  ${s.heading}  (${s.bytes} B)`);
+      return 0;
+    }
+
+    const result = getPolicySection(projectRoot, area, section);
+    if (json) {
+      console.log(JSON.stringify(result, null, 2));
+      return 0;
+    }
+    if (!result.found) {
+      console.log(`[orchestrator] ${result.relPath} has no section matching "${section}". It has:`);
+      for (const s of result.sections) console.log(`  ${s.number === null ? "-" : `§${s.number}`}  ${s.heading}  (${s.bytes} B)`);
+      return 0;
+    }
+    console.log(`# ${result.relPath} — ${result.heading}  (${result.bytes} B of ${result.areaBytes} B)`);
+    console.log("");
+    console.log(result.text);
+    return 0;
+  } catch (error) {
+    if (error instanceof PolicyIndexError) throw new CliUsageError(error.message);
+    throw error;
+  }
+}
+
+async function runTokensVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  if (rest.includes("--help")) {
+    console.log("usage: sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>] [--project-root <path>] [--state-db <path>]");
+    return 0;
+  }
+  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  const stateDb = flagValue(rest, "--state-db");
+  const taskId = positionalArg(rest);
+  const sinceRaw = flagValue(rest, "--since");
+  const since = sinceRaw === undefined ? undefined : Date.parse(sinceRaw);
+  if (sinceRaw !== undefined && Number.isNaN(since)) throw new CliUsageError(`--since must be an ISO timestamp (got ${sinceRaw})`);
+  const by = flagValue(rest, "--by") ?? "task";
+  if (by !== "task" && by !== "role" && by !== "stage" && by !== "session") throw new CliUsageError(`--by must be role, stage, or session (got ${by})`);
+  const exportPath = flagValue(rest, "--export-json");
+  const baselinePath = flagValue(rest, "--baseline");
+  const { store, registry } = openStore(projectRoot, stateDb);
+  try {
+    const runs = store.allRuns().filter((run) => (taskId === undefined || run.task_id === taskId) && (since === undefined || run.start_time >= since));
+    if (runs.length === 0) {
+      console.log("[orchestrator] no recorded runs match this token query — nothing to measure.");
+      return 0;
+    }
+    const completedTaskIds = new Set(
+      store.listTasks().filter((task) => task.machine.current === TaskState.DEPLOYED).map((task) => task.taskId),
+    );
+    const report = tokenMetricsExport(runs, { completedTaskIds });
+    if (by === "task") for (const metric of report.tasks) printTokenTask(metric);
+    else if (by === "role" || by === "stage") {
+      for (const role of report.roles) console.log(
+        `[orchestrator] ${by} ${role.role}: runs=${role.runCount} static=${displayMetric(role.staticChars)} retrieved=${displayMetric(role.retrievedChars)} ` +
+          `static/retrieved=${role.staticVsRetrievedRatio === null ? "not reported" : role.staticVsRetrievedRatio.toFixed(2)} ` +
+          `docs=${displayMetric(role.docChars)}/${displayMetric(role.docCharsBefore)} before-slice slicing-saved=${role.slicingSavedPct === null ? "not reported" : `${role.slicingSavedPct}%`} ` +
+          `context-budget-warnings=${role.contextBudget.warningRuns}/${role.contextBudget.measuredRuns} overflow=${displayMetric(role.contextBudget.overflowChars)}`,
+      );
+    } else {
+      for (const kind of ["orchestrated", "interactive", "not_reported"] as const) {
+        const count = report.tasks.reduce((sum, metric) => sum + metric.sessionKinds[kind], 0);
+        console.log(`[orchestrator] session ${kind === "not_reported" ? "not reported" : kind}: ${count} run(s)`);
+      }
+    }
+    const total = report.totals;
+    console.log(`[orchestrator] totals: input=${displayMetric(total.inputTokens)} output=${displayMetric(total.outputTokens)} cached=${displayMetric(total.cachedTokens)} total=${displayMetric(total.totalTokens)} retries=${total.retryCount} retryWaste=${displayMetric(total.retryWasteTokens)}`);
+    console.log(
+      `[orchestrator] V3 rollups: total_token_per_completed_task=${displayMetric(total.total_token_per_completed_task)} ` +
+        `first_pass_success_rate=${displayRate(total.first_pass_success_rate)} fallback_rate=${displayRate(total.fallback_rate)}`,
+    );
+    const budget = configuredTokenBudget(projectRoot);
+    console.log(`[orchestrator] configured post-hoc token budget: ${budget.toLocaleString()} vs actual input ${displayMetric(total.inputTokens)} (pre-spawn caps are not part of this control)`);
+    console.log(`[orchestrator] context-budget warnings: ${total.contextBudget.warningRuns}/${total.contextBudget.measuredRuns} measured run(s), overflow=${displayMetric(total.contextBudget.overflowChars)} (warning-only; prompts were not changed)`);
+    if (exportPath) {
+      fs.writeFileSync(exportPath, JSON.stringify(report, null, 2), "utf8");
+      console.log(`[orchestrator] wrote token metrics JSON to ${exportPath}`);
+    }
+    if (baselinePath) {
+      const before = JSON.parse(fs.readFileSync(baselinePath, "utf8")) as TokenMetricsExport;
+      const delta = compareTokenBaselines(before, report);
+      console.log(`[orchestrator] vs baseline (${baselinePath}): input ${delta.inputTokenDeltaPct === null ? "not reported" : `${delta.inputTokenDeltaPct.toFixed(1)}%`}, prompt chars ${delta.promptCharacterDeltaPct === null ? "not reported" : `${delta.promptCharacterDeltaPct.toFixed(1)}%`}, retry waste ${delta.retryWasteDeltaPct === null ? "not reported" : `${delta.retryWasteDeltaPct.toFixed(1)}%`}`);
+      console.log(
+        `[orchestrator] V3 rollup deltas: total_token_per_completed_task=${displayPercentDelta(delta.totalTokenPerCompletedTaskDeltaPct)} ` +
+          `first_pass_success_rate=${displayPercentDelta(delta.firstPassSuccessRateDeltaPct)} fallback_rate=${displayPercentDelta(delta.fallbackRateDeltaPct)}`,
+      );
+    }
+    return 0;
+  } finally { registry.close(); }
+}
+
+/** `context <role> [--module <m>] [--phase <n,n>] [--task <id>] [--packet] [--json]`. */
+async function runContextVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const role = positionalArg(rest);
+  if (!role) throw new CliUsageError("context: an agent role is required");
+  const projectRoot = path.resolve(flagValue(rest, "--project-root") ?? defaultProjectRoot);
+  const phaseRaw = flagValue(rest, "--phase");
+  let phases: number[] | undefined;
+  if (phaseRaw !== undefined) {
+    phases = phaseRaw.split(",").map((value) => Number(value.trim()));
+    if (phases.length === 0 || phases.some((value) => !Number.isInteger(value) || value <= 0)) {
+      throw new CliUsageError("context: --phase must be a comma-separated list of positive integers");
+    }
+  }
+  try {
+    const taskId = flagValue(rest, "--task");
+    if (rest.includes("--packet")) {
+      if (!taskId) throw new CliUsageError("context: --packet requires --task <id>");
+      const stage = stageForRole(role);
+      const packetPath = latestExecutionPacketPath(projectRoot, taskId, stage);
+      if (!packetPath) throw new ContextCommandError(`no persisted execution packet for ${taskId}/${stage}`, 4);
+      const packet = readExecutionPacket(packetPath);
+      console.log(rest.includes("--json") ? JSON.stringify(packet, null, 2) : renderContextPacket(packet));
+      return 0;
+    }
+    const result = await buildContextCommand({
+      role,
+      moduleHint: flagValue(rest, "--module"),
+      phases,
+      taskId,
+      projectRoot,
+    });
+    console.log(rest.includes("--json") ? JSON.stringify(contextCommandJson(result), null, 2) : renderContextCommand(result));
+    return 0;
+  } catch (error) {
+    if (error instanceof ContextCommandError) {
+      console.error(`[orchestrator] ${error.message}`);
+      return error.exitCode;
+    }
+    throw error;
+  }
+}
+
+/** `knowledge get <id>[,<id>...] [--lane <lane>] [--json]`: one policy-filtered retrieval door. */
+async function runKnowledgeVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const args = positionalArgs(rest);
+  const subcommand = args[0];
+  const projectRoot = path.resolve(flagValue(rest, "--project-root") ?? defaultProjectRoot);
+  if (subcommand === "migrate-v2") {
+    if (args.length > 1) throw new CliUsageError("knowledge migrate-v2: no positional arguments are accepted");
+    const report = migrateKnowledgeSchemaV2({ knowledgeRoot: projectRoot, dryRun: rest.includes("--dry-run"), now: flagValue(rest, "--now") ?? new Date().toISOString() });
+    if (rest.includes("--json")) console.log(JSON.stringify(report, null, 2));
+    else {
+      console.log(`[orchestrator] knowledge schema v2 ${report.dry_run ? "dry-run" : "migration"}: ${report.changed}/${report.scanned} item(s) would change${report.dry_run ? "" : "; changes written"}.`);
+      for (const item of report.items) console.log(`  ${item.path}: ${item.changes.join(", ")} target_ids=[${item.target_ids.join(",")}]`);
+      console.log(`[orchestrator] ${report.note}`);
+      if (report.backup_manifest) console.log(`[orchestrator] reversible backup manifest: ${report.backup_manifest}`);
+    }
+    return 0;
+  }
+  if (subcommand === "reconcile") {
+    if (args.length > 1) throw new CliUsageError("knowledge reconcile: no positional arguments are accepted");
+    const targetId = flagValue(rest, "--target");
+    if (!targetId) throw new CliUsageError("knowledge reconcile: --target <id> is required");
+    const report = reconcileKnowledge({ knowledgeRoot: projectRoot, frameworkRoot: resolveFrameworkRoot(), targetId, now: flagValue(rest, "--now") ?? new Date().toISOString() });
+    console.log(rest.includes("--json") ? JSON.stringify(report, null, 2) : renderReconciliationReport(report));
+    return 0;
+  }
+  if (subcommand !== "get") throw new CliUsageError("knowledge: expected sub-command get, migrate-v2, or reconcile");
+  const ids = (args[1] ?? "").split(",").map((id) => id.trim()).filter((id) => id !== "");
+  if (ids.length === 0) throw new CliUsageError("knowledge get: an item id is required");
+  if (args.length > 2) throw new CliUsageError("knowledge get: ids must be one comma-separated argument");
+
+  const laneRaw = flagValue(rest, "--lane") ?? "dev";
+  if (!isRoleLane(laneRaw)) {
+    throw new CliUsageError(`knowledge get: "${laneRaw}" is not a lane — use ba, sa, uxui, or dev`);
+  }
+  const lane = laneRaw as RoleLane;
+  const context = KnowledgeContext.load(projectRoot, new Date().toISOString());
+  const rendered = ids.map((id) => ({ id, result: renderKnowledgeRetrieval(lane, id, laneGet(lane, context, id)) }));
+  const json = rest.includes("--json");
+  if (json) console.log(JSON.stringify({ lane, items: rendered.map((entry) => entry.result.json) }, null, 2));
+  else for (const entry of rendered) console.log(entry.result.text);
+  return rendered.some((entry) => (entry.result.json.status as string | undefined) === "not_found") ? 1 : 0;
+}
+
 /** Dispatches a T31 verb, translating the ones that are really the existing engine in disguise (`run`, `resume`, `retry`) rather than duplicating the step loop. */
 async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): Promise<number> {
   switch (verb) {
@@ -1703,6 +2233,14 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
       return runAuditVerb(rest, defaultProjectRoot);
     case "qa-metrics":
       return runQaMetricsVerb(rest, defaultProjectRoot);
+    case "tokens":
+      return runTokensVerb(rest, defaultProjectRoot);
+    case "context":
+      return runContextVerb(rest, defaultProjectRoot);
+    case "knowledge":
+      return runKnowledgeVerb(rest, defaultProjectRoot);
+    case "policy":
+      return runPolicyVerb(rest, defaultProjectRoot);
     case "projects":
       return runProjectsVerb(rest, defaultProjectRoot);
     case "init":
@@ -1726,7 +2264,7 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
     case "doctor":
       return runDoctorVerb(rest);
     case "runtimes":
-      return runRuntimesVerb();
+      return runRuntimesVerb(rest, defaultProjectRoot);
   }
 }
 
@@ -1735,9 +2273,19 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
  * tests read one record. A person picking a runtime for a machine should not
  * have to trust prose that can drift from what the adapters actually do.
  */
-function runRuntimesVerb(): number {
+async function runRuntimesVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
+  const projectRoot = path.resolve(flagValue(rest, "--project-root") ?? defaultProjectRoot);
+  const runtimeRegistry = createProductionRuntimeRegistry(projectRoot);
+  const probes = await runtimeRegistry.probeAll();
   console.log("[orchestrator] runtime support (raise a level only when T-V1-05 conformance passes):");
-  for (const line of describeRuntimeSupport()) console.log(`  ${line}`);
+  for (const line of describeRuntimeSupport()) {
+    const id = line.slice(0, line.indexOf(":"));
+    const probe = probes[id];
+    const availability = probe?.available
+      ? `available${probe.version ? ` (${probe.version})` : ""}`
+      : `unavailable: ${probe?.reason ?? "no unavailability reason was reported"}`;
+    console.log(`  ${line}; ${availability}`);
+  }
   return 0;
 }
 
@@ -1779,6 +2327,18 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       return 0;
     }
     console.error("[orchestrator] layout.yaml and the repo disagree:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
+  if (args.checkPromptBudget) {
+    const result = checkPromptBudget(args.projectRoot);
+    if (result.ok) {
+      console.log("[orchestrator] static prompt budget holds.");
+      for (const note of result.notes) console.log(`  - ${note}`);
+      return 0;
+    }
+    console.error("[orchestrator] static prompt budget exceeded:");
     for (const problem of result.problems) console.error(`  - ${problem}`);
     return 1;
   }
@@ -1926,6 +2486,20 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     return 1;
   }
 
+  if (args.checkPlan) {
+    const result = checkPlanGraphs(args.projectRoot, args.module);
+    // Notes print either way: a project before its first module, or a module
+    // whose plan.md isn't written yet, are normal states — not findings.
+    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
+    if (result.ok) {
+      console.log("[orchestrator] every plan.md checked is a valid task graph.");
+      return 0;
+    }
+    console.error("[orchestrator] plan task graphs have problems:");
+    for (const problem of result.problems) console.error(`  - ${problem}`);
+    return 1;
+  }
+
   if (args.checkKnowledge) {
     const result = checkKnowledge(args.projectRoot);
     // Notes print either way: a repo with nothing captured in knowledge/ yet is the normal
@@ -1979,7 +2553,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
   }
 
   const store = new SqliteTaskStore(args.stateDb ?? defaultStateDbPath(args.projectRoot));
-  const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(args.projectRoot) });
+  const registry = new TaskRegistry({ store, budget: budgetFor(args), stateViewPath: defaultStateViewPath(args.projectRoot) });
   let lockedTaskId: string | undefined;
 
   try {
@@ -2043,17 +2617,44 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     // that seam. `guards` derives from `contracts/<role>.yaml` (T15), same as before.
     // T-OC5: --runtime picks the adapter; the default stays byte-identical to
     // every run before the flag existed.
+    let executionConfig: ReturnType<typeof loadStaConfig>["execution"] | undefined;
+    try {
+      executionConfig = loadStaConfig(args.projectRoot).execution;
+    } catch {
+      // Missing/invalid config is diagnosed by the router. Composition must
+      // retain the historical Single/claude-code defaults in either case.
+      executionConfig = undefined;
+    }
+    const resolvedMode = args.mode ?? executionConfig?.mode;
+    const defaultRuntimeId = args.runtime ??
+      ((resolvedMode ?? "single") === "single" ? executionConfig?.runner : undefined) ??
+      DEFAULT_RUNTIME_ID;
+    const allowPaidFallback = executionConfig?.allow_paid_fallback === true;
+    if (defaultRuntimeId === PAID_API_RUNTIME_ID && !allowPaidFallback) {
+      console.error(
+        `[orchestrator] runtime "${PAID_API_RUNTIME_ID}" is unreachable because paid API fallback is disabled; ` +
+          "set execution.allow_paid_fallback: true explicitly before selecting it",
+      );
+      return 1;
+    }
+    const runtimeRegistry = createProductionRuntimeRegistry(args.projectRoot, { allowPaidFallback });
+    const defaultRuntime = runtimeRegistry.tryGet(defaultRuntimeId);
+    if (!defaultRuntime) {
+      console.error(`[orchestrator] configured Single runner "${defaultRuntimeId}" is not registered`);
+      return 1;
+    }
     const runtimeExecutor = createRuntimeExecutor({
-      runtime: (() => {
-        switch (args.runtime ?? "claude-code") {
-          case "codex":
-            return new CodexAdapter({ projectRoot: args.projectRoot });
-          case "opencode":
-            return new OpenCodeAdapter({ projectRoot: args.projectRoot });
-          default:
-            return new ClaudeCodeAdapter({ projectRoot: args.projectRoot });
-        }
-      })(),
+      runtime: defaultRuntime,
+      registry: runtimeRegistry,
+      routingFlags: args.runtime ? { runtime: args.runtime } : undefined,
+      classification: (id) => store.loadTask(id)?.classification,
+      riskSignals: (id) => {
+        const classification = store.loadTask(id)?.classification;
+        return classification ? riskSignalsFromClassification(classification) : undefined;
+      },
+      routingMode: resolvedMode,
+      allowHandoff: resolvedMode === "auto" && (executionConfig?.allow_handoff ?? true),
+      allowPaidFallback,
       projectRoot: args.projectRoot,
       moduleName: () => args.module!,
       guards: contractGuardResolver(args.projectRoot),
@@ -2062,6 +2663,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       // frontend work is not blocked on the UX-artifact precondition its
       // pipeline deliberately skipped.
       taskLevel: () => stored?.classification.level,
+      runtimeTask: (id) => store.loadTask(id)?.runtimeTask,
       // Absent --autonomy keeps the executor's own default ("propose"), which is
       // byte-identical to every run before the flag existed. Unattended runs pass
       // it explicitly — T117's pilot showed headless "propose" cannot act.
@@ -2098,16 +2700,59 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     // deterministic checks before qa-engineer runs, bounded evidence package,
     // and the TARGETED/FULL decision the gate enforces. `--no-qa-optimization`
     // restores the exact V1 behaviour for a caller that wants it.
-    const executor = args.noQaOptimization
-      ? runtimeExecutor
-      : withQaOptimization({
+    // Resolve the same writable roots for change discovery, deterministic
+    // checks, and evidence. In three-repo mode this remains the Target, never
+    // the Framework binding root.
+    let qaRoots: string[] = [args.projectRoot];
+    try {
+      loadInstallationConfig(process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined);
+      const task = store.loadTask(taskId);
+      if (task) {
+        const roots3 = preflightThreeRepoTask(task, AgentStage.QA_ENGINEER, {
+          frameworkRoot: args.projectRoot,
+          installationConfigPath: process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined,
+        });
+        const writes = roots3.workRoots.filter((root) => root.access === "write").map((root) => root.path);
+        if (writes.length > 0) qaRoots = [...new Set(writes)];
+      }
+    } catch {
+      // legacy project: projectRoot stands
+    }
+    let qaDocsRoot = args.projectRoot;
+    try {
+      const installation = loadInstallationConfig(process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined);
+      if (installation.knowledge_root) qaDocsRoot = installation.knowledge_root;
+    } catch {
+      // legacy project: projectRoot stands
+    }
+    const qaInputs = await productionQaInputs({ docsRoot: qaDocsRoot, moduleName: args.module ?? "", taskId, roots: qaRoots });
+
+    const verificationHook = args.noDeterministicGate
+      ? null
+      : createPostDevVerificationHook({
           inner: runtimeExecutor,
+          deterministicRunner: () => combineProjectRunners(qaRoots.map((root) => ({
+            root,
+            runner: createProjectRunner({
+              root,
+              workspace: new LocalWorkspace({ root }),
+              staticGatePath: path.join(args.projectRoot, ".claude", "scripts", "static-analysis-gate.js"),
+            }),
+          }))),
+          requiredVerification: () => orchestrator.runtimeTask?.required_verification,
+        });
+    const postDevExecutor = verificationHook?.executor ?? withPostDevVerificationDisabled(runtimeExecutor);
+
+    const executor = args.noQaOptimization
+      ? postDevExecutor
+      : withQaOptimization({
+          inner: postDevExecutor,
           changedFiles: async () => {
             // Read-only git inspection of every writable Target root; legacy
             // projects have exactly one — the project root itself. A root whose
             // git fails contributes nothing rather than poisoning the others;
             // a total failure yields [], which scopes as unbounded → FULL.
-            let roots: string[] = [args.projectRoot];
+            let roots: string[] = qaRoots;
             try {
               loadInstallationConfig(process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined);
               const task = store.loadTask(taskId);
@@ -2125,7 +2770,16 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
             const results = await Promise.allSettled(roots.map((root) => gitChangedFiles(root)));
             return [...new Set(results.flatMap((r) => (r.status === "fulfilled" ? r.value : [])))];
           },
+          ...(args.noDeterministicGate
+            ? { deterministicGate: "disabled" as const }
+            : {
+                deterministicGate: "enabled" as const,
+                deterministicVerification: verificationHook!.verificationFor,
+              }),
+          packageInputs: qaInputs.packageInputs,
+          scopeInputs: qaInputs.scopeInputs,
           riskSignals: () => riskSignalsFromClassification(orchestrator.classification),
+          taskLevel: () => orchestrator.classification.level,
           previousRound: () => {
             // In three-repo mode the module docs live under the Knowledge root.
             let docsRoot = args.projectRoot;

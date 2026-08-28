@@ -1,14 +1,18 @@
+import * as path from "node:path";
 import { AgentStage, TaskLevel } from "../types.js";
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { getAgent } from "../agents/registry.js";
 import { resolveAgentModel, resolveAgentVersion } from "../agents/agentModel.js";
 import type { StructuredFailure } from "../orchestrator/failure.js";
 import {
-  buildPrompt,
+  buildPromptParts,
+  compileExecutionPacket,
+  assembleStageContext,
+  handoffFromContext,
   failResult,
   qaArtifactResult,
   securityArtifactResult,
-  sliceModuleDocsFor,
+  type PromptPartsResult,
   type RunMetrics,
 } from "./agentRunAssembly.js";
 import type {
@@ -18,11 +22,24 @@ import type {
   RuntimeGuards,
 } from "./runtimeAdapter.js";
 import type { RuntimeRegistry } from "./runtimeRegistry.js";
-import { resolveRuntimeRoute } from "./runtimeRouting.js";
+import {
+  resolveRuntimeRoute,
+  type PreviousRuntimeFailure,
+  type RoutingMode,
+  type RuntimeRouteAttempt,
+  type RuntimeRouteFlags,
+} from "./runtimeRouting.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import type { ClassificationResult } from "../classification/taskClassifier.js";
+import type { QaRiskSignals } from "../qa/mode.js";
 import { checkRoleExecutionGate } from "../roles/roleExecutionGate.js";
 import type { PersistedTask } from "../store/taskStore.js";
+import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import type { ThreeRepoRequestRoots } from "../threeRepo/preflight.js";
+import { deriveHandoff } from "../agents/moduleDocs.js";
+import { ArtifactType } from "../artifacts/schemas.js";
+import { assessContextBudget, resolveContextBudgetFromProject, type ContextBudgetComposition } from "../context/contextBudget.js";
+import { writeExecutionPacket } from "../state/runtimeArtifacts.js";
 
 /**
  * An `AgentExecutor` built on a `RuntimeAdapter` (T108).
@@ -32,10 +49,7 @@ import type { ThreeRepoRequestRoots } from "../threeRepo/preflight.js";
  * in this file names a runtime, reads a runtime's flag, or parses a runtime's
  * envelope — swap the adapter and every line here still applies.
  *
- * `agents/claudeCliExecutor.ts` remains as it was and is still what `cli.ts`
- * uses. Repointing it is T109's job, together with the Claude Code adapter it
- * would point at; doing both in this task would have removed the only evidence
- * that the extraction into `agentRunAssembly.ts` changed nothing.
+ * `cli.ts` constructs this executor with the runtime selected for the task.
  */
 
 export interface RuntimeExecutorOptions {
@@ -79,6 +93,10 @@ export interface RuntimeExecutorOptions {
   stageRoots?: Partial<Record<AgentStage, string>>;
   /** Phase 2's fail-closed resolver. When present it runs before adapter start. */
   threeRepoTask?: (taskId: string, stage: AgentStage) => { task: PersistedTask; roots: ThreeRepoRequestRoots };
+  /** Stored Phase-1 task contract. Production supplies this for every runnable task. */
+  runtimeTask?: (taskId: string) => RuntimeTask | null | undefined;
+  /** Optional bounded retention override; the runtime-artifact default otherwise applies. */
+  packetRetention?: number;
   /**
    * T114 — make the BA → SA → DEV human handoffs a prerequisite of the lead
    * stages. Off by default so a project that has not adopted V1.5 knowledge
@@ -86,22 +104,19 @@ export interface RuntimeExecutorOptions {
    */
   enforceRoleWorkflow?: boolean;
   /**
-   * T112 — when given, a role's runtime and model are resolved per run via
-   * `runtimeRouting.ts` (`.sta/config.yaml`'s `model_routing`, extended to a
-   * `runtime:model` syntax) instead of always executing on `runtime`. `runtime`
-   * stays the fallback a route resolves to when its override names an
-   * unregistered runtime, or when there is no override at all. Left unset,
-   * behaviour is identical to before T112: every run goes to `runtime` with the
-   * model `opts.model` (or the role's own frontmatter) picked.
-   *
-   * Deliberately opt-in rather than wired into `cli.ts`'s production path — see
-   * `HANDOFF_V1.md` §21 for why: routing to a second runtime is only as trustworthy
-   * as that runtime's adapter, and `codexAdapter.ts` (T110) is an explicitly
-   * partial, unverified implementation. Turning this on for a real pipeline run
-   * is a decision for whoever configures `model_routing`, not a default this
-   * executor should assume.
+   * V3 production routing. When present, runtime/model selection, cached
+   * availability, support policy and write-stage capabilities are resolved per
+   * run. Left unset only for embedded compatibility callers and focused tests.
    */
   registry?: RuntimeRegistry;
+  /** Explicit CLI runner/model constraints (precedence level 1). */
+  routingFlags?: RuntimeRouteFlags;
+  classification?: (taskId: string) => ClassificationResult | undefined;
+  riskSignals?: (taskId: string) => QaRiskSignals | undefined;
+  previousFailures?: (taskId: string) => readonly PreviousRuntimeFailure[] | undefined;
+  routingMode?: RoutingMode;
+  allowHandoff?: boolean;
+  allowPaidFallback?: boolean;
   /** T111's verified capability picture per runtime id, passed through to `resolveRuntimeRoute` so its capability-policy diagnostic uses confirmed facts instead of a static claim, when available. */
   verifiedCapabilities?: Readonly<Record<string, ReadonlySet<RuntimeCapability>>>;
 }
@@ -133,9 +148,26 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
   model?: string;
   promptVersion?: number;
   context_chars: number;
+  composition: {
+    static_chars: number;
+    handoff_chars: number;
+    doc_chars: number;
+    knowledge_chars: number;
+    code_intel_chars: number;
+    tool_output_chars: number;
+  };
+  doc_chars_before: number;
+  runtime: string;
+  requested_runtime?: string;
+  requested_model?: string;
+  routing_basis?: string;
+  fallback_reason?: string;
+  fallback_count?: number;
+  contextBudget: ReturnType<typeof assessContextBudget>;
+  budgetComposition: ContextBudgetComposition;
 }): RunMetrics {
-  const input_tokens = result.usage.inputTokens ?? 0;
-  const output_tokens = result.usage.outputTokens ?? 0;
+  const input_tokens = result.usage.inputTokens;
+  const output_tokens = result.usage.outputTokens;
   return {
     // What the runtime says it used, falling back to what was configured. A
     // runtime that reports its own model is the better source: a routing
@@ -143,7 +175,7 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     // frontmatter value, which is the one thing the log must not do.
     model: result.model ?? declared.model,
     promptVersion: declared.promptVersion,
-    tokens: input_tokens + output_tokens,
+    tokens: (input_tokens ?? 0) + (output_tokens ?? 0),
     // `?? 0` here, unlike the `costUsd?: number` in the envelope: the run log's
     // `cost` is a number by contract, and "this runtime does not report cost" is
     // recorded as the absent COST_REPORTING capability, not as a fake figure in
@@ -153,6 +185,27 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     output_tokens,
     cache_read_tokens: result.usage.cachedInputTokens,
     context_chars: declared.context_chars,
+    runtime: declared.runtime,
+    requested_runtime: declared.requested_runtime,
+    requested_model: declared.requested_model,
+    routing_basis: declared.routing_basis,
+    fallback_reason: declared.fallback_reason,
+    fallback_count: declared.fallback_count,
+    session_kind: "orchestrated",
+    ...declared.composition,
+    doc_chars_before: declared.doc_chars_before,
+    context_budget_chars: declared.contextBudget.budgetChars ?? undefined,
+    context_budget_source: declared.contextBudget.budgetSource ?? undefined,
+    context_overflow_chars: declared.contextBudget.overflowChars ?? undefined,
+    context_budget_warning: declared.contextBudget.warning ?? undefined,
+    context_base_chars: declared.budgetComposition.base,
+    context_task_chars: declared.budgetComposition.task,
+    context_safety_chars: declared.budgetComposition.safety,
+    context_docs_chars: declared.budgetComposition.docs,
+    context_knowledge_chars: declared.budgetComposition.knowledge,
+    context_code_chars: declared.budgetComposition.code,
+    context_tool_output_chars: declared.budgetComposition.tool_output,
+    context_reserve_chars: declared.budgetComposition.reserve,
   };
 }
 
@@ -160,6 +213,23 @@ function describeFailure(runtimeId: string, role: string, result: RuntimeAgentRe
   const detail = [result.text, ...result.diagnostics, ...routingDiagnostics].filter((s) => s.length > 0).join(" | ").slice(0, 2000);
   const exit = result.exitCode === null ? "unknown" : String(result.exitCode);
   return `${runtimeId} run of \`${role}\` finished ${result.status} (exit ${exit}): ${detail}`;
+}
+
+interface FallbackHop {
+  readonly count: number;
+  readonly requestedRuntime: string;
+  readonly requestedModel?: string;
+  readonly actualRuntime: string;
+  readonly actualModel?: string;
+  readonly reason: string;
+}
+
+function renderFallbackHops(hops: readonly FallbackHop[]): string | undefined {
+  if (hops.length === 0) return undefined;
+  return hops.map((hop) =>
+    `hop ${hop.count}: requested=${hop.requestedRuntime}/${hop.requestedModel ?? "default"}; ` +
+    `actual=${hop.actualRuntime}/${hop.actualModel ?? "default"}; reason=${hop.reason}`,
+  ).join(" | ");
 }
 
 export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecutor {
@@ -171,6 +241,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
   return async function runtimeExecutor(req: AgentExecutorRequest): Promise<AgentExecutorResult> {
     const role = getAgent(req.stage).role;
     const moduleName = opts.moduleName(req.taskId);
+    const phases = opts.phases?.(req.taskId);
 
     let threeRepo: { task: PersistedTask; roots: ThreeRepoRequestRoots } | undefined;
     if (opts.threeRepoTask) {
@@ -189,57 +260,225 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       if (!handoff.allowed) return failResult(handoff.reason ?? `cannot start ${role}: role workflow gate failed`);
     }
 
-    const sliced = sliceDocs
-      ? sliceModuleDocsFor(req.stage, {
-          projectRoot: threeRepo?.roots.knowledgeRoot ?? opts.projectRoot,
-          moduleName,
-          phases: opts.phases?.(req.taskId),
-        })
-      : [];
+    const workRoot = threeRepo?.roots.workRoots.find((root) => root.access === "write") ?? threeRepo?.roots.workRoots[0];
+    let incomingHandoff;
+    try {
+      incomingHandoff = handoffFromContext(req.context);
+    } catch (error) {
+      return failResult(`cannot use prior-stage handoff: ${String(error)}`);
+    }
+    let stageContext;
+    try {
+      stageContext = sliceDocs
+        ? await assembleStageContext(req.stage, {
+            projectRoot: opts.projectRoot,
+            docsRoot: threeRepo?.roots.knowledgeRoot ?? opts.projectRoot,
+            knowledgeRoot: threeRepo?.roots.knowledgeRoot,
+            moduleName,
+            phases,
+            taskId: req.taskId,
+            handoff: incomingHandoff ?? undefined,
+            targetRoot: workRoot?.path,
+            targetId: workRoot?.targetId,
+          })
+        : {
+            docs: [], knowledge: [], codeIntel: [], selected: [], docCharsBefore: 0,
+            savings: { bytesBefore: 0, bytesAfter: 0, savedPct: 0 },
+            directFileReads: 0,
+          };
+    } catch (error) {
+      return failResult(`cannot assemble authorized handoff context: ${String(error)}`);
+    }
 
-    const prompt = buildPrompt(req, opts.extraInstruction, sliced);
+    let guards: RuntimeGuards;
+    try {
+      guards = opts.guards(role);
+    } catch (e) {
+      // The current role contract is the authority packet scope narrows. A run
+      // with no resolved contract must not compile a packet or start an adapter.
+      return failResult(`cannot start ${role}: ${String(e)}`);
+    }
 
-    // T112: resolve which runtime and model this run actually goes to. Absent
-    // `opts.registry`, `activeRuntime`/`activeModel` are exactly `runtime` and
-    // `resolveModel(role)` — identical to pre-T112 behaviour.
+    const runtimeTask = threeRepo?.task.runtimeTask ?? opts.runtimeTask?.(req.taskId) ?? null;
+    let packetPath: string | undefined;
+    let promptParts: PromptPartsResult;
+    if (runtimeTask) {
+      try {
+        const packet = compileExecutionPacket({
+          req,
+          role,
+          runtimeTask,
+          contractScope: { allow: guards.writeAllow, deny: guards.writeDeny },
+          extra: opts.extraInstruction,
+          sources: {
+            docs: stageContext.docs,
+            knowledge: stageContext.knowledge,
+            codeIntel: stageContext.codeIntel,
+          },
+        });
+        const runtimeStateRoot = threeRepo?.roots.bindingRoot ?? opts.projectRoot;
+        const persisted = writeExecutionPacket({
+          projectRoot: runtimeStateRoot,
+          packet,
+          forbiddenRoots: threeRepo
+            ? [threeRepo.roots.knowledgeRoot, ...threeRepo.roots.workRoots.map((root) => root.path)]
+            : [],
+          maxRunsPerTask: opts.packetRetention,
+        });
+        packetPath = path.relative(runtimeStateRoot, persisted.path).replace(/\\/g, "/");
+        promptParts = packet;
+      } catch (error) {
+        return failResult(`cannot compile or persist execution packet for ${role}: ${String(error)}`);
+      }
+    } else {
+      // Historical or embedded callers may have no RuntimeTask. Production
+      // tasks created since state schema v13 always take the packet path above.
+      promptParts = buildPromptParts(req, opts.extraInstruction, {
+        docs: stageContext.docs,
+        knowledge: stageContext.knowledge,
+        codeIntel: stageContext.codeIntel,
+      });
+    }
+    const prompt = promptParts.text;
+    const finish = (result: AgentExecutorResult): AgentExecutorResult =>
+      packetPath ? { ...result, packetPath } : result;
+
+    // V3 routing remains above the orchestrator seam. Embedded callers that do
+    // not supply a registry retain the fixed-runtime compatibility behaviour.
+    const hasTargetWrite = threeRepo?.roots.workRoots.some((root) => root.access === "write") ?? false;
     let activeRuntime = runtime;
     let activeModel = resolveModel(role);
+    let routeAttempts: readonly RuntimeRouteAttempt[] = [];
+    let routeAllowHandoff = false;
+    let routeAvailability: Readonly<Record<string, { available: boolean; reason?: string }>> = {};
     const routingDiagnostics: string[] = [];
+    let requestedRuntime: string | undefined;
+    let requestedModel: string | undefined;
+    let routingBasis: string | undefined;
     if (opts.registry) {
+      routeAvailability = await opts.registry.probeAll();
       const route = resolveRuntimeRoute({
         role,
         stage: req.stage,
         projectRoot: opts.projectRoot,
         registry: opts.registry,
         defaultRuntimeId: runtime.id,
+        flags: opts.routingFlags,
+        classification: opts.classification?.(req.taskId),
+        riskSignals: opts.riskSignals?.(req.taskId),
+        availability: routeAvailability,
+        previousFailures: opts.previousFailures?.(req.taskId),
+        mode: opts.routingMode,
+        allowHandoff: opts.allowHandoff,
+        hasTargetWrite,
         verifiedCapabilities: opts.verifiedCapabilities,
       });
-      activeRuntime = route.runtime;
-      activeModel = route.model ?? activeModel;
       routingDiagnostics.push(...route.diagnostics);
+      routeAttempts = route.attempts;
+      routeAllowHandoff = route.allowHandoff;
+      requestedRuntime = route.requested.runtimeId;
+      requestedModel = route.requested.model;
+      routingBasis = `level-${route.precedenceLevel}`;
+      if (route.error || !route.selected) {
+        const routeFailure = [route.error ?? "runtime route resolved no selected candidate", ...route.diagnostics].join(" | ");
+        return finish(failResult(
+          `cannot start ${role}: ${routeFailure}`,
+          {
+            requested_runtime: requestedRuntime,
+            requested_model: requestedModel,
+            routing_basis: routingBasis,
+            fallback_count: 0,
+          },
+        ));
+      }
+      activeRuntime = route.selected.runtime;
+      activeModel = route.selected.model ?? activeModel;
     }
 
-    const declared = {
+    const fallbackHops: FallbackHop[] = [];
+    const recordTransition = (current: RuntimeRouteAttempt, next: RuntimeRouteAttempt, reason: string): void => {
+      fallbackHops.push({
+        count: fallbackHops.length + 1,
+        requestedRuntime: current.runtimeId,
+        requestedModel: current.model,
+        actualRuntime: next.runtimeId,
+        actualModel: next.model,
+        reason,
+      });
+    };
+    let activeAttemptIndex = routeAttempts.findIndex((attempt) => attempt.runtime?.id === activeRuntime.id && !attempt.skipReason);
+    if (activeAttemptIndex > 0) {
+      for (let index = 0; index < activeAttemptIndex; index++) {
+        const current = routeAttempts[index]!;
+        const next = routeAttempts[index + 1]!;
+        recordTransition(current, next, current.skipReason ?? current.reason);
+      }
+    }
+
+    const contextBudget = assessContextBudget(
+      prompt.length,
+      promptParts.budgetComposition,
+      resolveContextBudgetFromProject(opts.projectRoot, role, activeModel),
+    );
+    if (contextBudget.warning) {
+      // T-V3TOK-100 is deliberately observation-only. In particular, this
+      // happens after assembly and before execution without editing `prompt`.
+      console.warn(
+        `[orchestrator] WARNING: ${role} context budget exceeded: ${contextBudget.contextChars} chars > ` +
+          `${contextBudget.budgetChars} (${contextBudget.budgetSource}); overflow=${contextBudget.overflowChars}. Prompt is unchanged (warning mode).`,
+      );
+    }
+
+    let declared = {
       model: activeModel,
       promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
       context_chars: prompt.length,
+      composition: promptParts.composition,
+      doc_chars_before: stageContext.docCharsBefore,
+      runtime: activeRuntime.id,
+      requested_runtime: requestedRuntime,
+      requested_model: requestedModel,
+      routing_basis: routingBasis,
+      fallback_reason: renderFallbackHops(fallbackHops),
+      fallback_count: opts.registry ? fallbackHops.length : undefined,
+      contextBudget,
+      budgetComposition: promptParts.budgetComposition,
     };
 
-    let guards: RuntimeGuards;
-    try {
-      guards = opts.guards(role);
-    } catch (e) {
-      // A run whose write scope could not be resolved must not start. This is
-      // the one place the executor refuses before reaching the runtime at all.
-      return failResult(`cannot start ${role}: ${String(e)}`, declared);
-    }
+    const executeActiveRuntime = (): Promise<RuntimeAgentResult> => activeRuntime.executeAgent({
+      role,
+      cwd: threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot,
+      bindingRoot: threeRepo?.roots.bindingRoot,
+      knowledgeRoot: threeRepo?.roots.knowledgeRoot,
+      workRoots: threeRepo?.roots.workRoots,
+      definitionPath: activeRuntime.binding.definitionPath(role),
+      prompt,
+      model: declared.model,
+      autonomy,
+      guards,
+      env: {
+        AGENTCLAUDE_ROLE: role,
+        ...(hasTargetWrite ? { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify(threeRepo!.roots.workRoots.filter((root) => root.access === "write").map((root) => root.path)) } : {}),
+        ...(threeRepo?.roots.knowledgeRoot ? { AGENTCLAUDE_KNOWLEDGE_ROOT: threeRepo.roots.knowledgeRoot } : {}),
+      },
+      timeoutMs: opts.timeoutMs,
+    });
 
     let result: RuntimeAgentResult;
-    const hasTargetWrite = threeRepo?.roots.workRoots.some((root) => root.access === "write") ?? false;
     if (hasTargetWrite && !activeRuntime.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)) {
-      return failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot enforce a pre-tool workspace guard for Target write access`, declared);
+      return finish(failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot enforce a pre-tool workspace guard for Target write access`, declared));
     }
-    try {
+    const activeProbe = routeAvailability[activeRuntime.id];
+    if (activeProbe?.available === false) {
+      result = {
+        status: "UNAVAILABLE",
+        exitCode: null,
+        text: "",
+        usage: {},
+        guards: { enforced: [], unenforced: [] },
+        diagnostics: [activeProbe.reason ?? "availability probe reported no reason"],
+      };
+    } else try {
       result = await activeRuntime.executeAgent({
         role,
         // Binding/config lives in the Framework root; workspace access arrives
@@ -274,16 +513,16 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       // `executeAgent` is contracted never to throw. If one does, that is an
       // adapter bug — and it still must not take the task down, so it lands as a
       // FAIL that names the adapter rather than the agent.
-      return failResult(`adapter "${activeRuntime.id}" threw instead of returning a result: ${String(e)}`, declared);
+      return finish(failResult(`adapter "${activeRuntime.id}" threw instead of returning a result: ${String(e)}`, declared));
     }
 
-    const metrics = metricsFrom(result, declared);
+    let metrics = metricsFrom(result, declared);
 
-    if (hasTargetWrite && !result.guards.enforced.includes(RuntimeCapability.PRE_TOOL_GUARD)) {
-      return failResult(
+    if (result.status !== "UNAVAILABLE" && hasTargetWrite && !result.guards.enforced.includes(RuntimeCapability.PRE_TOOL_GUARD)) {
+      return finish(failResult(
         `Target-write run of ${role} was rejected because adapter "${activeRuntime.id}" did not confirm pre-tool guard enforcement${result.guards.reason ? `: ${result.guards.reason}` : ""}`,
         metrics,
-      );
+      ));
     }
 
     // T-OC7 — the post-hoc half of the exit-check contract. A runtime without
@@ -301,13 +540,83 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     }
 
     if (result.status === "UNAVAILABLE") {
-      return {
-        ...failResult(describeFailure(activeRuntime.id, role, result, routingDiagnostics), metrics),
-        failure: unavailableFailure(activeRuntime.id, result.diagnostics.join("; ") || result.text || "no reason given"),
-      };
+      let unavailableReason = result.diagnostics.join("; ") || result.text || "no reason given";
+      while (routeAllowHandoff && activeAttemptIndex >= 0 && activeAttemptIndex + 1 < routeAttempts.length) {
+        const current = routeAttempts[activeAttemptIndex]!;
+        const next = routeAttempts[++activeAttemptIndex]!;
+        recordTransition(current, next, current.skipReason ?? `runtime "${current.runtimeId}" returned UNAVAILABLE: ${unavailableReason}`);
+
+        if (next.skipReason || !next.runtime) {
+          unavailableReason = next.skipReason ?? `runtime "${next.runtimeId}" is not registered`;
+          continue;
+        }
+        const probe = routeAvailability[next.runtimeId];
+        if (probe?.available === false) {
+          unavailableReason = `runtime "${next.runtimeId}" is UNAVAILABLE during availability probe: ${probe.reason ?? "no reason given"}`;
+          continue;
+        }
+        if (hasTargetWrite && !next.runtime.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)) {
+          unavailableReason = `runtime "${next.runtimeId}" cannot enforce a pre-tool workspace guard for Target write access`;
+          continue;
+        }
+
+        activeRuntime = next.runtime;
+        activeModel = next.model ?? resolveModel(role);
+        const nextBudget = assessContextBudget(
+          prompt.length,
+          promptParts.budgetComposition,
+          resolveContextBudgetFromProject(opts.projectRoot, role, activeModel),
+        );
+        declared = {
+          ...declared,
+          model: activeModel,
+          runtime: activeRuntime.id,
+          fallback_reason: renderFallbackHops(fallbackHops),
+          fallback_count: fallbackHops.length,
+          contextBudget: nextBudget,
+        };
+        try {
+          result = await executeActiveRuntime();
+        } catch (error) {
+          // A contract-violating throw is ERROR, not infrastructure evidence.
+          return finish(failResult(`adapter "${activeRuntime.id}" threw instead of returning a result: ${String(error)}`, declared));
+        }
+        metrics = metricsFrom(result, declared);
+
+        if (result.status !== "UNAVAILABLE" && hasTargetWrite && !result.guards.enforced.includes(RuntimeCapability.PRE_TOOL_GUARD)) {
+          return finish(failResult(
+            `Target-write run of ${role} was rejected because adapter "${activeRuntime.id}" did not confirm pre-tool guard enforcement${result.guards.reason ? `: ${result.guards.reason}` : ""}`,
+            metrics,
+          ));
+        }
+        if (result.status === "UNAVAILABLE") {
+          unavailableReason = result.diagnostics.join("; ") || result.text || "no reason given";
+          continue;
+        }
+        // ERROR and TIMEOUT are never fallback triggers.
+        if (result.status !== "OK") {
+          return finish(failResult(describeFailure(activeRuntime.id, role, result, routingDiagnostics), metrics));
+        }
+        break;
+      }
+
+      if (result.status === "UNAVAILABLE") {
+        const paidDisabled = opts.allowPaidFallback !== true
+          ? " Paid API fallback is disabled (execution.allow_paid_fallback is false)."
+          : "";
+        const reason = `${unavailableReason}.${paidDisabled}`;
+        return finish({
+          ...failResult(`${describeFailure(activeRuntime.id, role, result, routingDiagnostics)}${paidDisabled}`, {
+            ...metrics,
+            fallback_reason: renderFallbackHops(fallbackHops),
+            fallback_count: opts.registry ? fallbackHops.length : undefined,
+          }),
+          failure: unavailableFailure(activeRuntime.id, reason),
+        });
+      }
     }
     if (result.status !== "OK") {
-      return failResult(describeFailure(activeRuntime.id, role, result, routingDiagnostics), metrics);
+      return finish(failResult(describeFailure(activeRuntime.id, role, result, routingDiagnostics), metrics));
     }
 
     // qa-engineer and security report their verdict in a document, not in an
@@ -315,13 +624,13 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // works wherever the run happened, not only where the orchestrator's `fs`
     // can reach.
     if (req.stage === AgentStage.QA_ENGINEER) {
-      return qaArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "review.md"));
+      return finish(qaArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "review.md")));
     }
     if (req.stage === AgentStage.SECURITY) {
-      return securityArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "security.md"));
+      return finish(securityArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "security.md")));
     }
 
-    // The four doc-producing stages each own exactly one module document. Exit 0
+    // The five doc-producing stages each own exactly one module document. Exit 0
     // alone is not success for them — an agent that answered every question with
     // prose but never wrote its artifact would otherwise sail through as PASS,
     // and the next stage would build (or refuse to build) against a document
@@ -331,16 +640,27 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     if (ownedDoc) {
       const doc = await readModuleDocVia(activeRuntime, moduleName, ownedDoc);
       if (doc === null || doc.trim() === "") {
-        return failResult(
+        return finish(failResult(
           `${role} reported success but _docs/module/${moduleName}/${ownedDoc} doesn't exist (or is empty) — ` +
             `cannot confirm the stage produced its artifact`,
           metrics,
-        );
+        ));
       }
-      return { outcome: { ...metrics, result: "PASS" } };
+      const handoff = deriveHandoff(req.stage, moduleName, doc, ownedDoc === "plan.md" ? doc : undefined, {
+        taskId: req.taskId,
+        phases,
+      });
+      for (const note of handoff.notes) {
+        console.error(`[orchestrator] HANDOFF NOTE (${role}): ${note}`);
+      }
+      return finish({
+        outcome: { ...metrics, result: "PASS" },
+        artifactType: ArtifactType.HANDOFF,
+        artifact: handoff.artifact,
+      });
     }
 
-    return { outcome: { ...metrics, result: "PASS" } };
+    return finish({ outcome: { ...metrics, result: "PASS" } });
   };
 }
 

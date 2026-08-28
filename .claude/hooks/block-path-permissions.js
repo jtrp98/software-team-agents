@@ -16,8 +16,8 @@
  * both hit this. `tool_name` and `tool_input` are all there is, so this hook cannot work out on
  * its own which of the eleven agents is about to write.
  *
- * So it takes identity from `AGENTCLAUDE_ROLE`, which `orchestrator/src/agents/claudeCliExecutor.ts`
- * sets on the child process before spawning `claude -p --agent <role>`. When the orchestrator is
+ * So it takes identity from `AGENTCLAUDE_ROLE`, which the runtime executor and adapters set on
+ * the child process before spawning an agent. When the orchestrator is
  * driving, the role is known and the agent's own rules apply. When a person is driving
  * interactively, there is no role, and this falls back to the UNIVERSAL_DENY floor -- the paths
  * no agent may write under any circumstances.

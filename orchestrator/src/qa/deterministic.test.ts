@@ -43,6 +43,31 @@ describe("runDeterministicVerification", () => {
     expect(v.passed).toBe(true);
     expect(v.ran.map((r) => r.id)).toEqual(["build"]);
     expect(v.skipped).toEqual(["lint", "typecheck", "unit-tests", "integration-tests"]);
+    expect(v.status).toBe("passed");
+  });
+
+  it("executes only selected levels in fixed order", async () => {
+    const order: string[] = [];
+    const v = await runDeterministicVerification((id) => {
+      order.push(id);
+      return pass(id);
+    }, { levels: ["unit", "lint", "typecheck", "build"] });
+    expect(order).toEqual(["lint", "typecheck", "unit-tests", "build"]);
+    expect(v.required).toEqual(order);
+    expect(v.passed).toBe(true);
+  });
+
+  it("warns by default but fails only after explicit enforcement when required evidence is missing", async () => {
+    const warn = await runDeterministicVerification(() => null, { levels: ["lint", "unit"] });
+    expect(warn).toMatchObject({ status: "skipped", enforcement: "warn", passed: true });
+    expect(renderDeterministicVerification(warn).join("\n")).toContain("SKIPPED (not PASS)");
+
+    const enforce = await runDeterministicVerification(() => null, {
+      levels: ["lint", "unit"],
+      enforcement: "enforce",
+    });
+    expect(enforce).toMatchObject({ status: "skipped", enforcement: "enforce", passed: false });
+    expect(renderDeterministicVerification(enforce).join("\n")).toContain("BLOCKED by test-pyramid enforcement");
   });
 
   it("turns a throwing runner into a FAIL instead of crashing the pipeline", async () => {

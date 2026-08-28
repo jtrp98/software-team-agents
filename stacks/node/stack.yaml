@@ -16,4 +16,5 @@ commands:
   test: npm test
   lint: npm run lint
   typecheck: npm run typecheck
+scan_extensions: [.ts, .tsx, .js, .jsx, .prisma]
 capabilities: [rest-api, database-access, auth, testing]

@@ -13,11 +13,10 @@
 #
 # WHO READS THIS
 #
-# `.claude/agents/test-planner.md` consults it while deciding levels per REQ-NNN. It is not
-# wired to a runtime check yet — orchestrator/src/testing/testPyramid.ts is the checkable half
-# (schema validity, no duplicate ids, no empty required_levels), ready for a future round to
-# cross-check test-plan.md's stated levels against it the way check-schema-contract.js compares
-# schema.prisma against design.md.
+# `.claude/agents/test-planner.md` consults it while deciding levels per REQ-NNN, and
+# `orchestrator/src/testing/testPyramid.ts` feeds the same floor into RuntimeTask and
+# deterministic execution. V3 is warning-only unless a project explicitly sets
+# `enforcement: enforce`; an omitted value therefore preserves existing exit behaviour.
 
 version: 1
 

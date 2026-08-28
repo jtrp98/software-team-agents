@@ -7,7 +7,7 @@ citation still means the same rule; only the path in front of it needs the table
 
 | Section(s) | Now lives in |
 |---|---|
-| §0 (T-WG5 — confirm workspace ↔ lane before writing) | `policies/documentation.md` |
+| §0 (T-WG5 — confirm workspace ↔ workspace role before writing) | `policies/documentation.md` |
 | §1, §2, §3, §4, §5b, §10, §11 | `policies/documentation.md` |
 | §5 | `policies/git.md` |
 | §5a, §5c-1, §5d | `policies/security.md` |

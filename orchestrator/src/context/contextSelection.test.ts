@@ -29,6 +29,45 @@ describe("CONTEXT_POLICY", () => {
       expect(overlap).toEqual([]);
     }
   });
+
+  it("lets every runtime role read the bounded handoff reference", () => {
+    for (const stage of Object.values(AgentStage).filter((stage) => stage !== AgentStage.HUMAN)) {
+      expect(CONTEXT_POLICY[stage]!.reads).toContain(ArtifactType.HANDOFF);
+    }
+  });
+
+  it("keeps ExecutionPacket out of prior-stage context for every role", () => {
+    for (const policy of Object.values(CONTEXT_POLICY)) {
+      expect(policy.reads).not.toContain(ArtifactType.EXECUTION_PACKET);
+      expect(policy.doesNotRead).toContain(ArtifactType.EXECUTION_PACKET);
+    }
+  });
+
+  it("knowledge-brief is readable by every dev-side role (T-KA5a)", () => {
+    for (const stage of [
+      AgentStage.QA_ENGINEER,
+      AgentStage.BACKEND_ENGINEER,
+      AgentStage.FRONTEND_ENGINEER,
+      AgentStage.SECURITY,
+      AgentStage.DEVOPS,
+    ]) {
+      expect(CONTEXT_POLICY[stage]!.reads).toContain("knowledge-brief");
+    }
+  });
+
+  it("knowledge-brief stays forbidden for Knowledge-side roles — they sit inside the Knowledge repo already", () => {
+    for (const stage of [
+      AgentStage.BUSINESS_ANALYST,
+      AgentStage.SYSTEM_ANALYST,
+      AgentStage.PROJECT_MANAGER,
+      AgentStage.TEST_PLANNER,
+      AgentStage.UXUI_DESIGNER,
+    ]) {
+      expect(() => selectContext(stage, { "knowledge-brief": "brief" }, ["knowledge-brief"])).toThrow(
+        ContextLeakageError,
+      );
+    }
+  });
 });
 
 describe("selectContext", () => {

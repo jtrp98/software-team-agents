@@ -6,7 +6,7 @@ it taxes every future run, and what language it's written in.
 
 ---
 
-## 0. Before writing anything — confirm workspace ↔ lane (T-WG5)
+## 0. Before writing anything — confirm workspace ↔ workspace role (T-WG5)
 
 **Every analysis/doc-writing run's first action is `software-team-agents status`, before touching
 `§1`'s module-folder resolution.** This isn't optional context-gathering — it's the checkpoint
@@ -17,7 +17,7 @@ workspace at all; nothing asked first.
 
 Read `status`'s output and confirm two things with the user before writing:
 
-1. **This workspace's role matches the work.** BA-lane work (`business-analyst`,
+1. **This workspace's role matches the work.** BA-workspace work (`business-analyst`,
    `system-analyst`, `project-manager`, `test-planner`, `uxui-designer`) writes only from a
    `role: ba` workspace (the Knowledge repo). If `status` reports `role: dev` or no role at all,
    stop and ask — don't write a module doc into a Target.
@@ -203,6 +203,8 @@ This isn't gated behind any specific agent owning the fix: whichever agent's run
 
 §4 says existing docs are amended with `Edit`, never replaced with `Write`. **Enforced** by `.claude/hooks/block-doc-rewrite.js`, which blocks a `Write` to one of the seven per-module docs once it already exists on disk — `Edit`/`MultiEdit` are unaffected, and so is a doc's first creation (file doesn't exist yet). If blocked, use `Edit` on the section that needs to change. (The hook can't tell which agent is calling it — see its comments for why the file-exists check is the right proxy anyway.)
 
+**Generated renderings are never hand-edited at all.** `.codex/agents/*.toml`, `.opencode/agent/*.md`, `.opencode/commands/*.md`, and `.agents/skills/**` are byte-for-byte renderings of their single sources (`.claude/agents/*.md`, `.claude/commands/*.md`) — regenerate them (`node scripts/regenerate-renderings.mjs` in the Framework repo; `sta sync` in a target), never patch them. To edit what a runtime sees, edit the source and re-render: `sta --check-bindings` fails loudly on any other divergence. The same rule will apply to any future generated artifact (ADR-005).
+
 ---
 
 ## 10. Read only the part of a document your run needs
@@ -242,7 +244,7 @@ Same technique — `Grep` for `^## ` to get the section map, then `Read` the ran
 
 **Skip:** `## Feasibility Summary` (an executive summary of sections you're reading anyway), `## Change Log`, and `## Data Model` — read `schema.prisma` for that instead, per `policies/architecture.md` §7, once it exists.
 
-`system-analyst` owns this document and reads it in full when amending. `qa-engineer` reads the Data Model in full every round — see `policies/architecture.md` §7 for why that one isn't optional. `project-manager` also reads the Data Model, because it writes one task per model/migration and needs the model list; it usually runs before scaffold, when `design.md` is the only copy anyway.
+`system-analyst` owns this document and reads it in full when amending. `qa-engineer` reads the Data Model in full every round — see `policies/architecture.md` §7 for why that one isn't optional. `project-manager` also reads the Data Model — to know what the work areas are when phasing (one task = one independently verifiable unit of work, batched by shared boundary; nothing mandates a task per model), not because each model becomes its own row; it usually runs before scaffold, when `design.md` is the only copy anyway.
 
 ### `review.md`
 

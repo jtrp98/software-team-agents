@@ -10,6 +10,7 @@ import {
   checkTestPyramid,
   loadTestPyramid,
   requiredLevelsFor,
+  runtimeVerificationFor,
   testPyramidPath,
 } from "./testPyramid.js";
 
@@ -101,6 +102,32 @@ describe("requiredLevelsFor", () => {
   it("returns null for a task type the file doesn't name", () => {
     const pyramid = loadTestPyramid(fixtureRoot(VALID_YAML));
     expect(requiredLevelsFor("ghost-type", pyramid)).toBeNull();
+  });
+});
+
+describe("runtimeVerificationFor", () => {
+  it("selects a known task type plus the always-on mechanical baseline", () => {
+    const pyramid = loadTestPyramid(fixtureRoot(VALID_YAML));
+    expect(runtimeVerificationFor("ui-component", pyramid)).toEqual({
+      levels: ["lint", "typecheck", "unit", "build"],
+      enforcement: "warn",
+      source: "test-pyramid",
+      reason: expect.stringContaining("ui-component"),
+    });
+  });
+
+  it("preserves the historical full order for an unknown task type", () => {
+    const pyramid = loadTestPyramid(fixtureRoot(VALID_YAML));
+    expect(runtimeVerificationFor("ghost-type", pyramid)).toMatchObject({
+      levels: ["lint", "typecheck", "unit", "integration", "build"],
+      enforcement: "warn",
+      source: "full-order",
+    });
+  });
+
+  it("makes enforcement reachable only through an explicit policy value", () => {
+    const pyramid = loadTestPyramid(fixtureRoot(VALID_YAML.replace("version: 1", "version: 1\nenforcement: enforce")));
+    expect(runtimeVerificationFor("ui-component", pyramid).enforcement).toBe("enforce");
   });
 });
 

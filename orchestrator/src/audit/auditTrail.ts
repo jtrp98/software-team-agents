@@ -1,5 +1,6 @@
 import { AgentStage } from "../types.js";
 import type { PersistedEvent, TaskStore } from "../store/taskStore.js";
+import { formatRunRouting, type RunRecord } from "../observability/runLog.js";
 
 /**
  * The audit trail (T37): WHO / WHAT / WHEN / WHY / INPUT / OUTPUT / DECISION for
@@ -96,11 +97,12 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
       const result = str(outcome, "result");
       const tokens = num(outcome, "tokens");
       const artifact = str(payload, "artifactType");
+      const packetPath = str(payload, "packetPath");
       const parts = [artifact, result, tokens === null ? null : `${tokens} tokens`].filter((p) => p !== null);
       return {
         actor: str(payload, "stage"),
         reason: str(outcome, "failure_reason"),
-        input: null,
+        input: packetPath === null ? null : `execution-packet:${packetPath}`,
         output: parts.length > 0 ? parts.join(", ") : null,
         decision: null,
       };
@@ -185,6 +187,35 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
         output: null,
         decision: "block",
       };
+
+    // Code-intelligence provider events (T-GR13): the optional graphify-backed
+    // context resolver reports through the same trail instead of a parallel
+    // observability system. Payloads carry metadata only — never source text.
+    case "CODE_INTELLIGENCE_QUERY":
+    case "CODE_INTELLIGENCE_HIT":
+    case "CODE_INTELLIGENCE_FALLBACK":
+    case "CODE_INTELLIGENCE_STALE":
+    case "CODE_INTELLIGENCE_ERROR":
+    case "CODE_INTELLIGENCE_DENIED":
+    case "CODE_INTELLIGENCE_SOURCE_VERIFIED": {
+      const operation = str(payload, "operation");
+      const reason = str(payload, "reason");
+      const count = num(payload, "candidates");
+      const role = str(payload, "role");
+      let decision: string | null = null;
+      if (type === "CODE_INTELLIGENCE_DENIED") decision = "deny:code-intelligence";
+      else if (type === "CODE_INTELLIGENCE_FALLBACK") decision = "fallback:search";
+      else if (type === "CODE_INTELLIGENCE_SOURCE_VERIFIED") decision = "source_verified";
+      const output =
+        type === "CODE_INTELLIGENCE_HIT" && count !== null ? `${count} candidate(s)` : null;
+      return {
+        actor: role ?? ORCHESTRATOR_ACTOR,
+        reason,
+        input: operation,
+        output,
+        decision,
+      };
+    }
 
     case "TASK_DEPLOYED":
       return { actor: ORCHESTRATOR_ACTOR, reason: null, input: null, output: null, decision: "deploy" };
@@ -282,6 +313,8 @@ function timestamp(at: number): string {
 export interface FormatAuditOptions {
   /** Show only entries that recorded a decision. */
   decisionsOnly?: boolean;
+  /** Existing run-log rows; routing is a decision view over the same state DB. */
+  runs?: readonly RunRecord[];
 }
 
 /**
@@ -293,9 +326,14 @@ export interface FormatAuditOptions {
  */
 export function formatAuditTrail(entries: readonly AuditEntry[], opts: FormatAuditOptions = {}): string {
   const shown = opts.decisionsOnly ? decisionTrail(entries) : entries;
-  if (shown.length === 0) return "(no events recorded for this task)";
+  const runs = opts.runs ?? [];
+  if (shown.length === 0 && runs.length === 0) return "(no events recorded for this task)";
 
   const lines: string[] = [];
+  for (const run of runs) {
+    lines.push(`${timestamp(run.start_time)}  EXECUTION_ROUTE  who=${run.agent}`);
+    lines.push(`    route:    ${formatRunRouting(run)}`);
+  }
   for (const entry of shown) {
     lines.push(`${timestamp(entry.at)}  ${entry.type}${entry.actor ? `  who=${entry.actor}` : ""}`);
     if (entry.decision) lines.push(`    decision: ${entry.decision}`);

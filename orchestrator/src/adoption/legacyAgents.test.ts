@@ -108,7 +108,7 @@ describe("scanLegacyAgents — a role this framework knows", () => {
         name: "system-analyst",
         description: "Legacy SA.",
         tools: "Read, Glob, Grep, AskUserQuestion, Write, Edit",
-        model: "opus",
+        model: "sonnet",
       }),
     });
 

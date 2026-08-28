@@ -12,11 +12,16 @@
  *   1. typecheck + full test suite + build (orchestrator)
  *      — includes the AI-boundary, context-scope and runtime-conformance suites,
  *        which live inside `npm test` by design rather than as parallel tracks.
+ *   1b. the three V3 property gates (T-V3R-110): the six guardrail invariants,
+ *      the Single/Auto/Manual execution-mode matrix against mock runners, and
+ *      paid-fallback unreachability — named so a failure says which property broke.
+ *      Each is runnable alone: node scripts/v3-gate.mjs <gate>.
  *   2. hooks/scripts self-test (.claude/tests/run.js)
  *   3. every repository-consistency checker (the 15 `--check-*` gates + bindings)
  *   4. templates snapshot is exactly what the current sources regenerate
  *      — plus version consistency between package.json and the stamped manifest
- *   5. packaged-distribution E2E against the real .tgz (packs its own artifact;
+ *   5. four V3 migration fixtures against a packed install
+ *   6. packaged-distribution E2E against the real .tgz (packs its own artifact;
  *      proves install→init→bind→sync→launch-surface without this repo)
  */
 import { spawnSync } from "node:child_process";
@@ -62,6 +67,15 @@ run("typecheck (orchestrator)", "npm run typecheck", { cwd: path.join(repoRoot, 
 run("test suite (incl. AI boundary, context scope, runtime conformance)", "npm test", { cwd: path.join(repoRoot, "orchestrator"), quiet: true });
 run("build (orchestrator)", "npm run build", { cwd: path.join(repoRoot, "orchestrator"), quiet: true });
 
+// --- 1b · V3 property gates (T-V3R-110) --------------------------------------
+// Named, independently runnable steps so a V3 property that stopped being
+// asserted fails legibly here instead of disappearing into the suite total.
+// Each pins the assertions it requires by name; none needs a runner login or a
+// dogfood run — every runtime they touch is a mock or a process fixture.
+run("V3 guardrail invariant suite (six criteria)", "node scripts/v3-gate.mjs guardrails", { quiet: true });
+run("V3 execution-mode matrix (mock runners)", "node scripts/v3-gate.mjs modes", { quiet: true });
+run("V3 paid-fallback unreachability", "node scripts/v3-gate.mjs paid-fallback", { quiet: true });
+
 // --- 2 · hooks & scripts -----------------------------------------------------
 run("hooks/scripts self-test", "node .claude/tests/run.js");
 
@@ -70,6 +84,7 @@ const distCli = "node orchestrator/dist/cli.js";
 for (const flag of [
   "--check-contracts",
   "--check-layout",
+  "--check-prompt-budget",
   "--check-workflows",
   "--check-profile",
   "--check-decisions",
@@ -92,13 +107,22 @@ for (const flag of [
 // Installation check, the way CI runs it: against a freshly-init'd project,
 // not the framework repo itself (which is a dev checkout, not a sta project).
 {
-  const tmpInit = path.join(os.tmpdir(), `sta-gate-install-${process.pid}`);
-  spawnSync(
-    [q("node"), q(path.join(repoRoot, "orchestrator", "dist", "cli.js")), "init", "--mode", "legacy-project", "--templates", q(path.join(repoRoot, "templates")), "--project-root", q(tmpInit)].join(" "),
-    { encoding: "utf8", shell: true, timeout: 120_000, stdio: ["ignore", "pipe", "pipe"] },
-  );
-  run("checker --check-installation (fresh init)", `${distCli} --check-installation --project-root ${q(tmpInit)}`, { quiet: true });
-  fs.rmSync(tmpInit, { recursive: true, force: true });
+  const tmpInit = fs.mkdtempSync(path.join(os.tmpdir(), "sta-gate-install-"));
+  try {
+    fs.writeFileSync(
+      path.join(tmpInit, "package.json"),
+      JSON.stringify({ name: "sta-installation-check", private: true, scripts: { build: "tsc", test: "node --test" } }, null, 2),
+    );
+    fs.writeFileSync(path.join(tmpInit, "package-lock.json"), JSON.stringify({ name: "sta-installation-check", lockfileVersion: 3 }));
+    run(
+      "initialize installation-check fixture",
+      [q("node"), q(path.join(repoRoot, "orchestrator", "dist", "cli.js")), "init", "--mode", "legacy-project", "--templates", q(path.join(repoRoot, "templates")), "--project-root", q(tmpInit)].join(" "),
+      { quiet: true, timeoutMs: 120_000 },
+    );
+    run("checker --check-installation (fresh init)", `${distCli} --check-installation --project-root ${q(tmpInit)}`, { quiet: true });
+  } finally {
+    fs.rmSync(tmpInit, { recursive: true, force: true });
+  }
 }
 
 // --- 4 · templates snapshot & version consistency ----------------------------
@@ -125,7 +149,8 @@ run("templates snapshot regenerates byte-identically", `${distCli} --build-templ
   }
 }
 
-// --- 5 · packaged distribution E2E -------------------------------------------
+// --- 5/6 · packed migration fixtures and packaged distribution E2E -----------
+run("four packed V3 migration fixtures", "node scripts/migration-fixtures.mjs");
 run("packaged .tgz E2E (fresh env, real bins)", "node scripts/packaged-e2e.mjs");
 
 console.log("\n=========================================");

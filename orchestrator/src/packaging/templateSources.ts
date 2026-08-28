@@ -30,7 +30,9 @@ export interface TemplateSourceEntry {
 
 export const TEMPLATE_SOURCES: readonly TemplateSourceEntry[] = [
   { relPath: "CLAUDE.md", kind: "file" },
+  { relPath: "AGENTS.md", kind: "file" },
   { relPath: ".claude/agents", kind: "dir" },
+  { relPath: ".claude/commands", kind: "dir" },
   { relPath: ".claude/hooks", kind: "dir" },
   { relPath: ".claude/scripts", kind: "dir" },
   { relPath: ".claude/shared", kind: "dir" },
@@ -53,7 +55,7 @@ export const TEMPLATE_SOURCES: readonly TemplateSourceEntry[] = [
  *   .claude/tests/**     the framework's own self-test, not something a target project runs
  *   _docs/**, decisions/**, knowledge/**, .workflow/**   project-owned state; `sta init`
  *                        creates these empty if absent and never overwrites them again
- *   project.yaml         project-owned; `sta init` writes it only if missing
+ *   project.yaml         Framework self-profile only; `sta init` never writes it to a Target
  *   README.md, MERGE_GUIDE.md, TASKS*.md, CHECKLIST*.md, HANDOFF*.md
  *                        this repo's own working docs about building the framework itself
  */

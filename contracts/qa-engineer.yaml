@@ -35,7 +35,7 @@ permissions:
   # WORKSPACE_BA_ARTIFACTS, not by this file, so plan.md stays listed here for that mode. In a
   # `role: dev` Target workspace the hook already denies plan.md unconditionally regardless of this
   # grant; qa-engineer.md's "Knowledge / Target / three-repo mode" section covers what to do instead
-  # (record the verdict in review.md's `## Knowledge sync` table for a BA-lane session to apply).
+  # (record the verdict in review.md's `## Knowledge sync` table for a BA-workspace session to apply).
   read: [".claude/agents/backend-engineer.md", ".claude/agents/frontend-engineer.md", ".claude/scripts/**", ".claude/shared/**", "policies/**", "CLAUDE.md", "_docs/module/**", "_docs/status-archive.md", "_docs/status.md", "app/**", "components/**", "package.json", "prisma/**", "server/**", "src/**"]
   write: ["_docs/module/*/review.md", "_docs/module/*/review/**", "_docs/module/*/plan.md", "_docs/status.md", "_docs/status-archive.md"]
   deny: ["_docs/module/*/design.md", "_docs/module/*/requirement.md", "_docs/module/*/security.md", "app/**", "server/**", "prisma/**"]

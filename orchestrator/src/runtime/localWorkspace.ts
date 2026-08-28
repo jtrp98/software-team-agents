@@ -99,7 +99,7 @@ export class LocalWorkspace implements RuntimeWorkspace {
     });
 
     // Node reports a timeout by returning normally with `error` set and a null
-    // status — the same shape T47 had to handle in claudeCliExecutor. Reading it
+    // status — the same shape T47 had to handle in the legacy executor. Reading it
     // off `error.code` rather than inferring it from `status === null` keeps a
     // killed-by-signal run distinguishable from a timed-out one.
     const timedOut = (proc.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";

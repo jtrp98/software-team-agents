@@ -13,6 +13,7 @@ import {
   readKnowledgeFile,
   relativePathFor,
   renderKnowledgeItem,
+  sameKnowledgeContent,
   writeKnowledgeItem,
 } from "./knowledgeStore.js";
 
@@ -136,6 +137,21 @@ describe("version as the concurrency mechanism", () => {
     expect(() => writeKnowledgeItem(requirement("REQ-003", { title: "changed", version: 4 }), root)).toThrow(
       KnowledgeVersionConflictError,
     );
+  });
+
+  it("treats a re-derived item whose sources[].captured_at moved as unchanged — a run stamp is not a change", () => {
+    const onDiskItem = requirement("REQ-003");
+    const rederived = requirement("REQ-003", {
+      updated_at: "2026-08-26T10:00:00Z",
+      sources: [
+        { type: "file", locator: "_docs/module/sales-crm/requirement.md#L48-L61", captured_at: "2026-08-26T10:00:00Z", digest: "sha256:9f2a" },
+      ],
+    });
+    expect(sameKnowledgeContent(onDiskItem, rederived)).toBe(true);
+    expect(sameKnowledgeContent(onDiskItem, requirement("REQ-003", {
+      sources: [{ type: "file", locator: "_docs/module/sales-crm/requirement.md#L48-L61", captured_at: NOW, digest: "sha256:CHANGED" }],
+    }))).toBe(false);
+    expect(() => writeKnowledgeItem(rederived, root)).not.toThrow();
   });
 
   it("refuses a version that goes backwards", () => {

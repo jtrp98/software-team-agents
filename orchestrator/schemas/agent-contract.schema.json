@@ -137,6 +137,7 @@
         "ux-design",
         "qa-report",
         "security-report",
+        "handoff",
         "backend-code",
         "frontend-code",
         "devops-docs",
@@ -188,7 +189,8 @@
         "unsourced_facts_marked_assumption",
         "flags_sensitive_phases",
         "no_design_url_scraping",
-        "figma_read_only_mcp"
+        "figma_read_only_mcp",
+        "claude_design_mcp_draft_only"
       ]
     }
   }

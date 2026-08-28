@@ -514,14 +514,26 @@ export function approveAdoptionStage(
     throw new AdoptionNotSettledError([id]);
   }
 
-  const onDisk = new Map(loadKnowledge(projectRoot).items.map((i) => [i.id, i]));
+  // v2 identity is module/id: two delivery modules may hold the same bare id
+  // (REQ-001 in sb-compass and sb-compass-faculty-match), so the disk map is
+  // grouped by id and EVERY copy a stage claimed gets advanced. Keying by bare
+  // id kept only one copy, advanced it twice off a stale object, and failed the
+  // version guard mid-approval ("disk is version N+1, this edit says N").
+  const itemsOnDisk = loadKnowledge(projectRoot).items;
+  const byId = new Map<string, typeof itemsOnDisk>();
+  for (const item of itemsOnDisk) {
+    const copies = byId.get(item.id) ?? [];
+    copies.push(item);
+    byId.set(item.id, copies);
+  }
   for (const itemId of record.knowledge_ids) {
-    const item = onDisk.get(itemId);
     // An id the stage claims but disk does not have is left to T88 to report:
     // this function's job is the approval, and failing it here would make a
     // reporting problem block the checkpoint.
-    if (!item || item.status === "approved" || item.status === "deprecated") continue;
-    advanceToApproved(item, now, projectRoot);
+    for (const item of byId.get(itemId) ?? []) {
+      if (item.status === "approved" || item.status === "deprecated") continue;
+      advanceToApproved(item, now, projectRoot);
+    }
   }
 
   record.approved_by = approvedBy;

@@ -63,13 +63,14 @@ Then, guided by what status reports:
 |---|---|
 | Framework root + version | `status --json` → `frameworkRoot`, `frameworkVersion`; missing ⇒ the CLI is not installed — install it (see below), then continue rather than stopping |
 | Current directory's workspace kind & role | `status --json` → `workspaceKind`, `role`; also read `.agent-team/config.yaml` if present (`role`, `knowledge.path`, `overrides`) |
+| Target stack profile | `status --json` → `stack` (`profile`, `package_manager`, `commands`, `schema_paths`, `source_roots`, `fingerprint`). Report this Harness result; do not detect the stack yourself. If absent or the Harness reports ambiguity/unresolved evidence, show that evidence and ask the user to confirm one `--stack <name>` choice before rerunning `init`/`sync`. Ask no stack question when `stack` is resolved. |
 | Knowledge root (machine-wide) | `status --json` → `knowledgeRoot` / `knowledgeBinding` (via installation binding) |
 | Registered Targets | read `<knowledgeRoot>/targets.yaml` when a Knowledge root resolved |
 | Local path mappings | read `<knowledgeRoot>/.workflow/targets.local.yaml` if present |
 | Sync status of the current workspace | `status --json` → `syncState`, `syncedVersion`, `conflictCount`, `managedFileCount` |
 | Runtime readiness | `status --json` → `claude.ready`, `codex.ready`, `opencode.ready` (OpenCode needs bindings **and** `.opencode/plugin/sta-guards.js` — its headless default posture is allow-all, so a missing plugin means unguarded, not just incomplete) |
-| Knowledge root bound but never initialized (T-WG1) | `status --json` → `knowledgeBoundButUninitialized` (the bound root's path, or absent) — a machine-wide binding resolves, yet `<knowledgeRoot>/.agent-team/config.yaml` is absent, so BA-lane prompts exist nowhere on this machine yet; `status`'s plain-text output prints the same fact as a `WARNING:` line with the exact fix command |
-| Roster drift in a workspace (T-WG2) | `status --json` → `rosterDriftPaths` (array of paths; empty = none) — agent-prompt files under `.claude/agents/` / `.codex/agents/` / `.opencode/agent/` whose names belong to the *other* lane's roster (analysis prompts in a DEV workspace, engineer/reviewer prompts in a BA one); never legitimate regardless of how they got there |
+| Knowledge root bound but never initialized (T-WG1) | `status --json` → `knowledgeBoundButUninitialized` (the bound root's path, or absent) — a machine-wide binding resolves, yet `<knowledgeRoot>/.agent-team/config.yaml` is absent, so BA-workspace prompts exist nowhere on this machine yet; `status`'s plain-text output prints the same fact as a `WARNING:` line with the exact fix command |
+| Roster drift in a workspace (T-WG2) | `status --json` → `rosterDriftPaths` (array of paths; empty = none) — agent-prompt files under `.claude/agents/` / `.codex/agents/` / `.opencode/agent/` whose names belong to the *other* workspace role's roster (analysis prompts in a DEV workspace, engineer/reviewer prompts in a BA one); never legitimate regardless of how they got there |
 | Module docs stranded in a Target (T-WG4) | `sta --check-workspace --project-root <path>` (the Framework's top-level CLI, not `software-team-agents`) — flags every file under a `role: dev` workspace's `_docs/module/**` plus a `## Modules` table in its `_docs/status.md`, each with the Knowledge-repo destination path |
 
 If `status` fails because the current directory is not a Git repository, that is
@@ -104,9 +105,9 @@ setup step.
 Ask which one applies (**this is the one question always asked**, unless the user
 already said):
 
-1. **BA** — business analysis lane; works in the Knowledge repository
-2. **DEV** — engineering lane; works in a Target repository
-3. **QA** — quality lane; derives its needs from the official workflow definitions
+1. **BA** — analysis workspace role; works in the Knowledge repository
+2. **DEV** — engineering workspace role; works in a Target repository
+3. **QA** — quality-verification flow; derives its needs from the official workflow definitions
 4. **Add Target** — register an additional Target in an existing setup
 5. **Update Setup** — re-inspect and refresh an existing setup (Framework moved/updated)
 6. **Inspect Setup** — full read-only report; change nothing
@@ -133,7 +134,7 @@ already said):
   (auto-detects the BA workspace) followed by `software-team-agents sync`.
 - Optionally offer: "Bind this machine's default Knowledge root too?" →
   `sta configure knowledge-root <path>` (affects other flows on this machine).
-- Verify with `software-team-agents status`: expect Role `BA`, `Target: NOT
+- Verify with `software-team-agents status`: expect Workspace role `BA`, `Target: NOT
   REQUIRED`, sync `UP_TO_DATE`, Claude/Codex/OpenCode READY.
 - **UX/UI consultant.** The BA workspace materializes five prompts —
   `business-analyst`, `system-analyst`, `project-manager`, `test-planner` and
@@ -167,22 +168,15 @@ already said):
   detection reports `unrecognized`, not ambiguous) or when it actually reports
   ambiguity (a repo carrying real Knowledge markers — `knowledge/`,
   `targets.yaml`, `knowledge-policy.yaml` — alongside app source).
-- **Stack reality check.** `sync` only copies the Framework's generic default stack into
-  `.claude/agents/frontend-engineer.md`/`backend-engineer.md` — it does not detect or merge
-  the Target's actual one, and a fresh `init`/`sync` on an already-built project will not
-  match it by default. Read each file's "Fixed project stack" section and compare against
-  the Target's real markers: `package.json` dependencies/devDependencies, `prisma/schema.prisma`
-  presence, `tailwind.config.*`/`postcss.config.*`, whether the API is a separate server or
-  framework-native route handlers, which auth library is actually wired up. If they disagree,
-  show the specific diff and ask the user to confirm the real stack, then update both files'
-  "Fixed project stack" section in place per that file's own "When the stack needs to change"
-  rule — don't guess, and don't skip this just because `sync` reported `UP_TO_DATE` (sync
-  tracks file versions, not stack accuracy).
-- Verify: Role `DEV`, Knowledge line present via `workspace-config`/`installation`,
+- Report the Harness-resolved `status --json` `stack` profile. Do not inspect
+  dependencies to perform a second AI stack detection. If the Harness stopped
+  on ambiguous or unresolved evidence, ask the user to confirm one profile and
+  rerun with `--stack <name>`; otherwise ask nothing about the stack.
+- Verify: Workspace role `DEV`, Knowledge line present via `workspace-config`/`installation`,
   sync `UP_TO_DATE`, runtimes READY.
 - **No analysis prompts here, by design.** A DEV/Target workspace carries only
   the engineer roster (`backend/frontend-engineer`, `qa-engineer`, `security`,
-  `devops`). The BA-lane prompts — including `uxui-designer` — are deliberately
+  `devops`). The BA-workspace prompts — including `uxui-designer` — are deliberately
   absent, and the engineering agents' contracts additionally deny writing
   requirement/design/test-plan docs, the module's `uxui/` folder, or anything
   under `knowledge/` from this workspace (a bare session with no role is not yet
@@ -191,7 +185,7 @@ already said):
   requirements or UX work "here", route them to the BA flow above instead of
   working around the block.
 - **Roster drift & stranded docs.** Before declaring DEV ready, check the two
-  Phase 0 rows: other-lane prompt files present here, and local `_docs/module/**`
+  Phase 0 rows: other-workspace-role prompt files present here, and local `_docs/module/**`
   content. Roster drift is fixed by plain `sync`; if it reports conflicts, show
   them verbatim and wait for the user's explicit "force". Stranded docs are
   migrated, never deleted: propose copying `_docs/module/<name>/` into the
@@ -263,14 +257,15 @@ Common breakages, minimal fixes — canonical identities never change implicitly
 
 | Symptom | Fix |
 |---|---|
-| Requirements/design docs found inside a Target (`_docs/module/**`) | an analysis role wrote into the wrong workspace; migrate to `<knowledgeRoot>/_docs/module/<name>/` (merge status tables), remove the Target-side copy only on explicit confirmation, and find how lane routing failed before continuing |
-| BA-lane prompts present in a DEV workspace (or engineer prompts in a BA one) | roster drift — plain `software-team-agents sync`; escalate to `sync --force` only on the user's explicit word |
+| Requirements/design docs found inside a Target (`_docs/module/**`) | an analysis role wrote into the wrong workspace; migrate to `<knowledgeRoot>/_docs/module/<name>/` (merge status tables), remove the Target-side copy only on explicit confirmation, and find how workspace-role routing failed before continuing |
+| BA-workspace prompts present in a DEV workspace (or engineer prompts in a BA one) | roster drift — plain `software-team-agents sync`; escalate to `sync --force` only on the user's explicit word |
 | BA/UXUI prompts unavailable anywhere despite a bound Knowledge root | the Knowledge repo was never initialized — run the BA flow's bound-but-uninitialized step |
 | Knowledge/Target moved on disk | update `knowledge.path` in the workspace config, or the mapping entry in `.workflow/targets.local.yaml` (show the diff first); identity in `targets.yaml` stays |
 | Missing local mapping | add just that mapping block to `.workflow/targets.local.yaml` |
 | Stale sync (`OUTDATED`) | plain `software-team-agents sync` |
 | Remote mismatch vs `targets.yaml` | report both URLs, change nothing until the user decides which side is wrong |
 | Config half-lost (manifest without config) | re-run `init` in that workspace |
+| Knowledge repo's own doc tree doesn't match canonical shape (legacy folders, stray files, unrecognized `knowledge/**` subtrees) | binding/sync is a separate concern from this — hand off to `prompt-reconcile-knowledge-layout.md` |
 
 After any repair: `status` again and confirm the specific symptom is gone.
 
@@ -285,33 +280,14 @@ After any repair: `status` again and confirm the specific symptom is gone.
 - not already claimed by another configured workspace (duplicate detection)
 - actually the kind of repo it claims to be (Knowledge markers vs app markers)
 
-## Merging with the project's existing Claude setup
+## Existing Claude setup
 
-When the Target already carries its own `.claude/` (common for mature repos),
-the CLI deliberately never merges hand-written content: any pre-existing file at
-a managed path is reported as `untracked-file` and skipped. That keeps sync
-honest but leaves the workspace silently unguarded. You close that gap — this
-is one of the few places this playbook edits file content, under these rails:
-
-1. **Show both sides first.** For each reported `untracked-file`, show the
-   project's version and the Framework's intended version side by side before
-   proposing anything.
-2. **Merge, don't replace.**
-   - `.claude/settings.json`: keep every project hook/permission; append the
-     Framework's PreToolUse/SubagentStop/Stop entries. Validate JSON before and
-     after.
-   - `CLAUDE.md`: keep the project document intact; add the Framework section
-     (agent table pointer + policies reference) below it, clearly delimited.
-   - Agent prompts with colliding names: never auto-pick. Ask whether the
-     project's file should win (then claim it via `overrides`) or the Framework
-     version should land (back up the project's copy into `.agent-team/backups/`
-     manually first).
-3. **Claim what survives.** After merging, add each touched path to
-   `.agent-team/config.yaml` `overrides:` so future syncs skip them *on purpose*
-   instead of reporting noise.
-4. **Re-verify.** `software-team-agents status` must come back with all
-   runtimes READY and zero unexpected `untracked-file` reports; then run one
-   read-only agent smoke check if the user wants belt-and-braces.
+`software-team-agents sync` preserves project-owned configuration: it merges
+missing Framework guard registrations into `.claude/settings.json` and injects
+only the delimited `sta:bootstrap` block into project-owned root instructions,
+backing up before each write. If sync reports a blocking conflict, leave the
+file untouched and follow the named recovery path (repair it, claim the path in
+`overrides`, or use an explicitly confirmed backed-up force operation).
 
 ## Safety rails — never, under this playbook
 
@@ -336,6 +312,7 @@ Framework : <frameworkVersion> at <frameworkRoot>
 Workspace : <workspace path> (<kind>)
 Knowledge : <path or "not required">
 Targets   : <ids> (local paths)
+Stack     : <resolved profile and package manager, or unresolved + confirmed fix>
 Sync      : <state>, managed files <n>, conflicts <n>
 Runtimes  : claude <READY/…>, codex <…>, opencode <…>
 Next      : cd <workspace> && software-team-agents <command>

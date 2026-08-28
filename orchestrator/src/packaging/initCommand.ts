@@ -4,6 +4,7 @@ import { readTemplateManifest, sha256Of } from "./templateManifest.js";
 import { CURRENT_STA_SCHEMA_VERSION, isInstalled, writeInstallManifest, type InstallManifest } from "./installManifest.js";
 import { defaultStaConfig, staConfigPath, writeStaConfig } from "./staConfig.js";
 import { assertFrameworkManagedPaths } from "../threeRepo/ownership.js";
+import { backupAgentsPointer, LEGACY_AGENTS_POINTER_PATH, mergeAgentsPointer } from "./agentsPointer.js";
 
 /**
  * T92 — `sta init`: materializes `<templatesDir>/**` into `projectRoot`,
@@ -54,6 +55,22 @@ export function runInit(
   for (const file of templateManifest.files) {
     const src = path.join(templatesDir, file.path);
     const dest = path.join(projectRoot, file.path);
+    if (file.path === LEGACY_AGENTS_POINTER_PATH && fs.existsSync(dest)) {
+      const existing = fs.readFileSync(dest, "utf8");
+      const merged = mergeAgentsPointer(existing, fs.readFileSync(src, "utf8"));
+      if (merged.state === "malformed") {
+        skippedConflicts.push(file.path);
+        continue;
+      }
+      if (merged.state === "project-owned") {
+        if (merged.content !== existing) {
+          backupAgentsPointer(projectRoot, existing, now);
+          fs.writeFileSync(dest, merged.content, "utf8");
+        }
+        installed.push(file.path);
+        continue; // project bytes make this unsuitable for whole-file manifest tracking
+      }
+    }
     if (fs.existsSync(dest)) {
       const existingHash = sha256Of(fs.readFileSync(dest));
       if (existingHash !== file.sha256) {

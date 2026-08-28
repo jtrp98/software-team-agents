@@ -8,7 +8,11 @@ import { Capability } from "../agents/capabilities.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 
 /**
- * The one place an agent looks up what this project is built with (T14), and
+ * Framework self-profile and shipped stack catalog. Target stack resolution
+ * lives in `.agent-team/config.yaml`; this module must never be used as a
+ * default for the application currently being worked on.
+ *
+ * The one place a Framework self-check looks up what this package is built with, and
  * the technology profiles it can be built with (T13).
  *
  * Before this, "what stack is this?" was answered by reading
@@ -53,6 +57,8 @@ export const StackProfileSchema = z.object({
     lint: z.string().min(1),
     typecheck: z.string().min(1),
   }),
+  /** File extensions the offline security pattern sweep may inspect for this profile. Empty means unsupported, never clean. */
+  scan_extensions: z.array(z.string().regex(/^\.[A-Za-z0-9]+$/)).default([]),
   capabilities: z.array(z.enum(Capability)),
 });
 export type StackProfile = z.infer<typeof StackProfileSchema>;
@@ -152,7 +158,7 @@ export function listStacks(projectRoot: string = defaultProjectRoot()): string[]
 /** The commands to run for a side of the project — what a build or verification step actually invokes. */
 export function commandsFor(
   side: "backend" | "frontend",
-  projectRoot: string = defaultProjectRoot(),
+  projectRoot: string,
 ): StackProfile["commands"] {
   const profile = loadProjectProfile(projectRoot);
   return loadStackProfile(profile.current[side].stack, projectRoot).commands;
@@ -255,7 +261,7 @@ export function checkProfile(projectRoot: string = defaultProjectRoot()): Profil
 /** Which agents can take work on a side of this project, by the language the profile declares. */
 export function agentsForCurrentStack(
   side: "backend" | "frontend",
-  projectRoot: string = defaultProjectRoot(),
+  projectRoot: string,
 ): AgentStage[] {
   const language = loadProjectProfile(projectRoot).current[side].language.toLowerCase();
   return Object.values(AGENT_REGISTRY)

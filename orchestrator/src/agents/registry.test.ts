@@ -10,6 +10,7 @@ import {
 import { Capability } from "./capabilities.js";
 import { STAGE_TO_STATE } from "../state/taskState.js";
 import { AgentStage } from "../types.js";
+import { ArtifactType } from "../artifacts/schemas.js";
 
 describe("AGENT_REGISTRY", () => {
   it("has an entry for every AgentStage", () => {
@@ -33,6 +34,19 @@ describe("AGENT_REGISTRY", () => {
   it("only security can write a security-report", () => {
     const writers = Object.values(AGENT_REGISTRY).filter((e) => e.outputs.includes("security-report"));
     expect(writers.map((w) => w.name)).toEqual([AgentStage.SECURITY]);
+  });
+
+  it("registers handoff output only for the five authoritative document stages", () => {
+    const writers = Object.values(AGENT_REGISTRY)
+      .filter((entry) => entry.outputs.includes(ArtifactType.HANDOFF))
+      .map((entry) => entry.name);
+    expect(writers).toEqual([
+      AgentStage.BUSINESS_ANALYST,
+      AgentStage.SYSTEM_ANALYST,
+      AgentStage.PROJECT_MANAGER,
+      AgentStage.TEST_PLANNER,
+      AgentStage.UXUI_DESIGNER,
+    ]);
   });
 
   it("devops is the only role with deploy/rollback permissions", () => {

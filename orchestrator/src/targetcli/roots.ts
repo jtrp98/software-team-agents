@@ -30,6 +30,20 @@ export interface Roots {
   knowledgeRoot?: string;
 }
 
+/**
+ * Module-document reads use the Knowledge binding exported by an interactive
+ * three-repo launch; legacy/single-repo runs use the project itself. Keeping
+ * this decision beside the three-root model prevents callers from inventing
+ * conflicting precedence rules.
+ */
+export function resolveContextDocsRoot(
+  projectRoot: string,
+  env: { AGENTCLAUDE_KNOWLEDGE_ROOT?: string | undefined } = process.env,
+): string {
+  const knowledgeRoot = env.AGENTCLAUDE_KNOWLEDGE_ROOT?.trim();
+  return path.resolve(knowledgeRoot || projectRoot);
+}
+
 function isDirectory(dir: string): boolean {
   try {
     return fs.statSync(dir).isDirectory();

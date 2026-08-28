@@ -19,27 +19,28 @@ import type { TemplateManifest } from "../packaging/templateManifest.js";
  * copied into knowledge.
  */
 
-export type RoleName = "ba" | "dev";
+/** Where an interactive workspace runs and which managed payload it receives. */
+export type WorkspaceRole = "ba" | "dev";
 
-export const ROLE_LABEL: Record<RoleName, string> = {
+export const WORKSPACE_ROLE_LABEL: Record<WorkspaceRole, string> = {
   ba: "BA",
   dev: "DEV",
 };
 
-export const ROLE_WORKSPACE_KIND: Record<RoleName, "knowledge" | "target"> = {
+export const ROLE_WORKSPACE_KIND: Record<WorkspaceRole, "knowledge" | "target"> = {
   ba: "knowledge",
   dev: "target",
 };
 
 /** Which agent prompts a role's workspace materializes. The Knowledge side carries the analysis roles (incl. uxui-designer, whose outputs are knowledge/_docs only); the Target side carries engineers + reviewers. */
-export const BA_LANE_AGENTS: readonly string[] = [
+export const BA_WORKSPACE_AGENTS: readonly string[] = [
   "business-analyst",
   "system-analyst",
   "project-manager",
   "test-planner",
   // T-UX1/T-UX13: the UX/UI consultant is a knowledge-side role — its outputs
   // are draft UX-* items under knowledge/ plus _docs/module/<m>/uxui/**, never
-  // app source, so its prompt belongs beside the other Knowledge-lane roles.
+  // app source, so its prompt belongs beside the other Knowledge-workspace roles.
   "uxui-designer",
 ];
 
@@ -47,15 +48,16 @@ export const BA_LANE_AGENTS: readonly string[] = [
  * T-ROLE-10 / T-ROLE-11 — role-aware managed-asset profiles over the template payload.
  *
  * Both roles get hooks + settings (the guards travel with every workspace),
- * skills (.claude/scripts), shared instructions, policies, and CLAUDE.md. They
+ * skills (.claude/scripts), shared instructions, policies, CLAUDE.md, and its
+ * rendered AGENTS.md pointer. They
  * differ in agent roster and in orchestrator-only payload (contracts,
  * workflows, stacks, layout/test-pyramid/escalation YAML) that only a DEV/Target
  * workspace needs because only there does the pipeline drive engineers.
  */
-export function assetsForRole(role: RoleName): (relPath: string) => boolean {
-  const baAgents = new Set(BA_LANE_AGENTS);
+export function assetsForRole(role: WorkspaceRole): (relPath: string) => boolean {
+  const baAgents = new Set(BA_WORKSPACE_AGENTS);
   if (role === "dev") {
-    // T-UX13: a Target workspace carries no BA-lane prompts. A session opened
+    // T-UX13: a Target workspace carries no BA-workspace prompts. A session opened
     // inside the app repo then cannot pick `business-analyst` and write
     // requirements into the Target — the wrong-repo failure this split exists
     // to prevent at the source, not just to detect afterwards.
@@ -67,7 +69,7 @@ export function assetsForRole(role: RoleName): (relPath: string) => boolean {
     };
   }
   return (relPath) => {
-    if (relPath === "CLAUDE.md") return true;
+    if (relPath === "CLAUDE.md" || relPath === "AGENTS.md") return true;
     if (relPath.startsWith(".claude/agents/")) {
       if (!relPath.endsWith(".md")) return false; // e.g. README fragments — none today, but stay strict
       return baAgents.has(path.basename(relPath, ".md"));
@@ -86,7 +88,7 @@ export function assetsForRole(role: RoleName): (relPath: string) => boolean {
 }
 
 /** The effective payload for a role: a copy of the manifest with excluded files removed. Stale detection then cleans anything a profile drop leaves behind. */
-export function filterManifestForRole(manifest: TemplateManifest, role: RoleName): TemplateManifest {
+export function filterManifestForRole(manifest: TemplateManifest, role: WorkspaceRole): TemplateManifest {
   const include = assetsForRole(role);
   return { ...manifest, files: manifest.files.filter((f) => include(f.path)) };
 }
@@ -104,12 +106,15 @@ export type WorkspaceKind = "knowledge" | "target" | "ambiguous" | "unrecognized
  * actually in doubt. The three markers left are Knowledge-only.
  */
 const KNOWLEDGE_MARKERS: readonly string[] = ["knowledge", "knowledge-policy.yaml", "targets.yaml"];
-const APP_SOURCE_MARKERS: readonly string[] = [
+export const APP_SOURCE_MARKERS: readonly string[] = [
   "package.json",
   "pyproject.toml",
+  "requirements.txt",
   "setup.py",
   "pom.xml",
   "build.gradle",
+  "build.gradle.kts",
+  "Directory.Build.props",
   "go.mod",
   "Cargo.toml",
 ];
@@ -124,7 +129,7 @@ function hasDir(dir: string, name: string): boolean {
 
 function hasFile(dir: string, name: string): boolean {
   try {
-    return fs.statSync(path.join(dir, name)).isFile();
+    return fs.lstatSync(path.join(dir, name)).isFile();
   } catch {
     return false;
   }
@@ -135,10 +140,22 @@ export function hasKnowledgeMarkers(dir: string): boolean {
 }
 
 function hasAppSourceMarkers(dir: string): boolean {
-  if (APP_SOURCE_MARKERS.some((m) => hasFile(dir, m))) return true;
-  // .NET solutions/projects live as directories-of-files with distinctive extensions.
+  const hasDirectMarker = (candidate: string): boolean => {
+    if (APP_SOURCE_MARKERS.some((m) => hasFile(candidate, m))) return true;
+    try {
+      return fs.readdirSync(candidate, { withFileTypes: true }).some(
+        (entry) => !entry.isSymbolicLink() && entry.isFile() && (entry.name.endsWith(".sln") || entry.name.endsWith(".csproj")),
+      );
+    } catch {
+      return false;
+    }
+  };
+  if (hasDirectMarker(dir)) return true;
+  const skip = new Set(["node_modules", ".git", "dist", ".workflow", ".next", "build"]);
   try {
-    return fs.readdirSync(dir).some((f) => f.endsWith(".sln") || f.endsWith(".csproj"));
+    return fs.readdirSync(dir, { withFileTypes: true }).some(
+      (entry) => !entry.isSymbolicLink() && entry.isDirectory() && !skip.has(entry.name) && hasDirectMarker(path.join(dir, entry.name)),
+    );
   } catch {
     return false;
   }
@@ -299,10 +316,11 @@ export function resolveTargetBinding(options: {
  * set when no binding resolved — BA must keep working exactly as before.
  */
 export function launchEnv(
-  role: RoleName,
+  role: WorkspaceRole,
   existingEnv: NodeJS.ProcessEnv = process.env,
   knowledgeRoot?: string,
   targetRoot?: string,
+  contextCommand?: string,
 ): NodeJS.ProcessEnv {
   // The role is part of the signature so call sites state whose policy they
   // launch under; today both roles enforce the same shape — own workspace
@@ -313,5 +331,6 @@ export function launchEnv(
     AGENTCLAUDE_WRITABLE_WORK_ROOTS: "[]",
     ...(knowledgeRoot ? { AGENTCLAUDE_KNOWLEDGE_ROOT: knowledgeRoot } : {}),
     ...(targetRoot ? { AGENTCLAUDE_TARGET_ROOT: targetRoot } : {}),
+    ...(contextCommand ? { AGENTCLAUDE_CONTEXT_CMD: contextCommand } : {}),
   };
 }

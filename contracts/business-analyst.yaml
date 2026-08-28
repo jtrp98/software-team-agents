@@ -8,7 +8,7 @@ input:
   required: []
   optional: [qa-report, design]
 output:
-  required: [requirements]
+  required: [requirements, handoff]
 constraints:
   - no_git
   - stay_inside_repo

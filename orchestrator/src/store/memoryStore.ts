@@ -57,6 +57,10 @@ export class MemoryTaskStore implements TaskStore {
     return this.runs.filter((r) => r.task_id === taskId).map((r) => ({ ...r }));
   }
 
+  allRuns(): RunRecord[] {
+    return this.runs.map((r) => ({ ...r }));
+  }
+
   appendEvent(event: NewEvent): void {
     // Normalised on the way in, exactly as the SQLite store does — an event read
     // back from memory must carry the same audit fields (T37) it would carry

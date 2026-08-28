@@ -23,7 +23,7 @@ describe("three-repo knowledge migration", () => {
     copyMigrationSource(manifest, options); transformMigratedKnowledge(options); writeMigrationManifest(manifest, knowledge);
     expect(fs.readFileSync(path.join(source, "knowledge", "pilot", "task", "BE-001.yaml"), "utf8")).toContain("schema_version: 1");
     const migrated = parseYaml(fs.readFileSync(path.join(knowledge, "knowledge", "pilot", "task", "BE-001.yaml"), "utf8")) as Record<string, unknown>;
-    expect(migrated.schema_version).toBe(2); expect(migrated.version).toBe(4); expect(migrated.status).toBe("approved"); expect(migrated.target_ids).toEqual(["sb-web-helper"]);
+    expect(migrated.schema_version).toBe(2); expect(migrated.version).toBe(3); expect(migrated.status).toBe("approved"); expect(migrated.target_ids).toEqual(["sb-web-helper"]);
     expect(readMigrationManifest(knowledge).docs[0].sha256).toBe(manifest.docs[0].sha256);
   });
 

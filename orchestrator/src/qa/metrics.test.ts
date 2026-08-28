@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import type { RunRecord } from "../observability/runLog.js";
-import { buildMetricsExport, compareBaselines, taskQaMetrics } from "./metrics.js";
+import { buildMetricsExport, compareBaselines, compareTokenBaselines, taskQaMetrics, taskTokenMetrics, tokenMetricsExport, type TokenMetricsExport } from "./metrics.js";
 
 function run(partial: Partial<RunRecord> & { agent: AgentStage }): RunRecord {
   return {
@@ -21,6 +21,34 @@ function run(partial: Partial<RunRecord> & { agent: AgentStage }): RunRecord {
     cache_read_tokens: null,
     context_chars: null,
     qa_mode: null,
+    qa_effort: null,
+    deterministic_gate: null,
+    runtime: null,
+    requested_runtime: null,
+    requested_model: null,
+    routing_basis: null,
+    fallback_reason: null,
+    fallback_count: null,
+    session_kind: null,
+    static_chars: null,
+    handoff_chars: null,
+    doc_chars: null,
+    doc_chars_before: null,
+    knowledge_chars: null,
+    code_intel_chars: null,
+    tool_output_chars: null,
+    context_budget_chars: null,
+    context_budget_source: null,
+    context_overflow_chars: null,
+    context_budget_warning: null,
+    context_base_chars: null,
+    context_task_chars: null,
+    context_safety_chars: null,
+    context_docs_chars: null,
+    context_knowledge_chars: null,
+    context_code_chars: null,
+    context_tool_output_chars: null,
+    context_reserve_chars: null,
     ...partial,
   };
 }
@@ -110,5 +138,150 @@ describe("buildMetricsExport / compareBaselines", () => {
   it("reports null tokensPerSuccessfulTask when nothing succeeded", () => {
     const e = buildMetricsExport([{ taskId: "T-failed", runs: [run({ agent: AgentStage.DEVOPS, tokens: 500, result: "FAIL" })] }], { now: () => 7 });
     expect(e.totals.tokensPerSuccessfulTask).toBeNull();
+  });
+});
+
+describe("T-V3TOK-100 context budget token reporting", () => {
+  it("reports warning frequency, overflow, and the complete priority composition", () => {
+    const metric = taskTokenMetrics([run({
+      agent: AgentStage.BACKEND_ENGINEER, context_chars: 100, context_budget_chars: 90, context_budget_source: "role",
+      context_overflow_chars: 10, context_budget_warning: true,
+      context_base_chars: 10, context_task_chars: 20, context_safety_chars: 0, context_docs_chars: 30,
+      context_knowledge_chars: 15, context_code_chars: 10, context_tool_output_chars: 15, context_reserve_chars: 0,
+    })]);
+    expect(metric.contextBudget).toMatchObject({ measuredRuns: 1, warningRuns: 1, contextChars: 100, budgetChars: 90, overflowChars: 10 });
+    expect(Object.values(metric.contextBudget.composition).reduce<number>((sum, value) => sum + (value ?? 0), 0)).toBe(100);
+    const exported = tokenMetricsExport([run({
+      agent: AgentStage.BACKEND_ENGINEER, context_chars: 100, context_budget_chars: 90, context_budget_source: "role",
+      context_overflow_chars: 10, context_budget_warning: true,
+      context_base_chars: 10, context_task_chars: 20, context_safety_chars: 0, context_docs_chars: 30,
+      context_knowledge_chars: 15, context_code_chars: 10, context_tool_output_chars: 15, context_reserve_chars: 0,
+    })]);
+    expect(exported.contextBudgetRuns).toEqual([expect.objectContaining({ role: AgentStage.BACKEND_ENGINEER, contextChars: 100, budgetChars: 90, overflowChars: 10, warning: true })]);
+  });
+});
+
+describe("T-V3TOK-003 token metrics", () => {
+  it("aggregates orchestrated and interactive rows without treating missing token usage as zero", () => {
+    const orchestrated = run({
+      agent: AgentStage.BACKEND_ENGINEER,
+      task_id: "T-orch",
+      input_tokens: 100,
+      output_tokens: 20,
+      cache_read_tokens: 50,
+      static_chars: 40,
+      handoff_chars: 10,
+      doc_chars: 20,
+      knowledge_chars: 0,
+      code_intel_chars: 0,
+      tool_output_chars: 0,
+      session_kind: "orchestrated",
+    });
+    const interactive = run({
+      agent: AgentStage.BACKEND_ENGINEER,
+      task_id: "session:dev:2026-08-26T00:00:00.000Z",
+      input_tokens: null,
+      output_tokens: null,
+      cache_read_tokens: null,
+      static_chars: 900,
+      session_kind: "interactive",
+    });
+    const exportData = tokenMetricsExport([orchestrated, interactive], { now: () => 1 });
+    expect(exportData.tasks).toHaveLength(2);
+    expect(exportData.totals.inputTokens).toBeNull();
+    expect(exportData.tasks.find((metric) => metric.taskId === "T-orch")?.totalTokens).toBe(120);
+    expect(exportData.tasks.find((metric) => metric.taskId === "T-orch")?.retryWasteTokens).toBe(0);
+    expect(exportData.tasks.find((metric) => metric.taskId.startsWith("session:"))?.inputTokens).toBeNull();
+    expect(exportData.roles[0]).toMatchObject({ role: AgentStage.BACKEND_ENGINEER, staticChars: 940, retrievedChars: null, staticVsRetrievedRatio: null });
+  });
+
+  it("counts retries and failure spend only when every failed row reported true usage", () => {
+    const metrics = taskTokenMetrics([
+      run({ agent: AgentStage.BACKEND_ENGINEER, result: "FAIL", retry_count: 1, input_tokens: 8, output_tokens: 2 }),
+      run({ agent: AgentStage.BACKEND_ENGINEER, result: "FAIL", retry_count: 1, input_tokens: null, output_tokens: null }),
+    ]);
+    expect(metrics.retryCount).toBe(2);
+    expect(metrics.retryWasteTokens).toBeNull();
+  });
+
+  it("does not calculate a baseline percentage from incomplete token data", () => {
+    const before = tokenMetricsExport([run({ agent: AgentStage.BACKEND_ENGINEER, input_tokens: 10, output_tokens: 2 })]);
+    const after = tokenMetricsExport([run({ agent: AgentStage.BACKEND_ENGINEER, input_tokens: null, output_tokens: null })]);
+    expect(compareTokenBaselines(before, after).inputTokenDeltaPct).toBeNull();
+  });
+
+  it("reports measured slicing savings per role and leaves incomplete rows unknown", () => {
+    const measured = tokenMetricsExport([
+      run({ agent: AgentStage.BACKEND_ENGINEER, doc_chars: 600, doc_chars_before: 1_000 }),
+    ]);
+    expect(measured.roles[0]).toMatchObject({ docChars: 600, docCharsBefore: 1_000, slicingSavedPct: 40 });
+    const unknown = tokenMetricsExport([
+      run({ agent: AgentStage.BACKEND_ENGINEER, doc_chars: 600, doc_chars_before: null }),
+    ]);
+    expect(unknown.roles[0].slicingSavedPct).toBeNull();
+  });
+});
+
+describe("T-V3R-080 optimization rollups", () => {
+  it("uses only completed tasks and reports the three named rollups", () => {
+    const runs = [
+      run({ task_id: "T-done-1", agent: AgentStage.BACKEND_ENGINEER, input_tokens: 80, output_tokens: 20, fallback_count: 0 }),
+      run({ task_id: "T-done-2", agent: AgentStage.BACKEND_ENGINEER, input_tokens: 160, output_tokens: 40, retry_count: 1, fallback_count: 1 }),
+      run({ task_id: "T-open", agent: AgentStage.BACKEND_ENGINEER, input_tokens: 900, output_tokens: 100, fallback_count: 0 }),
+    ];
+    const report = tokenMetricsExport(runs, { completedTaskIds: new Set(["T-done-1", "T-done-2"]) });
+
+    expect(report.totals.total_token_per_completed_task).toBe(150);
+    expect(report.totals.first_pass_success_rate).toBe(0.5);
+    expect(report.totals.fallback_rate).toBeCloseTo(1 / 3);
+  });
+
+  it("propagates missing completion, token, and fallback facts as null rather than zero", () => {
+    const historical = run({
+      task_id: "T-old",
+      agent: AgentStage.BACKEND_ENGINEER,
+      input_tokens: null,
+      output_tokens: null,
+      fallback_count: null,
+    });
+
+    const withoutTaskState = tokenMetricsExport([historical]);
+    expect(withoutTaskState.totals).toMatchObject({
+      total_token_per_completed_task: null,
+      first_pass_success_rate: null,
+      fallback_rate: null,
+    });
+
+    const withCompletion = tokenMetricsExport([historical], { completedTaskIds: new Set(["T-old"]) });
+    expect(withCompletion.totals.total_token_per_completed_task).toBeNull();
+    expect(withCompletion.totals.first_pass_success_rate).toBe(1);
+    expect(withCompletion.totals.fallback_rate).toBeNull();
+
+    const noCompletedRows = tokenMetricsExport([
+      run({ task_id: "T-open", agent: AgentStage.BACKEND_ENGINEER, input_tokens: 1, output_tokens: 1, fallback_count: 0 }),
+    ], { completedTaskIds: new Set() });
+    expect(noCompletedRows.totals.total_token_per_completed_task).toBeNull();
+    expect(noCompletedRows.totals.first_pass_success_rate).toBeNull();
+    expect(noCompletedRows.totals.fallback_rate).toBe(0);
+  });
+
+  it("compares every V3 rollup and treats historical baselines without the fields as unreported", () => {
+    const before = tokenMetricsExport([
+      run({ task_id: "T1", agent: AgentStage.BACKEND_ENGINEER, input_tokens: 80, output_tokens: 20, fallback_count: 1 }),
+    ], { completedTaskIds: new Set(["T1"]) });
+    const after = tokenMetricsExport([
+      run({ task_id: "T1", agent: AgentStage.BACKEND_ENGINEER, input_tokens: 40, output_tokens: 10, fallback_count: 1 }),
+      run({ task_id: "T2", agent: AgentStage.BACKEND_ENGINEER, input_tokens: 40, output_tokens: 10, retry_count: 1, fallback_count: 0 }),
+    ], { completedTaskIds: new Set(["T1", "T2"]) });
+
+    expect(compareTokenBaselines(before, after)).toMatchObject({
+      totalTokenPerCompletedTaskDeltaPct: -50,
+      firstPassSuccessRateDeltaPct: -50,
+      fallbackRateDeltaPct: -50,
+    });
+
+    const historical = structuredClone(before) as TokenMetricsExport;
+    delete (historical.totals as Partial<TokenMetricsExport["totals"]>).fallback_rate;
+    expect(compareTokenBaselines(historical, after).fallbackRateDeltaPct).toBeNull();
   });
 });

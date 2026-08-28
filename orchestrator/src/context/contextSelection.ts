@@ -36,7 +36,10 @@ export type ContextCategory =
   | "devops-docs"
   | "ux-research"
   /** QA01/QA04: the bounded evidence package the orchestrator assembles for a qa-engineer round. Not an artifact any stage produces — the wrapper injects it per run. */
-  | "qa-evidence";
+  | "qa-evidence"
+  /** T-KA5a: compact per-module brief derived from `knowledge/` YAML, assembled by
+   *  `knowledgeBriefAssembly` and injected beside the sliced docs. */
+  | "knowledge-brief";
 
 export const ALL_CONTEXT_CATEGORIES: ContextCategory[] = [
   ArtifactType.REQUIREMENTS,
@@ -45,11 +48,16 @@ export const ALL_CONTEXT_CATEGORIES: ContextCategory[] = [
   ArtifactType.TEST_PLAN,
   ArtifactType.QA_REPORT,
   ArtifactType.SECURITY_REPORT,
+  ArtifactType.HANDOFF,
+  // Compiler-to-runtime only. Including it in the category universe makes
+  // every role's doesNotRead deny explicit; no CONTEXT_POLICY grants it.
+  ArtifactType.EXECUTION_PACKET,
   "backend-code",
   "frontend-code",
   "devops-docs",
   "ux-research",
   "qa-evidence",
+  "knowledge-brief",
 ];
 
 export interface ContextPolicy {
@@ -58,7 +66,10 @@ export interface ContextPolicy {
 }
 
 function policy(reads: ContextCategory[]): ContextPolicy {
-  return { reads, doesNotRead: ALL_CONTEXT_CATEGORIES.filter((c) => !reads.includes(c)) };
+  // A handoff is a bounded pointer set, not authority. Every stage may inspect
+  // it; selectContext still applies this policy to every referenced source.
+  const permitted = [...new Set([...reads, ArtifactType.HANDOFF])];
+  return { reads: permitted, doesNotRead: ALL_CONTEXT_CATEGORIES.filter((c) => !permitted.includes(c)) };
 }
 
 /**
@@ -89,6 +100,7 @@ export const CONTEXT_POLICY: Partial<Record<AgentStage, ContextPolicy>> = {
     ArtifactType.TEST_PLAN,
     ArtifactType.QA_REPORT,
     "backend-code",
+    "knowledge-brief",
   ]),
   [AgentStage.FRONTEND_ENGINEER]: policy([
     ArtifactType.PLAN,
@@ -97,6 +109,7 @@ export const CONTEXT_POLICY: Partial<Record<AgentStage, ContextPolicy>> = {
     ArtifactType.TEST_PLAN,
     ArtifactType.QA_REPORT,
     "frontend-code",
+    "knowledge-brief",
   ]),
   [AgentStage.QA_ENGINEER]: policy([
     ArtifactType.REQUIREMENTS,
@@ -110,6 +123,7 @@ export const CONTEXT_POLICY: Partial<Record<AgentStage, ContextPolicy>> = {
     // injected by the optimization wrapper per round, never stored in the
     // artifact store, so selectContext itself yields nothing for it.
     "qa-evidence",
+    "knowledge-brief",
   ]),
   [AgentStage.SECURITY]: policy([
     ArtifactType.REQUIREMENTS,
@@ -117,6 +131,7 @@ export const CONTEXT_POLICY: Partial<Record<AgentStage, ContextPolicy>> = {
     ArtifactType.QA_REPORT,
     "backend-code",
     "frontend-code",
+    "knowledge-brief",
   ]),
   [AgentStage.DEVOPS]: policy([
     ArtifactType.QA_REPORT,
@@ -124,6 +139,7 @@ export const CONTEXT_POLICY: Partial<Record<AgentStage, ContextPolicy>> = {
     ArtifactType.PLAN,
     ArtifactType.DESIGN,
     "devops-docs",
+    "knowledge-brief",
   ]),
 };
 

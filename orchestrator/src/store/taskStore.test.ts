@@ -86,6 +86,35 @@ function sampleRun(taskId = "T-1"): RunRecord {
     cache_read_tokens: null,
     context_chars: 4000,
     qa_mode: null,
+    qa_effort: null,
+    deterministic_gate: null,
+    runtime: "claude-code",
+    requested_runtime: null,
+    requested_model: null,
+    routing_basis: null,
+    fallback_reason: null,
+    fallback_count: null,
+    session_kind: "orchestrated",
+    static_chars: 500,
+    instruction_surface_bytes: null,
+    handoff_chars: 300,
+    doc_chars: 2500,
+    doc_chars_before: 4000,
+    knowledge_chars: 200,
+    code_intel_chars: 400,
+    tool_output_chars: 100,
+    context_budget_chars: null,
+    context_budget_source: null,
+    context_overflow_chars: null,
+    context_budget_warning: null,
+    context_base_chars: null,
+    context_task_chars: null,
+    context_safety_chars: null,
+    context_docs_chars: null,
+    context_knowledge_chars: null,
+    context_code_chars: null,
+    context_tool_output_chars: null,
+    context_reserve_chars: null,
   };
 }
 
@@ -187,6 +216,26 @@ describe.each(implementations)("%s", (_name, makeStore) => {
     const runs = store.runsForTask("T-1");
     expect(runs[0]).toMatchObject({ model: "sonnet", input_tokens: 1000, output_tokens: 234, cache_read_tokens: null, context_chars: 4000 });
     expect(runs[1]).toMatchObject({ model: null, input_tokens: null, output_tokens: null, cache_read_tokens: null, context_chars: null });
+    store.close();
+  });
+
+  it("round-trips T-V3TOK-001 runtime and prompt composition fields, including truthful nulls", () => {
+    const store = makeStore();
+    store.appendRun(sampleRun("T-1"));
+    store.appendRun({ ...sampleRun("T-1"), runtime: "codex", session_kind: "interactive", static_chars: 9, instruction_surface_bytes: 17, handoff_chars: null, doc_chars: null, knowledge_chars: null, code_intel_chars: null, tool_output_chars: null });
+    expect(store.runsForTask("T-1")).toMatchObject([
+      { runtime: "claude-code", session_kind: "orchestrated", static_chars: 500, doc_chars: 2500 },
+      { runtime: "codex", session_kind: "interactive", static_chars: 9, instruction_surface_bytes: 17, handoff_chars: null, doc_chars: null },
+    ]);
+    store.close();
+  });
+
+  it("records whether optimized QA used the deterministic gate or its explicit escape hatch", () => {
+    const store = makeStore();
+    store.appendRun({ ...sampleRun("T-1"), agent: AgentStage.QA_ENGINEER, deterministic_gate: "enabled" });
+    store.appendRun({ ...sampleRun("T-1"), agent: AgentStage.QA_ENGINEER, deterministic_gate: "disabled" });
+
+    expect(store.runsForTask("T-1").map((run) => run.deterministic_gate)).toEqual(["enabled", "disabled"]);
     store.close();
   });
 
@@ -386,6 +435,146 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
         expect(store.runsForTask("T-NEW")[0].promptVersion).toBe(2);
       } finally {
         store.close();
+      }
+    } finally {
+      fs.rmSync(path.dirname(file), { recursive: true, force: true });
+    }
+  });
+
+  it("T-V3TOK-001: a v6 database migrates in place without changing legacy run facts", () => {
+    const file = tmpDbPath();
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      const db = new Database(file);
+      db.exec(`CREATE TABLE tasks (task_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, state TEXT NOT NULL);
+        CREATE TABLE runs (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, agent TEXT NOT NULL, start_time INTEGER NOT NULL, end_time INTEGER NOT NULL, duration INTEGER NOT NULL, model TEXT, tokens INTEGER NOT NULL, cost REAL NOT NULL, result TEXT NOT NULL, retry_count INTEGER NOT NULL, failure_reason TEXT, input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, context_chars INTEGER, prompt_version INTEGER, qa_mode TEXT);
+        CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, at INTEGER NOT NULL, type TEXT NOT NULL, payload TEXT NOT NULL, actor TEXT, reason TEXT, input TEXT, output TEXT, decision TEXT);`);
+      db.exec("INSERT INTO runs (task_id, agent, start_time, end_time, duration, tokens, cost, result, retry_count) VALUES ('T-V6', 'backend-engineer', 1, 2, 1, 123, 0, 'PASS', 0)");
+      db.pragma("user_version = 6");
+      db.close();
+      const store = new SqliteTaskStore(file);
+      try {
+        expect(store.runsForTask("T-V6")[0]).toMatchObject({ tokens: 123, runtime: null, session_kind: null, static_chars: null, doc_chars: null });
+      } finally { store.close(); }
+    } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
+  });
+
+  it("T-V3R-002: a v11 fixture migrates through v12 to v14, preserves every legacy run fact, and round-trips nullable routing fields", () => {
+    const file = tmpDbPath();
+    const routingColumns = [
+      "requested_runtime",
+      "requested_model",
+      "routing_basis",
+      "fallback_reason",
+      "fallback_count",
+    ] as const;
+    try {
+      // Start from the real current DDL, then remove only the v12 columns. This
+      // keeps the fixture locked to the complete v11 shape without duplicating
+      // forty legacy column declarations in the test.
+      const seed = new SqliteTaskStore(file);
+      const legacy = sampleRun("T-V11");
+      seed.appendRun(legacy);
+      seed.close();
+
+      const rawV11 = new Database(file);
+      for (const column of routingColumns) rawV11.exec(`ALTER TABLE runs DROP COLUMN ${column}`);
+      rawV11.pragma("user_version = 11");
+      rawV11.close();
+
+      const migrated = new SqliteTaskStore(file);
+      const routed: RunRecord = {
+        ...sampleRun("T-V12"),
+        runtime: "codex",
+        model: "gpt-5",
+        requested_runtime: "claude-code",
+        requested_model: "sonnet",
+        routing_basis: "policy",
+        fallback_reason: "requested runtime unavailable",
+        fallback_count: 1,
+      };
+      try {
+        expect(migrated.runsForTask("T-V11")).toEqual([legacy]);
+        migrated.appendRun(routed);
+        expect(migrated.runsForTask("T-V12")).toEqual([routed]);
+      } finally {
+        migrated.close();
+      }
+
+      const versionCheck = new Database(file, { readonly: true });
+      expect(versionCheck.pragma("user_version", { simple: true })).toBe(14);
+      expect((versionCheck.pragma("table_info(runs)") as { name: string }[]).filter((column) => routingColumns.includes(column.name as typeof routingColumns[number])).map((column) => column.name)).toEqual([...routingColumns]);
+      versionCheck.close();
+
+      // Opening v14 again must not re-run either migration or disturb data.
+      const reopened = new SqliteTaskStore(file);
+      try {
+        expect(reopened.runsForTask("T-V11")).toEqual([legacy]);
+        expect(reopened.runsForTask("T-V12")).toEqual([routed]);
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      fs.rmSync(path.dirname(file), { recursive: true, force: true });
+    }
+  });
+
+  it("T-V3R-010/T-V3R-060: a v12 task fixture migrates to v14 without rewriting legacy task JSON", () => {
+    const file = tmpDbPath();
+    try {
+      const seed = new SqliteTaskStore(file);
+      seed.createTask(sampleTask("T-V12"));
+      seed.close();
+
+      const legacyDb = new Database(file);
+      const before = (legacyDb.prepare("SELECT state FROM tasks WHERE task_id = ?").get("T-V12") as { state: string }).state;
+      const legacy = JSON.parse(before) as Record<string, unknown>;
+      delete legacy.runtimeTask;
+      const legacyBytes = JSON.stringify(legacy);
+      legacyDb.prepare("UPDATE tasks SET state = ? WHERE task_id = ?").run(legacyBytes, "T-V12");
+      legacyDb.pragma("user_version = 12");
+      legacyDb.close();
+
+      const migrated = new SqliteTaskStore(file);
+      try {
+        expect(migrated.loadTask("T-V12")!.runtimeTask).toBeNull();
+      } finally {
+        migrated.close();
+      }
+
+      const verify = new Database(file, { readonly: true });
+      try {
+        expect(verify.pragma("user_version", { simple: true })).toBe(14);
+        expect((verify.prepare("SELECT state FROM tasks WHERE task_id = ?").get("T-V12") as { state: string }).state).toBe(legacyBytes);
+      } finally {
+        verify.close();
+      }
+    } finally {
+      fs.rmSync(path.dirname(file), { recursive: true, force: true });
+    }
+  });
+
+  it("T-V3R-060: a v13 run migrates with null effort and new effort values round-trip independently", () => {
+    const file = tmpDbPath();
+    try {
+      const seed = new SqliteTaskStore(file);
+      const legacy = sampleRun("T-V13");
+      seed.appendRun(legacy);
+      seed.close();
+
+      const raw = new Database(file);
+      raw.exec("ALTER TABLE runs DROP COLUMN qa_effort");
+      raw.pragma("user_version = 13");
+      raw.close();
+
+      const migrated = new SqliteTaskStore(file);
+      const decided = { ...sampleRun("T-V14"), qa_mode: "FULL", qa_effort: "lightweight" } as RunRecord;
+      try {
+        expect(migrated.runsForTask("T-V13")).toEqual([legacy]);
+        migrated.appendRun(decided);
+        expect(migrated.runsForTask("T-V14")).toEqual([decided]);
+      } finally {
+        migrated.close();
       }
     } finally {
       fs.rmSync(path.dirname(file), { recursive: true, force: true });

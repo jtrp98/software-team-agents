@@ -21,6 +21,7 @@ import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
 import { ApprovalType } from "../gates/approval.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
+import { RunLog } from "../observability/runLog.js";
 
 function qaReport(status: "PASS" | "FAIL"): QaReportArtifact {
   return {
@@ -61,9 +62,11 @@ describe("describeEvent (T37)", () => {
     const fields = describeEvent("AGENT_COMPLETED", {
       stage: "qa-engineer",
       artifactType: "qa-report",
+      packetPath: ".workflow/packets/T-1/qa-engineer-1.json",
       outcome: { result: "PASS", tokens: 1200 },
     });
     expect(fields.actor).toBe("qa-engineer");
+    expect(fields.input).toBe("execution-packet:.workflow/packets/T-1/qa-engineer-1.json");
     expect(fields.output).toBe("qa-report, PASS, 1200 tokens");
     // Finishing is a fact, not a choice — so it carries no decision.
     expect(fields.decision).toBeNull();
@@ -284,6 +287,30 @@ describe("audit trail over a real run (T37)", () => {
 
   it("says so plainly when a task produced no events", () => {
     expect(formatAuditTrail([])).toBe("(no events recorded for this task)");
+  });
+
+  it("T-V3R-081 renders fallback routing and historical nulls without inventing values", () => {
+    const routed = new RunLog().record({
+      task_id: "T-ROUTE",
+      agent: AgentStage.BACKEND_ENGINEER,
+      start_time: 1,
+      end_time: 2,
+      outcome: {
+        tokens: 1, cost: 0, result: "PASS", requested_runtime: "claude-code", runtime: "codex",
+        requested_model: "sonnet", model: "gpt-5.6-codex", routing_basis: "role-policy",
+        fallback_count: 1, fallback_reason: "requested runner unavailable",
+      },
+    });
+    const historical = new RunLog().record({
+      task_id: "T-ROUTE", agent: AgentStage.QA_ENGINEER, start_time: 2, end_time: 3,
+      outcome: { tokens: 1, cost: 0, result: "PASS" },
+    });
+    const rendered = formatAuditTrail([], { runs: [routed, historical] });
+    expect(rendered).toContain("runner=claude-code → codex");
+    expect(rendered).toContain("model=sonnet → gpt-5.6-codex");
+    expect(rendered).toContain("fallback_reason=requested runner unavailable");
+    expect(rendered).toContain("runner=not reported → not reported");
+    expect(rendered).toContain("model=not reported → not reported");
   });
 
   it("records a human's answer as the human's, in the trail", () => {

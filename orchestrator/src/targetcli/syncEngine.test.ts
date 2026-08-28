@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { sha256Of } from "../packaging/templateManifest.js";
-import { renderCodexBinding, renderOpenCodeBinding, defaultOpenCodePermissions } from "../runtime/bindingGenerator.js";
+import { renderCodexBinding, renderCodexSkill, renderOpenCodeBinding, defaultOpenCodePermissions, extractGuardrailRules } from "../runtime/bindingGenerator.js";
 import {
   blockingConflicts,
   planSync,
@@ -13,6 +13,7 @@ import {
 } from "./syncEngine.js";
 import { classifySyncState } from "./version.js";
 import { defaultTargetConfig, readTargetManifest, writeTargetConfig } from "./targetMeta.js";
+import { stripBootstrapBlock } from "./knowledgeRender.js";
 
 const roots: string[] = [];
 function tmpRoot(prefix: string): string {
@@ -45,19 +46,86 @@ function makeTemplatesDir(version: string, files: FixtureFile[]): string {
     `${JSON.stringify({ schema_version: 1, framework_version: version, generated_at: "2026-01-01T00:00:00Z", files: entries.sort((a, b) => a.path.localeCompare(b.path)) }, null, 2)}\n`,
     "utf8",
   );
+  const stack = path.join(dir, "stacks", "node", "stack.yaml");
+  fs.mkdirSync(path.dirname(stack), { recursive: true });
+  fs.writeFileSync(
+    stack,
+    "stack: node\nkind: backend\nlanguage: typescript\nruntime: node\nframeworks: [express]\ndatabase: []\napi: [rest]\npackage_manager: npm\ncommands:\n  install: npm install\n  build: npm run build\n  test: npm test\n  lint: npm run lint\n  typecheck: npm run typecheck\ncapabilities: [testing]\n",
+    "utf8",
+  );
   return dir;
 }
 
 function gitTarget(): string {
   const target = tmpRoot("target");
   fs.mkdirSync(path.join(target, ".git")); // standalone-repo marker, inspected locally like installation.ts does
+  fs.writeFileSync(path.join(target, "package.json"), '{"name":"fixture"}\n', "utf8");
+  fs.writeFileSync(path.join(target, "package-lock.json"), '{"lockfileVersion":3}\n', "utf8");
   return target;
 }
 
 const V1_FILES: FixtureFile[] = [
   { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer", "builds backend") },
-  { relPath: ".claude/settings.json", content: '{"hooks":{"PreToolUse":[{"a":1}]}}' },
+  { relPath: ".claude/settings.json", content: '{"hooks":{"PreToolUse":[{"matcher":"Write","hooks":[{"type":"command","command":"node","args":["${CLAUDE_PROJECT_DIR}/.claude/hooks/block-git.js"]}]}]}}' },
 ];
+
+const GUARDRAILS: FixtureFile = {
+  relPath: ".claude/commands/_shared/guardrails.md",
+  content:
+    "---\ndescription: shared guardrails\n---\nShared guardrails for every slash command below:\n\n1. Prompt shortcut only.\n2. Contracts and policies win.\n",
+};
+const COMMAND_MD = (name: string): string =>
+  `---\ndescription: Shortcut ${name}.\nargument-hint: [topic]\n---\n@_shared/guardrails.md\n\nRun ${name}: $ARGUMENTS\n`;
+const COMMAND_FILES: FixtureFile[] = [
+  GUARDRAILS,
+  { relPath: ".claude/commands/summarize.md", content: COMMAND_MD("summarize") },
+];
+
+describe("command renderings at sync (T-OCC2..3 / T-CXC2..3)", () => {
+  it("sync generates both command mirror families from the shipped sources", () => {
+    const target = gitTarget();
+    const templatesDir = makeTemplatesDir("1.0.0", [...V1_FILES, ...COMMAND_FILES]);
+
+    runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-01T00:00:00Z" });
+
+    const source = fs.readFileSync(path.join(target, ".claude", "commands", "summarize.md"), "utf8");
+    const rules = extractGuardrailRules(fs.readFileSync(path.join(target, ".claude", "commands", "_shared", "guardrails.md"), "utf8"));
+    expect(fs.readFileSync(path.join(target, ".opencode", "commands", "summarize.md"), "utf8")).toContain("Run summarize: $ARGUMENTS");
+    expect(fs.readFileSync(path.join(target, ".agents", "skills", "summarize", "SKILL.md"), "utf8")).toBe(
+      renderCodexSkill("summarize", source, rules),
+    );
+    expect(fs.readFileSync(path.join(target, ".agents", "skills", "summarize", "agents", "openai.yaml"), "utf8")).toBe(
+      "policy:\n  allow_implicit_invocation: false\n",
+    );
+    const manifest = readTargetManifest(target);
+    expect(manifest.files.map((f) => f.path)).toEqual(expect.arrayContaining([".opencode/commands/summarize.md", ".agents/skills/summarize/SKILL.md"]));
+  });
+
+  it("removing a command from the payload removes its pristine mirrors and conflicts on edited ones", () => {
+    const target = gitTarget();
+    const withCommand = makeTemplatesDir("1.0.0", [...V1_FILES, ...COMMAND_FILES]);
+    runTargetSync({ targetRoot: target, templatesDir: withCommand, now: "2026-01-01T00:00:00Z" });
+
+    const withoutCommand = makeTemplatesDir("1.1.0", [...V1_FILES, GUARDRAILS]);
+    const result = runTargetSync({ targetRoot: target, templatesDir: withoutCommand, now: "2026-01-02T00:00:00Z" });
+    expect(result.performed.filter((p) => p.action === "remove-stale").map((p) => p.path)).toEqual(
+      expect.arrayContaining([".opencode/commands/summarize.md", ".agents/skills/summarize/SKILL.md", ".agents/skills/summarize/agents/openai.yaml"]),
+    );
+    expect(fs.existsSync(path.join(target, ".opencode", "commands", "summarize.md"))).toBe(false);
+  });
+
+  it("an edited mirror of a removed command stops the run instead of silently deleting work", () => {
+    const target = gitTarget();
+    const withCommand = makeTemplatesDir("1.0.0", [...V1_FILES, ...COMMAND_FILES]);
+    runTargetSync({ targetRoot: target, templatesDir: withCommand, now: "2026-01-01T00:00:00Z" });
+
+    const mirrorPath = path.join(target, ".opencode", "commands", "summarize.md");
+    fs.writeFileSync(mirrorPath, "---\ndescription: hand-edited\n---\nlocal work\n");
+    const withoutCommand = makeTemplatesDir("1.1.0", [...V1_FILES, GUARDRAILS]);
+
+    expect(() => runTargetSync({ targetRoot: target, templatesDir: withoutCommand, now: "2026-01-02T00:00:00Z" })).toThrow(TargetSyncConflictError);
+  });
+});
 
 describe("safe sync engine", () => {
   it("first sync adds every managed file and generates codex renderings", () => {
@@ -206,7 +274,7 @@ describe("safe sync engine", () => {
     expect(() => planSync({ targetRoot: target, templatesDir: v2, manifest: readTargetManifest(target), config: defaultTargetConfig("x", "now") })).not.toThrow();
   });
 
-  it("keeps a claimed file out of the manifest, so un-claiming it does not mislabel the project's own file", () => {
+  it("keeps a claimed file out of the manifest, then safely merges it when the project removes the override", () => {
     // Regression: an override recorded the TEMPLATE's hash even though sync
     // never wrote the file. Un-claiming the path then read as "tracked file
     // edited after sync" (blocking) instead of "the project owns this path"
@@ -224,12 +292,14 @@ describe("safe sync engine", () => {
     // A file sync deliberately left alone is not claimed in the manifest.
     expect(readTargetManifest(target).files.some((f) => f.path === ".claude/settings.json")).toBe(false);
 
-    // Un-claiming it reports the project's ownership instead of blocking.
+    // Un-claiming it plans the structured guard merge instead of claiming the
+    // whole file or mislabelling the project's bytes as a local edit.
     const unclaimed = defaultTargetConfig("my-project", "2026-01-01T00:00:00Z");
     writeTargetConfig(target, unclaimed);
     const plan = planSync({ targetRoot: target, templatesDir: v1, manifest: readTargetManifest(target), config: unclaimed });
-    expect(plan.conflicts.map((c) => c.kind)).toEqual(["untracked-file"]);
+    expect(plan.conflicts).toEqual([]);
     expect(blockingConflicts(plan)).toEqual([]);
+    expect(plan.entries).toContainEqual(expect.objectContaining({ action: "update", path: ".claude/settings.json" }));
     expect(fs.readFileSync(settingsPath, "utf8")).toBe('{"project":"specific"}');
   });
 
@@ -341,11 +411,12 @@ describe("safe sync engine — OpenCode renderings (T-OC2)", () => {
   });
 });
 
-// --- T-WG7 — dev-lane rendering of CLAUDE.md + the generated include --------
+// --- T-WG7 — DEV-workspace rendering of CLAUDE.md + the generated include ---
 
 const DEV_V1: FixtureFile[] = [
   { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer", "builds backend") },
   { relPath: "CLAUDE.md", content: "# Rules\n\nRead `_docs/status.md` first.\n" },
+  { relPath: "AGENTS.md", content: "generated at sync\n" },
 ];
 
 function knowledgeRootFixture(): string {
@@ -360,7 +431,7 @@ function installationConfigFixture(knowledgeRoot: string): string {
   return file;
 }
 
-describe("dev-lane Knowledge rendering (T-WG7)", () => {
+describe("DEV-workspace Knowledge rendering (T-WG7)", () => {
   it("renders CLAUDE.md with the banner and writes the include for a dev workspace", () => {
     const target = gitTarget();
     writeTargetConfig(target, defaultTargetConfig("app", "2026-01-01T00:00:00Z", "dev"));
@@ -374,7 +445,7 @@ describe("dev-lane Knowledge rendering (T-WG7)", () => {
     });
 
     const claude = fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8");
-    expect(claude.startsWith("<!-- sta:three-repo-dev -->")).toBe(true);
+    expect(claude.startsWith("<!-- sta:bootstrap -->")).toBe(true);
     expect(claude).toContain(knowledge);
     expect(claude).toContain("Read `_docs/status.md` first."); // body preserved under the banner
     const include = fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8");
@@ -412,18 +483,18 @@ describe("dev-lane Knowledge rendering (T-WG7)", () => {
     expect(fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8")).toContain(moved);
   });
 
-  it("leaves a non-dev workspace byte-identical to the template and writes no include", () => {
+  it("renders the BA bootstrap over a byte-identical template body and writes no Knowledge include", () => {
     const target = gitTarget();
     writeTargetConfig(target, defaultTargetConfig("kb", "now", "ba"));
     const templatesDir = makeTemplatesDir("1.0.0", DEV_V1);
 
     runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-01T00:00:00Z", installationConfigPath: installationConfigFixture(knowledgeRootFixture()) });
 
-    expect(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8")).toBe(DEV_V1[1]!.content);
+    expect(stripBootstrapBlock(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8"))).toBe(DEV_V1[1]!.content);
     expect(fs.existsSync(path.join(target, ".claude", "shared", "knowledge-root.md"))).toBe(false);
   });
 
-  it("never touches a foreign project-owned CLAUDE.md but still records the binding include", () => {
+  it("injects only the delimited block into a foreign project-owned CLAUDE.md and records the binding include", () => {
     const target = gitTarget();
     writeTargetConfig(target, defaultTargetConfig("app", "now", "dev"));
     fs.writeFileSync(path.join(target, "CLAUDE.md"), "# The project's own instructions\n", "utf8");
@@ -435,10 +506,66 @@ describe("dev-lane Knowledge rendering (T-WG7)", () => {
       installationConfigPath: installationConfigFixture(knowledgeRootFixture()),
     });
 
-    expect(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8")).toBe("# The project's own instructions\n");
-    expect(result.skippedConflicts.map((c) => c.path)).toContain("CLAUDE.md");
+    expect(stripBootstrapBlock(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8"))).toBe("# The project's own instructions\n");
+    expect(result.skippedConflicts.map((c) => c.path)).not.toContain("CLAUDE.md");
     expect(readTargetManifest(target).files.map((f) => f.path)).not.toContain("CLAUDE.md");
+    expect(readTargetManifest(target).framework_blocks?.map((block) => block.path)).toContain("CLAUDE.md");
     expect(fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8")).toContain("KNOWLEDGE_ROOT=");
+  });
+});
+
+describe("T-V3-07 AGENTS.md rendered pointer ownership", () => {
+  function sync(target: string, extra: Partial<Parameters<typeof runTargetSync>[0]> = {}) {
+    writeTargetConfig(target, defaultTargetConfig("app", "now", "dev"));
+    return runTargetSync({
+      targetRoot: target,
+      templatesDir: makeTemplatesDir("1.0.0", DEV_V1),
+      now: "2026-01-01T00:00:00Z",
+      installationConfigPath: installationConfigFixture(knowledgeRootFixture()),
+      ...extra,
+    });
+  }
+
+  it("adds and manifest-tracks the short pointer when AGENTS.md is absent", () => {
+    const target = gitTarget();
+    sync(target);
+    const agents = fs.readFileSync(path.join(target, "AGENTS.md"), "utf8");
+    expect(agents).toContain("[CLAUDE.md](CLAUDE.md)");
+    expect(readTargetManifest(target).files.map((entry) => entry.path)).toContain("AGENTS.md");
+  });
+
+  it("injects only the managed block into project-owned AGENTS.md and preserves every outside byte", () => {
+    const target = gitTarget();
+    const own = "# Project rules\r\nKeep this exact.\r\n";
+    fs.writeFileSync(path.join(target, "AGENTS.md"), own, "utf8");
+    sync(target);
+    expect(stripBootstrapBlock(fs.readFileSync(path.join(target, "AGENTS.md"), "utf8"))).toBe(own);
+    expect(readTargetManifest(target).framework_blocks?.map((entry) => entry.path)).toContain("AGENTS.md");
+    expect(readTargetManifest(target).files.map((entry) => entry.path)).not.toContain("AGENTS.md");
+  });
+
+  it("reduces a provable duplicate only with dedicated confirmation, backing up the full prior file", () => {
+    const target = gitTarget();
+    const duplicate = "# Same project rules\n";
+    fs.writeFileSync(path.join(target, "CLAUDE.md"), duplicate, "utf8");
+    fs.writeFileSync(path.join(target, "AGENTS.md"), duplicate, "utf8");
+    const first = sync(target);
+    expect(stripBootstrapBlock(fs.readFileSync(path.join(target, "AGENTS.md"), "utf8"))).toBe(duplicate);
+    const second = sync(target, { now: "2026-01-02T00:00:00Z", manifest: readTargetManifest(target), config: undefined, confirmAgentsPointer: true });
+    const reduced = fs.readFileSync(path.join(target, "AGENTS.md"), "utf8");
+    expect(reduced).toContain("[CLAUDE.md](CLAUDE.md)");
+    expect(stripBootstrapBlock(reduced)).not.toBe(duplicate);
+    expect(second.backupDir).toBeTruthy();
+    expect(fs.readFileSync(path.join(second.backupDir!, "AGENTS.md"), "utf8")).toContain(duplicate);
+  });
+
+  it("never deletes AGENTS.md when a later payload drops it", () => {
+    const target = gitTarget();
+    sync(target);
+    const before = fs.readFileSync(path.join(target, "AGENTS.md"), "utf8");
+    const config = defaultTargetConfig("app", "now", "dev");
+    runTargetSync({ targetRoot: target, templatesDir: makeTemplatesDir("1.1.0", DEV_V1.filter((entry) => entry.relPath !== "AGENTS.md")), manifest: readTargetManifest(target), config, now: "2026-01-03T00:00:00Z", installationConfigPath: installationConfigFixture(knowledgeRootFixture()) });
+    expect(fs.readFileSync(path.join(target, "AGENTS.md"), "utf8")).toBe(before);
   });
 });
 

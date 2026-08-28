@@ -5,27 +5,34 @@ import Ajv, { type ValidateFunction } from "ajv";
 import { parse as parseYaml } from "yaml";
 import { AgentStage, TaskLevel } from "../types.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
-import { classifyTask, type ClassificationInput, type ClassificationResult } from "../classification/taskClassifier.js";
+import type { ClassificationInput } from "../classification/taskClassifier.js";
+import { catalogWorkflows, checkWorkflowFiles, workflowPath, workflowsDir } from "./workflowCatalog.js";
+
+export { workflowPath, workflowsDir };
 
 /**
  * Loads `workflows/<id>.yml` — which agents run, in what order, for one kind of
  * change.
  *
- * Until these files existed the answer lived only inside `taskClassifier.ts`, as
- * a chain of if-statements. That is fine for a program and bad for everything
- * else: "what happens for a hotfix" was a code change, a review, and a release,
- * rather than a file somebody could open and edit.
+ * These files are **generated** (T-V3TOK-110, ADR-007). The authored sources are
+ * `classification/taskClassifier.ts` for the behaviour and
+ * `workflow/workflowCatalog.ts` for the prose the classifier does not model;
+ * `scripts/regenerate-renderings.mjs` writes the files and
+ * `checkAllWorkflows()` byte-checks them, the same arrangement `--check-bindings`
+ * uses for `.codex/`, `.opencode/` and `.agents/skills`.
  *
- * The classifier is still what the orchestrator runs on, exactly as
- * `agentContract.ts` kept `AGENT_REGISTRY` authoritative for the same reason:
- * `classifyTask` is a pure function that several modules call without knowing
- * what a project root is, and making it read files at import time would push
- * that knowledge into all of them. What makes these files real rather than
- * decorative is `checkAllWorkflows()`, which fails when a file and the
- * classifier disagree — so the two cannot drift, and the file can be trusted as
- * a description of what actually happens.
+ * Before that they were hand-written beside a hand-written classifier, with a
+ * semantic lint comparing the two. That is a dual source of truth kept aligned by
+ * a check that can only object after somebody has already forgotten — and the
+ * files were never runtime inputs, so the duplication bought documentation at the
+ * price of a permanent sync obligation.
  *
- * Two workflows have no classification signal at all. `refactor`, `hotfix` and
+ * What this module still owns is *reading* one: a target project's copy is a real
+ * file that a person can open, and it is validated against
+ * `schemas/workflow.schema.json` on the way in rather than trusted because it was
+ * generated once.
+ *
+ * Three workflows have no classification signal at all. `refactor`, `hotfix` and
  * `security-fix` are distinguished by *intent*, not by anything observable in
  * the change — a refactor and a bug fix look identical from outside — so they
  * are named explicitly by the caller rather than inferred. Pretending otherwise
@@ -58,14 +65,6 @@ const SCHEMA_PATH = path.resolve(
   "schemas",
   "workflow.schema.json",
 );
-
-export function workflowsDir(projectRoot: string = defaultProjectRoot()): string {
-  return path.join(projectRoot, "workflows");
-}
-
-export function workflowPath(id: string, projectRoot: string = defaultProjectRoot()): string {
-  return path.join(workflowsDir(projectRoot), `${id}.yml`);
-}
 
 export class WorkflowError extends Error {
   constructor(
@@ -138,11 +137,17 @@ export function loadAllWorkflows(projectRoot: string = defaultProjectRoot()): Re
 }
 
 /**
- * Which workflow a set of signals selects, by the declared priority rather than
+ * Which workflow a set of signals selects, by the derived priority rather than
  * by the order of any if-chain. Returns "triage" when nothing matches — never a
  * default guess, because a task nobody classified is a task for a person.
+ *
+ * Defaults to the catalog so a caller that only wants the name of the pipeline
+ * it is about to run (`sta run`'s opening line) does not need a project root.
  */
-export function resolveWorkflowId(input: ClassificationInput, workflows: Record<string, WorkflowDefinition>): string {
+export function resolveWorkflowId(
+  input: ClassificationInput,
+  workflows: Record<string, WorkflowDefinition> = catalogWorkflows(),
+): string {
   const candidates = Object.values(workflows)
     .filter((w): w is WorkflowDefinition & { trigger: Extract<WorkflowTrigger, { kind: "signal" }> } =>
       w.trigger.kind === "signal" && w.trigger.signal !== "none")
@@ -173,43 +178,37 @@ export interface WorkflowCheckResult {
 }
 
 /**
- * Every combination of engineer/sensitivity flags a signal-triggered workflow
- * can see. Small and exhaustive on purpose: the disagreements worth catching are
- * conditional steps, and four cases cover every branch these files can express.
- */
-const FLAG_COMBINATIONS: ClassificationInput[] = [
-  { touchesBackend: true },
-  { touchesFrontend: true },
-  { touchesBackend: true, touchesFrontend: true },
-  { touchesBackend: true, touchesFrontend: true, touchesSensitiveArea: true },
-];
-
-/**
- * The check `--check-workflows` runs: every file parses, and for each one the
- * pipeline it describes is the pipeline the classifier actually produces.
+ * The check `--check-workflows` runs, in two halves.
  *
- * This is what stops the files becoming a stale description of a system that
- * moved on without them — the same job `--check-contracts` does for
- * `contracts/*.yaml`.
+ * The first is the deterministic one: every committed `workflows/<id>.yml` is
+ * byte-identical to what the catalog renders from the classifier today, with no
+ * orphans. That is strictly stronger than the semantic comparison it replaced,
+ * which only probed four flag combinations and so could not see a description, a
+ * note or a priority drift at all.
+ *
+ * The second re-reads the files through the Ajv schema. Byte equality already
+ * implies it here, but a target project's copy is a real file a person can open
+ * and the loader is what a person's `sta` will use — a generated file that
+ * violates its own schema should fail this check rather than the next run.
  */
 export function checkAllWorkflows(projectRoot: string = defaultProjectRoot()): WorkflowCheckResult {
-  const problems: string[] = [];
+  const fileCheck = checkWorkflowFiles(projectRoot);
+  const problems = [...fileCheck.problems];
 
   let workflows: Record<string, WorkflowDefinition>;
   try {
     workflows = loadAllWorkflows(projectRoot);
   } catch (e) {
-    return { ok: false, problems: [e instanceof WorkflowError ? e.message : String(e)] };
+    return { ok: false, problems: [...problems, e instanceof WorkflowError ? e.message : String(e)] };
   }
 
   if (Object.keys(workflows).length === 0) {
-    return { ok: false, problems: [`no workflow files found in ${workflowsDir(projectRoot)}`] };
+    return { ok: false, problems: [...problems, `no workflow files found in ${workflowsDir(projectRoot)}`] };
   }
 
   const seenPriority = new Map<number, string>();
   for (const workflow of Object.values(workflows)) {
     if (workflow.trigger.kind !== "signal") continue;
-
     const clash = seenPriority.get(workflow.trigger.priority);
     if (clash) {
       problems.push(
@@ -218,36 +217,6 @@ export function checkAllWorkflows(projectRoot: string = defaultProjectRoot()): W
       );
     }
     seenPriority.set(workflow.trigger.priority, workflow.workflow);
-
-    if (workflow.trigger.signal === "none") continue;
-
-    for (const flags of FLAG_COMBINATIONS) {
-      const input: ClassificationInput = { ...flags, [workflow.trigger.signal]: true };
-
-      // Only compare when this workflow is the one the signals would select —
-      // a lower-priority signal in the same input would legitimately win.
-      if (resolveWorkflowId(input, workflows) !== workflow.workflow) continue;
-
-      const actual: ClassificationResult = classifyTask(input);
-      const declared = pipelineFromWorkflow(workflow, input);
-      const flagList = Object.keys(flags).join("+") || "(none)";
-
-      if (declared.join(" -> ") !== actual.pipeline.join(" -> ")) {
-        problems.push(
-          `${workflow.workflow} [${flagList}]: file says ${declared.join(" -> ") || "(empty)"}, ` +
-            `classifier produces ${actual.pipeline.join(" -> ") || "(empty)"}`,
-        );
-      }
-      if (workflow.level !== actual.level) {
-        problems.push(`${workflow.workflow} [${flagList}]: file says level ${workflow.level}, classifier says ${actual.level}`);
-      }
-      if (workflow.requires_human_approval !== actual.requiresHumanApproval) {
-        problems.push(
-          `${workflow.workflow} [${flagList}]: file says requires_human_approval ` +
-            `${workflow.requires_human_approval}, classifier says ${actual.requiresHumanApproval}`,
-        );
-      }
-    }
   }
 
   return { ok: problems.length === 0, problems };

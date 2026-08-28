@@ -43,7 +43,7 @@ import { AgentStage } from "../types.js";
  *      nothing useful, and traverse() would return noise.
  */
 
-/** Default emitted generation remains v1 until Phase 5 performs the explicit migration. */
+/** Legacy writers may still load v1; new Target evidence writers emit v2 explicitly. */
 export const KNOWLEDGE_SCHEMA_VERSION = 1;
 
 export const KNOWLEDGE_KINDS = [
@@ -389,14 +389,6 @@ export function checkKnowledgeItem(data: unknown): string[] {
     if (item.schema_version >= 2 && !source.origin) problems.push(`source "${source.locator}" requires origin in schema v2`);
     if (source.origin?.root === "target" && !source.origin.target_id) problems.push(`source "${source.locator}" has target origin without target_id`);
     if (source.origin?.root !== "target" && source.origin?.target_id !== null && source.origin?.target_id !== undefined) problems.push(`source "${source.locator}" has target_id for a non-target origin`);
-  }
-
-  if (item.kind === "task" && item.schema_version >= 2 && item.payload.tag !== null) {
-    if (item.payload.target_id === undefined || item.payload.target_id === null) {
-      problems.push("schema v2 code task requires payload.target_id");
-    } else if (!targetIds.includes(item.payload.target_id)) {
-      problems.push(`schema v2 code task payload.target_id "${item.payload.target_id}" must be one of target_ids`);
-    }
   }
 
   return problems;

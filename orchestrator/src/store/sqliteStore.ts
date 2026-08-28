@@ -50,7 +50,16 @@ import {
 // nothing lost. v1 -> v2 changed the columns a *run* is read through, where a silent misread
 // would corrupt cost and token accounting that nothing downstream could tell was wrong. An
 // unknown version still refuses to open at all.
-const SCHEMA_VERSION = 6;
+// v7 (token observability): adds nullable runtime/session/composition fields. Historical rows
+// remain explicitly "not reported"; this migration never infers a breakdown.
+// v8: records full module-doc bytes alongside the sliced prompt bytes.
+// v9: records deterministic-gate enabled/disabled for optimized QA runs.
+// v10: records warning-only context-budget accounting and overflow telemetry.
+// v11: records launch-time always-on instruction bytes for interactive sessions.
+// v12 (T-V3R-002): records requested-vs-actual routing and fallback decisions. All five fields
+// are nullable because historical runs did not report them and must not be backfilled.
+// v14 (T-V3R-060): records the orthogonal QA effort decision. Historical rows stay null.
+const SCHEMA_VERSION = 14;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -77,7 +86,36 @@ CREATE TABLE IF NOT EXISTS runs (
   cache_read_tokens  INTEGER,
   context_chars      INTEGER,
   prompt_version     INTEGER,
-  qa_mode            TEXT
+  qa_mode            TEXT,
+  qa_effort          TEXT,
+  deterministic_gate TEXT,
+  runtime            TEXT,
+  requested_runtime  TEXT,
+  requested_model    TEXT,
+  routing_basis      TEXT,
+  fallback_reason    TEXT,
+  fallback_count     INTEGER,
+  session_kind       TEXT,
+  static_chars       INTEGER,
+  instruction_surface_bytes INTEGER,
+  handoff_chars      INTEGER,
+  doc_chars          INTEGER,
+  doc_chars_before   INTEGER,
+  knowledge_chars    INTEGER,
+  code_intel_chars   INTEGER,
+  tool_output_chars          INTEGER,
+  context_budget_chars       INTEGER,
+  context_budget_source      TEXT,
+  context_overflow_chars     INTEGER,
+  context_budget_warning     INTEGER,
+  context_base_chars         INTEGER,
+  context_task_chars         INTEGER,
+  context_safety_chars       INTEGER,
+  context_docs_chars         INTEGER,
+  context_knowledge_chars    INTEGER,
+  context_code_chars         INTEGER,
+  context_tool_output_chars  INTEGER,
+  context_reserve_chars      INTEGER
 );
 CREATE INDEX IF NOT EXISTS runs_task_id ON runs (task_id);
 CREATE TABLE IF NOT EXISTS events (
@@ -158,6 +196,35 @@ interface RunRow {
   context_chars: number | null;
   prompt_version: number | null;
   qa_mode: string | null;
+  qa_effort: string | null;
+  deterministic_gate: string | null;
+  runtime: string | null;
+  requested_runtime: string | null;
+  requested_model: string | null;
+  routing_basis: string | null;
+  fallback_reason: string | null;
+  fallback_count: number | null;
+  session_kind: string | null;
+  static_chars: number | null;
+  instruction_surface_bytes: number | null;
+  handoff_chars: number | null;
+  doc_chars: number | null;
+  doc_chars_before: number | null;
+  knowledge_chars: number | null;
+  code_intel_chars: number | null;
+  tool_output_chars: number | null;
+  context_budget_chars: number | null;
+  context_budget_source: string | null;
+  context_overflow_chars: number | null;
+  context_budget_warning: number | null;
+  context_base_chars: number | null;
+  context_task_chars: number | null;
+  context_safety_chars: number | null;
+  context_docs_chars: number | null;
+  context_knowledge_chars: number | null;
+  context_code_chars: number | null;
+  context_tool_output_chars: number | null;
+  context_reserve_chars: number | null;
 }
 
 interface EventRow {
@@ -205,6 +272,72 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     // QA07: runs predating the qa_mode column simply read back "not recorded".
     const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
     if (!existing.has("qa_mode")) db.exec("ALTER TABLE runs ADD COLUMN qa_mode TEXT");
+  },
+  6: (db) => {
+    // Every T-V3TOK-001 field is nullable. A v6 row did not measure these
+    // values, so null is the only truthful migration result (never zero).
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    const columns: ReadonlyArray<[string, "TEXT" | "INTEGER"]> = [
+      ["runtime", "TEXT"],
+      ["session_kind", "TEXT"],
+      ["static_chars", "INTEGER"],
+      ["handoff_chars", "INTEGER"],
+      ["doc_chars", "INTEGER"],
+      ["knowledge_chars", "INTEGER"],
+      ["code_intel_chars", "INTEGER"],
+      ["tool_output_chars", "INTEGER"],
+    ];
+    for (const [column, type] of columns) if (!existing.has(column)) db.exec(`ALTER TABLE runs ADD COLUMN ${column} ${type}`);
+  },
+  7: (db) => {
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    if (!existing.has("doc_chars_before")) db.exec("ALTER TABLE runs ADD COLUMN doc_chars_before INTEGER");
+  },
+  8: (db) => {
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    if (!existing.has("deterministic_gate")) db.exec("ALTER TABLE runs ADD COLUMN deterministic_gate TEXT");
+  },
+  9: (db) => {
+    // Warning-only context budget telemetry. Historical rows did not measure
+    // any of this, so every new nullable field stays null rather than guessed.
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    const columns: ReadonlyArray<[string, "TEXT" | "INTEGER"]> = [
+      ["context_budget_chars", "INTEGER"], ["context_budget_source", "TEXT"], ["context_overflow_chars", "INTEGER"],
+      ["context_budget_warning", "INTEGER"], ["context_base_chars", "INTEGER"], ["context_task_chars", "INTEGER"],
+      ["context_safety_chars", "INTEGER"], ["context_docs_chars", "INTEGER"], ["context_knowledge_chars", "INTEGER"],
+      ["context_code_chars", "INTEGER"], ["context_tool_output_chars", "INTEGER"], ["context_reserve_chars", "INTEGER"],
+    ];
+    for (const [column, type] of columns) if (!existing.has(column)) db.exec(`ALTER TABLE runs ADD COLUMN ${column} ${type}`);
+  },
+  10: (db) => {
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    if (!existing.has("instruction_surface_bytes")) db.exec("ALTER TABLE runs ADD COLUMN instruction_surface_bytes INTEGER");
+  },
+  11: (db) => {
+    // T-V3R-002: old rows have no truthful requested route or fallback facts.
+    // Nullable columns preserve every legacy value byte-for-byte and read as
+    // "not reported" without inventing a backfill.
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    const columns: ReadonlyArray<[string, "TEXT" | "INTEGER"]> = [
+      ["requested_runtime", "TEXT"],
+      ["requested_model", "TEXT"],
+      ["routing_basis", "TEXT"],
+      ["fallback_reason", "TEXT"],
+      ["fallback_count", "INTEGER"],
+    ];
+    for (const [column, type] of columns) if (!existing.has(column)) db.exec(`ALTER TABLE runs ADD COLUMN ${column} ${type}`);
+  },
+  12: (db) => {
+    // T-V3R-010: RuntimeTask lives in the existing versioned task JSON.
+    // PersistedTaskSchema supplies null for historical v12 rows, so migration
+    // is additive and deliberately does not rewrite their state bytes.
+    void db;
+  },
+  13: (db) => {
+    // T-V3R-060: a pre-v14 run has no recorded effort decision; null is the
+    // only truthful value and keeps the mode/effort axes independently queryable.
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    if (!existing.has("qa_effort")) db.exec("ALTER TABLE runs ADD COLUMN qa_effort TEXT");
   },
 };
 
@@ -299,8 +432,8 @@ export class SqliteTaskStore implements TaskStore {
   appendRun(record: RunRecord): void {
     this.db
       .prepare(
-        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, prompt_version, qa_mode)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, prompt_version, qa_mode, qa_effort, deterministic_gate, runtime, requested_runtime, requested_model, routing_basis, fallback_reason, fallback_count, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.task_id,
@@ -320,12 +453,50 @@ export class SqliteTaskStore implements TaskStore {
         record.context_chars,
         record.promptVersion,
         record.qa_mode,
+        record.qa_effort,
+        record.deterministic_gate,
+        record.runtime,
+        record.requested_runtime,
+        record.requested_model,
+        record.routing_basis,
+        record.fallback_reason,
+        record.fallback_count,
+        record.session_kind,
+        record.static_chars,
+        record.instruction_surface_bytes ?? null,
+        record.handoff_chars,
+        record.doc_chars,
+        record.doc_chars_before,
+        record.knowledge_chars,
+        record.code_intel_chars,
+        record.tool_output_chars,
+        record.context_budget_chars,
+        record.context_budget_source,
+        record.context_overflow_chars,
+        record.context_budget_warning === null ? null : Number(record.context_budget_warning),
+        record.context_base_chars,
+        record.context_task_chars,
+        record.context_safety_chars,
+        record.context_docs_chars,
+        record.context_knowledge_chars,
+        record.context_code_chars,
+        record.context_tool_output_chars,
+        record.context_reserve_chars,
       );
   }
 
   runsForTask(taskId: string): RunRecord[] {
     const rows = this.db.prepare("SELECT * FROM runs WHERE task_id = ? ORDER BY id ASC").all(taskId) as RunRow[];
-    return rows.map((r) => ({
+    return rows.map((r) => this.runRecordFromRow(r));
+  }
+
+  allRuns(): RunRecord[] {
+    const rows = this.db.prepare("SELECT * FROM runs ORDER BY id ASC").all() as RunRow[];
+    return rows.map((r) => this.runRecordFromRow(r));
+  }
+
+  private runRecordFromRow(r: RunRow): RunRecord {
+    return {
       task_id: r.task_id,
       agent: r.agent as AgentStage,
       start_time: r.start_time,
@@ -343,7 +514,36 @@ export class SqliteTaskStore implements TaskStore {
       cache_read_tokens: r.cache_read_tokens,
       context_chars: r.context_chars,
       qa_mode: r.qa_mode === "FULL" || r.qa_mode === "TARGETED" ? r.qa_mode : null,
-    }));
+      qa_effort: r.qa_effort === "skip" || r.qa_effort === "lightweight" || r.qa_effort === "full" ? r.qa_effort : null,
+      deterministic_gate: r.deterministic_gate === "enabled" || r.deterministic_gate === "disabled" ? r.deterministic_gate : null,
+      runtime: r.runtime,
+      requested_runtime: r.requested_runtime,
+      requested_model: r.requested_model,
+      routing_basis: r.routing_basis,
+      fallback_reason: r.fallback_reason,
+      fallback_count: r.fallback_count,
+      session_kind: r.session_kind === "orchestrated" || r.session_kind === "interactive" ? r.session_kind : null,
+      static_chars: r.static_chars,
+      instruction_surface_bytes: r.instruction_surface_bytes,
+      handoff_chars: r.handoff_chars,
+      doc_chars: r.doc_chars,
+      doc_chars_before: r.doc_chars_before,
+      knowledge_chars: r.knowledge_chars,
+      code_intel_chars: r.code_intel_chars,
+      tool_output_chars: r.tool_output_chars,
+      context_budget_chars: r.context_budget_chars,
+      context_budget_source: r.context_budget_source === "role" || r.context_budget_source === "model_context_window" ? r.context_budget_source : null,
+      context_overflow_chars: r.context_overflow_chars,
+      context_budget_warning: r.context_budget_warning === null ? null : r.context_budget_warning !== 0,
+      context_base_chars: r.context_base_chars,
+      context_task_chars: r.context_task_chars,
+      context_safety_chars: r.context_safety_chars,
+      context_docs_chars: r.context_docs_chars,
+      context_knowledge_chars: r.context_knowledge_chars,
+      context_code_chars: r.context_code_chars,
+      context_tool_output_chars: r.context_tool_output_chars,
+      context_reserve_chars: r.context_reserve_chars,
+    };
   }
 
   appendEvent(event: NewEvent): void {

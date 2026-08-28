@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { checkInstallManifest, installManifestPath, type InstallManifest } from "./installManifest.js";
-import { checkStaConfig } from "./staConfig.js";
+import { inspectStaConfig } from "./staConfig.js";
 import { sha256Of } from "./templateManifest.js";
 
 /**
@@ -53,7 +53,9 @@ export function validateInstallation(projectRoot: string): InstallValidationResu
     }
   }
 
-  problems.push(...checkStaConfig(projectRoot));
+  const config = inspectStaConfig(projectRoot);
+  problems.push(...config.problems);
+  notes.push(...config.warnings);
 
   return { ok: problems.length === 0, problems, notes };
 }

@@ -10,6 +10,7 @@ import { SqliteTaskStore } from "../store/sqliteStore.js";
 import Database from "better-sqlite3";
 import { assertBindingsImmutable, uniqueBoundTargetIds, validateNewTaskBindings, validatePersistedTaskBindings } from "./taskBindings.js";
 import { preflightThreeRepoTask } from "./preflight.js";
+import { figmaPatConfigured } from "./identities.js";
 import type { TargetRegistry } from "./targets.js";
 
 const registry: TargetRegistry = {
@@ -231,6 +232,36 @@ describe("Phase 2 preflight", () => {
       const okConfig = path.join(root, "ok.yaml");
       fs.writeFileSync(okConfig, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\nidentities:\n  figma_email: same@person.dev\n  claude_email: same@person.dev\n`);
       const result = preflightThreeRepoTask(uxuiTask, AgentStage.UXUI_DESIGNER, { ...base, installationConfigPath: okConfig });
+      expect(result.workRoots).toEqual([]);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  /** T-CD3 (planning/v2/uxui-claude-design-TASKS.md): the identity gate is design-source-agnostic.
+   * A Claude Design MCP run authenticates through Anthropic itself, so the preflight must keep
+   * accepting a declared-identity installation with NO Figma PAT present — if anyone ever wires
+   * figmaPatConfigured() into this gate, the Claude Design direction breaks fail-closed-by-accident
+   * and this test is the tripwire. */
+  it("passes the uxui-designer stage with declared identities and no FIGMA_PAT anywhere — the Claude Design MCP direction needs none", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "three-repo-claude-design-"));
+    try {
+      const framework = path.join(root, "framework");
+      const knowledge = path.join(root, "knowledge");
+      const target = path.join(root, "target");
+      initRepository(framework); initRepository(knowledge); initRepository(target);
+      fs.writeFileSync(path.join(target, ".git", "config"), "[remote \"origin\"]\n\turl = https://github.com/acme/backend.git\n");
+      fs.mkdirSync(path.join(knowledge, ".workflow"));
+      fs.writeFileSync(path.join(knowledge, "targets.yaml"), "schema_version: 1\ntargets:\n  - target_id: backend\n    name: Backend\n    remote_url: https://github.com/acme/backend.git\n    status: active\n  - target_id: frontend\n    name: Frontend\n    remote_url: https://github.com/acme/frontend.git\n    status: active\n");
+      fs.writeFileSync(path.join(knowledge, ".workflow", "targets.local.yaml"), `schema_version: 1\ntargets:\n  backend:\n    path: ${JSON.stringify(target)}\n`);
+      const config = path.join(root, "installation.yaml");
+      fs.writeFileSync(config, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\nidentities:\n  figma_email: designer@person.dev\n  claude_email: designer@person.dev\n`);
+
+      // Deterministic stand-in for "no token configured": the PAT presence helper answers from env,
+      // and an empty env means the gate below cannot be leaning on one.
+      expect(figmaPatConfigured({})).toBe(false);
+
+      const classification = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
+      const task = newPersistedTask({ taskId: "ux", classification, machine: initTaskMachine(classification.pipeline, false), now: 1, targetBindings: { backend_target: null, frontend_target: "frontend" } });
+      const result = preflightThreeRepoTask(task, AgentStage.UXUI_DESIGNER, { frameworkRoot: framework, installationConfigPath: config });
       expect(result.workRoots).toEqual([]);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });

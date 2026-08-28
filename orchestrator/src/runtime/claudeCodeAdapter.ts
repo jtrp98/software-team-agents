@@ -26,7 +26,7 @@ export type { SpawnSync } from "./runtimeAdapter.js";
 
 /**
  * The `RuntimeAdapter` for Claude Code (T109) — the Claude-Code-specific half
- * that `agents/claudeCliExecutor.ts` used to hold before T108 split it. This is
+ * that the legacy executor used to hold before T108 split it. This is
  * that file's `spawnSync("claude", ...)` call, its JSON envelope, and its
  * `AGENTCLAUDE_ROLE` environment variable, now behind the seam `runtimeAdapter.ts`
  * defines instead of welded to `agents/registry.ts` and `orchestrator.ts` directly.
@@ -81,7 +81,7 @@ const CLAUDE_CODE_CAPABILITIES: readonly RuntimeCapability[] = [
  * `RuntimeAutonomy` onto Claude Code's actual `--permission-mode` values
  * (`default`/`acceptEdits`/`plan`/`bypassPermissions`).
  *
- * `propose` -> `default` preserves `claudeCliExecutor.ts`'s old hardcoded
+ * `propose` -> `default` preserves the legacy executor's hardcoded
  * `"manual"` default exactly: `createRuntimeExecutor` also defaults `autonomy` to
  * `"propose"`, so an unconfigured caller sees identical behaviour to before this
  * task. `read-only` maps to `plan` as the closest available mode — Claude Code has
@@ -322,16 +322,13 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     //
     // The rules ride the `--disallowedTools=<rules>` EQUALS form on purpose.
     // claude v2.1.241 parses the space form greedily and swallows the next
-    // positional — found by the sandbox dogfood (T-V1-15): every run died with
-    // "Input must be provided ... when using --print" and 0 tokens, while a
-    // direct spawn with the same argv shape minus this flag worked. The equals
-    // form keeps the prompt positional intact on builds that parse it correctly
-    // too, so no version split is needed here.
+    // positional. The prompt itself is deliberately sent on stdin below: on
+    // Windows a production context can exceed the native command-line limit,
+    // while `claude -p` accepts its default text input from stdin.
     const disallowRules = disallowRulesFromGuards(req.guards);
     if (disallowRules.length > 0) args.push(`--disallowedTools=${disallowRules.join(",")}`);
     // M6: only when a schema was requested — default runs stay free-form.
     if (this.outputSchema) args.push("--json-schema", JSON.stringify(this.outputSchema));
-    args.push(req.prompt);
 
     let proc: SpawnSyncReturns<string>;
     let resolvedThrough: string | null = null;
@@ -341,6 +338,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         encoding: "utf8",
         timeout: req.timeoutMs ?? this.defaultTimeoutMs,
         maxBuffer: 64 * 1024 * 1024,
+        input: req.prompt,
         // T15: the one way a PreToolUse hook can know which agent is writing.
         env: { ...process.env, ...req.env, AGENTCLAUDE_ROLE: req.role },
       }));

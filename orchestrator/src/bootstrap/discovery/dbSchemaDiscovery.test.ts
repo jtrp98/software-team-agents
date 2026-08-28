@@ -81,6 +81,15 @@ describe("dbSchemaDiscoveryStage", () => {
     ]);
   });
 
+  it("stamps v2 Target origin and scope when discovery reads a bound Target", async () => {
+    fs.mkdirSync(path.join(root, "prisma"), { recursive: true });
+    fs.writeFileSync(path.join(root, "prisma", "schema.prisma"), SCHEMA, "utf8");
+    const result = await dbSchemaDiscoveryStage(() => NOW, "node-app").discover(root);
+    expect(result.items.every((entry) => entry.schema_version === 2 && entry.target_ids?.[0] === "node-app")).toBe(true);
+    expect(result.items.every((entry) => entry.sources.every((source) => source.origin?.root === "target" && source.origin.target_id === "node-app"))).toBe(true);
+    expect(result.sources[0]?.origin).toEqual({ root: "target", target_id: "node-app" });
+  });
+
   it("derives relations from field types that name another declared model", async () => {
     fs.mkdirSync(path.join(root, "prisma"), { recursive: true });
     fs.writeFileSync(path.join(root, "prisma", "schema.prisma"), SCHEMA, "utf8");

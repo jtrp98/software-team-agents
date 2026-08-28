@@ -38,6 +38,7 @@ import type { TargetBindings } from "../threeRepo/taskBindings.js";
 import { Environment } from "../environment/environment.js";
 import { type StructuredFailure } from "./failure.js";
 import { isAgentAssignedAt, stageStateOf } from "./taskStatus.js";
+import type { RuntimeTask } from "./runtimeTask.js";
 
 export interface AgentExecutorRequest {
   stage: AgentStage;
@@ -57,8 +58,12 @@ export interface AgentExecutorResult {
   outcome: RunOutcome;
   artifactType?: ArtifactType;
   artifact?: unknown;
+  /** Runtime-state path of the exact packet used for this attempt. */
+  packetPath?: string;
   /** Evidence a human, not this agent, actually supplied (e.g. relayed approval) — rare; usually set via provideHumanApproval instead. */
   gateEvidence?: Partial<GateContext>;
+  /** Internal marker: post-Dev deterministic failure keeps the cursor on this Dev stage. */
+  postDevVerificationFailed?: boolean;
   /**
    * A failure as structured data: what broke, who owns it, whether a person
    * must look. The agent supplies the facts; the orchestrator decides where
@@ -93,7 +98,7 @@ export interface OrchestratorEventMap extends DomainEventMap {
   /** `inputs` is the artifact categories this stage is actually handed (T37's INPUT) — the same slice `step()` passes to the executor. */
   AGENT_ASSIGNED: { taskId: string; stage: AgentStage; inputs: ContextCategory[] };
   /** `artifactType` is what the stage produced (T37's OUTPUT), or null for a stage whose work is only code on disk. */
-  AGENT_COMPLETED: { taskId: string; stage: AgentStage; outcome: RunOutcome; artifactType: ArtifactType | null };
+  AGENT_COMPLETED: { taskId: string; stage: AgentStage; outcome: RunOutcome; artifactType: ArtifactType | null; packetPath: string | null };
   WAITING_FOR_HUMAN: { taskId: string; from: TaskState; to: TaskState; reason: string; approvalType: ApprovalType | null };
   TASK_BLOCKED: { taskId: string; reason: string };
   TASK_DEPLOYED: { taskId: string };
@@ -118,6 +123,8 @@ export interface OrchestratorOptions {
   environment?: Environment;
   /** Phase 2: immutable Target identity captured on task creation. */
   targetBindings?: TargetBindings;
+  /** V3 Phase 1: deterministic execution contract built by TaskRegistry before persistence. */
+  runtimeTask?: RuntimeTask | null;
 }
 
 function assertCanProduce(stage: AgentStage, artifactType: ArtifactType): void {
@@ -163,6 +170,7 @@ export class Orchestrator {
   readonly store: TaskStore;
   readonly dependsOn: string[];
   readonly classification: ClassificationResult;
+  readonly runtimeTask: RuntimeTask | null;
   private readonly pipeline: AgentStage[];
   private readonly implementationStartIndex: number;
   private readonly budget: Budget;
@@ -202,6 +210,7 @@ export class Orchestrator {
     this.store = opts?.store ?? new MemoryTaskStore();
     this.budget = opts?.budget ?? DEFAULT_BUDGET;
     this.classification = classification;
+    this.runtimeTask = restore?.runtimeTask ?? opts?.runtimeTask ?? null;
     this.createdAt = restore?.createdAt ?? this.now();
     this.dependsOn = restore ? [...restore.dependsOn] : [...(opts?.dependsOn ?? [])];
     this.pipeline = restore ? restore.machine.pipeline : classification.pipeline;
@@ -249,6 +258,7 @@ export class Orchestrator {
           now: this.createdAt,
           environment: this.taskEnvironment,
           targetBindings: opts?.targetBindings,
+          runtimeTask: this.runtimeTask,
         }),
       );
     }
@@ -305,6 +315,7 @@ export class Orchestrator {
       updatedAt: this.now(),
       dependsOn: [...this.dependsOn],
       classification: this.classification,
+      runtimeTask: this.runtimeTask,
       machine: this.run.machine,
       retries: { ...this.run.retries },
       gateContext: { ...this.gateContext },
@@ -596,6 +607,7 @@ export class Orchestrator {
       stage,
       outcome: result.outcome,
       artifactType: result.artifactType ?? null,
+      packetPath: result.packetPath ?? null,
     });
     // QA07: the mode a QA round ran in is recorded with its cost. Read off the
     // raw artifact before schema validation (which happens below and gates
@@ -650,13 +662,28 @@ export class Orchestrator {
     // below), so this is the one place a failed prepare doesn't silently count as finished.
     // Every other completion, including devops's own "execute" one, advances exactly as before.
     const isDevopsPrepareCompletion = stage === AgentStage.DEVOPS && this.run.machine.current === TaskState.READY_TO_DEPLOY;
+    const requiresHumanStop =
+      result.outcome.result === "FAIL" &&
+      result.failure?.requiresHuman === true &&
+      result.failure.category === "infrastructure";
     if (isDevopsPrepareCompletion) {
       if (result.outcome.result !== "FAIL") this.deployPrepared = true;
-    } else {
+    } else if (!requiresHumanStop && result.postDevVerificationFailed !== true) {
       this.pipelineCursor += 1;
     }
     if (result.outcome.result === "FAIL" && result.failure) {
       this.lastFailure = result.failure;
+    }
+
+    // Infrastructure UNAVAILABLE is a STOP at every stage, not only at the
+    // QA/security failure routers. It consumes neither a retry round nor the
+    // pipeline cursor, so an explicit human resume retries the same stage.
+    if (requiresHumanStop) {
+      this.lastRecovery = { kind: "ESCALATE", strategy: "escalate_to_human", reason: result.failure!.reason };
+      this.run = { ...this.run, machine: forceBlock(this.run.machine) };
+      this.blockedReason = result.failure!.reason;
+      this.emitVerdict(stage, result);
+      return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
     }
 
     // T45: a failed "execute" — the actual deploy/migration command, and the health check

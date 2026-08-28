@@ -38,6 +38,8 @@ import { loadTargetRegistry } from "../threeRepo/targets.js";
 
 export interface KnowledgeQuery {
   kinds?: KnowledgeKind[];
+  /** Current bound Target ids. Scoped items must intersect; [] means only global items. Undefined preserves legacy unscoped retrieval. */
+  target_ids?: string[];
   /**
    * `null` selects project-wide items specifically. `undefined` — whether the
    * key is absent or explicitly set — means "do not filter on this", so passing
@@ -146,6 +148,10 @@ export class KnowledgeBase {
       // be a truthiness check.
       if (filter.repo !== undefined && item.repo !== filter.repo) return false;
       if (filter.module !== undefined && item.module !== filter.module) return false;
+      if (filter.target_ids !== undefined) {
+        const scope = item.target_ids ?? [];
+        if (scope.length > 0 && !scope.some((targetId) => filter.target_ids!.includes(targetId))) return false;
+      }
       if (filter.owner !== undefined && item.owner !== filter.owner) return false;
       if (statuses && !statuses.includes(item.status)) return false;
       if (filter.sensitive !== undefined && item.sensitive !== filter.sensitive) return false;

@@ -1,19 +1,22 @@
-# Team Setup — V1
+# Team Setup — V3
 
 > Onboarding flow สำหรับสมาชิกใหม่: Install → Bind → Init your workspace → Validate → Ready
 > ทุกขั้นตอน reuse คำสั่งจริงของ `sta`/`software-team-agents` — ไม่มีขั้นไหนแก้ framework internals
-> สถาปัตยกรรม Three-Repo (สรุปเต็มใน [`AGENTS.md`](AGENTS.md), รายละเอียดใน [`README.md`](README.md)):
+> สถาปัตยกรรม Three-Repo + Local Runtime State (กฎการทำงานใน [`CLAUDE.md`](CLAUDE.md), รายละเอียดใน [`README.md`](README.md); [`AGENTS.md`](AGENTS.md) เป็น Codex pointer):
 
 ```
 Framework repo (repo นี้)        Knowledge repo (ต่อบริษัท)              Target repo(s) (โค้ดจริง)
 orchestrator / .claude /         knowledge/ _docs/module/**/            sb-web-helper ฯลฯ — real source code
 contracts / workflows /          decisions/ targets.yaml
 policies / templates/
+Local Runtime State: .workflow/state.db + packets/evidence/runs — local, regenerable, gitignored
 ```
 
-**กฎที่ทั้งไฟล์นี้มีอยู่เพื่อบังคับ:** BA/SA/PM/QA ทำงานใน **Knowledge repo** เท่านั้น
-(`business-analyst`, `system-analyst`, `project-manager`, `test-planner`, `uxui-designer` — "BA lane").
-DEV/DevOps ทำงานใน **Target repo** เท่านั้น (backend/frontend engineer, qa, security, devops — "DEV lane").
+V3 จึงมี ownership **สี่ domain**: Framework, Knowledge, Target และ Runtime State. สามอันแรกเป็น repository ownership; Runtime State ไม่ sync/commit และ packet/evidence/run output ห้ามกลายเป็น Knowledge หรือ Target data.
+
+**กฎที่ทั้งไฟล์นี้มีอยู่เพื่อบังคับ:** BA/SA/PM/test-planner/uxui-designer ทำงานใน **Knowledge repo** เท่านั้น
+(`business-analyst`, `system-analyst`, `project-manager`, `test-planner`, `uxui-designer` — "BA workspace role").
+DEV/DevOps ทำงานใน **Target repo** เท่านั้น (backend/frontend engineer, qa, security, devops — "DEV workspace role").
 ทั้งสองฝั่งอ่าน Knowledge ได้เสมอ (DEV อ่านแบบ read-only ผ่าน binding) แต่ requirement/design/plan
 **เขียนที่ Knowledge repo เท่านั้น** — ไม่ใช่ Target. การเขียนผิดที่คือเหตุการณ์จริงที่ทำให้ไฟล์นี้ถูกเขียนใหม่
 (ดู Troubleshooting #1 ด้านล่าง และ `planning/v2/workspace-guardrails-TASKS.md`).
@@ -31,13 +34,15 @@ DEV/DevOps ทำงานใน **Target repo** เท่านั้น (backe
 ## Step 1 — Install the Framework (once per machine)
 
 ```bash
-npm install -g software-team-agents        # หรือ npm pack ที่ repo นี้ + npm i -g <tgz> ถ้ายังไม่ publish
+npm install -g <path>\software-team-agents-<version>.tgz
 sta --version
 software-team-agents --version
 ```
 
 ทั้งสองคำสั่งเป็น bin เดียวกันของ package นี้ (`sta` = orchestrator ทั้งชุด, `software-team-agents` =
 Target-first / role-aware entry point ที่ทุก step ด้านล่างใช้).
+Package นี้เป็น private internal distribution และไม่ publish บน npm registry; ผู้ดูแล Framework สร้าง
+`.tgz` ด้วย `npm run release` แล้วแจกพร้อม checksum.
 
 ## Step 2 — Get the Knowledge Repo (clone ครั้งเดียวต่อเครื่อง, ทุก role)
 
@@ -45,8 +50,8 @@ Target-first / role-aware entry point ที่ทุก step ด้านล่
 git clone <ทีมของคุณ>/knowledge-<company>.git C:\src\<company>-knowledge
 ```
 
-BA/SA/PM/QA **แค่นี้พอ** — ไม่ต้อง clone Target repo เลย (ไม่แตะโค้ดแอป)
-DEV/DevOps clone Target repo(s) เพิ่มใน Step 4
+BA/SA/PM/test-planner/uxui-designer **แค่นี้พอ** — ไม่ต้อง clone Target repo เลย (ไม่แตะโค้ดแอป)
+backend/frontend engineer, **qa-engineer**, security และ devops clone Target repo(s) เพิ่มใน Step 4
 
 ## Step 3 — Bind This Machine to the Knowledge Root (ครั้งเดียวต่อเครื่อง)
 
@@ -64,7 +69,7 @@ sta configure knowledge-root C:\src\<company>-knowledge
 **ทุก workspace ต้องรู้ตัวว่าเป็นฝั่งไหน** (`role: ba` หรือ `role: dev`) — บันทึกไว้ที่
 `.agent-team/config.yaml` ของ workspace นั้นเอง, เขียนครั้งเดียวตอน `init`.
 
-### BA lane (business-analyst / system-analyst / project-manager / test-planner / uxui-designer)
+### BA workspace role (business-analyst / system-analyst / project-manager / test-planner / uxui-designer)
 
 ```bash
 cd C:\src\<company>-knowledge
@@ -75,7 +80,7 @@ software-team-agents init --role ba
 `business-analyst`/`system-analyst` จะไม่มี prompt อยู่เลยในเครื่องนี้ (ดู Troubleshooting #1) และ
 `software-team-agents status` จากทุก workspace ที่ผูกกับ Knowledge root นี้จะเตือนด้วย WARNING ตรงๆ.
 
-### DEV lane (backend/frontend engineer, qa-engineer, security, devops)
+### DEV workspace role (backend/frontend engineer, qa-engineer, security, devops)
 
 **ถ้ายังไม่มี Target repo บนเครื่องนี้เลย — เลือกก่อนว่าอยู่กรณีไหน:**
 
@@ -99,6 +104,19 @@ cd C:\src\<your-target-repo>
 software-team-agents init --role dev
 ```
 
+ถ้า repo มี `.claude/` หรือ root instructions ของตัวเองอยู่แล้ว `init`/`sync` จะไม่ทิ้ง setup เดิม:
+
+- `.claude/settings.json` ยังคง project hooks, permissions และ unknown keys; Framework เติมเฉพาะ guard
+  registrations ที่ขาดและ backup ก่อนเขียน. JSON ที่ parse/merge ไม่ได้เป็น blocking conflict.
+- root `CLAUDE.md`/`AGENTS.md` ยังคง bytes ของ project นอก marker; Framework inject/update เฉพาะ
+  `<!-- sta:bootstrap -->` … `<!-- /sta:bootstrap -->`. Marker ผิดรูปเป็น conflict และไม่ถูกเดาด้วย `--force`.
+- `CLAUDE.local.md` และ nested `AGENTS.md` ถูก detect/report แต่ไม่แก้. Path ใน `overrides` ถูกข้ามและ
+  รายงานว่าเป็น explicit user choice.
+
+ตรวจผลด้วย `software-team-agents status` (`hooks registered/installed` และ instruction surface) ก่อน launch;
+preflight `Guards wired` จะหยุดเมื่อ hook files ถูกติดตั้งแต่ effective settings ยังไม่ register ครบ เว้นแต่
+settings path อยู่ใน `overrides` ซึ่งจะรายงาน explicit user choice ตรงๆ.
+
 ถ้า repo นี้ยังไม่ผูก Knowledge — ให้ตั้ง `knowledge.path` ใน `.agent-team/config.yaml` (relative หรือ
 absolute path ไปยัง Knowledge repo) หรือให้ Step 3's machine-wide binding พอ. `dev` session จะปฏิเสธ
 launch ทันทีถ้าไม่มี Knowledge binding ที่ใช้ได้ — fail-closed พร้อมคำสั่งแก้ตรงตัว.
@@ -116,7 +134,7 @@ software-team-agents status
 - `Sync:` — `state: UP_TO_DATE` (ไม่ใช่ `NOT_INITIALIZED`/`INCOMPATIBLE`); `conflicts: 0`
 - `WARNING: Knowledge root bound ... has no .agent-team/config.yaml` — Knowledge root ผูกไว้แล้วแต่ยังไม่
   `init --role ba` ที่นั่น (ดู Troubleshooting #1) — รันคำสั่งที่ status พิมพ์ให้ตรงๆ
-- `WARNING: roster drift` — มี agent prompt จากอีก lane ปนอยู่ใน workspace นี้ (ดู Troubleshooting #2)
+- `WARNING: roster drift` — มี agent prompt จากอีก workspace role ปนอยู่ใน workspace นี้ (ดู Troubleshooting #2)
 - `Claude:`/`Codex:`/`OpenCode:` — ต้อง `READY` สำหรับ runtime ที่จะใช้จริง
 
 `status` ไม่เขียนอะไรเลย — ปลอดภัยรันซ้ำได้ทุกเมื่อ
@@ -124,12 +142,91 @@ software-team-agents status
 ## Step 6 — Start Working
 
 ```bash
-software-team-agents ba     # BA lane — launches from the Knowledge repo
-software-team-agents dev    # DEV lane — launches from this Target
+software-team-agents ba     # BA workspace role — launches from the Knowledge repo
+software-team-agents dev    # DEV workspace role — launches from this Target
 ```
 
 ทั้งสองคำสั่งรัน preflight ให้อัตโนมัติ (auto-sync ถ้าไม่มี conflict), แล้ว launch runtime (`claude` โดย
 default; `--runtime codex|opencode` เลือกอย่างอื่นได้) จาก workspace ที่ถูกต้องให้เอง — cd เองไม่ต้องคิด.
+
+### V3 defaults ที่ setup ไม่เปลี่ยนให้เอง
+
+V3 config เป็น additive; workspace ก่อน V3 ทำงานต่อได้โดยไม่เพิ่ม block ใด. ค่าที่ **OFF by default** คือ:
+
+- **Auto mode** — config ว่างทำให้ `sta run` ใช้ Single + Claude Code. `--mode auto`, `execution.mode: auto`, หรือการเพิ่ม `routing.strategy`/`routing.order` โดยไม่กำหนด mode ล้วนเป็น explicit config act ที่เปิด Auto.
+- **Pyramid enforcement** — `test-pyramid.yaml` ที่ไม่ระบุ `enforcement` เป็น `warn`; เลือก verification floor แต่ไม่ block จาก missing evidence จนกว่าคนแก้เป็น `enforcement: enforce`.
+- **QA `skip`** — production CLI ไม่มี flag/config สำหรับเปิด; low-risk QA ยังเรียก model แบบ `lightweight`. Internal opt-in seam จะ skip ได้ต่อเมื่อ deterministic evidence ผ่าน แต่ยังไม่ใช่ user-facing V3 feature.
+- **Paid fallback** — `execution.allow_paid_fallback` default **`false`**; ต่อให้ใช้ Auto ก็ไม่ invoke API. การเปิดต้องตั้ง `true` โดยชัดเจนและ embedding host ต้อง inject official authenticated transport.
+
+Deterministic verification เปิดโดย default. `--no-deterministic-gate` เป็น per-task escape hatch ที่มีจริงแต่ไม่ใช่ default และไม่เท่ากับ QA skip. ถ้า Auto ไม่มี eligible runner เหลือ pipeline **STOP → Human**; `ERROR`/`TIMEOUT` ก็ไม่ trigger handoff.
+
+---
+
+## Upgrade Existing Teams to V3
+
+V3 ไม่มี config/schema rewrite แบบบังคับ: `.agent-team/config.yaml` และ `.sta/config.yaml` แบบก่อน V3 ยัง parse, defaults resolve ใน memory, Knowledge schema อยู่ version 1 และ Runtime State DB migrate forward ตอนถูกเปิด. ทำตาม path ที่ installation ใช้อยู่จริง:
+
+### A. Role-aware Three-Repo workspaces (`.agent-team/`)
+
+```bash
+npm install -g <path>\software-team-agents-<version>.tgz
+
+cd C:\src\<company>-knowledge
+software-team-agents status
+software-team-agents sync
+software-team-agents status
+
+cd C:\src\<target-repo>
+software-team-agents status
+software-team-agents sync
+software-team-agents status
+sta doctor --project-root C:\src\<target-repo>
+```
+
+ทำซ้ำ `status → sync → status` ทุก BA/DEV workspace. `sync` ใช้ three-hash diff: locally modified managed file จะ block และคง bytes เดิม; อย่าใช้ `--force` จนกว่าจะ review conflict เพราะ `--force` คือ explicit confirmation ให้ overwrite/remove หลัง backup ที่ `.agent-team/backups/<timestamp>/`. V3 block ที่ omitted แสดงใน status/doctor ว่า defaults apply; ไม่ต้องเพิ่ม YAML เพียงเพื่อให้อัปเกรดผ่าน.
+
+### B. Legacy project installation (`.sta/manifest.json`)
+
+คำสั่งนี้ตรงกับ T-V3R-072 upgrade fixture: pre-V3 managed bytes ถูก upgrade, config เดิมไม่ถูกเติม default, task DB v11 migrate ผ่าน v13+ ตอนเปิด และ task resume ที่ stage เดิม.
+
+```bash
+sta upgrade --mode legacy-project \
+  --templates <installed-package>\templates \
+  --project-root C:\src\<legacy-project>
+
+sta status <task-id> --project-root C:\src\<legacy-project>
+sta resume <task-id> --module <module-name> --project-root C:\src\<legacy-project>
+```
+
+`<installed-package>\templates` คือ `templates` directory ของ package `.tgz` version ที่เพิ่งติดตั้ง (หา global package root ได้ด้วย `npm root -g`). Upgrade backup managed files และ manifest ไว้ใต้ `.sta/backups/<timestamp>/`, overwrite เฉพาะ pristine files, ข้าม user-modified files, restore tracked file ที่หาย และปล่อย retired files ไว้แต่เลิก track. Runtime DB migration เป็น forward migration และไม่ rewrite `.sta/config.yaml`.
+
+ถ้าต้องคืน **upgrade-owned managed files**:
+
+```bash
+sta list-backups --project-root C:\src\<legacy-project>
+sta rollback --project-root C:\src\<legacy-project>
+```
+
+`rollback` คืน managed files/manifest จาก backup ล่าสุดแบบ byte-for-byte; ไม่ย้อน Runtime State DB. ตรวจ `sta status`/`sta audit` ก่อนทำงานต่อ. `sta migrate` ใช้เฉพาะเมื่อ `.sta/manifest.json` มี breaking schema migration ที่ build นั้นลงทะเบียนไว้; V3 ปัจจุบันยังใช้ manifest `schema_version: 1` จึงไม่ต้องรันคำสั่งนี้เป็นขั้นอัปเกรดปกติ.
+
+### C. เปิด V3 behavior ภายหลัง (optional)
+
+สำหรับ headless `sta run`, แก้ project-owned `.sta/config.yaml` เฉพาะเมื่อต้องการ opt in. ตัวอย่าง Auto แบบ subscription-first ที่ยังปิด paid fallback:
+
+```yaml
+schema_version: 1
+execution:
+  mode: auto
+  runner: claude-code
+  allow_handoff: true
+  allow_paid_fallback: false
+routing:
+  strategy: subscription-first
+  order: [claude-code, codex, opencode]
+  allow_below_supported: [codex, opencode]
+```
+
+`routing.allow_below_supported` จำเป็นเพราะ Codex ยัง Preview และ OpenCode ยัง Experimental; support level ไม่ถูกยกเพียงเพราะอัปเกรด V3. Manual ต้องกำหนดทั้ง `runtime` และ `model` ต่อ role ใน `routing.by_role`. Interactive `software-team-agents dev|ba --runtime ...` ไม่อ่าน router นี้ — คนเลือก runtime โดยตรงเหมือนเดิม.
 
 ---
 
@@ -141,15 +238,15 @@ default; `--runtime codex|opencode` เลือกอย่างอื่น�
 (repo ที่มี `role: dev`) — ที่ที่ถูกคือ Knowledge repo เท่านั้น.
 
 **สาเหตุที่พบจริง (2026-08-24):** Knowledge root ถูก `configure knowledge-root` ไว้ถูกต้อง แต่ไม่เคยมีใคร
-รัน `init --role ba` ที่นั่นเลย — ไม่มี BA-lane prompt (`business-analyst`, `system-analyst`, ...) อยู่บน
+รัน `init --role ba` ที่นั่นเลย — ไม่มี BA-workspace prompt (`business-analyst`, `system-analyst`, ...) อยู่บน
 เครื่องนี้เลยแม้แต่ที่เดียว, และไม่มีอะไรเตือนเรื่องนี้จนกว่าจะสายไปแล้ว (session ที่เปิดตรงในเครื่องเป้าหมาย
 เขียน `_docs/` ลง Target ได้เพราะ hook ไม่รู้จัก role ของ workspace ในตอนนั้น).
 
 **ตรวจ:**
 
 ```bash
-software-team-agents status --json | grep -i knowledgeBoundButUninitialized
-software-team-agents status   # หรืออ่านบรรทัด WARNING ตรงๆ
+software-team-agents status --json   # ตรวจ field knowledgeBoundButUninitialized
+software-team-agents status          # หรืออ่านบรรทัด WARNING ตรงๆ
 node orchestrator/dist/cli.js --check-workspace --project-root <target-repo>
 ```
 
@@ -167,10 +264,10 @@ node orchestrator/dist/cli.js --check-workspace --project-root <target-repo>
 
 ### 2. "status เตือน roster drift"
 
-**สัญญาณ:** `status` พิมพ์ `WARNING: roster drift — agent prompt(s) from another lane found in this
+**สัญญาณ:** `status` พิมพ์ `WARNING: roster drift — agent prompt(s) from another workspace role found in this
 workspace`.
 
-**สาเหตุ:** มีคนคัดลอก agent prompt file ของอีก lane เข้ามาด้วยมือ (เช่น `business-analyst.md` ในโฟลเดอร์
+**สาเหตุ:** มีคนคัดลอก agent prompt file ของอีก workspace role เข้ามาด้วยมือ (เช่น `business-analyst.md` ในโฟลเดอร์
 DEV) — ไฟล์แบบนี้ไม่มีทางถูกต้องในเครื่องมือนี้ ไม่ว่าจะมาจากไหน.
 
 **แก้:** `software-team-agents sync --force` — สำรองไฟล์เดิมไว้ที่ `.agent-team/backups/<timestamp>/` ก่อน
@@ -192,6 +289,56 @@ relative หรือ absolute ก็ได้) หรือรัน `sta confi
 **แก้:** รัน `software-team-agents sync` แล้ว `status` ซ้ำ — ข้อความ NOT READY บอกไฟล์ที่ขาดตรงๆ (agent
 prompts, `.claude/settings.json`, bindings)
 
+### 6. พิมพ์ `/xxx` แล้วไม่เจอ (slash command หาย)
+
+**เช็ค:**
+1. `.claude/commands/<name>.md` มีอยู่ใน workspace นี้ไหม — ถ้าไม่มี รัน `software-team-agents sync`
+   (ชุด command ship ผ่าน templates เหมือน `.claude/agents/`)
+2. Restart session หลัง sync — Claude Code โหลดรายชื่อ command ตอนเริ่ม session
+3. ชื่อต้องตรงไฟล์ (flat namespace) — ไฟล์ใน `_shared/` เป็น include ไม่ใช่ command
+   (`/_shared/guardrails` type ได้แต่ไม่ใช่จุดประสงค์); ชื่อที่มีทั้งหมดดูที่
+   [`planning/v2/claude-commands-TASKS.md`](planning/v2/claude-commands-TASKS.md) §1.1
+
+### 7. `$xxx` ไม่เจอใน Codex (skills mirror หาย)
+
+**เช็ค:**
+1. `.agents/skills/<name>/SKILL.md` มีครบไหม — ถ้าไม่มี รัน `software-team-agents sync`
+   (mirror เป็น generated file, `software-team-agents sync` generate จาก `.claude/commands/**` ให้ใหม่เสมอ)
+2. Codex reload skills เองอัตโนมัติ (detect on change) — ไม่ต้อง restart; เมนูรวมอยู่ที่ `/skills`
+3. Invoke แบบ explicit คือ `$<name>`; การ activate เองโดยโมเดลถูกปิดไว้ (`agents/openai.yaml`
+   → `allow_implicit_invocation: false`) ตั้งใจ ไม่ใช่ bug
+4. ยังไม่เห็น → `sta --check-bindings` — drift/orphan รายงานทีละไฟล์พร้อม fix
+
+### 8. พิมพ์ `/xxx` ใน OpenCode แล้วไม่เจอ (commands mirror หาย)
+
+**เช็ค:**
+1. `.opencode/commands/<name>.md` มีครบ 31 ไฟล์ไหม — ถ้าไม่มี รัน `software-team-agents sync`
+2. OpenCode auto-reload commands ทันที (ต่างจาก Claude ที่ต้อง restart session)
+3. แก้เนื้อหา command ที่ source เดียวเสมอ: `.claude/commands/<name>.md` —
+   ห้าม hand-edit `.opencode/commands/**` (generated; `--check-bindings` จับ byte-diff ได้)
+
+### 9. Claude Design MCP ไม่ connect (uxui-designer Path C)
+
+**อาการ:** uxui-designer run หรือ `/design-*` tool รายงาน MCP server ไม่พร้อม / tools หาย
+
+**เช็ค/แก้:**
+1. เพิ่ม server ครั้งเดียวต่อเครื่อง:
+   `claude mcp add --scope user --transport http claude-design https://api.anthropic.com/v1/design/mcp`
+2. Login: รัน `/design-login` ใน Claude Code — ต้องเห็น ✔ Connected; token หมดอายุ → login ซ้ำ
+3. Identity gate (fail closed): email account ที่ login **ต้องตรง** `claude_email` ที่ declare
+   (`sta configure identity --claude-email <email>`) — ไม่ตรง preflight block run
+4. ยังไม่ผ่าน → ใช้ Path A/B (handoff/export files) แทนได้เสมอ — Path C เป็นช่องทางเสริม ไม่ใช่ dependency
+
+### 10. Knowledge repo เดิม (มีอยู่ก่อน adopt Framework) มีโครงสร้างไฟล์ไม่ตรง canonical shape
+
+**อาการ:** `_docs/`/`knowledge/` มีโฟลเดอร์/ไฟล์ที่ไม่ตรง `layout.yaml`/`CLAUDE.md` — เช่น module tree
+ซ้อนกันสองชุด, ไฟล์ requirement เก่าที่ไม่ได้อยู่ใต้ module folder, ไฟล์แปลกใต้ `_docs/module/` โดยตรง,
+หรือโฟลเดอร์ใต้ `knowledge/<module>/` ที่ `CLAUDE.md` ไม่ได้บันทึกไว้
+
+**แก้:** binding/sync (Troubleshooting #1–4) เป็นคนละเรื่องกับสิ่งนี้ — ใช้
+[`prompt-reconcile-knowledge-layout.md`](prompt-reconcile-knowledge-layout.md) ให้ AI assistant สแกน จัดหมวด และเสนอทางแก้
+ทีละรายการ ไม่มีการลบ/ย้ายอะไรโดยไม่ถามก่อน
+
 ---
 
 ## Canonical References
@@ -200,5 +347,5 @@ prompts, `.claude/settings.json`, bindings)
 - Shared agent rules → [`policies/`](policies/README.md)
 - Knowledge model → [`knowledge/README.md`](knowledge/README.md)
 - Product overview & runtime support status → [`README.md`](README.md)
-- Full command reference → [`AGENTS.md`](AGENTS.md) `## Commands`, or `software-team-agents --help` /
+- Full command reference → `software-team-agents --help` / `sta --help`; operating rules → [`CLAUDE.md`](CLAUDE.md)
   `sta --help`
