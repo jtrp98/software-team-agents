@@ -11,6 +11,7 @@ import type { RuntimeGuards } from "./runtimeAdapter.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { compileExecutionPacket } from "./agentRunAssembly.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
+import { createProductionRuntimeRegistry } from "../cli.js";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const RUNTIME_ROOT = path.join(REPO_ROOT, "orchestrator", "src", "runtime");
@@ -28,16 +29,6 @@ function concreteAdapterSources(): Array<{ file: string; source: string }> {
     .filter((name) => name.endsWith("Adapter.ts") && name !== "runtimeAdapter.ts")
     .map((name) => ({ file: name, source: fs.readFileSync(path.join(RUNTIME_ROOT, name), "utf8") }))
     .filter(({ source }) => /implements\s+RuntimeAdapter\b/.test(source));
-}
-
-function productionTypescriptFiles(directory: string): string[] {
-  const files: string[] = [];
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    const absolute = path.join(directory, entry.name);
-    if (entry.isDirectory()) files.push(...productionTypescriptFiles(absolute));
-    else if (entry.name.endsWith(".ts") && !entry.name.endsWith(".test.ts")) files.push(absolute);
-  }
-  return files;
 }
 
 afterEach(() => {
@@ -105,6 +96,7 @@ describe("T-V3R-001 guardrail invariants", () => {
   it("criterion 4 — no concrete adapter source reads a known credential path or auth-token environment variable", () => {
     const adapters = concreteAdapterSources();
     expect(adapters.map(({ file }) => file).sort()).toEqual([
+      "apiAdapter.ts",
       "claudeCodeAdapter.ts",
       "codexAdapter.ts",
       "mockAdapter.ts",
@@ -115,16 +107,11 @@ describe("T-V3R-001 guardrail invariants", () => {
     expect(violations).toEqual([]);
   });
 
-  it("criterion 5 — paid fallback defaults false and no API-backed adapter is reachable before its opt-in mechanism exists", () => {
-    const config = defaultStaConfig() as ReturnType<typeof defaultStaConfig> & { allow_paid_fallback?: boolean };
-    expect(config.allow_paid_fallback ?? false).toBe(false);
-
-    const apiAdapterImplementations = productionTypescriptFiles(path.join(REPO_ROOT, "orchestrator", "src"))
-      .filter((file) => /\bclass\s+\w*ApiAdapter\b/.test(fs.readFileSync(file, "utf8")));
-    expect(
-      apiAdapterImplementations,
-      "an API adapter now exists: this invariant must be replaced with a production allow_paid_fallback gate assertion",
-    ).toEqual([]);
+  it("criterion 5 — paid fallback defaults false and production cannot reach ApiAdapter without opt-in", () => {
+    const config = defaultStaConfig();
+    expect(config.execution?.allow_paid_fallback ?? false).toBe(false);
+    expect(createProductionRuntimeRegistry(REPO_ROOT).ids()).not.toContain("paid-api");
+    expect(createProductionRuntimeRegistry(REPO_ROOT, { allowPaidFallback: true }).ids()).toContain("paid-api");
   });
 
   it("criterion 6 — an unregistered-runtime fallback preserves the exact RuntimeGuards object", async () => {

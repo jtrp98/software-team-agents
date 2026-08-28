@@ -200,8 +200,10 @@ describe("resolveRuntimeRoute — availability, support and guard refusal", () =
         opencode: { available: true },
       },
     });
-    expect(result.selected).toBeUndefined();
-    expect(result.error).toContain(exactReason);
+    // Phase 4 keeps the requested candidate in the plan so the executor can
+    // classify the probe result as UNAVAILABLE and apply mode semantics.
+    expect(result.selected?.runtime.id).toBe("codex");
+    expect(result.error).toBeUndefined();
     expect(result.diagnostics.some((diagnostic) => diagnostic.includes(exactReason))).toBe(true);
   });
 
@@ -213,9 +215,11 @@ describe("resolveRuntimeRoute — availability, support and guard refusal", () =
         opencode: { available: false, reason: "opencode missing" },
       },
     });
-    expect(result.candidates).toEqual([]);
-    expect(result.selected).toBeUndefined();
-    expect(result.error).toBe("no registered runtime is available; refusing to default silently");
+    expect(result.mode).toBe("single");
+    expect(result.candidates.map((candidate) => candidate.runtime.id)).toEqual(["claude-code"]);
+    expect(result.selected?.runtime.id).toBe("claude-code");
+    expect(result.error).toBeUndefined();
+    expect(result.diagnostics.join("\n")).toContain("claude missing");
   });
 
   it("refuses automatic routing below supported unless that exact runtime is opted in", () => {

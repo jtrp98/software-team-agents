@@ -31,7 +31,7 @@ export const SUPPORT_LEVELS: readonly RuntimeSupportLevel[] = [
 ];
 
 /** The ids `--runtime` accepts — kept as data so CLI validation and this table cannot name different sets. */
-export const RUNTIME_IDS = ["claude-code", "codex", "opencode"] as const;
+export const RUNTIME_IDS = ["claude-code", "codex", "opencode", "paid-api"] as const;
 export type RuntimeId = (typeof RUNTIME_IDS)[number];
 
 export interface RuntimeSupport {
@@ -55,6 +55,11 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
     level: "experimental",
     claim:
       "spike-proven on 1.18.21 (probe, headless run, guards report); exit checks have no in-band enforcement (`GUARD GAP` + QA round cover it) and other versions' tool arg-shapes are unverified",
+  },
+  "paid-api": {
+    level: "experimental",
+    claim:
+      "read-only and document-stage fallback through an injected official API transport; disabled by default, no Target-write guards, and no bundled credential handling",
   },
 };
 

@@ -21,8 +21,10 @@ import { readModuleDoc } from "./agents/moduleDocs.js";
 import { ClaudeCodeAdapter } from "./runtime/claudeCodeAdapter.js";
 import { CodexAdapter } from "./runtime/codexAdapter.js";
 import { OpenCodeAdapter } from "./runtime/openCodeAdapter.js";
-import { RUNTIME_IDS, describeRuntimeSupport } from "./runtime/runtimeSupport.js";
+import { ApiAdapter, PAID_API_RUNTIME_ID } from "./runtime/apiAdapter.js";
+import { RUNTIME_IDS, describeRuntimeSupport, type RuntimeId } from "./runtime/runtimeSupport.js";
 import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "./runtime/runtimeRegistry.js";
+import type { RoutingMode } from "./runtime/runtimeRouting.js";
 import { detectRuntimeCapabilities } from "./runtime/runtimeCapabilityDetection.js";
 import { resolveContextDocsRoot, resolveFrameworkRoot } from "./targetcli/roots.js";
 import type { RuntimeAutonomy } from "./runtime/runtimeAdapter.js";
@@ -188,7 +190,9 @@ export interface CliArgs {
    * byte-identical; `codex`/`opencode` route through their adapters — both are
    * partial (see each adapter's header) and say so via guard reports.
    */
-  runtime?: "claude-code" | "codex" | "opencode";
+  runtime?: RuntimeId;
+  /** Named V3 orchestrated execution mode. Interactive dev/ba lanes do not use this parser. */
+  mode?: RoutingMode;
   /**
    * QA optimization (change-aware scope, deterministic pre-checks, TARGETED/FULL
    * routing) is on by default for qa-engineer rounds; this flag restores the exact
@@ -218,7 +222,7 @@ export class CliUsageError extends Error {}
 
 export const USAGE =
   "usage (T31 verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--project-root <path>] [--state-db <path>]\n" +
+  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--mode <single|auto|manual>] [--runtime <claude-code|codex|opencode|paid-api>] [--project-root <path>] [--state-db <path>]\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  sta approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
   "  sta resume  <task-id> --module <name> [--project-root <path>]   continue a task already in the store\n" +
@@ -255,7 +259,7 @@ export const USAGE =
   "  sta roles context <ba|sa|uxui|dev> [<id>] [--full] [--module <name>]   what that lane may see, and via which role (T107)\n" +
   "\n" +
   "underlying flag-based form:\n" +
-  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode>] <classification flags>\n" +
+  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--mode <single|auto|manual>] [--runtime <claude-code|codex|opencode|paid-api>] <classification flags>\n" +
   "  sta --task-id <id> --module <name> --resume        continue a task already in the store\n" +
   "  sta --task-id <id> --module <name> [--token-budget <n>] [--no-qa-optimization|--no-deterministic-gate]   run with optional QA/budget controls\n" +
   "  sta --list [--project-root <path>]                 show every task and stop\n" +
@@ -313,7 +317,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let dependsOn: string[] = [];
   let phases: number[] = [];
   let autonomy: RuntimeAutonomy | undefined;
-  let runtime: "claude-code" | "codex" | "opencode" | undefined;
+  let runtime: RuntimeId | undefined;
+  let mode: RoutingMode | undefined;
   let noQaOptimization = false;
   let noDeterministicGate = false;
   let tokenBudget: number | undefined;
@@ -409,6 +414,13 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
         throw new CliUsageError(`--runtime must be one of: ${RUNTIME_IDS.join(", ")} (got ${value ?? "nothing"})`);
       }
       runtime = value as NonNullable<CliArgs["runtime"]>;
+    } else if (arg === "--mode") {
+      const value = argv[++i];
+      const valid: readonly RoutingMode[] = ["single", "auto", "manual"];
+      if (!value || !valid.includes(value as RoutingMode)) {
+        throw new CliUsageError(`--mode must be one of: ${valid.join(", ")} (got ${value ?? "nothing"})`);
+      }
+      mode = value as RoutingMode;
     } else if (arg === "--no-qa-optimization") {
       noQaOptimization = true;
     } else if (arg === "--no-deterministic-gate") {
@@ -459,6 +471,10 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     throw new CliUsageError("Target bindings are immutable; --frontend-target/--backend-target cannot be used with --resume");
   }
 
+  // Backward compatibility: --runtime by itself has always meant one fixed
+  // adapter. Naming that behaviour must not silently turn handoff on.
+  if (runtime && mode === undefined) mode = "single";
+
   return {
     taskId,
     module: moduleName,
@@ -492,6 +508,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     targetBindings,
     autonomy,
     runtime,
+    mode,
     noQaOptimization,
     noDeterministicGate,
     tokenBudget,
@@ -825,7 +842,7 @@ function isVerb(s: string | undefined): s is Verb {
 }
 
 /** Flags a verb accepts that take a value — their value must never be mistaken for the positional <task-id>. */
-  const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--phase", "--task", "--target", "--by", "--since", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime", "--as", "--note", "--lane"]);
+  const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--phase", "--task", "--target", "--by", "--since", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime", "--mode", "--as", "--note", "--lane"]);
 
 /** Every non-flag token in a verb's remaining args, in order, skipping over each value-flag's own argument. */
 function positionalArgs(rest: string[]): string[] {
@@ -1203,12 +1220,19 @@ async function runUpgradeVerb(rest: string[], defaultProjectRoot: string): Promi
   }
 }
 
-/** The production composition root for every subscription CLI runtime. */
-export function createProductionRuntimeRegistry(projectRoot: string): RuntimeRegistry {
-  return RuntimeRegistry.forProcess([
+/** The production composition root. Paid transport is absent unless explicitly enabled. */
+export function createProductionRuntimeRegistry(
+  projectRoot: string,
+  options: { allowPaidFallback?: boolean } = {},
+): RuntimeRegistry {
+  const adapters = [
     new ClaudeCodeAdapter({ projectRoot }),
     new CodexAdapter({ projectRoot }),
     new OpenCodeAdapter({ projectRoot }),
+  ];
+  return RuntimeRegistry.forProcess([
+    ...adapters,
+    ...(options.allowPaidFallback ? [new ApiAdapter({ projectRoot })] : []),
   ]);
 }
 
@@ -2569,9 +2593,34 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     // that seam. `guards` derives from `contracts/<role>.yaml` (T15), same as before.
     // T-OC5: --runtime picks the adapter; the default stays byte-identical to
     // every run before the flag existed.
-    const runtimeRegistry = createProductionRuntimeRegistry(args.projectRoot);
+    let executionConfig: ReturnType<typeof loadStaConfig>["execution"] | undefined;
+    try {
+      executionConfig = loadStaConfig(args.projectRoot).execution;
+    } catch {
+      // Missing/invalid config is diagnosed by the router. Composition must
+      // retain the historical Single/claude-code defaults in either case.
+      executionConfig = undefined;
+    }
+    const resolvedMode = args.mode ?? executionConfig?.mode;
+    const defaultRuntimeId = args.runtime ??
+      ((resolvedMode ?? "single") === "single" ? executionConfig?.runner : undefined) ??
+      DEFAULT_RUNTIME_ID;
+    const allowPaidFallback = executionConfig?.allow_paid_fallback === true;
+    if (defaultRuntimeId === PAID_API_RUNTIME_ID && !allowPaidFallback) {
+      console.error(
+        `[orchestrator] runtime "${PAID_API_RUNTIME_ID}" is unreachable because paid API fallback is disabled; ` +
+          "set execution.allow_paid_fallback: true explicitly before selecting it",
+      );
+      return 1;
+    }
+    const runtimeRegistry = createProductionRuntimeRegistry(args.projectRoot, { allowPaidFallback });
+    const defaultRuntime = runtimeRegistry.tryGet(defaultRuntimeId);
+    if (!defaultRuntime) {
+      console.error(`[orchestrator] configured Single runner "${defaultRuntimeId}" is not registered`);
+      return 1;
+    }
     const runtimeExecutor = createRuntimeExecutor({
-      runtime: runtimeRegistry.get(args.runtime ?? DEFAULT_RUNTIME_ID),
+      runtime: defaultRuntime,
       registry: runtimeRegistry,
       routingFlags: args.runtime ? { runtime: args.runtime } : undefined,
       classification: (id) => store.loadTask(id)?.classification,
@@ -2579,7 +2628,9 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
         const classification = store.loadTask(id)?.classification;
         return classification ? riskSignalsFromClassification(classification) : undefined;
       },
-      routingMode: "single",
+      routingMode: resolvedMode,
+      allowHandoff: resolvedMode === "auto" && (executionConfig?.allow_handoff ?? true),
+      allowPaidFallback,
       projectRoot: args.projectRoot,
       moduleName: () => args.module!,
       guards: contractGuardResolver(args.projectRoot),

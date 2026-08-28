@@ -19,6 +19,16 @@ export interface RuntimeRouteCandidate {
   readonly reason: string;
 }
 
+/** One ordered route decision, including candidates refused before execution. */
+export interface RuntimeRouteAttempt {
+  readonly runtimeId: string;
+  readonly runtime?: RuntimeAdapter;
+  readonly model?: string;
+  readonly reason: string;
+  /** Evidence for a deterministic skip. Such an entry must never execute. */
+  readonly skipReason?: string;
+}
+
 export interface RequestedRuntimeRoute {
   readonly runtimeId: string;
   readonly model?: string;
@@ -26,12 +36,16 @@ export interface RequestedRuntimeRoute {
 }
 
 export interface RuntimeRoute {
+  /** Complete ordered plan. Unlike candidates, this retains deterministic skips as evidence. */
+  readonly attempts: readonly RuntimeRouteAttempt[];
   readonly candidates: readonly RuntimeRouteCandidate[];
   readonly selected?: RuntimeRouteCandidate;
   /** Compatibility projection of `selected`; new callers should consume the candidate. */
   readonly runtime?: RuntimeAdapter;
   readonly model?: string;
   readonly requested: RequestedRuntimeRoute;
+  readonly mode: RoutingMode;
+  readonly allowHandoff: boolean;
   readonly precedenceLevel: RoutingPrecedenceLevel;
   readonly diagnostics: readonly string[];
   /** Present whenever no candidate may be executed. Callers must fail closed. */
@@ -128,7 +142,7 @@ function manualRoute(
   defaultRuntimeId: string,
   frontmatterModel: string | undefined,
   diagnostics: string[],
-): { spec?: CandidateSpec; legacyModelRouting: boolean } {
+): { spec?: CandidateSpec; legacyModelRouting: boolean; explicitRuntime: boolean; explicitModel: boolean } {
   const byRole = config?.routing?.by_role?.[role];
   const legacy = config?.model_routing?.[role];
   if (byRole !== undefined) {
@@ -142,6 +156,8 @@ function manualRoute(
           reason: `manual routing.by_role selected "${byRole}" for role "${role}"`,
         },
         legacyModelRouting: false,
+        explicitRuntime: parsed.runtimeId !== undefined,
+        explicitModel: true,
       };
     }
     return {
@@ -151,6 +167,8 @@ function manualRoute(
         reason: `manual routing.by_role selected runtime "${byRole.runtime}" for role "${role}"`,
       },
       legacyModelRouting: false,
+      explicitRuntime: true,
+      explicitModel: byRole.model !== undefined,
     };
   }
   if (legacy !== undefined) {
@@ -162,19 +180,24 @@ function manualRoute(
         reason: `manual model_routing selected "${legacy}" for role "${role}"`,
       },
       legacyModelRouting: true,
+      explicitRuntime: parsed.runtimeId !== undefined,
+      explicitModel: true,
     };
   }
-  return { legacyModelRouting: false };
+  return { legacyModelRouting: false, explicitRuntime: false, explicitModel: false };
 }
 
 function unresolved(
   requested: RequestedRuntimeRoute,
+  mode: RoutingMode,
+  allowHandoff: boolean,
   precedenceLevel: RoutingPrecedenceLevel,
   diagnostics: readonly string[],
   error: string,
   candidates: readonly RuntimeRouteCandidate[] = [],
+  attempts: readonly RuntimeRouteAttempt[] = [],
 ): RuntimeRoute {
-  return { candidates, selected: undefined, runtime: undefined, model: undefined, requested, precedenceLevel, diagnostics, error };
+  return { attempts, candidates, selected: undefined, runtime: undefined, model: undefined, requested, mode, allowHandoff, precedenceLevel, diagnostics, error };
 }
 
 /**
@@ -191,11 +214,49 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
   const flagPresent = opts.flags?.runtime !== undefined || opts.flags?.model !== undefined;
   const manual = manualRoute(config, opts.role, defaultRuntimeId, frontmatterModel, diagnostics);
   const policyPresent = config?.routing?.strategy !== undefined || config?.routing?.order !== undefined;
+  // Pre-V3 model_routing remains an inferred Manual route. With no such
+  // legacy entry and no execution block, the named default is Single.
+  const recordedUnavailable = opts.previousFailures?.some((failure) => failure.status === "UNAVAILABLE") ?? false;
+  const mode: RoutingMode = opts.mode ?? config?.execution?.mode ??
+    (manual.spec ? "manual" : policyPresent || (opts.allowHandoff === true && recordedUnavailable) ? "auto" : "single");
+  const allowHandoff = mode === "auto" && (opts.allowHandoff ?? config?.execution?.allow_handoff ?? true);
 
   let precedenceLevel: RoutingPrecedenceLevel;
   let specs: CandidateSpec[];
   let legacyModelRouting = false;
-  if (flagPresent) {
+  if (mode === "single") {
+    precedenceLevel = flagPresent ? 1 : 4;
+    const runtimeId = opts.flags?.runtime ?? config?.execution?.runner ?? defaultRuntimeId;
+    specs = [{
+      runtimeId,
+      model: opts.flags?.model ?? frontmatterModel,
+      reason: flagPresent
+        ? `explicit CLI flag selected runtime "${runtimeId}"${opts.flags?.model ? ` and model "${opts.flags.model}"` : ""}`
+        : automaticReason({ ...opts, mode }, runtimeId),
+    }];
+  } else if (mode === "manual") {
+    precedenceLevel = flagPresent ? 1 : 2;
+    if (flagPresent) {
+      specs = [{
+        runtimeId: opts.flags?.runtime ?? "",
+        model: opts.flags?.model,
+        reason: `explicit CLI flag selected manual runtime "${opts.flags?.runtime ?? "(unnamed)"}"${opts.flags?.model ? ` and model "${opts.flags.model}"` : ""}`,
+      }];
+    } else if (manual.spec) {
+      specs = [manual.spec];
+      legacyModelRouting = manual.legacyModelRouting;
+    } else {
+      const requested = { runtimeId: defaultRuntimeId, model: frontmatterModel, reason: `Manual mode has no route for role "${opts.role}"` };
+      return unresolved(requested, mode, allowHandoff, precedenceLevel, diagnostics, `Manual mode requires routing.by_role or model_routing to explicitly name a runner and model for role "${opts.role}"`);
+    }
+    const strictManual = opts.mode === "manual" || config?.execution?.mode === "manual";
+    const explicitRuntime = flagPresent ? opts.flags?.runtime !== undefined : manual.explicitRuntime;
+    const explicitModel = flagPresent ? opts.flags?.model !== undefined : manual.explicitModel;
+    if (strictManual && (!explicitRuntime || !explicitModel)) {
+      const requested = { runtimeId: specs[0]?.runtimeId || defaultRuntimeId, model: specs[0]?.model, reason: specs[0]?.reason ?? "manual route" };
+      return unresolved(requested, mode, allowHandoff, precedenceLevel, diagnostics, `Manual mode may use only an explicitly named runner and model for role "${opts.role}"`);
+    }
+  } else if (flagPresent) {
     precedenceLevel = 1;
     specs = [{
       runtimeId: opts.flags?.runtime ?? defaultRuntimeId,
@@ -218,6 +279,25 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     specs = [{ runtimeId: defaultRuntimeId, model: frontmatterModel, reason: automaticReason(opts, defaultRuntimeId) }];
   }
 
+  if (mode === "auto" && allowHandoff) {
+    const ordered = subscriptionFirstRuntimeIds(opts.registry, defaultRuntimeId, config?.routing?.order);
+    // Explicit opt-in makes the paid adapter the final fallback even when a
+    // subscription-only order was configured before that adapter existed.
+    if (config?.execution?.allow_paid_fallback && opts.registry.has("paid-api") && !ordered.includes("paid-api")) {
+      ordered.push("paid-api");
+    }
+    const present = new Set(specs.map((spec) => spec.runtimeId));
+    for (const runtimeId of ordered) {
+      if (present.has(runtimeId)) continue;
+      specs.push({
+        runtimeId,
+        model: frontmatterModel,
+        reason: `Auto mode fallback candidate after requested runtime "${specs[0]?.runtimeId ?? defaultRuntimeId}"`,
+      });
+      present.add(runtimeId);
+    }
+  }
+
   const requestedSpec = specs[0] ?? {
     runtimeId: defaultRuntimeId,
     model: frontmatterModel,
@@ -230,15 +310,7 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
   };
 
   if (opts.registry.ids().length === 0) {
-    return unresolved(requested, precedenceLevel, diagnostics, "no runtime is registered; refusing to default silently");
-  }
-
-  if (opts.availability && opts.registry.ids().every((id) => opts.availability?.[id]?.available === false)) {
-    for (const id of opts.registry.ids()) {
-      const reason = opts.availability[id]?.reason ?? "no unavailability reason was reported";
-      diagnostics.push(`runtime "${id}" is unavailable: ${reason}`);
-    }
-    return unresolved(requested, precedenceLevel, diagnostics, "no registered runtime is available; refusing to default silently");
+    return unresolved(requested, mode, allowHandoff, precedenceLevel, diagnostics, "no runtime is registered; refusing to default silently");
   }
 
   // The legacy model_routing contract explicitly fell back from an unknown id
@@ -253,67 +325,56 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     }];
   }
 
-  // A past automatic attempt that is explicitly recorded UNAVAILABLE unlocks
-  // level 5 candidates for Phase 4 to consume. Production Phase 3 supplies no
-  // previousFailures and therefore never executes this fallback path.
-  const selectedProbe = opts.availability?.[specs[0]?.runtimeId ?? ""];
-  const selectedUnavailable = selectedProbe?.available === false;
-  const priorUnavailable = opts.previousFailures?.some(
-    (failure) => failure.runtimeId === specs[0]?.runtimeId && failure.status === "UNAVAILABLE",
+  // Only recorded UNAVAILABLE attempts unlock precedence 5. ERROR/TIMEOUT are
+  // deliberately ignored and can never move the runtime.
+  const failedIds = new Set(
+    opts.previousFailures?.filter((failure) => failure.status === "UNAVAILABLE").map((failure) => failure.runtimeId),
   );
-  if (precedenceLevel === 4 && selectedUnavailable && priorUnavailable && opts.allowHandoff) {
-    const failedIds = new Set(opts.previousFailures?.filter((failure) => failure.status === "UNAVAILABLE").map((failure) => failure.runtimeId));
-    specs = subscriptionFirstRuntimeIds(opts.registry, defaultRuntimeId, config?.routing?.order)
-      .filter((runtimeId) => !failedIds.has(runtimeId))
-      .map((runtimeId, index) => ({
-        runtimeId,
-        model: frontmatterModel,
-        reason: `fallback candidate ${index + 1} after runtime "${requested.runtimeId}" was unavailable`,
-      }));
+  if (mode === "auto" && allowHandoff && precedenceLevel === 4 && failedIds.has(specs[0]?.runtimeId ?? "")) {
+    specs = specs.filter((spec) => !failedIds.has(spec.runtimeId));
     precedenceLevel = 5;
   }
 
-  const registered: RuntimeRouteCandidate[] = [];
+  const attempts: RuntimeRouteAttempt[] = [];
+  const supportOptIns = new Set(config?.routing?.allow_below_supported ?? []);
+  const required = requiredCapabilitiesFor(opts.stage, opts.hasTargetWrite ?? false);
   for (const spec of specs) {
     const runtime = opts.registry.tryGet(spec.runtimeId);
     if (!runtime) {
-      diagnostics.push(`runtime "${spec.runtimeId}" is not registered`);
+      const skipReason = `runtime "${spec.runtimeId}" is not registered`;
+      diagnostics.push(skipReason);
+      attempts.push({ runtimeId: spec.runtimeId, model: spec.model, reason: spec.reason, skipReason });
       continue;
     }
-    registered.push({ runtime, model: spec.model, reason: spec.reason });
-  }
-  if (registered.length === 0) {
-    return unresolved(requested, precedenceLevel, diagnostics, `requested runtime "${specs[0]?.runtimeId ?? requested.runtimeId}" is not registered`);
-  }
-
-  const available = registered.filter((candidate) => {
-    const probe = opts.availability?.[candidate.runtime.id];
-    if (!probe || probe.available) return true;
-    diagnostics.push(`runtime "${candidate.runtime.id}" is unavailable: ${probe.reason ?? "no unavailability reason was reported"}`);
-    return false;
-  });
-
-  const supportOptIns = new Set(config?.routing?.allow_below_supported ?? []);
-  const supported = available.filter((candidate) => {
-    if (precedenceLevel < 3) return true; // explicit flag/manual choice is itself direct consent
-    const level = supportLevel(candidate.runtime.id);
-    if (level === "supported" || supportOptIns.has(candidate.runtime.id)) return true;
-    diagnostics.push(
-      `runtime "${candidate.runtime.id}" support level "${level}" is below "supported"; automatic routing requires routing.allow_below_supported to name this runtime`,
-    );
-    return false;
-  });
-
-  const required = requiredCapabilitiesFor(opts.stage, opts.hasTargetWrite ?? false);
-  const capable = supported.filter((candidate) => {
-    const declaredOrVerified = opts.verifiedCapabilities?.[candidate.runtime.id] ?? candidate.runtime.capabilities;
+    const probe = opts.availability?.[runtime.id];
+    if (probe?.available === false) {
+      diagnostics.push(`runtime "${runtime.id}" is unavailable: ${probe.reason ?? "no unavailability reason was reported"}`);
+    }
+    const level = supportLevel(runtime.id);
+    const paidOptIn = runtime.id === "paid-api" && config?.execution?.allow_paid_fallback === true;
+    if (precedenceLevel >= 3 && level !== "supported" && !supportOptIns.has(runtime.id) && !paidOptIn) {
+      const skipReason = `runtime "${runtime.id}" support level "${level}" is below "supported"; automatic routing requires routing.allow_below_supported to name this runtime`;
+      diagnostics.push(skipReason);
+      attempts.push({ runtimeId: runtime.id, runtime, model: spec.model, reason: spec.reason, skipReason });
+      continue;
+    }
+    const declaredOrVerified = opts.verifiedCapabilities?.[runtime.id] ?? runtime.capabilities;
     const unmet = required.filter((capability) => !declaredOrVerified.has(capability));
-    if (unmet.length === 0) return true;
-    const evidence = opts.verifiedCapabilities?.[candidate.runtime.id] ? "verified" : "declared";
-    const message = `runtime "${candidate.runtime.id}" lacks ${evidence} capabilities required by this stage: ${unmet.join(", ")}`;
-    diagnostics.push(message);
-    return !(opts.hasTargetWrite ?? false);
-  });
+    if (unmet.length > 0) {
+      const evidence = opts.verifiedCapabilities?.[runtime.id] ? "verified" : "declared";
+      const message = `runtime "${runtime.id}" lacks ${evidence} capabilities required by this stage: ${unmet.join(", ")}`;
+      diagnostics.push(message);
+      if (opts.hasTargetWrite ?? false) {
+        attempts.push({ runtimeId: runtime.id, runtime, model: spec.model, reason: spec.reason, skipReason: message });
+        continue;
+      }
+    }
+    attempts.push({ runtimeId: runtime.id, runtime, model: spec.model, reason: spec.reason });
+  }
+
+  const capable: RuntimeRouteCandidate[] = attempts
+    .filter((attempt): attempt is RuntimeRouteAttempt & { runtime: RuntimeAdapter } => !!attempt.runtime && !attempt.skipReason)
+    .map((attempt) => ({ runtime: attempt.runtime, model: attempt.model, reason: attempt.reason }));
 
   for (const candidate of capable) {
     if (candidate.model && !candidate.runtime.models.has(candidate.model)) {
@@ -324,7 +385,9 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
   }
 
   const intendedRuntimeId = specs[0]?.runtimeId ?? requested.runtimeId;
-  const selected = capable.find((candidate) => candidate.runtime.id === intendedRuntimeId);
+  const selected = allowHandoff
+    ? capable[0]
+    : capable.find((candidate) => candidate.runtime.id === intendedRuntimeId);
   if (!selected) {
     const probe = opts.availability?.[intendedRuntimeId];
     const level = supportLevel(intendedRuntimeId);
@@ -343,15 +406,18 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     } else {
       error = `no eligible candidate remains for requested runtime "${intendedRuntimeId}"`;
     }
-    return unresolved(requested, precedenceLevel, diagnostics, error, capable);
+    return unresolved(requested, mode, allowHandoff, precedenceLevel, diagnostics, error, capable, attempts);
   }
 
   return {
+    attempts,
     candidates: capable,
     selected,
     runtime: selected.runtime,
     model: selected.model,
     requested,
+    mode,
+    allowHandoff,
     precedenceLevel,
     diagnostics,
   };

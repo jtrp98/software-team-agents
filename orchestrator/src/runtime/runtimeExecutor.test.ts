@@ -984,7 +984,7 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
     expect(preview.requests).toEqual([]);
   });
 
-  it("does not execute a resolved fallback candidate before Phase 4", async () => {
+  it("executes a resolved fallback candidate in Auto mode and records the hop", async () => {
     const projectRoot = tmpProject();
     fs.mkdirSync(path.join(projectRoot, ".sta"), { recursive: true });
     fs.writeFileSync(
@@ -1003,12 +1003,18 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
       projectRoot,
       moduleName: () => "sales-crm",
       guards: () => NO_GUARDS,
-      previousFailures: () => [{ runtimeId: "claude-code", status: "UNAVAILABLE" }],
+      routingMode: "auto",
       allowHandoff: true,
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-NO-PHASE-4", context: [] });
-    expect(result.outcome.failure_reason).toContain("fallback execution is not enabled in Phase 3");
+    expect(result.outcome.result).toBe("PASS");
+    expect(result.outcome).toMatchObject({
+      requested_runtime: "claude-code",
+      runtime: "codex",
+      fallback_count: 1,
+    });
+    expect(result.outcome.fallback_reason).toContain("UNAVAILABLE");
     expect(unavailable.requests).toEqual([]);
-    expect(fallback.requests).toEqual([]);
+    expect(fallback.requests).toHaveLength(1);
   });
 
   it("routes a run to the second registered runtime when .sta/config.yaml's model_routing names it", async () => {

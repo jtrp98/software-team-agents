@@ -53,6 +53,7 @@ describe("parseArgs", () => {
       targetBindings: { frontend_target: null, backend_target: null },
       autonomy: undefined,
       runtime: undefined,
+      mode: undefined,
       noQaOptimization: false,
       noDeterministicGate: false,
       tokenBudget: undefined,
@@ -72,9 +73,18 @@ describe("parseArgs", () => {
   });
 
   it("parses --runtime and rejects runtimes no adapter implements (T-OC5)", () => {
-    expect(parseArgs(["--task-id", "T-1", "--module", "m", "--runtime", "opencode"], "/repo").runtime).toBe("opencode");
+    const explicit = parseArgs(["--task-id", "T-1", "--module", "m", "--runtime", "opencode"], "/repo");
+    expect(explicit.runtime).toBe("opencode");
+    expect(explicit.mode).toBe("single");
     expect(parseArgs(["--task-id", "T-1", "--module", "m"], "/repo").runtime).toBeUndefined();
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--runtime", "ghost"], "/repo")).toThrow(CliUsageError);
+  });
+
+  it("parses all three orchestrated modes and rejects unknown modes", () => {
+    for (const mode of ["single", "auto", "manual"] as const) {
+      expect(parseArgs(["--task-id", "T-1", "--module", "m", "--mode", mode], "/repo").mode).toBe(mode);
+    }
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--mode", "silent"], "/repo")).toThrow(CliUsageError);
   });
 
   it("parses the post-hoc token budget and deterministic-gate escape hatch", () => {
@@ -111,9 +121,12 @@ describe("parseArgs", () => {
 describe("T-V3R-032 production runtime composition", () => {
   it("constructs the complete runtime registry used by the real CLI executor call site", () => {
     expect(createProductionRuntimeRegistry(defaultProjectRoot()).ids()).toEqual(["claude-code", "codex", "opencode"]);
+    expect(createProductionRuntimeRegistry(defaultProjectRoot(), { allowPaidFallback: true }).ids()).toEqual([
+      "claude-code", "codex", "opencode", "paid-api",
+    ]);
     const source = fs.readFileSync(path.join(defaultProjectRoot(), "orchestrator", "src", "cli.ts"), "utf8");
     expect(source).toContain("registry: runtimeRegistry");
-    expect(source).toContain("runtime: runtimeRegistry.get(args.runtime ?? DEFAULT_RUNTIME_ID)");
+    expect(source).toContain("runtime: defaultRuntime");
   });
 });
 

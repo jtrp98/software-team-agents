@@ -36,6 +36,7 @@ describe("defaultStaConfig / writeStaConfig / loadStaConfig", () => {
       schema_version: 1,
       stack: "nextjs-express",
       model_routing: { "qa-engineer": "opus" },
+      execution: { mode: "auto", runner: "claude-code", allow_handoff: true, allow_paid_fallback: false },
       routing: {
         strategy: "subscription-first",
         order: ["claude-code", "codex"],
@@ -49,6 +50,7 @@ describe("defaultStaConfig / writeStaConfig / loadStaConfig", () => {
     const loaded = loadStaConfig(root);
     expect(loaded.stack).toBe("nextjs-express");
     expect(loaded.model_routing).toEqual({ "qa-engineer": "opus" });
+    expect(loaded.execution).toEqual({ mode: "auto", runner: "claude-code", allow_handoff: true, allow_paid_fallback: false });
     expect(loaded.routing).toEqual({
       strategy: "subscription-first",
       order: ["claude-code", "codex"],
@@ -58,6 +60,14 @@ describe("defaultStaConfig / writeStaConfig / loadStaConfig", () => {
     expect(loaded.permission_overrides).toEqual({ "backend-engineer": { write: ["extra/**"] } });
     expect(loaded.token_budget).toBe(42_000);
     expect(loaded.context_budget).toEqual({ roles: { "qa-engineer": 90_000 }, model_context_windows: { opus: 120_000 } });
+  });
+
+  it("keeps V3 execution defaults additive and paid fallback off when the block is absent", () => {
+    const config = defaultStaConfig();
+    expect(config).toEqual({ schema_version: 1 });
+    expect(config.execution?.mode ?? "single").toBe("single");
+    expect(config.execution?.runner ?? "claude-code").toBe("claude-code");
+    expect(config.execution?.allow_paid_fallback ?? false).toBe(false);
   });
 
   it("throws StaConfigMissingError when there is no config yet", () => {

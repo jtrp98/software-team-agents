@@ -660,13 +660,28 @@ export class Orchestrator {
     // below), so this is the one place a failed prepare doesn't silently count as finished.
     // Every other completion, including devops's own "execute" one, advances exactly as before.
     const isDevopsPrepareCompletion = stage === AgentStage.DEVOPS && this.run.machine.current === TaskState.READY_TO_DEPLOY;
+    const requiresHumanStop =
+      result.outcome.result === "FAIL" &&
+      result.failure?.requiresHuman === true &&
+      result.failure.category === "infrastructure";
     if (isDevopsPrepareCompletion) {
       if (result.outcome.result !== "FAIL") this.deployPrepared = true;
-    } else {
+    } else if (!requiresHumanStop) {
       this.pipelineCursor += 1;
     }
     if (result.outcome.result === "FAIL" && result.failure) {
       this.lastFailure = result.failure;
+    }
+
+    // Infrastructure UNAVAILABLE is a STOP at every stage, not only at the
+    // QA/security failure routers. It consumes neither a retry round nor the
+    // pipeline cursor, so an explicit human resume retries the same stage.
+    if (requiresHumanStop) {
+      this.lastRecovery = { kind: "ESCALATE", strategy: "escalate_to_human", reason: result.failure!.reason };
+      this.run = { ...this.run, machine: forceBlock(this.run.machine) };
+      this.blockedReason = result.failure!.reason;
+      this.emitVerdict(stage, result);
+      return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
     }
 
     // T45: a failed "execute" — the actual deploy/migration command, and the health check

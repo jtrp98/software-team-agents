@@ -12,6 +12,7 @@ const DISPLAY_NAME: Record<(typeof RUNTIME_IDS)[number], string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
   opencode: "OpenCode",
+  "paid-api": "Paid API",
 };
 
 const LEVEL_WORD = {
@@ -30,7 +31,7 @@ function readmeRow(id: keyof typeof RUNTIME_SUPPORT): string | undefined {
 
 describe("runtimeSupport — the single source of truth for support claims (T-V1-04)", () => {
   it("covers exactly the runtimes `--runtime` accepts, so CLI and claims cannot name different sets", () => {
-    expect(RUNTIME_IDS).toEqual(["claude-code", "codex", "opencode"]);
+    expect(RUNTIME_IDS).toEqual(["claude-code", "codex", "opencode", "paid-api"]);
     expect(Object.keys(RUNTIME_SUPPORT).sort()).toEqual([...RUNTIME_IDS].sort());
   });
 
@@ -59,6 +60,7 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
     expect(RUNTIME_SUPPORT["claude-code"].level).toBe("supported");
     expect(RUNTIME_SUPPORT.codex.level).toBe("preview");
     expect(RUNTIME_SUPPORT.opencode.level).toBe("experimental");
+    expect(RUNTIME_SUPPORT["paid-api"].level).toBe("experimental");
   });
 
   /**

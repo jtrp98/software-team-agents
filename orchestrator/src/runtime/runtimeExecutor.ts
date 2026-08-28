@@ -26,6 +26,7 @@ import {
   resolveRuntimeRoute,
   type PreviousRuntimeFailure,
   type RoutingMode,
+  type RuntimeRouteAttempt,
   type RuntimeRouteFlags,
 } from "./runtimeRouting.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
@@ -118,6 +119,7 @@ export interface RuntimeExecutorOptions {
   previousFailures?: (taskId: string) => readonly PreviousRuntimeFailure[] | undefined;
   routingMode?: RoutingMode;
   allowHandoff?: boolean;
+  allowPaidFallback?: boolean;
   /** T111's verified capability picture per runtime id, passed through to `resolveRuntimeRoute` so its capability-policy diagnostic uses confirmed facts instead of a static claim, when available. */
   verifiedCapabilities?: Readonly<Record<string, ReadonlySet<RuntimeCapability>>>;
 }
@@ -214,6 +216,23 @@ function describeFailure(runtimeId: string, role: string, result: RuntimeAgentRe
   const detail = [result.text, ...result.diagnostics, ...routingDiagnostics].filter((s) => s.length > 0).join(" | ").slice(0, 2000);
   const exit = result.exitCode === null ? "unknown" : String(result.exitCode);
   return `${runtimeId} run of \`${role}\` finished ${result.status} (exit ${exit}): ${detail}`;
+}
+
+interface FallbackHop {
+  readonly count: number;
+  readonly requestedRuntime: string;
+  readonly requestedModel?: string;
+  readonly actualRuntime: string;
+  readonly actualModel?: string;
+  readonly reason: string;
+}
+
+function renderFallbackHops(hops: readonly FallbackHop[]): string | undefined {
+  if (hops.length === 0) return undefined;
+  return hops.map((hop) =>
+    `hop ${hop.count}: requested=${hop.requestedRuntime}/${hop.requestedModel ?? "default"}; ` +
+    `actual=${hop.actualRuntime}/${hop.actualModel ?? "default"}; reason=${hop.reason}`,
+  ).join(" | ");
 }
 
 export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecutor {
@@ -332,11 +351,15 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     const hasTargetWrite = threeRepo?.roots.workRoots.some((root) => root.access === "write") ?? false;
     let activeRuntime = runtime;
     let activeModel = resolveModel(role);
+    let routeAttempts: readonly RuntimeRouteAttempt[] = [];
+    let routeAllowHandoff = false;
+    let routeAvailability: Readonly<Record<string, { available: boolean; reason?: string }>> = {};
     const routingDiagnostics: string[] = [];
     let requestedRuntime: string | undefined;
     let requestedModel: string | undefined;
     let routingBasis: string | undefined;
     if (opts.registry) {
+      routeAvailability = await opts.registry.probeAll();
       const route = resolveRuntimeRoute({
         role,
         stage: req.stage,
@@ -346,7 +369,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         flags: opts.routingFlags,
         classification: opts.classification?.(req.taskId),
         riskSignals: opts.riskSignals?.(req.taskId),
-        availability: await opts.registry.probeAll(),
+        availability: routeAvailability,
         previousFailures: opts.previousFailures?.(req.taskId),
         mode: opts.routingMode,
         allowHandoff: opts.allowHandoff,
@@ -354,20 +377,11 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         verifiedCapabilities: opts.verifiedCapabilities,
       });
       routingDiagnostics.push(...route.diagnostics);
+      routeAttempts = route.attempts;
+      routeAllowHandoff = route.allowHandoff;
       requestedRuntime = route.requested.runtimeId;
       requestedModel = route.requested.model;
       routingBasis = `level-${route.precedenceLevel}`;
-      if (route.precedenceLevel === 5) {
-        return finish(failResult(
-          `cannot start ${role}: a fallback candidate was resolved, but fallback execution is not enabled in Phase 3`,
-          {
-            requested_runtime: requestedRuntime,
-            requested_model: requestedModel,
-            routing_basis: routingBasis,
-            fallback_count: 0,
-          },
-        ));
-      }
       if (route.error || !route.selected) {
         const routeFailure = [route.error ?? "runtime route resolved no selected candidate", ...route.diagnostics].join(" | ");
         return finish(failResult(
@@ -384,6 +398,26 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       activeModel = route.selected.model ?? activeModel;
     }
 
+    const fallbackHops: FallbackHop[] = [];
+    const recordTransition = (current: RuntimeRouteAttempt, next: RuntimeRouteAttempt, reason: string): void => {
+      fallbackHops.push({
+        count: fallbackHops.length + 1,
+        requestedRuntime: current.runtimeId,
+        requestedModel: current.model,
+        actualRuntime: next.runtimeId,
+        actualModel: next.model,
+        reason,
+      });
+    };
+    let activeAttemptIndex = routeAttempts.findIndex((attempt) => attempt.runtime?.id === activeRuntime.id && !attempt.skipReason);
+    if (activeAttemptIndex > 0) {
+      for (let index = 0; index < activeAttemptIndex; index++) {
+        const current = routeAttempts[index]!;
+        const next = routeAttempts[index + 1]!;
+        recordTransition(current, next, current.skipReason ?? current.reason);
+      }
+    }
+
     const contextBudget = assessContextBudget(
       prompt.length,
       promptParts.budgetComposition,
@@ -398,7 +432,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       );
     }
 
-    const declared = {
+    let declared = {
       model: activeModel,
       promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
       context_chars: prompt.length,
@@ -408,16 +442,46 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       requested_runtime: requestedRuntime,
       requested_model: requestedModel,
       routing_basis: routingBasis,
-      fallback_count: opts.registry ? 0 : undefined,
+      fallback_reason: renderFallbackHops(fallbackHops),
+      fallback_count: opts.registry ? fallbackHops.length : undefined,
       contextBudget,
       budgetComposition: promptParts.budgetComposition,
     };
+
+    const executeActiveRuntime = (): Promise<RuntimeAgentResult> => activeRuntime.executeAgent({
+      role,
+      cwd: threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot,
+      bindingRoot: threeRepo?.roots.bindingRoot,
+      knowledgeRoot: threeRepo?.roots.knowledgeRoot,
+      workRoots: threeRepo?.roots.workRoots,
+      definitionPath: activeRuntime.binding.definitionPath(role),
+      prompt,
+      model: declared.model,
+      autonomy,
+      guards,
+      env: {
+        AGENTCLAUDE_ROLE: role,
+        ...(hasTargetWrite ? { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify(threeRepo!.roots.workRoots.filter((root) => root.access === "write").map((root) => root.path)) } : {}),
+        ...(threeRepo?.roots.knowledgeRoot ? { AGENTCLAUDE_KNOWLEDGE_ROOT: threeRepo.roots.knowledgeRoot } : {}),
+      },
+      timeoutMs: opts.timeoutMs,
+    });
 
     let result: RuntimeAgentResult;
     if (hasTargetWrite && !activeRuntime.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)) {
       return finish(failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot enforce a pre-tool workspace guard for Target write access`, declared));
     }
-    try {
+    const activeProbe = routeAvailability[activeRuntime.id];
+    if (activeProbe?.available === false) {
+      result = {
+        status: "UNAVAILABLE",
+        exitCode: null,
+        text: "",
+        usage: {},
+        guards: { enforced: [], unenforced: [] },
+        diagnostics: [activeProbe.reason ?? "availability probe reported no reason"],
+      };
+    } else try {
       result = await activeRuntime.executeAgent({
         role,
         // Binding/config lives in the Framework root; workspace access arrives
@@ -455,9 +519,9 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       return finish(failResult(`adapter "${activeRuntime.id}" threw instead of returning a result: ${String(e)}`, declared));
     }
 
-    const metrics = metricsFrom(result, declared);
+    let metrics = metricsFrom(result, declared);
 
-    if (hasTargetWrite && !result.guards.enforced.includes(RuntimeCapability.PRE_TOOL_GUARD)) {
+    if (result.status !== "UNAVAILABLE" && hasTargetWrite && !result.guards.enforced.includes(RuntimeCapability.PRE_TOOL_GUARD)) {
       return finish(failResult(
         `Target-write run of ${role} was rejected because adapter "${activeRuntime.id}" did not confirm pre-tool guard enforcement${result.guards.reason ? `: ${result.guards.reason}` : ""}`,
         metrics,
@@ -479,10 +543,80 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     }
 
     if (result.status === "UNAVAILABLE") {
-      return finish({
-        ...failResult(describeFailure(activeRuntime.id, role, result, routingDiagnostics), metrics),
-        failure: unavailableFailure(activeRuntime.id, result.diagnostics.join("; ") || result.text || "no reason given"),
-      });
+      let unavailableReason = result.diagnostics.join("; ") || result.text || "no reason given";
+      while (routeAllowHandoff && activeAttemptIndex >= 0 && activeAttemptIndex + 1 < routeAttempts.length) {
+        const current = routeAttempts[activeAttemptIndex]!;
+        const next = routeAttempts[++activeAttemptIndex]!;
+        recordTransition(current, next, current.skipReason ?? `runtime "${current.runtimeId}" returned UNAVAILABLE: ${unavailableReason}`);
+
+        if (next.skipReason || !next.runtime) {
+          unavailableReason = next.skipReason ?? `runtime "${next.runtimeId}" is not registered`;
+          continue;
+        }
+        const probe = routeAvailability[next.runtimeId];
+        if (probe?.available === false) {
+          unavailableReason = `runtime "${next.runtimeId}" is UNAVAILABLE during availability probe: ${probe.reason ?? "no reason given"}`;
+          continue;
+        }
+        if (hasTargetWrite && !next.runtime.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)) {
+          unavailableReason = `runtime "${next.runtimeId}" cannot enforce a pre-tool workspace guard for Target write access`;
+          continue;
+        }
+
+        activeRuntime = next.runtime;
+        activeModel = next.model ?? resolveModel(role);
+        const nextBudget = assessContextBudget(
+          prompt.length,
+          promptParts.budgetComposition,
+          resolveContextBudgetFromProject(opts.projectRoot, role, activeModel),
+        );
+        declared = {
+          ...declared,
+          model: activeModel,
+          runtime: activeRuntime.id,
+          fallback_reason: renderFallbackHops(fallbackHops),
+          fallback_count: fallbackHops.length,
+          contextBudget: nextBudget,
+        };
+        try {
+          result = await executeActiveRuntime();
+        } catch (error) {
+          // A contract-violating throw is ERROR, not infrastructure evidence.
+          return finish(failResult(`adapter "${activeRuntime.id}" threw instead of returning a result: ${String(error)}`, declared));
+        }
+        metrics = metricsFrom(result, declared);
+
+        if (result.status !== "UNAVAILABLE" && hasTargetWrite && !result.guards.enforced.includes(RuntimeCapability.PRE_TOOL_GUARD)) {
+          return finish(failResult(
+            `Target-write run of ${role} was rejected because adapter "${activeRuntime.id}" did not confirm pre-tool guard enforcement${result.guards.reason ? `: ${result.guards.reason}` : ""}`,
+            metrics,
+          ));
+        }
+        if (result.status === "UNAVAILABLE") {
+          unavailableReason = result.diagnostics.join("; ") || result.text || "no reason given";
+          continue;
+        }
+        // ERROR and TIMEOUT are never fallback triggers.
+        if (result.status !== "OK") {
+          return finish(failResult(describeFailure(activeRuntime.id, role, result, routingDiagnostics), metrics));
+        }
+        break;
+      }
+
+      if (result.status === "UNAVAILABLE") {
+        const paidDisabled = opts.allowPaidFallback !== true
+          ? " Paid API fallback is disabled (execution.allow_paid_fallback is false)."
+          : "";
+        const reason = `${unavailableReason}.${paidDisabled}`;
+        return finish({
+          ...failResult(`${describeFailure(activeRuntime.id, role, result, routingDiagnostics)}${paidDisabled}`, {
+            ...metrics,
+            fallback_reason: renderFallbackHops(fallbackHops),
+            fallback_count: opts.registry ? fallbackHops.length : undefined,
+          }),
+          failure: unavailableFailure(activeRuntime.id, reason),
+        });
+      }
     }
     if (result.status !== "OK") {
       return finish(failResult(describeFailure(activeRuntime.id, role, result, routingDiagnostics), metrics));

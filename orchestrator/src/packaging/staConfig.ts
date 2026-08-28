@@ -20,6 +20,21 @@ export const StaConfigSchema = z.object({
   /** role -> model override, layered over each agent's frontmatter default (CLAUDE.md's "model per agent" table). */
   model_routing: z.record(z.string().min(1), z.string().min(1)).optional(),
   /**
+   * V3 execution policy. Optional and additive: an older config with no block
+   * resolves to Single on claude-code, with paid fallback disabled.
+   */
+  execution: z
+    .object({
+      mode: z.enum(["single", "auto", "manual"]).optional(),
+      /** The one runtime Single mode uses when no CLI --runtime is present. */
+      runner: z.string().min(1).optional(),
+      /** Auto-mode subscription handoff. Ignored by Single and Manual. */
+      allow_handoff: z.boolean().optional(),
+      /** Spending gate. Absence is deliberately false. */
+      allow_paid_fallback: z.boolean().optional(),
+    })
+    .optional(),
+  /**
    * V3 runner/model routing. All fields are optional so a pre-V3 config keeps
    * its exact behaviour. `by_role` accepts the existing `runtime:model` spelling
    * as well as a structured target; the latter avoids parsing when both fields
