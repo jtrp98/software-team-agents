@@ -348,6 +348,13 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     const hasTargetWrite = threeRepo?.roots.workRoots.some((root) => root.access === "write") ?? false;
     let activeRuntime = runtime;
     let activeModel = resolveModel(role);
+    // T-V4-CAST-001 — whether `activeModel` is an operator-visible override (CLI
+    // `--model` / `.sta/config.yaml` routing) rather than the frontmatter
+    // default, plus any effort named with it. The registry route is the only
+    // channel that can set these; the embedded compatibility path below never
+    // forwards a model past an adapter that ignores it, exactly as before.
+    let activeModelExplicit = false;
+    let activeEffort: string | undefined;
     let routeAttempts: readonly RuntimeRouteAttempt[] = [];
     let routeAllowHandoff = false;
     let routeAvailability: Readonly<Record<string, { available: boolean; reason?: string }>> = {};
@@ -393,6 +400,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       }
       activeRuntime = route.selected.runtime;
       activeModel = route.selected.model ?? activeModel;
+      activeModelExplicit = route.selected.modelExplicit ?? false;
+      activeEffort = route.effort;
     }
 
     const fallbackHops: FallbackHop[] = [];
@@ -454,6 +463,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       definitionPath: activeRuntime.binding.definitionPath(role),
       prompt,
       model: declared.model,
+      modelExplicit: activeModelExplicit,
+      effort: activeEffort,
       autonomy,
       guards,
       env: {
@@ -490,6 +501,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         definitionPath: activeRuntime.binding.definitionPath(role),
         prompt,
         model: declared.model,
+        modelExplicit: activeModelExplicit,
+        effort: activeEffort,
         autonomy,
         guards,
         // T15: the framework's own channel for telling a guard which role is
@@ -562,6 +575,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
 
         activeRuntime = next.runtime;
         activeModel = next.model ?? resolveModel(role);
+        activeModelExplicit = next.modelExplicit ?? false;
+        activeEffort = next.effort;
         const nextBudget = assessContextBudget(
           prompt.length,
           promptParts.budgetComposition,

@@ -949,6 +949,29 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
     });
   });
 
+  it("T-V4-CAST-001 — a --model routing flag reaches the adapter as an explicit override; a resolved default does not", async () => {
+    const projectRoot = tmpProject();
+    writeAgentFile(projectRoot, "backend-engineer", "model: sonnet");
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet", "opus"] });
+    const base = {
+      runtime,
+      registry: new RuntimeRegistry([runtime]),
+      projectRoot,
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+    };
+
+    await createRuntimeExecutor(base)({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-DEFAULT", context: [] });
+    expect(runtime.requests[0].model).toBe("sonnet");
+    expect(runtime.requests[0].modelExplicit ?? false).toBe(false);
+
+    await createRuntimeExecutor({ ...base, routingFlags: { model: "opus" } })(
+      { stage: AgentStage.BACKEND_ENGINEER, taskId: "T-OVERRIDE", context: [] },
+    );
+    expect(runtime.requests[1].model).toBe("opus");
+    expect(runtime.requests[1].modelExplicit).toBe(true);
+  });
+
   it("refuses an unavailable selected runtime before adapter start and preserves the probe reason", async () => {
     const exactReason = "claude executable unavailable — exact diagnostic";
     const runtime = new MockRuntimeAdapter({

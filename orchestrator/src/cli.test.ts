@@ -54,6 +54,7 @@ describe("parseArgs", () => {
       targetBindings: { frontend_target: null, backend_target: null },
       autonomy: undefined,
       runtime: undefined,
+      model: undefined,
       mode: undefined,
       noQaOptimization: false,
       noDeterministicGate: false,
@@ -79,6 +80,16 @@ describe("parseArgs", () => {
     expect(explicit.mode).toBe("single");
     expect(parseArgs(["--task-id", "T-1", "--module", "m"], "/repo").runtime).toBeUndefined();
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--runtime", "ghost"], "/repo")).toThrow(CliUsageError);
+  });
+
+  it("T-V4-CAST-001 — parses --model, forces single mode by itself, and needs a value", () => {
+    const explicit = parseArgs(["--task-id", "T-1", "--module", "m", "--model", "opus"], "/repo");
+    expect(explicit.model).toBe("opus");
+    expect(explicit.mode).toBe("single");
+    expect(parseArgs(["--task-id", "T-1", "--module", "m"], "/repo").model).toBeUndefined();
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--model"], "/repo")).toThrow(CliUsageError);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--model", "--frontend"], "/repo")).toThrow(CliUsageError);
+    expect(USAGE).toContain("--model");
   });
 
   it("parses all three orchestrated modes and rejects unknown modes", () => {

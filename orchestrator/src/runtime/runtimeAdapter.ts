@@ -137,6 +137,26 @@ export interface RuntimeAgentRequest {
   readonly prompt: string;
   /** Model to run on, or undefined to take the runtime's own default. The field T112 fills. */
   readonly model?: string;
+  /**
+   * True when `model` was set by an operator-visible override — the `--model` CLI
+   * flag or `.sta/config.yaml` routing — rather than resolved from role
+   * frontmatter or an automatic default (T-V4-CAST-001).
+   *
+   * An adapter that would otherwise ignore `model` to avoid contradicting its
+   * runtime's own per-role configuration (Claude Code resolves the model from
+   * subagent frontmatter) MUST honour it when this is true, and MUST refuse a
+   * value its runtime cannot reach rather than pass it through. With this false
+   * or absent, `model` carries only the resolved default and an adapter is free
+   * to ignore it exactly as before.
+   */
+  readonly modelExplicit?: boolean;
+  /**
+   * Explicitly requested reasoning effort, paired with an explicit `model`
+   * (T-V4-CAST-001). Undefined = the runtime's / binding's own default. An
+   * adapter whose runtime exposes no effort control records a diagnostic rather
+   * than dropping this silently.
+   */
+  readonly effort?: string;
   readonly autonomy: RuntimeAutonomy;
   readonly guards: RuntimeGuards;
   /** Extra environment for the run. An adapter may add to it; it must not drop what it is given. */

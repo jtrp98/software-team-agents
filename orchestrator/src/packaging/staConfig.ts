@@ -70,6 +70,8 @@ export const StaConfigSchema = z.object({
             z.object({
               runtime: z.string().min(1),
               model: z.string().min(1).optional(),
+              /** Reasoning effort, forwarded alongside an explicit model where the runtime exposes a control (T-V4-CAST-001). */
+              effort: z.string().min(1).optional(),
             }),
           ]),
         )

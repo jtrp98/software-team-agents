@@ -113,6 +113,34 @@ describe("resolveRuntimeRoute — V3 shape and compatibility", () => {
     expect(result.diagnostics).toContain('routing.by_role for role "backend-engineer" takes precedence over model_routing');
   });
 
+  it("T-V4-CAST-001 — marks the model explicit for a --model flag and a by_role override, not for a frontmatter default", () => {
+    // frontmatter default → not explicit
+    expect(route().selected?.modelExplicit ?? false).toBe(false);
+
+    // --model flag → explicit, precedence 1
+    const flagged = route({ flags: { model: "opus" } });
+    expect(flagged.precedenceLevel).toBe(1);
+    expect(flagged.selected?.model).toBe("opus");
+    expect(flagged.selected?.modelExplicit).toBe(true);
+
+    // by_role with an explicit model + effort → explicit, effort carried
+    const byRole = route({
+      config: {
+        schema_version: 1,
+        routing: { by_role: { "backend-engineer": { runtime: "claude-code", model: "opus", effort: "high" } } },
+      },
+    });
+    expect(byRole.selected?.modelExplicit).toBe(true);
+    expect(byRole.effort).toBe("high");
+
+    // by_role naming only a runtime (model falls back to frontmatter) → not explicit
+    const runtimeOnly = route({
+      config: { schema_version: 1, routing: { by_role: { "backend-engineer": { runtime: "codex" } } } },
+    });
+    expect(runtimeOnly.selected?.modelExplicit ?? false).toBe(false);
+    expect(runtimeOnly.effort).toBeUndefined();
+  });
+
   it("returns an ordered policy candidate list and a human-readable reason for every candidate", () => {
     const result = route({
       config: {

@@ -303,11 +303,41 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
   }
 
   async executeAgent(req: RuntimeAgentRequest): Promise<RuntimeAgentResult> {
-    // req.model is deliberately not turned into a `--model` flag here: the
-    // subagent's own `.claude/agents/<role>.md` frontmatter already selects a
-    // model, and passing both risks the two disagreeing. T112 is where a genuine
-    // per-run override gets designed, once it decides whether that means editing
-    // the frontmatter or finally using this flag.
+    // req.model is turned into `--model` ONLY when the caller marks it an
+    // operator-visible override (`req.modelExplicit`) — the `--model` CLI flag or
+    // `.sta/config.yaml` routing. Absent that, the subagent's own
+    // `.claude/agents/<role>.md` frontmatter governs and nothing is passed, so
+    // the argument list stays byte-identical to every run before T-V4-CAST-001:
+    // passing both risks the frontmatter and the flag disagreeing, and the drop
+    // exists to prevent exactly that unless a person asked for it.
+    const modelDiagnostics: string[] = [];
+    let overrideModel: string | undefined;
+    if (req.modelExplicit && req.model) {
+      if (!this.models.has(req.model)) {
+        return {
+          status: "ERROR",
+          exitCode: null,
+          text: "",
+          usage: {},
+          guards: { enforced: [], unenforced: [] },
+          diagnostics: [
+            `refusing to run: model "${req.model}" is not one Claude Code accepts ` +
+              `(${[...this.models].join(", ")}) — fix --model or the .sta/config.yaml routing entry ` +
+              `rather than passing an unknown model through to the runtime`,
+          ],
+        };
+      }
+      overrideModel = req.model;
+    }
+    if (req.modelExplicit && req.effort) {
+      // Claude Code's `claude -p` exposes no reasoning-effort control, so an
+      // explicitly requested effort cannot be applied here — recorded, never
+      // dropped in silence (T-V4-CAST-001).
+      modelDiagnostics.push(
+        `requested reasoning effort "${req.effort}" was not applied: Claude Code's \`claude -p\` has no effort flag ` +
+          `(subagent frontmatter's \`effort:\` is honoured only when generating a Codex/OpenCode binding)`,
+      );
+    }
     const args = [
       "-p",
       "--agent",
@@ -317,6 +347,8 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       "--permission-mode",
       PERMISSION_MODE[req.autonomy],
     ];
+    // Override-only: with no explicit request this pushes nothing (see above).
+    if (overrideModel) args.push("--model", overrideModel);
     // M4: contract denies as hard permission rules, not just hook backstops.
     // Empty guards ⇒ no flag, keeping the no-guard request shape unchanged.
     //
@@ -345,7 +377,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     } catch (e) {
       // A spawn that throws outright — not one that returns with `.error` set —
       // means the runtime itself could not be reached, never a task failure.
-      return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [`failed to spawn \`claude\`: ${String(e)}`] };
+      return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [...modelDiagnostics, `failed to spawn \`claude\`: ${String(e)}`] };
     }
 
     const guards = await guardReportFor(this.workspace, this.binding.guardConfigPath!, req.guards);
@@ -353,7 +385,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     if (proc.error) {
       const code = (proc.error as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
-        const diagnostics = [`\`claude\` binary not found: ${proc.error.message}`];
+        const diagnostics = [...modelDiagnostics, `\`claude\` binary not found: ${proc.error.message}`];
         if (resolvedThrough === null && this.platform === "win32") {
           diagnostics.push(
             "on Windows an npm-installed `claude` is a .cmd/.ps1 shim spawnSync cannot execute; no resolvable entry was found — install the native build or expose a real executable on PATH",
@@ -362,13 +394,16 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards, diagnostics };
       }
       if (code === "ETIMEDOUT") {
-        return { status: "TIMEOUT", exitCode: proc.status ?? null, text: "", usage: {}, guards, diagnostics: [`\`claude --agent ${req.role}\` timed out: ${proc.error.message}`] };
+        return { status: "TIMEOUT", exitCode: proc.status ?? null, text: "", usage: {}, guards, diagnostics: [...modelDiagnostics, `\`claude --agent ${req.role}\` timed out: ${proc.error.message}`] };
       }
-      return { status: "ERROR", exitCode: proc.status ?? null, text: "", usage: {}, guards, diagnostics: [`\`claude\` errored: ${proc.error.message}`] };
+      return { status: "ERROR", exitCode: proc.status ?? null, text: "", usage: {}, guards, diagnostics: [...modelDiagnostics, `\`claude\` errored: ${proc.error.message}`] };
     }
 
     const { value: cli, parseFailed } = parseCliOutput(proc.stdout ?? "");
-    const diagnostics = parseFailed ? ["could not parse `claude`'s stdout as JSON — usage/cost are unknown for this run"] : [];
+    const diagnostics = [
+      ...modelDiagnostics,
+      ...(parseFailed ? ["could not parse `claude`'s stdout as JSON — usage/cost are unknown for this run"] : []),
+    ];
     const usage: RuntimeUsage = {
       inputTokens: cli.usage?.input_tokens,
       outputTokens: cli.usage?.output_tokens,
