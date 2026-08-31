@@ -241,6 +241,15 @@ describe.each(implementations)("%s", (_name, makeStore) => {
     store.close();
   });
 
+  it("T-V4-CAST-006 persists a QA/security verdict source fingerprint without runtime identity", () => {
+    const store = makeStore();
+    const fingerprint = { files: { "src/payment.ts": "sha256-fixture" } };
+    store.appendRun({ ...sampleRun("T-1"), agent: AgentStage.QA_ENGINEER, verification_fingerprint: fingerprint });
+    store.appendRun({ ...sampleRun("T-1"), agent: AgentStage.SECURITY, verification_fingerprint: fingerprint });
+    expect(store.runsForTask("T-1").map((run) => run.verification_fingerprint)).toEqual([fingerprint, fingerprint]);
+    store.close();
+  });
+
   it("keeps events per task as an audit trail", () => {
     const store = makeStore();
     store.appendEvent({ taskId: "T-1", at: 1, type: "AGENT_ASSIGNED", payload: { stage: "backend-engineer" } });
@@ -504,7 +513,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       }
 
       const versionCheck = new Database(file, { readonly: true });
-      expect(versionCheck.pragma("user_version", { simple: true })).toBe(16);
+        expect(versionCheck.pragma("user_version", { simple: true })).toBe(17);
       expect((versionCheck.pragma("table_info(runs)") as { name: string }[]).filter((column) => routingColumns.includes(column.name as typeof routingColumns[number])).map((column) => column.name)).toEqual([...routingColumns]);
       versionCheck.close();
 
@@ -546,7 +555,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
 
       const verify = new Database(file, { readonly: true });
       try {
-        expect(verify.pragma("user_version", { simple: true })).toBe(16);
+        expect(verify.pragma("user_version", { simple: true })).toBe(17);
         expect((verify.prepare("SELECT state FROM tasks WHERE task_id = ?").get("T-V12") as { state: string }).state).toBe(legacyBytes);
       } finally {
         verify.close();

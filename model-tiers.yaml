@@ -1,0 +1,114 @@
+# Model tiers are a human-owned choice for this framework.
+# Cross-camp cells are approximations chosen by a person, not equivalences.
+# No automated process refreshes this file; edit it only when its human owner chooses to.
+
+tiers:
+  T1:
+    reserved: true
+    camps:
+      anthropic:
+        model: opus
+        effort: max
+        notes: Maximum reasoning; reserved and never cast in the pipeline.
+      openai:
+        model: gpt-5.6-sol
+        effort: xhigh
+        notes: Maximum reasoning; reserved and never cast in the pipeline.
+      google:
+        model: gemini-3-pro
+        effort: high
+        notes: Maximum reasoning; reserved and never cast in the pipeline.
+      zai:
+        model: glm-5.2
+        effort: thinking
+        notes: Maximum reasoning; reserved and never cast in the pipeline.
+  T2:
+    camps:
+      anthropic:
+        model: opus
+        effort: high
+        notes: Planning and security grade; the highest tier a plan may cast.
+      openai:
+        model: gpt-5.6-sol
+        effort: high
+        notes: Planning and security grade.
+      google:
+        model: gemini-3.1-pro
+        effort: high
+        notes: Planning and security grade.
+      zai:
+        model: glm-5.2
+        effort: thinking
+        notes: Planning and security grade.
+  T3:
+    camps:
+      anthropic:
+        model: opus
+        effort: medium
+        notes: Analysis grade and risky implementation or QA verification.
+      openai:
+        model: gpt-5.6-sol
+        effort: medium
+        notes: Analysis grade and risky implementation or QA verification.
+      google:
+        model: gemini-3.1-pro
+        effort: medium
+        notes: Analysis grade and risky implementation or QA verification.
+      zai:
+        model: glm-5.2
+        effort: thinking
+        notes: Analysis grade and risky implementation or QA verification.
+  T4:
+    camps:
+      anthropic:
+        model: sonnet
+        effort: high
+        notes: Hard or risky implementation across a contract or several modules.
+      openai:
+        model: gpt-5.6-terra
+        effort: high
+        notes: Hard or risky implementation across a contract or several modules.
+      google:
+        model: gemini-3.7-flash
+        effort: high
+        notes: Hard or risky implementation across a contract or several modules.
+      zai:
+        model: glm-4.7
+        effort: thinking
+        notes: Hard or risky implementation across a contract or several modules.
+  T5:
+    camps:
+      anthropic:
+        model: sonnet
+        effort: medium
+        notes: Light implementation work.
+      openai:
+        model: gpt-5.6-terra
+        effort: medium
+        notes: Light implementation work.
+      google:
+        model: gemini-3.7-flash
+        effort: medium
+        notes: Light implementation work.
+      zai:
+        model: glm-4.7
+        effort: off
+        notes: Light implementation work.
+  T6:
+    camps:
+      anthropic:
+        model: haiku-4.5
+        effort: low
+        notes: Fast mechanical work such as setup, typos, and lint fixes.
+      openai:
+        model: gpt-5.6-luna
+        effort: low
+        notes: Fast mechanical work such as setup, typos, and lint fixes.
+      google:
+        model: gemini-3-flash-lite
+        effort: low
+        notes: Fast mechanical work such as setup, typos, and lint fixes.
+      zai:
+        model: glm-5-turbo
+        effort: off
+        notes: Fast mechanical work such as setup, typos, and lint fixes.

@@ -8,6 +8,16 @@ import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { MockRuntimeAdapter } from "./mockAdapter.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { parseModelRoute, requiredCapabilitiesFor, resolveRuntimeRoute, type ResolveRuntimeRouteOptions } from "./runtimeRouting.js";
+import type { ModelTiers } from "./modelTiers.js";
+
+const tierTable = {
+  T1: { reserved: true, camps: { anthropic: { model: "opus", effort: "max", notes: "x" }, openai: { model: "sol", effort: "xhigh", notes: "x" }, google: { model: "pro", effort: "high", notes: "x" }, zai: { model: "glm", effort: "thinking", notes: "x" } } },
+  T2: { reserved: false, camps: { anthropic: { model: "opus", effort: "high", notes: "x" }, openai: { model: "sol", effort: "high", notes: "x" }, google: { model: "pro", effort: "high", notes: "x" }, zai: { model: "glm", effort: "thinking", notes: "x" } } },
+  T3: { reserved: false, camps: { anthropic: { model: "opus", effort: "medium", notes: "x" }, openai: { model: "sol", effort: "medium", notes: "x" }, google: { model: "pro", effort: "medium", notes: "x" }, zai: { model: "glm", effort: "thinking", notes: "x" } } },
+  T4: { reserved: false, camps: { anthropic: { model: "sonnet", effort: "high", notes: "x" }, openai: { model: "terra", effort: "high", notes: "x" }, google: { model: "flash", effort: "high", notes: "x" }, zai: { model: "glm-4.7", effort: "thinking", notes: "x" } } },
+  T5: { reserved: false, camps: { anthropic: { model: "sonnet", effort: "medium", notes: "x" }, openai: { model: "terra", effort: "medium", notes: "x" }, google: { model: "flash", effort: "medium", notes: "x" }, zai: { model: "glm-4.7", effort: "off", notes: "x" } } },
+  T6: { reserved: false, camps: { anthropic: { model: "haiku", effort: "low", notes: "x" }, openai: { model: "luna", effort: "low", notes: "x" }, google: { model: "lite", effort: "low", notes: "x" }, zai: { model: "turbo", effort: "off", notes: "x" } } },
+} as ModelTiers;
 
 function tmpProject(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "runtime-routing-"));
@@ -53,6 +63,20 @@ function route(over: Partial<ResolveRuntimeRouteOptions> = {}) {
     ...over,
   });
 }
+
+describe("T-V4-CAST-005", () => {
+  it("feeds a phase tier into the existing level-four route without making a sixth level", () => {
+    const resolved = route({ tier: { id: "T4", table: tierTable } });
+    expect(resolved.precedenceLevel).toBe(4);
+    expect(resolved.selected).toMatchObject({ model: "sonnet", effort: "high", modelExplicit: true });
+  });
+
+  it("keeps the frontmatter route unchanged when no tier table is supplied", () => {
+    const resolved = route();
+    expect(resolved.precedenceLevel).toBe(4);
+    expect(resolved.selected).toMatchObject({ model: "sonnet", effort: undefined, modelExplicit: false });
+  });
+});
 
 describe("parseModelRoute", () => {
   it("preserves plain model names and splits runtime:model only on the first colon", () => {

@@ -23,6 +23,7 @@ function fixtureRepo(): string {
     "stacks/nextjs-express/stack.yaml": "language: typescript\n",
     "layout.yaml": "version: 1\n",
     "escalation-policy.yaml": "severities: []\n",
+    "model-tiers.yaml": "tiers: {}\n",
     "knowledge-policy.yaml": "roles: []\n",
     "test-pyramid.yaml": "levels: []\n",
     "orchestrator/src/cli.ts": "// framework source, never templated\n",
@@ -60,6 +61,7 @@ describe("listTemplateFiles", () => {
     expect(files).toContain("stacks/nextjs-express/stack.yaml");
     expect(files).toContain("layout.yaml");
     expect(files).toContain("escalation-policy.yaml");
+    expect(files).toContain("model-tiers.yaml");
     expect(files).not.toContain("knowledge-policy.yaml");
     expect(files).toContain("test-pyramid.yaml");
   });

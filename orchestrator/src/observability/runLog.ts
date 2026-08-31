@@ -1,4 +1,5 @@
 import { AgentStage } from "../types.js";
+import type { ChangeSetFingerprint } from "../qa/changeSource.js";
 
 export interface RunRecord {
   task_id: string;
@@ -71,6 +72,8 @@ export interface RunRecord {
   qa_effort: "skip" | "lightweight" | "full" | null;
   /** Whether this optimized QA round ran deterministic checks, or used the explicit escape hatch. */
   deterministic_gate: "enabled" | "disabled" | null;
+  /** Source snapshot captured for a QA/security verdict; null means pre-T-V4-CAST-006 history. */
+  verification_fingerprint?: ChangeSetFingerprint | null;
 }
 
 export interface RunOutcome {
@@ -117,6 +120,7 @@ export interface RunOutcome {
   qa_mode?: "FULL" | "TARGETED";
   qa_effort?: "skip" | "lightweight" | "full";
   deterministic_gate?: "enabled" | "disabled";
+  verification_fingerprint?: ChangeSetFingerprint;
 }
 
 const NOT_REPORTED = "not reported";
@@ -217,6 +221,7 @@ export class RunLog {
       qa_mode: params.outcome.qa_mode ?? null,
       qa_effort: params.outcome.qa_effort ?? null,
       deterministic_gate: params.outcome.deterministic_gate ?? null,
+      ...(params.outcome.verification_fingerprint ? { verification_fingerprint: params.outcome.verification_fingerprint } : {}),
     };
     this.records.push(entry);
     return entry;

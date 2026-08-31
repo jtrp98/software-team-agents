@@ -41,6 +41,8 @@ import { ArtifactType } from "../artifacts/schemas.js";
 import { assessContextBudget, contextBudgetRejections, formatBudgetRejection, resolveContextBudgetFromProject, resolveContextBudgetModeFromProject, taskTokenBudgetRejection, type ContextBudgetComposition } from "../context/contextBudget.js";
 import { RunLog } from "../observability/runLog.js";
 import { writeExecutionPacket } from "../state/runtimeArtifacts.js";
+import { loadModelTiers, type ModelTierId, type ModelTiers } from "./modelTiers.js";
+import { captureChangeSetFingerprint } from "../qa/changeSource.js";
 
 /**
  * An `AgentExecutor` built on a `RuntimeAdapter` (T108).
@@ -122,6 +124,8 @@ export interface RuntimeExecutorOptions {
   taskRunLog?: (taskId: string) => RunLog;
   /** T111's verified capability picture per runtime id, passed through to `resolveRuntimeRoute` so its capability-policy diagnostic uses confirmed facts instead of a static claim, when available. */
   verifiedCapabilities?: Readonly<Record<string, ReadonlySet<RuntimeCapability>>>;
+  /** Optional plan tier lookup. An absent table deliberately leaves routing unchanged. */
+  planTier?: (taskId: string) => string | undefined;
 }
 
 /**
@@ -220,6 +224,20 @@ function describeFailure(runtimeId: string, role: string, result: RuntimeAgentRe
   const detail = [result.text, ...result.diagnostics, ...routingDiagnostics].filter((s) => s.length > 0).join(" | ").slice(0, 2000);
   const exit = result.exitCode === null ? "unknown" : String(result.exitCode);
   return `${runtimeId} run of \`${role}\` finished ${result.status} (exit ${exit}): ${detail}`;
+}
+
+/** Capture the source state at a document verdict without making the verdict depend on runtime identity. */
+async function fingerprintVerdict(result: AgentExecutorResult, projectRoot: string): Promise<AgentExecutorResult> {
+  if (!result.artifactType) return result;
+  try {
+    return {
+      ...result,
+      outcome: { ...result.outcome, verification_fingerprint: await captureChangeSetFingerprint(projectRoot) },
+    };
+  } catch {
+    // A non-git legacy workspace retains its established verdict behaviour.
+    return result;
+  }
 }
 
 interface FallbackHop {
@@ -370,6 +388,14 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     let requestedModel: string | undefined;
     let routingBasis: string | undefined;
     if (opts.registry) {
+      let tier: { id: ModelTierId; table: ModelTiers } | undefined;
+      const tierId = opts.planTier?.(req.taskId);
+      try {
+        const table = loadModelTiers(opts.projectRoot);
+        if (table && tierId && tierId !== "T1" && tierId in table) tier = { id: tierId as ModelTierId, table };
+      } catch (error) {
+        routingDiagnostics.push(`model tiers were ignored: ${error instanceof Error ? error.message : String(error)}`);
+      }
       routeAvailability = await opts.registry.probeAll();
       const route = resolveRuntimeRoute({
         role,
@@ -386,6 +412,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         allowHandoff: opts.allowHandoff,
         hasTargetWrite,
         verifiedCapabilities: opts.verifiedCapabilities,
+        tier,
       });
       routingDiagnostics.push(...route.diagnostics);
       routeAttempts = [...route.attempts];
@@ -733,10 +760,16 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // works wherever the run happened, not only where the orchestrator's `fs`
     // can reach.
     if (req.stage === AgentStage.QA_ENGINEER) {
-      return finish(qaArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "review.md")));
+      return finish(await fingerprintVerdict(
+        qaArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "review.md")),
+        opts.projectRoot,
+      ));
     }
     if (req.stage === AgentStage.SECURITY) {
-      return finish(securityArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "security.md")));
+      return finish(await fingerprintVerdict(
+        securityArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "security.md")),
+        opts.projectRoot,
+      ));
     }
 
     // The five doc-producing stages each own exactly one module document. Exit 0

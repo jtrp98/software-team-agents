@@ -69,7 +69,7 @@ When it's genuinely ambiguous, ask the user — and record the reason in `requir
 |---|---|---|
 | `requirement.md` | `business-analyst` | business requirements, scope, declined features, references for any external fact |
 | `design.md` | `system-analyst` | feasibility verdicts, the confirmed Prisma schema, module breakdown |
-| `plan.md` | `project-manager` (task Status: `project-manager` writes rows `pending`, `qa-engineer` sets `verified`/`blocked` — T52; engineers don't edit the table, they report progress in their handoff) | phased task table |
+| `plan.md` | `project-manager` (task Status: `project-manager` writes rows `pending`, `qa-engineer` sets `verified`/`blocked` — T52; engineers don't edit the table, they report progress in their handoff) | phased task table, with an optional phase-level `Tier` cast for implementation and QA work |
 | `review.md` | `qa-engineer` | open issues (all phases) + the current verify round + undeployed phases' `Unverified Behaviour` |
 | `review/phase-N.md` | `qa-engineer` | archived verify rounds for phases that are closed — read only on demand |
 | `security.md` | `security` | findings, accepted risks |

@@ -3,6 +3,7 @@ import * as path from "node:path";
 import Database from "better-sqlite3";
 import type { AgentStage } from "../types.js";
 import type { RunRecord } from "../observability/runLog.js";
+import type { ChangeSetFingerprint } from "../qa/changeSource.js";
 import {
   PersistedEventSchema,
   TaskAlreadyExistsError,
@@ -61,7 +62,8 @@ import {
 // v14 (T-V3R-060): records the orthogonal QA effort decision. Historical rows stay null.
 // v15 (T-V4-COST-001): records deterministic input-token estimates. Historical rows stay null.
 // v16 (T-V4-COST-006): records agent-frontmatter effort independently from qa_effort.
-const SCHEMA_VERSION = 16;
+// v17 (T-V4-CAST-006): records source fingerprints for QA/security verdicts.
+const SCHEMA_VERSION = 17;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -119,7 +121,8 @@ CREATE TABLE IF NOT EXISTS runs (
   context_knowledge_chars    INTEGER,
   context_code_chars         INTEGER,
   context_tool_output_chars  INTEGER,
-  context_reserve_chars      INTEGER
+  context_reserve_chars      INTEGER,
+  verification_fingerprint   TEXT
 );
 CREATE INDEX IF NOT EXISTS runs_task_id ON runs (task_id);
 CREATE TABLE IF NOT EXISTS events (
@@ -231,6 +234,7 @@ interface RunRow {
   context_code_chars: number | null;
   context_tool_output_chars: number | null;
   context_reserve_chars: number | null;
+  verification_fingerprint: string | null;
 }
 
 interface EventRow {
@@ -243,6 +247,19 @@ interface EventRow {
   input: string | null;
   output: string | null;
   decision: string | null;
+}
+
+function parseVerificationFingerprint(value: string | null): ChangeSetFingerprint | null {
+  if (value === null) return null;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || !("files" in parsed) || !parsed.files || typeof parsed.files !== "object") return null;
+    const files = Object.entries(parsed.files as Record<string, unknown>);
+    if (files.some(([file, digest]) => !file || typeof digest !== "string")) return null;
+    return { files: Object.fromEntries(files as Array<[string, string]>) };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -355,6 +372,12 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
     if (!existing.has("effort")) db.exec("ALTER TABLE runs ADD COLUMN effort TEXT");
   },
+  16: (db) => {
+    // Verdict source identity did not exist for historical runs; null preserves
+    // their legacy behaviour rather than inventing an unverifiable snapshot.
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    if (!existing.has("verification_fingerprint")) db.exec("ALTER TABLE runs ADD COLUMN verification_fingerprint TEXT");
+  },
 };
 
 export class SqliteTaskStore implements TaskStore {
@@ -448,8 +471,8 @@ export class SqliteTaskStore implements TaskStore {
   appendRun(record: RunRecord): void {
     this.db
       .prepare(
-        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, estimated_input_tokens, prompt_version, effort, qa_mode, qa_effort, deterministic_gate, runtime, requested_runtime, requested_model, routing_basis, fallback_reason, fallback_count, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, estimated_input_tokens, prompt_version, effort, qa_mode, qa_effort, deterministic_gate, runtime, requested_runtime, requested_model, routing_basis, fallback_reason, fallback_count, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars, verification_fingerprint)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.task_id,
@@ -500,6 +523,7 @@ export class SqliteTaskStore implements TaskStore {
         record.context_code_chars,
         record.context_tool_output_chars,
         record.context_reserve_chars,
+        record.verification_fingerprint ? JSON.stringify(record.verification_fingerprint) : null,
       );
   }
 
@@ -563,6 +587,7 @@ export class SqliteTaskStore implements TaskStore {
       context_code_chars: r.context_code_chars,
       context_tool_output_chars: r.context_tool_output_chars,
       context_reserve_chars: r.context_reserve_chars,
+      ...(r.verification_fingerprint === null ? {} : { verification_fingerprint: parseVerificationFingerprint(r.verification_fingerprint) }),
     };
   }
 

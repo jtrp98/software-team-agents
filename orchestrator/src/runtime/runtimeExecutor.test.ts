@@ -990,6 +990,22 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
     });
   });
 
+  it("keeps a cast task on its frontmatter model when model-tiers.yaml is absent", async () => {
+    const projectRoot = tmpProject();
+    writeAgentFile(projectRoot, "backend-engineer", "model: sonnet");
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
+    const executor = createRuntimeExecutor({
+      runtime,
+      registry: new RuntimeRegistry([runtime]),
+      projectRoot,
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+      planTier: () => "T4",
+    });
+    await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-NO-TIER-TABLE", context: [] });
+    expect(runtime.requests[0]).toMatchObject({ model: "sonnet", modelExplicit: false, effort: undefined });
+  });
+
   it("T-V4-CAST-001 — a --model routing flag reaches the adapter as an explicit override; a resolved default does not", async () => {
     const projectRoot = tmpProject();
     writeAgentFile(projectRoot, "backend-engineer", "model: sonnet");

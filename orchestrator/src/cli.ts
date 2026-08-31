@@ -24,6 +24,7 @@ import { OpenCodeAdapter } from "./runtime/openCodeAdapter.js";
 import { ApiAdapter, PAID_API_RUNTIME_ID } from "./runtime/apiAdapter.js";
 import { RUNTIME_IDS, type RuntimeId } from "./runtime/runtimeSupport.js";
 import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "./runtime/runtimeRegistry.js";
+import { selectTierCamp } from "./runtime/tierCampSelection.js";
 import type { RoutingMode } from "./runtime/runtimeRouting.js";
 import { detectRuntimeCapabilities } from "./runtime/runtimeCapabilityDetection.js";
 import { resolveContextDocsRoot, resolveFrameworkRoot } from "./targetcli/roots.js";
@@ -661,6 +662,26 @@ function runtimeTaskText(args: CliArgs, taskId: string, docsRoot: string): strin
   } catch {
     return taskId;
   }
+}
+
+/** Optional phase-tier metadata is advisory input to routing, never a runtime gate. */
+function plannedTier(args: CliArgs, taskId: string): string | undefined {
+  if (!args.module) return undefined;
+  try {
+    const planMd = readModuleDoc(resolveContextDocsRoot(args.projectRoot), args.module, "plan.md");
+    return planMd === null ? undefined : parsePlanTasks(planMd).tasks.find((task) => task.id === taskId)?.tier;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Never called without a terminal: CI/headless execution must not read stdin. */
+function promptForCamp(defaultRuntimeId: RuntimeId): RuntimeId {
+  process.stdout.write(`[orchestrator] Tiered phase: choose camp/runtime [${RUNTIME_IDS.join(", ")}] (default ${defaultRuntimeId}): `);
+  const input = Buffer.alloc(128);
+  const read = fs.readSync(0, input, 0, input.length, null);
+  const selected = input.toString("utf8", 0, read).trim();
+  return (RUNTIME_IDS as readonly string[]).includes(selected) ? selected as RuntimeId : defaultRuntimeId;
 }
 
 /**
@@ -1379,16 +1400,28 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     // that seam. `guards` derives from `contracts/<role>.yaml` (T15), same as before.
     // T-OC5: --runtime picks the adapter; the default stays byte-identical to
     // every run before the flag existed.
-    let executionConfig: ReturnType<typeof loadStaConfig>["execution"] | undefined;
+    let staConfig: ReturnType<typeof loadStaConfig> | undefined;
     try {
-      executionConfig = loadStaConfig(args.projectRoot).execution;
+      staConfig = loadStaConfig(args.projectRoot);
     } catch {
       // Missing/invalid config is diagnosed by the router. Composition must
       // retain the historical Single/claude-code defaults in either case.
-      executionConfig = undefined;
+      staConfig = undefined;
     }
+    const executionConfig = staConfig?.execution;
     const resolvedMode = args.mode ?? executionConfig?.mode;
-    const defaultRuntimeId = args.runtime ??
+    const phaseTier = plannedTier(args, taskId);
+    const tierCamp = phaseTier
+      ? selectTierCamp({
+        flagRuntime: args.runtime,
+        configuredRuntime: executionConfig?.runner,
+        hasConfiguredRoleRoute: staConfig?.routing?.by_role !== undefined,
+        isTTY: process.stdin.isTTY === true,
+        defaultRuntimeId: DEFAULT_RUNTIME_ID,
+        prompt: () => promptForCamp(DEFAULT_RUNTIME_ID),
+      })
+      : undefined;
+    const defaultRuntimeId = tierCamp?.runtimeId ?? args.runtime ??
       ((resolvedMode ?? "single") === "single" ? executionConfig?.runner : undefined) ??
       DEFAULT_RUNTIME_ID;
     const allowPaidFallback = executionConfig?.allow_paid_fallback === true;
@@ -1409,6 +1442,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       runtime: defaultRuntime,
       registry: runtimeRegistry,
       routingFlags: args.runtime || args.model ? { runtime: args.runtime, model: args.model } : undefined,
+      planTier: (id) => plannedTier(args, id),
       classification: (id) => store.loadTask(id)?.classification,
       riskSignals: (id) => {
         const classification = store.loadTask(id)?.classification;

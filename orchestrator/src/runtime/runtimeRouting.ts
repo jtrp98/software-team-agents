@@ -9,6 +9,8 @@ import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "./runtimeRegistry.js";
 import type { RuntimeAdapter, RuntimeProbe, RuntimeRunStatus } from "./runtimeAdapter.js";
 import { RUNTIME_SUPPORT, type RuntimeSupportLevel } from "./runtimeSupport.js";
+import { resolveTierBinding } from "./tierRouting.js";
+import type { ModelTierId, ModelTiers } from "./modelTiers.js";
 
 export type RoutingPrecedenceLevel = 1 | 2 | 3 | 4 | 5;
 export type RoutingMode = "single" | "manual" | "auto";
@@ -90,6 +92,8 @@ export interface ResolveRuntimeRouteOptions {
   /** True only when this stage has a canonical Target root with write access. */
   readonly hasTargetWrite?: boolean;
   readonly verifiedCapabilities?: Readonly<Record<string, ReadonlySet<RuntimeCapability>>>;
+  /** A phase tier resolves model/effort through this route's existing precedence. */
+  readonly tier?: { id: ModelTierId; table: ModelTiers };
 }
 
 interface CandidateSpec {
@@ -315,6 +319,18 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
       });
       present.add(runtimeId);
     }
+  }
+
+  // Tier resolution is a source for model/effort, never a sixth precedence
+  // level. A direct model override retains its existing explicit priority.
+  if (opts.tier) {
+    specs = specs.map((spec) => {
+      if (spec.modelExplicit) return spec;
+      const binding = resolveTierBinding(opts.tier!.table, opts.tier!.id, spec.runtimeId);
+      return binding === null
+        ? spec
+        : { ...spec, model: binding.model, effort: binding.effort, modelExplicit: true, reason: `${spec.reason}; phase tier ${opts.tier!.id} resolved for ${spec.runtimeId}` };
+    });
   }
 
   const requestedSpec = specs[0] ?? {

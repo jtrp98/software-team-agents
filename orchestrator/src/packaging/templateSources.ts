@@ -44,6 +44,7 @@ export const TEMPLATE_SOURCES: readonly TemplateSourceEntry[] = [
   { relPath: "stacks", kind: "dir" },
   { relPath: "layout.yaml", kind: "file" },
   { relPath: "escalation-policy.yaml", kind: "file" },
+  { relPath: "model-tiers.yaml", kind: "file" },
   { relPath: "test-pyramid.yaml", kind: "file" },
 ];
 
