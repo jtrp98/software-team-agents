@@ -16,6 +16,9 @@ Process/workflow layer + orchestrator CLI สำหรับทีมซอฟ�
 
 > **ตั้งทีมใหม่?** เดิน onboarding เต็มทีละขั้นที่ [`TEAM_SETUP_V1.md`](TEAM_SETUP_V1.md) (Install → Bind →
 > Init workspace → Validate → Ready + Troubleshooting) — README นี้เป็น reference, ไม่ใช่ walkthrough
+>
+> **ให้ AI ตั้งให้?** ชี้ assistant (Claude Code / Codex / OpenCode) ไปที่ [`prompt-setup.md`](prompt-setup.md) —
+> playbook เดียวกันในรูปแบบที่ agent รันเอง (ดูหัวข้อ [Setup playbooks](#setup-playbooks-prompt-setupmd)).
 
 ---
 
@@ -106,6 +109,28 @@ V3 flags ที่ `sta run` รับจริง:
 | `--token-budget <n>` | positive integer, post-hoc task token ceiling; ไม่ใช่ pre-spawn context cap |
 
 ดู surface ทั้งหมดที่ build นี้รับจริงด้วย `sta --help`, runtime/support จริงด้วย `sta runtimes`, และผล routing/fallback ที่บันทึกด้วย `sta status <task-id>` / `sta audit <task-id>`.
+
+## Setup playbooks (`prompt-setup.md`)
+
+`prompt-setup.md` คือ playbook สำหรับ **AI coding assistant** (Claude Code / Codex / OpenCode หรือ agent ใด ๆ ที่อ่านไฟล์ + รัน shell ได้) ให้ตั้ง / ซ่อม / ตรวจ software-team-agents บนเครื่องหนึ่งเครื่องต่อ role เดียว — runtime-agnostic, สมมติแค่ file access + shell คู่ขนานกับ [`TEAM_SETUP_V1.md`](TEAM_SETUP_V1.md) ซึ่งเป็นเวอร์ชันให้ **คน** เดินเองพร้อม Troubleshooting
+
+**วิธีใช้:** ให้ assistant อ่านไฟล์นี้ — paste เนื้อหาเข้า session หรือสั่ง "อ่าน `prompt-setup.md` แล้วตั้งให้ที"
+
+**สิ่งที่มันทำ:** Phase 0 inspect แบบ read-only (`software-team-agents status --json`, `--version`, `sta --check-workspace`) → สรุปสิ่งที่เจอ → ให้เลือก 1 ใน 7 flow:
+
+| Flow | ใช้เมื่อ |
+|---|---|
+| **BA** | ตั้ง analysis workspace ใน Knowledge repo (Framework + Knowledge เท่านั้น, ไม่มี Target) |
+| **DEV** | ตั้ง engineering workspace ใน Target repo + bind Knowledge เป็น read context |
+| **QA** | เหมือน DEV แต่ derive ความต้องการจาก workflow definitions ก่อนถาม |
+| **Add Target** | register Target เพิ่มในชุดที่มีอยู่ โดยไม่แตะของเดิม |
+| **Update Setup** | re-inspect + `sync` หลัง Framework ขยับ/อัปเดต |
+| **Inspect Setup** | รายงาน read-only ล้วน ไม่แก้อะไร |
+| **Repair Setup** | repo ย้ายที่, sync ค้าง, remote ไม่ตรง, prompt หลุด workspace ผิด |
+
+**หลักการที่ playbook บังคับตัวเอง:** inspect ก่อนถาม (ถามเฉพาะที่ตรวจไม่ได้) · ใช้คำสั่งทางการเท่านั้น (`init | sync | status`, `sta configure knowledge-root`) ไม่แก้ `.agent-team/` ด้วยมือ · safe by default — ไม่ลบอะไร, ไม่ `sync --force` จนกว่าคนจะพูดคำว่า "force" ต่อ step นั้น, ไม่แตะ Framework checkout · state-changing git (`git clone` / `git init` ตอน bootstrap Target ใหม่) ต้องโชว์คำสั่งก่อนและรอ confirm · จบด้วย Final Report + คำสั่งที่ผู้ใช้รันต่อได้
+
+> `prompt-update-knowledge.md` **ไม่เกี่ยวกับ setup** — เป็นชื่อเดิมของ `prompt-reconcile-knowledge-layout.md` (จัด layout ไฟล์ใน Knowledge repo) เหลือเป็น pointer หนึ่ง release แล้วลบ ดูหัวข้อ [จัด Knowledge repo ที่โครงสร้างเพี้ยน](#จัด-knowledge-repo-ที่โครงสร้างเพี้ยน--playbook-prompt-reconcile-knowledge-layoutmd)
 
 ## Installation
 
@@ -356,6 +381,28 @@ Knowledge ไม่ใช่ "AI memory" — เป็นข้อมูลร�
 - **Role/Target-based context** — `knowledge-policy.yaml` กำหนด field ที่แต่ละ role เห็น; `target_ids: []` เป็น global และรายการที่ scoped จะเข้า context เฉพาะ Target ปัจจุบัน พร้อมจำนวนที่ถูก exclude/fallback เมื่อ resolve Target ไม่ได้
 - **Freshness + reconciliation** — brief แสดง verdict จาก `freshnessOf()` ภายใต้เพดาน 16,384 B; `sta knowledge reconcile --target <id>` คำนวณรายงาน current/desired แบบ read-only ทุกครั้งและไม่บันทึก verdict
 - Reserved directories: `_sources/ _conflicts/ _bootstrap/ _human-input/ _adoption/ _roles/`
+
+### จัด Knowledge repo ที่โครงสร้างเพี้ยน — playbook `prompt-reconcile-knowledge-layout.md`
+
+ใช้เมื่อมี Knowledge repo **อยู่แล้ว** แต่ layout ไฟล์บนดิสก์ไม่ตรง canonical — มันมีมาก่อน Framework, โดนเครื่องมืออื่นแก้, หรือโตแบบ organic ก่อนมีกฎ module-folder (เช่น มี `_docs/<team-prefix>/module/**` ขนานกับ `_docs/module/**`, requirement dump แบบ `_docs/requirement/<domain>/**`, ไฟล์หลงใต้ `_docs/module/` ที่ไม่อยู่ในโฟลเดอร์ module ใด)
+
+```
+# ชี้ assistant (Claude Code / Codex / OpenCode) ไปที่ root ของ Knowledge repo แล้วสั่ง:
+"อ่าน prompt-reconcile-knowledge-layout.md แล้ว reconcile โครงสร้าง repo นี้"
+```
+
+ผลลัพธ์: assistant ทำ inventory ทั้ง repo → จำแนกทุก path ที่ไม่ตรง canonical ลง 6 bucket (parallel tree / pre-module reference / stray files / out-of-framework / unrecognized `knowledge/**` / **right place แต่ format เก่า**) → รัน `sta --check-doc-structure` + `--check-plan` + `--check-knowledge` ต่อโมดูลเพื่อทำตาราง conformance (`plan.md` checkbox เก่า = `0 tasks / 0 waves` ไม่ผ่าน) → เสนอย้าย/route ทีละรายการพร้อม `mv`/`Edit` ที่จะรัน แล้วทำเฉพาะที่ยืนยัน · **ไม่ลบไฟล์ ไม่ bulk-move ไม่ regenerate doc** — doc ที่ format เก่าถูก route กลับไปให้ agent เจ้าของ reformat เอง
+
+ขอบเขต — playbook นี้จัดแต่ layout ไฟล์ ไม่แตะเรื่องอื่น:
+
+| อาการ | ใช้ |
+|---|---|
+| โครงสร้างโฟลเดอร์/ไฟล์ใน Knowledge repo ไม่ตรง canonical | `prompt-reconcile-knowledge-layout.md` |
+| binding / sync / workspace ไม่ได้ register | `prompt-setup.md` (Inspect/Repair) — รันก่อน ถ้า `sta doctor` / `--check-workspace` แดง |
+| หลักฐาน current/desired เทียบ Target จริง (implementation drift) | `sta knowledge reconcile --target <id>` |
+| import legacy `.claude/` `docs/` `planning/` เข้า Knowledge ครั้งแรก | `sta adopt <plan\|start\|run\|approve\|validate>` |
+
+> `prompt-update-knowledge.md` เป็นชื่อเดิมของ playbook นี้ — เหลือไว้เป็น pointer หนึ่ง release แล้วลบ
 
 ## Design sources & identities (uxui-designer)
 
