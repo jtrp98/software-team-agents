@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentStage } from "../types.js";
 import { classifyTask } from "../classification/taskClassifier.js";
 import { Orchestrator } from "../orchestrator/orchestrator.js";
@@ -12,6 +12,7 @@ import { MockRuntimeAdapter, okResult } from "./mockAdapter.js";
 import { NO_GUARDS, type RuntimeRunStatus } from "./runtimeAdapter.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { resolveRuntimeRoute } from "./runtimeRouting.js";
+import * as contextBudget from "../context/contextBudget.js";
 
 const roots: string[] = [];
 function project(config?: string): string {
@@ -282,5 +283,85 @@ describe("T-V3R-041 fallback evidence matrix", () => {
     expect(result.outcome.failure_reason).toMatch(/paid API fallback is disabled/i);
     expect(result.failure?.requiresHuman).toBe(true);
     expect(adapters.every((adapter) => adapter.requests.length === 0)).toBe(true);
+  });
+
+  it("T-V4-COST-005 skips a budget-inadmissible first candidate then spawns the next admissible candidate", async () => {
+    const root = project(`${autoConfig}context_budget:\n  mode: reject\n`);
+    const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
+    const codex = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
+    const resolver = vi.spyOn(contextBudget, "resolveContextBudgetFromProject")
+      .mockReturnValueOnce({ chars: 1, source: "role" })
+      .mockReturnValue({ chars: 100_000, source: "role" });
+    try {
+      const result = await createRuntimeExecutor({
+        runtime: claude,
+        registry: new RuntimeRegistry([claude, codex]),
+        routingMode: "auto",
+        allowHandoff: true,
+        allowPaidFallback: false,
+        projectRoot: root,
+        moduleName: () => "phase-4",
+        guards: () => NO_GUARDS,
+        sliceModuleDocs: false,
+      })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-BUDGET-THEN-SPAWN", context: [] });
+      expect(result.outcome).toMatchObject({ result: "PASS", runtime: "codex", fallback_count: 1 });
+      expect(result.outcome.fallback_reason).toContain('"runtime":"claude-code"');
+      expect(claude.requests).toEqual([]);
+      expect(codex.requests).toHaveLength(1);
+    } finally {
+      resolver.mockRestore();
+    }
+  });
+
+  it("T-V4-COST-005 records every budget-inadmissible candidate as a structured skip and fails closed", async () => {
+    const root = project(`${autoConfig}context_budget:\n  mode: reject\n  roles:\n    backend-engineer: 1\n`);
+    const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
+    const codex = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
+    const result = await createRuntimeExecutor({
+      runtime: claude,
+      registry: new RuntimeRegistry([claude, codex]),
+      routingMode: "auto",
+      allowHandoff: true,
+      allowPaidFallback: false,
+      projectRoot: root,
+      moduleName: () => "phase-4",
+      guards: () => NO_GUARDS,
+      sliceModuleDocs: false,
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-BUDGET-SKIP", context: [] });
+
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain("context_chars budget rejected");
+    expect(result.outcome.fallback_reason).toContain('"budgetType":"context_chars"');
+    expect(result.outcome.fallback_reason).toContain('"runtime":"claude-code"');
+    expect(result.outcome.fallback_reason).toContain('"runtime":"codex"');
+    expect(claude.requests).toEqual([]);
+    expect(codex.requests).toEqual([]);
+  });
+
+  it.each([false, true])("paid budget rejection never widens the resolved candidate set (allow_paid_fallback=%s)", async (allowPaidFallback) => {
+    const root = project(
+      `${autoConfig.replace("allow_paid_fallback: false", `allow_paid_fallback: ${allowPaidFallback}`)}context_budget:\n  mode: reject\n  roles:\n    backend-engineer: 1\n`,
+    );
+    const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
+    const codex = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
+    const paid = new MockRuntimeAdapter({ id: "paid-api", models: ["sonnet"] });
+    const result = await createRuntimeExecutor({
+      runtime: claude,
+      registry: new RuntimeRegistry([claude, codex, paid]),
+      routingMode: "auto",
+      allowHandoff: true,
+      allowPaidFallback,
+      projectRoot: root,
+      moduleName: () => "phase-4",
+      guards: () => NO_GUARDS,
+      sliceModuleDocs: false,
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-PAID-BUDGET", context: [] });
+
+    expect(result.outcome.result).toBe("FAIL");
+    expect(claude.requests).toEqual([]);
+    expect(codex.requests).toEqual([]);
+    expect(paid.requests).toEqual([]);
+    if (allowPaidFallback) expect(result.outcome.fallback_reason).toContain("actual=paid-api");
+    else expect(result.outcome.fallback_reason).not.toContain("actual=paid-api");
   });
 });

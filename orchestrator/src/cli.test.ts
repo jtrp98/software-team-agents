@@ -701,9 +701,9 @@ describe("T-V3TOK-003 tokens verb", () => {
     const store = new SqliteTaskStore(defaultStateDbPath(dir));
     store.appendRun({
       task_id: "session:dev:2026-08-26T00:00:00.000Z", agent: AgentStage.BACKEND_ENGINEER,
-      start_time: 1, end_time: 2, duration: 1, model: null, promptVersion: null, tokens: 0, cost: 0,
+      start_time: 1, end_time: 2, duration: 1, model: null, promptVersion: null, effort: null, tokens: 0, cost: 0,
       result: "PASS", retry_count: 0, failure_reason: null, input_tokens: null, output_tokens: null,
-      cache_read_tokens: null, context_chars: null, qa_mode: null, qa_effort: null, runtime: "claude",
+      cache_read_tokens: null, context_chars: null, estimated_input_tokens: null, qa_mode: null, qa_effort: null, runtime: "claude",
       requested_runtime: null, requested_model: null, routing_basis: null, fallback_reason: null, fallback_count: null,
       session_kind: "interactive",
       deterministic_gate: null,
@@ -719,6 +719,7 @@ describe("T-V3TOK-003 tokens verb", () => {
     try {
       expect(await runCli(["tokens", "--project-root", dir], dir)).toBe(0);
       expect(logs.join("\n")).toContain("not reported");
+      expect(logs.join("\n")).toContain("estimated-input=not reported");
       expect(logs.join("\n")).toContain("static=321");
       expect(logs.join("\n")).toContain("always-on-instructions=123 B");
       expect(logs.join("\n")).toContain("context-budget warnings: 1/1 measured run(s), overflow=221");

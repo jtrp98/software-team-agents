@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { parseModelFromFrontmatter, parseVersionFromFrontmatter, resolveAgentModel, resolveAgentVersion } from "./agentModel.js";
+import { parseEffortFromFrontmatter, parseModelFromFrontmatter, parseVersionFromFrontmatter, resolveAgentEffort, resolveAgentModel, resolveAgentVersion } from "./agentModel.js";
 
 function tmpProject(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "agent-model-"));
@@ -67,6 +67,23 @@ describe("resolveAgentVersion (T57)", () => {
     const root = tmpProject();
     writeAgentFile(root, "bad-version", "---\nname: bad-version\nversion: not-a-number\n---\n\nbody\n");
     expect(resolveAgentVersion(root, "bad-version")).toBeNull();
+  });
+});
+
+describe("resolveAgentEffort (T-V4-COST-006)", () => {
+  it("reads effort through the shared frontmatter helper", () => {
+    const root = tmpProject();
+    writeAgentFile(root, "backend-engineer", "---\nname: backend-engineer\neffort: high\n---\n");
+    expect(resolveAgentEffort(root, "backend-engineer")).toBe("high");
+  });
+
+  it("returns null for absent effort or malformed frontmatter", () => {
+    const root = tmpProject();
+    writeAgentFile(root, "missing", "---\nname: missing\n---\n");
+    writeAgentFile(root, "malformed", "effort: high\n");
+    expect(resolveAgentEffort(root, "missing")).toBeNull();
+    expect(resolveAgentEffort(root, "malformed")).toBeNull();
+    expect(parseEffortFromFrontmatter("---\neffort:  \n---\n")).toBeNull();
   });
 });
 

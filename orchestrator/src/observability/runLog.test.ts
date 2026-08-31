@@ -20,6 +20,7 @@ describe("RunLog", () => {
       duration: 3500,
       model: null,
       promptVersion: null,
+      effort: null,
       tokens: 22000,
       cost: 0.33,
       result: "FAIL",
@@ -29,6 +30,7 @@ describe("RunLog", () => {
       output_tokens: null,
       cache_read_tokens: null,
       context_chars: null,
+      estimated_input_tokens: null,
       runtime: null,
       requested_runtime: null,
       requested_model: null,
@@ -78,6 +80,7 @@ describe("RunLog", () => {
         output_tokens: 1000,
         cache_read_tokens: 2500,
         context_chars: 18000,
+        estimated_input_tokens: 4500,
       },
     });
     expect(record.model).toBe("sonnet");
@@ -85,6 +88,7 @@ describe("RunLog", () => {
     expect(record.output_tokens).toBe(1000);
     expect(record.cache_read_tokens).toBe(2500);
     expect(record.context_chars).toBe(18000);
+    expect(record.estimated_input_tokens).toBe(4500);
   });
 
   it("T-V3R-060 records QA effort independently from QA mode", () => {
@@ -96,6 +100,18 @@ describe("RunLog", () => {
       outcome: { tokens: 1, cost: 0, result: "PASS", qa_mode: "FULL", qa_effort: "lightweight" },
     });
     expect(record.qa_mode).toBe("FULL");
+    expect(record.qa_effort).toBe("lightweight");
+  });
+
+  it("T-V4-COST-006 keeps configured agent effort distinct from qa_effort", () => {
+    const record = new RunLog().record({
+      task_id: "TASK-EFFORT",
+      agent: AgentStage.QA_ENGINEER,
+      start_time: 0,
+      end_time: 1,
+      outcome: { tokens: 1, cost: 0, result: "PASS", effort: "high", qa_effort: "lightweight" },
+    });
+    expect(record.effort).toBe("high");
     expect(record.qa_effort).toBe("lightweight");
   });
 
@@ -248,7 +264,7 @@ describe("RunLog", () => {
       },
     });
     expect(log.summary("TASK-ROUTE")).toContain(
-      "runner=claude-code → codex model=sonnet → gpt-5.6-codex basis=level-4-default fallback_count=1 fallback_reason=claude-code unavailable",
+      "effort=not reported basis=level-4-default fallback_count=1 fallback_reason=claude-code unavailable",
     );
   });
 

@@ -2,7 +2,7 @@ import * as path from "node:path";
 import { AgentStage, TaskLevel } from "../types.js";
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { getAgent } from "../agents/registry.js";
-import { resolveAgentModel, resolveAgentVersion } from "../agents/agentModel.js";
+import { resolveAgentEffort, resolveAgentModel, resolveAgentVersion } from "../agents/agentModel.js";
 import type { StructuredFailure } from "../orchestrator/failure.js";
 import {
   buildPromptParts,
@@ -38,7 +38,8 @@ import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import type { ThreeRepoRequestRoots } from "../threeRepo/preflight.js";
 import { deriveHandoff } from "../agents/moduleDocs.js";
 import { ArtifactType } from "../artifacts/schemas.js";
-import { assessContextBudget, resolveContextBudgetFromProject, type ContextBudgetComposition } from "../context/contextBudget.js";
+import { assessContextBudget, contextBudgetRejections, formatBudgetRejection, resolveContextBudgetFromProject, resolveContextBudgetModeFromProject, taskTokenBudgetRejection, type ContextBudgetComposition } from "../context/contextBudget.js";
+import { RunLog } from "../observability/runLog.js";
 import { writeExecutionPacket } from "../state/runtimeArtifacts.js";
 
 /**
@@ -117,6 +118,8 @@ export interface RuntimeExecutorOptions {
   routingMode?: RoutingMode;
   allowHandoff?: boolean;
   allowPaidFallback?: boolean;
+  /** Existing task telemetry, used only for pre-spawn task-token projection. */
+  taskRunLog?: (taskId: string) => RunLog;
   /** T111's verified capability picture per runtime id, passed through to `resolveRuntimeRoute` so its capability-policy diagnostic uses confirmed facts instead of a static claim, when available. */
   verifiedCapabilities?: Readonly<Record<string, ReadonlySet<RuntimeCapability>>>;
 }
@@ -147,7 +150,9 @@ function unavailableFailure(runtimeId: string, reason: string): StructuredFailur
 function metricsFrom(result: RuntimeAgentResult, declared: {
   model?: string;
   promptVersion?: number;
+  effort?: string;
   context_chars: number;
+  estimated_input_tokens: number;
   composition: {
     static_chars: number;
     handoff_chars: number;
@@ -175,6 +180,7 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     // frontmatter value, which is the one thing the log must not do.
     model: result.model ?? declared.model,
     promptVersion: declared.promptVersion,
+    effort: declared.effort,
     tokens: (input_tokens ?? 0) + (output_tokens ?? 0),
     // `?? 0` here, unlike the `costUsd?: number` in the envelope: the run log's
     // `cost` is a number by contract, and "this runtime does not report cost" is
@@ -185,6 +191,7 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     output_tokens,
     cache_read_tokens: result.usage.cachedInputTokens,
     context_chars: declared.context_chars,
+    estimated_input_tokens: declared.estimated_input_tokens,
     runtime: declared.runtime,
     requested_runtime: declared.requested_runtime,
     requested_model: declared.requested_model,
@@ -355,7 +362,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // forwards a model past an adapter that ignores it, exactly as before.
     let activeModelExplicit = false;
     let activeEffort: string | undefined;
-    let routeAttempts: readonly RuntimeRouteAttempt[] = [];
+    let routeAttempts: RuntimeRouteAttempt[] = [];
     let routeAllowHandoff = false;
     let routeAvailability: Readonly<Record<string, { available: boolean; reason?: string }>> = {};
     const routingDiagnostics: string[] = [];
@@ -381,7 +388,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         verifiedCapabilities: opts.verifiedCapabilities,
       });
       routingDiagnostics.push(...route.diagnostics);
-      routeAttempts = route.attempts;
+      routeAttempts = [...route.attempts];
       routeAllowHandoff = route.allowHandoff;
       requestedRuntime = route.requested.runtimeId;
       requestedModel = route.requested.model;
@@ -424,12 +431,14 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       }
     }
 
-    const contextBudget = assessContextBudget(
+    const contextBudgetMode = resolveContextBudgetModeFromProject(opts.projectRoot);
+    let contextBudget = assessContextBudget(
       prompt.length,
       promptParts.budgetComposition,
       resolveContextBudgetFromProject(opts.projectRoot, role, activeModel),
+      contextBudgetMode,
     );
-    if (contextBudget.warning) {
+    if (contextBudget.warning && !contextBudget.rejected) {
       // T-V3TOK-100 is deliberately observation-only. In particular, this
       // happens after assembly and before execution without editing `prompt`.
       console.warn(
@@ -438,10 +447,86 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       );
     }
 
+    const candidateBudgetRejections = (): ReturnType<typeof contextBudgetRejections> => {
+      const budgetScope = { taskId: req.taskId, role, stage: req.stage, runtime: activeRuntime.id, model: activeModel ?? null };
+      const rejections = contextBudgetRejections(contextBudget, budgetScope);
+      const taskBudgetRejection = opts.taskRunLog
+        ? taskTokenBudgetRejection(opts.projectRoot, opts.taskRunLog(req.taskId), req.taskId, contextBudget.estimatedInputTokens, budgetScope)
+        : null;
+      if (taskBudgetRejection) rejections.push(taskBudgetRejection);
+      return rejections;
+    };
+    let budgetRejections = candidateBudgetRejections();
+    const accumulatedBudgetRejections = [...budgetRejections];
+
+    // The router has already made the ordered candidate list. Budget only
+    // filters that list after assembly; it never discovers or adds a runtime.
+    while (contextBudgetMode === "reject" && budgetRejections.length > 0 && routeAllowHandoff && activeAttemptIndex >= 0 && activeAttemptIndex + 1 < routeAttempts.length) {
+      const current = routeAttempts[activeAttemptIndex]!;
+      const skipReason = JSON.stringify(budgetRejections);
+      const skipped = { ...current, skipReason };
+      routeAttempts[activeAttemptIndex] = skipped;
+      let next = routeAttempts[++activeAttemptIndex]!;
+      recordTransition(skipped, next, skipReason);
+      while ((next.skipReason || !next.runtime) && activeAttemptIndex + 1 < routeAttempts.length) {
+        const afterSkip = routeAttempts[++activeAttemptIndex]!;
+        recordTransition(next, afterSkip, next.skipReason ?? `runtime "${next.runtimeId}" is not registered`);
+        next = afterSkip;
+      }
+      if (next.skipReason || !next.runtime) break;
+
+      activeRuntime = next.runtime;
+      activeModel = next.model ?? resolveModel(role);
+      activeModelExplicit = next.modelExplicit ?? false;
+      activeEffort = next.effort;
+      contextBudget = assessContextBudget(
+        prompt.length,
+        promptParts.budgetComposition,
+        resolveContextBudgetFromProject(opts.projectRoot, role, activeModel),
+        contextBudgetMode,
+      );
+      budgetRejections = candidateBudgetRejections();
+      accumulatedBudgetRejections.push(...budgetRejections);
+    }
+    if (contextBudgetMode === "reject" && budgetRejections.length > 0) {
+      return finish(failResult(
+        accumulatedBudgetRejections.map(formatBudgetRejection).join(" | "),
+        {
+          model: activeModel,
+          promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
+          effort: resolveAgentEffort(opts.projectRoot, role) ?? undefined,
+          context_chars: prompt.length,
+          estimated_input_tokens: contextBudget.estimatedInputTokens,
+          ...promptParts.composition,
+          doc_chars_before: stageContext.docCharsBefore,
+          runtime: activeRuntime.id,
+          requested_runtime: requestedRuntime,
+          requested_model: requestedModel,
+          routing_basis: routingBasis,
+          fallback_reason: renderFallbackHops(fallbackHops),
+          fallback_count: opts.registry ? fallbackHops.length : undefined,
+          context_budget_chars: contextBudget.budgetChars ?? undefined,
+          context_budget_source: contextBudget.budgetSource ?? undefined,
+          context_overflow_chars: contextBudget.overflowChars ?? undefined,
+          context_budget_warning: true,
+          context_base_chars: promptParts.budgetComposition.base,
+          context_task_chars: promptParts.budgetComposition.task,
+          context_safety_chars: promptParts.budgetComposition.safety,
+          context_docs_chars: promptParts.budgetComposition.docs,
+          context_knowledge_chars: promptParts.budgetComposition.knowledge,
+          context_code_chars: promptParts.budgetComposition.code,
+          context_tool_output_chars: promptParts.budgetComposition.tool_output,
+          context_reserve_chars: promptParts.budgetComposition.reserve,
+        },
+      ));
+    }
+
     let declared = {
       model: activeModel,
       promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
+      effort: resolveAgentEffort(opts.projectRoot, role) ?? undefined,
       context_chars: prompt.length,
+      estimated_input_tokens: contextBudget.estimatedInputTokens,
       composition: promptParts.composition,
       doc_chars_before: stageContext.docCharsBefore,
       runtime: activeRuntime.id,
@@ -581,7 +666,16 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           prompt.length,
           promptParts.budgetComposition,
           resolveContextBudgetFromProject(opts.projectRoot, role, activeModel),
+          contextBudgetMode,
         );
+        contextBudget = nextBudget;
+        const nextBudgetRejections = candidateBudgetRejections();
+        if (contextBudgetMode === "reject" && nextBudgetRejections.length > 0) {
+          const skipReason = JSON.stringify(nextBudgetRejections);
+          routeAttempts[activeAttemptIndex] = { ...next, skipReason };
+          unavailableReason = skipReason;
+          continue;
+        }
         declared = {
           ...declared,
           model: activeModel,

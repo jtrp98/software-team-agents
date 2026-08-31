@@ -338,7 +338,7 @@ try {
     const legacyTask = JSON.parse(row.state);
     delete legacyTask.runtimeTask;
     legacyDb.prepare("UPDATE tasks SET state = ? WHERE task_id = ?").run(JSON.stringify(legacyTask), taskId);
-    for (const column of ["requested_runtime", "requested_model", "routing_basis", "fallback_reason", "fallback_count", "qa_effort"]) {
+    for (const column of ["requested_runtime", "requested_model", "routing_basis", "fallback_reason", "fallback_count", "qa_effort", "estimated_input_tokens", "effort"]) {
       legacyDb.exec(`ALTER TABLE runs DROP COLUMN ${column}`);
     }
     legacyDb.pragma("user_version = 11");
@@ -358,7 +358,7 @@ try {
     const versionDb = new Database(dbPath, { readonly: true });
     const migratedVersion = Number(versionDb.pragma("user_version", { simple: true }));
     versionDb.close();
-    assertFixture(migratedVersion >= 13, "v11 DB did not traverse the required v13 compatibility step", String(migratedVersion));
+    assertFixture(migratedVersion >= 16, "v11 DB did not traverse the required v16 compatibility step", String(migratedVersion));
     assertFixture(resumedStages[0] === "qa-engineer" && terminal.kind === "DEPLOYED", "task did not resume at its pre-upgrade stage", resumedStages.join(" -> "));
 
     const rollback = runBin(staBin, ["rollback", "--project-root", project], { env });

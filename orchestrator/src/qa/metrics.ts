@@ -181,6 +181,9 @@ export interface TaskTokenMetrics {
   stageCount: number;
   retryCount: number;
   inputTokens: number | null;
+  estimatedInputTokens: number | null;
+  /** Distinct configured agent efforts represented by this task's run rows. */
+  efforts: string[];
   outputTokens: number | null;
   cachedTokens: number | null;
   totalTokens: number | null;
@@ -290,6 +293,8 @@ export function taskTokenMetrics(runs: readonly RunRecord[]): TaskTokenMetrics {
     stageCount: new Set(runs.map((run) => run.agent)).size,
     retryCount: runs.reduce((sum, run) => sum + run.retry_count, 0),
     inputTokens: strictSum(runs, (run) => run.input_tokens),
+    estimatedInputTokens: strictSum(runs, (run) => run.estimated_input_tokens),
+    efforts: [...new Set(runs.map((run) => run.effort ?? "not reported"))].sort(),
     outputTokens: strictSum(runs, (run) => run.output_tokens),
     cachedTokens: strictSum(runs, (run) => run.cache_read_tokens),
     totalTokens: strictSum(runs, totalTokensFor),
@@ -381,6 +386,8 @@ export function tokenMetricsExport(
       stageCount: aggregate.stageCount,
       retryCount: aggregate.retryCount,
       inputTokens: aggregate.inputTokens,
+      estimatedInputTokens: aggregate.estimatedInputTokens,
+      efforts: aggregate.efforts,
       outputTokens: aggregate.outputTokens,
       cachedTokens: aggregate.cachedTokens,
       totalTokens: aggregate.totalTokens,

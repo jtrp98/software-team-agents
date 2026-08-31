@@ -49,7 +49,7 @@ import { runKnowledgeVerb } from "./cli/verbs/knowledge.js";
 import { runRuntimesVerb } from "./cli/verbs/runtimes.js";
 import { runTaskLoop } from "./cli/runTaskLoop.js";
 import { describeStatus, type TaskStatusKind } from "./orchestrator/taskStatus.js";
-import { formatRunRouting } from "./observability/runLog.js";
+import { formatRunRouting, RunLog } from "./observability/runLog.js";
 import { acquireTaskLock, releaseTaskLock, TaskLockedError } from "./concurrency/taskLock.js";
 import { hasWorkspace, loadWorkspace, workspacePath, type Workspace } from "./workspace/workspace.js";
 import { loadStageRoots } from "./repos/repoMap.js";
@@ -1426,6 +1426,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       // pipeline deliberately skipped.
       taskLevel: () => stored?.classification.level,
       runtimeTask: (id) => store.loadTask(id)?.runtimeTask,
+      taskRunLog: (id) => new RunLog(store.runsForTask(id)),
       // Absent --autonomy keeps the executor's own default ("propose"), which is
       // byte-identical to every run before the flag existed. Unattended runs pass
       // it explicitly — T117's pilot showed headless "propose" cannot act.

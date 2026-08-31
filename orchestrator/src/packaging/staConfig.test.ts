@@ -49,7 +49,7 @@ describe("defaultStaConfig / writeStaConfig / loadStaConfig", () => {
       verification: { baseline: ["unit", "typecheck", "build"] },
       permission_overrides: { "backend-engineer": { write: ["extra/**"] } },
       token_budget: 42_000,
-      context_budget: { roles: { "qa-engineer": 90_000 }, model_context_windows: { opus: 120_000 } },
+      context_budget: { roles: { "qa-engineer": 90_000 }, model_context_windows: { opus: 120_000 }, max_context_estimated_tokens: 30_000, mode: "reject" },
     });
     const loaded = loadStaConfig(root);
     expect(loaded.stack).toBe("nextjs-express");
@@ -65,7 +65,7 @@ describe("defaultStaConfig / writeStaConfig / loadStaConfig", () => {
     expect(loaded.verification).toEqual({ baseline: ["unit", "typecheck", "build"] });
     expect(loaded.permission_overrides).toEqual({ "backend-engineer": { write: ["extra/**"] } });
     expect(loaded.token_budget).toBe(42_000);
-    expect(loaded.context_budget).toEqual({ roles: { "qa-engineer": 90_000 }, model_context_windows: { opus: 120_000 } });
+    expect(loaded.context_budget).toEqual({ roles: { "qa-engineer": 90_000 }, model_context_windows: { opus: 120_000 }, max_context_estimated_tokens: 30_000, mode: "reject" });
   });
 
   it("keeps V3 execution defaults additive and paid fallback off when the block is absent", () => {

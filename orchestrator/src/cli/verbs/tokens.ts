@@ -14,8 +14,8 @@ function printTokenTask(metric: TaskTokenMetrics): void {
   const c = metric.composition;
   const budget = metric.contextBudget;
   console.log(
-    `[orchestrator] ${metric.taskId}: input=${displayMetric(metric.inputTokens)} output=${displayMetric(metric.outputTokens)} ` +
-      `cached=${displayMetric(metric.cachedTokens)} total=${displayMetric(metric.totalTokens)} stages=${metric.stageCount} retries=${metric.retryCount} retryWaste=${displayMetric(metric.retryWasteTokens)} ` +
+    `[orchestrator] ${metric.taskId}: input=${displayMetric(metric.inputTokens)} estimated-input=${displayMetric(metric.estimatedInputTokens)} output=${displayMetric(metric.outputTokens)} ` +
+      `cached=${displayMetric(metric.cachedTokens)} total=${displayMetric(metric.totalTokens)} effort=${metric.efforts.join(",")} stages=${metric.stageCount} retries=${metric.retryCount} retryWaste=${displayMetric(metric.retryWasteTokens)} ` +
       `sessions=orchestrated:${metric.sessionKinds.orchestrated},interactive:${metric.sessionKinds.interactive},not-reported:${metric.sessionKinds.not_reported} ` +
       `always-on-instructions=${displayMetric(metric.instructionSurfaceBytes)} B`,
   );
@@ -73,7 +73,7 @@ export async function runTokensVerb(rest: string[], defaultProjectRoot: string):
       }
     }
     const total = report.totals;
-    console.log(`[orchestrator] totals: input=${displayMetric(total.inputTokens)} output=${displayMetric(total.outputTokens)} cached=${displayMetric(total.cachedTokens)} total=${displayMetric(total.totalTokens)} retries=${total.retryCount} retryWaste=${displayMetric(total.retryWasteTokens)}`);
+    console.log(`[orchestrator] totals: input=${displayMetric(total.inputTokens)} estimated-input=${displayMetric(total.estimatedInputTokens)} output=${displayMetric(total.outputTokens)} cached=${displayMetric(total.cachedTokens)} total=${displayMetric(total.totalTokens)} effort=${total.efforts.join(",")} retries=${total.retryCount} retryWaste=${displayMetric(total.retryWasteTokens)}`);
     console.log(
       `[orchestrator] V3 rollups: total_token_per_completed_task=${displayMetric(total.total_token_per_completed_task)} ` +
         `first_pass_success_rate=${displayRate(total.first_pass_success_rate)} fallback_rate=${displayRate(total.fallback_rate)}`,

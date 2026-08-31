@@ -49,12 +49,14 @@ import { assertContextComposition, emptyContextBudgetComposition, type ContextBu
 export interface RunMetrics {
   model?: string;
   promptVersion?: number;
+  effort?: string;
   tokens: number;
   cost: number;
   input_tokens?: number;
   output_tokens?: number;
   cache_read_tokens?: number;
   context_chars: number;
+  estimated_input_tokens?: number;
   runtime?: string;
   requested_runtime?: string;
   requested_model?: string;
