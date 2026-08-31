@@ -15,7 +15,9 @@ const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname.rep
 const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sta-v3-migrations-"));
 const stage = path.join(tempRoot, "Four Migration Fixtures With Spaces");
+const npmCache = path.join(tempRoot, "npm-cache");
 fs.mkdirSync(stage, { recursive: true });
+fs.mkdirSync(npmCache, { recursive: true });
 
 let failures = 0;
 let assertions = 0;
@@ -30,6 +32,7 @@ function npm(args, cwd) {
   return execFileSync(win ? "npm.cmd" : "npm", argv, {
     cwd,
     encoding: "utf8",
+    env: { ...process.env, npm_config_cache: npmCache },
     shell: win,
     stdio: ["ignore", "pipe", "inherit"],
   });
