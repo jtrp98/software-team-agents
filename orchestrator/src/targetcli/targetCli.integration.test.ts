@@ -753,6 +753,43 @@ describe("role workspace architecture (T-ROLE)", () => {
     void knowledgeBefore;
   });
 
+  it("T-V5-001 (characterization — red until T-V5-011): same-version template drift must not report UP_TO_DATE", async () => {
+    // The live knowledge-schoolbright condition (F-02): the workspace synced at
+    // 1.0.0-rc.3 and every managed file is pristine, but the installed
+    // Framework's templates/ payload changed (there: policies/documentation.md
+    // and CLAUDE.md) without a version bump — an npm-link live clone pinned
+    // across many commits.
+    const knowledge = makeKnowledgeRepo();
+    const payload = (documentation: string, claude: string): { relPath: string; content: string }[] => [
+      { relPath: ".claude/agents/business-analyst.md", content: AGENT_MD("business-analyst") },
+      { relPath: ".claude/settings.json", content: '{"hooks":{"PreToolUse":[{"matcher":"","hooks":[]}]}}' },
+      { relPath: "policies/documentation.md", content: documentation },
+      { relPath: "CLAUDE.md", content: claude },
+    ];
+    const fw = fakeFramework("1.0.0-rc.3", payload("# Documentation policy\n", "# Framework instructions\n"));
+    expect((await capture(() => runTargetCli(["init"], knowledge, fw))).code).toBe(0);
+
+    // The payload changes; the version string does not.
+    const fwDrifted = fakeFramework(
+      "1.0.0-rc.3",
+      payload(
+        "# Documentation policy\n\nAdded prose after the last sync — no version bump shipped it.\n",
+        "# Framework instructions\n\nUpdated bootstrap prose without a bump.\n",
+      ),
+    );
+
+    const status = JSON.parse((await capture(() => runTargetCli(["status", "--json"], knowledge, fwDrifted))).out) as {
+      syncState: string;
+      syncedVersion?: string;
+      conflictCount: number;
+    };
+    expect(status.syncedVersion).toBe("1.0.0-rc.3");
+    // Both drifted files are pristine on disk — this is drift, not a conflict...
+    expect(status.conflictCount).toBe(0);
+    // ... so comparing version strings must not be allowed to call it fresh.
+    expect(status.syncState).not.toBe("UP_TO_DATE");
+  });
+
   it("ba command: preflight passes without any Target checkout and launches from Knowledge (T-ROLE-03/19)", async () => {
     const knowledge = makeKnowledgeRepo();
     const fw = fakeFramework("1.0.0", FW_V1_FILES);

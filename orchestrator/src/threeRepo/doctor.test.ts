@@ -137,6 +137,51 @@ describe("runDoctor (T166)", () => {
     expect(report.ok).toBe(false);
   });
 
+  it("T-V5-002 (characterization — red until T-V5-005): doctor in an .agent-team-only workspace runs its project checks and never prescribes sta init --force", async () => {
+    // The workspace shape `software-team-agents init` produces (F-01/F-14):
+    // .agent-team/{config.yaml,manifest.json}, no .sta/ anywhere, and the
+    // machine's installation binding points at it (a BA Knowledge workspace).
+    const workspace = path.join(base, "agent-team-workspace");
+    fs.mkdirSync(workspace, { recursive: true });
+    gitInit(workspace);
+    fs.mkdirSync(path.join(workspace, ".agent-team"), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspace, ".agent-team", "manifest.json"),
+      JSON.stringify({ schema_version: 1, framework_version: "0.0.0-doctor-test", installed_at: NOW, updated_at: NOW, files: [] }),
+    );
+    fs.writeFileSync(
+      path.join(workspace, ".agent-team", "config.yaml"),
+      `schema_version: 1\ntarget_id: ${path.basename(workspace)}\nregistered_at: ${NOW}\nrole: ba\noverrides: []\n`,
+    );
+    fs.writeFileSync(path.join(workspace, "targets.yaml"), "schema_version: 1\ntargets: []\n");
+    fs.writeFileSync(configPath, `schema_version: 1\nknowledge_root: ${JSON.stringify(workspace)}\n`);
+    const templatesDir = path.join(base, "empty-templates");
+    fs.mkdirSync(templatesDir, { recursive: true });
+
+    // The obvious invocation: no --project-root, standing inside the workspace.
+    const originalCwd = process.cwd();
+    process.chdir(workspace);
+    let report: Awaited<ReturnType<typeof runDoctor>>;
+    try {
+      report = await runDoctor({ installationConfigPath: configPath, templatesDir, probe: passingProbe });
+    } finally {
+      process.chdir(originalCwd);
+    }
+
+    // Collect every way today's output is wrong, so one red run names them all.
+    const violations: string[] = [];
+    for (const c of report.checks) {
+      if ((c.detail ?? "").includes("no --project-root given")) violations.push(`check "${c.name}" skipped: ${c.detail}`);
+      if (`${c.name}\n${c.detail ?? ""}\n${c.fix ?? ""}`.includes("sta init --force")) {
+        violations.push(`check "${c.name}" prescribes the legacy destructive installer: ${c.fix ?? c.detail}`);
+      }
+    }
+    if (!report.checks.some((c) => c.name === "Target profile (.agent-team/config.yaml stack)")) {
+      violations.push("project-scoped Target profile check did not run at all");
+    }
+    expect(violations).toEqual([]);
+  });
+
   it("does not leak configuration file contents into any detail or fix text", async () => {
     const secretMarker = "SUPER_SECRET_TOKEN_VALUE_12345";
     fs.mkdirSync(path.join(knowledgeRoot, ".git"), { recursive: true });

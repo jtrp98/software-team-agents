@@ -5,6 +5,8 @@ import { afterAll, describe, expect, it } from "vitest";
 import { buildTemplates } from "./templateBuilder.js";
 import { runInit } from "./initCommand.js";
 import { validateInstallation } from "./installValidation.js";
+import { runTargetSync } from "../targetcli/syncEngine.js";
+import { defaultTargetConfig, writeTargetConfig } from "../targetcli/targetMeta.js";
 
 const roots: string[] = [];
 function tmpDir(prefix: string): string {
@@ -42,6 +44,26 @@ describe("validateInstallation", () => {
     const result = validateInstallation(project);
     expect(result.ok).toBe(false);
     expect(result.problems[0]).toContain(".sta");
+  });
+
+  it("T-V5-002 (characterization — red until T-V5-004): an .agent-team-only workspace counts as installed", () => {
+    // The shape `software-team-agents init` actually produces: .agent-team/
+    // metadata and synced files, no .sta/ anywhere (F-01). A health check must
+    // not call a correctly installed workspace broken.
+    const templatesDir = fixtureTemplatesDir();
+    const workspace = tmpDir("sta-validate-agentteam-");
+    fs.mkdirSync(path.join(workspace, ".git")); // standalone-repo marker, as the sync engine inspects it
+    fs.writeFileSync(path.join(workspace, "package.json"), '{"name":"fixture"}\n', "utf8");
+    writeTargetConfig(workspace, defaultTargetConfig(path.basename(workspace), "2026-08-20T09:00:00Z", "ba"));
+    runTargetSync({ targetRoot: workspace, templatesDir, now: "2026-08-20T09:00:00Z" });
+
+    expect(fs.existsSync(path.join(workspace, ".agent-team", "config.yaml"))).toBe(true);
+    expect(fs.existsSync(path.join(workspace, ".agent-team", "manifest.json"))).toBe(true);
+    expect(fs.existsSync(path.join(workspace, ".sta"))).toBe(false);
+
+    const result = validateInstallation(workspace);
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
   });
 
   it("passes clean right after init", () => {
