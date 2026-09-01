@@ -1,5 +1,5 @@
 import { AgentStage } from "../types.js";
-import { sectionMap } from "../context/contextManager.js";
+import { sectionMap } from "../context/sections.js";
 import { parseSecurityReport } from "../agents/moduleDocs.js";
 import { routeByCategory, type FailureCategory } from "../routing/failureRouting.js";
 import type { StructuredFailure } from "./failure.js";

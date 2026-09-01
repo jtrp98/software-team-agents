@@ -76,6 +76,7 @@ function sampleRun(taskId = "T-1"): RunRecord {
     duration: 50,
     model: "sonnet",
     promptVersion: 1,
+    effort: "medium",
     tokens: 1234,
     cost: 0.5,
     result: "PASS",
@@ -85,6 +86,7 @@ function sampleRun(taskId = "T-1"): RunRecord {
     output_tokens: 234,
     cache_read_tokens: null,
     context_chars: 4000,
+    estimated_input_tokens: 1000,
     qa_mode: null,
     qa_effort: null,
     deterministic_gate: null,
@@ -236,6 +238,15 @@ describe.each(implementations)("%s", (_name, makeStore) => {
     store.appendRun({ ...sampleRun("T-1"), agent: AgentStage.QA_ENGINEER, deterministic_gate: "disabled" });
 
     expect(store.runsForTask("T-1").map((run) => run.deterministic_gate)).toEqual(["enabled", "disabled"]);
+    store.close();
+  });
+
+  it("T-V4-CAST-006 persists a QA/security verdict source fingerprint without runtime identity", () => {
+    const store = makeStore();
+    const fingerprint = { files: { "src/payment.ts": "sha256-fixture" } };
+    store.appendRun({ ...sampleRun("T-1"), agent: AgentStage.QA_ENGINEER, verification_fingerprint: fingerprint });
+    store.appendRun({ ...sampleRun("T-1"), agent: AgentStage.SECURITY, verification_fingerprint: fingerprint });
+    expect(store.runsForTask("T-1").map((run) => run.verification_fingerprint)).toEqual([fingerprint, fingerprint]);
     store.close();
   });
 
@@ -459,7 +470,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
     } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
   });
 
-  it("T-V3R-002: a v11 fixture migrates through v12 to v14, preserves every legacy run fact, and round-trips nullable routing fields", () => {
+  it("T-V3R-002: a v11 fixture migrates through v12 to v16, preserves every legacy run fact, and round-trips nullable routing fields", () => {
     const file = tmpDbPath();
     const routingColumns = [
       "requested_runtime",
@@ -502,11 +513,11 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       }
 
       const versionCheck = new Database(file, { readonly: true });
-      expect(versionCheck.pragma("user_version", { simple: true })).toBe(14);
+        expect(versionCheck.pragma("user_version", { simple: true })).toBe(17);
       expect((versionCheck.pragma("table_info(runs)") as { name: string }[]).filter((column) => routingColumns.includes(column.name as typeof routingColumns[number])).map((column) => column.name)).toEqual([...routingColumns]);
       versionCheck.close();
 
-      // Opening v14 again must not re-run either migration or disturb data.
+      // Opening v16 again must not re-run either migration or disturb data.
       const reopened = new SqliteTaskStore(file);
       try {
         expect(reopened.runsForTask("T-V11")).toEqual([legacy]);
@@ -519,7 +530,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
     }
   });
 
-  it("T-V3R-010/T-V3R-060: a v12 task fixture migrates to v14 without rewriting legacy task JSON", () => {
+  it("T-V3R-010/T-V3R-060: a v12 task fixture migrates to v16 without rewriting legacy task JSON", () => {
     const file = tmpDbPath();
     try {
       const seed = new SqliteTaskStore(file);
@@ -544,7 +555,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
 
       const verify = new Database(file, { readonly: true });
       try {
-        expect(verify.pragma("user_version", { simple: true })).toBe(14);
+        expect(verify.pragma("user_version", { simple: true })).toBe(17);
         expect((verify.prepare("SELECT state FROM tasks WHERE task_id = ?").get("T-V12") as { state: string }).state).toBe(legacyBytes);
       } finally {
         verify.close();
@@ -564,13 +575,15 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
 
       const raw = new Database(file);
       raw.exec("ALTER TABLE runs DROP COLUMN qa_effort");
+      raw.exec("ALTER TABLE runs DROP COLUMN estimated_input_tokens");
+      raw.exec("ALTER TABLE runs DROP COLUMN effort");
       raw.pragma("user_version = 13");
       raw.close();
 
       const migrated = new SqliteTaskStore(file);
       const decided = { ...sampleRun("T-V14"), qa_mode: "FULL", qa_effort: "lightweight" } as RunRecord;
       try {
-        expect(migrated.runsForTask("T-V13")).toEqual([legacy]);
+        expect(migrated.runsForTask("T-V13")).toEqual([{ ...legacy, estimated_input_tokens: null, effort: null }]);
         migrated.appendRun(decided);
         expect(migrated.runsForTask("T-V14")).toEqual([decided]);
       } finally {

@@ -70,6 +70,8 @@ export const StaConfigSchema = z.object({
             z.object({
               runtime: z.string().min(1),
               model: z.string().min(1).optional(),
+              /** Reasoning effort, forwarded alongside an explicit model where the runtime exposes a control (T-V4-CAST-001). */
+              effort: z.string().min(1).optional(),
             }),
           ]),
         )
@@ -100,6 +102,10 @@ export const StaConfigSchema = z.object({
       roles: z.record(z.string().min(1), z.number().int().positive()).optional(),
       /** Project-declared because model aliases alone are not authoritative limits. */
       model_context_windows: z.record(z.string().min(1), z.number().int().positive()).optional(),
+      /** Additive approximate prompt-token ceiling; character thresholds remain authoritative. */
+      max_context_estimated_tokens: z.number().int().positive().optional(),
+      /** Omission preserves the historical observation-only behaviour. */
+      mode: z.enum(["warn", "reject"]).optional(),
     })
     .optional(),
 });

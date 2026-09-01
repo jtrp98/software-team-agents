@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { estimateInputTokens } from "../context/contextBudget.js";
 import type { CodeIntelligenceProvider } from "./provider.js";
 
 /**
@@ -84,7 +85,7 @@ export function measureNaive(targetRoot: string, scopeDirs: string[], wallMs: nu
       return sum;
     }
   }, 0);
-  return { filesConsidered: files.length, estTokens: Math.ceil(bytes / 4), wallMs };
+  return { filesConsidered: files.length, estTokens: estimateInputTokens(bytes), wallMs };
 }
 
 function uniqueFiles(candidates: { location: { file: string } }[]): string[] {
@@ -154,7 +155,7 @@ export async function measureGraph(
       return sum;
     }
   }, 0);
-  return { filesConsidered: uniqueFiles(candidates).length, estTokens: Math.ceil(bytes / 4), wallMs };
+  return { filesConsidered: uniqueFiles(candidates).length, estTokens: estimateInputTokens(bytes), wallMs };
 }
 
 export async function runDiscoveryBenchmark(

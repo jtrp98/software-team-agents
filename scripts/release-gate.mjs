@@ -75,6 +75,7 @@ run("build (orchestrator)", "npm run build", { cwd: path.join(repoRoot, "orchest
 run("V3 guardrail invariant suite (six criteria)", "node scripts/v3-gate.mjs guardrails", { quiet: true });
 run("V3 execution-mode matrix (mock runners)", "node scripts/v3-gate.mjs modes", { quiet: true });
 run("V3 paid-fallback unreachability", "node scripts/v3-gate.mjs paid-fallback", { quiet: true });
+run("benchmark dataset, frozen oracles, and report regeneration", "npm run test:benchmark", { quiet: true });
 
 // --- 2 · hooks & scripts -----------------------------------------------------
 run("hooks/scripts self-test", "node .claude/tests/run.js");

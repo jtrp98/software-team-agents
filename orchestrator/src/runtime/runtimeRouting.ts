@@ -9,6 +9,8 @@ import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "./runtimeRegistry.js";
 import type { RuntimeAdapter, RuntimeProbe, RuntimeRunStatus } from "./runtimeAdapter.js";
 import { RUNTIME_SUPPORT, type RuntimeSupportLevel } from "./runtimeSupport.js";
+import { resolveTierBinding } from "./tierRouting.js";
+import type { ModelTierId, ModelTiers } from "./modelTiers.js";
 
 export type RoutingPrecedenceLevel = 1 | 2 | 3 | 4 | 5;
 export type RoutingMode = "single" | "manual" | "auto";
@@ -16,6 +18,10 @@ export type RoutingMode = "single" | "manual" | "auto";
 export interface RuntimeRouteCandidate {
   readonly runtime: RuntimeAdapter;
   readonly model?: string;
+  /** True when `model` came from an operator-visible override (CLI flag / `.sta/config.yaml` routing), not frontmatter (T-V4-CAST-001). */
+  readonly modelExplicit?: boolean;
+  /** Reasoning effort named alongside an explicit model in `.sta/config.yaml` routing (T-V4-CAST-001). */
+  readonly effort?: string;
   readonly reason: string;
 }
 
@@ -24,6 +30,8 @@ export interface RuntimeRouteAttempt {
   readonly runtimeId: string;
   readonly runtime?: RuntimeAdapter;
   readonly model?: string;
+  readonly modelExplicit?: boolean;
+  readonly effort?: string;
   readonly reason: string;
   /** Evidence for a deterministic skip. Such an entry must never execute. */
   readonly skipReason?: string;
@@ -32,6 +40,8 @@ export interface RuntimeRouteAttempt {
 export interface RequestedRuntimeRoute {
   readonly runtimeId: string;
   readonly model?: string;
+  readonly modelExplicit?: boolean;
+  readonly effort?: string;
   readonly reason: string;
 }
 
@@ -44,6 +54,8 @@ export interface RuntimeRoute {
   readonly runtime?: RuntimeAdapter;
   readonly model?: string;
   readonly requested: RequestedRuntimeRoute;
+  /** Reasoning effort resolved for the selected candidate, when one was named explicitly (T-V4-CAST-001). */
+  readonly effort?: string;
   readonly mode: RoutingMode;
   readonly allowHandoff: boolean;
   readonly precedenceLevel: RoutingPrecedenceLevel;
@@ -80,11 +92,15 @@ export interface ResolveRuntimeRouteOptions {
   /** True only when this stage has a canonical Target root with write access. */
   readonly hasTargetWrite?: boolean;
   readonly verifiedCapabilities?: Readonly<Record<string, ReadonlySet<RuntimeCapability>>>;
+  /** A phase tier resolves model/effort through this route's existing precedence. */
+  readonly tier?: { id: ModelTierId; table: ModelTiers };
 }
 
 interface CandidateSpec {
   readonly runtimeId: string;
   readonly model?: string;
+  readonly modelExplicit?: boolean;
+  readonly effort?: string;
   readonly reason: string;
 }
 
@@ -153,6 +169,7 @@ function manualRoute(
         spec: {
           runtimeId: parsed.runtimeId ?? defaultRuntimeId,
           model: parsed.model,
+          modelExplicit: true,
           reason: `manual routing.by_role selected "${byRole}" for role "${role}"`,
         },
         legacyModelRouting: false,
@@ -164,6 +181,8 @@ function manualRoute(
       spec: {
         runtimeId: byRole.runtime,
         model: byRole.model ?? frontmatterModel,
+        modelExplicit: byRole.model !== undefined,
+        effort: byRole.effort,
         reason: `manual routing.by_role selected runtime "${byRole.runtime}" for role "${role}"`,
       },
       legacyModelRouting: false,
@@ -177,6 +196,7 @@ function manualRoute(
       spec: {
         runtimeId: parsed.runtimeId ?? defaultRuntimeId,
         model: parsed.model,
+        modelExplicit: true,
         reason: `manual model_routing selected "${legacy}" for role "${role}"`,
       },
       legacyModelRouting: true,
@@ -230,6 +250,7 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     specs = [{
       runtimeId,
       model: opts.flags?.model ?? frontmatterModel,
+      modelExplicit: opts.flags?.model !== undefined,
       reason: flagPresent
         ? `explicit CLI flag selected runtime "${runtimeId}"${opts.flags?.model ? ` and model "${opts.flags.model}"` : ""}`
         : automaticReason({ ...opts, mode }, runtimeId),
@@ -240,6 +261,7 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
       specs = [{
         runtimeId: opts.flags?.runtime ?? "",
         model: opts.flags?.model,
+        modelExplicit: opts.flags?.model !== undefined,
         reason: `explicit CLI flag selected manual runtime "${opts.flags?.runtime ?? "(unnamed)"}"${opts.flags?.model ? ` and model "${opts.flags.model}"` : ""}`,
       }];
     } else if (manual.spec) {
@@ -261,6 +283,7 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     specs = [{
       runtimeId: opts.flags?.runtime ?? defaultRuntimeId,
       model: opts.flags?.model ?? frontmatterModel,
+      modelExplicit: opts.flags?.model !== undefined,
       reason: `explicit CLI flag selected runtime "${opts.flags?.runtime ?? defaultRuntimeId}"${opts.flags?.model ? ` and model "${opts.flags.model}"` : ""}`,
     }];
   } else if (manual.spec) {
@@ -298,6 +321,18 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     }
   }
 
+  // Tier resolution is a source for model/effort, never a sixth precedence
+  // level. A direct model override retains its existing explicit priority.
+  if (opts.tier) {
+    specs = specs.map((spec) => {
+      if (spec.modelExplicit) return spec;
+      const binding = resolveTierBinding(opts.tier!.table, opts.tier!.id, spec.runtimeId);
+      return binding === null
+        ? spec
+        : { ...spec, model: binding.model, effort: binding.effort, modelExplicit: true, reason: `${spec.reason}; phase tier ${opts.tier!.id} resolved for ${spec.runtimeId}` };
+    });
+  }
+
   const requestedSpec = specs[0] ?? {
     runtimeId: defaultRuntimeId,
     model: frontmatterModel,
@@ -306,6 +341,8 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
   const requested: RequestedRuntimeRoute = {
     runtimeId: requestedSpec.runtimeId,
     model: requestedSpec.model,
+    modelExplicit: requestedSpec.modelExplicit,
+    effort: requestedSpec.effort,
     reason: requestedSpec.reason,
   };
 
@@ -321,6 +358,8 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     specs = [{
       runtimeId: defaultRuntimeId,
       model: specs[0]!.model,
+      modelExplicit: specs[0]!.modelExplicit,
+      effort: specs[0]!.effort,
       reason: `compatibility fallback to "${defaultRuntimeId}" because model_routing named an unregistered runtime`,
     }];
   }
@@ -343,7 +382,7 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     if (!runtime) {
       const skipReason = `runtime "${spec.runtimeId}" is not registered`;
       diagnostics.push(skipReason);
-      attempts.push({ runtimeId: spec.runtimeId, model: spec.model, reason: spec.reason, skipReason });
+      attempts.push({ runtimeId: spec.runtimeId, model: spec.model, modelExplicit: spec.modelExplicit, effort: spec.effort, reason: spec.reason, skipReason });
       continue;
     }
     const probe = opts.availability?.[runtime.id];
@@ -355,7 +394,7 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     if (precedenceLevel >= 3 && level !== "supported" && !supportOptIns.has(runtime.id) && !paidOptIn) {
       const skipReason = `runtime "${runtime.id}" support level "${level}" is below "supported"; automatic routing requires routing.allow_below_supported to name this runtime`;
       diagnostics.push(skipReason);
-      attempts.push({ runtimeId: runtime.id, runtime, model: spec.model, reason: spec.reason, skipReason });
+      attempts.push({ runtimeId: runtime.id, runtime, model: spec.model, modelExplicit: spec.modelExplicit, effort: spec.effort, reason: spec.reason, skipReason });
       continue;
     }
     const declaredOrVerified = opts.verifiedCapabilities?.[runtime.id] ?? runtime.capabilities;
@@ -365,16 +404,16 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
       const message = `runtime "${runtime.id}" lacks ${evidence} capabilities required by this stage: ${unmet.join(", ")}`;
       diagnostics.push(message);
       if (opts.hasTargetWrite ?? false) {
-        attempts.push({ runtimeId: runtime.id, runtime, model: spec.model, reason: spec.reason, skipReason: message });
+        attempts.push({ runtimeId: runtime.id, runtime, model: spec.model, modelExplicit: spec.modelExplicit, effort: spec.effort, reason: spec.reason, skipReason: message });
         continue;
       }
     }
-    attempts.push({ runtimeId: runtime.id, runtime, model: spec.model, reason: spec.reason });
+    attempts.push({ runtimeId: runtime.id, runtime, model: spec.model, modelExplicit: spec.modelExplicit, effort: spec.effort, reason: spec.reason });
   }
 
   const capable: RuntimeRouteCandidate[] = attempts
     .filter((attempt): attempt is RuntimeRouteAttempt & { runtime: RuntimeAdapter } => !!attempt.runtime && !attempt.skipReason)
-    .map((attempt) => ({ runtime: attempt.runtime, model: attempt.model, reason: attempt.reason }));
+    .map((attempt) => ({ runtime: attempt.runtime, model: attempt.model, modelExplicit: attempt.modelExplicit, effort: attempt.effort, reason: attempt.reason }));
 
   for (const candidate of capable) {
     if (candidate.model && !candidate.runtime.models.has(candidate.model)) {
@@ -415,6 +454,7 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     selected,
     runtime: selected.runtime,
     model: selected.model,
+    effort: selected.effort,
     requested,
     mode,
     allowHandoff,

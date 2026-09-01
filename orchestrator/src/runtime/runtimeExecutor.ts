@@ -2,7 +2,7 @@ import * as path from "node:path";
 import { AgentStage, TaskLevel } from "../types.js";
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { getAgent } from "../agents/registry.js";
-import { resolveAgentModel, resolveAgentVersion } from "../agents/agentModel.js";
+import { resolveAgentEffort, resolveAgentModel, resolveAgentVersion } from "../agents/agentModel.js";
 import type { StructuredFailure } from "../orchestrator/failure.js";
 import {
   buildPromptParts,
@@ -38,8 +38,11 @@ import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import type { ThreeRepoRequestRoots } from "../threeRepo/preflight.js";
 import { deriveHandoff } from "../agents/moduleDocs.js";
 import { ArtifactType } from "../artifacts/schemas.js";
-import { assessContextBudget, resolveContextBudgetFromProject, type ContextBudgetComposition } from "../context/contextBudget.js";
+import { assessContextBudget, contextBudgetRejections, formatBudgetRejection, resolveContextBudgetFromProject, resolveContextBudgetModeFromProject, taskTokenBudgetRejection, type ContextBudgetComposition } from "../context/contextBudget.js";
+import { RunLog } from "../observability/runLog.js";
 import { writeExecutionPacket } from "../state/runtimeArtifacts.js";
+import { loadModelTiers, type ModelTierId, type ModelTiers } from "./modelTiers.js";
+import { captureChangeSetFingerprint } from "../qa/changeSource.js";
 
 /**
  * An `AgentExecutor` built on a `RuntimeAdapter` (T108).
@@ -117,8 +120,12 @@ export interface RuntimeExecutorOptions {
   routingMode?: RoutingMode;
   allowHandoff?: boolean;
   allowPaidFallback?: boolean;
+  /** Existing task telemetry, used only for pre-spawn task-token projection. */
+  taskRunLog?: (taskId: string) => RunLog;
   /** T111's verified capability picture per runtime id, passed through to `resolveRuntimeRoute` so its capability-policy diagnostic uses confirmed facts instead of a static claim, when available. */
   verifiedCapabilities?: Readonly<Record<string, ReadonlySet<RuntimeCapability>>>;
+  /** Optional plan tier lookup. An absent table deliberately leaves routing unchanged. */
+  planTier?: (taskId: string) => string | undefined;
 }
 
 /**
@@ -147,7 +154,9 @@ function unavailableFailure(runtimeId: string, reason: string): StructuredFailur
 function metricsFrom(result: RuntimeAgentResult, declared: {
   model?: string;
   promptVersion?: number;
+  effort?: string;
   context_chars: number;
+  estimated_input_tokens: number;
   composition: {
     static_chars: number;
     handoff_chars: number;
@@ -175,6 +184,7 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     // frontmatter value, which is the one thing the log must not do.
     model: result.model ?? declared.model,
     promptVersion: declared.promptVersion,
+    effort: declared.effort,
     tokens: (input_tokens ?? 0) + (output_tokens ?? 0),
     // `?? 0` here, unlike the `costUsd?: number` in the envelope: the run log's
     // `cost` is a number by contract, and "this runtime does not report cost" is
@@ -185,6 +195,7 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     output_tokens,
     cache_read_tokens: result.usage.cachedInputTokens,
     context_chars: declared.context_chars,
+    estimated_input_tokens: declared.estimated_input_tokens,
     runtime: declared.runtime,
     requested_runtime: declared.requested_runtime,
     requested_model: declared.requested_model,
@@ -213,6 +224,20 @@ function describeFailure(runtimeId: string, role: string, result: RuntimeAgentRe
   const detail = [result.text, ...result.diagnostics, ...routingDiagnostics].filter((s) => s.length > 0).join(" | ").slice(0, 2000);
   const exit = result.exitCode === null ? "unknown" : String(result.exitCode);
   return `${runtimeId} run of \`${role}\` finished ${result.status} (exit ${exit}): ${detail}`;
+}
+
+/** Capture the source state at a document verdict without making the verdict depend on runtime identity. */
+async function fingerprintVerdict(result: AgentExecutorResult, projectRoot: string): Promise<AgentExecutorResult> {
+  if (!result.artifactType) return result;
+  try {
+    return {
+      ...result,
+      outcome: { ...result.outcome, verification_fingerprint: await captureChangeSetFingerprint(projectRoot) },
+    };
+  } catch {
+    // A non-git legacy workspace retains its established verdict behaviour.
+    return result;
+  }
 }
 
 interface FallbackHop {
@@ -348,7 +373,14 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     const hasTargetWrite = threeRepo?.roots.workRoots.some((root) => root.access === "write") ?? false;
     let activeRuntime = runtime;
     let activeModel = resolveModel(role);
-    let routeAttempts: readonly RuntimeRouteAttempt[] = [];
+    // T-V4-CAST-001 — whether `activeModel` is an operator-visible override (CLI
+    // `--model` / `.sta/config.yaml` routing) rather than the frontmatter
+    // default, plus any effort named with it. The registry route is the only
+    // channel that can set these; the embedded compatibility path below never
+    // forwards a model past an adapter that ignores it, exactly as before.
+    let activeModelExplicit = false;
+    let activeEffort: string | undefined;
+    let routeAttempts: RuntimeRouteAttempt[] = [];
     let routeAllowHandoff = false;
     let routeAvailability: Readonly<Record<string, { available: boolean; reason?: string }>> = {};
     const routingDiagnostics: string[] = [];
@@ -356,6 +388,14 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     let requestedModel: string | undefined;
     let routingBasis: string | undefined;
     if (opts.registry) {
+      let tier: { id: ModelTierId; table: ModelTiers } | undefined;
+      const tierId = opts.planTier?.(req.taskId);
+      try {
+        const table = loadModelTiers(opts.projectRoot);
+        if (table && tierId && tierId !== "T1" && tierId in table) tier = { id: tierId as ModelTierId, table };
+      } catch (error) {
+        routingDiagnostics.push(`model tiers were ignored: ${error instanceof Error ? error.message : String(error)}`);
+      }
       routeAvailability = await opts.registry.probeAll();
       const route = resolveRuntimeRoute({
         role,
@@ -372,9 +412,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         allowHandoff: opts.allowHandoff,
         hasTargetWrite,
         verifiedCapabilities: opts.verifiedCapabilities,
+        tier,
       });
       routingDiagnostics.push(...route.diagnostics);
-      routeAttempts = route.attempts;
+      routeAttempts = [...route.attempts];
       routeAllowHandoff = route.allowHandoff;
       requestedRuntime = route.requested.runtimeId;
       requestedModel = route.requested.model;
@@ -393,6 +434,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       }
       activeRuntime = route.selected.runtime;
       activeModel = route.selected.model ?? activeModel;
+      activeModelExplicit = route.selected.modelExplicit ?? false;
+      activeEffort = route.effort;
     }
 
     const fallbackHops: FallbackHop[] = [];
@@ -415,12 +458,14 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       }
     }
 
-    const contextBudget = assessContextBudget(
+    const contextBudgetMode = resolveContextBudgetModeFromProject(opts.projectRoot);
+    let contextBudget = assessContextBudget(
       prompt.length,
       promptParts.budgetComposition,
       resolveContextBudgetFromProject(opts.projectRoot, role, activeModel),
+      contextBudgetMode,
     );
-    if (contextBudget.warning) {
+    if (contextBudget.warning && !contextBudget.rejected) {
       // T-V3TOK-100 is deliberately observation-only. In particular, this
       // happens after assembly and before execution without editing `prompt`.
       console.warn(
@@ -429,10 +474,86 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       );
     }
 
+    const candidateBudgetRejections = (): ReturnType<typeof contextBudgetRejections> => {
+      const budgetScope = { taskId: req.taskId, role, stage: req.stage, runtime: activeRuntime.id, model: activeModel ?? null };
+      const rejections = contextBudgetRejections(contextBudget, budgetScope);
+      const taskBudgetRejection = opts.taskRunLog
+        ? taskTokenBudgetRejection(opts.projectRoot, opts.taskRunLog(req.taskId), req.taskId, contextBudget.estimatedInputTokens, budgetScope)
+        : null;
+      if (taskBudgetRejection) rejections.push(taskBudgetRejection);
+      return rejections;
+    };
+    let budgetRejections = candidateBudgetRejections();
+    const accumulatedBudgetRejections = [...budgetRejections];
+
+    // The router has already made the ordered candidate list. Budget only
+    // filters that list after assembly; it never discovers or adds a runtime.
+    while (contextBudgetMode === "reject" && budgetRejections.length > 0 && routeAllowHandoff && activeAttemptIndex >= 0 && activeAttemptIndex + 1 < routeAttempts.length) {
+      const current = routeAttempts[activeAttemptIndex]!;
+      const skipReason = JSON.stringify(budgetRejections);
+      const skipped = { ...current, skipReason };
+      routeAttempts[activeAttemptIndex] = skipped;
+      let next = routeAttempts[++activeAttemptIndex]!;
+      recordTransition(skipped, next, skipReason);
+      while ((next.skipReason || !next.runtime) && activeAttemptIndex + 1 < routeAttempts.length) {
+        const afterSkip = routeAttempts[++activeAttemptIndex]!;
+        recordTransition(next, afterSkip, next.skipReason ?? `runtime "${next.runtimeId}" is not registered`);
+        next = afterSkip;
+      }
+      if (next.skipReason || !next.runtime) break;
+
+      activeRuntime = next.runtime;
+      activeModel = next.model ?? resolveModel(role);
+      activeModelExplicit = next.modelExplicit ?? false;
+      activeEffort = next.effort;
+      contextBudget = assessContextBudget(
+        prompt.length,
+        promptParts.budgetComposition,
+        resolveContextBudgetFromProject(opts.projectRoot, role, activeModel),
+        contextBudgetMode,
+      );
+      budgetRejections = candidateBudgetRejections();
+      accumulatedBudgetRejections.push(...budgetRejections);
+    }
+    if (contextBudgetMode === "reject" && budgetRejections.length > 0) {
+      return finish(failResult(
+        accumulatedBudgetRejections.map(formatBudgetRejection).join(" | "),
+        {
+          model: activeModel,
+          promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
+          effort: resolveAgentEffort(opts.projectRoot, role) ?? undefined,
+          context_chars: prompt.length,
+          estimated_input_tokens: contextBudget.estimatedInputTokens,
+          ...promptParts.composition,
+          doc_chars_before: stageContext.docCharsBefore,
+          runtime: activeRuntime.id,
+          requested_runtime: requestedRuntime,
+          requested_model: requestedModel,
+          routing_basis: routingBasis,
+          fallback_reason: renderFallbackHops(fallbackHops),
+          fallback_count: opts.registry ? fallbackHops.length : undefined,
+          context_budget_chars: contextBudget.budgetChars ?? undefined,
+          context_budget_source: contextBudget.budgetSource ?? undefined,
+          context_overflow_chars: contextBudget.overflowChars ?? undefined,
+          context_budget_warning: true,
+          context_base_chars: promptParts.budgetComposition.base,
+          context_task_chars: promptParts.budgetComposition.task,
+          context_safety_chars: promptParts.budgetComposition.safety,
+          context_docs_chars: promptParts.budgetComposition.docs,
+          context_knowledge_chars: promptParts.budgetComposition.knowledge,
+          context_code_chars: promptParts.budgetComposition.code,
+          context_tool_output_chars: promptParts.budgetComposition.tool_output,
+          context_reserve_chars: promptParts.budgetComposition.reserve,
+        },
+      ));
+    }
+
     let declared = {
       model: activeModel,
       promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
+      effort: resolveAgentEffort(opts.projectRoot, role) ?? undefined,
       context_chars: prompt.length,
+      estimated_input_tokens: contextBudget.estimatedInputTokens,
       composition: promptParts.composition,
       doc_chars_before: stageContext.docCharsBefore,
       runtime: activeRuntime.id,
@@ -454,6 +575,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       definitionPath: activeRuntime.binding.definitionPath(role),
       prompt,
       model: declared.model,
+      modelExplicit: activeModelExplicit,
+      effort: activeEffort,
       autonomy,
       guards,
       env: {
@@ -490,6 +613,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         definitionPath: activeRuntime.binding.definitionPath(role),
         prompt,
         model: declared.model,
+        modelExplicit: activeModelExplicit,
+        effort: activeEffort,
         autonomy,
         guards,
         // T15: the framework's own channel for telling a guard which role is
@@ -562,11 +687,22 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
 
         activeRuntime = next.runtime;
         activeModel = next.model ?? resolveModel(role);
+        activeModelExplicit = next.modelExplicit ?? false;
+        activeEffort = next.effort;
         const nextBudget = assessContextBudget(
           prompt.length,
           promptParts.budgetComposition,
           resolveContextBudgetFromProject(opts.projectRoot, role, activeModel),
+          contextBudgetMode,
         );
+        contextBudget = nextBudget;
+        const nextBudgetRejections = candidateBudgetRejections();
+        if (contextBudgetMode === "reject" && nextBudgetRejections.length > 0) {
+          const skipReason = JSON.stringify(nextBudgetRejections);
+          routeAttempts[activeAttemptIndex] = { ...next, skipReason };
+          unavailableReason = skipReason;
+          continue;
+        }
         declared = {
           ...declared,
           model: activeModel,
@@ -624,10 +760,16 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // works wherever the run happened, not only where the orchestrator's `fs`
     // can reach.
     if (req.stage === AgentStage.QA_ENGINEER) {
-      return finish(qaArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "review.md")));
+      return finish(await fingerprintVerdict(
+        qaArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "review.md")),
+        opts.projectRoot,
+      ));
     }
     if (req.stage === AgentStage.SECURITY) {
-      return finish(securityArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "security.md")));
+      return finish(await fingerprintVerdict(
+        securityArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "security.md")),
+        opts.projectRoot,
+      ));
     }
 
     // The five doc-producing stages each own exactly one module document. Exit 0

@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { sectionMap } from "../context/contextManager.js";
+import { sectionMap } from "../context/sections.js";
 
 /**
  * T-V3TOK-013 — on-demand policy retrieval.

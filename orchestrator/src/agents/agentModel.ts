@@ -59,7 +59,22 @@ export function parseVersionFromFrontmatter(text: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function parseFrontmatterField(text: string, key: string): string | null {
+/** Reads the configured model-reasoning effort for telemetry only. */
+export function resolveAgentEffort(projectRoot: string, role: string): string | null {
+  const file = path.join(projectRoot, ".claude", "agents", `${role}.md`);
+  try {
+    return parseEffortFromFrontmatter(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+export function parseEffortFromFrontmatter(text: string): string | null {
+  return parseFrontmatterField(text, "effort");
+}
+
+/** Shared parser for the deliberately flat agent-frontmatter fields. */
+export function parseFrontmatterField(text: string, key: string): string | null {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   if (!match) return null;
   const fieldRe = new RegExp(`^${key}\\s*:`);

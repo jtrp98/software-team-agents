@@ -1,8 +1,11 @@
 # prompt-reconcile-knowledge-layout.md — Knowledge Repo Structure Reconciliation Playbook
 
-> **Scope:** This playbook reconciles file layout inside a Knowledge repo. It
-> does not read a Target and does not reconcile evidence. For current/desired
-> evidence classification, run `sta knowledge reconcile --target <id>`.
+> **Scope:** This playbook reconciles file layout inside a Knowledge repo,
+> and flags canonical docs whose *content format* has drifted from the
+> current Framework schema (routing the reformat to the owning agent, never
+> rewriting them here). It does not read a Target and does not reconcile
+> evidence. For current/desired evidence classification, run
+> `sta knowledge reconcile --target <id>`.
 
 > **What this is:** a playbook for an AI coding assistant (Claude Code, Codex,
 > OpenCode, or any agent that can read files and run shell commands) to
@@ -95,6 +98,29 @@
    this Framework doesn't define at all (an old tool's cache/manifest dir,
    OS cruft like `.DS_Store`) is also in scope for the report, even though
    it's almost never something to move *into* the canonical shape.
+5. **Check content-format conformance, not just placement.** A file can sit
+   at the right path and still be written to an outdated schema — a legacy
+   `plan.md` full of `- [x] [backend] …` checkboxes instead of the
+   `| Task | Status | Owner | Depends on |` table with `BE-`/`FE-NNN` ids,
+   `(DES-NNN)` traceability and `pending/in_progress/verified/blocked`
+   Status (`policies/documentation.md` §2, §4 — T52); a
+   `requirement.md` missing its `## References` table; knowledge items
+   without `sources[]`. Run the Framework's own structural validators from
+   the checkout, per module, and record each result:
+
+   ```bash
+   sta --check-doc-structure       # every _docs/module/*/*.md's sections against its schema
+   sta --check-plan                # every module's plan.md as a task DAG (deps/cycle/owner/status/DES/waves)
+   sta --check-plan --module <name>   # scope to one module
+   sta --check-knowledge           # knowledge/*.yaml against its schema and cross-links
+   sta --check-roles               # each role workspace's watermark against knowledge/
+   ```
+
+   Build a per-module conformance table — `module → format OK? (what's off) →
+   check-plan result` — as part of the Phase 0 inventory. `0 tasks / 0 waves`
+   from `--check-plan` means the parser found no recognizable task table,
+   i.e. the doc is pre-format, not empty. This table is a **report**, not a
+   licence to rewrite (Bucket F says what to do with it).
 
 ---
 
@@ -187,13 +213,50 @@ it. If it turns out to be a live, recurring convention worth keeping, that's
 a `layout.yaml` change to propose to the user — not something this playbook
 decides unilaterally by moving files around.
 
+### Bucket F — Right place, outdated format
+
+A canonical doc at its correct path but written to a schema this Framework
+no longer recognizes: `plan.md` as a checkbox list rather than the task
+DAG table (`--check-plan` → `0 tasks / 0 waves`), `requirement.md` with no
+`## References` table, `design.md` missing its mandatory sections,
+`review.md` with closed rounds never archived, knowledge YAML without
+`sources[]`/`version`.
+
+**Don't rewrite it.** Regenerating an analysis doc is exactly what every
+agent contract in this Framework forbids, and this playbook inherits that
+rule. A pre-format `plan.md` still encodes real decisions about scope and
+order — losing them to a reformat is worse than the format drift.
+
+**Action:** report each non-conforming doc with its failing check and the
+specific gap. Then, per doc, offer the user one of:
+- **route to the owning agent** — the reformat is that agent's job on its
+  own doc (`project-manager` re-derives `plan.md` as a validated DAG from
+  the existing `design.md` + the old plan's content; `business-analyst`
+  adds the `## References` table). This playbook does not run those agents;
+  it names which one and hands off.
+- **leave as-is** — the doc is inert to the pipeline until a stage that
+  needs it runs (Operating principle #4); a module with no active work
+  doesn't need its `plan.md` migrated today.
+- **incremental `Edit`** — only for additive, mechanical gaps (a missing
+  `(DES-NNN)` reference on one row, a `## References` heading with rows the
+  user dictates), never a structural rewrite. Same amend rules as every
+  analysis agent: `Edit` the affected section only, add one dated
+  `## Change Log` line (the date comes from the user —
+  `policies/documentation.md` §3), write the content in Thai (§11), and
+  confirm the section with the user before saving (§4).
+
+Never treat a failing `--check-*` as authority to regenerate the doc — §4
+and the `block-doc-rewrite.js` hook (§5b) both forbid it.
+
 ---
 
 ## Reconciliation flow
 
 1. Run Phase 0, produce the full classified inventory (one table: path →
-   bucket → one-line reasoning).
-2. Walk the user through each bucket in order (A → E), proposing one action
+   bucket → one-line reasoning) plus the per-module content-conformance
+   table (module → format OK? → `--check-plan`/`--check-doc-structure`
+   result).
+2. Walk the user through each bucket in order (A → F), proposing one action
    per item or per clearly-related group — never a blanket "move everything
    in Bucket B."
 3. Apply only what's confirmed, one path (or confirmed group) at a time.
@@ -225,6 +288,9 @@ decides unilaterally by moving files around.
   file-move decision
 - never rewrite a canonical doc wholesale to absorb legacy content — `Edit`,
   section by section, with a dated Change Log line
+- never regenerate a doc that fails a `--check-*` validator (Bucket F) —
+  report it and route the reformat to the owning agent; a failing check is
+  a finding, not a mandate to rewrite
 
 ## Final report template
 
@@ -238,6 +304,8 @@ Bucket B (reference)      : <n> — <n> staged, <n> left in place
 Bucket C (stray files)    : <n> — <n> resolved, <n> left pending
 Bucket D (out-of-scope)   : <n> — reported only
 Bucket E (unrecognized knowledge/** data) : <n> — <n> explained, <n> left pending
+Bucket F (outdated doc format) : <n> — <n> routed to owning agent, <n> left as-is
+Content-format checks     : check-doc-structure <pass/n fail>, check-plan <n pass / n fail>, check-knowledge <pass/n fail>
 Layout proposals raised   : <none, or list>
 Next                      : <what the user should decide/run next>
 ```

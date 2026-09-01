@@ -171,7 +171,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
         if (!registry) throw new Error("registry unavailable");
         if (registry.targets.length === 0) return { status: "PASS", detail: "no targets registered" };
         try {
-          const mapping = loadLocalTargetMapping(knowledgeRootValue!, registry, options.projectRoot ?? process.cwd());
+          const mapping = loadLocalTargetMapping(knowledgeRootValue!, registry, defaultProjectRoot());
           if (mapping.length === 0) {
             return { status: "WARNING", detail: `${registry.targets.length} registered target(s) have no local mapping`, fix: "add paths under .workflow/targets.local.yaml in the Knowledge root" };
           }

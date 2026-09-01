@@ -54,6 +54,7 @@ describe("parseArgs", () => {
       targetBindings: { frontend_target: null, backend_target: null },
       autonomy: undefined,
       runtime: undefined,
+      model: undefined,
       mode: undefined,
       noQaOptimization: false,
       noDeterministicGate: false,
@@ -79,6 +80,16 @@ describe("parseArgs", () => {
     expect(explicit.mode).toBe("single");
     expect(parseArgs(["--task-id", "T-1", "--module", "m"], "/repo").runtime).toBeUndefined();
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--runtime", "ghost"], "/repo")).toThrow(CliUsageError);
+  });
+
+  it("T-V4-CAST-001 — parses --model, forces single mode by itself, and needs a value", () => {
+    const explicit = parseArgs(["--task-id", "T-1", "--module", "m", "--model", "opus"], "/repo");
+    expect(explicit.model).toBe("opus");
+    expect(explicit.mode).toBe("single");
+    expect(parseArgs(["--task-id", "T-1", "--module", "m"], "/repo").model).toBeUndefined();
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--model"], "/repo")).toThrow(CliUsageError);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--model", "--frontend"], "/repo")).toThrow(CliUsageError);
+    expect(USAGE).toContain("--model");
   });
 
   it("parses all three orchestrated modes and rejects unknown modes", () => {
@@ -690,9 +701,9 @@ describe("T-V3TOK-003 tokens verb", () => {
     const store = new SqliteTaskStore(defaultStateDbPath(dir));
     store.appendRun({
       task_id: "session:dev:2026-08-26T00:00:00.000Z", agent: AgentStage.BACKEND_ENGINEER,
-      start_time: 1, end_time: 2, duration: 1, model: null, promptVersion: null, tokens: 0, cost: 0,
+      start_time: 1, end_time: 2, duration: 1, model: null, promptVersion: null, effort: null, tokens: 0, cost: 0,
       result: "PASS", retry_count: 0, failure_reason: null, input_tokens: null, output_tokens: null,
-      cache_read_tokens: null, context_chars: null, qa_mode: null, qa_effort: null, runtime: "claude",
+      cache_read_tokens: null, context_chars: null, estimated_input_tokens: null, qa_mode: null, qa_effort: null, runtime: "claude",
       requested_runtime: null, requested_model: null, routing_basis: null, fallback_reason: null, fallback_count: null,
       session_kind: "interactive",
       deterministic_gate: null,
@@ -708,6 +719,7 @@ describe("T-V3TOK-003 tokens verb", () => {
     try {
       expect(await runCli(["tokens", "--project-root", dir], dir)).toBe(0);
       expect(logs.join("\n")).toContain("not reported");
+      expect(logs.join("\n")).toContain("estimated-input=not reported");
       expect(logs.join("\n")).toContain("static=321");
       expect(logs.join("\n")).toContain("always-on-instructions=123 B");
       expect(logs.join("\n")).toContain("context-budget warnings: 1/1 measured run(s), overflow=221");

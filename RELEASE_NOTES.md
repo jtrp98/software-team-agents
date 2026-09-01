@@ -1,5 +1,13 @@
 # Release Notes
 
+## Internal V1 Stable
+
+**Internal V1 Stable = P0 → P1 → P2 → P3 → P4 each executed and reported,
+with the release gate green.** It is not a claim that P3 produced a favourable
+result. A benchmark showing that the harness does not help in some or all
+categories still satisfies the milestone, and that negative result is valid,
+publishable evidence.
+
 ## software-team-agents v1.0.0-rc.3
 
 > Product version `1.0.0-rc.3` (semver; follows `v1.0.0-rc.2`) · 2026-08-28

@@ -12,6 +12,12 @@ A decision that only affects one module (e.g. "should `orders` soft-delete or ha
 belongs in that module's `_docs/module/<name>/design.md` instead, next to the schema it shapes.
 The test: would this decision matter to a module that doesn't exist yet? If yes, it's an ADR.
 
+## Index
+
+| ADR | Decision |
+|---|---|
+| ADR-023 | [Freeze V4 framework capabilities until the stabilization exit condition is met](ADR-023-v4-framework-feature-freeze.md) |
+
 ## Format
 
 One file per decision: `ADR-<NNN>-<slug>.md`, numbers zero-padded to 3 digits and never reused,
@@ -56,6 +62,44 @@ What was decided, stated as a sentence an engineer can implement without reading
 ## Consequences
 What this makes easy, what it makes hard, and what it rules out.
 ```
+
+## Capability proposal gate (`REQ-17`)
+
+An ADR that proposes a new framework capability must add all five of the
+following required sections. They make the proposed capability reviewable
+before it becomes framework surface; they do not make an answer automatically
+good.
+
+```markdown
+## REQ-17 justification
+
+### 1. What is the real pain?
+
+### 2. Why can existing components not solve it?
+
+### 3. How much cost, time, or error does it reduce?
+
+### 4. What benchmark or evidence supports that?
+
+### 5. How much maintenance complexity or cost does it add?
+```
+
+An unanswerable question means **reject**. A blank is not an answer and must
+not be treated as an omission that can be filled in later. Question 5 was
+unanswered for every Part II capability as originally proposed; that missing
+maintenance cost is the decisive reason `R4` could not proceed. ADR-022 could
+proceed where `R4` could not because it answered Question 5 (as well as
+Questions 1 and 2).
+
+A partially answered gate may proceed only when the owner explicitly authorizes
+it **in that ADR itself**, naming the unanswered questions and their status.
+ADR-022 is the recorded example: it answers three of five questions and records
+the owner's authorization to proceed with Questions 3 and 4 incomplete. A
+partially answered gate is never authorized by leaving the gaps unstated.
+
+The ADR checker validates ADR shape, not the quality of these answers. Existing
+ADRs that predate this template are not retroactively required to add these
+sections.
 
 ## Why this isn't `_docs/`
 

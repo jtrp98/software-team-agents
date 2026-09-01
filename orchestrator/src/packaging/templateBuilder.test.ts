@@ -106,6 +106,7 @@ describe("buildTemplates against the real repo", () => {
     const paths = manifest.files.map((f) => f.path);
     expect(paths).toContain("CLAUDE.md");
     expect(paths).toContain("layout.yaml");
+    expect(paths).toContain("model-tiers.yaml");
     expect(paths.some((p) => p.startsWith(".claude/agents/"))).toBe(true);
     expect(paths.some((p) => p.startsWith(".claude/commands/"))).toBe(true);
     expect(paths.some((p) => p.startsWith("contracts/"))).toBe(true);

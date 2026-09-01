@@ -81,7 +81,7 @@ export function renderBootstrapBlock(options: BootstrapRenderOptions): string {
     "- Hard boundary: amend existing module docs section-by-section; never regenerate them.",
     "- Hard boundary: approvals/sign-offs are human acts; agents never forge them.",
     "- Hard boundary: dates and unclear business rules come from a person; never improvise them.",
-    "- Context: run the command named by `AGENTCLAUDE_CONTEXT_CMD` with `<your-role> --module <name> --phase <n>`.",
+    `- Context: execute this as an actual shell command — not just read the name — before browsing files for module context yourself: \`$AGENTCLAUDE_CONTEXT_CMD ${options.role} --module <name> --phase <n>\` (fill in \`<name>\`/\`<n>\`). If that variable is empty/unset, this session was not launched via \`software-team-agents ${options.role}\` — say so and stop instead of grepping local files as a substitute.`,
     "- Everything else: read only the needed section with `sta policy <area> <section>`.",
     BOOTSTRAP_CLOSE,
     "",

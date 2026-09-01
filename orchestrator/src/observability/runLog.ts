@@ -1,4 +1,5 @@
 import { AgentStage } from "../types.js";
+import type { ChangeSetFingerprint } from "../qa/changeSource.js";
 
 export interface RunRecord {
   task_id: string;
@@ -10,6 +11,8 @@ export interface RunRecord {
   model: string | null;
   /** Which prompt version ran this stage (T57) — from the same file's `version:` frontmatter field. Null when absent (an agent file that predates T57, or a test stub) — log-only, never selects which prompt actually runs. */
   promptVersion: number | null;
+  /** Agent-frontmatter reasoning effort; distinct from the QA risk gate's qa_effort. */
+  effort: string | null;
   tokens: number;
   cost: number;
   result: "PASS" | "FAIL";
@@ -22,6 +25,8 @@ export interface RunRecord {
   cache_read_tokens: number | null;
   /** Size (characters) of the prompt actually sent this run (T28) — the context-size half of "token/context tracking", independent of the response's token usage. */
   context_chars: number | null;
+  /** Deterministic input-token approximation from context_chars; null for historical rows. */
+  estimated_input_tokens: number | null;
   /** Runtime id reported by the executor/session launcher. Null for historical rows. */
   runtime: string | null;
   /** Runtime requested before routing/fallback. Null when that decision was not reported. */
@@ -67,11 +72,14 @@ export interface RunRecord {
   qa_effort: "skip" | "lightweight" | "full" | null;
   /** Whether this optimized QA round ran deterministic checks, or used the explicit escape hatch. */
   deterministic_gate: "enabled" | "disabled" | null;
+  /** Source snapshot captured for a QA/security verdict; null means pre-T-V4-CAST-006 history. */
+  verification_fingerprint?: ChangeSetFingerprint | null;
 }
 
 export interface RunOutcome {
   model?: string;
   promptVersion?: number;
+  effort?: string;
   tokens: number;
   cost: number;
   result: "PASS" | "FAIL";
@@ -81,6 +89,7 @@ export interface RunOutcome {
   output_tokens?: number;
   cache_read_tokens?: number;
   context_chars?: number;
+  estimated_input_tokens?: number;
   runtime?: string;
   requested_runtime?: string;
   requested_model?: string;
@@ -111,6 +120,7 @@ export interface RunOutcome {
   qa_mode?: "FULL" | "TARGETED";
   qa_effort?: "skip" | "lightweight" | "full";
   deterministic_gate?: "enabled" | "disabled";
+  verification_fingerprint?: ChangeSetFingerprint;
 }
 
 const NOT_REPORTED = "not reported";
@@ -125,9 +135,10 @@ function reported(value: string | number | null): string {
  * output would make an unknown route look like a same-runner decision.
  */
 export function formatRunRouting(run: RunRecord): string {
+  const effort = reported(run.effort);
   return `runner=${reported(run.requested_runtime)} → ${reported(run.runtime)} ` +
     `model=${reported(run.requested_model)} → ${reported(run.model)} ` +
-    `basis=${reported(run.routing_basis)} fallback_count=${reported(run.fallback_count)} ` +
+    `effort=${effort} basis=${reported(run.routing_basis)} fallback_count=${reported(run.fallback_count)} ` +
     `fallback_reason=${reported(run.fallback_reason)}`;
 }
 
@@ -169,6 +180,7 @@ export class RunLog {
       duration: params.end_time - params.start_time,
       model: params.outcome.model ?? null,
       promptVersion: params.outcome.promptVersion ?? null,
+      effort: params.outcome.effort ?? null,
       tokens: params.outcome.tokens,
       cost: params.outcome.cost,
       result: params.outcome.result,
@@ -178,6 +190,7 @@ export class RunLog {
       output_tokens: params.outcome.output_tokens ?? null,
       cache_read_tokens: params.outcome.cache_read_tokens ?? null,
       context_chars: params.outcome.context_chars ?? null,
+      estimated_input_tokens: params.outcome.estimated_input_tokens ?? null,
       runtime: params.outcome.runtime ?? null,
       requested_runtime: params.outcome.requested_runtime ?? null,
       requested_model: params.outcome.requested_model ?? null,
@@ -208,6 +221,7 @@ export class RunLog {
       qa_mode: params.outcome.qa_mode ?? null,
       qa_effort: params.outcome.qa_effort ?? null,
       deterministic_gate: params.outcome.deterministic_gate ?? null,
+      ...(params.outcome.verification_fingerprint ? { verification_fingerprint: params.outcome.verification_fingerprint } : {}),
     };
     this.records.push(entry);
     return entry;

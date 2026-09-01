@@ -25,10 +25,10 @@ export interface BudgetCheckResult {
   violations: string[];
 }
 
-export function checkBudget(log: RunLog, taskId: string, budget: Budget = DEFAULT_BUDGET): BudgetCheckResult {
+export function checkBudget(log: RunLog, taskId: string, budget: Budget = DEFAULT_BUDGET, projectedTotalTokens?: number): BudgetCheckResult {
   const violations: string[] = [];
 
-  const totalTokens = log.totalTokens(taskId);
+  const totalTokens = projectedTotalTokens ?? log.totalTokens(taskId);
   if (totalTokens > budget.token_budget) {
     violations.push(`token_budget exceeded: ${totalTokens} > ${budget.token_budget}`);
   }

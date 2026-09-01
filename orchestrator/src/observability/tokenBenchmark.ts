@@ -5,6 +5,7 @@ import { deriveHandoff } from "../agents/moduleDocs.js";
 import { ArtifactType, type HandoffArtifact } from "../artifacts/schemas.js";
 import { renderTokenBenchmarkMarkdown } from "../codeintel/benchmark.js";
 import { ContextManager } from "../context/contextManager.js";
+import { estimateInputTokens } from "../context/contextBudget.js";
 import { renderSlicedDocs, buildPromptParts, compileExecutionPacket, sliceModuleDocsWithSavings } from "../runtime/agentRunAssembly.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { AgentStage } from "../types.js";
@@ -167,7 +168,7 @@ export function runTokenBenchmark(frameworkRoot: string): TokenBenchmarkRow[] {
         filesOpened += selected.length;
         inputChars += staticChars(frameworkRoot, stage) + buildPromptParts({ taskId: `${workload}-fixture`, stage, context: [] }, undefined, { docs: renderedDocs }).text.length;
       }
-      const inputTokens = Math.ceil(inputChars / 4);
+      const inputTokens = estimateInputTokens(inputChars);
       return { workload, inputTokens, outputTokens: null, totalTokens: inputTokens, modelCalls: WORKLOAD_STAGES[workload].length, filesOpened, docBytes, retries: 0, qualityGatesPassed: null };
     });
   } finally {

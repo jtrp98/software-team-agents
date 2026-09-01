@@ -4,6 +4,7 @@ import { AgentStage } from "../types.js";
 import { TaskGraph, TaskGraphError, CircularDependencyError, UnknownTaskError, type TaskNode } from "../graph/taskGraph.js";
 import { sections, firstTable, checkboxLines } from "../adoption/markdown.js";
 import { extractIds } from "../traceability/traceability.js";
+import { loadModelTiers, ModelTiersInvalidError, type ModelTiers } from "../runtime/modelTiers.js";
 
 /**
  * The plan.md task table as a machine-checkable graph (pm-improvements T-PM1.x).
@@ -55,6 +56,7 @@ const VALID_OWNERS: readonly string[] = Object.values(AgentStage).filter((s) => 
 
 const TASK_ID_PATTERN = /\b(?:BE|FE)-[A-Za-z0-9._-]+\b/;
 const DESIGN_REF_PATTERN = /\bDES-\d+\b/g;
+const ANALYSIS_OWNERS = new Set(["business-analyst", "system-analyst", "project-manager", "test-planner"]);
 
 export interface PlanTaskRow {
   /** Plan-level id, e.g. `BE-004`. Unique within the plan — validated, not assumed. */
@@ -69,6 +71,8 @@ export interface PlanTaskRow {
   owner: string;
   /** Authored wave from an optional `Wave` column; null when the plan carries none. */
   wave: number | null;
+  /** Optional phase-level cast, inherited by every task in its phase. */
+  tier?: string;
   description: string;
   /** True when the row came from a legacy `- [ ]` line rather than a T52 table. */
   fromCheckbox: boolean;
@@ -120,6 +124,11 @@ function contractsOf(cell: string | undefined): string[] | undefined {
   return [...new Set(text.split(/\s*(?:,|;|<br\s*\/?>)\s*/i).map((value) => value.replace(/^`|`$/g, "").trim()).filter(Boolean))];
 }
 
+function tierOf(cell: string | undefined): string | undefined {
+  const text = (cell ?? "").trim();
+  return text === "" || text === "—" || text === "-" ? undefined : text;
+}
+
 function rowsForPhase(phaseNumber: number, body: string, problems: string[]): PlanTaskRow[] {
   const rows: PlanTaskRow[] = [];
   const push = (
@@ -130,6 +139,7 @@ function rowsForPhase(phaseNumber: number, body: string, problems: string[]): Pl
     waveCell: string | undefined,
     producesCell: string | undefined,
     consumesCell: string | undefined,
+    phaseTier: string | undefined,
     fromCheckbox: boolean,
   ): void => {
     const parsed = parseTaskCell(taskCell);
@@ -147,6 +157,7 @@ function rowsForPhase(phaseNumber: number, body: string, problems: string[]): Pl
       status: status ?? "pending",
       owner: ownerCell.trim(),
       wave: wave === "invalid" ? null : wave,
+      ...(phaseTier === undefined ? {} : { tier: phaseTier }),
       description: parsed.description || parsed.id,
       fromCheckbox,
       produces: contractsOf(producesCell),
@@ -173,6 +184,13 @@ function rowsForPhase(phaseNumber: number, body: string, problems: string[]): Pl
     const wave = table.header.findIndex((heading) => heading.trim().toLowerCase() === "wave");
     const produces = table.header.findIndex((heading) => heading.trim().toLowerCase() === "produces");
     const consumes = table.header.findIndex((heading) => heading.trim().toLowerCase() === "consumes");
+    const tier = table.header.findIndex((heading) => heading.trim().toLowerCase() === "tier");
+    const tierCells = tier === -1 ? [] : table.rows.map((cells) => tierOf(cells[tier]));
+    const authoredTiers = tierCells.filter((value): value is string => value !== undefined);
+    if (authoredTiers.length > 1) {
+      problems.push(`phase ${phaseNumber}: Tier must be recorded once per phase, not repeated per task`);
+    }
+    const phaseTier = authoredTiers[0];
     for (const cells of table.rows) {
       push(
         cells[task] ?? "",
@@ -182,6 +200,7 @@ function rowsForPhase(phaseNumber: number, body: string, problems: string[]): Pl
         wave === -1 ? undefined : cells[wave],
         produces === -1 ? undefined : cells[produces],
         consumes === -1 ? undefined : cells[consumes],
+        phaseTier,
         false,
       );
     }
@@ -191,7 +210,7 @@ function rowsForPhase(phaseNumber: number, body: string, problems: string[]): Pl
   // Legacy checkbox shape (pre-T52). Still parsed so --check-plan says something
   // useful about an unmigrated plan instead of silently passing it.
   for (const line of checkboxLines(body)) {
-    push(line.text, "", "", "", undefined, undefined, undefined, true);
+    push(line.text, "", "", "", undefined, undefined, undefined, undefined, true);
   }
   return rows;
 }
@@ -222,7 +241,7 @@ export interface PlanGraphCheck {
  */
 export function validatePlanTasks(
   tasks: PlanTaskRow[],
-  opts: { designMd?: string } = {},
+  opts: { designMd?: string; modelTiers?: ModelTiers | null } = {},
 ): PlanGraphCheck {
   const errors: string[] = [];
 
@@ -236,6 +255,32 @@ export function validatePlanTasks(
       continue;
     }
     byId.set(task.id, task);
+  }
+
+  const tasksByPhase = new Map<number, PlanTaskRow[]>();
+  for (const task of tasks) {
+    const phaseTasks = tasksByPhase.get(task.phase) ?? [];
+    phaseTasks.push(task);
+    tasksByPhase.set(task.phase, phaseTasks);
+  }
+  for (const [phase, phaseTasks] of tasksByPhase) {
+    const tier = phaseTasks[0]?.tier;
+    if (!tier) continue;
+    if (phaseTasks.every((task) => ANALYSIS_OWNERS.has(task.owner.trim().toLowerCase()))) {
+      errors.push(`phase ${phase} casts ${tier}, but analysis phases must not carry a Tier`);
+      continue;
+    }
+    if (tier === "T1") {
+      errors.push(`phase ${phase} casts T1, but T1 is reserved and cannot be cast in the pipeline`);
+      continue;
+    }
+    if (opts.modelTiers === null || opts.modelTiers === undefined) {
+      errors.push(`phase ${phase} casts ${tier}, but model-tiers.yaml is not configured`);
+      continue;
+    }
+    if (!(tier in opts.modelTiers)) {
+      errors.push(`phase ${phase} casts ${tier}, which is absent from model-tiers.yaml`);
+    }
   }
 
   for (const task of tasks) {
@@ -486,7 +531,11 @@ export interface PlanGraphModuleResult {
 }
 
 /** Validates one module's plan.md (and its design.md DES refs, when design.md exists). */
-export function checkPlanGraphForModule(docsModuleDir: string, module: string): PlanGraphModuleResult {
+export function checkPlanGraphForModule(
+  docsModuleDir: string,
+  module: string,
+  modelTiers: ModelTiers | null = null,
+): PlanGraphModuleResult {
   const planPath = path.join(docsModuleDir, module, "plan.md");
   const notes: string[] = [];
   if (!fs.existsSync(planPath)) {
@@ -500,7 +549,7 @@ export function checkPlanGraphForModule(docsModuleDir: string, module: string): 
   if (tasks.length === 0) {
     notes.push(`${module}/plan.md has no task rows under any ## Phase heading`);
   }
-  const check = validatePlanTasks(tasks, { designMd });
+  const check = validatePlanTasks(tasks, { designMd, modelTiers });
   errors.push(...check.errors);
 
   const widest = Math.max(0, ...[...check.waves.values()]);
@@ -540,10 +589,20 @@ export function checkPlanGraphs(projectRoot: string, moduleName?: string): PlanG
     return { ok: false, problems: [`module "${moduleName}" has no folder under _docs/module/`], notes: [] };
   }
 
+  let modelTiers: ModelTiers | null;
+  try {
+    modelTiers = loadModelTiers(projectRoot);
+  } catch (error) {
+    if (error instanceof ModelTiersInvalidError) {
+      return { ok: false, problems: [error.message], notes: [] };
+    }
+    throw error;
+  }
+
   const problems: string[] = [];
   const notes: string[] = [];
   for (const module of modules) {
-    const result = checkPlanGraphForModule(docsModuleDir, module);
+    const result = checkPlanGraphForModule(docsModuleDir, module, modelTiers);
     notes.push(...result.notes);
     problems.push(...result.errors.map((e) => `${module}/plan.md: ${e}`));
   }

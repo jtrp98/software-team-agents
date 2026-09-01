@@ -53,6 +53,20 @@ function executorFor(runtime: MockRuntimeAdapter, over: Record<string, unknown> 
 const PASSING_REVIEW = ["## Round 1 (FULL)", "- everything checks out ✅", "- 12 passed, 0 failed"].join("\n");
 
 describe("createRuntimeExecutor — what reaches the adapter (T108)", () => {
+  it("T-V4-COST-006 records frontmatter effort without changing the adapter effort", async () => {
+    const projectRoot = tmpProject();
+    writeAgentFile(projectRoot, "backend-engineer", "model: sonnet\neffort: high");
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
+    const result = await createRuntimeExecutor({
+      runtime,
+      projectRoot,
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-EFFORT", context: [] });
+    expect(result.outcome.effort).toBe("high");
+    expect(runtime.requests[0]!.effort).toBeUndefined();
+  });
+
   it("addresses the agent by this framework's role name and the binding's own path", async () => {
     const runtime = new MockRuntimeAdapter({ id: "some-runtime" });
     const executor = executorFor(runtime);
@@ -371,10 +385,37 @@ describe("metrics — normalising any runtime's usage into the run log (T26/T28)
       expect(result.outcome.context_budget_chars).toBe(1);
       expect(result.outcome.context_overflow_chars).toBe(expected.length - 1);
       expect(result.outcome.context_budget_warning).toBe(true);
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Prompt is unchanged (warning mode)"));
+      expect(warn).toHaveBeenCalledWith(
+        `[orchestrator] WARNING: business-analyst context budget exceeded: ${expected.length} chars > 1 (role); overflow=${expected.length - 1}. Prompt is unchanged (warning mode).`,
+      );
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it("refuses an over-budget prompt in reject mode before executeAgent", async () => {
+    const root = tmpProject();
+    fs.mkdirSync(path.join(root, ".sta"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".sta", "config.yaml"), "schema_version: 1\ncontext_budget:\n  mode: reject\n  roles:\n    business-analyst: 1\n", "utf8");
+    const runtime = new MockRuntimeAdapter();
+    const executor = executorFor(runtime, { projectRoot: root });
+    const result = await executor({ stage: AgentStage.BUSINESS_ANALYST, taskId: "T-reject", context: [{ source: ArtifactType.REQUIREMENTS, content: "x".repeat(500) }] });
+    expect(runtime.requests).toHaveLength(0);
+    expect(result.outcome).toMatchObject({ result: "FAIL", context_budget_warning: true, context_budget_chars: 1 });
+  });
+
+  it("keeps missing and invalid budget config in the warn-compatible execution path", async () => {
+    const missing = new MockRuntimeAdapter();
+    await executorFor(missing)({ stage: AgentStage.BUSINESS_ANALYST, taskId: "T-NO-CONFIG", context: [] });
+    expect(missing.requests).toHaveLength(1);
+
+    const root = tmpProject();
+    fs.mkdirSync(path.join(root, ".sta"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".sta", "config.yaml"), "schema_version: invalid\n", "utf8");
+    const invalid = new MockRuntimeAdapter();
+    const result = await executorFor(invalid, { projectRoot: root })({ stage: AgentStage.BUSINESS_ANALYST, taskId: "T-INVALID-CONFIG", context: [] });
+    expect(result.outcome.result).toBeDefined();
+    expect(invalid.requests).toHaveLength(1);
   });
 
   it("fails before adapter execution when HANDOFF explicitly references a forbidden document", async () => {
@@ -947,6 +988,45 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
       routing_basis: "level-4",
       fallback_count: 0,
     });
+  });
+
+  it("keeps a cast task on its frontmatter model when model-tiers.yaml is absent", async () => {
+    const projectRoot = tmpProject();
+    writeAgentFile(projectRoot, "backend-engineer", "model: sonnet");
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
+    const executor = createRuntimeExecutor({
+      runtime,
+      registry: new RuntimeRegistry([runtime]),
+      projectRoot,
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+      planTier: () => "T4",
+    });
+    await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-NO-TIER-TABLE", context: [] });
+    expect(runtime.requests[0]).toMatchObject({ model: "sonnet", modelExplicit: false, effort: undefined });
+  });
+
+  it("T-V4-CAST-001 — a --model routing flag reaches the adapter as an explicit override; a resolved default does not", async () => {
+    const projectRoot = tmpProject();
+    writeAgentFile(projectRoot, "backend-engineer", "model: sonnet");
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet", "opus"] });
+    const base = {
+      runtime,
+      registry: new RuntimeRegistry([runtime]),
+      projectRoot,
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+    };
+
+    await createRuntimeExecutor(base)({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-DEFAULT", context: [] });
+    expect(runtime.requests[0].model).toBe("sonnet");
+    expect(runtime.requests[0].modelExplicit ?? false).toBe(false);
+
+    await createRuntimeExecutor({ ...base, routingFlags: { model: "opus" } })(
+      { stage: AgentStage.BACKEND_ENGINEER, taskId: "T-OVERRIDE", context: [] },
+    );
+    expect(runtime.requests[1].model).toBe("opus");
+    expect(runtime.requests[1].modelExplicit).toBe(true);
   });
 
   it("refuses an unavailable selected runtime before adapter start and preserves the probe reason", async () => {

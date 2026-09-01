@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as readline from "node:readline/promises";
-import { AgentStage, TaskState } from "./types.js";
+import { AgentStage } from "./types.js";
 import { classifyTask, type ClassificationInput } from "./classification/taskClassifier.js";
 import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
@@ -14,8 +14,7 @@ import { combineProjectRunners, createProjectRunner } from "./qa/projectRunner.j
 import { createPostDevVerificationHook, withPostDevVerificationDisabled } from "./qa/verificationHook.js";
 import { LocalWorkspace } from "./runtime/localWorkspace.js";
 import { DEFAULT_BUDGET, type Budget } from "./cost/costControl.js";
-import { loadStaConfig, StaConfigMissingError } from "./packaging/staConfig.js";
-import { buildMetricsExport, compareBaselines, compareTokenBaselines, taskQaMetrics, tokenMetricsExport, type TaskTokenMetrics, type TokenMetricsExport } from "./qa/metrics.js";
+import { loadStaConfig } from "./packaging/staConfig.js";
 import type { QaFindingRecord } from "./qa/evidence.js";
 import { parseOpenIssues } from "./orchestrator/failureClassifier.js";
 import { readModuleDoc } from "./agents/moduleDocs.js";
@@ -23,8 +22,9 @@ import { ClaudeCodeAdapter } from "./runtime/claudeCodeAdapter.js";
 import { CodexAdapter } from "./runtime/codexAdapter.js";
 import { OpenCodeAdapter } from "./runtime/openCodeAdapter.js";
 import { ApiAdapter, PAID_API_RUNTIME_ID } from "./runtime/apiAdapter.js";
-import { RUNTIME_IDS, describeRuntimeSupport, type RuntimeId } from "./runtime/runtimeSupport.js";
+import { RUNTIME_IDS, type RuntimeId } from "./runtime/runtimeSupport.js";
 import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "./runtime/runtimeRegistry.js";
+import { selectTierCamp } from "./runtime/tierCampSelection.js";
 import type { RoutingMode } from "./runtime/runtimeRouting.js";
 import { detectRuntimeCapabilities } from "./runtime/runtimeCapabilityDetection.js";
 import { resolveContextDocsRoot, resolveFrameworkRoot } from "./targetcli/roots.js";
@@ -32,47 +32,30 @@ import type { RuntimeAutonomy } from "./runtime/runtimeAdapter.js";
 import { contractGuardResolver } from "./runtime/runtimeGuards.js";
 import { DatabaseUnavailableError, SqliteTaskStore } from "./store/sqliteStore.js";
 import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
-import { checkAllContracts } from "./agents/agentContract.js";
-import { checkPathRules } from "./agents/pathPermissions.js";
-import { checkLayout } from "./layout/repoLayout.js";
-import { checkPromptBudget } from "./layout/promptBudget.js";
-import { ApprovalType } from "./gates/approval.js";
-import { checkAllWorkflows, resolveWorkflowId } from "./workflow/workflowDefinition.js";
-import { checkBindings } from "./runtime/bindingGenerator.js";
-import { checkProfile } from "./profile/projectProfile.js";
-import { checkDecisions } from "./decisions/decisionLog.js";
-import { checkTestPyramid } from "./testing/testPyramid.js";
+import { resolveWorkflowId } from "./workflow/workflowDefinition.js";
+import { CHECKERS, runChecker } from "./cli/checkers.js";
+import { configuredTokenBudget, flagValue as supportFlagValue, positionalArg, positionalArgs } from "./cli/support.js";
+import { runStatusVerb } from "./cli/verbs/status.js";
+import { runApproveVerb } from "./cli/verbs/approve.js";
+import { runPauseVerb } from "./cli/verbs/pause.js";
+import { runCancelVerb } from "./cli/verbs/cancel.js";
+import { runAuditVerb } from "./cli/verbs/audit.js";
+import { runRolesVerb } from "./cli/verbs/roles.js";
+import { runAdoptVerb } from "./cli/verbs/adopt.js";
+import { runQaMetricsVerb } from "./cli/verbs/qaMetrics.js";
+import { runPolicyVerb } from "./cli/verbs/policy.js";
+import { runTokensVerb } from "./cli/verbs/tokens.js";
+import { runContextVerb } from "./cli/verbs/context.js";
+import { runKnowledgeVerb } from "./cli/verbs/knowledge.js";
+import { runRuntimesVerb } from "./cli/verbs/runtimes.js";
+import { runTaskLoop } from "./cli/runTaskLoop.js";
 import { describeStatus, type TaskStatusKind } from "./orchestrator/taskStatus.js";
 import { formatRunRouting, RunLog } from "./observability/runLog.js";
 import { acquireTaskLock, releaseTaskLock, TaskLockedError } from "./concurrency/taskLock.js";
-import { actorsIn, auditTrail, decisionTrail, formatAuditTrail } from "./audit/auditTrail.js";
-import { checkReviewSeparation } from "./review/reviewSeparation.js";
-import { checkEscalationPolicy } from "./escalation/escalationPolicy.js";
-import { checkWorkspace, hasWorkspace, loadWorkspace, workspacePath, type Workspace } from "./workspace/workspace.js";
-import { checkRepoMap, loadStageRoots } from "./repos/repoMap.js";
-import { Environment, checkEnvironmentConfig, describeEnvironment, isEnvironment } from "./environment/environment.js";
-import { checkDocStructure } from "./docs/docStructure.js";
-import { checkPlanGraphs, planReadinessAdvisory } from "./docs/planGraph.js";
-import { KnowledgeBase, checkKnowledge } from "./knowledge/knowledgeBase.js";
-import { LANE_LABEL, ROLE_LANES, isRoleLane } from "./roles/roleLane.js";
-import {
-  acknowledge,
-  checkRoleWorkspaces,
-  laneView,
-  loadRoleWorkspace,
-  writeRoleWorkspace,
-} from "./roles/roleWorkspace.js";
-import { describeStage, roleWorkflowState, workflowFor, workspacesUnder } from "./roles/roleWorkflow.js";
-import { recordSignoff } from "./roles/roleApproval.js";
-import { approveItem, checklistFor, reviewItem } from "./roles/artifactReview.js";
-import { lanesAffectedBy, notificationsFor } from "./roles/changePropagation.js";
-import { laneContext, laneGet } from "./roles/laneContext.js";
-import { KnowledgeContext } from "./knowledge/knowledgeContext.js";
-import { renderKnowledgeRetrieval } from "./knowledge/retrievalRender.js";
-import { writeKnowledgeItem } from "./knowledge/knowledgeStore.js";
-import { migrateKnowledgeSchemaV2 } from "./knowledge/schemaV2Migration.js";
-import { reconcileKnowledge, renderReconciliationReport } from "./knowledge/reconcile.js";
-import type { RoleLane } from "./roles/roleLane.js";
+import { hasWorkspace, loadWorkspace, workspacePath, type Workspace } from "./workspace/workspace.js";
+import { loadStageRoots } from "./repos/repoMap.js";
+import { Environment, describeEnvironment, isEnvironment } from "./environment/environment.js";
+import { planReadinessAdvisory } from "./docs/planGraph.js";
 import { buildTemplates } from "./packaging/templateBuilder.js";
 import { runInit } from "./packaging/initCommand.js";
 import { runUpgrade } from "./packaging/upgradeCommand.js";
@@ -81,30 +64,14 @@ import { migrateSta } from "./packaging/migration.js";
 import { configureIdentities, configureKnowledgeRoot, loadInstallationConfig } from "./threeRepo/installation.js";
 import { loadTargetRegistry } from "./threeRepo/targets.js";
 import { preflightThreeRepoTask } from "./threeRepo/preflight.js";
+import { resolveDocsRoot, resolveThreeRepoTaskLookup, resolveWritableWorkRoots } from "./threeRepo/cliRoots.js";
 import { exitCodeFor, runDoctor } from "./threeRepo/doctor.js";
 import { validateNewTaskBindings, type TargetBindings } from "./threeRepo/taskBindings.js";
 import { collectMigrationManifest, confirmCutover, copyMigrationSource, readMigrationManifest, transformMigratedKnowledge, verifyMigration, writeMigrationManifest } from "./threeRepo/knowledgeMigration.js";
 import { listBackups, rollbackSta } from "./packaging/rollback.js";
-import { validateInstallation } from "./packaging/installValidation.js";
-import {
-  acknowledgePreflight,
-  AdoptionBlockedError,
-  ALL_ADOPTION_STAGES,
-  approveAdoptionStage,
-  initAdoption,
-  planAdoption,
-  recordAdoptionValidation,
-  runAdoptionStage,
-} from "./adoption/adoptionRunner.js";
-import { readAdoptionState } from "./adoption/adoptionStore.js";
-import { validateAdoption } from "./adoption/adoptionValidation.js";
-import type { AdoptionStageId } from "./adoption/adoptionModel.js";
-import { getPolicySection, listPolicySections, PolicyIndexError } from "./docs/policyIndex.js";
 import { buildPlanGraph, type TaskNode } from "./graph/taskGraph.js";
 import { parsePlanTasks } from "./docs/planGraph.js";
-import { buildContextCommand, ContextCommandError, contextCommandJson, renderContextCommand, renderContextPacket, stageForRole } from "./context/contextCommand.js";
 import type { RuntimeTaskWorkRoot } from "./orchestrator/runtimeTask.js";
-import { latestExecutionPacketPath, readExecutionPacket } from "./state/runtimeArtifacts.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -192,6 +159,14 @@ export interface CliArgs {
    * partial (see each adapter's header) and say so via guard reports.
    */
   runtime?: RuntimeId;
+  /**
+   * Operator-visible model override for every stage of this run (T-V4-CAST-001),
+   * the companion to `--runtime`. Forwarded to the runtime as an explicit
+   * request; a value the selected runtime cannot reach is refused by its adapter,
+   * not passed through. Absent = each role's frontmatter `model:` governs, exactly
+   * as before the flag existed.
+   */
+  model?: string;
   /** Named V3 orchestrated execution mode. Interactive dev/ba lanes do not use this parser. */
   mode?: RoutingMode;
   /**
@@ -223,7 +198,7 @@ export class CliUsageError extends Error {}
 
 export const USAGE =
   "usage (T31 verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--mode <single|auto|manual>] [--runtime <claude-code|codex|opencode|paid-api>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
+  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--mode <single|auto|manual>] [--runtime <claude-code|codex|opencode|paid-api>] [--model <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  sta approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
   "  sta resume  <task-id> --module <name> [--project-root <path>]   continue a task already in the store\n" +
@@ -259,10 +234,11 @@ export const USAGE =
   "  sta roles impact <id>[,<id>...]   which lanes changing those items would reach, before changing them (T105)\n" +
   "  sta roles context <ba|sa|uxui|dev> [<id>] [--full] [--module <name>]   what that lane may see, and via which role (T107)\n" +
   "\n" +
-  "V3 execution: --mode defaults to single; --runtime without --mode also means single. auto alone may hand off after UNAVAILABLE (never ERROR/TIMEOUT); manual requires an explicit per-role runner+model in .sta/config.yaml. paid-api additionally requires execution.allow_paid_fallback: true (default false). If no eligible runner remains, the task stops for a person.\n" +
+  "V3 execution: --mode defaults to single; --runtime (or --model) without --mode also means single. auto alone may hand off after UNAVAILABLE (never ERROR/TIMEOUT); manual requires an explicit per-role runner+model in .sta/config.yaml. paid-api additionally requires execution.allow_paid_fallback: true (default false). If no eligible runner remains, the task stops for a person.\n" +
+  "  --model <name> overrides every stage's frontmatter model for this run (the same override .sta/config.yaml routing carries); the runtime refuses a model it cannot reach rather than passing it through. Absent, each role's own model: governs.\n" +
   "\n" +
   "underlying flag-based form:\n" +
-  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--mode <single|auto|manual>] [--runtime <claude-code|codex|opencode|paid-api>] <classification flags>\n" +
+  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--mode <single|auto|manual>] [--runtime <claude-code|codex|opencode|paid-api>] [--model <name>] <classification flags>\n" +
   "  sta --task-id <id> --module <name> --resume        continue a task already in the store\n" +
   "  sta --task-id <id> --module <name> [--token-budget <n>] [--no-qa-optimization|--no-deterministic-gate]   run with optional QA/budget controls\n" +
   "  sta --list [--project-root <path>]                 show every task and stop\n" +
@@ -321,6 +297,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let phases: number[] = [];
   let autonomy: RuntimeAutonomy | undefined;
   let runtime: RuntimeId | undefined;
+  let model: string | undefined;
   let mode: RoutingMode | undefined;
   let noQaOptimization = false;
   let noDeterministicGate = false;
@@ -417,6 +394,12 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
         throw new CliUsageError(`--runtime must be one of: ${RUNTIME_IDS.join(", ")} (got ${value ?? "nothing"})`);
       }
       runtime = value as NonNullable<CliArgs["runtime"]>;
+    } else if (arg === "--model") {
+      const value = argv[++i];
+      if (!value || value.startsWith("--")) {
+        throw new CliUsageError(`--model requires a model name (got ${value ?? "nothing"})`);
+      }
+      model = value;
     } else if (arg === "--mode") {
       const value = argv[++i];
       const valid: readonly RoutingMode[] = ["single", "auto", "manual"];
@@ -474,9 +457,9 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     throw new CliUsageError("Target bindings are immutable; --frontend-target/--backend-target cannot be used with --resume");
   }
 
-  // Backward compatibility: --runtime by itself has always meant one fixed
-  // adapter. Naming that behaviour must not silently turn handoff on.
-  if (runtime && mode === undefined) mode = "single";
+  // Backward compatibility: --runtime (or --model) by itself has always meant one
+  // fixed adapter/model. Naming that behaviour must not silently turn handoff on.
+  if ((runtime || model) && mode === undefined) mode = "single";
 
   return {
     taskId,
@@ -511,6 +494,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     targetBindings,
     autonomy,
     runtime,
+    model,
     mode,
     noQaOptimization,
     noDeterministicGate,
@@ -553,25 +537,7 @@ export function cliVersion(startDir: string = path.dirname(fileURLToPath(import.
  * PLAN rather than IMPLEMENTATION directly — the approval type is what stays
  * stable, per gatePolicy.ts/approval.ts's matching fix.
  */
-function approvalFieldFor(approvalType: ApprovalType | null): "requirementApproved" | "designApproved" | "humanApproved" | null {
-  if (approvalType === ApprovalType.REQUIREMENT_INTERVIEW) return "requirementApproved";
-  if (approvalType === ApprovalType.SCHEMA_CONFIRMATION) return "designApproved";
-  if (approvalType === ApprovalType.DEPLOY) return "humanApproved";
-  return null;
-}
-
-/** What each of the five decisions means, said in the words the person answering needs. */
-const APPROVAL_PROMPT: Record<ApprovalType, string> = {
-  [ApprovalType.SCHEMA_CONFIRMATION]:
-    "Confirm the data model in design.md before any code is written against it",
-  [ApprovalType.DEPLOY]: "Approve an actual deploy/migration to production",
-  [ApprovalType.QA_FAILURE]: "A QA round came back ⚠️/❌ and needs a decision",
-  [ApprovalType.SECURITY_RISK]: "A Critical/Important security finding is unresolved",
-  [ApprovalType.REQUIREMENT_INTERVIEW]: "A requirement needs a person, not an inference",
-  [ApprovalType.UXUI_SIGNOFF]: "Confirm the current UX/UI artifact before frontend work starts",
-};
-
-async function confirm(question: string): Promise<boolean> {
+export async function confirm(question: string): Promise<boolean> {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   try {
     const answer = await rl.question(`${question} [y/N] `);
@@ -592,7 +558,7 @@ const STATUS_EMOJI: Record<TaskStatusKind, string> = {
   CANCELLED: "🚫",
 };
 
-function printListing(registry: TaskRegistry): void {
+export function printListing(registry: TaskRegistry): void {
   const listing = registry.list();
   if (listing.length === 0) {
     console.log("[orchestrator] no tasks in this store yet.");
@@ -696,6 +662,26 @@ function runtimeTaskText(args: CliArgs, taskId: string, docsRoot: string): strin
   } catch {
     return taskId;
   }
+}
+
+/** Optional phase-tier metadata is advisory input to routing, never a runtime gate. */
+function plannedTier(args: CliArgs, taskId: string): string | undefined {
+  if (!args.module) return undefined;
+  try {
+    const planMd = readModuleDoc(resolveContextDocsRoot(args.projectRoot), args.module, "plan.md");
+    return planMd === null ? undefined : parsePlanTasks(planMd).tasks.find((task) => task.id === taskId)?.tier;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Never called without a terminal: CI/headless execution must not read stdin. */
+function promptForCamp(defaultRuntimeId: RuntimeId): RuntimeId {
+  process.stdout.write(`[orchestrator] Tiered phase: choose camp/runtime [${RUNTIME_IDS.join(", ")}] (default ${defaultRuntimeId}): `);
+  const input = Buffer.alloc(128);
+  const read = fs.readSync(0, input, 0, input.length, null);
+  const selected = input.toString("utf8", 0, read).trim();
+  return (RUNTIME_IDS as readonly string[]).includes(selected) ? selected as RuntimeId : defaultRuntimeId;
 }
 
 /**
@@ -846,207 +832,13 @@ function isVerb(s: string | undefined): s is Verb {
   return s !== undefined && (VERBS as readonly string[]).includes(s);
 }
 
-/** Flags a verb accepts that take a value — their value must never be mistaken for the positional <task-id>. */
-  const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--phase", "--task", "--target", "--by", "--since", "--docs-root", "--config-path", "--source-root", "--knowledge-root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime", "--mode", "--as", "--note", "--lane"]);
-
-/** Every non-flag token in a verb's remaining args, in order, skipping over each value-flag's own argument. */
-function positionalArgs(rest: string[]): string[] {
-  const found: string[] = [];
-  for (let i = 0; i < rest.length; i++) {
-    if (rest[i].startsWith("--")) {
-      if (VERB_VALUE_FLAGS.has(rest[i])) i++; // skip its value, not just the flag itself
-      continue;
-    }
-    found.push(rest[i]);
-  }
-  return found;
-}
-
-/** First non-flag token in a verb's remaining args — the positional <task-id> for the verbs that take one. */
-function positionalArg(rest: string[]): string | undefined {
-  return positionalArgs(rest)[0];
-}
-
 function flagValue(rest: string[], flag: string): string | undefined {
-  const i = rest.indexOf(flag);
-  return i === -1 ? undefined : rest[i + 1];
-}
-
-function openStore(projectRoot: string, stateDb?: string): { store: SqliteTaskStore; registry: TaskRegistry } {
-  const store = new SqliteTaskStore(stateDb ?? defaultStateDbPath(projectRoot));
-  const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(projectRoot) });
-  return { store, registry };
+  return supportFlagValue(rest, flag);
 }
 
 /** Resolves only the existing post-hoc budget model; it never pre-emptively caps a spawn. */
 function budgetFor(args: CliArgs): Budget {
   return { ...DEFAULT_BUDGET, token_budget: args.tokenBudget ?? configuredTokenBudget(args.projectRoot) };
-}
-
-function configuredTokenBudget(projectRoot: string): number {
-  let configured: number | undefined;
-  try {
-    configured = loadStaConfig(projectRoot).token_budget;
-  } catch (error) {
-    // A config is optional for legacy Targets.  Invalid present configs remain
-    // an installation concern; do not turn an absent one into a fake value.
-    if (!(error instanceof StaConfigMissingError)) throw error;
-  }
-  return configured ?? DEFAULT_BUDGET.token_budget;
-}
-
-/** `status [<task-id>] [--watch] [--interval <seconds>]` — no id lists everything, an id shows one task's detail. */
-async function runStatusVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
-  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
-  const stateDb = flagValue(rest, "--state-db");
-  const taskId = positionalArg(rest);
-  const watch = rest.includes("--watch");
-  const intervalSeconds = Number(flagValue(rest, "--interval") ?? "5");
-
-  const { store, registry } = openStore(projectRoot, stateDb);
-  try {
-    if (watch) {
-      // Real-time is "until interrupted" outside a test; iterations is only ever overridden by
-      // one, from inside the test suite, to keep watchListing from actually looping forever.
-      await watchListing(registry, { intervalMs: Math.max(1, intervalSeconds) * 1000, iterations: Infinity });
-      return 0;
-    }
-    if (!taskId) {
-      printListing(registry);
-      return 0;
-    }
-    const task = store.loadTask(taskId);
-    if (!task) {
-      console.error(`[orchestrator] no such task: ${taskId}`);
-      return 1;
-    }
-    const status = describeStatus(task, store.listTasks());
-    const agent = status.currentAgent ? ` agent=${status.currentAgent}` : "";
-    console.log(`[orchestrator] task ${taskId}: ${status.kind} at ${status.state}${agent}`);
-    if (status.reason) console.log(`[orchestrator]   ${status.reason}`);
-    if (status.waitingOn?.length) console.log(`[orchestrator]   waiting on: ${status.waitingOn.join(", ")}`);
-    const runs = store.runsForTask(taskId);
-    if (runs.length > 0) console.log(new RunLog(runs).summary(taskId));
-    return 0;
-  } finally {
-    registry.close();
-  }
-}
-
-/** `approve <task-id> [--yes|--no]` — resolves the current WAITING_FOR_HUMAN gate without the full run loop. Interactive (like `run`'s own prompt) if neither flag is given. */
-async function runApproveVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
-  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
-  const stateDb = flagValue(rest, "--state-db");
-  const taskId = positionalArg(rest);
-  if (!taskId) throw new CliUsageError("approve: a task id is required");
-  const forcedYes = rest.includes("--yes");
-  const forcedNo = rest.includes("--no");
-
-  const { store, registry } = openStore(projectRoot, stateDb);
-  try {
-    const stored = store.loadTask(taskId);
-    if (!stored) throw new CliUsageError(`approve: task ${taskId} is not in this store`);
-    if (stored.cancelled) {
-      console.log(`[orchestrator] task ${taskId} is cancelled — nothing to approve.`);
-      return 1;
-    }
-
-    const orchestrator = registry.resume(taskId); // read/decide only — does not check cross-task dependencies, same as inspecting any other settled task
-    const status = orchestrator.status();
-    if (status.kind !== "WAITING_FOR_HUMAN") {
-      console.log(`[orchestrator] task ${taskId} is not waiting on a human decision right now (status: ${status.kind}).`);
-      return 1;
-    }
-
-    const field = approvalFieldFor(status.approvalType);
-    const label = status.approvalType ? `${status.approvalType}` : `${status.from} -> ${status.to}`;
-    console.log(`[orchestrator] human decision required (${label}): ${status.reason}`);
-    if (status.approvalType) console.log(`[orchestrator]   ${APPROVAL_PROMPT[status.approvalType]}`);
-
-    const approved = forcedYes ? true : forcedNo ? false : await confirm(`Approve ${label}?`);
-    if (status.approvalType) {
-      orchestrator.decideApproval(status.approvalType, approved, { by: process.env.USER ?? process.env.USERNAME });
-    } else if (field) {
-      orchestrator.provideHumanApproval(field, approved);
-    } else {
-      console.log(`[orchestrator] this CLI doesn't know how to resolve that gate.`);
-      return 2;
-    }
-    registry.refreshStateView();
-    console.log(approved ? `[orchestrator] approved.` : `[orchestrator] rejected — recorded, will not be asked again on resume.`);
-    return approved ? 0 : 3;
-  } finally {
-    registry.close();
-  }
-}
-
-/** `pause <task-id>` */
-async function runPauseVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
-  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
-  const stateDb = flagValue(rest, "--state-db");
-  const taskId = positionalArg(rest);
-  if (!taskId) throw new CliUsageError("pause: a task id is required");
-
-  const { registry } = openStore(projectRoot, stateDb);
-  try {
-    registry.pause(taskId);
-    console.log(`[orchestrator] task ${taskId} paused.`);
-    return 0;
-  } finally {
-    registry.close();
-  }
-}
-
-/** `cancel <task-id> [--reason <text>]` */
-async function runCancelVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
-  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
-  const stateDb = flagValue(rest, "--state-db");
-  const taskId = positionalArg(rest);
-  if (!taskId) throw new CliUsageError("cancel: a task id is required");
-  const reason = flagValue(rest, "--reason") ?? "no reason given";
-
-  const { registry } = openStore(projectRoot, stateDb);
-  try {
-    registry.cancel(taskId, reason);
-    console.log(`[orchestrator] task ${taskId} cancelled: ${reason}`);
-    return 0;
-  } finally {
-    registry.close();
-  }
-}
-
-/**
- * `audit <task-id> [--decisions]` — T37's trail, for the question "why did the
- * pipeline do that?".
- *
- * Read-only and store-only: it never opens an `Orchestrator`, because
- * reconstructing a task's state to explain its past is both unnecessary and a
- * way to accidentally advance it while looking at it.
- */
-async function runAuditVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
-  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
-  const stateDb = flagValue(rest, "--state-db");
-  const taskId = positionalArg(rest);
-  if (!taskId) throw new CliUsageError("audit: a task id is required");
-  const decisionsOnly = rest.includes("--decisions");
-
-  const { store, registry } = openStore(projectRoot, stateDb);
-  try {
-    if (!store.loadTask(taskId)) {
-      console.error(`[orchestrator] no such task: ${taskId}`);
-      return 1;
-    }
-    const entries = auditTrail(store, taskId);
-    const actors = actorsIn(entries);
-    console.log(
-      `[orchestrator] audit trail for ${taskId}: ${entries.length} event(s), ` +
-        `${decisionTrail(entries).length} decision(s)${actors.length > 0 ? `, actors: ${actors.join(", ")}` : ""}`,
-    );
-    console.log(formatAuditTrail(entries, { decisionsOnly, runs: store.runsForTask(taskId) }));
-    return 0;
-  } finally {
-    registry.close();
-  }
 }
 
 /**
@@ -1366,456 +1158,6 @@ async function runListBackupsVerb(rest: string[], defaultProjectRoot: string): P
 }
 
 /**
- * The `roles` sub-commands that are not `ack`, split out so `runRolesVerb` stays
- * the readable "show me the lanes" path it started as (T103-T107).
- *
- * Every writing one takes `--by`, and every one of them writes something only a
- * person may write. That is not politeness: `knowledge/_roles/**` is denied to
- * every agent at the tool level, and `approve` goes through `applyTransition`,
- * which refuses any actor but a person.
- */
-async function runRolesSubCommand(
-  args: string[],
-  rest: string[],
-  projectRoot: string,
-  moduleFlag: string | undefined,
-  kb: KnowledgeBase,
-  now: string,
-): Promise<number> {
-  const module = moduleFlag ?? null;
-  const by = flagValue(rest, "--by");
-  const workspaces = workspacesUnder(projectRoot, module, now);
-
-  const requireLane = (): RoleLane => {
-    const lane = args[1];
-    if (lane === undefined || !isRoleLane(lane)) {
-      throw new CliUsageError(`roles ${args[0]}: a lane is required — one of ${ROLE_LANES.join(", ")}`);
-    }
-    return lane;
-  };
-  const requireBy = (): string => {
-    if (by === undefined) throw new CliUsageError(`roles ${args[0]}: --by <name> is required — this is a person's decision`);
-    return by;
-  };
-
-  switch (args[0]) {
-    case "signoff": {
-      const lane = requireLane();
-      const signer = requireBy();
-      const spec = workflowFor(lane);
-      if (!spec) throw new CliUsageError(`roles signoff: no lane workflow is defined for ${lane}`);
-
-      const state = roleWorkflowState(spec, module, kb, workspaces);
-      const approved = kb.query({ module }).filter((item) => state.approved.includes(item.id));
-      // Dogfood F3: project-wide scope (no --module) sees nothing when the lane's
-      // approved work sits in modules. Say which, instead of the misleading
-      // "nothing approved" that contradicts what `sta roles` just displayed.
-      if (module === null && approved.length === 0) {
-        const withApproved = [...new Set(kb.query({}).filter((i) => i.status === "approved").map((i) => i.module ?? "(project-wide)"))];
-        if (withApproved.length > 0) {
-          throw new CliUsageError(
-            `roles signoff: nothing is approved at project-wide scope; approved items live in module(s): ${withApproved.join(", ")} — add --module <name>`,
-          );
-        }
-      }
-      const reject = rest.includes("--reject");
-
-      // Refusing to sign off over a blocker is the whole point of having one: a
-      // person waving through work already known to be unusable spends the single
-      // step in this pipeline that cannot be redone cheaply.
-      if (!reject && state.handoff.blockers.length > 0) {
-        console.error(`[orchestrator] the ${LANE_LABEL[lane]} lane cannot be signed off while these stand:`);
-        for (const blocker of state.handoff.blockers) console.error(`  - ${blocker}`);
-        return 1;
-      }
-
-      try {
-        const updated = recordSignoff(workspaces(lane), {
-          approved,
-          approve: !reject,
-          by: signer,
-          note: flagValue(rest, "--note"),
-          now,
-        });
-        writeRoleWorkspace(updated, projectRoot);
-      } catch (e) {
-        console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
-        return 1;
-      }
-
-      console.log(
-        `[orchestrator] ${LANE_LABEL[lane]} on ${module ?? "(project-wide)"}: ${signer} ` +
-          `${reject ? "rejected" : "signed off"} ${state.approved.join(", ")}.`,
-      );
-      for (const carried of state.handoff.carries) console.log(`[orchestrator] carries: ${carried}`);
-      return 0;
-    }
-
-    case "review": {
-      // One id-list token: commas separate items, exactly like `roles ack`'s.
-      // Extra positional tokens are ignored rather than mistaken for more ids —
-      // unknown value-flags must never turn their values into item names.
-      const ids = (args[1] ?? "").split(",").filter((a) => a !== "");
-      const as = flagValue(rest, "--as");
-      if (ids.length === 0) throw new CliUsageError("roles review: an item id is required");
-      if (!as) throw new CliUsageError("roles review: --as <agent> is required — a review's content is which discipline looked");
-      if (!Object.values(AgentStage).includes(as as AgentStage)) {
-        throw new CliUsageError(`roles review: "${as}" is not an agent role`);
-      }
-      for (const id of ids) {
-        const item = kb.get(id);
-        if (!item) {
-          console.error(`[orchestrator] no knowledge item with id ${id}`);
-          return 1;
-        }
-        try {
-          writeKnowledgeItem(reviewItem(item, as as AgentStage, now), projectRoot);
-        } catch (e) {
-          console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
-          return 1;
-        }
-        console.log(`[orchestrator] ${id} reviewed as ${as}. It confirmed:`);
-        for (const line of checklistFor(item.kind)) console.log(`  - ${line}`);
-      }
-      return 0;
-    }
-
-    case "approve": {
-      const ids = (args[1] ?? "").split(",").filter((a) => a !== "");
-      const approver = requireBy();
-      if (ids.length === 0) throw new CliUsageError("roles approve: an item id is required");
-      for (const id of ids) {
-        const item = kb.get(id);
-        if (!item) {
-          console.error(`[orchestrator] no knowledge item with id ${id}`);
-          return 1;
-        }
-        try {
-          writeKnowledgeItem(approveItem(item, now), projectRoot);
-        } catch (e) {
-          console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
-          return 1;
-        }
-        // The approver's name is not written into the item on purpose — see
-        // artifactReview.ts. It is echoed so the person sees their own act recorded
-        // in the terminal, and git carries the rest.
-        console.log(`[orchestrator] ${id} approved by ${approver}. It is binding now; downstream lanes may rely on it.`);
-      }
-      return 0;
-    }
-
-    case "inbox": {
-      const lanes = args[1] !== undefined && isRoleLane(args[1]) ? [args[1] as RoleLane] : [...ROLE_LANES];
-      let total = 0;
-      for (const lane of lanes) {
-        const notifications = notificationsFor(lane, module, kb, workspaces(lane));
-        total += notifications.length;
-        console.log(`\n${LANE_LABEL[lane]} — ${notifications.length} to look at`);
-        for (const n of notifications) console.log(`  [${n.reason}] ${n.message}`);
-      }
-      if (total === 0) console.log("\n[orchestrator] every lane is up to date.");
-      return 0;
-    }
-
-    case "impact": {
-      const ids = args.slice(1).flatMap((a) => a.split(",")).filter((a) => a !== "");
-      if (ids.length === 0) throw new CliUsageError("roles impact: name at least one item id");
-      const unknown = ids.filter((id) => kb.get(id) === null);
-      if (unknown.length > 0) {
-        console.error(`[orchestrator] no knowledge item with id ${unknown.join(", ")}`);
-        return 1;
-      }
-      const affected = lanesAffectedBy(kb, ids);
-      console.log(`[orchestrator] changing ${ids.join(", ")} would reach:`);
-      for (const lane of ROLE_LANES) {
-        const items = affected.get(lane) ?? [];
-        console.log(`  ${LANE_LABEL[lane].padEnd(4)} ${items.length === 0 ? "nothing" : items.map((i) => i.id).join(", ")}`);
-      }
-      return 0;
-    }
-
-    case "context": {
-      const lane = requireLane();
-      const id = args[2];
-      const context = KnowledgeContext.load(projectRoot, now);
-
-      if (id !== undefined) {
-        const outcome = laneGet(lane, context, id);
-        if (rest.includes("--full")) {
-          const rendered = renderKnowledgeRetrieval(lane, id, outcome);
-          if (outcome.status === "not-found") console.error(rendered.text);
-          else console.log(rest.includes("--json") ? JSON.stringify(rendered.json, null, 2) : rendered.text);
-          return outcome.status === "not-found" ? 1 : 0;
-        }
-        if (outcome.status === "not-found") {
-          console.error(`[orchestrator] no knowledge item with id ${id}`);
-          return 1;
-        }
-        if (outcome.status === "withheld") {
-          // Withheld is not an error: the lane asked a legitimate question and the
-          // answer is "not for you". Exit 0 and say which, so it is never confused
-          // with the item not existing.
-          console.log(`[orchestrator] ${id}: withheld — ${outcome.reason}`);
-          return 0;
-        }
-        const { item, viaRole, provenance } = outcome.item;
-        console.log(`[orchestrator] ${id} as the ${LANE_LABEL[lane]} lane sees it (via ${viaRole}):`);
-        console.log(`  ${item.title} [${item.kind}, ${item.status}, owned by ${item.owner}]`);
-        if (item.withheld.length > 0) console.log(`  withheld: ${item.withheld.join(", ")}`);
-        console.log(`  ${provenance.citation}`);
-        return 0;
-      }
-
-      const result = laneContext(lane, context, module === null ? {} : { module });
-      console.log(`[orchestrator] the ${LANE_LABEL[lane]} lane sees ${result.items.length} item(s):`);
-      for (const entry of result.items) {
-        const withheld = entry.item.withheld.length > 0 ? ` (withheld: ${entry.item.withheld.join(", ")})` : "";
-        console.log(`  ${entry.item.id.padEnd(18)} ${entry.item.kind.padEnd(14)} via ${entry.viaRole}${withheld}`);
-      }
-      if (result.hidden.length > 0) console.log(`  hidden from every role in this lane: ${result.hidden.join(", ")}`);
-      if (result.kindsNotInLane.length > 0) console.log(`  kinds outside this lane's view: ${result.kindsNotInLane.join(", ")}`);
-      return 0;
-    }
-  }
-  throw new CliUsageError(`roles: unhandled sub-command "${args[0]}"`);
-}
-
-/**
- * `roles [--module <name>]` — where each lane stands, and
- * `roles ack <lane> <id>[,<id>...] --by <name>` — record that a person in that lane has
- * seen the current version of those items (T99).
- *
- * This verb is the *only* writer of a role workspace. `knowledge/_roles/**` is in
- * `UNIVERSAL_DENY`, so no agent can write one in any mode — an acknowledgement is a human
- * act, and an agent able to record one could mark its own work seen on a person's behalf.
- * `--by` is required for the same reason: the file has to say who.
- */
-async function runRolesVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
-  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
-  const moduleFlag = flagValue(rest, "--module");
-  const args = positionalArgs(rest);
-  const kb = KnowledgeBase.load(projectRoot);
-  const now = new Date().toISOString();
-
-  const SUB_COMMANDS = ["ack", "signoff", "review", "approve", "inbox", "impact", "context"];
-  if (args.length > 0 && !SUB_COMMANDS.includes(args[0])) {
-    throw new CliUsageError(`roles: unknown sub-command "${args[0]}" — one of ${SUB_COMMANDS.join(", ")}`);
-  }
-  if (args.length > 0 && args[0] !== "ack") {
-    return runRolesSubCommand(args, rest, projectRoot, moduleFlag, kb, now);
-  }
-
-  if (args.length === 0) {
-    // No --module shows every module that has knowledge in it, so a lane sitting behind
-    // in a module the caller forgot about is still visible.
-    const modules: (string | null)[] =
-      moduleFlag !== undefined
-        ? [moduleFlag]
-        : [...new Set(kb.query({}).map((item) => item.module))].sort((a, b) =>
-            a === null ? -1 : b === null ? 1 : a < b ? -1 : a > b ? 1 : 0,
-          );
-    if (modules.length === 0) {
-      console.log("[orchestrator] no knowledge captured yet — a lane has nothing to stand on.");
-      return 0;
-    }
-    for (const module of modules) {
-      console.log(`\n${module ?? "(project-wide)"}`);
-      const workspaces = workspacesUnder(projectRoot, module, now);
-      for (const lane of ROLE_LANES) {
-        const view = laneView(workspaces(lane), kb);
-        const spec = workflowFor(lane);
-        const state = spec ? roleWorkflowState(spec, module, kb, workspaces) : null;
-
-        // Two different questions, both printed: `stage` is where the lane's own
-        // work has got to (T100), `deps` is whether what it depends on moved
-        // under it (T99). A lane can be `ready` and `behind` at the same time.
-        console.log(`  ${LANE_LABEL[lane].padEnd(4)} ${describeStage(state).padEnd(20)} deps: ${view.status}`);
-        if (state) {
-          console.log(`       next (${state.nextAction.actor}): ${state.nextAction.what}`);
-          for (const carried of state.handoff.carries) console.log(`       carries: ${carried}`);
-        }
-        if (view.stale.length > 0) {
-          console.log(`       changed since acknowledged: ${view.stale.map((s) => `${s.id} v${s.version}->v${s.currentVersion}`).join(", ")}`);
-        }
-        if (view.unseen.length > 0) console.log(`       never acknowledged: ${view.unseen.join(", ")}`);
-        if (view.awaitingApproval.length > 0) console.log(`       waiting on a person: ${view.awaitingApproval.join(", ")}`);
-      }
-    }
-    return 0;
-  }
-
-  const lane = args[1];
-  if (lane === undefined || !isRoleLane(lane)) {
-    throw new CliUsageError(`roles ack: a lane is required — one of ${ROLE_LANES.join(", ")}`);
-  }
-  const ids = args.slice(2).flatMap((a) => a.split(",")).filter((a) => a !== "");
-  const by = flagValue(rest, "--by");
-  if (by === undefined) {
-    throw new CliUsageError("roles ack: --by <name> is required — an acknowledgement records who made it");
-  }
-
-  const module = moduleFlag ?? null;
-  try {
-    const updated = acknowledge(loadRoleWorkspace(lane, module, projectRoot, now), kb, ids, by, now);
-    writeRoleWorkspace(updated, projectRoot);
-  } catch (e) {
-    console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
-    return 1;
-  }
-  console.log(
-    `[orchestrator] ${LANE_LABEL[lane]} on ${module ?? "(project-wide)"}: ${by} acknowledged ${ids.join(", ")}.`,
-  );
-  return 0;
-}
-
-/**
- * `adopt` (T81, wired to the CLI as part of T113's pilot — the library existed
- * since V1.3 but nothing exposed it to a person before this).
- *
- * `plan` is deliberately the sub-command with no state requirement and no
- * writes at all: it is meant to be runnable as the very first thing anyone
- * does against a real legacy project, before `start` even creates
- * `knowledge/_adoption/state.json`. Every other sub-command requires the state
- * `initAdoption()` created, and reports the same "no adoption in progress" a
- * person would get from calling the library directly rather than a CLI-only
- * error shape.
- */
-async function runAdoptVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
-  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
-  const sourceRoot = flagValue(rest, "--source-root") ?? projectRoot;
-  if (sourceRoot !== projectRoot) {
-    if (!fs.existsSync(projectRoot) || !fs.statSync(projectRoot).isDirectory()) throw new CliUsageError(`adopt: Knowledge root is not an existing directory: ${projectRoot}`);
-    if (!fs.existsSync(sourceRoot) || !fs.statSync(sourceRoot).isDirectory()) throw new CliUsageError(`adopt: legacy source root is not an existing directory: ${sourceRoot}`);
-    const knowledgeCanonical = fs.realpathSync.native(projectRoot);
-    const sourceCanonical = fs.realpathSync.native(sourceRoot);
-    if (knowledgeCanonical === sourceCanonical || knowledgeCanonical.startsWith(`${sourceCanonical}${path.sep}`) || sourceCanonical.startsWith(`${knowledgeCanonical}${path.sep}`)) {
-      throw new CliUsageError("adopt: --source-root must be separate from the Knowledge root; refusing a source/destination overlap");
-    }
-  }
-  // T113 pilot finding: not every real adoption target has its own `_docs/`
-  // right at the repo root — a monorepo or a per-client subtree may nest it.
-  // Repo-relative so a person types the same thing they'd see in a listing
-  // (`--docs-root _docs/hkt`), resolved against `sourceRoot` so a three-repo
-  // adoption reads the Target while writing only to the Knowledge root.
-  // every other path this CLI reports already is. No state persists this
-  // across invocations (same as `--project-root` itself) — pass it on every
-  // `adopt` call for this project, `plan` included.
-  const docsRootFlag = flagValue(rest, "--docs-root");
-  const docsRoot = docsRootFlag !== undefined ? path.join(sourceRoot, docsRootFlag) : undefined;
-  const args = positionalArgs(rest);
-  const now = new Date().toISOString();
-  const SUB_COMMANDS = ["plan", "status", "start", "ack", "run", "approve", "validate"];
-  const sub = args[0];
-  if (sub === undefined || !SUB_COMMANDS.includes(sub)) {
-    throw new CliUsageError(`adopt: a sub-command is required — one of ${SUB_COMMANDS.join(", ")}`);
-  }
-
-  if (sub === "plan") {
-    const plan = planAdoption(projectRoot, now, docsRoot, sourceRoot);
-    if (plan.preflight.blockers.length > 0) {
-      console.log(`[orchestrator] preflight found work in flight — this would block \`adopt start\` until acknowledged:`);
-      for (const b of plan.preflight.blockers) console.log(`  ! ${b}`);
-    }
-    for (const stage of plan.stages) {
-      console.log(`\n${stage.id}${stage.skipped ? " (nothing to import)" : ""}`);
-      for (const w of stage.writes) console.log(`  ${w.action.padEnd(9)} ${w.path}  (${w.subject})`);
-      for (const c of stage.conflicts) console.log(`  ! conflict: ${c} — already reviewed, legacy material now disagrees`);
-      for (const n of stage.notes) console.log(`  · ${n}`);
-    }
-    console.log(
-      `\n[orchestrator] plan: ${plan.totals.create} to create, ${plan.totals.update} to update, ` +
-        `${plan.totals.unchanged} unchanged, ${plan.totals.conflict} conflict(s). Nothing was written — this is a dry run (T87).`,
-    );
-    return 0;
-  }
-
-  try {
-    if (sub === "status") {
-      const { state, problems } = readAdoptionState(projectRoot);
-      if (problems.length > 0) {
-        for (const p of problems) console.error(`[orchestrator] ${p}`);
-        return 1;
-      }
-      if (!state) {
-        console.log("[orchestrator] no adoption in progress — run `adopt plan` first, then `adopt start`.");
-        return 0;
-      }
-      console.log(`[orchestrator] status: ${state.status}`);
-      for (const s of state.stages) {
-        console.log(`  ${s.id.padEnd(14)} ${s.status}${s.approved_by ? ` (approved by ${s.approved_by})` : ""}`);
-      }
-      return 0;
-    }
-
-    if (sub === "start") {
-      const state = initAdoption(projectRoot, now, docsRoot, sourceRoot);
-      console.log(`[orchestrator] adoption started — status: ${state.status}`);
-      if (state.preflight && state.preflight.blockers.length > 0) {
-        console.log("  blocked on:");
-        for (const b of state.preflight.blockers) console.log(`  ! ${b}`);
-        console.log('  run `adopt ack --by <name>` once a person has decided it is safe to import over this.');
-      }
-      return 0;
-    }
-
-    if (sub === "ack") {
-      const by = flagValue(rest, "--by");
-      if (!by) throw new CliUsageError("adopt ack: --by <name> is required");
-      const state = acknowledgePreflight(by, projectRoot, now);
-      console.log(`[orchestrator] preflight acknowledged by ${by} — status: ${state.status}`);
-      return 0;
-    }
-
-    if (sub === "run") {
-      const stageId = args[1];
-      if (!stageId || !(ALL_ADOPTION_STAGES as readonly string[]).includes(stageId)) {
-        throw new CliUsageError(`adopt run: a stage id is required — one of ${ALL_ADOPTION_STAGES.join(", ")}`);
-      }
-      const state = runAdoptionStage(stageId as AdoptionStageId, projectRoot, now, docsRoot, sourceRoot);
-      const record = state.stages.find((s) => s.id === stageId)!;
-      console.log(
-        `[orchestrator] ${stageId}: ${record.status}${record.note ? ` — ${record.note}` : ""} — status: ${state.status}`,
-      );
-      return 0;
-    }
-
-    if (sub === "approve") {
-      const stageId = args[1];
-      const by = flagValue(rest, "--by");
-      if (!stageId || !(ALL_ADOPTION_STAGES as readonly string[]).includes(stageId)) {
-        throw new CliUsageError(`adopt approve: a stage id is required — one of ${ALL_ADOPTION_STAGES.join(", ")}`);
-      }
-      if (!by) throw new CliUsageError("adopt approve: --by <name> is required");
-      const state = approveAdoptionStage(stageId as AdoptionStageId, by, projectRoot, now);
-      console.log(`[orchestrator] ${stageId} approved by ${by} — status: ${state.status}`);
-      return 0;
-    }
-
-    // validate
-    const by = flagValue(rest, "--by");
-    if (!by) throw new CliUsageError("adopt validate: --by <name> is required");
-    const report = validateAdoption(projectRoot, now, docsRoot, sourceRoot);
-    if (!report.ok) {
-      console.error("[orchestrator] adoption validation failed:");
-      for (const problem of report.problems) console.error(`  ! ${problem}`);
-      return 1;
-    }
-    const state = recordAdoptionValidation(by, projectRoot, now);
-    console.log(`[orchestrator] adoption validated by ${by} — status: ${state.status}`);
-    return 0;
-  } catch (e) {
-    if (e instanceof AdoptionBlockedError) {
-      console.error("[orchestrator] adoption is blocked:");
-      for (const b of e.blockers) console.error(`  ! ${b}`);
-      console.error('  run `adopt ack --by <name>` once a person has decided it is safe to import over this.');
-      return 1;
-    }
-    console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
-    return 1;
-  }
-}
-
-/**
  * The previous failed QA round's findings, read from the module's `review.md`
  * (`## Open Issues`) — the input a recheck plan needs so round N+1 verifies
  * the named findings first instead of starting over (QA06).
@@ -1899,316 +1241,6 @@ export async function productionQaInputs(opts: { docsRoot: string; moduleName: s
   };
 }
 
-/** `qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]` — QA07's cost/effectiveness picture off the run log. */
-async function runQaMetricsVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
-  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
-  const stateDb = flagValue(rest, "--state-db");
-  const taskId = positionalArg(rest);
-  const exportPath = flagValue(rest, "--export-json");
-  const baselinePath = flagValue(rest, "--baseline");
-  const escapedRaw = flagValue(rest, "--escaped-defects");
-  const escapedDefects = escapedRaw !== undefined ? Number(escapedRaw) : undefined;
-  if (escapedDefects !== undefined && !Number.isInteger(escapedDefects)) {
-    throw new CliUsageError(`--escaped-defects must be an integer (got ${escapedRaw})`);
-  }
-
-  const { store, registry } = openStore(projectRoot, stateDb);
-  try {
-    const ids = taskId ? [taskId] : store.listTasks().map((t) => t.taskId);
-    if (ids.length === 0) {
-      console.log("[orchestrator] no tasks in this state database yet — nothing to measure.");
-      return 0;
-    }
-    const entries = ids.map((id) => ({ taskId: id, runs: store.runsForTask(id) }));
-    const metricsExport = buildMetricsExport(entries, { escapedDefects });
-
-    for (const t of metricsExport.tasks) {
-      const share = `${(t.qaShare * 100).toFixed(0)}%`;
-      console.log(
-        `[orchestrator] ${t.taskId}: QA ${t.qaRuns} round(s), ${t.qaTokens} tokens ` +
-          `(${share} of task total), FULL=${t.fullRounds} TARGETED=${t.targetedRounds}` +
-          `${t.unrecordedModeRounds > 0 ? ` unrecorded=${t.unrecordedModeRounds}` : ""}, retries=${t.qaRetries}, failures=${t.qaFailures}`,
-      );
-    }
-    const tot = metricsExport.totals;
-    console.log(
-      `[orchestrator] totals: QA ${tot.qaRuns} round(s) — ${tot.qaTokens}/${tot.totalTokens} tokens ` +
-        `(${(tot.qaShare * 100).toFixed(0)}%), FULL=${tot.fullRounds} TARGETED=${tot.targetedRounds} retries=${tot.qaRetries}` +
-        `${tot.escapedDefects !== undefined ? ` escapedDefects=${tot.escapedDefects}` : ""}`,
-    );
-
-    if (exportPath) {
-      fs.writeFileSync(exportPath, JSON.stringify(metricsExport, null, 2), "utf8");
-      console.log(`[orchestrator] wrote baseline JSON to ${exportPath}`);
-    }
-    if (baselinePath) {
-      const before = JSON.parse(fs.readFileSync(baselinePath, "utf8")) as ReturnType<typeof buildMetricsExport>;
-      const delta = compareBaselines(before, metricsExport);
-      console.log(
-        `[orchestrator] vs baseline (${baselinePath}): verdict=${delta.verdict}, ` +
-          `qa tokens ${delta.qaTokenDeltaPct === null ? "n/a" : `${delta.qaTokenDeltaPct.toFixed(1)}%`}, ` +
-          `qa share ${delta.qaShareDeltaPct === null ? "n/a" : `${delta.qaShareDeltaPct.toFixed(1)}%`}, ` +
-          `modes ${delta.targetedVsFullShift}, retry delta ${delta.retryDelta}`,
-      );
-      for (const note of delta.notes) console.log(`[orchestrator]   note: ${note}`);
-    }
-    return 0;
-  } finally {
-    registry.close();
-  }
-}
-
-function displayMetric(value: number | null): string {
-  return value === null ? "not reported" : value.toLocaleString();
-}
-
-function displayRate(value: number | null): string {
-  return value === null ? "not reported" : `${(value * 100).toFixed(1)}%`;
-}
-
-function displayPercentDelta(value: number | null): string {
-  return value === null ? "not reported" : `${value.toFixed(1)}%`;
-}
-
-function printTokenTask(metric: TaskTokenMetrics): void {
-  const c = metric.composition;
-  const budget = metric.contextBudget;
-  console.log(
-    `[orchestrator] ${metric.taskId}: input=${displayMetric(metric.inputTokens)} output=${displayMetric(metric.outputTokens)} ` +
-      `cached=${displayMetric(metric.cachedTokens)} total=${displayMetric(metric.totalTokens)} stages=${metric.stageCount} retries=${metric.retryCount} retryWaste=${displayMetric(metric.retryWasteTokens)} ` +
-      `sessions=orchestrated:${metric.sessionKinds.orchestrated},interactive:${metric.sessionKinds.interactive},not-reported:${metric.sessionKinds.not_reported} ` +
-      `always-on-instructions=${displayMetric(metric.instructionSurfaceBytes)} B`,
-  );
-  console.log(
-    `[orchestrator]   composition: static=${displayMetric(c.static_chars)} handoff=${displayMetric(c.handoff_chars)} docs=${displayMetric(c.doc_chars)}/${displayMetric(c.doc_chars_before)} before-slice ` +
-      `knowledge=${displayMetric(c.knowledge_chars)} code-intel=${displayMetric(c.code_intel_chars)} tool-output=${displayMetric(c.tool_output_chars)}`,
-  );
-  console.log(
-    `[orchestrator]   context budget (warning-only): measured-runs=${budget.measuredRuns} warnings=${budget.warningRuns} ` +
-      `actual=${displayMetric(budget.contextChars)} budget=${displayMetric(budget.budgetChars)} overflow=${displayMetric(budget.overflowChars)} ` +
-      `composition=base:${displayMetric(budget.composition.base)} task:${displayMetric(budget.composition.task)} safety:${displayMetric(budget.composition.safety)} ` +
-      `docs:${displayMetric(budget.composition.docs)} knowledge:${displayMetric(budget.composition.knowledge)} code:${displayMetric(budget.composition.code)} ` +
-      `tool_output:${displayMetric(budget.composition.tool_output)} reserve:${displayMetric(budget.composition.reserve)}`,
-  );
-}
-
-/** `tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]`. */
-/**
- * T-V3TOK-013 — `sta policy` reads one section, not one file.
- *
- * A miss is exit 0 with the available sections printed: an agent that gets an
- * error here falls back to reading the whole file, which is exactly the cost
- * this verb removes.
- */
-async function runPolicyVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
-  if (rest.includes("--help")) {
-    console.log("usage: sta policy [<area>] [<section>] [--json] [--project-root <path>]");
-    console.log("  no args        every policy area and the sections inside it");
-    console.log("  <area>         one area's sections (documentation, coding, security, ...)");
-    console.log("  <area> <sec>   that section's text; accepts §10, 10, 5c, or part of the heading");
-    return 0;
-  }
-  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
-  const json = rest.includes("--json");
-  const [area, section] = positionalArgs(rest);
-
-  try {
-    if (area === undefined) {
-      const index = listPolicySections(projectRoot);
-      if (json) {
-        console.log(JSON.stringify(index, null, 2));
-        return 0;
-      }
-      for (const entry of index) {
-        console.log(`${entry.relPath} (${entry.bytes} B, ${entry.sections.length} section(s))`);
-        for (const s of entry.sections) console.log(`  ${s.number === null ? "-" : `§${s.number}`}  ${s.heading}  (${s.bytes} B)`);
-      }
-      return 0;
-    }
-
-    if (section === undefined) {
-      const entry = listPolicySections(projectRoot).find((e) => e.area === area.replace(/^policies\//, "").replace(/\.md$/, ""));
-      if (!entry) throw new PolicyIndexError(`no policy area "${area}" — available: ${listPolicySections(projectRoot).map((e) => e.area).join(", ")}`);
-      if (json) {
-        console.log(JSON.stringify(entry, null, 2));
-        return 0;
-      }
-      console.log(`${entry.relPath} (${entry.bytes} B)`);
-      for (const s of entry.sections) console.log(`  ${s.number === null ? "-" : `§${s.number}`}  ${s.heading}  (${s.bytes} B)`);
-      return 0;
-    }
-
-    const result = getPolicySection(projectRoot, area, section);
-    if (json) {
-      console.log(JSON.stringify(result, null, 2));
-      return 0;
-    }
-    if (!result.found) {
-      console.log(`[orchestrator] ${result.relPath} has no section matching "${section}". It has:`);
-      for (const s of result.sections) console.log(`  ${s.number === null ? "-" : `§${s.number}`}  ${s.heading}  (${s.bytes} B)`);
-      return 0;
-    }
-    console.log(`# ${result.relPath} — ${result.heading}  (${result.bytes} B of ${result.areaBytes} B)`);
-    console.log("");
-    console.log(result.text);
-    return 0;
-  } catch (error) {
-    if (error instanceof PolicyIndexError) throw new CliUsageError(error.message);
-    throw error;
-  }
-}
-
-async function runTokensVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
-  if (rest.includes("--help")) {
-    console.log("usage: sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>] [--project-root <path>] [--state-db <path>]");
-    return 0;
-  }
-  const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
-  const stateDb = flagValue(rest, "--state-db");
-  const taskId = positionalArg(rest);
-  const sinceRaw = flagValue(rest, "--since");
-  const since = sinceRaw === undefined ? undefined : Date.parse(sinceRaw);
-  if (sinceRaw !== undefined && Number.isNaN(since)) throw new CliUsageError(`--since must be an ISO timestamp (got ${sinceRaw})`);
-  const by = flagValue(rest, "--by") ?? "task";
-  if (by !== "task" && by !== "role" && by !== "stage" && by !== "session") throw new CliUsageError(`--by must be role, stage, or session (got ${by})`);
-  const exportPath = flagValue(rest, "--export-json");
-  const baselinePath = flagValue(rest, "--baseline");
-  const { store, registry } = openStore(projectRoot, stateDb);
-  try {
-    const runs = store.allRuns().filter((run) => (taskId === undefined || run.task_id === taskId) && (since === undefined || run.start_time >= since));
-    if (runs.length === 0) {
-      console.log("[orchestrator] no recorded runs match this token query — nothing to measure.");
-      return 0;
-    }
-    const completedTaskIds = new Set(
-      store.listTasks().filter((task) => task.machine.current === TaskState.DEPLOYED).map((task) => task.taskId),
-    );
-    const report = tokenMetricsExport(runs, { completedTaskIds });
-    if (by === "task") for (const metric of report.tasks) printTokenTask(metric);
-    else if (by === "role" || by === "stage") {
-      for (const role of report.roles) console.log(
-        `[orchestrator] ${by} ${role.role}: runs=${role.runCount} static=${displayMetric(role.staticChars)} retrieved=${displayMetric(role.retrievedChars)} ` +
-          `static/retrieved=${role.staticVsRetrievedRatio === null ? "not reported" : role.staticVsRetrievedRatio.toFixed(2)} ` +
-          `docs=${displayMetric(role.docChars)}/${displayMetric(role.docCharsBefore)} before-slice slicing-saved=${role.slicingSavedPct === null ? "not reported" : `${role.slicingSavedPct}%`} ` +
-          `context-budget-warnings=${role.contextBudget.warningRuns}/${role.contextBudget.measuredRuns} overflow=${displayMetric(role.contextBudget.overflowChars)}`,
-      );
-    } else {
-      for (const kind of ["orchestrated", "interactive", "not_reported"] as const) {
-        const count = report.tasks.reduce((sum, metric) => sum + metric.sessionKinds[kind], 0);
-        console.log(`[orchestrator] session ${kind === "not_reported" ? "not reported" : kind}: ${count} run(s)`);
-      }
-    }
-    const total = report.totals;
-    console.log(`[orchestrator] totals: input=${displayMetric(total.inputTokens)} output=${displayMetric(total.outputTokens)} cached=${displayMetric(total.cachedTokens)} total=${displayMetric(total.totalTokens)} retries=${total.retryCount} retryWaste=${displayMetric(total.retryWasteTokens)}`);
-    console.log(
-      `[orchestrator] V3 rollups: total_token_per_completed_task=${displayMetric(total.total_token_per_completed_task)} ` +
-        `first_pass_success_rate=${displayRate(total.first_pass_success_rate)} fallback_rate=${displayRate(total.fallback_rate)}`,
-    );
-    const budget = configuredTokenBudget(projectRoot);
-    console.log(`[orchestrator] configured post-hoc token budget: ${budget.toLocaleString()} vs actual input ${displayMetric(total.inputTokens)} (pre-spawn caps are not part of this control)`);
-    console.log(`[orchestrator] context-budget warnings: ${total.contextBudget.warningRuns}/${total.contextBudget.measuredRuns} measured run(s), overflow=${displayMetric(total.contextBudget.overflowChars)} (warning-only; prompts were not changed)`);
-    if (exportPath) {
-      fs.writeFileSync(exportPath, JSON.stringify(report, null, 2), "utf8");
-      console.log(`[orchestrator] wrote token metrics JSON to ${exportPath}`);
-    }
-    if (baselinePath) {
-      const before = JSON.parse(fs.readFileSync(baselinePath, "utf8")) as TokenMetricsExport;
-      const delta = compareTokenBaselines(before, report);
-      console.log(`[orchestrator] vs baseline (${baselinePath}): input ${delta.inputTokenDeltaPct === null ? "not reported" : `${delta.inputTokenDeltaPct.toFixed(1)}%`}, prompt chars ${delta.promptCharacterDeltaPct === null ? "not reported" : `${delta.promptCharacterDeltaPct.toFixed(1)}%`}, retry waste ${delta.retryWasteDeltaPct === null ? "not reported" : `${delta.retryWasteDeltaPct.toFixed(1)}%`}`);
-      console.log(
-        `[orchestrator] V3 rollup deltas: total_token_per_completed_task=${displayPercentDelta(delta.totalTokenPerCompletedTaskDeltaPct)} ` +
-          `first_pass_success_rate=${displayPercentDelta(delta.firstPassSuccessRateDeltaPct)} fallback_rate=${displayPercentDelta(delta.fallbackRateDeltaPct)}`,
-      );
-    }
-    return 0;
-  } finally { registry.close(); }
-}
-
-/** `context <role> [--module <m>] [--phase <n,n>] [--task <id>] [--packet] [--json]`. */
-async function runContextVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
-  const role = positionalArg(rest);
-  if (!role) throw new CliUsageError("context: an agent role is required");
-  const projectRoot = path.resolve(flagValue(rest, "--project-root") ?? defaultProjectRoot);
-  const phaseRaw = flagValue(rest, "--phase");
-  let phases: number[] | undefined;
-  if (phaseRaw !== undefined) {
-    phases = phaseRaw.split(",").map((value) => Number(value.trim()));
-    if (phases.length === 0 || phases.some((value) => !Number.isInteger(value) || value <= 0)) {
-      throw new CliUsageError("context: --phase must be a comma-separated list of positive integers");
-    }
-  }
-  try {
-    const taskId = flagValue(rest, "--task");
-    if (rest.includes("--packet")) {
-      if (!taskId) throw new CliUsageError("context: --packet requires --task <id>");
-      const stage = stageForRole(role);
-      const packetPath = latestExecutionPacketPath(projectRoot, taskId, stage);
-      if (!packetPath) throw new ContextCommandError(`no persisted execution packet for ${taskId}/${stage}`, 4);
-      const packet = readExecutionPacket(packetPath);
-      console.log(rest.includes("--json") ? JSON.stringify(packet, null, 2) : renderContextPacket(packet));
-      return 0;
-    }
-    const result = await buildContextCommand({
-      role,
-      moduleHint: flagValue(rest, "--module"),
-      phases,
-      taskId,
-      projectRoot,
-    });
-    console.log(rest.includes("--json") ? JSON.stringify(contextCommandJson(result), null, 2) : renderContextCommand(result));
-    return 0;
-  } catch (error) {
-    if (error instanceof ContextCommandError) {
-      console.error(`[orchestrator] ${error.message}`);
-      return error.exitCode;
-    }
-    throw error;
-  }
-}
-
-/** `knowledge get <id>[,<id>...] [--lane <lane>] [--json]`: one policy-filtered retrieval door. */
-async function runKnowledgeVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
-  const args = positionalArgs(rest);
-  const subcommand = args[0];
-  const projectRoot = path.resolve(flagValue(rest, "--project-root") ?? defaultProjectRoot);
-  if (subcommand === "migrate-v2") {
-    if (args.length > 1) throw new CliUsageError("knowledge migrate-v2: no positional arguments are accepted");
-    const report = migrateKnowledgeSchemaV2({ knowledgeRoot: projectRoot, dryRun: rest.includes("--dry-run"), now: flagValue(rest, "--now") ?? new Date().toISOString() });
-    if (rest.includes("--json")) console.log(JSON.stringify(report, null, 2));
-    else {
-      console.log(`[orchestrator] knowledge schema v2 ${report.dry_run ? "dry-run" : "migration"}: ${report.changed}/${report.scanned} item(s) would change${report.dry_run ? "" : "; changes written"}.`);
-      for (const item of report.items) console.log(`  ${item.path}: ${item.changes.join(", ")} target_ids=[${item.target_ids.join(",")}]`);
-      console.log(`[orchestrator] ${report.note}`);
-      if (report.backup_manifest) console.log(`[orchestrator] reversible backup manifest: ${report.backup_manifest}`);
-    }
-    return 0;
-  }
-  if (subcommand === "reconcile") {
-    if (args.length > 1) throw new CliUsageError("knowledge reconcile: no positional arguments are accepted");
-    const targetId = flagValue(rest, "--target");
-    if (!targetId) throw new CliUsageError("knowledge reconcile: --target <id> is required");
-    const report = reconcileKnowledge({ knowledgeRoot: projectRoot, frameworkRoot: resolveFrameworkRoot(), targetId, now: flagValue(rest, "--now") ?? new Date().toISOString() });
-    console.log(rest.includes("--json") ? JSON.stringify(report, null, 2) : renderReconciliationReport(report));
-    return 0;
-  }
-  if (subcommand !== "get") throw new CliUsageError("knowledge: expected sub-command get, migrate-v2, or reconcile");
-  const ids = (args[1] ?? "").split(",").map((id) => id.trim()).filter((id) => id !== "");
-  if (ids.length === 0) throw new CliUsageError("knowledge get: an item id is required");
-  if (args.length > 2) throw new CliUsageError("knowledge get: ids must be one comma-separated argument");
-
-  const laneRaw = flagValue(rest, "--lane") ?? "dev";
-  if (!isRoleLane(laneRaw)) {
-    throw new CliUsageError(`knowledge get: "${laneRaw}" is not a lane — use ba, sa, uxui, or dev`);
-  }
-  const lane = laneRaw as RoleLane;
-  const context = KnowledgeContext.load(projectRoot, new Date().toISOString());
-  const rendered = ids.map((id) => ({ id, result: renderKnowledgeRetrieval(lane, id, laneGet(lane, context, id)) }));
-  const json = rest.includes("--json");
-  if (json) console.log(JSON.stringify({ lane, items: rendered.map((entry) => entry.result.json) }, null, 2));
-  else for (const entry of rendered) console.log(entry.result.text);
-  return rendered.some((entry) => (entry.result.json.status as string | undefined) === "not_found") ? 1 : 0;
-}
-
 /** Dispatches a T31 verb, translating the ones that are really the existing engine in disguise (`run`, `resume`, `retry`) rather than duplicating the step loop. */
 async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): Promise<number> {
   switch (verb) {
@@ -2268,27 +1300,6 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
   }
 }
 
-/**
- * T-V1-04 — the support table, from `runtimeSupport.ts` so CLI, README and
- * tests read one record. A person picking a runtime for a machine should not
- * have to trust prose that can drift from what the adapters actually do.
- */
-async function runRuntimesVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
-  const projectRoot = path.resolve(flagValue(rest, "--project-root") ?? defaultProjectRoot);
-  const runtimeRegistry = createProductionRuntimeRegistry(projectRoot);
-  const probes = await runtimeRegistry.probeAll();
-  console.log("[orchestrator] runtime support (raise a level only when T-V1-05 conformance passes):");
-  for (const line of describeRuntimeSupport()) {
-    const id = line.slice(0, line.indexOf(":"));
-    const probe = probes[id];
-    const availability = probe?.available
-      ? `available${probe.version ? ` (${probe.version})` : ""}`
-      : `unavailable: ${probe?.reason ?? "no unavailability reason was reported"}`;
-    console.log(`  ${line}; ${availability}`);
-  }
-  return 0;
-}
-
 export async function runCli(argv: string[], defaultProjectRoot: string): Promise<number> {
   // Verbs route before anything else — the flag parser below rejects bare
   // tokens, so a version pre-check that parsed argv first (the old main-block
@@ -2305,239 +1316,11 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     return 0;
   }
 
-  if (args.checkContracts) {
-    const result = checkAllContracts(args.projectRoot);
-    // Path rules live in the same files, so they are checked in the same pass —
-    // a write glob that can never match is a role that silently cannot do its job.
-    const paths = checkPathRules(args.projectRoot);
-    const problems = [...result.problems, ...paths.problems];
-    if (problems.length === 0) {
-      console.log("[orchestrator] contracts/*.yaml agree with the agent registry, and their path rules are sane.");
-      return 0;
-    }
-    console.error("[orchestrator] contracts/*.yaml have problems:");
-    for (const problem of problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkLayout) {
-    const result = checkLayout(args.projectRoot);
-    if (result.ok) {
-      console.log("[orchestrator] layout.yaml agrees with the repo.");
-      return 0;
-    }
-    console.error("[orchestrator] layout.yaml and the repo disagree:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkPromptBudget) {
-    const result = checkPromptBudget(args.projectRoot);
-    if (result.ok) {
-      console.log("[orchestrator] static prompt budget holds.");
-      for (const note of result.notes) console.log(`  - ${note}`);
-      return 0;
-    }
-    console.error("[orchestrator] static prompt budget exceeded:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkWorkflows) {
-    const result = checkAllWorkflows(args.projectRoot);
-    if (result.ok) {
-      console.log("[orchestrator] workflows/*.yml agree with the classifier.");
-      return 0;
-    }
-    console.error("[orchestrator] workflows/*.yml and the classifier disagree:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkBindings) {
-    const result = checkBindings(args.projectRoot);
-    if (result.ok) {
-      console.log("[orchestrator] .codex/agents bindings match the .claude/agents sources.");
-      return 0;
-    }
-    console.error("[orchestrator] codex role bindings have drifted from their sources:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkProfile) {
-    const result = checkProfile(args.projectRoot);
-    // Notes print either way: a tracked migration is worth seeing on a green run,
-    // and burying it until something breaks is how it stops being tracked.
-    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
-    if (result.ok) {
-      console.log("[orchestrator] project.yaml and stacks/ agree with the agent roster.");
-      return 0;
-    }
-    console.error("[orchestrator] project.yaml and the agent roster disagree:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkDecisions) {
-    const result = checkDecisions(args.projectRoot);
-    if (result.ok) {
-      console.log("[orchestrator] decisions/*.md agree with the schema and cross-link cleanly.");
-      return 0;
-    }
-    console.error("[orchestrator] decisions/*.md have problems:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkTestPyramid) {
-    const result = checkTestPyramid(args.projectRoot);
-    if (result.ok) {
-      console.log("[orchestrator] test-pyramid.yaml agrees with its schema.");
-      return 0;
-    }
-    console.error("[orchestrator] test-pyramid.yaml has problems:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkReviewSeparation) {
-    const result = checkReviewSeparation(args.projectRoot);
-    // Notes print either way. An unreviewed pipeline is a right-sizing decision
-    // the user owns (workflows/typo.yml says so outright), so it is shown and not failed.
-    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
-    if (result.ok) {
-      console.log("[orchestrator] no agent can review its own work.");
-      return 0;
-    }
-    console.error("[orchestrator] creator/reviewer separation is broken:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkEscalationPolicy) {
-    const result = checkEscalationPolicy(args.projectRoot);
-    // Notes print either way: a severity that can never retry changes how the whole
-    // pipeline behaves, and burying it until something stops is how it stops being known.
-    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
-    if (result.ok) {
-      console.log("[orchestrator] escalation-policy.yaml agrees with the runtime policy.");
-      return 0;
-    }
-    console.error("[orchestrator] escalation-policy.yaml has problems:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkWorkspace) {
-    const result = checkWorkspace(args.projectRoot);
-    // Notes print either way: "no workspace.yaml" is the normal, expected state for a
-    // standalone project, and burying that note would make silence indistinguishable
-    // from a workspace nobody remembered to validate.
-    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
-    if (result.ok) {
-      console.log("[orchestrator] workspace.yaml is fine.");
-      return 0;
-    }
-    console.error("[orchestrator] workspace.yaml has problems:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkRepos) {
-    const result = checkRepoMap(args.projectRoot);
-    // Notes print either way: "no repos.yaml" is the normal, expected state for a
-    // single-repo project, same reasoning as --check-workspace's note above.
-    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
-    if (result.ok) {
-      console.log("[orchestrator] repos.yaml is fine.");
-      return 0;
-    }
-    console.error("[orchestrator] repos.yaml has problems:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkEnvironments) {
-    const result = checkEnvironmentConfig(args.projectRoot);
-    // Notes print either way: "no environments.yaml" is the normal, expected state — every
-    // project gets the four built-in descriptions even without one.
-    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
-    if (result.ok) {
-      console.log("[orchestrator] environments.yaml is fine.");
-      return 0;
-    }
-    console.error("[orchestrator] environments.yaml has problems:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkDocStructure) {
-    const result = checkDocStructure(args.projectRoot);
-    // Notes print either way: "no _docs/module/ yet" is the normal, expected state before
-    // business-analyst has run once.
-    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
-    if (result.ok) {
-      console.log("[orchestrator] every module document present has the sections its schema requires.");
-      return 0;
-    }
-    console.error("[orchestrator] module documents have structural problems:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkPlan) {
-    const result = checkPlanGraphs(args.projectRoot, args.module);
-    // Notes print either way: a project before its first module, or a module
-    // whose plan.md isn't written yet, are normal states — not findings.
-    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
-    if (result.ok) {
-      console.log("[orchestrator] every plan.md checked is a valid task graph.");
-      return 0;
-    }
-    console.error("[orchestrator] plan task graphs have problems:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkKnowledge) {
-    const result = checkKnowledge(args.projectRoot);
-    // Notes print either way: a repo with nothing captured in knowledge/ yet is the normal
-    // state, the same reading --check-doc-structure gives a project before its first module.
-    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
-    if (result.ok) {
-      console.log("[orchestrator] knowledge/ is consistent.");
-      return 0;
-    }
-    console.error("[orchestrator] knowledge/ has problems:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkInstallation) {
-    const result = validateInstallation(args.projectRoot);
-    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
-    if (result.ok) {
-      console.log("[orchestrator] .sta/ agrees with the project's real files.");
-      return 0;
-    }
-    console.error("[orchestrator] .sta/ has problems:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
-  }
-
-  if (args.checkRoles) {
-    const result = checkRoleWorkspaces(args.projectRoot);
-    // Notes print either way. "BA is behind on sales-crm" is the check working —
-    // it is what a lane needs to be told, not a repo inconsistency to fail on.
-    for (const note of result.notes) console.log(`[orchestrator] note: ${note}`);
-    if (result.ok) {
-      console.log("[orchestrator] every role workspace agrees with knowledge/.");
-      return 0;
-    }
-    console.error("[orchestrator] role workspaces have problems:");
-    for (const problem of result.problems) console.error(`  - ${problem}`);
-    return 1;
+  // T-V4-CLI-002: the 18 `--check-*` flags are one table in cli/checkers.ts.
+  // Evaluation order is the table order, matching the pre-table if-chain: the
+  // flags are mutually exclusive in practice, and the first match wins and exits.
+  for (const checker of CHECKERS) {
+    if (args[checker.flag]) return runChecker(checker, args.projectRoot, args.module);
   }
 
   if (args.buildTemplates) {
@@ -2617,16 +1400,28 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     // that seam. `guards` derives from `contracts/<role>.yaml` (T15), same as before.
     // T-OC5: --runtime picks the adapter; the default stays byte-identical to
     // every run before the flag existed.
-    let executionConfig: ReturnType<typeof loadStaConfig>["execution"] | undefined;
+    let staConfig: ReturnType<typeof loadStaConfig> | undefined;
     try {
-      executionConfig = loadStaConfig(args.projectRoot).execution;
+      staConfig = loadStaConfig(args.projectRoot);
     } catch {
       // Missing/invalid config is diagnosed by the router. Composition must
       // retain the historical Single/claude-code defaults in either case.
-      executionConfig = undefined;
+      staConfig = undefined;
     }
+    const executionConfig = staConfig?.execution;
     const resolvedMode = args.mode ?? executionConfig?.mode;
-    const defaultRuntimeId = args.runtime ??
+    const phaseTier = plannedTier(args, taskId);
+    const tierCamp = phaseTier
+      ? selectTierCamp({
+        flagRuntime: args.runtime,
+        configuredRuntime: executionConfig?.runner,
+        hasConfiguredRoleRoute: staConfig?.routing?.by_role !== undefined,
+        isTTY: process.stdin.isTTY === true,
+        defaultRuntimeId: DEFAULT_RUNTIME_ID,
+        prompt: () => promptForCamp(DEFAULT_RUNTIME_ID),
+      })
+      : undefined;
+    const defaultRuntimeId = tierCamp?.runtimeId ?? args.runtime ??
       ((resolvedMode ?? "single") === "single" ? executionConfig?.runner : undefined) ??
       DEFAULT_RUNTIME_ID;
     const allowPaidFallback = executionConfig?.allow_paid_fallback === true;
@@ -2646,7 +1441,8 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     const runtimeExecutor = createRuntimeExecutor({
       runtime: defaultRuntime,
       registry: runtimeRegistry,
-      routingFlags: args.runtime ? { runtime: args.runtime } : undefined,
+      routingFlags: args.runtime || args.model ? { runtime: args.runtime, model: args.model } : undefined,
+      planTier: (id) => plannedTier(args, id),
       classification: (id) => store.loadTask(id)?.classification,
       riskSignals: (id) => {
         const classification = store.loadTask(id)?.classification;
@@ -2664,6 +1460,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       // pipeline deliberately skipped.
       taskLevel: () => stored?.classification.level,
       runtimeTask: (id) => store.loadTask(id)?.runtimeTask,
+      taskRunLog: (id) => new RunLog(store.runsForTask(id)),
       // Absent --autonomy keeps the executor's own default ("propose"), which is
       // byte-identical to every run before the flag existed. Unattended runs pass
       // it explicitly — T117's pilot showed headless "propose" cannot act.
@@ -2674,18 +1471,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       // Three-repo mode is activated by the installation binding, never by a
       // per-run root override.  The persisted task is reloaded for every stage
       // so resume observes retirement/mapping changes before any adapter starts.
-      threeRepoTask: (() => {
-        try {
-          loadInstallationConfig(process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined);
-          return (id: string, stage: AgentStage) => {
-            const task = store.loadTask(id);
-            if (!task) throw new Error(`task ${id} disappeared from the state store`);
-            return { task, roots: preflightThreeRepoTask(task, stage, { frameworkRoot: args.projectRoot, installationConfigPath: process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined }) };
-          };
-        } catch {
-          return undefined;
-        }
-      })(),
+      threeRepoTask: resolveThreeRepoTaskLookup(args.projectRoot, store),
       // T114: projects with V1.5 role workspaces get the same BA → SA → DEV
       // handoff protection when the real orchestrator invokes an agent.
       // An absent knowledge directory means this is a legacy project, whose
@@ -2702,29 +1488,10 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     // restores the exact V1 behaviour for a caller that wants it.
     // Resolve the same writable roots for change discovery, deterministic
     // checks, and evidence. In three-repo mode this remains the Target, never
-    // the Framework binding root.
-    let qaRoots: string[] = [args.projectRoot];
-    try {
-      loadInstallationConfig(process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined);
-      const task = store.loadTask(taskId);
-      if (task) {
-        const roots3 = preflightThreeRepoTask(task, AgentStage.QA_ENGINEER, {
-          frameworkRoot: args.projectRoot,
-          installationConfigPath: process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined,
-        });
-        const writes = roots3.workRoots.filter((root) => root.access === "write").map((root) => root.path);
-        if (writes.length > 0) qaRoots = [...new Set(writes)];
-      }
-    } catch {
-      // legacy project: projectRoot stands
-    }
-    let qaDocsRoot = args.projectRoot;
-    try {
-      const installation = loadInstallationConfig(process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined);
-      if (installation.knowledge_root) qaDocsRoot = installation.knowledge_root;
-    } catch {
-      // legacy project: projectRoot stands
-    }
+    // the Framework binding root. T-V4-CLI-003: one tested resolver, not four
+    // inline fail-open copies.
+    const qaRoots = resolveWritableWorkRoots(args.projectRoot, taskId, store);
+    const qaDocsRoot = resolveDocsRoot(args.projectRoot);
     const qaInputs = await productionQaInputs({ docsRoot: qaDocsRoot, moduleName: args.module ?? "", taskId, roots: qaRoots });
 
     const verificationHook = args.noDeterministicGate
@@ -2752,21 +1519,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
             // projects have exactly one — the project root itself. A root whose
             // git fails contributes nothing rather than poisoning the others;
             // a total failure yields [], which scopes as unbounded → FULL.
-            let roots: string[] = qaRoots;
-            try {
-              loadInstallationConfig(process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined);
-              const task = store.loadTask(taskId);
-              if (task) {
-                const roots3 = preflightThreeRepoTask(task, AgentStage.QA_ENGINEER, {
-                  frameworkRoot: args.projectRoot,
-                  installationConfigPath: process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined,
-                });
-                const writes = roots3.workRoots.filter((r) => r.access === "write").map((r) => r.path);
-                if (writes.length > 0) roots = [...new Set(writes)];
-              }
-            } catch {
-              // legacy project — projectRoot stands
-            }
+            const roots = resolveWritableWorkRoots(args.projectRoot, taskId, store);
             const results = await Promise.allSettled(roots.map((root) => gitChangedFiles(root)));
             return [...new Set(results.flatMap((r) => (r.status === "fulfilled" ? r.value : [])))];
           },
@@ -2782,89 +1535,17 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
           taskLevel: () => orchestrator.classification.level,
           previousRound: () => {
             // In three-repo mode the module docs live under the Knowledge root.
-            let docsRoot = args.projectRoot;
-            try {
-              const installation = loadInstallationConfig(process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined);
-              if (installation.knowledge_root) docsRoot = installation.knowledge_root;
-            } catch {
-              // legacy project — projectRoot stands
-            }
-            return previousRoundFromDocs(docsRoot, args.module ?? "", taskId);
+            return previousRoundFromDocs(resolveDocsRoot(args.projectRoot), args.module ?? "", taskId);
           },
         });
 
-    for (;;) {
-      const status = orchestrator.status();
-      registry.refreshStateView();
-
-      if (status.kind === "DEPLOYED") {
-        console.log(`[orchestrator] task ${taskId} DEPLOYED.`);
-        console.log(orchestrator.runLog.summary(taskId));
-        return 0;
-      }
-      if (status.kind === "BLOCKED") {
-        console.log(`[orchestrator] task ${taskId} BLOCKED: ${status.reason}`);
-        return 1;
-      }
-      if (status.kind === "WAITING_FOR_HUMAN") {
-        const field = approvalFieldFor(status.approvalType);
-        if (!field) {
-          console.log(
-            `[orchestrator] task ${taskId} stuck waiting: ${status.from} -> ${status.to} (${status.reason}), ` +
-              "and this CLI doesn't know how to resolve that gate interactively.",
-          );
-          return 2;
-        }
-        const label = status.approvalType ? `${status.approvalType}` : `${status.from} -> ${status.to}`;
-        console.log(`[orchestrator] human decision required (${label}): ${status.reason}`);
-        if (status.approvalType) console.log(`[orchestrator]   ${APPROVAL_PROMPT[status.approvalType]}`);
-
-        // No TTY, no question: a headless `run` that called confirm() here would
-        // hang on a stdin nobody is attached to (or crash on a closed one) while
-        // looking alive. The gate stays pending in the ledger either way — the
-        // task is parked, deterministically resumable once a person answers:
-        //   sta approve <task-id> --yes|--no
-        if (!process.stdin.isTTY) {
-          console.log(
-            `[orchestrator] no terminal attached — parking task ${taskId} with the gate unanswered. ` +
-              `Resolve it with: node orchestrator/dist/cli.js approve ${taskId} --yes|--no ` +
-              `(or rerun this command in an interactive terminal), then --resume.`,
-          );
-          return 4; // 4 = PARKED — distinct from blocked(1), stuck(2), rejected(3)
-        }
-
-        const approved = await confirm(`Approve ${label}?`);
-        if (!approved) {
-          // Recorded as a rejection, not left unanswered: resuming must not
-          // re-ask a question this person already said no to (T08).
-          if (status.approvalType) {
-            orchestrator.decideApproval(status.approvalType, false, { by: process.env.USER ?? process.env.USERNAME });
-          }
-          registry.refreshStateView();
-          console.log(
-            `[orchestrator] rejected — task ${taskId} is stopped and the decision is recorded. ` +
-              `Resuming will not ask again; revisit it deliberately if that was wrong.`,
-          );
-          return 3;
-        }
-        if (status.approvalType) {
-          orchestrator.decideApproval(status.approvalType, true, { by: process.env.USER ?? process.env.USERNAME });
-        } else {
-          orchestrator.provideHumanApproval(field, true);
-        }
-        registry.refreshStateView();
-        continue;
-      }
-
-      console.log(`[orchestrator] running ${status.stage}...`);
-      const nextStatus = await orchestrator.step(executor);
-      registry.refreshStateView();
-      if (nextStatus.kind === "RUNNING" && nextStatus.stage === status.stage) {
-        // Defensive: step() should always move the cursor forward or change status kind.
-        console.log(`[orchestrator] ${status.stage} did not advance the task — stopping to avoid a spin loop.`);
-        return 1;
-      }
-    }
+    return await runTaskLoop(orchestrator, registry, executor, {
+      log: (message) => console.log(message),
+      error: (message) => console.error(message),
+      confirm,
+      isTTY: process.stdin.isTTY === true,
+      actor: process.env.USER ?? process.env.USERNAME,
+    });
   } finally {
     if (lockedTaskId) releaseTaskLock(args.projectRoot, lockedTaskId);
     registry.close();

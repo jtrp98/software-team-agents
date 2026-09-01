@@ -27,7 +27,8 @@
     "test:v3-gates": "node scripts/v3-gate.mjs all",
     "test:guardrails": "node scripts/v3-gate.mjs guardrails",
     "test:modes": "node scripts/v3-gate.mjs modes",
-    "test:paid-fallback": "node scripts/v3-gate.mjs paid-fallback"
+    "test:paid-fallback": "node scripts/v3-gate.mjs paid-fallback",
+    "test:benchmark": "node planning/v4/benchmark/verify-oracles.mjs && node planning/v4/benchmark/build-metrics.mjs && node planning/v4/benchmark/build-run-ledger.mjs && node planning/v4/benchmark/verify-run-log.mjs && node planning/v4/benchmark/verify-value-report.mjs"
   },
   "dependencies": {
     "ajv": "^8.20.0",

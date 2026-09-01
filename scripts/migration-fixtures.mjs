@@ -15,7 +15,9 @@ const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname.rep
 const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sta-v3-migrations-"));
 const stage = path.join(tempRoot, "Four Migration Fixtures With Spaces");
+const npmCache = path.join(tempRoot, "npm-cache");
 fs.mkdirSync(stage, { recursive: true });
+fs.mkdirSync(npmCache, { recursive: true });
 
 let failures = 0;
 let assertions = 0;
@@ -30,6 +32,7 @@ function npm(args, cwd) {
   return execFileSync(win ? "npm.cmd" : "npm", argv, {
     cwd,
     encoding: "utf8",
+    env: { ...process.env, npm_config_cache: npmCache },
     shell: win,
     stdio: ["ignore", "pipe", "inherit"],
   });
@@ -335,7 +338,7 @@ try {
     const legacyTask = JSON.parse(row.state);
     delete legacyTask.runtimeTask;
     legacyDb.prepare("UPDATE tasks SET state = ? WHERE task_id = ?").run(JSON.stringify(legacyTask), taskId);
-    for (const column of ["requested_runtime", "requested_model", "routing_basis", "fallback_reason", "fallback_count", "qa_effort"]) {
+    for (const column of ["requested_runtime", "requested_model", "routing_basis", "fallback_reason", "fallback_count", "qa_effort", "estimated_input_tokens", "effort"]) {
       legacyDb.exec(`ALTER TABLE runs DROP COLUMN ${column}`);
     }
     legacyDb.pragma("user_version = 11");
@@ -355,7 +358,7 @@ try {
     const versionDb = new Database(dbPath, { readonly: true });
     const migratedVersion = Number(versionDb.pragma("user_version", { simple: true }));
     versionDb.close();
-    assertFixture(migratedVersion >= 13, "v11 DB did not traverse the required v13 compatibility step", String(migratedVersion));
+    assertFixture(migratedVersion >= 16, "v11 DB did not traverse the required v16 compatibility step", String(migratedVersion));
     assertFixture(resumedStages[0] === "qa-engineer" && terminal.kind === "DEPLOYED", "task did not resume at its pre-upgrade stage", resumedStages.join(" -> "));
 
     const rollback = runBin(staBin, ["rollback", "--project-root", project], { env });

@@ -86,6 +86,7 @@ const GATES = {
       "implements RuntimeAdapter without claiming any guard capability",
       "refuses a Target-write stage before the mocked transport is invoked",
       "all local runners unavailable stops and names the disabled paid path",
+      "paid budget rejection never widens the resolved candidate set",
     ],
   },
 };

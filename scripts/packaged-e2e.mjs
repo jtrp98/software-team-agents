@@ -52,7 +52,13 @@ function expectCond(name, condition, detail = "") {
 function npm(args, cwd) {
   const isWin = process.platform === "win32";
   const quoted = isWin ? args.map((a) => (/[\s"]/.test(a) ? `"${a.replace(/"/g, '\\"')}"` : a)) : args;
-  return execFileSync(isWin ? "npm.cmd" : "npm", quoted, { cwd, encoding: "utf8", shell: isWin, stdio: ["ignore", "pipe", "inherit"] });
+  return execFileSync(isWin ? "npm.cmd" : "npm", quoted, {
+    cwd,
+    encoding: "utf8",
+    env: { ...process.env, npm_config_cache: npmCache },
+    shell: isWin,
+    stdio: ["ignore", "pipe", "inherit"],
+  });
 }
 
 /** Quotes one token for a shell command line (our args never embed quotes). */
@@ -81,6 +87,8 @@ if (!fs.existsSync(path.join(repoRoot, "orchestrator", "dist", "cli.js"))) {
 }
 
 const stage = fs.mkdtempSync(path.join(os.tmpdir(), "sta-packaged-e2e-"));
+const npmCache = path.join(stage, "npm-cache");
+fs.mkdirSync(npmCache, { recursive: true });
 console.log(`[e2e] stage: ${stage}`);
 
 try {

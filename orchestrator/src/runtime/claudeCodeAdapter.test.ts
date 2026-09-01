@@ -155,6 +155,69 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
     expect(schemaArgs).not.toContain("do the thing");
   });
 
+  it("T-V4-CAST-001 — forwards --model only for an explicit override, and the no-override arg list is byte-identical", async () => {
+    const capture = () => {
+      let args: string[] = [];
+      const spawnSync: SpawnSync = (_cmd, a) => {
+        args = a;
+        return cliResult(0, JSON.stringify({ is_error: false, result: "done" }));
+      };
+      return { spawnSync, get: () => args };
+    };
+
+    // Resolved default reaching the adapter as req.model (frontmatter) — not explicit.
+    const a = capture();
+    await new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync: a.spawnSync }).executeAgent(
+      baseRequest({ model: "opus" }),
+    );
+    // Same request with no model at all.
+    const b = capture();
+    await new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync: b.spawnSync }).executeAgent(baseRequest());
+
+    expect(a.get()).toEqual(b.get());
+    expect(a.get()).not.toContain("--model");
+
+    // Explicit override → forwarded.
+    const c = capture();
+    await new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync: c.spawnSync }).executeAgent(
+      baseRequest({ model: "opus", modelExplicit: true }),
+    );
+    const idx = c.get().indexOf("--model");
+    expect(idx).toBeGreaterThan(-1);
+    expect(c.get()[idx + 1]).toBe("opus");
+  });
+
+  it("T-V4-CAST-001 — refuses an explicit model outside CLAUDE_CODE_MODELS instead of passing it through", async () => {
+    let spawned = false;
+    const spawnSync: SpawnSync = () => {
+      spawned = true;
+      return cliResult(0, JSON.stringify({ is_error: false, result: "done" }));
+    };
+    const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync });
+
+    const result = await adapter.executeAgent(baseRequest({ model: "gpt-5", modelExplicit: true }));
+
+    expect(spawned).toBe(false);
+    expect(result.status).toBe("ERROR");
+    expect(result.diagnostics.join(" ")).toMatch(/model "gpt-5" is not one Claude Code accepts/);
+  });
+
+  it("T-V4-CAST-001 — records a diagnostic for an explicit effort rather than dropping it (no claude -p effort flag)", async () => {
+    let args: string[] = [];
+    const spawnSync: SpawnSync = (_cmd, a) => {
+      args = a;
+      return cliResult(0, JSON.stringify({ is_error: false, result: "done" }));
+    };
+    const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync });
+
+    const result = await adapter.executeAgent(baseRequest({ model: "sonnet", modelExplicit: true, effort: "high" }));
+
+    expect(result.status).toBe("OK");
+    expect(args).not.toContain("--effort");
+    expect(args).not.toContain("high");
+    expect(result.diagnostics.join(" ")).toMatch(/reasoning effort "high" was not applied/);
+  });
+
   it("runs in req.cwd, not the workspace root", async () => {
     let capturedCwd: string | undefined;
     const spawnSync: SpawnSync = (_cmd, _args, options) => {

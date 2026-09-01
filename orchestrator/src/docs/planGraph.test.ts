@@ -11,6 +11,7 @@ import {
   planReadinessAdvisory,
   type PlanTaskRow,
 } from "./planGraph.js";
+import { parseModelTiers } from "../runtime/modelTiers.js";
 
 function row(over: Partial<PlanTaskRow> & { id: string }): PlanTaskRow {
   return {
@@ -54,6 +55,54 @@ Phase 2 reads Phase 1's models.
 2026-08-26: created.
 `;
 
+const TIERED_PHASE = `## Phase 1: Orders
+
+| Task | Status | Owner | Depends on | Tier |
+|---|---|---|---|---|
+| BE-001 (DES-001) — order API | pending | backend-engineer | — | T4 |
+| FE-001 (DES-001) — order form | pending | frontend-engineer | BE-001 | — |
+`;
+
+const MODEL_TIERS = parseModelTiers(`tiers:
+  T1:
+    reserved: true
+    camps:
+      anthropic: { model: a, effort: a, notes: a }
+      openai: { model: a, effort: a, notes: a }
+      google: { model: a, effort: a, notes: a }
+      zai: { model: a, effort: a, notes: a }
+  T2:
+    camps:
+      anthropic: { model: a, effort: a, notes: a }
+      openai: { model: a, effort: a, notes: a }
+      google: { model: a, effort: a, notes: a }
+      zai: { model: a, effort: a, notes: a }
+  T3:
+    camps:
+      anthropic: { model: a, effort: a, notes: a }
+      openai: { model: a, effort: a, notes: a }
+      google: { model: a, effort: a, notes: a }
+      zai: { model: a, effort: a, notes: a }
+  T4:
+    camps:
+      anthropic: { model: a, effort: a, notes: a }
+      openai: { model: a, effort: a, notes: a }
+      google: { model: a, effort: a, notes: a }
+      zai: { model: a, effort: a, notes: a }
+  T5:
+    camps:
+      anthropic: { model: a, effort: a, notes: a }
+      openai: { model: a, effort: a, notes: a }
+      google: { model: a, effort: a, notes: a }
+      zai: { model: a, effort: a, notes: a }
+  T6:
+    camps:
+      anthropic: { model: a, effort: a, notes: a }
+      openai: { model: a, effort: a, notes: a }
+      google: { model: a, effort: a, notes: a }
+      zai: { model: a, effort: a, notes: a }
+`);
+
 describe("parsePlanTasks", () => {
   it("parses ids, DES refs, owners, statuses and dependencies from every phase table", () => {
     const { tasks, problems } = parsePlanTasks(TABLE_PLAN);
@@ -95,6 +144,23 @@ describe("parsePlanTasks", () => {
     expect(tasks[0].produces).toEqual(["orders/create", "orders/read"]);
     expect(tasks[0].consumes).toEqual(["auth/session"]);
   });
+
+  it("T-V4-CAST-004 — inherits one Tier cell across every task in the phase", () => {
+    const { tasks, problems } = parsePlanTasks(TIERED_PHASE);
+    expect(problems).toEqual([]);
+    expect(tasks.map((task) => task.tier)).toEqual(["T4", "T4"]);
+  });
+
+  it("T-V4-CAST-004 — refuses a Tier copied into more than one task row", () => {
+    const { problems } = parsePlanTasks(TIERED_PHASE.replace("| BE-001 | — |", "| BE-001 | T4 |"));
+    expect(problems.join("\n")).toContain("once per phase, not repeated per task");
+  });
+
+  it("T-V4-CAST-004 — keeps a pre-existing plan fixture byte-identical when no Tier column exists", () => {
+    expect(JSON.stringify(parsePlanTasks(TABLE_PLAN))).toBe(
+      '{"tasks":[{"id":"BE-001","phase":1,"designRefs":["DES-001"],"dependsOn":[],"status":"pending","owner":"backend-engineer","wave":null,"description":"order CRUD","fromCheckbox":false},{"id":"FE-001","phase":1,"designRefs":["DES-001"],"dependsOn":["BE-001"],"status":"pending","owner":"frontend-engineer","wave":null,"description":"order form","fromCheckbox":false},{"id":"BE-002","phase":2,"designRefs":["DES-002"],"dependsOn":["BE-001"],"status":"pending","owner":"backend-engineer","wave":null,"description":"billing API","fromCheckbox":false}],"problems":[]}',
+    );
+  });
 });
 
 describe("validatePlanTasks — T-PM10.1", () => {
@@ -106,6 +172,23 @@ describe("validatePlanTasks — T-PM10.1", () => {
     ]);
     expect(check.errors).toEqual([]);
     expect(check.ok).toBe(true);
+  });
+
+  it("T-V4-CAST-004 — accepts a configured T2 through T6 cast without inspecting camps or model names", () => {
+    const check = validatePlanTasks([row({ id: "BE-001", tier: "T4" })], { modelTiers: MODEL_TIERS });
+    expect(check.ok).toBe(true);
+  });
+
+  it("T-V4-CAST-004 — refuses reserved T1 and a tier absent from the table", () => {
+    expect(validatePlanTasks([row({ id: "BE-001", tier: "T1" })], { modelTiers: MODEL_TIERS }).errors.join("\n"))
+      .toContain("T1 is reserved");
+    expect(validatePlanTasks([row({ id: "BE-001", tier: "T9" })], { modelTiers: MODEL_TIERS }).errors.join("\n"))
+      .toContain("T9, which is absent from model-tiers.yaml");
+  });
+
+  it("T-V4-CAST-004 — refuses a tier on an analysis phase", () => {
+    const check = validatePlanTasks([row({ id: "BE-001", owner: "project-manager", tier: "T2" })], { modelTiers: MODEL_TIERS });
+    expect(check.errors.join("\n")).toContain("analysis phases must not carry a Tier");
   });
 
   it("rejects a duplicate task id, naming both phases", () => {
