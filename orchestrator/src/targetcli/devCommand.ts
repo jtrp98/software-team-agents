@@ -1,5 +1,7 @@
 import { spawn as nodeSpawn, spawnSync as nodeSpawnSync } from "node:child_process";
+import * as fs from "node:fs";
 import * as path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { readTemplateManifest } from "../packaging/templateManifest.js";
 import { resolveRoots } from "./roots.js";
 import {
@@ -15,6 +17,7 @@ import {
   launchEnv,
   resolveKnowledgeBinding,
   resolveTargetBinding,
+  hasKnowledgeMarkers,
   TargetBindingError,
   WORKSPACE_ROLE_LABEL,
   ROLE_WORKSPACE_KIND,
@@ -23,11 +26,12 @@ import {
   type WorkspaceRole,
   type TargetBinding,
 } from "./roleWorkspace.js";
+import { configureKnowledgeRoot } from "../threeRepo/installation.js";
 import { formatResolvedCommand, resolveBundledStaCli } from "../runtime/npmCliResolver.js";
-import { runTargetInit } from "./initCommand.js";
+import { environmentPrerequisites, runTargetInit } from "./initCommand.js";
 import { isTargetInitialized } from "./targetMeta.js";
 import { measureWorkspaceStatic, recordInteractiveSession } from "../observability/sessionRecord.js";
-import { CLAUDE_SETTINGS_PATH, inspectGuardWiring } from "./guardSettings.js";
+import { CLAUDE_SETTINGS_PATH, guardCoverage, type GuardCoverage } from "./guardSettings.js";
 
 /**
  * T-ROLE-03 / T-ROLE-04 / T-ROLE-19 — role-aware execution: preflight, then
@@ -61,9 +65,19 @@ export interface RoleRunOptions {
   runtime?: RuntimeName;
   /** Sync managed files automatically when the plan is conflict-free (default true). */
   autoSync?: boolean;
+  /**
+   * T-V5-008 — deliberately accept a session on a runtime that enforces no
+   * guard. Never a default and never implicit: without it, an unguarded runtime
+   * fails preflight. It cannot excuse a *broken* guard mechanism.
+   */
+  allowUnguardedRuntime?: boolean;
   now?: string;
   /** Overrides where the machine-wide installation binding is read from (tests; unusual setups). */
   installationConfigPath?: string;
+  /** T-V5-009: an explicit candidate is offered, never silently recorded. */
+  knowledgeRoot?: string;
+  /** Test/UI seam for the one interactive confirmation. */
+  confirmKnowledgeBinding?: (candidate: string) => Promise<boolean>;
   /** Test seams. */
   probe?: (cmd: string) => { available: boolean; detail?: string };
   launch?: (cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<number>;
@@ -78,6 +92,47 @@ export class PreflightError extends Error {
   ) {
     super(`${failed.name}: ${failed.detail ?? "failed"}`);
   }
+}
+
+function siblingKnowledgeRoot(targetRoot: string): string | undefined {
+  const parent = path.dirname(targetRoot);
+  try {
+    return fs.readdirSync(parent, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(parent, entry.name))
+      .find((candidate) => candidate !== targetRoot && hasKnowledgeMarkers(candidate));
+  } catch {
+    return undefined;
+  }
+}
+
+async function confirmKnowledgeBinding(candidate: string, options: RoleRunOptions): Promise<boolean> {
+  if (options.confirmKnowledgeBinding) return options.confirmKnowledgeBinding(candidate);
+  // Headless executions preserve the existing fail-closed behaviour: no prompt
+  // and, critically, no write to installation-local state.
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+  const readline = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return /^(y|yes)$/i.test((await readline.question(`[software-team-agents] Use sibling Knowledge repository "${candidate}" on this machine? [y/N] `)).trim());
+  } finally {
+    readline.close();
+  }
+}
+
+async function offerKnowledgeBinding(options: RoleRunOptions): Promise<boolean> {
+  const roots = resolveRoots({ targetRoot: options.targetRoot });
+  const config = loadTargetConfig(roots.targetRoot);
+  if (config?.knowledge?.path) return false; // workspace binding always wins
+  try {
+    if (resolveKnowledgeBinding({ targetRoot: roots.targetRoot, installationConfigPath: options.installationConfigPath })) return false;
+  } catch {
+    return false; // invalid existing state must be repaired explicitly, never replaced
+  }
+  const candidate = options.knowledgeRoot ?? siblingKnowledgeRoot(roots.targetRoot);
+  if (!candidate || !hasKnowledgeMarkers(candidate)) return false;
+  if (!(await confirmKnowledgeBinding(candidate, options))) return false;
+  configureKnowledgeRoot(candidate, options.installationConfigPath, roots.frameworkRoot);
+  return true;
 }
 
 function defaultProbe(cmd: string): { available: boolean; detail?: string } {
@@ -110,6 +165,8 @@ export interface WorkspaceContext {
   /** T-LV1 — resolved for BA when `target.path` is set and valid; always optional, never blocks a BA session. */
   target?: TargetBinding;
   runtime: RuntimeName;
+  /** T-V5-008 — the guard verdict this launch was allowed under, for the launch record. */
+  guards: GuardCoverage;
 }
 
 /**
@@ -186,25 +243,66 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
   }
   checks.push({ name: "Framework compatibility", ok: true, detail: installedVersion });
 
-  // Claude hook files being present is not evidence that Claude will execute
-  // them. Check effective settings before any auto-sync so an already-installed
+  // Guard files being present is not evidence that the runtime will execute
+  // them. Check effective coverage before any auto-sync so an already-installed
   // but unregistered guard fails closed with this exact diagnosis.
-  if ((options.runtime ?? "claude") === "claude") {
-    const currentManifest = readTargetManifest(roots.targetRoot);
-    const currentConfig = loadTargetConfig(roots.targetRoot);
-    const wiring = inspectGuardWiring({ targetRoot: roots.targetRoot, templatesDir, manifest: currentManifest, config: currentConfig });
-    if (wiring.overridden) {
-      checks.push({ name: "Guards wired", ok: true, detail: `${CLAUDE_SETTINGS_PATH} is in overrides — explicit user choice; Framework guards are not required` });
-    } else if (wiring.hooksInstalled === 0) {
-      checks.push({ name: "Guards wired", ok: true, detail: "0/0 Framework guard registrations shipped for this profile" });
-    } else if (wiring.settingsError) {
-      fail("Guards wired", `${wiring.settingsError} — run software-team-agents sync; if deliberate, claim .claude/settings.json in overrides`);
-    } else if (wiring.missingRegistrations.length > 0) {
-      const missing = wiring.missingRegistrations.map((registration) => `${registration.event}:${registration.hookPath}`).join(", ");
-      fail("Guards wired", `${wiring.hooksRegistered}/${wiring.hooksInstalled} Framework guard registration(s) active; missing ${missing} — run software-team-agents sync`);
-    } else {
-      checks.push({ name: "Guards wired", ok: true, detail: `${wiring.hooksRegistered}/${wiring.hooksInstalled} Framework guard registration(s) active` });
+  //
+  // T-V5-008 — this consults the verdict for whichever runtime is launching,
+  // not only Claude. A runtime with no mechanism at all (`unguarded`) stops the
+  // launch unless the user acknowledges it explicitly; a *broken* mechanism is
+  // never acknowledgeable, because it is a repairable fault rather than a
+  // deliberate choice, and letting a flag past it would weaken a guard that is
+  // enforced today.
+  const launchRuntime = options.runtime ?? "claude";
+  const coverage = guardCoverage({
+    runtime: launchRuntime,
+    targetRoot: roots.targetRoot,
+    templatesDir,
+    manifest: readTargetManifest(roots.targetRoot),
+    config: loadTargetConfig(roots.targetRoot),
+  });
+  const wiring = coverage.wiring;
+  if (coverage.level === "broken") {
+    if (wiring?.settingsError) {
+      fail("Guards wired", `${wiring.settingsError} — run software-team-agents sync; if deliberate, claim ${CLAUDE_SETTINGS_PATH} in overrides`);
     }
+    const missing = (wiring?.missingRegistrations ?? []).map((registration) => `${registration.event}:${registration.hookPath}`).join(", ");
+    fail(
+      "Guards wired",
+      wiring
+        ? `${wiring.hooksRegistered}/${wiring.hooksInstalled} Framework guard registration(s) active; missing ${missing} — run software-team-agents sync`
+        : `${launchRuntime}: ${coverage.detail} — run software-team-agents sync`,
+    );
+  }
+  if (coverage.level === "unguarded") {
+    if (!options.allowUnguardedRuntime) {
+      fail(
+        "Guards wired",
+        `${launchRuntime} enforces no guard in this workspace — ${coverage.detail}. ` +
+          "Re-run with --allow-unguarded-runtime to accept an unguarded session deliberately, or launch with --runtime claude.",
+      );
+    }
+    checks.push({
+      name: "Guards wired",
+      ok: true,
+      detail: `${launchRuntime}: UNGUARDED, acknowledged via --allow-unguarded-runtime — ${coverage.detail}`,
+    });
+  } else if (coverage.level === "not-required") {
+    checks.push({
+      name: "Guards wired",
+      ok: true,
+      detail: wiring?.overridden
+        ? `${CLAUDE_SETTINGS_PATH} is in overrides — explicit user choice; Framework guards are not required`
+        : "0/0 Framework guard registrations shipped for this profile",
+    });
+  } else {
+    checks.push({
+      name: "Guards wired",
+      ok: true,
+      detail: wiring
+        ? `${wiring.hooksRegistered}/${wiring.hooksInstalled} Framework guard registration(s) active`
+        : `${launchRuntime}: ${coverage.detail}`,
+    });
   }
 
   // Managed-file integrity under this role's asset profile: auto-sync only
@@ -319,13 +417,13 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
     }
   }
 
-  const runtime = options.runtime ?? "claude";
   const probe = options.probe ?? defaultProbe;
-  const verdict = probe(runtime);
-  if (!verdict.available) fail(`Runtime (${runtime})`, verdict.detail ?? `${runtime} is unavailable`);
-  checks.push({ name: `Runtime (${runtime})`, ok: true, detail: verdict.detail });
+  for (const prerequisite of environmentPrerequisites(launchRuntime, probe)) {
+    if (!prerequisite.ok) fail(prerequisite.name, `${prerequisite.detail} — ${prerequisite.fix}`);
+    checks.push({ name: prerequisite.name, ok: true, detail: prerequisite.detail });
+  }
 
-  return { checks, role, workspaceRoot: roots.targetRoot, frameworkRoot: roots.frameworkRoot, templatesDir, knowledge: devKnowledge, target: baTarget, runtime };
+  return { checks, role, workspaceRoot: roots.targetRoot, frameworkRoot: roots.frameworkRoot, templatesDir, knowledge: devKnowledge, target: baTarget, runtime: launchRuntime, guards: coverage };
 }
 
 /** DEV-only aliases kept for the original callers/tests. */
@@ -340,7 +438,12 @@ export type DevOptions = RoleRunOptions;
 async function runRoleSession(role: WorkspaceRole, options: RoleRunOptions): Promise<number> {
   let ctx: WorkspaceContext;
   try {
-    ctx = workspacePreflight(role, options);
+    try {
+      ctx = workspacePreflight(role, options);
+    } catch (error) {
+      if (role !== "dev" || !(error instanceof PreflightError) || error.failed.name !== "Knowledge" || !(await offerKnowledgeBinding(options))) throw error;
+      ctx = workspacePreflight(role, options);
+    }
   } catch (e) {
     if (e instanceof PreflightError) {
       console.error("[software-team-agents] preflight failed:");
@@ -350,7 +453,11 @@ async function runRoleSession(role: WorkspaceRole, options: RoleRunOptions): Pro
     throw e;
   }
   for (const c of ctx.checks) console.log(`[software-team-agents] ✓ ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
-  console.log(`[software-team-agents] starting ${ctx.runtime} (${WORKSPACE_ROLE_LABEL[role]}) from ${ctx.workspaceRoot} ...`);
+  // T-V5-008 — an acknowledged unguarded launch is recorded as such on the
+  // launch line itself, so the session's own transcript states that none of the
+  // six guards was active.
+  const unguarded = ctx.guards.level === "unguarded" ? " [UNGUARDED SESSION — acknowledged]" : "";
+  console.log(`[software-team-agents] starting ${ctx.runtime} (${WORKSPACE_ROLE_LABEL[role]})${unguarded} from ${ctx.workspaceRoot} ...`);
   const launch = options.launch ?? defaultLaunch;
   const startedAt = Date.now();
   // Measure before the runtime starts: an interactive session may edit its own

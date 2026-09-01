@@ -1,5 +1,38 @@
 # Release Notes
 
+## Unreleased — V5 (simplification release, in progress)
+
+V5 adds no features. It closes half-finished transitions and makes existing enforcement honest.
+Behaviour changes users will feel are listed here as each task lands.
+
+### Breaking changes
+
+- **Guard coverage is now a launch requirement for every runtime** (`T-V5-008`, audit finding `F-05`).
+  Until now, `status` printed `Codex: READY` after counting `.codex/agents/*.toml` with no guard check
+  of any kind, and `dev`/`ba` preflight inspected guard wiring only when the launching runtime was
+  Claude. `software-team-agents ba --runtime codex` therefore started a session with none of the six
+  guards active.
+
+  **What changes:** every runtime now gets one guard verdict, consulted by both readiness and
+  preflight.
+  - `codex` has no guard mechanism — the payload ships no Codex hook wiring and Codex's hook loading
+    has never been verified on a real install — so it reports `NOT READY — UNGUARDED` and **launches
+    that succeed today now stop**.
+  - `opencode` reports its coverage as *partial* and names both halves: `.opencode/plugin/sta-guards.js`
+    enforces `block-outside-repo` and `block-path-permissions`, each binding's permission block
+    enforces `block-git`; `block-doc-rewrite`, `block-secret-leak` and `require-green-before-stop`
+    have no OpenCode mechanism and do not run. A workspace missing the plugin is `unguarded` and
+    stops, because OpenCode's default posture is allow-all.
+  - `claude` behaviour is unchanged: the same registrations are required and the same messages are
+    printed.
+
+  **How to proceed deliberately:** `software-team-agents dev|ba --runtime <name> --allow-unguarded-runtime`
+  launches an unguarded session on purpose; the launch line records it as
+  `[UNGUARDED SESSION — acknowledged]`. The flag never applies to a *broken* Claude guard wiring —
+  a missing or unregistered hook stays a hard failure with or without it.
+
+  Building a Codex guard mechanism is deliberately out of V5's scope (`ADR-023` feature freeze).
+
 ## Internal V1 Stable
 
 **Internal V1 Stable = P0 → P1 → P2 → P3 → P4 each executed and reported,

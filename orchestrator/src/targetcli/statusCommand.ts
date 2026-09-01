@@ -27,7 +27,7 @@ import { classifySyncState, type SyncState } from "./version.js";
 import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
 import { detectInstructionSurface, isNestedInstruction, type InstructionSurfaceEntry } from "../threeRepo/ownership.js";
 import { targetStackWasHumanEdited } from "./targetProfile.js";
-import { CLAUDE_SETTINGS_PATH, inspectGuardWiring, type GuardWiringStatus } from "./guardSettings.js";
+import { CLAUDE_SETTINGS_PATH, guardCoverage, guardCoverageIsPositive, inspectGuardWiring, type GuardCoverage } from "./guardSettings.js";
 import { effectiveExecutionConfig, loadStaConfig, type StaConfig } from "../packaging/staConfig.js";
 
 /**
@@ -120,19 +120,14 @@ function countFiles(dir: string, suffix: string): number {
   }
 }
 
-export function claudeReadiness(targetRoot: string, guardWiring?: GuardWiringStatus): RuntimeReadiness {
+export function claudeReadiness(targetRoot: string, coverage?: GuardCoverage): RuntimeReadiness {
   const agents = countFiles(path.join(targetRoot, ".claude", "agents"), ".md");
   if (agents === 0) return { ready: false, detail: "no .claude/agents/*.md — run software-team-agents sync" };
-  if (guardWiring?.overridden) {
-    return { ready: true, detail: `${agents} agent(s); Framework guard wiring explicitly declined via overrides` };
-  }
-  if (guardWiring) {
-    if (guardWiring.hooksInstalled === 0) return { ready: true, detail: `${agents} agent(s); no Framework guard registrations shipped for this profile` };
-    if (guardWiring.settingsError) return { ready: false, detail: `${guardWiring.settingsError} — run software-team-agents sync` };
-    if (guardWiring.missingRegistrations.length > 0) {
-      return { ready: false, detail: `${guardWiring.hooksRegistered}/${guardWiring.hooksInstalled} Framework guard registration(s) wired — run software-team-agents sync` };
-    }
-    return { ready: true, detail: `${agents} agent(s), Framework guards wired (${guardWiring.hooksRegistered}/${guardWiring.hooksInstalled})` };
+  if (coverage) {
+    if (coverage.level === "not-required") return { ready: true, detail: `${agents} agent(s); ${coverage.detail}` };
+    if (coverage.level === "broken") return { ready: false, detail: `${coverage.detail} — run software-team-agents sync` };
+    if (!guardCoverageIsPositive(coverage)) return { ready: false, detail: `unguarded — ${coverage.detail}` };
+    return { ready: true, detail: `${agents} agent(s), ${coverage.detail}` };
   }
   const settingsPath = path.join(targetRoot, ".claude", "settings.json");
   if (!fs.existsSync(settingsPath)) return { ready: false, detail: "no .claude/settings.json — hooks unwired" };
@@ -146,29 +141,36 @@ export function claudeReadiness(targetRoot: string, guardWiring?: GuardWiringSta
   }
 }
 
-export function codexReadiness(targetRoot: string): RuntimeReadiness {
+/**
+ * T-V5-008 — bindings alone are not readiness. Counting `.codex/agents/*.toml`
+ * and reporting READY is exactly the F-05 defect: a Codex session launches with
+ * no guard of any kind. READY now requires a positive guard verdict too.
+ */
+export function codexReadiness(targetRoot: string, coverage: GuardCoverage): RuntimeReadiness {
   const md = countFiles(path.join(targetRoot, ".claude", "agents"), ".md");
   const toml = countFiles(path.join(targetRoot, ".codex", "agents"), ".toml");
   if (md === 0) return { ready: false, detail: "no agent sources synced yet — run software-team-agents sync" };
   if (toml < md) return { ready: false, detail: `${toml}/${md} bindings generated — run software-team-agents sync` };
+  if (!guardCoverageIsPositive(coverage)) {
+    return { ready: false, detail: `${toml} binding(s) match ${md} agent source(s), but UNGUARDED — ${coverage.detail}` };
+  }
   return { ready: true, detail: `${toml} binding(s) match ${md} agent source(s)` };
 }
 
 /**
  * OpenCode readiness (T-OC5): bindings must be present and the sta-guards
  * plugin wired — OpenCode's headless default posture is allow-all (planning/v2
- * spike §7), so a workspace without the plugin would run unguarded.
+ * spike §7), so a workspace without the plugin would run unguarded. T-V5-008
+ * moves the plugin half into the shared guard verdict and makes the partial
+ * coverage explicit about which guards do and do not run here.
  */
-export function opencodeReadiness(targetRoot: string): RuntimeReadiness {
+export function opencodeReadiness(targetRoot: string, coverage: GuardCoverage): RuntimeReadiness {
   const md = countFiles(path.join(targetRoot, ".claude", "agents"), ".md");
   const agents = countFiles(path.join(targetRoot, ".opencode", "agent"), ".md");
   if (md === 0) return { ready: false, detail: "no agent sources synced yet — run software-team-agents sync" };
   if (agents < md) return { ready: false, detail: `${agents}/${md} bindings generated — run software-team-agents sync` };
-  const pluginPath = path.join(targetRoot, ".opencode", "plugin", "sta-guards.js");
-  if (!fs.existsSync(pluginPath)) {
-    return { ready: false, detail: `no .opencode/plugin/sta-guards.js — guards unwired (OpenCode's default is allow-all); run software-team-agents sync` };
-  }
-  return { ready: true, detail: `${agents} binding(s) match ${md} agent source(s), plugin wired` };
+  if (!guardCoverageIsPositive(coverage)) return { ready: false, detail: coverage.detail };
+  return { ready: true, detail: `${agents} binding(s) match ${md} agent source(s); ${coverage.detail}` };
 }
 
 export function gatherStatus(options: { targetRoot?: string; templatesDir?: string; installationConfigPath?: string } = {}): TargetStatus {
@@ -324,9 +326,11 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     hooksInstalled: guardWiring.hooksInstalled,
     hooksRegistered: guardWiring.hooksRegistered,
     knowledgeBoundButUninitialized,
-    claude: claudeReadiness(roots.targetRoot, guardWiring),
-    codex: codexReadiness(roots.targetRoot),
-    opencode: opencodeReadiness(roots.targetRoot),
+    // T-V5-008 — every runtime's readiness is decided by the same verdict
+    // function, so none of them can report READY without one.
+    claude: claudeReadiness(roots.targetRoot, guardCoverage({ runtime: "claude", targetRoot: roots.targetRoot, wiring: guardWiring })),
+    codex: codexReadiness(roots.targetRoot, guardCoverage({ runtime: "codex", targetRoot: roots.targetRoot })),
+    opencode: opencodeReadiness(roots.targetRoot, guardCoverage({ runtime: "opencode", targetRoot: roots.targetRoot })),
     v3Configuration: v3ExecutionStatus(config, staConfig),
   };
 }

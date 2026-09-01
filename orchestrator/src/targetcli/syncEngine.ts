@@ -5,8 +5,13 @@ import { BINDING_RENDERINGS, COMMAND_RENDERINGS, isAgentBindingRendering, loadCo
 import { parseVersion } from "./version.js";
 import {
   CLAUDE_MD_PATH,
+  GITIGNORE_PATH,
+  gitignoreAlreadyCovers,
   inspectBootstrapBlock,
+  inspectGitignoreBlock,
   KNOWLEDGE_ROOT_INCLUDE_PATH,
+  MANAGED_GITIGNORE_PATHS,
+  renderGitignoreBlock,
   renderKnowledgeInclude,
   renderWorkspaceClaude,
   resolveDevKnowledgeRoot,
@@ -24,7 +29,7 @@ import {
   type TargetStackConfig,
 } from "./targetMeta.js";
 import { CLAUDE_SETTINGS_PATH, mergeFrameworkGuards } from "./guardSettings.js";
-import { BA_WORKSPACE_AGENTS, resolveTargetBinding, type WorkspaceRole } from "./roleWorkspace.js";
+import { BA_WORKSPACE_AGENTS, resolveTargetBinding, runtimesForWorkspace, type WorkspaceRole, type WorkspaceRuntime } from "./roleWorkspace.js";
 import { missingInstructionConsequence } from "../threeRepo/ownership.js";
 import { planTargetProfile } from "./targetProfile.js";
 import { renderStackDigest, STACK_DIGEST_RELATIVE_PATH } from "../profile/stackDigest.js";
@@ -58,6 +63,10 @@ const DERIVED_RENDERINGS = BINDING_RENDERINGS.filter(isAgentBindingRendering).ma
 export const AGENTS_MD_PATH = "AGENTS.md";
 /** Same for the prompt-shortcut renderings (`.opencode/commands`, `.agents/skills`), generated from `.claude/commands`. */
 const DERIVED_COMMAND_RENDERINGS = COMMAND_RENDERINGS.map((spec) => ({ ...spec, note: "generated from .claude/commands" }));
+
+function runtimeForRenderingDir(dir: string): WorkspaceRuntime {
+  return dir.startsWith(".codex/") || dir.startsWith(".agents/") ? "codex" : "opencode";
+}
 
 export type SyncAction = "add" | "update" | "restore" | "remove-stale" | "unchanged" | "override";
 
@@ -281,10 +290,78 @@ function planStaleFiles(
 }
 
 /**
+ * T-V5-006 — the managed `.gitignore` block. The framework writes the
+ * version-control decision for its machine-local paths (`.workflow/`,
+ * `.agent-team/backups/`) into a marked block of the workspace's `.gitignore`
+ * — the same marker-block ownership model CLAUDE.md/AGENTS.md already use, so
+ * sync updates it, conflicts surface like any other edited block, and status
+ * plans it like any other managed contribution. The file itself stays
+ * project-owned: everything outside the markers is never read for planning and
+ * never written.
+ *
+ * A path the project already ignores is not listed again — the block says so
+ * in a comment instead. Entries live in {@link MANAGED_GITIGNORE_PATHS}
+ * (knowledgeRender.ts); this block deliberately does NOT yet list derived
+ * renderings or policies — those join through T-V5-018/T-V5-016 after their
+ * regeneration guarantees are proven.
+ */
+function planGitignoreBlock(
+  targetRoot: string,
+  oldBlockHashes: ReadonlyMap<string, string>,
+  overrides: ReadonlySet<string>,
+): PlannedFile {
+  if (overrides.has(GITIGNORE_PATH)) {
+    return { entry: { action: "override", path: GITIGNORE_PATH, note: "claimed by the project — sync leaves it alone" } };
+  }
+  const abs = path.join(targetRoot, GITIGNORE_PATH);
+  const current = fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : undefined;
+  if (current === undefined) {
+    return { entry: { action: "add", path: GITIGNORE_PATH, note: "write managed .gitignore block" } };
+  }
+  const inspected = inspectGitignoreBlock(current);
+  if (inspected.state === "malformed") {
+    return {
+      conflict: {
+        path: GITIGNORE_PATH,
+        kind: "malformed-framework-block",
+        detail: `${inspected.detail}; file left untouched — restore the latest backup or repair the marker pair manually`,
+      },
+    };
+  }
+  if (inspected.state === "absent") {
+    return { entry: { action: "update", path: GITIGNORE_PATH, note: "append managed .gitignore block; project rules preserved" } };
+  }
+  const expectedBlock = renderGitignoreBlock(
+    MANAGED_GITIGNORE_PATHS.filter((managedPath) => gitignoreAlreadyCovers(inspected.outside, managedPath)),
+  );
+  const expectedHash = sha256Of(expectedBlock);
+  const currentHash = sha256Of(inspected.block);
+  const previousHash = oldBlockHashes.get(GITIGNORE_PATH);
+  if (previousHash === undefined) {
+    return currentHash === expectedHash
+      ? { entry: { action: "unchanged", path: GITIGNORE_PATH, note: "project file already carries the current Framework block" } }
+      : { conflict: { path: GITIGNORE_PATH, kind: "user-modified", detail: "an untracked sta:gitignore block already exists with different bytes; restore/remove it manually before sync" } };
+  }
+  if (currentHash !== previousHash && currentHash !== expectedHash) {
+    return {
+      conflict: {
+        path: GITIGNORE_PATH,
+        kind: "user-modified",
+        detail: "the project edited inside the Framework .gitignore markers; restore the block from backup or re-run with --force",
+      },
+    };
+  }
+  return { entry: { action: currentHash === expectedHash ? "unchanged" : "update", path: GITIGNORE_PATH, note: "Framework .gitignore block only; project rules preserved" } };
+}
+
+/**
  * A project-owned CLAUDE.md is not a managed file, so its Framework block is
  * absent from `oldFiles`. When a later payload no longer supplies CLAUDE.md,
  * plan removal of that block through the ordinary stale lifecycle instead of
  * leaving an orphaned contribution behind.
+ *
+ * The `.gitignore` block is exempt: it is not payload-derived, so it can never
+ * go stale no matter what the template payload does.
  */
 function planStaleFrameworkBlocks(
   targetRoot: string,
@@ -295,6 +372,7 @@ function planStaleFrameworkBlocks(
   const newPathSet = new Set(templateManifest.files.map((file) => file.path));
   const planned: PlannedFile[] = [];
   for (const [relPath, trackedHash] of oldBlockHashes) {
+    if (relPath === GITIGNORE_PATH || relPath === AGENTS_MD_PATH) continue;
     if (newPathSet.has(relPath)) continue;
     if (overrides.has(relPath)) {
       planned.push({ entry: { action: "override", path: relPath, note: "Framework block kept because the project claimed this path" } });
@@ -491,6 +569,7 @@ export function planSync(options: PlanSyncOptions): SyncPlan {
     ...planPayloadFiles(options.targetRoot, options.templatesDir, templateManifest, oldFiles, overrides, oldBlockHashes, options.derivedContent, options.confirmAgentsPointer),
     ...planStaleFiles(options.targetRoot, templateManifest, oldFiles, overrides, options.derivedContent),
     ...planStaleFrameworkBlocks(options.targetRoot, templateManifest, oldBlockHashes, overrides),
+    planGitignoreBlock(options.targetRoot, oldBlockHashes, overrides),
   ];
 
   const conflicts = planned.map((p) => p.conflict).filter((c): c is SyncConflict => c !== undefined);
@@ -597,6 +676,12 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
       })
     : undefined;
   const config = profilePlan && originalConfig ? { ...originalConfig, stack: profilePlan.stack } : originalConfig;
+  // A direct engine caller without workspace metadata is the historical
+  // framework-fixture contract: render every family. Real init/sync calls
+  // always supply config or a manifest, where T-V5-007's selected set applies.
+  const activeRuntimes = config || manifest
+    ? new Set(runtimesForWorkspace(config, manifest))
+    : new Set<WorkspaceRuntime>(["claude", "codex", "opencode"]);
   const derived = devDerivedContent({
     targetRoot: options.targetRoot,
     templatesDir: options.templatesDir,
@@ -618,6 +703,7 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
       .map((f) => path.basename(f.path, ".md")),
   );
   for (const spec of DERIVED_RENDERINGS) {
+    if (!activeRuntimes.has(runtimeForRenderingDir(spec.dir))) continue;
     for (const [relPath, tracked] of oldFiles) {
       if (!relPath.startsWith(`${spec.dir}/`) || !relPath.endsWith(spec.fileExtension)) continue;
       const role = path.basename(relPath, spec.fileExtension);
@@ -645,6 +731,7 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
       .map((f) => path.basename(f.path, ".md")),
   );
   for (const spec of DERIVED_COMMAND_RENDERINGS) {
+    if (!activeRuntimes.has(runtimeForRenderingDir(spec.dir))) continue;
     for (const [relPath, tracked] of oldFiles) {
       if (!relPath.startsWith(`${spec.dir}/`)) continue;
       const underDir = relPath.slice(spec.dir.length + 1);
@@ -661,6 +748,23 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
           detail: "this generated file's command source was removed, but the local copy has been edited",
         });
       }
+    }
+  }
+  // An explicit runtime narrowing removes only renderings the manifest proves
+  // pristine. A locally edited binding is a normal stale conflict — never a
+  // silent deletion — exactly like every other profile drop.
+  const unselectedPrefixes = [
+    ...DERIVED_RENDERINGS.filter((spec) => !activeRuntimes.has(runtimeForRenderingDir(spec.dir))).map((spec) => `${spec.dir}/`),
+    ...DERIVED_COMMAND_RENDERINGS.filter((spec) => !activeRuntimes.has(runtimeForRenderingDir(spec.dir))).map((spec) => `${spec.dir}/`),
+  ];
+  for (const [relPath, tracked] of oldFiles) {
+    if (!unselectedPrefixes.some((prefix) => prefix.endsWith("/") ? relPath.startsWith(prefix) : relPath === prefix)) continue;
+    const abs = path.join(options.targetRoot, relPath);
+    if (!fs.existsSync(abs)) continue;
+    if (hashFile(abs) === tracked.sha256) {
+      plan.entries.push({ action: "remove-stale", path: relPath, note: "binding for an unselected runtime" });
+    } else {
+      plan.conflicts.push({ path: relPath, kind: "stale-modified", detail: "binding belongs to a runtime no longer selected, but local bytes were edited" });
     }
   }
   // Only tracked-but-edited (and stale-modified) files block the run; a
@@ -813,6 +917,7 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
   // no independent authorship, so they never conflict with the Framework — but a
   // foreign pre-existing file at the destination stays untouched and unclaimed.
   for (const spec of DERIVED_RENDERINGS) {
+    if (!activeRuntimes.has(runtimeForRenderingDir(spec.dir))) continue;
     for (const agentFile of templateManifest.files.filter((f) => f.path.startsWith(".claude/agents/") && f.path.endsWith(".md"))) {
       const role = path.basename(agentFile.path, ".md");
       const sourceAbs = path.join(options.targetRoot, ".claude", "agents", `${role}.md`);
@@ -854,6 +959,7 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     }
     if (guardrailsRules !== "") {
       for (const spec of DERIVED_COMMAND_RENDERINGS) {
+        if (!activeRuntimes.has(runtimeForRenderingDir(spec.dir))) continue;
         for (const name of commandNames) {
           let rendered: Map<string, string>;
           try {
@@ -954,6 +1060,8 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
   // project files receive only the delimited block. A whole-file reduction is
   // possible only for an exact CLAUDE.md duplicate and the dedicated explicit
   // confirmation option; --force does not broaden that authority.
+  // AGENTS.md is the shared bootstrap pointer, not a Codex binding. Only the
+  // `.agents/` skill directory is runtime-specific.
   if (derivedContent?.has(AGENTS_MD_PATH)) {
     const rendered = derivedContent.get(AGENTS_MD_PATH)!;
     const relPath = AGENTS_MD_PATH;
@@ -1007,6 +1115,46 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
       fs.rmSync(abs);
       performed.push({ action: "remove-stale", path: conflict.path, note: "roster drift — agent prompt from another workspace role" });
     }
+  }
+
+  // T-V5-006 — apply the single managed contribution to the project-owned
+  // `.gitignore`. Only the marked range is ours: bytes outside it are retained
+  // verbatim, and the hash recorded below lets the next sync detect a hand edit
+  // rather than replacing it. A file without a final newline receives the
+  // block before its original bytes so no project byte is altered just to make
+  // room for a marker line.
+  const plannedGitignore = plan.entries.find((entry) => entry.path === GITIGNORE_PATH);
+  if (plannedGitignore?.action === "override") {
+    performed.push(plannedGitignore);
+  } else if (plannedGitignore) {
+    const gitignoreAbs = path.join(options.targetRoot, GITIGNORE_PATH);
+    const current = fs.existsSync(gitignoreAbs) ? fs.readFileSync(gitignoreAbs, "utf8") : undefined;
+    const inspected = current === undefined ? { state: "absent" as const } : inspectGitignoreBlock(current);
+    // A malformed/user-modified block cannot reach apply unless --force was
+    // requested. Even then it remains a conflict by design, so this guards an
+    // impossible state rather than guessing at project-owned text.
+    if (inspected.state !== "valid" && inspected.state !== "absent") {
+      throw new Error("malformed .gitignore block reached apply after preflight");
+    }
+    const outside = inspected.state === "valid" ? inspected.outside : (current ?? "");
+    const block = renderGitignoreBlock(
+      MANAGED_GITIGNORE_PATHS.filter((managedPath) => gitignoreAlreadyCovers(outside, managedPath)),
+    );
+    const next = inspected.state === "valid"
+      ? current!.replace(inspected.block, block)
+      : current === undefined || current === ""
+        ? block
+        : current.endsWith("\n")
+          ? `${current}${block}`
+          : `${block}${current}`;
+    if (next !== current) {
+      if (current !== undefined) backup(GITIGNORE_PATH);
+      fs.writeFileSync(gitignoreAbs, next, "utf8");
+      performed.push({ ...plannedGitignore, action: current === undefined ? "add" : "update" });
+    } else {
+      performed.push({ ...plannedGitignore, action: "unchanged" });
+    }
+    frameworkBlocks.push({ path: GITIGNORE_PATH, sha256: sha256Of(block) });
   }
 
   // Stale block cleanup — remove only the delimited range that the block hash

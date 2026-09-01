@@ -114,6 +114,8 @@ export const TargetConfigSchema = z.object({
   registered_at: z.string().min(1),
   /** Which role's workspace this repository is (T-ROLE-01). Absent in configs from before this field existed — commands then detect or require --role. */
   role: z.enum(["ba", "dev"]).optional(),
+  /** Runtime bindings materialised in this workspace. Absent is a pre-V5 config. */
+  runtimes: z.array(z.enum(["claude", "codex", "opencode"])).min(1).optional(),
   /** T-ROLE-06 — repo-relative (or absolute) path binding to the team's Knowledge repo, committed with this workspace. */
   knowledge: z.object({ path: z.string().min(1) }).optional(),
   /** T-LV1 — repo-relative (or absolute) path binding to a Target repo, committed with a Knowledge workspace. Optional and read-only: BA never requires it. */
@@ -178,7 +180,7 @@ export function inspectTargetConfigAsPreV3(targetRoot: string): TargetConfigComp
 }
 
 export function defaultTargetConfig(targetId: string, now: string, role?: "ba" | "dev"): TargetConfig {
-  return { schema_version: 1, target_id: targetId, registered_at: now, overrides: [], role };
+  return { schema_version: 1, target_id: targetId, registered_at: now, overrides: [], role, runtimes: ["claude"] };
 }
 
 export function loadTargetConfig(targetRoot: string): TargetConfig | undefined {

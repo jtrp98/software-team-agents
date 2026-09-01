@@ -44,6 +44,15 @@ describe("validateInstallation", () => {
     const result = validateInstallation(project);
     expect(result.ok).toBe(false);
     expect(result.problems[0]).toContain(".sta");
+    expect(result.problems[0]).toContain("software-team-agents init");
+  });
+
+  it("T-V5-004: a workspace with neither manifest reports one actionable problem naming the current installer", () => {
+    const project = tmpDir("sta-validate-empty-");
+    const result = validateInstallation(project);
+    expect(result.ok).toBe(false);
+    expect(result.problems).toHaveLength(1);
+    expect(result.problems[0]).toContain("software-team-agents init");
   });
 
   it("T-V5-002 (characterization — red until T-V5-004): an .agent-team-only workspace counts as installed", () => {
@@ -74,7 +83,10 @@ describe("validateInstallation", () => {
     const result = validateInstallation(project);
     expect(result.ok).toBe(true);
     expect(result.problems).toEqual([]);
-    expect(result.notes).toEqual([]);
+    // T-V5-004: the legacy layout keeps validating but names itself as legacy —
+    // a deliberate wording change from the previous "no notes at all".
+    expect(result.layout).toBe("sta");
+    expect(result.notes.join("\n")).toContain("legacy .sta/ layout");
   });
 
   it("notes a user-modified file rather than treating it as a problem", () => {

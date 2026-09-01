@@ -105,8 +105,8 @@ for (const flag of [
   run(`checker ${flag}`, `${distCli} ${flag}`, { quiet: true });
 }
 
-// Installation check, the way CI runs it: against a freshly-init'd project,
-// not the framework repo itself (which is a dev checkout, not a sta project).
+// T-V5-004 — installation check, the way CI runs it: against a freshly
+// initialized `.agent-team/` workspace, not the Framework repo itself.
 {
   const tmpInit = fs.mkdtempSync(path.join(os.tmpdir(), "sta-gate-install-"));
   try {
@@ -115,9 +115,12 @@ for (const flag of [
       JSON.stringify({ name: "sta-installation-check", private: true, scripts: { build: "tsc", test: "node --test" } }, null, 2),
     );
     fs.writeFileSync(path.join(tmpInit, "package-lock.json"), JSON.stringify({ name: "sta-installation-check", lockfileVersion: 3 }));
+    // The Target installer deliberately requires a repository-shaped source
+    // workspace. This is a marker only (no git command is run by the gate).
+    fs.mkdirSync(path.join(tmpInit, ".git"));
     run(
       "initialize installation-check fixture",
-      [q("node"), q(path.join(repoRoot, "orchestrator", "dist", "cli.js")), "init", "--mode", "legacy-project", "--templates", q(path.join(repoRoot, "templates")), "--project-root", q(tmpInit)].join(" "),
+      [q("node"), q(path.join(repoRoot, "orchestrator", "dist", "targetcli", "cli.js")), "init", "--role", "dev", "--target-root", q(tmpInit)].join(" "),
       { quiet: true, timeoutMs: 120_000 },
     );
     run("checker --check-installation (fresh init)", `${distCli} --check-installation --project-root ${q(tmpInit)}`, { quiet: true });

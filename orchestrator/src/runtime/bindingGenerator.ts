@@ -2,6 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { renderStackDigest, stackDigestPath } from "../profile/stackDigest.js";
 import { inspectBootstrapBlock } from "../targetcli/knowledgeRender.js";
+import { isTargetInitialized, loadTargetConfig, readTargetManifest } from "../targetcli/targetMeta.js";
+import { runtimesForWorkspace, type WorkspaceRuntime } from "../targetcli/roleWorkspace.js";
 
 /**
  * The role-binding generator (OFF10 M2 / OFF03 P7): one role definition,
@@ -529,6 +531,12 @@ function checkRenderingSet(
 export function checkBindings(projectRoot: string): BindingCheckResult {
   const problems: string[] = [];
   const claudeDir = path.join(projectRoot, ".claude", "agents");
+  const config = loadTargetConfig(projectRoot);
+  const manifest = isTargetInitialized(projectRoot) ? readTargetManifest(projectRoot) : undefined;
+  // A non-workspace fixture keeps the historical all-renderings contract; an
+  // initialized workspace checks exactly its recorded runtime set.
+  const runtimes = config || manifest ? new Set(runtimesForWorkspace(config, manifest)) : new Set<WorkspaceRuntime>(["claude", "codex", "opencode"]);
+  const renderingRuntime = (dir: string): WorkspaceRuntime => dir.startsWith(".codex/") || dir.startsWith(".agents/") ? "codex" : "opencode";
 
   const mdRoles = listRoles(claudeDir);
   if (mdRoles.length === 0) {
@@ -536,6 +544,8 @@ export function checkBindings(projectRoot: string): BindingCheckResult {
   }
 
   for (const spec of BINDING_RENDERINGS) {
+    if (spec.kind === "root-file" && !runtimes.has("codex")) continue;
+    if (spec.kind === "agent-set" && !runtimes.has(renderingRuntime(spec.dir))) continue;
     if (spec.kind === "agent-set") {
       checkRenderingSet(projectRoot, claudeDir, mdRoles, spec, problems);
       continue;
@@ -597,7 +607,8 @@ export function checkBindings(projectRoot: string): BindingCheckResult {
         guardrailsRules = "";
       }
       if (guardrailsRules !== "") {
-        for (const spec of COMMAND_RENDERINGS) {
+      for (const spec of COMMAND_RENDERINGS) {
+        if (!runtimes.has(renderingRuntime(spec.dir))) continue;
           checkCommandRenderingSet(projectRoot, claudeCommandsDir, names, guardrailsRules, spec, problems);
         }
       }

@@ -63,7 +63,12 @@ export function exitCodeFor(report: DoctorReport): number {
 }
 
 export interface DoctorOptions {
-  /** Project whose .sta/, .claude and state store are examined. Absent = those checks report skipped-by-scope rather than guessed. */
+  /**
+   * Project whose installation metadata, .claude and state store are examined.
+   * T-V5-005: absent = the repository the user is standing in (process.cwd());
+   * when that is genuinely not an initialised workspace, the project-scoped
+   * checks report skipped-by-scope rather than guessed.
+   */
   projectRoot?: string;
   /** Overrides where the installation config is read from (tests; unusual setups). */
   installationConfigPath?: string;
@@ -94,7 +99,23 @@ export interface DoctorOptions {
 
 export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [];
-  const projectRoot = options.projectRoot;
+  // T-V5-005 — `sta doctor` with no flags diagnoses the repository the user is
+  // standing in. An explicit --project-root stays an override, not a
+  // requirement. When the resulting root is genuinely not an initialised
+  // workspace, the project-scoped checks say so instead of failing on absence.
+  const projectRoot = options.projectRoot ?? process.cwd();
+  const projectRootLooksLikeWorkspace =
+    isTargetInitialized(projectRoot) || fs.existsSync(path.join(projectRoot, ".sta", "manifest.json"));
+  // An explicit root retains the established diagnostic contract: inspect it
+  // even when its metadata is incomplete, so callers receive its actionable
+  // configuration errors. The no-flag path is different: a bare cwd is not
+  // guessed to be a workspace and is reported as skipped-by-scope.
+  const projectScopeEnabled = options.projectRoot !== undefined || projectRootLooksLikeWorkspace;
+  const projectScopeSkip = (what: string): DoctorCheckBody => ({
+    status: "WARNING" as const,
+    detail: `skipped — ${projectRoot} is not an initialised workspace (no .agent-team/ or .sta/ metadata), so ${what} was not examined`,
+    fix: "run software-team-agents init inside the workspace, or re-run with --project-root <path>",
+  });
   let instructionSurface: InstructionSurfaceEntry[] = [];
   const configureFix = "run: sta configure knowledge-root <path>";
 
@@ -124,12 +145,18 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
   const naDetail = "n/a — this project IS the Knowledge root; framework internals stay out by design";
 
   checks.push(
-    check("Framework installation (.sta/)", "run: sta init --mode <mode> --templates <dir> --project-root <path>", () => {
-      if (!projectRoot) return { status: "WARNING", detail: "no --project-root given — .sta/state/guard checks skipped", fix: "re-run with --project-root <path>" };
+    check("Framework installation", "run: software-team-agents init inside the workspace", () => {
+      if (!projectScopeEnabled) return projectScopeSkip("the installation metadata");
       if (sameRealPath(projectRoot, boundKnowledgeRoot)) return { status: "PASS", detail: naDetail };
       const result = validateInstallation(projectRoot);
       if (result.problems.length > 0) return { status: "FAIL", detail: result.problems.join("; ") };
-      return { status: "PASS", detail: `${path.join(projectRoot, ".sta")} valid` };
+      return {
+        status: "PASS",
+        detail:
+          result.layout === "sta"
+            ? `${path.join(projectRoot, ".sta")} valid (legacy layout)`
+            : `${path.join(projectRoot, ".agent-team")} valid`,
+      };
     }),
   );
 
@@ -207,7 +234,11 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
   checks.push(
     await (async (): Promise<DoctorCheck> => {
       const name = "Runtime capabilities (claims vs this install)";
-      const fix = "run: sta init --force to restore bindings and guard wiring";
+      // T-V5-005: the previous remediation here was `sta init --force`, which in
+      // a BA workspace materialises the full DEV payload — the destructive
+      // legacy-installer habit this check must never prescribe. The sync
+      // lifecycle restores bindings and guard wiring without touching roles.
+      const fix = "run: software-team-agents sync to restore bindings and guard wiring";
       try {
         if (!options.capabilities) {
           return { name, status: "WARNING", detail: "skipped — no capability check wired by the caller", fix };
@@ -234,7 +265,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
     await (async (): Promise<DoctorCheck> => {
       const name = "State store (.workflow/state.db)";
       const fix = "ensure the project directory is writable, then re-run this check";
-      if (!projectRoot) return { name, status: "WARNING", detail: "skipped — no --project-root given", fix };
+      if (!projectScopeEnabled) return { name, ...projectScopeSkip("the state store") };
       const file = path.join(projectRoot, ".workflow", "state.db");
       // Read-only: a doctor that creates state.db on the machine it only
       // examines would violate its own never-mutates contract.
@@ -257,7 +288,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
 
   checks.push(
     check("Guard wiring (.claude/settings.json)", "run: software-team-agents sync to restore hook wiring", () => {
-      if (!projectRoot) return { status: "WARNING", detail: "skipped — no --project-root given" };
+      if (!projectScopeEnabled) return projectScopeSkip("guard wiring");
       if (sameRealPath(projectRoot, boundKnowledgeRoot)) return { status: "PASS", detail: naDetail };
       let manifest: TargetManifest | undefined;
       try {
@@ -288,7 +319,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
 
   checks.push(
     check("V3 configuration", "fix the V3 blocks in .sta/config.yaml or .agent-team/config.yaml", () => {
-      if (!projectRoot) return { status: "WARNING", detail: "skipped — no --project-root given", fix: "re-run with --project-root <path>" };
+      if (!projectScopeEnabled) return projectScopeSkip("V3 configuration");
       let staConfig: ReturnType<typeof loadStaConfig> | undefined;
       let targetConfig: TargetConfig | undefined;
       try {
@@ -316,7 +347,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
     }),
   );
 
-  if (projectRoot) {
+  if (projectScopeEnabled) {
     let frameworkPaths = new Set<string>();
     try {
       if (isTargetInitialized(projectRoot)) {
@@ -341,6 +372,13 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
       // Guard wiring check above reports the actionable problem.
     }
     instructionSurface = detectInstructionSurface({ targetRoot: projectRoot, frameworkPaths });
+    // T-V5-005 — these files' bytes are managed by no command (they are npm
+    // housekeeping that exists only beside the OpenCode plugin), so prescribing
+    // `sync` for them names a recovery that cannot apply. The ownership
+    // classification itself is T-V5-022's; until then the warning stays, the
+    // dead fix text does not.
+    const managedByNoCommand = (entry: InstructionSurfaceEntry): boolean =>
+      entry.precedence === "framework-managed" && ["package.json", "package-lock.json", ".gitignore"].includes(path.posix.basename(entry.path));
     for (const entry of instructionSurface) {
       const contributionExpected = entry.precedence !== "project-owned-untouched";
       const nestedWarning = isNestedInstruction(entry);
@@ -355,11 +393,13 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
         fix:
           status === "PASS"
             ? undefined
-            : nestedWarning
-              ? "review this project-owned instruction beside the root bootstrap; doctor remains read-only"
-            : entry.precedence === "framework-managed"
-              ? "run: software-team-agents sync"
-              : "review prompt-setup.md section: Merging with the project's existing Claude setup",
+            : managedByNoCommand(entry)
+              ? undefined
+              : nestedWarning
+                ? "review this project-owned instruction beside the root bootstrap; doctor remains read-only"
+                : entry.precedence === "framework-managed"
+                  ? "run: software-team-agents sync"
+                  : "review prompt-setup.md section: Merging with the project's existing Claude setup",
       });
     }
 

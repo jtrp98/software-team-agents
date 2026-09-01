@@ -182,6 +182,56 @@ describe("runDoctor (T166)", () => {
     expect(violations).toEqual([]);
   });
 
+  it("T-V5-005: an instruction-surface path no command manages produces no Fix: line", async () => {
+    const workspace = path.join(base, "opencode-workspace");
+    fs.mkdirSync(workspace, { recursive: true });
+    gitInit(workspace);
+    fs.mkdirSync(path.join(workspace, ".agent-team"), { recursive: true });
+    fs.writeFileSync(
+      path.join(workspace, ".agent-team", "manifest.json"),
+      JSON.stringify({ schema_version: 1, framework_version: "0.0.0-doctor-test", installed_at: NOW, updated_at: NOW, files: [] }),
+    );
+    fs.writeFileSync(
+      path.join(workspace, ".agent-team", "config.yaml"),
+      `schema_version: 1\ntarget_id: ${path.basename(workspace)}\nregistered_at: ${NOW}\nrole: ba\noverrides: []\n`,
+    );
+    fs.mkdirSync(path.join(workspace, ".opencode"), { recursive: true });
+    fs.writeFileSync(path.join(workspace, ".opencode", "package.json"), '{"dependencies":{"@opencode-ai/plugin":"1.x"}}\n');
+    fs.writeFileSync(configPath, `schema_version: 1\nknowledge_root: ${JSON.stringify(workspace)}\n`);
+
+    const report = await runDoctor({ projectRoot: workspace, installationConfigPath: configPath, probe: passingProbe });
+    const entry = report.checks.find((c) => c.name === "Instruction surface: .opencode/package.json");
+    expect(entry).toBeDefined();
+    expect(entry!.status).toBe("WARNING"); // classification stays (T-V5-022's); the dead fix text does not
+    expect(entry!.fix).toBeUndefined();
+  });
+
+  it("T-V5-005: the sta init --force remediation is replaced by the sync lifecycle everywhere", async () => {
+    const report = await runDoctor({ installationConfigPath: path.join(base, "missing.yaml"), probe: passingProbe });
+    for (const c of report.checks) {
+      expect(`${c.name}\n${c.detail ?? ""}\n${c.fix ?? ""}`).not.toContain("sta init --force");
+    }
+  });
+
+  it("T-V5-005: a cwd that is not an initialised workspace reports skipped-by-scope, not failures", async () => {
+    const bare = path.join(base, "bare-directory");
+    fs.mkdirSync(bare, { recursive: true });
+    const originalCwd = process.cwd();
+    process.chdir(bare);
+    let report: Awaited<ReturnType<typeof runDoctor>>;
+    try {
+      report = await runDoctor({ installationConfigPath: path.join(base, "missing.yaml"), probe: passingProbe });
+    } finally {
+      process.chdir(originalCwd);
+    }
+    const scoped = report.checks.filter((c) => ["Framework installation", "State store (.workflow/state.db)", "Guard wiring (.claude/settings.json)", "V3 configuration"].includes(c.name));
+    expect(scoped.length).toBe(4);
+    for (const c of scoped) {
+      expect(c.status).toBe("WARNING");
+      expect(c.detail).toContain("is not an initialised workspace");
+    }
+  });
+
   it("does not leak configuration file contents into any detail or fix text", async () => {
     const secretMarker = "SUPER_SECRET_TOKEN_VALUE_12345";
     fs.mkdirSync(path.join(knowledgeRoot, ".git"), { recursive: true });

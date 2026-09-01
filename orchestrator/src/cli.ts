@@ -259,7 +259,7 @@ export const USAGE =
   "  sta --check-plan [--module <name>] [--project-root <path>]  validate every module's plan.md as a task DAG (deps/cycle/owner/status/DES/waves)\n" +
   "  sta --check-knowledge [--project-root <path>]      check knowledge/*.yaml against its schema and cross-links\n" +
   "  sta --build-templates <out-dir> [--project-root <path>]  snapshot framework template files + manifest.json (T90) into <out-dir>\n" +
-  "  sta --check-installation [--project-root <path>]   check .sta/manifest.json and .sta/config.yaml against the project's real files (T98) — needs an initialized Target (.sta/ exists); fails on a bare Framework checkout by design\n" +
+  "  sta --check-installation [--project-root <path>]   check .agent-team/manifest.json (or legacy .sta/) against the project's real files (T98) — needs an initialized workspace; fails on a bare Framework checkout by design\n" +
   "  sta --check-roles [--project-root <path>]          check each role workspace's watermark against knowledge/ (T99)\n" +
   "  sta --version                                      show the Framework version this CLI runs\n" +
   "run/retry exit codes: 0 deployed · 1 blocked · 2 unknown gate · 3 rejected by a person · 4 parked — a gate awaits `sta approve <task-id> --yes|--no`\n" +

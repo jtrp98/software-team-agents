@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
 import type { TemplateManifest } from "../packaging/templateManifest.js";
+import type { TargetConfig, TargetManifest } from "./targetMeta.js";
 
 /**
  * T-ROLE-01 / T-ROLE-02 — the Role Workspace model.
@@ -21,6 +22,17 @@ import type { TemplateManifest } from "../packaging/templateManifest.js";
 
 /** Where an interactive workspace runs and which managed payload it receives. */
 export type WorkspaceRole = "ba" | "dev";
+export type WorkspaceRuntime = "claude" | "codex" | "opencode";
+
+/** T-V5-007 — the recorded set wins; a pre-V5 manifest with non-Claude
+ * renderings is conservatively treated as an opt-in to every existing runtime. */
+export function runtimesForWorkspace(config: TargetConfig | undefined, manifest?: TargetManifest): readonly WorkspaceRuntime[] {
+  if (config?.runtimes?.length) return config.runtimes;
+  const legacyBindings = manifest?.files.some((file) =>
+    file.path.startsWith(".codex/") || file.path.startsWith(".opencode/") || file.path.startsWith(".agents/"),
+  );
+  return legacyBindings ? ["claude", "codex", "opencode"] : ["claude"];
+}
 
 export const WORKSPACE_ROLE_LABEL: Record<WorkspaceRole, string> = {
   ba: "BA",

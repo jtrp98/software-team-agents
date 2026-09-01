@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { sha256Of } from "../packaging/templateManifest.js";
 import { runTargetCli } from "./cli.js";
+import { runTargetInit } from "./initCommand.js";
 import { isInsideFrameworkRoot, resolveFrameworkRoot, resolveRoots } from "./roots.js";
 import { devPreflight, runBa, runDev } from "./devCommand.js";
 import { loadTargetConfig, readTargetManifest, writeTargetConfig, writeTargetManifest, defaultTargetConfig } from "./targetMeta.js";
@@ -13,7 +14,7 @@ import { defaultStateDbPath } from "../store/stateView.js";
 import { runDoctor } from "../threeRepo/doctor.js";
 import type { InstructionSurfaceEntry } from "../threeRepo/ownership.js";
 import { stringify as stringifyYaml } from "yaml";
-import { inspectBootstrapBlock, stripBootstrapBlock } from "./knowledgeRender.js";
+import { inspectBootstrapBlock, inspectGitignoreBlock, stripBootstrapBlock } from "./knowledgeRender.js";
 
 /**
  * T-TARGET-18/19/20 + T-ROLE-22..26 — end-to-end tests against temporary
@@ -218,7 +219,7 @@ describe("software-team-agents — target-first end to end", () => {
     expect(inspected.state).toBe("valid");
     if (inspected.state !== "valid") throw new Error("expected a valid bootstrap block");
     expect(sha256Of(Buffer.from(inspected.outside))).toBe(sha256Of(Buffer.from(original)));
-    expect(readTargetManifest(target).framework_blocks).toHaveLength(1);
+    expect(readTargetManifest(target).framework_blocks?.some((entry) => entry.path === "CLAUDE.md")).toBe(true);
     const firstBackup = fs.readdirSync(path.join(target, ".agent-team", "backups"))[0]!;
     expect(fs.readFileSync(path.join(target, ".agent-team", "backups", firstBackup, "CLAUDE.md"), "utf8")).toBe(original);
 
@@ -287,7 +288,9 @@ describe("software-team-agents — target-first end to end", () => {
     expect(run.code).toBe(0);
     expect(run.out).toMatch(/override|explicit user choice|skipped/i);
     expect(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8")).toBe(projectBytes);
-    expect(readTargetManifest(target).framework_blocks).toBeUndefined();
+    expect(readTargetManifest(target).framework_blocks).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: ".gitignore" })]),
+    );
   });
 
   it("T-V3-06: removing CLAUDE.md from the payload strips only the tracked block and restores exact original bytes", async () => {
@@ -300,7 +303,9 @@ describe("software-team-agents — target-first end to end", () => {
     const removed = await capture(() => runTargetCli(["sync"], target, fwV2, { installationConfigPath: NO_INSTALLATION }));
     expect(removed.code).toBe(0);
     expect(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8")).toBe(original);
-    expect(readTargetManifest(target).framework_blocks).toBeUndefined();
+    expect(readTargetManifest(target).framework_blocks).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: ".gitignore" })]),
+    );
     const backups = fs
       .readdirSync(path.join(target, ".agent-team", "backups"))
       .map((dir) => path.join(target, ".agent-team", "backups", dir, "CLAUDE.md"))
@@ -680,7 +685,8 @@ describe("software-team-agents — target-first end to end", () => {
     writeTargetConfig(target, cfg);
 
     // `sync` reconciles it through a block without claiming project prose ...
-    expect((await capture(() => runTargetCli(["sync"], target, fw))).code).toBe(0);
+    const repeat = await capture(() => runTargetCli(["sync"], target, fw));
+    expect(repeat.code, repeat.out).toBe(0);
     expect(stripBootstrapBlock(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8"))).toBe("# the project's own instructions\n");
 
     // ... so preflight must agree and remain ready.
@@ -689,6 +695,88 @@ describe("software-team-agents — target-first end to end", () => {
     expect(managed?.ok).toBe(true);
     expect(managed?.detail).toContain("up to date");
     expect(stripBootstrapBlock(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8"))).toBe("# the project's own instructions\n");
+  });
+
+  it("T-V5-006: init owns only a marked .gitignore block, preserves project bytes, and refuses edited or malformed blocks", async () => {
+    const target = makeTarget();
+    // No final newline exercises the preservation branch: original bytes must
+    // remain literally unchanged outside the Framework marker range.
+    const projectIgnore = "node_modules/\n# project rule without a trailing newline";
+    write(target, ".gitignore", projectIgnore);
+    const fw = fakeFramework("3.1.0", [{ relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer") }]);
+
+    expect((await capture(() => runTargetCli(["init"], target, fw))).code).toBe(0);
+    const ignorePath = path.join(target, ".gitignore");
+    const installed = fs.readFileSync(ignorePath, "utf8");
+    const block = inspectGitignoreBlock(installed);
+    expect(block).toMatchObject({ state: "valid", outside: projectIgnore });
+    expect(block.state === "valid" ? block.block : "").toContain(".workflow/");
+    expect(block.state === "valid" ? block.block : "").toContain(".agent-team/backups/");
+    expect(block.state === "valid" ? block.block : "").toContain("does NOT untrack");
+    expect(readTargetManifest(target).framework_blocks?.some((entry) => entry.path === ".gitignore")).toBe(true);
+
+    // The current block remains byte-identical after a normal re-sync.
+    const repeat = await capture(() => runTargetCli(["sync"], target, fw));
+    expect(repeat.code, repeat.out).toBe(0);
+    expect(fs.readFileSync(ignorePath, "utf8")).toBe(installed);
+
+    fs.writeFileSync(ignorePath, installed.replace(".workflow/", ".workflow-local/"), "utf8");
+    const edited = await capture(() => runTargetCli(["sync"], target, fw));
+    expect(edited.code).toBe(2);
+    expect(edited.err).toContain(".gitignore");
+    expect(fs.readFileSync(ignorePath, "utf8")).toContain(".workflow-local/");
+
+    fs.writeFileSync(ignorePath, installed.replace("# sta:gitignore-end", "# sta:gitignore-end-broken"), "utf8");
+    const malformed = await capture(() => runTargetCli(["sync"], target, fw));
+    expect(malformed.code).toBe(2);
+    expect(malformed.err).toContain("malformed");
+  });
+
+  it("T-V5-007: default init has Claude only; explicit Codex opt-in materialises both Claude and Codex bindings", async () => {
+    const files = [{ relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer") }];
+    const fw = fakeFramework("3.1.0", files);
+    const defaultTarget = makeTarget();
+    expect((await capture(() => runTargetCli(["init"], defaultTarget, fw))).code).toBe(0);
+    expect(fs.existsSync(path.join(defaultTarget, ".codex"))).toBe(false);
+    expect(fs.existsSync(path.join(defaultTarget, ".opencode"))).toBe(false);
+    expect(fs.existsSync(path.join(defaultTarget, ".agents"))).toBe(false);
+
+    const codexTarget = makeTarget();
+    expect((await capture(() => runTargetCli(["init", "--runtime", "codex"], codexTarget, fw))).code).toBe(0);
+    expect(loadTargetConfig(codexTarget)?.runtimes).toEqual(["claude", "codex"]);
+    expect(fs.existsSync(path.join(codexTarget, ".claude", "agents", "backend-engineer.md"))).toBe(true);
+    expect(fs.existsSync(path.join(codexTarget, ".codex", "agents", "backend-engineer.toml"))).toBe(true);
+    expect(fs.existsSync(path.join(codexTarget, ".opencode"))).toBe(false);
+
+    // Pre-V5 manifests have no runtime list. If they already track bindings
+    // for every runtime, that history is the opt-in: a normal sync must retain
+    // all three until the user explicitly writes a narrower list.
+    const legacyTarget = makeTarget();
+    expect(
+      (await capture(() => runTargetCli(["init", "--runtime", "codex", "--runtime", "opencode"], legacyTarget, fw))).code,
+    ).toBe(0);
+    const { runtimes: _removedRuntimeList, ...legacyConfig } = loadTargetConfig(legacyTarget)!;
+    writeTargetConfig(legacyTarget, legacyConfig);
+    expect((await capture(() => runTargetCli(["sync"], legacyTarget, fw))).code).toBe(0);
+    expect(fs.existsSync(path.join(legacyTarget, ".codex", "agents", "backend-engineer.toml"))).toBe(true);
+    expect(fs.existsSync(path.join(legacyTarget, ".opencode", "agent", "backend-engineer.md"))).toBe(true);
+
+    // Narrowing is ordinary stale-pristine removal; an edited rendering stops
+    // the operation instead of being erased.
+    const narrowed = loadTargetConfig(codexTarget)!;
+    writeTargetConfig(codexTarget, { ...narrowed, runtimes: ["claude"] });
+    expect((await capture(() => runTargetCli(["sync"], codexTarget, fw))).code).toBe(0);
+    expect(fs.existsSync(path.join(codexTarget, ".codex", "agents", "backend-engineer.toml"))).toBe(false);
+
+    const conflictTarget = makeTarget();
+    expect((await capture(() => runTargetCli(["init", "--runtime", "codex"], conflictTarget, fw))).code).toBe(0);
+    const conflictConfig = loadTargetConfig(conflictTarget)!;
+    writeTargetConfig(conflictTarget, { ...conflictConfig, runtimes: ["claude"] });
+    const binding = path.join(conflictTarget, ".codex", "agents", "backend-engineer.toml");
+    fs.appendFileSync(binding, "# local edit\n");
+    const narrowedConflict = await capture(() => runTargetCli(["sync"], conflictTarget, fw));
+    expect(narrowedConflict.code).toBe(2);
+    expect(fs.readFileSync(binding, "utf8")).toContain("# local edit");
   });
 });
 
@@ -727,8 +815,9 @@ describe("role workspace architecture (T-ROLE)", () => {
     expect(fs.existsSync(path.join(knowledge, ".claude", "agents", "backend-engineer.md"))).toBe(false);
     expect(fs.existsSync(path.join(knowledge, "contracts"))).toBe(false);
     expect(fs.existsSync(path.join(knowledge, "workflows"))).toBe(false);
-    // Codex renderings follow the included roster only.
-    expect(fs.existsSync(path.join(knowledge, ".codex", "agents", "business-analyst.toml"))).toBe(true);
+    // T-V5-007: Claude is the sole default runtime; no other binding family
+    // is materialised until the workspace explicitly opts in.
+    expect(fs.existsSync(path.join(knowledge, ".codex", "agents", "business-analyst.toml"))).toBe(false);
     expect(fs.existsSync(path.join(knowledge, ".codex", "agents", "backend-engineer.toml"))).toBe(false);
 
     // The Knowledge repo's own content survived untouched.
@@ -1278,6 +1367,62 @@ describe("role workspace architecture (T-ROLE)", () => {
     // ...and neither Knowledge nor Framework changed at all.
     expect(JSON.stringify([...dirHash(knowledge).entries()].sort())).toBe(knowledgeBefore);
     expect(JSON.stringify([...dirHash(fw).entries()].sort())).toBe(fwBefore);
+  });
+
+  it("T-V5-009: DEV offers an explicit sibling Knowledge binding, while headless runs remain fail-closed", async () => {
+    const siblings = tmpRoot("knowledge-binding-siblings");
+    const target = path.join(siblings, "app");
+    const knowledge = path.join(siblings, "knowledge");
+    fs.mkdirSync(path.join(target, ".git"), { recursive: true });
+    write(target, "package.json", '{"name":"app"}\n');
+    write(target, "package-lock.json", '{"lockfileVersion":3}\n');
+    fs.mkdirSync(path.join(knowledge, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(knowledge, "knowledge"));
+    write(knowledge, "targets.yaml", "schema_version: 1\ntargets: []\n");
+    const fw = fakeFramework("1.0.0", FW_V1_FILES);
+    const acceptedPath = path.join(siblings, "accepted-installation.yaml");
+    const initialized = await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: acceptedPath }));
+    expect(initialized.code, initialized.err).toBe(0);
+
+    let launched = false;
+    await expect(runDev({
+      targetRoot: target,
+      templatesDir: path.join(fw, "templates"),
+      installationConfigPath: acceptedPath,
+      probe: () => ({ available: true }),
+      confirmKnowledgeBinding: async (candidate) => candidate === knowledge,
+      launch: () => { launched = true; return Promise.resolve(0); },
+    })).resolves.toBe(0);
+    expect(launched).toBe(true);
+    expect(configureKnowledgeRoot).toBeTypeOf("function");
+    expect(fs.readFileSync(acceptedPath, "utf8")).toContain(knowledge);
+
+    const headlessPath = path.join(siblings, "headless-installation.yaml");
+    fs.rmSync(acceptedPath);
+    await expect(runDev({
+      targetRoot: target,
+      templatesDir: path.join(fw, "templates"),
+      installationConfigPath: headlessPath,
+      probe: () => ({ available: true }),
+      launch: () => Promise.resolve(0),
+    })).resolves.toBe(1);
+    expect(fs.existsSync(headlessPath)).toBe(false);
+  });
+
+  it("T-V5-010: init reports the shared runtime prerequisite without refusing initialization", () => {
+    const target = makeTarget();
+    const fw = fakeFramework("1.0.0", FW_V1_FILES);
+    const result = runTargetInit({
+      targetRoot: target,
+      templatesDir: path.join(fw, "templates"),
+      now: "2026-09-01T00:00:00.000Z",
+      probe: () => ({ available: false, detail: "runtime deliberately absent" }),
+    });
+    expect(result.sync.frameworkVersion).toBe("1.0.0");
+    expect(result.prerequisites).toEqual([expect.objectContaining({
+      name: "Runtime (claude)", ok: false, detail: "runtime deliberately absent", fix: "install claude and make sure it is on PATH",
+    })]);
+    expect(fs.existsSync(path.join(target, ".agent-team", "manifest.json"))).toBe(true);
   });
 
   it("workspaces registered under one role refuse the other command (write-policy clarity)", async () => {
