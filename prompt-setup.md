@@ -174,6 +174,15 @@ already said):
   rerun with `--stack <name>`; otherwise ask nothing about the stack.
 - Verify: Workspace role `DEV`, Knowledge line present via `workspace-config`/`installation`,
   sync `UP_TO_DATE`, runtimes READY.
+- **The bootstrap's `Context:` line is a shell command, not a reference.** The
+  synced `AGENTS.md`/`CLAUDE.md` tells the runtime to execute
+  `$AGENTCLAUDE_CONTEXT_CMD <role> --module <name> --phase <n>` — a real command
+  to run, not a name to notice and move on from. A weaker model can still read
+  right past it and grep local files for module context instead; if you see that
+  happen, run the command yourself and paste the result in, or tell the user
+  plainly that this runtime isn't following the instruction. If the variable is
+  empty, the session was not launched via `software-team-agents dev`/`ba` — say
+  so rather than substituting a local-file search.
 - **No analysis prompts here, by design.** A DEV/Target workspace carries only
   the engineer roster (`backend/frontend-engineer`, `qa-engineer`, `security`,
   `devops`). The BA-workspace prompts — including `uxui-designer` — are deliberately

@@ -56,12 +56,13 @@ describe("the shipped decisions/", () => {
       "ADR-008-plan-graph-promote.md",
       "ADR-021-shared-agent-preamble.md",
       "ADR-022-per-phase-model-tier.md",
+      "ADR-023-v4-framework-feature-freeze.md",
     ]);
   });
 
   it("all load and validate against the schema", () => {
     const adrs = loadAllAdrs();
-    expect(adrs).toHaveLength(10);
+    expect(adrs).toHaveLength(11);
     for (const adr of adrs) {
       expect(adr.frontmatter.status).toBe("accepted");
     }

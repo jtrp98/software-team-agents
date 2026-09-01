@@ -92,7 +92,7 @@ project.yaml            ← stack profile ของ project นี้ (current v
 |---|---|
 | `single` | **default**. ใช้ runner เดียวจาก `--runtime`, `execution.runner`, หรือ `claude-code` ตามลำดับ; ไม่ hand off |
 | `auto` | opt-in ด้วย `--mode auto`, `execution.mode: auto`, หรือการประกาศ `routing.strategy`/`routing.order` โดยไม่กำหนด mode; เดิน candidate order เฉพาะเมื่อ runner คืน `UNAVAILABLE`. `ERROR`/`TIMEOUT` ไม่ trigger fallback |
-| `manual` | opt-in; ต้องมี runner **และ model** ชัดเจนต่อ role ใน `routing.by_role` หรือ legacy `model_routing`. `--runtime` ไม่มี `--model` คู่ใน CLI จึงไม่พอสำหรับ strict Manual |
+| `manual` | opt-in; ต้องมี runner **และ model** ชัดเจนต่อ role ใน `routing.by_role` หรือ legacy `model_routing`. `--runtime` และ `--model` เป็น explicit per-run override; strict Manual ยังต้องมี route ที่ resolve ได้ |
 
 Routing precedence ที่ implementation ใช้คือ `--runtime` → `routing.by_role` (เหนือ `model_routing`) → `routing.order`/`routing.strategy` → default `claude-code`; candidate ต้อง registered, available, มี capability ที่ stage ต้องใช้ และ automatic routing ไป runtime ต่ำกว่า `supported` ต้อง opt in ราย runtime ผ่าน `routing.allow_below_supported`. `--runtime <id>` โดยไม่มี `--mode` รักษา behavior เดิมด้วยการหมายถึง Single.
 
@@ -107,8 +107,11 @@ V3 flags ที่ `sta run` รับจริง:
 | `--no-qa-optimization` | กลับไปใช้ executor QA แบบก่อน optimization สำหรับ task นี้; ไม่ใช่ QA skip |
 | `--no-deterministic-gate` | explicit escape hatch ปิด deterministic pre-check สำหรับ task นี้; default gate เปิด |
 | `--token-budget <n>` | positive integer, post-hoc task token ceiling; ไม่ใช่ pre-spawn context cap |
+| `--model <name>` | explicit model override สำหรับ run นี้ และทำให้ mode เป็น Single เมื่อไม่ได้ระบุ `--mode`; runtime ปฏิเสธ model ที่มันใช้ไม่ได้ |
 
 ดู surface ทั้งหมดที่ build นี้รับจริงด้วย `sta --help`, runtime/support จริงด้วย `sta runtimes`, และผล routing/fallback ที่บันทึกด้วย `sta status <task-id>` / `sta audit <task-id>`.
+
+สิ่งที่ V4 **ไม่เปลี่ยน**: routing ยังมี precedence เดิมห้าระดับ, runtime contracts ยังเป็น adapter contracts เดิม, และ ContextManager ยังเลือก context แบบ conservative เดิม (unknown section ถูกเก็บไว้).
 
 ## Setup playbooks (`prompt-setup.md`)
 
@@ -452,6 +455,8 @@ sta configure identity --figma-email <email> --claude-email <email>
 - **Validation flags** — `sta --check-*` 16 ตัว: `contracts, layout, workflows, profile, decisions, test-pyramid, review-separation, escalation-policy, workspace, repos, environments, doc-structure, plan, knowledge, installation, roles` (+ `--check-bindings` มีใน CLI แต่ไม่ได้ wire ใน CI). `--check-plan [--module <name>]` ตรวจตาราง task ของทุก `plan.md` เป็น dependency graph แบบ deterministic (duplicate id / dangling·self·duplicate dependency / cycle / owner·status ผิด / DES traceability / wave ordering) — pm-improvements T-PM1.3. `--check-workspace` ตรวจสองเรื่องที่ไม่เกี่ยวกัน: `workspace.yaml` (multi-project grouping, T41) และ misplaced-docs scan (T-WG4) — `role: dev` workspace ที่มี `_docs/module/**` หรือ Modules table ใน `status.md` โดนรายงานพร้อม hint ปลายทางใน Knowledge repo
 - **doctor** — `sta doctor --project-root <path>` รวม 9 checks แบบ read-only (installation, knowledge binding/schema, targets registry, local mappings, runtime adapter, state store, guard wiring) exit 1 เมื่อมี FAIL พร้อม "Fix:" ทุกข้อ
 - **Audit trail** — `sta audit <task-id>`
+
+  `sta audit` และ `sta tokens` ใช้ run record เดียวกัน: `estimated_input_tokens` คือประมาณการจาก context, `effort` คือ reasoning effort ของ agent/runtime และต่างจาก `qa_effort` ของ QA risk gate.
 - **Backup/Rollback** — role-aware sync backup ที่ `.agent-team/backups/<ts>/`; legacy upgrade/migrate snapshot ที่ `.sta/backups/` คืนได้ด้วย `sta rollback` / `sta list-backups`
 
 - **Profile-aware static analysis** — `.claude/scripts/static-analysis-gate.js` reads the resolved Target's `stack.commands`, scans only its declared source roots/extensions, and reports `unverified` (exit 2) when every verification command is skipped. With no resolved profile, the legacy Node/package-script report remains unchanged. The gate is offline and never installs a toolchain.
@@ -532,7 +537,31 @@ verification:
   baseline: [unit]
 ```
 
+### Pre-spawn context budget และ telemetry (V4)
+
+`context_budget` เป็น optional และ omission หรือ config ที่ใช้ไม่ได้จะ resolve เป็น `mode: warn` เสมอ จึงคง behaviour เดิมไว้: วัดและรายงาน overflow แต่ไม่แก้ prompt และไม่ปฏิเสธ stage. เลือก `mode: reject` ได้เฉพาะ project ที่ต้องการหยุดก่อน spawn เมื่อเกิน budget. `roles` และ `model_context_windows` เป็นเพดานหน่วย character; `max_context_estimated_tokens` เป็นเพดานประมาณการ input token เพิ่มเติม ไม่แทนที่ character threshold.
+
+```yaml
+context_budget:
+  mode: warn                          # default; observation only
+  roles:
+    qa-engineer: 120000               # prompt characters
+  model_context_windows:
+    opus: 180000                      # prompt characters
+  max_context_estimated_tokens: 45000 # approximate input-token ceiling
+```
+
+ทุก run record ใหม่มี `estimated_input_tokens` จาก `context_chars` แบบ deterministic และ `effort` ของ model/runner ที่เลือกไว้. ทั้งสอง field แสดงใน `sta tokens` และอยู่ในข้อมูลที่ `sta audit <task-id>` ใช้อธิบาย run. `effort` ไม่ใช่ `qa_effort`: ค่าแรกคือ reasoning effort ของ agent/runtime ส่วน `qa_effort` คือระดับงานของ QA risk gate.
+
+### Tier ต่อ phase และ camp ที่เลือกตอนเริ่มงาน
+
+รายการ `T-V4-CAST-003` ถึง `006` ship แล้ว: [`model-tiers.yaml`](model-tiers.yaml) เป็นตารางที่ human-owned ซึ่ง map Tier ไปยัง model/effort ของแต่ละ camp; cells ข้าม camp เป็น approximation ที่คนเลือก ไม่ใช่ claim ว่า model เท่ากัน. `plan.md` จึงใส่ optional phase-level `Tier` ได้เฉพาะ implementation และ QA phase (T2–T6; T1 reserved). มันไม่เก็บ runtime, model หรือ fallback ordering.
+
+camp ถูกเลือกตอนเริ่ม dev phase: explicit runtime/camp หรือ configured camp ชนะเสมอ; ถ้าไม่มีทั้งคู่ prompt จะปรากฏเฉพาะ terminal ที่มี TTY และ headless run ใช้ configured default โดยไม่ถาม stdin. การเลือก camp นี้ไม่ใช่ automatic quota fallback และไม่มี camp question ตอนเขียน plan.
+
 ค่าที่ **OFF by default** และ V3 ไม่เปิดให้เอง: Auto (config ว่าง resolve เป็น `single`; การเพิ่ม `routing.strategy`/`routing.order` ถือเป็น opt-in เช่นกัน) · pyramid enforcement (`test-pyramid.yaml` omitted `enforcement` = `warn`) · QA `skip` (production CLI ไม่มี flag/config เปิด; low-risk QA ยังเป็น `lightweight`) · paid fallback (`execution.allow_paid_fallback` default `false`). Deterministic gate ตรงข้ามกันคือเปิดโดย default และปิดเฉพาะ task ด้วย `--no-deterministic-gate`.
+
+`context_budget.mode: warn` เป็นค่า default แบบ OFF-by-default สำหรับ enforcement: มันวัดและเตือนเท่านั้น; `reject` ต้อง opt in อย่างชัดเจน.
 
 `stack:` เป็น Target-resolved configuration ที่ engineer prompts และ verification gate ใช้ร่วมกัน ไม่ใช่
 Framework-wide default:
@@ -614,6 +643,8 @@ node ../.claude/tests/run.js   # hook/script self-test — ต้องเขี
 ```
 
 - Release gate: `npm run release:check` (root) รันทุก step ตามลำดับ release. V3 property gates สาม step แยกรันเดี่ยวได้เพื่อ debug: `npm run test:guardrails` (guardrail invariants หกข้อ), `npm run test:modes` (Single/Auto/Manual matrix บน mock runner), `npm run test:paid-fallback` (paid API ไปไม่ถึงเมื่อ `allow_paid_fallback` เป็น false) — ไม่มี step ไหนต้อง login runner จริงหรือรัน dogfood
+- Benchmark gate: `npm run test:benchmark` ตรวจ corpus/oracle ที่ frozen และ regenerate metric/run-ledger reports แบบ deterministic; ไม่ต้อง login runner และไม่เรียก live model
+- **Internal V1 Stable** = P0 → P1 → P2 → P3 → P4 แต่ละ phase ถูก **executed and reported** พร้อม release gate สีเขียว; ไม่ได้แปลว่า P3 ให้ผล favourable. แม้ benchmark พบว่า harness ไม่ช่วยในบางหรือทุก category ก็ยังผ่าน milestone นี้ และเป็นผลลัพธ์เชิงลบที่ valid และ publish ได้
 - CI: [`.github/workflows/agent-framework-ci.yml`](.github/workflows/agent-framework-ci.yml) รัน self-test + typecheck + tests + release-gate `--check-*` flags + template build/init check บนทุก PR และทุก push ไป `master` หรือ `release/**` (default branch `release/dev` รวมอยู่ — release path ไม่มีทาง bypass validation)
 - โครงสร้าง directory ถูกประกาศใน [`layout.yaml`](layout.yaml) และตรวจด้วย `--check-layout` — เพิ่ม folder ใหม่ต้องประกาศก่อน
 - เอกสารกฎ: [`policies/`](policies/README.md) · machine-readable half ของ agent: [`contracts/`](contracts/) · operating/pipeline rules: [`CLAUDE.md`](CLAUDE.md) · Codex root pointer: [`AGENTS.md`](AGENTS.md) · knowledge model: [`knowledge/README.md`](knowledge/README.md) · V1 contract (guarantees/non-goals): [`decisions/ADR-004-v1-contract.md`](decisions/ADR-004-v1-contract.md)
