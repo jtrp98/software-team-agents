@@ -88,13 +88,17 @@ replacement; changing the stack remains a human decision.
 Pick the entry point by the size of the change — but **don't skip a stage the change needs**: a schema
 change bypassing `system-analyst` is the exact failure this pipeline exists to prevent.
 
-| The work is | Start at | Skip |
-|---|---|---|
-| Copy/styling tweak | `backend-engineer` (if it touches the API) → `frontend-engineer` — no QA stage by design (`workflows/typo.yml`; `--check-review-separation` reports this on purpose, it does not fail) | BA, SA, PM, test-planner, `qa-engineer` |
-| A bug where requirement + schema are already clear | engineer → `qa-engineer` | BA, SA, PM, test-planner |
-| Adds or alters a field/table/relation | `system-analyst` (amend) → `test-planner` → engineer → `qa-engineer` (+`security`) | BA, PM |
-| Changes a business rule, no schema impact | `business-analyst` (amend) → `system-analyst` (amend) → `test-planner` → engineer → `qa-engineer` | PM |
-| A new feature, module, or project | `business-analyst`, full chain — even when it also needs new tables: the interview comes first, the schema confirmation after it | nothing |
+| The work is | Start at | Skip | Evidence basis |
+|---|---|---|---|
+| Copy/styling tweak | `backend-engineer` (if it touches the API) → `frontend-engineer` — no QA stage by design (`workflows/typo.yml`; `--check-review-separation` reports this on purpose, it does not fail) | BA, SA, PM, test-planner, `qa-engineer` | **Judgement** — P3 had no typo/copy category. |
+| A bug where requirement + schema are already clear | engineer → `qa-engineer` | BA, SA, PM, test-planner | **Judgement retained; P3 insufficient** — all bug attempts failed the frozen oracle and arm C token totals were not reported. |
+| Adds or alters a field/table/relation | `system-analyst` (amend) → `test-planner` → engineer → `qa-engineer` (+`security`) | BA, PM | **Judgement** — P3 did not isolate schema-change work. |
+| Changes a business rule, no schema impact | `business-analyst` (amend) → `system-analyst` (amend) → `test-planner` → engineer → `qa-engineer` | PM | **Judgement** — P3 did not isolate business-rule work. |
+| A new feature, module, or project | `business-analyst`, full chain — even when it also needs new tables: the interview comes first, the schema confirmation after it | nothing | **Judgement retained; P3 insufficient** — all feature attempts failed the frozen oracle and arm C token totals were not reported. |
 
 `project-manager` earns its run only when there is enough work to phase; one or two tasks go straight
 to an engineer, and `test-planner` goes with it.
+
+P3 did not establish a winning or losing category, so it changes no route. Automatic benchmark-driven
+bypass remains rejected; a future category-level loss would be proposed as a smaller existing-mechanism
+`workflows/*.yml`, not implemented by a new router decision axis.

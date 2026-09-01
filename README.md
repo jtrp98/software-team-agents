@@ -278,18 +278,20 @@ sta run --task-id T-1 --module demo --bug-fix --backend --autonomy edit \
   --project-root C:\src\company-knowledge     # three-repo mode: project-root คือ Knowledge root
 ```
 
-| flag | workflow | chain |
-|---|---|---|
-| `--typo` | `typo.yml` (TRIVIAL) | engineer เท่านั้น ไม่มี QA |
-| `--bug-fix` | `bugfix.yml` (SMALL) | engineer → QA (+security เมื่อ sensitive) |
-| `--incremental` | `incremental.yml` (MEDIUM) | — |
-| `--business-rule` | `business-rule.yml` (MEDIUM) | BA → SA → engineer → QA |
-| `--new-feature` | `feature.yml` (LARGE_CRITICAL) | BA → SA → PM → test-planner → engineer → QA (full chain) |
-| `--schema` | `schema-change.yml` (LARGE_CRITICAL) | SA → test-planner → engineer → QA |
-| `--deploy` | `deploy.yml` | + devops, gated |
-| (flags เสริม) | `hotfix.yml`, `refactor.yml`, `security-fix.yml`, `triage.yml` | classifier เลือกตาม signal/priority |
+| flag | workflow | chain | ฐานหลักฐาน right-sizing |
+|---|---|---|---|
+| `--typo` | `typo.yml` (TRIVIAL) | engineer เท่าน ไม่มี QA | **Judgement** — P3 ไม่มีหมวด typo/copy |
+| `--bug-fix` | `bugfix.yml` (SMALL) | engineer → QA (+security เมื่อ sensitive) | **Judgement retained; P3 insufficient** — bug ทุก attempt ไม่ผ่าน frozen oracle และ C-token ไม่ถูกรายงาน |
+| `--incremental` | `incremental.yml` (MEDIUM) | — | **Judgement** — P3 ไม่ได้แยก incremental workflow |
+| `--business-rule` | `business-rule.yml` (MEDIUM) | BA → SA → engineer → QA | **Judgement** — P3 ไม่ได้แยก business-rule workflow |
+| `--new-feature` | `feature.yml` (LARGE_CRITICAL) | BA → SA → PM → test-planner → engineer → QA (full chain) | **Judgement retained; P3 insufficient** — feature ทุก attempt ไม่ผ่าน frozen oracle และ C-token ไม่ถูกรายงาน |
+| `--schema` | `schema-change.yml` (LARGE_CRITICAL) | SA → test-planner → engineer → QA | **Judgement** — P3 ไม่ได้แยก schema-change workflow |
+| `--deploy` | `deploy.yml` | + devops, gated | **Judgement** — P3 ไม่มี deploy task |
+| (flags เสริม) | `hotfix.yml`, `refactor.yml`, `security-fix.yml`, `triage.yml` | classifier เลือกตาม signal/priority | **Judgement retained; P3 insufficient** — refactor/investigation ไม่มี oracle pass/C-token; hotfix/security ไม่ถูกทดลอง |
 
 flag เสริมได้แก่ `--sensitive`, `--backend`, `--frontend` — step ภายใน workflow ถูกเลือกด้วย `when:` (เช่น `touchesBackend`) ตามที่ประกาศในไฟล์ workflow เอง
+
+P3 ไม่ได้พิสูจน์ว่าหมวดใดชนะหรือแพ้ จึงไม่เปลี่ยน route และไม่สร้าง automatic bypass; ถ้าหลักฐานในอนาคตพบหมวดที่แพ้ ให้เสนอ `workflows/*.yml` ที่สั้นลงผ่านกลไกเดิม ไม่เพิ่ม decision axis ใน router
 
 pipeline ที่มี design phase (`--new-feature`, `--schema`, `--business-rule`, `--incremental`) รัน **`uxui-designer` ก่อน `frontend-engineer`** เสมอ (T-UX11); typo/bugfix/hotfix/refactor/security-fix ไม่มี uxui step — frontend work level TRIVIAL/SMALL จึงไม่โดน UX-artifact gate (T-UX12)
 
