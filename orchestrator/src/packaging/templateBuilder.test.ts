@@ -3,8 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { buildTemplates } from "./templateBuilder.js";
-import { checkTemplateManifest, sha256Of } from "./templateManifest.js";
+import { buildTemplates, compareTemplateSnapshot } from "./templateBuilder.js";
+import { checkTemplateManifest, payloadDigest, sha256Of } from "./templateManifest.js";
 
 const NOW = "2026-08-20T09:00:00Z";
 const roots: string[] = [];
@@ -77,6 +77,7 @@ describe("buildTemplates", () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(outDir, "manifest.json"), "utf8"));
     const claude = manifest.files.find((f: { path: string }) => f.path === "CLAUDE.md");
     expect(claude.sha256).toBe(sha256Of("# rules\n"));
+    expect(manifest.payload_digest).toBe(payloadDigest(manifest.files));
   });
 
   it("is deterministic — re-running produces byte-identical copies and the same hashes", () => {
@@ -85,6 +86,17 @@ describe("buildTemplates", () => {
     const first = buildTemplates(root, outDir, "2026-01-01T00:00:00Z");
     const second = buildTemplates(root, outDir, "2026-06-01T00:00:00Z");
     expect(second.manifest.files).toEqual(first.manifest.files);
+  });
+
+  it("T-V5-014: reports a changed source by name without rebuilding the snapshot", () => {
+    const root = fixtureRepo();
+    const outDir = path.join(root, "out");
+    buildTemplates(root, outDir, NOW);
+    const snapshotBefore = fs.readFileSync(path.join(outDir, "CLAUDE.md"), "utf8");
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "# changed source\n", "utf8");
+
+    expect(compareTemplateSnapshot(root, outDir)).toEqual([{ path: "CLAUDE.md", kind: "changed" }]);
+    expect(fs.readFileSync(path.join(outDir, "CLAUDE.md"), "utf8")).toBe(snapshotBefore);
   });
 
   it("throws a clear error when orchestrator/package.json has no version", () => {

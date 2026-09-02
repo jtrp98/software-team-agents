@@ -9,7 +9,7 @@ import {
   loadTargetConfig,
   readTargetManifest,
 } from "./targetMeta.js";
-import { blockingConflicts, devDerivedContent, planSync, projectOwnedPaths, runTargetSync } from "./syncEngine.js";
+import { blockingConflicts, devDerivedContent, pendingSyncEntries, planSync, projectOwnedPaths, runTargetSync } from "./syncEngine.js";
 import { sameMajor } from "./version.js";
 import {
   assetsForRole,
@@ -337,13 +337,18 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
     }
     const owned = projectOwnedPaths(plan);
     const ownedNote = owned.length > 0 ? `; ${owned.length} project-owned path(s) left alone: ${owned.join(", ")}` : "";
-    const needsSync = plan.entries.some((e) => ["add", "update", "restore", "remove-stale"].includes(e.action));
-    if (needsSync) {
+    const pending = pendingSyncEntries(plan);
+    if (pending.length > 0) {
+      const named = pending.slice(0, 10).map((entry) => `${entry.action}: ${entry.path}`).join(", ");
+      const remainder = pending.length > 10 ? `, ... ${pending.length - 10} more` : "";
       if (options.autoSync === false) {
-        fail("Managed files", "managed assets are outdated — run software-team-agents sync, or drop --no-auto-sync");
+        fail("Managed files", `managed assets are outdated (${named}${remainder}) — run software-team-agents sync, or drop --no-auto-sync`);
       }
-      runTargetSync({ targetRoot: roots.targetRoot, templatesDir, manifest, config, include: assetsForRole(role), role, installationConfigPath: options.installationConfigPath, now: options.now ?? new Date().toISOString() });
-      checks.push({ name: "Managed files", ok: true, detail: `auto-synced to Framework ${plan.frameworkVersion}${ownedNote}` });
+      const result = runTargetSync({ targetRoot: roots.targetRoot, templatesDir, manifest, config, include: assetsForRole(role), role, installationConfigPath: options.installationConfigPath, now: options.now ?? new Date().toISOString() });
+      const changed = result.performed.filter((entry) => entry.action !== "unchanged" && entry.action !== "override");
+      const changedNames = changed.slice(0, 10).map((entry) => `${entry.action}: ${entry.path}`).join(", ");
+      const changedRemainder = changed.length > 10 ? `, ... ${changed.length - 10} more` : "";
+      checks.push({ name: "Managed files", ok: true, detail: `auto-synced to Framework ${plan.frameworkVersion}; changed ${changed.length}: ${changedNames}${changedRemainder}${ownedNote}` });
     } else {
       checks.push({ name: "Managed files", ok: true, detail: `up to date${ownedNote}` });
     }

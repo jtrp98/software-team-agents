@@ -130,15 +130,15 @@ for (const flag of [
 }
 
 // --- 4 · templates snapshot & version consistency ----------------------------
-run("templates snapshot regenerates byte-identically", `${distCli} --build-templates templates`, { quiet: true });
 {
-  const dirty = spawnSync("git status --porcelain -- templates", { cwd: repoRoot, encoding: "utf8", shell: true });
   step += 1;
-  if ((dirty.stdout ?? "").trim() === "" && dirty.status === 0) {
-    console.log("[gate] ok — templates/ matches its sources");
+  const { compareTemplateSnapshot } = await import("../orchestrator/dist/packaging/templateBuilder.js");
+  const drift = compareTemplateSnapshot(repoRoot, path.join(repoRoot, "templates"));
+  if (drift.length === 0) {
+    console.log("[gate] ok — templates/ matches its sources (read-only comparison)");
   } else {
     failures.push("templates snapshot drift");
-    console.error(`[gate] FAIL — templates/ drifted from sources:\n${dirty.stdout}`);
+    console.error(`[gate] FAIL — templates/ drifted from sources:\n${drift.map((entry) => `  ${entry.path} (${entry.kind})`).join("\n")}`);
   }
 }
 {

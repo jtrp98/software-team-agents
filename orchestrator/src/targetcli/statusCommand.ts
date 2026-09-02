@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { readTemplateManifest } from "../packaging/templateManifest.js";
+import { payloadDigest, readTemplateManifest } from "../packaging/templateManifest.js";
 import { resolveRoots } from "./roots.js";
 import {
   isTargetInitialized,
@@ -10,7 +10,7 @@ import {
   type TargetManifest,
   type TargetStackConfig,
 } from "./targetMeta.js";
-import { devDerivedContent, planSync } from "./syncEngine.js";
+import { devDerivedContent, pendingSyncEntries, planSync, type SyncPlanEntry } from "./syncEngine.js";
 import {
   assetsForRole,
   detectWorkspaceKind,
@@ -59,6 +59,10 @@ export interface TargetStatus {
   stackProfileMismatch?: string;
   syncedVersion?: string;
   syncState: SyncState;
+  /** Entries the current plan would write; unchanged and overridden paths are excluded. */
+  syncChanges: SyncPlanEntry[];
+  /** Same-version Framework payload difference; absent means unknown/not applicable. */
+  frameworkPayloadSkew?: boolean;
   /** Managed paths whose on-disk content matches neither pristine nor shipped. */
   conflictCount: number;
   /**
@@ -178,7 +182,9 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
   const templatesDir = options.templatesDir ?? path.join(roots.frameworkRoot, "templates");
   // The payload's own manifest decides what "installed" means — an explicit
   // templates dir (tests, unusual setups) outranks the ambient installation.
-  const frameworkVersion = readTemplateManifest(templatesDir).framework_version;
+  const templateManifest = readTemplateManifest(templatesDir);
+  const frameworkVersion = templateManifest.framework_version;
+  const frameworkPayloadDigest = templateManifest.payload_digest ?? payloadDigest(templateManifest.files);
   const initialized = isTargetInitialized(roots.targetRoot);
 
   const config: TargetConfig | undefined = (() => {
@@ -208,6 +214,8 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
   let rosterDriftPaths: string[] = [];
   let managedFileCount = 0;
   let syncState: SyncState = "NOT_INITIALIZED";
+  let syncChanges: SyncPlanEntry[] = [];
+  let frameworkPayloadSkew: boolean | undefined;
   let frameworkInstructionPaths = new Set<string>();
   let targetManifest: TargetManifest | undefined;
   if (initialized) {
@@ -215,10 +223,12 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     targetManifest = manifest;
     frameworkInstructionPaths = new Set(manifest.files.map((file) => file.path));
     syncedVersion = manifest.framework_version;
+    if (manifest.framework_version === frameworkVersion && manifest.payload_digest !== undefined) {
+      frameworkPayloadSkew = manifest.payload_digest !== frameworkPayloadDigest;
+    }
     managedFileCount = manifest.files.length;
-    syncState = classifySyncState(manifest.framework_version, frameworkVersion);
     try {
-      const conflicts = planSync({
+      const plan = planSync({
         targetRoot: roots.targetRoot,
         templatesDir,
         manifest,
@@ -234,12 +244,20 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
           include: role ? assetsForRole(role) : undefined,
           installationConfigPath: options.installationConfigPath,
         })?.content,
-      }).conflicts;
+      });
+      const incompatible = classifySyncState(manifest.framework_version, frameworkVersion);
+      syncChanges = pendingSyncEntries(plan);
+      // Compatibility always wins: a cross-major payload must never be made to
+      // look like a routine same-major update merely because the plan has work.
+      syncState = incompatible ?? (syncChanges.length > 0 ? "OUTDATED" : "UP_TO_DATE");
+      const conflicts = plan.conflicts;
       conflictCount = conflicts.length;
       projectOwnedPaths = conflicts.filter((c) => c.kind === "untracked-file").map((c) => c.path);
       rosterDriftPaths = conflicts.filter((c) => c.kind === "roster-drift").map((c) => c.path);
     } catch {
-      // An unreadable payload must not make status crash; conflicts stay visible via version drift.
+      // An unreadable payload must not make status crash. Preserve the
+      // compatibility stop, but never claim freshness without a readable plan.
+      syncState = classifySyncState(manifest.framework_version, frameworkVersion) ?? "OUTDATED";
     }
   }
 
@@ -315,6 +333,8 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
         : undefined,
     syncedVersion,
     syncState,
+    syncChanges,
+    frameworkPayloadSkew,
     conflictCount,
     projectOwnedPaths,
     instructionSurface: detectInstructionSurface({
@@ -373,6 +393,15 @@ export function renderStatus(status: TargetStatus): string {
   }
   lines.push("Sync:");
   lines.push(`  state: ${status.syncState}`);
+  if (status.syncChanges.length > 0) {
+    lines.push(`  managed updates available (${status.syncChanges.length}):`);
+    for (const entry of status.syncChanges.slice(0, 10)) lines.push(`    ${entry.action}: ${entry.path}`);
+    if (status.syncChanges.length > 10) lines.push(`    ... ${status.syncChanges.length - 10} more`);
+    lines.push("    run `software-team-agents sync` to apply these managed updates");
+  }
+  if (status.frameworkPayloadSkew) {
+    lines.push("  WARNING: installed Framework payload differs from the payload last synced at this same version");
+  }
   if (status.syncState === "INCOMPATIBLE") {
     lines.push("  installed and synced Framework versions differ in major — review the changelog before re-syncing (sync --force)");
   }

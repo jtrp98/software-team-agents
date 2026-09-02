@@ -7,6 +7,9 @@ import { runInit } from "./initCommand.js";
 import { runUpgrade } from "./upgradeCommand.js";
 import { readInstallManifest } from "./installManifest.js";
 import { NoBackupToRollbackError, listBackups, rollbackSta } from "./rollback.js";
+import { runTargetSync } from "../targetcli/syncEngine.js";
+import { defaultTargetConfig, readTargetManifest, writeTargetConfig } from "../targetcli/targetMeta.js";
+import { gatherStatus } from "../targetcli/statusCommand.js";
 
 const roots: string[] = [];
 function tmpDir(prefix: string): string {
@@ -99,5 +102,51 @@ describe("rollbackSta", () => {
     rollbackSta(project, firstBackup);
     expect(fs.readFileSync(path.join(project, "CLAUDE.md"), "utf8")).toBe("# v1\n");
     expect(readInstallManifest(project).framework_version).toBe("0.1.0");
+  });
+
+  it("T-V5-013: restores a sync file and .agent-team manifest while preserving config overrides", () => {
+    const v1 = fixtureTemplatesDir("1.0.0", { "CLAUDE.md": "# v1\n" });
+    const v2 = fixtureTemplatesDir("1.1.0", { "CLAUDE.md": "# v2\n" });
+    const project = tmpDir("sta-target-rollback-");
+    fs.mkdirSync(path.join(project, ".git"));
+    runTargetSync({ targetRoot: project, templatesDir: v1, now: "2026-08-20T09:00:00Z" });
+    const config = { ...defaultTargetConfig("rollback-target", "2026-08-20T09:00:00Z"), overrides: ["project-owned.md"] };
+    writeTargetConfig(project, config);
+
+    fs.writeFileSync(path.join(project, "CLAUDE.md"), "# local pre-sync edit\n", "utf8");
+    const beforeManifest = fs.readFileSync(path.join(project, ".agent-team", "manifest.json"), "utf8");
+    const beforeStatus = gatherStatus({ targetRoot: project, templatesDir: v2 });
+    const synced = runTargetSync({
+      targetRoot: project,
+      templatesDir: v2,
+      manifest: readTargetManifest(project),
+      config,
+      now: "2026-08-21T09:00:00Z",
+      force: true,
+    });
+    expect(synced.backupDir).toBeTruthy();
+    expect(fs.existsSync(path.join(synced.backupDir!, "manifest.json"))).toBe(true);
+    expect(listBackups(project)).toEqual([path.basename(synced.backupDir!)]);
+
+    rollbackSta(project);
+
+    expect(fs.readFileSync(path.join(project, "CLAUDE.md"), "utf8")).toBe("# local pre-sync edit\n");
+    expect(fs.readFileSync(path.join(project, ".agent-team", "manifest.json"), "utf8")).toBe(beforeManifest);
+    expect(fs.readFileSync(path.join(project, ".agent-team", "config.yaml"), "utf8")).toContain("project-owned.md");
+    const afterStatus = gatherStatus({ targetRoot: project, templatesDir: v2 });
+    expect({ syncState: afterStatus.syncState, conflictCount: afterStatus.conflictCount }).toEqual({
+      syncState: beforeStatus.syncState,
+      conflictCount: beforeStatus.conflictCount,
+    });
+  });
+
+  it("T-V5-013: refuses an old .agent-team snapshot without a manifest before restoring a file", () => {
+    const project = tmpDir("sta-target-old-backup-");
+    const backup = path.join(project, ".agent-team", "backups", "2026-08-20T09-00-00-000Z");
+    writeFiles(backup, { "CLAUDE.md": "# old bytes\n" });
+    writeFiles(project, { "CLAUDE.md": "# current bytes\n" });
+
+    expect(() => rollbackSta(project)).toThrow(/has no manifest\.json.*no file was changed/);
+    expect(fs.readFileSync(path.join(project, "CLAUDE.md"), "utf8")).toBe("# current bytes\n");
   });
 });

@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { readTemplateManifest, sha256Of, type TemplateFileEntry, type TemplateManifest } from "../packaging/templateManifest.js";
+import { payloadDigest, readTemplateManifest, sha256Of, type TemplateFileEntry, type TemplateManifest } from "../packaging/templateManifest.js";
 import { BINDING_RENDERINGS, COMMAND_RENDERINGS, isAgentBindingRendering, loadCommandGuardrails, listCommands, renderAgentsPointer } from "../runtime/bindingGenerator.js";
 import { parseVersion } from "./version.js";
 import {
@@ -496,6 +496,10 @@ export const blockingConflicts = (plan: SyncPlan): SyncConflict[] => plan.confli
 export const projectOwnedPaths = (plan: SyncPlan): string[] =>
   plan.conflicts.filter((c) => !isBlockingConflict(c)).map((c) => c.path);
 
+/** Entries a normal sync would write, in deterministic plan order. */
+export const pendingSyncEntries = (plan: SyncPlan): SyncPlanEntry[] =>
+  plan.entries.filter((entry) => entry.action !== "unchanged" && entry.action !== "override");
+
 export class TargetSyncConflictError extends Error {
   constructor(public readonly plan: SyncPlan) {
     super(
@@ -664,6 +668,7 @@ export function existingTargetManifest(targetRoot: string): TargetManifest | und
  * against nothing.
  */
 export function runTargetSync(options: ApplySyncOptions): SyncResult {
+  const completeTemplateManifest = readTemplateManifest(options.templatesDir);
   const manifest = options.manifest ?? existingTargetManifest(options.targetRoot);
   const originalConfig = options.config ?? loadTargetConfig(options.targetRoot);
   const profilePlan = (options.role ?? originalConfig?.role) === "dev"
@@ -811,6 +816,12 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     if (!backupDir) {
       backupDir = path.join(options.targetRoot, ".agent-team", "backups", options.now.replace(/[:.]/g, "-"));
       fs.mkdirSync(backupDir, { recursive: true });
+      // T-V5-013 — file bytes and their pristine-hash baseline are one
+      // snapshot. Without the old manifest, restoring the files would make the
+      // next plan compare them against the post-sync hashes.
+      if (manifest) {
+        fs.copyFileSync(path.join(options.targetRoot, ".agent-team", "manifest.json"), path.join(backupDir, "manifest.json"));
+      }
     }
     const dest = path.join(backupDir, relPath);
     fs.mkdirSync(path.dirname(dest), { recursive: true });
@@ -1192,6 +1203,10 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     installed_at: manifest?.installed_at ?? options.now,
     updated_at: options.now,
     files: managedEntries,
+    // Framework identity is the complete built payload, not this workspace
+    // role's selected subset. Otherwise BA and DEV would record different
+    // identities for the same checkout and status would report false skew.
+    payload_digest: completeTemplateManifest.payload_digest ?? payloadDigest(completeTemplateManifest.files),
     ...(frameworkBlocks.length > 0 ? { framework_blocks: frameworkBlocks } : {}),
   };
   writeTargetManifest(options.targetRoot, freshManifest);

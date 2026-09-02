@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { exitCodeFor, runDoctor } from "./doctor.js";
+import { buildTemplates } from "../packaging/templateBuilder.js";
 
 const NOW = "2026-08-22T09:00:00Z";
 
@@ -230,6 +231,33 @@ describe("runDoctor (T166)", () => {
       expect(c.status).toBe("WARNING");
       expect(c.detail).toContain("is not an initialised workspace");
     }
+  });
+
+  it("T-V5-014: reports a stale Framework snapshot by source path and stays silent elsewhere", async () => {
+    const framework = path.join(base, "framework");
+    fs.mkdirSync(path.join(framework, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(framework, "orchestrator"), { recursive: true });
+    fs.writeFileSync(path.join(framework, "orchestrator", "package.json"), '{"version":"1.0.0"}\n');
+    fs.writeFileSync(path.join(framework, "CLAUDE.md"), "# snapshot v1\n");
+    buildTemplates(framework, path.join(framework, "templates"), NOW);
+    const builtBefore = fs.readFileSync(path.join(framework, "templates", "CLAUDE.md"), "utf8");
+    fs.writeFileSync(path.join(framework, "CLAUDE.md"), "# snapshot v2\n");
+
+    const stale = await runDoctor({ projectRoot: framework, installationConfigPath: path.join(base, "missing.yaml"), probe: passingProbe });
+    expect(stale.checks.find((entry) => entry.name === "Template snapshot")).toMatchObject({
+      status: "FAIL",
+      detail: expect.stringContaining("CLAUDE.md (changed)"),
+    });
+    expect(fs.readFileSync(path.join(framework, "templates", "CLAUDE.md"), "utf8")).toBe(builtBefore);
+
+    buildTemplates(framework, path.join(framework, "templates"), NOW);
+    const clean = await runDoctor({ projectRoot: framework, installationConfigPath: path.join(base, "missing.yaml"), probe: passingProbe });
+    expect(clean.checks.find((entry) => entry.name === "Template snapshot")).toMatchObject({ status: "PASS" });
+
+    const downstream = path.join(base, "downstream");
+    fs.mkdirSync(downstream, { recursive: true });
+    const outside = await runDoctor({ projectRoot: downstream, installationConfigPath: path.join(base, "missing.yaml"), probe: passingProbe });
+    expect(outside.checks.some((entry) => entry.name === "Template snapshot")).toBe(false);
   });
 
   it("does not leak configuration file contents into any detail or fix text", async () => {

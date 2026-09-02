@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CliUsageError, USAGE, createProductionRuntimeRegistry, parseArgs, productionQaInputs, runCli, watchListing } from "./cli.js";
 import { defaultProjectRoot } from "./agents/agentContract.js";
 import { classifyTask } from "./classification/taskClassifier.js";
@@ -14,6 +14,24 @@ import { AgentStage, TaskState } from "./types.js";
 import type { ExecutionPacket } from "./artifacts/schemas.js";
 import { writeExecutionPacket } from "./state/runtimeArtifacts.js";
 import { RunLog } from "./observability/runLog.js";
+import { runTargetSync } from "./targetcli/syncEngine.js";
+import { resolveFrameworkRoot } from "./targetcli/roots.js";
+
+describe("T-V5-013 live upgrade alias", () => {
+  it("routes an .agent-team workspace through software-team-agents sync without requiring legacy --mode", async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "sta-upgrade-alias-"));
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    try {
+      const templatesDir = path.join(resolveFrameworkRoot(), "templates");
+      runTargetSync({ targetRoot: project, templatesDir, now: "2026-09-01T00:00:00Z" });
+      await expect(runCli(["upgrade", "--project-root", project], project)).resolves.toBe(0);
+      expect(log.mock.calls.flat().join("\n")).toContain("[software-team-agents] synced to Framework");
+    } finally {
+      log.mockRestore();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("parseArgs", () => {
   it("parses required flags and maps classification flags", () => {

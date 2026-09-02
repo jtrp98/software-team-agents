@@ -1,11 +1,37 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { listTemplateFiles } from "./templateSources.js";
-import { buildManifest, readFrameworkVersion, type TemplateManifest } from "./templateManifest.js";
+import { buildManifest, readFrameworkVersion, readTemplateManifest, type TemplateManifest } from "./templateManifest.js";
 
 export interface BuildTemplatesResult {
   manifest: TemplateManifest;
   outDir: string;
+}
+
+export interface TemplateSnapshotDrift {
+  path: string;
+  kind: "missing" | "changed" | "stale";
+}
+
+/** Read-only comparison of authored template sources with the built snapshot. */
+export function compareTemplateSnapshot(repoRoot: string, outDir: string): TemplateSnapshotDrift[] {
+  const sourcePaths = listTemplateFiles(repoRoot);
+  const sourceSet = new Set(sourcePaths);
+  const snapshot = readTemplateManifest(outDir);
+  const drift: TemplateSnapshotDrift[] = [];
+  for (const relPath of sourcePaths) {
+    const source = path.join(repoRoot, ...relPath.split("/"));
+    const built = path.join(outDir, ...relPath.split("/"));
+    if (!fs.existsSync(built)) {
+      drift.push({ path: relPath, kind: "missing" });
+    } else if (!fs.readFileSync(source).equals(fs.readFileSync(built))) {
+      drift.push({ path: relPath, kind: "changed" });
+    }
+  }
+  for (const file of snapshot.files) {
+    if (!sourceSet.has(file.path)) drift.push({ path: file.path, kind: "stale" });
+  }
+  return drift.sort((a, b) => a.path.localeCompare(b.path));
 }
 
 /**

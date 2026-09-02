@@ -570,10 +570,10 @@ describe("T-V3-07 AGENTS.md rendered pointer ownership", () => {
 });
 
 describe("sync-state classification (packaging checklist: READY/OUTDATED/INCOMPATIBLE)", () => {
-  it("distinguishes up-to-date, patch/minor drift, and major incompatibility", () => {
-    expect(classifySyncState("1.2.0", "1.2.0")).toBe("UP_TO_DATE");
-    expect(classifySyncState("1.2.0", "1.3.0")).toBe("OUTDATED");
-    expect(classifySyncState("1.3.0", "1.2.9")).toBe("OUTDATED");
+  it("uses version strings only for the major-version compatibility stop", () => {
+    expect(classifySyncState("1.2.0", "1.2.0")).toBeUndefined();
+    expect(classifySyncState("1.2.0", "1.3.0")).toBeUndefined();
+    expect(classifySyncState("1.3.0", "1.2.9")).toBeUndefined();
     expect(classifySyncState("1.2.0", "2.0.0")).toBe("INCOMPATIBLE");
     expect(classifySyncState("2.0.0", "1.2.0")).toBe("INCOMPATIBLE");
   });

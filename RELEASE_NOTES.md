@@ -33,6 +33,30 @@ Behaviour changes users will feel are listed here as each task lands.
 
   Building a Codex guard mechanism is deliberately out of V5's scope (`ADR-023` feature freeze).
 
+### Update and status
+
+- **`software-team-agents status` now derives freshness from the on-disk sync plan** (`T-V5-011`,
+  audit finding `F-02`). Workspaces whose Framework version string matches but whose managed payload
+  is stale now report `OUTDATED` and name the pending managed paths. A cross-major mismatch remains
+  `INCOMPATIBLE` and takes precedence over ordinary drift. `status` remains read-only.
+- `status` and `doctor` show the managed paths that `sync` would change and the repair command.
+  When `ba` or `dev` auto-syncs before launch, its preflight line now announces the paths it wrote;
+  `--no-auto-sync` stops with the same path list instead of a generic outdated message (`T-V5-012`).
+- `sta list-backups` and `sta rollback` now use the `.agent-team/backups/` snapshots written by the
+  live sync lifecycle. New snapshots pair changed files with the pre-sync manifest; rollback restores
+  both while leaving `.agent-team/config.yaml` and its overrides untouched. Legacy `.sta/` snapshots
+  remain readable during the transition, and `sta upgrade` aliases the live sync path for an
+  `.agent-team` workspace (`T-V5-013`).
+- Template and workspace manifests now carry an optional payload digest derived from their existing
+  file hashes. This lets `status` identify two Framework checkouts that share a version string but
+  ship different bytes. A pre-V5 workspace without the field remains valid and reports the digest as
+  unknown until its next sync; absence is never treated as a mismatch (`T-V5-015`).
+- Synced `policies/` remains present on disk and continues to power `sta policy`, but new workspaces
+  list it in the managed `.gitignore` block because the Framework repository owns those files.
+  **Ignoring does not untrack files already committed:** existing repositories keep their committed
+  copies until a person runs `git rm -r --cached policies/` and commits that version-control change.
+  Sync itself never runs git and never removes the working copies (`T-V5-016`).
+
 ## Internal V1 Stable
 
 **Internal V1 Stable = P0 → P1 → P2 → P3 → P4 each executed and reported,

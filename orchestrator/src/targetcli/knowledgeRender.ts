@@ -175,7 +175,7 @@ export const GITIGNORE_BLOCK_CLOSE = "# sta:gitignore-end";
  * Derived and policy paths join through their own tasks (T-V5-016/T-V5-018) —
  * each addition must first prove sync regenerates what ignoring would hide.
  */
-export const MANAGED_GITIGNORE_PATHS: readonly string[] = [".workflow/", ".agent-team/backups/"];
+export const MANAGED_GITIGNORE_PATHS: readonly string[] = [".workflow/", ".agent-team/backups/", "policies/"];
 
 export function inspectGitignoreBlock(content: string): BootstrapInspection {
   return inspectMarkerBlock(content, GITIGNORE_BLOCK_OPEN, GITIGNORE_BLOCK_CLOSE, "gitignore");

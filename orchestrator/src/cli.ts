@@ -69,6 +69,7 @@ import { exitCodeFor, runDoctor } from "./threeRepo/doctor.js";
 import { validateNewTaskBindings, type TargetBindings } from "./threeRepo/taskBindings.js";
 import { collectMigrationManifest, confirmCutover, copyMigrationSource, readMigrationManifest, transformMigratedKnowledge, verifyMigration, writeMigrationManifest } from "./threeRepo/knowledgeMigration.js";
 import { listBackups, rollbackSta } from "./packaging/rollback.js";
+import { runTargetCli } from "./targetcli/cli.js";
 import { buildPlanGraph, type TaskNode } from "./graph/taskGraph.js";
 import { parsePlanTasks } from "./docs/planGraph.js";
 import type { RuntimeTaskWorkRoot } from "./orchestrator/runtimeTask.js";
@@ -968,6 +969,15 @@ async function runConfigureVerb(rest: string[], frameworkRoot: string): Promise<
 /** `upgrade --templates <dir>` — T95. */
 async function runUpgradeVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
+  // T-V5-013 — the live lifecycle is `.agent-team/`; `sta upgrade` is a
+  // compatibility spelling for the same sync operation. The legacy branch
+  // below remains available only to `.sta/` workspaces during the transition.
+  if (fs.existsSync(path.join(projectRoot, ".agent-team", "manifest.json"))) {
+    return runTargetCli(
+      ["sync", "--target-root", projectRoot, ...(rest.includes("--force") ? ["--force"] : [])],
+      projectRoot,
+    );
+  }
   const mode = flagValue(rest, "--mode");
   if (mode !== "legacy-project" && mode !== "three-repo") {
     throw new CliUsageError("upgrade: --mode <legacy-project|three-repo> is required; mode is never inferred from directories");
@@ -1145,12 +1155,12 @@ async function runRollbackVerb(rest: string[], defaultProjectRoot: string): Prom
   }
 }
 
-/** `list-backups` — read-only listing of .sta/backups/, oldest first. */
+/** `list-backups` — read-only listing of the live backup root, oldest first. */
 async function runListBackupsVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
   const backups = listBackups(projectRoot);
   if (backups.length === 0) {
-    console.log(`[orchestrator] no backups under ${projectRoot}/.sta/backups/ yet.`);
+    console.log(`[orchestrator] no backups under ${projectRoot}/.agent-team/backups/ (or legacy .sta/backups/) yet.`);
     return 0;
   }
   for (const name of backups) console.log(`  ${name}`);

@@ -26,10 +26,21 @@ export interface TemplateManifest {
   framework_version: string;
   generated_at: string;
   files: TemplateFileEntry[];
+  /** Derived from the existing path/hash rows; distinguishes builds sharing a version string. */
+  payload_digest?: string;
 }
 
 export function sha256Of(content: Buffer | string): string {
   return crypto.createHash("sha256").update(content).digest("hex");
+}
+
+/** Stable digest over manifest material, independent of input row order. */
+export function payloadDigest(files: readonly TemplateFileEntry[]): string {
+  const material = [...files]
+    .sort((a, b) => a.path.localeCompare(b.path))
+    .map((file) => `${file.path}\0${file.sha256}`)
+    .join("\n");
+  return sha256Of(material);
 }
 
 /**
@@ -61,7 +72,7 @@ export function buildManifest(
     const content = fs.readFileSync(abs);
     return { path: relPath.split(path.sep).join("/"), sha256: sha256Of(content), size_bytes: content.length };
   });
-  return { schema_version: 1, framework_version: frameworkVersion, generated_at: now, files };
+  return { schema_version: 1, framework_version: frameworkVersion, generated_at: now, files, payload_digest: payloadDigest(files) };
 }
 
 export class TemplatesNotBuiltError extends Error {}

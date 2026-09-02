@@ -1,6 +1,5 @@
 import * as path from "node:path";
 import { readTemplateManifest } from "../packaging/templateManifest.js";
-import { TargetNotInitializedError, readTargetManifest } from "./targetMeta.js";
 
 /**
  * T-TARGET-09 — Framework version tracking.
@@ -32,34 +31,11 @@ export function installedFrameworkVersion(frameworkRoot: string): string {
 
 export type SyncState = "NOT_INITIALIZED" | "UP_TO_DATE" | "OUTDATED" | "INCOMPATIBLE";
 
-export interface VersionReport {
-  state: SyncState;
-  /** Version this Target last synced, when initialized. */
-  syncedVersion?: string;
-  /** Version of the Framework installation itself. */
-  installedVersion: string;
-}
-
 /**
- * Same major = compatible: sync is a routine update (OUTDATED).
- * Different major = INCOMPATIBLE — managed assets may change shape across
- * majors, so a cross-major jump (an upgrade OR especially a downgrade) needs
- * explicit --force rather than happening silently.
+ * Version strings decide compatibility only. Freshness is derived from
+ * `planSync` by the caller: equal versions can carry different payload bytes,
+ * and different same-major versions can carry identical selected payloads.
  */
-export function classifySyncState(syncedVersion: string, installedVersion: string): SyncState {
-  if (syncedVersion === installedVersion) return "UP_TO_DATE";
-  if (!sameMajor(syncedVersion, installedVersion)) return "INCOMPATIBLE";
-  return "OUTDATED";
-}
-
-export function reportVersions(frameworkRoot: string, targetRoot: string): VersionReport {
-  const installedVersion = installedFrameworkVersion(frameworkRoot);
-  let syncedVersion: string;
-  try {
-    syncedVersion = readTargetManifest(targetRoot).framework_version;
-  } catch (e) {
-    if (e instanceof TargetNotInitializedError) return { state: "NOT_INITIALIZED", installedVersion };
-    throw e;
-  }
-  return { state: classifySyncState(syncedVersion, installedVersion), syncedVersion, installedVersion };
+export function classifySyncState(syncedVersion: string, installedVersion: string): "INCOMPATIBLE" | undefined {
+  return sameMajor(syncedVersion, installedVersion) ? undefined : "INCOMPATIBLE";
 }

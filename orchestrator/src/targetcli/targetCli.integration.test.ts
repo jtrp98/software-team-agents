@@ -7,7 +7,7 @@ import { runTargetCli } from "./cli.js";
 import { runTargetInit } from "./initCommand.js";
 import { isInsideFrameworkRoot, resolveFrameworkRoot, resolveRoots } from "./roots.js";
 import { devPreflight, runBa, runDev } from "./devCommand.js";
-import { loadTargetConfig, readTargetManifest, writeTargetConfig, writeTargetManifest, defaultTargetConfig } from "./targetMeta.js";
+import { checkTargetManifest, loadTargetConfig, readTargetManifest, writeTargetConfig, writeTargetManifest, defaultTargetConfig } from "./targetMeta.js";
 import { configureKnowledgeRoot } from "../threeRepo/installation.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { defaultStateDbPath } from "../store/stateView.js";
@@ -437,7 +437,7 @@ describe("software-team-agents — target-first end to end", () => {
     const initRun = await capture(() => runTargetCli(["init"], target, fw));
     expect(initRun.code).toBe(0);
     expect(fs.existsSync(path.join(target, ".claude", "agents", "backend-engineer.md"))).toBe(true);
-    expect(fs.existsSync(path.join(target, ".codex", "agents", "backend-engineer.toml"))).toBe(true);
+    expect(fs.existsSync(path.join(target, ".codex", "agents", "backend-engineer.toml"))).toBe(false);
     expect(fs.readFileSync(path.join(target, "src", "example.ts"), "utf8")).toContain("app logic");
 
     // Idempotent: a second init keeps identity config and application source intact.
@@ -453,7 +453,7 @@ describe("software-team-agents — target-first end to end", () => {
     expect(status.syncedVersion).toBe("1.0.0");
     expect(status.syncState).toBe("UP_TO_DATE");
     expect(status.claude.ready).toBe(true);
-    expect(status.codex.ready).toBe(true);
+    expect(status.codex.ready).toBe(false);
     expect(status.role).toBe("dev");
 
     // The engineer's work lands in the Target and never in the Framework.
@@ -778,6 +778,38 @@ describe("software-team-agents — target-first end to end", () => {
     expect(narrowedConflict.code).toBe(2);
     expect(fs.readFileSync(binding, "utf8")).toContain("# local edit");
   });
+
+  it("T-V5-016: policies stay materialised while the managed block marks them ignored", async () => {
+    const knowledge = makeKnowledgeRepo();
+    const policy = "# Coding\n\n## 1. Safety\n\nKeep the guard.\n";
+    const fw = fakeFramework("1.0.0", [
+      { relPath: ".claude/agents/business-analyst.md", content: AGENT_MD("business-analyst") },
+      { relPath: "policies/coding.md", content: policy },
+    ]);
+    expect((await capture(() => runTargetCli(["init"], knowledge, fw))).code).toBe(0);
+
+    expect(fs.readFileSync(path.join(knowledge, "policies", "coding.md"), "utf8")).toBe(policy);
+    const ignored = inspectGitignoreBlock(fs.readFileSync(path.join(knowledge, ".gitignore"), "utf8"));
+    expect(ignored.state).toBe("valid");
+    const block = ignored.state === "valid" ? ignored.block : "";
+    expect(block).toContain("policies/");
+    expect(block).toContain("Ignoring a path does NOT untrack it");
+
+    expect((await capture(() => runTargetCli(["sync"], knowledge, fw))).code).toBe(0);
+    const status = JSON.parse((await capture(() => runTargetCli(["status", "--json"], knowledge, fw))).out) as {
+      syncState: string;
+      syncChanges: unknown[];
+    };
+    expect(status.syncState).toBe("UP_TO_DATE");
+    expect(status.syncChanges).toEqual([]);
+    expect(fs.readFileSync(path.join(knowledge, "policies", "coding.md"), "utf8")).toBe(policy);
+
+    const target = makeTarget();
+    expect((await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
+    expect(fs.readFileSync(path.join(target, "policies", "coding.md"), "utf8")).toBe(policy);
+    const targetIgnore = inspectGitignoreBlock(fs.readFileSync(path.join(target, ".gitignore"), "utf8"));
+    expect(targetIgnore.state === "valid" ? targetIgnore.block : "").toContain("policies/");
+  });
 });
 
 describe("role workspace architecture (T-ROLE)", () => {
@@ -867,16 +899,129 @@ describe("role workspace architecture (T-ROLE)", () => {
       ),
     );
 
-    const status = JSON.parse((await capture(() => runTargetCli(["status", "--json"], knowledge, fwDrifted))).out) as {
+    const beforeStatus = [...dirHash(knowledge).entries()];
+    const statusRun = await capture(() => runTargetCli(["status", "--json"], knowledge, fwDrifted));
+    const status = JSON.parse(statusRun.out) as {
       syncState: string;
       syncedVersion?: string;
       conflictCount: number;
+      syncChanges: { path: string }[];
+      frameworkPayloadSkew?: boolean;
     };
     expect(status.syncedVersion).toBe("1.0.0-rc.3");
     // Both drifted files are pristine on disk — this is drift, not a conflict...
     expect(status.conflictCount).toBe(0);
+    expect(status.frameworkPayloadSkew).toBe(true);
     // ... so comparing version strings must not be allowed to call it fresh.
-    expect(status.syncState).not.toBe("UP_TO_DATE");
+    expect(status.syncState).toBe("OUTDATED");
+    expect(status.syncChanges.map((entry) => entry.path)).toEqual(
+      expect.arrayContaining(["policies/documentation.md", "CLAUDE.md"]),
+    );
+    expect([...dirHash(knowledge).entries()]).toEqual(beforeStatus);
+
+    const rendered = (await capture(() => runTargetCli(["status"], knowledge, fwDrifted))).out;
+    expect(rendered).toContain("policies/documentation.md");
+    expect(rendered).toContain("CLAUDE.md");
+    expect(rendered).toContain("installed Framework payload differs");
+    expect([...dirHash(knowledge).entries()]).toEqual(beforeStatus);
+
+    expect((await capture(() => runTargetCli(["sync"], knowledge, fwDrifted))).code).toBe(0);
+    const afterSync = JSON.parse((await capture(() => runTargetCli(["status", "--json"], knowledge, fwDrifted))).out) as {
+      syncState: string;
+      syncChanges: unknown[];
+    };
+    expect(afterSync.syncState).toBe("UP_TO_DATE");
+    expect(afterSync.syncChanges).toEqual([]);
+  });
+
+  it("T-V5-011: major incompatibility wins over a plan with managed updates", async () => {
+    const knowledge = makeKnowledgeRepo();
+    const fw1 = fakeFramework("1.0.0", [
+      { relPath: ".claude/agents/business-analyst.md", content: AGENT_MD("business-analyst") },
+      { relPath: "policies/documentation.md", content: "v1\n" },
+    ]);
+    expect((await capture(() => runTargetCli(["init"], knowledge, fw1))).code).toBe(0);
+    const fw2 = fakeFramework("2.0.0", [
+      { relPath: ".claude/agents/business-analyst.md", content: AGENT_MD("business-analyst") },
+      { relPath: "policies/documentation.md", content: "v2\n" },
+    ]);
+    const status = JSON.parse((await capture(() => runTargetCli(["status", "--json"], knowledge, fw2))).out) as {
+      syncState: string;
+      syncChanges: { path: string }[];
+    };
+    expect(status.syncChanges.map((entry) => entry.path)).toContain("policies/documentation.md");
+    expect(status.syncState).toBe("INCOMPATIBLE");
+  });
+
+  it("T-V5-015: a pre-V5 target manifest has unknown payload skew, never a false mismatch", async () => {
+    const knowledge = makeKnowledgeRepo();
+    const fw = fakeFramework("1.0.0", [
+      { relPath: ".claude/agents/business-analyst.md", content: AGENT_MD("business-analyst") },
+      { relPath: "policies/documentation.md", content: "current\n" },
+    ]);
+    expect((await capture(() => runTargetCli(["init"], knowledge, fw))).code).toBe(0);
+    const oldManifest = readTargetManifest(knowledge);
+    delete oldManifest.payload_digest;
+    expect(checkTargetManifest(oldManifest)).toEqual([]);
+    writeTargetManifest(knowledge, oldManifest);
+
+    const status = JSON.parse((await capture(() => runTargetCli(["status", "--json"], knowledge, fw))).out) as {
+      syncState: string;
+      frameworkPayloadSkew?: boolean;
+    };
+    expect(status.syncState).toBe("UP_TO_DATE");
+    expect(status.frameworkPayloadSkew).toBeUndefined();
+    expect((await capture(() => runTargetCli(["status"], knowledge, fw))).out).not.toContain("payload differs");
+  });
+
+  it("T-V5-012: status, doctor, auto-sync and --no-auto-sync name the same managed paths", async () => {
+    const target = makeTarget();
+    const knowledge = makeKnowledgeRepo();
+    const payload = (one: string, two: string): { relPath: string; content: string }[] => [
+      { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer") },
+      { relPath: "policies/one.md", content: one },
+      { relPath: "policies/two.md", content: two },
+    ];
+    const fw1 = fakeFramework("1.0.0", payload("one-v1\n", "two-v1\n"));
+    expect((await capture(() => runTargetCli(["init"], target, fw1, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
+    const config = loadTargetConfig(target)!;
+    config.knowledge = { path: knowledge };
+    writeTargetConfig(target, config);
+
+    const fw2 = fakeFramework("1.0.0", payload("one-v2\n", "two-v2\n"));
+    const expectedPaths = ["policies/one.md", "policies/two.md"];
+    const statusText = (await capture(() => runTargetCli(["status"], target, fw2, { installationConfigPath: NO_INSTALLATION }))).out;
+    for (const relativePath of expectedPaths) expect(statusText).toContain(relativePath);
+    expect(statusText).toContain("software-team-agents sync");
+
+    const noAutoSync = () =>
+      devPreflight({
+        targetRoot: target,
+        templatesDir: path.join(fw2, "templates"),
+        installationConfigPath: NO_INSTALLATION,
+        autoSync: false,
+        probe: () => ({ available: true }),
+      });
+    for (const relativePath of expectedPaths) expect(noAutoSync).toThrow(relativePath);
+
+    const doctor = await runDoctor({
+      projectRoot: target,
+      templatesDir: path.join(fw2, "templates"),
+      installationConfigPath: NO_INSTALLATION,
+    });
+    const freshness = doctor.checks.find((check) => check.name === "Managed asset freshness");
+    expect(freshness).toMatchObject({ status: "WARNING", fix: "run: software-team-agents sync" });
+    for (const relativePath of expectedPaths) expect(freshness?.detail).toContain(relativePath);
+
+    const context = devPreflight({
+      targetRoot: target,
+      templatesDir: path.join(fw2, "templates"),
+      installationConfigPath: NO_INSTALLATION,
+      probe: () => ({ available: true }),
+    });
+    const managed = context.checks.find((check) => check.name === "Managed files");
+    expect(managed?.detail).toContain("changed 2");
+    for (const relativePath of expectedPaths) expect(managed?.detail).toContain(relativePath);
   });
 
   it("ba command: preflight passes without any Target checkout and launches from Knowledge (T-ROLE-03/19)", async () => {
@@ -947,18 +1092,6 @@ describe("role workspace architecture (T-ROLE)", () => {
           "owner": "target",
           "path": ".claude/settings.json",
           "precedence": "project-owned-merged",
-        },
-        {
-          "frameworkContributionPresent": true,
-          "owner": "framework",
-          "path": ".codex/agents/backend-engineer.toml",
-          "precedence": "framework-managed",
-        },
-        {
-          "frameworkContributionPresent": true,
-          "owner": "framework",
-          "path": ".opencode/agent/backend-engineer.md",
-          "precedence": "framework-managed",
         },
         {
           "frameworkContributionPresent": false,

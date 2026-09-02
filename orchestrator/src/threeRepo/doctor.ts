@@ -9,10 +9,12 @@ import { loadTargetRegistry } from "./targets.js";
 import { detectInstructionSurface, isNestedInstruction, type InstructionSurfaceEntry } from "./ownership.js";
 import { isTargetInitialized, loadTargetConfig, readTargetManifest, type TargetConfig, type TargetManifest } from "../targetcli/targetMeta.js";
 import { detectWorkspaceKind } from "../targetcli/roleWorkspace.js";
+import { gatherStatus } from "../targetcli/statusCommand.js";
 import { targetStackWasHumanEdited } from "../targetcli/targetProfile.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { inspectGuardWiring } from "../targetcli/guardSettings.js";
 import { loadStaConfig } from "../packaging/staConfig.js";
+import { compareTemplateSnapshot } from "../packaging/templateBuilder.js";
 
 /**
  * `sta doctor` (T166) — read-only diagnostics for one machine's installation.
@@ -119,6 +121,26 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
   let instructionSurface: InstructionSurfaceEntry[] = [];
   const configureFix = "run: sta configure knowledge-root <path>";
 
+  // T-V5-014 — only a Framework checkout owns both template sources and the
+  // built snapshot. Downstream workspaces stay silent; doctor never rebuilds.
+  const frameworkCheckout =
+    fs.existsSync(path.join(projectRoot, ".git")) &&
+    fs.existsSync(path.join(projectRoot, "orchestrator", "package.json")) &&
+    fs.existsSync(path.join(projectRoot, "templates", "manifest.json"));
+  if (frameworkCheckout) {
+    checks.push(
+      check("Template snapshot", "run: npm run build:templates", () => {
+        const drift = compareTemplateSnapshot(projectRoot, path.join(projectRoot, "templates"));
+        return drift.length === 0
+          ? { status: "PASS", detail: "templates/ matches every declared source" }
+          : {
+              status: "FAIL",
+              detail: `${drift.length} stale template snapshot path(s): ${drift.map((entry) => `${entry.path} (${entry.kind})`).join(", ")}`,
+            };
+      }),
+    );
+  }
+
   // Mode awareness: a Knowledge root never carries framework internals (.sta/,
   // .claude) — `init --mode three-repo` deliberately writes zero template files
   // there. When the examined projectRoot IS the bound Knowledge root, those two
@@ -159,6 +181,33 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
       };
     }),
   );
+
+  if (projectScopeEnabled && isTargetInitialized(projectRoot)) {
+    checks.push(
+      check("Managed asset freshness", "run: software-team-agents sync", () => {
+        const status = gatherStatus({
+          targetRoot: projectRoot,
+          templatesDir: options.templatesDir ?? path.join(defaultProjectRoot(), "templates"),
+          installationConfigPath: options.installationConfigPath,
+        });
+        if (status.syncState === "UP_TO_DATE") return { status: "PASS", detail: "UP_TO_DATE" };
+        if (status.syncState === "INCOMPATIBLE") {
+          return {
+            status: "FAIL",
+            detail: `INCOMPATIBLE — ${status.syncChanges.length} managed change(s) planned across a major-version boundary`,
+            fix: "review the changelog, then run: software-team-agents sync --force",
+          };
+        }
+        const named = status.syncChanges.slice(0, 10).map((entry) => `${entry.action}: ${entry.path}`).join(", ");
+        const remainder = status.syncChanges.length > 10 ? `, ... ${status.syncChanges.length - 10} more` : "";
+        return {
+          status: "WARNING",
+          detail: `OUTDATED — ${status.syncChanges.length} managed change(s): ${named}${remainder}`,
+          fix: "run: software-team-agents sync",
+        };
+      }),
+    );
+  }
 
   checks.push(
     check("Installation config (Knowledge root binding)", configureFix, () => {

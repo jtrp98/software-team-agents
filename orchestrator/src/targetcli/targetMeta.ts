@@ -31,6 +31,8 @@ export interface TargetManifest {
   installed_at: string;
   updated_at: string;
   files: TemplateFileEntry[];
+  /** Absent in pre-V5 workspaces means unknown, never mismatch. */
+  payload_digest?: string;
   /** Framework-owned delimited contributions inside otherwise project-owned files. */
   framework_blocks?: { path: string; sha256: string }[];
 }
@@ -84,6 +86,9 @@ export function checkTargetManifest(data: unknown): string[] {
     problems.push("framework_version is missing");
   }
   if (!Array.isArray(manifest.files)) return [...problems, "files is missing"];
+  if (manifest.payload_digest !== undefined && !/^[a-f0-9]{64}$/.test(manifest.payload_digest)) {
+    problems.push("payload_digest is invalid");
+  }
   const seen = new Set<string>();
   for (const file of manifest.files as TemplateFileEntry[]) {
     if (!file || typeof file.path !== "string" || typeof file.sha256 !== "string") {
