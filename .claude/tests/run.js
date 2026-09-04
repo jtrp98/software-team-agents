@@ -919,6 +919,44 @@ function runPathHook(tool, filePath, role, extraEnv) {
   return runHook('block-path-permissions.js', { tool_name: tool, tool_input: { file_path: filePath } }, env);
 }
 
+/**
+ * T-V5-023 — the layout half of an engineer's path rules, as the orchestrator
+ * resolves it and hands it over beside AGENTCLAUDE_ROLE.
+ *
+ * A contract now holds only the role boundary; where a stack puts code lives in
+ * `stacks/<profile>/stack.yaml`, which this dependency-free hook cannot join to
+ * `.agent-team/config.yaml`. Read here from the profile the orchestrator falls
+ * back to for a workspace with no recorded stack, so a profile reformatted out
+ * of flow style — or emptied — fails this self-test instead of silently
+ * stripping an engineer's write access.
+ */
+function stackRulesEnvFor(role) {
+  const profile = role === 'frontend-engineer' ? 'frontend' : 'node';
+  const text = fs.readFileSync(path.join(ROOT, 'stacks', profile, 'stack.yaml'), 'utf8');
+  const at = text.indexOf('\n  ' + role + ':');
+  const section = at < 0 ? '' : text.slice(at);
+  const list = (key) => {
+    const m = new RegExp('^\\s*' + key + ':\\s*\\[([^\\]]*)\\]\\s*$', 'm').exec(section);
+    return m ? m[1].split(',').map((s) => s.trim().replace(/^["']|["']$/g, '')).filter((s) => s !== '') : [];
+  };
+  return { write: list('write'), deny: list('deny') };
+}
+
+function withStackRules(role, extraEnv) {
+  return Object.assign({ AGENTCLAUDE_STACK_PATH_RULES: JSON.stringify(stackRulesEnvFor(role)) }, extraEnv || {});
+}
+
+check(
+  'the node stack profile still declares backend-engineer layout globs in the flow style this reader needs',
+  stackRulesEnvFor('backend-engineer').write.includes('server/**') ? 0 : 1,
+  0,
+);
+check(
+  'the frontend stack profile still declares frontend-engineer layout globs the same way',
+  stackRulesEnvFor('frontend-engineer').deny.includes('prisma/**') ? 0 : 1,
+  0,
+);
+
 check(
   'no role set -> a normal write is allowed (hooks carry no identity; this is the honest floor)',
   runPathHook('Write', path.join(ROOT, 'server', 'x.ts')),
@@ -953,9 +991,37 @@ check(
 );
 
 check(
-  'backend-engineer writing server code -> allowed',
-  runPathHook('Write', path.join(ROOT, 'server', 'routes', 'deal.ts'), 'backend-engineer'),
+  'backend-engineer writing server code -> allowed (contract boundary + stack layout, T-V5-023)',
+  runPathHook('Write', path.join(ROOT, 'server', 'routes', 'deal.ts'), 'backend-engineer', withStackRules('backend-engineer')),
   ALLOW,
+);
+
+// The two halves arrive together or not at all. Without the layout half, the
+// layout paths are in neither the write list nor the deny list, so the path
+// lands on deny-by-default: the missing-channel failure is stricter than
+// intended, never looser.
+check(
+  'backend-engineer with no stack layout supplied -> blocked, not waved through',
+  runPathHook('Write', path.join(ROOT, 'server', 'routes', 'deal.ts'), 'backend-engineer'),
+  BLOCK,
+);
+
+check(
+  'a malformed stack layout channel is treated as absent, never as a grant',
+  runPathHook('Write', path.join(ROOT, 'server', 'routes', 'deal.ts'), 'backend-engineer', { AGENTCLAUDE_STACK_PATH_RULES: '{not json' }),
+  BLOCK,
+);
+
+check(
+  'a stack layout channel claiming a non-array write set grants nothing',
+  runPathHook('Write', path.join(ROOT, 'server', 'routes', 'deal.ts'), 'backend-engineer', { AGENTCLAUDE_STACK_PATH_RULES: '{"write":"server/**"}' }),
+  BLOCK,
+);
+
+check(
+  'the stack layout deny still outranks the write list it ships with',
+  runPathHook('Write', path.join(ROOT, 'components', 'DealCard.tsx'), 'backend-engineer', withStackRules('backend-engineer')),
+  BLOCK,
 );
 
 check(
@@ -966,8 +1032,14 @@ check(
 
 check(
   'frontend-engineer writing schema.prisma -> blocked (backend owns it)',
-  runPathHook('Edit', path.join(ROOT, 'prisma', 'schema.prisma'), 'frontend-engineer'),
+  runPathHook('Edit', path.join(ROOT, 'prisma', 'schema.prisma'), 'frontend-engineer', withStackRules('frontend-engineer')),
   BLOCK,
+);
+
+check(
+  'frontend-engineer writing UI code -> allowed once the layout half is supplied',
+  runPathHook('Write', path.join(ROOT, 'components', 'DealCard.tsx'), 'frontend-engineer', withStackRules('frontend-engineer')),
+  ALLOW,
 );
 
 check(
@@ -976,6 +1048,8 @@ check(
   ALLOW,
 );
 
+// qa-engineer is not a stack-scoped role, so no layout ever reaches it — and it
+// stays blocked even when a channel value is present.
 check(
   'qa-engineer writing application code -> blocked (a verifier that fixes is not verifying)',
   runPathHook('Write', path.join(ROOT, 'server', 'routes', 'deal.ts'), 'qa-engineer'),

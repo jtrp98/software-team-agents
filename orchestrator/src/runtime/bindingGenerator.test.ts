@@ -21,6 +21,7 @@ import {
   renderOpenCodeCommand,
   withGitBashRules,
 } from "./bindingGenerator.js";
+import { renderGuardRuleBlock } from "../agents/pathPermissions.js";
 import { extractDeveloperInstructions } from "./codexAdapter.js";
 
 /**
@@ -560,5 +561,110 @@ describe("T-V5-018 — derived rendering ignore paths", () => {
     expect(paths.some((p) => p.includes(".claude"))).toBe(false);
     expect(paths.some((p) => p.includes("sta-guards.js"))).toBe(false);
     expect(paths.some((p) => p.includes("AGENTS.md"))).toBe(false);
+  });
+});
+
+describe("checkBindings — generated guard rule block (T-V5-020)", () => {
+  const CLAUDE_HOST = ".claude/hooks/block-path-permissions.js";
+  const OPENCODE_HOST = ".opencode/plugin/sta-guards.js";
+
+  function writeSources(role: string): void {
+    const md = SAMPLE_MD.replace("qa-engineer", role);
+    fs.writeFileSync(path.join(root, ".claude", "agents", `${role}.md`), md);
+    fs.writeFileSync(path.join(root, ".codex", "agents", `${role}.toml`), renderCodexBinding(md));
+    fs.mkdirSync(path.join(root, ".opencode", "agent"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".opencode", "agent", `${role}.md`), renderOpenCodeBinding(md, defaultOpenCodePermissions()));
+  }
+  function writeHost(rel: string, block: string): void {
+    const abs = path.join(root, ...rel.split("/"));
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, `// authored host code\n${block}// more authored host code\n`, "utf8");
+  }
+  /** The `.codex/hooks` mirror of the Claude host, so the parity section stays satisfied. */
+  function mirrorClaudeHooks(): void {
+    const src = path.join(root, ".claude", "hooks");
+    if (!fs.existsSync(src)) return;
+    const dest = path.join(root, ".codex", "hooks");
+    fs.mkdirSync(dest, { recursive: true });
+    for (const f of fs.readdirSync(src)) fs.copyFileSync(path.join(src, f), path.join(dest, f));
+  }
+
+  it("passes when every host carries the rendered block", () => {
+    writeSources("qa-engineer");
+    writeHost(CLAUDE_HOST, renderGuardRuleBlock());
+    writeHost(OPENCODE_HOST, renderGuardRuleBlock());
+    mirrorClaudeHooks();
+    expect(checkBindings(root)).toEqual({ ok: true, problems: [] });
+  });
+
+  it("fails when a generated guard block is hand-edited", () => {
+    writeSources("qa-engineer");
+    const tampered = renderGuardRuleBlock().replace("'knowledge/_roles/**'", "'knowledge/_roles/**-disabled'");
+    expect(tampered).not.toBe(renderGuardRuleBlock());
+    writeHost(CLAUDE_HOST, tampered);
+    writeHost(OPENCODE_HOST, renderGuardRuleBlock());
+    mirrorClaudeHooks();
+
+    const result = checkBindings(root);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join("\n")).toMatch(/\.claude\/hooks\/block-path-permissions\.js: the sta:guard-rules block does not match/);
+    expect(result.problems.join("\n")).toMatch(/regenerate-renderings\.mjs/);
+  });
+
+  it("fails when a host lost its block entirely", () => {
+    writeSources("qa-engineer");
+    writeHost(CLAUDE_HOST, "");
+    writeHost(OPENCODE_HOST, renderGuardRuleBlock());
+    mirrorClaudeHooks();
+
+    const result = checkBindings(root);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join("\n")).toMatch(/no generated sta:guard-rules block/);
+  });
+
+  it("fails when the markers themselves are corrupted rather than guessing at the block", () => {
+    writeSources("qa-engineer");
+    writeHost(CLAUDE_HOST, `${renderGuardRuleBlock()}// sta:guard-rules-end\n`);
+    writeHost(OPENCODE_HOST, renderGuardRuleBlock());
+    mirrorClaudeHooks();
+
+    const result = checkBindings(root);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join("\n")).toMatch(/guard-rules marker pair/);
+  });
+
+  it("says nothing about a host this workspace never received", () => {
+    writeSources("qa-engineer");
+    expect(checkBindings(root)).toEqual({ ok: true, problems: [] });
+  });
+
+  it("leaves a host the project claimed through overrides alone", () => {
+    writeSources("qa-engineer");
+    writeHost(CLAUDE_HOST, renderGuardRuleBlock().replace("'dist/**'", "'dist/**-project-edit'"));
+    writeHost(OPENCODE_HOST, renderGuardRuleBlock());
+    mirrorClaudeHooks();
+    expect(checkBindings(root).ok).toBe(false);
+
+    fs.mkdirSync(path.join(root, ".agent-team"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".agent-team", "config.yaml"),
+      `schema_version: 1\ntarget_id: t\nregistered_at: 2026-01-01\nrole: dev\nruntimes: [claude, codex, opencode]\noverrides: ["${CLAUDE_HOST}"]\n`,
+      "utf8",
+    );
+    expect(checkBindings(root)).toEqual({ ok: true, problems: [] });
+  });
+
+  it("skips the OpenCode host when the workspace does not materialise that runtime", () => {
+    writeSources("qa-engineer");
+    writeHost(CLAUDE_HOST, renderGuardRuleBlock());
+    writeHost(OPENCODE_HOST, renderGuardRuleBlock().replace("'dist/**'", "'dist/**-stale'"));
+    mirrorClaudeHooks();
+    fs.mkdirSync(path.join(root, ".agent-team"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".agent-team", "config.yaml"),
+      "schema_version: 1\ntarget_id: t\nregistered_at: 2026-01-01\nrole: dev\nruntimes: [claude]\noverrides: []\n",
+      "utf8",
+    );
+    expect(checkBindings(root).problems.join("\n")).not.toMatch(/sta-guards\.js/);
   });
 });

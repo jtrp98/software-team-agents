@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { GUARD_RULES_CLOSE, GUARD_RULES_OPEN, GUARD_RULE_HOSTS, renderGuardRuleBlock } from "../agents/pathPermissions.js";
 import { renderStackDigest, stackDigestPath } from "../profile/stackDigest.js";
-import { inspectBootstrapBlock } from "../targetcli/knowledgeRender.js";
-import { isTargetInitialized, loadTargetConfig, readTargetManifest } from "../targetcli/targetMeta.js";
+import { inspectBootstrapBlock, inspectMarkerBlock } from "../targetcli/knowledgeRender.js";
+import { isTargetInitialized, isUserOverridden, loadTargetConfig, readTargetManifest } from "../targetcli/targetMeta.js";
 import { runtimesForWorkspace, type WorkspaceRuntime } from "../targetcli/roleWorkspace.js";
 
 /**
@@ -29,8 +30,10 @@ import { runtimesForWorkspace, type WorkspaceRuntime } from "../targetcli/roleWo
  * see `COMMAND_RENDERINGS` below.
  *
  * `checkBindings()` fails when what is on disk stops matching what this module
- * would generate, and — since OFF10 M3 — it also fails when the straight
- * `.codex/hooks/*.js` mirrors stop matching their `.claude/hooks/*` sources.
+ * would generate; since OFF10 M3 it also fails when the straight
+ * `.codex/hooks/*.js` mirrors stop matching their `.claude/hooks/*` sources,
+ * and since T-V5-020 when a hook's generated `sta:guard-rules` block stops
+ * matching the one authored declaration in `agents/pathPermissions.ts`.
  *
  * WHAT IS DELIBERATELY NOT CARRIED OVER
  * - `tools` — Claude tool names are provider vocabulary; each runtime configures
@@ -630,6 +633,41 @@ export function checkBindings(projectRoot: string): BindingCheckResult {
         if (!runtimes.has(renderingRuntime(spec.dir))) continue;
           checkCommandRenderingSet(projectRoot, claudeCommandsDir, names, guardrailsRules, spec, problems);
         }
+      }
+    }
+  }
+
+  // --- Guard rule block (T-V5-020) -----------------------------------------
+  // `UNIVERSAL_DENY`, the workspace artifact lists and the matcher are declared
+  // once in `agents/pathPermissions.ts` and rendered into each hook's
+  // `sta:guard-rules` block. Verified here so a hand edit fails loudly instead
+  // of quietly making one enforcement point weaker than the other two — which
+  // is precisely how the TypeScript path came to be missing the workspace rules
+  // altogether (F-06). The `.codex/hooks` mirror needs no entry of its own: the
+  // parity check below already requires it to be byte-identical to its source.
+  {
+    const expectedGuardBlock = renderGuardRuleBlock();
+    for (const host of GUARD_RULE_HOSTS) {
+      if (host.runtime !== "claude" && !runtimes.has(host.runtime)) continue;
+      const abs = path.join(projectRoot, ...host.path.split("/"));
+      // Absent: this workspace never received that payload — nothing to verify.
+      // Overridden: the project claimed the file, so sync does not write it and
+      // this must not report the project's own copy as drift.
+      if (!fs.existsSync(abs) || isUserOverridden(projectRoot, host.path, config)) continue;
+      const inspected = inspectMarkerBlock(
+        fs.readFileSync(abs, "utf8").replace(/\r\n/g, "\n"),
+        GUARD_RULES_OPEN,
+        GUARD_RULES_CLOSE,
+        "guard-rules",
+      );
+      if (inspected.state === "absent") {
+        problems.push(`${host.path}: no generated sta:guard-rules block — run node scripts/regenerate-renderings.mjs`);
+      } else if (inspected.state === "malformed") {
+        problems.push(`${host.path}: ${inspected.detail}`);
+      } else if (inspected.block !== expectedGuardBlock) {
+        problems.push(
+          `${host.path}: the sta:guard-rules block does not match the declaration in agents/pathPermissions.ts — edit the declaration, then run node scripts/regenerate-renderings.mjs`,
+        );
       }
     }
   }

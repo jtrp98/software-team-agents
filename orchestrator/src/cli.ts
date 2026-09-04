@@ -247,7 +247,7 @@ export const USAGE =
   "  sta --check-layout [--project-root <path>]         check layout.yaml against the real directories\n" +
   "  sta --check-prompt-budget [--project-root <path>]  check the static prompt floor: CLAUDE.md + agent prompt budgets, no policies pre-read, pointers resolve\n" +
   "  sta --check-workflows [--project-root <path>]      check generated workflows/*.yml byte-match the classifier\n" +
-  "  sta --check-bindings [--project-root <path>]       check generated renderings (.codex/agents, .opencode/agent, .opencode/commands, .agents/skills) byte-match their .claude sources\n" +
+  "  sta --check-bindings [--project-root <path>]       check generated renderings (.codex/agents, .opencode/agent, .opencode/commands, .agents/skills), the .codex/hooks mirrors and each hook's generated guard-rule block byte-match their sources\n" +
   "  sta --check-profile [--project-root <path>]        check project.yaml and stacks/ against the agent roster\n" +
   "  sta --check-decisions [--project-root <path>]      check decisions/*.md ADRs against the schema and cross-links\n" +
   "  sta --check-test-pyramid [--project-root <path>]   check test-pyramid.yaml against its schema\n" +

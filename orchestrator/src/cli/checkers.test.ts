@@ -37,8 +37,8 @@ const EXPECTED: Record<string, { ok: string; fail: string; notes: CheckerDescrip
     notes: "none",
   },
   "--check-bindings": {
-    ok: "[orchestrator] .codex/agents bindings match the .claude/agents sources.",
-    fail: "[orchestrator] codex role bindings have drifted from their sources:",
+    ok: "[orchestrator] generated bindings, hook mirrors and guard-rule blocks match their sources.",
+    fail: "[orchestrator] generated bindings, hook mirrors or guard-rule blocks have drifted from their sources:",
     notes: "none",
   },
   "--check-profile": {

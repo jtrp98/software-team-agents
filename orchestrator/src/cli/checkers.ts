@@ -142,8 +142,8 @@ export const CHECKERS: readonly CheckerDescriptor[] = [
     flag: "checkBindings",
     cliFlag: "--check-bindings",
     run: (root) => toOutcome(checkBindings(root)),
-    okMessage: "[orchestrator] .codex/agents bindings match the .claude/agents sources.",
-    failHeading: "[orchestrator] codex role bindings have drifted from their sources:",
+    okMessage: "[orchestrator] generated bindings, hook mirrors and guard-rule blocks match their sources.",
+    failHeading: "[orchestrator] generated bindings, hook mirrors or guard-rule blocks have drifted from their sources:",
     notes: "none",
   },
   {

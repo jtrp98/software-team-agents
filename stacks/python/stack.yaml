@@ -17,3 +17,16 @@ commands:
   typecheck: mypy .
 scan_extensions: [.py]
 capabilities: [rest-api, database-access, auth, testing]
+
+# T-V5-023 — the layout half of the engineer path rules; `{source_root}` expands from the
+# Target's recorded `stack.source_roots`. Layout only: nothing here claims a prompt can
+# build Python.
+permissions:
+  backend-engineer:
+    read: ["{source_root}/**", "pyproject.toml", "requirements.txt", "setup.py"]
+    write: ["{source_root}/**"]
+    deny: ["{source_root}/.venv/**", "{source_root}/__pycache__/**", "{source_root}/static/**", "{source_root}/templates/**"]
+  frontend-engineer:
+    read: ["{source_root}/**", "pyproject.toml"]
+    write: ["{source_root}/static/**", "{source_root}/templates/**"]
+    deny: ["{source_root}/.venv/**", "{source_root}/__pycache__/**"]

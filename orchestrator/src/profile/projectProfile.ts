@@ -40,6 +40,35 @@ import { defaultProjectRoot } from "../agents/agentContract.js";
  * which is what makes it a tracked migration rather than a contradiction.
  */
 
+/**
+ * T-V5-023 — one engineer role's path globs for one stack layout.
+ *
+ * `contracts/<role>.yaml` used to hold these, which tied the role boundary to a
+ * single stack: `server/**`, `src/lib/**`, `app/api/**`, `prisma/**` describe a
+ * Node/Prisma repository, not "what a backend engineer owns". The one real
+ * Target (.NET/EF, source root `ClassOnlineWeb`) matched none of them, so its
+ * engineers could write nothing and the project claimed both prompts through
+ * `overrides` instead — permanently detaching them from Framework updates.
+ *
+ * A contract now expresses the role boundary (`_docs/module/**` denied,
+ * `contracts/**` denied, capabilities, tools, states) and a stack profile
+ * expresses the layout. `--check-contracts` fails if a stack-shaped glob drifts
+ * back into a contract.
+ *
+ * `{source_root}` expands to each root recorded in the Target's
+ * `.agent-team/config.yaml` `stack.source_roots`, so a profile names layout
+ * without naming any particular Target's directories. A source root of `.`
+ * expands the prefix away entirely (`{source_root}/**` → `**`): the Target root
+ * *is* the project, and the universal floor, the workspace-role rules and the
+ * contract's own denies all still apply on top.
+ */
+const StackRolePermissionsSchema = z.object({
+  read: z.array(z.string().min(1)).default([]),
+  write: z.array(z.string().min(1)).default([]),
+  deny: z.array(z.string().min(1)).default([]),
+});
+export type StackRolePermissions = z.infer<typeof StackRolePermissionsSchema>;
+
 export const StackProfileSchema = z.object({
   stack: z.string().min(1),
   kind: z.enum(["backend", "frontend"]),
@@ -60,8 +89,79 @@ export const StackProfileSchema = z.object({
   /** File extensions the offline security pattern sweep may inspect for this profile. Empty means unsupported, never clean. */
   scan_extensions: z.array(z.string().regex(/^\.[A-Za-z0-9]+$/)).default([]),
   capabilities: z.array(z.enum(Capability)),
+  /** T-V5-023 — stack-shaped engineer path globs, keyed by agent role. Absent means the role falls back to {@link STACK_PERMISSION_FALLBACK}. */
+  permissions: z.record(z.string().min(1), StackRolePermissionsSchema).default({}),
 });
 export type StackProfile = z.infer<typeof StackProfileSchema>;
+
+/** The roles whose path globs a stack profile may declare. Every other role's paths are role-shaped and stay in its contract. */
+export const STACK_SCOPED_ROLES: readonly string[] = ["backend-engineer", "frontend-engineer"];
+
+/**
+ * Where a role's globs come from when the resolved profile declares none — and
+ * when a workspace has recorded no stack at all. Both point at the Node/Prisma
+ * profiles, which carry exactly the globs the contracts carried before
+ * T-V5-023, so an existing installation resolves the same write set it always
+ * had rather than losing access.
+ */
+export const STACK_PERMISSION_FALLBACK: Readonly<Record<string, string>> = {
+  "backend-engineer": "node",
+  "frontend-engineer": "frontend",
+};
+
+function expandSourceRoots(globs: readonly string[], sourceRoots: readonly string[]): string[] {
+  const roots = sourceRoots.length > 0 ? sourceRoots : ["."];
+  const out: string[] = [];
+  for (const glob of globs) {
+    if (!glob.includes("{source_root}")) {
+      if (!out.includes(glob)) out.push(glob);
+      continue;
+    }
+    for (const root of roots) {
+      // `.` is the Target root itself: drop the prefix rather than emit `./**`,
+      // which normalizes to `**` anyway and reads like a mistake.
+      const expanded = root === "." || root === "" ? glob.replace(/\{source_root\}\/?/g, "") : glob.replaceAll("{source_root}", root);
+      if (expanded !== "" && !out.includes(expanded)) out.push(expanded);
+    }
+  }
+  return out;
+}
+
+/**
+ * The stack-shaped half of one engineer role's path rules, resolved from the
+ * Target's recorded profile. Returns empty lists for a role no profile scopes,
+ * and never throws for a missing profile: a guard that failed closed here would
+ * strip an engineer's write access over a packaging problem.
+ */
+export function resolveStackPathRules(options: {
+  role: string;
+  projectRoot: string;
+  profile?: string;
+  sourceRoots?: readonly string[];
+}): StackRolePermissions {
+  const empty: StackRolePermissions = { read: [], write: [], deny: [] };
+  if (!STACK_SCOPED_ROLES.includes(options.role)) return empty;
+
+  const attempts = [options.profile, STACK_PERMISSION_FALLBACK[options.role]].filter(
+    (name): name is string => typeof name === "string" && name !== "",
+  );
+  for (const name of attempts) {
+    let profile: StackProfile;
+    try {
+      profile = loadStackProfile(name, options.projectRoot);
+    } catch {
+      continue;
+    }
+    const declared = profile.permissions[options.role];
+    if (!declared) continue;
+    return {
+      read: expandSourceRoots(declared.read, options.sourceRoots ?? []),
+      write: expandSourceRoots(declared.write, options.sourceRoots ?? []),
+      deny: expandSourceRoots(declared.deny, options.sourceRoots ?? []),
+    };
+  }
+  return empty;
+}
 
 const SideSchema = z.object({
   stack: z.string().min(1),

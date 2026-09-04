@@ -2,6 +2,9 @@ import * as path from "node:path";
 import { AgentStage, TaskLevel } from "../types.js";
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { getAgent } from "../agents/registry.js";
+import { GUARD_STACK_RULES_ENV } from "../agents/pathPermissions.js";
+import { resolveStackPathRules } from "../profile/projectProfile.js";
+import { loadTargetConfig } from "../targetcli/targetMeta.js";
 import { resolveAgentEffort, resolveAgentModel, resolveAgentVersion } from "../agents/agentModel.js";
 import type { StructuredFailure } from "../orchestrator/failure.js";
 import {
@@ -138,6 +141,26 @@ export interface RuntimeExecutorOptions {
  * envelope; without it the two are the same `FAIL` and the retry budget drains
  * for no reason.
  */
+/**
+ * T-V5-023 — the stack layout globs a guard hook cannot resolve for itself,
+ * packed for the environment channel that already carries `AGENTCLAUDE_ROLE`.
+ *
+ * Returns nothing at all for a role no stack profile scopes, so a non-engineer
+ * stage's environment is unchanged. `read` is deliberately not sent: reading is
+ * not enforced as a block anywhere, and a hook has no use for it.
+ */
+function resolveGuardStackRules(role: string, guardRoot: string): Record<string, string> {
+  let rules;
+  try {
+    const stack = loadTargetConfig(guardRoot)?.stack;
+    rules = resolveStackPathRules({ role, projectRoot: guardRoot, profile: stack?.profile, sourceRoots: stack?.source_roots });
+  } catch {
+    return {}; // a broken profile must not stop a run; the orchestrator's own assertCanWrite still applies
+  }
+  if (rules.write.length === 0 && rules.deny.length === 0) return {};
+  return { [GUARD_STACK_RULES_ENV]: JSON.stringify({ write: rules.write, deny: rules.deny }) };
+}
+
 function unavailableFailure(runtimeId: string, reason: string): StructuredFailure {
   return {
     category: "infrastructure",
@@ -566,6 +589,13 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       budgetComposition: promptParts.budgetComposition,
     };
 
+    // T-V5-023 — the stack layout half of this role's write/deny rules. The
+    // guard root is the same directory the runtime runs the agent in, because
+    // that is where the hook reads `contracts/` and `stacks/` from; resolving
+    // from anywhere else would hand a hook globs for a different workspace.
+    const guardRoot = threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot;
+    const guardStackRules = resolveGuardStackRules(role, guardRoot);
+
     const executeActiveRuntime = (): Promise<RuntimeAgentResult> => activeRuntime.executeAgent({
       role,
       cwd: threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot,
@@ -581,6 +611,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       guards,
       env: {
         AGENTCLAUDE_ROLE: role,
+        ...guardStackRules,
         ...(hasTargetWrite ? { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify(threeRepo!.roots.workRoots.filter((root) => root.access === "write").map((root) => root.path)) } : {}),
         ...(threeRepo?.roots.knowledgeRoot ? { AGENTCLAUDE_KNOWLEDGE_ROOT: threeRepo.roots.knowledgeRoot } : {}),
       },
@@ -624,6 +655,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         // on top; the contract says it must not drop these.
         env: {
           AGENTCLAUDE_ROLE: role,
+        ...guardStackRules,
           // Guard hooks receive only tool paths, not this task's binding. Give
           // them the canonical write roots resolved by preflight; never derive
           // scope from cwd or an agent-provided path.

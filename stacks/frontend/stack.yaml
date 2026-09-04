@@ -16,3 +16,12 @@ commands:
   typecheck: npm run typecheck
 scan_extensions: [.ts, .tsx, .js, .jsx]
 capabilities: [ui, testing]
+
+# T-V5-023 — the layout half of the engineer path rules, and the fallback for a
+# `frontend-engineer` in a workspace with no recorded stack. Exactly the globs
+# `contracts/frontend-engineer.yaml` carried before the split.
+permissions:
+  frontend-engineer:
+    read: ["app/**", "components/**", "package.json", "public/**", "server/**", "src/**", "styles/**"]
+    write: ["app/**", "components/**", "src/components/**", "src/app/**", "styles/**", "public/**"]
+    deny: ["prisma/**", "server/**", "app/api/**"]

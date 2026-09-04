@@ -7,6 +7,10 @@
  *                                (+ <name>/agents/openai.yaml)
  *   taskClassifier.ts +        → workflows/<id>.yml   (T-V3TOK-110, ADR-007)
  *   workflowCatalog.ts
+ *   pathPermissions.ts         → the `sta:guard-rules` block inside
+ *                                .claude/hooks/block-path-permissions.js and
+ *                                .opencode/plugin/sta-guards.js (T-V5-020)
+ *   .claude/hooks/*            → .codex/hooks/* byte-mirrors
  *
  * Target projects get the same bytes at `sta sync` time (syncEngine); this
  * script exists for the Framework repo itself, where the mirrors are committed.
@@ -26,6 +30,13 @@ import {
 } from "../orchestrator/dist/runtime/bindingGenerator.js";
 import { renderStackDigest } from "../orchestrator/dist/profile/stackDigest.js";
 import { generateWorkflowFiles } from "../orchestrator/dist/workflow/workflowCatalog.js";
+import {
+  GUARD_RULES_CLOSE,
+  GUARD_RULES_OPEN,
+  GUARD_RULE_HOSTS,
+  renderGuardRuleBlock,
+} from "../orchestrator/dist/agents/pathPermissions.js";
+import { inspectMarkerBlock } from "../orchestrator/dist/targetcli/knowledgeRender.js";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const lf = (s) => s.replace(/\r\n/g, "\n");
@@ -95,6 +106,58 @@ if (fs.existsSync(commandsDir)) {
       }
     }
     removeStale(spec.dir, keep);
+  }
+}
+
+// --- guard rule block (T-V5-020) -------------------------------------------
+// `UNIVERSAL_DENY`, the workspace artifact lists and the matcher are declared
+// once in agents/pathPermissions.ts. Each hook carries them inside an
+// `sta:guard-rules` marker pair; everything outside the markers is authored,
+// host-specific code this script never touches.
+{
+  const expected = renderGuardRuleBlock();
+  for (const host of GUARD_RULE_HOSTS) {
+    const abs = path.join(ROOT, ...host.path.split("/"));
+    if (!fs.existsSync(abs)) throw new Error(`${host.path} is missing — it carries the generated guard rules`);
+    const current = lf(fs.readFileSync(abs, "utf8"));
+    const inspected = inspectMarkerBlock(current, GUARD_RULES_OPEN, GUARD_RULES_CLOSE, "guard-rules");
+    if (inspected.state !== "valid") {
+      throw new Error(`${host.path}: expected one ${GUARD_RULES_OPEN} / ${GUARD_RULES_CLOSE} pair (${inspected.state})`);
+    }
+    if (inspected.block === expected) continue;
+    // Spliced by index, never String.replace: the generated matcher contains
+    // `$'` and `$)`, which a replacement string reinterprets as substitution
+    // patterns and silently truncates the block.
+    const at = current.indexOf(inspected.block);
+    emit(host.path, current.slice(0, at) + expected + current.slice(at + inspected.block.length));
+  }
+}
+
+// --- .codex/hooks mirror ----------------------------------------------------
+// No Codex-side generator renders these, so they are straight byte-copies of
+// `.claude/hooks/*` — the arrangement `--check-bindings` already enforces.
+// Copying them here is what makes "mutate the declaration, regenerate every
+// copy" true for the guard block above rather than a manual afterthought.
+{
+  const claudeHooks = path.join(ROOT, ".claude", "hooks");
+  const isMirrored = (f) => f.endsWith(".js") || f === "package.json";
+  const names = fs.existsSync(claudeHooks) ? fs.readdirSync(claudeHooks).filter(isMirrored).sort() : [];
+  for (const name of names) {
+    const source = fs.readFileSync(path.join(claudeHooks, name), "utf8");
+    const dest = path.join(ROOT, ".codex", "hooks", name);
+    // `--check-bindings` compares these normalized, so a mirror that differs
+    // only in line endings is already correct — rewriting it would churn files
+    // this task never changed.
+    if (fs.existsSync(dest) && lf(fs.readFileSync(dest, "utf8")) === lf(source)) continue;
+    emit(`.codex/hooks/${name}`, source);
+  }
+  const keep = new Set(names);
+  for (const f of fs.existsSync(path.join(ROOT, ".codex", "hooks")) ? fs.readdirSync(path.join(ROOT, ".codex", "hooks")) : []) {
+    if (isMirrored(f) && !keep.has(f)) {
+      fs.rmSync(path.join(ROOT, ".codex", "hooks", f));
+      console.log(`remove stale .codex/hooks/${f}`);
+      written++;
+    }
   }
 }
 

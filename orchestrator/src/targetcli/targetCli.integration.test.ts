@@ -15,6 +15,7 @@ import { runDoctor } from "../threeRepo/doctor.js";
 import type { InstructionSurfaceEntry } from "../threeRepo/ownership.js";
 import { stringify as stringifyYaml } from "yaml";
 import { inspectBootstrapBlock, inspectGitignoreBlock, stripBootstrapBlock } from "./knowledgeRender.js";
+import { renderGuardRuleBlock } from "../agents/pathPermissions.js";
 import { checkBindings } from "../runtime/bindingGenerator.js";
 
 /**
@@ -818,7 +819,8 @@ describe("software-team-agents — target-first end to end", () => {
       { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer") },
       { relPath: ".claude/commands/summarize.md", content: "---\ndescription: sum\n---\nbody\n" },
       { relPath: ".claude/commands/_shared/guardrails.md", content: "---\ndescription: g\n---\n1. Rule\n" },
-      { relPath: ".opencode/plugin/sta-guards.js", content: "// authored plugin\n" },
+      // Authored payload carrying the generated guard-rule block, exactly as the real plugin does (T-V5-020).
+      { relPath: ".opencode/plugin/sta-guards.js", content: `// authored plugin\n${renderGuardRuleBlock()}` },
       { relPath: "CLAUDE.md", content: "<!-- sta:bootstrap -->\n# b\n<!-- /sta:bootstrap -->\n" },
       { relPath: "AGENTS.md", content: "<!-- sta:bootstrap -->\n# b\n<!-- /sta:bootstrap -->\nFull operating rules: see [CLAUDE.md](CLAUDE.md).\n" },
     ]);
