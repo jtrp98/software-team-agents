@@ -25,8 +25,18 @@ export function sameMajor(a: string, b: string): boolean {
   }
 }
 
+/**
+ * T-V5-030 — the version string alone cannot distinguish two Framework
+ * checkouts on the same linked-checkout install (F-02/F-23): the version
+ * only moves on an intentional bump, while content changes on every commit.
+ * Append the payload digest (T-V5-015) as semver build metadata so
+ * `--version` differs whenever the payload does, without changing what a
+ * plain version comparison sees (`+...` is ignored by `parseVersion` above).
+ */
 export function installedFrameworkVersion(frameworkRoot: string): string {
-  return readTemplateManifest(path.join(frameworkRoot, "templates")).framework_version;
+  const manifest = readTemplateManifest(path.join(frameworkRoot, "templates"));
+  const digest = manifest.payload_digest;
+  return digest ? `${manifest.framework_version}+${digest.slice(0, 12)}` : manifest.framework_version;
 }
 
 export type SyncState = "NOT_INITIALIZED" | "UP_TO_DATE" | "OUTDATED" | "INCOMPATIBLE";

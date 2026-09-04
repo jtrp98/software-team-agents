@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { RUNTIME_IDS, RUNTIME_SUPPORT, SUPPORT_LEVELS, describeRuntimeSupport } from "./runtimeSupport.js";
+import { codexCoverage, opencodeCoverageWithPlugin } from "../targetcli/guardSettings.js";
 
 /** This repo is its own fixture — the README table is the prose half of the claim. */
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
@@ -61,6 +62,16 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
     expect(RUNTIME_SUPPORT.codex.level).toBe("preview");
     expect(RUNTIME_SUPPORT.opencode.level).toBe("experimental");
     expect(RUNTIME_SUPPORT["paid-api"].level).toBe("experimental");
+  });
+
+  /**
+   * T-V5-031 — a runtime's claim must quote the same guard-coverage verdict
+   * `T-V5-008`'s launch check consults (`guardCoverage()` in guardSettings.ts),
+   * not a hand-copied restatement that can drift from it.
+   */
+  it("quotes the exact guard-coverage detail T-V5-008 launch preflight consults", () => {
+    expect(RUNTIME_SUPPORT.codex.claim).toContain(codexCoverage().detail);
+    expect(RUNTIME_SUPPORT.opencode.claim).toContain(opencodeCoverageWithPlugin().detail);
   });
 
   /**

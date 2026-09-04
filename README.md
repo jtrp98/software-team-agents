@@ -14,11 +14,88 @@ Process/workflow layer + orchestrator CLI สำหรับทีมซอฟ�
 
 ไม่ใช่ AI model และไม่ได้มาแทน runtime จริง — ทุก run ของ pipeline ยัง execute ผ่าน runner adapter ที่เลือก. `sta run` default เป็น **Single + Claude Code**; `software-team-agents dev|ba` เป็น interactive lane ที่คนเลือก runtime โดยตรงและไม่ผ่าน V3 router
 
-> **ตั้งทีมใหม่?** เดิน onboarding เต็มทีละขั้นที่ [`TEAM_SETUP_V1.md`](TEAM_SETUP_V1.md) (Install → Bind →
-> Init workspace → Validate → Ready + Troubleshooting) — README นี้เป็น reference, ไม่ใช่ walkthrough
->
 > **ให้ AI ตั้งให้?** ชี้ assistant (Claude Code / Codex / OpenCode) ไปที่ [`prompt-setup.md`](prompt-setup.md) —
 > playbook เดียวกันในรูปแบบที่ agent รันเอง (ดูหัวข้อ [Setup playbooks](#setup-playbooks-prompt-setupmd)).
+
+---
+
+## Getting Started
+
+**(T-V5-029/T-V5-030)** README นี้คือเอกสารเดียวที่เป็นเจ้าของ installation — `TEAM_SETUP_V1.md` เหลือเป็น
+pointer มาที่นี่ Channel ที่ใช้งานจริงวันนี้คือ **linked checkout** (`npm link`); package นี้ไม่เคย publish
+`.tgz` release จริง (`npm run release` เป็นแค่สคริปต์ packing) — รายละเอียดที่ [## Installation](#installation).
+
+`build`/`npm link`/`--version`/`status` ด้านล่างถูกรันจริงระหว่างเขียน section นี้ และ output ที่แปะคือของจริง
+(`T-V5-029` evidence rule) `init`/`sync`/`ba`/`dev` เป็นคำสั่งเดียวกับที่ integration test cover
+(`targetCli.integration.test.ts`) แต่ไม่ได้รันในรอบนี้เพราะจะแก้ไฟล์จริงในสอง repo ที่ใช้เป็น validation case
+(`schoolbright-knowledge`, `sb-web-student`) โดยไม่มีคนขอ — Safety rails ของ pipeline นี้เอง.
+
+```bash
+# 1. Install — link CLI ของ checkout นี้เข้า global (ครั้งเดียวต่อเครื่อง)
+cd <framework-checkout>
+npm --prefix orchestrator run build
+npm link
+```
+
+```text
+$ software-team-agents --version
+1.0.0-rc.3+b06bece78b37
+```
+
+`<version>+<digest 12 hex>` — digest เปลี่ยนทุกครั้งที่ payload เปลี่ยน แม้ version string จะเท่าเดิม เพราะ
+linked checkout ทำให้ content เปลี่ยนได้ทุก commit โดย version ไม่ขยับ (`F-02`/`T-V5-015`/`T-V5-030`).
+
+```bash
+# 2. Knowledge repo — clone ครั้งเดียวต่อเครื่อง ทุก role อ่านได้ (BA เขียน, DEV read-only)
+git clone <your-knowledge-repo-url> <path>
+
+# 3. Init workspace ของคุณ — cd เข้า Knowledge repo (BA) หรือ product repo (DEV) แล้วรัน
+cd <knowledge-repo-or-target-repo>
+software-team-agents init
+software-team-agents status
+```
+
+`status` real output จาก validation pair ของ cycle นี้ (BA workspace, `schoolbright-knowledge`) —
+role detect ถูก, sync state ตรงกับ working tree จริง ไม่ใช่ string ที่ค้าง:
+
+```text
+$ software-team-agents status
+Workspace role: BA (ba)
+Workspace: Knowledge
+Knowledge:
+  C:\src\schoolbright-knowledge (id: schoolbright-knowledge)
+...
+Sync:
+  state: OUTDATED
+  managed updates available (2):
+    update: .claude/hooks/block-path-permissions.js
+    update: .opencode/plugin/sta-guards.js
+    run `software-team-agents sync` to apply these managed updates
+  WARNING: installed Framework payload differs from the payload last synced at this same version
+Claude: READY — 5 agent(s), Framework guards wired (8/8)
+Codex: NOT READY — ... UNGUARDED — no Codex guard mechanism ...
+OpenCode: READY — 5 binding(s) match 5 agent source(s); partial — ...
+```
+
+`status` บอกชื่อไฟล์ที่ค้างและคำสั่งแก้ตรงๆ เสมอ (`T-V5-011`/`T-V5-012`) — ไม่ใช่แค่ "OUTDATED" เฉยๆ:
+
+```bash
+software-team-agents sync    # อัปเดต managed files ตาม state ที่ status รายงาน
+```
+
+```bash
+# 4. ทำงาน
+software-team-agents ba      # BA workspace — launch runtime จาก Knowledge repo
+software-team-agents dev     # DEV workspace — launch runtime จาก Target repo
+```
+
+Guard coverage ต่าง runtime ต่าง — `codex`/`opencode` ไม่ใช่แค่ "support ต่ำกว่า" แต่คือ launch requirement
+จริง ดู [## Runtime ที่รองรับ](#runtime-ที่รองรับ). Health check เดียวที่ต้องรู้: `software-team-agents status`
+(ดู [## Ownership, health และ troubleshooting](#ownership-health-และ-troubleshooting)).
+
+Command เต็ม, upgrade path, role detail → [## Installation](#installation) และ
+[## Quick Start](#quick-start--target-first-software-team-agents) ด้านล่าง — README ที่เหลือเป็น reference
+ไม่ใช่ walkthrough ที่ต้องอ่านตามลำดับ.
 
 ---
 
@@ -75,12 +152,22 @@ project.yaml            ← stack profile ของ project นี้ (current v
 
 สถานะเป็นชุดปิด (`sta runtimes` อ่านจาก source of truth เดียวกัน — `orchestrator/src/runtime/runtimeSupport.ts`, test ตรวจว่าตารางนี้ตรงกับ record จริง): **Supported** = headless pipeline + guards verified บน install จริง · **Preview** = launch paths ใช้ได้, gap ที่เหลือถูกระบุชื่อและมี coverage · **Experimental** = spike-proven เท่านั้น · **Unsupported** = ไม่เสนอ
 
-| Runtime | สถานะ |
-|---|---|
-| **Claude Code** | ✅ **Supported** — implemented + verified (pipeline, guards, capability probe) |
-| **Codex** | ⚠️ **Preview** — `software-team-agents dev\|ba --runtime codex` เปิด interactive session ได้ และ `.codex/agents/*.toml` + skills mirror `.agents/skills/**` ถูก generate ครบ (skills invoke `$name` ได้จริงบน codex-cli 0.149 — spike T-CXC1) แต่ headless pipeline (`sta run`) วิ่งบน Claude Code เป็น default; `CodexAdapter` ฝั่ง orchestrator ยังเป็น implementation ที่ไม่เคย verify กับ install จริง |
-| **OpenCode** | 🧪 **Experimental** (T-OC, planning/v2) — bindings `.opencode/agent/*.md` + plugin `sta-guards.js` sync ครบ, commands mirror `.opencode/commands/**` generate ครบ (`/name` ผ่าน `opencode run --command` — spike T-OCC1), `dev\|ba --runtime opencode` เปิด session ได้, headless เลือกได้ด้วย `sta run --runtime opencode`; adapter/permission ผ่านการ spike พิสูจน์แล้วแต่ exit checks (typecheck/secret ตอนจบ run) ยังไม่มี in-band — รายงานเป็น GUARD GAP และให้ QA round เป็นตัวครอบ |
-| **Paid API** | 🧪 **Experimental** — fallback สำหรับ read-only/document stages ผ่าน official transport ที่ embedding host inject ให้เท่านั้น; ปิดโดย default, ไม่อ่าน credential เอง และไม่มี Target-write guard จึงถูกปฏิเสธก่อน API invocation |
+Guard coverage per runtime (`T-V5-008`) is the same verdict `dev`/`ba` preflight consults before a launch —
+`codex`/`opencode` are not just lower-tier support, they are a **launch requirement**:
+`software-team-agents dev|ba --runtime codex` refuses to start (`NOT READY — UNGUARDED`) unless you pass
+`--allow-unguarded-runtime`, which then prints `[UNGUARDED SESSION — acknowledged]` on the launch line.
+
+| Runtime | สถานะ | Guard coverage |
+|---|---|---|
+| **Claude Code** | ✅ **Supported** — implemented + verified (pipeline, guards, capability probe) | **enforced** — all six guards wired and verified (`block-git`, `block-outside-repo`, `block-path-permissions`, `block-doc-rewrite`, `block-secret-leak`, `require-green-before-stop`) |
+| **Codex** | ⚠️ **Preview** — `software-team-agents dev\|ba --runtime codex` เปิด interactive session ได้ และ `.codex/agents/*.toml` + skills mirror `.agents/skills/**` ถูก generate ครบ (skills invoke `$name` ได้จริงบน codex-cli 0.149 — spike T-CXC1) แต่ headless pipeline (`sta run`) วิ่งบน Claude Code เป็น default; `CodexAdapter` ฝั่ง orchestrator ยังเป็น implementation ที่ไม่เคย verify กับ install จริง | **unguarded** — the payload ships no Codex hook wiring at all; a launch requires `--allow-unguarded-runtime` |
+| **OpenCode** | 🧪 **Experimental** (T-OC, planning/v2) — bindings `.opencode/agent/*.md` + plugin `sta-guards.js` sync ครบ, commands mirror `.opencode/commands/**` generate ครบ (`/name` ผ่าน `opencode run --command` — spike T-OCC1), `dev\|ba --runtime opencode` เปิด session ได้, headless เลือกได้ด้วย `sta run --runtime opencode`; adapter/permission ผ่านการ spike พิสูจน์แล้วแต่ exit checks (typecheck/secret ตอนจบ run) ยังไม่มี in-band — รายงานเป็น GUARD GAP และให้ QA round เป็นตัวครอบ | **partial** — `.opencode/plugin/sta-guards.js` enforces `block-outside-repo` + `block-path-permissions`, each binding's permission block enforces `block-git`; `block-doc-rewrite`, `block-secret-leak`, `require-green-before-stop` have no OpenCode mechanism. A workspace **missing the plugin** is `unguarded`, not merely partial (OpenCode's default posture is allow-all) |
+| **Paid API** | 🧪 **Experimental** — fallback สำหรับ read-only/document stages ผ่าน official transport ที่ embedding host inject ให้เท่านั้น; ปิดโดย default, ไม่อ่าน credential เอง และไม่มี Target-write guard จึงถูกปฏิเสธก่อน API invocation | n/a — no interactive launch path; rejected before invocation when Target-write guards can't apply |
+
+Same verdict, three places: this table, `sta runtimes` (reads `RUNTIME_SUPPORT` directly), and
+`software-team-agents --help`'s `--runtime` line — all three quote `guardSettings.ts`'s `codexCoverage()`/
+`opencodeCoverageWithPlugin()`, so a coverage claim cannot drift from what preflight actually enforces
+(`orchestrator/src/runtime/runtimeSupport.test.ts` pins it).
 
 ข้อจำกัด: การรัน unattended ต้องใช้ `--autonomy edit` หรือ `full` (default `propose` ติด permission prompt ที่ไม่มีคนกดใน headless run)
 
@@ -115,7 +202,7 @@ V3 flags ที่ `sta run` รับจริง:
 
 ## Setup playbooks (`prompt-setup.md`)
 
-`prompt-setup.md` คือ playbook สำหรับ **AI coding assistant** (Claude Code / Codex / OpenCode หรือ agent ใด ๆ ที่อ่านไฟล์ + รัน shell ได้) ให้ตั้ง / ซ่อม / ตรวจ software-team-agents บนเครื่องหนึ่งเครื่องต่อ role เดียว — runtime-agnostic, สมมติแค่ file access + shell คู่ขนานกับ [`TEAM_SETUP_V1.md`](TEAM_SETUP_V1.md) ซึ่งเป็นเวอร์ชันให้ **คน** เดินเองพร้อม Troubleshooting
+`prompt-setup.md` คือ playbook สำหรับ **AI coding assistant** (Claude Code / Codex / OpenCode หรือ agent ใด ๆ ที่อ่านไฟล์ + รัน shell ได้) ให้ตั้ง / ซ่อม / ตรวจ software-team-agents บนเครื่องหนึ่งเครื่องต่อ role เดียว — runtime-agnostic, สมมติแค่ file access + shell คู่ขนานกับ [`## Getting Started`](#getting-started) ด้านบน (คนเดินเอง) และ [`## Ownership, health และ troubleshooting`](#ownership-health-และ-troubleshooting) (Troubleshooting; `TEAM_SETUP_V1.md` ตัวเดิมเหลือเป็น pointer มาที่นี่แล้ว — T-V5-029)
 
 **วิธีใช้:** ให้ assistant อ่านไฟล์นี้ — paste เนื้อหาเข้า session หรือสั่ง "อ่าน `prompt-setup.md` แล้วตั้งให้ที"
 
@@ -139,30 +226,50 @@ V3 flags ที่ `sta run` รับจริง:
 
 Prerequisites: **Node.js ≥ 20**, **Git** + อย่างน้อยหนึ่ง runtime ที่จะใช้ — **Claude Code CLI** (default; login แล้ว) / **Codex CLI** / **OpenCode CLI ≥ 1.18** — ตรวจด้วย `node --version`, `claude --version`, `codex --version`, `opencode --version`
 
-### ติดตั้งจาก `.tgz` (วิธีมาตรฐาน — internal distribution)
+**(T-V5-030) มี channel เดียวที่ใช้งานจริงวันนี้: linked checkout (`npm link`).** package นี้ยังไม่เคย publish
+เป็น registry artifact หรือ `.tgz` release จริงสักครั้ง — `npm run release` มีแค่ *สคริปต์* packing (มัน pack
+ให้เท่านั้น ไม่เคยถูกแจกจริง) เอกสารรุ่นก่อนหน้านี้เคยอ้างชื่อไฟล์ `.tgz` ที่ไม่เคยมีอยู่จริง — แก้แล้วที่นี่ (F-23).
 
-package เป็น `private`: ไม่ publish ขึ้น registry artifact เดียวคือไฟล์ `.tgz` + SHA-256 checksum ที่ได้จาก `npm run release` ฝั่ง framework ผู้รับไม่ต้อง clone Framework repo เลย:
+### ติดตั้งจาก linked checkout (`npm link`) — วิธีที่ใช้งานจริง
 
 ```bash
-# ติดตั้ง (ไฟล์ .tgz แจกกันภายในทีม พร้อมไฟล์ .sha256 สำหรับตรวจ integrity)
-npm i -g ./software-team-agents-1.0.0-rc.1.tgz
-software-team-agents --version          # ต้องตรงกับ version ในชื่อไฟล์
+cd <framework-checkout>
+npm --prefix orchestrator run build   # tsc -> orchestrator/dist
+npm link                              # ผูก global `sta` / `software-team-agents` เข้ากับ checkout นี้
+software-team-agents --version        # ยืนยัน — <package.json version>+<payload digest 12 ตัวแรก>
 ```
 
-อัปเกรด — ติดตั้ง `.tgz` version ใหม่ทับ แล้ว sync แต่ละ workspace ตาม:
+`npm link` ชี้ bin ทั้งสองตัวไปที่ checkout ตรงๆ — แก้ source แล้ว `npm --prefix orchestrator run build`
+รอบใหม่ มีผลทันทีไม่ต้อง reinstall. `--version` พิมพ์ **version string + payload digest** เสมอ (เช่น
+`1.0.0-rc.3+b06bece78b37`) เพราะ linked checkout ทำให้ version string เดิมแต่ payload เปลี่ยนได้ทุก commit
+(`F-02`) — digest ต่างกันคือ payload ต่างกันจริง แม้ version string จะเท่ากัน (`T-V5-015`/`T-V5-030`).
+
+อัปเกรด — `git pull` แล้ว rebuild ใน checkout เดิม แล้ว sync แต่ละ workspace:
 
 ```bash
-npm i -g ./software-team-agents-1.0.0-rc.1.tgz
+cd <framework-checkout> && git pull && npm --prefix orchestrator run build
 cd my-project && software-team-agents sync
 ```
 
-ถอนการติดตั้ง — ลบเฉพาะ CLI ไม่แตะ Knowledge/Target/project source ใด ๆ:
+ถอนการติดตั้ง:
 
 ```bash
-npm uninstall -g software-team-agents
+npm unlink -g software-team-agents
 ```
 
-> Framework developer: `npm run release` (typecheck → tests → build → pack → SHA-256) สร้าง `release/software-team-agents-x.y.z.tgz` version เดียวใน root `package.json` คือ single source ที่ตั้งชื่อ `.tgz`, stamp ลง `templates/manifest.json` และ report โดย `--version` · โหมดพัฒนาใช้ `npm link` แทนได้ (bin ชี้ build output — `npm run build` ก่อนใช้งาน)
+### ติดตั้งจาก `.tgz` — เมื่อไม่มี Framework checkout บนเครื่องนี้
+
+สำหรับคนที่ไม่ได้/ไม่ต้อง clone Framework repo: ผู้ดูแล Framework รัน `npm run release`
+(typecheck → tests → build → `npm pack` → SHA-256 sidecar) แล้วแจกไฟล์ `release/<name>-<version>.tgz` +
+`.sha256` ที่ได้จริงจากรันนั้น — **ชื่อไฟล์ต้องตรงกับ `package.json` `version` ปัจจุบันเท่านั้น อย่าเขียน
+version เจาะจงในเอกสาร เพราะมันเปลี่ยนทุก release**:
+
+```bash
+npm i -g ./software-team-agents-<version>.tgz   # <version> = ชื่อไฟล์ .tgz ที่ได้รับจริง
+software-team-agents --version                  # version ต้องตรงกับชื่อไฟล์ (digest อาจต่างกันคนละ build)
+```
+
+อัปเกรด/ถอนการติดตั้งเหมือน linked checkout ด้านบน (`npm i -g` ทับด้วย `.tgz` ใหม่ / `npm uninstall -g software-team-agents`).
 
 ### Development checkout
 
@@ -591,8 +698,8 @@ stack:
 ## Workflow ตัวอย่าง End-to-End
 
 ```bash
-# 0) ติดตั้ง (ครั้งเดียวต่อเครื่อง)
-npm i -g ./software-team-agents-1.0.0-rc.1.tgz
+# 0) ติดตั้ง (ครั้งเดียวต่อเครื่อง) — linked checkout เป็น channel จริง (ดู ## Installation)
+cd <framework-checkout> && npm --prefix orchestrator run build && npm link
 
 # 1) BA — เขียน requirement ใน Knowledge repo
 git clone https://github.com/<org>/company-knowledge.git C:\src\company-knowledge
@@ -629,6 +736,90 @@ cd C:\src\my-product && software-team-agents status
 software-team-agents sync
 software-team-agents status                 # syncState: UP_TO_DATE
 ```
+
+## Ownership, health และ troubleshooting
+
+**(T-V5-032)** สิบคำถามพื้นฐานของ developer ใหม่ — ตอบได้จากเอกสารเดียวนี้ (`## Getting Started` +
+section นี้) บวกตารางเดียว:
+
+| # | คำถาม | คำตอบอยู่ที่ |
+|---|---|---|
+| 1 | ต้อง install อะไร | [## Getting Started](#getting-started) ข้อ 1 — `npm link` |
+| 2 | update ยังไง | [## Getting Started](#getting-started) ข้อ 1 (`git pull` + rebuild) — [## Installation](#installation) |
+| 3 | ตรวจ "ติดตั้งถูกไหม" ด้วยคำสั่งเดียวอะไร | `software-team-agents status` (ดู Health check ด้านล่าง) |
+| 4 | ไฟล์ไหน generated, authored, machine-local | ตาราง Ownership ด้านล่าง (derive จาก `status`'s Instruction surface) |
+| 5 | BA ทำงานที่ไหน, DEV ทำงานที่ไหน | [Role Workspace](#role-workspace--ba-ทำงานใน-knowledge-dev-ทำงานใน-target) |
+| 6 | runtime ไหนใช้ได้, guard ครอบแค่ไหน | [## Runtime ที่รองรับ](#runtime-ที่รองรับ) |
+| 7 | command หลักมีอะไรบ้าง | [## Quick Start](#quick-start--target-first-software-team-agents) |
+| 8 | sync ทำอะไร, ปลอดภัยแค่ไหน | [## Ownership model](#ownership-model), Troubleshooting #4 ด้านล่าง |
+| 9 | พังแล้วแก้ยังไง (10 อาการที่พบจริง) | Troubleshooting ด้านล่าง |
+| 10 | ให้ AI ตั้งให้แทนได้ไหม | [## Setup playbooks](#setup-playbooks-prompt-setupmd) (`prompt-setup.md`) |
+
+### Health check
+
+คำสั่งเดียวที่ตอบ "ติดตั้งถูกไหม": **`software-team-agents status`** (`--json` สำหรับ machine-readable).
+อ่านจากบนลงล่าง — ทุกบรรทัดบอกวิธีแก้ตัวเองถ้าไม่ READY (`Role:`/`Workspace:`, `Knowledge:`, `Sync:`,
+`Claude:`/`Codex:`/`OpenCode:`). `status` ไม่เขียนอะไรเลย ปลอดภัยรันซ้ำได้ทุกเมื่อ (`T-V3-01`).
+`sta doctor` (รันจากในตัว workspace เอง ไม่ต้อง `--project-root`, `T-V5-005`) ให้ diagnostic ละเอียดกว่า
+พร้อมคำสั่งแก้ที่ปลอดภัยสำหรับ workspace ที่ยืนอยู่จริง.
+
+### Ownership table (generated / authored / machine-local)
+
+Derive ได้จาก `status`'s **Instruction surface** list ตรงๆ (แต่ละ path มี `owner`/`precedence` พิมพ์ออกมาแล้ว
+ไม่ต้อง maintain ตารางนี้ด้วยมือ — ตัวอย่างข้างล่างคือ class ที่มีจริง ไม่ใช่รายการไฟล์ที่ต้อง sync ทีละบรรทัด):
+
+| Class | precedence (จาก `status --json` `instructionSurface[].precedence`) | ตัวอย่าง | แก้ยังไง |
+|---|---|---|---|
+| **Generated** (framework-managed) | `framework-managed` | `.claude/agents/*.md`, `.codex/**`, `.opencode/agent/**`, `.opencode/plugin/sta-guards.js`, `contracts/*.yaml`, `stacks/*/stack.yaml` | ห้ามแก้มือ — `software-team-agents sync` เท่านั้น; แก้แล้ว `sync` เห็นเป็น conflict |
+| **Authored, project-owned with a framework block** | `project-owned-with-framework-block` | root `CLAUDE.md`, `AGENTS.md` | prose นอก `<!-- sta:bootstrap -->` เป็นของ project แก้ได้อิสระ; sync แตะเฉพาะใน marker |
+| **Authored, merged** | `project-owned-merged` | `.claude/settings.json` | project keys/hooks คงอยู่; sync เติมเฉพาะ guard registration ที่ขาด |
+| **Authored, untouched** | `project-owned-untouched` | `CLAUDE.local.md`, nested `AGENTS.md`, `.opencode/package.json` | sync detect/report แต่ไม่แก้ — ของ project 100% |
+| **Machine-local** (ไม่ sync, ไม่ commit) | *(ไม่อยู่ใน instruction surface — เป็น domain แยก)* | `.workflow/**` (state.db, packets, evidence, runs), `.agent-team/backups/**`, `%LOCALAPPDATA%\software-team-agents\installation.yaml` | `init` เขียน managed `.gitignore` block ให้เอง (`T-V5-006`); ลบได้อิสระ — regenerate ได้เสมอ |
+
+Real ตัวอย่างจาก validation pair ของ cycle นี้ (`schoolbright-knowledge` BA workspace, 22 instruction-surface
+entries): 16 `framework-managed`, 2 `project-owned-with-framework-block` (`CLAUDE.md`/`AGENTS.md`), 1
+`project-owned-merged` (`.claude/settings.json`), 3 `project-owned-untouched` — วัดจริงด้วย
+`software-team-agents status` ในรอบเขียนเอกสารนี้.
+
+### Troubleshooting
+
+สิบอาการนี้ย้ายมาจาก `TEAM_SETUP_V1.md` (เดิม) — คัดเฉพาะที่ reproduce ได้จริงกับ build หลัง V5;
+ไม่มีอาการไหนที่ Phase 1–4 ลบไปแล้วถูกทิ้งไว้เป็นของปัจจุบัน:
+
+1. **"requirement/design หลุดไปออกใน Target แทน Knowledge"** — สัญญาณ: `_docs/module/<name>/` หรือ
+   `_docs/status.md`'s `## Modules` table อยู่ใน workspace `role: dev`. ตรวจ: `software-team-agents status
+   --json` → `knowledgeBoundButUninitialized`; `sta --check-workspace --project-root <target-repo>` (T-WG4)
+   ชี้ทุกไฟล์ที่หลงพร้อมปลายทางที่ถูก. แก้: `cd <knowledge-root> && software-team-agents init --role ba`
+   (ปิด root cause) แล้ว copy ไฟล์ไป Knowledge, merge `## Modules` row, ลบของเดิมจาก Target.
+2. **`status` เตือน roster drift** — agent prompt ของอีก workspace role ปนอยู่ (T-WG2). แก้:
+   `software-team-agents sync --force` (backup ก่อนเสมอ); `sync` เฉยๆ ปฏิเสธและ report conflict แทนเขียนทับ.
+3. **`dev` ปฏิเสธ launch ด้วย "no Knowledge repository bound"** — ถ้ามี Knowledge repo เป็น sibling
+   directory บนเครื่องเดียวกัน `dev` จะ**เสนอ bind ให้เอง** แบบ interactive (`T-V5-009`); ตอบ `y` ก็เสร็จ ไม่ต้อง
+   รู้จัก `installation.yaml` มาก่อน. ไม่ interactive (headless) หรือไม่มี sibling ที่ใช้ได้ — ยัง fail-closed:
+   ตั้ง `knowledge.path` ใน `.agent-team/config.yaml` เอง หรือ `sta configure knowledge-root <path>`
+   (machine-wide).
+4. **`status`/`sync` รายงาน conflict บนไฟล์ framework จัดการ** — อ่าน `detail`/recovery line ตรงๆ: 3 แบบ —
+   `user-modified` (revert หรือ claim เป็น `overrides`/`--force`), `stale-modified` (ไฟล์ถูกถอดจาก template
+   แล้วแต่ยังมีการแก้ค้าง — ย้ายออกเอง), `roster-drift` (ดู #2).
+5. **`Claude`/`Codex`/`OpenCode` = NOT READY** — `software-team-agents sync` แล้ว `status` ซ้ำ ข้อความบอกไฟล์
+   ที่ขาดตรงๆ. **`Codex: NOT READY` เป็นค่า default ที่ตั้งใจ** ตั้งแต่ `T-V5-008` — Codex ไม่มี guard
+   mechanism เลย เปิดใช้แบบตั้งใจด้วย `--allow-unguarded-runtime` เท่านั้น ไม่ใช่ bug ที่ต้อง "แก้ให้ READY".
+6. **พิมพ์ `/xxx` แล้วไม่เจอ (slash command หาย)** — `software-team-agents sync` (ship ผ่าน templates เหมือน
+   `.claude/agents/`) แล้ว restart session (Claude Code โหลด command list ตอนเริ่ม).
+7. **`$xxx` ไม่เจอใน Codex (skills mirror หาย)** — `software-team-agents sync` (generate จาก
+   `.claude/commands/**` ใหม่เสมอ, ไม่ต้อง restart — Codex reload เอง); ยังไม่เห็น → `sta --check-bindings`.
+8. **`/xxx` ใน OpenCode ไม่เจอ (commands mirror หาย)** — `software-team-agents sync`; แก้เนื้อหาที่ source
+   เดียวเสมอคือ `.claude/commands/<name>.md` ห้าม hand-edit `.opencode/commands/**` (`--check-bindings`
+   จับ byte-diff ได้).
+9. **Claude Design MCP ไม่ connect (uxui-designer)** — เพิ่ม server ครั้งเดียว: `claude mcp add --scope user
+   --transport http claude-design https://api.anthropic.com/v1/design/mcp`, login ด้วย `/design-login`,
+   ตรวจ identity gate ตรง (`sta configure identity --claude-email <email>`); ไม่ผ่าน → ใช้ Path A/B
+   (handoff/export files) แทนได้เสมอ.
+10. **Knowledge repo เดิมมีโครงสร้างไม่ตรง canonical shape** — คนละเรื่องกับ binding/sync (#1–4); ใช้
+    [`prompt-reconcile-knowledge-layout.md`](prompt-reconcile-knowledge-layout.md) ให้ AI สแกน/เสนอทางแก้
+    ทีละรายการ ไม่มีการลบ/ย้ายโดยไม่ถามก่อน.
+
+หลังแก้อาการไหน — รัน `software-team-agents status` ซ้ำ ยืนยันว่าอาการนั้นหายไปจริง.
 
 ## Development / Contributing
 

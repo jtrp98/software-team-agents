@@ -400,17 +400,8 @@ function claudeCoverage(wiring: GuardWiringStatus): GuardCoverage {
  * the plugin's own header says so, and OpenCode's default posture is allow-all,
  * so a missing plugin means nothing is enforced at all.
  */
-function opencodeCoverage(targetRoot: string): GuardCoverage {
-  const pluginPresent = fs.existsSync(path.join(targetRoot, ...OPENCODE_PLUGIN_PATH.split("/")));
-  if (!pluginPresent) {
-    return {
-      runtime: "opencode",
-      level: "unguarded",
-      enforced: [],
-      unenforced: ALL_GUARD_CAPABILITIES,
-      detail: `no ${OPENCODE_PLUGIN_PATH} — OpenCode's default posture is allow-all, so block-git, block-outside-repo, block-path-permissions, block-doc-rewrite, block-secret-leak and require-green-before-stop are all inactive; run software-team-agents sync`,
-    };
-  }
+/** The `partial` verdict when the plugin is present — pure/static, so documentation (T-V5-031) can quote it without a workspace. */
+export function opencodeCoverageWithPlugin(): GuardCoverage {
   return {
     runtime: "opencode",
     level: "partial",
@@ -422,6 +413,20 @@ function opencodeCoverage(targetRoot: string): GuardCoverage {
   };
 }
 
+function opencodeCoverage(targetRoot: string): GuardCoverage {
+  const pluginPresent = fs.existsSync(path.join(targetRoot, ...OPENCODE_PLUGIN_PATH.split("/")));
+  if (!pluginPresent) {
+    return {
+      runtime: "opencode",
+      level: "unguarded",
+      enforced: [],
+      unenforced: ALL_GUARD_CAPABILITIES,
+      detail: `no ${OPENCODE_PLUGIN_PATH} — OpenCode's default posture is allow-all, so block-git, block-outside-repo, block-path-permissions, block-doc-rewrite, block-secret-leak and require-green-before-stop are all inactive; run software-team-agents sync`,
+    };
+  }
+  return opencodeCoverageWithPlugin();
+}
+
 /**
  * Codex ships no guard payload at all: there is no `templates/.codex/`, so
  * nothing wires a hook in a Codex workspace, and the framework's own note in
@@ -431,7 +436,8 @@ function opencodeCoverage(targetRoot: string): GuardCoverage {
  * is verified, the only honest verdict is `unguarded` — building one is
  * deliberately out of V5's scope.
  */
-function codexCoverage(): GuardCoverage {
+/** Pure/static — Codex has no per-workspace state to check, so this doubles as the documentation source (T-V5-031). */
+export function codexCoverage(): GuardCoverage {
   return {
     runtime: "codex",
     level: "unguarded",

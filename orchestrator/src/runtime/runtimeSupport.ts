@@ -21,6 +21,8 @@
  * implementation" failure T-V1-04 exists to prevent.
  */
 
+import { codexCoverage, opencodeCoverageWithPlugin } from "../targetcli/guardSettings.js";
+
 export type RuntimeSupportLevel = "supported" | "preview" | "experimental" | "unsupported";
 
 export const SUPPORT_LEVELS: readonly RuntimeSupportLevel[] = [
@@ -49,12 +51,14 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
   codex: {
     level: "preview",
     claim:
-      "interactive sessions via `--runtime codex` work and bindings generate completely; the headless adapter has never been verified against a real install — UAT covers Claude Code only",
+      `interactive sessions via \`--runtime codex\` work and bindings generate completely; the headless adapter has never been verified against a real install — UAT covers Claude Code only. ` +
+      `Guard coverage: ${codexCoverage().detail} — a launch requires --allow-unguarded-runtime (T-V5-008)`,
   },
   opencode: {
     level: "experimental",
     claim:
-      "spike-proven on 1.18.21 (probe, headless run, guards report); exit checks have no in-band enforcement (`GUARD GAP` + QA round cover it) and other versions' tool arg-shapes are unverified",
+      `spike-proven on 1.18.21 (probe, headless run, guards report); exit checks have no in-band enforcement (\`GUARD GAP\` + QA round cover it) and other versions' tool arg-shapes are unverified. ` +
+      `Guard coverage (once synced): ${opencodeCoverageWithPlugin().detail}`,
   },
   "paid-api": {
     level: "experimental",

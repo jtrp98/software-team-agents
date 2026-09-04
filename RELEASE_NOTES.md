@@ -57,6 +57,21 @@ Behaviour changes users will feel are listed here as each task lands.
   copies until a person runs `git rm -r --cached policies/` and commits that version-control change.
   Sync itself never runs git and never removes the working copies (`T-V5-016`).
 
+### Distribution
+
+- **The real install channel is documented as what it is: `npm link` onto a Framework checkout**
+  (`T-V5-030`, audit finding `F-23`). There has never been a published `.tgz` release — `npm run
+  release` produces a packing *script's* output, not a distributed artifact — and the README/
+  `TEAM_SETUP_V1.md` named a version (`1.0.0-rc.1.tgz`) that never shipped. Getting Started now leads
+  with `npm link`; the `.tgz` path stays documented as the route for someone who has not cloned the
+  Framework, produced by `npm run release` on demand.
+- **`software-team-agents --version` now reports the payload digest alongside the version string**
+  (`<version>+<digest12>`, e.g. `1.0.0-rc.3+3f9a1c2b7e4d`), so two Framework checkouts on the same
+  linked-checkout channel — and therefore the same version string — are distinguishable the moment
+  their payload differs. `--version`'s regex shape (`\d+\.\d+\.\d+…`) is unchanged; the digest is
+  semver build metadata appended, not a restructured string, and ordinary version comparisons
+  (`sameMajor`, `classifySyncState`) ignore it exactly as they ignore any other build-metadata suffix.
+
 ## Internal V1 Stable
 
 **Internal V1 Stable = P0 → P1 → P2 → P3 → P4 each executed and reported,

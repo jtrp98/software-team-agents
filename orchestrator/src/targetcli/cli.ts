@@ -38,7 +38,9 @@ export const TARGET_USAGE =
   "  --force                sync/init: overwrite locally-modified managed files (backed up first)\n" +
   "  --confirm-agents-pointer sync: reduce a provable CLAUDE.md duplicate to the generated AGENTS.md pointer (backed up)\n" +
   "  --no-auto-sync         dev/ba: refuse to run when managed assets are outdated\n" +
-  "  --runtime <name>       dev/ba: claude (default), codex or opencode\n" +
+  "  --runtime <name>       dev/ba: claude (default), codex or opencode — guard coverage differs per\n" +
+  "                         runtime (claude: enforced, opencode: partial, codex: unguarded); run\n" +
+  "                         `sta runtimes` for the coverage detail behind each verdict\n" +
   "  --allow-unguarded-runtime  dev/ba: deliberately launch a runtime that enforces no guard\n" +
   "  --json                 status: machine-readable output\n" +
   "  -h, --help             show this help\n" +

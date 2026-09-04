@@ -9,11 +9,13 @@
 > and set me up"). The playbook is runtime-agnostic: it only assumes file access
 > and a shell.
 >
-> **Human-facing counterpart:** [`TEAM_SETUP_V1.md`](TEAM_SETUP_V1.md) is the
-> same onboarding flow written for a person to follow by hand, with a
-> Troubleshooting section (including the exact incident this playbook's
-> Phase-0 detectors exist to catch — see "req หลุดไป Target" there). Point a
-> user who wants to do this themselves at that file instead of this one.
+> **Human-facing counterpart:** [`README.md` § Getting Started](README.md#getting-started) is the
+> same onboarding flow written for a person to follow by hand; its
+> [§ Ownership, health and troubleshooting](README.md#ownership-health-และ-troubleshooting) section
+> (including the exact incident this playbook's Phase-0 detectors exist to
+> catch — see "requirement/design หลุดไปออกใน Target" there) covers recovery. Point a
+> user who wants to do this themselves at README instead of this one
+> (`TEAM_SETUP_V1.md` is now a pointer to the same place — T-V5-029).
 
 ---
 
