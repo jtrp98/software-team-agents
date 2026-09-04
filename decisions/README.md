@@ -17,6 +17,7 @@ The test: would this decision matter to a module that doesn't exist yet? If yes,
 | ADR | Decision |
 |---|---|
 | ADR-023 | [Freeze V4 framework capabilities until the stabilization exit condition is met](ADR-023-v4-framework-feature-freeze.md) |
+| ADR-024 | [`_docs` is the authoritative knowledge system; `knowledge/` stops mirroring it](ADR-024-docs-vs-knowledge.md) |
 
 ## Format
 
