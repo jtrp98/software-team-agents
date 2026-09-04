@@ -215,6 +215,27 @@ function sliceRequirementSection(markdown: string, trace: TraceabilityScope): Tr
   return { verdict, text: markdown, skipped: [] };
 }
 
+/**
+ * T-V5-035 (F-04) — the subset of `selectDocContext`'s fallback conditions
+ * that depend only on the document's own headings/ids, not on a run's stage,
+ * phase or traceability graph. `--check-doc-structure` reuses this to flag a
+ * document that would fall back to whole-document context on *any* run,
+ * before a real run hits it — same predicates `selectDocContext` already
+ * evaluates, not a second set of rules.
+ */
+export function structuralFallbackReason(doc: DocKind, markdown: string): string | null {
+  if (sectionMap(markdown).length === 0) {
+    return "no `## ` headings found — nothing to slice along, so every run reads it whole";
+  }
+  if (doc === "design" && !sectionMap(markdown).some((s) => isAlwaysReadDesignSection(s.heading))) {
+    return "none of §10's always-read sections (Feasibility / Risks / Open Questions) are present — every run reads it whole";
+  }
+  if (doc === "requirement" && extractIds(markdown, "REQ").length === 0) {
+    return "no REQ-NNN rule ids — relevance cannot be established, so every run reads it whole";
+  }
+  return null;
+}
+
 export function selectDocContext(req: ContextRequest, markdown: string): SelectedContext {
   const full = readsInFull(req);
   if (full) return whole(req.doc, markdown, full);

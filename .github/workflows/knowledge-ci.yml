@@ -43,6 +43,17 @@ jobs:
         continue-on-error: true
         run: sta --check-doc-structure
 
+      # T-V5-033/034 (F-04) — document/section byte ceilings. Unlike the
+      # report-only steps above (T-V5-027, still pending their own triage),
+      # this one is blocking from the day it lands: an over-ceiling document
+      # is caught in CI, on the change that grew it, and fixed by an editorial
+      # split (policies/documentation.md §4 — never automatic). A `ba` session
+      # is never blocked by it — see the non-blocking "Document size" preflight
+      # note this same checker feeds (T-V5-034).
+      - name: Check every module document's byte ceiling
+        if: steps.sta.outputs.found == 'true'
+        run: sta --check-doc-size
+
       - name: Check plan.md task graphs
         if: steps.sta.outputs.found == 'true'
         continue-on-error: true

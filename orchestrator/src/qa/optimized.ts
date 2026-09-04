@@ -120,6 +120,14 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
     const effort = selectQaEffort(opts.taskLevel?.(req), signals, { allowSkip: opts.allowQaSkip });
 
     const deterministic = opts.deterministicVerification?.(req);
+    // T-V5-036 (F-20) — the run-log field records what happened, not what was
+    // requested: "enabled" only where the sweep actually produced a result.
+    // `opts.deterministicGate` still governs the *prompt wording* below (the
+    // caller's stated intent for this round), but the outcome is derived from
+    // the real `deterministic` value so a caller that requested "enabled" and
+    // got no result back (e.g. no code-producing stage ran first) is never
+    // reported as having run the gate.
+    const gateOutcome: "enabled" | "disabled" = deterministic ? "enabled" : "disabled";
     if (deterministic && !deterministic.passed) {
       // No LLM call happens here — the tool output IS the explanation. No
       // structured failure on purpose: recoveryPolicy's no-failure route sends
@@ -134,7 +142,7 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
         outcome: {
           ...failed.outcome,
           qa_effort: effort.effort,
-          deterministic_gate: opts.deterministicGate ?? "enabled",
+          deterministic_gate: gateOutcome,
         },
       };
     }
@@ -146,7 +154,7 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
         );
         return {
           ...failed,
-          outcome: { ...failed.outcome, qa_effort: "skip", deterministic_gate: opts.deterministicGate ?? "disabled" },
+          outcome: { ...failed.outcome, qa_effort: "skip", deterministic_gate: gateOutcome },
           gateEvidence: { ...(failed.gateEvidence ?? {}), qaModeDecision: decision },
         };
       }
@@ -162,7 +170,7 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
         unverifiedBehaviour: [],
       };
       return {
-        outcome: { tokens: 0, cost: 0, result: "PASS", qa_effort: "skip", deterministic_gate: "enabled" },
+        outcome: { tokens: 0, cost: 0, result: "PASS", qa_effort: "skip", deterministic_gate: gateOutcome },
         artifactType: ArtifactType.QA_REPORT,
         artifact: report,
         gateEvidence: { qaModeDecision: decision },
@@ -195,7 +203,7 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
       outcome: {
         ...result.outcome,
         qa_effort: effort.effort,
-        deterministic_gate: opts.deterministicGate ?? (opts.deterministicVerification ? "enabled" : "disabled"),
+        deterministic_gate: gateOutcome,
       },
       gateEvidence: { ...(result.gateEvidence ?? {}), qaModeDecision: decision },
     };

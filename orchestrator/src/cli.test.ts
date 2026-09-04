@@ -60,6 +60,7 @@ describe("parseArgs", () => {
       checkRepos: false,
       checkEnvironments: false,
       checkDocStructure: false,
+      checkDocSize: false,
       checkPlan: false,
       checkKnowledge: false,
       checkInstallation: false,
@@ -827,6 +828,28 @@ describe("T-V3TOK-041 context verb", () => {
       expect(await runCli(["context", "backend-engineer", "--task", "T-PACKET", "--packet", "--json", "--project-root", root], root)).toBe(0);
       expect(JSON.parse(logs.join("\n"))).toMatchObject({ task_id: "T-PACKET", scope: { allow: ["server/**"] } });
       expect(USAGE).toContain("--packet");
+    } finally {
+      console.log = original;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("T-V5-037: sta context persists an assembled-size measurement sta tokens then reports", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-context-tokens-"));
+    const dir = path.join(root, "_docs", "module", "sales");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "requirement.md"), "# Req\n\n## Scope\nMVP\n", "utf8");
+    fs.writeFileSync(path.join(dir, "design.md"), "# Design\n\n## Risks & Dependencies\nnone\n\n## Open Questions\nnone\n", "utf8");
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+    try {
+      expect(await runCli(["context", "backend-engineer", "--module", "sales", "--phase", "1", "--project-root", root], root)).toBe(0);
+      logs.length = 0;
+      expect(await runCli(["tokens", "--project-root", root], root)).toBe(0);
+      const output = logs.join("\n");
+      expect(output).not.toContain("estimated-input=not reported");
+      expect(output).toMatch(/docs=\d+\/\d+ before-slice/);
     } finally {
       console.log = original;
       fs.rmSync(root, { recursive: true, force: true });

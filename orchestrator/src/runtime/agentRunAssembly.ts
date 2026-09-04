@@ -129,7 +129,13 @@ export function renderSlicedDocs(selected: SelectedContext[], cm: ContextManager
   }
   for (const s of selected) {
     parts.push("", `### ${s.doc}.md`);
-    if (!s.fullDocument && s.skipped.length > 0) {
+    if (s.fullDocument) {
+      // T-V5-035 (F-04) — a fallback to the whole document is a fact about
+      // this run's context, not just a number in `sta context`'s composition
+      // report; naming it here is what makes the fallback attributable in
+      // the one place an agent (and a run log reading the same text) sees it.
+      parts.push(`_Sent in full — ${s.reason}._`, "");
+    } else if (s.skipped.length > 0) {
       parts.push(
         `_Known-irrelevant sections not included: ${s.skipped.join(", ")}. ` +
           `The full file is at \`${cm.path(s.doc)}\` — read it if one of those turns out to matter._`,

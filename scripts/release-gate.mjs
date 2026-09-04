@@ -96,6 +96,7 @@ for (const flag of [
   "--check-repos",
   "--check-environments",
   "--check-doc-structure",
+  "--check-doc-size",
   "--check-knowledge",
   "--check-roles",
   // The bindings check is what caught the last silent rendering drift; CI does

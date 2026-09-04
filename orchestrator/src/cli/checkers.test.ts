@@ -86,6 +86,11 @@ const EXPECTED: Record<string, { ok: string; fail: string; notes: CheckerDescrip
     fail: "[orchestrator] module documents have structural problems:",
     notes: "leading",
   },
+  "--check-doc-size": {
+    ok: "[orchestrator] every module document and section present is inside its byte ceiling.",
+    fail: "[orchestrator] module documents or sections are over their byte ceiling (policies/documentation.md §4):",
+    notes: "leading",
+  },
   "--check-plan": {
     ok: "[orchestrator] every plan.md checked is a valid task graph.",
     fail: "[orchestrator] plan task graphs have problems:",
@@ -134,8 +139,8 @@ describe("CHECKERS table (T-V4-CLI-002)", () => {
     expect(actual).toEqual(EXPECTED);
   });
 
-  it("is a plain array of 18 rows in the same order the if-chain evaluated", () => {
-    expect(CHECKERS).toHaveLength(18);
+  it("is a plain array of 19 rows in the same order the if-chain evaluated", () => {
+    expect(CHECKERS).toHaveLength(19);
     expect(CHECKERS.map((c) => c.cliFlag)).toEqual(Object.keys(EXPECTED));
   });
 

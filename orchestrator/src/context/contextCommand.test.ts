@@ -76,4 +76,18 @@ describe("sta context command (T-V3TOK-040/041/043)", () => {
     expect(result.composition.direct_file_reads).toBe(5);
     expect(contextCommandJson(result)).toMatchObject({ composition: { doc_chars_before: expect.any(Number), saved_pct: expect.any(Number) } });
   });
+
+  it("names each fallback document and its structural reason, not just a count (T-V5-035)", async () => {
+    const root = rootWith({ sales: { "requirement.md": REQUIREMENT, "design.md": DESIGN, "plan.md": PLAN } });
+    const unknown = await buildContextCommand({ role: "backend-engineer", moduleHint: "sales", taskId: "BE-999", projectRoot: root, env: {} });
+    expect(unknown.composition.fallback_to_full_documents).toBeGreaterThan(0);
+    expect(unknown.composition.fallback_documents).toEqual(
+      expect.arrayContaining([expect.objectContaining({ doc: "plan", reason: expect.stringContaining("phase") })]),
+    );
+    const rendered = renderContextCommand(unknown);
+    expect(rendered).toContain("fallback: plan —");
+    expect(contextCommandJson(unknown)).toMatchObject({
+      composition: { fallback_documents: expect.arrayContaining([expect.objectContaining({ doc: "plan" })]) },
+    });
+  });
 });

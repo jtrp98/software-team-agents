@@ -2,7 +2,15 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { checkDocStructure, checkOneDoc, extractStructure } from "./docStructure.js";
+import {
+  checkDocStructure,
+  checkDocSize,
+  checkOneDoc,
+  checkOneDocSize,
+  extractStructure,
+  SECTION_SIZE_CEILING_BYTES,
+  DOCUMENT_SIZE_CEILING_BYTES,
+} from "./docStructure.js";
 
 const REQUIREMENT_OK = `
 # Sales CRM — Requirements
@@ -238,5 +246,121 @@ describe("checkDocStructure", () => {
     const result = checkDocStructure(tmp);
     expect(result.ok).toBe(false);
     expect(result.problems.some((p) => p.startsWith("crm/requirement.md"))).toBe(true);
+  });
+
+  it("notes a requirement.md that would fall back for having no REQ ids (T-V5-035)", () => {
+    const dir = path.join(tmp, "_docs", "module", "crm");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "requirement.md"), REQUIREMENT_OK.replace(/REQ-001: x/, "no ids here"));
+    const result = checkDocStructure(tmp);
+    expect(result.ok).toBe(true);
+    expect(result.notes.some((n) => n.includes("crm/requirement.md") && n.includes("REQ-NNN"))).toBe(true);
+  });
+
+  it("notes a design.md missing every §10 always-read section (T-V5-035)", () => {
+    const dir = path.join(tmp, "_docs", "module", "crm");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "design.md"),
+      "# Design\n\n## Data Model\nx\n\n## Modules\nx\n\n## Change Log\n- x\n",
+    );
+    const result = checkDocStructure(tmp);
+    expect(result.notes.some((n) => n.includes("crm/design.md") && n.includes("always-read"))).toBe(true);
+  });
+
+  it("does not note a well-formed requirement.md/design.md", () => {
+    const dir = path.join(tmp, "_docs", "module", "crm");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "requirement.md"), REQUIREMENT_OK);
+    fs.writeFileSync(path.join(dir, "design.md"), DESIGN_OK);
+    const result = checkDocStructure(tmp);
+    expect(result.notes).toEqual([]);
+  });
+});
+
+describe("checkOneDocSize (T-V5-033)", () => {
+  it("passes a small, well-sectioned document", () => {
+    expect(checkOneDocSize(REQUIREMENT_OK, "m/requirement.md").ok).toBe(true);
+  });
+
+  it("fails and names a section over the ceiling", () => {
+    // Padded well past the section ceiling but under the document ceiling, so
+    // only the section problem fires, not the whole-document one.
+    const markdown = REQUIREMENT_OK.replace(
+      "## Change Log\n- 2026-08-20: created\n",
+      `## Change Log\n- 2026-08-20: created\n${"x".repeat(SECTION_SIZE_CEILING_BYTES + 1)}\n`,
+    );
+    const result = checkOneDocSize(markdown, "m/requirement.md");
+    expect(result.ok).toBe(false);
+    expect(result.problems.some((p) => p.includes("m/requirement.md") && p.includes("Change Log"))).toBe(true);
+  });
+
+  it("fails and names the whole document when it is over the document ceiling", () => {
+    const markdown = `# Title\n\n## Overview\n${"x".repeat(DOCUMENT_SIZE_CEILING_BYTES + 1)}\n`;
+    const result = checkOneDocSize(markdown, "m/requirement.md");
+    expect(result.ok).toBe(false);
+    expect(result.problems.some((p) => p.includes("whole document"))).toBe(true);
+  });
+
+  it("prints the ceiling value in the failure message", () => {
+    const markdown = `# Title\n\n## Overview\n${"x".repeat(DOCUMENT_SIZE_CEILING_BYTES + 1)}\n`;
+    const result = checkOneDocSize(markdown, "m/requirement.md");
+    expect(result.problems.some((p) => p.includes(DOCUMENT_SIZE_CEILING_BYTES.toLocaleString()))).toBe(true);
+  });
+});
+
+describe("checkDocSize (T-V5-033)", () => {
+  let tmp: string;
+
+  beforeEach(() => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "docsize-test-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("notes rather than fails when _docs/module/ doesn't exist yet", () => {
+    const result = checkDocSize(tmp);
+    expect(result.ok).toBe(true);
+    expect(result.notes.length).toBeGreaterThan(0);
+  });
+
+  it("passes when every doc present is under ceiling", () => {
+    const dir = path.join(tmp, "_docs", "module", "crm");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "requirement.md"), REQUIREMENT_OK);
+    const result = checkDocSize(tmp);
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
+  });
+
+  it("collects problems across modules, naming module and file", () => {
+    const dir = path.join(tmp, "_docs", "module", "crm");
+    fs.mkdirSync(dir, { recursive: true });
+    const markdown = `# Title\n\n## Overview\n${"x".repeat(DOCUMENT_SIZE_CEILING_BYTES + 1)}\n`;
+    fs.writeFileSync(path.join(dir, "requirement.md"), markdown);
+    const result = checkDocSize(tmp);
+    expect(result.ok).toBe(false);
+    expect(result.problems.some((p) => p.startsWith("crm/requirement.md"))).toBe(true);
+  });
+
+  it("scopes to one module when moduleName is given, ignoring another module's oversized doc (T-V5-034)", () => {
+    const oversized = `# Title\n\n## Overview\n${"x".repeat(DOCUMENT_SIZE_CEILING_BYTES + 1)}\n`;
+    fs.mkdirSync(path.join(tmp, "_docs", "module", "crm"), { recursive: true });
+    fs.writeFileSync(path.join(tmp, "_docs", "module", "crm", "requirement.md"), oversized);
+    fs.mkdirSync(path.join(tmp, "_docs", "module", "sales"), { recursive: true });
+    fs.writeFileSync(path.join(tmp, "_docs", "module", "sales", "requirement.md"), REQUIREMENT_OK);
+
+    const scoped = checkDocSize(tmp, "sales");
+    expect(scoped.ok).toBe(true);
+    expect(scoped.problems).toEqual([]);
+  });
+
+  it("reports a moduleName with no folder as a problem, not a silent pass", () => {
+    fs.mkdirSync(path.join(tmp, "_docs", "module", "other"), { recursive: true });
+    const result = checkDocSize(tmp, "nonexistent");
+    expect(result.ok).toBe(false);
+    expect(result.problems.some((p) => p.includes("nonexistent"))).toBe(true);
   });
 });

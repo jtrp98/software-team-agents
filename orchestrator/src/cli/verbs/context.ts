@@ -22,6 +22,7 @@ export async function runContextVerb(rest: string[], defaultProjectRoot: string)
       console.log(rest.includes("--json") ? JSON.stringify(packet, null, 2) : renderContextPacket(packet));
       return 0;
     }
+    const startedAt = Date.now();
     const result = await buildContextCommand({
       role,
       moduleHint: flagValue(rest, "--module"),
@@ -30,6 +31,15 @@ export async function runContextVerb(rest: string[], defaultProjectRoot: string)
       projectRoot,
     });
     console.log(rest.includes("--json") ? JSON.stringify(contextCommandJson(result), null, 2) : renderContextCommand(result));
+    // T-V5-037 (F-18) — the one measurable-without-runtime-cooperation number
+    // `sta tokens` can report; fail-open, never changes this command's exit code.
+    recordContextComposition({
+      projectRoot,
+      agent: result.stage,
+      composition: result.composition,
+      startedAt,
+      endedAt: Date.now(),
+    });
     return 0;
   } catch (error) {
     if (error instanceof ContextCommandError) {
@@ -43,4 +53,5 @@ import * as path from "node:path";
 import { CliUsageError } from "../../cli.js";
 import { buildContextCommand, ContextCommandError, contextCommandJson, renderContextCommand, renderContextPacket, stageForRole } from "../../context/contextCommand.js";
 import { latestExecutionPacketPath, readExecutionPacket } from "../../state/runtimeArtifacts.js";
+import { recordContextComposition } from "../../observability/sessionRecord.js";
 import { flagValue, positionalArg } from "../support.js";

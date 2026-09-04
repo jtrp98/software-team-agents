@@ -114,7 +114,7 @@ describe("withQaOptimization", () => {
     expect(evidence).not.toContain("static-analysis-gate.js");
   });
 
-  it("keeps the complete mechanical instruction when the deterministic gate is disabled", async () => {
+  it("records honestly that no sweep result is available when the deterministic gate is disabled, instead of instructing the LLM to run it (T-V5-036)", async () => {
     let evidence = "";
     await withQaOptimization({
       inner: async (req) => {
@@ -126,8 +126,8 @@ describe("withQaOptimization", () => {
       taskLevel: () => "LARGE_CRITICAL" as ClassificationResult["level"],
     })(qaReq());
     expect(evidence).toContain("Deterministic gate: disabled");
-    expect(evidence).toContain("node .claude/scripts/static-analysis-gate.js");
-    expect(evidence).toContain("lint, format, typecheck, build, and test");
+    expect(evidence).toContain("No deterministic sweep result is available for this round");
+    expect(evidence).not.toContain("node .claude/scripts/static-analysis-gate.js");
   });
 
   it("passes non-QA stages through untouched", async () => {
@@ -256,6 +256,31 @@ describe("withQaOptimization", () => {
     });
     const result = await exec(qaReq({ qaRound: 1 }));
     expect(result.gateEvidence?.qaModeDecision?.mode).toBe("TARGETED");
+  });
+
+  it("reports deterministic_gate: disabled — not the caller's requested 'enabled' — when no sweep result was actually produced (T-V5-036)", async () => {
+    // The caller says "enabled" (its own intent for the round) but wires no
+    // deterministicVerification callback, e.g. because the post-Dev hook never
+    // ran for this taskId. The outcome must reflect what happened, not what
+    // was asked for.
+    const result = await withQaOptimization({
+      inner: passingQaInner,
+      changedFiles: () => ["src/a.ts"],
+      deterministicGate: "enabled",
+    })(qaReq());
+    expect(result.outcome.deterministic_gate).toBe("disabled");
+  });
+
+  it("reports deterministic_gate: enabled when a real sweep result was produced, regardless of the caller's flag", async () => {
+    const deterministic = await runDeterministicVerification((id) =>
+      id === "typecheck" ? { id, status: "PASS", durationMs: 1, outputSummary: "ok" } : null,
+    );
+    const result = await withQaOptimization({
+      inner: passingQaInner,
+      changedFiles: () => ["src/a.ts"],
+      deterministicVerification: () => deterministic,
+    })(qaReq());
+    expect(result.outcome.deterministic_gate).toBe("enabled");
   });
 
   it("lets caller risk signals force FULL on an otherwise bounded change", async () => {

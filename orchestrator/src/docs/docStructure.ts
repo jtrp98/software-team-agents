@@ -2,6 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import Ajv, { type ValidateFunction } from "ajv";
 import { fileURLToPath } from "node:url";
+import { sectionMap, sectionText } from "../context/sections.js";
+import { structuralFallbackReason } from "../context/docSelection.js";
 
 /**
  * T53 — a schema per module document type (`requirement.md`, `design.md`, `plan.md`,
@@ -129,6 +131,97 @@ export interface DocStructureCheckResult {
 }
 
 /**
+ * T-V5-033 — `F-04`. Byte ceilings for a module document and for one of its `##`
+ * sections, so a document that has grown past the point `sta context` can slice
+ * usefully fails a check instead of being read in full by every stage forever.
+ *
+ * Chosen from a direct measurement of `knowledge-schoolbright`'s real module
+ * documents (`requirement.md`/`design.md`/`plan.md`/`review.md`/`security.md`
+ * only — the same set `DOC_FILENAMES` already knows about), not guessed:
+ * section bytes p50 3,563 / p90 25,961 / p95 35,684 / p99 63,524 / max 73,565
+ * (n=149); document bytes p50 59,421 / p90 184,228 / p95 299,939 / max 420,181
+ * (n=13). Both ceilings sit just above the p90–p95 band of that distribution,
+ * so they flag genuine outliers without tripping the bulk of ordinary sections.
+ * See `planning/v5/v5-6-evidence.md` for the full measurement and the
+ * "Amended at implementation" note on `T-V5-033` explaining why the audit's
+ * originally-named offenders (`WORD-01` 93,574 B, a closed-questions section
+ * 37,697 B) no longer exist in the current repository to be named by size.
+ */
+export const SECTION_SIZE_CEILING_BYTES = 40_000;
+export const DOCUMENT_SIZE_CEILING_BYTES = 200_000;
+
+const ARCHIVE_PROCEDURE = "policies/documentation.md §4 (an editorial split — this checker never archives)";
+
+/**
+ * Byte-size structural summary, reusing the exact `##` boundaries
+ * `context/sections.ts` already computes for slicing — a document too big to
+ * slice usefully is the same condition this checker exists to catch.
+ */
+export function checkOneDocSize(markdown: string, label: string): DocStructureResult {
+  const problems: string[] = [];
+  const docBytes = Buffer.byteLength(markdown, "utf8");
+  if (docBytes > DOCUMENT_SIZE_CEILING_BYTES) {
+    problems.push(
+      `${label}: whole document is ${docBytes.toLocaleString()} B, over the ${DOCUMENT_SIZE_CEILING_BYTES.toLocaleString()} B ceiling — split it per ${ARCHIVE_PROCEDURE}.`,
+    );
+  }
+  for (const section of sectionMap(markdown)) {
+    const bytes = Buffer.byteLength(sectionText(markdown, section), "utf8");
+    if (bytes > SECTION_SIZE_CEILING_BYTES) {
+      problems.push(
+        `${label} § "${section.heading}": ${bytes.toLocaleString()} B, over the ${SECTION_SIZE_CEILING_BYTES.toLocaleString()} B section ceiling — split it per ${ARCHIVE_PROCEDURE}.`,
+      );
+    }
+  }
+  return { ok: problems.length === 0, problems };
+}
+
+/**
+ * Checks every module document `checkDocStructure` already enumerates —
+ * same file set, same existence rule (a document not written yet is skipped,
+ * not flagged) — against the byte ceilings above.
+ *
+ * `moduleName` scopes the measurement to one module, the same
+ * `checkPlanGraphs(root, moduleName)` precedent `--check-plan` already uses —
+ * T-V5-034's BA preflight note passes the resolved module so it measures one
+ * module's documents, not the whole repository, and stays fast.
+ */
+export function checkDocSize(projectRoot: string, moduleName?: string): DocStructureCheckResult {
+  const moduleDir = path.join(projectRoot, "_docs", "module");
+  if (!fs.existsSync(moduleDir)) {
+    return { ok: true, problems: [], notes: ["no `_docs/module/` yet — nothing to measure."] };
+  }
+
+  const modules = moduleName
+    ? [moduleName]
+    : fs
+        .readdirSync(moduleDir, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => e.name)
+        .sort();
+
+  if (!moduleName && modules.length === 0) {
+    return { ok: true, problems: [], notes: ["`_docs/module/` has no module folders yet."] };
+  }
+  if (moduleName && !fs.existsSync(path.join(moduleDir, moduleName))) {
+    return { ok: false, problems: [`module "${moduleName}" has no folder under _docs/module/`], notes: [] };
+  }
+
+  const problems: string[] = [];
+  for (const name of modules) {
+    for (const docType of Object.keys(DOC_FILENAMES) as DocType[]) {
+      const file = path.join(moduleDir, name, DOC_FILENAMES[docType]);
+      if (!fs.existsSync(file)) continue;
+      const markdown = fs.readFileSync(file, "utf8");
+      const result = checkOneDocSize(markdown, `${name}/${DOC_FILENAMES[docType]}`);
+      problems.push(...result.problems);
+    }
+  }
+
+  return { ok: problems.length === 0, problems, notes: [] };
+}
+
+/**
  * Checks every module's documents that exist. A document that doesn't exist yet (a
  * module mid-way through the pipeline, before `design.md` or `plan.md` was written) is
  * skipped, not flagged — this validates structure, not project progress.
@@ -150,6 +243,7 @@ export function checkDocStructure(projectRoot: string): DocStructureCheckResult 
   }
 
   const problems: string[] = [];
+  const notes: string[] = [];
   for (const name of modules) {
     for (const docType of Object.keys(DOC_FILENAMES) as DocType[]) {
       const file = path.join(moduleDir, name, DOC_FILENAMES[docType]);
@@ -157,8 +251,15 @@ export function checkDocStructure(projectRoot: string): DocStructureCheckResult 
       const markdown = fs.readFileSync(file, "utf8");
       const result = checkOneDoc(docType, markdown, `${name}/${DOC_FILENAMES[docType]}`);
       problems.push(...result.problems);
+      // T-V5-035 (F-04) — the structural conditions `context/docSelection.ts`
+      // already falls back to a whole document on, reported here so a run
+      // never has to hit the fallback to find out.
+      if (docType === "requirement" || docType === "design") {
+        const reason = structuralFallbackReason(docType, markdown);
+        if (reason) notes.push(`${name}/${DOC_FILENAMES[docType]}: would fall back to whole-document context — ${reason}`);
+      }
     }
   }
 
-  return { ok: problems.length === 0, problems, notes: [] };
+  return { ok: problems.length === 0, problems, notes };
 }

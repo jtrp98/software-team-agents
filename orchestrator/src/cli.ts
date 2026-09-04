@@ -127,6 +127,8 @@ export interface CliArgs {
   checkEnvironments: boolean;
   /** Check every module's requirement/design/plan/review/security doc structure against its schema and exit (T53). Same audience. */
   checkDocStructure: boolean;
+  /** Check every module document and `##` section against its byte ceiling and exit (T-V5-033, F-04). Same audience. */
+  checkDocSize: boolean;
   /** Validate every module's plan.md task table as a dependency graph — duplicate ids, missing/self/cyclic dependencies, owners, statuses, DES traceability, wave ordering — and exit (T-PM1.3). `--module <name>` scopes it to one plan. */
   checkPlan: boolean;
   /** Check knowledge/*.yaml against its schema, its id/relation rules and its own cross-links, and exit (T61). Same audience. */
@@ -257,6 +259,7 @@ export const USAGE =
   "  sta --check-repos [--project-root <path>]          check repos.yaml (if any) against the filesystem\n" +
   "  sta --check-environments [--project-root <path>]   check environments.yaml (if any) against its schema\n" +
   "  sta --check-doc-structure [--project-root <path>]  check every _docs/module/*/*.md's sections against its schema\n" +
+  "  sta --check-doc-size [--project-root <path>]       check every _docs/module/*/*.md document and `##` section against its byte ceiling (report-only until wired into CI)\n" +
   "  sta --check-plan [--module <name>] [--project-root <path>]  validate every module's plan.md as a task DAG (deps/cycle/owner/status/DES/waves)\n" +
   "  sta --check-knowledge [--project-root <path>]      check knowledge/*.yaml against its schema and cross-links\n" +
   "  sta --build-templates <out-dir> [--project-root <path>]  snapshot framework template files + manifest.json (T90) into <out-dir>\n" +
@@ -288,6 +291,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkReposFlag = false;
   let checkEnvironmentsFlag = false;
   let checkDocStructureFlag = false;
+  let checkDocSizeFlag = false;
   let checkPlanFlag = false;
   let checkKnowledgeFlag = false;
   let checkInstallationFlag = false;
@@ -365,6 +369,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkEnvironmentsFlag = true;
     } else if (arg === "--check-doc-structure") {
       checkDocStructureFlag = true;
+    } else if (arg === "--check-doc-size") {
+      checkDocSizeFlag = true;
     } else if (arg === "--check-plan") {
       checkPlanFlag = true;
     } else if (arg === "--check-knowledge") {
@@ -442,6 +448,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkReposFlag &&
     !checkEnvironmentsFlag &&
     !checkDocStructureFlag &&
+    !checkDocSizeFlag &&
     !checkPlanFlag &&
     !checkKnowledgeFlag &&
     !checkInstallationFlag &&
@@ -483,6 +490,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkRepos: checkReposFlag,
     checkEnvironments: checkEnvironmentsFlag,
     checkDocStructure: checkDocStructureFlag,
+    checkDocSize: checkDocSizeFlag,
     checkPlan: checkPlanFlag,
     checkKnowledge: checkKnowledgeFlag,
     checkInstallation: checkInstallationFlag,

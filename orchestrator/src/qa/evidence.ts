@@ -139,9 +139,14 @@ export function buildEvidencePackage(input: EvidencePackageInput): string {
   ];
 
   if (input.deterministicGate === "disabled") {
+    // T-V5-036 (F-20) — this branch is reached only via the orchestrator's own
+    // `--no-deterministic-gate` escape hatch, i.e. a deliberate choice not to
+    // run the sweep for this round. It records that fact; it does not ask the
+    // LLM to run the sweep itself — a request in a prompt is not a fact, and
+    // there is no verified evidence the orchestrator can hand over instead.
     sections.push([
       "## Deterministic gate: disabled",
-      "Run `node .claude/scripts/static-analysis-gate.js` before verifying — lint, format, typecheck, build, and test from the Target-resolved `stack.commands` (falling back to the legacy per-package scripts only when no profile exists), plus `security_scan` over the profile's source roots/extensions and an offline `dependency_scan`. A skipped check is not a pass; if every verification command is skipped the gate reports `unverified` and exits distinctly instead of producing a green round. The gate stays deterministic and offline; it never installs tools or calls a registry.",
+      "No deterministic sweep result is available for this round (`--no-deterministic-gate` was set for this run). Verify from the evidence in this package and direct inspection; do not treat the absence of a sweep result as a pass.",
     ]);
   } else if (input.deterministicGate === "enabled") {
     sections.push([

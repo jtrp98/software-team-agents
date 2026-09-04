@@ -32,6 +32,8 @@ import { environmentPrerequisites, runTargetInit } from "./initCommand.js";
 import { isTargetInitialized } from "./targetMeta.js";
 import { measureWorkspaceStatic, recordInteractiveSession } from "../observability/sessionRecord.js";
 import { CLAUDE_SETTINGS_PATH, guardCoverage, type GuardCoverage } from "./guardSettings.js";
+import { checkDocSize } from "../docs/docStructure.js";
+import { resolveModule } from "../agents/moduleDocs.js";
 
 /**
  * T-ROLE-03 / T-ROLE-04 / T-ROLE-19 — role-aware execution: preflight, then
@@ -428,6 +430,26 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
       } else {
         throw e;
       }
+    }
+
+    // T-V5-034 — the same `--check-doc-size` ceiling (F-04) as a non-blocking
+    // note: a BA is never stopped by document growth, only told about it, since
+    // blocking here would stand in the way of the very work needed to fix it
+    // (the CI wiring that does block lives in the BA workflow, T-V5-034 scope).
+    // Scoped to the one module `resolveModule` can resolve with no hint, the
+    // same "never guess among candidates" rule `sta context` already applies —
+    // an ambiguous or empty workspace measures nothing rather than the whole
+    // repository, so preflight stays fast.
+    const moduleResolution = resolveModule(roots.targetRoot);
+    if (moduleResolution.status === "one") {
+      const sizeResult = checkDocSize(roots.targetRoot, moduleResolution.module);
+      checks.push({
+        name: "Document size",
+        ok: true,
+        detail: sizeResult.problems.length === 0
+          ? `${moduleResolution.module}: every document and section is inside its byte ceiling`
+          : `${moduleResolution.module}: ${sizeResult.problems.length} over ceiling — ${sizeResult.problems.join("; ")}`,
+      });
     }
   }
 

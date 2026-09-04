@@ -6,7 +6,7 @@ import { sha256Of } from "../packaging/templateManifest.js";
 import { runTargetCli } from "./cli.js";
 import { runTargetInit } from "./initCommand.js";
 import { isInsideFrameworkRoot, resolveFrameworkRoot, resolveRoots } from "./roots.js";
-import { devPreflight, runBa, runDev } from "./devCommand.js";
+import { devPreflight, runBa, runDev, workspacePreflight } from "./devCommand.js";
 import { checkTargetManifest, loadTargetConfig, readTargetManifest, writeTargetConfig, writeTargetManifest, defaultTargetConfig } from "./targetMeta.js";
 import { configureKnowledgeRoot } from "../threeRepo/installation.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
@@ -1090,6 +1090,46 @@ describe("role workspace architecture (T-ROLE)", () => {
     expect(launchedEnv?.AGENTCLAUDE_WRITABLE_WORK_ROOTS).toBe("[]");
     expect(launchedEnv?.AGENTCLAUDE_CONTEXT_CMD).toContain("context");
     expect(launchedArgs).toEqual([]);
+  });
+
+  it("T-V5-034: ba preflight reports an over-ceiling document as a non-blocking note, scoped to the resolved module", async () => {
+    const knowledge = makeKnowledgeRepo();
+    const fw = fakeFramework("1.0.0", FW_V1_FILES);
+    expect((await capture(() => runTargetCli(["init"], knowledge, fw))).code).toBe(0);
+
+    // A single resolvable module with one document past the byte ceiling.
+    const oversized = `# Title\n\n## Overview\n${"x".repeat(200_001)}\n`;
+    write(knowledge, "_docs/module/crm/requirement.md", oversized);
+
+    const ctx = workspacePreflight("ba", {
+      targetRoot: knowledge,
+      templatesDir: path.join(fw, "templates"),
+      installationConfigPath: NO_INSTALLATION,
+      probe: () => ({ available: true }),
+    });
+
+    const sizeCheck = ctx.checks.find((check) => check.name === "Document size");
+    expect(sizeCheck?.ok).toBe(true);
+    expect(sizeCheck?.detail).toContain("crm");
+    expect(sizeCheck?.detail).toContain("requirement.md");
+  });
+
+  it("T-V5-034: ba preflight measures no document size when the module is ambiguous (many candidates)", async () => {
+    const knowledge = makeKnowledgeRepo();
+    const fw = fakeFramework("1.0.0", FW_V1_FILES);
+    expect((await capture(() => runTargetCli(["init"], knowledge, fw))).code).toBe(0);
+
+    write(knowledge, "_docs/module/crm/requirement.md", "# Title\n\n## Overview\nx\n");
+    write(knowledge, "_docs/module/sales/requirement.md", "# Title\n\n## Overview\nx\n");
+
+    const ctx = workspacePreflight("ba", {
+      targetRoot: knowledge,
+      templatesDir: path.join(fw, "templates"),
+      installationConfigPath: NO_INSTALLATION,
+      probe: () => ({ available: true }),
+    });
+
+    expect(ctx.checks.find((check) => check.name === "Document size")).toBeUndefined();
   });
 
   it("T-V3-01 — status and doctor report the same instruction surface without writing any file", async () => {

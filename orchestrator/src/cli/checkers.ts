@@ -26,7 +26,7 @@ import { checkEscalationPolicy } from "../escalation/escalationPolicy.js";
 import { checkWorkspace } from "../workspace/workspace.js";
 import { checkRepoMap } from "../repos/repoMap.js";
 import { checkEnvironmentConfig } from "../environment/environment.js";
-import { checkDocStructure } from "../docs/docStructure.js";
+import { checkDocStructure, checkDocSize } from "../docs/docStructure.js";
 import { checkPlanGraphs } from "../docs/planGraph.js";
 import { checkKnowledge } from "../knowledge/knowledgeBase.js";
 import { validateInstallation } from "../packaging/installValidation.js";
@@ -64,6 +64,7 @@ export type CheckerFlag =
   | "checkRepos"
   | "checkEnvironments"
   | "checkDocStructure"
+  | "checkDocSize"
   | "checkPlan"
   | "checkKnowledge"
   | "checkInstallation"
@@ -223,6 +224,14 @@ export const CHECKERS: readonly CheckerDescriptor[] = [
     run: (root) => toOutcome(checkDocStructure(root)),
     okMessage: "[orchestrator] every module document present has the sections its schema requires.",
     failHeading: "[orchestrator] module documents have structural problems:",
+    notes: "leading",
+  },
+  {
+    flag: "checkDocSize",
+    cliFlag: "--check-doc-size",
+    run: (root, moduleName) => toOutcome(checkDocSize(root, moduleName)),
+    okMessage: "[orchestrator] every module document and section present is inside its byte ceiling.",
+    failHeading: "[orchestrator] module documents or sections are over their byte ceiling (policies/documentation.md §4):",
     notes: "leading",
   },
   {
