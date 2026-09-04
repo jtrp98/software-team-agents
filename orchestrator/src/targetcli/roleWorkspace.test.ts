@@ -89,6 +89,8 @@ describe("role asset profiles (T-ROLE-09/10/11)", () => {
     expect(include(".opencode/plugin/sta-guards.js")).toBe(true);
     expect(include("policies/documentation.md")).toBe(true);
     expect(include("CLAUDE.md")).toBe(true);
+    // T-V5-027: the document/plan checkers as CI are BA-workspace payload.
+    expect(include(".github/workflows/knowledge-ci.yml")).toBe(true);
 
     expect(include(".claude/agents/backend-engineer.md")).toBe(false);
     expect(include(".claude/agents/frontend-engineer.md")).toBe(false);
@@ -100,12 +102,14 @@ describe("role asset profiles (T-ROLE-09/10/11)", () => {
     expect(include("layout.yaml")).toBe(false);
   });
 
-  it("DEV carries the full roster and pipeline payload", () => {
+  it("DEV carries the full roster and pipeline payload, but not the Knowledge document CI", () => {
     const include = assetsForRole("dev");
     expect(include(".claude/agents/backend-engineer.md")).toBe(true);
     expect(include("contracts/backend.yaml")).toBe(true);
     expect(include("workflows/bugfix.yml")).toBe(true);
     expect(include("test-pyramid.yaml")).toBe(true);
+    // T-V5-027: a Target has no `_docs/**` of its own for these checks to run against.
+    expect(include(".github/workflows/knowledge-ci.yml")).toBe(false);
   });
 });
 

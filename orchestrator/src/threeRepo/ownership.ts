@@ -160,17 +160,32 @@ export function missingInstructionConsequence(targetRoot: string, relativePath: 
   return undefined;
 }
 
+export const BOOTSTRAP_BLOCK_OPEN = "<!-- sta:bootstrap -->";
+export const BOOTSTRAP_BLOCK_CLOSE = "<!-- /sta:bootstrap -->";
+
 function containsOneBootstrapBlock(file: string): boolean {
   try {
     const body = fs.readFileSync(file, "utf8");
-    const open = "<!-- sta:bootstrap -->";
-    const close = "<!-- /sta:bootstrap -->";
-    return body.split(open).length - 1 === 1 &&
-      body.split(close).length - 1 === 1 &&
-      body.indexOf(close) > body.indexOf(open);
+    return body.split(BOOTSTRAP_BLOCK_OPEN).length - 1 === 1 &&
+      body.split(BOOTSTRAP_BLOCK_CLOSE).length - 1 === 1 &&
+      body.indexOf(BOOTSTRAP_BLOCK_CLOSE) > body.indexOf(BOOTSTRAP_BLOCK_OPEN);
   } catch {
     return false;
   }
+}
+
+/**
+ * Removes the Framework-managed bootstrap block from an otherwise
+ * project-owned file (e.g. a Target's `CLAUDE.md`). What is left is the
+ * project's own content, if any. T-V5-025: the block itself is
+ * Framework-authored bytes and must never be treated as project content by
+ * an importer.
+ */
+export function stripFrameworkManagedBlock(text: string): string {
+  const openIndex = text.indexOf(BOOTSTRAP_BLOCK_OPEN);
+  const closeIndex = text.indexOf(BOOTSTRAP_BLOCK_CLOSE);
+  if (openIndex === -1 || closeIndex === -1 || closeIndex < openIndex) return text;
+  return (text.slice(0, openIndex) + text.slice(closeIndex + BOOTSTRAP_BLOCK_CLOSE.length)).trim();
 }
 
 /** Read-only, symlink-avoiding inventory of the complete Target instruction surface. */
@@ -250,6 +265,32 @@ export function ownerOfPath(relativePath: string): RepositoryOwner {
     return "target";
   }
   return "framework";
+}
+
+/**
+ * Whether the content at `relativePath` is authored by the Framework rather
+ * than by a project. T-V5-025: the adoption importer must refuse these paths
+ * (`policies/**`, `.claude/agents/**`, `contracts/**`, `workflows/**`,
+ * `stacks/**`, `layout.yaml` and siblings) instead of duplicating them into a
+ * project's knowledge graph. Reuses the two classifications this module
+ * already maintains rather than introducing a third list: `ownerOfPath`'s
+ * default bucket (everything not explicitly Knowledge- or Target-owned is
+ * Framework's own repository content) and `instructionPathClass`'s
+ * `framework-managed` instruction surface (e.g. `.claude/agents/**`, which
+ * `ownerOfPath` alone would call "target" because of the shared `.claude`
+ * prefix).
+ */
+export function isFrameworkAuthoredPath(relativePath: string): boolean {
+  let owner: RepositoryOwner;
+  try {
+    owner = ownerOfPath(relativePath);
+  } catch {
+    // Regenerable runtime state (packets/evidence/runs) is never Framework
+    // rulebook content — let the caller's own handling decide what to do.
+    return false;
+  }
+  if (owner === "framework") return true;
+  return instructionPathClass(relativePath)?.owner === "framework";
 }
 
 /** Framework install/upgrade manifests may contain only framework-owned paths.

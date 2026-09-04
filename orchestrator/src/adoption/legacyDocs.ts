@@ -4,6 +4,7 @@ import { AgentStage } from "../types.js";
 import { KNOWLEDGE_SCHEMA_VERSION, type KnowledgeItem, type KnowledgeItemOf } from "../knowledge/knowledgeModel.js";
 import { digestOfSource } from "../knowledge/sourceDigest.js";
 import { sourceIdFor, type SourceRecord } from "../knowledge/sourceRegistry.js";
+import { isFrameworkAuthoredPath, stripFrameworkManagedBlock } from "../threeRepo/ownership.js";
 import { firstH1, firstParagraph, sectionBody, sections, slug } from "./markdown.js";
 
 /**
@@ -43,6 +44,17 @@ import { firstH1, firstParagraph, sectionBody, sections, slug } from "./markdown
  * The one exception is a *rules* document (`CLAUDE.md`, `policies/*.md`), whose
  * whole point is to be readable without opening another file: those keep their
  * full text.
+ *
+ * FRAMEWORK-AUTHORED BYTES ARE NEVER IMPORTED (T-V5-025)
+ *
+ * `policies/**` is always Framework rulebook content, never a project's own
+ * writing, so it is refused outright — `isFrameworkAuthoredPath` (reusing
+ * `threeRepo/ownership.ts`'s existing owner classification, not a new list)
+ * excludes it before any file is read. `CLAUDE.md` is different: in three-repo
+ * mode it is Target-owned, but the Framework's own bootstrap block lives
+ * inside it between `<!-- sta:bootstrap -->` markers, so that block alone is
+ * stripped before the file is imported. A `CLAUDE.md` that is nothing but the
+ * bootstrap block produces no item, the same as an empty file.
  */
 
 const RULE_DOCS = ["CLAUDE.md"];
@@ -330,10 +342,15 @@ export function importLegacyDocs(projectRoot: string, now: string, docsRoot: str
   const sources: SourceRecord[] = [];
   const notes: string[] = [];
 
-  const add = (relativePath: string, build: (text: string, sourceId: string) => KnowledgeItem[]): void => {
+  const add = (
+    relativePath: string,
+    build: (text: string, sourceId: string) => KnowledgeItem[],
+    options: { stripFrameworkBlock?: boolean } = {},
+  ): void => {
     const abs = path.join(projectRoot, ...relativePath.split("/"));
     if (!fs.existsSync(abs)) return;
-    const text = fs.readFileSync(abs, "utf8");
+    const raw = fs.readFileSync(abs, "utf8");
+    const text = options.stripFrameworkBlock ? stripFrameworkManagedBlock(raw) : raw;
     if (text.trim() === "") {
       notes.push(`${relativePath} is empty — skipped rather than imported as an empty item`);
       return;
@@ -349,16 +366,28 @@ export function importLegacyDocs(projectRoot: string, now: string, docsRoot: str
   };
 
   // 1. The rules. Full text, because a rule you have to open another file to
-  //    read is a rule an agent will not read.
+  //    read is a rule an agent will not read. `CLAUDE.md`'s Framework-managed
+  //    bootstrap block is stripped first (T-V5-025) — only a project's own
+  //    addition to that file, if any, is imported.
   for (const file of RULE_DOCS) {
-    add(file, (text, sourceId) => [
-      proseItem(file, text, projectRoot, now, sourceId, { module: null, idPrefix: "DES-RULES", fullText: true }),
-    ]);
+    add(
+      file,
+      (text, sourceId) => [
+        proseItem(file, text, projectRoot, now, sourceId, { module: null, idPrefix: "DES-RULES", fullText: true }),
+      ],
+      { stripFrameworkBlock: true },
+    );
   }
+  // `policies/**` is always Framework rulebook content (T-V5-025) — refused
+  // outright via the reused ownership classification, never imported.
   for (const dir of RULE_DIRS) {
     const found: string[] = [];
     walkMarkdown(path.join(projectRoot, dir), projectRoot, found);
     for (const file of found.sort()) {
+      if (isFrameworkAuthoredPath(file)) {
+        notes.push(`${file} is Framework-authored — refused rather than imported as project content`);
+        continue;
+      }
       add(file, (text, sourceId) => [
         proseItem(file, text, projectRoot, now, sourceId, { module: null, idPrefix: "DES-RULES", fullText: true }),
       ]);

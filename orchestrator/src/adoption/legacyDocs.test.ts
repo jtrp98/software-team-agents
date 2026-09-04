@@ -80,15 +80,38 @@ describe("importLegacyDocs — the rules documents", () => {
     expect(item.body).toContain("business-analyst → system-analyst → engineer");
   });
 
-  it("imports every policies/*.md the same way", () => {
+  it("refuses policies/*.md — Framework rulebook content is never duplicated into a project's graph (T-V5-025)", () => {
     const root = project({
       "policies/coding.md": "# Coding\n\nGreen before handoff.\n",
       "policies/git.md": "# Git\n\nNo git, ever.\n",
     });
 
-    const ids = importLegacyDocs(root, NOW).items.map((i) => i.id);
+    const result = importLegacyDocs(root, NOW);
 
-    expect(ids).toEqual(["DES-RULES-POLICIES-CODING", "DES-RULES-POLICIES-GIT"]);
+    expect(result.items).toEqual([]);
+    expect(result.sources).toEqual([]);
+    expect(result.notes.some((n) => n.includes("policies/coding.md") && n.includes("Framework-authored"))).toBe(true);
+    expect(result.notes.some((n) => n.includes("policies/git.md") && n.includes("Framework-authored"))).toBe(true);
+  });
+
+  it("strips CLAUDE.md's Framework-managed bootstrap block before importing (T-V5-025)", () => {
+    const withBlock = `<!-- sta:bootstrap -->\n${CLAUDE_MD}<!-- /sta:bootstrap -->\n\n## Project-specific addition\nThis part was written by the project, not the Framework.\n`;
+    const root = project({ "CLAUDE.md": withBlock });
+
+    const [item] = importLegacyDocs(root, NOW).items;
+
+    expect(item.body).not.toContain("No git, ever.");
+    expect(item.body).toContain("Project-specific addition");
+    expect(item.body).toContain("This part was written by the project, not the Framework.");
+  });
+
+  it("produces no item for a CLAUDE.md that is only the Framework's bootstrap block", () => {
+    const root = project({ "CLAUDE.md": `<!-- sta:bootstrap -->\n${CLAUDE_MD}<!-- /sta:bootstrap -->\n` });
+
+    const result = importLegacyDocs(root, NOW);
+
+    expect(result.items).toEqual([]);
+    expect(result.notes.some((n) => n.includes("CLAUDE.md") && n.includes("empty"))).toBe(true);
   });
 });
 

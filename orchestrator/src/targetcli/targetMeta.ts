@@ -260,7 +260,15 @@ export function assertManageablePath(relPath: string): void {
   if (normalised.startsWith("/") || /^[a-zA-Z]:/.test(normalised) || normalised.split("/").includes("..")) {
     throw new Error(`refusing to manage "${relPath}" — managed paths are always repo-relative`);
   }
-  if (NEVER_MANAGED_PREFIXES.some((prefix) => normalised === prefix.replace(/\/$/, "") || normalised.startsWith(prefix))) {
+  // T-V5-027: match on a whole path segment, not a raw string prefix — ".git" must not also
+  // catch ".github" (a real templated path, `.github/workflows/knowledge-ci.yml`), the same way
+  // "knowledge" must not catch a hypothetical "knowledge-policy-something/" directory.
+  if (
+    NEVER_MANAGED_PREFIXES.some((prefix) => {
+      const bare = prefix.replace(/\/$/, "");
+      return normalised === bare || normalised.startsWith(`${bare}/`);
+    })
+  ) {
     throw new Error(`refusing to manage "${relPath}" — application source and runtime state are Target-owned, always`);
   }
 }

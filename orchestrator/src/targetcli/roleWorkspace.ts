@@ -80,6 +80,9 @@ export function assetsForRole(role: WorkspaceRole): (relPath: string) => boolean
       if (relPath.startsWith(".claude/agents/") && relPath.endsWith(".md")) {
         return !baAgents.has(path.basename(relPath, ".md"));
       }
+      // T-V5-027: the Knowledge document/plan checkers are BA-workspace CI — a
+      // Target has no `_docs/**` of its own for them to run against.
+      if (relPath === ".github/workflows/knowledge-ci.yml") return false;
       return true;
     };
   }
@@ -96,6 +99,9 @@ export function assetsForRole(role: WorkspaceRole): (relPath: string) => boolean
     // sync time and never ship in the template payload at all.
     if (relPath.startsWith(".opencode/plugin/")) return true;
     if (relPath.startsWith("policies/")) return true;
+    // T-V5-027: the document/plan checkers as CI — a Knowledge workspace's own
+    // documents are what this validates, so only the BA/Knowledge side gets it.
+    if (relPath === ".github/workflows/knowledge-ci.yml") return true;
     // contracts/, workflows/, stacks/, layout.yaml, escalation-policy.yaml,
     // test-pyramid.yaml — engineer-pipeline payload, not BA tooling.
     return false;

@@ -67,6 +67,19 @@ describe("three-repo ownership", () => {
     }
   });
 
+  it("T-V5-027: a NEVER_MANAGED_PREFIXES entry matches a whole path segment, not a raw string prefix", () => {
+    // `.git` must block `.git/`, `.git` itself and nothing that merely starts with those four
+    // characters — a real templated BA-workspace path (`.github/workflows/knowledge-ci.yml`)
+    // shares the `.git` prefix with the denied `.git/` directory but is a different path entirely.
+    expect(() => assertManageablePath(".github/workflows/knowledge-ci.yml")).not.toThrow();
+    expect(() => assertManageablePath(".git/config")).toThrow(/runtime state are Target-owned, always/);
+    expect(() => assertManageablePath(".git")).toThrow(/runtime state are Target-owned, always/);
+    // Same boundary bug for every other bare (no-trailing-slash) prefix in the list.
+    expect(() => assertManageablePath("knowledge-policy-notice.md")).not.toThrow();
+    expect(() => assertManageablePath("decisions-archive/old.md")).not.toThrow();
+    expect(() => assertManageablePath("templates-legacy/x")).not.toThrow();
+  });
+
   it("declares exactly one allowed precedence for every known instruction path class", () => {
     expect(INSTRUCTION_PATH_CLASSES.map(({ name, precedence }) => ({ name, precedence }))).toEqual([
       { name: "root-claude", precedence: "project-owned-with-framework-block" },

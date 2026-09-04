@@ -31,6 +31,11 @@ export interface TemplateSourceEntry {
 export const TEMPLATE_SOURCES: readonly TemplateSourceEntry[] = [
   { relPath: "CLAUDE.md", kind: "file" },
   { relPath: "AGENTS.md", kind: "file" },
+  // T-V5-027: the document/plan checkers as CI, for a BA/Knowledge workspace only
+  // (see roleWorkspace.ts's assetsForRole). Templated like any other managed asset,
+  // but — unlike the rest — committed at the destination rather than gitignored,
+  // because GitHub only runs a workflow that is in the repository's own history.
+  { relPath: ".github/workflows/knowledge-ci.yml", kind: "file" },
   { relPath: ".claude/agents", kind: "dir" },
   { relPath: ".claude/commands", kind: "dir" },
   { relPath: ".claude/hooks", kind: "dir" },
