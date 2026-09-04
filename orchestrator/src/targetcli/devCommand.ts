@@ -408,10 +408,19 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
     // reported as a non-blocking check, exactly like T-WG1's "Knowledge (BA
     // workspace role)" note — it is never a reason to fail preflight.
     try {
-      const resolved = resolveTargetBinding({ knowledgeRoot: roots.targetRoot, configTargetPath: config?.target?.path });
+      const resolved = resolveTargetBinding({
+        knowledgeRoot: roots.targetRoot,
+        configTargetId: config?.target?.target_id,
+        configTargetPath: config?.target?.path,
+        frameworkRoot: roots.frameworkRoot,
+      });
       if (resolved) {
         baTarget = resolved;
-        checks.push({ name: "Target (BA workspace role)", ok: true, detail: `${resolved.targetRoot} (via ${resolved.via}, read-only)` });
+        checks.push({
+          name: "Target (BA workspace role)",
+          ok: true,
+          detail: `${resolved.targetRoot} (via ${resolved.via}, read-only)${resolved.deprecation ? `; DEPRECATED: ${resolved.deprecation}` : ""}`,
+        });
       }
     } catch (e) {
       if (e instanceof TargetBindingError) {

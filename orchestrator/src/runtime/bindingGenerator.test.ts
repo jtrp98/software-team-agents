@@ -7,6 +7,7 @@ import {
   CODEX_SKILL_OPENAI_YAML,
   COMMAND_RENDERINGS,
   defaultOpenCodePermissions,
+  derivedRenderingIgnorePaths,
   extractGuardrailRules,
   GIT_READONLY_BASH_RULES,
   listCommands,
@@ -540,5 +541,24 @@ describe("checkBindings — hook parity (M3)", () => {
 
     writeHook("codex", "package.json", marker);
     expect(checkBindings(root)).toEqual({ ok: true, problems: [] });
+  });
+});
+
+describe("T-V5-018 — derived rendering ignore paths", () => {
+  it("derives ignore directories from BINDING_RENDERINGS and COMMAND_RENDERINGS", () => {
+    const paths = derivedRenderingIgnorePaths();
+    expect(paths).toEqual([
+      ".agents/skills/",
+      ".codex/agents/",
+      ".opencode/agent/",
+      ".opencode/commands/",
+    ]);
+  });
+
+  it("does not ignore authored .claude/agents, authored plugins, or AGENTS.md", () => {
+    const paths = derivedRenderingIgnorePaths();
+    expect(paths.some((p) => p.includes(".claude"))).toBe(false);
+    expect(paths.some((p) => p.includes("sta-guards.js"))).toBe(false);
+    expect(paths.some((p) => p.includes("AGENTS.md"))).toBe(false);
   });
 });

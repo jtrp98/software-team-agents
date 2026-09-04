@@ -420,7 +420,8 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
     } catch {
       // Guard wiring check above reports the actionable problem.
     }
-    instructionSurface = detectInstructionSurface({ targetRoot: projectRoot, frameworkPaths });
+    const manifestPaths = isTargetInitialized(projectRoot) ? frameworkPaths : undefined;
+    instructionSurface = detectInstructionSurface({ targetRoot: projectRoot, frameworkPaths: manifestPaths });
     // T-V5-005 — these files' bytes are managed by no command (they are npm
     // housekeeping that exists only beside the OpenCode plugin), so prescribing
     // `sync` for them names a recovery that cannot apply. The ownership

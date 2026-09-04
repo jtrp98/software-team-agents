@@ -203,8 +203,35 @@ describe("runDoctor (T166)", () => {
     const report = await runDoctor({ projectRoot: workspace, installationConfigPath: configPath, probe: passingProbe });
     const entry = report.checks.find((c) => c.name === "Instruction surface: .opencode/package.json");
     expect(entry).toBeDefined();
-    expect(entry!.status).toBe("WARNING"); // classification stays (T-V5-022's); the dead fix text does not
+    expect(entry!.status).toBe("PASS");
     expect(entry!.fix).toBeUndefined();
+  });
+
+  it("T-V5-022: zero warnings sourced from .agent-team/backups/ while genuine nested instructions still warn", async () => {
+    const workspace = path.join(base, "backup-nested-ws");
+    fs.mkdirSync(workspace, { recursive: true });
+    gitInit(workspace);
+    fs.mkdirSync(path.join(workspace, ".agent-team", "backups", "2026-09-01"), { recursive: true });
+    fs.writeFileSync(path.join(workspace, ".agent-team", "backups", "2026-09-01", "AGENTS.md"), "# backup agents\n");
+    fs.mkdirSync(path.join(workspace, "src"), { recursive: true });
+    fs.writeFileSync(path.join(workspace, "src", "AGENTS.md"), "# nested agents\n");
+    fs.writeFileSync(
+      path.join(workspace, ".agent-team", "manifest.json"),
+      JSON.stringify({ schema_version: 1, framework_version: "0.0.0-doctor-test", installed_at: NOW, updated_at: NOW, files: [] }),
+    );
+    fs.writeFileSync(
+      path.join(workspace, ".agent-team", "config.yaml"),
+      `schema_version: 1\ntarget_id: ${path.basename(workspace)}\nregistered_at: ${NOW}\nrole: dev\noverrides: []\n`,
+    );
+
+    const report = await runDoctor({ projectRoot: workspace, installationConfigPath: configPath, probe: passingProbe });
+    const backupChecks = report.checks.filter((c) => c.name.includes(".agent-team/backups"));
+    expect(backupChecks).toHaveLength(0);
+
+    const nestedEntry = report.checks.find((c) => c.name === "Instruction surface: src/AGENTS.md");
+    expect(nestedEntry).toBeDefined();
+    expect(nestedEntry!.status).toBe("WARNING");
+    expect(nestedEntry!.detail).toContain("may shadow or contradict the root bootstrap");
   });
 
   it("T-V5-005: the sta init --force remediation is replaced by the sync lifecycle everywhere", async () => {

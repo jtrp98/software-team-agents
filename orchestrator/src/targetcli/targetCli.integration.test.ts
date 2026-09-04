@@ -15,6 +15,7 @@ import { runDoctor } from "../threeRepo/doctor.js";
 import type { InstructionSurfaceEntry } from "../threeRepo/ownership.js";
 import { stringify as stringifyYaml } from "yaml";
 import { inspectBootstrapBlock, inspectGitignoreBlock, stripBootstrapBlock } from "./knowledgeRender.js";
+import { checkBindings } from "../runtime/bindingGenerator.js";
 
 /**
  * T-TARGET-18/19/20 + T-ROLE-22..26 — end-to-end tests against temporary
@@ -809,6 +810,43 @@ describe("software-team-agents — target-first end to end", () => {
     expect(fs.readFileSync(path.join(target, "policies", "coding.md"), "utf8")).toBe(policy);
     const targetIgnore = inspectGitignoreBlock(fs.readFileSync(path.join(target, ".gitignore"), "utf8"));
     expect(targetIgnore.state === "valid" ? targetIgnore.block : "").toContain("policies/");
+  });
+
+  it("T-V5-018: derived renderings are ignored in .gitignore and checkBindings passes on sync", async () => {
+    const target = makeTarget();
+    const fw = fakeFramework("1.0.0", [
+      { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer") },
+      { relPath: ".claude/commands/summarize.md", content: "---\ndescription: sum\n---\nbody\n" },
+      { relPath: ".claude/commands/_shared/guardrails.md", content: "---\ndescription: g\n---\n1. Rule\n" },
+      { relPath: ".opencode/plugin/sta-guards.js", content: "// authored plugin\n" },
+      { relPath: "CLAUDE.md", content: "<!-- sta:bootstrap -->\n# b\n<!-- /sta:bootstrap -->\n" },
+      { relPath: "AGENTS.md", content: "<!-- sta:bootstrap -->\n# b\n<!-- /sta:bootstrap -->\nFull operating rules: see [CLAUDE.md](CLAUDE.md).\n" },
+    ]);
+    expect((await capture(() => runTargetCli(["init", "--runtime", "codex", "--runtime", "opencode"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
+
+    // Derived renderings exist on disk
+    expect(fs.existsSync(path.join(target, ".codex", "agents", "backend-engineer.toml"))).toBe(true);
+    expect(fs.existsSync(path.join(target, ".opencode", "agent", "backend-engineer.md"))).toBe(true);
+    expect(fs.existsSync(path.join(target, ".opencode", "commands", "summarize.md"))).toBe(true);
+    expect(fs.existsSync(path.join(target, ".agents", "skills", "summarize", "SKILL.md"))).toBe(true);
+
+    // Authored files are present
+    expect(fs.existsSync(path.join(target, ".claude", "agents", "backend-engineer.md"))).toBe(true);
+    expect(fs.existsSync(path.join(target, ".opencode", "plugin", "sta-guards.js"))).toBe(true);
+
+    // checkBindings passes
+    expect(checkBindings(target)).toEqual({ ok: true, problems: [] });
+
+    // .gitignore ignores derived rendering directories but NOT authored files
+    const ignore = inspectGitignoreBlock(fs.readFileSync(path.join(target, ".gitignore"), "utf8"));
+    expect(ignore.state).toBe("valid");
+    const block = ignore.state === "valid" ? ignore.block : "";
+    expect(block).toContain(".agents/skills/");
+    expect(block).toContain(".codex/agents/");
+    expect(block).toContain(".opencode/agent/");
+    expect(block).toContain(".opencode/commands/");
+    expect(block).not.toContain(".claude/agents");
+    expect(block).not.toContain("sta-guards.js");
   });
 });
 

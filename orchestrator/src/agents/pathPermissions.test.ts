@@ -1,13 +1,19 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import {
   PathDeniedError,
   UNIVERSAL_DENY,
+  WORKSPACE_BA_ARTIFACTS,
+  WORKSPACE_DEV_ARTIFACTS,
   assertCanWrite,
   canWritePath,
   checkPathRules,
   matchesGlob,
   pathRulesFor,
+  readWorkspaceRole,
   toRepoRelative,
 } from "./pathPermissions.js";
 
@@ -209,5 +215,69 @@ describe("checkPathRules", () => {
   it("names the universal denies it enforces, so the list is not folklore", () => {
     expect(UNIVERSAL_DENY).toContain(".git/**");
     expect(UNIVERSAL_DENY).toContain(".workflow/**");
+  });
+});
+
+describe("T-V5-019 — workspace-role artifact rules", () => {
+  const permissive = { write: ["**"], deny: [], read: ["**"] };
+
+  it("DEV-role workspace denies _docs/module/*/requirement.md and knowledge/** through the TypeScript path", () => {
+    const docDecision = canWritePath(permissive, "_docs/module/crm/requirement.md", { workspaceRole: "dev" });
+    expect(docDecision.allowed).toBe(false);
+    if (!docDecision.allowed) {
+      expect(docDecision.rule).toBe("workspace-deny");
+      expect(docDecision.reason).toContain("Knowledge repository");
+    }
+
+    const kbDecision = canWritePath(permissive, "knowledge/sales/requirement/REQ-1.yaml", { workspaceRole: "dev" });
+    expect(kbDecision.allowed).toBe(false);
+    if (!kbDecision.allowed) {
+      expect(kbDecision.rule).toBe("workspace-deny");
+    }
+
+    // App code and engineer-owned docs remain allowed in dev
+    expect(canWritePath(permissive, "src/index.ts", { workspaceRole: "dev" }).allowed).toBe(true);
+    expect(canWritePath(permissive, "_docs/module/crm/review.md", { workspaceRole: "dev" }).allowed).toBe(true);
+  });
+
+  it("BA-role workspace denies contracts/** and workflows/**", () => {
+    const contractDecision = canWritePath(permissive, "contracts/backend-engineer.yaml", { workspaceRole: "ba" });
+    expect(contractDecision.allowed).toBe(false);
+    if (!contractDecision.allowed) {
+      expect(contractDecision.rule).toBe("workspace-deny");
+      expect(contractDecision.reason).toContain("Target checkout");
+    }
+
+    const workflowDecision = canWritePath(permissive, "workflows/bugfix.yml", { workspaceRole: "ba" });
+    expect(workflowDecision.allowed).toBe(false);
+    if (!workflowDecision.allowed) {
+      expect(workflowDecision.rule).toBe("workspace-deny");
+    }
+
+    // Knowledge docs remain allowed in BA
+    expect(canWritePath(permissive, "_docs/module/crm/requirement.md", { workspaceRole: "ba" }).allowed).toBe(true);
+    expect(canWritePath(permissive, "knowledge/sales/requirement/REQ-1.yaml", { workspaceRole: "ba" }).allowed).toBe(true);
+  });
+
+  it("no recorded role → both rule sets inactive (legacy workspace unaffected)", () => {
+    expect(canWritePath(permissive, "_docs/module/crm/requirement.md", { workspaceRole: null }).allowed).toBe(true);
+    expect(canWritePath(permissive, "contracts/backend-engineer.yaml", { workspaceRole: null }).allowed).toBe(true);
+    expect(canWritePath(permissive, "_docs/module/crm/requirement.md").allowed).toBe(true);
+    expect(canWritePath(permissive, "contracts/backend-engineer.yaml").allowed).toBe(true);
+  });
+
+  it("TypeScript artifact lists match .claude/hooks/block-path-permissions.js and .opencode/plugin/sta-guards.js exactly", () => {
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+    const claudeHook = fs.readFileSync(path.join(root, ".claude", "hooks", "block-path-permissions.js"), "utf8");
+    const opencodePlugin = fs.readFileSync(path.join(root, ".opencode", "plugin", "sta-guards.js"), "utf8");
+
+    for (const baPattern of WORKSPACE_BA_ARTIFACTS) {
+      expect(claudeHook).toContain(baPattern);
+      expect(opencodePlugin).toContain(baPattern);
+    }
+    for (const devPattern of WORKSPACE_DEV_ARTIFACTS) {
+      expect(claudeHook).toContain(devPattern);
+      expect(opencodePlugin).toContain(devPattern);
+    }
   });
 });

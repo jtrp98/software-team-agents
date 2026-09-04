@@ -133,8 +133,8 @@ export function instructionPathClass(relativePath: string): InstructionPathClass
   return INSTRUCTION_PATH_CLASSES.find((entry) => entry.matches(candidate));
 }
 
-/** Matches the static gate's bounded tree-walk exclusions. */
-export const INSTRUCTION_SCAN_SKIP_DIRS = new Set(["node_modules", ".git", "dist", ".workflow", ".next", "build"]);
+/** Matches the static gate's bounded tree-walk exclusions. T-V5-022: .agent-team backups are not instruction surface. */
+export const INSTRUCTION_SCAN_SKIP_DIRS = new Set(["node_modules", ".git", "dist", ".workflow", ".next", "build", ".agent-team"]);
 
 function installedFrameworkHookCount(targetRoot: string): number {
   const hooksDir = path.join(targetRoot, ".claude", "hooks");
@@ -180,6 +180,7 @@ export function detectInstructionSurface(options: {
 }): InstructionSurfaceEntry[] {
   const targetRoot = path.resolve(options.targetRoot);
   const frameworkPaths = new Set([...(options.frameworkPaths ?? [])].map(normalise));
+  const hasManifest = options.frameworkPaths !== undefined;
   const found: InstructionSurfaceEntry[] = [];
 
   const walk = (directory: string, relativeDirectory: string): void => {
@@ -203,12 +204,30 @@ export function detectInstructionSurface(options: {
       const frameworkContributionPresent =
         frameworkPaths.has(relative) ||
         (pathClass.precedence === "project-owned-with-framework-block" && containsOneBootstrapBlock(absolute));
+
+      // T-V5-022: resolve owner from manifest membership with directory prefix as a fallback only.
+      // If the manifest was provided and does not claim this file, it is project-owned (target),
+      // not framework-managed.
+      let owner: RepositoryOwner = pathClass.owner;
+      let precedence: InstructionPrecedence = pathClass.precedence;
+      if (hasManifest && pathClass.owner === "framework") {
+        if (frameworkPaths.has(relative)) {
+          owner = "framework";
+          precedence = "framework-managed";
+        } else {
+          owner = "target";
+          precedence = "project-owned-untouched";
+        }
+      }
+
       found.push({
         path: relative,
-        owner: pathClass.owner,
-        precedence: pathClass.precedence,
+        owner,
+        precedence,
         frameworkContributionPresent,
-        consequence: frameworkContributionPresent ? undefined : missingInstructionConsequence(targetRoot, relative),
+        consequence: frameworkContributionPresent || precedence !== "framework-managed"
+          ? undefined
+          : missingInstructionConsequence(targetRoot, relative),
       });
     }
   };

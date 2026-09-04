@@ -179,9 +179,7 @@ export const MANAGED_GITIGNORE_PATHS: readonly string[] = [".workflow/", ".agent
 
 export function inspectGitignoreBlock(content: string): BootstrapInspection {
   return inspectMarkerBlock(content, GITIGNORE_BLOCK_OPEN, GITIGNORE_BLOCK_CLOSE, "gitignore");
-}
-
-/**
+}/**
  * Whether the project's own rules (outside any managed block) already ignore a
  * managed path. Deliberately conservative: only exact, leading-slash,
  * trailing-slash, trailing-glob and parent-directory forms count, and an
@@ -210,9 +208,14 @@ export function gitignoreAlreadyCovers(content: string | undefined, managedPath:
   return ignored;
 }
 
-/** The block bytes for a workspace: header, the not-already-ignored entries, and what the project already covers stated in a comment. */
-export function renderGitignoreBlock(alreadyIgnored: readonly string[]): string {
-  const entries = MANAGED_GITIGNORE_PATHS.filter((p) => !alreadyIgnored.includes(p));
+/**
+ * The block bytes for a workspace: header, the not-already-ignored entries, and
+ * what the project already covers stated in a comment. `entries` defaults to
+ * the machine-local paths; sync passes the full set (T-V5-018 adds the derived
+ * rendering directories, which every sync regenerates).
+ */
+export function renderGitignoreBlock(alreadyIgnored: readonly string[], entries: readonly string[] = MANAGED_GITIGNORE_PATHS): string {
+  const listed = entries.filter((p) => !alreadyIgnored.includes(p));
   const lines = [
     GITIGNORE_BLOCK_OPEN,
     "# software-team-agents — framework-managed machine-local paths.",
@@ -222,10 +225,10 @@ export function renderGitignoreBlock(alreadyIgnored: readonly string[]): string 
   if (alreadyIgnored.length > 0) {
     lines.push(`# Already ignored by the project, so not listed again: ${alreadyIgnored.join(", ")}`);
   }
-  if (entries.length === 0) {
+  if (listed.length === 0) {
     lines.push("# (every managed path is already covered by the project's own rules)");
   }
-  lines.push(...entries, GITIGNORE_BLOCK_CLOSE);
+  lines.push(...listed, GITIGNORE_BLOCK_CLOSE);
   // The marker inspector includes the line ending after its closing marker in
   // the managed range, so the rendered bytes do too. That makes the manifest
   // hash stable across a later sync.

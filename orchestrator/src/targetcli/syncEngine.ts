@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { payloadDigest, readTemplateManifest, sha256Of, type TemplateFileEntry, type TemplateManifest } from "../packaging/templateManifest.js";
-import { BINDING_RENDERINGS, COMMAND_RENDERINGS, isAgentBindingRendering, loadCommandGuardrails, listCommands, renderAgentsPointer } from "../runtime/bindingGenerator.js";
+import { BINDING_RENDERINGS, COMMAND_RENDERINGS, derivedRenderingIgnorePaths, isAgentBindingRendering, loadCommandGuardrails, listCommands, renderAgentsPointer } from "../runtime/bindingGenerator.js";
 import { parseVersion } from "./version.js";
 import {
   CLAUDE_MD_PATH,
@@ -300,11 +300,43 @@ function planStaleFiles(
  * never written.
  *
  * A path the project already ignores is not listed again — the block says so
- * in a comment instead. Entries live in {@link MANAGED_GITIGNORE_PATHS}
- * (knowledgeRender.ts); this block deliberately does NOT yet list derived
- * renderings or policies — those join through T-V5-018/T-V5-016 after their
- * regeneration guarantees are proven.
+ * in a comment instead. Base entries live in {@link MANAGED_GITIGNORE_PATHS}
+ * (knowledgeRender.ts); T-V5-018 adds the derived rendering directories from
+    if (relPath.startsWith(".codex/") || relPath.startsWith(".opencode/agent/") || relPath.startsWith(".opencode/commands/") || relPath.startsWith(".agents/skills/")) continue; // derived renderings follow their sources automatically
+    if (derivedContent?.has(relPath)) continue; // T-WG7 — regenerated below from the live binding, never stale
+    if (overrides.has(relPath)) {
+      planned.push({ entry: { action: "override", path: relPath, note: "dropped by the Framework, kept because the project claimed it" } });
+      continue;
+    }
+    const abs = path.join(targetRoot, relPath);
+    if (!fs.existsSync(abs)) continue; // gone already — nothing to clean
+    if (hashFile(abs) === tracked.sha256) {
+      planned.push({ entry: { action: "remove-stale", path: relPath }, remove: true });
+    } else {
+      planned.push({ conflict: { path: relPath, kind: "stale-modified", detail: "the Framework no longer manages this file, but the local copy has been edited" } });
+    }
+  }
+  return planned;
+}
+
+/**
+ * T-V5-006 — the managed `.gitignore` block. The framework writes the
+ * version-control decision for its machine-local paths (`.workflow/`,
+ * `.agent-team/backups/`) into a marked block of the workspace's `.gitignore`
+ * — the same marker-block ownership model CLAUDE.md/AGENTS.md already use, so
+ * sync updates it, conflicts surface like any other edited block, and status
+ * plans it like any other managed contribution. The file itself stays
+ * project-owned: everything outside the markers is never read for planning and
+ * never written.
+ *
+ * A path the project already ignores is not listed again — the block says so
+ * in a comment instead. Base entries live in {@link MANAGED_GITIGNORE_PATHS}
+ * (knowledgeRender.ts); T-V5-018 adds the derived rendering directories from
+ * the rendering declarations, which is safe exactly because every sync
+ * regenerates them (verified by `--check-bindings`).
  */
+const GITIGNORE_BLOCK_ENTRIES: readonly string[] = [...MANAGED_GITIGNORE_PATHS, ...derivedRenderingIgnorePaths()];
+
 function planGitignoreBlock(
   targetRoot: string,
   oldBlockHashes: ReadonlyMap<string, string>,
@@ -332,7 +364,8 @@ function planGitignoreBlock(
     return { entry: { action: "update", path: GITIGNORE_PATH, note: "append managed .gitignore block; project rules preserved" } };
   }
   const expectedBlock = renderGitignoreBlock(
-    MANAGED_GITIGNORE_PATHS.filter((managedPath) => gitignoreAlreadyCovers(inspected.outside, managedPath)),
+    GITIGNORE_BLOCK_ENTRIES.filter((managedPath) => gitignoreAlreadyCovers(inspected.outside, managedPath)),
+    GITIGNORE_BLOCK_ENTRIES,
   );
   const expectedHash = sha256Of(expectedBlock);
   const currentHash = sha256Of(inspected.block);
@@ -1149,7 +1182,8 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     }
     const outside = inspected.state === "valid" ? inspected.outside : (current ?? "");
     const block = renderGitignoreBlock(
-      MANAGED_GITIGNORE_PATHS.filter((managedPath) => gitignoreAlreadyCovers(outside, managedPath)),
+      GITIGNORE_BLOCK_ENTRIES.filter((managedPath) => gitignoreAlreadyCovers(outside, managedPath)),
+      GITIGNORE_BLOCK_ENTRIES,
     );
     const next = inspected.state === "valid"
       ? current!.replace(inspected.block, block)

@@ -230,7 +230,7 @@ describe("target binding (T-LV1)", () => {
     expect(binding).toBeUndefined();
   });
 
-  it("resolves a relative config binding against the knowledge root", () => {
+  it("resolves a relative config binding against the knowledge root — with the T-V5-017 deprecation warning", () => {
     const knowledge = tmpRoot("kb");
     const t = targetRepo();
     const name = path.basename(t);
@@ -241,6 +241,9 @@ describe("target binding (T-LV1)", () => {
     });
     expect(binding?.via).toBe("workspace-config");
     expect(fs.existsSync(binding!.targetRoot)).toBe(true);
+    // The deprecated committed path still works but says so, naming the fix.
+    expect(binding?.deprecation).toContain("target.path");
+    expect(binding?.deprecation).toContain("targets.local.yaml");
   });
 
   it("fails closed (throws) with recovery advice for a missing path", () => {
@@ -269,6 +272,93 @@ describe("target binding (T-LV1)", () => {
     expect(() =>
       resolveTargetBinding({ knowledgeRoot: knowledge, configTargetPath: "." }),
     ).toThrow(/separate from the Knowledge workspace/);
+  });
+});
+
+describe("target binding by id (T-V5-017 — one Target-location mechanism)", () => {
+  function standaloneAppRepo(prefix: string): string {
+    const app = tmpRoot(prefix);
+    fs.mkdirSync(path.join(app, ".git"));
+    fs.writeFileSync(path.join(app, "package.json"), "{}");
+    return app;
+  }
+  function knowledgeWithRegistry(appId: string, appPath?: string): string {
+    const knowledge = tmpRoot("kb-id");
+    fs.mkdirSync(path.join(knowledge, ".git"));
+    fs.mkdirSync(path.join(knowledge, "knowledge"));
+    fs.writeFileSync(
+      path.join(knowledge, "targets.yaml"),
+      `schema_version: 1\ntargets:\n  - target_id: ${appId}\n    name: App\n    remote_url: https://github.com/acme/app.git\n    status: active\n`,
+    );
+    if (appPath) {
+      fs.mkdirSync(path.join(knowledge, ".workflow"), { recursive: true });
+      fs.writeFileSync(
+        path.join(knowledge, ".workflow", "targets.local.yaml"),
+        `schema_version: 1\ntargets:\n  ${appId}:\n    path: ${JSON.stringify(appPath)}\n`,
+      );
+    }
+    return knowledge;
+  }
+
+  it("resolves target_id through .workflow/targets.local.yaml with no committed path and no warning", () => {
+    const app = standaloneAppRepo("app");
+    const knowledge = knowledgeWithRegistry("app", app);
+    const binding = resolveTargetBinding({ knowledgeRoot: knowledge, configTargetId: "app" });
+    expect(binding?.via).toBe("local-mapping");
+    expect(binding?.targetId).toBe("app");
+    expect(binding?.deprecation).toBeUndefined();
+    expect(fs.realpathSync.native(binding!.targetRoot)).toBe(fs.realpathSync.native(app));
+  });
+
+  it("resolves on a second machine with no edit to a committed file — the mapping is machine-local", () => {
+    // "Second machine" = a different checkout location; only .workflow/targets.local.yaml differs.
+    const app = standaloneAppRepo("app2");
+    const secondKnowledge = knowledgeWithRegistry("app", app);
+    const binding = resolveTargetBinding({ knowledgeRoot: secondKnowledge, configTargetId: "app" });
+    expect(binding?.via).toBe("local-mapping");
+    expect(fs.existsSync(binding!.targetRoot)).toBe(true);
+  });
+
+  it("an unknown target_id fails with the registry named as the fix", () => {
+    const app = standaloneAppRepo("app3");
+    const knowledge = knowledgeWithRegistry("app", app);
+    try {
+      resolveTargetBinding({ knowledgeRoot: knowledge, configTargetId: "other" });
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(TargetBindingError);
+      expect((e as Error).message).toContain("unknown Target \"other\"");
+      expect((e as Error).message).toContain("targets.yaml");
+    }
+  });
+
+  it("a configured id with no local mapping fails naming .workflow/targets.local.yaml", () => {
+    const knowledge = knowledgeWithRegistry("app");
+    try {
+      resolveTargetBinding({ knowledgeRoot: knowledge, configTargetId: "app" });
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(TargetBindingError);
+      expect((e as Error).message).toContain("targets.local.yaml");
+    }
+  });
+
+  it("a mapping path without application markers is rejected — looksLikeTargetRoot still applies", () => {
+    const plain = tmpRoot("not-an-app");
+    fs.mkdirSync(path.join(plain, ".git"));
+    const knowledge = knowledgeWithRegistry("app", plain);
+    expect(() => resolveTargetBinding({ knowledgeRoot: knowledge, configTargetId: "app" })).toThrow(/not a Target repository/);
+  });
+
+  it("a mapping path overlapping the Knowledge root is rejected by the shared loader", () => {
+    const app = standaloneAppRepo("app4");
+    const knowledge = knowledgeWithRegistry("app", app);
+    // Point the mapping at the Knowledge root itself — the loader's overlap rule must fire.
+    fs.writeFileSync(
+      path.join(knowledge, ".workflow", "targets.local.yaml"),
+      `schema_version: 1\ntargets:\n  app:\n    path: ${JSON.stringify(knowledge)}\n`,
+    );
+    expect(() => resolveTargetBinding({ knowledgeRoot: knowledge, configTargetId: "app" })).toThrow(/overlap/i);
   });
 });
 

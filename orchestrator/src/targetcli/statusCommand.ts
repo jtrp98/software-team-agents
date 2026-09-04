@@ -51,8 +51,8 @@ export interface TargetStatus {
   workspaceKind: ReturnType<typeof detectWorkspaceKind>;
   knowledgeRoot?: string;
   knowledgeBinding?: { knowledgeRoot: string; via: string };
-  /** T-LV1 — BA-workspace only: the optional Target binding resolved from `target.path`, when one is set and valid; "invalid" carries the problem in targetRoot. Absent when unset (silent, never required). */
-  targetBinding?: { targetRoot: string; via: string };
+  /** T-LV1 — BA-workspace only: the optional Target binding, by `target_id` through the local mapping or the deprecated `target.path`; "invalid" carries the problem in targetRoot. Absent when unset (silent, never required). */
+  targetBinding?: { targetRoot: string; via: string; deprecation?: string };
   targetId?: string;
   /** Cached deterministic Target profile; absent means not yet detected. */
   stack?: TargetStackConfig;
@@ -295,7 +295,12 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
   let targetBinding: TargetBinding | undefined;
   if (role === "ba") {
     try {
-      targetBinding = resolveTargetBinding({ knowledgeRoot: roots.targetRoot, configTargetPath: config?.target?.path });
+      targetBinding = resolveTargetBinding({
+        knowledgeRoot: roots.targetRoot,
+        configTargetId: config?.target?.target_id,
+        configTargetPath: config?.target?.path,
+        frameworkRoot: roots.frameworkRoot,
+      });
     } catch (e) {
       if (e instanceof TargetBindingError) targetBinding = { targetRoot: e.message, via: "invalid" };
       else throw e;
@@ -339,7 +344,7 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     projectOwnedPaths,
     instructionSurface: detectInstructionSurface({
       targetRoot: roots.targetRoot,
-      frameworkPaths: frameworkInstructionPaths,
+      frameworkPaths: initialized ? frameworkInstructionPaths : undefined,
     }),
     rosterDriftPaths,
     managedFileCount,
@@ -367,8 +372,13 @@ export function renderStatus(status: TargetStatus): string {
     if (status.targetBinding && status.targetBinding.via !== "invalid") {
       lines.push("Target (optional, read-only):");
       lines.push(`  ${status.targetBinding.targetRoot} (via ${status.targetBinding.via})`);
+      // T-V5-017 — the committed target.path is machine-local content in a
+      // shared file; status says so every time it is what resolved the binding.
+      if (status.targetBinding.deprecation) {
+        lines.push(`  WARNING: ${status.targetBinding.deprecation}`);
+      }
     } else if (status.targetBinding && status.targetBinding.via === "invalid") {
-      lines.push(`Target: NOT REQUIRED (optional; not needed for BA work) — configured target.path is invalid: ${status.targetBinding.targetRoot}`);
+      lines.push(`Target: NOT REQUIRED (optional; not needed for BA work) — configured target binding is invalid: ${status.targetBinding.targetRoot}`);
     } else {
       lines.push("Target: NOT REQUIRED (optional; not needed for BA work)");
     }

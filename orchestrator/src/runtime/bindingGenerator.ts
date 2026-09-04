@@ -477,6 +477,25 @@ export function isAgentBindingRendering(spec: BindingRendering): spec is AgentBi
   return spec.kind === "agent-set";
 }
 
+/**
+ * T-V5-018 — repo-relative directories that hold nothing but sync-generated
+ * renderings, derived from the rendering declarations themselves so a future
+ * rendering cannot be forgotten by the managed `.gitignore` block. Sync
+ * regenerates every one of them on each run (`checkBindings` verifies the
+ * bytes), which is what makes ignoring them safe. Root-file renderings
+ * (AGENTS.md) and authored payload (`.claude/agents/*.md`,
+ * `.opencode/plugin/sta-guards.js`) are deliberately absent: whether to commit
+ * those stays the project's call.
+ */
+export function derivedRenderingIgnorePaths(): readonly string[] {
+  const dirs = new Set<string>();
+  for (const spec of BINDING_RENDERINGS) {
+    if (isAgentBindingRendering(spec)) dirs.add(`${spec.dir}/`);
+  }
+  for (const spec of COMMAND_RENDERINGS) dirs.add(`${spec.dir}/`);
+  return [...dirs].sort();
+}
+
 /** One generated rendering family: every source role needs a byte-identical twin, no orphans allowed. */
 function checkRenderingSet(
   projectRoot: string,

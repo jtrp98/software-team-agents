@@ -1,6 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
+import { loadLocalTargetMapping, LocalTargetMappingError, type ResolvedLocalTarget } from "../threeRepo/localTargets.js";
+import { loadTargetRegistry, targetById, TargetRegistryError } from "../threeRepo/targets.js";
+import { defaultProjectRoot } from "../agents/agentContract.js";
 import type { TemplateManifest } from "../packaging/templateManifest.js";
 import type { TargetConfig, TargetManifest } from "./targetMeta.js";
 
@@ -262,7 +265,11 @@ export interface TargetBinding {
   /** Absolute, validated path of the bound Target root. */
   targetRoot: string;
   /** Where the binding came from — recovery advice names it. "invalid" carries the problem text in targetRoot instead. */
-  via: "workspace-config" | "invalid";
+  via: "workspace-config" | "local-mapping" | "invalid";
+  /** T-V5-017 — set when the binding resolved through the deprecated committed `target.path`: machine-local content in a shared file. Names the fix. */
+  deprecation?: string;
+  /** T-V5-017 — the Target's stable identity when the binding resolved by `target_id`. */
+  targetId?: string;
 }
 
 export class TargetBindingError extends Error {}
@@ -271,22 +278,38 @@ function looksLikeTargetRoot(candidate: string): boolean {
   return hasAppSourceMarkers(candidate);
 }
 
+/** The one-line warning for a binding that still relies on the deprecated committed path. */
+const TARGET_PATH_DEPRECATION =
+  "target.path in .agent-team/config.yaml is a machine-local path committed to a shared file — " +
+  "set target_id: <id> there and record this machine's checkout under .workflow/targets.local.yaml instead " +
+  "(T-V5-042 removes target.path)";
+
 /**
- * Resolves the Target root a BA workspace may optionally read from — the
- * reverse of resolveKnowledgeBinding: `.agent-team/config.yaml` `target.path`,
- * repo-relative (or absolute) to the Knowledge root. Unlike Knowledge for DEV,
- * a Target binding is never required for BA (T-ROLE-07): with no
- * configTargetPath set this returns undefined silently — there is no
- * installation-wide fallback to try, since a Target binding only ever comes
- * from this one Knowledge workspace's own config. Every other failure mode
- * (missing path, wrong repo kind, overlap with the Knowledge root) throws
- * TargetBindingError so a caller can report it — callers never treat that as
- * fatal, they only decide how to describe it.
+ * Resolves the Target root a BA workspace may optionally read from. T-V5-017
+ * closed F-08's two unrelated mechanisms: identity now travels in the shared
+ * config (`target_id`), and the machine path is resolved per machine through
+ * the same `.workflow/targets.local.yaml` + `targets.yaml` join
+ * `threeRepo/localTargets.ts` already owns — reusing `loadLocalTargetMapping`
+ * and `targetById`, not a second resolver.
+ *
+ * The deprecated `target.path` is still honoured during the transition, but
+ * every resolution through it carries {@link TargetBinding.deprecation} so
+ * `status` can report machine-local content sitting in a committed file.
+ *
+ * Like Knowledge for DEV, a Target binding is never required for BA
+ * (T-ROLE-07): with neither `target_id` nor `target.path` set this returns
+ * undefined silently. Every other failure mode throws TargetBindingError so a
+ * caller can report it — callers never treat that as fatal, they only decide
+ * how to describe it.
  */
 export function resolveTargetBinding(options: {
   knowledgeRoot: string;
+  configTargetId?: string;
   configTargetPath?: string;
+  /** Needed to validate the local mapping's overlap rule; defaults to this CLI's own checkout. */
+  frameworkRoot?: string;
 }): TargetBinding | undefined {
+  if (options.configTargetId) return resolveTargetById(options.configTargetId, options);
   if (!options.configTargetPath) return undefined;
   const raw = options.configTargetPath;
   const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(options.knowledgeRoot, raw);
@@ -303,7 +326,53 @@ export function resolveTargetBinding(options: {
   if (isSameOrNested(resolved, options.knowledgeRoot)) {
     throw new TargetBindingError(`Target root must be separate from the Knowledge workspace — "${raw}" resolves inside it`);
   }
-  return { targetRoot: fs.realpathSync.native(resolved), via: "workspace-config" };
+  return { targetRoot: fs.realpathSync.native(resolved), via: "workspace-config", deprecation: TARGET_PATH_DEPRECATION };
+}
+
+/** Identity → machine path, through the one Target-location mechanism this framework has (T-V5-017). */
+function resolveTargetById(targetId: string, options: { knowledgeRoot: string; frameworkRoot?: string }): TargetBinding {
+  let registry;
+  try {
+    registry = loadTargetRegistry(options.knowledgeRoot);
+  } catch (error) {
+    throw new TargetBindingError(
+      `cannot resolve Target "${targetId}" by id: ${error instanceof Error ? error.message : String(error)} — Target identities live in targets.yaml in the Knowledge root`,
+    );
+  }
+  try {
+    targetById(registry, targetId);
+  } catch (error) {
+    if (error instanceof TargetRegistryError) {
+      throw new TargetBindingError(`${error.message} — register it in targets.yaml before binding it by target_id`);
+    }
+    throw error;
+  }
+  let mapping: ResolvedLocalTarget[];
+  try {
+    mapping = loadLocalTargetMapping(options.knowledgeRoot, registry, options.frameworkRoot ?? defaultProjectRoot());
+  } catch (error) {
+    if (error instanceof LocalTargetMappingError) {
+      throw new TargetBindingError(
+        `Target "${targetId}" has no usable local mapping: ${error.message} — record this machine's checkout under .workflow/targets.local.yaml in the Knowledge root`,
+      );
+    }
+    throw error;
+  }
+  const entry = mapping.find((candidate) => candidate.target_id === targetId);
+  if (!entry) {
+    throw new TargetBindingError(
+      `no local mapping for Target "${targetId}" — add "${targetId}:" with this machine's path under targets: in .workflow/targets.local.yaml in the Knowledge root`,
+    );
+  }
+  // loadLocalTargetMapping already ran assertStandaloneRepositoryRoot and the
+  // overlap rules; looksLikeTargetRoot is the one check it does not own.
+  if (!looksLikeTargetRoot(entry.path)) {
+    throw new TargetBindingError(
+      `"${entry.path}" (Target "${targetId}" from .workflow/targets.local.yaml) is not a Target repository ` +
+        "(no package.json/pyproject.toml/... application markers) — fix its mapping path",
+    );
+  }
+  return { targetRoot: entry.path, via: "local-mapping", targetId };
 }
 
 // --- write policy wiring (T-ROLE-12 / T-ROLE-13) ----------------------------

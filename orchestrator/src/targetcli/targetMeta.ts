@@ -123,8 +123,22 @@ export const TargetConfigSchema = z.object({
   runtimes: z.array(z.enum(["claude", "codex", "opencode"])).min(1).optional(),
   /** T-ROLE-06 — repo-relative (or absolute) path binding to the team's Knowledge repo, committed with this workspace. */
   knowledge: z.object({ path: z.string().min(1) }).optional(),
-  /** T-LV1 — repo-relative (or absolute) path binding to a Target repo, committed with a Knowledge workspace. Optional and read-only: BA never requires it. */
-  target: z.object({ path: z.string().min(1) }).optional(),
+  /**
+   * T-LV1/T-V5-017 — optional, read-only Target binding for a Knowledge (BA)
+   * workspace: BA never requires it. `target_id` is the shared form — stable
+   * identity resolved per machine through `.workflow/targets.local.yaml`.
+   * `path` is deprecated machine-local content in a committed file: honoured
+   * with a warning during the transition, removed by T-V5-042.
+   */
+  target: z
+    .object({
+      target_id: z.string().min(1).optional(),
+      path: z.string().min(1).optional(),
+    })
+    .refine((binding) => binding.target_id !== undefined || binding.path !== undefined, {
+      message: "target binding needs target_id (preferred) or the deprecated path",
+    })
+    .optional(),
   /** Deterministic Target stack cache (T-V3-03). Absent means not yet detected. */
   stack: z.object({
     profile: z.string().min(1),

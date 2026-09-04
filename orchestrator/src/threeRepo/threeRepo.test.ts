@@ -109,6 +109,39 @@ describe("three-repo ownership", () => {
       "src/CLAUDE.local.md",
     ]);
   });
+
+  it("T-V5-022: skips .agent-team backups and classifies unmanaged instructions from manifest", () => {
+    const root = tempRoot();
+    const target = path.join(root, "target-v5-022");
+    initRepository(target);
+    write(path.join(target, ".agent-team", "backups", "2026-09-01", "AGENTS.md"), "# backup agents\n");
+    write(path.join(target, ".opencode", "package.json"), "{}");
+    write(path.join(target, ".opencode", "agent", "dev.md"), "# dev\n");
+
+    // Without manifest (fallback): .opencode/package.json is classified by directory prefix as framework
+    const surfaceWithoutManifest = detectInstructionSurface({ targetRoot: target });
+    expect(surfaceWithoutManifest.some((e) => e.path.includes(".agent-team"))).toBe(false);
+    const unmanagedFallback = surfaceWithoutManifest.find((e) => e.path === ".opencode/package.json");
+    expect(unmanagedFallback?.owner).toBe("framework");
+
+    // With manifest (T-V5-022): unmanaged file (.opencode/package.json) is classified as target-owned
+    const surfaceWithManifest = detectInstructionSurface({
+      targetRoot: target,
+      frameworkPaths: new Set([".opencode/agent/dev.md"]),
+    });
+    expect(surfaceWithManifest.some((e) => e.path.includes(".agent-team"))).toBe(false);
+    const unmanagedWithManifest = surfaceWithManifest.find((e) => e.path === ".opencode/package.json");
+    expect(unmanagedWithManifest).toEqual({
+      path: ".opencode/package.json",
+      owner: "target",
+      precedence: "project-owned-untouched",
+      frameworkContributionPresent: false,
+      consequence: undefined,
+    });
+    const managedWithManifest = surfaceWithManifest.find((e) => e.path === ".opencode/agent/dev.md");
+    expect(managedWithManifest?.owner).toBe("framework");
+    expect(managedWithManifest?.precedence).toBe("framework-managed");
+  });
 });
 
 describe("installation Knowledge root", () => {

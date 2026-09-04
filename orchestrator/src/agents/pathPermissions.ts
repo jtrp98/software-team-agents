@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { AgentStage } from "../types.js";
 import { defaultProjectRoot, loadAgentContract } from "./agentContract.js";
@@ -45,6 +46,61 @@ export const UNIVERSAL_DENY: string[] = [
   // exception. The writer is a person, through the CLI.
   "knowledge/_roles/**",
 ];
+
+/** T-UX13/T-WG3: analysis artifacts and registry files whose home is the Knowledge repo, never a Target workspace. Engineer-owned docs (review/security/deploy) stay writable here. */
+export const WORKSPACE_BA_ARTIFACTS: readonly string[] = [
+  "_docs/module/*/requirement.md",
+  "_docs/module/*/design.md",
+  "_docs/module/*/design-archive.md",
+  "_docs/module/*/test-plan.md",
+  "_docs/module/*/plan.md",
+  "_docs/module/*/uxui/**",
+  "_docs/status.md",
+  "knowledge/**",
+  "decisions/**",
+  "targets.yaml",
+  "knowledge-policy.yaml",
+];
+
+/** T-WG3 mirror image: engineer/pipeline payload that belongs to a Target checkout, never a BA workspace. */
+export const WORKSPACE_DEV_ARTIFACTS: readonly string[] = [
+  "contracts/**",
+  "workflows/**",
+  "stacks/**",
+  "layout.yaml",
+  "test-pyramid.yaml",
+  "escalation-policy.yaml",
+];
+
+/** Reads `role:` out of .agent-team/config.yaml (written by `software-team-agents init`). Null when absent/unreadable -- the rule then stays inactive, exactly like any legacy workspace. */
+export function readWorkspaceRole(workspaceRoot: string): "ba" | "dev" | null {
+  let text: string;
+  try {
+    text = fs.readFileSync(path.join(workspaceRoot, ".agent-team", "config.yaml"), "utf8");
+  } catch {
+    return null;
+  }
+  const m = /^\s*role:\s*(ba|dev)\s*$/m.exec(text);
+  return m ? (m[1] as "ba" | "dev") : null;
+}
+
+/** T-WG3 — the why-text for a workspace-role deny, naming the Knowledge root when the launch supplied one. */
+export function workspaceDenyWhy(role: "ba" | "dev", knowledgeRoot?: string): string {
+  if (role === "dev") {
+    const kb = knowledgeRoot || process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
+    return (
+      "Requirements, designs, plans, test-plans, UX artifacts and registry files live in the Knowledge repository" +
+      (kb ? ` (\`${kb}\`)` : "") +
+      ". Run `software-team-agents ba` from the Knowledge workspace instead; this workspace " +
+      "(`role: dev` in .agent-team/config.yaml) owns app code plus review/security/deploy docs only."
+    );
+  }
+  return (
+    "Contracts, workflows, stacks and pipeline policy are engineer payload for a Target checkout. " +
+    "Run engineering work with `software-team-agents dev` from a Target workspace; this workspace " +
+    "(`role: ba` in .agent-team/config.yaml) owns analysis docs and knowledge items only."
+  );
+}
 
 /**
  * Glob matching for the small subset these rules use: `*` within a path segment,
@@ -115,21 +171,39 @@ export function pathRulesFor(agent: AgentStage | string, projectRoot: string = d
 
 export type WriteDecision =
   | { allowed: true }
-  | { allowed: false; reason: string; rule: "universal-deny" | "agent-deny" | "not-allowed" };
+  | { allowed: false; reason: string; rule: "universal-deny" | "workspace-deny" | "agent-deny" | "not-allowed" };
 
 /**
  * Decides whether an agent may write a repo-relative path.
  *
  * Order is deliberate and not interchangeable: universal denies outrank
- * everything, an agent's own deny outranks its allow, and anything the allow
+ * everything, workspace-role denies enforce repository boundaries (T-V5-019),
+ * an agent's own deny outranks its allow, and anything the allow
  * list does not cover is refused. Allow-by-default would mean a new directory
  * is writable by every agent the moment it appears, which is the opposite of an
  * ownership model.
  */
-export function canWritePath(rules: PathRules, relPath: string): WriteDecision {
+export function canWritePath(
+  rules: PathRules,
+  relPath: string,
+  options?: { workspaceRole?: "ba" | "dev" | null; knowledgeRoot?: string },
+): WriteDecision {
   for (const pattern of UNIVERSAL_DENY) {
     if (matchesGlob(pattern, relPath)) {
       return { allowed: false, rule: "universal-deny", reason: `no agent may write ${pattern}` };
+    }
+  }
+  if (options?.workspaceRole === "dev") {
+    for (const pattern of WORKSPACE_BA_ARTIFACTS) {
+      if (matchesGlob(pattern, relPath)) {
+        return { allowed: false, rule: "workspace-deny", reason: workspaceDenyWhy("dev", options?.knowledgeRoot) };
+      }
+    }
+  } else if (options?.workspaceRole === "ba") {
+    for (const pattern of WORKSPACE_DEV_ARTIFACTS) {
+      if (matchesGlob(pattern, relPath)) {
+        return { allowed: false, rule: "workspace-deny", reason: workspaceDenyWhy("ba", options?.knowledgeRoot) };
+      }
     }
   }
   for (const pattern of rules.deny) {
@@ -165,8 +239,13 @@ export function assertCanWrite(
   agent: AgentStage | string,
   relPath: string,
   projectRoot: string = defaultProjectRoot(),
+  options?: { workspaceRole?: "ba" | "dev" | null; knowledgeRoot?: string },
 ): void {
-  const decision = canWritePath(pathRulesFor(agent, projectRoot), relPath);
+  const wsRole = options?.workspaceRole !== undefined ? options.workspaceRole : readWorkspaceRole(projectRoot);
+  const decision = canWritePath(pathRulesFor(agent, projectRoot), relPath, {
+    workspaceRole: wsRole,
+    knowledgeRoot: options?.knowledgeRoot,
+  });
   if (!decision.allowed) throw new PathDeniedError(agent, relPath, decision);
 }
 
