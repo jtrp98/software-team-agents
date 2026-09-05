@@ -1,6 +1,6 @@
 /**
  * The `roles` sub-commands that are not `ack`, split out so `runRolesVerb` stays
- * the readable "show me the lanes" path it started as (T103-T107).
+ * the readable "show me the lanes" path.
  *
  * Every writing one takes `--by`, and every one of them writes something only a
  * person may write. That is not politeness: `knowledge/_roles/**` is denied to
@@ -40,9 +40,9 @@ async function runRolesSubCommand(
 
       const state = roleWorkflowState(spec, module, kb, workspaces);
       const approved = kb.query({ module }).filter((item) => state.approved.includes(item.id));
-      // Dogfood F3: project-wide scope (no --module) sees nothing when the lane's
-      // approved work sits in modules. Say which, instead of the misleading
-      // "nothing approved" that contradicts what `sta roles` just displayed.
+      // Project-wide scope (no --module) sees nothing when the lane's approved
+      // work sits in modules. Say which, instead of the misleading "nothing
+      // approved" that contradicts what `sta roles` just displayed.
       if (module === null && approved.length === 0) {
         const withApproved = [...new Set(kb.query({}).filter((i) => i.status === "approved").map((i) => i.module ?? "(project-wide)"))];
         if (withApproved.length > 0) {
@@ -216,7 +216,7 @@ async function runRolesSubCommand(
 /**
  * `roles [--module <name>]` — where each lane stands, and
  * `roles ack <lane> <id>[,<id>...] --by <name>` — record that a person in that lane has
- * seen the current version of those items (T99).
+ * seen the current version of those items.
  *
  * This verb is the *only* writer of a role workspace. `knowledge/_roles/**` is in
  * `UNIVERSAL_DENY`, so no agent can write one in any mode — an acknowledgement is a human
@@ -260,8 +260,8 @@ export async function runRolesVerb(rest: string[], defaultProjectRoot: string): 
         const state = spec ? roleWorkflowState(spec, module, kb, workspaces) : null;
 
         // Two different questions, both printed: `stage` is where the lane's own
-        // work has got to (T100), `deps` is whether what it depends on moved
-        // under it (T99). A lane can be `ready` and `behind` at the same time.
+        // work has got to, `deps` is whether what it depends on moved under it.
+        // A lane can be `ready` and `behind` at the same time.
         console.log(`  ${LANE_LABEL[lane].padEnd(4)} ${describeStage(state).padEnd(20)} deps: ${view.status}`);
         if (state) {
           console.log(`       next (${state.nextAction.actor}): ${state.nextAction.what}`);

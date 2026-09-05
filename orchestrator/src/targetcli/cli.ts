@@ -5,20 +5,19 @@ import { fileURLToPath } from "node:url";
 import { resolveFrameworkRoot } from "./roots.js";
 import { runTargetInit } from "./initCommand.js";
 import { gatherStatus, renderStatus } from "./statusCommand.js";
-import { TargetSyncConflictError, planSync, runTargetSync } from "./syncEngine.js";
+import { TargetSyncConflictError, runTargetSync } from "./syncEngine.js";
 import { readTargetManifest, isTargetInitialized, loadTargetConfig, TargetNotInitializedError } from "./targetMeta.js";
 import { installedFrameworkVersion } from "./version.js";
 import { runBa, runDev, type RuntimeName } from "./devCommand.js";
 import { assetsForRole, type WorkspaceRole } from "./roleWorkspace.js";
 
 /**
- * T-TARGET-01 + T-ROLE-03/04 — the Target-first, role-aware entry point.
- *
- * `software-team-agents init|sync|status|dev|ba`, always executed against the
- * repository the user's shell is standing in (process.cwd(), or --target-root).
- * Nothing here requires — or even accepts — cd-ing into the Framework repo;
- * that repo resolves itself from this file's installed location. `dev` runs a
- * DEV session from a Target; `ba` runs a BA session from the Knowledge repo.
+ * The Target-first, role-aware entry point: `software-team-agents init|sync|status|dev|ba`,
+ * always executed against the repository the user's shell is standing in
+ * (process.cwd(), or --target-root). Nothing here requires — or even accepts —
+ * cd-ing into the Framework repo; that repo resolves itself from this file's
+ * installed location. `dev` runs a DEV session from a Target; `ba` runs a BA
+ * session from the Knowledge repo.
  */
 
 export const TARGET_USAGE =
@@ -38,7 +37,10 @@ export const TARGET_USAGE =
   "  --force                sync/init: overwrite locally-modified managed files (backed up first)\n" +
   "  --confirm-agents-pointer sync: reduce a provable CLAUDE.md duplicate to the generated AGENTS.md pointer (backed up)\n" +
   "  --no-auto-sync         dev/ba: refuse to run when managed assets are outdated\n" +
-  "  --runtime <name>       dev/ba: claude (default), codex or opencode\n" +
+  "  --runtime <name>       dev/ba: claude (default), codex or opencode — guard coverage differs per\n" +
+  "                         runtime (claude: enforced, opencode: partial, codex: unguarded); run\n" +
+  "                         `sta runtimes` for the coverage detail behind each verdict\n" +
+  "  --allow-unguarded-runtime  dev/ba: deliberately launch a runtime that enforces no guard\n" +
   "  --json                 status: machine-readable output\n" +
   "  -h, --help             show this help\n" +
   "  --version              show the installed Framework version\n";
@@ -52,6 +54,9 @@ export interface TargetCliArgs {
   confirmAgentsPointer: boolean;
   autoSync: boolean;
   runtime: RuntimeName;
+  runtimeSelections: RuntimeName[];
+  /** Explicit acceptance of a runtime that enforces no guard. */
+  allowUnguardedRuntime: boolean;
   json: boolean;
   help: boolean;
   version: boolean;
@@ -59,7 +64,7 @@ export interface TargetCliArgs {
 
 /** Pure argv parser — no console/exit, directly testable. */
 export function parseTargetArgs(argv: string[]): TargetCliArgs {
-  const args: TargetCliArgs = { force: false, confirmAgentsPointer: false, autoSync: true, runtime: "claude", json: false, help: false, version: false };
+  const args: TargetCliArgs = { force: false, confirmAgentsPointer: false, autoSync: true, runtime: "claude", runtimeSelections: [], allowUnguardedRuntime: false, json: false, help: false, version: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     switch (arg) {
@@ -100,8 +105,12 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
           throw new Error(`--runtime must be claude, codex or opencode (got ${value ?? "nothing"})`);
         }
         args.runtime = value;
+        args.runtimeSelections.push(value);
         break;
       }
+      case "--allow-unguarded-runtime":
+        args.allowUnguardedRuntime = true;
+        break;
       case "--json":
         args.json = true;
         break;
@@ -167,6 +176,7 @@ export async function runTargetCli(
           force: args.force,
           role: args.role,
           stack: args.stack,
+          runtimes: args.runtimeSelections,
           installationConfigPath: options.installationConfigPath,
         });
         console.log(
@@ -178,6 +188,11 @@ export async function runTargetCli(
         const updated = result.sync.performed.filter((p) => p.action === "update").length;
         const unchanged = result.sync.performed.filter((p) => p.action === "unchanged").length;
         console.log(`[software-team-agents]   managed assets: ${added} added, ${updated} updated, ${unchanged} already current`);
+        // Surfaces the same environment prerequisite objects launch preflight
+        // will later enforce; advisory here, not enforced.
+        for (const prerequisite of result.prerequisites) {
+          if (!prerequisite.ok) console.log(`[software-team-agents] ! ${prerequisite.name} — ${prerequisite.detail}; Fix: ${prerequisite.fix}`);
+        }
         for (const action of result.sync.performed.filter((entry) => entry.action === "override")) {
           console.log(`[software-team-agents]   override     ${action.path} (${action.note ?? "explicit user choice"})`);
         }
@@ -218,14 +233,14 @@ export async function runTargetCli(
           if (e instanceof TargetSyncConflictError) {
             console.error("[software-team-agents] sync stopped — local modifications would be lost:");
             for (const conflict of e.plan.conflicts) {
-              console.error(`  ! ${conflict.path} — ${conflict.detail}`);
+              console.error(`  ! ${conflict.path} (${conflict.kind}) — ${conflict.detail}`);
               console.error(
                 conflict.kind === "user-modified"
                   ? "    recovery: revert the edit, claim the file via .agent-team/config.yaml overrides, or re-run with --force"
                   : conflict.kind === "unmergeable-settings"
                     ? "    recovery: fix/merge .claude/settings.json manually, claim it in .agent-team/config.yaml overrides, or re-run with --force (backup first)"
                   : conflict.kind === "malformed-framework-block"
-                    ? "    recovery: restore CLAUDE.md from .agent-team/backups or repair it to exactly one sta:bootstrap marker pair; --force will not guess"
+                    ? `    recovery: restore ${conflict.path} from .agent-team/backups or repair its Framework marker pair; --force will not guess`
                   : conflict.kind === "roster-drift"
                     ? "    recovery: re-run with --force to remove it (backed up first) — it belongs to another workspace role and does not belong here"
                     : "    recovery: move/rename your file aside, then re-run software-team-agents sync",
@@ -250,6 +265,7 @@ export async function runTargetCli(
           templatesDir: path.join(frameworkRoot, "templates"),
           runtime: args.runtime,
           autoSync: args.autoSync,
+          allowUnguardedRuntime: args.allowUnguardedRuntime,
           installationConfigPath: options.installationConfigPath,
         });
       }
@@ -260,6 +276,7 @@ export async function runTargetCli(
           templatesDir: path.join(frameworkRoot, "templates"),
           runtime: args.runtime,
           autoSync: args.autoSync,
+          allowUnguardedRuntime: args.allowUnguardedRuntime,
           installationConfigPath: options.installationConfigPath,
         });
       }

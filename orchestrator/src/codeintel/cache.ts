@@ -3,12 +3,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 /**
- * T-GR4 — where indexes live, and how they die.
+ * Where indexes live, and how they die.
  *
- * D-1 (decided): machine-local, outside every repo. The precedent is the
- * installation state at `%LOCALAPPDATA%\software-team-agents\` — derived data
- * that belongs to a machine, not to a checkout. Consequences that fall out of
- * that placement on purpose:
+ * Machine-local, outside every repo — derived data that belongs to a
+ * machine, not to a checkout. Consequences that fall out of that placement
+ * on purpose:
  *
  *   - Nothing here can be committed or bundled: `npm pack` never sees this
  *     directory because it is not inside any repository.

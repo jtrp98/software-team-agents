@@ -1,6 +1,6 @@
 # Policy — Security guards (§5a, §5c-1, §5d)
 
-Split from `.claude/shared/conventions.md` by T49. The three rules here are the parts of the
+The three rules here are the parts of the
 guard layer that are specifically about containment and leakage — where an agent may write, and
 what it may never leave behind — plus the rule that keeps that layer honest.
 

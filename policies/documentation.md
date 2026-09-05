@@ -1,19 +1,18 @@
 # Policy — Documentation discipline (§1, §2, §3, §4, §5b, §10, §11)
 
-Split from `.claude/shared/conventions.md` by T49. Everything about where a document lives, how
+Everything about where a document lives, how
 it's kept current, how it's amended without losing history, how big it's allowed to get before
 it taxes every future run, and what language it's written in.
 
 ---
 
-## 0. Before writing anything — confirm workspace ↔ workspace role (T-WG5)
+## 0. Before writing anything — confirm workspace ↔ workspace role
 
 **Every analysis/doc-writing run's first action is `software-team-agents status`, before touching
 `§1`'s module-folder resolution.** This isn't optional context-gathering — it's the checkpoint
-that catches a session running in the wrong repository before it writes a single file. The
-sb-compass incident that motivated this rule (`planning/v2/workspace-guardrails-TASKS.md`) was a
-requirement written straight into a Target repo that looked ready but wasn't a Knowledge
-workspace at all; nothing asked first.
+that catches a session running in the wrong repository before it writes a single file.
+Writing directly into a Target repo that looks ready but isn't a Knowledge
+workspace corrupts workspace boundaries if nothing checks first.
 
 Read `status`'s output and confirm two things with the user before writing:
 
@@ -22,7 +21,7 @@ Read `status`'s output and confirm two things with the user before writing:
    `role: ba` workspace (the Knowledge repo). If `status` reports `role: dev` or no role at all,
    stop and ask — don't write a module doc into a Target.
 2. **If `status` prints `WARNING: Knowledge root bound in installation.yaml ... has no
-   .agent-team/config.yaml`** (the T-WG1 detector — a Knowledge root is bound but nobody ever ran
+   .agent-team/config.yaml`** (a Knowledge root is bound but nobody ever ran
    `init --role ba` there), **stop and ask the user before writing any doc file at all**, even
    into a folder that already exists. Writing into an uninitialized Knowledge workspace is exactly
    how the incident happened: the binding looked valid, so nothing else caught it.
@@ -69,7 +68,7 @@ When it's genuinely ambiguous, ask the user — and record the reason in `requir
 |---|---|---|
 | `requirement.md` | `business-analyst` | business requirements, scope, declined features, references for any external fact |
 | `design.md` | `system-analyst` | feasibility verdicts, the confirmed Prisma schema, module breakdown |
-| `plan.md` | `project-manager` (task Status: `project-manager` writes rows `pending`, `qa-engineer` sets `verified`/`blocked` — T52; engineers don't edit the table, they report progress in their handoff) | phased task table, with an optional phase-level `Tier` cast for implementation and QA work |
+| `plan.md` | `project-manager` (task Status: `project-manager` writes rows `pending`, `qa-engineer` sets `verified`/`blocked`; engineers don't edit the table, they report progress in their handoff) | phased task table, with an optional phase-level `Tier` cast for implementation and QA work |
 | `review.md` | `qa-engineer` | open issues (all phases) + the current verify round + undeployed phases' `Unverified Behaviour` |
 | `review/phase-N.md` | `qa-engineer` | archived verify rounds for phases that are closed — read only on demand |
 | `security.md` | `security` | findings, accepted risks |
@@ -83,7 +82,7 @@ When it's genuinely ambiguous, ask the user — and record the reason in `requir
 
 **Read it when you start** — it tells you which modules exist and what state they're in, which usually answers the module-resolution question before you have to ask.
 
-**Regenerate it when you finish**, as the last thing you do: run `node .claude/scripts/generate-status.js` with `Bash` (T51). No agent hand-edits `status.md` with `Write`/`Edit` any more — the generator computes every module's `Docs:` line, per-phase table, `**Now**`, and `**Blocked on**` straight from `plan.md`'s task table (T52 — each row's `Status` cell), `review.md`'s `## Review Outcome` `**Status:**` line, `security.md`'s `## Open Findings` table, and `deploy.md`'s Deploy History, so there is nothing left to get out of sync by hand. It preserves the `## Scaffold` line verbatim (that one fact — is this project scaffolded — isn't derivable from any other document, so `setup` is still the one that sets it, and the generator never overwrites it). The output format below is unchanged from before T51 — only who produces it changed.
+**Regenerate it when you finish**, as the last thing you do: run `node .claude/scripts/generate-status.js` with `Bash`. No agent hand-edits `status.md` with `Write`/`Edit` — the generator computes every module's `Docs:` line, per-phase table, `**Now**`, and `**Blocked on**` straight from `plan.md`'s task table (each row's `Status` cell), `review.md`'s `## Review Outcome` `**Status:**` line, `security.md`'s `## Open Findings` table, and `deploy.md`'s Deploy History, so there is nothing left to get out of sync by hand. It preserves the `## Scaffold` line verbatim (that one fact — is this project scaffolded — isn't derivable from any other document, so `setup` is still the one that sets it, and the generator never overwrites it).
 
 ```markdown
 # Project Status
@@ -115,9 +114,9 @@ A phase whose heading in `plan.md` carries `🔒 Security gate` keeps `security 
 
 **The `(FULL)`/`(TARGETED)` mode comes straight from `qa-engineer`'s `**Status:**` line in `review.md`** — `generate-status.js` reads it, nobody types it into `status.md` directly any more. That parenthesis is the difference between a phase `devops` can ship and one that needs a full pass first (`.claude/agents/qa-engineer.md` defines the two modes and the gate).
 
-**`status.md` is an index, not a source of truth.** If it ever disagrees with the actual documents, the documents win — and since T51 that's structural, not a discipline an agent has to remember: re-running the generator regenerates `status.md` from whatever the documents currently say, so "correcting" `status.md` means fixing the document it was computed from and regenerating, never hand-editing the index itself.
+**`status.md` is an index, not a source of truth.** If it ever disagrees with the actual documents, the documents win — and that's structural, not a discipline an agent has to remember: re-running the generator regenerates `status.md` from whatever the documents currently say, so "correcting" `status.md` means fixing the document it was computed from and regenerating, never hand-editing the index itself.
 
-**`node .claude/scripts/check-status-sync.js` is still useful as an independent second opinion** — it counts `verified` rows per phase in every module's `plan.md` task table (T52) and compares them against what a `status.md` on disk claims. Since `generate-status.js` computes the same `implemented` symbol the same way, the two should never disagree when the generator produced the file you're looking at; `check-status-sync.js` earns its keep on a `status.md` nobody has regenerated yet (manual mode, before this project ran the generator once, or a file someone edited by hand despite the rule above). Not a hook, blocks nothing; run it via `Bash` as a cheap first pass before deciding a phase needs a full `qa-engineer` round.
+**`node .claude/scripts/check-status-sync.js` is still useful as an independent second opinion** — it counts `verified` rows per phase in every module's `plan.md` task table and compares them against what a `status.md` on disk claims. Since `generate-status.js` computes the same `implemented` symbol the same way, the two should never disagree when the generator produced the file you're looking at; `check-status-sync.js` earns its keep on a `status.md` nobody has regenerated yet (manual mode, before this project ran the generator once, or a file someone edited by hand despite the rule above). Not a hook, blocks nothing; run it via `Bash` as a cheap first pass before deciding a phase needs a full `qa-engineer` round.
 
 Don't put dates in `status.md`. It records where things stand right now; dated history belongs in each document's own `## Change Log`.
 
@@ -153,7 +152,7 @@ Once a document exists, you are amending it, not regenerating it.
 - Update only the sections your change actually affects, **using `Edit`**. Never rewrite a whole document with `Write` in amend mode — that silently destroys history and other agents' work.
 - Append a dated line to that document's `## Change Log`; never rewrite or prune existing entries.
 - Confirm a changed section with the user before saving it.
-- **A task's Status cell in `plan.md`'s task table (T52) has one writer per value.** `project-manager` writes every new row `pending`, and is the only writer of `in_progress` (an engineer that started the row says so in its handoff, and `project-manager`/`qa-engineer` record it — engineers don't edit `plan.md`; their contracts deny `_docs/module/**`). Only `qa-engineer` sets `verified` or `blocked`, only after inspecting real code. No agent may clear or reorder a row it doesn't own the current value of — and this is exactly why `project-manager` must amend `plan.md` with `Edit` rather than rewriting it.
+- **A task's Status cell in `plan.md`'s task table has one writer per value.** `project-manager` writes every new row `pending`, and is the only writer of `in_progress` (an engineer that started the row says so in its handoff, and `project-manager`/`qa-engineer` record it — engineers don't edit `plan.md`; their contracts deny `_docs/module/**`). Only `qa-engineer` sets `verified` or `blocked`, only after inspecting real code. No agent may clear or reorder a row it doesn't own the current value of — and this is exactly why `project-manager` must amend `plan.md` with `Edit` rather than rewriting it.
 - **`qa-engineer` may also *add* a `🔒 Security gate` to a phase heading in `plan.md`, never remove one.** `project-manager` can only flag what the design predicted; QA is looking at the code that got built, and `devops` gates on the heading. This is the only other write any agent but `project-manager` makes to `plan.md`.
 
 ### Keeping `review.md` small — it is the one document every agent pays for

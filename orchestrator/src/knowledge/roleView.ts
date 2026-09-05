@@ -7,13 +7,13 @@ import type { KnowledgeBase, KnowledgeQuery } from "./knowledgeBase.js";
 import type { KnowledgeItem } from "./knowledgeModel.js";
 
 /**
- * Role views (T67) — BA sees the Business View, SA the Architecture View, DEV
+ * Role views — BA sees the Business View, SA the Architecture View, DEV
  * the Technical View, all filtered out of the one knowledge base rather than
  * copied into three.
  *
  * WHY THIS IS DERIVED AND NOT DECLARED
  *
- * There is already a per-role read policy: `CONTEXT_POLICY` (T05), which says
+ * There is already a per-role read policy: `CONTEXT_POLICY`, which says
  * which document categories each of the ten roles may read. Writing a second
  * table here — "which kinds may each role see" — would create two permission
  * models that agree today and diverge the first time somebody edits one. So
@@ -26,7 +26,7 @@ import type { KnowledgeItem } from "./knowledgeModel.js";
  *     *other* agents, so `system-analyst` — which writes `design.md` — does not
  *     appear as a reader of it. Deriving from reads alone would hand the
  *     Architecture View a role that cannot see architecture. The owner table is
- *     `ALLOWED_OWNERS` (T65), already written; "you can see what you own" is
+ *     `ALLOWED_OWNERS`, already written; "you can see what you own" is
  *     not a permission call anyone would dispute.
  *   - **`decision`, for everyone.** ADRs are project-wide settled calls that
  *     CLAUDE.md has every agent read instead of re-litigating, and no single
@@ -65,10 +65,10 @@ export const KINDS_BY_CATEGORY: Record<ContextCategory, KnowledgeKind[]> = {
 const ALWAYS_VISIBLE: KnowledgeKind[] = ["decision"];
 
 /**
- * The three views V1.1 names, with the ten roles grouped onto them by what
- * they do rather than by where they sit in the pipeline: whoever decides *what
- * to build* reads business, whoever decides *how* reads architecture, whoever
- * builds or checks the built thing reads technical.
+ * The roles grouped onto their views by what they do rather than by where
+ * they sit in the pipeline: whoever decides *what to build* reads business,
+ * whoever decides *how* reads architecture, whoever builds or checks the
+ * built thing reads technical.
  */
 export const VIEW_OF: Record<AgentStage, ViewName> = {
   [AgentStage.BUSINESS_ANALYST]: "business",

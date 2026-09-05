@@ -25,21 +25,20 @@ import {
 } from "./evidence.js";
 
 /**
- * QA01–QA06 wired around the executor seam.
+ * QA optimization wired around the executor seam.
  *
  * Wrapping (rather than rewriting) `createRuntimeExecutor` is what keeps this
  * opt-out-able and testable: every non-QA stage passes through untouched, and
  * a QA round gains, in order —
  *
- *   1. a change-aware scope built from this round's changed files (QA01);
- *   2. a deterministic TARGETED/FULL decision with recorded reasons (QA02),
- *      escalated when a fix reached outside the previous findings (QA06);
- *   3. the post-Dev deterministic result supplied as evidence (QA03);
+ *   1. a change-aware scope built from this round's changed files;
+ *   2. a deterministic TARGETED/FULL decision with recorded reasons,
+ *      escalated when a fix reached outside the previous findings;
+ *   3. the post-Dev deterministic result supplied as evidence;
  *   4. a bounded evidence package injected as the `qa-evidence` context item
- *      the QA prompt reads first (QA04);
+ *      the QA prompt reads first;
  *   5. the mode decision attached to the gate evidence, where `gatePolicy`
- *      enforces that a FULL decision is only discharged by a FULL report
- *      (QA05).
+ *      enforces that a FULL decision is only discharged by a FULL report.
  *
  * Fail-closed throughout: an error producing the change list yields an empty
  * one, which `buildQaScope` declares unbounded, which selects FULL. The
@@ -109,9 +108,9 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
     if ((req.qaRound ?? 0) > 0 && previous) {
       recheck = planRecheck(previous.findings, previous.evidence, [...changedFiles]);
       if (recheck.newFilesOutsideFindings.length > 0) {
-        // QA06 acceptance: a fix reaching outside the previous findings is a
-        // cross-boundary change — mode selection turns this into FULL with the
-        // file list recorded as the reason.
+        // A fix reaching outside the previous findings is a cross-boundary
+        // change — mode selection turns this into FULL with the file list
+        // recorded as the reason.
         signals.crossTargetImpact = true;
       }
     }
@@ -120,6 +119,14 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
     const effort = selectQaEffort(opts.taskLevel?.(req), signals, { allowSkip: opts.allowQaSkip });
 
     const deterministic = opts.deterministicVerification?.(req);
+    // The run-log field records what happened, not what was requested:
+    // "enabled" only where the sweep actually produced a result.
+    // `opts.deterministicGate` still governs the *prompt wording* below (the
+    // caller's stated intent for this round), but the outcome is derived from
+    // the real `deterministic` value so a caller that requested "enabled" and
+    // got no result back (e.g. no code-producing stage ran first) is never
+    // reported as having run the gate.
+    const gateOutcome: "enabled" | "disabled" = deterministic ? "enabled" : "disabled";
     if (deterministic && !deterministic.passed) {
       // No LLM call happens here — the tool output IS the explanation. No
       // structured failure on purpose: recoveryPolicy's no-failure route sends
@@ -134,7 +141,7 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
         outcome: {
           ...failed.outcome,
           qa_effort: effort.effort,
-          deterministic_gate: opts.deterministicGate ?? "enabled",
+          deterministic_gate: gateOutcome,
         },
       };
     }
@@ -146,7 +153,7 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
         );
         return {
           ...failed,
-          outcome: { ...failed.outcome, qa_effort: "skip", deterministic_gate: opts.deterministicGate ?? "disabled" },
+          outcome: { ...failed.outcome, qa_effort: "skip", deterministic_gate: gateOutcome },
           gateEvidence: { ...(failed.gateEvidence ?? {}), qaModeDecision: decision },
         };
       }
@@ -162,7 +169,7 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
         unverifiedBehaviour: [],
       };
       return {
-        outcome: { tokens: 0, cost: 0, result: "PASS", qa_effort: "skip", deterministic_gate: "enabled" },
+        outcome: { tokens: 0, cost: 0, result: "PASS", qa_effort: "skip", deterministic_gate: gateOutcome },
         artifactType: ArtifactType.QA_REPORT,
         artifact: report,
         gateEvidence: { qaModeDecision: decision },
@@ -195,7 +202,7 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
       outcome: {
         ...result.outcome,
         qa_effort: effort.effort,
-        deterministic_gate: opts.deterministicGate ?? (opts.deterministicVerification ? "enabled" : "disabled"),
+        deterministic_gate: gateOutcome,
       },
       gateEvidence: { ...(result.gateEvidence ?? {}), qaModeDecision: decision },
     };

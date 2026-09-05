@@ -5,17 +5,16 @@ import Ajv, { type ValidateFunction } from "ajv";
 import { parse as parseYaml } from "yaml";
 
 /**
- * local / dev / staging / production (T43) — a fixed, small vocabulary, not
- * an open one. Letting a project invent its own environment names would make
- * "which environment is this?" a question every reader has to look up per
- * project; four names every agent already understands from CLAUDE.md's own
- * deploy language is worth more than letting a project rename them.
+ * local / dev / staging / production — a fixed, small vocabulary, not an open
+ * one. Letting a project invent its own environment names would make "which
+ * environment is this?" a question every reader has to look up per project;
+ * four names every agent already understands from CLAUDE.md's own deploy
+ * language is worth more than letting a project rename them.
  *
  * `environments.yaml` is optional and adds description / `requires_approval`
  * metadata for these four names — it never defines new ones (the schema's
  * `enum` enforces that). Absence is not an error: every project gets the
- * built-in generic descriptions below even with no file at all, which is
- * what makes `--env` usable on a project that has never heard of T43.
+ * built-in generic descriptions below even with no file at all.
  */
 export enum Environment {
   LOCAL = "local",

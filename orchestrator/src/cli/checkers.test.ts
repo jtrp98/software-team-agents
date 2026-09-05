@@ -11,9 +11,9 @@ const cliSource = fs.readFileSync(
 );
 
 /**
- * The frozen expectation for every descriptor. If a message or heading changes,
- * this test fails and the `T-V4-CLI-001` baseline must be re-justified — the two
- * are the oracle for "the 18 blocks still print byte-identically".
+ * The frozen expectation for every descriptor — the oracle for "every checker
+ * still prints byte-identically". If a message or heading changes, this test
+ * fails and the change must be deliberate.
  */
 const EXPECTED: Record<string, { ok: string; fail: string; notes: CheckerDescriptor["notes"] }> = {
   "--check-contracts": {
@@ -37,8 +37,8 @@ const EXPECTED: Record<string, { ok: string; fail: string; notes: CheckerDescrip
     notes: "none",
   },
   "--check-bindings": {
-    ok: "[orchestrator] .codex/agents bindings match the .claude/agents sources.",
-    fail: "[orchestrator] codex role bindings have drifted from their sources:",
+    ok: "[orchestrator] generated bindings, hook mirrors and guard-rule blocks match their sources.",
+    fail: "[orchestrator] generated bindings, hook mirrors or guard-rule blocks have drifted from their sources:",
     notes: "none",
   },
   "--check-profile": {
@@ -86,6 +86,11 @@ const EXPECTED: Record<string, { ok: string; fail: string; notes: CheckerDescrip
     fail: "[orchestrator] module documents have structural problems:",
     notes: "leading",
   },
+  "--check-doc-size": {
+    ok: "[orchestrator] every module document and section present is inside its byte ceiling.",
+    fail: "[orchestrator] module documents or sections are over their byte ceiling (policies/documentation.md §4):",
+    notes: "leading",
+  },
   "--check-plan": {
     ok: "[orchestrator] every plan.md checked is a valid task graph.",
     fail: "[orchestrator] plan task graphs have problems:",
@@ -97,8 +102,8 @@ const EXPECTED: Record<string, { ok: string; fail: string; notes: CheckerDescrip
     notes: "leading",
   },
   "--check-installation": {
-    ok: "[orchestrator] .sta/ agrees with the project's real files.",
-    fail: "[orchestrator] .sta/ has problems:",
+    ok: "[orchestrator] installation metadata (.agent-team/) agrees with the project's real files.",
+    fail: "[orchestrator] installation metadata has problems:",
     notes: "leading",
   },
   "--check-roles": {
@@ -124,7 +129,7 @@ function captureConsole(fn: () => void): { out: string[]; err: string[] } {
   return { out, err };
 }
 
-describe("CHECKERS table (T-V4-CLI-002)", () => {
+describe("CHECKERS table", () => {
   it("carries the ok message, fail heading and notes mode for every descriptor", () => {
     const actual = Object.fromEntries(
       CHECKERS.map((c) => [c.cliFlag, { ok: c.okMessage, fail: c.failHeading, notes: c.notes }]),
@@ -132,8 +137,8 @@ describe("CHECKERS table (T-V4-CLI-002)", () => {
     expect(actual).toEqual(EXPECTED);
   });
 
-  it("is a plain array of 18 rows in the same order the if-chain evaluated", () => {
-    expect(CHECKERS).toHaveLength(18);
+  it("is a plain array of 19 rows in the same order the if-chain evaluated", () => {
+    expect(CHECKERS).toHaveLength(19);
     expect(CHECKERS.map((c) => c.cliFlag)).toEqual(Object.keys(EXPECTED));
   });
 
@@ -154,7 +159,7 @@ describe("CHECKERS table (T-V4-CLI-002)", () => {
   });
 });
 
-describe("runChecker output (T-V4-CLI-002)", () => {
+describe("runChecker output", () => {
   const base: CheckerDescriptor = {
     flag: "checkContracts",
     cliFlag: "--check-x",
@@ -241,8 +246,6 @@ describe("runChecker output (T-V4-CLI-002)", () => {
       failHeading: "[orchestrator] teapot problems:",
       notes: "none",
     };
-    // No production code changed: the loop in runCli would pick it up from
-    // `[...CHECKERS, nineteenth]` unmodified.
     const { out } = captureConsole(() => {
       for (const c of [...CHECKERS.slice(0, 0), nineteenth]) {
         if (c.cliFlag === "--check-teapot") runChecker(c, "/r", undefined);

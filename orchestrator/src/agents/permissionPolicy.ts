@@ -19,9 +19,9 @@ export function hasPermission(stage: AgentStage, permission: Permission): boolea
 /**
  * The actual enforcement point: an orchestrator calls this before letting a
  * role perform a permission-gated action (deploy, write_code, ...). Bound to
- * the registry (item 9), so a role's permission list is defined in exactly
- * one place. Agents never call this on themselves — the point is that they
- * can't grant themselves a permission by deciding to.
+ * the registry, so a role's permission list is defined in exactly one place.
+ * Agents never call this on themselves — the point is that they can't grant
+ * themselves a permission by deciding to.
  */
 export function assertPermission(stage: AgentStage, permission: Permission): void {
   if (!hasPermission(stage, permission)) {

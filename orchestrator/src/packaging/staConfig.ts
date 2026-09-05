@@ -4,7 +4,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 
 /**
- * T93 — project-local configuration, `.sta/config.yaml`.
+ * Project-local configuration, `.sta/config.yaml`.
  *
  * This is the one file `sta init` writes that is unambiguously the project's
  * own from the moment it's created: unlike every other templated file, an
@@ -14,38 +14,83 @@ import { z } from "zod";
  * machine-only JSON `.sta/manifest.json` uses.
  */
 export const ExecutionConfigSchema = z.object({
+  /**
+   * Ignored. Execution modes are removed: there is one route
+   * (`--runtime`/`--model`, then `routing.by_role`, then the default runner
+   * plus the role's frontmatter model). Declared here only so an existing
+   * config carrying the key keeps loading; see `staConfig.test.ts`.
+   */
   mode: z.enum(["single", "auto", "manual"]).optional(),
   runner: z.string().min(1).optional(),
+  /**
+   * Ignored. There is no handoff candidate chain any more: a route
+   * that cannot execute stops the task for a person. Declared for the same
+   * load-compatibility reason as `mode`.
+   */
   allow_handoff: z.boolean().optional(),
+  /**
+   * Ignored. The paid API runtime this key used to gate is retired
+   * (`--runtime` never offers it; production never constructs `ApiAdapter`),
+   * so nothing reads this value any more. It stays declared here, still
+   * boolean-typed and still round-tripped by `loadStaConfig`, purely so an
+   * existing `.sta/config.yaml` or `.agent-team/config.yaml` that still
+   * carries it keeps loading without an "unrecognized key" surprise — see
+   * `orchestrator/src/packaging/staConfig.test.ts` for the compatibility
+   * assertion.
+   */
   allow_paid_fallback: z.boolean().optional(),
 });
 
 export type ExecutionConfig = z.infer<typeof ExecutionConfigSchema>;
 
 export interface EffectiveExecutionConfig {
-  mode: "single" | "auto" | "manual";
   runner: string;
-  allow_handoff: boolean;
   allow_paid_fallback: boolean;
   deterministic_gate_enabled: true;
 }
 
-/** Resolve V3 defaults in memory without rewriting a pre-V3 user config. */
+/**
+ * Resolve execution defaults in memory without rewriting a user config.
+ *
+ * `mode` and `allow_handoff` are no longer resolved: nothing reads
+ * them, so reporting an "effective" value for them would state a behaviour the
+ * runtime does not have. `INERT_EXECUTION_KEYS` is what `status` names instead.
+ */
 export function effectiveExecutionConfig(config?: ExecutionConfig): EffectiveExecutionConfig {
   return {
-    mode: config?.mode ?? "single",
     runner: config?.runner ?? "claude-code",
-    allow_handoff: config?.allow_handoff ?? true,
     allow_paid_fallback: config?.allow_paid_fallback ?? false,
     deterministic_gate_enabled: true,
   };
+}
+
+/** Keys a config may still carry that no code path reads. */
+export const INERT_EXECUTION_KEYS = ["mode", "allow_handoff", "allow_paid_fallback"] as const;
+export const INERT_ROUTING_KEYS = ["strategy", "order"] as const;
+
+/** The inert keys a given config actually declares, for reporting. */
+export function inertConfigKeys(config: StaConfig | undefined, execution: ExecutionConfig | undefined): string[] {
+  const found: string[] = [];
+  for (const key of INERT_EXECUTION_KEYS) {
+    if (execution?.[key] !== undefined) found.push(`execution.${key}`);
+  }
+  for (const key of INERT_ROUTING_KEYS) {
+    if (config?.routing?.[key] !== undefined) found.push(`routing.${key}`);
+  }
+  if (config?.model_routing !== undefined) found.push("model_routing");
+  return found;
 }
 
 export const StaConfigSchema = z.object({
   schema_version: z.literal(1),
   /** Overrides project.yaml's stack pointer for orchestrator purposes only, if a project needs to diverge. Unset = defer to project.yaml. */
   stack: z.string().min(1).optional(),
-  /** role -> model override, layered over each agent's frontmatter default (CLAUDE.md's "model per agent" table). */
+  /**
+   * Ignored. The legacy per-role spelling is superseded by
+   * `routing.by_role`, which is the one per-role override routing reads.
+   * Declared here only so an existing config carrying it keeps loading; it no
+   * longer selects a runtime or a model, and `status` reports it as inert.
+   */
   model_routing: z.record(z.string().min(1), z.string().min(1)).optional(),
   /**
    * V3 execution policy. Optional and additive: an older config with no block
@@ -53,10 +98,14 @@ export const StaConfigSchema = z.object({
    */
   execution: ExecutionConfigSchema.optional(),
   /**
-   * V3 runner/model routing. All fields are optional so a pre-V3 config keeps
-   * its exact behaviour. `by_role` accepts the existing `runtime:model` spelling
-   * as well as a structured target; the latter avoids parsing when both fields
-   * are configured explicitly.
+   * Runner/model routing. All fields are optional so a config with no block
+   * keeps its exact behaviour. `by_role` accepts the existing `runtime:model`
+   * spelling as well as a structured target; the latter avoids parsing when
+   * both fields are configured explicitly.
+   *
+   * `strategy` and `order` are ignored: the candidate-ordering
+   * policy they drove is removed along with the handoff chain, so there is no
+   * list to order. They stay declared for load compatibility only.
    */
   routing: z
     .object({
@@ -70,7 +119,7 @@ export const StaConfigSchema = z.object({
             z.object({
               runtime: z.string().min(1),
               model: z.string().min(1).optional(),
-              /** Reasoning effort, forwarded alongside an explicit model where the runtime exposes a control (T-V4-CAST-001). */
+              /** Reasoning effort, forwarded alongside an explicit model where the runtime exposes a control. */
               effort: z.string().min(1).optional(),
             }),
           ]),
@@ -96,7 +145,7 @@ export const StaConfigSchema = z.object({
     .optional(),
   /** Post-hoc token ceiling for a task. Pre-spawn context caps are separate. */
   token_budget: z.number().int().positive().optional(),
-  /** T-V3TOK-100 warning thresholds, all measured in prompt characters. */
+  /** Warning thresholds, all measured in prompt characters. */
   context_budget: z
     .object({
       roles: z.record(z.string().min(1), z.number().int().positive()).optional(),
@@ -154,7 +203,7 @@ export function loadStaConfig(projectRoot: string): StaConfig {
   return result.data;
 }
 
-/** Non-throwing check, for T98's installation validation — a bad config is a reported problem, not a crash. */
+/** Non-throwing check, for installation validation — a bad config is a reported problem, not a crash. */
 export function inspectStaConfig(projectRoot: string, reader: StaConfigReader = "current"): StaConfigInspection {
   const target = staConfigPath(projectRoot);
   if (!fs.existsSync(target)) return { problems: [`${target} is missing`], warnings: [] };
@@ -179,7 +228,7 @@ export function inspectStaConfig(projectRoot: string, reader: StaConfigReader = 
   return { problems, warnings };
 }
 
-/** Non-throwing problem-only API retained for existing T98 callers. */
+/** Non-throwing problem-only API retained for existing callers. */
 export function checkStaConfig(projectRoot: string): string[] {
   return inspectStaConfig(projectRoot).problems;
 }

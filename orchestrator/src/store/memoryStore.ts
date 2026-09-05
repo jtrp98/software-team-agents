@@ -11,9 +11,7 @@ import {
 } from "./taskStore.js";
 
 /**
- * In-memory TaskStore. This is the store the existing 155 tests keep using —
- * they were written before persistence existed and must not start depending
- * on a file on disk to keep passing.
+ * In-memory TaskStore, used by tests written before persistence existed.
  *
  * It clones on the way in and on the way out for a reason beyond tidiness:
  * the SQLite store serialises through JSON, so it *cannot* hand back a live
@@ -63,8 +61,8 @@ export class MemoryTaskStore implements TaskStore {
 
   appendEvent(event: NewEvent): void {
     // Normalised on the way in, exactly as the SQLite store does — an event read
-    // back from memory must carry the same audit fields (T37) it would carry
-    // after a round trip through a real database, or the tests stop meaning anything.
+    // back from memory must carry the same audit fields it would carry after a
+    // round trip through a real database, or the tests stop meaning anything.
     this.events.push(parseNewEvent(structuredClone(event) as NewEvent));
   }
 

@@ -51,7 +51,7 @@ describe("notificationsFor — transitive reach, which is what T106 adds over T9
   /**
    * DEV points at the API and the design, not at the requirement. A direct-only
    * walk leaves DEV uninformed about the amendment that just invalidated its
-   * work, which is the gap T106 exists to close.
+   * work.
    */
   it("tells DEV about a requirement change it does not directly depend on", () => {
     const after = new KnowledgeBase(bump("REQ-003"));

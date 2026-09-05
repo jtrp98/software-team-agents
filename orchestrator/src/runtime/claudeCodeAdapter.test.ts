@@ -98,7 +98,7 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
     );
 
     // The equals form is required: claude v2.1.241's space form swallows the
-    // following positional prompt (found by the sandbox dogfood, T-V1-15).
+    // following positional prompt.
     const flag = capturedArgs.find((a) => a.startsWith("--disallowedTools="));
     expect(flag).toBeDefined();
     expect(flag).toBe(

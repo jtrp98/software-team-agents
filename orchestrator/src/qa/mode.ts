@@ -1,5 +1,5 @@
 /**
- * QA02 — QA Mode Selection (TARGETED vs FULL), and the decision rules QA05's
+ * QA Mode Selection (TARGETED vs FULL), and the decision rules the
  * conditional final gate enforces.
  *
  * The selection is deterministic on purpose: same scope + same signals must
@@ -143,11 +143,10 @@ export function downgradeMode(
 /**
  * Whether a PASSing qa-report may close the round it was written for.
  *
- * This is the enforcement half of QA05: a decision of FULL is only satisfied
- * by a report that says FULL — a TARGETED report against a FULL decision is
- * exactly the "หลบ FULL gate" case, and it does not pass. No decision on
- * record keeps the pre-optimization behaviour (PASS alone closes), which is
- * what makes wiring this gate backward-compatible with V1 runs.
+ * A decision of FULL is only satisfied by a report that says FULL — a
+ * TARGETED report against a FULL decision does not pass. No decision on
+ * record keeps the pre-optimization behaviour (PASS alone closes), which
+ * keeps this gate backward-compatible with older runs.
  */
 export function canCloseWith(decision: QaModeDecision | undefined, reportMode: QaMode): { allowed: boolean; reason?: string } {
   if (!decision) return { allowed: true };

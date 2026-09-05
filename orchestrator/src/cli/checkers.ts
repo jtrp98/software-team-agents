@@ -1,14 +1,11 @@
 /**
- * T-V4-CLI-002 — the 18 `--check-*` flags as one declarative table.
- *
- * Every entry here was, until this task, a near-identical `if (args.checkX)`
- * block inside `runCli` (`cli.ts:2308-2541`). The blocks differed only in: the
- * flag, the function called, the success sentence, the failure heading, and how
- * `result.notes` were surfaced. That is table data, not control flow.
+ * The `--check-*` flags as one declarative table: each row is the flag, the
+ * function called, the success sentence, the failure heading, and how
+ * `result.notes` is surfaced.
  *
  * This file holds ONLY the table and the one loop body that prints an entry.
  * No interface hierarchy, no registry class, no plugin mechanism — the consumer
- * (`runCli`) is a plain `for` loop over `CHECKERS`. Adding the 19th checker is
+ * (`runCli`) is a plain `for` loop over `CHECKERS`. Adding a new checker is
  * one new row here plus its `--check-*` branch in `parseArgs`; the
  * `cli.test.ts` descriptor-count test fails if those two ever disagree.
  */
@@ -26,7 +23,7 @@ import { checkEscalationPolicy } from "../escalation/escalationPolicy.js";
 import { checkWorkspace } from "../workspace/workspace.js";
 import { checkRepoMap } from "../repos/repoMap.js";
 import { checkEnvironmentConfig } from "../environment/environment.js";
-import { checkDocStructure } from "../docs/docStructure.js";
+import { checkDocStructure, checkDocSize } from "../docs/docStructure.js";
 import { checkPlanGraphs } from "../docs/planGraph.js";
 import { checkKnowledge } from "../knowledge/knowledgeBase.js";
 import { validateInstallation } from "../packaging/installValidation.js";
@@ -46,8 +43,8 @@ export type CheckOutcome = {
 /**
  * The `CliArgs` boolean field that selects a checker. Also this table's
  * source-order key — evaluation order in `runCli` must stay the order below,
- * because the flags are mutually exclusive in practice only, and the old code
- * short-circuited on the first match in a fixed order.
+ * because the flags are mutually exclusive in practice only and are matched
+ * in a fixed order.
  */
 export type CheckerFlag =
   | "checkContracts"
@@ -64,6 +61,7 @@ export type CheckerFlag =
   | "checkRepos"
   | "checkEnvironments"
   | "checkDocStructure"
+  | "checkDocSize"
   | "checkPlan"
   | "checkKnowledge"
   | "checkInstallation"
@@ -142,8 +140,8 @@ export const CHECKERS: readonly CheckerDescriptor[] = [
     flag: "checkBindings",
     cliFlag: "--check-bindings",
     run: (root) => toOutcome(checkBindings(root)),
-    okMessage: "[orchestrator] .codex/agents bindings match the .claude/agents sources.",
-    failHeading: "[orchestrator] codex role bindings have drifted from their sources:",
+    okMessage: "[orchestrator] generated bindings, hook mirrors and guard-rule blocks match their sources.",
+    failHeading: "[orchestrator] generated bindings, hook mirrors or guard-rule blocks have drifted from their sources:",
     notes: "none",
   },
   {
@@ -226,6 +224,14 @@ export const CHECKERS: readonly CheckerDescriptor[] = [
     notes: "leading",
   },
   {
+    flag: "checkDocSize",
+    cliFlag: "--check-doc-size",
+    run: (root, moduleName) => toOutcome(checkDocSize(root, moduleName)),
+    okMessage: "[orchestrator] every module document and section present is inside its byte ceiling.",
+    failHeading: "[orchestrator] module documents or sections are over their byte ceiling (policies/documentation.md §4):",
+    notes: "leading",
+  },
+  {
     flag: "checkPlan",
     cliFlag: "--check-plan",
     run: (root, moduleName) => toOutcome(checkPlanGraphs(root, moduleName)),
@@ -245,8 +251,8 @@ export const CHECKERS: readonly CheckerDescriptor[] = [
     flag: "checkInstallation",
     cliFlag: "--check-installation",
     run: (root) => toOutcome(validateInstallation(root)),
-    okMessage: "[orchestrator] .sta/ agrees with the project's real files.",
-    failHeading: "[orchestrator] .sta/ has problems:",
+    okMessage: "[orchestrator] installation metadata (.agent-team/) agrees with the project's real files.",
+    failHeading: "[orchestrator] installation metadata has problems:",
     notes: "leading",
   },
   {
@@ -262,8 +268,8 @@ export const CHECKERS: readonly CheckerDescriptor[] = [
 ];
 
 /**
- * Executes one descriptor and returns its process exit code, printing exactly
- * what the pre-table `if (args.checkX)` block printed — same streams, same order.
+ * Executes one descriptor and returns its process exit code, printing to the
+ * same streams in the same order every `--check-*` flag relies on.
  */
 export function runChecker(
   d: CheckerDescriptor,

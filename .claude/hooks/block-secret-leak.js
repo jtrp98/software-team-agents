@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /*
- * Stop / SubagentStop guard (T25 — Secret Detection): an agent doesn't get to finish a run that
+ * Stop / SubagentStop guard: an agent doesn't get to finish a run that
  * leaves a hardcoded secret sitting in a file it just wrote or edited.
  *
  * WHY THIS RUNS AT STOP, NOT ONCE PER PHASE LIKE static-analysis-gate.js
  *
- * TASKS.md's T25 spec says "agent ต้องตรวจก่อนส่งงาน" — before *handing off*, which is a
- * per-agent-stop event, not a once-per-phase gate. A secret written by `backend-engineer` and
+ * The rule is "check before handing off" — a per-agent-stop event, not a once-per-phase gate.
+ * A secret written by `backend-engineer` and
  * only caught when `qa-engineer` runs `static-analysis-gate.js` later has already sat in the
  * file across a full agent turn; catching it here is the same "cheapest possible place" logic
  * `require-green-before-stop.js` already uses for typecheck/lint (see that file's header) — and

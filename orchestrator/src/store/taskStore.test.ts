@@ -254,7 +254,7 @@ describe.each(implementations)("%s", (_name, makeStore) => {
     const store = makeStore();
     store.appendEvent({ taskId: "T-1", at: 1, type: "AGENT_ASSIGNED", payload: { stage: "backend-engineer" } });
     store.appendEvent({ taskId: "T-2", at: 2, type: "TASK_BLOCKED", payload: { reason: "nope" } });
-    // T37's audit fields are optional on the way in and always present on the way
+    // Audit fields are optional on the way in and always present on the way
     // out — explicitly null, so "not recorded" is a value rather than an absence.
     expect(store.eventsForTask("T-1")).toEqual([
       {
@@ -416,7 +416,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
   it("T57: a v3 file (predating runs.prompt_version) migrates in place — old runs read back with promptVersion: null, new runs get a real one", () => {
     const file = tmpDbPath();
     try {
-      // Build a v3-shaped file by hand: same DDL as before T57, minus the new column.
+      // Build a v3-shaped file by hand: same DDL as before, minus the new column.
       fs.mkdirSync(path.dirname(file), { recursive: true });
       const db = new Database(file);
       db.pragma("journal_mode = WAL");
@@ -440,7 +440,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       try {
         const runs = store.runsForTask("T-OLD");
         expect(runs).toHaveLength(1);
-        expect(runs[0].promptVersion).toBeNull(); // pre-T57 row — not recorded, not guessed
+        expect(runs[0].promptVersion).toBeNull(); // pre-existing row — not recorded, not guessed
 
         store.appendRun({ ...sampleRun("T-NEW"), promptVersion: 2 });
         expect(store.runsForTask("T-NEW")[0].promptVersion).toBe(2);
@@ -616,10 +616,10 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
   });
 
   /**
-   * T33 (Resume after session death) — the store round-trip test above proves the DATA survives;
-   * this proves a task can actually be picked back up and driven to completion by a brand-new
-   * `Orchestrator`/`TaskRegistry` pair built on a reopened file, simulating the process that was
-   * running it having been killed and a fresh one started in its place.
+   * The store round-trip test above proves the DATA survives; this proves a task can actually be
+   * picked back up and driven to completion by a brand-new `Orchestrator`/`TaskRegistry` pair built
+   * on a reopened file, simulating the process that was running it having been killed and a fresh
+   * one started in its place.
    */
   it("a task interrupted mid-pipeline is fully drivable to DEPLOYED by a fresh process reopening the same file", async () => {
     const file = tmpDbPath();
@@ -667,10 +667,10 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
   });
 
   /**
-   * T34 (Idempotency) — the concrete guarantee TASKS.md asks for ("รันซ้ำต้องไม่สร้าง...ซ้ำ") is
-   * that re-issuing the same task_id never produces a second, competing pipeline for the same
-   * work. `TaskAlreadyExistsError` (already exercised on the in-memory store above) is the same
-   * guard here, backed by SQLite's own `task_id TEXT PRIMARY KEY` — this proves it holds across a
+   * The concrete guarantee TASKS.md asks for ("รันซ้ำต้องไม่สร้าง...ซ้ำ") is that re-issuing the
+   * same task_id never produces a second, competing pipeline for the same work.
+   * `TaskAlreadyExistsError` (already exercised on the in-memory store above) is the same guard
+   * here, backed by SQLite's own `task_id TEXT PRIMARY KEY` — this proves it holds across a
    * process restart too, not just within one running process's memory.
    */
   it("re-creating the same task_id after a restart still throws, rather than silently starting a second pipeline for it", () => {

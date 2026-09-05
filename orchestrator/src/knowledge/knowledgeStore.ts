@@ -10,35 +10,29 @@ import {
 } from "./knowledgeModel.js";
 
 /**
- * Where knowledge lives on disk, and the rules for putting it there (T61).
+ * Where knowledge lives on disk, and the rules for putting it there.
  *
  * SOURCE OF TRUTH = YAML FILES IN THE REPO, GIT AS TRANSPORT
  *
- * The first design put this in `.workflow/knowledge.db`, and the question that
- * killed it was "how does that sync when we are on different machines?" —
- * SQLite has no answer: committed, it is a binary blob git cannot merge; not
- * committed, it is not shared, which is the problem V1.1 exists to solve.
- * Files in the repo pick the storage that matches the constraints already
- * enforced here — agents can write files and cannot run git — and they make
- * review a pull request instead of a UI somebody has to build.
+ * A SQLite/binary store can't be merged by git (committed) or shared (not
+ * committed). Files in the repo match the constraints already enforced here —
+ * agents can write files and cannot run git — and make review a pull request
+ * instead of a UI somebody has to build.
  *
  * ONE FILE PER ITEM
  *
  * `knowledge/<module>/<kind>/<ID>.yaml`. A conflict then happens only when two
- * people really did edit the same item: BA adding REQ-012 while DEV edits
- * BE-014 touches two files and merges clean. `decisions/*.md` already works
- * this way, and the by-product is free per-item history (`git log` on the
- * file). One file per *kind* would put every edit in the repo through the same
- * few files, which is the opposite trade.
+ * people really did edit the same item — one file per *kind* would put every
+ * edit in the repo through the same few files instead. This also gives free
+ * per-item history via `git log` on the file.
  *
  * NO INDEX, NO CACHE
  *
- * Files are read into memory and queried there (knowledgeBase.ts). `taskStore.ts`
- * already stated the reason this repo does not keep derived copies: a stored
+ * Files are read into memory and queried there (knowledgeBase.ts). A stored
  * derivation is a second source of truth waiting to disagree with the first —
  * and an index derived from files git just merged is exactly a cache nobody
- * knows is stale. If measurement ever shows this is slow (T116 is the task
- * that measures), an index that rebuilds from the files is still available.
+ * knows is stale. If measurement ever shows this is slow, an index that
+ * rebuilds from the files is still an option.
  */
 
 export const KNOWLEDGE_DIRNAME = "knowledge";
@@ -56,6 +50,11 @@ export const PROJECT_WIDE_DIR = "_project";
  * a module folder and a bookkeeping folder look identical from the outside,
  * and guessing wrong means either losing a module's items or reporting the
  * registry as forty malformed items.
+ *
+ * `_adoption` stays on the list even though the subsystem that wrote it is
+ * gone: workspaces that ran the old import still have the directory on disk,
+ * and dropping it here would make the item walk read those bookkeeping files
+ * as a module's items.
  */
 export const RESERVED_DIRS = ["_sources", "_conflicts", "_bootstrap", "_human-input", "_adoption", "_roles"] as const;
 
@@ -238,8 +237,8 @@ function contentOf(item: KnowledgeItem): string {
  * Whether two items say the same thing, ignoring `version`/`updated_at` — the
  * same comparison `writeKnowledgeItem` makes to decide whether a version bump is
  * required. Exported because a caller that re-derives an item from its source
- * (discovery, T74-T79) has to ask "did anything actually move" *before* writing,
- * and it must ask with this function rather than its own: a second definition of
+ * (discovery) has to ask "did anything actually move" *before* writing, and
+ * must ask with this function rather than its own: a second definition of
  * "same content" would disagree with the one the write path enforces, and then
  * every re-run would either bump for nothing or fail the version check.
  */

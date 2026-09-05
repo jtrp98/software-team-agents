@@ -15,7 +15,7 @@ import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 
 /**
- * T-V1-05 — the runtime conformance suite: one mandatory-case matrix run
+ * The runtime conformance suite: one mandatory-case matrix run
  * against every real adapter through its public port, producing a
  * deterministic compatibility report per runtime.
  *
@@ -44,7 +44,7 @@ import { RuntimeRegistry } from "./runtimeRegistry.js";
  * produces, and whether its guard accounting lies — deterministically, on
  * every machine CI runs on. Whether a given machine's installation honours
  * those surfaces is `sta doctor`'s capability probe's job, and a support
- * level (T-V1-04) rises only when both agree.
+ * level rises only when both agree.
  */
 
 const ROLE = "qa-engineer";
@@ -69,7 +69,7 @@ const EXECUTOR_ENV = {
   AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([TARGET_ROOT]),
 };
 
-/** The mandatory case list, in report order — T-V1-05's contract with itself. */
+/** The mandatory case list, in report order — this suite's contract with itself. */
 const MANDATORY_CASES = [
   "agent-launch",
   "workspace-detection",
@@ -265,7 +265,6 @@ async function runConformance(impl: Implementation): Promise<ConformanceRow[]> {
     !exitEnforced &&
     (guards.unenforced.includes(RuntimeCapability.EXIT_GUARD) || guards.unenforced.includes(RuntimeCapability.PER_AGENT_EXIT_GUARD)) &&
     !!guards.reason;
-  const claudeSurfaceRules = impl.id === "claude-code" && surface.includes(`Write(${GUARDS.writeDeny[0]})`) && surface.includes(`Bash(${GUARDS.forbidCommands[0]} *)`);
 
   const guardVerdict = (): ConformanceRow["verdict"] =>
     preToolEnforced ? "ENFORCED" : preToolHonestlyUnenforced ? "REPORTED_UNENFORCED" : "FAIL";
@@ -430,7 +429,7 @@ describe("T-V1-05 runtime conformance — one matrix, every runtime", () => {
     fs.mkdirSync(path.join(root, ".sta"), { recursive: true });
     fs.writeFileSync(
       path.join(root, ".sta", "config.yaml"),
-      "schema_version: 1\nmodel_routing:\n  backend-engineer: unsafe:mock-model\n",
+      "schema_version: 1\nrouting:\n  by_role:\n    backend-engineer: unsafe:mock-model\n",
       "utf8",
     );
     const fallback = new MockRuntimeAdapter({ id: "claude-code" });

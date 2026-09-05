@@ -6,13 +6,13 @@ import Ajv, { type ValidateFunction } from "ajv";
 import addFormats from "ajv-formats";
 
 /**
- * The manifest T90 produces alongside `templates/` — one row per templated
+ * The manifest produced alongside `templates/` — one row per templated
  * file, its content hash, and the framework version this build came from.
  *
- * This is the anchor T94-T97 build on: `sta upgrade` diffs a target
- * project's on-disk file hash against the `sha256` recorded here at install
- * time. Unchanged since install -> safe to overwrite. Changed -> the user
- * edited it, so upgrade skips it and warns instead of clobbering it.
+ * This is the anchor `sta upgrade` builds on: it diffs a target project's
+ * on-disk file hash against the `sha256` recorded here at install time.
+ * Unchanged since install -> safe to overwrite. Changed -> the user edited
+ * it, so upgrade skips it and warns instead of clobbering it.
  */
 export interface TemplateFileEntry {
   /** Repo-root-relative, forward-slashed — identical to how it lands in the target project. */
@@ -26,10 +26,21 @@ export interface TemplateManifest {
   framework_version: string;
   generated_at: string;
   files: TemplateFileEntry[];
+  /** Derived from the existing path/hash rows; distinguishes builds sharing a version string. */
+  payload_digest?: string;
 }
 
 export function sha256Of(content: Buffer | string): string {
   return crypto.createHash("sha256").update(content).digest("hex");
+}
+
+/** Stable digest over manifest material, independent of input row order. */
+export function payloadDigest(files: readonly TemplateFileEntry[]): string {
+  const material = [...files]
+    .sort((a, b) => a.path.localeCompare(b.path))
+    .map((file) => `${file.path}\0${file.sha256}`)
+    .join("\n");
+  return sha256Of(material);
 }
 
 /**
@@ -61,12 +72,12 @@ export function buildManifest(
     const content = fs.readFileSync(abs);
     return { path: relPath.split(path.sep).join("/"), sha256: sha256Of(content), size_bytes: content.length };
   });
-  return { schema_version: 1, framework_version: frameworkVersion, generated_at: now, files };
+  return { schema_version: 1, framework_version: frameworkVersion, generated_at: now, files, payload_digest: payloadDigest(files) };
 }
 
 export class TemplatesNotBuiltError extends Error {}
 
-/** Reads and validates `<templatesDir>/manifest.json` — the file `sta init`/`upgrade` (T92/T95) read as their source of truth for what to install. */
+/** Reads and validates `<templatesDir>/manifest.json` — the file `sta init`/`upgrade` read as their source of truth for what to install. */
 export function readTemplateManifest(templatesDir: string): TemplateManifest {
   const target = path.join(templatesDir, "manifest.json");
   if (!fs.existsSync(target)) {

@@ -1,6 +1,6 @@
 # Policy — Version control (§5)
 
-Split from `.claude/shared/conventions.md` by T49. One rule, kept in its own file because it is
+One rule, kept in its own file because it is
 enforced structurally, not just written down.
 
 ---

@@ -14,23 +14,23 @@ import { kindsFor } from "./roleView.js";
 import { type Freshness, freshnessOf } from "./freshness.js";
 
 /**
- * The Shared Context API (T70), with permission-aware retrieval (T69) and
- * provenance (T72) built in rather than bolted on.
+ * The Shared Context API, with permission-aware retrieval and provenance
+ * built in rather than bolted on.
  *
  * ONE DOOR
  *
  * Every agent asks the project's knowledge through here instead of reading
- * `knowledge/*.yaml` directly. That is the point of T70: a dozen call sites each
- * opening files is a dozen places where the role filter, the field policy and
- * the freshness warning can each be forgotten independently.
+ * `knowledge/*.yaml` directly. A dozen call sites each opening files is a
+ * dozen places where the role filter, the field policy and the freshness
+ * warning can each be forgotten independently.
  *
  * PERMISSION IS NOT AN AFTERTHOUGHT
  *
- * T69's requirement, stated plainly: the check happens *before* the agent sees
- * anything, not after. There is no method here that returns a raw
- * `KnowledgeItem` — retrieval produces a `VisibleItem`, already filtered by kind
- * (T67) and by field (T68). "Show the agent everything and trust it not to
- * mention the sensitive parts" is not access control; it is a hope.
+ * The check happens *before* the agent sees anything, not after. There is no
+ * method here that returns a raw `KnowledgeItem` — retrieval produces a
+ * `VisibleItem`, already filtered by kind and by field. "Show the agent
+ * everything and trust it not to mention the sensitive parts" is not access
+ * control; it is a hope.
  *
  * NOTHING IS WITHHELD SILENTLY
  *
@@ -52,7 +52,7 @@ export interface ResolvedSource {
   locator: string;
   captured_at: string;
   digest: string | null;
-  /** The registry record (T62) this cites, when it names or matches one. */
+  /** The registry record this cites, when it names or matches one. */
   record: SourceRecord | null;
 }
 
@@ -183,19 +183,14 @@ function citationHead(item: KnowledgeItem): string {
 
 /**
  * Provenance and freshness carry the same locators the item's `sources` do, so a
- * policy that redacts `sources` has to redact them here too.
+ * policy that redacts `sources` must redact them here too — otherwise a role
+ * reading a sensitive item would get `sources: []` on the item but the full
+ * locator list back through `provenance.sources`, `provenance.citation`, and
+ * `freshness.oldestSource`: the same leak one step out.
  *
- * It did not, and that made the redaction cosmetic: a role reading a sensitive
- * item got `sources: []` on the item, `withheld: ["body","payload","sources"]`
- * saying so — and then the full locator list back through `provenance.sources`,
- * `provenance.citation`, and `freshness.oldestSource`. Three copies of the thing
- * the policy had just removed, on the same object. `provenance()` already
- * refused an item the role may not *see at all*; this is the finer case the
- * module's own note calls a side channel.
- *
- * The verdict and the age survive: "this is stale" is a quality signal about the
- * item, not a fact from the material, and withholding it would leave an agent
- * relying on something it cannot tell is out of date.
+ * The verdict and the age survive redaction: "this is stale" is a quality
+ * signal about the item, not a fact from the material, and withholding it
+ * would leave an agent relying on something it cannot tell is out of date.
  */
 function redactProvenance(provenance: Provenance, role: AgentStage, item: KnowledgeItem, withheld: Set<string>): Provenance {
   const removed: string[] = [];

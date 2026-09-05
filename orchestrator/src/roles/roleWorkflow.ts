@@ -14,41 +14,37 @@ import { type RoleWorkspace, loadRoleWorkspace } from "./roleWorkspace.js";
 import { type SignoffVerdict, describeSignoff, signoffVerdict } from "./roleApproval.js";
 
 /**
- * What happens *inside* one lane, between raw input arriving and the next lane
- * being able to start (T100 for BA; T101/T102 add the other two rows).
+ * What happens *inside* one lane, between raw input arriving and the next
+ * lane being able to start.
  *
- * NOT THE SAME THING AS `workflows/*.yml`
- *
- * Those say which of the eleven agents run, in what order, for a kind of change —
- * the cross-lane pipeline. This says what a single lane's work passes through
- * on its way to being something the next lane may rely on. A project has one
+ * This is not the same thing as `workflows/*.yml`: those say which of the
+ * eleven agents run, in what order, for a kind of change — the cross-lane
+ * pipeline. This says what a single lane's work passes through on its way to
+ * being something the next lane may rely on. A project has one
  * `workflows/feature.yml`; it has three of these, running at their own pace.
  *
- * THE STAGE IS DERIVED FROM T65, NOT STORED
+ * The stage is derived from `ownership.ts`, not stored: that module already
+ * fixes the only path a piece of knowledge can take — `draft` -> `reviewed`
+ * (by somebody who is not its owner) -> `approved` (by a person, never an
+ * agent). So a lane's stage is not a new state machine, it is a reading of
+ * where its own items currently sit on that one. Storing it would create a
+ * second answer free to disagree with the items themselves — the same reason
+ * `roleWorkspace.ts` stores only the watermark.
  *
- * `ownership.ts` already fixes the only path a piece of knowledge can take:
- * `draft` -> `reviewed` (by somebody who is not its owner) -> `approved` (by a
- * person, never an agent). So a lane's stage is not a new state machine, it is
- * a reading of where its own items currently sit on that one. Storing it would
- * create a second answer free to disagree with the items themselves — the same
- * reason `roleWorkspace.ts` stores only the watermark.
+ * The handoff is not a new mechanism either: "BA hands off to SA" means BA's
+ * requirements are `approved`, and the SA lane has acknowledged them (its
+ * watermark). Both halves already exist, so this file reports the handoff
+ * rather than performing one. Nothing here writes.
  *
- * THE HANDOFF IS NOT A NEW MECHANISM EITHER
- *
- * "BA hands off to SA" means: BA's requirements are `approved`, and the SA lane
- * has acknowledged them (T99's watermark). Both halves already exist, so this
- * file reports the handoff rather than performing one. Nothing here writes.
- *
- * BLOCKERS VS CARRIES
- *
- * A blocker means the next lane must not start. A carry means it may start and
- * has something to resolve first. The distinction is load-bearing for exactly
- * one case, and getting it wrong would be worse than not having it: CLAUDE.md
- * requires an unsourced fact to be written down as `assumption_unconfirmed`, and
- * requires `system-analyst` to resolve it with the user rather than designing
- * around it. If that flag blocked the handoff, the rule would punish the
- * business-analyst for obeying it, and the way to make progress would be to stop
- * flagging assumptions. So it travels, loudly, instead of stopping anything.
+ * Blockers vs. carries: a blocker means the next lane must not start. A
+ * carry means it may start and has something to resolve first. The
+ * distinction is load-bearing for exactly one case: CLAUDE.md requires an
+ * unsourced fact to be written down as `assumption_unconfirmed`, and requires
+ * `system-analyst` to resolve it with the user rather than designing around
+ * it. If that flag blocked the handoff, the rule would punish the
+ * business-analyst for obeying it, and the way to make progress would be to
+ * stop flagging assumptions. So it travels, loudly, instead of stopping
+ * anything.
  */
 
 export type RoleWorkflowStage =
@@ -56,9 +52,9 @@ export type RoleWorkflowStage =
   | "intake"
   /** At least one owned item is `draft` — somebody other than its owner has to review it. */
   | "drafting"
-  /** Everything owned is `reviewed` or better, and at least one is waiting on a person (item level, T65). */
+  /** Everything owned is `reviewed` or better, and at least one is waiting on a person (item level). */
   | "awaiting-approval"
-  /** Every item is approved, but nobody has signed the lane itself off yet — or what they signed has changed since (T103). */
+  /** Every item is approved, but nobody has signed the lane itself off yet — or what they signed has changed since. */
   | "awaiting-signoff"
   /** The person in this lane said no. An answer, not an absence — it blocks until they are asked again. */
   | "rejected"
@@ -83,7 +79,7 @@ export interface Handoff {
   blockers: string[];
   /** Flagged material the next lane must resolve before designing around it — travels with the work, never holds it. */
   carries: string[];
-  /** Whether the receiving lane has acknowledged these versions (T99). False is normal, not an error. */
+  /** Whether the receiving lane has acknowledged these versions. False is normal, not an error. */
   acknowledgedByTarget: boolean;
 }
 
@@ -92,11 +88,11 @@ export interface RoleWorkflowState {
   module: string | null;
   stage: RoleWorkflowStage;
   nextAction: NextAction;
-  /** Ids owned by this lane in this module, by where they sit on T65's path. */
+  /** Ids owned by this lane in this module, by where they sit on the draft/reviewed/approved path. */
   draft: string[];
   reviewed: string[];
   approved: string[];
-  /** Where this lane's own gate stands (T103). */
+  /** Where this lane's own gate stands. */
   signoff: SignoffVerdict;
   handoff: Handoff;
 }
@@ -118,7 +114,7 @@ export interface LaneSpec {
 }
 
 /**
- * The BA lane (T100): raw requirement in, `requirement`/`business-rule`
+ * The BA lane: raw requirement in, `requirement`/`business-rule`
  * knowledge out, handed to SA.
  *
  * Its two lane-specific checks are the two things `system-analyst` cannot work
@@ -159,7 +155,7 @@ export const BA_WORKFLOW: LaneSpec = {
 };
 
 /**
- * The SA lane (T101): approved requirements in, `architecture`/`api`/`db-schema`
+ * The SA lane: approved requirements in, `architecture`/`api`/`db-schema`
  * knowledge out, handed to DEV.
  *
  * Its blockers are the three ways a design can be `approved` and still leave an
@@ -222,7 +218,7 @@ export const SA_WORKFLOW: LaneSpec = {
 };
 
 /**
- * The DEV lane (T102): approved design in, `task` knowledge and real code out.
+ * The DEV lane: approved design in, `task` knowledge and real code out.
  * The last lane — it hands off to nobody.
  *
  * Its first blocker is CLAUDE.md's §6a rule made checkable rather than
@@ -232,9 +228,10 @@ export const SA_WORKFLOW: LaneSpec = {
  * it is stated in the data — `TaskPayload.produces` / `consumes` — so it can be
  * caught instead of reviewed for.
  *
- * The join to T01–T60 is `orchestrator_task_id`. It carries rather than blocks:
- * a task can be perfectly well described here and simply not have been run
- * through the state machine yet, which is a normal state and not a defect.
+ * The join to the running state machine is `orchestrator_task_id`. It carries
+ * rather than blocks: a task can be perfectly well described here and simply
+ * not have been run through the state machine yet, which is a normal state
+ * and not a defect.
  */
 export const DEV_WORKFLOW: LaneSpec = {
   lane: "dev",
@@ -333,7 +330,7 @@ export function workflowFor(lane: RoleLane): LaneSpec | undefined {
   return LANE_WORKFLOWS[lane];
 }
 
-/** Kinds a lane's roles are allowed to own. Derived from T65's table — used for messages, never as a filter (an item's actual `owner` decides which lane it belongs to). */
+/** Kinds a lane's roles are allowed to own. Derived from the ownership table — used for messages, never as a filter (an item's actual `owner` decides which lane it belongs to). */
 export function ownedKindsOf(lane: RoleLane): KnowledgeKind[] {
   const roles = new Set(rolesInLane(lane));
   return (Object.keys(ALLOWED_OWNERS) as KnowledgeKind[]).filter((kind) =>
@@ -399,8 +396,8 @@ export function roleWorkflowState(
     acknowledgedByTarget,
   };
 
-  // T103's gate sits after every item is approved and before `ready`: item-level
-  // approval says each fact is binding, the sign-off says the lane is finished.
+  // The lane's own gate sits after every item is approved and before `ready`:
+  // item-level approval says each fact is binding, the sign-off says the lane is finished.
   const signoff = signoffVerdict(workspaces(spec.lane), approved);
 
   const stage: RoleWorkflowStage = !hasPrimary
@@ -471,7 +468,7 @@ function nextActionFor(spec: LaneSpec, stage: RoleWorkflowStage, facts: StageFac
         agent: null,
         what:
           `${ids(facts.draft).join(", ")} are draft — somebody other than the owner reviews them before a person can ` +
-          "approve (T65: an owner marking its own work reviewed records that nothing happened)",
+          "approve (an owner marking its own work reviewed records that nothing happened)",
       };
 
     case "awaiting-approval":

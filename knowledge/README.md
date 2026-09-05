@@ -11,16 +11,16 @@ knowledge/
 ├── <module>/            ← _docs/module/<name>, or `_project` for project-wide items
 │   └── <kind>/
 │       └── <ID>.yaml
-├── _sources/            ← SRC-*.yaml: the raw material that was ingested (T62);
+├── _sources/            ← SRC-*.yaml: the raw material that was ingested;
 │                          plus design/ — Claude Design / Figma exports a *person*
-│                          placed for the uxui-designer lane (T-UX5). Agents read
+│                          placed for the uxui-designer lane. Agents read
 │                          these files and cite them with sha256 digests; only a
 │                          person writes here.
-├── _conflicts/          ← CONF-*.yaml: a person's decision about two facts that contradict (T66)
-├── _bootstrap/          ← STATE.yaml: how far first-time discovery got (T73)
-├── _human-input/        ← what a person supplied that no file could be read for (T79)
-├── _adoption/           ← the staging area for migrating an existing project in (T81)
-└── _roles/              ← <module>/<lane>.yaml: where BA, SA and DEV each stand (T99)
+├── _conflicts/          ← CONF-*.yaml: a person's decision about two facts that contradict
+├── _bootstrap/          ← STATE.yaml: how far first-time discovery got
+├── _human-input/        ← what a person supplied that no file could be read for
+├── _adoption/           ← retired in V5 (ADR-024); reserved directory skipped by item walk for legacy workspaces
+└── _roles/              ← <module>/<lane>.yaml: where BA, SA and DEV each stand
 ```
 
 Every `_`-prefixed name above is reserved — the item walk skips them, so they can never be
@@ -28,7 +28,7 @@ mistaken for a module full of malformed items. The list the code enforces is `RE
 in `orchestrator/src/knowledge/knowledgeStore.ts`.
 
 `<ID>` is the id the pipeline already uses — `REQ-003`, `DES-003`, `BE-014`, `TEST-003`,
-`ADR-004` (T19). Not a parallel id: one that differed from the id in `plan.md` would need a
+`ADR-004`. Not a parallel id: one that differed from the id in `plan.md` would need a
 mapping nobody maintains.
 
 ## Why files in the repo, and not a database
@@ -90,7 +90,7 @@ who decides. `_roles/<module>/<lane>.yaml` holds the only two things about a lan
 be worked out from `knowledge/` itself:
 
 - **`seen`** — which version of which item the person in that lane has acknowledged.
-- **`signoffs`** — that person's own approval gate (T103), and the exact item versions each
+- **`signoffs`** — that person's own approval gate, and the exact item versions each
   answer covered. Approving an *item* says a fact is binding; signing off the *lane* says the
   lane is finished and the next one may start. A sign-off names versions so that amending
   what it covered makes it stale by arithmetic, rather than leaving a flag that outlives its

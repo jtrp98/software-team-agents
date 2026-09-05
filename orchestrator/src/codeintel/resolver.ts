@@ -21,28 +21,27 @@ import {
 } from "./provider.js";
 
 /**
- * T-GR5 / T-GR6 / T-GR11 / T-GR13 — the one door between the pipeline and a
- * code-intelligence provider.
+ * The one door between the pipeline and a code-intelligence provider.
  *
- * THE FLOW (fixed by TASKS §0.1): ask → freshness gate → scoped query →
- * rank/top-N/dedupe → permission filter → evidence block. The output is text
- * plus candidates that travel through the existing context-injection channel;
- * nothing here touches runtimes, hooks, or settings.
+ * THE FLOW: ask → freshness gate → scoped query → rank/top-N/dedupe →
+ * permission filter → evidence block. The output is text plus candidates
+ * that travel through the existing context-injection channel; nothing
+ * here touches runtimes, hooks, or settings.
  *
  * WHY EVERY FAILURE IS A FALLBACK, NOT AN ERROR: the pipeline ran to completion
  * before this module existed. A missing tool, a stale index, a timeout — none
  * of them may change task outcomes, so every failure mode collapses onto the
  * same answer: `{ used: false }`, and the caller proceeds with plain search and
  * read exactly as before. With the feature OFF (the default) the resolver never
- * even constructs a provider — behaviour is bit-for-bit what it was (T-GR11).
+ * even constructs a provider — behaviour is bit-for-bit what it was.
  *
- * B6 (no permission bypass): the capability matrix decides whether a role may
+ * No permission bypass: the capability matrix decides whether a role may
  * ask at all; the path filter re-checks every returned candidate against the
  * same workspace roots and UNIVERSAL_DENY floor as any other read. A provider
  * that returns a path outside scope loses that path — the tool widens nothing.
  */
 
-/** Telemetry kinds (T-GR13) — rendered through `sta audit` like every other event. */
+/** Telemetry kinds — rendered through `sta audit` like every other event. */
 export const CODE_INTEL_EVENTS = {
   QUERY: "CODE_INTELLIGENCE_QUERY",
   HIT: "CODE_INTELLIGENCE_HIT",
@@ -80,7 +79,7 @@ export interface CodeContextResult {
   candidates: CodeCandidate[];
   /**
    * Rendered evidence for the prompt. Empty unless `used`. Carries the
-   * source-verification directive (T-GR6) — an evidence block without it would
+   * source-verification directive — an evidence block without it would
    * invite copy-paste analysis from a map that might be stale.
    */
   evidenceBlock: string;
@@ -245,7 +244,7 @@ function requiredSymbol(symbol: string | undefined, operation: CodeIntelOperatio
 }
 
 /**
- * B6 — the provider widens nothing. A candidate survives only if it points
+ * The provider widens nothing. A candidate survives only if it points
  * inside an allowed root AND does not match the universal write-deny floor
  * (.git, node_modules, dist…). Relative traversal tricks (`../`) die at the
  * path.resolve + containment check.
@@ -386,7 +385,7 @@ export function rankAndTrim(candidates: CodeCandidate[], topN: number): CodeCand
 }
 
 /**
- * T-GR6 — the guardrail lives IN the artifact, so it cannot be forgotten.
+ * The guardrail lives IN the artifact, so it cannot be forgotten.
  *
  * Every role gets the same principle sentence and its own concrete rule; the
  * automated test pins these lines, so deleting or softening them fails CI
@@ -482,9 +481,9 @@ function message(error: unknown): string {
 }
 
 /**
- * T-GR13 — audit entries carry METADATA ONLY: counts, revisions, reasons, and
- * at most the top few file paths (paths are already visible in the repo; file
- * contents and secrets never enter a payload — B7).
+ * Audit entries carry METADATA ONLY: counts, revisions, reasons, and at most
+ * the top few file paths (paths are already visible in the repo; file
+ * contents and secrets never enter a payload).
  */
 function telemetryEmitter(
   deps: CodeIntelResolverDeps,
@@ -500,7 +499,7 @@ function telemetryEmitter(
         payload: { role: req.role, ...payload },
       });
     } catch {
-      // Telemetry must never break the pipeline that hosts it (T-GR11 posture).
+      // Telemetry must never break the pipeline that hosts it.
     }
   };
 }

@@ -1,5 +1,3 @@
 # Business-analyst rationale
 
-T-V3TOK-026 moved requirement-document examples and mechanical structure
-details out of static context. The role prompt keeps interview and evidence
-judgment.
+The role owns requirements elicitation, structured interviews, and evidence-backed specification. The prompt keeps interview and evidence judgment while referring structural schemas to shared definitions.

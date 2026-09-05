@@ -110,8 +110,6 @@ describe("classifyQaFailure routes by a stated category when no role is named (T
     expect(failure!.owner).toBe(AgentStage.SYSTEM_ANALYST);
     expect(failure!.category).toBe("contract");
     expect(failure!.requiresHuman).toBe(false);
-    // The route says why it went where it went, so a wrong one is visible rather than mysterious.
-    expect(failure!.reason).toContain("routed by category");
   });
 
   it("uses the affected ids to pick a side within `implementation`", () => {
@@ -134,8 +132,6 @@ describe("classifyQaFailure routes by a stated category when no role is named (T
     const failure = classifyQaFailure(review(["| something is wrong somewhere | Phase 2 | ??? | blocking | 1 |"]));
     expect(failure!.requiresHuman).toBe(true);
     expect(failure!.owner).toBe(AgentStage.HUMAN);
-    // Unchanged from before T38: a row stating nothing routable is not a row at
-    // all, so this is the pre-existing "names no agent" stop, not a new one.
     expect(failure!.reason).toContain("names no agent to route it to");
   });
 

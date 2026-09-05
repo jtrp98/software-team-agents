@@ -48,8 +48,7 @@ describe("review separation, as a property of the roster (T39)", () => {
 
   it("reports the one workflow that deliberately ships unreviewed, without failing on it", () => {
     const result = checkReviewSeparation();
-    // workflows/typo.yml says so in as many words. A written-down right-sizing
-    // decision is the user's; the check makes it visible rather than overriding it.
+    // A right-sizing decision the user made deliberately; reported, not failed.
     expect(result.notes.some((n) => n.includes('workflow "typo"'))).toBe(true);
     expect(result.ok).toBe(true);
   });

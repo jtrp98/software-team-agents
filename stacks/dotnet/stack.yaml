@@ -21,3 +21,51 @@ commands:
   typecheck: dotnet build
 scan_extensions: [.cs, .cshtml, .razor]
 capabilities: [rest-api, grpc, database-access, auth, testing]
+
+# T-V5-023 — the layout half of the engineer path rules. `{source_root}` expands to each root
+# recorded in the Target's `.agent-team/config.yaml` `stack.source_roots`, so this profile names
+# an ASP.NET project layout without naming any particular Target's directories.
+#
+# Before the split these globs lived in `contracts/{backend,frontend}-engineer.yaml` as
+# `server/**` / `app/api/**` / `prisma/**`, which exist in no .NET repository — so both engineers
+# resolved an empty write set here and the one real Target claimed both prompts through
+# `overrides` instead. Declaring layout does not make a prompt .NET-capable; that stays the
+# open gap this file's header names.
+permissions:
+  backend-engineer:
+    read: ["{source_root}/**", "*.sln", "*.csproj", "Directory.Build.props", "Directory.Packages.props"]
+    write: ["{source_root}/**"]
+    # Views and client assets belong to frontend-engineer; build output and restored packages
+    # belong to nobody. `Areas/**` stays open to both: in MVC it holds controllers and views
+    # side by side, the same overlap `app/**` carries on the Node profile.
+    deny:
+      - "{source_root}/bin/**"
+      - "{source_root}/obj/**"
+      - "{source_root}/packages/**"
+      - "{source_root}/Views/**"
+      - "{source_root}/Pages/**"
+      - "{source_root}/wwwroot/**"
+      - "{source_root}/Content/**"
+      - "{source_root}/Scripts/**"
+      - "{source_root}/assets/**"
+  frontend-engineer:
+    read: ["{source_root}/**", "*.sln", "*.csproj"]
+    write:
+      - "{source_root}/Views/**"
+      - "{source_root}/Pages/**"
+      - "{source_root}/Areas/**"
+      - "{source_root}/wwwroot/**"
+      - "{source_root}/Content/**"
+      - "{source_root}/Scripts/**"
+      - "{source_root}/assets/**"
+    # Controllers, view models and startup wiring are backend-engineer's, exactly as
+    # `app/api/**` and `prisma/**` are on the Node profile.
+    deny:
+      - "{source_root}/bin/**"
+      - "{source_root}/obj/**"
+      - "{source_root}/packages/**"
+      - "{source_root}/Controllers/**"
+      - "{source_root}/VMModels/**"
+      - "{source_root}/Models/**"
+      - "{source_root}/App_Start/**"
+      - "{source_root}/Migrations/**"

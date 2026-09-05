@@ -7,13 +7,10 @@ import { readBootstrapState, writeBootstrapState, BootstrapStateError } from "./
 import { ALL_STAGES, computeStatus, newBootstrapState, type BootstrapState, type DiscoveryStageId } from "./bootstrapModel.js";
 
 /**
- * Runs the T73 flow: discovery stage → items written into `knowledge/` →
- * bootstrap state updated → repeat → T80 validation → `ready`.
+ * Runs the bootstrap flow: discovery stage → items written into `knowledge/` →
+ * bootstrap state updated → repeat → validation → `ready`.
  *
- * `DiscoveryStage` is the seam T74-T79 implement against. None of them exist
- * yet, so this module and its tests only know the interface, not a single
- * real stage — the same relationship `fromArtifacts.ts` (T61) has to the
- * Markdown parsers T75/T83/T84/T85 will eventually call it from.
+ * `DiscoveryStage` is the seam discovery stages implement against.
  */
 
 export interface DiscoveryResult {
@@ -72,12 +69,10 @@ function requireState(projectRoot: string): BootstrapState {
 
 /**
  * Runs one discovery stage: lands every item and source it produced (through
- * the shared `landing.ts` rule, which is also what T87's dry run previews with),
- * marks
- * the stage `done`/`skipped` with the item ids it left behind, and persists
- * the recomputed overall status. Each stage's items land in `knowledge/`
- * through the same `writeKnowledgeItem`/`writeSourceRecord` every other
- * writer uses — bootstrap does not get a second way to write an item.
+ * the shared `landing.ts` rule), marks the stage `done`/`skipped` with the
+ * item ids it left behind, and persists the recomputed overall status.
+ * Each stage's items land in `knowledge/` through the same
+ * `writeKnowledgeItem`/`writeSourceRecord` every other writer uses.
  *
  * A stage that lands new material after somebody has validated this bootstrap
  * clears that validation: `ready` means a person reviewed what is there, and
@@ -100,8 +95,8 @@ export async function runBootstrapStage(
 
   record.status = result.skipped ? "skipped" : "done";
   record.completed_at = now;
-  // Everything the stage found, including what it declined to overwrite: T80
-  // still has to account for those, and dropping them would hide them.
+  // Everything the stage found, including what it declined to overwrite:
+  // validation still has to account for those, and dropping them would hide them.
   record.knowledge_ids = result.items.map((i) => i.id);
   if (landed.conflicts.length > 0) record.conflict_ids = landed.conflicts;
   else delete record.conflict_ids;
@@ -128,7 +123,7 @@ export async function runBootstrapStage(
 }
 
 /**
- * T80 — records that a person reviewed everything discovery produced.
+ * Records that a person reviewed everything discovery produced.
  * Refuses while any stage is still pending/in_progress: approving knowledge
  * that has not finished arriving is not what "Ready" is supposed to mean.
  */

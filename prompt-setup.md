@@ -9,11 +9,13 @@
 > and set me up"). The playbook is runtime-agnostic: it only assumes file access
 > and a shell.
 >
-> **Human-facing counterpart:** [`TEAM_SETUP_V1.md`](TEAM_SETUP_V1.md) is the
-> same onboarding flow written for a person to follow by hand, with a
-> Troubleshooting section (including the exact incident this playbook's
-> Phase-0 detectors exist to catch — see "req หลุดไป Target" there). Point a
-> user who wants to do this themselves at that file instead of this one.
+> **Human-facing counterpart:** [`README.md` § Getting Started](README.md#getting-started) is the
+> same onboarding flow written for a person to follow by hand; its
+> [§ Ownership, health and troubleshooting](README.md#ownership-health-และ-troubleshooting) section
+> (including the exact incident this playbook's Phase-0 detectors exist to
+> catch — see "requirement/design หลุดไปออกใน Target" there) covers recovery. Point a
+> user who wants to do this themselves at README instead of this one
+> (`TEAM_SETUP_V1.md` is now a pointer to the same place).
 
 ---
 
@@ -54,7 +56,7 @@ do not bother the user with anything that resolves cleanly.
 ```bash
 software-team-agents status --json        # roots, role, versions, sync state, readiness
 software-team-agents --version            # installed Framework version
-sta --check-workspace --project-root .    # T-WG4 — misplaced module docs, when this is a role: dev workspace
+sta --check-workspace --project-root .    # misplaced module docs, when this is a role: dev workspace
 ```
 
 Then, guided by what status reports:
@@ -69,9 +71,9 @@ Then, guided by what status reports:
 | Local path mappings | read `<knowledgeRoot>/.workflow/targets.local.yaml` if present |
 | Sync status of the current workspace | `status --json` → `syncState`, `syncedVersion`, `conflictCount`, `managedFileCount` |
 | Runtime readiness | `status --json` → `claude.ready`, `codex.ready`, `opencode.ready` (OpenCode needs bindings **and** `.opencode/plugin/sta-guards.js` — its headless default posture is allow-all, so a missing plugin means unguarded, not just incomplete) |
-| Knowledge root bound but never initialized (T-WG1) | `status --json` → `knowledgeBoundButUninitialized` (the bound root's path, or absent) — a machine-wide binding resolves, yet `<knowledgeRoot>/.agent-team/config.yaml` is absent, so BA-workspace prompts exist nowhere on this machine yet; `status`'s plain-text output prints the same fact as a `WARNING:` line with the exact fix command |
-| Roster drift in a workspace (T-WG2) | `status --json` → `rosterDriftPaths` (array of paths; empty = none) — agent-prompt files under `.claude/agents/` / `.codex/agents/` / `.opencode/agent/` whose names belong to the *other* workspace role's roster (analysis prompts in a DEV workspace, engineer/reviewer prompts in a BA one); never legitimate regardless of how they got there |
-| Module docs stranded in a Target (T-WG4) | `sta --check-workspace --project-root <path>` (the Framework's top-level CLI, not `software-team-agents`) — flags every file under a `role: dev` workspace's `_docs/module/**` plus a `## Modules` table in its `_docs/status.md`, each with the Knowledge-repo destination path |
+| Knowledge root bound but never initialized | `status --json` → `knowledgeBoundButUninitialized` (the bound root's path, or absent) — a machine-wide binding resolves, yet `<knowledgeRoot>/.agent-team/config.yaml` is absent, so BA-workspace prompts exist nowhere on this machine yet; `status`'s plain-text output prints the same fact as a `WARNING:` line with the exact fix command |
+| Roster drift in a workspace | `status --json` → `rosterDriftPaths` (array of paths; empty = none) — agent-prompt files under `.claude/agents/` / `.codex/agents/` / `.opencode/agent/` whose names belong to the *other* workspace role's roster (analysis prompts in a DEV workspace, engineer/reviewer prompts in a BA one); never legitimate regardless of how they got there |
+| Module docs stranded in a Target | `sta --check-workspace --project-root <path>` (the Framework's top-level CLI, not `software-team-agents`) — flags every file under a `role: dev` workspace's `_docs/module/**` plus a `## Modules` table in its `_docs/status.md`, each with the Knowledge-repo destination path |
 
 If `status` fails because the current directory is not a Git repository, that is
 fine — you are likely standing outside any workspace. Note it and continue to
@@ -84,7 +86,9 @@ Present a one-screen summary of what you found, then show the menu.
 From a Framework checkout, one command — no packing, no tarball:
 
 ```bash
-cd <framework-checkout> && npm link
+cd <framework-checkout>
+npm --prefix orchestrator run build
+npm link
 ```
 
 `npm link` points the global `software-team-agents` / `sta` binaries at the
@@ -189,8 +193,7 @@ already said):
   absent, and the engineering agents' contracts additionally deny writing
   requirement/design/test-plan docs, the module's `uxui/` folder, or anything
   under `knowledge/` from this workspace (a bare session with no role is not yet
-  covered by a hook-level guard — tracked in
-  `planning/v2/workspace-guardrails-TASKS.md`, T-WG3). If the user asks for
+  covered by a hook-level guard). If the user asks for
   requirements or UX work "here", route them to the BA flow above instead of
   working around the block.
 - **Roster drift & stranded docs.** Before declaring DEV ready, check the two

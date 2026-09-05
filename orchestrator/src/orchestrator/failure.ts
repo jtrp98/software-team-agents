@@ -5,16 +5,15 @@ import { STAGE_TO_STATE } from "../state/taskState.js";
 /**
  * A failure reported by an agent, as structured data rather than prose.
  *
- * The point (TASKS.md T06's shape, T01's "failure handling" responsibility)
- * is that the *orchestrator* decides where a failure routes, not the agent
- * that hit it. An agent says what broke and who owns it; it never says "send
- * this back to backend-engineer" — that conclusion is drawn here, from the
+ * The *orchestrator* decides where a failure routes, not the agent that hit
+ * it. An agent says what broke and who owns it; it never says "send this
+ * back to backend-engineer" — that conclusion is drawn here, from the
  * pipeline the task actually has.
  *
- * T01 defines this record and routes on it. Producing one from a real
- * `review.md`/`security.md` (classifying prose into a category/owner) is T06
- * and deliberately not done here — an executor that has no structured failure
- * to report simply omits it, and routing falls back to the pre-T01 behaviour.
+ * Producing one of these from a real `review.md`/`security.md` (classifying
+ * prose into a category/owner) is deliberately not done here — an executor
+ * that has no structured failure to report simply omits it, and routing
+ * falls back to legacy behaviour.
  */
 export const StructuredFailureSchema = z.object({
   category: z.enum(["implementation", "contract", "requirement", "infrastructure", "test", "unknown"]),
@@ -41,9 +40,8 @@ export type FailureRoute =
   /**
    * Go back to an *earlier* stage: the failure was never the implementing
    * stage's to fix. A contract gap belongs to `system-analyst` at DESIGN, an
-   * undecided business rule to `business-analyst` at REQUIREMENT. Added by T07,
-   * which gave the state machine the guarded backward edge (`recoverTo`) this
-   * needs; before that this case had to escalate.
+   * undecided business rule to `business-analyst` at REQUIREMENT — the state
+   * machine's guarded backward edge (`recoverTo`) makes this possible.
    */
   | { kind: "RECOVER"; stage: AgentStage; toState: TaskState; reason: string }
   | { kind: "ESCALATE"; reason: string };
@@ -60,12 +58,9 @@ const RECOVERABLE_STATES: TaskState[] = [TaskState.REQUIREMENT, TaskState.DESIGN
  *  - the owner isn't in this task's pipeline at all;
  *  - the owner's stage occupies a TaskState the machine has no back-edge to.
  *
- * That last one used to cover far more ground: before T07 the state machine had
- * no backward edge at all, so a contract bug owned by `system-analyst` stopped
- * for a person even though the pipeline plainly contained the stage that owns
- * it. T07 added `recoverTo`, so those now return a RECOVER route instead, and
- * the escalation is reserved for owners whose state genuinely has no path back
- * (a stage that runs *after* the failure, or one outside the forward sequence).
+ * The escalation case is reserved for owners whose state genuinely has no path
+ * back (a stage that runs *after* the failure, or one outside the forward
+ * sequence) — everything else routes back via RECOVER instead.
  */
 export function routeFailure(failure: StructuredFailure, pipeline: AgentStage[]): FailureRoute {
   if (failure.requiresHuman) {

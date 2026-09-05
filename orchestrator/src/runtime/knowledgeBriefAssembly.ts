@@ -8,7 +8,7 @@ import { loadTargetRegistry } from "../threeRepo/targets.js";
 import { loadLocalTargetMapping, targetIdForLocalPath } from "../threeRepo/localTargets.js";
 
 /**
- * The knowledge-store brief (T-KA5a): a compact, bounded rendering of what
+ * The knowledge-store brief: a compact, bounded rendering of what
  * `knowledge/<module>/<kind>/<ID>.yaml` already holds for one module, injected
  * beside the sliced docs so a stage starts from the store instead of re-reading
  * whole prose documents to rediscover facts the store already answers.
@@ -17,8 +17,8 @@ import { loadLocalTargetMapping, targetIdForLocalPath } from "../threeRepo/local
  * the loader catches everything and yields `[]` — an absent or unreadable
  * store leaves the prompt exactly as it would have been without the brief.
  *
- * OFF07: this file is pure over its inputs. The caller reads the store however
- * its runtime allows; nothing here knows which process spawned the agent.
+ * This file is pure over its inputs. The caller reads the store however its
+ * runtime allows; nothing here knows which process spawned the agent.
  */
 
 const MAX_PER_KIND = 40;
@@ -136,7 +136,7 @@ export function renderKnowledgeBrief(items: readonly BriefItem[], stage: AgentSt
   return appendWithinCap(cappedIndex, expansions, opts.cap ?? BRIEF_CAP);
 }
 
-/** Loads the store and renders the brief; any failure yields `[]` (additive, T05). */
+/** Loads the store and renders the brief; any failure yields `[]` (additive). */
 export function knowledgeBriefFor(stage: AgentStage, opts: KnowledgeBriefOptions): string[] {
   try {
     const root = opts.knowledgeRoot ?? opts.projectRoot;

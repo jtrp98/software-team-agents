@@ -1,10 +1,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
+import { loadLocalTargetMapping, LocalTargetMappingError, type ResolvedLocalTarget } from "../threeRepo/localTargets.js";
+import { loadTargetRegistry, targetById, TargetRegistryError } from "../threeRepo/targets.js";
+import { defaultProjectRoot } from "../agents/agentContract.js";
 import type { TemplateManifest } from "../packaging/templateManifest.js";
+import type { TargetConfig, TargetManifest } from "./targetMeta.js";
 
 /**
- * T-ROLE-01 / T-ROLE-02 — the Role Workspace model.
+ * The Role Workspace model.
  *
  *   > BA works in Knowledge. DEV works in Target. Framework powers both.
  *
@@ -13,14 +17,24 @@ import type { TemplateManifest } from "../packaging/templateManifest.js";
  *   BA  workspace = knowledgeRoot   (Target never required)
  *   DEV workspace = targetRoot      (Knowledge required as read context)
  *
- * The Framework stays the only sync source in both directions —
- * Framework → Knowledge and Framework → Target, never Knowledge ⇄ Target
- * (T-ROLE-14/T-ROLE-15): requirements are not copied into apps, source is not
- * copied into knowledge.
+ * The Framework stays the only sync source in both directions — Framework →
+ * Knowledge and Framework → Target, never Knowledge ⇄ Target: requirements
+ * are not copied into apps, source is not copied into knowledge.
  */
 
 /** Where an interactive workspace runs and which managed payload it receives. */
 export type WorkspaceRole = "ba" | "dev";
+export type WorkspaceRuntime = "claude" | "codex" | "opencode";
+
+/** The recorded set wins; a manifest with non-Claude renderings but no
+ * recorded runtime config is conservatively treated as opt-in to every existing runtime. */
+export function runtimesForWorkspace(config: TargetConfig | undefined, manifest?: TargetManifest): readonly WorkspaceRuntime[] {
+  if (config?.runtimes?.length) return config.runtimes;
+  const legacyBindings = manifest?.files.some((file) =>
+    file.path.startsWith(".codex/") || file.path.startsWith(".opencode/") || file.path.startsWith(".agents/"),
+  );
+  return legacyBindings ? ["claude", "codex", "opencode"] : ["claude"];
+}
 
 export const WORKSPACE_ROLE_LABEL: Record<WorkspaceRole, string> = {
   ba: "BA",
@@ -38,21 +52,21 @@ export const BA_WORKSPACE_AGENTS: readonly string[] = [
   "system-analyst",
   "project-manager",
   "test-planner",
-  // T-UX1/T-UX13: the UX/UI consultant is a knowledge-side role — its outputs
-  // are draft UX-* items under knowledge/ plus _docs/module/<m>/uxui/**, never
-  // app source, so its prompt belongs beside the other Knowledge-workspace roles.
+  // The UX/UI consultant is a knowledge-side role — its outputs are draft
+  // UX-* items under knowledge/ plus _docs/module/<m>/uxui/**, never app
+  // source — so its prompt belongs beside the other Knowledge-workspace roles.
   "uxui-designer",
 ];
 
 /**
- * T-ROLE-10 / T-ROLE-11 — role-aware managed-asset profiles over the template payload.
+ * Role-aware managed-asset profiles over the template payload.
  *
  * Both roles get hooks + settings (the guards travel with every workspace),
  * skills (.claude/scripts), shared instructions, policies, CLAUDE.md, and its
- * rendered AGENTS.md pointer. They
- * differ in agent roster and in orchestrator-only payload (contracts,
- * workflows, stacks, layout/test-pyramid/escalation YAML) that only a DEV/Target
- * workspace needs because only there does the pipeline drive engineers.
+ * rendered AGENTS.md pointer. They differ in agent roster and in
+ * orchestrator-only payload (contracts, workflows, stacks,
+ * layout/test-pyramid/escalation YAML) that only a DEV/Target workspace needs
+ * because only there does the pipeline drive engineers.
  */
 export function assetsForRole(role: WorkspaceRole): (relPath: string) => boolean {
   const baAgents = new Set(BA_WORKSPACE_AGENTS);
@@ -65,13 +79,16 @@ export function assetsForRole(role: WorkspaceRole): (relPath: string) => boolean
       if (relPath.startsWith(".claude/agents/") && relPath.endsWith(".md")) {
         return !baAgents.has(path.basename(relPath, ".md"));
       }
+      // The Knowledge document/plan checkers are BA-workspace CI — a Target
+      // has no `_docs/**` of its own for them to run against.
+      if (relPath === ".github/workflows/knowledge-ci.yml") return false;
       return true;
     };
   }
   return (relPath) => {
     if (relPath === "CLAUDE.md" || relPath === "AGENTS.md") return true;
     if (relPath.startsWith(".claude/agents/")) {
-      if (!relPath.endsWith(".md")) return false; // e.g. README fragments — none today, but stay strict
+      if (!relPath.endsWith(".md")) return false;
       return baAgents.has(path.basename(relPath, ".md"));
     }
     if (relPath.startsWith(".claude/hooks/") || relPath.startsWith(".claude/scripts/") || relPath.startsWith(".claude/shared/")) return true;
@@ -81,6 +98,8 @@ export function assetsForRole(role: WorkspaceRole): (relPath: string) => boolean
     // sync time and never ship in the template payload at all.
     if (relPath.startsWith(".opencode/plugin/")) return true;
     if (relPath.startsWith("policies/")) return true;
+    // Only the BA/Knowledge side validates its own documents.
+    if (relPath === ".github/workflows/knowledge-ci.yml") return true;
     // contracts/, workflows/, stacks/, layout.yaml, escalation-policy.yaml,
     // test-pyramid.yaml — engineer-pipeline payload, not BA tooling.
     return false;
@@ -93,7 +112,7 @@ export function filterManifestForRole(manifest: TemplateManifest, role: Workspac
   return { ...manifest, files: manifest.files.filter((f) => include(f.path)) };
 }
 
-// --- repository kind detection (T-ROLE-16) ---------------------------------
+// --- repository kind detection -----------------------------------------------
 
 export type WorkspaceKind = "knowledge" | "target" | "ambiguous" | "unrecognized";
 
@@ -103,9 +122,11 @@ export type WorkspaceKind = "knowledge" | "target" | "ambiguous" | "unrecognized
  * cannot discriminate between them. Counting it made every app repo that owns a
  * docs folder — i.e. every target once its first module doc lands — come back
  * "ambiguous", forcing an explicit `--role` on a repository whose kind was never
- * actually in doubt. The three markers left are Knowledge-only.
+ * actually in doubt. The markers left are Knowledge-only: `knowledge/` and
+ * `targets.yaml` are both committed, so a Knowledge repository is recognised
+ * from a fresh clone, before any `init`.
  */
-const KNOWLEDGE_MARKERS: readonly string[] = ["knowledge", "knowledge-policy.yaml", "targets.yaml"];
+const KNOWLEDGE_MARKERS: readonly string[] = ["knowledge", "targets.yaml"];
 export const APP_SOURCE_MARKERS: readonly string[] = [
   "package.json",
   "pyproject.toml",
@@ -139,6 +160,25 @@ export function hasKnowledgeMarkers(dir: string): boolean {
   return KNOWLEDGE_MARKERS.some((m) => (m === "knowledge" ? hasDir(dir, m) : hasFile(dir, m)));
 }
 
+/**
+ * The recorded role of an already-initialised workspace.
+ *
+ * Once `init` has run, the workspace *states* what it is; guessing from files
+ * is only necessary before that. Read on its own rather than through
+ * `loadTargetConfig` so a config this CLI cannot fully parse (an older or newer
+ * schema) still yields its role instead of throwing detection away entirely —
+ * getting this wrong routes writes to the wrong repository.
+ */
+function recordedWorkspaceRole(dir: string): "ba" | "dev" | undefined {
+  try {
+    const raw = fs.readFileSync(path.join(dir, ".agent-team", "config.yaml"), "utf8");
+    const match = /^role:[ \t]*(ba|dev)[ \t]*$/m.exec(raw);
+    return match ? (match[1] as "ba" | "dev") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function hasAppSourceMarkers(dir: string): boolean {
   const hasDirectMarker = (candidate: string): boolean => {
     if (APP_SOURCE_MARKERS.some((m) => hasFile(candidate, m))) return true;
@@ -165,8 +205,16 @@ function hasAppSourceMarkers(dir: string): boolean {
  * Classifies an initialized-or-not repository root for `init`.
  * Both marker families present (a legacy monorepo, this framework checkout)
  * or none → ambiguous/unrecognized, and init requires an explicit --role.
+ *
+ * A workspace that has already been initialised is classified by the role it
+ * recorded, which outranks every marker: a DEV workspace that also carries
+ * Knowledge-shaped files is `target`, not `ambiguous`, because a person
+ * already answered that question at `init`. Markers are what classify a
+ * repository that has never been initialised.
  */
 export function detectWorkspaceKind(dir: string): WorkspaceKind {
+  const recorded = recordedWorkspaceRole(dir);
+  if (recorded) return recorded === "ba" ? "knowledge" : "target";
   const knowledge = hasKnowledgeMarkers(dir);
   const appSource = hasAppSourceMarkers(dir);
   if (knowledge && appSource) return "ambiguous";
@@ -175,7 +223,7 @@ export function detectWorkspaceKind(dir: string): WorkspaceKind {
   return "unrecognized";
 }
 
-// --- Knowledge binding (T-ROLE-06) -----------------------------------------
+// --- Knowledge binding -------------------------------------------------------
 
 export interface KnowledgeBinding {
   /** Absolute, validated path of the bound Knowledge root. */
@@ -200,7 +248,7 @@ function isSameOrNested(a: string, b: string): boolean {
  * Resolves the Knowledge root a DEV workspace depends on:
  * `.agent-team/config.yaml` `knowledge.path` first (repo-relative binding,
  * committed with the target), then the machine-wide installation binding.
- * Fail-closed with actionable recovery when nothing valid resolves (T-ROLE-08).
+ * Fails closed with actionable recovery when nothing valid resolves.
  */
 export function resolveKnowledgeBinding(options: {
   targetRoot: string;
@@ -240,17 +288,19 @@ export function resolveKnowledgeBinding(options: {
     return undefined;
   } catch (e) {
     if (e instanceof KnowledgeBindingError) throw e;
-    return undefined; // no installation config — treated like any other missing optional binding here; callers decide whether that is fatal
+    return undefined; // no installation config — treated as any other missing optional binding; callers decide whether that is fatal
   }
 }
 
-// --- Target binding (T-LV1) --------------------------------------------------
+// --- Target binding ----------------------------------------------------------
 
 export interface TargetBinding {
   /** Absolute, validated path of the bound Target root. */
   targetRoot: string;
   /** Where the binding came from — recovery advice names it. "invalid" carries the problem text in targetRoot instead. */
-  via: "workspace-config" | "invalid";
+  via: "local-mapping" | "invalid";
+  /** The Target's stable identity when the binding resolved by `target_id`. */
+  targetId?: string;
 }
 
 export class TargetBindingError extends Error {}
@@ -260,41 +310,78 @@ function looksLikeTargetRoot(candidate: string): boolean {
 }
 
 /**
- * Resolves the Target root a BA workspace may optionally read from — the
- * reverse of resolveKnowledgeBinding: `.agent-team/config.yaml` `target.path`,
- * repo-relative (or absolute) to the Knowledge root. Unlike Knowledge for DEV,
- * a Target binding is never required for BA (T-ROLE-07): with no
- * configTargetPath set this returns undefined silently — there is no
- * installation-wide fallback to try, since a Target binding only ever comes
- * from this one Knowledge workspace's own config. Every other failure mode
- * (missing path, wrong repo kind, overlap with the Knowledge root) throws
- * TargetBindingError so a caller can report it — callers never treat that as
- * fatal, they only decide how to describe it.
+ * Resolves the Target root a BA workspace may optionally read from. Identity
+ * travels in the shared config (`target_id`), and the machine path is
+ * resolved per machine through the `.workflow/targets.local.yaml` +
+ * `targets.yaml` join `threeRepo/localTargets.ts` already owns — reusing
+ * `loadLocalTargetMapping` and `targetById`, not a second resolver. There is
+ * no committed-path fallback: a workspace still carrying the removed
+ * `target.path` resolves to no binding here, and `targetMeta.removedTargetPath()`
+ * is what lets `status` report the leftover with its fix rather than leaving
+ * it mysterious.
+ *
+ * Like Knowledge for DEV, a Target binding is never required for BA: with no
+ * `target_id` set this returns undefined silently. Every other failure mode
+ * throws TargetBindingError so a caller can report it — callers never treat
+ * that as fatal, they only decide how to describe it.
  */
 export function resolveTargetBinding(options: {
   knowledgeRoot: string;
-  configTargetPath?: string;
+  configTargetId?: string;
+  /** Needed to validate the local mapping's overlap rule; defaults to this CLI's own checkout. */
+  frameworkRoot?: string;
 }): TargetBinding | undefined {
-  if (!options.configTargetPath) return undefined;
-  const raw = options.configTargetPath;
-  const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(options.knowledgeRoot, raw);
-  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
-    throw new TargetBindingError(
-      `Target root not found: "${raw}" resolves to ${resolved} — fix target.path in .agent-team/config.yaml, or clone the app repo there`,
-    );
-  }
-  if (!looksLikeTargetRoot(resolved)) {
-    throw new TargetBindingError(
-      `"${resolved}" is not a Target repository (no package.json/pyproject.toml/... application markers) — point target.path at the app repo`,
-    );
-  }
-  if (isSameOrNested(resolved, options.knowledgeRoot)) {
-    throw new TargetBindingError(`Target root must be separate from the Knowledge workspace — "${raw}" resolves inside it`);
-  }
-  return { targetRoot: fs.realpathSync.native(resolved), via: "workspace-config" };
+  if (!options.configTargetId) return undefined;
+  return resolveTargetById(options.configTargetId, options);
 }
 
-// --- write policy wiring (T-ROLE-12 / T-ROLE-13) ----------------------------
+/** Identity → machine path, through the one Target-location mechanism this framework has. */
+function resolveTargetById(targetId: string, options: { knowledgeRoot: string; frameworkRoot?: string }): TargetBinding {
+  let registry;
+  try {
+    registry = loadTargetRegistry(options.knowledgeRoot);
+  } catch (error) {
+    throw new TargetBindingError(
+      `cannot resolve Target "${targetId}" by id: ${error instanceof Error ? error.message : String(error)} — Target identities live in targets.yaml in the Knowledge root`,
+    );
+  }
+  try {
+    targetById(registry, targetId);
+  } catch (error) {
+    if (error instanceof TargetRegistryError) {
+      throw new TargetBindingError(`${error.message} — register it in targets.yaml before binding it by target_id`);
+    }
+    throw error;
+  }
+  let mapping: ResolvedLocalTarget[];
+  try {
+    mapping = loadLocalTargetMapping(options.knowledgeRoot, registry, options.frameworkRoot ?? defaultProjectRoot());
+  } catch (error) {
+    if (error instanceof LocalTargetMappingError) {
+      throw new TargetBindingError(
+        `Target "${targetId}" has no usable local mapping: ${error.message} — record this machine's checkout under .workflow/targets.local.yaml in the Knowledge root`,
+      );
+    }
+    throw error;
+  }
+  const entry = mapping.find((candidate) => candidate.target_id === targetId);
+  if (!entry) {
+    throw new TargetBindingError(
+      `no local mapping for Target "${targetId}" — add "${targetId}:" with this machine's path under targets: in .workflow/targets.local.yaml in the Knowledge root`,
+    );
+  }
+  // loadLocalTargetMapping already ran assertStandaloneRepositoryRoot and the
+  // overlap rules; looksLikeTargetRoot is the one check it does not own.
+  if (!looksLikeTargetRoot(entry.path)) {
+    throw new TargetBindingError(
+      `"${entry.path}" (Target "${targetId}" from .workflow/targets.local.yaml) is not a Target repository ` +
+        "(no package.json/pyproject.toml/... application markers) — fix its mapping path",
+    );
+  }
+  return { targetRoot: entry.path, via: "local-mapping", targetId };
+}
+
+// --- write policy wiring -----------------------------------------------------
 
 /**
  * Environment for launching a role's runtime session. The guards
@@ -306,14 +393,14 @@ export function resolveTargetBinding(options: {
  *   BA  → writable: knowledgeRoot only. Target/Framework writes fail closed.
  *   DEV → writable: targetRoot only. Knowledge/Framework writes fail closed.
  *
- * T-WG7 — a DEV session also receives AGENTCLAUDE_KNOWLEDGE_ROOT so prompts,
- * hooks and generated includes can name the read-only Knowledge context
- * without hard-coding machine-specific paths.
+ * A DEV session also receives AGENTCLAUDE_KNOWLEDGE_ROOT so prompts, hooks
+ * and generated includes can name the read-only Knowledge context without
+ * hard-coding machine-specific paths.
  *
- * T-LV1 — symmetrically, a BA session receives AGENTCLAUDE_TARGET_ROOT
- * whenever a Target binding resolved, so `system-analyst` (T-LV2) can name a
- * real Target to read from without hard-coding a machine-specific path. Never
- * set when no binding resolved — BA must keep working exactly as before.
+ * Symmetrically, a BA session receives AGENTCLAUDE_TARGET_ROOT whenever a
+ * Target binding resolved, so `system-analyst` can name a real Target to read
+ * from without hard-coding a machine-specific path. Never set when no binding
+ * resolved — BA must keep working exactly as before.
  */
 export function launchEnv(
   role: WorkspaceRole,
@@ -322,9 +409,10 @@ export function launchEnv(
   targetRoot?: string,
   contextCommand?: string,
 ): NodeJS.ProcessEnv {
-  // The role is part of the signature so call sites state whose policy they
-  // launch under; today both roles enforce the same shape — own workspace
-  // writable, zero cross-root grants — via cwd plus this explicit empty list.
+  // `role` is part of the signature so call sites state whose policy they
+  // launch under, even though both roles currently enforce the same shape —
+  // own workspace writable, zero cross-root grants — via cwd plus this
+  // explicit empty list.
   void role;
   return {
     ...existingEnv,

@@ -110,8 +110,8 @@ export function preflightThreeRepoTask(
   if (knowledgeRoot === bindingRoot || knowledgeRoot.startsWith(`${bindingRoot}${path.sep}`) || bindingRoot.startsWith(`${knowledgeRoot}${path.sep}`)) {
     throw new TargetPreflightError(`Knowledge root "${knowledgeRoot}" overlaps Framework root "${bindingRoot}"`);
   }
-  // The UX/UI stage's identity gate (T-UX3): the declared Figma/Claude emails
-  // must exist, be well-formed, and agree, or the run stops before any agent
+  // The UX/UI stage's identity gate: the declared Figma/Claude emails must
+  // exist, be well-formed, and agree, or the run stops before any agent
   // starts. The runtime-side half — comparing `get_me` against the declaration
   // at MCP connect time — sits in identities.ts and fails closed the same way.
   if (stage === AgentStage.UXUI_DESIGNER) {

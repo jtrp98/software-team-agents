@@ -19,13 +19,12 @@ import {
 /**
  * The real store: one local SQLite file, no server, no daemon.
  *
- * Why a database file rather than the `.workflow/state.yaml` TASKS.md T02
- * sketches: a run is a sequence of small writes after every transition, and a
- * YAML file rewritten on each one is neither atomic nor safe against two
- * processes (T35's concurrency lock has to be built by hand on top of it).
- * SQLite gives both for free. The human-readable half of T02 is not dropped —
- * `store/stateView.ts` regenerates `.workflow/state.yaml` from this file, as a
- * view, which is also what T51 asks for.
+ * Why a database file rather than a YAML file rewritten on every transition:
+ * a run is a sequence of small writes after every transition, and rewriting
+ * YAML on each one is neither atomic nor safe against two processes writing
+ * at once. SQLite gives both for free. The human-readable file is not
+ * dropped — `store/stateView.ts` regenerates `.workflow/state.yaml` from this
+ * store, as a read-only view.
  *
  * Task state lives in one JSON column rather than a column per field on
  * purpose. Nothing here queries inside a task's state, and a normalised schema
@@ -35,34 +34,10 @@ import {
  * because those are the rows worth querying (cost per task, why it failed).
  */
 
-// v2 (T26/T28): added runs.model/input_tokens/output_tokens/cache_read_tokens/context_chars.
-// v3 (T37): added events.actor/reason/input/output/decision — the audit trail's WHO/WHY/INPUT/
-//           OUTPUT/DECISION.
-// v4 (T57): added runs.prompt_version — same nullable-column shape as v2 -> v3, migrated the
-//           same way, for the same reason: an old row simply reads back "not recorded".
-// v5 (three-repo Phase 2): adds targetBindings inside the task JSON document.
-// v6 (QA07): adds runs.qa_mode — the verify mode a qa-engineer round ran in, so TARGETED vs
-//            FULL is queryable per run instead of re-parsed out of review.md prose. Same
-//            nullable-column shape as v3 -> v4: an old row reads back null ("not recorded").
-//
-// v2 -> v3, v3 -> v4 and v5 -> v6 are migrated in place (see MIGRATIONS below), unlike v1 -> v2
-// which still fails closed. The difference is what is being added and what it would cost to get
-// it wrong: nullable columns that an old row simply reads as null with nothing guessed and
-// nothing lost. v1 -> v2 changed the columns a *run* is read through, where a silent misread
-// would corrupt cost and token accounting that nothing downstream could tell was wrong. An
-// unknown version still refuses to open at all.
-// v7 (token observability): adds nullable runtime/session/composition fields. Historical rows
-// remain explicitly "not reported"; this migration never infers a breakdown.
-// v8: records full module-doc bytes alongside the sliced prompt bytes.
-// v9: records deterministic-gate enabled/disabled for optimized QA runs.
-// v10: records warning-only context-budget accounting and overflow telemetry.
-// v11: records launch-time always-on instruction bytes for interactive sessions.
-// v12 (T-V3R-002): records requested-vs-actual routing and fallback decisions. All five fields
-// are nullable because historical runs did not report them and must not be backfilled.
-// v14 (T-V3R-060): records the orthogonal QA effort decision. Historical rows stay null.
-// v15 (T-V4-COST-001): records deterministic input-token estimates. Historical rows stay null.
-// v16 (T-V4-COST-006): records agent-frontmatter effort independently from qa_effort.
-// v17 (T-V4-CAST-006): records source fingerprints for QA/security verdicts.
+// Migrations are applied in place only when they add nullable columns: an old row simply reads
+// the new field back as null ("not recorded"), nothing is guessed and nothing is lost. A
+// migration that would need to reinterpret or rewrite existing data does not go in this list (see
+// MIGRATIONS below), and an unknown version refuses to open rather than risk misreading it.
 const SCHEMA_VERSION = 17;
 
 const DDL = `
@@ -140,7 +115,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_task_id ON events (task_id);
 `;
 
-/** The columns T37 adds to `events`. Named once so the DDL above and the migration below cannot drift apart. */
+/** Named once so the DDL above and the migration below cannot drift apart. */
 const EVENT_AUDIT_COLUMNS = ["actor", "reason", "input", "output", "decision"] as const;
 
 export class SchemaVersionMismatchError extends Error {
@@ -154,19 +129,18 @@ export class SchemaVersionMismatchError extends Error {
 }
 
 /**
- * T47 (Disaster Recovery) — "database unavailable" as a named, actionable failure instead of
- * whatever raw error `better-sqlite3`/`fs` happened to throw reaching the terminal as a bare
- * stack trace. This is deliberately narrow: it only wraps *opening* the store (the constructor),
- * not every query — a query failing mid-run for its own reason (a real bug, a corrupt row) should
- * still surface as itself, not get relabelled "unavailable" and hidden behind a generic message.
+ * "Database unavailable" as a named, actionable failure instead of whatever raw error
+ * `better-sqlite3`/`fs` happened to throw reaching the terminal as a bare stack trace. This is
+ * deliberately narrow: it only wraps *opening* the store (the constructor), not every query — a
+ * query failing mid-run for its own reason (a real bug, a corrupt row) should still surface as
+ * itself, not get relabelled "unavailable" and hidden behind a generic message.
  *
  * Nothing is written before the constructor succeeds (WAL mode + DDL run before any task row is
  * touched), so once whatever made the file unavailable clears — the disk had no space, another
  * process held an incompatible lock, the parent directory couldn't be created — the exact same
  * `resume`/`retry` command picks the task back up with nothing lost. This class exists so a
  * person hits a clear message instead of a crash, not so anything gets auto-retried: retrying a
- * database open by itself, without knowing why it failed, is exactly the kind of guess CLAUDE.md's
- * "verify against real state, not memory" rule warns against.
+ * database open by itself, without knowing why it failed, is a guess, not a fix.
  */
 export class DatabaseUnavailableError extends Error {
   constructor(public readonly filePath: string, public readonly cause: unknown) {
@@ -274,14 +248,14 @@ function parseVerificationFingerprint(value: string | null): ChangeSetFingerprin
  */
 const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
   2: (db) => {
-    // `events` predates T37; the DDL above only creates the columns on a fresh file.
+    // `events` predates this column set; the DDL above only creates the columns on a fresh file.
     const existing = new Set((db.pragma("table_info(events)") as { name: string }[]).map((c) => c.name));
     for (const column of EVENT_AUDIT_COLUMNS) {
       if (!existing.has(column)) db.exec(`ALTER TABLE events ADD COLUMN ${column} TEXT`);
     }
   },
   3: (db) => {
-    // `runs` predates T57; the DDL above only creates the column on a fresh file.
+    // `runs` predates this column; the DDL above only creates it on a fresh file.
     const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
     if (!existing.has("prompt_version")) db.exec("ALTER TABLE runs ADD COLUMN prompt_version INTEGER");
   },
@@ -292,12 +266,12 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     void db;
   },
   5: (db) => {
-    // QA07: runs predating the qa_mode column simply read back "not recorded".
+    // Runs predating the qa_mode column simply read back "not recorded".
     const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
     if (!existing.has("qa_mode")) db.exec("ALTER TABLE runs ADD COLUMN qa_mode TEXT");
   },
   6: (db) => {
-    // Every T-V3TOK-001 field is nullable. A v6 row did not measure these
+    // Every field added here is nullable. A v6 row did not measure these
     // values, so null is the only truthful migration result (never zero).
     const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
     const columns: ReadonlyArray<[string, "TEXT" | "INTEGER"]> = [
@@ -337,9 +311,9 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     if (!existing.has("instruction_surface_bytes")) db.exec("ALTER TABLE runs ADD COLUMN instruction_surface_bytes INTEGER");
   },
   11: (db) => {
-    // T-V3R-002: old rows have no truthful requested route or fallback facts.
-    // Nullable columns preserve every legacy value byte-for-byte and read as
-    // "not reported" without inventing a backfill.
+    // Old rows have no truthful requested route or fallback facts. Nullable
+    // columns preserve every legacy value byte-for-byte and read as "not
+    // reported" without inventing a backfill.
     const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
     const columns: ReadonlyArray<[string, "TEXT" | "INTEGER"]> = [
       ["requested_runtime", "TEXT"],
@@ -351,24 +325,24 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     for (const [column, type] of columns) if (!existing.has(column)) db.exec(`ALTER TABLE runs ADD COLUMN ${column} ${type}`);
   },
   12: (db) => {
-    // T-V3R-010: RuntimeTask lives in the existing versioned task JSON.
-    // PersistedTaskSchema supplies null for historical v12 rows, so migration
-    // is additive and deliberately does not rewrite their state bytes.
+    // RuntimeTask lives in the existing versioned task JSON. PersistedTaskSchema
+    // supplies null for historical rows, so migration is additive and
+    // deliberately does not rewrite their state bytes.
     void db;
   },
   13: (db) => {
-    // T-V3R-060: a pre-v14 run has no recorded effort decision; null is the
-    // only truthful value and keeps the mode/effort axes independently queryable.
+    // A pre-v14 run has no recorded effort decision; null is the only
+    // truthful value and keeps the mode/effort axes independently queryable.
     const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
     if (!existing.has("qa_effort")) db.exec("ALTER TABLE runs ADD COLUMN qa_effort TEXT");
   },
   14: (db) => {
-    // T-V4-COST-001: an old row has no honest estimate, so it remains null.
+    // An old row has no honest estimate, so it remains null.
     const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
     if (!existing.has("estimated_input_tokens")) db.exec("ALTER TABLE runs ADD COLUMN estimated_input_tokens INTEGER");
   },
   15: (db) => {
-    // T-V4-COST-006: old rows have no configured agent effort to report.
+    // Old rows have no configured agent effort to report.
     const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
     if (!existing.has("effort")) db.exec("ALTER TABLE runs ADD COLUMN effort TEXT");
   },
@@ -403,7 +377,7 @@ export class SqliteTaskStore implements TaskStore {
     } catch (e) {
       // SchemaVersionMismatchError is already a specific, well-messaged refusal (and already
       // closed the handle itself in migrate()) — pass it through unchanged rather than
-      // relabelling a deliberate refusal as "unavailable" (T47).
+      // relabelling a deliberate refusal as "unavailable".
       if (e instanceof SchemaVersionMismatchError) throw e;
       throw new DatabaseUnavailableError(filePath, e);
     }

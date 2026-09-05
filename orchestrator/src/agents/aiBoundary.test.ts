@@ -4,11 +4,11 @@ import { AgentStage } from "../types.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 import { buildPrompt } from "../runtime/agentRunAssembly.js";
 import { FORBIDDEN_COMMANDS, contractGuards } from "../runtime/runtimeGuards.js";
-import { CONTEXT_POLICY, ContextLeakageError, selectContext } from "../context/contextSelection.js";
+import { ContextLeakageError, selectContext } from "../context/contextSelection.js";
 import { canWritePath, pathRulesFor } from "./pathPermissions.js";
 
 /**
- * T-V1-13A §8.9/§8.15 — the AI boundary, attacked from the agent's seat.
+ * The AI boundary, attacked from the agent's seat.
  *
  * Every case here assumes the adversary is the model itself: a prompt, a
  * repository file, or a Knowledge item that *says* the agent may now do what
@@ -82,8 +82,7 @@ describe("analysis roles stay out of the Target", () => {
 
 describe("no role can rewrite its own leash", () => {
   /**
-   * §8.9 Contract Escalation + Framework Escalation. These paths are how the
-   * boundary is *defined* (contracts), *enforced* (hooks/plugins/runtime
+   * These paths are how the boundary is *defined* (contracts), *enforced* (hooks/plugins/runtime
    * adapters) or *stated* (policies). Each is outside every role's write list,
    * so editing them fails closed — a contract that granted them anyway would
    * be caught by this same loop against the shipped files.

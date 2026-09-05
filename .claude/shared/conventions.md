@@ -1,13 +1,11 @@
 # Shared Agent Conventions — moved
 
-T49 split this file into `policies/`, one file per area, because it had grown into thirteen
-numbered sections a person had to search through to find one rule. Section numbers (`§1`…`§12`,
-`§5a`–`§5d`) are unchanged — only which file holds them moved, so an existing `conventions.md §N`
-citation still means the same rule; only the path in front of it needs the table below.
+This file was split into `policies/`, one file per area, organized by topic.
+Section numbers (`§1`…`§12`, `§5a`–`§5d`) are unchanged — only which file holds them moved, so an existing `conventions.md §N` citation still means the same rule; only the path in front of it needs the table below.
 
 | Section(s) | Now lives in |
 |---|---|
-| §0 (T-WG5 — confirm workspace ↔ workspace role before writing) | `policies/documentation.md` |
+| §0 (confirm workspace ↔ workspace role before writing) | `policies/documentation.md` |
 | §1, §2, §3, §4, §5b, §10, §11 | `policies/documentation.md` |
 | §5 | `policies/git.md` |
 | §5a, §5c-1, §5d | `policies/security.md` |

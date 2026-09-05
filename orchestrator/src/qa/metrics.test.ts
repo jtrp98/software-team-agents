@@ -72,8 +72,8 @@ describe("taskQaMetrics", () => {
     expect(m.unrecordedModeRounds).toBe(1);
     expect(m.qaRetries).toBe(2);
     expect(m.qaFailures).toBe(1);
-    // T-V1-13A §8.12: only the FAILed run's tokens count as waste — the dev
-    // run and the passing/targeted/unrecorded QA rounds do not.
+    // Only the FAILed run's tokens count as waste — the dev run and the
+    // passing/targeted/unrecorded QA rounds do not.
     expect(m.retryWasteTokens).toBe(2000);
     expect(m.avgQaContextChars).toBe(7000);
     expect(m.qaDurationMs).toBe(300);

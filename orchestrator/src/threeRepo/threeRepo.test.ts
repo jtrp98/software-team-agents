@@ -67,6 +67,19 @@ describe("three-repo ownership", () => {
     }
   });
 
+  it("T-V5-027: a NEVER_MANAGED_PREFIXES entry matches a whole path segment, not a raw string prefix", () => {
+    // `.git` must block `.git/`, `.git` itself and nothing that merely starts with those four
+    // characters — a real templated BA-workspace path (`.github/workflows/knowledge-ci.yml`)
+    // shares the `.git` prefix with the denied `.git/` directory but is a different path entirely.
+    expect(() => assertManageablePath(".github/workflows/knowledge-ci.yml")).not.toThrow();
+    expect(() => assertManageablePath(".git/config")).toThrow(/runtime state are Target-owned, always/);
+    expect(() => assertManageablePath(".git")).toThrow(/runtime state are Target-owned, always/);
+    // Same boundary bug for every other bare (no-trailing-slash) prefix in the list.
+    expect(() => assertManageablePath("knowledge-policy-notice.md")).not.toThrow();
+    expect(() => assertManageablePath("decisions-archive/old.md")).not.toThrow();
+    expect(() => assertManageablePath("templates-legacy/x")).not.toThrow();
+  });
+
   it("declares exactly one allowed precedence for every known instruction path class", () => {
     expect(INSTRUCTION_PATH_CLASSES.map(({ name, precedence }) => ({ name, precedence }))).toEqual([
       { name: "root-claude", precedence: "project-owned-with-framework-block" },
@@ -108,6 +121,39 @@ describe("three-repo ownership", () => {
       "src/AGENTS.md",
       "src/CLAUDE.local.md",
     ]);
+  });
+
+  it("T-V5-022: skips .agent-team backups and classifies unmanaged instructions from manifest", () => {
+    const root = tempRoot();
+    const target = path.join(root, "target-v5-022");
+    initRepository(target);
+    write(path.join(target, ".agent-team", "backups", "2026-09-01", "AGENTS.md"), "# backup agents\n");
+    write(path.join(target, ".opencode", "package.json"), "{}");
+    write(path.join(target, ".opencode", "agent", "dev.md"), "# dev\n");
+
+    // Without manifest (fallback): .opencode/package.json is classified by directory prefix as framework
+    const surfaceWithoutManifest = detectInstructionSurface({ targetRoot: target });
+    expect(surfaceWithoutManifest.some((e) => e.path.includes(".agent-team"))).toBe(false);
+    const unmanagedFallback = surfaceWithoutManifest.find((e) => e.path === ".opencode/package.json");
+    expect(unmanagedFallback?.owner).toBe("framework");
+
+    // With manifest (T-V5-022): unmanaged file (.opencode/package.json) is classified as target-owned
+    const surfaceWithManifest = detectInstructionSurface({
+      targetRoot: target,
+      frameworkPaths: new Set([".opencode/agent/dev.md"]),
+    });
+    expect(surfaceWithManifest.some((e) => e.path.includes(".agent-team"))).toBe(false);
+    const unmanagedWithManifest = surfaceWithManifest.find((e) => e.path === ".opencode/package.json");
+    expect(unmanagedWithManifest).toEqual({
+      path: ".opencode/package.json",
+      owner: "target",
+      precedence: "project-owned-untouched",
+      frameworkContributionPresent: false,
+      consequence: undefined,
+    });
+    const managedWithManifest = surfaceWithManifest.find((e) => e.path === ".opencode/agent/dev.md");
+    expect(managedWithManifest?.owner).toBe("framework");
+    expect(managedWithManifest?.precedence).toBe("framework-managed");
   });
 });
 

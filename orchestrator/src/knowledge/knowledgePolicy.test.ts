@@ -40,10 +40,68 @@ function writePolicy(yaml: string): void {
 }
 
 describe("loading", () => {
-  it("falls back to a permissive built-in when there is no file", () => {
+  it("falls back to the built-in policy when there is no file", () => {
     expect(loadKnowledgePolicy(root)).toEqual(DEFAULT_KNOWLEDGE_POLICY);
     expect(checkKnowledgePolicyFile(root).problems).toEqual([]);
-    expect(checkKnowledgePolicyFile(root).notes.join()).toContain("every role sees every field");
+    expect(checkKnowledgePolicyFile(root).notes.join()).toContain("the built-in policy applies");
+  });
+
+  /**
+   * The redaction rule must live in the built-in default, not only in this
+   * repo's own `knowledge-policy.yaml` — that file is never templated into
+   * other workspaces, so relying on it alone silently loses the restriction
+   * everywhere else.
+   */
+  describe("T-V5-047 — the built-in policy carries the rule", () => {
+    it("redacts sensitive items for devops and project-manager with NO file present", () => {
+      const policy = loadKnowledgePolicy(root);
+      expect(policyFor(AgentStage.DEVOPS, policy).sensitive).toBe("redacted");
+      expect(policyFor(AgentStage.PROJECT_MANAGER, policy).sensitive).toBe("redacted");
+      const visible = visibleItemFor(sensitiveModel, AgentStage.PROJECT_MANAGER, policy)!;
+      expect(visible.withheld).toEqual(["body", "payload", "sources"]);
+      expect(visible.title).toBe(sensitiveModel.title); // identity survives — enough to sequence and gate on
+      expect(visible.status).toBe("draft");
+    });
+
+    it("leaves every other role, and an item's own owner, seeing everything", () => {
+      const policy = loadKnowledgePolicy(root);
+      for (const role of [AgentStage.BACKEND_ENGINEER, AgentStage.SYSTEM_ANALYST, AgentStage.QA_ENGINEER]) {
+        expect(visibleItemFor(sensitiveModel, role, policy)!.withheld, `role ${role}`).toEqual([]);
+      }
+      const ownedByPm = { ...sensitiveModel, owner: AgentStage.PROJECT_MANAGER };
+      expect(visibleItemFor(ownedByPm, AgentStage.PROJECT_MANAGER, policy)!.withheld).toEqual([]);
+      expect(visibleItemFor(sensitiveModel, AgentStage.HUMAN, policy)!.withheld).toEqual([]);
+    });
+
+    it("applies the per-kind freshness thresholds with NO file present", () => {
+      const policy = loadKnowledgePolicy(root);
+      expect(freshnessThresholdFor("db-schema", policy)).toEqual({ agingAfterDays: 30, staleAfterDays: 90 });
+      expect(freshnessThresholdFor("api", policy)).toEqual({ agingAfterDays: 30, staleAfterDays: 90 });
+      expect(freshnessThresholdFor("decision", policy)).toEqual({ agingAfterDays: 365, staleAfterDays: 730 });
+      expect(freshnessThresholdFor("task", policy)).toEqual({ agingAfterDays: 90, staleAfterDays: 180 });
+    });
+
+    /**
+     * The trap this task exists to close: every real workspace carries the
+     * 12-byte stub `version: 1`. If an absent key rebuilt these from `raw`, the
+     * stub would silently erase the built-in rule and the fix would be inert
+     * exactly where it matters.
+     */
+    it("the 12-byte stub every workspace carries does NOT erase the built-in rule", () => {
+      writePolicy("version: 1\n");
+      const policy = loadKnowledgePolicy(root);
+      expect(policyFor(AgentStage.PROJECT_MANAGER, policy).sensitive).toBe("redacted");
+      expect(freshnessThresholdFor("db-schema", policy).staleAfterDays).toBe(90);
+    });
+
+    it("a project that states its own answer still overrides the built-in one", () => {
+      writePolicy("version: 1\nroles:\n  devops:\n    sensitive: full\n");
+      const policy = loadKnowledgePolicy(root);
+      expect(policyFor(AgentStage.DEVOPS, policy).sensitive).toBe("full");
+      // project-manager was not named by this project, so it is unrestricted here:
+      // a stated `roles:` block is the project's answer, taken as written.
+      expect(policyFor(AgentStage.PROJECT_MANAGER, policy).sensitive).toBe("full");
+    });
   });
 
   it("reads this repo's own policy file", () => {

@@ -1,5 +1,3 @@
 # Test-planner rationale
 
-T-V3TOK-022 moved explanatory examples out of the static role prompt. The
-prompt retains the test-level selection and contract/unknown-behaviour
-judgments that cannot be inferred from a document schema.
+The role derives the test strategy across unit, integration, API, and E2E levels. The prompt retains test-level selection and contract/unknown-behaviour judgments that cannot be inferred from a document schema.

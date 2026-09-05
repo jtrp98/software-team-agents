@@ -13,7 +13,7 @@
  *      — includes the AI-boundary, context-scope and runtime-conformance suites,
  *        which live inside `npm test` by design rather than as parallel tracks.
  *   1b. the three V3 property gates (T-V3R-110): the six guardrail invariants,
- *      the Single/Auto/Manual execution-mode matrix against mock runners, and
+ *      the one-route matrix against mock runners (T-V5-040), and
  *      paid-fallback unreachability — named so a failure says which property broke.
  *      Each is runnable alone: node scripts/v3-gate.mjs <gate>.
  *   2. hooks/scripts self-test (.claude/tests/run.js)
@@ -73,7 +73,7 @@ run("build (orchestrator)", "npm run build", { cwd: path.join(repoRoot, "orchest
 // Each pins the assertions it requires by name; none needs a runner login or a
 // dogfood run — every runtime they touch is a mock or a process fixture.
 run("V3 guardrail invariant suite (six criteria)", "node scripts/v3-gate.mjs guardrails", { quiet: true });
-run("V3 execution-mode matrix (mock runners)", "node scripts/v3-gate.mjs modes", { quiet: true });
+run("one-route matrix (mock runners)", "node scripts/v3-gate.mjs modes", { quiet: true });
 run("V3 paid-fallback unreachability", "node scripts/v3-gate.mjs paid-fallback", { quiet: true });
 run("benchmark dataset, frozen oracles, and report regeneration", "npm run test:benchmark", { quiet: true });
 
@@ -96,6 +96,7 @@ for (const flag of [
   "--check-repos",
   "--check-environments",
   "--check-doc-structure",
+  "--check-doc-size",
   "--check-knowledge",
   "--check-roles",
   // The bindings check is what caught the last silent rendering drift; CI does
@@ -105,8 +106,8 @@ for (const flag of [
   run(`checker ${flag}`, `${distCli} ${flag}`, { quiet: true });
 }
 
-// Installation check, the way CI runs it: against a freshly-init'd project,
-// not the framework repo itself (which is a dev checkout, not a sta project).
+// T-V5-004 — installation check, the way CI runs it: against a freshly
+// initialized `.agent-team/` workspace, not the Framework repo itself.
 {
   const tmpInit = fs.mkdtempSync(path.join(os.tmpdir(), "sta-gate-install-"));
   try {
@@ -115,9 +116,12 @@ for (const flag of [
       JSON.stringify({ name: "sta-installation-check", private: true, scripts: { build: "tsc", test: "node --test" } }, null, 2),
     );
     fs.writeFileSync(path.join(tmpInit, "package-lock.json"), JSON.stringify({ name: "sta-installation-check", lockfileVersion: 3 }));
+    // The Target installer deliberately requires a repository-shaped source
+    // workspace. This is a marker only (no git command is run by the gate).
+    fs.mkdirSync(path.join(tmpInit, ".git"));
     run(
       "initialize installation-check fixture",
-      [q("node"), q(path.join(repoRoot, "orchestrator", "dist", "cli.js")), "init", "--mode", "legacy-project", "--templates", q(path.join(repoRoot, "templates")), "--project-root", q(tmpInit)].join(" "),
+      [q("node"), q(path.join(repoRoot, "orchestrator", "dist", "targetcli", "cli.js")), "init", "--role", "dev", "--target-root", q(tmpInit)].join(" "),
       { quiet: true, timeoutMs: 120_000 },
     );
     run("checker --check-installation (fresh init)", `${distCli} --check-installation --project-root ${q(tmpInit)}`, { quiet: true });
@@ -127,15 +131,15 @@ for (const flag of [
 }
 
 // --- 4 · templates snapshot & version consistency ----------------------------
-run("templates snapshot regenerates byte-identically", `${distCli} --build-templates templates`, { quiet: true });
 {
-  const dirty = spawnSync("git status --porcelain -- templates", { cwd: repoRoot, encoding: "utf8", shell: true });
   step += 1;
-  if ((dirty.stdout ?? "").trim() === "" && dirty.status === 0) {
-    console.log("[gate] ok — templates/ matches its sources");
+  const { compareTemplateSnapshot } = await import("../orchestrator/dist/packaging/templateBuilder.js");
+  const drift = compareTemplateSnapshot(repoRoot, path.join(repoRoot, "templates"));
+  if (drift.length === 0) {
+    console.log("[gate] ok — templates/ matches its sources (read-only comparison)");
   } else {
     failures.push("templates snapshot drift");
-    console.error(`[gate] FAIL — templates/ drifted from sources:\n${dirty.stdout}`);
+    console.error(`[gate] FAIL — templates/ drifted from sources:\n${drift.map((entry) => `  ${entry.path} (${entry.kind})`).join("\n")}`);
   }
 }
 {

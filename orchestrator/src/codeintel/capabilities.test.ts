@@ -3,11 +3,6 @@ import { AgentStage } from "../types.js";
 import { assertOperationAllowed, canUseCodeIntelligence } from "./capabilities.js";
 import { CapabilityDeniedError, CodeIntelOperation } from "./provider.js";
 
-/**
- * T-GR10 — the matrix itself: exactly the four benchmark roles pass, every
- * other role fails loudly.
- */
-
 const OPERATIONS: CodeIntelOperation[] = ["findRelevantCode", "getDependencies", "getDependents", "findPath", "getImpact"];
 
 describe("capability matrix (T-GR10)", () => {

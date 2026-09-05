@@ -5,7 +5,9 @@ import * as path from "node:path";
 import { ArtifactType, type HandoffArtifact } from "../artifacts/schemas.js";
 import { AgentStage } from "../types.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
-import { buildPrompt, buildPromptParts, compileExecutionPacket, handoffFromContext, referencedKnowledgeIds, renderExecutionPacketSections, sliceModuleDocsWithSavings } from "./agentRunAssembly.js";
+import { buildPrompt, buildPromptParts, compileExecutionPacket, handoffFromContext, referencedKnowledgeIds, renderExecutionPacketSections, renderSlicedDocs, sliceModuleDocsWithSavings } from "./agentRunAssembly.js";
+import type { SelectedContext } from "../context/docSelection.js";
+import type { ContextManager } from "../context/contextManager.js";
 
 describe("buildPromptParts (T-V3TOK-001)", () => {
   it("accounts for every character exactly once across prompt composition", () => {
@@ -100,6 +102,28 @@ describe("T-V3R-020 deterministic Task Compiler", () => {
     expect(packet.scope.allow).toEqual(["server/**"]);
     expect(packet.scope.allow).not.toContain("widened/**");
     expect(packet.sources).toEqual(expect.arrayContaining(["runtime-task", "requirement.md", "module-docs", "knowledge-brief"]));
+  });
+});
+
+describe("renderSlicedDocs — fallback attribution (T-V5-035)", () => {
+  it("names the reason in the prompt itself when a document came through in full", () => {
+    const selected: SelectedContext[] = [
+      {
+        doc: "design",
+        text: "# Design\nfull body",
+        kept: ["Feature-by-Feature Feasibility"],
+        skipped: [],
+        unknownSections: [],
+        fullDocument: true,
+        reason: "more than 40% of design.md sections have unknown relevance (6/13) — parser confidence is insufficient, so the document is passed through whole",
+        bytesBefore: 100,
+        bytesAfter: 100,
+      },
+    ];
+    const rendered = renderSlicedDocs(selected, {} as ContextManager).join("\n");
+    expect(rendered).toContain("Sent in full");
+    expect(rendered).toContain("parser confidence is insufficient");
+    expect(rendered).not.toContain("Known-irrelevant sections not included");
   });
 });
 

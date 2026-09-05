@@ -55,7 +55,6 @@ describe("routeFailure", () => {
     expect(route.reason).toContain("not in this task's pipeline");
   });
 
-  /** Before T07 this escalated: the machine had no backward edge, so the only honest answer was "ask a person". */
   it("recovers a contract failure to system-analyst rather than retrying an engineer that cannot fix it", () => {
     const route = routeFailure(failure({ category: "contract", owner: AgentStage.SYSTEM_ANALYST }), PIPELINE);
     expect(route.kind).toBe("RECOVER");

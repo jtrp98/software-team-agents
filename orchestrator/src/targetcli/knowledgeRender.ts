@@ -17,24 +17,41 @@ export type BootstrapInspection =
 export class MalformedBootstrapBlockError extends Error {}
 
 function markerCount(content: string, marker: string): number {
-  return content.split(marker).length - 1;
+  // Marker comments are whole lines. A prefix such as
+  // `# sta:gitignore-end-broken` is corruption, not a valid close marker.
+  return content.split(/\r?\n/).filter((line) => line === marker).length;
+}
+
+/**
+ * The one marker-pair locator every Framework block shares. The bootstrap
+ * block (CLAUDE.md/AGENTS.md) and the managed .gitignore block use different
+ * marker strings but identical locate/validate/split semantics, so they share
+ * this implementation instead of growing a second one.
+ */
+export function inspectMarkerBlock(
+  content: string,
+  open: string,
+  close: string,
+  label = "marker",
+): BootstrapInspection {
+  const opens = markerCount(content, open);
+  const closes = markerCount(content, close);
+  if (opens === 0 && closes === 0) return { state: "absent" };
+  if (opens !== 1 || closes !== 1) {
+    return { state: "malformed", detail: `expected one ${label} marker pair; found ${opens} opening and ${closes} closing markers` };
+  }
+  const openAt = content.indexOf(open);
+  const closeAt = content.indexOf(close);
+  if (closeAt < openAt) return { state: "malformed", detail: `${label} closing marker appears before its opening marker` };
+  let end = closeAt + close.length;
+  if (content.startsWith("\r\n", end)) end += 2;
+  else if (content.startsWith("\n", end)) end += 1;
+  return { state: "valid", block: content.slice(openAt, end), outside: content.slice(0, openAt) + content.slice(end) };
 }
 
 /** Locates one exact block without parsing or normalizing project-owned bytes around it. */
 export function inspectBootstrapBlock(content: string): BootstrapInspection {
-  const opens = markerCount(content, BOOTSTRAP_OPEN);
-  const closes = markerCount(content, BOOTSTRAP_CLOSE);
-  if (opens === 0 && closes === 0) return { state: "absent" };
-  if (opens !== 1 || closes !== 1) {
-    return { state: "malformed", detail: `expected one bootstrap marker pair; found ${opens} opening and ${closes} closing markers` };
-  }
-  const open = content.indexOf(BOOTSTRAP_OPEN);
-  const close = content.indexOf(BOOTSTRAP_CLOSE);
-  if (close < open) return { state: "malformed", detail: "bootstrap closing marker appears before its opening marker" };
-  let end = close + BOOTSTRAP_CLOSE.length;
-  if (content.startsWith("\r\n", end)) end += 2;
-  else if (content.startsWith("\n", end)) end += 1;
-  return { state: "valid", block: content.slice(open, end), outside: content.slice(0, open) + content.slice(end) };
+  return inspectMarkerBlock(content, BOOTSTRAP_OPEN, BOOTSTRAP_CLOSE, "bootstrap");
 }
 
 function stripLegacyBanner(content: string): string {
@@ -145,4 +162,86 @@ export function resolveDevKnowledgeRoot(options: {
   } catch {
     return undefined;
   }
+}
+
+// --- managed .gitignore block ------------------------------------------------
+
+export const GITIGNORE_PATH = ".gitignore";
+export const GITIGNORE_BLOCK_OPEN = "# sta:gitignore-start";
+export const GITIGNORE_BLOCK_CLOSE = "# sta:gitignore-end";
+
+/**
+ * The machine-local paths the framework states a version-control decision
+ * for. Any future addition must first prove sync regenerates what ignoring
+ * would hide.
+ */
+export const MANAGED_GITIGNORE_PATHS: readonly string[] = [".workflow/", ".agent-team/backups/", "policies/"];
+
+export function inspectGitignoreBlock(content: string): BootstrapInspection {
+  return inspectMarkerBlock(content, GITIGNORE_BLOCK_OPEN, GITIGNORE_BLOCK_CLOSE, "gitignore");
+}
+
+/**
+ * Whether the project's own rules (outside any managed block) already ignore a
+ * managed path. Deliberately conservative: only exact, leading-slash,
+ * trailing-slash, trailing-glob and parent-directory forms count, and an
+ * explicit negation makes the path NOT ignored — when in doubt the entry is
+ * written (a duplicate ignore rule is harmless; a missing one leaks runtime
+ * state into `git status`).
+ */
+export function gitignoreAlreadyCovers(content: string | undefined, managedPath: string): boolean {
+  if (!content) return false;
+  const bare = managedPath.replace(/\/+$/, "");
+  const matchingRules = (line: string): boolean => {
+    const rule = line.trim();
+    if (rule === "" || rule.startsWith("#")) return false;
+    if (rule === managedPath || rule === bare) return true;
+    if (rule === `/${managedPath}` || rule === `/${bare}`) return true;
+    if (rule === `${managedPath}**` || rule === `${bare}/**`) return true;
+    if (bare.includes("/") && rule === `${bare.split("/")[0]}/`) return true;
+    return false;
+  };
+  let ignored = false;
+  for (const line of content.split("\n")) {
+    const rule = line.trim();
+    if (rule.startsWith("!") && matchingRules(rule.slice(1))) ignored = false;
+    else if (!ignored && matchingRules(rule)) ignored = true;
+  }
+  return ignored;
+}
+
+/**
+ * The block bytes for a workspace: header, the not-already-ignored entries, and
+ * what the project already covers stated in a comment. `entries` defaults to
+ * the machine-local paths; sync passes the full set (including derived
+ * rendering directories, which every sync regenerates).
+ */
+export function renderGitignoreBlock(alreadyIgnored: readonly string[], entries: readonly string[] = MANAGED_GITIGNORE_PATHS): string {
+  const listed = entries.filter((p) => !alreadyIgnored.includes(p));
+  const lines = [
+    GITIGNORE_BLOCK_OPEN,
+    "# software-team-agents — framework-managed machine-local paths.",
+    "# Ignoring a path does NOT untrack it: files already committed stay in git",
+    "# until a person removes them (`git rm -r --cached <path>`).",
+  ];
+  if (alreadyIgnored.length > 0) {
+    lines.push(`# Already ignored by the project, so not listed again: ${alreadyIgnored.join(", ")}`);
+  }
+  if (listed.length === 0) {
+    lines.push("# (every managed path is already covered by the project's own rules)");
+  }
+  lines.push(...listed, GITIGNORE_BLOCK_CLOSE);
+  // The marker inspector includes the line ending after its closing marker in
+  // the managed range, so the rendered bytes do too. That makes the manifest
+  // hash stable across a later sync.
+  return `${lines.join("\n")}\n`;
+}
+
+/**
+ * One inspector for any framework-managed block contribution, keyed by path —
+ * installation validation and any future block consumer pick the right marker
+ * pair through this instead of knowing each file's marker dialect.
+ */
+export function inspectManagedBlock(relativePath: string, content: string): BootstrapInspection {
+  return relativePath === GITIGNORE_PATH ? inspectGitignoreBlock(content) : inspectBootstrapBlock(content);
 }

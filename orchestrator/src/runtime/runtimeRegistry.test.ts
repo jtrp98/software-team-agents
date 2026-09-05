@@ -42,9 +42,9 @@ describe("RuntimeRegistry (T108)", () => {
   });
 
   /**
-   * The factual half of T112. Which runtime to *use* is a policy decision that
-   * task owns; which runtimes *can* reach a model is knowable with no policy at
-   * all, and this is deliberately only the second thing.
+   * Which runtime to *use* is a policy decision made elsewhere; which runtimes
+   * *can* reach a model is knowable with no policy at all, and this is
+   * deliberately only the second thing.
    */
   it("reaching(model) lists every runtime that can serve a model", () => {
     const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["opus", "sonnet"] });
@@ -62,7 +62,7 @@ describe("RuntimeRegistry (T108)", () => {
     const registry = new RuntimeRegistry([a, b]);
 
     // Two candidates is a real state, not an error: the registry reports it and
-    // does not pick, because picking is the routing decision T112 makes with
+    // does not pick, because picking is a routing decision made with
     // `.sta/config.yaml` in hand.
     expect(registry.reaching("shared-model").map((r) => r.id)).toEqual(["a", "b"]);
   });

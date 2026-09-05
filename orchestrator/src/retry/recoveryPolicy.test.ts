@@ -89,16 +89,16 @@ describe("decideRecovery", () => {
       if (action.kind === "RETRY") {
         expect(action.stage).toBe(AgentStage.BACKEND_ENGINEER);
         expect(action.strategy).toBe("retry_same_stage");
-        // Two, not MAX_RETRY: since T40 the ceiling reported is the one this
-        // failure's severity actually gets ("high" = a blocking issue = two
-        // rounds, per CLAUDE.md's "a fix that fails twice gets escalated").
-        // Reporting the global budget here would promise a round it will not get.
+        // Two, not MAX_RETRY: the ceiling reported is the one this failure's
+        // severity actually gets ("high" = a blocking issue = two rounds, per
+        // CLAUDE.md's "a fix that fails twice gets escalated"). Reporting the
+        // global budget here would promise a round it will not get.
         expect(action.max).toBe(effectiveMaxRetry("high"));
         expect(action.max).toBeLessThan(MAX_RETRY);
       }
     });
 
-    /** The pre-T06 fallback, kept deliberately: no owner reported means no decision, not a guess. */
+    /** Kept deliberately: no owner reported means no decision, not a guess. */
     it("falls back to the implementation stage when the round reported no structured failure", () => {
       const action = decide({ failure: undefined });
       expect(action.kind).toBe("RETRY");

@@ -41,7 +41,7 @@ describe("state view", () => {
 
   it("says which agent is up and what the retry budget looks like", () => {
     const t = task("T-1");
-    // cursor 2: pipeline is [system-analyst, test-planner, backend-engineer, qa-engineer] (T20).
+    // cursor 2: pipeline is [system-analyst, test-planner, backend-engineer, qa-engineer].
     const doc = renderAndParse([{ ...t, machine: { ...t.machine, current: TaskState.IMPLEMENTATION }, pipelineCursor: 2, retries: { qa: 2, security: 0 } }]);
 
     expect(doc.tasks[0].status).toBe("RUNNING");
@@ -149,7 +149,7 @@ describe("state view — T02 fields", () => {
 
       writeStateViewFromStore(file, store);
       const doc = parse(fs.readFileSync(file, "utf8"));
-      // A copy tweak has no design phase (T-UX11): the one stage is frontend-engineer.
+      // A copy tweak has no design phase: the one stage is frontend-engineer.
       expect(doc.tasks[0].previous).toEqual({ agent: AgentStage.FRONTEND_ENGINEER, result: "PASS" });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

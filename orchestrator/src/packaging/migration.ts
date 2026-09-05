@@ -3,24 +3,23 @@ import * as path from "node:path";
 import { CURRENT_STA_SCHEMA_VERSION, installManifestPath, readInstallManifest } from "./installManifest.js";
 
 /**
- * T96 — the engine that carries a project's `.sta/` state across a *breaking*
- * change to the manifest's own shape (as opposed to T95's `upgrade`, which
- * only ever replaces file content — same shape, new bytes).
+ * Carries a project's `.sta/` state across a *breaking* change to the
+ * manifest's own shape (as opposed to `upgrade`, which only ever replaces
+ * file content — same shape, new bytes).
  *
  * There are no migrations registered yet: `.sta/manifest.json` has had
- * exactly one shape (`schema_version: 1`) since T94 defined it. This module
- * exists so the *mechanism* is proven before it is ever needed under
- * pressure — `migrateSta` walks `STA_MIGRATIONS` from a project's recorded
+ * exactly one shape (`schema_version: 1`) so far. This module exists so the
+ * *mechanism* is proven before it is ever needed under pressure —
+ * `migrateSta` walks `STA_MIGRATIONS` from a project's recorded
  * `schema_version` to `CURRENT_STA_SCHEMA_VERSION`, one step at a time, and
  * a project already on the latest version is simply a zero-length walk. The
  * day a real breaking change lands, its step gets appended to
  * `STA_MIGRATIONS` — this file does not get rewritten to invent one now.
  *
- * Paired with T97 by construction, not by convention: every step's mutation
- * runs *after* `backupBeforeMigrating` snapshots the current
- * `.sta/manifest.json` into a normal backup directory (T97's `rollbackSta`
- * doesn't need to know migration exists — a migration snapshot looks exactly
- * like an upgrade snapshot to it).
+ * Every step's mutation runs *after* `backupBeforeMigrating` snapshots the
+ * current `.sta/manifest.json` into a normal backup directory, so
+ * `rollbackSta` doesn't need to know migration exists — a migration snapshot
+ * looks exactly like an upgrade snapshot to it.
  */
 export interface StaMigrationStep {
   from: number;
@@ -34,7 +33,7 @@ export const STA_MIGRATIONS: readonly StaMigrationStep[] = [];
 
 export class NoMigrationPathError extends Error {}
 
-/** Snapshots `.sta/manifest.json` into a fresh backup dir, in the same shape T95's upgrade leaves one — so T97's `rollbackSta` can undo a migration exactly like it undoes an upgrade. */
+/** Snapshots `.sta/manifest.json` into a fresh backup dir, in the same shape an upgrade leaves one — so `rollbackSta` can undo a migration exactly like it undoes an upgrade. */
 function backupBeforeMigrating(projectRoot: string, now: string): string {
   const backupDir = path.join(projectRoot, ".sta", "backups", `${now.replace(/[:.]/g, "-")}-migrate`);
   fs.mkdirSync(backupDir, { recursive: true });

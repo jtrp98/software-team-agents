@@ -2,48 +2,30 @@ import { AgentStage } from "../types.js";
 import type { StructuredFailure } from "../orchestrator/failure.js";
 
 /**
- * Which role a *kind* of problem belongs to (T38).
+ * Which role a *kind* of problem belongs to — the inverse of
+ * `failureClassifier.ts`'s `CATEGORY_BY_OWNER` map (that one answers "backend-engineer
+ * was named, so what failure kind is this?"; this one answers "category is
+ * `contract`, so who gets it?"). A named role in `review.md` always wins — a
+ * person decided, and nothing here second-guesses that. This only covers the
+ * case where a row states a category but no role.
  *
- * THE DIRECTION THIS RUNS IN, AND WHY IT MATTERS
- *
- * `failureClassifier.ts` already holds a map called `CATEGORY_BY_OWNER`, and at
- * a glance this looks like its mirror. It is the opposite direction, and the
- * difference is the whole point of T38: that map answers "the document named
- * backend-engineer, so what kind of failure is this?", while this one answers
- * "the document says this is a contract problem, so who should get it?".
- *
- * The first direction needs a role to have been named. When `review.md` names
- * one, that is the strongest signal there is — a person looked at the code and
- * decided — and nothing here second-guesses it. But a row that states the
- * *type* of problem and no role used to be worth nothing at all: it fell into
- * "names no agent", which stops the task for a human. That is the right answer
- * for a row that says nothing useful, and the wrong one for a row that says
- * "contract gap" in as many words.
- *
- * WHAT THIS IS STILL NOT ALLOWED TO DO
- *
- * Guess. It maps a *stated* category to a destination; it never reads prose and
- * decides what category something feels like. `failureClassifier.ts`'s own rule
- * stands unchanged — a wrong owner costs two fresh-context agent runs and fixes
- * the wrong thing, so an unstated category still stops for a person. This only
- * removes the case where the answer was written down and nobody was reading it.
+ * It maps a *stated* category to a destination; it never infers a category
+ * from prose. An unstated category still stops for a person — a wrong owner
+ * costs two fresh-context agent runs and fixes the wrong thing.
  */
 
 export type FailureCategory = StructuredFailure["category"];
 
 /**
- * TASKS.md T38's table, as data: implementation → Backend, contract → SA,
- * requirement → BA, infrastructure → DevOps, test → QA.
+ * Category destination table. Each entry is a preference order, not a single
+ * answer — the pipeline a task actually has decides which candidate exists.
+ * "implementation" lists backend first per `policies/agent-boundaries.md` §6a
+ * (frontend builds against what backend shipped), overridden whenever the
+ * affected ids name a side.
  *
- * Each entry is a preference order, not a single answer, because the pipeline a
- * task actually has decides which of them exists. "implementation" lists backend
- * first per `policies/agent-boundaries.md` §6a (the frontend builds against what the backend
- * actually shipped, so backend-first is the pipeline's own ordering), and the
- * affected ids override that whenever they name a side.
- *
- * `unknown` maps to nothing on purpose. It is the category `failureClassifier.ts`
- * produces when a document names no owner, and giving it a destination would
- * turn "nobody knows" into a confident wrong answer.
+ * `unknown` maps to nothing on purpose — `failureClassifier.ts` produces it
+ * when a document names no owner, and giving it a destination would turn
+ * "nobody knows" into a confident wrong answer.
  */
 export const CATEGORY_DESTINATION: Record<FailureCategory, readonly AgentStage[]> = {
   implementation: [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER],
@@ -57,10 +39,9 @@ export const CATEGORY_DESTINATION: Record<FailureCategory, readonly AgentStage[]
 /**
  * Id prefixes that name a role unambiguously.
  *
- * `TEST-NNN` is deliberately absent: T19's convention makes it a test *item*,
- * which says what the failure is about and not whose it is — `test-planner`
- * chose the level and `qa-engineer` ran it, and a test id cannot tell those two
- * apart. Mapping it anyway would be the guess this module exists to avoid.
+ * `TEST-NNN` is deliberately absent: it names a test item, not an owner —
+ * `test-planner` chose the level and `qa-engineer` ran it, and the id can't
+ * tell those two apart.
  */
 const ID_PREFIX_STAGE: Record<string, AgentStage> = {
   BE: AgentStage.BACKEND_ENGINEER,

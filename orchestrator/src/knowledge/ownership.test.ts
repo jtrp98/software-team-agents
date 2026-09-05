@@ -167,9 +167,8 @@ describe("deprecated knowledge something still relies on", () => {
 });
 
 /**
- * T65's rules were written, tested, and then never called by anything that
- * runs. These lock them into the check CI actually executes — a rule nobody
- * runs is documentation, which is the T40 `severity` failure one level up.
+ * These lock the ownership rules into the check CI actually executes — a rule
+ * nobody runs is documentation, not enforcement.
  */
 describe("ownership reaches --check-knowledge", () => {
   let root: string;

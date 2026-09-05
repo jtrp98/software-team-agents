@@ -33,9 +33,9 @@ describe("approvalTypeForEdge", () => {
     expect(approvalTypeForEdge(TaskState.READY_TO_DEPLOY, TaskState.APPROVED)).toBe(ApprovalType.DEPLOY);
   });
 
-  /** T20: test-planner (like project-manager already did, for the "feature" pipeline) can sit
-   *  between DESIGN and IMPLEMENTATION, so every edge leaving DESIGN is gated — not only the
-   *  literal DESIGN->IMPLEMENTATION one, which a pipeline carrying either agent never takes. */
+  /** test-planner and project-manager can sit between DESIGN and IMPLEMENTATION,
+   *  so every edge leaving DESIGN is gated — not only the literal
+   *  DESIGN->IMPLEMENTATION one, which a pipeline carrying either agent never takes. */
   it("gates every edge leaving DESIGN, whatever it leads to", () => {
     expect(approvalTypeForEdge(TaskState.DESIGN, TaskState.PLAN)).toBe(ApprovalType.SCHEMA_CONFIRMATION);
   });
@@ -100,10 +100,6 @@ describe("decideApproval", () => {
     });
   });
 
-  /**
-   * The gap T08 exists to close: before this, `designApproved: false` and
-   * "never asked" were the same value, so a rejection became a re-prompt.
-   */
   it("records a rejection as an answer, distinguishable from never having asked", () => {
     const rejected = decideApproval(askSchema(), {
       type: ApprovalType.SCHEMA_CONFIRMATION,

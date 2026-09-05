@@ -1,43 +1,38 @@
 /**
- * The Claude Design MCP policy module (T-CD1) — the read/write allowlist for
+ * The Claude Design MCP policy module — the read/write allowlist for
  * Anthropic's official Claude Design MCP server, made checkable instead of remembered.
  *
- * WHAT THIS MODULE OWNS, AND WHAT IT DOES NOT
+ * This is a **verdict-only** module: it never performs a network call or talks
+ * to an MCP client. The runtime adapter consults it before exposing/invoking
+ * tools; this file only decides what is permitted, so every branch can be
+ * tested without a credential or a login.
  *
- *  - Like `threeRepo/identities.ts`, this is a **verdict-only** module: it never
- *    performs a network call and never talks to an MCP client. The runtime adapter
- *    consults it before exposing/invoking tools; this file only decides what is
- *    permitted, so every branch can be tested without a credential or a login.
- *  - Two modes exist because the uxui-designer lane uses Claude Design in two
- *    directions (planning/v2/uxui-claude-design-TASKS.md §0): `read` ingests a
- *    design INTO the pipeline (Path C), `write` pushes knowledge OUT onto a
- *    project's canvas as a draft mockup. A write-mode selection may use read
- *    tools too (you must inspect a project before iterating on it); a read-mode
- *    selection may never touch a write tool.
+ * Two modes exist because the uxui-designer lane uses Claude Design in two
+ * directions: `read` ingests a design into the pipeline, `write` pushes
+ * knowledge out onto a project's canvas as a draft mockup. A write-mode
+ * selection may also use read tools (a project must be inspected before it's
+ * iterated on); a read-mode selection may never touch a write tool.
  *
- * FROZEN ALLOWLISTS (T-CD5 UAT, 2026-08-25)
- *
- *  - The tool names below were read off the live official server during UAT
- *    (`claude -p` listing every `mcp__claude-design__*` tool) and frozen to
- *    match. Extending either list after this point is a deliberate constant
- *    change with a reason in the diff — never a convenience.
- *  - Deliberately EXCLUDED (always refused, even in write mode):
- *      `delete_files`, `finalize_plan` — destructive/publishing acts; a draft
- *        lane has no business doing either;
- *      `put_conversation`, `ack_comments` — the lane drives the canvas through
- *        files, not through chat turns;
- *      `add_member`, `remove_member`, `update_member_role`, `update_sharing` —
- *        membership/sharing is outward-facing and never an agent decision;
- *      `render_preview`, `create_support_js` — semantics not needed for ingest/
- *        draft work; reconsider only with a concrete task that requires them.
+ * FROZEN ALLOWLISTS (2026-08-25) — the tool names below were read off the live
+ * official server during UAT and frozen to match. Extending either list after
+ * this point is a deliberate constant change with a reason in the diff, never
+ * a convenience. Deliberately EXCLUDED (always refused, even in write mode):
+ *   `delete_files`, `finalize_plan` — destructive/publishing acts a draft lane
+ *     has no business doing;
+ *   `put_conversation`, `ack_comments` — the lane drives the canvas through
+ *     files, not chat turns;
+ *   `add_member`, `remove_member`, `update_member_role`, `update_sharing` —
+ *     membership/sharing is outward-facing and never an agent decision;
+ *   `render_preview`, `create_support_js` — not needed for ingest/draft work;
+ *     reconsider only with a concrete task that requires them.
  */
 
-/** The only Claude Design MCP endpoint this framework ever configures. Official server only — unofficial Chrome-driving proxies are out of scope by design (TASKS.md §2.1). */
+/** The only Claude Design MCP endpoint this framework ever configures. Official server only — unofficial Chrome-driving proxies are out of scope by design. */
 export const CLAUDE_DESIGN_MCP_SERVER_URL = "https://api.anthropic.com/v1/design/mcp";
 
 /**
  * Tools allowed in BOTH modes — inspect-only. Frozen against the live official
- * server on 2026-08-25 (T-CD5 UAT).
+ * server on 2026-08-25.
  */
 export const CLAUDE_DESIGN_READ_TOOLS: readonly string[] = [
   "get_claude_design_prompt",
@@ -53,7 +48,7 @@ export const CLAUDE_DESIGN_READ_TOOLS: readonly string[] = [
 
 /**
  * Canvas/project-mutating tools, usable ONLY when the run was explicitly launched in
- * write mode. Frozen against the live official server on 2026-08-25 (T-CD5 UAT).
+ * write mode. Frozen against the live official server on 2026-08-25.
  * `delete_files`/`finalize_plan` are deliberately absent — see the module header.
  */
 export const CLAUDE_DESIGN_WRITE_TOOLS: readonly string[] = [
@@ -83,7 +78,7 @@ function refusalReason(tool: string, mode: ClaudeDesignMode): string {
   }
   return (
     `"${tool}" is not on the claude-design ${mode} allowlist — unknown tools are refused fail-closed` +
-    " (allowlists were frozen against the live server on 2026-08-25, T-CD5; extend the constant deliberately if this tool is verified)"
+    " (allowlists were frozen against the live server on 2026-08-25; extend the constant deliberately if this tool is verified)"
   );
 }
 

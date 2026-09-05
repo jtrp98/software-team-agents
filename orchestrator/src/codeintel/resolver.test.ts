@@ -23,11 +23,6 @@ import {
 } from "./resolver.js";
 import { GraphifyProvider } from "./graphifyProvider.js";
 
-/**
- * T-GR5 (resolver flow), T-GR6 (source verification), T-GR10 (capability
- * matrix), T-GR11 (optional provider, default OFF), T-GR13 (audit telemetry).
- */
-
 const TARGET = { targetId: "t1", rootPath: "/repo", revision: "a".repeat(40) };
 
 function candidate(file: string, line?: number, score = 1, provenance: "extracted" | "inferred" = "extracted"): CodeCandidate {

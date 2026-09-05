@@ -197,7 +197,7 @@ describe("Phase 2 preflight", () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
-  /** T-UX3: the UX/UI stage's declared-identity gate — fail closed before any agent starts. */
+  /** The UX/UI stage's declared-identity gate — fail closed before any agent starts. */
   it("blocks the uxui-designer stage when identities are undeclared or disagreeing, and passes others through", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "three-repo-identity-"));
     try {
@@ -236,11 +236,10 @@ describe("Phase 2 preflight", () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
-  /** T-CD3 (planning/v2/uxui-claude-design-TASKS.md): the identity gate is design-source-agnostic.
-   * A Claude Design MCP run authenticates through Anthropic itself, so the preflight must keep
-   * accepting a declared-identity installation with NO Figma PAT present — if anyone ever wires
-   * figmaPatConfigured() into this gate, the Claude Design direction breaks fail-closed-by-accident
-   * and this test is the tripwire. */
+  /** The identity gate is design-source-agnostic. A Claude Design MCP run authenticates through
+   * Anthropic itself, so the preflight must keep accepting a declared-identity installation with
+   * NO Figma PAT present — if anyone ever wires figmaPatConfigured() into this gate, the Claude
+   * Design direction breaks fail-closed-by-accident and this test is the tripwire. */
   it("passes the uxui-designer stage with declared identities and no FIGMA_PAT anywhere — the Claude Design MCP direction needs none", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "three-repo-claude-design-"));
     try {

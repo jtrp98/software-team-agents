@@ -18,3 +18,14 @@ commands:
   typecheck: npm run typecheck
 scan_extensions: [.ts, .tsx, .js, .jsx, .prisma]
 capabilities: [rest-api, database-access, auth, testing]
+
+# T-V5-023 — the layout half of the engineer path rules. `contracts/backend-engineer.yaml`
+# keeps the role boundary; these globs say where a Node/Prisma repository puts backend code.
+# This profile is also the fallback for a workspace that has recorded no stack, so these
+# lists are exactly what the contract carried before the split — an existing installation
+# resolves the same write set it always had.
+permissions:
+  backend-engineer:
+    read: ["app/**", "package.json", "prisma/**", "server/**", "src/**"]
+    write: ["server/**", "src/server/**", "src/lib/**", "app/api/**", "prisma/**", "package.json"]
+    deny: ["components/**"]

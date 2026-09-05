@@ -6,7 +6,7 @@ import type { TemplateFileEntry } from "../packaging/templateManifest.js";
 import { ExecutionConfigSchema } from "../packaging/staConfig.js";
 
 /**
- * T-TARGET-06 / T-TARGET-05 — Target-side Framework metadata, under one home:
+ * Target-side Framework metadata, under one home:
  *
  *   .agent-team/manifest.json   generated. Every file the Framework manages in
  *                               this Target (path + pristine sha256), plus the
@@ -31,6 +31,8 @@ export interface TargetManifest {
   installed_at: string;
   updated_at: string;
   files: TemplateFileEntry[];
+  /** Absent in pre-V5 workspaces means unknown, never mismatch. */
+  payload_digest?: string;
   /** Framework-owned delimited contributions inside otherwise project-owned files. */
   framework_blocks?: { path: string; sha256: string }[];
 }
@@ -84,6 +86,9 @@ export function checkTargetManifest(data: unknown): string[] {
     problems.push("framework_version is missing");
   }
   if (!Array.isArray(manifest.files)) return [...problems, "files is missing"];
+  if (manifest.payload_digest !== undefined && !/^[a-f0-9]{64}$/.test(manifest.payload_digest)) {
+    problems.push("payload_digest is invalid");
+  }
   const seen = new Set<string>();
   for (const file of manifest.files as TemplateFileEntry[]) {
     if (!file || typeof file.path !== "string" || typeof file.sha256 !== "string") {
@@ -112,13 +117,31 @@ export const TargetConfigSchema = z.object({
   /** Stable identity for this Target — its directory name at init time. */
   target_id: z.string().min(1),
   registered_at: z.string().min(1),
-  /** Which role's workspace this repository is (T-ROLE-01). Absent in configs from before this field existed — commands then detect or require --role. */
+  /** Which role's workspace this repository is. Absent in configs from before this field existed — commands then detect or require --role. */
   role: z.enum(["ba", "dev"]).optional(),
-  /** T-ROLE-06 — repo-relative (or absolute) path binding to the team's Knowledge repo, committed with this workspace. */
+  /** Runtime bindings materialised in this workspace. Absent is a pre-V5 config. */
+  runtimes: z.array(z.enum(["claude", "codex", "opencode"])).min(1).optional(),
+  /** Repo-relative (or absolute) path binding to the team's Knowledge repo, committed with this workspace. */
   knowledge: z.object({ path: z.string().min(1) }).optional(),
-  /** T-LV1 — repo-relative (or absolute) path binding to a Target repo, committed with a Knowledge workspace. Optional and read-only: BA never requires it. */
-  target: z.object({ path: z.string().min(1) }).optional(),
-  /** Deterministic Target stack cache (T-V3-03). Absent means not yet detected. */
+  /**
+   * Optional, read-only Target binding for a Knowledge (BA) workspace: BA
+   * never requires it. `target_id` is the only form — a stable identity
+   * resolved per machine through `.workflow/targets.local.yaml`. The
+   * previously-committed `target.path` is gone.
+   *
+   * `target_id` stays `.optional()` and there is no `.refine()` so a config
+   * still carrying only the removed `path` **loads**: zod strips the unknown
+   * key, this becomes an empty binding, and `removedTargetPath()` below lets
+   * `status` report the leftover as a problem naming the fix. Requiring
+   * `target_id` here would turn every un-migrated workspace into a hard load
+   * failure, which is not acceptable.
+   */
+  target: z
+    .object({
+      target_id: z.string().min(1).optional(),
+    })
+    .optional(),
+  /** Deterministic Target stack cache. Absent means not yet detected. */
   stack: z.object({
     profile: z.string().min(1),
     package_manager: z.string().min(1),
@@ -138,7 +161,7 @@ export const TargetConfigSchema = z.object({
   }).passthrough().optional(),
   /** V3 execution policy; additive and absent in every pre-V3 Target config. */
   execution: ExecutionConfigSchema.optional(),
-  /** Repo-root-relative paths sync must never touch — the user override list (T-TARGET-05). */
+  /** Repo-root-relative paths sync must never touch — the user override list. */
   overrides: z.array(z.string().min(1)).default([]),
 });
 export type TargetConfig = z.infer<typeof TargetConfigSchema>;
@@ -177,8 +200,44 @@ export function inspectTargetConfigAsPreV3(targetRoot: string): TargetConfigComp
   };
 }
 
+/**
+ * The removed committed `target.path`, if a workspace still carries it.
+ *
+ * `TargetConfigSchema` no longer declares the key, so `loadTargetConfig` strips
+ * it and cannot see it. Reading the raw YAML here — the same way
+ * `inspectTargetConfigAsPreV3` already does in this module — is what lets
+ * `status` say "this is machine-local content in a committed file, here is the
+ * fix" instead of silently dropping a binding the user thinks is configured.
+ *
+ * Returns undefined when there is none, or the file is missing/unreadable —
+ * this is a reporting aid, never a failure path.
+ */
+export function removedTargetPath(targetRoot: string): string | undefined {
+  const target = targetConfigPath(targetRoot);
+  if (!fs.existsSync(target)) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(fs.readFileSync(target, "utf8"));
+  } catch {
+    return undefined;
+  }
+  const binding = (parsed as { target?: unknown } | null)?.target;
+  if (!binding || typeof binding !== "object" || Array.isArray(binding)) return undefined;
+  const legacy = (binding as { path?: unknown }).path;
+  return typeof legacy === "string" && legacy.trim() !== "" ? legacy : undefined;
+}
+
+/** The one-line fix a workspace still carrying the removed field is given. */
+export function removedTargetPathProblem(legacyPath: string): string {
+  return (
+    `${TARGET_META_DIR}/config.yaml still sets the removed target.path (${legacyPath}) — it is ignored. ` +
+    "Replace it with `target:` / `target_id: <id>` from targets.yaml, and record this machine's checkout " +
+    "under .workflow/targets.local.yaml"
+  );
+}
+
 export function defaultTargetConfig(targetId: string, now: string, role?: "ba" | "dev"): TargetConfig {
-  return { schema_version: 1, target_id: targetId, registered_at: now, overrides: [], role };
+  return { schema_version: 1, target_id: targetId, registered_at: now, overrides: [], role, runtimes: ["claude"] };
 }
 
 export function loadTargetConfig(targetRoot: string): TargetConfig | undefined {
@@ -239,7 +298,15 @@ export function assertManageablePath(relPath: string): void {
   if (normalised.startsWith("/") || /^[a-zA-Z]:/.test(normalised) || normalised.split("/").includes("..")) {
     throw new Error(`refusing to manage "${relPath}" — managed paths are always repo-relative`);
   }
-  if (NEVER_MANAGED_PREFIXES.some((prefix) => normalised === prefix.replace(/\/$/, "") || normalised.startsWith(prefix))) {
+  // Match on a whole path segment, not a raw string prefix — ".git" must not also
+  // catch ".github" (a real templated path, `.github/workflows/knowledge-ci.yml`), the same way
+  // "knowledge" must not catch a hypothetical "knowledge-policy-something/" directory.
+  if (
+    NEVER_MANAGED_PREFIXES.some((prefix) => {
+      const bare = prefix.replace(/\/$/, "");
+      return normalised === bare || normalised.startsWith(`${bare}/`);
+    })
+  ) {
     throw new Error(`refusing to manage "${relPath}" — application source and runtime state are Target-owned, always`);
   }
 }

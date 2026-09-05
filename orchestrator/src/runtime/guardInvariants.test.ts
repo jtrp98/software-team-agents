@@ -107,21 +107,18 @@ describe("T-V3R-001 guardrail invariants", () => {
     expect(violations).toEqual([]);
   });
 
-  it("criterion 5 — paid fallback defaults false and production cannot reach ApiAdapter without opt-in", () => {
+  // The paid API runtime is never offered: no config or flag can make
+  // production construction reach `ApiAdapter` any more.
+  it("criterion 5 — the paid API runtime is never offered; ApiAdapter is unreachable from production construction", () => {
     const config = defaultStaConfig();
     expect(config.execution?.allow_paid_fallback ?? false).toBe(false);
     expect(createProductionRuntimeRegistry(REPO_ROOT).ids()).not.toContain("paid-api");
-    expect(createProductionRuntimeRegistry(REPO_ROOT, { allowPaidFallback: true }).ids()).toContain("paid-api");
   });
 
-  it("criterion 6 — an unregistered-runtime fallback preserves the exact RuntimeGuards object", async () => {
-    const projectRoot = tempProject();
-    fs.mkdirSync(path.join(projectRoot, ".sta"), { recursive: true });
-    fs.writeFileSync(
-      path.join(projectRoot, ".sta", "config.yaml"),
-      "schema_version: 1\nmodel_routing:\n  backend-engineer: missing-runtime:some-model\n",
-      "utf8",
-    );
+  // An unregistered routing target is a closed route: it must reach no
+  // adapter at all, while the run that IS routed still receives the caller's
+  // exact frozen guards object, unmutated.
+  it("criterion 6 — an unregistered routing target reaches no adapter, and a routed run gets the exact RuntimeGuards object", async () => {
     const guards: RuntimeGuards = Object.freeze({
       writeAllow: Object.freeze(["server/**"]),
       writeDeny: Object.freeze([".git/**"]),
@@ -129,19 +126,40 @@ describe("T-V3R-001 guardrail invariants", () => {
       exitChecks: Object.freeze(["code-green"] as const),
     });
     const before = JSON.parse(JSON.stringify(guards)) as RuntimeGuards;
-    const fallback = new MockRuntimeAdapter({ id: "claude-code", models: ["some-model"] });
-    const executor = createRuntimeExecutor({
-      runtime: fallback,
-      registry: new RuntimeRegistry([fallback]),
-      projectRoot,
+
+    const refusedRoot = tempProject();
+    fs.mkdirSync(path.join(refusedRoot, ".sta"), { recursive: true });
+    fs.writeFileSync(
+      path.join(refusedRoot, ".sta", "config.yaml"),
+      "schema_version: 1\nrouting:\n  by_role:\n    backend-engineer: missing-runtime:some-model\n",
+      "utf8",
+    );
+    const registered = new MockRuntimeAdapter({ id: "claude-code", models: ["some-model"] });
+    const refused = await createRuntimeExecutor({
+      runtime: registered,
+      registry: new RuntimeRegistry([registered]),
+      projectRoot: refusedRoot,
       moduleName: () => "phase-0",
       guards: () => guards,
       sliceModuleDocs: false,
-    });
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-UNREGISTERED-GUARDS", context: [] });
+    expect(refused.outcome.result).toBe("FAIL");
+    expect(refused.outcome.failure_reason).toContain("missing-runtime");
+    expect(registered.requests).toHaveLength(0);
+    expect(guards).toEqual(before);
 
-    await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-FALLBACK-GUARDS", context: [] });
-    expect(fallback.requests).toHaveLength(1);
-    expect(fallback.requests[0].guards).toBe(guards);
+    const routedRoot = tempProject();
+    const routed = new MockRuntimeAdapter({ id: "claude-code", models: ["some-model"] });
+    await createRuntimeExecutor({
+      runtime: routed,
+      registry: new RuntimeRegistry([routed]),
+      projectRoot: routedRoot,
+      moduleName: () => "phase-0",
+      guards: () => guards,
+      sliceModuleDocs: false,
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-ROUTED-GUARDS", context: [] });
+    expect(routed.requests).toHaveLength(1);
+    expect(routed.requests[0].guards).toBe(guards);
     expect(guards).toEqual(before);
   });
 });

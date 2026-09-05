@@ -17,3 +17,16 @@ commands:
   typecheck: mvn compile
 scan_extensions: [.java]
 capabilities: [rest-api, grpc, database-access, auth, testing]
+
+# T-V5-023 — the layout half of the engineer path rules; `{source_root}` expands from the
+# Target's recorded `stack.source_roots`. Maven/Gradle layout only: nothing here claims a
+# prompt can build Java.
+permissions:
+  backend-engineer:
+    read: ["{source_root}/**", "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"]
+    write: ["{source_root}/src/main/java/**", "{source_root}/src/main/kotlin/**", "{source_root}/src/main/resources/**", "{source_root}/src/test/java/**", "{source_root}/src/test/kotlin/**"]
+    deny: ["{source_root}/target/**", "{source_root}/build/**", "{source_root}/src/main/resources/static/**", "{source_root}/src/main/resources/templates/**"]
+  frontend-engineer:
+    read: ["{source_root}/**", "pom.xml", "build.gradle", "build.gradle.kts"]
+    write: ["{source_root}/src/main/resources/static/**", "{source_root}/src/main/resources/templates/**"]
+    deny: ["{source_root}/target/**", "{source_root}/build/**", "{source_root}/src/main/java/**", "{source_root}/src/main/kotlin/**"]

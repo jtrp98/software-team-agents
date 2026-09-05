@@ -141,7 +141,7 @@ describe("pipelineFromWorkflow", () => {
       AgentStage.QA_ENGINEER,
     ]);
     expect(pipelineFromWorkflow(bugfix, { touchesFrontend: true })).toEqual([
-      // No uxui-designer: a bug fix has no design phase (T-UX11).
+      // No uxui-designer: a bug fix has no design phase.
       AgentStage.FRONTEND_ENGINEER,
       AgentStage.QA_ENGINEER,
     ]);

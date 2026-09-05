@@ -1,6 +1,6 @@
 import { AgentStage } from "../types.js";
 import { parsePlanTasks } from "../docs/planGraph.js";
-import { buildTraceChain, extractIds } from "../traceability/traceability.js";
+import { buildTraceChain } from "../traceability/traceability.js";
 import type { DocKind } from "./contextManager.js";
 import type { DesignSectionVerdict } from "./docSelection.js";
 

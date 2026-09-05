@@ -11,7 +11,7 @@ function tmpProject(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "codex-adapter-"));
 }
 
-/** Writes the official binding schema (OFF02 S6): name/description/developer_instructions in `.codex/agents/<role>.toml`. */
+/** Writes the official binding schema: name/description/developer_instructions in `.codex/agents/<role>.toml`. */
 function writeRoleBinding(root: string, role: string, instructions = "you are the role") {
   fs.mkdirSync(path.join(root, ".codex", "agents"), { recursive: true });
   fs.writeFileSync(

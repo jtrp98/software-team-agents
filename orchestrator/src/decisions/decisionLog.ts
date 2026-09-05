@@ -9,16 +9,14 @@ import { defaultProjectRoot } from "../agents/agentContract.js";
  * Reads `decisions/*.md` — Architecture Decision Records for project-wide
  * choices (stack, cross-cutting architecture, permission model) that would
  * otherwise get re-asked, or re-decided differently, on every fresh run that
- * touches the area (T16).
+ * touches the area.
  *
  * Unlike `workflows/*.yml` or `contracts/*.yaml`, an ADR has no runtime
- * behaviour to diff against — there is no "classifier" it can drift from,
- * because the decision it records lives in prose, read by a person and by a
- * model, not executed. What this module checks instead is the shape every
- * ADR has to have to be findable and trustworthy: valid frontmatter, an id
- * that matches the filename, no id reused by two files, and a `superseded`
- * record that actually names what replaced it. `decisions/README.md` has
- * the full format.
+ * behaviour to diff against — the decision lives in prose, not executed code.
+ * What this module checks instead is the shape every ADR needs to be findable
+ * and trustworthy: valid frontmatter, an id matching the filename, no id
+ * reused by two files, and a `superseded` record that names what replaced it.
+ * `decisions/README.md` has the full format.
  */
 
 export type AdrStatus = "proposed" | "accepted" | "superseded" | "rejected";

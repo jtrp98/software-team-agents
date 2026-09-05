@@ -7,9 +7,9 @@ export interface RunRecord {
   start_time: number;
   end_time: number;
   duration: number;
-  /** Which model actually ran this stage (T26) — from `.claude/agents/<role>.md`'s frontmatter, not guessed. Null when the executor didn't resolve one (e.g. a test stub). */
+  /** Which model actually ran this stage — from `.claude/agents/<role>.md`'s frontmatter, not guessed. Null when the executor didn't resolve one (e.g. a test stub). */
   model: string | null;
-  /** Which prompt version ran this stage (T57) — from the same file's `version:` frontmatter field. Null when absent (an agent file that predates T57, or a test stub) — log-only, never selects which prompt actually runs. */
+  /** Which prompt version ran this stage — from the same file's `version:` frontmatter field. Null when absent (or a test stub) — log-only, never selects which prompt actually runs. */
   promptVersion: number | null;
   /** Agent-frontmatter reasoning effort; distinct from the QA risk gate's qa_effort. */
   effort: string | null;
@@ -18,12 +18,12 @@ export interface RunRecord {
   result: "PASS" | "FAIL";
   retry_count: number;
   failure_reason: string | null;
-  /** T28 breakdown of `tokens` — undefined callers (older executors, test stubs) still just get the combined total above. */
+  /** Breakdown of `tokens` — undefined callers (older executors, test stubs) still just get the combined total above. */
   input_tokens: number | null;
   output_tokens: number | null;
-  /** Prompt-cache tokens read this run, per the CLI's own usage report (T28) — null when the executor doesn't report one. */
+  /** Prompt-cache tokens read this run, per the CLI's own usage report — null when the executor doesn't report one. */
   cache_read_tokens: number | null;
-  /** Size (characters) of the prompt actually sent this run (T28) — the context-size half of "token/context tracking", independent of the response's token usage. */
+  /** Size (characters) of the prompt actually sent this run — the context-size half of "token/context tracking", independent of the response's token usage. */
   context_chars: number | null;
   /** Deterministic input-token approximation from context_chars; null for historical rows. */
   estimated_input_tokens: number | null;
@@ -33,7 +33,7 @@ export interface RunRecord {
   requested_runtime: string | null;
   /** Model requested before routing/fallback. Null when that decision was not reported. */
   requested_model: string | null;
-  /** Precedence level that selected the route. Null for pre-V3 and unreported runs. */
+  /** Precedence level that selected the route. Null for older and unreported runs. */
   routing_basis: string | null;
   /** Why the requested route changed. Null means no reason was reported, not that fallback did not occur. */
   fallback_reason: string | null;
@@ -52,7 +52,7 @@ export interface RunRecord {
   knowledge_chars: number | null;
   code_intel_chars: number | null;
   tool_output_chars: number | null;
-  /** T-V3TOK-100 warning-mode context threshold and outcome; null means no authoritative budget was configured. */
+  /** Warning-mode context threshold and outcome; null means no authoritative budget was configured. */
   context_budget_chars: number | null;
   context_budget_source: "role" | "model_context_window" | null;
   context_overflow_chars: number | null;
@@ -66,13 +66,13 @@ export interface RunRecord {
   context_code_chars: number | null;
   context_tool_output_chars: number | null;
   context_reserve_chars: number | null;
-  /** QA07 — the verify mode this qa-engineer round ran in, from its own report. Null for every non-QA stage (and for QA runs that predate the field). */
+  /** The verify mode this qa-engineer round ran in, from its own report. Null for every non-QA stage (and for QA runs that predate the field). */
   qa_mode: "FULL" | "TARGETED" | null;
   /** Orthogonal model-reasoning effort selected by the deterministic risk gate. */
   qa_effort: "skip" | "lightweight" | "full" | null;
   /** Whether this optimized QA round ran deterministic checks, or used the explicit escape hatch. */
   deterministic_gate: "enabled" | "disabled" | null;
-  /** Source snapshot captured for a QA/security verdict; null means pre-T-V4-CAST-006 history. */
+  /** Source snapshot captured for a QA/security verdict; null when absent. */
   verification_fingerprint?: ChangeSetFingerprint | null;
 }
 
@@ -143,12 +143,12 @@ export function formatRunRouting(run: RunRecord): string {
 }
 
 /**
- * In-memory recorder for the per-run metrics item 11 requires. Deliberately
- * append-only and never mutates a past record — item 15 (Run History) reads
- * this same log to answer "why did it fail / how many rounds / how much
- * token" per task, so a record written here must stay a trustworthy fact.
+ * In-memory recorder for per-run metrics. Deliberately append-only and never
+ * mutates a past record — Run History reads this same log to answer "why did
+ * it fail / how many rounds / how much token" per task, so a record written
+ * here must stay a trustworthy fact.
  *
- * `model`/`input_tokens`/`output_tokens`/`cache_read_tokens`/`context_chars` (T26/T28) are all
+ * `model`/`input_tokens`/`output_tokens`/`cache_read_tokens`/`context_chars` are all
  * optional on the way in (`RunOutcome`) and nullable on the way out (`RunRecord`) rather than
  * required: an executor that doesn't resolve/report one (a test stub, an older executor build)
  * should not have to fabricate a value it doesn't have — `null` says "not reported", not "zero".
@@ -243,7 +243,7 @@ export class RunLog {
     return this.records;
   }
 
-  /** Renders the TASK-123-style summary shown in task-detail.md item 11 (tokens are raw counts, displayed in k). */
+  /** Renders the TASK-123-style summary (tokens are raw counts, displayed in k). */
   summary(taskId: string): string {
     const runs = this.runsForTask(taskId);
     const toK = (n: number) => `${Math.round(n / 1000)}k`;
@@ -254,7 +254,7 @@ export class RunLog {
   }
 
   /**
-   * Cost per agent for one task, TASKS.md T27's own example format
+   * Cost per agent for one task, formatted per agent plus total
    * ("BA $0.20, Backend $1.20, … Total $3.55"). Sums by agent first — a task
    * an agent ran twice (a retry round) reports once, combined, not once per run.
    */
@@ -263,8 +263,7 @@ export class RunLog {
   }
 
   /**
-   * The same breakdown across every task belonging to one feature/module — T27
-   * frames the example as "per feature", and a feature is usually more than one
+   * The same breakdown across every task belonging to one feature/module — a feature is usually more than one
    * task by the time it reaches `qa-engineer`. Callers pass the task IDs that
    * make up the feature (e.g. every `plan.md` task under one module folder).
    */

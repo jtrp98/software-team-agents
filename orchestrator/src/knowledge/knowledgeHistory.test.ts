@@ -134,8 +134,8 @@ describe("historyOf", () => {
     });
 
     // `--follow` traces the path back past the point where it held a knowledge
-    // item at all, which is routine during a legacy import (T83-T85). That used
-    // to reach `diffItems`, which read `.payload` off it and threw a TypeError
+    // item at all, which is routine during a legacy import. That could reach
+    // `diffItems`, which reads `.payload` off it and would throw a TypeError
     // out of a function whose contract is to report a reason instead.
     it("reports a history rather than throwing when an earlier commit held something else at that path", () => {
       const target = path.join(root, "knowledge", "sales-crm", "requirement");

@@ -8,7 +8,7 @@ import { digestOfSource } from "../../knowledge/sourceDigest.js";
 import type { DiscoveryResult, DiscoveryStage } from "../bootstrapRunner.js";
 
 /**
- * Database Schema Discovery (T76) — the third Discovery stage in T73's flow.
+ * Database Schema Discovery — the third Discovery stage in the bootstrap flow.
  *
  * Reads `prisma/schema.prisma` — CLAUDE.md's fixed stack, and per
  * `policies/architecture.md` §7 the working copy the engineers' queries
@@ -49,10 +49,9 @@ function lineOf(content: string, index: number): number {
  *
  * Exported because `design.md`'s `## Data Model` section holds the same syntax —
  * the `system-analyst` template requires real `schema.prisma` syntax there, and
- * `setup` seeds the actual file from it — so T85's legacy migration reads it
+ * `setup` seeds the actual file from it — so the migration reads it
  * with this function rather than its own. Two readings of one syntax agree until
- * the first fix to one of them; the T61-T80 review traced both of its worst
- * defects to exactly that shape of duplication.
+ * the first fix to one of them; reviews traced defects to exactly that shape of duplication.
  */
 export function parsePrismaModels(content: string): ParsedModel[] {
   const models: ParsedModel[] = [];
@@ -102,7 +101,7 @@ function dbItem(
     kind: "db-schema",
     title: `Database model: ${model.name}`,
     body:
-      `Database Schema Discovery (T76) read this model from \`${SCHEMA_RELATIVE_PATH}\` (lines ${model.startLine}-${model.endLine}).` +
+      `Database Schema Discovery read this model from \`${SCHEMA_RELATIVE_PATH}\` (lines ${model.startLine}-${model.endLine}).` +
       (relations.length > 0 ? ` Relates to: ${relations.join(", ")}.` : ""),
     repo: null,
     module: null,
@@ -114,7 +113,7 @@ function dbItem(
     updated_at: now,
     // Hashed through the locator, not from `model.raw`: the two are nearly the
     // same text but not identical (the match starts at `model`, the line range
-    // starts at column 0), and T71 recomputes from the locator.
+    // starts at column 0), and recomputes from the locator.
     ...(targetId ? { target_ids: [targetId] } : {}),
     sources: [{ type: "file", locator, captured_at: now, digest: digestOfSource(locator, projectRoot), source_id: sourceId, ...(targetId ? { origin: { root: "target" as const, target_id: targetId } } : {}) }],
     relations: [],

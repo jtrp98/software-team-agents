@@ -66,7 +66,7 @@ describe("migrateSta", () => {
     expect(readInstallManifest(root).schema_version).toBe(CURRENT_STA_SCHEMA_VERSION);
 
     const backedUpManifest = JSON.parse(fs.readFileSync(path.join(result.backupDir!, "manifest.json"), "utf8"));
-    expect(backedUpManifest.schema_version).toBe(CURRENT_STA_SCHEMA_VERSION - 1); // the pre-migration snapshot, for T97's rollback
+    expect(backedUpManifest.schema_version).toBe(CURRENT_STA_SCHEMA_VERSION - 1); // the pre-migration snapshot, for rollback
   });
 
   it("chains multiple injected steps in order", () => {

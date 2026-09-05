@@ -41,7 +41,7 @@ const RuntimeTaskScopeRootSchema = z.object({
  * The execution-ready task produced by deterministic Lightweight PM logic.
  * It is persisted runtime state, not an authored plan and not a prompt.
  * `expected_changes` is intentionally absent: predicting files would be the
- * only REQ-PM-02 field that needs model reasoning.
+ * only field here that needs model reasoning.
  */
 export const RuntimeTaskSchema = z.object({
   task_id: z.string().min(1),
@@ -60,7 +60,7 @@ export const RuntimeTaskSchema = z.object({
   do_not_touch: z.array(z.string().min(1)).min(1),
   acceptance_criteria: AvailabilitySchema.extend({ items: z.array(z.string().min(1)) }),
   required_verification: z.object({
-    // `deferred` remains readable for state created before T-V3R-050.
+    // `deferred` remains readable for older persisted state.
     status: z.enum(["selected", "full-order", "deferred"]),
     levels: z.array(z.string()),
     reason: z.string().min(1),

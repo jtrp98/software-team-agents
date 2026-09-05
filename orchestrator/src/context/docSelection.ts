@@ -16,10 +16,6 @@ function phaseHeadingMatcher(phase: number): RegExp {
   return new RegExp(`(phase|เฟส)\\s*0*${phase}\\b`, "i");
 }
 
-function moduleHeadingMatcher(moduleName: string): RegExp {
-  return new RegExp(moduleName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-}
-
 const CHANGE_LOG = /change\s*log/i;
 const DATA_MODEL = /data\s*model/i;
 const FEASIBILITY_SUMMARY = /feasibility\s+summary/i;
@@ -213,6 +209,25 @@ function sliceRequirementSection(markdown: string, trace: TraceabilityScope): Tr
 
   const verdict = traceVerdict(wholeIds, relevant, planned);
   return { verdict, text: markdown, skipped: [] };
+}
+
+/**
+ * Subset of `selectDocContext`'s fallback conditions that depend only on the
+ * document's own headings/ids, not on stage/phase/traceability. Reused by
+ * `--check-doc-structure` to flag a doc that would fall back to whole-document
+ * context on *any* run, before a real run hits it.
+ */
+export function structuralFallbackReason(doc: DocKind, markdown: string): string | null {
+  if (sectionMap(markdown).length === 0) {
+    return "no `## ` headings found — nothing to slice along, so every run reads it whole";
+  }
+  if (doc === "design" && !sectionMap(markdown).some((s) => isAlwaysReadDesignSection(s.heading))) {
+    return "none of §10's always-read sections (Feasibility / Risks / Open Questions) are present — every run reads it whole";
+  }
+  if (doc === "requirement" && extractIds(markdown, "REQ").length === 0) {
+    return "no REQ-NNN rule ids — relevance cannot be established, so every run reads it whole";
+  }
+  return null;
 }
 
 export function selectDocContext(req: ContextRequest, markdown: string): SelectedContext {

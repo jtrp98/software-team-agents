@@ -8,12 +8,11 @@ import { NO_GUARDS, type RuntimeAgentRequest, type SpawnSync } from "./runtimeAd
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 
 /**
- * T-OC4 — unit contract for the OpenCode adapter. Everything runs through
- * injected spawns; nothing here needs `opencode` on the machine (the real
- * install was exercised by the T-OC0 spike and is re-exercised by T-OC9 UAT).
+ * Unit contract for the OpenCode adapter. Everything runs through injected
+ * spawns; nothing here needs `opencode` on the machine.
  *
- * The NDJSON fixtures mirror what 1.18.21 actually emitted during the spike:
- * `text` events carry message parts, the final `step_finish` carries
+ * The NDJSON fixtures mirror what 1.18.21 actually emitted during manual
+ * testing: `text` events carry message parts, the final `step_finish` carries
  * tokens/cost/reason.
  */
 

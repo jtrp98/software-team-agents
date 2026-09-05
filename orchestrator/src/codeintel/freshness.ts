@@ -10,7 +10,7 @@ import {
 } from "./provider.js";
 
 /**
- * T-GR3 — freshness, because the indexing tool has no TTL.
+ * Freshness tracking, because the indexing tool has no TTL.
  *
  * The tool ages silently: an index built last month looks exactly as
  * authoritative as one built this morning, and a stale graph that labels its

@@ -1,8 +1,11 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { isUserOverridden, type TargetConfig, type TargetManifest } from "./targetMeta.js";
+import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
+import type { WorkspaceRuntime } from "./roleWorkspace.js";
 
 export const CLAUDE_SETTINGS_PATH = ".claude/settings.json";
+export const OPENCODE_PLUGIN_PATH = ".opencode/plugin/sta-guards.js";
 const GUARD_EVENTS = ["PreToolUse", "SubagentStop", "Stop"] as const;
 type GuardEvent = (typeof GUARD_EVENTS)[number];
 
@@ -302,4 +305,165 @@ export function inspectGuardWiring(options: {
     overridden,
     settingsError,
   };
+}
+
+// --- guard coverage per runtime -----------------------------------------
+
+/**
+ * ONE guard verdict per runtime, for every caller that has to decide whether a
+ * session is enforced. Every runtime gets an explicit verdict, so "this
+ * runtime has no mechanism at all" is a *stated* result rather than the
+ * absence of a check.
+ *
+ * The vocabulary is `RuntimeCapability`, not a new registry: the same
+ * guard families the adapters already report per run.
+ */
+export type GuardCoverageLevel =
+  /** Every guard mechanism this runtime has is present and verified active. */
+  | "enforced"
+  /** Some guard families are enforced; the rest are named, never implied. */
+  | "partial"
+  /** Nothing to enforce here — the payload ships no registrations for this profile, or the project claimed the wiring. */
+  | "not-required"
+  /** A mechanism exists but is misconfigured. Never acknowledgeable: it is a repairable fault, not a deliberate choice. */
+  | "broken"
+  /** This runtime has no guard mechanism in this workspace: a launch enforces nothing. */
+  | "unguarded";
+
+export interface GuardCoverage {
+  runtime: WorkspaceRuntime;
+  level: GuardCoverageLevel;
+  /** Guard families verified active for this runtime in this workspace. */
+  enforced: readonly RuntimeCapability[];
+  /** Guard families this runtime does not enforce here. Named so a gap can never be silent. */
+  unenforced: readonly RuntimeCapability[];
+  /** One line naming the mechanism and both halves of the verdict. */
+  detail: string;
+  /** Claude only: the registration counts behind the verdict, so callers need not re-inspect. */
+  wiring?: GuardWiringStatus;
+}
+
+const ALL_GUARD_CAPABILITIES: readonly RuntimeCapability[] = [
+  RuntimeCapability.PRE_TOOL_GUARD,
+  RuntimeCapability.POST_TOOL_GUARD,
+  RuntimeCapability.EXIT_GUARD,
+  RuntimeCapability.PER_AGENT_EXIT_GUARD,
+];
+
+/** A positive verdict: readiness may say READY and a launch needs no acknowledgement. */
+export function guardCoverageIsPositive(coverage: GuardCoverage): boolean {
+  return coverage.level === "enforced" || coverage.level === "partial" || coverage.level === "not-required";
+}
+
+function claudeCoverage(wiring: GuardWiringStatus): GuardCoverage {
+  const base = { runtime: "claude" as const, wiring };
+  if (wiring.overridden) {
+    return { ...base, level: "not-required", enforced: [], unenforced: [], detail: "Framework guard wiring explicitly declined via overrides" };
+  }
+  if (wiring.hooksInstalled === 0) {
+    return { ...base, level: "not-required", enforced: [], unenforced: [], detail: "no Framework guard registrations shipped for this profile" };
+  }
+  if (wiring.settingsError) {
+    return { ...base, level: "broken", enforced: [], unenforced: ALL_GUARD_CAPABILITIES, detail: wiring.settingsError };
+  }
+  if (wiring.missingRegistrations.length > 0) {
+    return {
+      ...base,
+      level: "broken",
+      enforced: [],
+      unenforced: ALL_GUARD_CAPABILITIES,
+      detail: `${wiring.hooksRegistered}/${wiring.hooksInstalled} Framework guard registration(s) wired`,
+    };
+  }
+  return {
+    ...base,
+    level: "enforced",
+    enforced: ALL_GUARD_CAPABILITIES,
+    unenforced: [],
+    detail: `Framework guards wired (${wiring.hooksRegistered}/${wiring.hooksInstalled})`,
+  };
+}
+
+/**
+ * OpenCode's coverage is genuinely partial, and the verdict says which half is
+ * which. The plugin (`.opencode/plugin/sta-guards.js`, auto-loaded from that
+ * directory) enforces writes-outside-workspace and contract path ownership;
+ * each rendered binding's `permission.bash` block denies state-changing git.
+ * Doc-rewrite, secret-leak and green-before-stop have no OpenCode mechanism —
+ * the plugin's own header says so, and OpenCode's default posture is allow-all,
+ * so a missing plugin means nothing is enforced at all.
+ */
+/** The `partial` verdict when the plugin is present — pure/static, so documentation can quote it without a workspace. */
+export function opencodeCoverageWithPlugin(): GuardCoverage {
+  return {
+    runtime: "opencode",
+    level: "partial",
+    enforced: [RuntimeCapability.PRE_TOOL_GUARD, RuntimeCapability.POST_TOOL_GUARD],
+    unenforced: [RuntimeCapability.EXIT_GUARD, RuntimeCapability.PER_AGENT_EXIT_GUARD],
+    detail:
+      `partial — ${OPENCODE_PLUGIN_PATH} enforces block-outside-repo and block-path-permissions, and each binding's permission block enforces block-git; ` +
+      "block-doc-rewrite, block-secret-leak and require-green-before-stop have no OpenCode mechanism and do not run",
+  };
+}
+
+function opencodeCoverage(targetRoot: string): GuardCoverage {
+  const pluginPresent = fs.existsSync(path.join(targetRoot, ...OPENCODE_PLUGIN_PATH.split("/")));
+  if (!pluginPresent) {
+    return {
+      runtime: "opencode",
+      level: "unguarded",
+      enforced: [],
+      unenforced: ALL_GUARD_CAPABILITIES,
+      detail: `no ${OPENCODE_PLUGIN_PATH} — OpenCode's default posture is allow-all, so block-git, block-outside-repo, block-path-permissions, block-doc-rewrite, block-secret-leak and require-green-before-stop are all inactive; run software-team-agents sync`,
+    };
+  }
+  return opencodeCoverageWithPlugin();
+}
+
+/**
+ * Codex ships no guard payload at all: there is no `templates/.codex/`, so
+ * nothing wires a hook in a Codex workspace, and the framework's own note in
+ * `runtime/bindingGenerator.ts` records that Codex's hook-loading behaviour has
+ * never been verified on a real install. Generated `.codex/agents/*.toml`
+ * bindings are agent definitions, not enforcement. Until a mechanism exists and
+ * is verified, the only honest verdict is `unguarded`.
+ */
+/** Pure/static — Codex has no per-workspace state to check, so this doubles as the documentation source. */
+export function codexCoverage(): GuardCoverage {
+  return {
+    runtime: "codex",
+    level: "unguarded",
+    enforced: [],
+    unenforced: ALL_GUARD_CAPABILITIES,
+    detail:
+      "no Codex guard mechanism — the Framework payload ships no Codex hook wiring and Codex's hook loading has never been verified on a real install, so block-git, block-outside-repo, block-path-permissions, block-doc-rewrite, block-secret-leak and require-green-before-stop are all inactive",
+  };
+}
+
+export function guardCoverage(options: {
+  runtime: WorkspaceRuntime;
+  targetRoot: string;
+  /** Required for `claude` unless a precomputed `wiring` is supplied. */
+  templatesDir?: string;
+  manifest?: TargetManifest;
+  config?: TargetConfig;
+  /** Reuses an already-computed Claude wiring instead of reading settings twice. */
+  wiring?: GuardWiringStatus;
+}): GuardCoverage {
+  if (options.runtime === "codex") return codexCoverage();
+  if (options.runtime === "opencode") return opencodeCoverage(options.targetRoot);
+  const wiring = options.wiring ?? (options.templatesDir === undefined
+    ? undefined
+    : inspectGuardWiring({ targetRoot: options.targetRoot, templatesDir: options.templatesDir, manifest: options.manifest, config: options.config }));
+  if (!wiring) {
+    // Fail closed: an uninspectable wiring is never reported as coverage.
+    return {
+      runtime: "claude",
+      level: "broken",
+      enforced: [],
+      unenforced: ALL_GUARD_CAPABILITIES,
+      detail: "guard wiring could not be inspected — no Framework templates directory was resolved",
+    };
+  }
+  return claudeCoverage(wiring);
 }

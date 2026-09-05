@@ -2,24 +2,11 @@ import { z } from "zod";
 import { TaskState } from "../types.js";
 
 /**
- * Human approval as recorded state rather than a thing that happened in a
- * conversation.
- *
- * The pipeline always stopped at the right places — `gatePolicy.ts` blocks the
- * edges, and the orchestrator genuinely refuses to move past them. What it had
- * no way to say was *what* it was waiting for, *who* answered, *when*, or
- * whether the answer had been "no".
- *
- * That last one was the real gap. `gateContext.designApproved` is a boolean, so
- * `false` and "never asked" are the same value. A person who explicitly rejected
- * a schema left behind exactly the state of a person who had not looked yet, and
- * the next run would ask again as though nothing had been decided — which is how
- * a rejection quietly becomes a re-prompt until someone says yes.
- *
- * So an approval here is a record, not a flag: it carries its type, its status,
- * the edge it guards, when it was asked, when it was answered, and by whom. The
- * booleans remain as the gate's input (nothing about `gatePolicy.ts` changes),
- * but they are now derived from this ledger rather than being the whole truth.
+ * Human approval as recorded state, not a plain boolean: `gateContext.designApproved`
+ * being a bare boolean can't distinguish "rejected" from "never asked", so a
+ * rejection would quietly turn into a re-prompt until someone said yes. An
+ * approval record instead carries its type, status, the edge it guards, when it
+ * was asked/answered, and by whom; the gate booleans are derived from this ledger.
  */
 
 /** The five points CLAUDE.md says always wait for a person, whatever mode the pipeline is running in. */
@@ -49,7 +36,6 @@ export const ApprovalRecordSchema = z.object({
   /** The edge this guards. Null for an approval that is not tied to one (an escalated failure). */
   from: z.enum(TaskState).nullable(),
   to: z.enum(TaskState).nullable(),
-  /** Why a person is needed, in the words the task will show them. */
   reason: z.string().min(1),
   requestedAt: z.number(),
   decidedAt: z.number().nullable(),
@@ -115,11 +101,9 @@ export interface RequestApprovalParams {
 
 /**
  * Opens a pending approval, or returns the ledger untouched when this type is
- * already outstanding or already answered.
- *
- * Idempotence is the point: `status()` is polled, and every poll must not append
- * another identical question. An answered approval is likewise never reopened
- * here — re-asking is `reopenApproval`, which is a deliberate act.
+ * already outstanding or already answered. Must be idempotent: `status()` is
+ * polled, and every poll must not append another identical question. Re-asking
+ * an answered approval is `reopenApproval`, a deliberate separate act.
  */
 export function requestApproval(ledger: ApprovalLedger, params: RequestApprovalParams): ApprovalLedger {
   const existing = findApproval(ledger, params.type);
@@ -205,7 +189,6 @@ export function gateEvidenceFrom(ledger: ApprovalLedger): { requirementApproved?
   return evidence;
 }
 
-/** T08's record shape, for the state view and for anything showing a person what is outstanding. */
 export interface ApprovalView {
   required: boolean;
   type: ApprovalType;

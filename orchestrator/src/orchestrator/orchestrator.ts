@@ -44,10 +44,10 @@ export interface AgentExecutorRequest {
   stage: AgentStage;
   taskId: string;
   context: ContextItem[];
-  /** T44 — only set when stage is DEVOPS: which of the two runs this is, so the executor's prompt can say so. See `isAgentAssignedAt` in taskStatus.ts. */
+  /** Only set when stage is DEVOPS: which of the two runs this is, so the executor's prompt can say so. See `isAgentAssignedAt` in taskStatus.ts. */
   deployPhase?: "prepare" | "execute";
   /**
-   * QA06 — the QA retry count at the time this round starts (0 for the first
+   * The QA retry count at the time this round starts (0 for the first
    * round). Only set for QA_ENGINEER; the optimization wrapper uses it to
    * build the recheck plan instead of re-verifying from scratch.
    */
@@ -74,7 +74,7 @@ export interface AgentExecutorResult {
   failure?: StructuredFailure;
 }
 
-/** The pluggable seam: item 13 is a pure coordinator, it never runs an agent itself. */
+/** The pluggable seam: the orchestrator is a pure coordinator, it never runs an agent itself. */
 export type AgentExecutor = (req: AgentExecutorRequest) => Promise<AgentExecutorResult> | AgentExecutorResult;
 
 export type OrchestratorStatus =
@@ -84,20 +84,19 @@ export type OrchestratorStatus =
   | { kind: "DEPLOYED" };
 
 /**
- * Item 14: every routing decision is also an event, not only a return value —
- * "Developer finished -> emit IMPLEMENTATION_COMPLETED -> orchestrator routes
- * -> QA" from task-detail.md maps to AGENT_COMPLETED in, AGENT_ASSIGNED out.
+ * Every routing decision is also an event, not only a return value — an agent
+ * finishing routes to the next stage the same way a completion event does.
  *
  * The five below are the *lifecycle*: which stage is up, which finished, why the
- * machine stopped. T36 extends the map with the *domain* events — the verdicts,
- * the approvals, and what a deploy cost — which carry facts these five cannot
- * express (see events/domainEvents.ts for what each adds and why neither set
- * replaces the other).
+ * machine stopped. `domainEvents.ts` extends the map with the *domain* events —
+ * the verdicts, the approvals, and what a deploy cost — which carry facts these
+ * five cannot express (see events/domainEvents.ts for what each adds and why
+ * neither set replaces the other).
  */
 export interface OrchestratorEventMap extends DomainEventMap {
-  /** `inputs` is the artifact categories this stage is actually handed (T37's INPUT) — the same slice `step()` passes to the executor. */
+  /** `inputs` is the artifact categories this stage is actually handed — the same slice `step()` passes to the executor. */
   AGENT_ASSIGNED: { taskId: string; stage: AgentStage; inputs: ContextCategory[] };
-  /** `artifactType` is what the stage produced (T37's OUTPUT), or null for a stage whose work is only code on disk. */
+  /** `artifactType` is what the stage produced, or null for a stage whose work is only code on disk. */
   AGENT_COMPLETED: { taskId: string; stage: AgentStage; outcome: RunOutcome; artifactType: ArtifactType | null; packetPath: string | null };
   WAITING_FOR_HUMAN: { taskId: string; from: TaskState; to: TaskState; reason: string; approvalType: ApprovalType | null };
   TASK_BLOCKED: { taskId: string; reason: string };
@@ -119,11 +118,11 @@ export interface OrchestratorOptions {
    * Use `Orchestrator.resume()` / the registry rather than passing this by hand.
    */
   restore?: PersistedTask;
-  /** T43 — local/dev/staging/production. Defaults to `Environment.LOCAL` when not given (a fresh task) or not stored (an old row, see taskStore.ts). */
+  /** local/dev/staging/production. Defaults to `Environment.LOCAL` when not given (a fresh task) or not stored (an old row, see taskStore.ts). */
   environment?: Environment;
-  /** Phase 2: immutable Target identity captured on task creation. */
+  /** Immutable Target identity captured on task creation. */
   targetBindings?: TargetBindings;
-  /** V3 Phase 1: deterministic execution contract built by TaskRegistry before persistence. */
+  /** Deterministic execution contract built by TaskRegistry before persistence. */
   runtimeTask?: RuntimeTask | null;
 }
 
@@ -131,8 +130,8 @@ function assertCanProduce(stage: AgentStage, artifactType: ArtifactType): void {
   if (!AGENT_REGISTRY[stage].outputs.includes(artifactType)) {
     throw new Error(`${stage} is not registered (item 9) to produce ${artifactType}`);
   }
-  // T39: and a verdict specifically must come from a role that did not do the
-  // work. Checked separately from the registry lookup above on purpose — that one
+  // A verdict specifically must come from a role that did not do the work.
+  // Checked separately from the registry lookup above on purpose — that one
   // asks "is this in the table?", this one asks "is this a review of your own
   // work?", and only the second still holds if someone edits the table.
   assertIndependentVerdict(stage, artifactType);
@@ -143,25 +142,25 @@ function implementationStart(pipeline: AgentStage[]): number {
 }
 
 /**
- * The central controller (item 13): state management, routing, retry
- * handling, gate enforcement, context assembly, and agent selection — all
- * composed from items 1-12, none of it reimplemented here. Structurally
- * replaces CLAUDE.md's "no agent invokes the next one" rule: this is now the
- * only thing that decides what runs next, and no agent holds a reference to
- * transition()/gatedTransition()/recordFailure() itself.
+ * The central controller: state management, routing, retry handling, gate
+ * enforcement, context assembly, and agent selection — all composed from
+ * their owning modules, none of it reimplemented here. This is the only thing
+ * that decides what runs next (CLAUDE.md: "no agent invokes the next one"),
+ * and no agent holds a reference to transition()/gatedTransition()/
+ * recordFailure() itself.
  *
- * Communication is event-driven (item 14): reportCompletion() is the one
- * entry point an agent's completion reaches the orchestrator through, and
- * every routing decision it makes is also emitted on `events`, not only
- * returned — step() is a convenience wrapper over reportCompletion() for
- * callers that do want a direct call/await relationship.
+ * Communication is event-driven: reportCompletion() is the one entry point an
+ * agent's completion reaches the orchestrator through, and every routing
+ * decision it makes is also emitted on `events`, not only returned — step()
+ * is a convenience wrapper over reportCompletion() for callers that do want a
+ * direct call/await relationship.
  *
- * Since T01 it is durable as well: every state change is written through to a
- * `TaskStore` before the caller is told about it, so a closed terminal or a
- * crashed process resumes from where it stopped (`Orchestrator.resume`)
- * instead of re-running a pipeline whose expensive stages already ran.
- * Approvals a person gave are part of that stored state — resuming must never
- * re-ask a question that was already answered.
+ * It is also durable: every state change is written through to a `TaskStore`
+ * before the caller is told about it, so a closed terminal or a crashed
+ * process resumes from where it stopped (`Orchestrator.resume`) instead of
+ * re-running a pipeline whose expensive stages already ran. Approvals a
+ * person gave are part of that stored state — resuming must never re-ask a
+ * question that was already answered.
  */
 export class Orchestrator {
   readonly runLog: RunLog;
@@ -185,7 +184,7 @@ export class Orchestrator {
   private approvals: ApprovalLedger;
   private lastStatusKey: string | undefined;
   /**
-   * T31's pause/cancel — managed by `TaskRegistry.pause()`/`cancel()` directly against the
+   * Pause/cancel — managed by `TaskRegistry.pause()`/`cancel()` directly against the
    * store, never by this class itself (they are a human override, orthogonal to the pipeline's
    * own state machine). Carried here only so a `snapshot()` taken mid-run echoes back whatever
    * was loaded instead of silently resetting it to false/null on the next save.
@@ -193,14 +192,14 @@ export class Orchestrator {
   private paused: boolean;
   private cancelled: boolean;
   private cancelReason: string | null;
-  /** T43 — local/dev/staging/production. Set once at creation, carried through resume/snapshot like paused/cancelled above; nothing in the state machine reads it — it exists to be told to agents, not to gate anything (that's T44/T45's job). */
+  /** local/dev/staging/production. Set once at creation, carried through resume/snapshot like paused/cancelled above; nothing in the state machine reads it — it exists to be told to agents, not to gate anything. */
   private taskEnvironment: Environment;
-  /** T44 — true once devops's "prepare" run has completed at READY_TO_DEPLOY. See `isAgentAssignedAt` in taskStatus.ts for what this distinguishes and why. */
+  /** True once devops's "prepare" run has completed at READY_TO_DEPLOY. See `isAgentAssignedAt` in taskStatus.ts for what this distinguishes and why. */
   private deployPrepared: boolean;
   private readonly targetBindings: TargetBindings;
   /** The state the task was in when the current failure arrived, captured before retryPolicy moves it. */
   private stateBeforeFailure: TaskState = TaskState.CREATED;
-  /** What the last failure resolved to (T07). Exposed for the CLI and the run log; not persisted — it is derived, not state. */
+  /** What the last failure resolved to. Exposed for the CLI and the run log; not persisted — it is derived, not state. */
   private lastRecovery: RecoveryAction | null = null;
 
   constructor(taskId: string, classification: ClassificationResult, opts?: OrchestratorOptions) {
@@ -230,7 +229,7 @@ export class Orchestrator {
       this.taskEnvironment = restore.environment;
       this.deployPrepared = restore.deployPrepared;
       this.targetBindings = restore.targetBindings;
-      // Seeded from the store so budget accounting (item 12) counts what the
+      // Seeded from the store so budget accounting counts what the
       // earlier process already spent — a resumed task must not get a fresh
       // token allowance just because it restarted.
       this.runLog = new RunLog(this.store.runsForTask(taskId));
@@ -297,12 +296,12 @@ export class Orchestrator {
     return this.run.retries;
   }
 
-  /** T43 — which of local/dev/staging/production this task targets. */
+  /** Which of local/dev/staging/production this task targets. */
   get environment(): Environment {
     return this.taskEnvironment;
   }
 
-  /** How the most recent failure was resolved (T07), or null if none has happened in this process. */
+  /** How the most recent failure was resolved, or null if none has happened in this process. */
   get recovery(): RecoveryAction | null {
     return this.lastRecovery;
   }
@@ -347,9 +346,8 @@ export class Orchestrator {
    *
    * A rejection is an answer, not an absence: it is stored as `rejected`, and
    * `advance()` blocks the task on it rather than posing the same question on
-   * the next poll. Before T08 `provideHumanApproval(field, false)` was
-   * indistinguishable from never having asked, so a "no" degraded into a
-   * re-prompt until someone eventually said yes.
+   * the next poll — otherwise a "no" would degrade into a re-prompt until
+   * someone eventually said yes.
    */
   decideApproval(
     type: ApprovalType,
@@ -365,7 +363,7 @@ export class Orchestrator {
     });
     this.syncGateEvidence();
     this.persist();
-    // T36: the answer is an event too. Before this, a listener could observe every
+    // The answer is an event too — otherwise a listener could observe every
     // question the pipeline ever asked and never learn what a person said back.
     this.emitAndStore("APPROVAL_DECIDED", {
       taskId: this.taskId,
@@ -376,10 +374,10 @@ export class Orchestrator {
   }
 
   /**
-   * The pre-T08 entry point, kept working: it maps a gate field back to the
+   * The legacy entry point, kept working: it maps a gate field back to the
    * approval type that feeds it. Callers that know which of the five decisions
-   * they are answering should use `decideApproval` — this cannot express a
-   * rejection distinctly, which is the whole reason T08 exists.
+   * they are answering should use `decideApproval` instead — this cannot
+   * express a rejection distinctly.
    */
   provideHumanApproval(field: "requirementApproved" | "designApproved" | "humanApproved", value: boolean): void {
     const type =
@@ -399,7 +397,7 @@ export class Orchestrator {
   }
 
   /**
-   * Opens a human decision and announces it (T36's APPROVAL_REQUIRED).
+   * Opens a human decision and announces it (emits APPROVAL_REQUIRED).
    *
    * The emit rides on `requestApproval`'s own idempotence: it returns the ledger
    * unchanged when this type is already open or already answered, and `advance()`
@@ -463,7 +461,7 @@ export class Orchestrator {
         case "DEPLOYED":
           this.emitAndStore("TASK_DEPLOYED", { taskId: this.taskId });
           // Same moment, different fact: TASK_DEPLOYED is the transition,
-          // DEPLOY_COMPLETED is what reaching it cost (T36).
+          // DEPLOY_COMPLETED is what reaching it cost.
           this.emitAndStore("DEPLOY_COMPLETED", this.deploySummary());
           break;
       }
@@ -477,8 +475,7 @@ export class Orchestrator {
    *
    * `runs` counts every agent run including redone rounds, while `stages` lists
    * each stage once — so `runs > stages.length` is the signal that work was
-   * repeated, which is the fact T29/T30's rework rate is built from and the one
-   * a bare "DEPLOYED" tells nobody.
+   * repeated, a fact a bare "DEPLOYED" tells nobody.
    */
   private deploySummary(): DomainEventMap["DEPLOY_COMPLETED"] {
     const runs = this.runLog.runsForTask(this.taskId);
@@ -501,7 +498,7 @@ export class Orchestrator {
    * Every emitted event is also appended to the store: the audit trail of who
    * was asked to do what, and why a task stopped.
    *
-   * The seven T37 fields are derived once, here, by the module that knows every
+   * The audit fields are derived once, here, by the module that knows every
    * payload shape (`audit/auditTrail.ts`) rather than assembled by hand at each
    * emit site — a per-site sprinkle is exactly how two events end up disagreeing
    * about what "actor" means.
@@ -585,7 +582,7 @@ export class Orchestrator {
   }
 
   /**
-   * The event-driven entry point (item 14): call this once an agent has
+   * The event-driven entry point: call this once an agent has
    * finished, wherever that news comes from — a direct await, a webhook, a
    * message off a queue. Throws if `stage` isn't the one currently assigned,
    * since the orchestrator — not the caller — decides who runs next.
@@ -609,7 +606,7 @@ export class Orchestrator {
       artifactType: result.artifactType ?? null,
       packetPath: result.packetPath ?? null,
     });
-    // QA07: the mode a QA round ran in is recorded with its cost. Read off the
+    // The mode a QA round ran in is recorded with its cost. Read off the
     // raw artifact before schema validation (which happens below and gates
     // progression independently) — only a literal FULL/TARGETED counts, so an
     // invalid value logs as "not recorded" rather than being guessed into shape.
@@ -655,7 +652,7 @@ export class Orchestrator {
       this.gateContext = { ...this.gateContext, ...result.gateEvidence };
     }
 
-    // T44: devops's "prepare" completion (at READY_TO_DEPLOY) does not advance the cursor — the
+    // devops's "prepare" completion (at READY_TO_DEPLOY) does not advance the cursor — the
     // same pipeline slot is still assigned once the task reaches APPROVED, for "execute". A
     // failed prepare leaves deployPrepared false, so the next run retries prepare rather than
     // treating a failure as done — devops has no other failure routing (unlike qa/security
@@ -686,7 +683,7 @@ export class Orchestrator {
       return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
     }
 
-    // T45: a failed "execute" — the actual deploy/migration command, and the health check
+    // A failed "execute" — the actual deploy/migration command, and the health check
     // devops.md requires right after it — must never be silently treated as a successful
     // deploy. devops has no retry budget and no automatic recovery route (unlike qa/security
     // just below): re-running a failed deploy command without a person looking is exactly the
@@ -706,7 +703,7 @@ export class Orchestrator {
       this.applyFailureRoute(failureKind, result.failure);
     }
 
-    // T-UX10: the UX/UI consultant does not fail the way a verifier does — its
+    // The UX/UI consultant does not fail the way a verifier does — its
     // "FAIL" is a question that is not its to answer (is this UI worth building
     // → business-analyst; can it be built → system-analyst). That is pipeline
     // navigation, not a defect round: it never enters recordFailure's retry
@@ -717,7 +714,7 @@ export class Orchestrator {
       return this.routeUxuiQuestionBack(result.failure);
     }
 
-    // T36's verdict events, emitted after the route is decided so a failed round
+    // Verdict events, emitted after the route is decided so a failed round
     // carries the decision with it. A listener that only saw AGENT_COMPLETED
     // would have to re-derive both halves — and could not derive the recovery
     // action at all, since nothing outside this method computes it.
@@ -733,8 +730,8 @@ export class Orchestrator {
    * An engineer finishing is an AGENT_COMPLETED and no more: giving it a verdict
    * would make "passed" mean two different things depending on who emitted it —
    * "I ran without erroring" for a producer, "I checked someone else's work and
-   * it holds" for a reviewer. Those are not the same claim, and T39 rests on
-   * their being kept apart.
+   * it holds" for a reviewer. Those are not the same claim, and independent
+   * verdicts rest on their being kept apart.
    */
   private emitVerdict(stage: AgentStage, result: AgentExecutorResult): void {
     const passed = result.outcome.result !== "FAIL";
@@ -761,9 +758,8 @@ export class Orchestrator {
    * The decision itself lives in retry/recoveryPolicy.ts and is pure; this only
    * carries it out. Keeping those apart matters because the decision is the part
    * worth reviewing: RETRY, RECOVER, ROLLBACK, ESCALATE and ABORT are five
-   * different answers, and before T07 the pipeline could only express two of
-   * them. The agent that reported the failure makes none of these calls — it
-   * supplies facts, the orchestrator draws the conclusion.
+   * different answers. The agent that reported the failure makes none of these
+   * calls — it supplies facts, the orchestrator draws the conclusion.
    */
   private applyFailureRoute(failureKind: "qa" | "security", failure: StructuredFailure | undefined): void {
     const action = decideRecovery({
@@ -834,7 +830,7 @@ export class Orchestrator {
   }
 
   /**
-   * Applies a UX/UI question's structured failure (T-UX10): RECOVER sends the
+   * Applies a UX/UI question's structured failure: RECOVER sends the
    * task back to business-analyst/system-analyst exactly like a qa-reported
    * contract gap — same guarded back-edge, same cursor arithmetic. Everything
    * else stops for a person, because these are the fail-closed edges:
@@ -888,11 +884,11 @@ export class Orchestrator {
 
     const { stage } = status;
     const context = selectContext(stage, this.artifactStore);
-    // T44: at the moment this status was returned, DEVOPS is only ever assigned at exactly one
+    // At the moment this status was returned, DEVOPS is only ever assigned at exactly one
     // of these two states (see isAgentAssignedAt) — so the current state alone tells us which run.
     const deployPhase: AgentExecutorRequest["deployPhase"] =
       stage === AgentStage.DEVOPS ? (this.run.machine.current === TaskState.APPROVED ? "execute" : "prepare") : undefined;
-    // QA06: the retry count is the round number a recheck plan is built from.
+    // The retry count is the round number a recheck plan is built from.
     const qaRound = stage === AgentStage.QA_ENGINEER ? this.run.retries.qa : undefined;
     // The capability gate's one destructive moment: devops about to run the real
     // deploy/migration command must hold the `deploy` permission its contract

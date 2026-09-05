@@ -69,7 +69,7 @@ function saAcknowledged(seen: Record<string, number>): WorkspaceLookup {
   return set.lookup;
 }
 
-/** Everything a lane owns is approved AND the lane is signed off — the only way to reach `ready` since T103. */
+/** Everything a lane owns is approved AND the lane is signed off — the only way to reach `ready`. */
 function signedOff(spec: { lane: RoleLane }, kb: KnowledgeBase, extra: (set: ReturnType<typeof lanes>) => void = () => {}): WorkspaceLookup {
   const set = lanes();
   const approved = kb.query({ module: "sales-crm" }).filter((i) => laneOf(i.owner) === spec.lane && i.status === "approved");
@@ -345,7 +345,7 @@ describe("the DEV lane workflow (T102)", () => {
     expect(devState(kb).handoff.blockers.join(" ")).toMatch(/approved blocked task is two answers/);
   });
 
-  /** The join to T01–T60 travels rather than blocks: not yet run is a normal state. */
+  /** The join to the orchestrator's task ledger travels rather than blocks: not yet run is a normal state. */
   it("carries a task that is not joined to the orchestrator, and one qa has not verified", () => {
     const state = devState(withStatus({ "BE-014": "approved", "FE-020": "approved" }));
     const carried = state.handoff.carries.join(" ");

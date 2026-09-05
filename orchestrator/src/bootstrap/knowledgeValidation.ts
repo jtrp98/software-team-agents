@@ -8,20 +8,17 @@ import { BootstrapNotSettledError, BootstrapNotStartedError, recordHumanValidati
 import type { BootstrapState } from "./bootstrapModel.js";
 
 /**
- * Knowledge Validation (T80) — closes T73's flow. Everything T74-T79 wrote
+ * Knowledge Validation — closes the bootstrap flow. Everything discovery wrote
  * is `draft`, owned by whichever stage produced it. This is the step that
  * makes it something the rest of the pipeline may rely on: every item
- * bootstrap's stages produced is walked through T65's real review path
- * (`draft -> reviewed -> approved`, never the shortcut `draft -> approved`
- * T65 refuses to allow) with a person as the actor, and only once that is
- * done does the project's bootstrap status become `ready`
- * (`recordHumanValidation`, T73).
+ * bootstrap's stages produced is walked through the review path
+ * (`draft -> reviewed -> approved`, never the shortcut `draft -> approved`)
+ * with a person as the actor, and only once that is done does the project's
+ * bootstrap status become `ready`.
  *
  * SCOPED TO WHAT BOOTSTRAP ACTUALLY PRODUCED
  *
- * TASKS_V1.md's T80 says "review knowledge ที่ discover มาทั้งหมด" — what
- * discovery produced, not every draft item in the project. This walks the
- * bootstrap state's `stages[].knowledge_ids`, not `knowledge/` at large: a
+ * This walks the bootstrap state's `stages[].knowledge_ids`, not `knowledge/` at large: a
  * hand-authored draft unrelated to this bootstrap pass is not this
  * function's business, and silently approving it would be a bigger claim
  * than "a person looked at what discovery found".
@@ -29,7 +26,7 @@ import type { BootstrapState } from "./bootstrapModel.js";
  * ONE WRITE PER TRANSITION, NOT PER ITEM
  *
  * `writeKnowledgeItem` requires a changed item's `version` to be exactly one
- * more than what's on disk (T61 §2.6's conflict rule). An item starting at
+ * more than what's on disk. An item starting at
  * `draft` needs two transitions to reach `approved`, so it is written twice
  * — once after each transition — rather than once with `version + 2`, which
  * `writeKnowledgeItem` would read as skipping a version and reject.
@@ -46,10 +43,10 @@ export interface ValidationSummary {
 }
 
 /**
- * Walks one item through T65's real review path with a person as the actor.
+ * Walks one item through the review path with a person as the actor.
  *
- * Exported because V1.3's adoption needs the identical step: its per-stage
- * checkpoint (T81) is a person looking at what a stage produced, which is what
+ * Exported because adoption needs the identical step: its per-stage
+ * checkpoint is a person looking at what a stage produced, which is what
  * `approved` means. A second implementation of "take this to approved" would be
  * a second opinion about a transition matrix that exists to have exactly one.
  */

@@ -23,6 +23,7 @@ export interface ContextComposition {
   code_intel_chars: number;
   saved_pct: number;
   fallback_to_full_documents: number;
+  fallback_documents: { doc: string; reason: string }[];
   direct_file_reads: number;
 }
 
@@ -134,6 +135,9 @@ export async function buildContextCommand(input: ContextCommandInput): Promise<C
       code_intel_chars: sourceChars(context.codeIntel),
       saved_pct: context.savings.savedPct,
       fallback_to_full_documents: context.selected.filter((doc) => doc.fullDocument).length,
+      fallback_documents: context.selected
+        .filter((doc) => doc.fullDocument)
+        .map((doc) => ({ doc: doc.doc, reason: doc.reason })),
       direct_file_reads: context.directFileReads,
     },
   };
@@ -150,6 +154,7 @@ export function renderContextCommand(result: ContextCommandResult): string {
     `- role=${result.role} module=${result.module} phases=${scope} phase_source=${result.phaseResolution}`,
     `- docs=${c.doc_chars} chars rendered; selected=${c.doc_selected_chars}/${c.doc_chars_before} source chars; slicing_saved=${c.saved_pct}%`,
     `- knowledge=${c.knowledge_chars} chars; code_intel=${c.code_intel_chars} chars; direct_file_reads=${c.direct_file_reads}; fallback_to_full=${c.fallback_to_full_documents}`,
+    ...c.fallback_documents.map((f) => `  - fallback: ${f.doc} — ${f.reason}`),
   ].join("\n");
   return `${body}${report}`;
 }

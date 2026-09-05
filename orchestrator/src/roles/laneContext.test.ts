@@ -123,7 +123,7 @@ describe("laneGet", () => {
     }
   });
 
-  /** The T107 case named in TASKS_V1.md: DEV needs some of BA's business rules. */
+  /** DEV needs some of BA's business rules. */
   it("lets DEV read a business rule BA owns", () => {
     const outcome = laneGet("dev", context(), "RULE-007");
     expect(outcome.status).toBe("ok");

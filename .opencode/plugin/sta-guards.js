@@ -1,8 +1,8 @@
 /*
- * sta-guards.js — the OpenCode half of this framework's tool-call guards
- * (planning/v2 T-OC6). Generated into every workspace by `sta init`/`sync`
- * and auto-loaded by OpenCode from `.opencode/plugin/` — no config wiring
- * needed (verified on the T-OC0 spike, OpenCode 1.18.21).
+ * sta-guards.js — the OpenCode half of this framework's tool-call guards.
+ * Generated into every workspace by `sta init`/`sync` and auto-loaded by
+ * OpenCode from `.opencode/plugin/` — no config wiring needed (verified on
+ * OpenCode 1.18.21).
  *
  * WHAT ENFORCES WHAT ON THIS RUNTIME
  *
@@ -17,8 +17,8 @@
  *   doc-rewrite / secret-leak / exit checks
  *                                → NOT enforced on OpenCode v1. The adapter
  *                                  reports them via RuntimeGuardReport
- *                                  .unenforced so T111 covers them post-hoc;
- *                                  porting them is roadmap, not a silent gap.
+ *                                  .unenforced post-hoc; porting them is
+ *                                  roadmap, not a silent gap.
  *
  * WHY THE DEFAULT POSTURE MATTERS
  *
@@ -34,6 +34,14 @@
  * universal floor holds — an interactive run has no role to check against.
  * `AGENTCLAUDE_WRITABLE_WORK_ROOTS` (JSON array of absolute paths) grants the
  * canonical Target roots in three-repo mode; invalid input grants nothing.
+ *
+ * WHERE THE RULES COME FROM
+ *
+ * Not from here. The universal floor, the workspace artifact lists, the role
+ * reader and the glob matcher are declared once in
+ * orchestrator/src/agents/pathPermissions.ts and rendered into the
+ * `sta:guard-rules` block below (T-V5-020) — the same bytes this plugin and
+ * `.claude/hooks/` both carry. Outside the markers: OpenCode-specific code.
  *
  * FAILURE CONTRACT — identical to every hook in `.claude/hooks/`
  *
@@ -52,56 +60,46 @@ const PATH_TOOLS = new Set(["write", "edit", "multiedit", "patch", "notebookedit
 /** Keys known to carry a destination path across opencode tool versions/shapes. */
 const PATH_ARG_KEYS = ["file_path", "filePath", "notebook_path", "notebookPath", "path"];
 
-/** Paths no agent may write, whatever its contract says. Mirrors UNIVERSAL_DENY in pathPermissions.ts and block-path-permissions.js. */
-const UNIVERSAL_DENY = [".git/**", "node_modules/**", ".workflow/**", "dist/**", "knowledge/_roles/**"];
-
-/** T-UX13/T-WG3: analysis artifacts and registry files whose home is the Knowledge repo, never a Target workspace. Mirrors WORKSPACE_BA_ARTIFACTS in block-path-permissions.js. Engineer-owned docs (review/security/deploy) stay writable here. */
-const WORKSPACE_BA_ARTIFACTS = [
-  "_docs/module/*/requirement.md",
-  "_docs/module/*/design.md",
-  "_docs/module/*/design-archive.md",
-  "_docs/module/*/test-plan.md",
-  "_docs/module/*/plan.md",
-  "_docs/module/*/uxui/**",
-  "_docs/status.md",
-  "knowledge/**",
-  "decisions/**",
-  "targets.yaml",
-  "knowledge-policy.yaml",
-];
-
-/** T-WG3 mirror image: engineer/pipeline payload that belongs to a Target checkout, never a BA workspace. */
-const WORKSPACE_DEV_ARTIFACTS = ["contracts/**", "workflows/**", "stacks/**", "layout.yaml", "test-pyramid.yaml", "escalation-policy.yaml"];
-
-/** Reads `role:` out of .agent-team/config.yaml (written by `software-team-agents init`). Null when absent/unreadable — the rule then stays inactive, like any legacy workspace. */
+// sta:guard-rules-start
+// GENERATED from orchestrator/src/agents/pathPermissions.ts (T-V5-020) — the one authored
+// declaration of this framework's guard rule data. `sta --check-bindings` fails on a hand edit;
+// `node scripts/regenerate-renderings.mjs` rewrites it. No require, no import: CJS and ESM both.
+const UNIVERSAL_DENY = ['.git/**', 'node_modules/**', '.workflow/**', 'dist/**', 'knowledge/_roles/**'];
+const WORKSPACE_BA_ARTIFACTS = ['_docs/module/*/requirement.md', '_docs/module/*/design.md', '_docs/module/*/design-archive.md', '_docs/module/*/test-plan.md', '_docs/module/*/plan.md', '_docs/module/*/uxui/**', '_docs/status.md', 'knowledge/**', 'decisions/**', 'targets.yaml', 'knowledge-policy.yaml'];
+const WORKSPACE_DEV_ARTIFACTS = ['contracts/**', 'workflows/**', 'stacks/**', 'layout.yaml', 'test-pyramid.yaml', 'escalation-policy.yaml'];
 function readWorkspaceRole(nodeFs, nodePath, workspaceRoot) {
   let text;
-  try {
-    text = nodeFs.readFileSync(nodePath.join(workspaceRoot, ".agent-team", "config.yaml"), "utf8");
-  } catch {
-    return null;
-  }
+  try { text = nodeFs.readFileSync(nodePath.join(workspaceRoot, '.agent-team', 'config.yaml'), 'utf8'); } catch { return null; }
   const m = /^\s*role:\s*(ba|dev)\s*$/m.exec(text);
   return m ? m[1] : null;
 }
-
-/** T-WG3 — the why-text for a workspace-role deny, naming the Knowledge root when the launch supplied one. Mirrors block-path-permissions.js. */
 function workspaceDenyWhy(role) {
-  if (role === "dev") {
-    const kb = process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
-    return (
-      "Requirements, designs, plans, test-plans, UX artifacts and registry files live in the Knowledge repository" +
-      (kb ? ` (\`${kb}\`)` : "") +
-      ". Run `software-team-agents ba` from the Knowledge workspace instead; this workspace " +
-      "(`role: dev` in .agent-team/config.yaml) owns app code plus review/security/deploy docs only."
-    );
-  }
-  return (
-    "Contracts, workflows, stacks and pipeline policy are engineer payload for a Target checkout. " +
-    "Run engineering work with `software-team-agents dev` from a Target workspace; this workspace " +
-    "(`role: ba` in .agent-team/config.yaml) owns analysis docs and knowledge items only."
-  );
+  const kb = process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
+  if (role === 'dev') return 'Requirements, designs, plans, test-plans, UX artifacts and registry files live in the Knowledge repository' + (kb ? ' (`' + kb + '`)' : '') + '. Run `software-team-agents ba` from the Knowledge workspace instead; this workspace (`role: dev` in .agent-team/config.yaml) owns app code plus review/security/deploy docs only.';
+  return 'Contracts, workflows, stacks and pipeline policy are engineer payload for a Target checkout. Run engineering work with `software-team-agents dev` from a Target workspace; this workspace (`role: ba` in .agent-team/config.yaml) owns analysis docs and knowledge items only.';
 }
+function stackPathRules() {
+  let parsed;
+  try { parsed = JSON.parse(process.env.AGENTCLAUDE_STACK_PATH_RULES || '{}'); } catch { return { write: [], deny: [] }; }
+  const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);
+  return { write: list(parsed && parsed.write), deny: list(parsed && parsed.deny) };
+}
+function matchesGlob(pattern, target) {
+  const clean = (p) => p.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
+  const pat = clean(pattern);
+  let out = '';
+  for (let i = 0; i < pat.length; i++) {
+    const c = pat[i];
+    if (c === '/' && pat.slice(i) === '/**') { out += '(?:/.*)?'; break; }
+    if (c !== '*') { out += '\\^$+?.()|{}[]'.includes(c) ? '\\' + c : c; continue; }
+    if (pat[i + 1] !== '*') { out += '[^/]*'; continue; }
+    const slashAfter = pat[i + 2] === '/';
+    out += slashAfter ? '(?:.*/)?' : '.*';
+    i += slashAfter ? 2 : 1;
+  }
+  return new RegExp('^' + out + '$').test(clean(target));
+}
+// sta:guard-rules-end
 
 let rootCache = null;
 
@@ -172,8 +170,8 @@ export const StaGuards = async ({ project }) => {
       }
     }
 
-    // T-WG3 (extends T-UX13): workspace-level rule — identity-independent, so
-    // it holds for interactive sessions too. Mirrors block-path-permissions.js.
+    // Workspace-level rule — identity-independent, so it holds for
+    // interactive sessions too. Mirrors block-path-permissions.js.
     const wsRole = readWorkspaceRole(nodeFs, nodePath, root);
     if (wsRole === "dev") {
       for (const pattern of WORKSPACE_BA_ARTIFACTS) {
@@ -274,7 +272,11 @@ function readRules(nodeFs, nodePath, root, role) {
   const write = readList(text, "write");
   const deny = readList(text, "deny");
   if (write === null) return null; // not the shape this reader understands — fail open
-  return { write, deny: deny === null ? [] : deny };
+  // Contract = role boundary, stack profile = layout. The layout half arrives
+  // from the orchestrator on the AGENTCLAUDE_ROLE channel, because no
+  // dependency-free reader here can join .agent-team/config.yaml to stacks/.
+  const stack = stackPathRules();
+  return { write: write.concat(stack.write), deny: (deny === null ? [] : deny).concat(stack.deny) };
 }
 
 function readList(text, key) {
@@ -284,34 +286,6 @@ function readList(text, key) {
     .split(",")
     .map((s) => s.trim().replace(/^["']|["']$/g, ""))
     .filter((s) => s !== "");
-}
-
-/** `*` within a segment, `**` across segments. Mirrors matchesGlob() in block-path-permissions.js / pathPermissions.ts. */
-function matchesGlob(pattern, target) {
-  const clean = (p) => p.replace(/\\/g, "/").replace(/^\.\//, "").replace(/^\/+/, "");
-  let out = "";
-  const pat = clean(pattern);
-  for (let i = 0; i < pat.length; i++) {
-    const c = pat[i];
-    if (c === "/" && pat.slice(i) === "/**") {
-      out += "(?:/.*)?";
-      break;
-    }
-    if (c === "*") {
-      if (pat[i + 1] === "*") {
-        const slashAfter = pat[i + 2] === "/";
-        out += slashAfter ? "(?:.*/)?" : ".*";
-        i += slashAfter ? 2 : 1;
-      } else {
-        out += "[^/]*";
-      }
-    } else if ("\\^$+?.()|{}[]".includes(c)) {
-      out += "\\" + c;
-    } else {
-      out += c;
-    }
-  }
-  return new RegExp("^" + out + "$").test(clean(target));
 }
 
 function denyMessage(rel, role, why) {

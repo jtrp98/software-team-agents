@@ -10,15 +10,15 @@ import { ApprovalType } from "../gates/approval.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
 
 /**
- * Integration tests (T55) — end to end through the real seams `orchestrator.test.ts`'s unit
- * tests deliberately isolate: Agent (a fake executor standing in for `claude -p --agent
- * <role>`) → Workflow (classifyTask's pipeline selection) → State (a real `SqliteTaskStore` on
- * a temp file, not `MemoryTaskStore`) → QA (retry on a failed round) → Approval (both human
- * gates). The thing this suite exists to catch that unit tests can't: a task surviving an
- * actual process crash — the in-memory `Orchestrator` instance discarded and a fresh one
- * rebuilt from `Orchestrator.resume()` reading the same sqlite file back — continuing to
- * completion with the exact same fake executor. `orchestrator.test.ts` never discards its
- * `Orchestrator` mid-run; every test here does, at least once.
+ * Integration tests — end to end through the real seams `orchestrator.test.ts`'s unit tests
+ * deliberately isolate: Agent (a fake executor standing in for `claude -p --agent <role>`) →
+ * Workflow (classifyTask's pipeline selection) → State (a real `SqliteTaskStore` on a temp
+ * file, not `MemoryTaskStore`) → QA (retry on a failed round) → Approval (both human gates).
+ * What this suite catches that unit tests can't: a task surviving an actual process crash —
+ * the in-memory `Orchestrator` instance discarded and a fresh one rebuilt from
+ * `Orchestrator.resume()` reading the same sqlite file back — continuing to completion with
+ * the exact same fake executor. `orchestrator.test.ts` never discards its `Orchestrator`
+ * mid-run; every test here does, at least once.
  */
 
 const okDesign: DesignArtifact = {
@@ -77,7 +77,7 @@ async function runToCompletion(orch: Orchestrator, executor: AgentExecutor, maxS
   throw new Error("runToCompletion exceeded maxSteps");
 }
 
-describe("Full pipeline integration (T55)", () => {
+describe("Full pipeline integration", () => {
   let tmpDb: string;
   const openStores: SqliteTaskStore[] = [];
 

@@ -1,0 +1,75 @@
+# T-V5-027 — the document/plan checkers, run where the documents actually live.
+#
+# This file ships as managed BA-workspace payload (templates/.github/workflows/knowledge-ci.yml,
+# packaging/templateSources.ts, targetcli/roleWorkspace.ts's assetsForRole) and is materialized
+# by `sync` into a Knowledge repository — never into a DEV/Target workspace, which carries no
+# `_docs/**` of its own. Unlike the rest of the managed payload it is committed, not gitignored:
+# GitHub only runs a workflow that is in the repository's own history.
+#
+# It calls the CLI this repository installed globally (`npm i -g ./software-team-agents-<v>.tgz`
+# per the framework's README) — never a checked-out Framework clone, because a Knowledge
+# repository does not have one and is not expected to grow one.
+name: Knowledge document checks
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Degrade cleanly: a repository that has not yet run the global `.tgz` install gets one
+      # clear line instead of a cryptic "sta: command not found" per step below.
+      - name: Confirm the framework CLI is installed
+        id: sta
+        run: |
+          if command -v sta >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::sta is not installed on this runner — install the framework's .tgz globally (see README's Getting Started) to enable these checks. Skipping, not failing."
+          fi
+
+      # Report-only for now (T-V5-027): a repository's existing failures are triaged before this
+      # workflow is switched to blocking, so V5 never merges a red pipeline into someone else's
+      # history. Flip every `continue-on-error` below to `false` once `knowledge-schoolbright`'s
+      # known failures are resolved.
+      - name: Check every module document's structure
+        if: steps.sta.outputs.found == 'true'
+        continue-on-error: true
+        run: sta --check-doc-structure
+
+      # T-V5-033/034 (F-04) — document/section byte ceilings. Unlike the
+      # report-only steps above (T-V5-027, still pending their own triage),
+      # this one is blocking from the day it lands: an over-ceiling document
+      # is caught in CI, on the change that grew it, and fixed by an editorial
+      # split (policies/documentation.md §4 — never automatic). A `ba` session
+      # is never blocked by it — see the non-blocking "Document size" preflight
+      # note this same checker feeds (T-V5-034).
+      - name: Check every module document's byte ceiling
+        if: steps.sta.outputs.found == 'true'
+        run: sta --check-doc-size
+
+      - name: Check plan.md task graphs
+        if: steps.sta.outputs.found == 'true'
+        continue-on-error: true
+        run: sta --check-plan
+
+      - name: Check knowledge/*.yaml
+        if: steps.sta.outputs.found == 'true'
+        continue-on-error: true
+        run: sta --check-knowledge
+
+      - name: Check role workspaces under knowledge/_roles/
+        if: steps.sta.outputs.found == 'true'
+        continue-on-error: true
+        run: sta --check-roles
+
+      - name: Check workspace.yaml, if any
+        if: steps.sta.outputs.found == 'true'
+        continue-on-error: true
+        run: sta --check-workspace

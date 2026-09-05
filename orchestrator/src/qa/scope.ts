@@ -1,14 +1,7 @@
 /**
- * QA01 — Change-Aware QA Scope.
- *
- * Before this module, a qa-engineer round started from the role's whole
- * context policy (requirements + design + plan + test plan + both code
- * trees) regardless of what the implementation round actually touched. For
- * a scoped change that is most of the token cost of the round spent on
- * files no verdict will ever mention.
- *
- * This computes the bounded scope first: what changed, what transitively
- * depends on it, and which knowledge items document exactly those files.
+ * Change-Aware QA Scope: bounds what a QA round verifies to the files that
+ * changed, their transitive dependents, and the knowledge items documenting
+ * exactly those files, instead of the role's whole context policy.
  * Everything outside the scope is not handed to QA by default — QA can
  * still widen (the prompt says how), it just does not start wide.
  *

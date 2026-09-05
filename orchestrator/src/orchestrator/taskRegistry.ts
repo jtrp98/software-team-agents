@@ -47,21 +47,18 @@ export interface TaskListing {
 }
 
 /**
- * Owns the set of tasks and the order they may run in.
- *
- * The `Orchestrator` drives one task through its pipeline; nothing before T01
- * knew that more than one task existed, so "run B after A" was a fact kept in
- * the head of whoever was running the pipeline. This holds it instead.
+ * Owns the set of tasks and the order they may run in — the `Orchestrator`
+ * only drives one task through its pipeline, so "run B after A" has to live
+ * somewhere else.
  *
  * Dependencies are declared at creation and never edited, and a task may only
  * depend on tasks that already exist. Those two rules together make a cycle
  * structurally impossible — a new task can only ever point backwards — so
  * there is no cycle detector here, and no cycle to detect.
  *
- * What this deliberately does *not* do is run two ready tasks at the same
- * time. Parallel execution is T10's DAG work; the value here is that a task
- * whose dependency has not shipped cannot be started at all, which is what
- * ordering by hand kept getting wrong.
+ * This deliberately does not run two ready tasks at the same time; the value
+ * here is only that a task whose dependency has not shipped cannot be
+ * started at all.
  */
 export class TaskRegistry {
   private readonly store: TaskStore;
@@ -146,7 +143,7 @@ export class TaskRegistry {
   }
 
   /**
-   * T31's `pause` verb — a human-imposed freeze, independent of the pipeline's own state.
+   * A human-imposed freeze, independent of the pipeline's own state.
    * `run`/`resume`/`retry` refuse to step a paused task (see cli.ts); `resume`/`retry` clear the
    * flag automatically, since asking to continue a task IS the un-pause action in a CLI with no
    * daemon to leave "paused-but-watchable" in the background.
@@ -168,7 +165,7 @@ export class TaskRegistry {
   }
 
   /**
-   * T31's `cancel` verb — final, unlike pause: a cancelled task is not meant to be picked back up
+   * Final, unlike pause: a cancelled task is not meant to be picked back up
    * (`resume`/`retry` refuse it too, see cli.ts). Distinct from `BLOCKED`: `BLOCKED` means the
    * system detected a problem (retry budget spent, an unresolved gate); `cancelled` means a human
    * deliberately gave up on the task for a reason of their own.
@@ -185,7 +182,6 @@ export class TaskRegistry {
     return tasks.map((task) => ({ task, status: describeStatus(task, tasks) }));
   }
 
-  /** Existing run-log rows for execution/status views; copied by the store. */
   runsForTask(taskId: string): RunRecord[] {
     return this.store.runsForTask(taskId);
   }
@@ -202,7 +198,7 @@ export class TaskRegistry {
   }
 
   /**
-   * The stored tasks as a dependency graph (T11).
+   * The stored tasks as a dependency graph.
    *
    * The registry's own ordering rule — a task may only depend on tasks that
    * already exist — makes a cycle structurally impossible, so this is not how
@@ -226,14 +222,14 @@ export class TaskRegistry {
   }
 
   /**
-   * Unfinished tasks grouped into batches that could run at the same time (T10).
+   * Unfinished tasks grouped into batches that could run at the same time.
    *
    * This answers *what may run concurrently*, which is a planning question and
    * is genuinely useful on its own — it is what `--list` shows, and what tells
    * you whether a dependency chain has serialized work that did not need to be.
    *
    * It does not run anything concurrently. Doing that safely needs file-level
-   * locking so two agents cannot write the same file at once (T35), and starting
+   * locking so two agents cannot write the same file at once, and starting
    * without it would trade a visible ordering problem for an invisible
    * corruption one.
    */

@@ -47,31 +47,46 @@ const GATES = {
       "criterion 2 — execution packet and adapter scopes are subsets of the role contract",
       "criterion 3 — every registered adapter passes role and writable-root guard env unmodified",
       "criterion 4 — no concrete adapter source reads a known credential path",
-      "criterion 5 — paid fallback defaults false and production cannot reach ApiAdapter without opt-in",
-      "criterion 6 — an unregistered-runtime fallback preserves the exact RuntimeGuards object",
+      "criterion 5 — the paid API runtime is never offered; ApiAdapter is unreachable from production construction",
+      // T-V5-040 rewrote criterion 6: `model_routing`'s unregistered-runtime
+      // fallback is removed, so the criterion now pins the stronger pair — the
+      // unregistered target reaches no adapter, and the routed run receives the
+      // caller's exact frozen guards object.
+      "criterion 6 — an unregistered routing target reaches no adapter, and a routed run gets the exact RuntimeGuards object",
     ],
   },
   modes: {
-    title: "execution-mode matrix against mock runners (Single / Auto / Manual)",
+    // T-V5-040 — execution modes are removed: there is one route. This gate is
+    // rewritten to the surviving behaviour rather than deleted. What it pins is
+    // now (a) each of the three route sources resolving, (b) exactly one
+    // candidate ever being resolved, and (c) every way a route can fail doing so
+    // closed, with no handoff to another runner.
+    title: "one-route matrix against mock runners (flag / routing.by_role / default, always fail-closed)",
     files: ["src/runtime/executionModes.test.ts"],
     filter: null,
     required: [
-      // Single — resolves and executes, and stops rather than handing off.
-      "absent config resolves Single on claude-code",
-      "Single unavailable stops with requiresHuman and consumes no handoff",
-      "Single UNAVAILABLE blocks the orchestrator without advancing or consuming a retry",
-      // Manual — resolves only what the user named, and executes only that.
-      "Manual requires both runner and model to be explicitly named",
-      "Manual executes only the runner and model the user named",
-      // Auto — resolves an ordered chain and executes the eligible runtime.
-      "records a multi-hop UNAVAILABLE plus capability skip before executing the eligible runtime",
-      "allow_handoff false produces zero hops",
+      // The three surviving route sources resolve and execute.
+      "absent config resolves the default route on claude-code",
+      "routing.by_role resolves exactly one candidate, at precedence 2",
+      "routing.by_role executes only the runner and model it names",
+      "an explicit --runtime flag outranks routing.by_role",
+      // Every failure mode stops for a person instead of moving the run.
+      "an unavailable route stops with requiresHuman and never reaches another runtime",
+      "an unavailable route blocks the orchestrator without advancing or consuming a retry",
+      "an unregistered routing.by_role runtime fails closed instead of substituting the default",
+      "a UNAVAILABLE result on a Target-write stage stops the task with no second runtime tried",
+      "an inert allow_handoff: true still produces zero hops",
       "never falls back on ERROR",
       "never falls back on TIMEOUT",
+      "all local runners unavailable stops with no further candidate to try",
+      "a budget-inadmissible route fails closed instead of moving to another runtime",
     ],
   },
   "paid-fallback": {
-    title: "paid-fallback unreachability (allow_paid_fallback defaults false)",
+    // T-V5-039 — the paid runtime is retired, not merely opt-in-gated: this
+    // gate now pins that it is *never* reachable, from any config or flag,
+    // rather than pinning that a now-deleted opt-in defaulted to off.
+    title: "paid API runtime unreachability (paid-api is never offered)",
     files: [
       "src/runtime/apiAdapter.test.ts",
       "src/runtime/guardInvariants.test.ts",
@@ -82,11 +97,10 @@ const GATES = {
     required: [
       "keeps V3 execution defaults additive and paid fallback off when the block is absent",
       "defaults paid fallback off when execution exists without that key",
-      "criterion 5 — paid fallback defaults false and production cannot reach ApiAdapter without opt-in",
+      "criterion 5 — the paid API runtime is never offered; ApiAdapter is unreachable from production construction",
       "implements RuntimeAdapter without claiming any guard capability",
       "refuses a Target-write stage before the mocked transport is invoked",
-      "all local runners unavailable stops and names the disabled paid path",
-      "paid budget rejection never widens the resolved candidate set",
+      "an unlisted registered runtime is never auto-appended to the fallback chain",
     ],
   },
 };

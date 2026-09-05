@@ -64,7 +64,7 @@ describe("describeStatus", () => {
     const status = describeStatus(stopped);
     expect(status.kind).toBe("WAITING_FOR_HUMAN");
     // PLAN (test-planner), not IMPLEMENTATION directly — but the gate still fires leaving
-    // DESIGN either way (T20's fix to checkGate/approvalTypeForEdge).
+    // DESIGN either way.
     expect(status.nextState).toBe(TaskState.PLAN);
     expect(status.reason).toContain("DESIGN_APPROVED");
   });
@@ -153,8 +153,8 @@ describe("phaseOf", () => {
 describe("describeStatus — next state", () => {
   it("says what state follows even while an agent is still running", () => {
     const base = task();
-    // cursor 2: pipeline is [system-analyst, test-planner, backend-engineer, qa-engineer] (T20
-    // inserted test-planner at index 1), and IMPLEMENTATION is backend-engineer's state.
+    // cursor 2: pipeline is [system-analyst, test-planner, backend-engineer, qa-engineer], and
+    // IMPLEMENTATION is backend-engineer's state.
     const running = { ...base, machine: { ...base.machine, current: TaskState.IMPLEMENTATION }, pipelineCursor: 2 };
     const status = describeStatus(running);
 

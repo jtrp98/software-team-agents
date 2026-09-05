@@ -133,8 +133,8 @@ export function instructionPathClass(relativePath: string): InstructionPathClass
   return INSTRUCTION_PATH_CLASSES.find((entry) => entry.matches(candidate));
 }
 
-/** Matches the static gate's bounded tree-walk exclusions. */
-export const INSTRUCTION_SCAN_SKIP_DIRS = new Set(["node_modules", ".git", "dist", ".workflow", ".next", "build"]);
+/** Matches the static gate's bounded tree-walk exclusions. .agent-team backups are not instruction surface. */
+export const INSTRUCTION_SCAN_SKIP_DIRS = new Set(["node_modules", ".git", "dist", ".workflow", ".next", "build", ".agent-team"]);
 
 function installedFrameworkHookCount(targetRoot: string): number {
   const hooksDir = path.join(targetRoot, ".claude", "hooks");
@@ -160,17 +160,31 @@ export function missingInstructionConsequence(targetRoot: string, relativePath: 
   return undefined;
 }
 
+export const BOOTSTRAP_BLOCK_OPEN = "<!-- sta:bootstrap -->";
+export const BOOTSTRAP_BLOCK_CLOSE = "<!-- /sta:bootstrap -->";
+
 function containsOneBootstrapBlock(file: string): boolean {
   try {
     const body = fs.readFileSync(file, "utf8");
-    const open = "<!-- sta:bootstrap -->";
-    const close = "<!-- /sta:bootstrap -->";
-    return body.split(open).length - 1 === 1 &&
-      body.split(close).length - 1 === 1 &&
-      body.indexOf(close) > body.indexOf(open);
+    return body.split(BOOTSTRAP_BLOCK_OPEN).length - 1 === 1 &&
+      body.split(BOOTSTRAP_BLOCK_CLOSE).length - 1 === 1 &&
+      body.indexOf(BOOTSTRAP_BLOCK_CLOSE) > body.indexOf(BOOTSTRAP_BLOCK_OPEN);
   } catch {
     return false;
   }
+}
+
+/**
+ * Removes the Framework-managed bootstrap block from an otherwise
+ * project-owned file (e.g. a Target's `CLAUDE.md`). What is left is the
+ * project's own content, if any. The block itself is Framework-authored
+ * bytes and must never be treated as project content by an importer.
+ */
+export function stripFrameworkManagedBlock(text: string): string {
+  const openIndex = text.indexOf(BOOTSTRAP_BLOCK_OPEN);
+  const closeIndex = text.indexOf(BOOTSTRAP_BLOCK_CLOSE);
+  if (openIndex === -1 || closeIndex === -1 || closeIndex < openIndex) return text;
+  return (text.slice(0, openIndex) + text.slice(closeIndex + BOOTSTRAP_BLOCK_CLOSE.length)).trim();
 }
 
 /** Read-only, symlink-avoiding inventory of the complete Target instruction surface. */
@@ -180,6 +194,7 @@ export function detectInstructionSurface(options: {
 }): InstructionSurfaceEntry[] {
   const targetRoot = path.resolve(options.targetRoot);
   const frameworkPaths = new Set([...(options.frameworkPaths ?? [])].map(normalise));
+  const hasManifest = options.frameworkPaths !== undefined;
   const found: InstructionSurfaceEntry[] = [];
 
   const walk = (directory: string, relativeDirectory: string): void => {
@@ -203,12 +218,30 @@ export function detectInstructionSurface(options: {
       const frameworkContributionPresent =
         frameworkPaths.has(relative) ||
         (pathClass.precedence === "project-owned-with-framework-block" && containsOneBootstrapBlock(absolute));
+
+      // Resolve owner from manifest membership with directory prefix as a fallback only.
+      // If the manifest was provided and does not claim this file, it is project-owned (target),
+      // not framework-managed.
+      let owner: RepositoryOwner = pathClass.owner;
+      let precedence: InstructionPrecedence = pathClass.precedence;
+      if (hasManifest && pathClass.owner === "framework") {
+        if (frameworkPaths.has(relative)) {
+          owner = "framework";
+          precedence = "framework-managed";
+        } else {
+          owner = "target";
+          precedence = "project-owned-untouched";
+        }
+      }
+
       found.push({
         path: relative,
-        owner: pathClass.owner,
-        precedence: pathClass.precedence,
+        owner,
+        precedence,
         frameworkContributionPresent,
-        consequence: frameworkContributionPresent ? undefined : missingInstructionConsequence(targetRoot, relative),
+        consequence: frameworkContributionPresent || precedence !== "framework-managed"
+          ? undefined
+          : missingInstructionConsequence(targetRoot, relative),
       });
     }
   };
@@ -231,6 +264,32 @@ export function ownerOfPath(relativePath: string): RepositoryOwner {
     return "target";
   }
   return "framework";
+}
+
+/**
+ * Whether the content at `relativePath` is authored by the Framework rather
+ * than by a project. The adoption importer must refuse these paths
+ * (`policies/**`, `.claude/agents/**`, `contracts/**`, `workflows/**`,
+ * `stacks/**`, `layout.yaml` and siblings) instead of duplicating them into a
+ * project's knowledge graph. Reuses the two classifications this module
+ * already maintains rather than introducing a third list: `ownerOfPath`'s
+ * default bucket (everything not explicitly Knowledge- or Target-owned is
+ * Framework's own repository content) and `instructionPathClass`'s
+ * `framework-managed` instruction surface (e.g. `.claude/agents/**`, which
+ * `ownerOfPath` alone would call "target" because of the shared `.claude`
+ * prefix).
+ */
+export function isFrameworkAuthoredPath(relativePath: string): boolean {
+  let owner: RepositoryOwner;
+  try {
+    owner = ownerOfPath(relativePath);
+  } catch {
+    // Regenerable runtime state (packets/evidence/runs) is never Framework
+    // rulebook content — let the caller's own handling decide what to do.
+    return false;
+  }
+  if (owner === "framework") return true;
+  return instructionPathClass(relativePath)?.owner === "framework";
 }
 
 /** Framework install/upgrade manifests may contain only framework-owned paths.

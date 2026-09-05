@@ -194,6 +194,15 @@ describe("loadKnowledge", () => {
     expect(result.items.map((i) => i.id).sort()).toEqual(["REQ-003", "REQ-004"]);
   });
 
+  it("T-V5-041: a leftover _adoption/ directory is still skipped after the subsystem was removed", () => {
+    writeKnowledgeItem(requirement("REQ-003"), root);
+    writeRaw("_adoption/STATE.yaml", "schema_version: 1\nstatus: adopted\nstages: []\n");
+    writeRaw("_adoption/backup/knowledge/sales-crm/requirement/REQ-003.yaml", "id: [unclosed\n");
+    const result = loadKnowledge(root);
+    expect(result.problems).toEqual([]);
+    expect(result.items.map((i) => i.id)).toEqual(["REQ-003"]);
+  });
+
   it("names the file when the YAML will not parse", () => {
     writeRaw("sales-crm/requirement/REQ-009.yaml", "id: [unclosed\n");
     const result = loadKnowledge(root);

@@ -9,7 +9,7 @@ import { signoffVerdict } from "./roleApproval.js";
 import type { RoleLane } from "./roleLane.js";
 
 /**
- * The point where the V1.5 human lanes meet a real orchestrator run (T114).
+ * The point where the human lanes meet a real orchestrator run.
  *
  * `roleWorkflowState()` deliberately only describes the handoff: it cannot
  * start an agent, and it must never create a human acknowledgement itself.
@@ -24,7 +24,7 @@ export interface RoleExecutionGateResult {
 
 export interface RoleExecutionGateOptions {
   /**
-   * The task's classification level, when the caller knows it (T-UX12). The
+   * The task's classification level, when the caller knows it. The
    * UX-artifact precondition is a *design-phase* requirement: TRIVIAL and SMALL
    * work has no design phase (the classifier does not schedule uxui-designer
    * for it either), so demanding one there would block small fixes on ceremony
@@ -83,9 +83,8 @@ export function checkRoleExecutionGate(
   if (loaded.items.length === 0) {
     // A knowledge/ directory with zero items is what `sta init` seeds into every
     // fresh project. There is no handoff to verify yet, and enforcing the lane
-    // discipline on an empty model would leave the SA lane at `intake` forever —
-    // which blocked every engineer stage on every newly-initialized project until
-    // T117's real run caught it. Presence of the directory is not adoption.
+    // discipline on an empty model would leave the SA lane at `intake` forever.
+    // Presence of the directory is not adoption.
     return { allowed: true };
   }
 

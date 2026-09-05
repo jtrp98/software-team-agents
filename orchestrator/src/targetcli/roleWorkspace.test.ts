@@ -12,6 +12,7 @@ import {
   resolveTargetBinding,
   TargetBindingError,
 } from "./roleWorkspace.js";
+import { loadTargetConfig, removedTargetPath, removedTargetPathProblem } from "./targetMeta.js";
 
 const roots: string[] = [];
 function tmpRoot(prefix: string): string {
@@ -52,12 +53,83 @@ describe("workspace kind detection (T-ROLE-16)", () => {
     expect(detectWorkspaceKind(nestedDotnet)).toBe("target");
   });
 
+  /**
+   * `knowledge-policy.yaml` is not a marker. Detection decides which
+   * repository a session may write to, so all five outcomes are pinned here
+   * rather than left to the composite case above.
+   */
+  describe("detection after the third marker was retired", () => {
+    function writeRole(root: string, role: string): void {
+      fs.mkdirSync(path.join(root, ".agent-team"), { recursive: true });
+      fs.writeFileSync(path.join(root, ".agent-team", "config.yaml"), `schema_version: 1\ntarget_id: x\nrole: ${role}\n`, "utf8");
+    }
+
+    it("1/5 pre-init Knowledge: a fresh clone is recognised from its committed markers alone", () => {
+      // Neither .agent-team/ nor knowledge-policy.yaml — exactly a `git clone`
+      // of a Knowledge repo before anyone has run `init` on this machine.
+      const clone = tmpRoot("pre-init-knowledge");
+      fs.mkdirSync(path.join(clone, "knowledge"));
+      fs.writeFileSync(path.join(clone, "targets.yaml"), "schema_version: 1\ntargets: []\n", "utf8");
+      expect(detectWorkspaceKind(clone)).toBe("knowledge");
+
+      // Either committed marker is sufficient on its own.
+      const onlyTargets = tmpRoot("pre-init-targets-only");
+      fs.writeFileSync(path.join(onlyTargets, "targets.yaml"), "schema_version: 1\ntargets: []\n", "utf8");
+      expect(detectWorkspaceKind(onlyTargets)).toBe("knowledge");
+    });
+
+    it("2/5 post-init Knowledge: the recorded role decides, markers or not", () => {
+      const initialised = tmpRoot("post-init-knowledge");
+      writeRole(initialised, "ba");
+      expect(detectWorkspaceKind(initialised)).toBe("knowledge");
+    });
+
+    it("3/5 Target: app source, and a recorded dev role outranks Knowledge-shaped files", () => {
+      const target = tmpRoot("target");
+      fs.writeFileSync(path.join(target, "package.json"), "{}", "utf8");
+      expect(detectWorkspaceKind(target)).toBe("target");
+
+      // A DEV workspace that also carries a knowledge/ folder is NOT ambiguous:
+      // a person already answered that question at init. Getting this wrong
+      // routes writes to the wrong repository.
+      const devWithKnowledgeDir = tmpRoot("dev-with-knowledge");
+      fs.writeFileSync(path.join(devWithKnowledgeDir, "package.json"), "{}", "utf8");
+      fs.mkdirSync(path.join(devWithKnowledgeDir, "knowledge"));
+      writeRole(devWithKnowledgeDir, "dev");
+      expect(detectWorkspaceKind(devWithKnowledgeDir)).toBe("target");
+    });
+
+    it("4/5 ambiguous: both marker families, nothing recorded — init still demands --role", () => {
+      const both = tmpRoot("ambiguous");
+      fs.mkdirSync(path.join(both, "knowledge"));
+      fs.writeFileSync(path.join(both, "package.json"), "{}", "utf8");
+      expect(detectWorkspaceKind(both)).toBe("ambiguous");
+    });
+
+    it("5/5 unrecognised: an empty directory, and a lone knowledge-policy.yaml is no longer a marker", () => {
+      expect(detectWorkspaceKind(tmpRoot("unrecognised"))).toBe("unrecognized");
+
+      const policyOnly = tmpRoot("policy-only");
+      fs.writeFileSync(path.join(policyOnly, "knowledge-policy.yaml"), "version: 1\n", "utf8");
+      expect(detectWorkspaceKind(policyOnly)).toBe("unrecognized");
+    });
+
+    it("a config this CLI cannot fully parse still yields its role rather than losing detection", () => {
+      const future = tmpRoot("future-schema");
+      fs.mkdirSync(path.join(future, ".agent-team"), { recursive: true });
+      fs.writeFileSync(
+        path.join(future, ".agent-team", "config.yaml"),
+        "schema_version: 99\nrole: ba\nunknown_future_key:\n  nested: true\n",
+        "utf8",
+      );
+      expect(detectWorkspaceKind(future)).toBe("knowledge");
+    });
+  });
+
   it("`_docs/` never makes an app repo ambiguous — this framework puts it there itself", () => {
-    // Regression: `_docs` counted as a Knowledge marker, so a target repo with a
-    // docs folder came back "ambiguous" and `init` demanded an explicit --role.
-    // Since module docs live at `_docs/module/<name>/` INSIDE the target, that
-    // eventually described every DEV workspace — the tool's own output made its
-    // own detection undecidable.
+    // Regression: `_docs` must not count as a Knowledge marker. Module docs
+    // live at `_docs/module/<name>/` INSIDE the target, so counting it would
+    // make every DEV workspace "ambiguous" once its first module doc lands.
     const target = tmpRoot("docs-target");
     fs.writeFileSync(path.join(target, "package.json"), "{}");
     fs.mkdirSync(path.join(target, "_docs", "module", "sales-crm"), { recursive: true });
@@ -89,6 +161,8 @@ describe("role asset profiles (T-ROLE-09/10/11)", () => {
     expect(include(".opencode/plugin/sta-guards.js")).toBe(true);
     expect(include("policies/documentation.md")).toBe(true);
     expect(include("CLAUDE.md")).toBe(true);
+    // The document/plan checkers are CI and are BA-workspace payload only.
+    expect(include(".github/workflows/knowledge-ci.yml")).toBe(true);
 
     expect(include(".claude/agents/backend-engineer.md")).toBe(false);
     expect(include(".claude/agents/frontend-engineer.md")).toBe(false);
@@ -100,12 +174,14 @@ describe("role asset profiles (T-ROLE-09/10/11)", () => {
     expect(include("layout.yaml")).toBe(false);
   });
 
-  it("DEV carries the full roster and pipeline payload", () => {
+  it("DEV carries the full roster and pipeline payload, but not the Knowledge document CI", () => {
     const include = assetsForRole("dev");
     expect(include(".claude/agents/backend-engineer.md")).toBe(true);
     expect(include("contracts/backend.yaml")).toBe(true);
     expect(include("workflows/bugfix.yml")).toBe(true);
     expect(include("test-pyramid.yaml")).toBe(true);
+    // A Target has no `_docs/**` of its own for these checks to run against.
+    expect(include(".github/workflows/knowledge-ci.yml")).toBe(false);
   });
 });
 
@@ -217,66 +293,150 @@ describe("write-policy launch wiring (T-ROLE-12/13)", () => {
   });
 });
 
-describe("target binding (T-LV1)", () => {
-  function targetRepo(): string {
-    const t = tmpRoot("app");
-    fs.writeFileSync(path.join(t, "package.json"), "{}");
-    return t;
+/**
+ * Asserts the contract for the removed `target.path` field: it is ignored,
+ * reported, and never fatal. Validation for the surviving `target_id` path
+ * (missing mapping, not-a-Target-repo, overlap guard) lives in the "target
+ * binding by id" block below.
+ */
+describe("target binding without the removed target.path", () => {
+  function writeConfig(root: string, body: string): void {
+    fs.mkdirSync(path.join(root, ".agent-team"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".agent-team", "config.yaml"), body, "utf8");
   }
 
-  it("returns undefined (silently — no throw) when target.path is not set", () => {
+  it("returns undefined (silently — no throw) when no target binding is set", () => {
     const knowledge = tmpRoot("kb-no-target");
     const binding = resolveTargetBinding({ knowledgeRoot: knowledge });
     expect(binding).toBeUndefined();
   });
 
-  it("resolves a relative config binding against the knowledge root", () => {
-    const knowledge = tmpRoot("kb");
-    const t = targetRepo();
-    const name = path.basename(t);
-    fs.renameSync(t, path.join(path.dirname(knowledge), name));
-    const binding = resolveTargetBinding({
-      knowledgeRoot: knowledge,
-      configTargetPath: path.join("..", name),
-    });
-    expect(binding?.via).toBe("workspace-config");
+  it("a config still carrying target.path loads — it is stripped, never a validation failure", () => {
+    const knowledge = tmpRoot("kb-legacy-path");
+    writeConfig(
+      knowledge,
+      "schema_version: 1\ntarget_id: kb\nregistered_at: 2026-08-24T06:13:07.517Z\noverrides: []\nrole: ba\ntarget:\n  path: C:\\src\\somewhere\\app\n",
+    );
+    const config = loadTargetConfig(knowledge);
+    expect(config?.role).toBe("ba");
+    expect(config?.target?.target_id).toBeUndefined();
+    expect((config?.target as Record<string, unknown> | undefined)?.path).toBeUndefined();
+  });
+
+  it("the removed field is still readable so status can name it, with the fix in the message", () => {
+    const knowledge = tmpRoot("kb-legacy-report");
+    writeConfig(
+      knowledge,
+      "schema_version: 1\ntarget_id: kb\nregistered_at: 2026-08-24T06:13:07.517Z\noverrides: []\nrole: ba\ntarget:\n  path: C:\\src\\somewhere\\app\n",
+    );
+    const legacy = removedTargetPath(knowledge);
+    expect(legacy).toBe("C:\\src\\somewhere\\app");
+    const problem = removedTargetPathProblem(legacy!);
+    expect(problem).toContain("target.path");
+    expect(problem).toContain("target_id");
+    expect(problem).toContain("targets.local.yaml");
+    // ...and it resolves to no binding rather than to the stale path.
+    expect(resolveTargetBinding({ knowledgeRoot: knowledge, configTargetId: loadTargetConfig(knowledge)?.target?.target_id })).toBeUndefined();
+  });
+
+  it("reports nothing for a migrated config and nothing for a workspace with no config at all", () => {
+    const migrated = tmpRoot("kb-migrated");
+    writeConfig(migrated, "schema_version: 1\ntarget_id: kb\nregistered_at: 2026-08-24T06:13:07.517Z\noverrides: []\nrole: ba\ntarget:\n  target_id: app\n");
+    expect(removedTargetPath(migrated)).toBeUndefined();
+    expect(removedTargetPath(tmpRoot("kb-bare"))).toBeUndefined();
+  });
+});
+
+describe("target binding by id (T-V5-017 — one Target-location mechanism)", () => {
+  function standaloneAppRepo(prefix: string): string {
+    const app = tmpRoot(prefix);
+    fs.mkdirSync(path.join(app, ".git"));
+    fs.writeFileSync(path.join(app, "package.json"), "{}");
+    return app;
+  }
+  function knowledgeWithRegistry(appId: string, appPath?: string): string {
+    const knowledge = tmpRoot("kb-id");
+    fs.mkdirSync(path.join(knowledge, ".git"));
+    fs.mkdirSync(path.join(knowledge, "knowledge"));
+    fs.writeFileSync(
+      path.join(knowledge, "targets.yaml"),
+      `schema_version: 1\ntargets:\n  - target_id: ${appId}\n    name: App\n    remote_url: https://github.com/acme/app.git\n    status: active\n`,
+    );
+    if (appPath) {
+      fs.mkdirSync(path.join(knowledge, ".workflow"), { recursive: true });
+      fs.writeFileSync(
+        path.join(knowledge, ".workflow", "targets.local.yaml"),
+        `schema_version: 1\ntargets:\n  ${appId}:\n    path: ${JSON.stringify(appPath)}\n`,
+      );
+    }
+    return knowledge;
+  }
+
+  it("resolves target_id through .workflow/targets.local.yaml with no committed path and no warning", () => {
+    const app = standaloneAppRepo("app");
+    const knowledge = knowledgeWithRegistry("app", app);
+    const binding = resolveTargetBinding({ knowledgeRoot: knowledge, configTargetId: "app" });
+    expect(binding?.via).toBe("local-mapping");
+    expect(binding?.targetId).toBe("app");
+    expect(fs.realpathSync.native(binding!.targetRoot)).toBe(fs.realpathSync.native(app));
+  });
+
+  it("resolves on a second machine with no edit to a committed file — the mapping is machine-local", () => {
+    // "Second machine" = a different checkout location; only .workflow/targets.local.yaml differs.
+    const app = standaloneAppRepo("app2");
+    const secondKnowledge = knowledgeWithRegistry("app", app);
+    const binding = resolveTargetBinding({ knowledgeRoot: secondKnowledge, configTargetId: "app" });
+    expect(binding?.via).toBe("local-mapping");
     expect(fs.existsSync(binding!.targetRoot)).toBe(true);
   });
 
-  it("fails closed (throws) with recovery advice for a missing path", () => {
-    const knowledge = tmpRoot("kb2");
-    expect(() =>
-      resolveTargetBinding({ knowledgeRoot: knowledge, configTargetPath: "../does-not-exist" }),
-    ).toThrow(TargetBindingError);
+  it("an unknown target_id fails with the registry named as the fix", () => {
+    const app = standaloneAppRepo("app3");
+    const knowledge = knowledgeWithRegistry("app", app);
     try {
-      resolveTargetBinding({ knowledgeRoot: knowledge, configTargetPath: "../does-not-exist" });
+      resolveTargetBinding({ knowledgeRoot: knowledge, configTargetId: "other" });
+      expect.unreachable("should have thrown");
     } catch (e) {
-      expect((e as Error).message).toMatch(/clone|config\.yaml/);
+      expect(e).toBeInstanceOf(TargetBindingError);
+      expect((e as Error).message).toContain("unknown Target \"other\"");
+      expect((e as Error).message).toContain("targets.yaml");
     }
   });
 
-  it("rejects a directory that is not a Target repo (no app-source markers)", () => {
-    const knowledge = tmpRoot("kb3");
-    const plain = tmpRoot("plain2");
-    expect(() =>
-      resolveTargetBinding({ knowledgeRoot: knowledge, configTargetPath: plain }),
-    ).toThrow(/not a Target repository/);
+  it("a configured id with no local mapping fails naming .workflow/targets.local.yaml", () => {
+    const knowledge = knowledgeWithRegistry("app");
+    try {
+      resolveTargetBinding({ knowledgeRoot: knowledge, configTargetId: "app" });
+      expect.unreachable("should have thrown");
+    } catch (e) {
+      expect(e).toBeInstanceOf(TargetBindingError);
+      expect((e as Error).message).toContain("targets.local.yaml");
+    }
   });
 
-  it("refuses a binding inside the Knowledge workspace itself (overlap guard)", () => {
-    const knowledge = tmpRoot("kb4");
-    fs.writeFileSync(path.join(knowledge, "package.json"), "{}");
-    expect(() =>
-      resolveTargetBinding({ knowledgeRoot: knowledge, configTargetPath: "." }),
-    ).toThrow(/separate from the Knowledge workspace/);
+  it("a mapping path without application markers is rejected — looksLikeTargetRoot still applies", () => {
+    const plain = tmpRoot("not-an-app");
+    fs.mkdirSync(path.join(plain, ".git"));
+    const knowledge = knowledgeWithRegistry("app", plain);
+    expect(() => resolveTargetBinding({ knowledgeRoot: knowledge, configTargetId: "app" })).toThrow(/not a Target repository/);
+  });
+
+  it("a mapping path overlapping the Knowledge root is rejected by the shared loader", () => {
+    const app = standaloneAppRepo("app4");
+    const knowledge = knowledgeWithRegistry("app", app);
+    // Point the mapping at the Knowledge root itself — the loader's overlap rule must fire.
+    fs.writeFileSync(
+      path.join(knowledge, ".workflow", "targets.local.yaml"),
+      `schema_version: 1\ntargets:\n  app:\n    path: ${JSON.stringify(knowledge)}\n`,
+    );
+    expect(() => resolveTargetBinding({ knowledgeRoot: knowledge, configTargetId: "app" })).toThrow(/overlap/i);
   });
 });
 
 describe("T-WG5 — the confirm-workspace checkpoint ships to both workspace roles' synced payload", () => {
-  // repo root's own templates/ snapshot, rebuilt by `npm run build:templates`
-  // (build:templates is required before this test passes — same as any other
-  // check against generated output; see CLAUDE.md's guardrail against
-  // patching templates/ directly instead of its sources).
+  // repo root's own templates/ snapshot; run `npm run build:templates` first
+  // if it's stale — see CLAUDE.md's guardrail against patching templates/
+  // directly instead of its sources.
   const templatesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "templates");
 
   it("policies/documentation.md's §0 checkpoint is included in both the BA and DEV asset profiles", () => {

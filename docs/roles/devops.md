@@ -1,4 +1,3 @@
 # DevOps rationale
 
-T-V3TOK-030 moved runtime gate and phase mechanics out of static context. The
-role prompt keeps migration safety and deployment disclosure judgment.
+The role owns deployment, CI workflows, and migration automation. The prompt keeps migration safety, environment checks, and deployment disclosure judgment.

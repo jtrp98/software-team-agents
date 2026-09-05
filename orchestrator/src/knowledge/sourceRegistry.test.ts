@@ -177,9 +177,8 @@ describe("cross-check between items and the registry", () => {
     expect(crossCheckRegistry([item], registry).unregisteredLocators).toEqual(["legacy/undocumented.md"]);
   });
 
-  // The third question the module's own note opens with — "one file backs
-  // eleven items; has it changed?" — which nothing answered: the registry's
-  // digest was written on every record and compared by no one.
+  // Closes the gap where a registry digest was recorded but never compared:
+  // "one file backs eleven items; has it changed?" had no answer before this.
   describe("staleSources", () => {
     function registered(root: string, relPath: string, contents: string): SourceRecord {
       fs.mkdirSync(path.dirname(path.join(root, relPath)), { recursive: true });

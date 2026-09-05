@@ -10,15 +10,14 @@ import {
 } from "../escalation/escalationPolicy.js";
 
 /**
- * Decides what actually happens after a failure — the five-way choice T07 asks
- * for, rather than the single "run the agent again" the pipeline had.
+ * Decides what actually happens after a failure — a five-way choice
+ * rather than the single "run the agent again" the pipeline had.
  *
  * Before this, every failed round meant the same thing: send it back to the
  * first implementation stage and hope. That conflates five genuinely different
- * situations, and treating them alike is what produces the loop
- * `qa-engineer.md` describes — an engineer guessing repeatedly at a decision
- * that was never theirs, because the system had no way to express "this is not
- * yours to fix".
+ * situations, and treating them alike is what produces loops — an engineer
+ * guessing repeatedly at a decision that was never theirs, because the system
+ * had no way to express "this is not yours to fix".
  *
  *   RETRY     re-run the stage that owns it; the failure is that stage's to fix
  *   RECOVER   go back further — a contract gap belongs at DESIGN, an undecided
@@ -51,7 +50,7 @@ export type RecoveryAction =
   | { kind: "ABORT"; strategy: "abort"; reason: string };
 
 export interface RecoveryInput {
-  /** The failure as classified (T06). Undefined when the reporting stage gave none. */
+  /** The failure as classified. Undefined when the reporting stage gave none. */
   failure: StructuredFailure | undefined;
   kind: FailureKind;
   /** The run *after* `recordFailure` has counted this failure. */
@@ -60,7 +59,7 @@ export interface RecoveryInput {
   /** The state the task was in when the failure arrived, before any recovery is applied. */
   currentState: TaskState;
   /**
-   * What each severity is allowed to do on its own (T40). Defaults to the
+   * What each severity is allowed to do on its own. Defaults to the
    * runtime policy; passed explicitly only by a test or a caller deliberately
    * running under different rules. Never read from disk here — this function
    * decides what happens when things are already going wrong, and it must not
@@ -104,7 +103,7 @@ export function decideRecovery(input: RecoveryInput): RecoveryAction {
     };
   }
 
-  // 1a. Then what this severity is allowed to do at all (T40). Above the routing
+  // 1a. Then what this severity is allowed to do at all. Above the routing
   //     decision, not inside it: a critical failure is not a routing question —
   //     there is no owner to send it to that makes it safe to keep going. All
   //     three outcomes here ESCALATE rather than ABORT, because the global budget
@@ -158,7 +157,7 @@ export function decideRecovery(input: RecoveryInput): RecoveryAction {
   }
 
   // 3. No structured failure. The reporting stage told us something broke and
-  //    nothing about whose it is, so this keeps the pre-T06 behaviour: back to
+  //    nothing about whose it is, so this keeps the default behaviour: back to
   //    the implementation stage. It is a fallback, not a decision.
   if (!failure) {
     const stage = firstImplementationStage(pipeline);
@@ -188,7 +187,7 @@ export function decideRecovery(input: RecoveryInput): RecoveryAction {
         strategy: "retry_same_stage",
         stage: route.stage,
         attempt: used,
-        // The ceiling this failure actually has (T40), which for a blocking issue
+        // The ceiling this failure actually has, which for a blocking issue
         // is two rather than the global three — reporting MAX_RETRY here would
         // tell a caller it has a round it will not be given.
         max: effectiveMaxRetry(failure.severity, escalation),
@@ -212,7 +211,7 @@ export function isTerminal(action: RecoveryAction): boolean {
   return action.kind === "ESCALATE" || action.kind === "ABORT";
 }
 
-/** The T07 record shape, for the state view and the run log. */
+/** Record shape, for the state view and the run log. */
 export interface RecoveryPlan {
   retry: { max: number; current: number };
   recovery: { strategy: RecoveryStrategy; reason: string };

@@ -1,5 +1,5 @@
 /**
- * T-V1-04 — the one declaration of how well each runtime is actually supported.
+ * The one declaration of how well each runtime is actually supported.
  *
  * README's runtime table used to carry the status in prose (✅ / ⚠️ / 🧪), which
  * meant two sources of truth that could drift: the table could claim a level
@@ -15,11 +15,13 @@
  *   experimental  — spike-proven only; expect guard gaps, expect change
  *   unsupported   — not offered
  *
- * The rule for raising a level is T-V1-05's conformance suite: mandatory cases
+ * The rule for raising a level is the conformance suite: mandatory cases
  * passing deterministically is what upgrades a claim, not enthusiasm. A level
- * here that outruns the evidence is exactly the "claim support เกิน
- * implementation" failure T-V1-04 exists to prevent.
+ * here that outruns the evidence is exactly the "claim support beyond
+ * implementation" failure this module exists to prevent.
  */
+
+import { codexCoverage, opencodeCoverageWithPlugin } from "../targetcli/guardSettings.js";
 
 export type RuntimeSupportLevel = "supported" | "preview" | "experimental" | "unsupported";
 
@@ -31,7 +33,7 @@ export const SUPPORT_LEVELS: readonly RuntimeSupportLevel[] = [
 ];
 
 /** The ids `--runtime` accepts — kept as data so CLI validation and this table cannot name different sets. */
-export const RUNTIME_IDS = ["claude-code", "codex", "opencode", "paid-api"] as const;
+export const RUNTIME_IDS = ["claude-code", "codex", "opencode"] as const;
 export type RuntimeId = (typeof RUNTIME_IDS)[number];
 
 export interface RuntimeSupport {
@@ -49,17 +51,14 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
   codex: {
     level: "preview",
     claim:
-      "interactive sessions via `--runtime codex` work and bindings generate completely; the headless adapter has never been verified against a real install — UAT covers Claude Code only",
+      `interactive sessions via \`--runtime codex\` work and bindings generate completely; the headless adapter has never been verified against a real install — UAT covers Claude Code only. ` +
+      `Guard coverage: ${codexCoverage().detail} — a launch requires --allow-unguarded-runtime (T-V5-008)`,
   },
   opencode: {
     level: "experimental",
     claim:
-      "spike-proven on 1.18.21 (probe, headless run, guards report); exit checks have no in-band enforcement (`GUARD GAP` + QA round cover it) and other versions' tool arg-shapes are unverified",
-  },
-  "paid-api": {
-    level: "experimental",
-    claim:
-      "read-only and document-stage fallback through an injected official API transport; disabled by default, no Target-write guards, and no bundled credential handling",
+      `spike-proven on 1.18.21 (probe, headless run, guards report); exit checks have no in-band enforcement (\`GUARD GAP\` + QA round cover it) and other versions' tool arg-shapes are unverified. ` +
+      `Guard coverage (once synced): ${opencodeCoverageWithPlugin().detail}`,
   },
 };
 

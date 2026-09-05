@@ -52,7 +52,7 @@ describe("the shipped layout.yaml", () => {
     expect(Object.keys(layout.concepts).length).toBeGreaterThan(0);
   });
 
-  /** The five T04 concepts, plus the two support concepts the repo actually has. */
+  /** The five separated concepts, plus the two support concepts the repo actually has. */
   it("declares each of the five separated concepts exactly once", () => {
     const layout = loadLayout();
     for (const concept of ["agent", "skill", "policy", "workflow", "orchestrator"]) {
@@ -80,7 +80,7 @@ describe("the shipped layout.yaml", () => {
     const layout = loadLayout();
     // Claude Code resolves subagents from exactly this path; the orchestrator shells out to it.
     expect(homesOf(layout, "agent").some((h) => h.path === ".claude/agents")).toBe(true);
-    // T02 specified .workflow/ and the store writes there; renaming buys a synonym and breaks state.
+    // The store writes to .workflow/ directly; renaming buys a synonym and breaks state.
     expect(homesOf(layout, "runtime").some((h) => h.path === ".workflow")).toBe(true);
   });
 

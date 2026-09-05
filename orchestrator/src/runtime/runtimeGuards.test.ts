@@ -12,6 +12,19 @@ describe("contractGuards — one declaration of what a role may write (T108)", (
     expect(guards.writeAllow.length).toBeGreaterThan(0);
   });
 
+  /**
+   * The contract carries the role boundary, the stack profile the layout. The
+   * adapter-level guard set has to carry both, or an orchestrated stage is
+   * handed a write scope that excludes the code it was asked to write.
+   */
+  it("carries the resolved stack layout, not just the contract's role-shaped globs", () => {
+    const guards = contractGuards("backend-engineer", REPO_ROOT);
+    expect(guards.writeAllow).toContain("server/**");
+    expect(guards.writeAllow).toContain("prisma/**");
+    expect(guards.writeAllow).toContain("_docs/status.md");
+    expect(guards.writeDeny).toContain("components/**");
+  });
+
   it("layers the universal floor over whatever the contract says, rather than replacing it", () => {
     const guards = contractGuards("backend-engineer", REPO_ROOT);
     for (const denied of UNIVERSAL_DENY) {

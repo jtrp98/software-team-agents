@@ -2,30 +2,17 @@ import { AgentStage } from "../types.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 
 /**
- * T-V1-13A §8.1 — where the four context classes live in this codebase.
- *
- * The classification is not a fourth data structure; each class is a behaviour
- * that already exists somewhere deterministic. This comment is the index so an
- * auditor finds them all in one place:
- *
- *   MANDATORY — assembled for every run of a stage: role identity and task id
- *     (`buildPrompt`'s header lines), this policy's `reads` categories, and
- *     `_docs/status.md` convention pointers.
- *
- *   TASK_SPECIFIC — module documents sliced to the run: `ContextManager`
- *     scopes by module name, `selectDocContext` slices plan.md to the phases
- *     the run touches (policies/documentation.md §10).
- *
- *   ON_DEMAND — never preloaded; handed over as a pointer instead:
- *     `renderSlicedDocs` names every skipped section with its file path so the
- *     agent reads exactly what turns out to matter. Historical decisions and
- *     prior traces are only reachable through explicit tools (`sta audit`,
- *     `sta qa-metrics`), never through the launch prompt.
- *
- *   FORBIDDEN — everything in `doesNotRead` below: `selectContext` refuses to
- *     return it and throws on an explicit request; write-side equivalents are
- *     `UNIVERSAL_DENY` + per-contract denies (pathPermissions.ts). Secrets are
- *     kept out by `.claude/hooks/block-secret-leak.js` exit checks.
+ * Four context classes, each a behaviour that lives elsewhere in this codebase
+ * (not a data structure of its own):
+ *   MANDATORY — always assembled for a stage (buildPrompt header, this policy's
+ *     `reads`, status.md pointers).
+ *   TASK_SPECIFIC — module docs sliced to the run (ContextManager/selectDocContext).
+ *   ON_DEMAND — never preloaded, only pointed to (renderSlicedDocs), so a stage
+ *     reads exactly what turns out to matter instead of everything up front.
+ *   FORBIDDEN — everything in `doesNotRead`: selectContext throws rather than
+ *     silently dropping it; write-side enforcement is UNIVERSAL_DENY + per-contract
+ *     denies in pathPermissions.ts, and secrets are blocked separately by
+ *     .claude/hooks/block-secret-leak.js.
  */
 
 /** Doc categories reuse ArtifactType; code/infra areas are not artifacts, so they're added here. */
@@ -35,10 +22,9 @@ export type ContextCategory =
   | "frontend-code"
   | "devops-docs"
   | "ux-research"
-  /** QA01/QA04: the bounded evidence package the orchestrator assembles for a qa-engineer round. Not an artifact any stage produces — the wrapper injects it per run. */
+  /** Bounded evidence package the orchestrator injects per qa-engineer round; not an artifact any stage produces. */
   | "qa-evidence"
-  /** T-KA5a: compact per-module brief derived from `knowledge/` YAML, assembled by
-   *  `knowledgeBriefAssembly` and injected beside the sliced docs. */
+  /** Compact per-module brief from knowledge/ YAML, assembled by knowledgeBriefAssembly. */
   | "knowledge-brief";
 
 export const ALL_CONTEXT_CATEGORIES: ContextCategory[] = [
@@ -49,8 +35,8 @@ export const ALL_CONTEXT_CATEGORIES: ContextCategory[] = [
   ArtifactType.QA_REPORT,
   ArtifactType.SECURITY_REPORT,
   ArtifactType.HANDOFF,
-  // Compiler-to-runtime only. Including it in the category universe makes
-  // every role's doesNotRead deny explicit; no CONTEXT_POLICY grants it.
+  // Compiler-to-runtime only; no CONTEXT_POLICY grants it, but it stays in the
+  // universe so every role's doesNotRead denies it explicitly.
   ArtifactType.EXECUTION_PACKET,
   "backend-code",
   "frontend-code",
@@ -66,18 +52,12 @@ export interface ContextPolicy {
 }
 
 function policy(reads: ContextCategory[]): ContextPolicy {
-  // A handoff is a bounded pointer set, not authority. Every stage may inspect
-  // it; selectContext still applies this policy to every referenced source.
+  // A handoff is a bounded pointer set, not authority — every stage may inspect it.
   const permitted = [...new Set([...reads, ArtifactType.HANDOFF])];
   return { reads: permitted, doesNotRead: ALL_CONTEXT_CATEGORIES.filter((c) => !permitted.includes(c)) };
 }
 
-/**
- * What each role is allowed to read, per CLAUDE.md's existing per-agent
- * "Reads" column. backend-engineer's entry matches task-detail.md item 8's
- * own example verbatim: reads requirement/design/plan/backend_code, and
- * explicitly not ux_research/frontend_implementation/devops_docs.
- */
+/** What each role is allowed to read, per CLAUDE.md's per-agent "Reads" column. */
 export const CONTEXT_POLICY: Partial<Record<AgentStage, ContextPolicy>> = {
   [AgentStage.SETUP]: policy([ArtifactType.DESIGN]),
   [AgentStage.BUSINESS_ANALYST]: policy([
@@ -88,10 +68,8 @@ export const CONTEXT_POLICY: Partial<Record<AgentStage, ContextPolicy>> = {
   [AgentStage.SYSTEM_ANALYST]: policy([ArtifactType.REQUIREMENTS, ArtifactType.QA_REPORT]),
   [AgentStage.PROJECT_MANAGER]: policy([ArtifactType.DESIGN, ArtifactType.REQUIREMENTS]),
   [AgentStage.TEST_PLANNER]: policy([ArtifactType.REQUIREMENTS, ArtifactType.DESIGN, ArtifactType.PLAN]),
-  // The UX/UI consultant reads what it is designing against: the confirmed
-  // requirements and the confirmed design. It does not read code or reports —
-  // its recommendations must come from what was decided, not from what happens
-  // to be implemented.
+  // UX/UI reads only confirmed requirements/design, not code or reports — its
+  // recommendations must follow what was decided, not what happens to be implemented.
   [AgentStage.UXUI_DESIGNER]: policy([ArtifactType.REQUIREMENTS, ArtifactType.DESIGN]),
   [AgentStage.BACKEND_ENGINEER]: policy([
     ArtifactType.PLAN,
@@ -119,9 +97,8 @@ export const CONTEXT_POLICY: Partial<Record<AgentStage, ContextPolicy>> = {
     ArtifactType.QA_REPORT,
     "backend-code",
     "frontend-code",
-    // The evidence package (QA04) is the one extra thing QA reads first; it is
-    // injected by the optimization wrapper per round, never stored in the
-    // artifact store, so selectContext itself yields nothing for it.
+    // Injected by the optimization wrapper per round, never stored in the artifact
+    // store, so selectContext itself yields nothing for it.
     "qa-evidence",
     "knowledge-brief",
   ]),

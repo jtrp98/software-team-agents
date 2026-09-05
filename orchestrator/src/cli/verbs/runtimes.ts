@@ -1,7 +1,7 @@
 /**
- * T-V1-04 — the support table, from `runtimeSupport.ts` so CLI, README and
- * tests read one record. A person picking a runtime for a machine should not
- * have to trust prose that can drift from what the adapters actually do.
+ * The support table lives in `runtimeSupport.ts` so CLI, README and tests read
+ * one record. A person picking a runtime for a machine should not have to
+ * trust prose that can drift from what the adapters actually do.
  */
 export async function runRuntimesVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = path.resolve(flagValue(rest, "--project-root") ?? defaultProjectRoot);

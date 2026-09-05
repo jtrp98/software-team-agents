@@ -423,7 +423,7 @@ describe("ContextManager against real files", () => {
     expect(cm.read(AgentStage.BACKEND_ENGINEER, "plan", [1])).toBeNull();
   });
 
-  /** The composition T05 asks for: the policy picks the documents, §10 picks how much of each. */
+  /** The policy picks the documents; §10 picks how much of each. */
   it("gives a stage only the documents its context policy allows", () => {
     const root = fixtureProject({ plan: PLAN, design: DESIGN, review: REVIEW, requirement: "# req\n\nสั้น\n" });
     const cm = new ContextManager({ projectRoot: root, moduleName: "sales-crm" });
@@ -460,9 +460,9 @@ describe("ContextManager against real files", () => {
 });
 
 /**
- * T-V3TOK-052 — these are correctness properties, not examples of a preferred
- * compression ratio.  Any future slicer may keep more, but it must never make
- * one of these assertions false in order to save bytes.
+ * These are correctness properties, not examples of a preferred compression
+ * ratio. Any future slicer may keep more, but it must never make one of
+ * these assertions false in order to save bytes.
  */
 describe("T-V3TOK-052 slicing safety invariants", () => {
   function fixtureProject(docs: Partial<Record<DocKind, string>>): string {

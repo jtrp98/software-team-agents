@@ -1,8 +1,14 @@
-import { UNIVERSAL_DENY, pathRulesFor } from "../agents/pathPermissions.js";
+import {
+  UNIVERSAL_DENY,
+  WORKSPACE_BA_ARTIFACTS,
+  WORKSPACE_DEV_ARTIFACTS,
+  pathRulesFor,
+  readWorkspaceRole,
+} from "../agents/pathPermissions.js";
 import { ALL_EXIT_CHECKS, type RuntimeGuards } from "./runtimeAdapter.js";
 
 /**
- * Turning a role's contract into the guard set a run is given (T108).
+ * Turning a role's contract into the guard set a run is given.
  *
  * The globs already exist in `contracts/<role>.yaml` and are already read by
  * `agents/pathPermissions.ts`; this only reshapes them into the runtime-facing
@@ -44,12 +50,19 @@ export function contractGuards(role: string, projectRoot: string): RuntimeGuards
   } catch (e) {
     throw new GuardResolutionError(role, e);
   }
+  const wsRole = readWorkspaceRole(projectRoot);
+  const workspaceDeny =
+    wsRole === "dev"
+      ? WORKSPACE_BA_ARTIFACTS
+      : wsRole === "ba"
+        ? WORKSPACE_DEV_ARTIFACTS
+        : [];
   return {
     writeAllow: rules.write,
-    // The role's own deny list plus the floor. Concatenated rather than
-    // replaced: the floor holds whatever a contract says, which is the whole
-    // reason it is called a floor.
-    writeDeny: [...UNIVERSAL_DENY, ...rules.deny],
+    // The role's own deny list plus the floor and workspace-role deny rules.
+    // Concatenated rather than replaced: the floor holds whatever a contract
+    // says, which is the whole reason it is called a floor.
+    writeDeny: [...UNIVERSAL_DENY, ...workspaceDeny, ...rules.deny],
     forbidCommands: FORBIDDEN_COMMANDS,
     exitChecks: ALL_EXIT_CHECKS,
   };

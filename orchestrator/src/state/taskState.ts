@@ -10,18 +10,14 @@ export const STAGE_TO_STATE: Partial<Record<AgentStage, TaskState>> = {
   [AgentStage.BUSINESS_ANALYST]: TaskState.REQUIREMENT,
   [AgentStage.SYSTEM_ANALYST]: TaskState.DESIGN,
   [AgentStage.PROJECT_MANAGER]: TaskState.PLAN,
-  // Runs after project-manager, still inside PLAN (T20) — a task-list phase gets a test
-  // strategy phase alongside it, not a state of its own. The two are consecutive stages
-  // in the pipeline sharing one TaskState, the same trick backend/frontend already use for
+  // Runs after project-manager, still inside PLAN — a task-list phase gets a test
+  // strategy phase alongside it, not a state of its own. The two are consecutive
+  // stages sharing one TaskState, the same trick backend/frontend use for
   // IMPLEMENTATION.
   [AgentStage.TEST_PLANNER]: TaskState.PLAN,
-  // Runs inside the implementation phase, immediately before frontend-engineer —
-  // the same shared-state trick as backend/frontend below: the consultant's
-  // ordering (before the engineer it advises) is enforced by pipeline order, not
-  // by a state of its own. Mapping it to PLAN instead would put a PLAN-stage
-  // slot after backend's IMPLEMENTATION in the pipeline, and the advance loop
-  // (which walks states forward while the cursor names the stage) would sail
-  // past it to DEPLOYED.
+  // Runs inside the implementation phase, immediately before frontend-engineer.
+  // Mapping it to PLAN instead would put a PLAN-stage slot after backend's
+  // IMPLEMENTATION, and the advance loop would sail past it to DEPLOYED.
   [AgentStage.UXUI_DESIGNER]: TaskState.IMPLEMENTATION,
   [AgentStage.BACKEND_ENGINEER]: TaskState.IMPLEMENTATION,
   [AgentStage.FRONTEND_ENGINEER]: TaskState.IMPLEMENTATION,
@@ -47,8 +43,8 @@ export function computeSequence(
   pipeline: AgentStage[],
   requiresHumanApproval: boolean,
 ): TaskState[] {
-  // Unclassifiable task (item 1: UNKNOWN) — pipeline is [HUMAN]. No forward path
-  // until a human re-triages it into a real classification.
+  // Unclassifiable task — pipeline is [HUMAN]. No forward path until a human
+  // re-triages it into a real classification.
   if (pipeline.length === 1 && pipeline[0] === AgentStage.HUMAN) {
     return [TaskState.CREATED, TaskState.BLOCKED];
   }
@@ -94,9 +90,9 @@ export function initTaskMachine(
  * Valid next states from the machine's current state: the next state in its
  * forward sequence, plus the fixed failure transition if current is QA or
  * SECURITY. BLOCKED is always a structurally valid next state from a _FAILED
- * state — retry-count policy (item 5) is what actually decides whether a
- * given failure loops back to IMPLEMENTATION or gets forced to BLOCKED; this
- * function only says both are legal moves, never chooses between them.
+ * state — retry-count policy is what actually decides whether a given failure
+ * loops back to IMPLEMENTATION or gets forced to BLOCKED; this function only
+ * says both are legal moves, never chooses between them.
  */
 export function nextStates(machine: TaskMachine): TaskState[] {
   const { current, sequence } = machine;
@@ -122,7 +118,7 @@ export function nextStates(machine: TaskMachine): TaskState[] {
       : [TaskState.BLOCKED];
   }
   if (current === TaskState.BLOCKED || current === TaskState.DEPLOYED) {
-    return []; // terminal until a human acts outside the state machine (item 5/17)
+    return []; // terminal until a human acts outside the state machine
   }
 
   if (idx === -1 || idx + 1 >= sequence.length) return [];
@@ -135,9 +131,9 @@ export function canTransition(machine: TaskMachine, to: TaskState): boolean {
 
 /**
  * The next state to move to on a success path — i.e. nextStates() with the
- * QA/SECURITY failure branches filtered out. Used by the orchestrator (item 13)
- * to drive normal forward progress; failure transitions are never decided
- * here, only by retry policy (item 5) explicitly choosing QA_FAILED/SECURITY_FAILED.
+ * QA/SECURITY failure branches filtered out. Used by the orchestrator to drive
+ * normal forward progress; failure transitions are never decided here, only by
+ * retry policy explicitly choosing QA_FAILED/SECURITY_FAILED.
  */
 export function forwardState(machine: TaskMachine): TaskState | null {
   const candidates = nextStates(machine).filter(
@@ -148,9 +144,9 @@ export function forwardState(machine: TaskMachine): TaskState | null {
 
 /**
  * The single mutator for task state. No agent holds a reference to this
- * function directly — only the orchestrator (item 13) will call it — so an
- * agent finishing its work cannot move a task forward itself; it can only
- * report completion and let the orchestrator decide the transition.
+ * function directly — only the orchestrator will call it — so an agent
+ * finishing its work cannot move a task forward itself; it can only report
+ * completion and let the orchestrator decide the transition.
  */
 export function transition(machine: TaskMachine, to: TaskState): TaskMachine {
   if (!canTransition(machine, to)) {
@@ -173,19 +169,14 @@ export class InvalidRecoveryError extends Error {
 }
 
 /**
- * Moves a task *backwards* to a state it already completed — the "Recover"
- * strategy (T07), as distinct from a retry.
+ * Moves a task *backwards* to a state it already completed — "Recover", as
+ * distinct from a retry (which re-runs the stage that failed). Recovering
+ * says the failure was never that stage's to fix: a contract gap belongs to
+ * `system-analyst` at DESIGN, a business rule that was never decided belongs
+ * to `business-analyst` at REQUIREMENT.
  *
- * Retrying re-runs the stage that failed. Recovering says the failure was never
- * that stage's to fix: a contract gap belongs to `system-analyst` at DESIGN, a
- * business rule that was never decided belongs to `business-analyst` at
- * REQUIREMENT. Before this existed the machine had no edge for that, so
- * `routeFailure` had to stop for a person on every such failure — the honest
- * limit it documented and left to T07.
- *
- * This is the second deliberate exception to "transition() is the single
- * mutator", and it is guarded much more tightly than `forceBlock`. The target
- * must satisfy all three:
+ * This is guarded much more tightly than `forceBlock`. The target must
+ * satisfy all three:
  *
  *   - be in this task's own `sequence`, so recovery can never invent a stage
  *     this pipeline does not have;
@@ -193,10 +184,9 @@ export class InvalidRecoveryError extends Error {
  *   - sit strictly earlier in the sequence than the current state, so this can
  *     never be used to skip work forward.
  *
- * Together those make it impossible for recovery to reach a state a normal
- * forward walk could not have reached first. After it lands, the ordinary
- * forward walk re-runs everything from there — which is the point: a design
- * amendment has to flow back through PLAN and IMPLEMENTATION to matter.
+ * After it lands, the ordinary forward walk re-runs everything from there —
+ * which is the point: a design amendment has to flow back through PLAN and
+ * IMPLEMENTATION to matter.
  */
 export function recoverTo(machine: TaskMachine, to: TaskState): TaskMachine {
   const targetIdx = machine.sequence.indexOf(to);
@@ -223,11 +213,11 @@ export function recoverTo(machine: TaskMachine, to: TaskState): TaskMachine {
 }
 
 /**
- * Emergency-stop bypass for cost/token budget overruns (item 12): forces
- * BLOCKED from any state, ignoring the structural graph. This is the one
- * intentional exception to "transition() is the single mutator" — a budget
- * cutoff isn't a pipeline event, it's an outside-the-pipeline safety brake,
- * and only costControl.ts's assertBudget failure path may call it.
+ * Emergency-stop bypass for cost/token budget overruns: forces BLOCKED from
+ * any state, ignoring the structural graph. This is the one intentional
+ * exception to "transition() is the single mutator" — a budget cutoff isn't a
+ * pipeline event, it's an outside-the-pipeline safety brake, and only
+ * costControl.ts's assertBudget failure path may call it.
  */
 export function forceBlock(machine: TaskMachine): TaskMachine {
   return {

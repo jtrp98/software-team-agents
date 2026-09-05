@@ -21,41 +21,23 @@ export function workflowPath(id: string, projectRoot: string = defaultProjectRoo
 
 /**
  * The single authored source for "which agents run, in what order, for one kind
- * of change" (T-V3TOK-110, ADR-007).
- *
- * WHY THIS FILE EXISTS
- *
- * `workflows/*.yml` used to be hand-written next to a hand-written classifier,
- * with `--check-workflows` comparing the two. That is a dual source of truth
- * kept aligned by lint: every classifier edit demanded a matching YAML edit, and
- * the lint could only object *after* someone forgot. The files were never
- * runtime inputs — nothing but two checkers ever read them — so the duplication
- * bought documentation at the price of a sync obligation.
- *
- * Now there is one authored source and one generated artifact:
- *
- *   `taskClassifier.ts`   the behaviour — what actually runs (unchanged)
- *   this file             the prose the classifier does not model
- *   `workflows/*.yml`     GENERATED from both; byte-checked by --check-workflows
+ * of change" (ADR-007).
  *
  * Behaviour is *derived*, never re-declared: {@link deriveSignalWorkflow} probes
  * `classifyTask()` and reads the step list, the conditions, the level and the
- * approval flag straight out of its answers. Editing the classifier and running
- * `node scripts/regenerate-renderings.mjs` is the whole procedure — there is no
- * second place to keep aligned, which is why the drift check could be tightened
- * from a semantic comparison to a byte comparison (the pattern
- * `--check-bindings` already uses for `.codex/`, `.opencode/` and
- * `.agents/skills`).
+ * approval flag straight out of its answers. `taskClassifier.ts` is the
+ * behaviour, this file is the prose the classifier does not model, and
+ * `workflows/*.yml` is generated from both and byte-checked by
+ * `--check-workflows` (the same pattern `--check-bindings` uses for
+ * `.codex/`, `.opencode/` and `.agents/skills`). Editing the classifier and
+ * running `node scripts/regenerate-renderings.mjs` is the whole procedure.
  *
- * THE THREE WORKFLOWS THAT CANNOT BE DERIVED
- *
- * `hotfix`, `refactor` and `security-fix` are distinguished by *intent*, not by
- * anything observable in the change — a refactor and a bug fix look identical
- * from outside, and "this is urgent" is a property of the situation. The
- * classifier has no signal for them and must not grow one, so they are named
- * explicitly by the caller. They are authored here in full (see
- * {@link EXPLICIT_BEHAVIOUR}) rather than derived — but they are still authored
- * exactly *once*, so no sync obligation exists for them either.
+ * `hotfix`, `refactor` and `security-fix` cannot be derived: they are
+ * distinguished by *intent*, not by anything observable in the change — a
+ * refactor and a bug fix look identical from outside, and "this is urgent" is
+ * a property of the situation. The classifier has no signal for them and must
+ * not grow one, so they are named explicitly by the caller and authored in
+ * full (see {@link EXPLICIT_BEHAVIOUR}).
  */
 
 /** Every classification signal that selects a workflow, plus the id it selects. */

@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { RUNTIME_IDS, RUNTIME_SUPPORT, SUPPORT_LEVELS, describeRuntimeSupport } from "./runtimeSupport.js";
+import { RUNTIME_IDS, RUNTIME_SUPPORT, SUPPORT_LEVELS } from "./runtimeSupport.js";
+import { codexCoverage, opencodeCoverageWithPlugin } from "../targetcli/guardSettings.js";
 
 /** This repo is its own fixture — the README table is the prose half of the claim. */
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
@@ -12,7 +13,6 @@ const DISPLAY_NAME: Record<(typeof RUNTIME_IDS)[number], string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
   opencode: "OpenCode",
-  "paid-api": "Paid API",
 };
 
 const LEVEL_WORD = {
@@ -31,7 +31,7 @@ function readmeRow(id: keyof typeof RUNTIME_SUPPORT): string | undefined {
 
 describe("runtimeSupport — the single source of truth for support claims (T-V1-04)", () => {
   it("covers exactly the runtimes `--runtime` accepts, so CLI and claims cannot name different sets", () => {
-    expect(RUNTIME_IDS).toEqual(["claude-code", "codex", "opencode", "paid-api"]);
+    expect(RUNTIME_IDS).toEqual(["claude-code", "codex", "opencode"]);
     expect(Object.keys(RUNTIME_SUPPORT).sort()).toEqual([...RUNTIME_IDS].sort());
   });
 
@@ -43,8 +43,8 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
   });
 
   /**
-   * T-V1-04's "ห้าม claim support เกิน implementation", pinned both ways:
-   * a `supported` claim may not carry a caveat about unverified enforcement,
+   * "Never claim support beyond implementation", pinned both ways: a
+   * `supported` claim may not carry a caveat about unverified enforcement,
    * and the two known placements cannot quietly rise.
    */
   it("never claims a level stronger than its own caveat allows", () => {
@@ -60,13 +60,22 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
     expect(RUNTIME_SUPPORT["claude-code"].level).toBe("supported");
     expect(RUNTIME_SUPPORT.codex.level).toBe("preview");
     expect(RUNTIME_SUPPORT.opencode.level).toBe("experimental");
-    expect(RUNTIME_SUPPORT["paid-api"].level).toBe("experimental");
+  });
+
+  /**
+   * A runtime's claim must quote the same guard-coverage verdict the launch
+   * check consults (`guardCoverage()` in guardSettings.ts), not a hand-copied
+   * restatement that can drift from it.
+   */
+  it("quotes the exact guard-coverage detail T-V5-008 launch preflight consults", () => {
+    expect(RUNTIME_SUPPORT.codex.claim).toContain(codexCoverage().detail);
+    expect(RUNTIME_SUPPORT.opencode.claim).toContain(opencodeCoverageWithPlugin().detail);
   });
 
   /**
    * README's runtime table must state exactly this record's level per runtime —
-   * T-V1-04's "one status everywhere". A row naming its runtime but not its
-   * level (or naming a stronger one) fails here rather than misleading a user.
+   * one status everywhere. A row naming its runtime but not its level (or
+   * naming a stronger one) fails here rather than misleading a user.
    */
   it("agrees with the shipped README's runtime table, word for word", () => {
     const rank = Object.fromEntries(SUPPORT_LEVELS.map((l, i) => [l, i]));

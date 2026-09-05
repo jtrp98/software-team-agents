@@ -22,21 +22,11 @@ import { assertContextComposition, emptyContextBudgetComposition, type ContextBu
 
 /**
  * This module is the deterministic Task Compiler: everything about running a
- * stage that is *this framework's* business rather
- * than any runtime's (T108).
- *
- * Extracted from the legacy Claude executor, where it sat next to the
- * `spawnSync("claude", ...)` call. That co-location is what made the framework
- * look Claude-Code-shaped when almost none of it was: assembling a prompt,
- * slicing module docs to the sections a stage may read, reading `review.md` back
- * into a QA artifact and routing a failed round by the owner the document names
- * are all rules from `policies/` — they would be identical if the process being
- * spawned were `codex`.
- *
- * Moved rather than copied. A second copy would drift from the first the moment
- * one of those policies changed, and the legacy executor tests
- * cases are the guard that the move changed no behaviour: they still exercise
- * this code, through the same executor, and still pass unchanged.
+ * stage that is *this framework's* business rather than any runtime's.
+ * Assembling a prompt, slicing module docs to the sections a stage may read,
+ * reading `review.md` back into a QA artifact, and routing a failed round by
+ * the owner the document names are all rules from `policies/` — they would be
+ * identical whichever runtime process the stage actually spawns.
  *
  * The artifact readback functions here are pure — they take the document text,
  * they do not read it. The caller reads it however its runtime lets it (the
@@ -45,7 +35,7 @@ import { assertContextComposition, emptyContextBudgetComposition, type ContextBu
  * for both stays in one place.
  */
 
-/** Everything T26/T28/T57 want logged, threaded as one bundle instead of a growing positional-argument list. */
+/** Run metrics, threaded as one bundle instead of a growing positional-argument list. */
 export interface RunMetrics {
   model?: string;
   promptVersion?: number;
@@ -86,17 +76,17 @@ export interface RunMetrics {
 }
 
 /**
- * T44 — what `req.deployPhase` means for the one stage that gets it (devops). The orchestrator
+ * What `req.deployPhase` means for the one stage that gets it (devops). The orchestrator
  * has already enforced the structural half (execute is unreachable without the DEPLOY approval
  * gate having passed — see `isAgentAssignedAt` in taskStatus.ts); this only tells the agent which
  * of the two runs it's in, since devops.md's own rules read differently depending on which.
  */
 export const DEPLOY_PHASE_INSTRUCTION: Record<"prepare" | "execute", string> = {
   prepare:
-    "Deploy phase: PREPARE. Do only what's safe to run unattended — Dockerfile/CI workflow/config, a migration dry-run, and — if this deploy includes a migration against a shared or production database — take and record a real, restorable backup before this run ends (T46: no backup, no migration). " +
+    "Deploy phase: PREPARE. Do only what's safe to run unattended — Dockerfile/CI workflow/config, a migration dry-run, and — if this deploy includes a migration against a shared or production database — take and record a real, restorable backup before this run ends (no backup, no migration). " +
     "Do NOT run the actual deploy or migration command in this run; that happens in a separate EXECUTE run, after the orchestrator's own human approval gate.",
   execute:
-    "Deploy phase: EXECUTE. The orchestrator's structural approval gate for this deploy has already been granted — this run is what actually issues the deploy/migration command, then verifies the result (service health, and — for a migration — the schema/data actually match what was intended, T46). " +
+    "Deploy phase: EXECUTE. The orchestrator's structural approval gate for this deploy has already been granted — this run is what actually issues the deploy/migration command, then verifies the result (service health, and — for a migration — the schema/data actually match what was intended). " +
     "Still follow your own agent instructions for what to confirm and verify; the gate having passed doesn't relax those. Report failure plainly if verification doesn't pass — do not soften it into a success.",
 };
 
@@ -129,7 +119,13 @@ export function renderSlicedDocs(selected: SelectedContext[], cm: ContextManager
   }
   for (const s of selected) {
     parts.push("", `### ${s.doc}.md`);
-    if (!s.fullDocument && s.skipped.length > 0) {
+    if (s.fullDocument) {
+      // A fallback to the whole document is a fact about this run's context,
+      // not just a number in `sta context`'s composition report; naming it
+      // here makes it attributable in the one place an agent (and a run log
+      // reading the same text) sees it.
+      parts.push(`_Sent in full — ${s.reason}._`, "");
+    } else if (s.skipped.length > 0) {
       parts.push(
         `_Known-irrelevant sections not included: ${s.skipped.join(", ")}. ` +
           `The full file is at \`${cm.path(s.doc)}\` — read it if one of those turns out to matter._`,
@@ -161,7 +157,7 @@ export interface SliceOptions {
 /**
  * The doc slice for one stage, or an empty slice if anything at all goes wrong.
  *
- * Additive by design (T05): a failure resolving or reading the docs leaves the
+ * Additive by design: a failure resolving or reading the docs leaves the
  * prompt exactly as it would have been without slicing, and the agent reads them
  * itself — slower, never wrong. Slicing is an optimization; completeness is the
  * correctness requirement.
@@ -332,12 +328,12 @@ function budgetClassFor(kind: PromptPartKind): keyof ContextBudgetComposition {
  * so. `static_chars` is framework text generated here (header/footer/deploy
  * note/extra instruction); it deliberately excludes CLAUDE.md, role prompts,
  * and policies that an interactive runtime loads itself. Those are measured by
- * T-V3TOK-002's workspace session recorder instead.
+ * the workspace session recorder instead.
  */
 export function buildPromptParts(req: AgentExecutorRequest, extra?: string, sources: PromptSources = {}): PromptPartsResult {
   const parts: PromptPart[] = [
-    // Vendor-neutral on purpose (OFF07): this prompt reaches every runtime, and
-    // a provider-named document pointer would leak one vendor's naming into all
+    // Vendor-neutral on purpose: this prompt reaches every runtime, and a
+    // provider-named document pointer would leak one vendor's naming into all
     // the others' context.
     { kind: "static_chars", text: `Task ${req.taskId} — you are running as the \`${req.stage}\` stage of this repo's pipeline (see the repo's own agent documentation).` },
     { kind: "static_chars", text: "" },
@@ -391,7 +387,7 @@ function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
-/** The only prompt additions made by V3 Phase 2. */
+/** Renders the ExecutionPacket sections appended to the prompt. */
 export function renderExecutionPacketSections(fields: Pick<ExecutionPacket, "acceptance_criteria" | "required_verification" | "stop_conditions">): string[] {
   const section = (title: string, values: readonly string[], empty: string): string =>
     [`## ${title}`, ...(values.length > 0 ? values.map((value) => `- ${value}`) : [`- ${empty}`])].join("\n");
@@ -475,7 +471,7 @@ export function failResult(reason: string, metrics: Partial<RunMetrics> = {}): A
  *
  * Fails closed on a missing document even when the runtime reported success: a
  * round nobody can read is not a round that passed. The owner attached on a
- * failure is the one qa-engineer itself named in `## Open Issues` (T06), so a
+ * failure is the one qa-engineer itself named in `## Open Issues`, so a
  * schema gap is not routed to an engineer as though it were a bug; when the
  * document names no owner the classifier escalates rather than guessing.
  */

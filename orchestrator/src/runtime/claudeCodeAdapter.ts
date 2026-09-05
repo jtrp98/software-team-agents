@@ -1,6 +1,4 @@
 import { spawnSync as nodeSpawnSync, type SpawnSyncReturns } from "node:child_process";
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { LocalWorkspace } from "./localWorkspace.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import type {
@@ -18,25 +16,24 @@ import type {
 } from "./runtimeAdapter.js";
 
 /**
- * The spawn primitive now lives on the port (`runtimeAdapter.ts`) so no adapter
- * depends on a sibling adapter's module. Re-exported here for the tests and
- * call sites that historically imported it from this file.
+ * The spawn primitive lives on the port (`runtimeAdapter.ts`) so no adapter
+ * depends on a sibling adapter's module. Re-exported here for tests and call
+ * sites that import it from this file.
  */
 export type { SpawnSync } from "./runtimeAdapter.js";
 
 /**
- * The `RuntimeAdapter` for Claude Code (T109) — the Claude-Code-specific half
- * that the legacy executor used to hold before T108 split it. This is
- * that file's `spawnSync("claude", ...)` call, its JSON envelope, and its
- * `AGENTCLAUDE_ROLE` environment variable, now behind the seam `runtimeAdapter.ts`
- * defines instead of welded to `agents/registry.ts` and `orchestrator.ts` directly.
+ * The `RuntimeAdapter` for Claude Code: the `spawnSync("claude", ...)` call,
+ * its JSON envelope, and its `AGENTCLAUDE_ROLE` environment variable, behind
+ * the seam `runtimeAdapter.ts` defines instead of welded to
+ * `agents/registry.ts` and `orchestrator.ts` directly.
  *
  * Everything that is this framework's business rather than Claude Code's —
  * assembling the prompt, slicing module docs, reading `review.md`/`security.md`
- * back, mapping metrics — already moved to `runtime/agentRunAssembly.ts` in T108
- * and is driven by `runtime/runtimeExecutor.ts`, not by this file. This adapter
- * only has to answer: how does one run of one role actually happen on this
- * machine, and what did it cost.
+ * back, mapping metrics — lives in `runtime/agentRunAssembly.ts` and is driven
+ * by `runtime/runtimeExecutor.ts`, not by this file. This adapter only has to
+ * answer: how does one run of one role actually happen on this machine, and
+ * what did it cost.
  */
 
 /**
@@ -139,7 +136,7 @@ interface ClaudeCliJsonResult {
   result?: string;
   total_cost_usd?: number;
   usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
-  /** OFF10 M6 — present only when the run passed `--json-schema`. */
+  /** Present only when the run passed `--json-schema`. */
   structured_output?: unknown;
 }
 
@@ -306,8 +303,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     // req.model is turned into `--model` ONLY when the caller marks it an
     // operator-visible override (`req.modelExplicit`) — the `--model` CLI flag or
     // `.sta/config.yaml` routing. Absent that, the subagent's own
-    // `.claude/agents/<role>.md` frontmatter governs and nothing is passed, so
-    // the argument list stays byte-identical to every run before T-V4-CAST-001:
+    // `.claude/agents/<role>.md` frontmatter governs and nothing is passed:
     // passing both risks the frontmatter and the flag disagreeing, and the drop
     // exists to prevent exactly that unless a person asked for it.
     const modelDiagnostics: string[] = [];
@@ -332,7 +328,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     if (req.modelExplicit && req.effort) {
       // Claude Code's `claude -p` exposes no reasoning-effort control, so an
       // explicitly requested effort cannot be applied here — recorded, never
-      // dropped in silence (T-V4-CAST-001).
+      // dropped in silence.
       modelDiagnostics.push(
         `requested reasoning effort "${req.effort}" was not applied: Claude Code's \`claude -p\` has no effort flag ` +
           `(subagent frontmatter's \`effort:\` is honoured only when generating a Codex/OpenCode binding)`,
@@ -349,7 +345,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     ];
     // Override-only: with no explicit request this pushes nothing (see above).
     if (overrideModel) args.push("--model", overrideModel);
-    // M4: contract denies as hard permission rules, not just hook backstops.
+    // Contract denies as hard permission rules, not just hook backstops.
     // Empty guards ⇒ no flag, keeping the no-guard request shape unchanged.
     //
     // The rules ride the `--disallowedTools=<rules>` EQUALS form on purpose.
@@ -359,7 +355,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     // while `claude -p` accepts its default text input from stdin.
     const disallowRules = disallowRulesFromGuards(req.guards);
     if (disallowRules.length > 0) args.push(`--disallowedTools=${disallowRules.join(",")}`);
-    // M6: only when a schema was requested — default runs stay free-form.
+    // Only when a schema was requested — default runs stay free-form.
     if (this.outputSchema) args.push("--json-schema", JSON.stringify(this.outputSchema));
 
     let proc: SpawnSyncReturns<string>;
@@ -371,7 +367,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         timeout: req.timeoutMs ?? this.defaultTimeoutMs,
         maxBuffer: 64 * 1024 * 1024,
         input: req.prompt,
-        // T15: the one way a PreToolUse hook can know which agent is writing.
+        // The one way a PreToolUse hook can know which agent is writing.
         env: { ...process.env, ...req.env, AGENTCLAUDE_ROLE: req.role },
       }));
     } catch (e) {

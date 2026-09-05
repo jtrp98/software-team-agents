@@ -1,13 +1,17 @@
 import { spawn as nodeSpawn, spawnSync as nodeSpawnSync } from "node:child_process";
+import * as fs from "node:fs";
 import * as path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { readTemplateManifest } from "../packaging/templateManifest.js";
 import { resolveRoots } from "./roots.js";
 import {
   TargetNotInitializedError,
   loadTargetConfig,
   readTargetManifest,
+  removedTargetPath,
+  removedTargetPathProblem,
 } from "./targetMeta.js";
-import { blockingConflicts, devDerivedContent, planSync, projectOwnedPaths, runTargetSync } from "./syncEngine.js";
+import { blockingConflicts, devDerivedContent, pendingSyncEntries, planSync, projectOwnedPaths, runTargetSync } from "./syncEngine.js";
 import { sameMajor } from "./version.js";
 import {
   assetsForRole,
@@ -15,6 +19,7 @@ import {
   launchEnv,
   resolveKnowledgeBinding,
   resolveTargetBinding,
+  hasKnowledgeMarkers,
   TargetBindingError,
   WORKSPACE_ROLE_LABEL,
   ROLE_WORKSPACE_KIND,
@@ -23,28 +28,31 @@ import {
   type WorkspaceRole,
   type TargetBinding,
 } from "./roleWorkspace.js";
+import { configureKnowledgeRoot } from "../threeRepo/installation.js";
 import { formatResolvedCommand, resolveBundledStaCli } from "../runtime/npmCliResolver.js";
-import { runTargetInit } from "./initCommand.js";
+import { environmentPrerequisites, runTargetInit } from "./initCommand.js";
 import { isTargetInitialized } from "./targetMeta.js";
 import { measureWorkspaceStatic, recordInteractiveSession } from "../observability/sessionRecord.js";
-import { CLAUDE_SETTINGS_PATH, inspectGuardWiring } from "./guardSettings.js";
+import { CLAUDE_SETTINGS_PATH, guardCoverage, type GuardCoverage } from "./guardSettings.js";
+import { checkDocSize } from "../docs/docStructure.js";
+import { resolveModule } from "../agents/moduleDocs.js";
 
 /**
- * T-ROLE-03 / T-ROLE-04 / T-ROLE-19 — role-aware execution: preflight, then
- * hand over to the real agent runtime FROM the Role Workspace.
+ * Role-aware execution: preflight, then hand over to the real agent runtime
+ * FROM the Role Workspace.
  *
  *   ba  → cwd = knowledgeRoot. Framework ✓, Knowledge ✓ writable, tooling
  *         synced, Target never required.
  *   dev → cwd = targetRoot. Everything above plus a REQUIRED, validated
  *         Knowledge binding — a DEV session without project knowledge fails
- *         closed with recovery instructions (T-ROLE-08).
+ *         closed with recovery instructions.
  *
  * Both flows auto-initialize an unambiguous workspace on first run (init is
  * idempotent and never touches non-managed content), stop on sync conflicts
  * rather than forcing, and enforce write policy through the launch itself:
  * the session gets exactly its own workspace as cwd and an explicitly empty
  * AGENTCLAUDE_WRITABLE_WORK_ROOTS, so cross-repository writes hit the
- * block-outside-repo guard (T-ROLE-12/13).
+ * block-outside-repo guard.
  */
 
 export type RuntimeName = "claude" | "codex" | "opencode";
@@ -61,9 +69,19 @@ export interface RoleRunOptions {
   runtime?: RuntimeName;
   /** Sync managed files automatically when the plan is conflict-free (default true). */
   autoSync?: boolean;
+  /**
+   * Deliberately accept a session on a runtime that enforces no guard. Never
+   * a default and never implicit: without it, an unguarded runtime fails
+   * preflight. It cannot excuse a *broken* guard mechanism.
+   */
+  allowUnguardedRuntime?: boolean;
   now?: string;
   /** Overrides where the machine-wide installation binding is read from (tests; unusual setups). */
   installationConfigPath?: string;
+  /** An explicit candidate is offered, never silently recorded. */
+  knowledgeRoot?: string;
+  /** Test/UI seam for the one interactive confirmation. */
+  confirmKnowledgeBinding?: (candidate: string) => Promise<boolean>;
   /** Test seams. */
   probe?: (cmd: string) => { available: boolean; detail?: string };
   launch?: (cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<number>;
@@ -78,6 +96,47 @@ export class PreflightError extends Error {
   ) {
     super(`${failed.name}: ${failed.detail ?? "failed"}`);
   }
+}
+
+function siblingKnowledgeRoot(targetRoot: string): string | undefined {
+  const parent = path.dirname(targetRoot);
+  try {
+    return fs.readdirSync(parent, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(parent, entry.name))
+      .find((candidate) => candidate !== targetRoot && hasKnowledgeMarkers(candidate));
+  } catch {
+    return undefined;
+  }
+}
+
+async function confirmKnowledgeBinding(candidate: string, options: RoleRunOptions): Promise<boolean> {
+  if (options.confirmKnowledgeBinding) return options.confirmKnowledgeBinding(candidate);
+  // Headless executions preserve the existing fail-closed behaviour: no prompt
+  // and, critically, no write to installation-local state.
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
+  const readline = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return /^(y|yes)$/i.test((await readline.question(`[software-team-agents] Use sibling Knowledge repository "${candidate}" on this machine? [y/N] `)).trim());
+  } finally {
+    readline.close();
+  }
+}
+
+async function offerKnowledgeBinding(options: RoleRunOptions): Promise<boolean> {
+  const roots = resolveRoots({ targetRoot: options.targetRoot });
+  const config = loadTargetConfig(roots.targetRoot);
+  if (config?.knowledge?.path) return false; // workspace binding always wins
+  try {
+    if (resolveKnowledgeBinding({ targetRoot: roots.targetRoot, installationConfigPath: options.installationConfigPath })) return false;
+  } catch {
+    return false; // invalid existing state must be repaired explicitly, never replaced
+  }
+  const candidate = options.knowledgeRoot ?? siblingKnowledgeRoot(roots.targetRoot);
+  if (!candidate || !hasKnowledgeMarkers(candidate)) return false;
+  if (!(await confirmKnowledgeBinding(candidate, options))) return false;
+  configureKnowledgeRoot(candidate, options.installationConfigPath, roots.frameworkRoot);
+  return true;
 }
 
 function defaultProbe(cmd: string): { available: boolean; detail?: string } {
@@ -107,9 +166,11 @@ export interface WorkspaceContext {
   templatesDir: string;
   /** Resolved for DEV (required); also reported for BA when a machine-wide binding exists (informational only). */
   knowledge?: KnowledgeBinding;
-  /** T-LV1 — resolved for BA when `target.path` is set and valid; always optional, never blocks a BA session. */
+  /** Resolved for BA when `target.target_id` is set and resolves; always optional, never blocks a BA session. */
   target?: TargetBinding;
   runtime: RuntimeName;
+  /** The guard verdict this launch was allowed under, for the launch record. */
+  guards: GuardCoverage;
 }
 
 /**
@@ -186,25 +247,66 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
   }
   checks.push({ name: "Framework compatibility", ok: true, detail: installedVersion });
 
-  // Claude hook files being present is not evidence that Claude will execute
-  // them. Check effective settings before any auto-sync so an already-installed
+  // Guard files being present is not evidence that the runtime will execute
+  // them. Check effective coverage before any auto-sync so an already-installed
   // but unregistered guard fails closed with this exact diagnosis.
-  if ((options.runtime ?? "claude") === "claude") {
-    const currentManifest = readTargetManifest(roots.targetRoot);
-    const currentConfig = loadTargetConfig(roots.targetRoot);
-    const wiring = inspectGuardWiring({ targetRoot: roots.targetRoot, templatesDir, manifest: currentManifest, config: currentConfig });
-    if (wiring.overridden) {
-      checks.push({ name: "Guards wired", ok: true, detail: `${CLAUDE_SETTINGS_PATH} is in overrides — explicit user choice; Framework guards are not required` });
-    } else if (wiring.hooksInstalled === 0) {
-      checks.push({ name: "Guards wired", ok: true, detail: "0/0 Framework guard registrations shipped for this profile" });
-    } else if (wiring.settingsError) {
-      fail("Guards wired", `${wiring.settingsError} — run software-team-agents sync; if deliberate, claim .claude/settings.json in overrides`);
-    } else if (wiring.missingRegistrations.length > 0) {
-      const missing = wiring.missingRegistrations.map((registration) => `${registration.event}:${registration.hookPath}`).join(", ");
-      fail("Guards wired", `${wiring.hooksRegistered}/${wiring.hooksInstalled} Framework guard registration(s) active; missing ${missing} — run software-team-agents sync`);
-    } else {
-      checks.push({ name: "Guards wired", ok: true, detail: `${wiring.hooksRegistered}/${wiring.hooksInstalled} Framework guard registration(s) active` });
+  //
+  // This consults the verdict for whichever runtime is launching, not only
+  // Claude. A runtime with no mechanism at all (`unguarded`) stops the launch
+  // unless the user acknowledges it explicitly; a *broken* mechanism is never
+  // acknowledgeable, because it is a repairable fault rather than a deliberate
+  // choice, and letting a flag past it would weaken a guard that is enforced
+  // today.
+  const launchRuntime = options.runtime ?? "claude";
+  const coverage = guardCoverage({
+    runtime: launchRuntime,
+    targetRoot: roots.targetRoot,
+    templatesDir,
+    manifest: readTargetManifest(roots.targetRoot),
+    config: loadTargetConfig(roots.targetRoot),
+  });
+  const wiring = coverage.wiring;
+  if (coverage.level === "broken") {
+    if (wiring?.settingsError) {
+      fail("Guards wired", `${wiring.settingsError} — run software-team-agents sync; if deliberate, claim ${CLAUDE_SETTINGS_PATH} in overrides`);
     }
+    const missing = (wiring?.missingRegistrations ?? []).map((registration) => `${registration.event}:${registration.hookPath}`).join(", ");
+    fail(
+      "Guards wired",
+      wiring
+        ? `${wiring.hooksRegistered}/${wiring.hooksInstalled} Framework guard registration(s) active; missing ${missing} — run software-team-agents sync`
+        : `${launchRuntime}: ${coverage.detail} — run software-team-agents sync`,
+    );
+  }
+  if (coverage.level === "unguarded") {
+    if (!options.allowUnguardedRuntime) {
+      fail(
+        "Guards wired",
+        `${launchRuntime} enforces no guard in this workspace — ${coverage.detail}. ` +
+          "Re-run with --allow-unguarded-runtime to accept an unguarded session deliberately, or launch with --runtime claude.",
+      );
+    }
+    checks.push({
+      name: "Guards wired",
+      ok: true,
+      detail: `${launchRuntime}: UNGUARDED, acknowledged via --allow-unguarded-runtime — ${coverage.detail}`,
+    });
+  } else if (coverage.level === "not-required") {
+    checks.push({
+      name: "Guards wired",
+      ok: true,
+      detail: wiring?.overridden
+        ? `${CLAUDE_SETTINGS_PATH} is in overrides — explicit user choice; Framework guards are not required`
+        : "0/0 Framework guard registrations shipped for this profile",
+    });
+  } else {
+    checks.push({
+      name: "Guards wired",
+      ok: true,
+      detail: wiring
+        ? `${wiring.hooksRegistered}/${wiring.hooksInstalled} Framework guard registration(s) active`
+        : `${launchRuntime}: ${coverage.detail}`,
+    });
   }
 
   // Managed-file integrity under this role's asset profile: auto-sync only
@@ -212,8 +314,8 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
   // the user's back).
   try {
     const manifest = readTargetManifest(roots.targetRoot);
-    // T-WG7 — plan against rendered bytes so a dev workspace's CLAUDE.md is
-    // judged by what sync actually writes there, not by the shipped template.
+    // Plan against rendered bytes so a dev workspace's CLAUDE.md is judged by
+    // what sync actually writes there, not by the shipped template.
     const derived = devDerivedContent({
       targetRoot: roots.targetRoot,
       templatesDir,
@@ -239,13 +341,18 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
     }
     const owned = projectOwnedPaths(plan);
     const ownedNote = owned.length > 0 ? `; ${owned.length} project-owned path(s) left alone: ${owned.join(", ")}` : "";
-    const needsSync = plan.entries.some((e) => ["add", "update", "restore", "remove-stale"].includes(e.action));
-    if (needsSync) {
+    const pending = pendingSyncEntries(plan);
+    if (pending.length > 0) {
+      const named = pending.slice(0, 10).map((entry) => `${entry.action}: ${entry.path}`).join(", ");
+      const remainder = pending.length > 10 ? `, ... ${pending.length - 10} more` : "";
       if (options.autoSync === false) {
-        fail("Managed files", "managed assets are outdated — run software-team-agents sync, or drop --no-auto-sync");
+        fail("Managed files", `managed assets are outdated (${named}${remainder}) — run software-team-agents sync, or drop --no-auto-sync`);
       }
-      runTargetSync({ targetRoot: roots.targetRoot, templatesDir, manifest, config, include: assetsForRole(role), role, installationConfigPath: options.installationConfigPath, now: options.now ?? new Date().toISOString() });
-      checks.push({ name: "Managed files", ok: true, detail: `auto-synced to Framework ${plan.frameworkVersion}${ownedNote}` });
+      const result = runTargetSync({ targetRoot: roots.targetRoot, templatesDir, manifest, config, include: assetsForRole(role), role, installationConfigPath: options.installationConfigPath, now: options.now ?? new Date().toISOString() });
+      const changed = result.performed.filter((entry) => entry.action !== "unchanged" && entry.action !== "override");
+      const changedNames = changed.slice(0, 10).map((entry) => `${entry.action}: ${entry.path}`).join(", ");
+      const changedRemainder = changed.length > 10 ? `, ... ${changed.length - 10} more` : "";
+      checks.push({ name: "Managed files", ok: true, detail: `auto-synced to Framework ${plan.frameworkVersion}; changed ${changed.length}: ${changedNames}${changedRemainder}${ownedNote}` });
     } else {
       checks.push({ name: "Managed files", ok: true, detail: `up to date${ownedNote}` });
     }
@@ -257,7 +364,7 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
   // Role dependencies.
   /** Set exactly when role === "dev" and the binding resolved — the required-dependency result. */
   let devKnowledge: KnowledgeBinding | undefined;
-  /** T-LV1 — set exactly when role === "ba" and a Target binding resolved; always optional. */
+  /** Set exactly when role === "ba" and a Target binding resolved; always optional. */
   let baTarget: TargetBinding | undefined;
   if (role === "dev") {
     const resolved: KnowledgeBinding | undefined = (() => {
@@ -280,7 +387,7 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
     }
     devKnowledge = resolved;
     checks.push({ name: "Knowledge", ok: true, detail: `${resolved.knowledgeRoot} (via ${resolved.via})` });
-    // T-WG1 — a valid, marker-complete binding still leaves the BA workspace role
+    // A valid, marker-complete binding still leaves the BA workspace role
     // entirely unusable if nobody ever ran `init --role ba` there. DEV reads
     // Knowledge fine either way (it only needs the markers), so this is a
     // note, not a failing check.
@@ -300,15 +407,31 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
     } catch {
       // informational only — never blocks a BA session
     }
-    // T-LV1 — an optional Target binding lets BA read the real app repo
-    // (schema.prisma, code) without ever requiring it. Any problem is
-    // reported as a non-blocking check, exactly like T-WG1's "Knowledge (BA
-    // workspace role)" note — it is never a reason to fail preflight.
+    // An optional Target binding lets BA read the real app repo (schema.prisma,
+    // code) without ever requiring it. Any problem is reported as a
+    // non-blocking check, like the "Knowledge (BA workspace role)" note above —
+    // it is never a reason to fail preflight.
     try {
-      const resolved = resolveTargetBinding({ knowledgeRoot: roots.targetRoot, configTargetPath: config?.target?.path });
+      const resolved = resolveTargetBinding({
+        knowledgeRoot: roots.targetRoot,
+        configTargetId: config?.target?.target_id,
+        frameworkRoot: roots.frameworkRoot,
+      });
       if (resolved) {
         baTarget = resolved;
-        checks.push({ name: "Target (BA workspace role)", ok: true, detail: `${resolved.targetRoot} (via ${resolved.via}, read-only)` });
+        checks.push({
+          name: "Target (BA workspace role)",
+          ok: true,
+          detail: `${resolved.targetRoot} (via ${resolved.via}, read-only)`,
+        });
+      }
+      // The removed committed path is stripped by the schema, so say so here
+      // too: without it a workspace that still sets it only sees its Target
+      // quietly missing. Non-blocking, like every check in this block — a BA
+      // Target binding is optional by design.
+      const legacy = removedTargetPath(roots.targetRoot);
+      if (legacy !== undefined) {
+        checks.push({ name: "Target (BA workspace role)", ok: true, detail: removedTargetPathProblem(legacy) });
       }
     } catch (e) {
       if (e instanceof TargetBindingError) {
@@ -317,15 +440,35 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
         throw e;
       }
     }
+
+    // The same `--check-doc-size` ceiling as a non-blocking note: a BA is
+    // never stopped by document growth, only told about it, since blocking
+    // here would stand in the way of the very work needed to fix it (the CI
+    // wiring that does block lives in the BA workflow).
+    // Scoped to the one module `resolveModule` can resolve with no hint, the
+    // same "never guess among candidates" rule `sta context` already applies —
+    // an ambiguous or empty workspace measures nothing rather than the whole
+    // repository, so preflight stays fast.
+    const moduleResolution = resolveModule(roots.targetRoot);
+    if (moduleResolution.status === "one") {
+      const sizeResult = checkDocSize(roots.targetRoot, moduleResolution.module);
+      checks.push({
+        name: "Document size",
+        ok: true,
+        detail: sizeResult.problems.length === 0
+          ? `${moduleResolution.module}: every document and section is inside its byte ceiling`
+          : `${moduleResolution.module}: ${sizeResult.problems.length} over ceiling — ${sizeResult.problems.join("; ")}`,
+      });
+    }
   }
 
-  const runtime = options.runtime ?? "claude";
   const probe = options.probe ?? defaultProbe;
-  const verdict = probe(runtime);
-  if (!verdict.available) fail(`Runtime (${runtime})`, verdict.detail ?? `${runtime} is unavailable`);
-  checks.push({ name: `Runtime (${runtime})`, ok: true, detail: verdict.detail });
+  for (const prerequisite of environmentPrerequisites(launchRuntime, probe)) {
+    if (!prerequisite.ok) fail(prerequisite.name, `${prerequisite.detail} — ${prerequisite.fix}`);
+    checks.push({ name: prerequisite.name, ok: true, detail: prerequisite.detail });
+  }
 
-  return { checks, role, workspaceRoot: roots.targetRoot, frameworkRoot: roots.frameworkRoot, templatesDir, knowledge: devKnowledge, target: baTarget, runtime };
+  return { checks, role, workspaceRoot: roots.targetRoot, frameworkRoot: roots.frameworkRoot, templatesDir, knowledge: devKnowledge, target: baTarget, runtime: launchRuntime, guards: coverage };
 }
 
 /** DEV-only aliases kept for the original callers/tests. */
@@ -340,7 +483,12 @@ export type DevOptions = RoleRunOptions;
 async function runRoleSession(role: WorkspaceRole, options: RoleRunOptions): Promise<number> {
   let ctx: WorkspaceContext;
   try {
-    ctx = workspacePreflight(role, options);
+    try {
+      ctx = workspacePreflight(role, options);
+    } catch (error) {
+      if (role !== "dev" || !(error instanceof PreflightError) || error.failed.name !== "Knowledge" || !(await offerKnowledgeBinding(options))) throw error;
+      ctx = workspacePreflight(role, options);
+    }
   } catch (e) {
     if (e instanceof PreflightError) {
       console.error("[software-team-agents] preflight failed:");
@@ -350,7 +498,11 @@ async function runRoleSession(role: WorkspaceRole, options: RoleRunOptions): Pro
     throw e;
   }
   for (const c of ctx.checks) console.log(`[software-team-agents] ✓ ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
-  console.log(`[software-team-agents] starting ${ctx.runtime} (${WORKSPACE_ROLE_LABEL[role]}) from ${ctx.workspaceRoot} ...`);
+  // An acknowledged unguarded launch is recorded as such on the launch line
+  // itself, so the session's own transcript states that none of the six
+  // guards was active.
+  const unguarded = ctx.guards.level === "unguarded" ? " [UNGUARDED SESSION — acknowledged]" : "";
+  console.log(`[software-team-agents] starting ${ctx.runtime} (${WORKSPACE_ROLE_LABEL[role]})${unguarded} from ${ctx.workspaceRoot} ...`);
   const launch = options.launch ?? defaultLaunch;
   const startedAt = Date.now();
   // Measure before the runtime starts: an interactive session may edit its own

@@ -107,34 +107,50 @@ describe("resolveRuntimeRoute — V3 shape and compatibility", () => {
     expect(result.error).toBeUndefined();
   });
 
-  it("keeps model_routing runtime:model and the unregistered-runtime compatibility fallback", () => {
-    const manual = route({
-      config: { schema_version: 1, model_routing: { "backend-engineer": "codex:gpt-5" } },
+  it("keeps the routing.by_role runtime:model spelling at precedence 2", () => {
+    const compact = route({
+      config: { schema_version: 1, routing: { by_role: { "backend-engineer": "codex:gpt-5" } } },
     });
-    expect(manual.precedenceLevel).toBe(2);
-    expect(manual.selected).toMatchObject({ model: "gpt-5", runtime: expect.objectContaining({ id: "codex" }) });
-
-    const legacyFallback = route({
-      config: { schema_version: 1, model_routing: { "backend-engineer": "ghost:o4-mini" } },
-    });
-    expect(legacyFallback.selected?.runtime.id).toBe("claude-code");
-    expect(legacyFallback.selected?.model).toBe("o4-mini");
-    expect(legacyFallback.requested.runtimeId).toBe("ghost");
-    expect(legacyFallback.diagnostics.join("\n")).toContain("not registered");
+    expect(compact.precedenceLevel).toBe(2);
+    expect(compact.selected).toMatchObject({ model: "gpt-5", runtime: expect.objectContaining({ id: "codex" }) });
   });
 
-  it("routing.by_role beats model_routing and records the conflict diagnostic", () => {
+  // The legacy `model_routing` spelling is removed. A config that still
+  // carries the key must load (staConfig keeps it declared) and must be
+  // ignored by routing, not silently honoured as a second spelling.
+  it("ignores a legacy model_routing key and routes at automatic precedence instead", () => {
+    const result = route({
+      config: { schema_version: 1, model_routing: { "backend-engineer": "codex:gpt-5" } },
+    });
+    expect(result.precedenceLevel).toBe(4);
+    expect(result.selected?.runtime.id).toBe("claude-code");
+    expect(result.selected?.model).toBe("sonnet");
+  });
+
+  // No compatibility fallback survives: an unregistered runtime is a closed
+  // route, never a quiet substitution of the default.
+  it("fails closed when routing.by_role names an unregistered runtime", () => {
+    const result = route({
+      config: { schema_version: 1, routing: { by_role: { "backend-engineer": "ghost:o4-mini" } } },
+    });
+    expect(result.selected).toBeUndefined();
+    expect(result.candidates).toEqual([]);
+    expect(result.requested.runtimeId).toBe("ghost");
+    expect(result.error).toBeTruthy();
+    expect(result.diagnostics.join("\n")).toContain("not registered");
+  });
+
+  it("routing.by_role beats a config-named default runner", () => {
     const result = route({
       config: {
         schema_version: 1,
-        model_routing: { "backend-engineer": "claude-code:opus" },
+        execution: { runner: "opencode" },
         routing: { by_role: { "backend-engineer": { runtime: "codex", model: "gpt-5" } } },
       },
     });
     expect(result.precedenceLevel).toBe(2);
     expect(result.selected?.runtime.id).toBe("codex");
     expect(result.selected?.model).toBe("gpt-5");
-    expect(result.diagnostics).toContain('routing.by_role for role "backend-engineer" takes precedence over model_routing');
   });
 
   it("T-V4-CAST-001 — marks the model explicit for a --model flag and a by_role override, not for a frontmatter default", () => {
@@ -165,41 +181,35 @@ describe("resolveRuntimeRoute — V3 shape and compatibility", () => {
     expect(runtimeOnly.effort).toBeUndefined();
   });
 
-  it("returns an ordered policy candidate list and a human-readable reason for every candidate", () => {
+  // `routing.strategy` / `routing.order` (the old precedence level 3) are
+  // removed. A config carrying them still loads and the route falls through
+  // to the automatic default: no candidate list is built from them.
+  it("ignores routing.strategy/order and resolves one automatic candidate", () => {
     const result = route({
       config: {
         schema_version: 1,
         routing: {
           strategy: "subscription-first",
-          order: ["claude-code", "codex", "opencode"],
+          order: ["opencode", "codex", "claude-code"],
           allow_below_supported: ["codex", "opencode"],
         },
       },
     });
-    expect(result.precedenceLevel).toBe(3);
-    expect(result.candidates.map((candidate) => candidate.runtime.id)).toEqual(["claude-code", "codex", "opencode"]);
+    expect(result.precedenceLevel).toBe(4);
+    expect(result.candidates.map((candidate) => candidate.runtime.id)).toEqual(["claude-code"]);
     expect(result.candidates.every((candidate) => candidate.reason.length > 20)).toBe(true);
   });
 });
 
-describe("resolveRuntimeRoute — complete precedence table", () => {
-  type Level = 1 | 2 | 3 | 4 | 5;
-  const pairs: Array<[Level, Level]> = [
-    [1, 2], [1, 3], [1, 4], [1, 5],
-    [2, 3], [2, 4], [2, 5],
-    [3, 4], [3, 5],
-    [4, 5],
-  ];
+describe("resolveRuntimeRoute — the surviving precedence table", () => {
+  // Three sources, one route. Levels 3 (policy order) and 5 (previous-failure
+  // walking) no longer exist, so the table is 1 > 2 > 4.
+  type Level = 1 | 2 | 4;
+  const pairs: Array<[Level, Level]> = [[1, 2], [1, 4], [2, 4]];
 
   function inputsFor(higher: Level, lower: Level): Partial<ResolveRuntimeRouteOptions> {
-    const config: StaConfig = { schema_version: 1 };
-    if (higher <= 3 || lower <= 3) {
-      config.routing = { allow_below_supported: ["codex", "opencode"] };
-    }
-    if (higher <= 3 && (higher === 3 || lower === 3)) {
-      config.routing = { ...config.routing, strategy: "subscription-first", order: ["opencode", "claude-code", "codex"] };
-    }
-    if (higher <= 2 && (higher === 2 || lower === 2)) {
+    const config: StaConfig = { schema_version: 1, routing: { allow_below_supported: ["codex", "opencode"] } };
+    if (higher === 2 || lower === 2) {
       config.routing = {
         ...config.routing,
         by_role: { "backend-engineer": { runtime: "codex", model: "gpt-5" } },
@@ -208,8 +218,6 @@ describe("resolveRuntimeRoute — complete precedence table", () => {
     return {
       config,
       flags: higher === 1 ? { runtime: "claude-code", model: "opus" } : undefined,
-      allowHandoff: lower === 5,
-      previousFailures: lower === 5 ? [{ runtimeId: "opencode", status: "UNAVAILABLE", reason: "lower fallback input" }] : undefined,
     };
   }
 
@@ -219,25 +227,23 @@ describe("resolveRuntimeRoute — complete precedence table", () => {
     expect(result.selected, result.error).toBeDefined();
   });
 
-  it("level 5 is reachable only after an automatic candidate is explicitly unavailable", () => {
-    const fixture = routingFixture();
-    const result = resolveRuntimeRoute({
-      role: "backend-engineer",
-      stage: AgentStage.BACKEND_ENGINEER,
-      projectRoot: fixture.projectRoot,
-      registry: fixture.registry,
-      config: { schema_version: 1, routing: { allow_below_supported: ["codex"] } },
-      availability: {
-        "claude-code": { available: false, reason: "automatic runtime unavailable" },
-        codex: { available: true },
-        opencode: { available: false, reason: "not a fallback candidate" },
+  it("never resolves more than one candidate, whatever the config declares", () => {
+    const result = route({
+      config: {
+        schema_version: 1,
+        model_routing: { "backend-engineer": "opencode:sonnet" },
+        execution: { mode: "auto", allow_handoff: true, runner: "opencode" },
+        routing: {
+          strategy: "subscription-first",
+          order: ["opencode", "codex", "claude-code"],
+          allow_below_supported: ["codex", "opencode"],
+          by_role: { "backend-engineer": { runtime: "codex", model: "gpt-5" } },
+        },
       },
-      previousFailures: [{ runtimeId: "claude-code", status: "UNAVAILABLE", reason: "automatic runtime unavailable" }],
-      allowHandoff: true,
     });
-    expect(result.precedenceLevel).toBe(5);
+    expect(result.attempts).toHaveLength(1);
+    expect(result.candidates).toHaveLength(1);
     expect(result.selected?.runtime.id).toBe("codex");
-    expect(result.selected?.reason).toMatch(/fallback candidate/);
   });
 });
 
@@ -252,8 +258,8 @@ describe("resolveRuntimeRoute — availability, support and guard refusal", () =
         opencode: { available: true },
       },
     });
-    // Phase 4 keeps the requested candidate in the plan so the executor can
-    // classify the probe result as UNAVAILABLE and apply mode semantics.
+    // The requested candidate stays in the plan so the executor classifies the
+    // probe result as UNAVAILABLE and escalates it with the exact reason.
     expect(result.selected?.runtime.id).toBe("codex");
     expect(result.error).toBeUndefined();
     expect(result.diagnostics.some((diagnostic) => diagnostic.includes(exactReason))).toBe(true);
@@ -267,7 +273,7 @@ describe("resolveRuntimeRoute — availability, support and guard refusal", () =
         opencode: { available: false, reason: "opencode missing" },
       },
     });
-    expect(result.mode).toBe("single");
+    expect(result.precedenceLevel).toBe(4);
     expect(result.candidates.map((candidate) => candidate.runtime.id)).toEqual(["claude-code"]);
     expect(result.selected?.runtime.id).toBe("claude-code");
     expect(result.error).toBeUndefined();
@@ -275,14 +281,13 @@ describe("resolveRuntimeRoute — availability, support and guard refusal", () =
   });
 
   it("refuses automatic routing below supported unless that exact runtime is opted in", () => {
-    const denied = route({
-      config: { schema_version: 1, routing: { order: ["codex"] } },
-    });
+    const denied = route({ defaultRuntimeId: "codex", config: { schema_version: 1 } });
     expect(denied.selected).toBeUndefined();
     expect(denied.error).toContain('support level "preview"');
 
     const allowed = route({
-      config: { schema_version: 1, routing: { order: ["codex"], allow_below_supported: ["codex"] } },
+      defaultRuntimeId: "codex",
+      config: { schema_version: 1, routing: { allow_below_supported: ["codex"] } },
     });
     expect(allowed.selected?.runtime.id).toBe("codex");
 

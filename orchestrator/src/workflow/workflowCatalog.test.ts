@@ -54,9 +54,9 @@ describe("the workflow catalog", () => {
   });
 
   /**
-   * The point of T-V3TOK-110: the file's pipeline is not *compared to* the
-   * classifier's, it *is* the classifier's. This asserts the derivation for
-   * every signal workflow across every input the `when:` vocabulary can express.
+   * The file's pipeline is not *compared to* the classifier's, it *is* the
+   * classifier's. This asserts the derivation for every signal workflow
+   * across every input the `when:` vocabulary can express.
    */
   it("derives each signal workflow's pipeline from the classifier itself", () => {
     const workflows = catalogWorkflows();

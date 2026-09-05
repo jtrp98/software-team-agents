@@ -1,6 +1,6 @@
 /** `tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]`. */
 /**
- * T-V3TOK-013 — `sta policy` reads one section, not one file.
+ * `sta policy` reads one section, not one file.
  *
  * A miss is exit 0 with the available sections printed: an agent that gets an
  * error here falls back to reading the whole file, which is exactly the cost

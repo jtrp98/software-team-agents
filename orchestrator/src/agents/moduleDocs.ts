@@ -9,7 +9,7 @@ import {
   type SecurityReportArtifact,
 } from "../artifacts/schemas.js";
 import { AgentStage } from "../types.js";
-import { firstTable, sections } from "../adoption/markdown.js";
+import { firstTable, sections } from "../docs/markdown.js";
 import { parsePlanTasks } from "../docs/planGraph.js";
 import { buildPlanGraph, type TaskNode } from "../graph/taskGraph.js";
 import { extractIds } from "../traceability/traceability.js";
@@ -18,11 +18,10 @@ import { extractIds } from "../traceability/traceability.js";
  * Bridges the real pipeline's Markdown docs (`_docs/module/<name>/review.md`,
  * `security.md` — written by the actual `qa-engineer`/`security` subagents
  * per `policies/documentation.md`) into the structured artifacts the
- * orchestrator's gates (gates/gatePolicy.ts) require. Regex-based, same
- * spirit and same limits as `.claude/scripts/check-schema-contract.js` and
- * `check-status-sync.js`: a helper that reads the convention's own markers
- * (✅/⚠️/❌, `(FULL)`/`(TARGETED)`, 🔴/🟠/🟡, 🔵/🟣/✅/⚪), not a Markdown
- * parser and not a substitute for a human reading the doc.
+ * orchestrator's gates (gates/gatePolicy.ts) require. Regex-based: a helper
+ * that reads the convention's own markers (✅/⚠️/❌, `(FULL)`/`(TARGETED)`,
+ * 🔴/🟠/🟡, 🔵/🟣/✅/⚪), not a Markdown parser and not a substitute for a
+ * human reading the doc.
  */
 
 /**
@@ -399,7 +398,7 @@ export interface ParsedQaReport {
  * The one verdict line `qa-engineer.md` tells the agent to write literally:
  * `**Status:** ✅ Verified (FULL)` / ⚠️ Partial / ❌ Failed. When it is present
  * it is the answer — no emoji census needed. Absent (older rounds, hand-edited
- * docs), parsing falls back to the emoji heuristic below, unchanged from V1.
+ * docs), parsing falls back to the emoji heuristic below.
  */
 const STATUS_LINE_RE =
   /\*\*Status:\*\*\s*✅\s*Verified\s*\((FULL|TARGETED)\)|\*\*Status:\*\*\s*⚠️\s*Partial\s*\((FULL|TARGETED)\)|\*\*Status:\*\*\s*❌\s*Failed\s*\((FULL|TARGETED)\)/;
@@ -413,7 +412,6 @@ const STATUS_LINE_RE =
 export function parseQaReport(taskId: string, reviewMd: string): ParsedQaReport {
   const round = tailSection(reviewMd, /^##\s+.*(round|verify|Round)/i) || reviewMd;
 
-  // Preferred: the exact Status line the agent prompt mandates.
   const statusLine = STATUS_LINE_RE.exec(round);
   let status: "PASS" | "FAIL";
   if (statusLine) {

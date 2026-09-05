@@ -1,4 +1,3 @@
 # System-analyst rationale
 
-T-V3TOK-027 moved long design examples out of static context. The role prompt
-keeps schema confirmation, additive/breaking, and contract judgments.
+The role owns technical feasibility, data modeling, and interface contracts. The prompt keeps schema confirmation, additive/breaking, and contract judgments.

@@ -1,6 +1,8 @@
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 import { resolveRoots } from "./roots.js";
 import { detectWorkspaceKind, assetsForRole, type WorkspaceRole, type WorkspaceKind } from "./roleWorkspace.js";
+import type { WorkspaceRuntime } from "./roleWorkspace.js";
 import {
   defaultTargetConfig,
   isTargetInitialized,
@@ -12,8 +14,8 @@ import { runTargetSync, type SyncResult } from "./syncEngine.js";
 import { planTargetProfile } from "./targetProfile.js";
 
 /**
- * T-TARGET-03 + T-ROLE-16 — `software-team-agents init`, run from inside a Role
- * Workspace (a Target repo for DEV, the Knowledge repo for BA).
+ * `software-team-agents init`, run from inside a Role Workspace (a Target repo
+ * for DEV, the Knowledge repo for BA).
  *
  * Detects what kind of repository it is standing in when no role is recorded
  * yet (Knowledge markers → ba; app-source markers → dev; both/neither → an
@@ -32,12 +34,43 @@ export interface TargetInitOptions {
   templatesDir?: string;
   now: string;
   force?: boolean;
-  /** Explicit role override (T-ROLE-16); detection is skipped when given. */
+  /** Explicit role override; detection is skipped when given. */
   role?: WorkspaceRole;
   /** Explicit stack selection for ambiguous or unsupported Target evidence. */
   stack?: string;
+  /** Explicit runtime bindings selected by repeatable `init --runtime`. */
+  runtimes?: readonly WorkspaceRuntime[];
   /** Machine-wide installation.yaml override (tests); forwarded to the sync engine's DEV-workspace binding resolution. */
   installationConfigPath?: string;
+  /** Injectable prerequisite probe; init reports failures but does not refuse. */
+  probe?: (runtime: WorkspaceRuntime) => { available: boolean; detail?: string };
+}
+
+/** One environment-facing preflight vocabulary, shared by `init` and launch. */
+export interface PrerequisiteCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+  fix: string;
+}
+
+export function probeRuntime(runtime: WorkspaceRuntime): { available: boolean; detail?: string } {
+  const result = spawnSync(runtime, ["--version"], { encoding: "utf8", shell: process.platform === "win32", timeout: 15_000 });
+  if (result.error || result.status !== 0) return { available: false, detail: `"${runtime} --version" failed` };
+  return { available: true, detail: (result.stdout ?? "").trim().split("\n")[0] };
+}
+
+export function environmentPrerequisites(
+  runtime: WorkspaceRuntime,
+  probe: (runtime: WorkspaceRuntime) => { available: boolean; detail?: string } = probeRuntime,
+): readonly PrerequisiteCheck[] {
+  const result = probe(runtime);
+  return [{
+    name: `Runtime (${runtime})`,
+    ok: result.available,
+    detail: result.detail ?? (result.available ? "available" : `${runtime} is unavailable`),
+    fix: `install ${runtime} and make sure it is on PATH`,
+  }];
 }
 
 export interface TargetInitResult {
@@ -52,6 +85,7 @@ export interface TargetInitResult {
   /** True when this run created .agent-team/config.yaml; false when it already existed. */
   createdConfig: boolean;
   wasInitialized: boolean;
+  prerequisites: readonly PrerequisiteCheck[];
   sync: SyncResult;
 }
 
@@ -99,7 +133,13 @@ export function runTargetInit(options: TargetInitOptions): TargetInitResult {
     });
     config = { ...config, stack: profile.stack };
   }
-  if (createdConfig) writeTargetConfig(roots.targetRoot, config);
+  if (options.runtimes?.length) {
+    // Claude remains the base runtime; additional selections materialise their
+    // own bindings. The explicit list is the only operation that narrows a
+    // legacy workspace's conservative all-runtime compatibility default.
+    config = { ...config, runtimes: [...new Set<WorkspaceRuntime>(["claude", ...options.runtimes])] };
+  }
+  if (createdConfig || options.runtimes?.length) writeTargetConfig(roots.targetRoot, config);
 
   const sync = runTargetSync({
     targetRoot: roots.targetRoot,
@@ -114,6 +154,7 @@ export function runTargetInit(options: TargetInitOptions): TargetInitResult {
     explicitStack: options.stack,
   });
 
+  const runtime = options.runtimes?.at(-1) ?? "claude";
   return {
     targetRoot: roots.targetRoot,
     frameworkRoot: roots.frameworkRoot,
@@ -124,6 +165,7 @@ export function runTargetInit(options: TargetInitOptions): TargetInitResult {
     detectedKind,
     createdConfig,
     wasInitialized,
+    prerequisites: environmentPrerequisites(runtime, options.probe),
     sync,
   };
 }

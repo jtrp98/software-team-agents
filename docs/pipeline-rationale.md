@@ -1,22 +1,19 @@
 # Pipeline rationale — the reasoning behind `CLAUDE.md`
 
-> Moved out of `CLAUDE.md` **verbatim** by T-V3TOK-011. Nothing here was rewritten or summarized.
->
-> `CLAUDE.md` is auto-loaded into every session and every subagent on both the orchestrated and
-> the interactive path, so every byte in it is paid again on every run. These sections explain
-> machinery to a person reading the repository; no agent needs them to do its work. `docs/` is
-> deliberately outside `TEMPLATE_SOURCES` (`orchestrator/src/packaging/templateSources.ts:31-47`),
-> so nothing here ships into a workspace or is auto-loaded anywhere.
+> These sections explain the machinery and design reasoning behind `CLAUDE.md` to anyone reading
+> the repository. No agent needs them to do its work. `docs/` is deliberately outside
+> `TEMPLATE_SOURCES` (`orchestrator/src/packaging/templateSources.ts`), so nothing here ships
+> into a workspace or is auto-loaded at runtime.
 
 ---
 
 ## Read this first
 
-`policies/*.md` is the authoritative source for the rules every agent shares: module-folder resolution, the `_docs/status.md` index, dates, amend discipline, version control, handoffs, the design-as-contract rule, and where the stack is defined — split by area (`coding.md`, `git.md`, `architecture.md`, `documentation.md`, `security.md`, `agent-boundaries.md`) since T49. The agent files deliberately don't repeat those rules — they point at those files, so changing a rule means editing one place, not ten. (`.claude/shared/conventions.md` is now a short redirect to the table above — see `policies/README.md`.)
+`policies/*.md` is the authoritative source for the rules every agent shares: module-folder resolution, the `_docs/status.md` index, dates, amend discipline, version control, handoffs, the design-as-contract rule, and where the stack is defined — split by area: `coding.md`, `git.md`, `architecture.md`, `documentation.md`, `security.md`, `agent-boundaries.md`. The agent files deliberately don't repeat those rules — they point at those files, so changing a rule means editing one place, not ten. (`.claude/shared/conventions.md` is now a short redirect to the table above — see `policies/README.md`.)
 
-`orchestrator/` (a separate Node/TypeScript package, `npm install`/`npm test` inside it) automates the opt-in autonomous mode described above — its runtime adapter spawns `claude -p --agent <role>`, so it still runs the exact `.claude/agents/<role>.md` files this document defines, and it still stops at the same five human-approval points via its own gate/retry logic. It never invokes an agent by holding the `Agent` tool itself, and it never edits `.claude/` or `_docs/` directly. Run it as `node orchestrator/dist/cli.js <command>` (`sta` when installed from the npm package); every command is listed in its usage output, and team setup is in `TEAM_SETUP_V1.md`.
+`orchestrator/` (a separate Node/TypeScript package, `npm install`/`npm test` inside it) automates the opt-in autonomous mode described above — its runtime adapter spawns `claude -p --agent <role>`, so it still runs the exact `.claude/agents/<role>.md` files this document defines, and it still stops at the same five human-approval points via its own gate/retry logic. It never invokes an agent by holding the `Agent` tool itself, and it never edits `.claude/` or `_docs/` directly. Run it as `node orchestrator/dist/cli.js <command>` (`sta` when installed from the npm package); every command is listed in its usage output, and team setup is documented in `README.md` (§ Getting Started & § Installation).
 
-Since P0 finished, three of its behaviours are worth knowing when you read the agent files:
+Several behaviours are worth knowing when you read the agent files:
 
 - **A failed round is routed by owner, not by position.** `qa-engineer` already writes which agent
   each open issue routes to; the orchestrator reads that column rather than guessing, and when the
@@ -42,7 +39,7 @@ Since P0 finished, three of its behaviours are worth knowing when you read the a
   consumes, so the exception §6a grants — tasks sharing no contract may run in either order — is
   finally actionable instead of being knowledge someone had to hold. `--list` shows the batches.
   The orchestrator still runs one task at a time: executing a batch concurrently needs file-level
-  locking (T35) first.
+  locking first.
 - **An approval is a record, not a flag.** Each of the five always-human points carries a type, a
   status, who answered and when. The one that mattered: a rejection is now stored as `rejected`, so
   it blocks the task — previously `false` and "never asked" were the same value, and a "no" quietly
@@ -80,13 +77,13 @@ business-analyst → system-analyst → project-manager → test-planner → bac
 | `security` | security audit | `requirement.md`, `design.md`, `review.md`, `schema.prisma`, real code | `security.md` |
 | `devops` | deploy, CI, migrations | `status.md`, `review.md`, `security.md`, `plan.md`, `design.md`, `schema.prisma`, stack files | `deploy.md`, infra files |
 
-**Three-repo note (T-ROLE/T-WG7):** every path above that sits in the module folder (`_docs/module/<name>/…`) or under `knowledge/` is a **Knowledge-repository** location. Analysis-role Writes columns — requirement/design/plan/test-plan and everything the `business-analyst`…`uxui-designer` rows produce — are written only from the Knowledge workspace (`software-team-agents ba`). A DEV workspace reads those same paths as READ-ONLY context (its rendered CLAUDE.md banner names the root), writes app code plus its own engineer docs (`review.md`, `security.md`, `deploy.md`), and never carries a local `_docs/`. `qa-engineer` runs from the Target (DEV) workspace and cannot write `plan.md` directly there — `.claude/hooks/block-path-permissions.js` denies it unconditionally in a `role: dev` workspace, whatever its contract says. Its Status-cell decision still has to land where `plan.md` lives — the Knowledge repo — so it goes through two stages (T-LV3): `qa-engineer` writes its verdict into `review.md` (fully writable from Target) plus a `## Knowledge sync — three-repo mode` table naming each task's id and new Status, then a BA-workspace session applies that table to `plan.md`'s Status cells — a relay of a decision already made, not a second review, and using write access the BA workspace role already holds over its own `plan.md`. In single-repo/legacy mode (no `role: dev`), none of this applies and `qa-engineer` still edits the Status cell directly, as it always did.
+**Three-repo note:** every path above that sits in the module folder (`_docs/module/<name>/…`) or under `knowledge/` is a **Knowledge-repository** location. Analysis-role Writes columns — requirement/design/plan/test-plan and everything the `business-analyst`…`uxui-designer` rows produce — are written only from the Knowledge workspace (`software-team-agents ba`). A DEV workspace reads those same paths as READ-ONLY context (its rendered CLAUDE.md banner names the root), writes app code plus its own engineer docs (`review.md`, `security.md`, `deploy.md`), and never carries a local `_docs/`. `qa-engineer` runs from the Target (DEV) workspace and cannot write `plan.md` directly there — `.claude/hooks/block-path-permissions.js` denies it unconditionally in a `role: dev` workspace, whatever its contract says. Its Status-cell decision still has to land where `plan.md` lives — the Knowledge repo — so it goes through two stages: `qa-engineer` writes its verdict into `review.md` (fully writable from Target) plus a `## Knowledge sync — three-repo mode` table naming each task's id and new Status, then a BA-workspace session applies that table to `plan.md`'s Status cells — a relay of a decision already made, not a second review, and using write access the BA workspace role already holds over its own `plan.md`. In single-repo/legacy mode (no `role: dev`), none of this applies and `qa-engineer` still edits the Status cell directly, as it always did.
 
-**V3 ownership addendum:** “Three-Repo” names three repository types, not only three ownership domains. Local **Runtime State** is the fourth domain: `.workflow/state.db`, its generated view, execution packets, verification evidence, and run artifacts are machine-local/regenerable and gitignored. The ownership guard explicitly refuses to classify `packets/`, `evidence/`, or `runs/` as Knowledge-owned, even where compatibility paths place other `.workflow/` metadata under a Knowledge root.
+**Ownership domains:** “Three-Repo” names three repository types, not only three ownership domains. Local **Runtime State** is the fourth domain: `.workflow/state.db`, its generated view, execution packets, verification evidence, and run artifacts are machine-local/regenerable and gitignored. The ownership guard explicitly refuses to classify `packets/`, `evidence/`, or `runs/` as Knowledge-owned, even where compatibility paths place other `.workflow/` metadata under a Knowledge root.
 
-**Lane visibility (T-LV1/T-LV2):** the read direction above also runs the other way, symmetrically and optionally. A BA workspace's `.agent-team/config.yaml` may set `target.path`, mirroring `knowledge.path` on the DEV side; when it resolves, `software-team-agents ba` sets `AGENTCLAUDE_TARGET_ROOT` the same way a DEV launch sets `AGENTCLAUDE_KNOWLEDGE_ROOT`. Unset or unresolved, BA works exactly as before — Target stays optional, nothing about BA's own workflow depends on it. `system-analyst` is the one agent that reads it today: amending a module that's already implemented, with `AGENTCLAUDE_TARGET_ROOT` present, it reads the real schema off the Target using the Target-resolved stack metadata rather than a hardcoded path before treating a change as additive/breaking, and reports drift against `design.md` plainly instead of trusting `design.md`'s memory of what got built. No write channel opens either direction — this is read-only, same as `AGENTCLAUDE_KNOWLEDGE_ROOT` is for DEV.
+**Lane visibility:** the read direction above also runs the other way, symmetrically and optionally. A BA workspace's `.agent-team/config.yaml` may set `target.target_id` — a Target identity from `targets.yaml`, resolved to this machine's checkout through `.workflow/targets.local.yaml`. When it resolves, `software-team-agents ba` sets `AGENTCLAUDE_TARGET_ROOT` the same way a DEV launch sets `AGENTCLAUDE_KNOWLEDGE_ROOT`. Unset or unresolved, BA works exactly as before — Target stays optional, nothing about BA's own workflow depends on it. `system-analyst` is the one agent that reads it today: amending a module that's already implemented, with `AGENTCLAUDE_TARGET_ROOT` present, it reads the real schema off the Target using the Target-resolved stack metadata rather than a hardcoded path before treating a change as additive/breaking, and reports drift against `design.md` plainly instead of trusting `design.md`'s memory of what got built. No write channel opens either direction — this is read-only, same as `AGENTCLAUDE_KNOWLEDGE_ROOT` is for DEV.
 
-Every agent also reads `_docs/status.md` when it starts and regenerates it (`node .claude/scripts/generate-status.js` — T51, `policies/documentation.md` §2) when it finishes, rather than hand-editing it — that's left out of the table above rather than repeated on all eleven rows. The BA-workspace agents have no `Bash` tool: they keep `status.md` correct by keeping its inputs (their own documents) accurate, and the agents that do hold `Bash` regenerate the file itself. Authority model, one line per layer: **PM = Work Graph · Graphify = Code Graph · Orchestrator = Runtime** — plan.md owns what-work/order/dependency/owner, code intelligence owns source-code relationships, the orchestrator derives runtime readiness and dispatch; no layer implements another's job.
+Every agent also reads `_docs/status.md` when it starts and regenerates it (`node .claude/scripts/generate-status.js`, `policies/documentation.md` §2) when it finishes, rather than hand-editing it — that's left out of the table above rather than repeated on all eleven rows. The BA-workspace agents have no `Bash` tool: they keep `status.md` correct by keeping its inputs (their own documents) accurate, and the agents that do hold `Bash` regenerate the file itself. Authority model, one line per layer: **PM = Work Graph · Graphify = Code Graph · Orchestrator = Runtime** — plan.md owns what-work/order/dependency/owner, code intelligence owns source-code relationships, the orchestrator derives runtime readiness and dispatch; no layer implements another's job.
 
 `uxui-designer` runs immediately before `frontend-engineer`, but only in pipelines that carry a design phase — feature, business-rule, schema-change and incremental work (`workflows/typo.yml`-class small fixes rely on the module's existing signed artifact instead). It analyzes the module's design source — a Figma file over a read-only MCP connection, export/handoff files a person placed in `knowledge/_sources/design/<module>/`, or Anthropic's Claude Design server over its MCP (Path C: reads ingest a design; explicit write mode may seed a draft mockup on the canvas; the tool allowlist is frozen and fail-closed in `orchestrator/src/integration/claudeDesignMcp.ts`, ADR-005) — and produces draft `UX-*` recommendations plus `_docs/module/<name>/uxui/design.md`. Everything it writes is draft — a person reviews, approves, and records the UXUI lane sign-off (`sta roles signoff uxui --by <name>`), and frontend work does not start until that gate is current. The gate itself follows the same right-sizing: TRIVIAL/SMALL tasks skip the UX-artifact precondition (no design phase, no uxui round was scheduled), while MEDIUM+ — and any unknown level, fail-closed — still require it; the SA→DEV handoff checks apply at every level. It never scrapes a design URL and never calls a destructive canvas tool; the Figma connection is read-only, identity-gated, and Claude Design output stays draft-only (see README, "Design sources & identities"). A question that is not its to answer — is this UI worth building, or can it be built — is reported as structured data and routed back to `business-analyst`/`system-analyst` automatically; if this pipeline has no such stage, it stops for a person instead of guessing.
 
@@ -107,7 +104,7 @@ _docs/
         ├── requirement.md       ← business-analyst
         ├── design.md            ← system-analyst
         ├── design-archive.md    ← (created on demand) closed amend-round Q&A, moved out of design.md's always-read sections
-        ├── plan.md              ← project-manager  (task Status cell + added security gates: qa-engineer, T52)
+        ├── plan.md              ← project-manager  (task Status cell + added security gates: qa-engineer)
         ├── test-plan.md         ← test-planner
         ├── uxui/design.md       ← uxui-designer (the lane artifact a person signs off before frontend work)
         ├── review.md            ← qa-engineer  (open issues + current round + unverified behaviour)
@@ -118,20 +115,20 @@ _docs/
 
 .claude/
 ├── shared/
-│   ├── conventions.md            ← short redirect to policies/ (T49 moved the rules there)
+│   ├── conventions.md            ← short redirect to policies/ (the rules live in policies/)
 │   └── multi-module-schema-scoping.md ← schema.prisma vs design.md scoping procedure, read only once >1 module exists
 ├── agents/*.md                  ← the eleven agents
 ├── hooks/
 │   ├── block-git.js              ← PreToolUse guard enforcing the no-git rule
 │   ├── block-outside-repo.js     ← PreToolUse guard keeping every write inside the repo root
 │   ├── block-doc-rewrite.js      ← PreToolUse guard forcing Edit (not Write) on existing module docs
-│   ├── block-path-permissions.js ← PreToolUse guard: per-agent write/deny paths from contracts/*.yaml (T15)
+│   ├── block-path-permissions.js ← PreToolUse guard: per-agent write/deny paths from contracts/*.yaml
 │   ├── require-green-before-stop.js ← Stop guard: an engineer can't hand off red typecheck/lint
-│   └── block-secret-leak.js      ← Stop guard: no hardcoded secret in a file this run changed (T25)
+│   └── block-secret-leak.js      ← Stop guard: no hardcoded secret in a file this run changed
 ├── scripts/
 │   ├── check-schema-contract.js  ← run by qa-engineer: diffs schema.prisma against every design.md
-│   ├── check-status-sync.js      ← independent second opinion on an existing status.md (T50)
-│   ├── generate-status.js        ← every agent runs this to (re)write status.md — no hand-edits (T51)
+│   ├── check-status-sync.js      ← independent second opinion on an existing status.md
+│   ├── generate-status.js        ← every agent runs this to (re)write status.md — no hand-edits
 │   └── static-analysis-gate.js   ← run by qa-engineer before a FULL round: profile commands + source-root security/dependency scans
 ├── tests/
 │   └── run.js                    ← self-test for every hook + script (both runtimes' copies, no deps)
@@ -141,8 +138,7 @@ _docs/
 ```
 layout.yaml                      ← which concept owns which directory (checked by --check-layout)
 contracts/*.yaml                 ← the machine-readable half of each agent
-policies/                        ← conventions.md split per area (T49): coding, git, architecture,
-                                   documentation, security, agent-boundaries
+policies/                        ← policies per area: coding, git, architecture, documentation, security, agent-boundaries
 workflows/                       ← one YAML per kind of change (11 files, generated from taskClassifier.ts + workflowCatalog.ts, byte-checked by --check-workflows — ADR-007)
 ```
 
@@ -160,7 +156,7 @@ launch, while an explicit settings override is reported as the user's choice.
 Two paths are deliberately **not** moved by it. `.claude/agents/` is where Claude Code resolves
 subagents from, so relocating the prompts would separate the concept by breaking the product;
 the concept is separated instead by naming both halves of an agent — the prompt and the
-contract. And `.workflow/` keeps the runtime state path T02 specified, since renaming it to
+contract. And `.workflow/` keeps the runtime state path, since renaming it to
 `runtime/` would break existing state to gain a synonym.
 
 No *document* is written at the repo root — every module doc lives under `_docs/module/<name>/`. (Project files that belong at the root by convention are a different thing: `setup` writes `package.json`, `.env`, `.env.example`, and `.gitignore` there, and `devops` writes infra files.) Every doc agent resolves its module folder first: one folder → use it; several → ask the user; none → send them back to `business-analyst`.
@@ -189,7 +185,7 @@ Set in each agent's frontmatter. The split puts the expensive model where a mist
 
 To change one, edit that agent's frontmatter. `inherit` follows the session's `/model`.
 
-**Every agent's frontmatter also carries `version:` (T57)** — a plain integer, starting at 1, bumped by whoever edits that agent's prompt meaningfully. This is log-only: Claude Code resolves a subagent from exactly `.claude/agents/<role>.md`, so only the prompt currently at that path can ever run — nothing here lets a task pin or run an older version. `orchestrator/src/agents/agentModel.ts`'s `resolveAgentVersion()` reads it the same way `resolveAgentModel()` reads `model:`, and `orchestrator/src/runtime/runtimeExecutor.ts` logs it on every run (`RunRecord.promptVersion`) so a task's history says which prompt version actually ran it — via whichever `RuntimeAdapter` (T108) is configured, `claudeCodeAdapter.ts` (T109) today.
+**Every agent's frontmatter also carries `version:`** — a plain integer, starting at 1, bumped by whoever edits that agent's prompt meaningfully. This is log-only: Claude Code resolves a subagent from exactly `.claude/agents/<role>.md`, so only the prompt currently at that path can ever run — nothing here lets a task pin or run an older version. `orchestrator/src/agents/agentModel.ts`'s `resolveAgentVersion()` reads it the same way `resolveAgentModel()` reads `model:`, and `orchestrator/src/runtime/runtimeExecutor.ts` logs it on every run (`RunRecord.promptVersion`) so a task's history says which prompt version actually ran it — via whichever `RuntimeAdapter` is configured, `claudeCodeAdapter.ts` today.
 
 ---
 

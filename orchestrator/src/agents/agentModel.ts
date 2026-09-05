@@ -2,11 +2,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 /**
- * Resolves which model a stage actually runs on (T26's "Model" field of the execution log),
- * by reading `.claude/agents/<role>.md`'s own frontmatter — the single source of truth CLAUDE.md
- * names for this ("To change one, edit that agent's frontmatter"). The orchestrator's own
- * `AGENT_REGISTRY` (agents/registry.ts) deliberately carries no copy of it: two definitions of
- * the same fact is exactly the drift this pipeline spends effort avoiding elsewhere.
+ * Resolves which model a stage actually runs on by reading `.claude/agents/<role>.md`'s own
+ * frontmatter — the single source of truth. `AGENT_REGISTRY` (agents/registry.ts) deliberately
+ * carries no copy of it, to avoid two definitions of the same fact drifting apart.
  *
  * Returns `null`, never throws, when the file is missing or has no parseable `model:` line — a
  * stage whose model can't be resolved should log as "unknown", not stop the run.
@@ -28,18 +26,17 @@ export function parseModelFromFrontmatter(text: string): string | null {
 }
 
 /**
- * Resolves which prompt version actually ran a stage (T57's "log which prompt version a task
- * used"), the same way `resolveAgentModel` resolves the model — from `.claude/agents/<role>.md`'s
- * own `version:` frontmatter field, never a second copy kept anywhere else.
+ * Resolves which prompt version actually ran a stage, the same way `resolveAgentModel` resolves
+ * the model — from `.claude/agents/<role>.md`'s own `version:` frontmatter field, never a second
+ * copy kept anywhere else.
  *
- * T57 is log-only by design: nothing here lets the orchestrator run an *older* prompt version.
+ * This is log-only by design: nothing here lets the orchestrator run an *older* prompt version.
  * Claude Code resolves a subagent from exactly `.claude/agents/<role>.md`, so only the prompt
- * currently at that path can ever run (`.claude/agents/` §4.1's reasoning). Bump the number in
- * that same file's frontmatter when the prompt changes meaningfully; this just reads it back so
- * a run's log says which one it was.
+ * currently at that path can ever run. Bump the number in that same file's frontmatter when the
+ * prompt changes meaningfully; this just reads it back so a run's log says which one it was.
  *
  * Returns `null`, never throws, when the file is missing or has no parseable `version:` line —
- * an agent file that predates T57 (or a test stub) should log as "unknown", not stop the run.
+ * an agent file without a version (or a test stub) should log as "unknown", not stop the run.
  */
 export function resolveAgentVersion(projectRoot: string, role: string): number | null {
   const file = path.join(projectRoot, ".claude", "agents", `${role}.md`);

@@ -13,19 +13,16 @@ import {
  *
  * WHY THIS IS ITS OWN MODULE
  *
- * This logic started inside `bootstrap/bootstrapRunner.ts`, where it was the
- * fix for the worst bug the T61-T80 review found: discovery wrote every item
- * with `force: true`, so an item a person had taken to `approved` at version 3
- * came back as `draft` at version 1 on the next run, while the bootstrap state
- * still said `ready` and still named the person who had validated it.
+ * This logic was pulled out of `bootstrap/bootstrapRunner.ts`, where discovery
+ * wrote every item with `force: true` — so an item a person had taken to
+ * `approved` at version 3 came back as `draft` at version 1 on the next run,
+ * while the bootstrap state still said `ready` and still named the person who
+ * had validated it.
  *
- * V1.3 needs the same rule in two more places, and one of them is a dry run
- * (T87) whose entire job is to say what an apply *would* do. A dry run with its
- * own copy of this decision is a dry run that can disagree with the apply it is
- * previewing — and that is precisely the shape of the two worst defects the
- * review found: not a bug inside a module, but two modules holding the same
- * agreement separately and each testing itself green. So the decision lives
- * here once, `classifyLanding` answers it without writing anything, and
+ * The rule is needed in more than one place, including a dry run whose entire
+ * job is to say what an apply *would* do. A dry run with its own copy of this
+ * decision could disagree with the apply it is previewing. So the decision
+ * lives here once, `classifyLanding` answers it without writing anything, and
  * `applyLanding` is the only thing that writes. A preview and an apply cannot
  * drift, because they are the same function called twice.
  *
@@ -39,7 +36,7 @@ import {
  *                               approved is agreement, not an event.
  *   past `draft`, new text   -> conflict. The material and the reviewed
  *                               knowledge now disagree; which one is right is a
- *                               person's call (T66), not a stage's.
+ *                               person's call, not a stage's.
  */
 
 export type LandingAction = "create" | "update" | "unchanged" | "conflict";
@@ -136,9 +133,9 @@ export function emptyLanded(): LandedItems {
 /**
  * Classify + apply + sort into buckets, the combination a writer with nothing
  * else to do wants. The decision is returned, so a caller that needs to act on
- * the path — adoption takes a backup before overwriting anything, for T89's
- * rollback — reads it from there rather than this module growing a callback for
- * a concern it should not know about.
+ * the path — adoption takes a backup before overwriting anything, for rollback
+ * — reads it from there rather than this module growing a callback for a
+ * concern it should not know about.
  */
 export function landItem(
   item: KnowledgeItem,

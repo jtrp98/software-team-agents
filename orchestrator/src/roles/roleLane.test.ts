@@ -24,7 +24,7 @@ describe("laneOf (T99)", () => {
   });
 
   /**
-   * The lane grouping is derived from T67's VIEW_OF rather than declared again.
+   * The lane grouping is derived from VIEW_OF rather than declared again.
    * If someone adds a role to VIEW_OF and forgets this file, the lane must still
    * be answerable — which it is, because there is nothing here to forget.
    */
@@ -53,7 +53,7 @@ describe("rolesInLane", () => {
     ]);
   });
 
-  /** V1 left the UXUI lane empty on purpose; uxui-designer is what fills it (T-UX1). */
+  /** The UXUI lane was left empty on purpose; uxui-designer is what fills it. */
   it("holds exactly uxui-designer in the UXUI lane", () => {
     expect(rolesInLane("uxui")).toEqual([AgentStage.UXUI_DESIGNER]);
   });

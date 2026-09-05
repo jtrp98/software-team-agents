@@ -6,6 +6,8 @@ import type { TaskStore } from "../store/taskStore.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { defaultStateDbPath } from "../store/stateView.js";
 import { assetsForRole, type WorkspaceRole } from "../targetcli/roleWorkspace.js";
+import { estimateInputTokens } from "../context/contextBudget.js";
+import type { ContextComposition } from "../context/contextCommand.js";
 
 export interface WorkspaceStaticMeasurement {
   /** Character count of the root instruction files loaded before interactive work. */
@@ -148,6 +150,54 @@ export function recordInteractiveSession(params: {
     // Observability is additive: an unavailable/locked state DB must never end
     // the user's interactive session. This matches knowledgeBriefFor's posture.
     console.error(`[software-team-agents] could not record interactive session telemetry: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * Persists the one composition number `sta tokens` can
+ * actually measure without runtime cooperation: what `sta context` assembled.
+ * Reuses the existing interactive-session recording path (`RunLog` +
+ * `TaskStore`), not a new store. Fail-open like `recordInteractiveSession`: a
+ * telemetry write failure is logged and never changes the caller's exit code.
+ */
+export function recordContextComposition(params: {
+  projectRoot: string;
+  agent: AgentStage;
+  composition: ContextComposition;
+  startedAt: number;
+  endedAt: number;
+  store?: TaskStore;
+}): void {
+  try {
+    const c = params.composition;
+    const contextChars = c.doc_chars + c.knowledge_chars + c.code_intel_chars;
+    const taskId = `context:${params.agent}:${new Date(params.startedAt).toISOString()}`;
+    const record = new RunLog().record({
+      task_id: taskId,
+      agent: params.agent,
+      start_time: params.startedAt,
+      end_time: params.endedAt,
+      outcome: {
+        tokens: 0,
+        cost: 0,
+        result: "PASS",
+        session_kind: "interactive",
+        context_chars: contextChars,
+        estimated_input_tokens: estimateInputTokens(contextChars),
+        doc_chars: c.doc_chars,
+        doc_chars_before: c.doc_chars_before,
+        knowledge_chars: c.knowledge_chars,
+        code_intel_chars: c.code_intel_chars,
+      },
+    });
+    const store = params.store ?? new SqliteTaskStore(defaultStateDbPath(params.projectRoot));
+    try {
+      store.appendRun(record);
+    } finally {
+      if (!params.store) store.close();
+    }
+  } catch (error) {
+    console.error(`[software-team-agents] could not record context composition telemetry: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 

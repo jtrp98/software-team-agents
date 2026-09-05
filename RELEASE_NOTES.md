@@ -1,5 +1,141 @@
 # Release Notes
 
+## software-team-agents 1.0.0 — V5 Simplification Release (2026-09-05)
+
+V5 adds no features. It closes half-finished transitions and makes existing enforcement honest.
+Behaviour changes users will feel are listed below.
+
+### Breaking changes
+
+- **`sensitive` items are now redacted for `devops` and `project-manager` in every workspace**
+  (`T-V5-047`, found while implementing `T-V5-043`).
+
+  This framework has always documented the rule that `devops` and `project-manager` see a `sensitive`
+  item's existence, title and status but not its contents — they schedule and gate work rather than
+  implement or review it. The rule lived only in the Framework repository's own `knowledge-policy.yaml`,
+  which `templateSources.ts` never syncs (`NEVER_TEMPLATED`). The only copy any real workspace had was
+  the 12-byte stub `version: 1`, which resolves to the permissive default. Measured on the real corpus:
+  a `project-manager` retrieval in a Knowledge repository returned 50 items flagged `sensitive: true`
+  with `withheld: []` and full bodies. The rule was written down in one repository and enforced in none.
+
+  **What changes:** the two role rules — and the per-kind freshness thresholds beside them
+  (`db-schema` and `api` age at 30 days and go stale at 90; `decision` at 365/730, against the 90/180
+  default) — are now the built-in policy, so they apply with no file present. Measured effect on one
+  real module set: for `project-manager` and `devops`, 121 items become redacted and the body+payload
+  bytes they receive drop from 163,606 to 70,402. **No item is hidden** — item counts are unchanged and
+  identity, title, status and relations are all preserved. Engineers, `system-analyst` and `qa-engineer`
+  are unaffected (0 items redacted). An item's own owner, and `HUMAN`, still see everything.
+
+  **How to proceed deliberately:** `knowledge-policy.yaml` still overrides. A stated `roles:` block is
+  taken as written and replaces the built-in one, so a project that wants the old behaviour writes
+  `roles: {}` (or names its own answer). An **absent** `roles:` key inherits the built-in rule — this is
+  why the stub `version: 1` no longer silently erases it.
+
+  **Worth reviewing separately:** in the validation corpus, 111 of the flagged items are implementation
+  `task` items (adding database columns) that a legacy `sta adopt` import marked `sensitive: true`.
+  Whether those items should carry the flag is a Knowledge-repository content question for BA/SA, not a
+  framework one — but it is what makes the measured effect this large.
+
+- **Guard coverage is now a launch requirement for every runtime** (`T-V5-008`, audit finding `F-05`).
+  Until now, `status` printed `Codex: READY` after counting `.codex/agents/*.toml` with no guard check
+  of any kind, and `dev`/`ba` preflight inspected guard wiring only when the launching runtime was
+  Claude. `software-team-agents ba --runtime codex` therefore started a session with none of the six
+  guards active.
+
+  **What changes:** every runtime now gets one guard verdict, consulted by both readiness and
+  preflight.
+  - `codex` has no guard mechanism — the payload ships no Codex hook wiring and Codex's hook loading
+    has never been verified on a real install — so it reports `NOT READY — UNGUARDED` and **launches
+    that succeed today now stop**.
+  - `opencode` reports its coverage as *partial* and names both halves: `.opencode/plugin/sta-guards.js`
+    enforces `block-outside-repo` and `block-path-permissions`, each binding's permission block
+    enforces `block-git`; `block-doc-rewrite`, `block-secret-leak` and `require-green-before-stop`
+    have no OpenCode mechanism and do not run. A workspace missing the plugin is `unguarded` and
+    stops, because OpenCode's default posture is allow-all.
+  - `claude` behaviour is unchanged: the same registrations are required and the same messages are
+    printed.
+
+  **How to proceed deliberately:** `software-team-agents dev|ba --runtime <name> --allow-unguarded-runtime`
+  launches an unguarded session on purpose; the launch line records it as
+  `[UNGUARDED SESSION — acknowledged]`. The flag never applies to a *broken* Claude guard wiring —
+  a missing or unregistered hook stays a hard failure with or without it.
+
+  Building a Codex guard mechanism is deliberately out of V5's scope (`ADR-023` feature freeze).
+
+### Update and status
+
+- **`software-team-agents status` now derives freshness from the on-disk sync plan** (`T-V5-011`,
+  audit finding `F-02`). Workspaces whose Framework version string matches but whose managed payload
+  is stale now report `OUTDATED` and name the pending managed paths. A cross-major mismatch remains
+  `INCOMPATIBLE` and takes precedence over ordinary drift. `status` remains read-only.
+- `status` and `doctor` show the managed paths that `sync` would change and the repair command.
+  When `ba` or `dev` auto-syncs before launch, its preflight line now announces the paths it wrote;
+  `--no-auto-sync` stops with the same path list instead of a generic outdated message (`T-V5-012`).
+- `sta list-backups` and `sta rollback` now use the `.agent-team/backups/` snapshots written by the
+  live sync lifecycle. New snapshots pair changed files with the pre-sync manifest; rollback restores
+  both while leaving `.agent-team/config.yaml` and its overrides untouched. Legacy `.sta/` snapshots
+  remain readable during the transition, and `sta upgrade` aliases the live sync path for an
+  `.agent-team` workspace (`T-V5-013`).
+- Template and workspace manifests now carry an optional payload digest derived from their existing
+  file hashes. This lets `status` identify two Framework checkouts that share a version string but
+  ship different bytes. A pre-V5 workspace without the field remains valid and reports the digest as
+  unknown until its next sync; absence is never treated as a mismatch (`T-V5-015`).
+- Synced `policies/` remains present on disk and continues to power `sta policy`, but new workspaces
+  list it in the managed `.gitignore` block because the Framework repository owns those files.
+  **Ignoring does not untrack files already committed:** existing repositories keep their committed
+  copies until a person runs `git rm -r --cached policies/` and commits that version-control change.
+  Sync itself never runs git and never removes the working copies (`T-V5-016`).
+
+### Distribution
+
+- **The real install channel is documented as what it is: `npm link` onto a Framework checkout**
+  (`T-V5-030`, audit finding `F-23`). There has never been a published `.tgz` release — `npm run
+  release` produces a packing *script's* output, not a distributed artifact — and the README/
+  `TEAM_SETUP_V1.md` named a version (`1.0.0-rc.1.tgz`) that never shipped. Getting Started now leads
+  with `npm link`; the `.tgz` path stays documented as the route for someone who has not cloned the
+  Framework, produced by `npm run release` on demand.
+- **`software-team-agents --version` now reports the payload digest alongside the version string**
+  (`<version>+<digest12>`, e.g. `1.0.0-rc.3+3f9a1c2b7e4d`), so two Framework checkouts on the same
+  linked-checkout channel — and therefore the same version string — are distinguishable the moment
+  their payload differs. `--version`'s regex shape (`\d+\.\d+\.\d+…`) is unchanged; the digest is
+  semver build metadata appended, not a restructured string, and ordinary version comparisons
+  (`sameMajor`, `classifySyncState`) ignore it exactly as they ignore any other build-metadata suffix.
+
+### Architecture and simplification
+
+- **Legacy `.sta/` installer and lifecycle verbs retired** (`T-V5-038`, audit finding `F-01`, `F-23`).
+  `software-team-agents init` is now the single installer entry point, writing `.agent-team/`.
+  The redundant legacy installer that created `.sta/`, along with its four stranded verbs
+  (`sta init --mode legacy-project`, `sta upgrade`, `sta repair`, `sta rollback`), has been removed.
+  Pre-V5 `.sta/`-only workspaces convert automatically and cleanly to `.agent-team/` upon `init`.
+- **`paid-api` runtime retired** (`T-V5-039`, audit finding `F-16`).
+  The unexecutable `paid-api` adapter and its options have been deleted. Supported runtimes are now
+  strictly `claude` (Supported), `codex` (Preview), and `opencode` (Experimental).
+- **Execution modes collapsed to one route** (`T-V5-040`, audit finding `F-17`).
+  The complex multi-mode system (`Single`/`Auto`/`Manual`), 5 precedence tiers, and camp-based routing
+  have been replaced with one deterministic, fail-closed route: flag > `routing.by_role` > default (`claude-code`).
+  An unavailable route stops for a human instead of hopping between runtimes.
+- **Legacy adoption subsystem retired** (`T-V5-041`, `T-V5-026`, `ADR-024`, audit finding `F-13`, `F-22`).
+  The one-time import subsystem (`sta adopt`, `_adoption/`, `.migration/`) has been removed (~3,121 lines).
+  Imported knowledge items remain authoritative under `knowledge/`.
+- **Machine-local paths removed from shared configuration** (`T-V5-042`, audit finding `F-08`).
+  Committed `target.path` in `.agent-team/config.yaml` is retired in favor of `target_id` combined with
+  machine-local mapping in `.workflow/targets.local.yaml`.
+- **Document size governance enforced by `--check-doc-size`** (`T-V5-033`, `T-V5-027`, audit finding `F-04`, `F-19`).
+  Hard ceilings per `policies/documentation.md` §4 (100 KB per section, 400 KB per module document)
+  are now enforced deterministically by `--check-doc-size` in both Framework release gates and Knowledge repository CI.
+
+### Knowledge repository editorial backlog (carried forward)
+
+- Real-world validation against `knowledge-schoolbright` in `T-V5-045` identified pre-existing document and plan
+  content issues that are now visible and enforced by V5 checkers:
+  - `--check-doc-structure`: 3 module documents lack structured REQ anchors (`crm-ai-support/requirement.md`, etc.).
+  - `--check-doc-size`: sections exceeding the byte ceiling (e.g. `WORD-01` in `sb-compass`).
+  - `--check-plan`: task DAG validation findings in `crm-ai-support/plan.md`.
+  - `--check-knowledge`: 10 stale registered sources pending content re-sync by BA/SA.
+  These findings are content debt owned by the BA/SA/PM team, not framework code bugs, and are tracked as
+  the Knowledge repository backlog carried forward past the V5 release.
+
 ## Internal V1 Stable
 
 **Internal V1 Stable = P0 → P1 → P2 → P3 → P4 each executed and reported,

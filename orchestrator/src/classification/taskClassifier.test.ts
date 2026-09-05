@@ -14,8 +14,8 @@ describe("classifyTask", () => {
   it("classifies a typo/copy fix as TRIVIAL with engineer-only pipeline", () => {
     const result = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
     expect(result.level).toBe(TaskLevel.TRIVIAL);
-    // No design phase in a copy tweak (T-UX11) — the module's existing signed
-    // UX artifact covers it; uxui-designer runs only in design-bearing pipelines.
+    // No design phase in a copy tweak — the module's existing signed UX
+    // artifact covers it; uxui-designer runs only in design-bearing pipelines.
     expect(result.pipeline).toEqual([AgentStage.FRONTEND_ENGINEER]);
     expect(result.requiresHumanApproval).toBe(false);
   });

@@ -3,13 +3,12 @@ import * as path from "node:path";
 import { sectionMap } from "../context/sections.js";
 
 /**
- * T-V3TOK-013 — on-demand policy retrieval.
+ * On-demand policy retrieval.
  *
- * `policies/` is 52,733 B across seven files, and every agent prompt used to
- * open all of it before looking at the work. Removing that pre-read (T-V3TOK-012)
- * is only safe if a narrower way in exists first: without one an agent falls
- * back to `Read policies/documentation.md`, which is 28,438 B on its own, and
- * the tokens come straight back.
+ * `policies/` contains multiple files, and previously every agent prompt used to
+ * open all of it before looking at the work. Removing that pre-read is only
+ * safe if a narrower way in exists first: without one an agent falls back to
+ * reading entire policy files, inflating token consumption.
  *
  * This is a *surface*, not a new parser. Sections come from `sectionMap()` in
  * `context/contextManager.ts`, which already handles the one case that matters
@@ -154,7 +153,7 @@ export function getPolicySection(projectRoot: string, area: string, section: str
 
 /**
  * Every `policies/<file>.md §<n>` pointer an agent prompt may carry, resolved
- * against the real headings. T-V3TOK-014 guard 4 uses this so a pointer that
+ * against the real headings. The contract check uses this so a pointer that
  * rots is a failing check rather than an agent's dead end at runtime.
  */
 export function policyPointerResolves(projectRoot: string, area: string, section: string): boolean {

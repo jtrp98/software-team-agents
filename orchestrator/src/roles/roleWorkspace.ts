@@ -13,42 +13,37 @@ import type { KnowledgeItem } from "../knowledge/knowledgeModel.js";
 import { LANE_LABEL, type RoleLane, ROLE_LANES, isRoleLane, laneOf } from "./roleLane.js";
 
 /**
- * The role workspace (T99) — where one lane stands in the shared knowledge
- * base, so BA, SA and DEV can work independently against one set of facts
- * instead of three copies of them.
+ * The role workspace — where one lane stands in the shared knowledge base, so
+ * BA, SA and DEV can work independently against one set of facts instead of
+ * three copies of them.
  *
- * WHAT IT HOLDS, AND WHY IT IS SO SMALL
+ * It holds exactly one field, `seen`: a watermark of which version of which
+ * item the person in this lane has acknowledged. That is the only thing here
+ * that cannot be worked out from `knowledge/` itself — everything else a
+ * caller wants is derived (`laneView()`): what the lane is drafting, what
+ * moved under it since it last looked, what it depends on and has never
+ * acknowledged at all. Conflicts are re-detected every run rather than
+ * stored, because a stored list keeps escalating things somebody already
+ * fixed; only the *decision* is kept. A change notification is the same
+ * shape of thing — it stops being true the moment the reader catches up —
+ * so the notification is derived and only the acknowledgement is stored.
  *
- * One field: `seen`, a watermark of which version of which item the person in
- * this lane has acknowledged. That is the only thing here that cannot be
- * worked out from `knowledge/` itself, and everything a caller actually wants
- * is worked out (`laneView()`): what the lane is drafting, what moved under it
- * since it last looked, what it depends on and has never acknowledged at all.
+ * The consequence that matters most: because the inbox is derived from the
+ * *reader's* watermark, nothing ever writes into another lane's file. BA
+ * amending REQ-003 does not notify DEV; DEV notices, because DEV's own
+ * recorded version of REQ-003 no longer matches. So "no lane writes another
+ * lane's workspace" costs nothing to enforce, and "every affected lane is
+ * told, not just some of them" is a property of the arithmetic rather than a
+ * discipline someone has to keep.
  *
- * The reason is T66's, applied to a different list. Conflicts are re-detected
- * every run rather than stored, because a stored list keeps escalating things
- * somebody already fixed; only the *decision* is kept. A change notification is
- * the same shape of thing — it stops being true the moment the reader catches
- * up — so the notification is derived and only the acknowledgement is stored.
- *
- * THE CONSEQUENCE THAT MATTERS MOST
- *
- * Because the inbox is derived from the *reader's* watermark, nothing ever
- * writes into another lane's file. BA amending REQ-003 does not notify DEV; DEV
- * notices, because DEV's own recorded version of REQ-003 no longer matches. So
- * "no lane writes another lane's workspace" costs nothing to enforce, and
- * "every affected lane is told, not just some of them" is a property of the
- * arithmetic rather than a discipline someone has to keep.
- *
- * NOTHING HERE ADVANCES `seen` ON ITS OWN
- *
- * `acknowledge()` is the only writer, it requires a person's name, and it takes
- * the version from the knowledge base rather than from the caller — you
- * acknowledge what is actually in front of you, not a number you supply. If
- * retrieval advanced the watermark, every notification would be marked read
- * before anyone had seen it, which is the failure this whole file exists to
- * prevent. Agents are kept out of it at a lower level too: `knowledge/_roles/**`
- * is in `UNIVERSAL_DENY`, so no agent can write one of these files in any mode,
+ * Nothing here advances `seen` on its own: `acknowledge()` is the only
+ * writer, it requires a person's name, and it takes the version from the
+ * knowledge base rather than from the caller — you acknowledge what is
+ * actually in front of you, not a number you supply. If retrieval advanced
+ * the watermark, every notification would be marked read before anyone had
+ * seen it, which is the failure this whole file exists to prevent. Agents
+ * are kept out of it at a lower level too: `knowledge/_roles/**` is in
+ * `UNIVERSAL_DENY`, so no agent can write one of these files in any mode,
  * with or without a contract. The writer is a person, through the CLI.
  */
 
@@ -75,7 +70,7 @@ export interface SignoffItemRef {
   version: number;
 }
 
-/** The person in this lane answering their own gate (T103) — see `roleApproval.ts` for the rules. */
+/** The person in this lane answering their own gate — see `roleApproval.ts` for the rules. */
 export interface LaneSignoff {
   type: ApprovalType;
   status: "approved" | "rejected";
@@ -90,7 +85,7 @@ export interface RoleWorkspace {
   lane: RoleLane;
   module: string | null;
   seen: SeenRef[];
-  /** Optional so a T99-era file still loads; absent and `[]` mean the same thing. */
+  /** Optional so an older file still loads; absent and `[]` mean the same thing. */
   signoffs?: LaneSignoff[];
   updated_at: string;
 }
@@ -254,7 +249,7 @@ function orderedForYaml(workspace: RoleWorkspace): Record<string, unknown> {
     updated_at: workspace.updated_at,
     seen: workspace.seen,
     // Omitted entirely rather than written as `[]`, so a lane that has never been
-    // signed off produces the same file it did before T103 added the field.
+    // signed off produces the same file it did before this field was added.
     ...(workspace.signoffs && workspace.signoffs.length > 0 ? { signoffs: workspace.signoffs } : {}),
   };
 }
@@ -295,8 +290,8 @@ export class AcknowledgementError extends Error {
  * Three things it refuses, each of which would otherwise make the watermark lie:
  *
  *   - **An empty `by`.** An acknowledgement is a human act; one with nobody
- *     attached is an agent marking work seen on a person's behalf, which is the
- *     thing V1.5 exists to prevent.
+ *     attached is an agent marking work seen on a person's behalf, which this
+ *     mechanism exists to prevent.
  *   - **An unknown id.** A watermark for an item that does not exist can never
  *     be compared against anything, so it silently drops out of every report.
  *   - **Nothing to acknowledge.** An empty call would bump `updated_at` and
@@ -351,12 +346,13 @@ export function acknowledge(
  *
  * Only two values, and deliberately not four. The first version of this had
  * `idle`/`drafting`/`awaiting-approval` here too — which is where the lane's own
- * work sits on T65's path, and that is `RoleWorkflowStage`'s question
- * (`roleWorkflow.ts`, T100). Two vocabularies answering overlapping questions
- * print as `BA drafting [drafting]` and diverge the first time one is edited, so
- * this one shrank to the half only it can answer: has anything this lane depends
- * on moved since the person in it last looked. `active` and `awaitingApproval`
- * stay below as data — it is the single-word verdict that had two owners.
+ * work sits on the draft/reviewed/approved path, and that is
+ * `RoleWorkflowStage`'s question (`roleWorkflow.ts`). Two vocabularies
+ * answering overlapping questions print as `BA drafting [drafting]` and
+ * diverge the first time one is edited, so this one shrank to the half only
+ * it can answer: has anything this lane depends on moved since the person in
+ * it last looked. `active` and `awaitingApproval` stay below as data — it is
+ * the single-word verdict that had two owners.
  */
 export type LaneStatus = "up-to-date" | "behind";
 
@@ -368,7 +364,7 @@ export interface LaneView {
   active: string[];
   /** Items this lane owns that only a person can now move on. */
   awaitingApproval: string[];
-  /** Cross-lane dependencies whose acknowledged version is no longer current. T105/T106's input. */
+  /** Cross-lane dependencies whose acknowledged version is no longer current. Feeds change propagation. */
   stale: StaleReference[];
   /** Cross-lane dependencies never acknowledged at all — so an empty `seen` does not read as "nothing to do". */
   unseen: string[];
@@ -387,7 +383,7 @@ export interface LaneView {
  * lane owns.
  *
  * Deliberately narrow. "Which knowledge might matter to DEV" is a question with
- * an expansive answer (T106 sharpens it with `impactOf`), but the answer that
+ * an expansive answer (`impactOf` sharpens it further), but the answer that
  * is certainly right and cheap is the one the lane has already written down: a
  * task that `implements` an API declares a dependency on that API, in the
  * knowledge graph, by the lane that owns the task. Items this lane owns itself
@@ -464,7 +460,7 @@ export function checkRoleWorkspaces(projectRoot: string = defaultProjectRoot()):
     return {
       ok: true,
       problems: [],
-      notes: [`no knowledge/${ROLES_DIRNAME}/ — no role workspace has been opened yet (T99).`],
+      notes: [`no knowledge/${ROLES_DIRNAME}/ — no role workspace has been opened yet.`],
     };
   }
 

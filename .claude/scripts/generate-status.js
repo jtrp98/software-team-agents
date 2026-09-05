@@ -1,39 +1,27 @@
 #!/usr/bin/env node
 /*
- * Generates `_docs/status.md` from the real module documents (T51).
- *
- * WHY THIS EXISTS
- *
- * Before T51, every agent hand-edited `_docs/status.md` as the last thing it did
- * (`policies/documentation.md` §2 said so directly). That is exactly the kind of duplicated
- * fact `check-status-sync.js` was built to catch drift in, not prevent: an agent
- * could always still write the wrong symbol, or forget to update it, and nothing would know
- * until the next drift check ran. This script removes the duplication instead of policing it —
- * `status.md`'s per-phase table is computed straight from `plan.md`'s task table (T52 — each
- * row's `Status` cell), `review.md`'s `## Review Outcome` line, `security.md`'s `## Open Findings` table, and
- * `deploy.md`'s Deploy History, every time it runs. There is nothing left for an agent to get
- * wrong by hand, because there is nothing left for an agent to hand-write.
+ * Generates `_docs/status.md` from the real module documents, instead of relying on every agent
+ * to hand-edit it as the last thing it does. Hand-editing is exactly the kind of duplicated fact
+ * `check-status-sync.js` exists to catch drift in, not prevent -- an agent could always write the
+ * wrong symbol or forget to update it. This script removes the duplication instead of policing
+ * it: `status.md`'s per-phase table is computed straight from `plan.md`'s task table (each row's
+ * `Status` cell), `review.md`'s `## Review Outcome` line, `security.md`'s `## Open Findings`
+ * table, and `deploy.md`'s Deploy History, every time it runs.
  *
  * Not a hook -- nothing blocks on this. Run it via Bash: `node .claude/scripts/generate-status.js`.
  * Every agent runs it as the last thing it does, in place of hand-editing `status.md` directly
  * (`policies/documentation.md` §2 has the current rule). Exit code is always 0: this is a writer,
  * not a checker -- `check-status-sync.js` is still the tool for verifying an existing `status.md`
- * without regenerating it (useful in manual mode, before this script existed on a project, or as
- * a second opinion).
+ * without regenerating it.
  *
- * WHAT IT DELIBERATELY DOES NOT TOUCH
+ * The `## Scaffold` line is written once by `setup` and isn't derivable from any other document,
+ * so this script preserves whatever the existing `status.md` says there, verbatim, and only
+ * invents a placeholder the first time the file doesn't exist yet.
  *
- * The `## Scaffold` line is written once by `setup` and isn't derivable from any other document
- * (there is no "is this project scaffolded" fact sitting in a doc) -- this script preserves
- * whatever the existing `status.md` says there, verbatim, and only invents a placeholder the
- * first time the file doesn't exist yet.
- *
- * WHY THE OUTPUT FORMAT IS UNCHANGED
- *
- * The template this produces is byte-for-byte the same shape `policies/documentation.md` §2
- * always documented (`- Phase N — implemented X · verified Y · security Z · deployed W`,
- * `**Now**:`, `**Blocked on**:`) -- `check-status-sync.js`'s regexes, and every agent that reads
- * `status.md` expecting that shape, keep working unchanged. Only *who writes it* changed.
+ * The output format is byte-for-byte the same shape `policies/documentation.md` §2 documents
+ * (`- Phase N — implemented X · verified Y · security Z · deployed W`, `**Now**:`,
+ * `**Blocked on**:`), so `check-status-sync.js`'s regexes, and every agent that reads `status.md`
+ * expecting that shape, keep working unchanged. Only *who writes it* changed.
  */
 
 'use strict';
@@ -61,7 +49,7 @@ function findModules() {
     .sort();
 }
 
-/** Phases in plan.md order, each with its task-table tally (T52) and whether it's gated. */
+/** Phases in plan.md order, each with its task-table tally and whether it's gated. */
 function parsePlanPhases(planMd) {
   const lines = planMd.split(/\r?\n/);
   const phases = []; // { num, name, gated, total, checked }

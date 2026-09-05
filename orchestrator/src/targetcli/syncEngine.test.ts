@@ -201,7 +201,6 @@ describe("safe sync engine", () => {
       expect(conflictError.plan.conflicts.map((c) => c.path)).toEqual([".claude/settings.json"]);
       expect(conflictError.plan.conflicts[0]!.kind).toBe("user-modified");
     }
-    // Local edit survived untouched.
     expect(fs.readFileSync(settingsPath, "utf8")).toBe('{"hooks":{"PreToolUse":[{"edited":true}]}}');
   });
 
@@ -411,7 +410,7 @@ describe("safe sync engine — OpenCode renderings (T-OC2)", () => {
   });
 });
 
-// --- T-WG7 — DEV-workspace rendering of CLAUDE.md + the generated include ---
+// --- DEV-workspace rendering of CLAUDE.md + the generated include ---
 
 const DEV_V1: FixtureFile[] = [
   { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer", "builds backend") },
@@ -430,6 +429,68 @@ function installationConfigFixture(knowledgeRoot: string): string {
   fs.writeFileSync(file, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledgeRoot)}\n`, "utf8");
   return file;
 }
+
+describe("BA-workspace Target rendering (T-WG7 / T-V5-042)", () => {
+  /**
+   * The BA half of the same renderer resolves its bound root through
+   * `target_id`, not a committed `target.path` — a path back to the old field
+   * would silently drop the "Target root" line out of every BA CLAUDE.md, so
+   * this is covered explicitly.
+   */
+  function baWorkspaceWithTarget(): { knowledge: string; app: string } {
+    const knowledge = tmpRoot("ba-knowledge");
+    fs.mkdirSync(path.join(knowledge, ".git"));
+    fs.mkdirSync(path.join(knowledge, "knowledge"));
+    const app = gitTarget();
+    fs.writeFileSync(path.join(app, "package.json"), "{}", "utf8");
+    fs.writeFileSync(
+      path.join(knowledge, "targets.yaml"),
+      "schema_version: 1\ntargets:\n  - target_id: app\n    name: App\n    remote_url: https://github.com/acme/app.git\n    status: active\n",
+      "utf8",
+    );
+    fs.mkdirSync(path.join(knowledge, ".workflow"), { recursive: true });
+    fs.writeFileSync(
+      path.join(knowledge, ".workflow", "targets.local.yaml"),
+      `schema_version: 1\ntargets:\n  app:\n    path: ${JSON.stringify(app)}\n`,
+      "utf8",
+    );
+    return { knowledge, app };
+  }
+
+  it("renders the bound Target root from target_id, through the local mapping", () => {
+    const { knowledge, app } = baWorkspaceWithTarget();
+    writeTargetConfig(knowledge, { ...defaultTargetConfig("kb", "2026-01-01T00:00:00Z", "ba"), target: { target_id: "app" } });
+
+    runTargetSync({
+      targetRoot: knowledge,
+      templatesDir: makeTemplatesDir("1.0.0", DEV_V1),
+      now: "2026-01-01T00:00:00Z",
+    });
+
+    const claude = fs.readFileSync(path.join(knowledge, "CLAUDE.md"), "utf8");
+    expect(claude).toContain("Target root (optional, read-only)");
+    expect(claude).toContain(fs.realpathSync.native(app));
+  });
+
+  it("renders UNBOUND when no target_id is set — including for a config still carrying only the removed target.path", () => {
+    const { knowledge } = baWorkspaceWithTarget();
+    writeTargetConfig(knowledge, defaultTargetConfig("kb", "2026-01-01T00:00:00Z", "ba"));
+    // Append the removed field the way an un-migrated workspace still has it.
+    const configFile = path.join(knowledge, ".agent-team", "config.yaml");
+    fs.appendFileSync(configFile, "target:\n  path: C:\\src\\somewhere\\app\n", "utf8");
+
+    runTargetSync({
+      targetRoot: knowledge,
+      templatesDir: makeTemplatesDir("1.0.0", DEV_V1),
+      now: "2026-01-01T00:00:00Z",
+    });
+
+    const claude = fs.readFileSync(path.join(knowledge, "CLAUDE.md"), "utf8");
+    // The stale committed path never reaches the rendered instruction surface.
+    expect(claude).not.toContain("C:\\src\\somewhere\\app");
+    expect(claude).toContain("UNBOUND");
+  });
+});
 
 describe("DEV-workspace Knowledge rendering (T-WG7)", () => {
   it("renders CLAUDE.md with the banner and writes the include for a dev workspace", () => {
@@ -549,7 +610,7 @@ describe("T-V3-07 AGENTS.md rendered pointer ownership", () => {
     const duplicate = "# Same project rules\n";
     fs.writeFileSync(path.join(target, "CLAUDE.md"), duplicate, "utf8");
     fs.writeFileSync(path.join(target, "AGENTS.md"), duplicate, "utf8");
-    const first = sync(target);
+    sync(target);
     expect(stripBootstrapBlock(fs.readFileSync(path.join(target, "AGENTS.md"), "utf8"))).toBe(duplicate);
     const second = sync(target, { now: "2026-01-02T00:00:00Z", manifest: readTargetManifest(target), config: undefined, confirmAgentsPointer: true });
     const reduced = fs.readFileSync(path.join(target, "AGENTS.md"), "utf8");
@@ -570,10 +631,10 @@ describe("T-V3-07 AGENTS.md rendered pointer ownership", () => {
 });
 
 describe("sync-state classification (packaging checklist: READY/OUTDATED/INCOMPATIBLE)", () => {
-  it("distinguishes up-to-date, patch/minor drift, and major incompatibility", () => {
-    expect(classifySyncState("1.2.0", "1.2.0")).toBe("UP_TO_DATE");
-    expect(classifySyncState("1.2.0", "1.3.0")).toBe("OUTDATED");
-    expect(classifySyncState("1.3.0", "1.2.9")).toBe("OUTDATED");
+  it("uses version strings only for the major-version compatibility stop", () => {
+    expect(classifySyncState("1.2.0", "1.2.0")).toBeUndefined();
+    expect(classifySyncState("1.2.0", "1.3.0")).toBeUndefined();
+    expect(classifySyncState("1.3.0", "1.2.9")).toBeUndefined();
     expect(classifySyncState("1.2.0", "2.0.0")).toBe("INCOMPATIBLE");
     expect(classifySyncState("2.0.0", "1.2.0")).toBe("INCOMPATIBLE");
   });

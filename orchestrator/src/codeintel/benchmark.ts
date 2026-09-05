@@ -4,22 +4,15 @@ import { estimateInputTokens } from "../context/contextBudget.js";
 import type { CodeIntelligenceProvider } from "./provider.js";
 
 /**
- * T-GR12 harness — the discovery-level half of the A/B benchmark.
+ * Discovery-level half of an A/B benchmark: for the same question, how much
+ * reading does a graph-assisted discovery point at versus a full sweep of
+ * the task's scope directories? Side A (naive) is that full worst case;
+ * side B is the unique candidate files the provider names, at real byte
+ * size. Tokens are estimated at ~4 bytes/token on both sides, so the RATIO
+ * is meaningful even where the absolute number is rough.
  *
- * WHAT THIS MEASURES HONESTLY, WITHOUT RUNNING AGENTS: for the same question,
- * how much reading does a graph-assisted discovery point at versus what the
- * pre-provider pipeline would have had to sweep? Side A (naive) is the full
- * worst case the old flow faced — every code file under the task's scope
- * directories, each one potentially opened and grepped. Side B is the unique
- * candidate files the provider names, at their real byte size. Tokens are
- * estimated at ~4 bytes/token, the same convention graphify's own benchmark
- * uses; both sides use it, so the RATIO is meaningful even where the absolute
- * number is rough.
- *
- * WHAT THIS DOES NOT MEASURE (and must not pretend to): wrong-file edits,
- * defects missed, verdict quality — those need orchestrated agent runs with
- * people watching, which is the other half of T-GR12. This module exists so
- * that half starts from recorded numbers instead of opinions.
+ * This does NOT measure wrong-file edits, defects missed, or verdict
+ * quality — those need orchestrated agent runs with people watching.
  */
 
 export interface BenchmarkCase {
@@ -103,7 +96,7 @@ function bytesForFiles(targetRoot: string, files: readonly string[]): number {
 }
 
 /**
- * Same-task A/B accounting for T-V3TOK-071.
+ * Same-task A/B accounting for retrieval cost.
  *
  * OFF models the pre-retrieval engineer opening every relevant candidate in
  * full. ON includes the bounded evidence block and still charges every file
@@ -204,7 +197,7 @@ export function renderBenchmarkMarkdown(rows: BenchmarkRow[], header: { targetId
   return lines.join("\n");
 }
 
-/** Shared stable renderer for deterministic token-workload baselines (T-V3TOK-004). */
+/** Shared stable renderer for deterministic token-workload baselines. */
 export function renderTokenBenchmarkMarkdown(rows: ReadonlyArray<{
   workload: string;
   inputTokens: number;

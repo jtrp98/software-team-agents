@@ -1,13 +1,12 @@
 #!/usr/bin/env node
 /*
- * Static Analysis Gate (T22) — the automated sweep that runs once, right before qa-engineer
+ * Static Analysis Gate — the automated sweep that runs once, right before qa-engineer
  * trusts a round, instead of "lint/typecheck/build/test" being a checklist re-derived from
  * memory every time. With a resolved Target profile it runs `lint`, `format`, `typecheck`,
  * `build`, and `test` from `.agent-team/config.yaml` `stack.commands`; without a profile it
  * preserves the legacy per-package `package.json` walk. It also runs a profile-scoped
- * `security_scan` (T23 — Security as
- * Continuous: this is the "Code" checkpoint, independent of whatever `security` audits later)
- * and `dependency_scan` (T24 — Dependency Security).
+ * `security_scan` (the "Code" checkpoint, independent of whatever `security` audits later)
+ * and `dependency_scan`.
  *
  * `dependency_scan` is deliberately NOT a live `npm audit`/registry call: this gate runs on
  * every FULL QA round, and a check that needs network access would make verification

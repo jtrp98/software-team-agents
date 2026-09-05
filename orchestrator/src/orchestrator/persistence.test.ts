@@ -161,11 +161,6 @@ describe("Orchestrator failure routing (T01)", () => {
     expect(status).toEqual({ kind: "RUNNING", stage: AgentStage.FRONTEND_ENGINEER });
   });
 
-  /**
-   * Before T07 this blocked: the machine had no way back to DESIGN, so a contract
-   * gap and an unclassifiable failure were indistinguishable. It now recovers to
-   * the stage that actually owns the gap.
-   */
   it("recovers to system-analyst when the failure is a contract gap, rather than re-running an engineer that cannot fix it", async () => {
     const { status, orch } = await driveToFailedQa(
       validateStructuredFailure({
@@ -253,8 +248,8 @@ describe("human approval as first-class state (T08)", () => {
       status: "pending",
       required: true,
       from: TaskState.DESIGN,
-      // PLAN (test-planner), not IMPLEMENTATION directly — see gatePolicy.ts's T20 comment:
-      // the gate fires leaving DESIGN regardless of what sits immediately after it.
+      // PLAN (test-planner), not IMPLEMENTATION directly — the gate fires leaving
+      // DESIGN regardless of what sits immediately after it.
       to: TaskState.PLAN,
     });
   });
@@ -279,9 +274,9 @@ describe("human approval as first-class state (T08)", () => {
   });
 
   /**
-   * The behaviour T08 exists for. A rejection used to be stored as `false`,
-   * which is what "never asked" also looked like — so the next poll asked again,
-   * and a "no" degraded into a re-prompt until someone said yes.
+   * A rejection stored as bare `false` would look identical to "never asked" —
+   * so the next poll would ask again, and a "no" would degrade into a
+   * re-prompt until someone said yes.
    */
   it("treats a rejection as an answer: the task blocks instead of being asked again", async () => {
     const { orch } = atSchemaGate();

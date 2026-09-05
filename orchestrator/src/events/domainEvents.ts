@@ -4,55 +4,29 @@ import type { StructuredFailure } from "../orchestrator/failure.js";
 import type { RecoveryAction } from "../retry/recoveryPolicy.js";
 
 /**
- * The domain half of the event vocabulary (T36).
+ * The domain half of the event vocabulary — distinct from the lifecycle events
+ * (AGENT_ASSIGNED / AGENT_COMPLETED / WAITING_FOR_HUMAN / TASK_BLOCKED /
+ * TASK_DEPLOYED) that `orchestrator.ts` emits for stage transitions.
  *
- * WHY THESE ARE NOT THE FIVE EVENTS THAT ALREADY EXISTED
+ * A listener that wants "did QA pass?" would otherwise have to receive
+ * AGENT_COMPLETED, check `stage === qa-engineer`, then read `outcome.result` —
+ * reconstructing a fact the orchestrator already knew. The domain events also
+ * carry facts the lifecycle events can't express at all: the classified
+ * failure and routing decision on a failed round (QA_FAILED/SECURITY_FAILED),
+ * which round passed (QA_PASSED/SECURITY_PASSED, for first-pass-rate tracking),
+ * the actual ApprovalRecord rather than a generic "waiting" signal
+ * (APPROVAL_REQUIRED, fired once per question, not on every status poll), the
+ * human's answer (APPROVAL_DECIDED), and what reaching DEPLOYED cost in
+ * stages/runs/tokens/time (DEPLOY_COMPLETED, alongside the bare TASK_DEPLOYED
+ * transition).
  *
- * `orchestrator.ts` has emitted AGENT_ASSIGNED / AGENT_COMPLETED /
- * WAITING_FOR_HUMAN / TASK_BLOCKED / TASK_DEPLOYED since T01. Those describe
- * the *lifecycle*: a stage started, a stage finished, the machine stopped.
- * They are deliberately generic, and that genericness is the gap T36 names.
- *
- * A listener that wants "did QA pass?" has to receive AGENT_COMPLETED, check
- * `stage === qa-engineer`, then read `outcome.result` — reconstructing a fact
- * the orchestrator already knew and threw away. Worse, the two things a
- * listener most needs after a failed round are not in that payload at all:
- * *what* the failure was (`StructuredFailure`, T06) and *what the orchestrator
- * decided to do about it* (`RecoveryAction`, T07). Those are computed inside
- * `reportCompletion` and, before this, existed only as a return value to
- * whoever happened to be awaiting the call.
- *
- * So these are not renames of the lifecycle events. Each one carries something
- * its lifecycle counterpart cannot express:
- *
- *   QA_FAILED / SECURITY_FAILED   the classified failure AND the routing decision
- *   QA_PASSED / SECURITY_PASSED   which round passed, so a listener can tell a
- *                                 first-pass from a third-round pass (T29/T30's
- *                                 first-pass rate is exactly that distinction)
- *   APPROVAL_REQUIRED             the ApprovalRecord itself — its type, the edge it
- *                                 guards, the words to show a person. WAITING_FOR_HUMAN
- *                                 fires for *any* unsatisfied gate, including ones with
- *                                 no approval type at all, and re-fires on status change;
- *                                 this fires exactly once, when a question is actually
- *                                 opened in the ledger
- *   APPROVAL_DECIDED              the answer. Nothing emitted an answer before, so an
- *                                 external listener could see every question this
- *                                 pipeline ever asked and never learn what was said back
- *   DEPLOY_COMPLETED              TASK_DEPLOYED says the machine reached DEPLOYED.
- *                                 This says what it cost to get there — stages, runs,
- *                                 tokens, money, wall time. Same moment, different fact:
- *                                 one is a transition, the other is the result
- *
- * WHY THE TWO SETS ARE NOT MERGED
- *
- * `benchmark.ts` already listens on AGENT_COMPLETED, and every event ever
- * emitted is persisted (`store.appendEvent`). Renaming an event would both
- * break a live listener and make the stored history of past runs unreadable
- * against the current vocabulary — the audit trail T37 builds on would start
- * with a discontinuity nothing records the reason for.
+ * The two sets are kept separate rather than merged/renamed because
+ * `benchmark.ts` already listens on AGENT_COMPLETED and every event is
+ * persisted (`store.appendEvent`) — renaming would break a live listener and
+ * make stored history from past runs unreadable.
  */
 
-/** T36's event names, as values — for a switch, a queue's routing key, or an audit filter. */
+/** Domain event names, as values — for a switch, a queue's routing key, or an audit filter. */
 export enum DomainEventType {
   QA_PASSED = "QA_PASSED",
   QA_FAILED = "QA_FAILED",
@@ -68,17 +42,17 @@ export interface VerdictPassedEvent {
   taskId: string;
   stage: AgentStage;
   /**
-   * How many failed rounds of this kind preceded it. 0 means first-pass — the
-   * number T30's quality score is built on, and one nothing else emits.
+   * How many failed rounds of this kind preceded it. 0 means first-pass —
+   * used for quality score calculations.
    */
   round: number;
 }
 
 /** A verification round that came back dirty, with both halves of the answer. */
 export interface VerdictFailedEvent extends VerdictPassedEvent {
-  /** What broke, as classified (T06). Null when the reporting stage supplied none. */
+  /** What broke, as classified. Null when the reporting stage supplied none. */
   failure: StructuredFailure | null;
-  /** What the orchestrator decided to do about it (T07) — RETRY / RECOVER / ROLLBACK / ESCALATE / ABORT. */
+  /** What the orchestrator decided to do about it — RETRY / RECOVER / ROLLBACK / ESCALATE / ABORT. */
   recovery: RecoveryAction | null;
 }
 
@@ -125,11 +99,10 @@ export function isDomainEventType(type: string): type is DomainEventType {
 }
 
 /**
- * Which verdict event a verification stage's outcome is.
- *
- * Returns null for a stage that verifies nothing — an engineer finishing is an
- * AGENT_COMPLETED and nothing more, and inventing a verdict for it would make
- * "passed" mean two different things depending on who emitted it.
+ * Which verdict event a verification stage's outcome is. Returns null for a
+ * stage that verifies nothing (e.g. an engineer finishing) — inventing a
+ * verdict for it would make "passed" mean two different things depending on
+ * who emitted it.
  */
 export function verdictEventFor(
   stage: AgentStage,

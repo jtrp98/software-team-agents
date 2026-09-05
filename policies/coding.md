@@ -1,6 +1,6 @@
 # Policy — Coding discipline (§5c, §9, §12)
 
-Split from `.claude/shared/conventions.md` by T49. Rules about how an engineer produces and
+Rules about how an engineer produces and
 verifies code, and how any agent treats what it thinks it already knows.
 
 ---
@@ -11,11 +11,11 @@ The dev↔QA round trip is the most expensive thing in this pipeline: a type err
 
 ---
 
-## 9. The stack is fixed and lives in two files
+## 9. The stack is project-resolved and declared in configuration
 
-`.claude/agents/frontend-engineer.md` and `.claude/agents/backend-engineer.md` hold the authoritative "Fixed project stack" sections. Any agent that needs to know the stack **reads those files** rather than assuming — the user can change the stack, and those two files get updated in place when they do.
+The Target workspace's `.agent-team/config.yaml` `stack:` block is authoritative for its profile, package manager/tool, commands, schema paths, and source roots. Synchronization renders the compact `.claude/shared/stack.md` digest from that block. Any agent that needs to know the stack reads `.claude/shared/stack.md` (or `.agent-team/config.yaml` `stack:`) rather than assuming or inventing conventions.
 
-Only `frontend-engineer` and `backend-engineer` may edit their own stack sections, and only after the user explicitly confirms the change.
+Engineer prompts implement the resolved stack without choosing replacements. Changing the stack remains an explicit human configuration decision.
 
 ---
 

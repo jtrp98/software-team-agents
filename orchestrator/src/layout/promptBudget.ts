@@ -6,7 +6,7 @@ import Ajv from "ajv";
 import { BOOTSTRAP_BUDGET_BYTES, inspectBootstrapBlock } from "../targetcli/knowledgeRender.js";
 
 /**
- * T-V3TOK-014 — the static-context floor cannot grow back silently.
+ * The static-context floor cannot grow back silently.
  *
  * The reason it grew 8.4x in the first place is that nothing measured it.
  * `CLAUDE.md` went 7,888 -> 42,232 B across 22 commits without one of them
@@ -41,24 +41,21 @@ export interface PromptBudgetCheckResult {
  * `CLAUDE.md` is auto-loaded into every session and every subagent, on both the
  * orchestrated and the interactive path.
  *
- * The T-V3TOK-010 gate approved option B — keep the eight rules the
- * rule-enforcement matrix classifies `PROMPT-ONLY`/`PARTIAL-KEEP` (5,547 B, no
- * deterministic backup) in the card, and defer the 6,144 B target to
- * T-V3TOK-020, which creates `.claude/shared/agent-preamble.md` to hold them.
- * The number named at that gate was 12,288 B.
+ * This budget keeps the eight rules the rule-enforcement matrix classifies
+ * `PROMPT-ONLY`/`PARTIAL-KEEP` (5,547 B, no deterministic backup) in the card,
+ * with a lower target deferred until those rules move into
+ * `.claude/shared/agent-preamble.md`.
  *
- * It is 13,312 B here, and the 1,024 B difference is one specific thing: the
- * three-repo/T-LV3 block, which the gate's inventory missed and which
- * `targetcli/roleWorkspace.test.ts:292-303` pins as having to ship in the
- * synced payload. It states where `qa-engineer`'s verdict may be written when
- * `plan.md` lives in another repository — dropping it would not have saved a
- * byte honestly, it would have deleted a boundary.
+ * The extra headroom above that lower target is one specific thing: the
+ * three-repo block, which `targetcli/roleWorkspace.test.ts:292-303` pins as
+ * having to ship in the synced payload. It states where `qa-engineer`'s
+ * verdict may be written when `plan.md` lives in another repository —
+ * dropping it would not have saved a byte honestly, it would have deleted a
+ * boundary.
  *
  * This is the budget being *set* once from a corrected inventory, which is not
  * the same as raising it later to fit a file that grew. Nothing here may be
  * raised again: a prompt that needs more space needs its rationale in `docs/`.
- * 42,232 -> 13,312 is a 68.5% reduction; the 6,144 B target still stands for
- * after T-V3TOK-020.
  */
 export const CLAUDE_MD_BUDGET = 13_312;
 
@@ -72,7 +69,6 @@ export const AGENT_PROMPT_TARGET = 4_096;
  * that needs more space is a prompt that needs its rationale moved to `docs/`.
  */
 export const PROMPT_BUDGETS: Record<string, number> = {
-  // T-V3TOK-022 through 027, 029, and 030 are at the normal final target.
   "setup.md": AGENT_PROMPT_TARGET,
   "test-planner.md": AGENT_PROMPT_TARGET,
   "uxui-designer.md": AGENT_PROMPT_TARGET,
@@ -80,9 +76,9 @@ export const PROMPT_BUDGETS: Record<string, number> = {
   "frontend-engineer.md": AGENT_PROMPT_TARGET,
   "business-analyst.md": AGENT_PROMPT_TARGET,
   "project-manager.md": AGENT_PROMPT_TARGET,
-  // T-V3TOK-027 needs the documented design-contract allowance.
+  // Documented design-contract allowance.
   "system-analyst.md": 6_144,
-  // T-V3TOK-028: QA retains the documented verification-checklist allowance.
+  // Documented verification-checklist allowance.
   "qa-engineer.md": 6_144,
   "security.md": AGENT_PROMPT_TARGET,
   "devops.md": AGENT_PROMPT_TARGET,
@@ -130,7 +126,7 @@ function byteSize(file: string): number | null {
   }
 }
 
-/** T-V3TOK-020: repeated role blocks drift; a shared pointer is not a block. */
+/** Repeated role blocks drift; a shared pointer is not a block. */
 function duplicateNamedBlocks(files: readonly { file: string; markdown: string }[]): string[] {
   const owners = new Map<string, string[]>();
   for (const { file, markdown } of files) {
@@ -207,8 +203,6 @@ export function checkPromptBudget(projectRoot: string = defaultProjectRoot()): P
   }
 
   for (const { file, markdown } of promptSources) {
-    const abs = path.join(projectRoot, ".claude", "agents", file);
-
     if (/^## Shared conventions\s*$/m.test(markdown)) {
       problems.push(`.claude/agents/${file} still has a Shared conventions block — use the shared preamble pointer (T-V3TOK-020)`);
     }
@@ -242,10 +236,11 @@ export function checkPromptBudget(projectRoot: string = defaultProjectRoot()): P
       }
     }
 
-    // --- structural guards (approved at the T-V3TOK-010 gate, item c) ---
-    // These are why R03/R12 may be reduced to one line in CLAUDE.md at all.
-    // `--check-contracts` compares contract to registry; neither is this file,
-    // and this file is the one Claude Code reads to resolve the subagent.
+    // --- structural guards ---
+    // These are why the tool-surface rules may be reduced to one line in
+    // CLAUDE.md at all. `--check-contracts` compares contract to registry;
+    // neither is this file, and this file is the one Claude Code reads to
+    // resolve the subagent.
     const tools = frontmatterTools(markdown);
     if (tools === null) {
       problems.push(`.claude/agents/${file} has no frontmatter tools: line — the role's tool surface must be stated, not inherited`);

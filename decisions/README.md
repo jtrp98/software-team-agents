@@ -14,9 +14,20 @@ The test: would this decision matter to a module that doesn't exist yet? If yes,
 
 ## Index
 
-| ADR | Decision |
-|---|---|
-| ADR-023 | [Freeze V4 framework capabilities until the stabilization exit condition is met](ADR-023-v4-framework-feature-freeze.md) |
+| ADR | Decision | Status |
+|---|---|---|
+| ADR-001 | [Use PostgreSQL with Prisma for the data layer](ADR-001-database.md) | accepted |
+| ADR-002 | [Hand-rolled JWT authentication, no third-party auth provider](ADR-002-authentication.md) | accepted |
+| ADR-003 | [No API versioning scheme — a single, unversioned REST API](ADR-003-api-versioning.md) | accepted |
+| ADR-004 | [The V1 contract — what v1.0.0 guarantees and what it explicitly does not](ADR-004-v1-contract.md) | accepted |
+| ADR-005 | [v2 — one command source rendered to three runtimes; Claude Design access is fail-closed and draft-only; graphify stays optional (deferred)](ADR-005-v2-command-rendering-and-mcp-boundaries.md) | accepted |
+| ADR-006 | [Graphify as an optional orchestrator-side Code Intelligence Provider — default OFF, fallback-first, machine-local cache](ADR-006-code-intelligence-provider.md) | accepted |
+| ADR-007 | [The task classifier is the single source of truth for pipelines; workflows/*.yml are generated from it and byte-checked](ADR-007-workflow-source-of-truth.md) | accepted |
+| ADR-008 | [Promote the plan graph to a read-only advisor for context and runs; runtime readiness stays the orchestrator's](ADR-008-plan-graph-promote.md) | accepted |
+| ADR-021 | [Keep the shared agent preamble as an on-demand pointer](ADR-021-shared-agent-preamble.md) | accepted |
+| ADR-022 | [Per-phase model tier for implementation and QA, camp chosen at execution time](ADR-022-per-phase-model-tier.md) | accepted |
+| ADR-023 | [Freeze V4 framework capabilities until the stabilization exit condition is met](ADR-023-v4-framework-feature-freeze.md) | accepted |
+| ADR-024 | [_docs is the authoritative knowledge system; knowledge/ stops mirroring it](ADR-024-docs-vs-knowledge.md) | accepted |
 
 ## Format
 
