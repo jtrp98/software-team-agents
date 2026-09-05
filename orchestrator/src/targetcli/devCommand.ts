@@ -8,6 +8,8 @@ import {
   TargetNotInitializedError,
   loadTargetConfig,
   readTargetManifest,
+  removedTargetPath,
+  removedTargetPathProblem,
 } from "./targetMeta.js";
 import { blockingConflicts, devDerivedContent, pendingSyncEntries, planSync, projectOwnedPaths, runTargetSync } from "./syncEngine.js";
 import { sameMajor } from "./version.js";
@@ -164,7 +166,7 @@ export interface WorkspaceContext {
   templatesDir: string;
   /** Resolved for DEV (required); also reported for BA when a machine-wide binding exists (informational only). */
   knowledge?: KnowledgeBinding;
-  /** T-LV1 — resolved for BA when `target.path` is set and valid; always optional, never blocks a BA session. */
+  /** T-LV1/T-V5-042 — resolved for BA when `target.target_id` is set and resolves; always optional, never blocks a BA session. */
   target?: TargetBinding;
   runtime: RuntimeName;
   /** T-V5-008 — the guard verdict this launch was allowed under, for the launch record. */
@@ -413,7 +415,6 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
       const resolved = resolveTargetBinding({
         knowledgeRoot: roots.targetRoot,
         configTargetId: config?.target?.target_id,
-        configTargetPath: config?.target?.path,
         frameworkRoot: roots.frameworkRoot,
       });
       if (resolved) {
@@ -421,8 +422,16 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
         checks.push({
           name: "Target (BA workspace role)",
           ok: true,
-          detail: `${resolved.targetRoot} (via ${resolved.via}, read-only)${resolved.deprecation ? `; DEPRECATED: ${resolved.deprecation}` : ""}`,
+          detail: `${resolved.targetRoot} (via ${resolved.via}, read-only)`,
         });
+      }
+      // T-V5-042 — the removed committed path is stripped by the schema, so
+      // say so here too: without it a workspace that still sets it only sees
+      // its Target quietly missing. Non-blocking, like every check in this
+      // block — a BA Target binding is optional by design (T-ROLE-07).
+      const legacy = removedTargetPath(roots.targetRoot);
+      if (legacy !== undefined) {
+        checks.push({ name: "Target (BA workspace role)", ok: true, detail: removedTargetPathProblem(legacy) });
       }
     } catch (e) {
       if (e instanceof TargetBindingError) {

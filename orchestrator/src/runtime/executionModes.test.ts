@@ -41,8 +41,15 @@ function targetTask(root: string) {
   };
 }
 
-describe("T-V3R-040 execution-mode matrix", () => {
-  it("absent config resolves Single on claude-code", async () => {
+/**
+ * T-V5-040 replaces T-V3R-040's three-mode matrix. Execution modes, the handoff
+ * candidate chain and the legacy `model_routing` spelling are removed, so the
+ * matrix is now the three surviving route sources — flag (precedence 1),
+ * `routing.by_role` (2), default runtime plus frontmatter model (4) — and the
+ * property that every route resolves exactly one runtime.
+ */
+describe("T-V5-040 one-route matrix", () => {
+  it("absent config resolves the default route on claude-code", async () => {
     const root = project();
     const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
     const codex = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
@@ -54,21 +61,24 @@ describe("T-V3R-040 execution-mode matrix", () => {
       guards: () => NO_GUARDS,
       sliceModuleDocs: false,
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-MATRIX", context: [] });
-    expect(result.outcome).toMatchObject({ result: "PASS", runtime: "claude-code", requested_runtime: "claude-code", fallback_count: 0 });
+    expect(result.outcome).toMatchObject({
+      result: "PASS",
+      runtime: "claude-code",
+      requested_runtime: "claude-code",
+      routing_basis: "level-4",
+      fallback_count: 0,
+    });
     expect(claude.requests).toHaveLength(1);
     expect(codex.requests).toHaveLength(0);
   });
 
-  it("Single unavailable stops with requiresHuman and consumes no handoff", async () => {
+  it("an unavailable route stops with requiresHuman and never reaches another runtime", async () => {
     const root = project();
     const claude = new MockRuntimeAdapter({ id: "claude-code", probe: { available: false, reason: "single missing" } });
     const codex = new MockRuntimeAdapter({ id: "codex" });
     const result = await createRuntimeExecutor({
       runtime: claude,
       registry: new RuntimeRegistry([claude, codex]),
-      routingMode: "single",
-      allowHandoff: true,
-      allowPaidFallback: false,
       projectRoot: root,
       moduleName: () => "phase-4",
       guards: () => NO_GUARDS,
@@ -76,18 +86,17 @@ describe("T-V3R-040 execution-mode matrix", () => {
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-MATRIX", context: [] });
     expect(result.outcome).toMatchObject({ result: "FAIL", fallback_count: 0 });
     expect(result.failure).toMatchObject({ requiresHuman: true, retryable: false });
-    expect(result.outcome.failure_reason).toMatch(/paid API fallback is disabled/i);
+    expect(result.outcome.failure_reason).toMatch(/single missing/i);
     expect(claude.requests).toHaveLength(0);
     expect(codex.requests).toHaveLength(0);
   });
 
-  it("Single UNAVAILABLE blocks the orchestrator without advancing or consuming a retry", async () => {
+  it("an unavailable route blocks the orchestrator without advancing or consuming a retry", async () => {
     const root = project();
     const claude = new MockRuntimeAdapter({ id: "claude-code", probe: { available: false, reason: "single missing" } });
     const executor = createRuntimeExecutor({
       runtime: claude,
       registry: new RuntimeRegistry([claude]),
-      routingMode: "single",
       projectRoot: root,
       moduleName: () => "phase-4",
       guards: () => NO_GUARDS,
@@ -103,45 +112,60 @@ describe("T-V3R-040 execution-mode matrix", () => {
     expect(claude.requests).toHaveLength(0);
   });
 
-  it("Manual requires both runner and model to be explicitly named", () => {
+  it("routing.by_role resolves exactly one candidate, at precedence 2", () => {
     const root = project();
     const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
     const codex = new MockRuntimeAdapter({ id: "codex", models: ["gpt-5"] });
     const registry = new RuntimeRegistry([claude, codex]);
-    const missingModel = resolveRuntimeRoute({
-      role: "backend-engineer",
-      stage: AgentStage.BACKEND_ENGINEER,
-      projectRoot: root,
-      registry,
-      mode: "manual",
-      config: { schema_version: 1, routing: { by_role: { "backend-engineer": { runtime: "codex" } } } },
-    });
-    expect(missingModel.error).toContain("explicitly named runner and model");
-    expect(missingModel.selected).toBeUndefined();
-
     const exact = resolveRuntimeRoute({
       role: "backend-engineer",
       stage: AgentStage.BACKEND_ENGINEER,
       projectRoot: root,
       registry,
-      mode: "manual",
       config: { schema_version: 1, routing: { by_role: { "backend-engineer": { runtime: "codex", model: "gpt-5" } } } },
     });
+    expect(exact.precedenceLevel).toBe(2);
     expect(exact.candidates.map((candidate) => [candidate.runtime.id, candidate.model])).toEqual([["codex", "gpt-5"]]);
+
+    // A per-role entry naming only a runtime keeps the role's frontmatter model
+    // instead of refusing: strict Manual mode, which required both to be named,
+    // is gone with the modes.
+    const runtimeOnly = resolveRuntimeRoute({
+      role: "backend-engineer",
+      stage: AgentStage.BACKEND_ENGINEER,
+      projectRoot: root,
+      registry,
+      config: { schema_version: 1, routing: { by_role: { "backend-engineer": { runtime: "codex" } } } },
+    });
+    expect(runtimeOnly.error).toBeUndefined();
+    expect(runtimeOnly.candidates.map((candidate) => [candidate.runtime.id, candidate.model])).toEqual([["codex", "sonnet"]]);
   });
 
-  it("Manual executes only the runner and model the user named", async () => {
+  it("an unregistered routing.by_role runtime fails closed instead of substituting the default", () => {
+    const root = project();
+    const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
+    const route = resolveRuntimeRoute({
+      role: "backend-engineer",
+      stage: AgentStage.BACKEND_ENGINEER,
+      projectRoot: root,
+      registry: new RuntimeRegistry([claude]),
+      config: { schema_version: 1, routing: { by_role: { "backend-engineer": "ghost-runtime:some-model" } } },
+    });
+    expect(route.selected).toBeUndefined();
+    expect(route.error).toBeTruthy();
+    expect(route.candidates).toEqual([]);
+    expect(route.diagnostics.join(" | ")).toContain('runtime "ghost-runtime" is not registered');
+  });
+
+  it("routing.by_role executes only the runner and model it names", async () => {
     const root = project(
-      "schema_version: 1\nexecution:\n  mode: manual\nrouting:\n  by_role:\n    backend-engineer:\n      runtime: codex\n      model: gpt-5\n",
+      "schema_version: 1\nrouting:\n  by_role:\n    backend-engineer:\n      runtime: codex\n      model: gpt-5\n",
     );
     const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
     const codex = new MockRuntimeAdapter({ id: "codex", models: ["gpt-5"] });
     const result = await createRuntimeExecutor({
       runtime: claude,
       registry: new RuntimeRegistry([claude, codex]),
-      routingMode: "manual",
-      allowHandoff: true,
-      allowPaidFallback: false,
       projectRoot: root,
       moduleName: () => "phase-4",
       guards: () => NO_GUARDS,
@@ -152,23 +176,49 @@ describe("T-V3R-040 execution-mode matrix", () => {
       result: "PASS",
       requested_runtime: "codex",
       runtime: "codex",
+      routing_basis: "level-2",
       fallback_count: 0,
     });
     expect(claude.requests).toHaveLength(0);
     expect(codex.requests).toHaveLength(1);
     expect(codex.requests[0]?.model).toBe("gpt-5");
   });
+
+  it("an explicit --runtime flag outranks routing.by_role", async () => {
+    const root = project(
+      "schema_version: 1\nrouting:\n  by_role:\n    backend-engineer:\n      runtime: codex\n      model: gpt-5\n",
+    );
+    const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
+    const codex = new MockRuntimeAdapter({ id: "codex", models: ["gpt-5"] });
+    const result = await createRuntimeExecutor({
+      runtime: claude,
+      registry: new RuntimeRegistry([claude, codex]),
+      routingFlags: { runtime: "claude-code" },
+      projectRoot: root,
+      moduleName: () => "phase-4",
+      guards: () => NO_GUARDS,
+      sliceModuleDocs: false,
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-MATRIX", context: [] });
+
+    expect(result.outcome).toMatchObject({ result: "PASS", runtime: "claude-code", routing_basis: "level-1" });
+    expect(codex.requests).toHaveLength(0);
+    expect(claude.requests).toHaveLength(1);
+  });
 });
 
-describe("T-V3R-041 fallback evidence matrix", () => {
-  const autoConfig =
+describe("T-V5-040 fail-closed evidence matrix", () => {
+  // What used to be `execution.mode: auto` plus `routing.order`. Both keys are
+  // now inert and must still load; the assertions below are that they change
+  // nothing about where the run goes.
+  const inertAutoConfig =
     "schema_version: 1\nexecution:\n  mode: auto\n  allow_handoff: true\n  allow_paid_fallback: false\nrouting:\n  order: [claude-code, codex, opencode]\n  allow_below_supported: [codex, opencode]\n";
 
-  it("records a multi-hop UNAVAILABLE plus capability skip before executing the eligible runtime", async () => {
-    const root = project(autoConfig);
+  it("a UNAVAILABLE result on a Target-write stage stops the task with no second runtime tried", async () => {
+    const root = project(inertAutoConfig);
     const unavailable = new MockRuntimeAdapter({
       id: "claude-code",
       models: ["sonnet"],
+      capabilities: [RuntimeCapability.PRE_TOOL_GUARD, RuntimeCapability.MODEL_SELECTION],
       respond: () => okResult({ status: "UNAVAILABLE", exitCode: null, diagnostics: ["subscription offline"] }),
     });
     const weak = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"], capabilities: [RuntimeCapability.MODEL_SELECTION] });
@@ -181,9 +231,6 @@ describe("T-V3R-041 fallback evidence matrix", () => {
     const result = await createRuntimeExecutor({
       runtime: unavailable,
       registry: new RuntimeRegistry([unavailable, weak, good]),
-      routingMode: "auto",
-      allowHandoff: true,
-      allowPaidFallback: false,
       projectRoot: root,
       moduleName: () => "phase-4",
       guards: () => NO_GUARDS,
@@ -192,20 +239,20 @@ describe("T-V3R-041 fallback evidence matrix", () => {
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-MATRIX", context: [] });
 
     expect(result.outcome).toMatchObject({
-      result: "PASS",
+      result: "FAIL",
       requested_runtime: "claude-code",
-      runtime: "opencode",
-      fallback_count: 2,
+      runtime: "claude-code",
+      fallback_count: 0,
     });
-    expect(result.outcome.fallback_reason).toContain("subscription offline");
-    expect(result.outcome.fallback_reason).toContain(RuntimeCapability.PRE_TOOL_GUARD);
+    expect(result.outcome.failure_reason).toContain("subscription offline");
+    expect(result.failure?.requiresHuman).toBe(true);
     expect(unavailable.requests).toHaveLength(1);
     expect(weak.requests).toHaveLength(0);
-    expect(good.requests).toHaveLength(1);
+    expect(good.requests).toHaveLength(0);
 
-    // INV-6 log-scan assertion: persist the completed run through the real
-    // observability seam, then reject any requested/actual change whose row
-    // lacks a reason or positive hop count.
+    // INV-6 log-scan assertion, kept: a row whose actual runtime differs from
+    // the requested one must carry a reason and a positive hop count. With one
+    // route the two are always equal, which the scan below now also proves.
     const log = new RunLog();
     log.record({
       task_id: "T-MATRIX",
@@ -215,6 +262,7 @@ describe("T-V3R-041 fallback evidence matrix", () => {
       outcome: result.outcome,
     });
     for (const row of log.runsForTask("T-MATRIX")) {
+      expect(row.runtime).toBe(row.requested_runtime);
       if (row.runtime !== row.requested_runtime) {
         expect(row.fallback_reason).toBeTruthy();
         expect(row.fallback_count).toBeGreaterThan(0);
@@ -222,36 +270,31 @@ describe("T-V3R-041 fallback evidence matrix", () => {
     }
   });
 
-  it("allow_handoff false produces zero hops", async () => {
-    const root = project(autoConfig.replace("allow_handoff: true", "allow_handoff: false"));
+  it("an inert allow_handoff: true still produces zero hops", async () => {
+    const root = project(inertAutoConfig);
     const first = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ status: "UNAVAILABLE", diagnostics: ["offline"] }) });
     const second = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
     const result = await createRuntimeExecutor({
       runtime: first,
       registry: new RuntimeRegistry([first, second]),
-      routingMode: "auto",
-      allowHandoff: false,
-      allowPaidFallback: false,
       projectRoot: root,
       moduleName: () => "phase-4",
       guards: () => NO_GUARDS,
       sliceModuleDocs: false,
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-MATRIX", context: [] });
     expect(result.outcome).toMatchObject({ result: "FAIL", fallback_count: 0 });
+    expect(result.outcome.fallback_reason).toBeUndefined();
     expect(result.failure?.requiresHuman).toBe(true);
     expect(second.requests).toHaveLength(0);
   });
 
   it.each(["ERROR", "TIMEOUT"] as const)("never falls back on %s", async (status: RuntimeRunStatus) => {
-    const root = project(autoConfig);
+    const root = project(inertAutoConfig);
     const first = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ status, exitCode: 1, diagnostics: [status] }) });
     const second = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
     const result = await createRuntimeExecutor({
       runtime: first,
       registry: new RuntimeRegistry([first, second]),
-      routingMode: "auto",
-      allowHandoff: true,
-      allowPaidFallback: false,
       projectRoot: root,
       moduleName: () => "phase-4",
       guards: () => NO_GUARDS,
@@ -261,8 +304,10 @@ describe("T-V3R-041 fallback evidence matrix", () => {
     expect(second.requests).toHaveLength(0);
   });
 
-  it("all local runners unavailable stops and names the disabled paid path", async () => {
-    const root = project(autoConfig);
+  // T-V5-039 / T-V5-040 — there is no paid path and no candidate chain to name
+  // any more: an unavailable runner stops the task for a person, full stop.
+  it("all local runners unavailable stops with no further candidate to try", async () => {
+    const root = project(inertAutoConfig);
     const adapters = ["claude-code", "codex", "opencode"].map((id) => new MockRuntimeAdapter({
       id,
       models: ["sonnet"],
@@ -271,58 +316,48 @@ describe("T-V3R-041 fallback evidence matrix", () => {
     const result = await createRuntimeExecutor({
       runtime: adapters[0]!,
       registry: new RuntimeRegistry(adapters),
-      routingMode: "auto",
-      allowHandoff: true,
-      allowPaidFallback: false,
       projectRoot: root,
       moduleName: () => "phase-4",
       guards: () => NO_GUARDS,
       sliceModuleDocs: false,
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-MATRIX", context: [] });
     expect(result.outcome.result).toBe("FAIL");
-    expect(result.outcome.failure_reason).toMatch(/paid API fallback is disabled/i);
+    expect(result.outcome.failure_reason).toMatch(/offline/i);
     expect(result.failure?.requiresHuman).toBe(true);
     expect(adapters.every((adapter) => adapter.requests.length === 0)).toBe(true);
   });
 
-  it("T-V4-COST-005 skips a budget-inadmissible first candidate then spawns the next admissible candidate", async () => {
-    const root = project(`${autoConfig}context_budget:\n  mode: reject\n`);
+  it("T-V4-COST-005 a budget-inadmissible route fails closed instead of moving to another runtime", async () => {
+    const root = project(`${inertAutoConfig}context_budget:\n  mode: reject\n`);
     const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
     const codex = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
     const resolver = vi.spyOn(contextBudget, "resolveContextBudgetFromProject")
-      .mockReturnValueOnce({ chars: 1, source: "role" })
-      .mockReturnValue({ chars: 100_000, source: "role" });
+      .mockReturnValue({ chars: 1, source: "role" });
     try {
       const result = await createRuntimeExecutor({
         runtime: claude,
         registry: new RuntimeRegistry([claude, codex]),
-        routingMode: "auto",
-        allowHandoff: true,
-        allowPaidFallback: false,
         projectRoot: root,
         moduleName: () => "phase-4",
         guards: () => NO_GUARDS,
         sliceModuleDocs: false,
-      })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-BUDGET-THEN-SPAWN", context: [] });
-      expect(result.outcome).toMatchObject({ result: "PASS", runtime: "codex", fallback_count: 1 });
-      expect(result.outcome.fallback_reason).toContain('"runtime":"claude-code"');
+      })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-BUDGET-CLOSED", context: [] });
+      expect(result.outcome).toMatchObject({ result: "FAIL", runtime: "claude-code", fallback_count: 0 });
+      expect(result.outcome.failure_reason).toContain("context_chars budget rejected");
       expect(claude.requests).toEqual([]);
-      expect(codex.requests).toHaveLength(1);
+      expect(codex.requests).toEqual([]);
     } finally {
       resolver.mockRestore();
     }
   });
 
-  it("T-V4-COST-005 records every budget-inadmissible candidate as a structured skip and fails closed", async () => {
-    const root = project(`${autoConfig}context_budget:\n  mode: reject\n  roles:\n    backend-engineer: 1\n`);
+  it("T-V4-COST-005 records the budget-inadmissible candidate as a structured rejection and fails closed", async () => {
+    const root = project(`${inertAutoConfig}context_budget:\n  mode: reject\n  roles:\n    backend-engineer: 1\n`);
     const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
     const codex = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
     const result = await createRuntimeExecutor({
       runtime: claude,
       registry: new RuntimeRegistry([claude, codex]),
-      routingMode: "auto",
-      allowHandoff: true,
-      allowPaidFallback: false,
       projectRoot: root,
       moduleName: () => "phase-4",
       guards: () => NO_GUARDS,
@@ -331,26 +366,26 @@ describe("T-V3R-041 fallback evidence matrix", () => {
 
     expect(result.outcome.result).toBe("FAIL");
     expect(result.outcome.failure_reason).toContain("context_chars budget rejected");
-    expect(result.outcome.fallback_reason).toContain('"budgetType":"context_chars"');
-    expect(result.outcome.fallback_reason).toContain('"runtime":"claude-code"');
-    expect(result.outcome.fallback_reason).toContain('"runtime":"codex"');
+    expect(result.outcome.failure_reason).toContain("claude-code");
     expect(claude.requests).toEqual([]);
     expect(codex.requests).toEqual([]);
   });
 
-  it.each([false, true])("paid budget rejection never widens the resolved candidate set (allow_paid_fallback=%s)", async (allowPaidFallback) => {
+  // T-V5-039 / T-V5-040 — `execution.allow_paid_fallback` is inert now that the
+  // paid runtime is never registered, and so is `routing.order`: an extra
+  // runtime present in the registry but absent from the route is never
+  // auto-appended as a candidate, regardless of either key's value. This is the
+  // removal of both the paid-only special case and the whole candidate chain.
+  it.each([false, true])("an unlisted registered runtime is never auto-appended to the fallback chain (allow_paid_fallback=%s)", async (allowPaidFallback) => {
     const root = project(
-      `${autoConfig.replace("allow_paid_fallback: false", `allow_paid_fallback: ${allowPaidFallback}`)}context_budget:\n  mode: reject\n  roles:\n    backend-engineer: 1\n`,
+      `${inertAutoConfig.replace("allow_paid_fallback: false", `allow_paid_fallback: ${allowPaidFallback}`)}context_budget:\n  mode: reject\n  roles:\n    backend-engineer: 1\n`,
     );
     const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
     const codex = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
-    const paid = new MockRuntimeAdapter({ id: "paid-api", models: ["sonnet"] });
+    const extra = new MockRuntimeAdapter({ id: "extra-runtime", models: ["sonnet"] });
     const result = await createRuntimeExecutor({
       runtime: claude,
-      registry: new RuntimeRegistry([claude, codex, paid]),
-      routingMode: "auto",
-      allowHandoff: true,
-      allowPaidFallback,
+      registry: new RuntimeRegistry([claude, codex, extra]),
       projectRoot: root,
       moduleName: () => "phase-4",
       guards: () => NO_GUARDS,
@@ -358,10 +393,10 @@ describe("T-V3R-041 fallback evidence matrix", () => {
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-PAID-BUDGET", context: [] });
 
     expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.fallback_count).toBe(0);
     expect(claude.requests).toEqual([]);
     expect(codex.requests).toEqual([]);
-    expect(paid.requests).toEqual([]);
-    if (allowPaidFallback) expect(result.outcome.fallback_reason).toContain("actual=paid-api");
-    else expect(result.outcome.fallback_reason).not.toContain("actual=paid-api");
+    expect(extra.requests).toEqual([]);
+    expect(result.outcome.fallback_reason).toBeUndefined();
   });
 });

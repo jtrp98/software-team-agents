@@ -124,19 +124,21 @@ export const TargetConfigSchema = z.object({
   /** T-ROLE-06 — repo-relative (or absolute) path binding to the team's Knowledge repo, committed with this workspace. */
   knowledge: z.object({ path: z.string().min(1) }).optional(),
   /**
-   * T-LV1/T-V5-017 — optional, read-only Target binding for a Knowledge (BA)
-   * workspace: BA never requires it. `target_id` is the shared form — stable
-   * identity resolved per machine through `.workflow/targets.local.yaml`.
-   * `path` is deprecated machine-local content in a committed file: honoured
-   * with a warning during the transition, removed by T-V5-042.
+   * T-LV1/T-V5-017/T-V5-042 — optional, read-only Target binding for a
+   * Knowledge (BA) workspace: BA never requires it. `target_id` is now the only
+   * form — a stable identity resolved per machine through
+   * `.workflow/targets.local.yaml`. The committed `target.path` is gone.
+   *
+   * `target_id` stays `.optional()` and there is no `.refine()` so a config
+   * still carrying only the removed `path` **loads**: zod strips the unknown
+   * key, this becomes an empty binding, and `removedTargetPath()` below lets
+   * `status` report the leftover as a problem naming the fix. Requiring
+   * `target_id` here would turn every un-migrated workspace into a hard load
+   * failure, which T-V5-042 explicitly forbids.
    */
   target: z
     .object({
       target_id: z.string().min(1).optional(),
-      path: z.string().min(1).optional(),
-    })
-    .refine((binding) => binding.target_id !== undefined || binding.path !== undefined, {
-      message: "target binding needs target_id (preferred) or the deprecated path",
     })
     .optional(),
   /** Deterministic Target stack cache (T-V3-03). Absent means not yet detected. */
@@ -196,6 +198,42 @@ export function inspectTargetConfigAsPreV3(targetRoot: string): TargetConfigComp
       ? []
       : [`${target} contains optional key(s) not understood by the pre-v3 schema: ${unknownKeys.join(", ")} — ignored; upgrade the CLI to configure them`],
   };
+}
+
+/**
+ * T-V5-042 — the removed committed `target.path`, if a workspace still carries it.
+ *
+ * `TargetConfigSchema` no longer declares the key, so `loadTargetConfig` strips
+ * it and cannot see it. Reading the raw YAML here — the same way
+ * `inspectTargetConfigAsPreV3` already does in this module — is what lets
+ * `status` say "this is machine-local content in a committed file, here is the
+ * fix" instead of silently dropping a binding the user thinks is configured.
+ *
+ * Returns the leftover path, or undefined when there is none (or the file is
+ * missing or unreadable — this is a reporting aid, never a failure path).
+ */
+export function removedTargetPath(targetRoot: string): string | undefined {
+  const target = targetConfigPath(targetRoot);
+  if (!fs.existsSync(target)) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = parseYaml(fs.readFileSync(target, "utf8"));
+  } catch {
+    return undefined;
+  }
+  const binding = (parsed as { target?: unknown } | null)?.target;
+  if (!binding || typeof binding !== "object" || Array.isArray(binding)) return undefined;
+  const legacy = (binding as { path?: unknown }).path;
+  return typeof legacy === "string" && legacy.trim() !== "" ? legacy : undefined;
+}
+
+/** The one-line fix a workspace still carrying the removed field is given. */
+export function removedTargetPathProblem(legacyPath: string): string {
+  return (
+    `${TARGET_META_DIR}/config.yaml still sets the removed target.path (${legacyPath}) — it is ignored. ` +
+    "Replace it with `target:` / `target_id: <id>` from targets.yaml, and record this machine's checkout " +
+    "under .workflow/targets.local.yaml (T-V5-042)"
+  );
 }
 
 export function defaultTargetConfig(targetId: string, now: string, role?: "ba" | "dev"): TargetConfig {

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { exitCodeFor, runDoctor } from "./doctor.js";
 import { buildTemplates } from "../packaging/templateBuilder.js";
+import { defaultTargetConfig, writeTargetConfig, writeTargetManifest } from "../targetcli/targetMeta.js";
 
 const NOW = "2026-08-22T09:00:00Z";
 
@@ -49,12 +50,15 @@ describe("runDoctor (T166)", () => {
 
   it("passes every structural check on a fully configured three-repo fixture", async () => {
     gitInit(knowledgeRoot);
-    fs.mkdirSync(path.join(projectRoot, ".sta"), { recursive: true });
-    fs.writeFileSync(
-      path.join(projectRoot, ".sta", "manifest.json"),
-      JSON.stringify({ schema_version: 1, framework_version: "0.0.0-doctor-test", installed_at: NOW, updated_at: NOW, files: [] }),
-    );
-    fs.writeFileSync(path.join(projectRoot, ".sta", "config.yaml"), "schema_version: 1\n");
+    // T-V5-038 — the doctor's "Framework installation" check now validates
+    // only the live `.agent-team/` layout; the legacy `.sta/`-only path this
+    // fixture used to build no longer passes (that installer is retired).
+    // Writing a real `.agent-team/manifest.json` also turns on "Managed asset
+    // freshness" (gated on `isTargetInitialized`), which requires a real git
+    // Target, so this fixture is now a real one too.
+    gitInit(projectRoot);
+    writeTargetManifest(projectRoot, { schema_version: 1, framework_version: "0.0.0-doctor-test", installed_at: NOW, updated_at: NOW, files: [] });
+    writeTargetConfig(projectRoot, defaultTargetConfig("doctor-fixture", NOW));
     fs.mkdirSync(path.join(projectRoot, ".claude"), { recursive: true });
     fs.writeFileSync(
       path.join(projectRoot, ".claude", "settings.json"),
@@ -65,10 +69,21 @@ describe("runDoctor (T166)", () => {
       "schema_version: 1\ntargets:\n  - target_id: sb-web-helper\n    name: SB Web Helper\n    remote_url: https://github.com/Jabjai-Corporation/sb-web-helper.git\n    status: active\n",
     );
     fs.writeFileSync(configPath, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledgeRoot)}\n`);
+    // Managed asset freshness now runs for real (see above) — an empty
+    // templates dir gives it nothing to plan against, matching how the other
+    // fixture in this file avoids comparing a fixture framework_version
+    // against this repo's real, unrelated templates snapshot.
+    const templatesDir = path.join(base, "empty-templates");
+    fs.mkdirSync(templatesDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(templatesDir, "manifest.json"),
+      JSON.stringify({ schema_version: 1, framework_version: "0.0.0-doctor-test", generated_at: NOW, files: [] }),
+    );
 
     const report = await runDoctor({
       installationConfigPath: configPath,
       projectRoot,
+      templatesDir,
       probe: passingProbe,
     });
     const byName = Object.fromEntries(report.checks.map((c) => [c.name, c]));

@@ -431,6 +431,69 @@ function installationConfigFixture(knowledgeRoot: string): string {
   return file;
 }
 
+describe("BA-workspace Target rendering (T-WG7 / T-V5-042)", () => {
+  /**
+   * The BA half of the same renderer. It resolved its bound root from the
+   * committed `target.path` and *only* from there — so T-V5-042's removal would
+   * have silently dropped the "Target root" line out of every BA CLAUDE.md if
+   * the call had not been re-pointed at `target_id`. Nothing covered this
+   * before; that is why the regression was invisible.
+   */
+  function baWorkspaceWithTarget(): { knowledge: string; app: string } {
+    const knowledge = tmpRoot("ba-knowledge");
+    fs.mkdirSync(path.join(knowledge, ".git"));
+    fs.mkdirSync(path.join(knowledge, "knowledge"));
+    const app = gitTarget();
+    fs.writeFileSync(path.join(app, "package.json"), "{}", "utf8");
+    fs.writeFileSync(
+      path.join(knowledge, "targets.yaml"),
+      "schema_version: 1\ntargets:\n  - target_id: app\n    name: App\n    remote_url: https://github.com/acme/app.git\n    status: active\n",
+      "utf8",
+    );
+    fs.mkdirSync(path.join(knowledge, ".workflow"), { recursive: true });
+    fs.writeFileSync(
+      path.join(knowledge, ".workflow", "targets.local.yaml"),
+      `schema_version: 1\ntargets:\n  app:\n    path: ${JSON.stringify(app)}\n`,
+      "utf8",
+    );
+    return { knowledge, app };
+  }
+
+  it("renders the bound Target root from target_id, through the local mapping", () => {
+    const { knowledge, app } = baWorkspaceWithTarget();
+    writeTargetConfig(knowledge, { ...defaultTargetConfig("kb", "2026-01-01T00:00:00Z", "ba"), target: { target_id: "app" } });
+
+    runTargetSync({
+      targetRoot: knowledge,
+      templatesDir: makeTemplatesDir("1.0.0", DEV_V1),
+      now: "2026-01-01T00:00:00Z",
+    });
+
+    const claude = fs.readFileSync(path.join(knowledge, "CLAUDE.md"), "utf8");
+    expect(claude).toContain("Target root (optional, read-only)");
+    expect(claude).toContain(fs.realpathSync.native(app));
+  });
+
+  it("renders UNBOUND when no target_id is set — including for a config still carrying only the removed target.path", () => {
+    const { knowledge } = baWorkspaceWithTarget();
+    writeTargetConfig(knowledge, defaultTargetConfig("kb", "2026-01-01T00:00:00Z", "ba"));
+    // Append the removed field the way an un-migrated workspace still has it.
+    const configFile = path.join(knowledge, ".agent-team", "config.yaml");
+    fs.appendFileSync(configFile, "target:\n  path: C:\\src\\somewhere\\app\n", "utf8");
+
+    runTargetSync({
+      targetRoot: knowledge,
+      templatesDir: makeTemplatesDir("1.0.0", DEV_V1),
+      now: "2026-01-01T00:00:00Z",
+    });
+
+    const claude = fs.readFileSync(path.join(knowledge, "CLAUDE.md"), "utf8");
+    // The stale committed path never reaches the rendered instruction surface.
+    expect(claude).not.toContain("C:\\src\\somewhere\\app");
+    expect(claude).toContain("UNBOUND");
+  });
+});
+
 describe("DEV-workspace Knowledge rendering (T-WG7)", () => {
   it("renders CLAUDE.md with the banner and writes the include for a dev workspace", () => {
     const target = gitTarget();

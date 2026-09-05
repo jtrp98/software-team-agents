@@ -56,6 +56,11 @@ export const PROJECT_WIDE_DIR = "_project";
  * a module folder and a bookkeeping folder look identical from the outside,
  * and guessing wrong means either losing a module's items or reporting the
  * registry as forty malformed items.
+ *
+ * `_adoption` stays on the list after T-V5-041 removed the subsystem that wrote
+ * it: any workspace that ran the import still has the directory on disk, and
+ * dropping it here would make the item walk read those bookkeeping files as a
+ * module's items.
  */
 export const RESERVED_DIRS = ["_sources", "_conflicts", "_bootstrap", "_human-input", "_adoption", "_roles"] as const;
 

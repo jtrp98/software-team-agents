@@ -21,11 +21,9 @@ import { readModuleDoc } from "./agents/moduleDocs.js";
 import { ClaudeCodeAdapter } from "./runtime/claudeCodeAdapter.js";
 import { CodexAdapter } from "./runtime/codexAdapter.js";
 import { OpenCodeAdapter } from "./runtime/openCodeAdapter.js";
-import { ApiAdapter, PAID_API_RUNTIME_ID } from "./runtime/apiAdapter.js";
 import { RUNTIME_IDS, type RuntimeId } from "./runtime/runtimeSupport.js";
 import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "./runtime/runtimeRegistry.js";
 import { selectTierCamp } from "./runtime/tierCampSelection.js";
-import type { RoutingMode } from "./runtime/runtimeRouting.js";
 import { detectRuntimeCapabilities } from "./runtime/runtimeCapabilityDetection.js";
 import { resolveContextDocsRoot, resolveFrameworkRoot } from "./targetcli/roots.js";
 import type { RuntimeAutonomy } from "./runtime/runtimeAdapter.js";
@@ -41,7 +39,6 @@ import { runPauseVerb } from "./cli/verbs/pause.js";
 import { runCancelVerb } from "./cli/verbs/cancel.js";
 import { runAuditVerb } from "./cli/verbs/audit.js";
 import { runRolesVerb } from "./cli/verbs/roles.js";
-import { runAdoptVerb } from "./cli/verbs/adopt.js";
 import { runQaMetricsVerb } from "./cli/verbs/qaMetrics.js";
 import { runPolicyVerb } from "./cli/verbs/policy.js";
 import { runTokensVerb } from "./cli/verbs/tokens.js";
@@ -57,8 +54,6 @@ import { loadStageRoots } from "./repos/repoMap.js";
 import { Environment, describeEnvironment, isEnvironment } from "./environment/environment.js";
 import { planReadinessAdvisory } from "./docs/planGraph.js";
 import { buildTemplates } from "./packaging/templateBuilder.js";
-import { runInit } from "./packaging/initCommand.js";
-import { runUpgrade } from "./packaging/upgradeCommand.js";
 import { runThreeRepoInit, runThreeRepoUpgrade } from "./packaging/threeRepoCommand.js";
 import { migrateSta } from "./packaging/migration.js";
 import { configureIdentities, configureKnowledgeRoot, loadInstallationConfig } from "./threeRepo/installation.js";
@@ -170,8 +165,6 @@ export interface CliArgs {
    * as before the flag existed.
    */
   model?: string;
-  /** Named V3 orchestrated execution mode. Interactive dev/ba lanes do not use this parser. */
-  mode?: RoutingMode;
   /**
    * QA optimization (change-aware scope, deterministic pre-checks, TARGETED/FULL
    * routing) is on by default for qa-engineer rounds; this flag restores the exact
@@ -201,7 +194,7 @@ export class CliUsageError extends Error {}
 
 export const USAGE =
   "usage (T31 verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--mode <single|auto|manual>] [--runtime <claude-code|codex|opencode|paid-api>] [--model <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
+  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode>] [--model <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  sta approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
   "  sta resume  <task-id> --module <name> [--project-root <path>]   continue a task already in the store\n" +
@@ -225,7 +218,7 @@ export const USAGE =
   "  sta upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
   "  sta migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending (T96)\n" +
   "  sta knowledge-migrate <dry-run|copy|verify|cutover> --source-root <path> --knowledge-root <path> [--now <ISO>] [--confirm I_CONFIRM_MIGRATION]   copy–verify–human-confirmed migration\n" +
-  "  sta adopt <plan|status|start|ack|run|approve|validate> [--project-root <path>] [--source-root <path>] [--docs-root <dir>]   import legacy .claude/ docs/ planning/ into the Knowledge root (T82–T85)\n" +
+  "  sta adopt   retired in V5 (ADR-024) — the one-time legacy import has run; no replacement\n" +
   "  sta rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups` (T97)\n" +
   "  sta list-backups [--project-root <path>]   list this project's .sta/backups/ snapshots, oldest first\n" +
   "  sta roles [--module <name>] [--project-root <path>]   where BA, SA, UXUI and DEV each stand against knowledge/ (T99)\n" +
@@ -237,11 +230,11 @@ export const USAGE =
   "  sta roles impact <id>[,<id>...]   which lanes changing those items would reach, before changing them (T105)\n" +
   "  sta roles context <ba|sa|uxui|dev> [<id>] [--full] [--module <name>]   what that lane may see, and via which role (T107)\n" +
   "\n" +
-  "V3 execution: --mode defaults to single; --runtime (or --model) without --mode also means single. auto alone may hand off after UNAVAILABLE (never ERROR/TIMEOUT); manual requires an explicit per-role runner+model in .sta/config.yaml. paid-api additionally requires execution.allow_paid_fallback: true (default false). If no eligible runner remains, the task stops for a person.\n" +
-  "  --model <name> overrides every stage's frontmatter model for this run (the same override .sta/config.yaml routing carries); the runtime refuses a model it cannot reach rather than passing it through. Absent, each role's own model: governs.\n" +
+  "Runtime selection (T-V5-040 - one route, no execution modes): --runtime <id> and --model <name> are the explicit per-run choice; otherwise an optional per-role routing.by_role entry in .sta/config.yaml applies; otherwise the default runner plus each role's frontmatter model:. A route resolves ONE runtime - if it cannot execute (unavailable, below supported without per-runtime opt-in, missing a guard capability the stage requires) the task stops for a person instead of moving to another runner.\n" +
+  "  --model <name> overrides every stage's frontmatter model for this run (the same override routing.by_role carries); the runtime refuses a model it cannot reach rather than passing it through. Absent, each role's own model: governs.\n" +
   "\n" +
   "underlying flag-based form:\n" +
-  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--mode <single|auto|manual>] [--runtime <claude-code|codex|opencode|paid-api>] [--model <name>] <classification flags>\n" +
+  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode>] [--model <name>] <classification flags>\n" +
   "  sta --task-id <id> --module <name> --resume        continue a task already in the store\n" +
   "  sta --task-id <id> --module <name> [--token-budget <n>] [--no-qa-optimization|--no-deterministic-gate]   run with optional QA/budget controls\n" +
   "  sta --list [--project-root <path>]                 show every task and stop\n" +
@@ -263,7 +256,7 @@ export const USAGE =
   "  sta --check-plan [--module <name>] [--project-root <path>]  validate every module's plan.md as a task DAG (deps/cycle/owner/status/DES/waves)\n" +
   "  sta --check-knowledge [--project-root <path>]      check knowledge/*.yaml against its schema and cross-links\n" +
   "  sta --build-templates <out-dir> [--project-root <path>]  snapshot framework template files + manifest.json (T90) into <out-dir>\n" +
-  "  sta --check-installation [--project-root <path>]   check .agent-team/manifest.json (or legacy .sta/) against the project's real files (T98) — needs an initialized workspace; fails on a bare Framework checkout by design\n" +
+  "  sta --check-installation [--project-root <path>]   check .agent-team/manifest.json against the project's real files (T98) — needs an initialized workspace; fails on a bare Framework checkout by design\n" +
   "  sta --check-roles [--project-root <path>]          check each role workspace's watermark against knowledge/ (T99)\n" +
   "  sta --version                                      show the Framework version this CLI runs\n" +
   "run/retry exit codes: 0 deployed · 1 blocked · 2 unknown gate · 3 rejected by a person · 4 parked — a gate awaits `sta approve <task-id> --yes|--no`\n" +
@@ -303,7 +296,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let autonomy: RuntimeAutonomy | undefined;
   let runtime: RuntimeId | undefined;
   let model: string | undefined;
-  let mode: RoutingMode | undefined;
   let noQaOptimization = false;
   let noDeterministicGate = false;
   let tokenBudget: number | undefined;
@@ -408,12 +400,15 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       }
       model = value;
     } else if (arg === "--mode") {
-      const value = argv[++i];
-      const valid: readonly RoutingMode[] = ["single", "auto", "manual"];
-      if (!value || !valid.includes(value as RoutingMode)) {
-        throw new CliUsageError(`--mode must be one of: ${valid.join(", ")} (got ${value ?? "nothing"})`);
-      }
-      mode = value as RoutingMode;
+      // T-V5-040 - execution modes are removed: there is one route. The flag
+      // errors with its replacement for this release rather than being
+      // silently accepted and ignored, which would change where a run lands
+      // without telling anyone.
+      throw new CliUsageError(
+        "--mode is removed: `sta run` has one route (execution modes single/auto/manual no longer exist). " +
+          "Use --runtime <id> and/or --model <name> for this run, or routing.by_role in .sta/config.yaml for a per-role runner/model. " +
+          "A route that cannot execute always stops for a person; nothing hands off to another runner.",
+      );
     } else if (arg === "--no-qa-optimization") {
       noQaOptimization = true;
     } else if (arg === "--no-deterministic-gate") {
@@ -465,10 +460,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     throw new CliUsageError("Target bindings are immutable; --frontend-target/--backend-target cannot be used with --resume");
   }
 
-  // Backward compatibility: --runtime (or --model) by itself has always meant one
-  // fixed adapter/model. Naming that behaviour must not silently turn handoff on.
-  if ((runtime || model) && mode === undefined) mode = "single";
-
   return {
     taskId,
     module: moduleName,
@@ -504,7 +495,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     autonomy,
     runtime,
     model,
-    mode,
     noQaOptimization,
     noDeterministicGate,
     tokenBudget,
@@ -920,26 +910,33 @@ async function runInitVerb(rest: string[], defaultProjectRoot: string): Promise<
       return 1;
     }
   }
-  const templatesDir = flagValue(rest, "--templates");
-  if (!templatesDir) throw new CliUsageError("init: --templates <dir> is required (built by `npm run build:templates`)");
-  const force = rest.includes("--force");
+  // T-V5-038 — `legacy-project` mode (`.sta/` materialization via
+  // packaging/initCommand.ts) is removed. Error naming the replacement for
+  // this release rather than vanishing silently; `software-team-agents init`
+  // (targetcli's installer) writes `.agent-team/` and converts a `.sta/`-only
+  // workspace with no content loss.
+  console.error(
+    `[orchestrator] init --mode legacy-project no longer exists — run \`software-team-agents init\` inside ${projectRoot} instead ` +
+      "(it writes .agent-team/ and converts an existing .sta/-only workspace with no content loss)",
+  );
+  return 1;
+}
 
-  try {
-    const result = runInit(projectRoot, path.resolve(templatesDir), new Date().toISOString(), { force });
-    console.log(
-      `[orchestrator] initialized ${projectRoot}: ${result.installed.length} file(s) installed` +
-        (result.skippedConflicts.length > 0 ? `, ${result.skippedConflicts.length} conflict(s) left untouched` : "") +
-        (result.seededDirs.length > 0 ? `, seeded ${result.seededDirs.join(", ")}` : "") +
-        (result.configWritten ? ", wrote .sta/config.yaml" : ", .sta/config.yaml already existed"),
-    );
-    for (const conflict of result.skippedConflicts) {
-      console.log(`[orchestrator]   conflict, left as-is: ${conflict} (project already has different content here)`);
-    }
-    return 0;
-  } catch (e) {
-    console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
-    return 1;
-  }
+/**
+ * T-V5-041 — the legacy-project importer is gone with `orchestrator/src/adoption/`.
+ *
+ * `ADR-024-docs-vs-knowledge.md` chose (a) and accepts explicitly that this
+ * import becomes unrepeatable: the one run it had is committed in
+ * `knowledge-schoolbright` (`e6f502f`). The verb errors for one release instead
+ * of vanishing, so a script still calling it says why rather than "unknown verb".
+ */
+function runRetiredAdoptVerb(): number {
+  console.error(
+    "[orchestrator] adopt is retired — the one-time legacy import has already run and its result is committed under knowledge/. " +
+      "See decisions/ADR-024-docs-vs-knowledge.md, which accepts that this import is not repeatable. " +
+      "There is no replacement command; `sta --check-knowledge` still validates the store.",
+  );
+  return 1;
 }
 
 async function runConfigureVerb(rest: string[], frameworkRoot: string): Promise<number> {
@@ -1000,54 +997,33 @@ async function runUpgradeVerb(rest: string[], defaultProjectRoot: string): Promi
       return 1;
     }
   }
-  const templatesFlag = flagValue(rest, "--templates");
-  // Dogfood F9: an installed package already ships the templates this upgrade
-  // should apply — walking up from this file to `templates/manifest.json` finds
-  // them whether `sta` runs from a checkout or from node_modules. The explicit
-  // flag stays for pointing at any other snapshot.
-  let templatesDir = templatesFlag;
-  if (!templatesDir) {
-    try {
-      templatesDir = path.join(resolveFrameworkRoot(), "templates");
-      console.log(`[orchestrator] using the installed framework's templates at ${templatesDir}`);
-    } catch {
-      throw new CliUsageError("upgrade: --templates <dir> is required when no installed framework templates can be located (built by `npm run build:templates`)");
-    }
-  }
-
-  try {
-    const result = runUpgrade(projectRoot, path.resolve(templatesDir), new Date().toISOString());
-    console.log(
-      `[orchestrator] upgraded ${projectRoot}: ${result.overwritten.length} overwritten, ` +
-        `${result.addedNew.length} new, ${result.restoredDeleted.length} restored, ` +
-        `${result.skippedUserModified.length} skipped (user-modified), backup at ${result.backupDir}`,
-    );
-    for (const skipped of result.skippedUserModified) {
-      console.log(`[orchestrator]   skipped, user-modified: ${skipped}`);
-    }
-    for (const dropped of result.droppedFromFramework) {
-      console.log(`[orchestrator]   note: ${dropped} is no longer part of the framework — left in place, no longer tracked`);
-    }
-    return 0;
-  } catch (e) {
-    console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
-    return 1;
-  }
+  // T-V5-038 — `legacy-project` mode (`.sta/` file-by-file upgrade via
+  // packaging/upgradeCommand.ts) is removed. Error naming the replacement for
+  // this release rather than vanishing silently: `software-team-agents init`
+  // converts a `.sta/`-only workspace to `.agent-team/` (no content loss),
+  // after which `software-team-agents sync` (or this same `upgrade` verb,
+  // which detects `.agent-team/manifest.json` above) keeps it current.
+  console.error(
+    `[orchestrator] upgrade --mode legacy-project no longer exists — run \`software-team-agents init\` inside ${projectRoot} ` +
+      "to convert it to .agent-team/ (no content loss), then `software-team-agents sync` to keep it current",
+  );
+  return 1;
 }
 
-/** The production composition root. Paid transport is absent unless explicitly enabled. */
-export function createProductionRuntimeRegistry(
-  projectRoot: string,
-  options: { allowPaidFallback?: boolean } = {},
-): RuntimeRegistry {
-  const adapters = [
+/**
+ * The production composition root.
+ *
+ * T-V5-039 — the paid API adapter is no longer constructed here at all:
+ * `--runtime` only offers runtimes that can actually run, and `ApiAdapter`
+ * (`runtime/apiAdapter.ts`) has no `invoke` in production, so every call it
+ * received always returned `NOT_CONFIGURED`. The class itself survives as an
+ * unwired reference implementation; it is simply never registered.
+ */
+export function createProductionRuntimeRegistry(projectRoot: string): RuntimeRegistry {
+  return RuntimeRegistry.forProcess([
     new ClaudeCodeAdapter({ projectRoot }),
     new CodexAdapter({ projectRoot }),
     new OpenCodeAdapter({ projectRoot }),
-  ];
-  return RuntimeRegistry.forProcess([
-    ...adapters,
-    ...(options.allowPaidFallback ? [new ApiAdapter({ projectRoot })] : []),
   ]);
 }
 
@@ -1308,7 +1284,7 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
     case "roles":
       return runRolesVerb(rest, defaultProjectRoot);
     case "adopt":
-      return runAdoptVerb(rest, defaultProjectRoot);
+      return runRetiredAdoptVerb();
     case "configure":
       return runConfigureVerb(rest, defaultProjectRoot);
     case "doctor":
@@ -1427,7 +1403,6 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       staConfig = undefined;
     }
     const executionConfig = staConfig?.execution;
-    const resolvedMode = args.mode ?? executionConfig?.mode;
     const phaseTier = plannedTier(args, taskId);
     const tierCamp = phaseTier
       ? selectTierCamp({
@@ -1439,18 +1414,8 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
         prompt: () => promptForCamp(DEFAULT_RUNTIME_ID),
       })
       : undefined;
-    const defaultRuntimeId = tierCamp?.runtimeId ?? args.runtime ??
-      ((resolvedMode ?? "single") === "single" ? executionConfig?.runner : undefined) ??
-      DEFAULT_RUNTIME_ID;
-    const allowPaidFallback = executionConfig?.allow_paid_fallback === true;
-    if (defaultRuntimeId === PAID_API_RUNTIME_ID && !allowPaidFallback) {
-      console.error(
-        `[orchestrator] runtime "${PAID_API_RUNTIME_ID}" is unreachable because paid API fallback is disabled; ` +
-          "set execution.allow_paid_fallback: true explicitly before selecting it",
-      );
-      return 1;
-    }
-    const runtimeRegistry = createProductionRuntimeRegistry(args.projectRoot, { allowPaidFallback });
+    const defaultRuntimeId = tierCamp?.runtimeId ?? args.runtime ?? executionConfig?.runner ?? DEFAULT_RUNTIME_ID;
+    const runtimeRegistry = createProductionRuntimeRegistry(args.projectRoot);
     const defaultRuntime = runtimeRegistry.tryGet(defaultRuntimeId);
     if (!defaultRuntime) {
       console.error(`[orchestrator] configured Single runner "${defaultRuntimeId}" is not registered`);
@@ -1466,9 +1431,6 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
         const classification = store.loadTask(id)?.classification;
         return classification ? riskSignalsFromClassification(classification) : undefined;
       },
-      routingMode: resolvedMode,
-      allowHandoff: resolvedMode === "auto" && (executionConfig?.allow_handoff ?? true),
-      allowPaidFallback,
       projectRoot: args.projectRoot,
       moduleName: () => args.module!,
       guards: contractGuardResolver(args.projectRoot),

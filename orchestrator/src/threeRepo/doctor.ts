@@ -172,13 +172,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
       if (sameRealPath(projectRoot, boundKnowledgeRoot)) return { status: "PASS", detail: naDetail };
       const result = validateInstallation(projectRoot);
       if (result.problems.length > 0) return { status: "FAIL", detail: result.problems.join("; ") };
-      return {
-        status: "PASS",
-        detail:
-          result.layout === "sta"
-            ? `${path.join(projectRoot, ".sta")} valid (legacy layout)`
-            : `${path.join(projectRoot, ".agent-team")} valid`,
-      };
+      return { status: "PASS", detail: `${path.join(projectRoot, ".agent-team")} valid` };
     }),
   );
 
@@ -383,15 +377,13 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
       if (!configured) {
         return {
           status: "PASS",
-          detail: "V3 config not configured — defaults apply (single / claude-code / deterministic gate enabled / paid fallback disabled)",
+          detail: "V3 config not configured — defaults apply (single / claude-code / deterministic gate enabled)",
         };
       }
       const execution = targetConfig?.execution ?? staConfig?.execution;
       return {
         status: "PASS",
-        detail:
-          `configured explicitly; mode=${execution?.mode ?? "single"}, runner=${execution?.runner ?? "claude-code"}, ` +
-          `paid fallback=${execution?.allow_paid_fallback === true ? "enabled" : "disabled"}`,
+        detail: `configured explicitly; mode=${execution?.mode ?? "single"}, runner=${execution?.runner ?? "claude-code"}`,
       };
     }),
   );

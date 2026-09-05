@@ -956,7 +956,7 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
     expect(runtime.requests).toHaveLength(1);
   });
 
-  it("with opts.registry and no model_routing override, still goes to the fixed runtime (its id doubles as the default)", async () => {
+  it("with opts.registry and no routing.by_role override, still goes to the fixed runtime (its id doubles as the default)", async () => {
     const primary = new MockRuntimeAdapter({ id: "claude-code" });
     const secondary = new MockRuntimeAdapter({ id: "codex" });
     const registry = new RuntimeRegistry([primary, secondary]);
@@ -1045,26 +1045,46 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
     expect(runtime.requests).toEqual([]);
   });
 
+  // T-V5-040 — the support-level gate survives the routing collapse: it now
+  // guards the one automatic route (precedence 4, the named default runner),
+  // which is the only route nobody chose explicitly.
   it("refuses an automatic preview route before either adapter starts", async () => {
     const projectRoot = tmpProject();
-    fs.mkdirSync(path.join(projectRoot, ".sta"), { recursive: true });
-    fs.writeFileSync(path.join(projectRoot, ".sta", "config.yaml"), "schema_version: 1\nrouting:\n  order: [codex]\n", "utf8");
-    const primary = new MockRuntimeAdapter({ id: "claude-code" });
     const preview = new MockRuntimeAdapter({ id: "codex" });
+    const other = new MockRuntimeAdapter({ id: "claude-code" });
     const result = await createRuntimeExecutor({
-      runtime: primary,
-      registry: new RuntimeRegistry([primary, preview]),
+      runtime: preview,
+      registry: new RuntimeRegistry([preview, other]),
       projectRoot,
       moduleName: () => "sales-crm",
       guards: () => NO_GUARDS,
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-SUPPORT-GATE", context: [] });
     expect(result.outcome.result).toBe("FAIL");
     expect(result.outcome.failure_reason).toContain('support level "preview"');
-    expect(primary.requests).toEqual([]);
     expect(preview.requests).toEqual([]);
+    expect(other.requests).toEqual([]);
   });
 
-  it("executes a resolved fallback candidate in Auto mode and records the hop", async () => {
+  it("lets routing.allow_below_supported opt one runtime past the automatic support gate", async () => {
+    const projectRoot = tmpProject();
+    fs.mkdirSync(path.join(projectRoot, ".sta"), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, ".sta", "config.yaml"), "schema_version: 1\nrouting:\n  allow_below_supported: [codex]\n", "utf8");
+    const preview = new MockRuntimeAdapter({ id: "codex" });
+    const result = await createRuntimeExecutor({
+      runtime: preview,
+      registry: new RuntimeRegistry([preview]),
+      projectRoot,
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-SUPPORT-OPTIN", context: [] });
+    expect(result.outcome.result).toBe("PASS");
+    expect(preview.requests).toHaveLength(1);
+  });
+
+  // T-V5-040 — the handoff candidate chain is gone: an unavailable route stops
+  // the stage rather than executing a different runtime, and the second
+  // registered adapter is never reached.
+  it("refuses an unavailable route without executing any other registered runtime", async () => {
     const projectRoot = tmpProject();
     fs.mkdirSync(path.join(projectRoot, ".sta"), { recursive: true });
     fs.writeFileSync(
@@ -1076,33 +1096,32 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
       id: "claude-code",
       probe: { available: false, reason: "automatic runtime unavailable" },
     });
-    const fallback = new MockRuntimeAdapter({ id: "codex" });
+    const other = new MockRuntimeAdapter({ id: "codex" });
     const result = await createRuntimeExecutor({
       runtime: unavailable,
-      registry: new RuntimeRegistry([unavailable, fallback]),
+      registry: new RuntimeRegistry([unavailable, other]),
       projectRoot,
       moduleName: () => "sales-crm",
       guards: () => NO_GUARDS,
-      routingMode: "auto",
-      allowHandoff: true,
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-NO-PHASE-4", context: [] });
-    expect(result.outcome.result).toBe("PASS");
+    expect(result.outcome.result).toBe("FAIL");
     expect(result.outcome).toMatchObject({
       requested_runtime: "claude-code",
-      runtime: "codex",
-      fallback_count: 1,
+      runtime: "claude-code",
+      fallback_count: 0,
     });
-    expect(result.outcome.fallback_reason).toContain("UNAVAILABLE");
+    expect(result.outcome.failure_reason).toContain("automatic runtime unavailable");
+    expect(result.outcome.fallback_reason).toBeUndefined();
     expect(unavailable.requests).toEqual([]);
-    expect(fallback.requests).toHaveLength(1);
+    expect(other.requests).toEqual([]);
   });
 
-  it("routes a run to the second registered runtime when .sta/config.yaml's model_routing names it", async () => {
+  it("routes a run to the second registered runtime when .sta/config.yaml's routing.by_role names it", async () => {
     const projectRoot = tmpProject();
     fs.mkdirSync(path.join(projectRoot, ".sta"), { recursive: true });
     fs.writeFileSync(
       path.join(projectRoot, ".sta", "config.yaml"),
-      "schema_version: 1\nmodel_routing:\n  backend-engineer: codex:o4-mini\n",
+      "schema_version: 1\nrouting:\n  by_role:\n    backend-engineer: codex:o4-mini\n",
       "utf8",
     );
     const primary = new MockRuntimeAdapter({ id: "claude-code" });
@@ -1123,12 +1142,16 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
     expect(secondary.requests[0].model).toBe("o4-mini");
   });
 
-  it("falls back to the fixed runtime, with the reason in the failure description, when model_routing names an unregistered runtime", async () => {
+  // T-V5-040 — the legacy `model_routing` spelling and its
+  // unregistered-runtime-to-default fallback are removed. `routing.by_role`
+  // naming a runtime nobody registered now fails closed before any adapter
+  // starts, instead of quietly running somewhere the config did not ask for.
+  it("fails closed, naming the unregistered runtime, when routing.by_role names one nobody registered", async () => {
     const projectRoot = tmpProject();
     fs.mkdirSync(path.join(projectRoot, ".sta"), { recursive: true });
     fs.writeFileSync(
       path.join(projectRoot, ".sta", "config.yaml"),
-      "schema_version: 1\nmodel_routing:\n  backend-engineer: ghost-runtime:some-model\n",
+      "schema_version: 1\nrouting:\n  by_role:\n    backend-engineer: ghost-runtime:some-model\n",
       "utf8",
     );
     const primary = new MockRuntimeAdapter({
@@ -1146,8 +1169,9 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
 
     const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-1", context: [] });
 
-    expect(primary.requests).toHaveLength(1);
+    expect(primary.requests).toHaveLength(0);
     expect(result.outcome.result).toBe("FAIL");
     expect((result.outcome as { failure_reason?: string }).failure_reason).toContain("not registered");
+    expect((result.outcome as { failure_reason?: string }).failure_reason).toContain("ghost-runtime");
   });
 });

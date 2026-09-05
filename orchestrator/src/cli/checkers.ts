@@ -254,7 +254,7 @@ export const CHECKERS: readonly CheckerDescriptor[] = [
     flag: "checkInstallation",
     cliFlag: "--check-installation",
     run: (root) => toOutcome(validateInstallation(root)),
-    okMessage: "[orchestrator] installation metadata (.agent-team/, or legacy .sta/) agrees with the project's real files.",
+    okMessage: "[orchestrator] installation metadata (.agent-team/) agrees with the project's real files.",
     failHeading: "[orchestrator] installation metadata has problems:",
     notes: "leading",
   },

@@ -53,17 +53,45 @@ export interface KnowledgePolicy {
 }
 
 /**
- * What applies when there is no file. Permissive on purpose: field-level
- * restriction breaks pipelines when it is wrong (an engineer who cannot see the
- * acceptance criteria implements the wrong thing), so it is opt-in.
+ * What applies when a project sets nothing.
+ *
+ * T-V5-047 — these rules used to live only in this repository's own
+ * `knowledge-policy.yaml`, which `templateSources.ts` never syncs anywhere. The
+ * effect, measured on the real corpus: a `project-manager` retrieval in
+ * `knowledge-schoolbright` returned 50 items flagged `sensitive: true` with
+ * `withheld: []` and full bodies, because the workspace's file was the stub
+ * `version: 1`. The rule was written down in one repository and enforced in
+ * none. Moving it here is the whole fix — the file remains an override for a
+ * project that wants a different answer, and is no longer where the answer has
+ * to be repeated to be true.
+ *
+ * `defaults` stays permissive on purpose: blanket field-level restriction breaks
+ * pipelines when it is wrong (an engineer who cannot see the acceptance criteria
+ * implements the wrong thing), so it is still opt-in. The two role overrides are
+ * narrow and hold generally: `devops` and `project-manager` schedule and ship
+ * work; neither implements it nor reviews it for correctness, so for an item
+ * flagged `sensitive` they get its existence, title and status — enough to
+ * sequence and to gate on — and not its contents. An item's own owner, and
+ * `HUMAN`, always see everything (`visibleItemFor`).
  */
 export const DEFAULT_KNOWLEDGE_POLICY: KnowledgePolicy = {
   version: 1,
   defaults: { sensitive: "full", hideFields: [] },
-  roles: {},
+  roles: {
+    [AgentStage.DEVOPS]: { sensitive: "redacted" },
+    [AgentStage.PROJECT_MANAGER]: { sensitive: "redacted" },
+  },
   freshness: {
     default: { agingAfterDays: 90, staleAfterDays: 180 },
-    byKind: {},
+    // The code moves under a model or an endpoint faster than under anything
+    // else here, and one that no longer matches the code is wrong rather than
+    // merely old. A settled decision does not rot on a schedule — it is
+    // superseded explicitly — so it is not nagged about.
+    byKind: {
+      "db-schema": { agingAfterDays: 30, staleAfterDays: 90 },
+      api: { agingAfterDays: 30, staleAfterDays: 90 },
+      decision: { agingAfterDays: 365, staleAfterDays: 730 },
+    },
   },
 };
 
@@ -119,17 +147,32 @@ function fromRaw(raw: RawPolicy): KnowledgePolicy {
     hideFields: raw.defaults?.hide_fields ?? [],
   };
 
-  const roles: KnowledgePolicy["roles"] = {};
-  for (const [role, entry] of Object.entries(raw.roles ?? {})) {
-    roles[role as AgentStage] = {
-      ...(entry.sensitive !== undefined ? { sensitive: entry.sensitive } : {}),
-      ...(entry.hide_fields !== undefined ? { hideFields: entry.hide_fields } : {}),
-    };
+  // T-V5-047 — an ABSENT key falls back to the built-in default; a key that is
+  // present, even as an empty map, is the project's answer and is taken as
+  // written. Rebuilding these from `raw` unconditionally would have made the
+  // 12-byte stub `version: 1` — which every workspace carries — silently erase
+  // the defaults above, which is exactly the failure this task is fixing.
+  let roles: KnowledgePolicy["roles"];
+  if (raw.roles === undefined) {
+    roles = DEFAULT_KNOWLEDGE_POLICY.roles;
+  } else {
+    roles = {};
+    for (const [role, entry] of Object.entries(raw.roles)) {
+      roles[role as AgentStage] = {
+        ...(entry.sensitive !== undefined ? { sensitive: entry.sensitive } : {}),
+        ...(entry.hide_fields !== undefined ? { hideFields: entry.hide_fields } : {}),
+      };
+    }
   }
 
-  const byKind: KnowledgePolicy["freshness"]["byKind"] = {};
-  for (const [kind, t] of Object.entries(raw.freshness?.by_kind ?? {})) {
-    byKind[kind as KnowledgeKind] = { agingAfterDays: t.aging_after_days, staleAfterDays: t.stale_after_days };
+  let byKind: KnowledgePolicy["freshness"]["byKind"];
+  if (raw.freshness?.by_kind === undefined) {
+    byKind = DEFAULT_KNOWLEDGE_POLICY.freshness.byKind;
+  } else {
+    byKind = {};
+    for (const [kind, t] of Object.entries(raw.freshness.by_kind)) {
+      byKind[kind as KnowledgeKind] = { agingAfterDays: t.aging_after_days, staleAfterDays: t.stale_after_days };
+    }
   }
 
   return {
@@ -179,7 +222,15 @@ export interface PolicyCheckResult {
 export function checkKnowledgePolicyFile(projectRoot: string = defaultProjectRoot()): PolicyCheckResult {
   const filePath = knowledgePolicyPath(projectRoot);
   if (!fs.existsSync(filePath)) {
-    return { problems: [], notes: [`no ${POLICY_FILENAME} — every role sees every field of what its view allows.`] };
+    // T-V5-047 — this used to say "every role sees every field", which stopped
+    // being true when the two role rules moved into the built-in default.
+    return {
+      problems: [],
+      notes: [
+        `no ${POLICY_FILENAME} — the built-in policy applies: devops and project-manager get sensitive items ` +
+          "redacted (identity, title and status only); every other role sees every field of what its view allows.",
+      ],
+    };
   }
 
   let policy: KnowledgePolicy;

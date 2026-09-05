@@ -162,7 +162,8 @@ Guard coverage per runtime (`T-V5-008`) is the same verdict `dev`/`ba` preflight
 | **Claude Code** | ✅ **Supported** — implemented + verified (pipeline, guards, capability probe) | **enforced** — all six guards wired and verified (`block-git`, `block-outside-repo`, `block-path-permissions`, `block-doc-rewrite`, `block-secret-leak`, `require-green-before-stop`) |
 | **Codex** | ⚠️ **Preview** — `software-team-agents dev\|ba --runtime codex` เปิด interactive session ได้ และ `.codex/agents/*.toml` + skills mirror `.agents/skills/**` ถูก generate ครบ (skills invoke `$name` ได้จริงบน codex-cli 0.149 — spike T-CXC1) แต่ headless pipeline (`sta run`) วิ่งบน Claude Code เป็น default; `CodexAdapter` ฝั่ง orchestrator ยังเป็น implementation ที่ไม่เคย verify กับ install จริง | **unguarded** — the payload ships no Codex hook wiring at all; a launch requires `--allow-unguarded-runtime` |
 | **OpenCode** | 🧪 **Experimental** (T-OC, planning/v2) — bindings `.opencode/agent/*.md` + plugin `sta-guards.js` sync ครบ, commands mirror `.opencode/commands/**` generate ครบ (`/name` ผ่าน `opencode run --command` — spike T-OCC1), `dev\|ba --runtime opencode` เปิด session ได้, headless เลือกได้ด้วย `sta run --runtime opencode`; adapter/permission ผ่านการ spike พิสูจน์แล้วแต่ exit checks (typecheck/secret ตอนจบ run) ยังไม่มี in-band — รายงานเป็น GUARD GAP และให้ QA round เป็นตัวครอบ | **partial** — `.opencode/plugin/sta-guards.js` enforces `block-outside-repo` + `block-path-permissions`, each binding's permission block enforces `block-git`; `block-doc-rewrite`, `block-secret-leak`, `require-green-before-stop` have no OpenCode mechanism. A workspace **missing the plugin** is `unguarded`, not merely partial (OpenCode's default posture is allow-all) |
-| **Paid API** | 🧪 **Experimental** — fallback สำหรับ read-only/document stages ผ่าน official transport ที่ embedding host inject ให้เท่านั้น; ปิดโดย default, ไม่อ่าน credential เอง และไม่มี Target-write guard จึงถูกปฏิเสธก่อน API invocation | n/a — no interactive launch path; rejected before invocation when Target-write guards can't apply |
+
+> `T-V5-039`: the previous "Paid API" row (an injected official-transport fallback, opt-in via `execution.allow_paid_fallback`) is retired — `--runtime` never offered a working transport for it (`new ApiAdapter(...)` had no `invoke` in production, so every call returned `NOT_CONFIGURED`). `runtime/apiAdapter.ts` survives only as an unwired reference implementation; it is never registered or offered.
 
 Same verdict, three places: this table, `sta runtimes` (reads `RUNTIME_SUPPORT` directly), and
 `software-team-agents --help`'s `--runtime` line — all three quote `guardSettings.ts`'s `codexCoverage()`/
@@ -171,34 +172,36 @@ Same verdict, three places: this table, `sta runtimes` (reads `RUNTIME_SUPPORT` 
 
 ข้อจำกัด: การรัน unattended ต้องใช้ `--autonomy edit` หรือ `full` (default `propose` ติด permission prompt ที่ไม่มีคนกดใน headless run)
 
-### Execution modes, routing และ fallback (V3)
+### Runtime routing (V5 — one route)
 
-`--mode <single|auto|manual>` ใช้กับ `sta run` เท่านั้น; interactive `software-team-agents dev|ba --runtime <claude|codex|opencode>` ยังเป็น direct user choice และไม่ใช้ router.
+มีทางเลือก runtime/model ทางเดียว: `sta run` resolve **candidate เดียว**เสมอ; execution modes (`single`/`auto`/`manual`), handoff candidate chain, `routing.strategy`/`routing.order` และ legacy `model_routing` ถูกถอดออกใน `T-V5-040`. interactive `software-team-agents dev|ba --runtime <claude|codex|opencode>` ยังเป็น direct user choice และไม่ใช้ router.
 
-| Mode | พฤติกรรมจริง |
-|---|---|
-| `single` | **default**. ใช้ runner เดียวจาก `--runtime`, `execution.runner`, หรือ `claude-code` ตามลำดับ; ไม่ hand off |
-| `auto` | opt-in ด้วย `--mode auto`, `execution.mode: auto`, หรือการประกาศ `routing.strategy`/`routing.order` โดยไม่กำหนด mode; เดิน candidate order เฉพาะเมื่อ runner คืน `UNAVAILABLE`. `ERROR`/`TIMEOUT` ไม่ trigger fallback |
-| `manual` | opt-in; ต้องมี runner **และ model** ชัดเจนต่อ role ใน `routing.by_role` หรือ legacy `model_routing`. `--runtime` และ `--model` เป็น explicit per-run override; strict Manual ยังต้องมี route ที่ resolve ได้ |
+| ลำดับ | ที่มาของ route | precedence ใน run log |
+|---|---|---|
+| 1 | `--runtime <id>` และ/หรือ `--model <name>` ของ run นั้น | `level-1` |
+| 2 | `routing.by_role.<role>` ใน `.sta/config.yaml` (`"runtime:model"` หรือ `{ runtime, model, effort }`) | `level-2` |
+| 3 | default runner (`execution.runner` หรือ `claude-code`) + `model:` ใน frontmatter ของ role | `level-4` |
 
-Routing precedence ที่ implementation ใช้คือ `--runtime` → `routing.by_role` (เหนือ `model_routing`) → `routing.order`/`routing.strategy` → default `claude-code`; candidate ต้อง registered, available, มี capability ที่ stage ต้องใช้ และ automatic routing ไป runtime ต่ำกว่า `supported` ต้อง opt in ราย runtime ผ่าน `routing.allow_below_supported`. `--runtime <id>` โดยไม่มี `--mode` รักษา behavior เดิมด้วยการหมายถึง Single.
+candidate ต้อง registered, available, และมี capability ที่ stage ต้องใช้ (Target-write stage ต้องมี `PRE_TOOL_GUARD`). automatic route (ลำดับ 3 — ลำดับเดียวที่คนไม่ได้เลือกเอง) ยังต้อง opt in ราย runtime ผ่าน `routing.allow_below_supported` ถ้า support level ต่ำกว่า `supported`.
 
-Auto fallback เดินต่อได้เฉพาะ candidate ที่ผ่าน guard/capability policy. Paid API ไม่ถูกสร้างเป็น usable transport เอง: embedding host ต้อง inject official authenticated transport และตั้ง `execution.allow_paid_fallback: true`; default คือ **`false`**. ถ้า requested runner ใช้ไม่ได้และไม่มี eligible candidate เหลือ (รวม paid fallback ที่ยังปิด) pipeline **STOP → Human** พร้อมเหตุผล — ไม่เลือก provider หรือจ่ายเงินเงียบ ๆ.
+ถ้า route นั้นรันไม่ได้ — unavailable, ต่ำกว่า supported โดยไม่ opt in, ขาด guard capability, หรือ runner คืน `UNAVAILABLE`/`ERROR`/`TIMEOUT` — pipeline **STOP → Human** พร้อมเหตุผล และ **ไม่ย้ายไป runner อื่น** (`fallback_count` เป็น 0 เสมอ). ไม่มีการเลือก provider เงียบ ๆ.
 
-V3 flags ที่ `sta run` รับจริง:
+config เก่ายังโหลดได้: `execution.mode`, `execution.allow_handoff`, `execution.allow_paid_fallback`, `routing.strategy`, `routing.order` และ `model_routing` ไม่ทำให้ config invalid แต่ไม่มีผลอะไรแล้ว — `software-team-agents status` รายงานเป็น `ignored keys: ...`. `sta run --mode ...` error พร้อมบอกคำสั่งแทนที่ (ไม่หายเงียบ) ตลอด release นี้.
+
+V5 flags ที่ `sta run` รับจริง:
 
 | Flag | ค่า/ผล |
 |---|---|
-| `--mode <single|auto|manual>` | เลือก execution mode; default `single` |
-| `--runtime <claude-code|codex|opencode|paid-api>` | เลือก runner; ถ้าไม่มี `--mode` จะบังคับ Single. `paid-api` ยังต้องเปิด config opt-in |
+| `--runtime <claude-code|codex|opencode>` | เลือก runner สำหรับ run นี้ (precedence 1) |
+| `--model <name>` | explicit model override สำหรับทุก stage ของ run นี้; runtime ปฏิเสธ model ที่มันใช้ไม่ได้ |
 | `--no-qa-optimization` | กลับไปใช้ executor QA แบบก่อน optimization สำหรับ task นี้; ไม่ใช่ QA skip |
 | `--no-deterministic-gate` | explicit escape hatch ปิด deterministic pre-check สำหรับ task นี้; default gate เปิด |
 | `--token-budget <n>` | positive integer, post-hoc task token ceiling; ไม่ใช่ pre-spawn context cap |
-| `--model <name>` | explicit model override สำหรับ run นี้ และทำให้ mode เป็น Single เมื่อไม่ได้ระบุ `--mode`; runtime ปฏิเสธ model ที่มันใช้ไม่ได้ |
+| `--mode <single|auto|manual>` | **ถอดออกแล้ว** — error พร้อมชี้ไป `--runtime`/`--model`/`routing.by_role` |
 
 ดู surface ทั้งหมดที่ build นี้รับจริงด้วย `sta --help`, runtime/support จริงด้วย `sta runtimes`, และผล routing/fallback ที่บันทึกด้วย `sta status <task-id>` / `sta audit <task-id>`.
 
-สิ่งที่ V4 **ไม่เปลี่ยน**: routing ยังมี precedence เดิมห้าระดับ, runtime contracts ยังเป็น adapter contracts เดิม, และ ContextManager ยังเลือก context แบบ conservative เดิม (unknown section ถูกเก็บไว้).
+สิ่งที่ V4 **ไม่เปลี่ยน**: runtime contracts ยังเป็น adapter contracts เดิม, และ ContextManager ยังเลือก context แบบ conservative เดิม (unknown section ถูกเก็บไว้).
 
 ## Setup playbooks (`prompt-setup.md`)
 
@@ -408,7 +411,7 @@ pipeline ที่มี design phase (`--new-feature`, `--schema`, `--business-
 ### Task lifecycle commands
 
 ```bash
-sta run      --task-id <id> --module <name> <classification flags> [--autonomy read-only|propose|edit|full] [--mode single|auto|manual] [--runtime claude-code|codex|opencode|paid-api]
+sta run      --task-id <id> --module <name> <classification flags> [--autonomy read-only|propose|edit|full] [--runtime claude-code|codex|opencode]
 sta resume   --task-id <id> --module <name>          # continue task ใน store
 sta retry    --task-id <id> --module <name>          # same as resume
 sta pause    --task-id <id>                          # freeze; run/resume/retry refuse
@@ -422,7 +425,7 @@ sta projects                                     # status summary ทุก proj
 sta --list                                       # ทุก task + batch ที่รันพร้อมกันได้
 ```
 
-option สำคัญ: `--frontend-target/--backend-target <id>` (immutable ต่อ task), `--phase <n,n>`, `--depends-on <id,id>`, `--env <local|dev|staging|production>`, `--state-db <path>`, `--token-budget <n>`, `--no-qa-optimization`, `--no-deterministic-gate`. `sta context --task <id> --packet` อ่าน latest validated V3 execution packet จาก Runtime State. ความหมายของ V3 execution flags อยู่ในตารางด้านบน; ไม่มี user-facing `--model` หรือ `--qa-skip` ใน CLI นี้
+option สำคัญ: `--frontend-target/--backend-target <id>` (immutable ต่อ task), `--phase <n,n>`, `--depends-on <id,id>`, `--env <local|dev|staging|production>`, `--state-db <path>`, `--token-budget <n>`, `--no-qa-optimization`, `--no-deterministic-gate`. `sta context --task <id> --packet` อ่าน latest validated V3 execution packet จาก Runtime State. ความหมายของ runtime-selection flags อยู่ในตารางด้านบน; ไม่มี user-facing `--qa-skip` ใน CLI นี้
 
 ### Human approval gates
 
@@ -512,7 +515,7 @@ Knowledge ไม่ใช่ "AI memory" — เป็นข้อมูลร�
 | โครงสร้างโฟลเดอร์/ไฟล์ใน Knowledge repo ไม่ตรง canonical | `prompt-reconcile-knowledge-layout.md` |
 | binding / sync / workspace ไม่ได้ register | `prompt-setup.md` (Inspect/Repair) — รันก่อน ถ้า `sta doctor` / `--check-workspace` แดง |
 | หลักฐาน current/desired เทียบ Target จริง (implementation drift) | `sta knowledge reconcile --target <id>` |
-| import legacy `.claude/` `docs/` `planning/` เข้า Knowledge ครั้งแรก | `sta adopt <plan\|start\|run\|approve\|validate>` |
+| import legacy `.claude/` `docs/` `planning/` เข้า Knowledge ครั้งแรก | **ถอดออกใน V5** (`ADR-024`) — one-time import รันไปแล้ว ไม่มีคำสั่งแทน |
 
 > `prompt-update-knowledge.md` เป็นชื่อเดิมของ playbook นี้ — เหลือไว้เป็น pointer หนึ่ง release แล้วลบ
 
@@ -601,7 +604,7 @@ Regenerate mirror ใน Framework repo เอง: `npm --prefix orchestrator ru
   - `OUTDATED` — minor/patch ต่าง → `software-team-agents sync` ได้เลย
   - `INCOMPATIBLE` — **major ต่าง** → ต้อง `sync --force` (cross-major jump ต้องตัดสินใจเอง ไม่ happen เงียบ ๆ) และ `dev/ba` preflight จะ fail ทันที
 - **Current workspace upgrade flow**: ติดตั้ง `.tgz` ใหม่ → `software-team-agents status` → `software-team-agents sync` ต่อ BA/DEV workspace; locally modified managed files block จนกว่าจะ resolve หรือยืนยัน `--force` (backup ก่อนเขียน)
-- **Legacy install (`.sta/`)**: `sta upgrade --mode legacy-project --templates <dir>` (skip ไฟล์ที่ user แก้, restore ไฟล์ที่ถูกลบ, backup ก่อนเขียน) · `sta migrate` สำหรับ breaking manifest schema change · `sta rollback [--backup <name>]`
+- **Legacy install (`.sta/`)**: ถอดออกใน `T-V5-038` — `sta init`/`sta upgrade --mode legacy-project` error พร้อมชี้ให้รัน `software-team-agents init` ซึ่งแปลง workspace `.sta/`-only ไปเป็น `.agent-team/` โดยไม่เสียเนื้อหา แล้วตามด้วย `software-team-agents sync` · `sta migrate` สำหรับ breaking manifest schema change · `sta rollback [--backup <name>]`
 - **Knowledge item schema**: opt-in migration `1 → 2` เพิ่ม `origin` + `target_ids` ผ่าน `sta knowledge migrate-v2 --dry-run` แล้ว `sta knowledge migrate-v2`; ไม่เปลี่ยน body/payload/status/owner/version และรายงาน freshness sweep แรกเป็น baseline. คำสั่ง legacy `sta knowledge-migrate <dry-run|copy|verify|cutover>` ยังเป็น Three-Repo copy/cutover flow และ cutover ต้อง `--confirm I_CONFIRM_MIGRATION`
 - **ยังไม่มี**: publish ขึ้น npm registry, auto-update, lockfile/resolution ข้าม repo — distribution ผ่าน `.tgz` เท่านั้น
 
@@ -621,18 +624,13 @@ Regenerate mirror ใน Framework repo เอง: `npm --prefix orchestrator ru
 
 Environment variables ที่ runtime ใช้: `AGENTCLAUDE_ROLE` (role ปัจจุบันสำหรับ path permissions), `AGENTCLAUDE_WRITABLE_WORK_ROOTS` (JSON array — interactive `dev|ba` ตั้ง `[]`; orchestrated Target-write stage ได้เฉพาะ canonical roots จาก three-repo preflight), และ `AGENTCLAUDE_KNOWLEDGE_ROOT` (read-only Knowledge context เมื่อ resolve ได้)
 
-V3 config ทั้งหมดเป็น optional; config ก่อน V3 ที่มีเพียง `schema_version: 1` ยัง parse และ resolve เป็น Single/Claude Code. ตัวอย่างที่เปิด Auto โดยยังไม่เปิด paid fallback:
+Config ทั้งหมดเป็น optional; config ที่มีเพียง `schema_version: 1` ยัง parse และ resolve เป็น default runner (`claude-code`) + frontmatter model. ตัวอย่างที่ตั้ง per-role route และ support opt-in (`T-V5-040`: `execution.mode`/`allow_handoff`/`routing.strategy`/`routing.order`/`model_routing` โหลดได้แต่ไม่มีผล จึงไม่อยู่ในตัวอย่างนี้):
 
 ```yaml
 schema_version: 1
 execution:
-  mode: auto
   runner: claude-code
-  allow_handoff: true
-  allow_paid_fallback: false
 routing:
-  strategy: subscription-first
-  order: [claude-code, codex, opencode]
   allow_below_supported: [codex, opencode]
   by_role:
     backend-engineer:
@@ -666,7 +664,7 @@ context_budget:
 
 camp ถูกเลือกตอนเริ่ม dev phase: explicit runtime/camp หรือ configured camp ชนะเสมอ; ถ้าไม่มีทั้งคู่ prompt จะปรากฏเฉพาะ terminal ที่มี TTY และ headless run ใช้ configured default โดยไม่ถาม stdin. การเลือก camp นี้ไม่ใช่ automatic quota fallback และไม่มี camp question ตอนเขียน plan.
 
-ค่าที่ **OFF by default** และ V3 ไม่เปิดให้เอง: Auto (config ว่าง resolve เป็น `single`; การเพิ่ม `routing.strategy`/`routing.order` ถือเป็น opt-in เช่นกัน) · pyramid enforcement (`test-pyramid.yaml` omitted `enforcement` = `warn`) · QA `skip` (production CLI ไม่มี flag/config เปิด; low-risk QA ยังเป็น `lightweight`) · paid fallback (`execution.allow_paid_fallback` default `false`). Deterministic gate ตรงข้ามกันคือเปิดโดย default และปิดเฉพาะ task ด้วย `--no-deterministic-gate`.
+ค่าที่ **OFF by default** และระบบไม่เปิดให้เอง: pyramid enforcement (`test-pyramid.yaml` omitted `enforcement` = `warn`) · QA `skip` (production CLI ไม่มี flag/config เปิด; low-risk QA ยังเป็น `lightweight`). Auto mode และ paid fallback ไม่ใช่ "off by default" อีกต่อไป — ถูกถอดออกทั้งระบบใน `T-V5-039`/`T-V5-040` และ key ที่เหลือใน config ไม่มีผลอะไร. Deterministic gate ตรงข้ามกันคือเปิดโดย default และปิดเฉพาะ task ด้วย `--no-deterministic-gate`.
 
 `context_budget.mode: warn` เป็นค่า default แบบ OFF-by-default สำหรับ enforcement: มันวัดและเตือนเท่านั้น; `reject` ต้อง opt in อย่างชัดเจน.
 
@@ -725,8 +723,8 @@ software-team-agents dev --runtime opencode # หรือเปิดด้ว�
 # 4) รัน task ผ่าน pipeline (headless)
 sta run --task-id T-7 --module demo --bug-fix --backend --autonomy edit \
   --backend-target my-product --project-root C:\src\company-knowledge
-#   default: --mode single + claude-code
-#   --runtime codex|opencode โดยไม่มี --mode ยังหมายถึง Single; Auto ต้อง --mode auto
+#   default runner: claude-code + frontmatter model ของแต่ละ role
+#   --runtime codex|opencode เลือก runner ของ run นี้; ไม่มี execution mode และไม่มี handoff
 sta status T-7 --project-root C:\src\company-knowledge
 sta audit T-7 --project-root C:\src\company-knowledge
 
@@ -833,7 +831,7 @@ npm run build:templates  # snapshot templates/ + manifest.json
 node ../.claude/tests/run.js   # hook/script self-test — ต้องเขียวเสมอถ้าแตะ hooks/scripts
 ```
 
-- Release gate: `npm run release:check` (root) รันทุก step ตามลำดับ release. V3 property gates สาม step แยกรันเดี่ยวได้เพื่อ debug: `npm run test:guardrails` (guardrail invariants หกข้อ), `npm run test:modes` (Single/Auto/Manual matrix บน mock runner), `npm run test:paid-fallback` (paid API ไปไม่ถึงเมื่อ `allow_paid_fallback` เป็น false) — ไม่มี step ไหนต้อง login runner จริงหรือรัน dogfood
+- Release gate: `npm run release:check` (root) รันทุก step ตามลำดับ release. V3 property gates สาม step แยกรันเดี่ยวได้เพื่อ debug: `npm run test:guardrails` (guardrail invariants หกข้อ), `npm run test:modes` (Single/Auto/Manual matrix บน mock runner), `npm run test:paid-fallback` (paid API ไปไม่ถึงเลย — `T-V5-039`: ไม่ถูกสร้างหรือ offer เป็น runtime อีกต่อไป) — ไม่มี step ไหนต้อง login runner จริงหรือรัน dogfood
 - Benchmark gate: `npm run test:benchmark` ตรวจ corpus/oracle ที่ frozen และ regenerate metric/run-ledger reports แบบ deterministic; ไม่ต้อง login runner และไม่เรียก live model
 - **Internal V1 Stable** = P0 → P1 → P2 → P3 → P4 แต่ละ phase ถูก **executed and reported** พร้อม release gate สีเขียว; ไม่ได้แปลว่า P3 ให้ผล favourable. แม้ benchmark พบว่า harness ไม่ช่วยในบางหรือทุก category ก็ยังผ่าน milestone นี้ และเป็นผลลัพธ์เชิงลบที่ valid และ publish ได้
 - CI: [`.github/workflows/agent-framework-ci.yml`](.github/workflows/agent-framework-ci.yml) รัน self-test + typecheck + tests + release-gate `--check-*` flags + template build/init check บนทุก PR และทุก push ไป `master` หรือ `release/**` (default branch `release/dev` รวมอยู่ — release path ไม่มีทาง bypass validation)

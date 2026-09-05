@@ -1470,14 +1470,16 @@ describe("role workspace architecture (T-ROLE)", () => {
       detail: expect.stringContaining("not configured — defaults apply"),
     });
 
+    // T-V5-040 — a config carrying the removed keys still loads, and status
+    // names them as ignored instead of rendering them as effective behaviour.
     write(target, ".sta/config.yaml", "schema_version: 1\nexecution:\n  mode: auto\n  allow_paid_fallback: false\n");
     const configuredStatus = JSON.parse(
       (await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out,
     ) as { v3Configuration: { configured: boolean; detail: string } };
-    expect(configuredStatus.v3Configuration).toEqual({
-      configured: true,
-      detail: expect.stringContaining("mode=auto"),
-    });
+    expect(configuredStatus.v3Configuration.configured).toBe(true);
+    expect(configuredStatus.v3Configuration.detail).toContain("runner=claude-code");
+    expect(configuredStatus.v3Configuration.detail).toContain("ignored keys: execution.mode, execution.allow_paid_fallback");
+    expect(configuredStatus.v3Configuration.detail).not.toContain("mode=auto");
 
     const unresolved = makeTarget();
     writeTargetConfig(unresolved, defaultTargetConfig(path.basename(unresolved), "2026-01-01T00:00:00Z", "dev"));

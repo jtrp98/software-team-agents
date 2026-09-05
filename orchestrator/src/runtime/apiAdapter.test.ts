@@ -94,8 +94,6 @@ describe("ApiAdapter — paid path safety", () => {
       runtime: adapter,
       registry: new RuntimeRegistry([adapter]),
       routingFlags: { runtime: "paid-api", model: "paid-model" },
-      routingMode: "single",
-      allowPaidFallback: true,
       projectRoot: root,
       moduleName: () => "phase-4",
       guards: () => NO_GUARDS,

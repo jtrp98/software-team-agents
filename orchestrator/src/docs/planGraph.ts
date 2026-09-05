@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { AgentStage } from "../types.js";
 import { TaskGraph, TaskGraphError, CircularDependencyError, UnknownTaskError, type TaskNode } from "../graph/taskGraph.js";
-import { sections, firstTable, checkboxLines } from "../adoption/markdown.js";
+import { sections, firstTable, checkboxLines } from "./markdown.js";
 import { extractIds } from "../traceability/traceability.js";
 import { loadModelTiers, ModelTiersInvalidError, type ModelTiers } from "../runtime/modelTiers.js";
 

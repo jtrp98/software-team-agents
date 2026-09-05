@@ -9,7 +9,7 @@ import {
   type SecurityReportArtifact,
 } from "../artifacts/schemas.js";
 import { AgentStage } from "../types.js";
-import { firstTable, sections } from "../adoption/markdown.js";
+import { firstTable, sections } from "../docs/markdown.js";
 import { parsePlanTasks } from "../docs/planGraph.js";
 import { buildPlanGraph, type TaskNode } from "../graph/taskGraph.js";
 import { extractIds } from "../traceability/traceability.js";

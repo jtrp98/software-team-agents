@@ -124,9 +124,16 @@ export type WorkspaceKind = "knowledge" | "target" | "ambiguous" | "unrecognized
  * cannot discriminate between them. Counting it made every app repo that owns a
  * docs folder — i.e. every target once its first module doc lands — come back
  * "ambiguous", forcing an explicit `--role` on a repository whose kind was never
- * actually in doubt. The three markers left are Knowledge-only.
+ * actually in doubt. The markers left are Knowledge-only.
+ *
+ * T-V5-043 dropped `knowledge-policy.yaml` from this list along with the file
+ * itself. It was never the *only* marker present in any workspace this
+ * framework produces — `runThreeRepoInit` writes `knowledge/`, `targets.yaml`
+ * and the policy file together — and both survivors are committed, so a
+ * Knowledge repository is recognised from a fresh clone, before any `init`.
+ * Verified against the real repositories before the marker was removed.
  */
-const KNOWLEDGE_MARKERS: readonly string[] = ["knowledge", "knowledge-policy.yaml", "targets.yaml"];
+const KNOWLEDGE_MARKERS: readonly string[] = ["knowledge", "targets.yaml"];
 export const APP_SOURCE_MARKERS: readonly string[] = [
   "package.json",
   "pyproject.toml",
@@ -160,6 +167,25 @@ export function hasKnowledgeMarkers(dir: string): boolean {
   return KNOWLEDGE_MARKERS.some((m) => (m === "knowledge" ? hasDir(dir, m) : hasFile(dir, m)));
 }
 
+/**
+ * T-V5-043 — the recorded role of an already-initialised workspace.
+ *
+ * Once `init` has run, the workspace *states* what it is; guessing from files
+ * is only necessary before that. Read on its own rather than through
+ * `loadTargetConfig` so a config this CLI cannot fully parse (an older or newer
+ * schema) still yields its role instead of throwing detection away entirely —
+ * getting this wrong routes writes to the wrong repository.
+ */
+function recordedWorkspaceRole(dir: string): "ba" | "dev" | undefined {
+  try {
+    const raw = fs.readFileSync(path.join(dir, ".agent-team", "config.yaml"), "utf8");
+    const match = /^role:[ \t]*(ba|dev)[ \t]*$/m.exec(raw);
+    return match ? (match[1] as "ba" | "dev") : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function hasAppSourceMarkers(dir: string): boolean {
   const hasDirectMarker = (candidate: string): boolean => {
     if (APP_SOURCE_MARKERS.some((m) => hasFile(candidate, m))) return true;
@@ -186,8 +212,16 @@ function hasAppSourceMarkers(dir: string): boolean {
  * Classifies an initialized-or-not repository root for `init`.
  * Both marker families present (a legacy monorepo, this framework checkout)
  * or none → ambiguous/unrecognized, and init requires an explicit --role.
+ *
+ * T-V5-043 — a workspace that has already been initialised is classified by the
+ * role it recorded, which outranks every marker: a DEV workspace that also
+ * carries Knowledge-shaped files is `target`, not `ambiguous`, because a person
+ * already answered that question at `init`. Markers are what classify a
+ * repository that has never been initialised.
  */
 export function detectWorkspaceKind(dir: string): WorkspaceKind {
+  const recorded = recordedWorkspaceRole(dir);
+  if (recorded) return recorded === "ba" ? "knowledge" : "target";
   const knowledge = hasKnowledgeMarkers(dir);
   const appSource = hasAppSourceMarkers(dir);
   if (knowledge && appSource) return "ambiguous";
@@ -271,9 +305,7 @@ export interface TargetBinding {
   /** Absolute, validated path of the bound Target root. */
   targetRoot: string;
   /** Where the binding came from — recovery advice names it. "invalid" carries the problem text in targetRoot instead. */
-  via: "workspace-config" | "local-mapping" | "invalid";
-  /** T-V5-017 — set when the binding resolved through the deprecated committed `target.path`: machine-local content in a shared file. Names the fix. */
-  deprecation?: string;
+  via: "local-mapping" | "invalid";
   /** T-V5-017 — the Target's stable identity when the binding resolved by `target_id`. */
   targetId?: string;
 }
@@ -284,55 +316,33 @@ function looksLikeTargetRoot(candidate: string): boolean {
   return hasAppSourceMarkers(candidate);
 }
 
-/** The one-line warning for a binding that still relies on the deprecated committed path. */
-const TARGET_PATH_DEPRECATION =
-  "target.path in .agent-team/config.yaml is a machine-local path committed to a shared file — " +
-  "set target_id: <id> there and record this machine's checkout under .workflow/targets.local.yaml instead " +
-  "(T-V5-042 removes target.path)";
-
 /**
  * Resolves the Target root a BA workspace may optionally read from. T-V5-017
- * closed F-08's two unrelated mechanisms: identity now travels in the shared
- * config (`target_id`), and the machine path is resolved per machine through
- * the same `.workflow/targets.local.yaml` + `targets.yaml` join
+ * closed F-08's two unrelated mechanisms and T-V5-042 removed the second one
+ * outright: identity travels in the shared config (`target_id`), and the
+ * machine path is resolved per machine through the same
+ * `.workflow/targets.local.yaml` + `targets.yaml` join
  * `threeRepo/localTargets.ts` already owns — reusing `loadLocalTargetMapping`
  * and `targetById`, not a second resolver.
  *
- * The deprecated `target.path` is still honoured during the transition, but
- * every resolution through it carries {@link TargetBinding.deprecation} so
- * `status` can report machine-local content sitting in a committed file.
+ * There is no committed-path fallback any more. A workspace still carrying the
+ * removed `target.path` resolves to no binding here, and
+ * `targetMeta.removedTargetPath()` is what lets `status` report the leftover
+ * with its fix rather than leaving it mysterious.
  *
  * Like Knowledge for DEV, a Target binding is never required for BA
- * (T-ROLE-07): with neither `target_id` nor `target.path` set this returns
- * undefined silently. Every other failure mode throws TargetBindingError so a
- * caller can report it — callers never treat that as fatal, they only decide
- * how to describe it.
+ * (T-ROLE-07): with no `target_id` set this returns undefined silently. Every
+ * other failure mode throws TargetBindingError so a caller can report it —
+ * callers never treat that as fatal, they only decide how to describe it.
  */
 export function resolveTargetBinding(options: {
   knowledgeRoot: string;
   configTargetId?: string;
-  configTargetPath?: string;
   /** Needed to validate the local mapping's overlap rule; defaults to this CLI's own checkout. */
   frameworkRoot?: string;
 }): TargetBinding | undefined {
-  if (options.configTargetId) return resolveTargetById(options.configTargetId, options);
-  if (!options.configTargetPath) return undefined;
-  const raw = options.configTargetPath;
-  const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(options.knowledgeRoot, raw);
-  if (!fs.existsSync(resolved) || !fs.statSync(resolved).isDirectory()) {
-    throw new TargetBindingError(
-      `Target root not found: "${raw}" resolves to ${resolved} — fix target.path in .agent-team/config.yaml, or clone the app repo there`,
-    );
-  }
-  if (!looksLikeTargetRoot(resolved)) {
-    throw new TargetBindingError(
-      `"${resolved}" is not a Target repository (no package.json/pyproject.toml/... application markers) — point target.path at the app repo`,
-    );
-  }
-  if (isSameOrNested(resolved, options.knowledgeRoot)) {
-    throw new TargetBindingError(`Target root must be separate from the Knowledge workspace — "${raw}" resolves inside it`);
-  }
-  return { targetRoot: fs.realpathSync.native(resolved), via: "workspace-config", deprecation: TARGET_PATH_DEPRECATION };
+  if (!options.configTargetId) return undefined;
+  return resolveTargetById(options.configTargetId, options);
 }
 
 /** Identity → machine path, through the one Target-location mechanism this framework has (T-V5-017). */

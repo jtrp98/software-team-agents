@@ -3,7 +3,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { buildTemplates } from "./templateBuilder.js";
-import { runInit } from "./initCommand.js";
 import { validateInstallation } from "./installValidation.js";
 import { runTargetSync } from "../targetcli/syncEngine.js";
 import { defaultTargetConfig, writeTargetConfig } from "../targetcli/targetMeta.js";
@@ -26,29 +25,9 @@ function writeFiles(root: string, files: Record<string, string>): void {
   }
 }
 
-function fixtureTemplatesDir(): string {
-  const source = tmpDir("sta-validate-source-");
-  writeFiles(source, {
-    "CLAUDE.md": "# rules\n",
-    "layout.yaml": "version: 1\n",
-    "orchestrator/package.json": JSON.stringify({ name: "@agentclaude/orchestrator", version: "0.1.0" }),
-  });
-  const templatesDir = path.join(source, "templates");
-  buildTemplates(source, templatesDir, "2026-08-20T09:00:00Z");
-  return templatesDir;
-}
-
 describe("validateInstallation", () => {
-  it("reports a missing manifest as a problem", () => {
+  it("reports a missing manifest as a problem naming the current installer", () => {
     const project = tmpDir("sta-validate-project-");
-    const result = validateInstallation(project);
-    expect(result.ok).toBe(false);
-    expect(result.problems[0]).toContain(".sta");
-    expect(result.problems[0]).toContain("software-team-agents init");
-  });
-
-  it("T-V5-004: a workspace with neither manifest reports one actionable problem naming the current installer", () => {
-    const project = tmpDir("sta-validate-empty-");
     const result = validateInstallation(project);
     expect(result.ok).toBe(false);
     expect(result.problems).toHaveLength(1);
@@ -75,67 +54,35 @@ describe("validateInstallation", () => {
     expect(result.problems).toEqual([]);
   });
 
-  it("passes clean right after init", () => {
-    const templatesDir = fixtureTemplatesDir();
-    const project = tmpDir("sta-validate-project-");
-    runInit(project, templatesDir, "2026-08-20T09:00:00Z");
-
-    const result = validateInstallation(project);
-    expect(result.ok).toBe(true);
-    expect(result.problems).toEqual([]);
-    // T-V5-004: the legacy layout keeps validating but names itself as legacy —
-    // a deliberate wording change from the previous "no notes at all".
-    expect(result.layout).toBe("sta");
-    expect(result.notes.join("\n")).toContain("legacy .sta/ layout");
-  });
-
-  it("notes a user-modified file rather than treating it as a problem", () => {
-    const templatesDir = fixtureTemplatesDir();
-    const project = tmpDir("sta-validate-project-");
-    runInit(project, templatesDir, "2026-08-20T09:00:00Z");
-    fs.writeFileSync(path.join(project, "CLAUDE.md"), "# edited by the project\n", "utf8");
-
-    const result = validateInstallation(project);
-    expect(result.ok).toBe(true);
-    expect(result.notes.some((n) => n.includes("CLAUDE.md"))).toBe(true);
-  });
-
-  it("reports a tracked file that vanished as a problem", () => {
-    const templatesDir = fixtureTemplatesDir();
-    const project = tmpDir("sta-validate-project-");
-    runInit(project, templatesDir, "2026-08-20T09:00:00Z");
-    fs.rmSync(path.join(project, "CLAUDE.md"));
-
-    const result = validateInstallation(project);
-    expect(result.ok).toBe(false);
-    expect(result.problems.some((p) => p.includes("CLAUDE.md"))).toBe(true);
-  });
-
-  it("reports a missing .sta/config.yaml as a problem", () => {
-    const templatesDir = fixtureTemplatesDir();
-    const project = tmpDir("sta-validate-project-");
-    runInit(project, templatesDir, "2026-08-20T09:00:00Z");
-    fs.rmSync(path.join(project, ".sta", "config.yaml"));
-
-    const result = validateInstallation(project);
-    expect(result.ok).toBe(false);
-    expect(result.problems.some((p) => p.includes("config.yaml"))).toBe(true);
-  });
-
-  it("validates V3 blocks when present without changing schema_version", () => {
-    const templatesDir = fixtureTemplatesDir();
-    const project = tmpDir("sta-validate-project-");
-    runInit(project, templatesDir, "2026-08-20T09:00:00Z");
+  /** T-V5-038 — the `.sta/`-only installer is gone; a workspace still on that
+   * layout gets a distinct, actionable message naming the conversion path,
+   * rather than being silently treated the same as a never-initialized one. */
+  it("reports a .sta/-only workspace as needing conversion, not just 'never initialized'", () => {
+    const project = tmpDir("sta-validate-legacy-");
+    fs.mkdirSync(path.join(project, ".sta"), { recursive: true });
     fs.writeFileSync(
-      path.join(project, ".sta", "config.yaml"),
-      "schema_version: 1\nexecution:\n  mode: auto\n  allow_paid_fallback: false\nqa:\n  strategy: risk-based\nverification:\n  baseline: [unit]\n",
+      path.join(project, ".sta", "manifest.json"),
+      JSON.stringify({ schema_version: 1, framework_version: "0.1.0", installed_at: "x", updated_at: "x", files: [] }),
       "utf8",
     );
-    expect(validateInstallation(project).ok).toBe(true);
 
-    fs.writeFileSync(path.join(project, ".sta", "config.yaml"), "schema_version: 1\nexecution:\n  mode: automatic\n", "utf8");
-    const invalid = validateInstallation(project);
-    expect(invalid.ok).toBe(false);
-    expect(invalid.problems.join("\n")).toMatch(/execution\.mode/);
+    const result = validateInstallation(project);
+    expect(result.ok).toBe(false);
+    expect(result.problems).toHaveLength(1);
+    expect(result.problems[0]).toContain("legacy .sta/manifest.json");
+    expect(result.problems[0]).toContain("software-team-agents init");
+    expect(result.problems[0]).toContain("no content loss");
   });
+
+  function fixtureTemplatesDir(): string {
+    const source = tmpDir("sta-validate-source-");
+    writeFiles(source, {
+      "CLAUDE.md": "# rules\n",
+      "layout.yaml": "version: 1\n",
+      "orchestrator/package.json": JSON.stringify({ name: "@agentclaude/orchestrator", version: "0.1.0" }),
+    });
+    const templatesDir = path.join(source, "templates");
+    buildTemplates(source, templatesDir, "2026-08-20T09:00:00Z");
+    return templatesDir;
+  }
 });

@@ -33,6 +33,25 @@ describe("T-V5-013 live upgrade alias", () => {
   });
 });
 
+describe("T-V5-041 retired adopt verb", () => {
+  it("errors naming ADR-024 rather than reporting an unknown verb", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(runCli(["adopt", "status"], defaultProjectRoot())).resolves.toBe(1);
+      const output = err.mock.calls.flat().join("\n");
+      expect(output).toContain("adopt is retired");
+      expect(output).toContain("ADR-024-docs-vs-knowledge.md");
+    } finally {
+      err.mockRestore();
+    }
+  });
+
+  it("keeps the verb in USAGE so the retirement is discoverable", () => {
+    expect(USAGE).toContain("sta adopt");
+    expect(USAGE).toContain("retired in V5");
+  });
+});
+
 describe("parseArgs", () => {
   it("parses required flags and maps classification flags", () => {
     const args = parseArgs(
@@ -96,26 +115,27 @@ describe("parseArgs", () => {
   it("parses --runtime and rejects runtimes no adapter implements (T-OC5)", () => {
     const explicit = parseArgs(["--task-id", "T-1", "--module", "m", "--runtime", "opencode"], "/repo");
     expect(explicit.runtime).toBe("opencode");
-    expect(explicit.mode).toBe("single");
     expect(parseArgs(["--task-id", "T-1", "--module", "m"], "/repo").runtime).toBeUndefined();
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--runtime", "ghost"], "/repo")).toThrow(CliUsageError);
   });
 
-  it("T-V4-CAST-001 — parses --model, forces single mode by itself, and needs a value", () => {
+  it("T-V4-CAST-001 — parses --model and needs a value", () => {
     const explicit = parseArgs(["--task-id", "T-1", "--module", "m", "--model", "opus"], "/repo");
     expect(explicit.model).toBe("opus");
-    expect(explicit.mode).toBe("single");
     expect(parseArgs(["--task-id", "T-1", "--module", "m"], "/repo").model).toBeUndefined();
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--model"], "/repo")).toThrow(CliUsageError);
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--model", "--frontend"], "/repo")).toThrow(CliUsageError);
     expect(USAGE).toContain("--model");
   });
 
-  it("parses all three orchestrated modes and rejects unknown modes", () => {
-    for (const mode of ["single", "auto", "manual"] as const) {
-      expect(parseArgs(["--task-id", "T-1", "--module", "m", "--mode", mode], "/repo").mode).toBe(mode);
+  // T-V5-040 — execution modes are gone; the flag must not vanish silently.
+  it("T-V5-040 rejects the removed --mode flag and names its replacement", () => {
+    for (const mode of ["single", "auto", "manual", "silent"] as const) {
+      expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--mode", mode], "/repo")).toThrow(CliUsageError);
     }
-    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--mode", "silent"], "/repo")).toThrow(CliUsageError);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--mode", "auto"], "/repo")).toThrow(/--mode is removed/);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--mode", "auto"], "/repo")).toThrow(/routing\.by_role/);
+    expect(USAGE).not.toContain("--mode <single|auto|manual>");
   });
 
   it("parses the post-hoc token budget and deterministic-gate escape hatch", () => {
@@ -151,10 +171,9 @@ describe("parseArgs", () => {
 
 describe("T-V3R-032 production runtime composition", () => {
   it("constructs the complete runtime registry used by the real CLI executor call site", () => {
+    // T-V5-039 — the paid API adapter is never constructed here; --runtime
+    // only offers runtimes that can actually run.
     expect(createProductionRuntimeRegistry(defaultProjectRoot()).ids()).toEqual(["claude-code", "codex", "opencode"]);
-    expect(createProductionRuntimeRegistry(defaultProjectRoot(), { allowPaidFallback: true }).ids()).toEqual([
-      "claude-code", "codex", "opencode", "paid-api",
-    ]);
     const source = fs.readFileSync(path.join(defaultProjectRoot(), "orchestrator", "src", "cli.ts"), "utf8");
     expect(source).toContain("registry: runtimeRegistry");
     expect(source).toContain("runtime: defaultRuntime");

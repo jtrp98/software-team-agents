@@ -653,7 +653,9 @@ export function devDerivedContent(options: {
     });
   } else {
     try {
-      boundRoot = resolveTargetBinding({ knowledgeRoot: options.targetRoot, configTargetPath: config.target?.path })?.targetRoot;
+      // T-V5-042 — was `configTargetPath: config.target?.path`, the only
+      // mechanism left; `target_id` is now the one that resolves.
+      boundRoot = resolveTargetBinding({ knowledgeRoot: options.targetRoot, configTargetId: config.target?.target_id })?.targetRoot;
     } catch {
       boundRoot = undefined;
     }

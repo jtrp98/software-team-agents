@@ -104,7 +104,7 @@ const EXPECTED: Record<string, { ok: string; fail: string; notes: CheckerDescrip
   "--check-installation": {
     // T-V5-004 re-justified this baseline: the checker now follows the installer
     // (.agent-team/ first, .sta/ as legacy), so the wording is layout-neutral.
-    ok: "[orchestrator] installation metadata (.agent-team/, or legacy .sta/) agrees with the project's real files.",
+    ok: "[orchestrator] installation metadata (.agent-team/) agrees with the project's real files.",
     fail: "[orchestrator] installation metadata has problems:",
     notes: "leading",
   },

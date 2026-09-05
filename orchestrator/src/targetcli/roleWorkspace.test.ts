@@ -12,6 +12,7 @@ import {
   resolveTargetBinding,
   TargetBindingError,
 } from "./roleWorkspace.js";
+import { loadTargetConfig, removedTargetPath, removedTargetPathProblem } from "./targetMeta.js";
 
 const roots: string[] = [];
 function tmpRoot(prefix: string): string {
@@ -50,6 +51,79 @@ describe("workspace kind detection (T-ROLE-16)", () => {
     fs.mkdirSync(path.join(nestedDotnet, "ClassOnlineWeb"));
     fs.writeFileSync(path.join(nestedDotnet, "ClassOnlineWeb", "ClassOnlineWeb.csproj"), "");
     expect(detectWorkspaceKind(nestedDotnet)).toBe("target");
+  });
+
+  /**
+   * T-V5-043 retired `knowledge-policy.yaml` as a marker. Detection decides which
+   * repository a session may write to, so all five outcomes are pinned here
+   * rather than left to the composite case above.
+   */
+  describe("T-V5-043 — detection after the third marker was retired", () => {
+    function writeRole(root: string, role: string): void {
+      fs.mkdirSync(path.join(root, ".agent-team"), { recursive: true });
+      fs.writeFileSync(path.join(root, ".agent-team", "config.yaml"), `schema_version: 1\ntarget_id: x\nrole: ${role}\n`, "utf8");
+    }
+
+    it("1/5 pre-init Knowledge: a fresh clone is recognised from its committed markers alone", () => {
+      // Neither .agent-team/ nor knowledge-policy.yaml — exactly a `git clone`
+      // of a Knowledge repo before anyone has run `init` on this machine.
+      const clone = tmpRoot("pre-init-knowledge");
+      fs.mkdirSync(path.join(clone, "knowledge"));
+      fs.writeFileSync(path.join(clone, "targets.yaml"), "schema_version: 1\ntargets: []\n", "utf8");
+      expect(detectWorkspaceKind(clone)).toBe("knowledge");
+
+      // Either committed marker is sufficient on its own.
+      const onlyTargets = tmpRoot("pre-init-targets-only");
+      fs.writeFileSync(path.join(onlyTargets, "targets.yaml"), "schema_version: 1\ntargets: []\n", "utf8");
+      expect(detectWorkspaceKind(onlyTargets)).toBe("knowledge");
+    });
+
+    it("2/5 post-init Knowledge: the recorded role decides, markers or not", () => {
+      const initialised = tmpRoot("post-init-knowledge");
+      writeRole(initialised, "ba");
+      expect(detectWorkspaceKind(initialised)).toBe("knowledge");
+    });
+
+    it("3/5 Target: app source, and a recorded dev role outranks Knowledge-shaped files", () => {
+      const target = tmpRoot("target");
+      fs.writeFileSync(path.join(target, "package.json"), "{}", "utf8");
+      expect(detectWorkspaceKind(target)).toBe("target");
+
+      // A DEV workspace that also carries a knowledge/ folder is NOT ambiguous:
+      // a person already answered that question at init. Getting this wrong
+      // routes writes to the wrong repository.
+      const devWithKnowledgeDir = tmpRoot("dev-with-knowledge");
+      fs.writeFileSync(path.join(devWithKnowledgeDir, "package.json"), "{}", "utf8");
+      fs.mkdirSync(path.join(devWithKnowledgeDir, "knowledge"));
+      writeRole(devWithKnowledgeDir, "dev");
+      expect(detectWorkspaceKind(devWithKnowledgeDir)).toBe("target");
+    });
+
+    it("4/5 ambiguous: both marker families, nothing recorded — init still demands --role", () => {
+      const both = tmpRoot("ambiguous");
+      fs.mkdirSync(path.join(both, "knowledge"));
+      fs.writeFileSync(path.join(both, "package.json"), "{}", "utf8");
+      expect(detectWorkspaceKind(both)).toBe("ambiguous");
+    });
+
+    it("5/5 unrecognised: an empty directory, and a lone knowledge-policy.yaml is no longer a marker", () => {
+      expect(detectWorkspaceKind(tmpRoot("unrecognised"))).toBe("unrecognized");
+
+      const policyOnly = tmpRoot("policy-only");
+      fs.writeFileSync(path.join(policyOnly, "knowledge-policy.yaml"), "version: 1\n", "utf8");
+      expect(detectWorkspaceKind(policyOnly)).toBe("unrecognized");
+    });
+
+    it("a config this CLI cannot fully parse still yields its role rather than losing detection", () => {
+      const future = tmpRoot("future-schema");
+      fs.mkdirSync(path.join(future, ".agent-team"), { recursive: true });
+      fs.writeFileSync(
+        path.join(future, ".agent-team", "config.yaml"),
+        "schema_version: 99\nrole: ba\nunknown_future_key:\n  nested: true\n",
+        "utf8",
+      );
+      expect(detectWorkspaceKind(future)).toBe("knowledge");
+    });
   });
 
   it("`_docs/` never makes an app repo ambiguous — this framework puts it there itself", () => {
@@ -221,61 +295,61 @@ describe("write-policy launch wiring (T-ROLE-12/13)", () => {
   });
 });
 
-describe("target binding (T-LV1)", () => {
-  function targetRepo(): string {
-    const t = tmpRoot("app");
-    fs.writeFileSync(path.join(t, "package.json"), "{}");
-    return t;
+/**
+ * T-V5-042 replaced this block's original subject. It used to exercise the
+ * committed `target.path` branch — resolution, its missing-path throw, its
+ * not-a-Target-repo throw and its overlap guard. None of that coverage is lost:
+ * every one of those validations lives on the surviving `target_id` path and is
+ * asserted in the "target binding by id" block below ("no local mapping",
+ * "without application markers — looksLikeTargetRoot still applies", "path
+ * overlapping the Knowledge root"). What is asserted here instead is the
+ * removal's own contract: the field is ignored, reported, and never fatal.
+ */
+describe("target binding without the removed target.path (T-LV1 / T-V5-042)", () => {
+  function writeConfig(root: string, body: string): void {
+    fs.mkdirSync(path.join(root, ".agent-team"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".agent-team", "config.yaml"), body, "utf8");
   }
 
-  it("returns undefined (silently — no throw) when target.path is not set", () => {
+  it("returns undefined (silently — no throw) when no target binding is set", () => {
     const knowledge = tmpRoot("kb-no-target");
     const binding = resolveTargetBinding({ knowledgeRoot: knowledge });
     expect(binding).toBeUndefined();
   });
 
-  it("resolves a relative config binding against the knowledge root — with the T-V5-017 deprecation warning", () => {
-    const knowledge = tmpRoot("kb");
-    const t = targetRepo();
-    const name = path.basename(t);
-    fs.renameSync(t, path.join(path.dirname(knowledge), name));
-    const binding = resolveTargetBinding({
-      knowledgeRoot: knowledge,
-      configTargetPath: path.join("..", name),
-    });
-    expect(binding?.via).toBe("workspace-config");
-    expect(fs.existsSync(binding!.targetRoot)).toBe(true);
-    // The deprecated committed path still works but says so, naming the fix.
-    expect(binding?.deprecation).toContain("target.path");
-    expect(binding?.deprecation).toContain("targets.local.yaml");
+  it("a config still carrying target.path loads — it is stripped, never a validation failure", () => {
+    const knowledge = tmpRoot("kb-legacy-path");
+    writeConfig(
+      knowledge,
+      "schema_version: 1\ntarget_id: kb\nregistered_at: 2026-08-24T06:13:07.517Z\noverrides: []\nrole: ba\ntarget:\n  path: C:\\src\\somewhere\\app\n",
+    );
+    const config = loadTargetConfig(knowledge);
+    expect(config?.role).toBe("ba");
+    expect(config?.target?.target_id).toBeUndefined();
+    expect((config?.target as Record<string, unknown> | undefined)?.path).toBeUndefined();
   });
 
-  it("fails closed (throws) with recovery advice for a missing path", () => {
-    const knowledge = tmpRoot("kb2");
-    expect(() =>
-      resolveTargetBinding({ knowledgeRoot: knowledge, configTargetPath: "../does-not-exist" }),
-    ).toThrow(TargetBindingError);
-    try {
-      resolveTargetBinding({ knowledgeRoot: knowledge, configTargetPath: "../does-not-exist" });
-    } catch (e) {
-      expect((e as Error).message).toMatch(/clone|config\.yaml/);
-    }
+  it("the removed field is still readable so status can name it, with the fix in the message", () => {
+    const knowledge = tmpRoot("kb-legacy-report");
+    writeConfig(
+      knowledge,
+      "schema_version: 1\ntarget_id: kb\nregistered_at: 2026-08-24T06:13:07.517Z\noverrides: []\nrole: ba\ntarget:\n  path: C:\\src\\somewhere\\app\n",
+    );
+    const legacy = removedTargetPath(knowledge);
+    expect(legacy).toBe("C:\\src\\somewhere\\app");
+    const problem = removedTargetPathProblem(legacy!);
+    expect(problem).toContain("target.path");
+    expect(problem).toContain("target_id");
+    expect(problem).toContain("targets.local.yaml");
+    // ...and it resolves to no binding rather than to the stale path.
+    expect(resolveTargetBinding({ knowledgeRoot: knowledge, configTargetId: loadTargetConfig(knowledge)?.target?.target_id })).toBeUndefined();
   });
 
-  it("rejects a directory that is not a Target repo (no app-source markers)", () => {
-    const knowledge = tmpRoot("kb3");
-    const plain = tmpRoot("plain2");
-    expect(() =>
-      resolveTargetBinding({ knowledgeRoot: knowledge, configTargetPath: plain }),
-    ).toThrow(/not a Target repository/);
-  });
-
-  it("refuses a binding inside the Knowledge workspace itself (overlap guard)", () => {
-    const knowledge = tmpRoot("kb4");
-    fs.writeFileSync(path.join(knowledge, "package.json"), "{}");
-    expect(() =>
-      resolveTargetBinding({ knowledgeRoot: knowledge, configTargetPath: "." }),
-    ).toThrow(/separate from the Knowledge workspace/);
+  it("reports nothing for a migrated config and nothing for a workspace with no config at all", () => {
+    const migrated = tmpRoot("kb-migrated");
+    writeConfig(migrated, "schema_version: 1\ntarget_id: kb\nregistered_at: 2026-08-24T06:13:07.517Z\noverrides: []\nrole: ba\ntarget:\n  target_id: app\n");
+    expect(removedTargetPath(migrated)).toBeUndefined();
+    expect(removedTargetPath(tmpRoot("kb-bare"))).toBeUndefined();
   });
 });
 
@@ -310,7 +384,6 @@ describe("target binding by id (T-V5-017 — one Target-location mechanism)", ()
     const binding = resolveTargetBinding({ knowledgeRoot: knowledge, configTargetId: "app" });
     expect(binding?.via).toBe("local-mapping");
     expect(binding?.targetId).toBe("app");
-    expect(binding?.deprecation).toBeUndefined();
     expect(fs.realpathSync.native(binding!.targetRoot)).toBe(fs.realpathSync.native(app));
   });
 

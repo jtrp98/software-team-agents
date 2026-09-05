@@ -7,6 +7,35 @@ Behaviour changes users will feel are listed here as each task lands.
 
 ### Breaking changes
 
+- **`sensitive` items are now redacted for `devops` and `project-manager` in every workspace**
+  (`T-V5-047`, found while implementing `T-V5-043`).
+
+  This framework has always documented the rule that `devops` and `project-manager` see a `sensitive`
+  item's existence, title and status but not its contents — they schedule and gate work rather than
+  implement or review it. The rule lived only in the Framework repository's own `knowledge-policy.yaml`,
+  which `templateSources.ts` never syncs (`NEVER_TEMPLATED`). The only copy any real workspace had was
+  the 12-byte stub `version: 1`, which resolves to the permissive default. Measured on the real corpus:
+  a `project-manager` retrieval in a Knowledge repository returned 50 items flagged `sensitive: true`
+  with `withheld: []` and full bodies. The rule was written down in one repository and enforced in none.
+
+  **What changes:** the two role rules — and the per-kind freshness thresholds beside them
+  (`db-schema` and `api` age at 30 days and go stale at 90; `decision` at 365/730, against the 90/180
+  default) — are now the built-in policy, so they apply with no file present. Measured effect on one
+  real module set: for `project-manager` and `devops`, 121 items become redacted and the body+payload
+  bytes they receive drop from 163,606 to 70,402. **No item is hidden** — item counts are unchanged and
+  identity, title, status and relations are all preserved. Engineers, `system-analyst` and `qa-engineer`
+  are unaffected (0 items redacted). An item's own owner, and `HUMAN`, still see everything.
+
+  **How to proceed deliberately:** `knowledge-policy.yaml` still overrides. A stated `roles:` block is
+  taken as written and replaces the built-in one, so a project that wants the old behaviour writes
+  `roles: {}` (or names its own answer). An **absent** `roles:` key inherits the built-in rule — this is
+  why the stub `version: 1` no longer silently erases it.
+
+  **Worth reviewing separately:** in the validation corpus, 111 of the flagged items are implementation
+  `task` items (adding database columns) that a legacy `sta adopt` import marked `sensitive: true`.
+  Whether those items should carry the flag is a Knowledge-repository content question for BA/SA, not a
+  framework one — but it is what makes the measured effect this large.
+
 - **Guard coverage is now a launch requirement for every runtime** (`T-V5-008`, audit finding `F-05`).
   Until now, `status` printed `Codex: READY` after counting `.codex/agents/*.toml` with no guard check
   of any kind, and `dev`/`ba` preflight inspected guard wiring only when the launching runtime was

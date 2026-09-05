@@ -1,12 +1,21 @@
 # Which fields of a knowledge item each role may see, and how old an item may get
 # before it is called stale (T68 / T71).
 #
-# WHY THIS IS A FILE
+# WHY THIS FILE IS NOW AN OVERRIDE, NOT THE RULE
 #
-# T15 put per-agent *path* permissions in `contracts/*.yaml` rather than in code, for
-# the same reason this is here: a permission that can only be changed by editing
-# TypeScript is one that nobody outside this repo can change, and every project ends up
-# needing a different answer. The code enforces; the file decides.
+# T-V5-047: everything below is also the BUILT-IN DEFAULT, in
+# `orchestrator/src/knowledge/knowledgePolicy.ts`'s DEFAULT_KNOWLEDGE_POLICY. It has to be,
+# because `templateSources.ts` never syncs this file: it is in NEVER_TEMPLATED, so the only
+# copy a real workspace ever had was the 12-byte stub `version: 1`. The rule below was
+# written down here and enforced in no workspace — measured on the real corpus, a
+# `project-manager` retrieval in knowledge-schoolbright returned 50 items flagged
+# `sensitive: true` with `withheld: []` and full bodies.
+#
+# So this file is kept for the reason T15 kept per-agent *path* permissions in
+# `contracts/*.yaml` — a permission that can only be changed by editing TypeScript is one
+# nobody outside this repo can change — but it is now an OVERRIDE. A project that states
+# nothing gets the rule anyway. Keep this file in step with DEFAULT_KNOWLEDGE_POLICY; the
+# tests in `knowledgePolicy.test.ts` assert the built-in values, not these.
 #
 # WHAT IS DELIBERATELY PERMISSIVE
 #
@@ -22,6 +31,10 @@
 #
 # An item's own owner always sees it in full, whatever this file says. A rule that hid
 # a role's own work from it would be a bug wearing a policy's clothes.
+#
+# NOTE ON `roles:` — a stated block is taken as written, and replaces the built-in one
+# rather than merging with it. Naming only `devops` here would leave `project-manager`
+# unrestricted. An ABSENT `roles:` key falls back to the built-in default.
 
 version: 1
 

@@ -8,6 +8,7 @@ import {
   checkStaConfig,
   defaultStaConfig,
   effectiveExecutionConfig,
+  inertConfigKeys,
   inspectStaConfig,
   loadStaConfig,
   staConfigPath,
@@ -71,17 +72,56 @@ describe("defaultStaConfig / writeStaConfig / loadStaConfig", () => {
   it("keeps V3 execution defaults additive and paid fallback off when the block is absent", () => {
     const config = defaultStaConfig();
     expect(config).toEqual({ schema_version: 1 });
+    // T-V5-040 — `mode` and `allow_handoff` are no longer resolved to an
+    // effective value because nothing reads them; they are reported as inert.
     expect(effectiveExecutionConfig(config.execution)).toEqual({
-      mode: "single",
       runner: "claude-code",
-      allow_handoff: true,
       allow_paid_fallback: false,
       deterministic_gate_enabled: true,
     });
+    expect(inertConfigKeys(config, config.execution)).toEqual([]);
   });
 
   it("defaults paid fallback off when execution exists without that key", () => {
     expect(effectiveExecutionConfig({ mode: "auto" }).allow_paid_fallback).toBe(false);
+  });
+
+  // T-V5-040 — a config written for the removed routing engine must still load,
+  // and every key nothing reads must be reported rather than silently honoured.
+  it("still loads a config carrying the removed routing keys and names them inert", () => {
+    const root = tmpRoot();
+    fs.mkdirSync(path.dirname(staConfigPath(root)), { recursive: true });
+    fs.writeFileSync(
+      staConfigPath(root),
+      [
+        "schema_version: 1",
+        "model_routing:",
+        "  qa-engineer: opus",
+        "execution:",
+        "  mode: auto",
+        "  runner: codex",
+        "  allow_handoff: true",
+        "  allow_paid_fallback: true",
+        "routing:",
+        "  strategy: subscription-first",
+        "  order: [claude-code, codex]",
+        "  by_role:",
+        "    backend-engineer: codex:gpt-5",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const loaded = loadStaConfig(root);
+    expect(loaded.execution?.runner).toBe("codex");
+    expect(inspectStaConfig(root)).toEqual({ problems: [], warnings: [] });
+    expect(inertConfigKeys(loaded, loaded.execution)).toEqual([
+      "execution.mode",
+      "execution.allow_handoff",
+      "execution.allow_paid_fallback",
+      "routing.strategy",
+      "routing.order",
+      "model_routing",
+    ]);
   });
 
   it("throws StaConfigMissingError when there is no config yet", () => {

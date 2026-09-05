@@ -5,9 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   CURRENT_STA_SCHEMA_VERSION,
   InstallManifestMissingError,
-  checkInstallManifest,
   installManifestPath,
-  isInstalled,
   readInstallManifest,
   writeInstallManifest,
   type InstallManifest,
@@ -33,41 +31,23 @@ function sample(): InstallManifest {
   };
 }
 
-describe("isInstalled / write / read", () => {
-  it("is false before init, true after", () => {
-    const root = tmpRoot();
-    expect(isInstalled(root)).toBe(false);
-    writeInstallManifest(root, sample());
-    expect(isInstalled(root)).toBe(true);
-    expect(fs.existsSync(installManifestPath(root))).toBe(true);
-  });
-
+/**
+ * T-V5-038 — `isInstalled` and `checkInstallManifest` (ajv schema check)
+ * existed only for the now-deleted `sta init`/`installValidation` legacy
+ * branch and were removed with it; this module now serves only `sta
+ * migrate` (T96), which reads/rewrites an existing manifest's schema_version.
+ */
+describe("write / read", () => {
   it("round-trips exactly", () => {
     const root = tmpRoot();
     const manifest = sample();
     writeInstallManifest(root, manifest);
+    expect(fs.existsSync(installManifestPath(root))).toBe(true);
     expect(readInstallManifest(root)).toEqual(manifest);
   });
 
   it("throws InstallManifestMissingError when absent", () => {
     const root = tmpRoot();
     expect(() => readInstallManifest(root)).toThrow(InstallManifestMissingError);
-  });
-});
-
-describe("checkInstallManifest", () => {
-  it("accepts a well-formed manifest", () => {
-    expect(checkInstallManifest(sample())).toEqual([]);
-  });
-
-  it("rejects a duplicate path", () => {
-    const manifest = sample();
-    manifest.files.push({ ...manifest.files[0] });
-    expect(checkInstallManifest(manifest).some((p) => p.includes("more than once"))).toBe(true);
-  });
-
-  it("rejects a missing required field", () => {
-    const { installed_at, ...rest } = sample();
-    expect(checkInstallManifest(rest).length).toBeGreaterThan(0);
   });
 });

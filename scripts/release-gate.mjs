@@ -13,7 +13,7 @@
  *      — includes the AI-boundary, context-scope and runtime-conformance suites,
  *        which live inside `npm test` by design rather than as parallel tracks.
  *   1b. the three V3 property gates (T-V3R-110): the six guardrail invariants,
- *      the Single/Auto/Manual execution-mode matrix against mock runners, and
+ *      the one-route matrix against mock runners (T-V5-040), and
  *      paid-fallback unreachability — named so a failure says which property broke.
  *      Each is runnable alone: node scripts/v3-gate.mjs <gate>.
  *   2. hooks/scripts self-test (.claude/tests/run.js)
@@ -73,7 +73,7 @@ run("build (orchestrator)", "npm run build", { cwd: path.join(repoRoot, "orchest
 // Each pins the assertions it requires by name; none needs a runner login or a
 // dogfood run — every runtime they touch is a mock or a process fixture.
 run("V3 guardrail invariant suite (six criteria)", "node scripts/v3-gate.mjs guardrails", { quiet: true });
-run("V3 execution-mode matrix (mock runners)", "node scripts/v3-gate.mjs modes", { quiet: true });
+run("one-route matrix (mock runners)", "node scripts/v3-gate.mjs modes", { quiet: true });
 run("V3 paid-fallback unreachability", "node scripts/v3-gate.mjs paid-fallback", { quiet: true });
 run("benchmark dataset, frozen oracles, and report regeneration", "npm run test:benchmark", { quiet: true });
 

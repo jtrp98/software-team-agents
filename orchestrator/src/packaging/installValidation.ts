@@ -1,7 +1,5 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { checkInstallManifest, installManifestPath, type InstallManifest } from "./installManifest.js";
-import { inspectStaConfig } from "./staConfig.js";
 import { sha256Of } from "./templateManifest.js";
 import {
   checkTargetManifest,
@@ -21,9 +19,16 @@ import { inspectManagedBlock } from "../targetcli/knowledgeRender.js";
  * previous `.sta/`-only check failed every correctly installed workspace), so
  * that manifest is validated when present, using the same structural model the
  * sync engine enforces (`checkTargetManifest`) — no second validation model.
- * A `.sta/`-only workspace still validates during the transition window, but
- * reports itself as *legacy*. Exit-code semantics are unchanged: 0 pass,
- * 1 problems (`scripts/release-gate.mjs` depends on them).
+ *
+ * T-V5-038 — the `.sta/`-only installer (`sta init`/`sta upgrade`) is gone, so
+ * there is no longer a legacy layout to validate here: a workspace with
+ * neither `.agent-team/manifest.json` nor a `.sta/manifest.json` (a project
+ * that never ran the current installer, or one still on the retired `.sta/`
+ * layout) reports one actionable problem naming `software-team-agents init`
+ * as the way forward. `.sta/` itself keeps validating separately, and only
+ * for rollback, through `rollback.ts`'s own legacy-backup fallback — that is
+ * a different mechanism (undo, not install-state checking) and out of scope
+ * here.
  *
  * `notes` (a file the project modified) are expected, ongoing state — a
  * modified framework file is not a problem, it's the whole point of never
@@ -36,22 +41,18 @@ export interface InstallValidationResult {
   ok: boolean;
   problems: string[];
   notes: string[];
-  /** Which installer's metadata was validated. */
-  layout: "agent-team" | "sta";
 }
 
 export function validateInstallation(projectRoot: string): InstallValidationResult {
   if (fs.existsSync(targetManifestPath(projectRoot))) {
     return validateAgentTeamInstallation(projectRoot);
   }
-  if (fs.existsSync(installManifestPath(projectRoot))) {
-    return validateLegacyStaInstallation(projectRoot);
-  }
   return {
     ok: false,
-    layout: "agent-team",
     problems: [
-      `no installation manifest found (neither .agent-team/manifest.json nor .sta/manifest.json exists under ${projectRoot}) — run \`software-team-agents init\` inside the workspace first`,
+      fs.existsSync(path.join(projectRoot, ".sta", "manifest.json"))
+        ? `${projectRoot} carries only a legacy .sta/manifest.json — the current installer writes .agent-team/; run \`software-team-agents init\` to convert this workspace (a .sta/-only workspace converts with no content loss)`
+        : `no installation manifest found (.agent-team/manifest.json does not exist under ${projectRoot}) — run \`software-team-agents init\` inside the workspace first`,
     ],
     notes: [],
   };
@@ -68,7 +69,6 @@ function validateAgentTeamInstallation(projectRoot: string): InstallValidationRe
   } catch (e) {
     return {
       ok: false,
-      layout: "agent-team",
       problems: [`.agent-team/manifest.json is not readable: ${e instanceof Error ? e.message : String(e)}`],
       notes,
     };
@@ -122,46 +122,5 @@ function validateAgentTeamInstallation(projectRoot: string): InstallValidationRe
     }
   }
 
-  return { ok: problems.length === 0, problems, notes, layout: "agent-team" };
-}
-
-/** Validates the pre-V5 `.sta/` layout. Still functional during the transition; reported as legacy, never as the normal case. */
-function validateLegacyStaInstallation(projectRoot: string): InstallValidationResult {
-  const problems: string[] = [];
-  const notes: string[] = [
-    "legacy .sta/ layout — the current installer writes .agent-team/ via `software-team-agents init`; this layout keeps validating during the transition only",
-  ];
-
-  const manifestPath = installManifestPath(projectRoot);
-  let manifest: InstallManifest;
-  try {
-    manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as InstallManifest;
-  } catch (e) {
-    return {
-      ok: false,
-      layout: "sta",
-      problems: [`${manifestPath} is not valid JSON: ${e instanceof Error ? e.message : String(e)}`],
-      notes,
-    };
-  }
-
-  problems.push(...checkInstallManifest(manifest).map((p) => `.sta/manifest.json: ${p}`));
-
-  for (const file of manifest.files) {
-    const dest = path.join(projectRoot, file.path);
-    if (!fs.existsSync(dest)) {
-      problems.push(`${file.path} is tracked in .sta/manifest.json but is missing from the project`);
-      continue;
-    }
-    const currentHash = sha256Of(fs.readFileSync(dest));
-    if (currentHash !== file.sha256) {
-      notes.push(`${file.path} differs from the framework's last-installed version — \`sta upgrade\` will skip it`);
-    }
-  }
-
-  const config = inspectStaConfig(projectRoot);
-  problems.push(...config.problems);
-  notes.push(...config.warnings);
-
-  return { ok: problems.length === 0, problems, notes, layout: "sta" };
+  return { ok: problems.length === 0, problems, notes };
 }

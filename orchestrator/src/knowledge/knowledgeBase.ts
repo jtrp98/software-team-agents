@@ -16,8 +16,6 @@ import { checkKnowledgePolicyFile } from "./knowledgePolicy.js";
 import { checkOwnership, deprecatedStillDependedOn } from "./ownership.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { readBootstrapState } from "../bootstrap/bootstrapStore.js";
-import { readAdoptionState } from "../adoption/adoptionStore.js";
-import { unapprovedStages as unapprovedAdoptionStages } from "../adoption/adoptionModel.js";
 import { loadTargetRegistry } from "../threeRepo/targets.js";
 
 /**
@@ -354,48 +352,6 @@ export interface KnowledgeCheckReport extends KnowledgeCheckResult {
 }
 
 /**
- * Adoption's half of `--check-knowledge` (T81-T89).
- *
- * Mirrors what `checkKnowledge` already does for bootstrap state, and blocks on
- * the same thing for the same reason: a `conflict_ids` entry means an importer
- * re-read a legacy document and got something different from what a person had
- * already approved. Nothing downstream can tell which of the two is right, which
- * is exactly why it has to stop for somebody.
- */
-function checkAdoptionAgainstItems(projectRoot: string, itemIds: Set<string>): { problems: string[]; notes: string[] } {
-  const { state, problems: stateProblems } = readAdoptionState(projectRoot);
-  const problems = stateProblems.map((p) => `knowledge/_adoption/STATE.yaml: ${p}`);
-  const notes: string[] = [];
-
-  if (!state) {
-    return { problems, notes };
-  }
-
-  for (const stage of state.stages) {
-    for (const id of stage.knowledge_ids) {
-      if (!itemIds.has(id)) {
-        problems.push(`knowledge/_adoption/STATE.yaml: stage "${stage.id}" claims item "${id}" which does not exist`);
-      }
-    }
-    for (const id of stage.conflict_ids ?? []) {
-      problems.push(
-        `${id}: the ${stage.id} stage re-read the legacy document and got something different, but the item is past \`draft\` — ` +
-          "a person decides whether the document or the reviewed item is right",
-      );
-    }
-  }
-
-  notes.push(`adoption (T81) status: ${state.status}`);
-  const waiting = unapprovedAdoptionStages(state.stages).map((s) => s.id);
-  if (waiting.length > 0) notes.push(`adoption stages waiting for an approval: ${waiting.join(", ")}`);
-  const blockers = state.preflight?.blockers ?? [];
-  if (blockers.length > 0 && !state.preflight?.acknowledged_by) {
-    notes.push(`adoption is blocked on ${blockers.length} unacknowledged finding(s) from T86's check`);
-  }
-  return { problems, notes };
-}
-
-/**
  * What `--check-knowledge` runs. A repo with no `knowledge/` yet passes with a
  * note, the same way `--check-doc-structure` treats a project that has not
  * reached `business-analyst` yet: this checks consistency, not progress.
@@ -479,13 +435,10 @@ export function checkKnowledge(projectRoot: string = defaultProjectRoot()): Know
   }
   allProblems.push(...bootstrapProblems);
 
-  // Adoption (T81), checked the same way and for the same reasons as bootstrap
-  // above. Folded into this flag rather than given its own, per the rule this
-  // module's doc states: CI's list of checks is matched to subsystems, not to
-  // files. Written as a separate function only because the two flows are
-  // separate states.
-  const adoption = checkAdoptionAgainstItems(projectRoot, new Set(items.map((i) => i.id)));
-  allProblems.push(...adoption.problems);
+  // T-V5-041 removed adoption's half of this check with the subsystem it
+  // reported on. Everything else here is unchanged: the store itself (`_roles/`,
+  // `_conflicts/`, `_human-input/`, `_sources/`), ownership, the source registry
+  // and bootstrap state are all still validated.
 
   const notes: string[] = [...policy.notes];
   // A note, not a problem: keeping a deprecated item *because* something still
@@ -501,7 +454,6 @@ export function checkKnowledge(projectRoot: string = defaultProjectRoot()): Know
   }
   if (!bootstrap.state && bootstrap.problems.length === 0) notes.push("bootstrap (T73) has not started — no knowledge/_bootstrap/STATE.yaml yet.");
   else if (bootstrap.state) notes.push(`bootstrap (T73) status: ${bootstrap.state.status}`);
-  notes.push(...adoption.notes);
   if (items.length === 0) notes.push("`knowledge/` holds no items yet.");
   for (const c of conflicts.unresolvedDetected) notes.push(`possible conflict ${c.id}: ${c.summary}`);
   for (const r of conflicts.staleResolutions) {

@@ -6,6 +6,8 @@ import {
   isTargetInitialized,
   loadTargetConfig,
   readTargetManifest,
+  removedTargetPath,
+  removedTargetPathProblem as buildRemovedTargetPathProblem,
   type TargetConfig,
   type TargetManifest,
   type TargetStackConfig,
@@ -28,7 +30,7 @@ import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeR
 import { detectInstructionSurface, isNestedInstruction, type InstructionSurfaceEntry } from "../threeRepo/ownership.js";
 import { targetStackWasHumanEdited } from "./targetProfile.js";
 import { CLAUDE_SETTINGS_PATH, guardCoverage, guardCoverageIsPositive, inspectGuardWiring, type GuardCoverage } from "./guardSettings.js";
-import { effectiveExecutionConfig, loadStaConfig, type StaConfig } from "../packaging/staConfig.js";
+import { effectiveExecutionConfig, inertConfigKeys, loadStaConfig, type StaConfig } from "../packaging/staConfig.js";
 
 /**
  * T-TARGET-10 + T-ROLE-18 — `software-team-agents status`: the whole
@@ -51,8 +53,10 @@ export interface TargetStatus {
   workspaceKind: ReturnType<typeof detectWorkspaceKind>;
   knowledgeRoot?: string;
   knowledgeBinding?: { knowledgeRoot: string; via: string };
-  /** T-LV1 — BA-workspace only: the optional Target binding, by `target_id` through the local mapping or the deprecated `target.path`; "invalid" carries the problem in targetRoot. Absent when unset (silent, never required). */
-  targetBinding?: { targetRoot: string; via: string; deprecation?: string };
+  /** T-LV1 — BA-workspace only: the optional Target binding, by `target_id` through the local mapping; "invalid" carries the problem in targetRoot. Absent when unset (silent, never required). */
+  targetBinding?: { targetRoot: string; via: string };
+  /** T-V5-042 — set when the workspace still carries the removed committed `target.path`. Reported as a problem with its fix; never a load failure. */
+  removedTargetPathProblem?: string;
   targetId?: string;
   /** Cached deterministic Target profile; absent means not yet detected. */
   stack?: TargetStackConfig;
@@ -105,14 +109,19 @@ export function v3ExecutionStatus(
   if (!configured) {
     return {
       configured: false,
-      detail: "not configured — defaults apply (single / claude-code / deterministic gate enabled / paid fallback disabled)",
+      detail: "not configured — defaults apply (one route / claude-code / deterministic gate enabled)",
     };
   }
+  // T-V5-040 — report only what the runtime actually reads. Keys a config still
+  // carries but nothing consumes are named as ignored rather than rendered as
+  // an "effective" value, which would describe behaviour that no longer exists.
+  const inert = inertConfigKeys(staConfig, execution);
+  const roles = Object.keys(staConfig?.routing?.by_role ?? {}).length;
   return {
     configured: true,
     detail:
-      `configured (mode=${effective.mode}, runner=${effective.runner}, ` +
-      `handoff=${effective.allow_handoff ? "enabled" : "disabled"}, paid fallback=${effective.allow_paid_fallback ? "enabled" : "disabled"})`,
+      `configured (runner=${effective.runner}, per-role routes=${roles})` +
+      (inert.length > 0 ? `; ignored keys: ${inert.join(", ")}` : ""),
   };
 }
 
@@ -298,7 +307,6 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
       targetBinding = resolveTargetBinding({
         knowledgeRoot: roots.targetRoot,
         configTargetId: config?.target?.target_id,
-        configTargetPath: config?.target?.path,
         frameworkRoot: roots.frameworkRoot,
       });
     } catch (e) {
@@ -330,6 +338,12 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     knowledgeRoot: roots.knowledgeRoot,
     knowledgeBinding,
     targetBinding,
+    // T-V5-042 — the removed field is stripped by the schema, so without this
+    // an un-migrated workspace would show no Target and no reason why.
+    removedTargetPathProblem: (() => {
+      const legacy = removedTargetPath(roots.targetRoot);
+      return legacy === undefined ? undefined : buildRemovedTargetPathProblem(legacy);
+    })(),
     targetId: config?.target_id,
     stack: config?.stack,
     stackProfileMismatch:
@@ -372,15 +386,17 @@ export function renderStatus(status: TargetStatus): string {
     if (status.targetBinding && status.targetBinding.via !== "invalid") {
       lines.push("Target (optional, read-only):");
       lines.push(`  ${status.targetBinding.targetRoot} (via ${status.targetBinding.via})`);
-      // T-V5-017 — the committed target.path is machine-local content in a
-      // shared file; status says so every time it is what resolved the binding.
-      if (status.targetBinding.deprecation) {
-        lines.push(`  WARNING: ${status.targetBinding.deprecation}`);
-      }
     } else if (status.targetBinding && status.targetBinding.via === "invalid") {
       lines.push(`Target: NOT REQUIRED (optional; not needed for BA work) — configured target binding is invalid: ${status.targetBinding.targetRoot}`);
     } else {
       lines.push("Target: NOT REQUIRED (optional; not needed for BA work)");
+    }
+    // T-V5-042 — a leftover committed target.path is a problem with a named
+    // fix, not a silent no-binding. Printed whether or not a target_id also
+    // resolved, so the machine-local content in a shared file is never
+    // invisible just because the workspace has since been migrated properly.
+    if (status.removedTargetPathProblem) {
+      lines.push(`  PROBLEM: ${status.removedTargetPathProblem}`);
     }
     if (status.knowledgeBinding && status.knowledgeBinding.via === "installation") {
       lines.push("Knowledge binding (informational):");

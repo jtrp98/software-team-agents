@@ -99,11 +99,17 @@ jobs:
       - name: Build framework templates (T90)
         run: node orchestrator/dist/cli.js --build-templates templates
 
-      - name: Check .sta/ against a freshly-init'd project (T92/T98)
+      - name: Check .agent-team/ against a freshly-init'd project (T98, T-V5-038)
         run: |
           rm -rf /tmp/sta-ci-check
           mkdir -p /tmp/sta-ci-check
-          # legacy-project is the mode that materializes templates + .sta/manifest.json;
-          # init requires an explicit --mode (never inferred) since T154.
-          node orchestrator/dist/cli.js init --mode legacy-project --templates templates --project-root /tmp/sta-ci-check
-          node orchestrator/dist/cli.js --check-installation --project-root /tmp/sta-ci-check
+          # T-V5-038 — the `.sta/`-materializing legacy-project installer
+          # (`sta init --mode legacy-project`) is retired; the live installer
+          # is `software-team-agents init`, which writes `.agent-team/`.
+          cd /tmp/sta-ci-check
+          npm init -y >/dev/null
+          echo '{"name":"sta-ci-check","lockfileVersion":3}' > package-lock.json
+          git init -q
+          node "$GITHUB_WORKSPACE/orchestrator/dist/targetcli/cli.js" init --role dev --target-root /tmp/sta-ci-check
+          node "$GITHUB_WORKSPACE/orchestrator/dist/cli.js" --check-installation --project-root /tmp/sta-ci-check
+          cd "$GITHUB_WORKSPACE"

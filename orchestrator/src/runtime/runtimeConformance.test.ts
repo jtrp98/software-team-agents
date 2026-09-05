@@ -430,7 +430,7 @@ describe("T-V1-05 runtime conformance — one matrix, every runtime", () => {
     fs.mkdirSync(path.join(root, ".sta"), { recursive: true });
     fs.writeFileSync(
       path.join(root, ".sta", "config.yaml"),
-      "schema_version: 1\nmodel_routing:\n  backend-engineer: unsafe:mock-model\n",
+      "schema_version: 1\nrouting:\n  by_role:\n    backend-engineer: unsafe:mock-model\n",
       "utf8",
     );
     const fallback = new MockRuntimeAdapter({ id: "claude-code" });

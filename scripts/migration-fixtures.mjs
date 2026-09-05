@@ -114,10 +114,6 @@ function sameSnapshot(left, right) {
   return JSON.stringify([...left]) === JSON.stringify([...right]);
 }
 
-function selectedBytes(root, paths) {
-  return new Map(paths.map((relative) => [relative, fs.readFileSync(path.join(root, relative)).toString("base64")]));
-}
-
 async function runFixture(name, body) {
   console.log(`\n[fixture] START ${name}`);
   try {
@@ -290,31 +286,30 @@ try {
     return "init -> bind -> Target init/sync -> status UP_TO_DATE, using sandboxed installation config";
   });
 
-  await runFixture("upgrade", async () => {
-    const root = path.join(stage, "04 Upgrade And Rollback Fixture");
+  // T-V5-038 — the `sta init --mode legacy-project` / `sta upgrade --mode
+  // legacy-project` verbs this fixture used to drive are retired. The DB
+  // schema-migration property this fixture proves was never actually caused
+  // by those CLI calls (`SqliteTaskStore`'s own migration runs on open,
+  // in-process, independent of any installer verb) — the legacy-project
+  // calls only ever built the fixture's `.sta/` scaffolding around it. This
+  // fixture now builds that scaffolding directly, and also proves doctor
+  // still reads a hand-authored pre-V3 `.sta/config.yaml` (the config-read
+  // path T-V5-040 owns, not this task; left untouched).
+  await runFixture("upgrade (DB schema compatibility across the retired legacy installer)", async () => {
+    const root = path.join(stage, "04 DB Migration Fixture");
     const knowledge = path.join(root, "Upgrade Knowledge Repo");
-    const project = path.join(root, "Pre V3 Installed Project");
-    const preV3Templates = path.join(root, "Pre V3 Templates");
+    const project = path.join(root, "Pre V3 Project");
     knowledgeRepo(knowledge);
     targetRepo(project);
-    fs.cpSync(path.join(packageRoot, "templates"), preV3Templates, { recursive: true });
-    const oldManifestPath = path.join(preV3Templates, "manifest.json");
-    const oldManifest = JSON.parse(fs.readFileSync(oldManifestPath, "utf8"));
-    oldManifest.framework_version = "2.9.0-pre-v3";
-    const changedEntry = oldManifest.files.find((entry) => entry.path === ".claude/agents/backend-engineer.md");
-    assertFixture(Boolean(changedEntry), "pre-V3 template fixture lacks backend-engineer.md");
-    const changedPath = path.join(preV3Templates, changedEntry.path);
-    const oldBytes = Buffer.concat([fs.readFileSync(changedPath), Buffer.from("\n<!-- pre-v3 fixture bytes -->\n")]);
-    fs.writeFileSync(changedPath, oldBytes);
-    changedEntry.sha256 = sha256(oldBytes);
-    changedEntry.size_bytes = oldBytes.length;
-    fs.writeFileSync(oldManifestPath, `${JSON.stringify(oldManifest, null, 2)}\n`, "utf8");
 
     const env = fixtureEnv(root);
     const configured = runBin(staBin, ["configure", "knowledge-root", knowledge], { cwd: packageRoot, env });
     assertFixture(configured.status === 0, "upgrade fixture bind failed", configured.out);
-    const init = runBin(staBin, ["init", "--mode", "legacy-project", "--templates", preV3Templates, "--project-root", project], { env });
-    assertFixture(init.status === 0, "pre-V3 installation fixture init failed", init.out);
+    // A hand-authored pre-V3 `.sta/config.yaml` — no manifest.json alongside
+    // it, so this is deliberately not an "installed" workspace by any
+    // installer, live or retired; it only exercises doctor's config read.
+    fs.mkdirSync(path.join(project, ".sta"), { recursive: true });
+    fs.writeFileSync(path.join(project, ".sta", "config.yaml"), "schema_version: 1\n", "utf8");
     const doctor = await runDoctor({
       projectRoot: project,
       installationConfigPath: env.AGENTCLAUDE_INSTALLATION_CONFIG,
@@ -344,12 +339,8 @@ try {
     legacyDb.pragma("user_version = 11");
     legacyDb.close();
 
-    const installManifest = JSON.parse(fs.readFileSync(path.join(project, ".sta", "manifest.json"), "utf8"));
-    const rollbackPaths = [".sta/config.yaml", ".sta/manifest.json", ...installManifest.files.map((entry) => entry.path)];
-    const beforeUpgrade = selectedBytes(project, rollbackPaths);
-    const upgrade = runBin(staBin, ["upgrade", "--mode", "legacy-project", "--templates", path.join(packageRoot, "templates"), "--project-root", project], { env });
-    assertFixture(upgrade.status === 0, "packed upgrade failed", upgrade.out);
-
+    // Reopening the store — not any installer verb — is what performs the
+    // migration; this is the property this fixture exists to prove.
     const migratedStore = new SqliteTaskStore(dbPath);
     const resumed = Orchestrator.resume(taskId, migratedStore);
     const resumedStages = [];
@@ -361,12 +352,71 @@ try {
     assertFixture(migratedVersion >= 16, "v11 DB did not traverse the required v16 compatibility step", String(migratedVersion));
     assertFixture(resumedStages[0] === "qa-engineer" && terminal.kind === "DEPLOYED", "task did not resume at its pre-upgrade stage", resumedStages.join(" -> "));
 
-    const rollback = runBin(staBin, ["rollback", "--project-root", project], { env });
-    assertFixture(rollback.status === 0, "rollback failed", rollback.out);
-    const afterRollback = selectedBytes(project, rollbackPaths);
-    assertFixture(sameSnapshot(beforeUpgrade, afterRollback), "rollback-owned files were not restored byte-for-byte");
-    assertFixture(fs.readFileSync(path.join(project, ".sta", "config.yaml"), "utf8") === "schema_version: 1\n", "upgrade implicitly rewrote pre-V3 config defaults");
-    return `doctor PASS; DB v11 traversed v13 to current v${migratedVersion}; resumed ${resumedStages.join(" -> ")}; ${rollbackPaths.length} rollback paths byte-identical`;
+    return `doctor PASS reading pre-V3 .sta/config.yaml; DB v11 traversed to current v${migratedVersion}; resumed ${resumedStages.join(" -> ")}`;
+  });
+
+  // T-V5-038 acceptance: removed verbs error naming the replacement rather
+  // than vanishing, and a `.sta/`-only workspace (as if installed by a
+  // pre-T-V5-038 release, never touched by any installer this build ships)
+  // converts to `.agent-team/` with no content loss.
+  await runFixture("legacy .sta/ retirement: removed verbs + zero-loss conversion", async () => {
+    const root = path.join(stage, "05 Legacy Sta Retirement Fixture");
+    const knowledge = path.join(root, "Retirement Knowledge Repo");
+    const project = path.join(root, "Legacy Sta Only Project");
+    knowledgeRepo(knowledge);
+    targetRepo(project);
+    const env = fixtureEnv(root);
+    assertFixture(runBin(staBin, ["configure", "knowledge-root", knowledge], { cwd: packageRoot, env }).status === 0, "bind failed");
+
+    const legacyInit = runBin(staBin, ["init", "--mode", "legacy-project", "--project-root", project], { env });
+    assertFixture(
+      legacyInit.status !== 0 && /software-team-agents init/.test(legacyInit.out),
+      "removed `sta init --mode legacy-project` did not error naming the replacement",
+      legacyInit.out,
+    );
+    const legacyUpgrade = runBin(staBin, ["upgrade", "--mode", "legacy-project", "--project-root", project], { env });
+    assertFixture(
+      legacyUpgrade.status !== 0 && /software-team-agents init/.test(legacyUpgrade.out),
+      "removed `sta upgrade --mode legacy-project` did not error naming the replacement",
+      legacyUpgrade.out,
+    );
+
+    // Simulate a workspace a pre-T-V5-038 release left on `.sta/`: real
+    // project source (from `targetRepo`) plus a `.sta/` manifest+config no
+    // installer in this build ever wrote.
+    fs.mkdirSync(path.join(project, ".sta"), { recursive: true });
+    fs.writeFileSync(
+      path.join(project, ".sta", "manifest.json"),
+      JSON.stringify({
+        schema_version: 1,
+        framework_version: "2.9.0-pre-v5-038",
+        installed_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        files: [],
+      }, null, 2),
+    );
+    fs.writeFileSync(path.join(project, ".sta", "config.yaml"), "schema_version: 1\n", "utf8");
+
+    const beforeSource = {
+      index: fs.readFileSync(path.join(project, "src", "index.ts")),
+      pkg: fs.readFileSync(path.join(project, "package.json")),
+    };
+
+    const convert = runBin(targetBin, ["init"], { cwd: project, env });
+    assertFixture(convert.status === 0, ".sta/-only workspace did not convert cleanly via software-team-agents init", convert.out);
+    assertFixture(fs.existsSync(path.join(project, ".agent-team", "manifest.json")), "conversion did not produce .agent-team/manifest.json");
+
+    const afterSource = {
+      index: fs.readFileSync(path.join(project, "src", "index.ts")),
+      pkg: fs.readFileSync(path.join(project, "package.json")),
+    };
+    assertFixture(beforeSource.index.equals(afterSource.index), "the project's own src/index.ts was not byte-identical after conversion — content lost");
+    assertFixture(beforeSource.pkg.equals(afterSource.pkg), "the project's own package.json was not byte-identical after conversion — content lost");
+    // The legacy .sta/ scaffolding itself is untouched (T-V5-038 removed the
+    // installer, not any reader of an existing .sta/ directory).
+    assertFixture(fs.existsSync(path.join(project, ".sta", "manifest.json")), "conversion deleted the legacy .sta/manifest.json");
+
+    return `removed verbs both errored naming the replacement; .sta/-only workspace converted to .agent-team/ with its real project source (src/index.ts, package.json) byte-identical`;
   });
 } catch (error) {
   failures += 1;
@@ -381,7 +431,7 @@ if (failures === 0) {
     // assertion has passed. Cleanup is best-effort and never fixture evidence.
     console.warn(`[fixture] cleanup deferred: ${error instanceof Error ? error.message : String(error)}`);
   }
-  console.log(`\n[fixture] ALL FOUR PASSED — ${assertions} assertions; packed .tgz; paths with spaces; sandboxed installation config`);
+  console.log(`\n[fixture] ALL FIVE PASSED — ${assertions} assertions; packed .tgz; paths with spaces; sandboxed installation config`);
 } else {
   console.error(`\n[fixture] ${failures} failure(s); stage kept for inspection: ${stage}`);
   process.exit(1);

@@ -14,38 +14,83 @@ import { z } from "zod";
  * machine-only JSON `.sta/manifest.json` uses.
  */
 export const ExecutionConfigSchema = z.object({
+  /**
+   * T-V5-040 — ignored. Execution modes are removed: there is one route
+   * (`--runtime`/`--model`, then `routing.by_role`, then the default runner
+   * plus the role's frontmatter model). Declared here only so an existing
+   * config carrying the key keeps loading; see `staConfig.test.ts`.
+   */
   mode: z.enum(["single", "auto", "manual"]).optional(),
   runner: z.string().min(1).optional(),
+  /**
+   * T-V5-040 — ignored. There is no handoff candidate chain any more: a route
+   * that cannot execute stops the task for a person. Declared for the same
+   * load-compatibility reason as `mode`.
+   */
   allow_handoff: z.boolean().optional(),
+  /**
+   * T-V5-039 — ignored. The paid API runtime this key used to gate is retired
+   * (`--runtime` never offers it; production never constructs `ApiAdapter`),
+   * so nothing reads this value any more. It stays declared here, still
+   * boolean-typed and still round-tripped by `loadStaConfig`, purely so an
+   * existing `.sta/config.yaml` or `.agent-team/config.yaml` that still
+   * carries it keeps loading without an "unrecognized key" surprise — see
+   * `orchestrator/src/packaging/staConfig.test.ts` for the compatibility
+   * assertion.
+   */
   allow_paid_fallback: z.boolean().optional(),
 });
 
 export type ExecutionConfig = z.infer<typeof ExecutionConfigSchema>;
 
 export interface EffectiveExecutionConfig {
-  mode: "single" | "auto" | "manual";
   runner: string;
-  allow_handoff: boolean;
   allow_paid_fallback: boolean;
   deterministic_gate_enabled: true;
 }
 
-/** Resolve V3 defaults in memory without rewriting a pre-V3 user config. */
+/**
+ * Resolve execution defaults in memory without rewriting a user config.
+ *
+ * T-V5-040 — `mode` and `allow_handoff` are no longer resolved: nothing reads
+ * them, so reporting an "effective" value for them would state a behaviour the
+ * runtime does not have. `INERT_EXECUTION_KEYS` is what `status` names instead.
+ */
 export function effectiveExecutionConfig(config?: ExecutionConfig): EffectiveExecutionConfig {
   return {
-    mode: config?.mode ?? "single",
     runner: config?.runner ?? "claude-code",
-    allow_handoff: config?.allow_handoff ?? true,
     allow_paid_fallback: config?.allow_paid_fallback ?? false,
     deterministic_gate_enabled: true,
   };
+}
+
+/** Keys a config may still carry that no code path reads (T-V5-039, T-V5-040). */
+export const INERT_EXECUTION_KEYS = ["mode", "allow_handoff", "allow_paid_fallback"] as const;
+export const INERT_ROUTING_KEYS = ["strategy", "order"] as const;
+
+/** The inert keys a given config actually declares, for reporting. */
+export function inertConfigKeys(config: StaConfig | undefined, execution: ExecutionConfig | undefined): string[] {
+  const found: string[] = [];
+  for (const key of INERT_EXECUTION_KEYS) {
+    if (execution?.[key] !== undefined) found.push(`execution.${key}`);
+  }
+  for (const key of INERT_ROUTING_KEYS) {
+    if (config?.routing?.[key] !== undefined) found.push(`routing.${key}`);
+  }
+  if (config?.model_routing !== undefined) found.push("model_routing");
+  return found;
 }
 
 export const StaConfigSchema = z.object({
   schema_version: z.literal(1),
   /** Overrides project.yaml's stack pointer for orchestrator purposes only, if a project needs to diverge. Unset = defer to project.yaml. */
   stack: z.string().min(1).optional(),
-  /** role -> model override, layered over each agent's frontmatter default (CLAUDE.md's "model per agent" table). */
+  /**
+   * T-V5-040 — ignored. The legacy per-role spelling is superseded by
+   * `routing.by_role`, which is the one per-role override routing reads.
+   * Declared here only so an existing config carrying it keeps loading; it no
+   * longer selects a runtime or a model, and `status` reports it as inert.
+   */
   model_routing: z.record(z.string().min(1), z.string().min(1)).optional(),
   /**
    * V3 execution policy. Optional and additive: an older config with no block
@@ -53,10 +98,14 @@ export const StaConfigSchema = z.object({
    */
   execution: ExecutionConfigSchema.optional(),
   /**
-   * V3 runner/model routing. All fields are optional so a pre-V3 config keeps
-   * its exact behaviour. `by_role` accepts the existing `runtime:model` spelling
-   * as well as a structured target; the latter avoids parsing when both fields
-   * are configured explicitly.
+   * Runner/model routing. All fields are optional so a config with no block
+   * keeps its exact behaviour. `by_role` accepts the existing `runtime:model`
+   * spelling as well as a structured target; the latter avoids parsing when
+   * both fields are configured explicitly.
+   *
+   * T-V5-040 — `strategy` and `order` are ignored: the candidate-ordering
+   * policy they drove is removed along with the handoff chain, so there is no
+   * list to order. They stay declared for load compatibility only.
    */
   routing: z
     .object({
