@@ -23,13 +23,6 @@ export interface ContextComposition {
   code_intel_chars: number;
   saved_pct: number;
   fallback_to_full_documents: number;
-  /**
-   * T-V5-035 (F-04) — which document(s) fell back and the exact structural
-   * reason `docSelection.ts` gave, so `fallback_to_full_documents` is never
-   * just a count. Same data `savings_by_document[].reason` already carries;
-   * surfaced here too because the count sits in `composition` and a reader of
-   * only that block previously had no way to attribute it.
-   */
   fallback_documents: { doc: string; reason: string }[];
   direct_file_reads: number;
 }

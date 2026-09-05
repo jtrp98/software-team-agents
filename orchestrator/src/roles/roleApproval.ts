@@ -4,47 +4,34 @@ import type { RoleLane } from "./roleLane.js";
 import type { LaneSignoff, RoleWorkspace, SignoffItemRef } from "./roleWorkspace.js";
 
 /**
- * Each lane's own approval gate (T103) — the point where the person in that
- * lane says "this is done, the next lane may start".
+ * Each lane's own approval gate — the point where the person in that lane
+ * says "this is done, the next lane may start".
  *
- * WHY THIS IS NOT THE SAME AS APPROVING AN ITEM
+ * This is not the same as approving an item: `ownership.ts` already makes a
+ * *single item* binding (`reviewed -> approved`, a person only), which
+ * answers "is this requirement true". It does not answer "is the BA lane
+ * finished with this module" — a lane can have every item approved and
+ * still be mid-thought, about to add two more. The second question is the
+ * one that gates a handoff.
  *
- * `ownership.ts` already makes a *single item* binding: `reviewed -> approved`,
- * a person only. That answers "is this requirement true". It does not answer
- * "is the BA lane finished with this module" — a lane can have every item
- * approved and still be mid-thought, about to add two more. The second question
- * is the one that gates a handoff, and it is the one V1.5's diagram draws as a
- * person under each column.
+ * The gate each lane carries reuses `ApprovalType` rather than inventing a
+ * new set of names: CLAUDE.md already names five points that always wait for
+ * a person, and three of them are exactly one per lane — the requirement
+ * interview (BA), the schema confirmation (SA), and the deploy (DEV).
+ * `gates/approval.ts` already enumerates all five for the task ledger; a
+ * second enum would be two names for one rule.
  *
- * WHY IT REUSES `ApprovalType` INSTEAD OF INVENTING LANE GATE NAMES
+ * There is deliberately no `pending` state stored here. A lane whose items
+ * are all approved and which has no current sign-off is at stage
+ * `awaiting-signoff`, computed from the same two facts every time — storing
+ * it as well would be a second source of truth.
  *
- * The gate each lane carries is not a new idea: CLAUDE.md already names five
- * points that always wait for a person, and three of them are exactly one per
- * lane — the requirement interview (BA), the schema confirmation (SA), and the
- * deploy (DEV). `gates/approval.ts` already enumerates all five for the task
- * ledger. A second enum would be two names for one rule.
- *
- * That also closes a gap T100 could only report: `ApprovalType.REQUIREMENT_INTERVIEW`
- * existed in that enum with no edge ever producing it, so the one always-human
- * point CLAUDE.md states most plainly — "business-analyst, any time it runs" —
- * was the only one with nothing enforcing it. It has a gate now.
- *
- * WHY THERE IS NO `pending`
- *
- * The task ledger needs one: it is polled, so "asked and not yet answered" has
- * to be a stored value. Here it is not stored because it is *derived* — a lane
- * whose items are all approved and which has no current sign-off is at stage
- * `awaiting-signoff`, computed from the same two facts every time. Storing it as
- * well would be the second source of truth this whole subsystem avoids.
- *
- * WHY A SIGN-OFF NAMES VERSIONS
- *
- * Because otherwise it is a flag that outlives what it approved. Sign off on
- * REQ-003 v4, amend it to v5, and a status-only record still reads "approved" —
- * which is the T08 failure ("`false` and never-asked were the same value") in a
- * new place. Recording `{id, version}` makes the sign-off go stale by
- * arithmetic the moment its subject changes, and the lane returns to
- * `awaiting-signoff` with the changed ids named.
+ * A sign-off names versions rather than being a status flag, because
+ * otherwise it outlives what it approved: sign off on REQ-003 v4, amend it
+ * to v5, and a status-only record would still read "approved". Recording
+ * `{id, version}` makes the sign-off go stale by arithmetic the moment its
+ * subject changes, and the lane returns to `awaiting-signoff` with the
+ * changed ids named.
  */
 
 /** Which of the five always-human points is this lane's gate. */
@@ -91,7 +78,7 @@ export function itemRefs(items: KnowledgeItem[]): SignoffItemRef[] {
  * A rejection goes stale the same way an approval does, and that is deliberate:
  * "you rejected v4, here is v5" is a new question, not a standing no. A
  * rejection that survived its subject being fixed would be unrevisitable
- * without an override — the mirror of the bug T08 fixed in the other direction.
+ * without an override.
  */
 export function signoffVerdict(workspace: RoleWorkspace, approved: KnowledgeItem[]): SignoffVerdict {
   const signoff = currentSignoff(workspace);

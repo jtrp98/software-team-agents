@@ -8,27 +8,16 @@ import { MAX_RETRY } from "../retry/retryPolicy.js";
 import type { StructuredFailure } from "../orchestrator/failure.js";
 
 /**
- * What a failure's severity is allowed to do without a person (T40).
+ * What a failure's severity is allowed to do without a person.
  *
- * THE GAP THIS CLOSES
+ * `severity` decides how many automatic rounds and what routing a failure
+ * gets — a cosmetic defect and a critical vulnerability must not be treated
+ * identically.
  *
- * `severity` has been a field on every `StructuredFailure` since T06. It was
- * parsed, stored, resumed, and displayed — and never once read by anything that
- * made a decision. A spacing bug and an open CRITICAL security finding got the
- * same three automatic rounds and the same routing, because the only inputs
- * `decideRecovery` actually consulted were the retry count, the current state,
- * and the owner.
- *
- * WHY THE CONSTANT BELOW IS THE AUTHORITY, AND THE YAML IS THE CHECKED COPY
- *
- * The same arrangement as `workflows/*.yml` against the classifier, for the same
- * reason and one more. The general reason: something that has to read a file at
- * decision time can fail at decision time, and `decideRecovery` is pure — it
- * takes a run and returns an action, with no I/O anywhere in the path. The
- * specific reason: this policy decides what happens when things are *already*
- * going wrong. A missing or malformed `escalation-policy.yaml` must not be able
- * to turn a failed round into a crash, or worse, into a silently permissive
- * default. So the values live in code, the file documents and mirrors them, and
+ * The values live in code (this constant), not only in `escalation-policy.yaml`:
+ * `decideRecovery` is pure, with no I/O in its path, so a missing or malformed
+ * YAML file must never be able to turn a failed round into a crash or a
+ * silently permissive default. The YAML documents and mirrors these values;
  * `--check-escalation-policy` fails when the two drift apart.
  */
 
@@ -70,13 +59,10 @@ export const DEFAULT_ESCALATION_POLICY: EscalationPolicy = {
 };
 
 /**
- * The policy for one severity.
- *
- * An unknown or absent severity falls back to `high` rather than to `low`: this
- * is only ever called about something that already failed, and the safe default
- * when you do not know how bad it is is to treat it as blocking. Defaulting to
- * `low` would mean an unrecognised severity quietly bought itself the most
- * permissive treatment available.
+ * The policy for one severity. An unknown or absent severity falls back to
+ * `high`, not `low`: this is only ever called about something that already
+ * failed, so the safe default is to treat it as blocking rather than letting
+ * an unrecognised severity quietly buy the most permissive treatment.
  */
 export function policyFor(severity: Severity | undefined, policy: EscalationPolicy = DEFAULT_ESCALATION_POLICY): SeverityPolicy {
   return (severity && policy.severity[severity]) || policy.severity.high;
@@ -161,11 +147,8 @@ const COMPARED_FIELDS = ["autonomous", "max_retry", "approval", "stop_pipeline"]
 
 /**
  * The check `--check-escalation-policy` runs: the file parses, and it says the
- * same thing the code will actually do.
- *
- * The second half is the point. A policy file that documents a rule the runtime
- * does not follow is worse than no file — it is a written answer that is wrong,
- * and the next person to read it has no way to tell.
+ * same thing the code will actually do — a policy file that documents a rule
+ * the runtime does not follow is worse than no file at all.
  */
 export function checkEscalationPolicy(projectRoot: string = defaultProjectRoot()): EscalationPolicyCheckResult {
   let file: EscalationPolicy;

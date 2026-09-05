@@ -19,9 +19,9 @@ import {
 import { writeMetadata } from "./freshness.js";
 
 /**
- * T-GR2 acceptance, proven against REAL captures from graphifyy v0.9.49
+ * Proven against REAL captures from graphifyy v0.9.49
  * (planning/v2/graphify-spike-evidence/ — sb-web-helper). CI never runs the
- * real binary (T-GR14): the transport is a stub returning these fixtures.
+ * real binary: the transport is a stub returning these fixtures.
  */
 
 const TARGET = { targetId: "t1", rootPath: "C:/src/target", revision: "a".repeat(40) };
@@ -41,9 +41,6 @@ Depth: 2
 - permissions-tab.tsx [imports_from] src/app/pages/admin/permission/_components/permissions-tab.tsx:L5
 - PermissionsTab() [calls] src/app/pages/admin/permission/_components/permissions-tab.tsx:L174
 - Breadcrumb() [calls] [INFERRED] src/components/breadcrumb/breadcrumb.tsx:L60`;
-
-type Runner = ConstructorParameters<typeof GraphifyProvider>[0]["runner"];
-type Config = ConstructorParameters<typeof GraphifyProvider>[0]["config"];
 
 function ok(stdout: string): SubprocessResult {
   return { code: 0, stdout, stderr: "" };

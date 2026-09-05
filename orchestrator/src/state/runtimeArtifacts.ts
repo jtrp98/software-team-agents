@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { ArtifactType, validateArtifact, type ExecutionPacket } from "../artifacts/schemas.js";
 import { AgentStage } from "../types.js";
 
-/** Regenerable V3 artifact classes stored below the VCS-ignored runtime-state root. */
+/** Regenerable artifact classes stored below the VCS-ignored runtime-state root. */
 export const RUNTIME_ARTIFACT_KINDS = ["packets", "evidence", "runs"] as const;
 export type RuntimeArtifactKind = (typeof RUNTIME_ARTIFACT_KINDS)[number];
 

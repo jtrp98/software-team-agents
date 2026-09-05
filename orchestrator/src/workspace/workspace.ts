@@ -8,7 +8,7 @@ import { loadTargetConfig } from "../targetcli/targetMeta.js";
 
 /**
  * Reads `workspace.yaml` — an optional file naming other project roots this
- * orchestrator instance can also drive (T41).
+ * orchestrator instance can also drive.
  *
  * Every checker and CLI verb already takes `--project-root`/`--state-db` per
  * invocation, and `.workflow/state.db` already lives under that root — a
@@ -19,8 +19,8 @@ import { loadTargetConfig } from "../targetcli/targetMeta.js";
  * stale the way a cached status would — `projects` re-reads each project's
  * own store every time.
  *
- * Absence is not an error. Most projects run standalone, the same as before
- * T41 — `checkWorkspace()` reports that as a note, not a problem, the same
+ * Absence is not an error. Most projects run standalone —
+ * `checkWorkspace()` reports that as a note, not a problem, the same
  * way `checkProfile()`'s target/blocked_on note does for an unfinished
  * migration.
  */
@@ -123,15 +123,13 @@ function listFilesRecursive(dir: string): string[] {
 }
 
 /**
- * T-WG4 — misplaced-docs scanner: a `role: dev` Target carries no `_docs/` of
- * its own by design (T-WG7 — module docs live in the Knowledge repo). A
+ * Misplaced-docs scanner: a `role: dev` Target carries no `_docs/` of
+ * its own by design (module docs live in the Knowledge repo). A
  * `_docs/module/**` file or a `## Modules` table in `_docs/status.md` sitting
- * in a DEV workspace is exactly the sb-compass incident's failure mode
- * (F1-F4 in workspace-guardrails-TASKS.md), just discovered after the fact
- * instead of prevented. `role` absent (legacy-project / this Framework repo
- * itself) or `role: ba` (whose workspace IS the Knowledge repo — `_docs/` is
- * exactly where it belongs) never trigger this: those are not the case this
- * check exists to catch, and flagging them would fail-open the guard.
+ * in a DEV workspace is discovered and reported. `role` absent (legacy-project /
+ * this Framework repo itself) or `role: ba` (whose workspace IS the Knowledge
+ * repo — `_docs/` is exactly where it belongs) never trigger this: those are
+ * not the case this check exists to catch, and flagging them would fail-open the guard.
  */
 function checkMisplacedDocs(projectRoot: string): string[] {
   let role: string | undefined;
@@ -148,7 +146,7 @@ function checkMisplacedDocs(projectRoot: string): string[] {
     for (const rel of listFilesRecursive(moduleDir)) {
       problems.push(
         `_docs/module/${rel} — module docs belong in the Knowledge repo, not this Target (role: dev). ` +
-          `Move it to <knowledgeRoot>\\_docs\\module\\${rel}, merge any status.md row, then remove it here (see T-WG8).`,
+          `Move it to <knowledgeRoot>\\_docs\\module\\${rel}, merge any status.md row, then remove it here.`,
       );
     }
   }
@@ -170,7 +168,7 @@ function checkMisplacedDocs(projectRoot: string): string[] {
  * every project name unique, and every root a real directory — a workspace
  * pointing at nothing is worse than no workspace at all.
  *
- * T-WG4 — also runs the misplaced-docs scan regardless of whether
+ * Also runs the misplaced-docs scan regardless of whether
  * workspace.yaml exists: that grouping file and this scan check unrelated
  * things (several project roots vs. one workspace's own `_docs/`), so an
  * absent workspace.yaml must not silence the other.
@@ -183,7 +181,7 @@ export function checkWorkspace(projectRoot: string = defaultProjectRoot()): Work
       ok: misplacedDocsProblems.length === 0,
       problems: misplacedDocsProblems,
       notes: [
-        "no workspace.yaml — this project runs standalone. Add one to group several project roots under one workspace (T41).",
+        "no workspace.yaml — this project runs standalone. Add one to group several project roots under one workspace.",
       ],
     };
   }

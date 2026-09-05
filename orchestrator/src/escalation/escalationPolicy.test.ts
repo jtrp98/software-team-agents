@@ -166,7 +166,7 @@ describe("decideRecovery honours the severity policy (T40)", () => {
   });
 
   it("changes nothing when the round reported no structured failure", () => {
-    // No failure means no severity to apply a policy to — the pre-T06 fallback stands.
+    // No failure means no severity to apply a policy to — falls back to the global max retry.
     const action = decide({ failure: undefined });
     expect(action.kind).toBe("RETRY");
     if (action.kind === "RETRY") expect(action.max).toBe(MAX_RETRY);

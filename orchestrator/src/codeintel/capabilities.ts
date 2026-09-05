@@ -2,15 +2,13 @@ import { AgentStage } from "../types.js";
 import { CapabilityDeniedError, CodeIntelOperation } from "./provider.js";
 
 /**
- * T-GR10 — who may ask the code-intelligence provider for anything.
+ * Who may ask the code-intelligence provider for anything.
  *
  * The matrix lives HERE, at rollout-config level, not in `contracts/*.yaml`:
  * contracts describe what a role writes and reads in a workspace; this is about
- * an optional tool the orchestrator may consult on a role's behalf. Touching
- * contract files would snapshot new wording into templates before the benchmark
- * (T-GR12) says the tool earns its keep — so until then this stays one array.
+ * an optional tool the orchestrator may consult on a role's behalf.
  *
- * B6 (no bypass) is enforced one layer down: even an allowed role only ever sees
+ * No-bypass is enforced one layer down: even an allowed role only ever sees
  * candidates whose paths survive the same permission/workspace-root filter every
  * other read goes through (resolver.ts). The matrix decides *whether to ask*;
  * it never widens *what may come back*.

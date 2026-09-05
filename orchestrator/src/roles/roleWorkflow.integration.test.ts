@@ -13,11 +13,11 @@ import { acknowledge, loadRoleWorkspace, writeRoleWorkspace } from "./roleWorksp
 import { BA_WORKFLOW, DEV_WORKFLOW, SA_WORKFLOW, roleWorkflowState, workspacesUnder } from "./roleWorkflow.js";
 
 /**
- * T114 — BA -> SA -> DEV integration test.
+ * BA -> SA -> DEV integration test.
  *
  * Every other test in `roleWorkflow.test.ts` feeds `roleWorkflowState()` an
  * in-memory `KnowledgeBase` and a hand-built `WorkspaceLookup`. That proves the
- * per-lane logic, but not the thing T114 actually asks: that context and
+ * per-lane logic, but not what this file actually asks: that context and
  * approval survive the trip through the real mechanism a fresh agent context
  * uses to pick up where the previous one left off — files on disk, reloaded
  * from scratch.
@@ -93,7 +93,7 @@ describe("T114: BA -> SA -> DEV integration (real files, fresh reload at every s
       true,
     );
 
-    // ---------- BA signs the lane off (T103) — a real file write, not a mock ----------
+    // ---------- BA signs the lane off — a real file write, not a mock ----------
     writeRoleWorkspace(
       recordSignoff(loadRoleWorkspace("ba", MODULE, root, NOW), {
         approved: approvedOwnedBy("ba"),
@@ -110,7 +110,7 @@ describe("T114: BA -> SA -> DEV integration (real files, fresh reload at every s
     const carriedToSA = baState.handoff.carries;
     const handedOffIds = baState.handoff.items;
 
-    // ---------- SA acknowledges the handoff (T99 watermark, on disk) ----------
+    // ---------- SA acknowledges the handoff (watermark, on disk) ----------
     writeRoleWorkspace(
       acknowledge(loadRoleWorkspace("sa", MODULE, root, NOW), kb(), handedOffIds, "Ploy", NOW),
       root,

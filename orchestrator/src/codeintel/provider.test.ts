@@ -6,13 +6,6 @@ import {
   ProviderStatus,
 } from "./provider.js";
 
-/**
- * T-GR1 acceptance: the interface is usable by ANY provider implementation
- * with zero knowledge of the tool behind it, every candidate is located and
- * provenance-tagged, and a throwing provider is a normal, catchable outcome —
- * the contract the resolver's fallback relies on.
- */
-
 const CANDIDATE: CodeCandidate = {
   location: { file: "src/a.ts", line: 3 },
   symbol: "a",

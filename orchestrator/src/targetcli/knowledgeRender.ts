@@ -23,10 +23,10 @@ function markerCount(content: string, marker: string): number {
 }
 
 /**
- * T-V5-006 — the one marker-pair locator every Framework block shares. The
- * bootstrap block (CLAUDE.md/AGENTS.md) and the managed .gitignore block use
- * different marker strings but identical locate/validate/split semantics, so
- * they share this implementation instead of growing a second one.
+ * The one marker-pair locator every Framework block shares. The bootstrap
+ * block (CLAUDE.md/AGENTS.md) and the managed .gitignore block use different
+ * marker strings but identical locate/validate/split semantics, so they share
+ * this implementation instead of growing a second one.
  */
 export function inspectMarkerBlock(
   content: string,
@@ -164,28 +164,30 @@ export function resolveDevKnowledgeRoot(options: {
   }
 }
 
-// --- managed .gitignore block (T-V5-006) ------------------------------------
+// --- managed .gitignore block ------------------------------------------------
 
 export const GITIGNORE_PATH = ".gitignore";
 export const GITIGNORE_BLOCK_OPEN = "# sta:gitignore-start";
 export const GITIGNORE_BLOCK_CLOSE = "# sta:gitignore-end";
 
 /**
- * The machine-local paths the framework states a version-control decision for.
- * Derived and policy paths join through their own tasks (T-V5-016/T-V5-018) —
- * each addition must first prove sync regenerates what ignoring would hide.
+ * The machine-local paths the framework states a version-control decision
+ * for. Any future addition must first prove sync regenerates what ignoring
+ * would hide.
  */
 export const MANAGED_GITIGNORE_PATHS: readonly string[] = [".workflow/", ".agent-team/backups/", "policies/"];
 
 export function inspectGitignoreBlock(content: string): BootstrapInspection {
   return inspectMarkerBlock(content, GITIGNORE_BLOCK_OPEN, GITIGNORE_BLOCK_CLOSE, "gitignore");
-}/**
+}
+
+/**
  * Whether the project's own rules (outside any managed block) already ignore a
  * managed path. Deliberately conservative: only exact, leading-slash,
  * trailing-slash, trailing-glob and parent-directory forms count, and an
  * explicit negation makes the path NOT ignored — when in doubt the entry is
  * written (a duplicate ignore rule is harmless; a missing one leaks runtime
- * state into `git status`, which is the F-09 failure this block exists to end).
+ * state into `git status`).
  */
 export function gitignoreAlreadyCovers(content: string | undefined, managedPath: string): boolean {
   if (!content) return false;
@@ -211,7 +213,7 @@ export function gitignoreAlreadyCovers(content: string | undefined, managedPath:
 /**
  * The block bytes for a workspace: header, the not-already-ignored entries, and
  * what the project already covers stated in a comment. `entries` defaults to
- * the machine-local paths; sync passes the full set (T-V5-018 adds the derived
+ * the machine-local paths; sync passes the full set (including derived
  * rendering directories, which every sync regenerates).
  */
 export function renderGitignoreBlock(alreadyIgnored: readonly string[], entries: readonly string[] = MANAGED_GITIGNORE_PATHS): string {

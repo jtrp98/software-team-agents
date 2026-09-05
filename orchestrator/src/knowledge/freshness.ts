@@ -9,7 +9,7 @@ import { digestOfSource, parseLocator } from "./sourceDigest.js";
 import { resolveSource } from "./sourceResolver.js";
 
 /**
- * Context freshness (T71) — how old is what an agent is about to rely on, and
+ * Context freshness — how old is what an agent is about to rely on, and
  * has the material underneath it moved.
  *
  * TIME IS THE WEAK SIGNAL; THE DIGEST IS THE STRONG ONE
@@ -24,14 +24,14 @@ import { resolveSource } from "./sourceResolver.js";
  *
  * `updated_at` says when somebody last touched the item. An item edited this
  * morning out of a document read in February is stale in a way that field
- * cannot express — which is exactly why T61 gave every source its own
- * `captured_at`. Age is taken from the *oldest* source, because an item is only
- * as current as the least current thing it rests on.
+ * cannot express — which is why every source has its own `captured_at`. Age is
+ * taken from the *oldest* source, because an item is only as current as the
+ * least current thing it rests on.
  *
  * THRESHOLDS ARE POLICY, NOT CODE
  *
  * How many days is too many differs per project and per kind, so it lives in
- * `knowledge-policy.yaml` (T68). A `db-schema` goes stale faster than a
+ * `knowledge-policy.yaml`. A `db-schema` goes stale faster than a
  * `decision`: the code moves under the first and not under the second.
  */
 
@@ -55,7 +55,7 @@ export interface Freshness {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 // Both live in `sourceDigest.ts` now, because the side that *records* a digest
-// (discovery, T74-T79) has to compute it with the identical function this side
+// (discovery) has to compute it with the identical function this side
 // checks it with — see that module's note. Re-exported so the locator/digest
 // helpers stay reachable from the module that defines what they are for.
 export { digestOfSource, parseLocator };

@@ -7,17 +7,10 @@ import { extractIds } from "../traceability/traceability.js";
 import { loadModelTiers, ModelTiersInvalidError, type ModelTiers } from "../runtime/modelTiers.js";
 
 /**
- * The plan.md task table as a machine-checkable graph (pm-improvements T-PM1.x).
+ * The plan.md task table as a machine-checkable graph.
  *
- * Before this module, `Depends on` was prose the orchestrator never read at
- * runtime — only the adoption importer (`legacyPlan.ts`) parsed it, and only
- * `--check-doc-structure` looked at plan.md at all, structurally (sections
- * exist, phase count ≥ 1). A plan whose dependency named a task that did not
- * exist, depended on itself, or cycled was nobody's error until an engineer
- * hit it mid-run.
- *
- * This module is the deterministic half of the fix: parse every phase's task
- * table into rows, then validate the graph without an LLM — duplicate ids,
+ * Parses every phase's task table into rows, then validates the graph
+ * without an LLM — duplicate ids,
  * missing/self/duplicate dependencies, cycles, unknown owners, unknown
  * statuses, missing DES traceability, impossible authored wave ordering.
  * Every failure names its task id, because "somewhere in phase 3" is not
@@ -33,11 +26,10 @@ import { loadModelTiers, ModelTiersInvalidError, type ModelTiers } from "../runt
  * Readiness is also derived, not read: `readinessOf` treats `verified` rows
  * (qa-engineer's mark, the only writer) as satisfied dependencies and answers
  * "what may start now" from the document as it stands. Nothing here writes
- * runtime state — that remains the orchestrator's store's job (T-PM5.1); this
+ * runtime state — that remains the orchestrator's store's job; this
  * is the plan-side mirror a person or a driver reads before creating tasks.
  *
- * T-V3TOK-111 promoted that mirror from "exported and unused" to something a
- * run actually consults — as an **advisory** and nothing more. `sta run` prints
+ * A run consults this mirror as an **advisory** and nothing more. `sta run` prints
  * {@link planReadinessAdvisory} when the task it was handed is behind an
  * unfinished dependency, and then runs it anyway. The authority model is the
  * reason for the restraint: PM owns the Work Graph, the orchestrator owns
@@ -63,7 +55,7 @@ export interface PlanTaskRow {
   id: string;
   /** The `## Phase N` heading this row sits under. */
   phase: number;
-  /** `DES-NNN` refs named in the Task cell — the traceability chain's task leg (T19). */
+  /** `DES-NNN` refs named in the Task cell — the traceability chain's task leg. */
   designRefs: string[];
   /** Declared dependencies from the `Depends on` cell, deduped, document order. */
   dependsOn: string[];
@@ -74,7 +66,7 @@ export interface PlanTaskRow {
   /** Optional phase-level cast, inherited by every task in its phase. */
   tier?: string;
   description: string;
-  /** True when the row came from a legacy `- [ ]` line rather than a T52 table. */
+  /** True when the row came from a legacy `- [ ]` line rather than a table. */
   fromCheckbox: boolean;
   /** Explicit contract columns from the authoritative task table; undefined means the plan did not make the claim. */
   produces?: string[];
@@ -207,7 +199,7 @@ function rowsForPhase(phaseNumber: number, body: string, problems: string[]): Pl
     return rows;
   }
 
-  // Legacy checkbox shape (pre-T52). Still parsed so --check-plan says something
+  // Legacy checkbox shape. Still parsed so --check-plan says something
   // useful about an unmigrated plan instead of silently passing it.
   for (const line of checkboxLines(body)) {
     push(line.text, "", "", "", undefined, undefined, undefined, undefined, true);
@@ -236,7 +228,7 @@ export interface PlanGraphCheck {
 }
 
 /**
- * Validates the parsed rows as a dependency graph (T-PM1.3). Deterministic by
+ * Validates the parsed rows as a dependency graph. Deterministic by
  * construction — no LLM, fixed check order, one error per finding.
  */
 export function validatePlanTasks(
@@ -370,7 +362,7 @@ export function validatePlanTasks(
  * Execution waves derived from the plan's own edges: declared dependencies plus
  * phase order. Wave 1 has no unresolved prerequisite; every task in wave N only
  * waits on strictly lower waves. Not runtime state — the orchestrator still
- * checks dependency status before dispatch (T-PM1.2).
+ * checks dependency status before dispatch.
  */
 export function deriveWaves(tasks: PlanTaskRow[]): Map<string, number> {
   const nodes: TaskNode[] = tasks.map((t) => ({
@@ -404,7 +396,7 @@ export interface PlanReadiness {
 }
 
 /**
- * The ready-task selector for a plan (T-PM5.2), answered from the document's
+ * The ready-task selector for a plan, answered from the document's
  * own Status cells: `pending` AND every dependency `verified` AND not itself
  * blocked. A failed (`blocked`) dependency is never satisfied, so everything
  * downstream stays out of `ready` — visible in `waiting` with the reason.
@@ -465,7 +457,7 @@ export interface PlanReadinessAdvisory {
 
 /**
  * What the plan document believes about one task, for `sta run` to print before
- * it starts (T-V3TOK-111).
+ * it starts.
  *
  * Returns `null` in every case where the plan has nothing useful to say — no
  * plan, an unparseable one, a task id the plan never mentions, or a row that is

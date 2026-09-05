@@ -7,14 +7,14 @@ import { defaultProjectRoot } from "../agents/agentContract.js";
 
 /**
  * Reads `test-pyramid.yaml` — which test levels (unit/integration/api/e2e) a
- * kind of task requires by default, so `test-planner` (T20) and `qa-engineer`
- * stop deciding the same floor from scratch every time (T21).
+ * kind of task requires by default, so `test-planner` and `qa-engineer`
+ * stop deciding the same floor from scratch every time.
  *
  * Lives at the repo root, unclaimed by any `layout.yaml` concept — the same
  * tier as `project.yaml` and `layout.yaml` itself. It answers a project-wide
  * policy question. `runtimeVerificationFor()` is the execution entry point:
- * it turns the authored task-type floor into the RuntimeTask contract while
- * preserving the historical full deterministic order for unknown types.
+ * it turns the authored task-type floor into the RuntimeTask contract, and
+ * falls back to the full deterministic order for unknown task types.
  */
 
 export type TestLevel = "unit" | "integration" | "api" | "e2e";
@@ -27,7 +27,7 @@ export interface TaskTypePolicy {
 
 export interface TestPyramid {
   version: number;
-  /** V3 ships warning-only. A project must explicitly opt in to enforcement. */
+  /** Ships warning-only by default. A project must explicitly opt in to enforcement. */
   enforcement?: "warn" | "enforce";
   task_types: Record<string, TaskTypePolicy>;
 }
@@ -41,7 +41,7 @@ export const ALWAYS_ON_VERIFICATION_LEVELS: readonly RuntimeVerificationLevel[] 
   "build",
 ];
 
-/** The level vocabulary represented by the historical deterministic runner. */
+/** The level vocabulary the deterministic runner covers end-to-end. */
 export const FULL_RUNTIME_VERIFICATION_LEVELS: readonly RuntimeVerificationLevel[] = [
   "lint",
   "typecheck",
@@ -119,10 +119,10 @@ export function requiredLevelsFor(taskType: string, pyramid: TestPyramid): TestL
  * Execution-time selection for one RuntimeTask.
  *
  * `requiredLevelsFor()` is deliberately called here rather than re-reading the
- * YAML shape at a second call site. Unknown task types retain the exact prior
- * full order. Known types keep lint/typecheck/build as the mechanical baseline
- * and add only their declared test levels; API/E2E remain visible requirements
- * even though V3 deliberately defers runners for those levels.
+ * YAML shape at a second call site. Unknown task types get the full
+ * deterministic order. Known types keep lint/typecheck/build as the mechanical
+ * baseline and add only their declared test levels; API/E2E remain visible
+ * requirements even though runners for those levels are deliberately deferred.
  */
 export function runtimeVerificationFor(
   taskType: string,

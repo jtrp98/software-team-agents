@@ -8,7 +8,7 @@ import type { TemplateManifest } from "../packaging/templateManifest.js";
 import type { TargetConfig, TargetManifest } from "./targetMeta.js";
 
 /**
- * T-ROLE-01 / T-ROLE-02 — the Role Workspace model.
+ * The Role Workspace model.
  *
  *   > BA works in Knowledge. DEV works in Target. Framework powers both.
  *
@@ -17,18 +17,17 @@ import type { TargetConfig, TargetManifest } from "./targetMeta.js";
  *   BA  workspace = knowledgeRoot   (Target never required)
  *   DEV workspace = targetRoot      (Knowledge required as read context)
  *
- * The Framework stays the only sync source in both directions —
- * Framework → Knowledge and Framework → Target, never Knowledge ⇄ Target
- * (T-ROLE-14/T-ROLE-15): requirements are not copied into apps, source is not
- * copied into knowledge.
+ * The Framework stays the only sync source in both directions — Framework →
+ * Knowledge and Framework → Target, never Knowledge ⇄ Target: requirements
+ * are not copied into apps, source is not copied into knowledge.
  */
 
 /** Where an interactive workspace runs and which managed payload it receives. */
 export type WorkspaceRole = "ba" | "dev";
 export type WorkspaceRuntime = "claude" | "codex" | "opencode";
 
-/** T-V5-007 — the recorded set wins; a pre-V5 manifest with non-Claude
- * renderings is conservatively treated as an opt-in to every existing runtime. */
+/** The recorded set wins; a manifest with non-Claude renderings but no
+ * recorded runtime config is conservatively treated as opt-in to every existing runtime. */
 export function runtimesForWorkspace(config: TargetConfig | undefined, manifest?: TargetManifest): readonly WorkspaceRuntime[] {
   if (config?.runtimes?.length) return config.runtimes;
   const legacyBindings = manifest?.files.some((file) =>
@@ -53,21 +52,21 @@ export const BA_WORKSPACE_AGENTS: readonly string[] = [
   "system-analyst",
   "project-manager",
   "test-planner",
-  // T-UX1/T-UX13: the UX/UI consultant is a knowledge-side role — its outputs
-  // are draft UX-* items under knowledge/ plus _docs/module/<m>/uxui/**, never
-  // app source, so its prompt belongs beside the other Knowledge-workspace roles.
+  // The UX/UI consultant is a knowledge-side role — its outputs are draft
+  // UX-* items under knowledge/ plus _docs/module/<m>/uxui/**, never app
+  // source — so its prompt belongs beside the other Knowledge-workspace roles.
   "uxui-designer",
 ];
 
 /**
- * T-ROLE-10 / T-ROLE-11 — role-aware managed-asset profiles over the template payload.
+ * Role-aware managed-asset profiles over the template payload.
  *
  * Both roles get hooks + settings (the guards travel with every workspace),
  * skills (.claude/scripts), shared instructions, policies, CLAUDE.md, and its
- * rendered AGENTS.md pointer. They
- * differ in agent roster and in orchestrator-only payload (contracts,
- * workflows, stacks, layout/test-pyramid/escalation YAML) that only a DEV/Target
- * workspace needs because only there does the pipeline drive engineers.
+ * rendered AGENTS.md pointer. They differ in agent roster and in
+ * orchestrator-only payload (contracts, workflows, stacks,
+ * layout/test-pyramid/escalation YAML) that only a DEV/Target workspace needs
+ * because only there does the pipeline drive engineers.
  */
 export function assetsForRole(role: WorkspaceRole): (relPath: string) => boolean {
   const baAgents = new Set(BA_WORKSPACE_AGENTS);
@@ -80,8 +79,8 @@ export function assetsForRole(role: WorkspaceRole): (relPath: string) => boolean
       if (relPath.startsWith(".claude/agents/") && relPath.endsWith(".md")) {
         return !baAgents.has(path.basename(relPath, ".md"));
       }
-      // T-V5-027: the Knowledge document/plan checkers are BA-workspace CI — a
-      // Target has no `_docs/**` of its own for them to run against.
+      // The Knowledge document/plan checkers are BA-workspace CI — a Target
+      // has no `_docs/**` of its own for them to run against.
       if (relPath === ".github/workflows/knowledge-ci.yml") return false;
       return true;
     };
@@ -89,7 +88,7 @@ export function assetsForRole(role: WorkspaceRole): (relPath: string) => boolean
   return (relPath) => {
     if (relPath === "CLAUDE.md" || relPath === "AGENTS.md") return true;
     if (relPath.startsWith(".claude/agents/")) {
-      if (!relPath.endsWith(".md")) return false; // e.g. README fragments — none today, but stay strict
+      if (!relPath.endsWith(".md")) return false;
       return baAgents.has(path.basename(relPath, ".md"));
     }
     if (relPath.startsWith(".claude/hooks/") || relPath.startsWith(".claude/scripts/") || relPath.startsWith(".claude/shared/")) return true;
@@ -99,8 +98,7 @@ export function assetsForRole(role: WorkspaceRole): (relPath: string) => boolean
     // sync time and never ship in the template payload at all.
     if (relPath.startsWith(".opencode/plugin/")) return true;
     if (relPath.startsWith("policies/")) return true;
-    // T-V5-027: the document/plan checkers as CI — a Knowledge workspace's own
-    // documents are what this validates, so only the BA/Knowledge side gets it.
+    // Only the BA/Knowledge side validates its own documents.
     if (relPath === ".github/workflows/knowledge-ci.yml") return true;
     // contracts/, workflows/, stacks/, layout.yaml, escalation-policy.yaml,
     // test-pyramid.yaml — engineer-pipeline payload, not BA tooling.
@@ -114,7 +112,7 @@ export function filterManifestForRole(manifest: TemplateManifest, role: Workspac
   return { ...manifest, files: manifest.files.filter((f) => include(f.path)) };
 }
 
-// --- repository kind detection (T-ROLE-16) ---------------------------------
+// --- repository kind detection -----------------------------------------------
 
 export type WorkspaceKind = "knowledge" | "target" | "ambiguous" | "unrecognized";
 
@@ -124,14 +122,9 @@ export type WorkspaceKind = "knowledge" | "target" | "ambiguous" | "unrecognized
  * cannot discriminate between them. Counting it made every app repo that owns a
  * docs folder — i.e. every target once its first module doc lands — come back
  * "ambiguous", forcing an explicit `--role` on a repository whose kind was never
- * actually in doubt. The markers left are Knowledge-only.
- *
- * T-V5-043 dropped `knowledge-policy.yaml` from this list along with the file
- * itself. It was never the *only* marker present in any workspace this
- * framework produces — `runThreeRepoInit` writes `knowledge/`, `targets.yaml`
- * and the policy file together — and both survivors are committed, so a
- * Knowledge repository is recognised from a fresh clone, before any `init`.
- * Verified against the real repositories before the marker was removed.
+ * actually in doubt. The markers left are Knowledge-only: `knowledge/` and
+ * `targets.yaml` are both committed, so a Knowledge repository is recognised
+ * from a fresh clone, before any `init`.
  */
 const KNOWLEDGE_MARKERS: readonly string[] = ["knowledge", "targets.yaml"];
 export const APP_SOURCE_MARKERS: readonly string[] = [
@@ -168,7 +161,7 @@ export function hasKnowledgeMarkers(dir: string): boolean {
 }
 
 /**
- * T-V5-043 — the recorded role of an already-initialised workspace.
+ * The recorded role of an already-initialised workspace.
  *
  * Once `init` has run, the workspace *states* what it is; guessing from files
  * is only necessary before that. Read on its own rather than through
@@ -213,9 +206,9 @@ function hasAppSourceMarkers(dir: string): boolean {
  * Both marker families present (a legacy monorepo, this framework checkout)
  * or none → ambiguous/unrecognized, and init requires an explicit --role.
  *
- * T-V5-043 — a workspace that has already been initialised is classified by the
- * role it recorded, which outranks every marker: a DEV workspace that also
- * carries Knowledge-shaped files is `target`, not `ambiguous`, because a person
+ * A workspace that has already been initialised is classified by the role it
+ * recorded, which outranks every marker: a DEV workspace that also carries
+ * Knowledge-shaped files is `target`, not `ambiguous`, because a person
  * already answered that question at `init`. Markers are what classify a
  * repository that has never been initialised.
  */
@@ -230,7 +223,7 @@ export function detectWorkspaceKind(dir: string): WorkspaceKind {
   return "unrecognized";
 }
 
-// --- Knowledge binding (T-ROLE-06) -----------------------------------------
+// --- Knowledge binding -------------------------------------------------------
 
 export interface KnowledgeBinding {
   /** Absolute, validated path of the bound Knowledge root. */
@@ -255,7 +248,7 @@ function isSameOrNested(a: string, b: string): boolean {
  * Resolves the Knowledge root a DEV workspace depends on:
  * `.agent-team/config.yaml` `knowledge.path` first (repo-relative binding,
  * committed with the target), then the machine-wide installation binding.
- * Fail-closed with actionable recovery when nothing valid resolves (T-ROLE-08).
+ * Fails closed with actionable recovery when nothing valid resolves.
  */
 export function resolveKnowledgeBinding(options: {
   targetRoot: string;
@@ -295,18 +288,18 @@ export function resolveKnowledgeBinding(options: {
     return undefined;
   } catch (e) {
     if (e instanceof KnowledgeBindingError) throw e;
-    return undefined; // no installation config — treated like any other missing optional binding here; callers decide whether that is fatal
+    return undefined; // no installation config — treated as any other missing optional binding; callers decide whether that is fatal
   }
 }
 
-// --- Target binding (T-LV1) --------------------------------------------------
+// --- Target binding ----------------------------------------------------------
 
 export interface TargetBinding {
   /** Absolute, validated path of the bound Target root. */
   targetRoot: string;
   /** Where the binding came from — recovery advice names it. "invalid" carries the problem text in targetRoot instead. */
   via: "local-mapping" | "invalid";
-  /** T-V5-017 — the Target's stable identity when the binding resolved by `target_id`. */
+  /** The Target's stable identity when the binding resolved by `target_id`. */
   targetId?: string;
 }
 
@@ -317,23 +310,20 @@ function looksLikeTargetRoot(candidate: string): boolean {
 }
 
 /**
- * Resolves the Target root a BA workspace may optionally read from. T-V5-017
- * closed F-08's two unrelated mechanisms and T-V5-042 removed the second one
- * outright: identity travels in the shared config (`target_id`), and the
- * machine path is resolved per machine through the same
- * `.workflow/targets.local.yaml` + `targets.yaml` join
- * `threeRepo/localTargets.ts` already owns — reusing `loadLocalTargetMapping`
- * and `targetById`, not a second resolver.
+ * Resolves the Target root a BA workspace may optionally read from. Identity
+ * travels in the shared config (`target_id`), and the machine path is
+ * resolved per machine through the `.workflow/targets.local.yaml` +
+ * `targets.yaml` join `threeRepo/localTargets.ts` already owns — reusing
+ * `loadLocalTargetMapping` and `targetById`, not a second resolver. There is
+ * no committed-path fallback: a workspace still carrying the removed
+ * `target.path` resolves to no binding here, and `targetMeta.removedTargetPath()`
+ * is what lets `status` report the leftover with its fix rather than leaving
+ * it mysterious.
  *
- * There is no committed-path fallback any more. A workspace still carrying the
- * removed `target.path` resolves to no binding here, and
- * `targetMeta.removedTargetPath()` is what lets `status` report the leftover
- * with its fix rather than leaving it mysterious.
- *
- * Like Knowledge for DEV, a Target binding is never required for BA
- * (T-ROLE-07): with no `target_id` set this returns undefined silently. Every
- * other failure mode throws TargetBindingError so a caller can report it —
- * callers never treat that as fatal, they only decide how to describe it.
+ * Like Knowledge for DEV, a Target binding is never required for BA: with no
+ * `target_id` set this returns undefined silently. Every other failure mode
+ * throws TargetBindingError so a caller can report it — callers never treat
+ * that as fatal, they only decide how to describe it.
  */
 export function resolveTargetBinding(options: {
   knowledgeRoot: string;
@@ -345,7 +335,7 @@ export function resolveTargetBinding(options: {
   return resolveTargetById(options.configTargetId, options);
 }
 
-/** Identity → machine path, through the one Target-location mechanism this framework has (T-V5-017). */
+/** Identity → machine path, through the one Target-location mechanism this framework has. */
 function resolveTargetById(targetId: string, options: { knowledgeRoot: string; frameworkRoot?: string }): TargetBinding {
   let registry;
   try {
@@ -391,7 +381,7 @@ function resolveTargetById(targetId: string, options: { knowledgeRoot: string; f
   return { targetRoot: entry.path, via: "local-mapping", targetId };
 }
 
-// --- write policy wiring (T-ROLE-12 / T-ROLE-13) ----------------------------
+// --- write policy wiring -----------------------------------------------------
 
 /**
  * Environment for launching a role's runtime session. The guards
@@ -403,14 +393,14 @@ function resolveTargetById(targetId: string, options: { knowledgeRoot: string; f
  *   BA  → writable: knowledgeRoot only. Target/Framework writes fail closed.
  *   DEV → writable: targetRoot only. Knowledge/Framework writes fail closed.
  *
- * T-WG7 — a DEV session also receives AGENTCLAUDE_KNOWLEDGE_ROOT so prompts,
- * hooks and generated includes can name the read-only Knowledge context
- * without hard-coding machine-specific paths.
+ * A DEV session also receives AGENTCLAUDE_KNOWLEDGE_ROOT so prompts, hooks
+ * and generated includes can name the read-only Knowledge context without
+ * hard-coding machine-specific paths.
  *
- * T-LV1 — symmetrically, a BA session receives AGENTCLAUDE_TARGET_ROOT
- * whenever a Target binding resolved, so `system-analyst` (T-LV2) can name a
- * real Target to read from without hard-coding a machine-specific path. Never
- * set when no binding resolved — BA must keep working exactly as before.
+ * Symmetrically, a BA session receives AGENTCLAUDE_TARGET_ROOT whenever a
+ * Target binding resolved, so `system-analyst` can name a real Target to read
+ * from without hard-coding a machine-specific path. Never set when no binding
+ * resolved — BA must keep working exactly as before.
  */
 export function launchEnv(
   role: WorkspaceRole,
@@ -419,9 +409,10 @@ export function launchEnv(
   targetRoot?: string,
   contextCommand?: string,
 ): NodeJS.ProcessEnv {
-  // The role is part of the signature so call sites state whose policy they
-  // launch under; today both roles enforce the same shape — own workspace
-  // writable, zero cross-root grants — via cwd plus this explicit empty list.
+  // `role` is part of the signature so call sites state whose policy they
+  // launch under, even though both roles currently enforce the same shape —
+  // own workspace writable, zero cross-root grants — via cwd plus this
+  // explicit empty list.
   void role;
   return {
     ...existingEnv,

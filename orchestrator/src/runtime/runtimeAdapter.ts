@@ -3,7 +3,7 @@ import type { SpawnSyncReturns } from "node:child_process";
 
 /**
  * The seam between this framework and the AI runtime that actually executes an
- * agent (T108) — `claude` today, `codex` next, without the orchestrator core
+ * agent — `claude` today, `codex` next, without the orchestrator core
  * learning either name.
  *
  * WHY THIS EXISTS WHEN `AgentExecutor` ALREADY DID
@@ -42,8 +42,8 @@ export interface RuntimeBinding {
   /**
    * Repo-relative root of this runtime's binding — `.claude`, `.codex`.
    *
-   * A directory rather than a set of files because `--check-bindings` (T111)
-   * needs somewhere to look, and because it is the unit `sta init` writes and
+   * A directory rather than a set of files because `--check-bindings` needs
+   * somewhere to look, and because it is the unit `sta init` writes and
    * `sta upgrade` diffs.
    */
   readonly dir: string;
@@ -53,8 +53,9 @@ export interface RuntimeBinding {
    * Repo-relative path of the file that wires this runtime's guards up, or
    * `null` for a runtime with no such mechanism.
    *
-   * `null` is a real answer, not a missing one: it is what forces T111 to cover
-   * those guards post-hoc instead of assuming the runtime is holding them.
+   * `null` is a real answer, not a missing one: it is what forces guard
+   * detection to cover those guards post-hoc instead of assuming the runtime
+   * is holding them.
    */
   readonly guardConfigPath: string | null;
 }
@@ -93,8 +94,8 @@ export const ALL_EXIT_CHECKS: readonly RuntimeExitCheck[] = ["code-green", "no-h
  * Stated as *what*, never as *by which mechanism* — no field here names a hook,
  * an event, or an exit code, because that is precisely what would make this
  * interface Claude-Code-shaped. An adapter enforces what its runtime can and
- * reports the rest back in `RuntimeAgentResult.guards`, so T111 knows what it
- * has left to check itself.
+ * reports the rest back in `RuntimeAgentResult.guards`, so capability
+ * detection knows what it has left to check itself.
  */
 export interface RuntimeGuards {
   /** Globs this role may write, from `contracts/<role>.yaml`. */
@@ -125,7 +126,7 @@ export const NO_GUARDS: RuntimeGuards = Object.freeze({
 export interface RuntimeAgentRequest {
   /** This framework's own name for the role — `AGENT_REGISTRY[stage].role`, which is also how the binding addresses it. */
   readonly role: string;
-  /** Absolute directory the run happens in. Honours `stageRoots` for a multi-repo project (T42). */
+  /** Absolute directory the run happens in. Honours `stageRoots` for a multi-repo project. */
   readonly cwd: string;
   /** Framework, Knowledge and Target roots are explicit; cwd is never scope. */
   readonly bindingRoot?: string;
@@ -135,12 +136,12 @@ export interface RuntimeAgentRequest {
   readonly definitionPath: string;
   /** The task instruction, already assembled and sliced by `agentRunAssembly.ts`. */
   readonly prompt: string;
-  /** Model to run on, or undefined to take the runtime's own default. The field T112 fills. */
+  /** Model to run on, or undefined to take the runtime's own default. */
   readonly model?: string;
   /**
    * True when `model` was set by an operator-visible override — the `--model` CLI
    * flag or `.sta/config.yaml` routing — rather than resolved from role
-   * frontmatter or an automatic default (T-V4-CAST-001).
+   * frontmatter or an automatic default.
    *
    * An adapter that would otherwise ignore `model` to avoid contradicting its
    * runtime's own per-role configuration (Claude Code resolves the model from
@@ -151,10 +152,10 @@ export interface RuntimeAgentRequest {
    */
   readonly modelExplicit?: boolean;
   /**
-   * Explicitly requested reasoning effort, paired with an explicit `model`
-   * (T-V4-CAST-001). Undefined = the runtime's / binding's own default. An
-   * adapter whose runtime exposes no effort control records a diagnostic rather
-   * than dropping this silently.
+   * Explicitly requested reasoning effort, paired with an explicit `model`.
+   * Undefined = the runtime's / binding's own default. An adapter whose
+   * runtime exposes no effort control records a diagnostic rather than
+   * dropping this silently.
    */
   readonly effort?: string;
   readonly autonomy: RuntimeAutonomy;
@@ -175,11 +176,11 @@ export type RuntimeRunStatus =
    * The runtime itself could not be used — binary missing, not authenticated,
    * spawn refused.
    *
-   * Split from ERROR deliberately. The legacy executor turned a failed spawn
-   * into a plain `FAIL`, which spent the task's retry budget and could
-   * trigger recovery for something the task did nothing to cause. Separating the
-   * two lets the retry policy leave the budget alone, and lets T112 try the other
-   * runtime instead of failing the task.
+   * Split from ERROR deliberately. Collapsing it into a plain `FAIL` would
+   * spend the task's retry budget and could trigger recovery for something the
+   * task did nothing to cause. Separating the two lets the retry policy leave
+   * the budget alone, and lets a caller try the other runtime instead of
+   * failing the task.
    */
   | "UNAVAILABLE";
 
@@ -195,9 +196,10 @@ export interface RuntimeUsage {
  * Which guards this run actually had in-band, and which the framework has to
  * cover itself.
  *
- * This is the field T111 reads, and the reason it survived a round of trimming:
- * with both target runtimes having full guard mechanisms, it looked redundant.
- * It is not, because enforcement is a property of the *installed version and the
+ * This is the field capability detection reads, and the reason it survived a
+ * round of trimming: with both target runtimes having full guard mechanisms,
+ * it looked redundant. It is not, because enforcement is a property of the
+ * *installed version and the
  * invocation*, not of the product — hooks are reported not to dispatch under
  * `codex exec` on some builds, and `codex exec` is what the orchestrator uses.
  * A run that silently enforced nothing while looking identical to one that
@@ -207,7 +209,7 @@ export interface RuntimeUsage {
 export interface RuntimeGuardReport {
   /** Guard capabilities that were actually active for this run. */
   readonly enforced: readonly RuntimeCapability[];
-  /** Guards the framework asked for that this run did not enforce. T111 must cover these post-hoc. */
+  /** Guards the framework asked for that this run did not enforce. Capability detection must cover these post-hoc. */
   readonly unenforced: readonly RuntimeCapability[];
   /** Why something is unenforced. Human-readable; ends up in the run log, so it has to say something a person can act on. */
   readonly reason?: string;
@@ -230,7 +232,7 @@ export interface RuntimeAgentResult {
   /** Anything the adapter wants a person to see in the log — a parse that fell back, a flag it had to drop. */
   readonly diagnostics: readonly string[];
   /**
-   * OFF10 M6 — the structured document a run returns **when a schema was
+   * The structured document a run returns **when a schema was
    * requested** of the adapter (`outputSchema` option) and the runtime delivered
    * one. Absent otherwise: undefined is "not requested / not returned", never an
    * empty placeholder. Neutral by design — neither vendor's envelope field name
@@ -304,8 +306,8 @@ export type SpawnSync = (
  *
  * Async throughout even though both current implementations are local and
  * synchronous. Not speculative generality: the framework reads `review.md` and
- * `security.md` back through this after every QA/security run, and T111 runs
- * `typecheck` through it — if a runtime is ever driven somewhere the
+ * `security.md` back through this after every QA/security run, and capability
+ * detection runs `typecheck` through it — if a runtime is ever driven somewhere the
  * orchestrator's own `fs` cannot see, a synchronous signature could not follow,
  * and every caller would have to change. One `await` now, or every call site
  * later.
@@ -324,16 +326,15 @@ export interface RuntimeAdapter {
   readonly id: string;
   readonly displayName: string;
   readonly binding: RuntimeBinding;
-  /** What this runtime claims it can do. A claim: T111 checks it against the installation. */
+  /** What this runtime claims it can do. A claim: capability detection checks it against the installation. */
   readonly capabilities: ReadonlySet<RuntimeCapability>;
   /**
    * Models reachable through this runtime.
    *
-   * This is what T112 routes on, and the reason that task needed re-thinking:
-   * with both runtimes having the same capabilities, "pick a runtime by
-   * capability" selects on nothing. The real reason to cross runtimes is that the
-   * model a role is configured for lives behind one of them — which is exactly
-   * T58's per-role model choice, extended one step.
+   * This is what runtime routing selects on: with both runtimes having the
+   * same capabilities, "pick a runtime by capability" selects on nothing. The
+   * real reason to cross runtimes is that the model a role is configured for
+   * lives behind one of them — an extension of per-role model choice.
    */
   readonly models: ReadonlySet<string>;
   readonly workspace: RuntimeWorkspace;

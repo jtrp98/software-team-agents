@@ -8,7 +8,7 @@ import type {
 } from "./runtimeAdapter.js";
 
 /**
- * `RuntimeWorkspace` over the local filesystem (T108).
+ * `RuntimeWorkspace` over the local filesystem.
  *
  * Shared by every adapter rather than owned by one: both runtimes this framework
  * targets run as a child process on the same machine, against the same working
@@ -99,9 +99,9 @@ export class LocalWorkspace implements RuntimeWorkspace {
     });
 
     // Node reports a timeout by returning normally with `error` set and a null
-    // status — the same shape T47 had to handle in the legacy executor. Reading it
-    // off `error.code` rather than inferring it from `status === null` keeps a
-    // killed-by-signal run distinguishable from a timed-out one.
+    // status. Reading it off `error.code` rather than inferring it from
+    // `status === null` keeps a killed-by-signal run distinguishable from a
+    // timed-out one.
     const timedOut = (proc.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
     // Appended, not used as a fallback. On a timeout Node returns an empty
     // `stderr` *and* an `error` — so treating the error as a fallback for a

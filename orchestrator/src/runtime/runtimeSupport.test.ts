@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { RUNTIME_IDS, RUNTIME_SUPPORT, SUPPORT_LEVELS, describeRuntimeSupport } from "./runtimeSupport.js";
+import { RUNTIME_IDS, RUNTIME_SUPPORT, SUPPORT_LEVELS } from "./runtimeSupport.js";
 import { codexCoverage, opencodeCoverageWithPlugin } from "../targetcli/guardSettings.js";
 
 /** This repo is its own fixture — the README table is the prose half of the claim. */
@@ -43,8 +43,8 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
   });
 
   /**
-   * T-V1-04's "ห้าม claim support เกิน implementation", pinned both ways:
-   * a `supported` claim may not carry a caveat about unverified enforcement,
+   * "Never claim support beyond implementation", pinned both ways: a
+   * `supported` claim may not carry a caveat about unverified enforcement,
    * and the two known placements cannot quietly rise.
    */
   it("never claims a level stronger than its own caveat allows", () => {
@@ -63,9 +63,9 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
   });
 
   /**
-   * T-V5-031 — a runtime's claim must quote the same guard-coverage verdict
-   * `T-V5-008`'s launch check consults (`guardCoverage()` in guardSettings.ts),
-   * not a hand-copied restatement that can drift from it.
+   * A runtime's claim must quote the same guard-coverage verdict the launch
+   * check consults (`guardCoverage()` in guardSettings.ts), not a hand-copied
+   * restatement that can drift from it.
    */
   it("quotes the exact guard-coverage detail T-V5-008 launch preflight consults", () => {
     expect(RUNTIME_SUPPORT.codex.claim).toContain(codexCoverage().detail);
@@ -74,8 +74,8 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
 
   /**
    * README's runtime table must state exactly this record's level per runtime —
-   * T-V1-04's "one status everywhere". A row naming its runtime but not its
-   * level (or naming a stronger one) fails here rather than misleading a user.
+   * one status everywhere. A row naming its runtime but not its level (or
+   * naming a stronger one) fails here rather than misleading a user.
    */
   it("agrees with the shipped README's runtime table, word for word", () => {
     const rank = Object.fromEntries(SUPPORT_LEVELS.map((l, i) => [l, i]));

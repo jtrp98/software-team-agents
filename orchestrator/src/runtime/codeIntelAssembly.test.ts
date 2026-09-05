@@ -4,9 +4,9 @@ import type { CodeIntelligenceProvider } from "../codeintel/provider.js";
 import { CODE_INTEL_ENV, CODE_INTEL_PIN_ENV, CODE_INTEL_BIN_ENV, codeIntelEnabled, codeIntelSlices, defaultProviderConfig } from "./codeIntelAssembly.js";
 
 /**
- * Phase 4 wiring contract: OFF (the default) is byte-identical to a pipeline
- * without the feature; every failure mode collapses to `[]`; ON appends the
- * evidence block carrying the source-verification directive.
+ * Wiring contract: OFF (the default) is byte-identical to a pipeline without
+ * the feature; every failure mode collapses to `[]`; ON appends the evidence
+ * block carrying the source-verification directive.
  */
 
 const INPUT = {

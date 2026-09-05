@@ -1045,9 +1045,8 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
     expect(runtime.requests).toEqual([]);
   });
 
-  // T-V5-040 — the support-level gate survives the routing collapse: it now
-  // guards the one automatic route (precedence 4, the named default runner),
-  // which is the only route nobody chose explicitly.
+  // The support-level gate guards the one automatic route (precedence 4, the
+  // named default runner), which is the only route nobody chose explicitly.
   it("refuses an automatic preview route before either adapter starts", async () => {
     const projectRoot = tmpProject();
     const preview = new MockRuntimeAdapter({ id: "codex" });
@@ -1081,9 +1080,8 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
     expect(preview.requests).toHaveLength(1);
   });
 
-  // T-V5-040 — the handoff candidate chain is gone: an unavailable route stops
-  // the stage rather than executing a different runtime, and the second
-  // registered adapter is never reached.
+  // An unavailable route stops the stage rather than executing a different
+  // runtime, and the second registered adapter is never reached.
   it("refuses an unavailable route without executing any other registered runtime", async () => {
     const projectRoot = tmpProject();
     fs.mkdirSync(path.join(projectRoot, ".sta"), { recursive: true });
@@ -1142,10 +1140,9 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
     expect(secondary.requests[0].model).toBe("o4-mini");
   });
 
-  // T-V5-040 — the legacy `model_routing` spelling and its
-  // unregistered-runtime-to-default fallback are removed. `routing.by_role`
-  // naming a runtime nobody registered now fails closed before any adapter
-  // starts, instead of quietly running somewhere the config did not ask for.
+  // `routing.by_role` naming a runtime nobody registered fails closed before
+  // any adapter starts, instead of quietly running somewhere the config did
+  // not ask for.
   it("fails closed, naming the unregistered runtime, when routing.by_role names one nobody registered", async () => {
     const projectRoot = tmpProject();
     fs.mkdirSync(path.join(projectRoot, ".sta"), { recursive: true });

@@ -4,7 +4,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 
 /**
- * T93 — project-local configuration, `.sta/config.yaml`.
+ * Project-local configuration, `.sta/config.yaml`.
  *
  * This is the one file `sta init` writes that is unambiguously the project's
  * own from the moment it's created: unlike every other templated file, an
@@ -15,7 +15,7 @@ import { z } from "zod";
  */
 export const ExecutionConfigSchema = z.object({
   /**
-   * T-V5-040 — ignored. Execution modes are removed: there is one route
+   * Ignored. Execution modes are removed: there is one route
    * (`--runtime`/`--model`, then `routing.by_role`, then the default runner
    * plus the role's frontmatter model). Declared here only so an existing
    * config carrying the key keeps loading; see `staConfig.test.ts`.
@@ -23,13 +23,13 @@ export const ExecutionConfigSchema = z.object({
   mode: z.enum(["single", "auto", "manual"]).optional(),
   runner: z.string().min(1).optional(),
   /**
-   * T-V5-040 — ignored. There is no handoff candidate chain any more: a route
+   * Ignored. There is no handoff candidate chain any more: a route
    * that cannot execute stops the task for a person. Declared for the same
    * load-compatibility reason as `mode`.
    */
   allow_handoff: z.boolean().optional(),
   /**
-   * T-V5-039 — ignored. The paid API runtime this key used to gate is retired
+   * Ignored. The paid API runtime this key used to gate is retired
    * (`--runtime` never offers it; production never constructs `ApiAdapter`),
    * so nothing reads this value any more. It stays declared here, still
    * boolean-typed and still round-tripped by `loadStaConfig`, purely so an
@@ -52,7 +52,7 @@ export interface EffectiveExecutionConfig {
 /**
  * Resolve execution defaults in memory without rewriting a user config.
  *
- * T-V5-040 — `mode` and `allow_handoff` are no longer resolved: nothing reads
+ * `mode` and `allow_handoff` are no longer resolved: nothing reads
  * them, so reporting an "effective" value for them would state a behaviour the
  * runtime does not have. `INERT_EXECUTION_KEYS` is what `status` names instead.
  */
@@ -64,7 +64,7 @@ export function effectiveExecutionConfig(config?: ExecutionConfig): EffectiveExe
   };
 }
 
-/** Keys a config may still carry that no code path reads (T-V5-039, T-V5-040). */
+/** Keys a config may still carry that no code path reads. */
 export const INERT_EXECUTION_KEYS = ["mode", "allow_handoff", "allow_paid_fallback"] as const;
 export const INERT_ROUTING_KEYS = ["strategy", "order"] as const;
 
@@ -86,7 +86,7 @@ export const StaConfigSchema = z.object({
   /** Overrides project.yaml's stack pointer for orchestrator purposes only, if a project needs to diverge. Unset = defer to project.yaml. */
   stack: z.string().min(1).optional(),
   /**
-   * T-V5-040 — ignored. The legacy per-role spelling is superseded by
+   * Ignored. The legacy per-role spelling is superseded by
    * `routing.by_role`, which is the one per-role override routing reads.
    * Declared here only so an existing config carrying it keeps loading; it no
    * longer selects a runtime or a model, and `status` reports it as inert.
@@ -103,7 +103,7 @@ export const StaConfigSchema = z.object({
    * spelling as well as a structured target; the latter avoids parsing when
    * both fields are configured explicitly.
    *
-   * T-V5-040 — `strategy` and `order` are ignored: the candidate-ordering
+   * `strategy` and `order` are ignored: the candidate-ordering
    * policy they drove is removed along with the handoff chain, so there is no
    * list to order. They stay declared for load compatibility only.
    */
@@ -119,7 +119,7 @@ export const StaConfigSchema = z.object({
             z.object({
               runtime: z.string().min(1),
               model: z.string().min(1).optional(),
-              /** Reasoning effort, forwarded alongside an explicit model where the runtime exposes a control (T-V4-CAST-001). */
+              /** Reasoning effort, forwarded alongside an explicit model where the runtime exposes a control. */
               effort: z.string().min(1).optional(),
             }),
           ]),
@@ -145,7 +145,7 @@ export const StaConfigSchema = z.object({
     .optional(),
   /** Post-hoc token ceiling for a task. Pre-spawn context caps are separate. */
   token_budget: z.number().int().positive().optional(),
-  /** T-V3TOK-100 warning thresholds, all measured in prompt characters. */
+  /** Warning thresholds, all measured in prompt characters. */
   context_budget: z
     .object({
       roles: z.record(z.string().min(1), z.number().int().positive()).optional(),
@@ -203,7 +203,7 @@ export function loadStaConfig(projectRoot: string): StaConfig {
   return result.data;
 }
 
-/** Non-throwing check, for T98's installation validation — a bad config is a reported problem, not a crash. */
+/** Non-throwing check, for installation validation — a bad config is a reported problem, not a crash. */
 export function inspectStaConfig(projectRoot: string, reader: StaConfigReader = "current"): StaConfigInspection {
   const target = staConfigPath(projectRoot);
   if (!fs.existsSync(target)) return { problems: [`${target} is missing`], warnings: [] };
@@ -228,7 +228,7 @@ export function inspectStaConfig(projectRoot: string, reader: StaConfigReader = 
   return { problems, warnings };
 }
 
-/** Non-throwing problem-only API retained for existing T98 callers. */
+/** Non-throwing problem-only API retained for existing callers. */
 export function checkStaConfig(projectRoot: string): string[] {
   return inspectStaConfig(projectRoot).problems;
 }

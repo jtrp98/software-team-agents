@@ -115,8 +115,8 @@ describe("resolveRuntimeRoute — V3 shape and compatibility", () => {
     expect(compact.selected).toMatchObject({ model: "gpt-5", runtime: expect.objectContaining({ id: "codex" }) });
   });
 
-  // T-V5-040 — the legacy `model_routing` spelling is removed. A config that
-  // still carries the key must load (staConfig keeps it declared) and must be
+  // The legacy `model_routing` spelling is removed. A config that still
+  // carries the key must load (staConfig keeps it declared) and must be
   // ignored by routing, not silently honoured as a second spelling.
   it("ignores a legacy model_routing key and routes at automatic precedence instead", () => {
     const result = route({
@@ -127,8 +127,8 @@ describe("resolveRuntimeRoute — V3 shape and compatibility", () => {
     expect(result.selected?.model).toBe("sonnet");
   });
 
-  // T-V5-040 — no compatibility fallback survives: an unregistered runtime is
-  // a closed route, never a quiet substitution of the default.
+  // No compatibility fallback survives: an unregistered runtime is a closed
+  // route, never a quiet substitution of the default.
   it("fails closed when routing.by_role names an unregistered runtime", () => {
     const result = route({
       config: { schema_version: 1, routing: { by_role: { "backend-engineer": "ghost:o4-mini" } } },
@@ -181,9 +181,9 @@ describe("resolveRuntimeRoute — V3 shape and compatibility", () => {
     expect(runtimeOnly.effort).toBeUndefined();
   });
 
-  // T-V5-040 — `routing.strategy` / `routing.order` (the old precedence level
-  // 3) are removed. A config carrying them still loads and the route falls
-  // through to the automatic default: no candidate list is built from them.
+  // `routing.strategy` / `routing.order` (the old precedence level 3) are
+  // removed. A config carrying them still loads and the route falls through
+  // to the automatic default: no candidate list is built from them.
   it("ignores routing.strategy/order and resolves one automatic candidate", () => {
     const result = route({
       config: {
@@ -202,8 +202,8 @@ describe("resolveRuntimeRoute — V3 shape and compatibility", () => {
 });
 
 describe("resolveRuntimeRoute — the surviving precedence table", () => {
-  // T-V5-040 — three sources, one route. Levels 3 (policy order) and 5
-  // (previous-failure walking) no longer exist, so the table is 1 > 2 > 4.
+  // Three sources, one route. Levels 3 (policy order) and 5 (previous-failure
+  // walking) no longer exist, so the table is 1 > 2 > 4.
   type Level = 1 | 2 | 4;
   const pairs: Array<[Level, Level]> = [[1, 2], [1, 4], [2, 4]];
 

@@ -85,9 +85,9 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
 }
 
 /**
- * The `RuntimeAdapter` for Codex (T110) — the second target `runtimeAdapter.ts`
- * (T108) was designed against, written to prove the interface is not
- * Claude-Code-shaped in disguise.
+ * The `RuntimeAdapter` for Codex — the second target `runtimeAdapter.ts` was
+ * designed against, written to prove the interface is not Claude-Code-shaped
+ * in disguise.
  *
  * **THIS IS A PARTIAL, ASSUMPTION-HEAVY IMPLEMENTATION — READ BEFORE TRUSTING IT.**
  *
@@ -95,12 +95,11 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
  * flag, exit-code convention, and capability claim below is either (a) publicly
  * documented Codex CLI behaviour as of this framework's knowledge cutoff, marked
  * with a confidence note, or (b) an explicit assumption mirroring
- * `claudeCodeAdapter.ts`'s shape where Codex's actual behaviour is unknown. The
- * user's own instruction for this task was explicit: mark this partial with
- * stated assumptions rather than making it look complete. T111 (capability
- * detection) is what turns "assumed" into "verified" once this runs against a
- * real installation — until then, treat every `capabilities` claim here as a
- * hypothesis, not a fact.
+ * `claudeCodeAdapter.ts`'s shape where Codex's actual behaviour is unknown.
+ * This is deliberately marked partial with stated assumptions rather than made
+ * to look complete. Capability detection is what turns "assumed" into
+ * "verified" once this runs against a real installation — until then, treat
+ * every `capabilities` claim here as a hypothesis, not a fact.
  *
  * WHAT IS REASONABLY CONFIDENT
  * - `codex exec "<prompt>"` runs one non-interactive turn and exits — the shape
@@ -115,9 +114,9 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
  *
  * WHAT IS NOT CLAIMED, AND WHY
  * - `NAMED_AGENTS` — Codex's *interactive* clients officially load custom agents
- *   from `.codex/agents/*.toml` (name/description/developer_instructions — see
- *   OFF02 source S6), and that `.toml` shape is exactly what this framework
- *   commits. What official docs do NOT document is an `exec`-level flag that
+ *   from `.codex/agents/*.toml` (name/description/developer_instructions), and
+ *   that `.toml` shape is exactly what this framework commits. What official
+ *   docs do NOT document is an `exec`-level flag that
  *   selects a named agent for a headless run. Until one is documented, the role
  *   definition is still read here and folded into the prompt via documented
  *   flags only — which is why the capability stays unclaimed. Do not flip this
@@ -132,8 +131,8 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
  *   believe it is enforced when it silently is not — the exact fail-open failure
  *   `policies/security.md` §5d warns about. `binding.guardConfigPath` is `null`
  *   for the same reason (see its doc-comment in `runtimeAdapter.ts`: `null` is
- *   the honest answer that forces T111 to cover guards post-hoc).
- * - `STRUCTURED_RESULT` / `COST_REPORTING` — since OFF10 the adapter speaks two
+ *   the honest answer that forces guards to be covered post-hoc).
+ * - `STRUCTURED_RESULT` / `COST_REPORTING` — the adapter speaks two
  *   documented machine surfaces: `--json` (JSONL event stream) and `-o/--output-
  *   last-message` (final message written to a file). Token/model values are
  *   taken from event payloads **only where actually present** — payload shapes
@@ -145,13 +144,12 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
  *   through this adapter as designed. This is the same reasoning
  *   `runtimeCapabilities.ts`'s header already anticipated for `codex exec`.
  * - `models` — no default catalogue is declared. Guessing exact model ids here
- *   would be exactly the "เดายิงมั่ว" (wild guessing) the user ruled out; a
- *   caller that knows its installation's reachable models passes them via
- *   `CodexAdapterOptions.models`. Left empty, `RuntimeRegistry.reaching()`
- *   correctly reports that this runtime reaches nothing, rather than a fabricated
- *   answer that reaches everything.
- * - `PARALLEL_EXECUTION` — same as `claudeCodeAdapter.ts`: reserved for T35,
- *   unclaimed by any adapter yet.
+ *   would be wild guessing; a caller that knows its installation's reachable
+ *   models passes them via `CodexAdapterOptions.models`. Left empty,
+ *   `RuntimeRegistry.reaching()` correctly reports that this runtime reaches
+ *   nothing, rather than a fabricated answer that reaches everything.
+ * - `PARALLEL_EXECUTION` — same as `claudeCodeAdapter.ts`: unclaimed by any
+ *   adapter yet.
  */
 
 const CODEX_CAPABILITIES: readonly RuntimeCapability[] = [
@@ -202,16 +200,15 @@ export class CodexAdapter implements RuntimeAdapter {
   readonly displayName = "Codex";
   readonly binding: RuntimeBinding = {
     // `.codex/agents/*.toml` is the officially documented custom-agent location
-    // and schema (OFF02 S6): required `name`, `description`,
-    // `developer_instructions`. Since OFF10 the adapter reads exactly that file
-    // (fixes the historical `.md` mismatch, OFF01 U1) and folds its
-    // developer_instructions into the prompt — still necessary because no
-    // exec-level named-agent selector is documented (see header).
+    // and schema: required `name`, `description`, `developer_instructions`.
+    // The adapter reads exactly that file and folds its developer_instructions
+    // into the prompt — still necessary because no exec-level named-agent
+    // selector is documented (see header).
     dir: ".codex",
     definitionPath: (role) => `.codex/agents/${role}.toml`,
     // No confirmed project-level guard-wiring file for Codex. `null` is the
     // deliberate, honest answer `runtimeAdapter.ts` documents for exactly this
-    // situation — T111 must cover these guards post-hoc, not assume them.
+    // situation — these guards must be covered post-hoc, not assumed.
     guardConfigPath: null,
   };
   readonly capabilities: ReadonlySet<RuntimeCapability> = new Set(CODEX_CAPABILITIES);
@@ -293,7 +290,7 @@ export class CodexAdapter implements RuntimeAdapter {
 
     const prompt = `${instructions}\n\n---\n\n${req.prompt}`;
 
-    // OFF10 M5: preflight write roots become sandbox-native --add-dir grants
+    // Preflight write roots become sandbox-native --add-dir grants
     // (OS-enforced) instead of living only in env the sandbox never read.
     const addDirs = addDirArgsFor(req.workRoots, req.autonomy);
 
@@ -329,8 +326,8 @@ export class CodexAdapter implements RuntimeAdapter {
         encoding: "utf8",
         timeout: req.timeoutMs ?? this.defaultTimeoutMs,
         maxBuffer: 64 * 1024 * 1024,
-        // T15's channel, same as `claudeCodeAdapter.ts` — set unconditionally
-        // since it costs nothing if the runtime never asks a guard to read it.
+        // Same channel as `claudeCodeAdapter.ts` — set unconditionally since it
+        // costs nothing if the runtime never asks a guard to read it.
         env: { ...process.env, ...req.env, AGENTCLAUDE_ROLE: req.role },
       });
     } catch (e) {
@@ -464,7 +461,7 @@ export function addDirArgsFor(
   return args;
 }
 
-/** Read-only roots that M5 could not grant natively — surfaced, not swallowed. */
+/** Read-only roots that could not be granted natively — surfaced, not swallowed. */
 export function unreadableWorkRootCaveat(workRoots: readonly RuntimeWorkRoot[] | undefined, autonomy: RuntimeAutonomy): string | null {
   if (!workRoots || (autonomy !== "propose" && autonomy !== "edit")) return null;
   const readOnly = workRoots.filter((r) => r.access === "read");

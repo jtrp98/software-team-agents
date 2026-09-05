@@ -133,7 +133,7 @@ export function instructionPathClass(relativePath: string): InstructionPathClass
   return INSTRUCTION_PATH_CLASSES.find((entry) => entry.matches(candidate));
 }
 
-/** Matches the static gate's bounded tree-walk exclusions. T-V5-022: .agent-team backups are not instruction surface. */
+/** Matches the static gate's bounded tree-walk exclusions. .agent-team backups are not instruction surface. */
 export const INSTRUCTION_SCAN_SKIP_DIRS = new Set(["node_modules", ".git", "dist", ".workflow", ".next", "build", ".agent-team"]);
 
 function installedFrameworkHookCount(targetRoot: string): number {
@@ -177,9 +177,8 @@ function containsOneBootstrapBlock(file: string): boolean {
 /**
  * Removes the Framework-managed bootstrap block from an otherwise
  * project-owned file (e.g. a Target's `CLAUDE.md`). What is left is the
- * project's own content, if any. T-V5-025: the block itself is
- * Framework-authored bytes and must never be treated as project content by
- * an importer.
+ * project's own content, if any. The block itself is Framework-authored
+ * bytes and must never be treated as project content by an importer.
  */
 export function stripFrameworkManagedBlock(text: string): string {
   const openIndex = text.indexOf(BOOTSTRAP_BLOCK_OPEN);
@@ -220,7 +219,7 @@ export function detectInstructionSurface(options: {
         frameworkPaths.has(relative) ||
         (pathClass.precedence === "project-owned-with-framework-block" && containsOneBootstrapBlock(absolute));
 
-      // T-V5-022: resolve owner from manifest membership with directory prefix as a fallback only.
+      // Resolve owner from manifest membership with directory prefix as a fallback only.
       // If the manifest was provided and does not claim this file, it is project-owned (target),
       // not framework-managed.
       let owner: RepositoryOwner = pathClass.owner;
@@ -269,7 +268,7 @@ export function ownerOfPath(relativePath: string): RepositoryOwner {
 
 /**
  * Whether the content at `relativePath` is authored by the Framework rather
- * than by a project. T-V5-025: the adoption importer must refuse these paths
+ * than by a project. The adoption importer must refuse these paths
  * (`policies/**`, `.claude/agents/**`, `contracts/**`, `workflows/**`,
  * `stacks/**`, `layout.yaml` and siblings) instead of duplicating them into a
  * project's knowledge graph. Reuses the two classifications this module

@@ -141,7 +141,8 @@ describe("detectRuntimeCapabilities — claude-code deep guard check", () => {
     expect(byCapability[RuntimeCapability.PER_AGENT_EXIT_GUARD].verified).toBe(true);
     // This project's own settings.json wires no PostToolUse hook (CLAUDE.md's
     // hook table has none) — ClaudeCodeAdapter still claims POST_TOOL_GUARD as
-    // a product capability, so this is exactly the gap T111 exists to surface.
+    // a product capability, so this is exactly the gap capability detection
+    // exists to surface.
     expect(byCapability[RuntimeCapability.POST_TOOL_GUARD].verified).toBe(false);
     expect(report.missingRequired).not.toContain(RuntimeCapability.PRE_TOOL_GUARD);
   });

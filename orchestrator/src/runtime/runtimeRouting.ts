@@ -12,15 +12,14 @@ import { resolveTierBinding } from "./tierRouting.js";
 import type { ModelTierId, ModelTiers } from "./modelTiers.js";
 
 /**
- * T-V5-040 — one explicit route.
+ * One explicit route.
  *
  * Three sources, in this order, and nothing else: the `--runtime`/`--model`
  * flags (level 1), an optional per-role `routing.by_role` entry (level 2), and
  * the named default runtime plus the role's frontmatter `model:` (level 4). The
  * level numbers are the historical ones so `routing_basis` in existing run logs
- * keeps its meaning; levels 3 (policy order) and 5 (previous-failure walking)
- * are gone along with execution modes, the handoff candidate chain and the
- * legacy `model_routing` spelling.
+ * keeps its meaning; levels 3 and 5 are gone along with execution modes, the
+ * handoff candidate chain and the legacy `model_routing` spelling.
  *
  * A route resolves at most ONE candidate. When that candidate may not execute,
  * the route fails closed with the reason — it never substitutes another runtime.
@@ -30,9 +29,9 @@ export type RoutingPrecedenceLevel = 1 | 2 | 4;
 export interface RuntimeRouteCandidate {
   readonly runtime: RuntimeAdapter;
   readonly model?: string;
-  /** True when `model` came from an operator-visible override (CLI flag / `routing.by_role`), not frontmatter (T-V4-CAST-001). */
+  /** True when `model` came from an operator-visible override (CLI flag / `routing.by_role`), not frontmatter. */
   readonly modelExplicit?: boolean;
-  /** Reasoning effort named alongside an explicit model in `routing.by_role` (T-V4-CAST-001). */
+  /** Reasoning effort named alongside an explicit model in `routing.by_role`. */
   readonly effort?: string;
   readonly reason: string;
 }
@@ -66,7 +65,7 @@ export interface RuntimeRoute {
   readonly runtime?: RuntimeAdapter;
   readonly model?: string;
   readonly requested: RequestedRuntimeRoute;
-  /** Reasoning effort resolved for the selected candidate, when one was named explicitly (T-V4-CAST-001). */
+  /** Reasoning effort resolved for the selected candidate, when one was named explicitly. */
   readonly effort?: string;
   readonly precedenceLevel: RoutingPrecedenceLevel;
   readonly diagnostics: readonly string[];
@@ -216,7 +215,7 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     precedenceLevel = 4;
     const runtimeId = config?.execution?.runner ?? defaultRuntimeId;
     // `modelExplicit: false` is stated, not omitted: a frontmatter default is a
-    // reported non-override (T-V4-CAST-001), and adapters read the field.
+    // reported non-override, and adapters read the field.
     spec = { runtimeId, model: frontmatterModel, modelExplicit: false, reason: automaticReason(opts, runtimeId) };
   }
 

@@ -14,11 +14,6 @@
  * those templates emit. What that buys is a failure mode worth having — a
  * template that drifts makes a reader find nothing, loudly, rather than find
  * something subtly wrong.
- *
- * T-V5-041 moved this module out of `adoption/` (which was removed with the
- * completed legacy import) and dropped the eight helpers only the importers
- * used: `sectionBody`, `tableRows`, `allTableRows`, `frontmatter`, `commaList`,
- * `firstH1`, `firstParagraph`, `slug`.
  */
 
 export interface MarkdownSection {
@@ -96,7 +91,7 @@ export function firstTable(text: string): MarkdownTable {
   return { header, rows };
 }
 
-/** Every `- [ ]` / `- [x]` line, with whether it was ticked — the legacy `plan.md` shape T52 replaced. */
+/** Every `- [ ]` / `- [x]` line, with whether it was ticked. */
 export function checkboxLines(text: string): Array<{ done: boolean; text: string }> {
   const out: Array<{ done: boolean; text: string }> = [];
   for (const line of text.split(/\r?\n/)) {

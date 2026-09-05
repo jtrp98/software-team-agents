@@ -3,15 +3,9 @@ import * as path from "node:path";
 import type { TemplateFileEntry } from "./templateManifest.js";
 
 /**
- * T94 — this manifest's own shape version, bumped only when `.sta/manifest.json`'s structure changes in a way T96 must migrate.
- *
- * T-V5-038 — the installer that used to write this file (`sta init`/`sta
- * upgrade`) is gone; `.sta/manifest.json` is now legacy, read-only state.
- * This module survives only because `sta migrate` (T96, out of scope for
- * T-V5-038) still needs to read and rewrite an existing project's recorded
- * `schema_version` — `isInstalled` and `checkInstallManifest` (the ajv schema
- * check) existed solely for the now-deleted installer/validator and were
- * removed with it.
+ * `.sta/manifest.json` is legacy, read-only state — nothing installs to it anymore.
+ * This module survives only because `sta migrate` still needs to read and rewrite
+ * an existing project's recorded `schema_version`. Bump this when that structure changes.
  */
 export const CURRENT_STA_SCHEMA_VERSION = 1;
 

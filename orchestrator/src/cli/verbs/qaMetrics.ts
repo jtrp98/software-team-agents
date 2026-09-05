@@ -1,4 +1,4 @@
-/** `qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]` — QA07's cost/effectiveness picture off the run log. */
+/** `qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]` — QA's cost/effectiveness picture off the run log. */
 export async function runQaMetricsVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
   const stateDb = flagValue(rest, "--state-db");

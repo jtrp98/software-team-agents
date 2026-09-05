@@ -8,23 +8,16 @@ import { defaultProjectRoot } from "../agents/agentContract.js";
 
 /**
  * Reads `repos.yaml` — an optional file naming the separate git repos a
- * single project's pipeline spans (T42): a frontend repo, a backend repo, an
- * infra repo, each written to by a different subset of pipeline stages.
+ * single project's pipeline spans (frontend/backend/infra), each written to
+ * by a different subset of pipeline stages. Docs (`_docs/`, `.claude/`,
+ * `design.md`, `status.md`) still live in one project root; only
+ * `backend-engineer`/`frontend-engineer` may need `claude` running in a
+ * different working directory to commit code where it belongs.
+ * `runtime/runtimeExecutor.ts`'s `stageRoots` option acts on what this module
+ * reads and validates.
  *
- * This is a different question from T41's `workspace.yaml`. A workspace
- * groups several *independent* projects, each with its own full doc set and
- * pipeline, so a person can see them together. A repo map describes *one*
- * project whose *own* pipeline's stages don't all write into the same
- * checkout — `_docs/`, `.claude/`, `design.md`, `status.md` still live in one
- * place (the project root every other module already resolves against), but
- * `backend-engineer` and `frontend-engineer` may need to run `claude` inside
- * two different working directories to actually commit code where it
- * belongs. `runtime/runtimeExecutor.ts`'s `stageRoots` option is what acts on
- * this — this module only reads and validates the file.
- *
- * Absence is not an error. Most projects keep everything in one repo, the
- * same as before T42 — `checkRepoMap()` reports that as a note, not a
- * problem, the same way `checkWorkspace()` (T41) does for its own file.
+ * Absence is not an error: most projects keep everything in one repo, and
+ * `checkRepoMap()` reports that as a note, not a problem.
  */
 
 export interface RepoEntry {
@@ -130,19 +123,17 @@ export interface RepoMapCheckResult {
 }
 
 /**
- * The check `--check-repos` runs. No file at all is not a problem — most
- * projects keep everything in one repo. A file that exists has to actually
- * work: parse, every repo name unique, every root a real directory, and no
- * stage claimed by two repos at once (that would make "where does this
- * stage's code land" ambiguous, which is the one thing this file exists to
- * settle).
+ * The check `--check-repos` runs. No file at all is not a problem. A file
+ * that exists has to actually work: parse, every repo name unique, every
+ * root a real directory, and no stage claimed by two repos at once (that
+ * would make "where does this stage's code land" ambiguous).
  */
 export function checkRepoMap(projectRoot: string = defaultProjectRoot()): RepoMapCheckResult {
   if (!hasRepoMap(projectRoot)) {
     return {
       ok: true,
       problems: [],
-      notes: ["no repos.yaml — every stage writes into the project root, the same repo (T42)."],
+      notes: ["no repos.yaml — every stage writes into the project root, the same repo."],
     };
   }
 

@@ -26,7 +26,7 @@ describe("gitDiffSummary", () => {
   });
 });
 
-describe("T-V4-CAST-006 diff-bound verification", () => {
+describe("diff-bound verification", () => {
   function fixture(): string {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-verification-fingerprint-"));
     execFileSync("git", ["init"], { cwd: root });

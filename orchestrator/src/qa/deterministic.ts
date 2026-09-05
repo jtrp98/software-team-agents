@@ -1,5 +1,5 @@
 /**
- * QA03 — Deterministic verification before LLM QA.
+ * Deterministic verification before LLM QA.
  *
  * The expensive model must not be the first thing to discover a broken
  * typecheck. Every check a tool can run runs first, in a fixed order, and a
@@ -50,7 +50,7 @@ export interface DeterministicVerification {
 export interface DeterministicVerificationOptions {
   /** RuntimeTask.required_verification levels. Omitted preserves the full historical order. */
   levels?: readonly string[];
-  /** V3 defaults to warning-only; enforcement requires an explicit policy value. */
+  /** Defaults to warning-only; enforcement requires an explicit policy value. */
   enforcement?: "warn" | "enforce";
 }
 

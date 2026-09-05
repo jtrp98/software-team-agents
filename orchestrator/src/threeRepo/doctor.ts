@@ -17,7 +17,7 @@ import { loadStaConfig } from "../packaging/staConfig.js";
 import { compareTemplateSnapshot } from "../packaging/templateBuilder.js";
 
 /**
- * `sta doctor` (T166) — read-only diagnostics for one machine's installation.
+ * `sta doctor` — read-only diagnostics for one machine's installation.
  *
  * Every check answers the three questions an operator has when something will
  * not run: WHAT is broken here, WHY (the underlying message), and HOW to fix
@@ -67,8 +67,8 @@ export function exitCodeFor(report: DoctorReport): number {
 export interface DoctorOptions {
   /**
    * Project whose installation metadata, .claude and state store are examined.
-   * T-V5-005: absent = the repository the user is standing in (process.cwd());
-   * when that is genuinely not an initialised workspace, the project-scoped
+   * Absent = the repository the user is standing in (process.cwd()); when
+   * that is genuinely not an initialised workspace, the project-scoped
    * checks report skipped-by-scope rather than guessed.
    */
   projectRoot?: string;
@@ -77,9 +77,9 @@ export interface DoctorOptions {
   /** Framework template root override for deterministic fixture diagnostics. */
   templatesDir?: string;
   /**
-   * Injectable so tests never spawn the real runtime probe — and, since the
-   * capability-contract work (OFF04), the *only* way a runtime is probed at all:
-   * the composition root (cli.ts) wires whichever adapter the run would use.
+   * Injectable so tests never spawn the real runtime probe — and the *only*
+   * way a runtime is probed at all: the composition root (cli.ts) wires
+   * whichever adapter the run would use.
    * A doctor that constructed its own adapter would make a core module name a
    * specific provider, which is the coupling `runtimeAdapter.ts` exists to
    * prevent. Absent probe ⇒ WARNING, never a guess.
@@ -101,7 +101,7 @@ export interface DoctorOptions {
 
 export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorReport> {
   const checks: DoctorCheck[] = [];
-  // T-V5-005 — `sta doctor` with no flags diagnoses the repository the user is
+  // `sta doctor` with no flags diagnoses the repository the user is
   // standing in. An explicit --project-root stays an override, not a
   // requirement. When the resulting root is genuinely not an initialised
   // workspace, the project-scoped checks say so instead of failing on absence.
@@ -121,7 +121,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
   let instructionSurface: InstructionSurfaceEntry[] = [];
   const configureFix = "run: sta configure knowledge-root <path>";
 
-  // T-V5-014 — only a Framework checkout owns both template sources and the
+  // Only a Framework checkout owns both template sources and the
   // built snapshot. Downstream workspaces stay silent; doctor never rebuilds.
   const frameworkCheckout =
     fs.existsSync(path.join(projectRoot, ".git")) &&
@@ -277,10 +277,10 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
   checks.push(
     await (async (): Promise<DoctorCheck> => {
       const name = "Runtime capabilities (claims vs this install)";
-      // T-V5-005: the previous remediation here was `sta init --force`, which in
-      // a BA workspace materialises the full DEV payload — the destructive
-      // legacy-installer habit this check must never prescribe. The sync
-      // lifecycle restores bindings and guard wiring without touching roles.
+      // `sta init --force` is never the remediation here: in a BA workspace it
+      // materialises the full DEV payload — the destructive legacy-installer
+      // habit this check must never prescribe. The sync lifecycle restores
+      // bindings and guard wiring without touching roles.
       const fix = "run: software-team-agents sync to restore bindings and guard wiring";
       try {
         if (!options.capabilities) {
@@ -414,11 +414,10 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
     }
     const manifestPaths = isTargetInitialized(projectRoot) ? frameworkPaths : undefined;
     instructionSurface = detectInstructionSurface({ targetRoot: projectRoot, frameworkPaths: manifestPaths });
-    // T-V5-005 — these files' bytes are managed by no command (they are npm
-    // housekeeping that exists only beside the OpenCode plugin), so prescribing
-    // `sync` for them names a recovery that cannot apply. The ownership
-    // classification itself is T-V5-022's; until then the warning stays, the
-    // dead fix text does not.
+    // These files' bytes are managed by no command (they are npm housekeeping
+    // that exists only beside the OpenCode plugin), so prescribing `sync` for
+    // them names a recovery that cannot apply — the warning stays, the dead
+    // fix text does not.
     const managedByNoCommand = (entry: InstructionSurfaceEntry): boolean =>
       entry.precedence === "framework-managed" && ["package.json", "package-lock.json", ".gitignore"].includes(path.posix.basename(entry.path));
     for (const entry of instructionSurface) {

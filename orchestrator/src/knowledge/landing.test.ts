@@ -8,10 +8,10 @@ import { pathFor, writeKnowledgeItem } from "./knowledgeStore.js";
 import { applyLanding, classifyLanding, emptyLanded, landItem } from "./landing.js";
 
 /**
- * The rule two writers share (bootstrap's discovery, V1.3's adoption) and a
- * third only previews (T87's dry run). The property worth locking is not any
- * one verdict — it is that the preview and the apply are the same decision, so
- * a dry run cannot promise something the apply does not do.
+ * The rule two writers share (bootstrap's discovery, adoption) and a third
+ * only previews (dry run). The property worth locking is not any one verdict
+ * — it is that the preview and the apply are the same decision, so a dry run
+ * cannot promise something the apply does not do.
  */
 
 const NOW = "2026-08-20T09:00:00Z";

@@ -9,18 +9,16 @@ import type { PersistedTask, TaskStore } from "./taskStore.js";
 /**
  * Generates `.workflow/state.yaml` from the store.
  *
- * TASKS.md T02 wants a YAML file a person can open and understand; T50/T51
- * want runtime state out of hand-maintained files. Both hold at once when the
- * YAML is a *view*: the state database stays the thing that is written to and
- * recovered from, and this file is overwritten from it, never read back. The
- * header says so in the file itself, because a generated file that does not
- * announce it will eventually be edited by someone.
+ * A human-readable YAML file and runtime state that isn't hand-maintained both
+ * hold at once when the YAML is a *view*: the state database stays the thing
+ * that is written to and recovered from, and this file is overwritten from it,
+ * never read back. The header says so in the file itself, because a generated
+ * file that does not announce it will eventually be edited by someone.
  *
  * Every document is checked against `schemas/state-view.schema.json` before it
- * is written (T02's contract half). The emitter below is hand-rolled rather
- * than a YAML dependency — the shape it emits is fixed, small, and now
- * schema-checked, so a parser would add a dependency without adding a
- * guarantee.
+ * is written. The emitter below is hand-rolled rather than a YAML dependency —
+ * the shape it emits is fixed, small, and now schema-checked, so a parser
+ * would add a dependency without adding a guarantee.
  */
 
 const STATE_VIEW_SCHEMA_VERSION = 1;
@@ -42,9 +40,8 @@ export interface StateViewOptions {
   now?: number;
   /**
    * The most recently finished run for a task. It lives in the run log, not on
-   * the task row, so the caller that has the store supplies it — T02's
-   * `previous: {agent, result}` is the one field the task state alone cannot
-   * answer.
+   * the task row, so the caller that has the store supplies it — `previous:
+   * {agent, result}` is the one field the task state alone cannot answer.
    */
   previousRun?: (taskId: string) => PreviousRun | null;
 }
@@ -122,9 +119,9 @@ export function taskToYamlValue(
     approvals: {
       design_approved: task.gateContext.designApproved ?? false,
       human_approved: task.gateContext.humanApproved ?? false,
-      // The ledger (T08). The booleans above are derived from it; this is what
-      // records that a decision was *made* — including a "no", which the
-      // booleans alone cannot distinguish from "not asked yet".
+      // The booleans above are derived from this ledger; this is what records
+      // that a decision was *made* — including a "no", which the booleans
+      // alone cannot distinguish from "not asked yet".
       ledger: task.approvals.map((a) => ({
         type: a.type,
         required: a.required,

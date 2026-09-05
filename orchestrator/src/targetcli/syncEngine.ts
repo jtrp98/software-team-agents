@@ -35,12 +35,11 @@ import { planTargetProfile } from "./targetProfile.js";
 import { renderStackDigest, STACK_DIGEST_RELATIVE_PATH } from "../profile/stackDigest.js";
 
 /**
- * T-TARGET-04 / T-TARGET-07 / T-TARGET-08 — Framework → Target sync.
- *
- * One direction, always: the Framework (`templates/`, built by build:templates)
- * is canonical; the Target receives. The engine diffs three hashes per managed
- * path — what the Framework ships now, what it shipped when this Target last
- * synced (the manifest's pristine hash), and what is actually on disk:
+ * Framework → Target sync, one direction always: the Framework (`templates/`,
+ * built by build:templates) is canonical; the Target receives. The engine
+ * diffs three hashes per managed path — what the Framework ships now, what it
+ * shipped when this Target last synced (the manifest's pristine hash), and
+ * what is actually on disk:
  *
  *   disk == shipped            already up to date          -> unchanged
  *   disk == pristine           untouched since last sync   -> update (backup first)
@@ -52,13 +51,12 @@ import { renderStackDigest, STACK_DIGEST_RELATIVE_PATH } from "../profile/stackD
  * config's override list are skipped outright — ownership moved to the user.
  *
  * `.codex/agents/<role>.toml` and `.opencode/agent/<role>.md` renderings are
- * generated from the just-synced `.claude/agents/<role>.md` sources (OFF10 M2:
- * one role definition, several renderings) rather than shipped as payload —
- * generated files are owned by declaring their derivation, and they can never
- * drift from their source.
+ * generated from the just-synced `.claude/agents/<role>.md` sources rather
+ * than shipped as payload — generated files are owned by declaring their
+ * derivation, and they can never drift from their source.
  */
 
-/** The generated-from-.claude rendering targets, with their sync-log wording. Declared in bindingGenerator (`BINDING_RENDERINGS`) so `checkBindings` verifies exactly what this engine generates. */
+/** Rendering targets generated from `.claude/agents`, declared in bindingGenerator (`BINDING_RENDERINGS`) so `checkBindings` verifies exactly what this engine generates. */
 const DERIVED_RENDERINGS = BINDING_RENDERINGS.filter(isAgentBindingRendering).map((spec) => ({ ...spec, note: "generated from .claude/agents" }));
 export const AGENTS_MD_PATH = "AGENTS.md";
 /** Same for the prompt-shortcut renderings (`.opencode/commands`, `.agents/skills`), generated from `.claude/commands`. */
@@ -83,9 +81,9 @@ export interface SyncConflict {
    * Target already owns this path; stale-modified: a dropped file carries
    * edits; malformed-framework-block: marker corruption that no force mode may
    * guess at; unmergeable-settings: project JSON cannot be safely merged;
-   * roster-drift (T-WG2): an agent-prompt file on disk whose name
-   * belongs to the OTHER workspace role — never legitimate here, regardless of
-   * how it got there, so it is never treated as an ordinary foreign file.
+   * roster-drift: an agent-prompt file on disk whose name belongs to the
+   * OTHER workspace role — never legitimate here regardless of how it got
+   * there, so it is never treated as an ordinary foreign file.
    */
   kind: "user-modified" | "untracked-file" | "stale-modified" | "roster-drift" | "malformed-framework-block" | "unmergeable-settings";
   detail: string;
@@ -169,9 +167,9 @@ function planPayloadFiles(
       continue;
     }
     const currentHash = hashFile(dest);
-    // A DEV-workspace rendering replaces the shipped bytes at the same managed path:
-    // compare against what sync actually writes, so a rendered workspace is
-    // "unchanged" on re-sync instead of perpetually "user-modified".
+    // A DEV-workspace rendering replaces the shipped bytes at this path, so compare
+    // against what sync actually writes — otherwise a rendered workspace would show
+    // as "user-modified" forever instead of "unchanged" on re-sync.
     const derivedBytes = derivedContent?.get(file.path);
     if (file.path === AGENTS_MD_PATH && derivedBytes !== undefined && confirmAgentsPointer && isProvableStaleAgentsDuplicate(targetRoot)) {
       planned.push({ entry: { action: currentHash === sha256Of(derivedBytes) ? "unchanged" : "update", path: file.path, note: "explicitly confirmed reduction of a provable CLAUDE.md duplicate" } });
@@ -273,7 +271,7 @@ function planStaleFiles(
       continue;
     }
     if (relPath.startsWith(".codex/") || relPath.startsWith(".opencode/agent/") || relPath.startsWith(".opencode/commands/") || relPath.startsWith(".agents/skills/")) continue; // derived renderings follow their sources automatically
-    if (derivedContent?.has(relPath)) continue; // T-WG7 — regenerated below from the live binding, never stale
+    if (derivedContent?.has(relPath)) continue; // regenerated below from the live binding, never stale
     if (overrides.has(relPath)) {
       planned.push({ entry: { action: "override", path: relPath, note: "dropped by the Framework, kept because the project claimed it" } });
       continue;
@@ -290,50 +288,18 @@ function planStaleFiles(
 }
 
 /**
- * T-V5-006 — the managed `.gitignore` block. The framework writes the
- * version-control decision for its machine-local paths (`.workflow/`,
- * `.agent-team/backups/`) into a marked block of the workspace's `.gitignore`
- * — the same marker-block ownership model CLAUDE.md/AGENTS.md already use, so
- * sync updates it, conflicts surface like any other edited block, and status
- * plans it like any other managed contribution. The file itself stays
- * project-owned: everything outside the markers is never read for planning and
- * never written.
+ * The managed `.gitignore` block. The framework writes the version-control
+ * decision for its machine-local paths (`.workflow/`, `.agent-team/backups/`)
+ * into a marked block of the workspace's `.gitignore` — the same marker-block
+ * ownership model CLAUDE.md/AGENTS.md already use, so sync updates it,
+ * conflicts surface like any other edited block, and status plans it like any
+ * other managed contribution. The file itself stays project-owned: everything
+ * outside the markers is never read for planning and never written.
  *
  * A path the project already ignores is not listed again — the block says so
  * in a comment instead. Base entries live in {@link MANAGED_GITIGNORE_PATHS}
- * (knowledgeRender.ts); T-V5-018 adds the derived rendering directories from
-    if (relPath.startsWith(".codex/") || relPath.startsWith(".opencode/agent/") || relPath.startsWith(".opencode/commands/") || relPath.startsWith(".agents/skills/")) continue; // derived renderings follow their sources automatically
-    if (derivedContent?.has(relPath)) continue; // T-WG7 — regenerated below from the live binding, never stale
-    if (overrides.has(relPath)) {
-      planned.push({ entry: { action: "override", path: relPath, note: "dropped by the Framework, kept because the project claimed it" } });
-      continue;
-    }
-    const abs = path.join(targetRoot, relPath);
-    if (!fs.existsSync(abs)) continue; // gone already — nothing to clean
-    if (hashFile(abs) === tracked.sha256) {
-      planned.push({ entry: { action: "remove-stale", path: relPath }, remove: true });
-    } else {
-      planned.push({ conflict: { path: relPath, kind: "stale-modified", detail: "the Framework no longer manages this file, but the local copy has been edited" } });
-    }
-  }
-  return planned;
-}
-
-/**
- * T-V5-006 — the managed `.gitignore` block. The framework writes the
- * version-control decision for its machine-local paths (`.workflow/`,
- * `.agent-team/backups/`) into a marked block of the workspace's `.gitignore`
- * — the same marker-block ownership model CLAUDE.md/AGENTS.md already use, so
- * sync updates it, conflicts surface like any other edited block, and status
- * plans it like any other managed contribution. The file itself stays
- * project-owned: everything outside the markers is never read for planning and
- * never written.
- *
- * A path the project already ignores is not listed again — the block says so
- * in a comment instead. Base entries live in {@link MANAGED_GITIGNORE_PATHS}
- * (knowledgeRender.ts); T-V5-018 adds the derived rendering directories from
- * the rendering declarations, which is safe exactly because every sync
- * regenerates them (verified by `--check-bindings`).
+ * (knowledgeRender.ts), plus the derived rendering directories, which is safe
+ * exactly because every sync regenerates them (verified by `--check-bindings`).
  */
 const GITIGNORE_BLOCK_ENTRIES: readonly string[] = [...MANAGED_GITIGNORE_PATHS, ...derivedRenderingIgnorePaths()];
 
@@ -449,16 +415,15 @@ const AGENT_PROMPT_DIRS: readonly { dir: string; ext: string }[] = [
 ];
 
 /**
- * T-WG2 — roster drift: an agent-prompt file physically present in a
- * role-declared workspace whose name belongs to the OTHER workspace role. This is
- * distinct from an ordinary foreign file: `planPayloadFiles`/`planStaleFiles`
- * only ever look at paths the CURRENT role's filtered manifest knows about
- * (`effectiveTemplateManifest`) or that this Target's own history tracked —
- * a hand-copied prompt that was never either is invisible to both, which is
- * exactly how the sb-compass incident's stray BA prompts survived undetected
- * (F2 in workspace-guardrails-TASKS.md). A name that isn't a known agent at
- * all (unrelated stray file) is deliberately left alone here — the existing
- * foreign-file policy already covers it.
+ * Roster drift: an agent-prompt file physically present in a role-declared
+ * workspace whose name belongs to the OTHER workspace role. This is distinct
+ * from an ordinary foreign file: `planPayloadFiles`/`planStaleFiles` only ever
+ * look at paths the CURRENT role's filtered manifest knows about
+ * (`effectiveTemplateManifest`) or that this Target's own history tracked — a
+ * hand-copied prompt that was never either is invisible to both, which is how
+ * stray cross-role prompts have survived undetected before. A name that isn't
+ * a known agent at all (unrelated stray file) is deliberately left alone here
+ * — the existing foreign-file policy already covers it.
  */
 export function detectRosterDrift(options: { targetRoot: string; templatesDir: string; role: WorkspaceRole }): SyncConflict[] {
   const fullManifest = readTemplateManifest(options.templatesDir);
@@ -515,10 +480,8 @@ function overrideSet(config: TargetConfig | undefined, targetRoot?: string, cand
  * .claude/settings.json), so sync skips it and reports it, and a workspace is
  * not broken for having one.
  *
- * This lives in one place on purpose: the rule was previously written inline in
- * `runTargetSync` and *not* applied by `workspacePreflight`, so `sync` accepted
- * a workspace that `dev` then refused to launch — the same workspace, two
- * verdicts. Every caller that gates on conflicts routes through here.
+ * This lives in one place on purpose, so every caller that gates on conflicts
+ * gets the same verdict for the same workspace.
  */
 export const isBlockingConflict = (conflict: SyncConflict): boolean => conflict.kind !== "untracked-file";
 
@@ -560,12 +523,12 @@ export interface PlanSyncOptions {
   /** Existing manifest; absent = first sync (everything is either new or untracked). */
   manifest?: TargetManifest;
   config?: TargetConfig;
-  /** Role asset profile (T-ROLE-09/10/11): only matching payload paths are planned, tracked, and cleaned. Absent = full payload. */
+  /** Role asset profile: only matching payload paths are planned, tracked, and cleaned. Absent = full payload. */
   include?: (relPath: string) => boolean;
-  /** T-WG2 — when supplied, plan also flags any on-disk agent-prompt file belonging to the other workspace role (see `detectRosterDrift`). Absent = no roster-drift scan (legacy/no-role workspaces keep prior behaviour exactly). */
+  /** When supplied, plan also flags any on-disk agent-prompt file belonging to the other workspace role (see `detectRosterDrift`). Absent = no roster-drift scan (legacy/no-role workspaces keep prior behaviour exactly). */
   role?: WorkspaceRole;
   /**
-   * T-WG7 — final bytes sync writes at otherwise-shipped paths (the DEV workspace's
+   * Final bytes sync writes at otherwise-shipped paths (the DEV workspace's
    * rendered CLAUDE.md). Planning compares against these so a rendered
    * workspace is recognized as current; apply writes the mapped bytes instead
    * of copying the template file.
@@ -631,9 +594,9 @@ export interface ApplySyncOptions extends PlanSyncOptions {
 }
 
 /**
- * T-WG7/T-V3-06 — workspace-role-derived bytes this sync would write. The same
- * CLAUDE.md renderer serves DEV and BA; the Knowledge include remains DEV-only,
- * and a DEV stack digest is rendered from the resolved Target profile.
+ * Workspace-role-derived bytes this sync would write. The same CLAUDE.md
+ * renderer serves DEV and BA; the Knowledge include remains DEV-only, and a
+ * DEV stack digest is rendered from the resolved Target profile.
  */
 export function devDerivedContent(options: {
   targetRoot: string;
@@ -653,8 +616,6 @@ export function devDerivedContent(options: {
     });
   } else {
     try {
-      // T-V5-042 — was `configTargetPath: config.target?.path`, the only
-      // mechanism left; `target_id` is now the one that resolves.
       boundRoot = resolveTargetBinding({ knowledgeRoot: options.targetRoot, configTargetId: config.target?.target_id })?.targetRoot;
     } catch {
       boundRoot = undefined;
@@ -716,9 +677,8 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
       })
     : undefined;
   const config = profilePlan && originalConfig ? { ...originalConfig, stack: profilePlan.stack } : originalConfig;
-  // A direct engine caller without workspace metadata is the historical
-  // framework-fixture contract: render every family. Real init/sync calls
-  // always supply config or a manifest, where T-V5-007's selected set applies.
+  // A direct engine caller without workspace metadata renders every runtime family;
+  // real init/sync calls always supply config or a manifest, whose selected set applies.
   const activeRuntimes = config || manifest
     ? new Set(runtimesForWorkspace(config, manifest))
     : new Set<WorkspaceRuntime>(["claude", "codex", "opencode"]);
@@ -851,9 +811,9 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     if (!backupDir) {
       backupDir = path.join(options.targetRoot, ".agent-team", "backups", options.now.replace(/[:.]/g, "-"));
       fs.mkdirSync(backupDir, { recursive: true });
-      // T-V5-013 — file bytes and their pristine-hash baseline are one
-      // snapshot. Without the old manifest, restoring the files would make the
-      // next plan compare them against the post-sync hashes.
+      // File bytes and their pristine-hash baseline are one snapshot: without the
+      // old manifest, restoring the files would make the next plan compare them
+      // against the post-sync hashes.
       if (manifest) {
         fs.copyFileSync(path.join(options.targetRoot, ".agent-team", "manifest.json"), path.join(backupDir, "manifest.json"));
       }
@@ -873,7 +833,7 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
       continue; // never claimed, never written
     }
     if (derivedContent?.has(file.path)) {
-      continue; // T-WG7 — written after the loop from rendered bytes, with rendered-hash tracking
+      continue; // written after the loop from rendered bytes, with rendered-hash tracking
     }
     if (forcedOver.has(file.path)) {
       // Forced over a conflict: same mechanics as an update, including the backup.
@@ -925,10 +885,10 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     managedEntries.push(file);
   }
 
-  // T-V3-04 — stack.md is shipped as a managed path but its Target bytes are
-  // derived from that Target's resolved stack config, never from prompt prose.
-  // The ordinary planner still owns conflict/override decisions and compares
-  // against these exact bytes before this write phase runs.
+  // stack.md is shipped as a managed path but its Target bytes are derived from
+  // that Target's resolved stack config, never from prompt prose. The ordinary
+  // planner still owns conflict/override decisions and compares against these
+  // exact bytes before this write phase runs.
   const stackDigest = derivedContent?.get(STACK_DIGEST_RELATIVE_PATH);
   if (stackDigest !== undefined) {
     const relPath = STACK_DIGEST_RELATIVE_PATH;
@@ -1039,10 +999,10 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     }
   }
 
-  // T-WG7/T-V3-06 — workspace-role rendering of CLAUDE.md. A pre-existing project file
-  // receives only the delimited block and is tracked by the block hash below;
-  // a Framework-created file remains whole-file managed. Both paths were
-  // planned against these exact rendered bytes before any write.
+  // Workspace-role rendering of CLAUDE.md. A pre-existing project file receives
+  // only the delimited block and is tracked by the block hash below; a
+  // Framework-created file remains whole-file managed. Both paths were planned
+  // against these exact rendered bytes before any write.
   if (derivedContent?.has(CLAUDE_MD_PATH)) {
     const rendered = derivedContent!.get(CLAUDE_MD_PATH)!;
     const claudeEntry: TemplateFileEntry = { path: CLAUDE_MD_PATH, sha256: sha256Of(rendered), size_bytes: Buffer.byteLength(rendered) };
@@ -1101,11 +1061,11 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     }
   }
 
-  // T-V3-07 — the Codex root pointer follows the same ownership split as
-  // CLAUDE.md. Absent files become whole-file managed pointers; existing
-  // project files receive only the delimited block. A whole-file reduction is
-  // possible only for an exact CLAUDE.md duplicate and the dedicated explicit
-  // confirmation option; --force does not broaden that authority.
+  // The Codex root pointer follows the same ownership split as CLAUDE.md.
+  // Absent files become whole-file managed pointers; existing project files
+  // receive only the delimited block. A whole-file reduction is possible only
+  // for an exact CLAUDE.md duplicate and the dedicated explicit confirmation
+  // option; --force does not broaden that authority.
   // AGENTS.md is the shared bootstrap pointer, not a Codex binding. Only the
   // `.agents/` skill directory is runtime-specific.
   if (derivedContent?.has(AGENTS_MD_PATH)) {
@@ -1149,10 +1109,10 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     }
   }
 
-  // T-WG2 — roster drift has no template source to sync from (the file was
-  // never this role's to receive), so --force removes it outright, backed up
-  // first like any other forced conflict. Without --force it already stopped
-  // the run above via blockingConflicts.
+  // Roster drift has no template source to sync from (the file was never this
+  // role's to receive), so --force removes it outright, backed up first like
+  // any other forced conflict. Without --force it already stopped the run
+  // above via blockingConflicts.
   if (options.force) {
     for (const conflict of plan.conflicts.filter((c) => c.kind === "roster-drift")) {
       const abs = path.join(options.targetRoot, conflict.path);
@@ -1163,12 +1123,12 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     }
   }
 
-  // T-V5-006 — apply the single managed contribution to the project-owned
-  // `.gitignore`. Only the marked range is ours: bytes outside it are retained
-  // verbatim, and the hash recorded below lets the next sync detect a hand edit
-  // rather than replacing it. A file without a final newline receives the
-  // block before its original bytes so no project byte is altered just to make
-  // room for a marker line.
+  // Apply the single managed contribution to the project-owned `.gitignore`.
+  // Only the marked range is ours: bytes outside it are retained verbatim, and
+  // the hash recorded below lets the next sync detect a hand edit rather than
+  // replacing it. A file without a final newline receives the block before its
+  // original bytes so no project byte is altered just to make room for a
+  // marker line.
   const plannedGitignore = plan.entries.find((entry) => entry.path === GITIGNORE_PATH);
   if (plannedGitignore?.action === "override") {
     performed.push(plannedGitignore);

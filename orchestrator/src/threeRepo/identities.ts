@@ -1,10 +1,10 @@
 import type { InstallationConfig } from "./installation.js";
 
 /**
- * The identity gate (T-UX3) — the "เมลเดียวกันเท่านั้น" rule the owner set for
+ * The identity gate — the "same account only" rule the owner set for
  * design-source access, made checkable instead of remembered.
  *
- * WHAT IS VERIFIED MECHANICALLY, AND WHAT IS NOT
+ * What is verified mechanically, and what is not:
  *
  *  - **Figma** can be verified end to end: a read-only `get_me` call returns
  *    the email of the account the token actually authenticates, so
@@ -17,19 +17,16 @@ import type { InstallationConfig } from "./installation.js";
  *    what binds the session to an account. Comparing the two declared emails
  *    here is defense-in-depth, not proof.
  *
- * FAIL CLOSED
+ * Fail closed: every branch that cannot establish the required fact is a
+ * refusal with a reason naming the fix (`sta configure identity …`). A
+ * missing config and a failed verification are equally blocking — the one
+ * thing they never do is let a run proceed on the assumption the accounts
+ * probably match.
  *
- * Every branch that cannot establish the required fact is a refusal with a
- * reason naming the fix (`sta configure identity …`). A missing config and a
- * failed verification are equally blocking — the one thing they never do is
- * let a run proceed on the assumption the accounts probably match.
- *
- * SECRETS STAY OUT
- *
- * Only email addresses pass through here, and nothing returns a token: the
- * PAT lives in the environment (`FIGMA_PAT`) or the runtime's keychain, and
- * {@link figmaPatConfigured} deliberately answers presence as a boolean so a
- * caller cannot accidentally log what it read.
+ * Secrets stay out: only email addresses pass through here, and nothing
+ * returns a token. The PAT lives in the environment (`FIGMA_PAT`) or the
+ * runtime's keychain, and {@link figmaPatConfigured} deliberately answers
+ * presence as a boolean so a caller cannot accidentally log what it read.
  */
 
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;

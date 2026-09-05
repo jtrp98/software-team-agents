@@ -18,7 +18,6 @@ import {
   type AgentContract,
 } from "./agentContract.js";
 
-/** Writes a throwaway contracts/ folder and returns the project root holding it. */
 function fixtureRoot(files: Record<string, string>): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-contracts-"));
   fs.mkdirSync(path.join(root, "contracts"), { recursive: true });
@@ -52,7 +51,6 @@ describe("the shipped contracts", () => {
     expect(Object.keys(all).sort()).toEqual([...CONTRACTED_AGENTS].sort());
   });
 
-  /** The reason this task exists: the files and the code the orchestrator runs on must say the same thing. */
   it("agree with the registry the orchestrator actually runs on", () => {
     const result = checkAllContracts();
     expect(result.problems).toEqual([]);
@@ -166,7 +164,7 @@ describe("assertContractsMatchRegistry", () => {
       throw new Error("expected it to throw");
     } catch (e) {
       expect(e).toBeInstanceOf(ContractRegistryMismatchError);
-      // eleven missing files plus the tool mismatch
+      // ten missing contract files (only setup's was written) plus the tool mismatch on setup
       expect((e as ContractRegistryMismatchError).problems.length).toBe(11);
     }
   });

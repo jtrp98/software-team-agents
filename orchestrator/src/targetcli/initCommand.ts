@@ -14,8 +14,8 @@ import { runTargetSync, type SyncResult } from "./syncEngine.js";
 import { planTargetProfile } from "./targetProfile.js";
 
 /**
- * T-TARGET-03 + T-ROLE-16 — `software-team-agents init`, run from inside a Role
- * Workspace (a Target repo for DEV, the Knowledge repo for BA).
+ * `software-team-agents init`, run from inside a Role Workspace (a Target repo
+ * for DEV, the Knowledge repo for BA).
  *
  * Detects what kind of repository it is standing in when no role is recorded
  * yet (Knowledge markers → ba; app-source markers → dev; both/neither → an
@@ -34,7 +34,7 @@ export interface TargetInitOptions {
   templatesDir?: string;
   now: string;
   force?: boolean;
-  /** Explicit role override (T-ROLE-16); detection is skipped when given. */
+  /** Explicit role override; detection is skipped when given. */
   role?: WorkspaceRole;
   /** Explicit stack selection for ambiguous or unsupported Target evidence. */
   stack?: string;

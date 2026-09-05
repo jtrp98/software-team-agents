@@ -11,7 +11,6 @@ import {
   extractGuardrailRules,
   GIT_READONLY_BASH_RULES,
   listCommands,
-  loadCommandGuardrails,
   parseAgentMd,
   parseCommandMd,
   renderCodexBinding,
@@ -25,11 +24,11 @@ import { renderGuardRuleBlock } from "../agents/pathPermissions.js";
 import { extractDeveloperInstructions } from "./codexAdapter.js";
 
 /**
- * OFF10 M2 — one role definition, two renderings, zero drift.
+ * One role definition, two renderings, zero drift.
  *
- * The .toml binding is a *rendering* of the .md source (OFF03 P7), so the
- * contract here is: rendering is deterministic, lossless for the fields it
- * carries (round-tripping through the adapter's own extractor), refuses to emit
+ * The .toml binding is a *rendering* of the .md source, so the contract here
+ * is: rendering is deterministic, lossless for the fields it carries
+ * (round-tripping through the adapter's own extractor), refuses to emit
  * ambiguous TOML rather than corrupting prose, and `checkBindings` catches every
  * way disk can diverge from source — missing twin, edited twin, orphan.
  */
@@ -278,9 +277,7 @@ describe("checkBindings", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// Command renderings (T-OCC2 / T-CXC2) — one shortcut source, three runtimes
-// ---------------------------------------------------------------------------
+// Command renderings — one shortcut source, three runtimes
 
 const GUARDRAILS_MD = [
   "---",

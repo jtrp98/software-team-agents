@@ -1,5 +1,5 @@
 /**
- * What a runtime is able to do (T108).
+ * What a runtime is able to do.
  *
  * A closed enum, for the same reason `agents/capabilities.ts` is one: a
  * capability exists to be *matched*, and free text cannot be matched — `hooks`,
@@ -8,8 +8,8 @@
  *
  * WHAT THIS SET IS FOR, AND WHAT IT IS NOT FOR
  *
- * It is deliberately much shorter than the first T108 draft. That draft assumed
- * the two runtimes this framework targets would differ widely, so it enumerated
+ * It is deliberately much shorter than an exhaustive draft assuming the two
+ * runtimes this framework targets would differ widely enough to enumerate
  * every axis they might differ on. They don't: Claude Code and Codex both have
  * project-level guard wiring, pre/post tool interception, stop hooks, named
  * agents and model selection. A capability nothing ever branches on is not
@@ -19,8 +19,8 @@
  *
  *   1. Something branches on it (`PER_AGENT_EXIT_GUARD`, `COST_REPORTING`,
  *      `INTERACTIVE_PROMPTS`).
- *   2. T111 validates it against the real installation and must fail loudly
- *      when the installed version doesn't have it.
+ *   2. Capability detection validates it against the real installation and
+ *      must fail loudly when the installed version doesn't have it.
  *
  * The second reason is why this set survives despite the parity: parity is a
  * fact about the *products*, not about the *version installed here*. Both known
@@ -67,7 +67,7 @@ export enum RuntimeCapability {
   COST_REPORTING = "cost-reporting",
   /** An agent can put a question to a person mid-run. `business-analyst` interviews a human; a runtime without this cannot run that stage as designed. */
   INTERACTIVE_PROMPTS = "interactive-prompts",
-  /** More than one agent run at a time is safe against this runtime. Reserved for T35's file-level locking work; nothing schedules on it yet. */
+  /** More than one agent run at a time is safe against this runtime. Reserved for future file-level locking work; nothing schedules on it yet. */
   PARALLEL_EXECUTION = "parallel-execution",
 }
 
@@ -76,7 +76,7 @@ export const ALL_RUNTIME_CAPABILITIES: readonly RuntimeCapability[] = Object.val
 /**
  * The capabilities this framework's design depends on. A runtime missing one of
  * these can still be driven, but something the pipeline promises stops being
- * true — so T111 reports each absence rather than letting it pass.
+ * true — so capability detection reports each absence rather than letting it pass.
  *
  * `PER_AGENT_EXIT_GUARD` is intentionally *not* here: it is required for an
  * interactive session that delegates, and irrelevant under the orchestrator.

@@ -19,13 +19,12 @@ import type {
 } from "./runtimeAdapter.js";
 
 /**
- * The `RuntimeAdapter` for OpenCode (planning/v2 T-OC4) — the third runtime
- * behind the seam `runtimeAdapter.ts` (T108) defines.
+ * The `RuntimeAdapter` for OpenCode — the third runtime behind the seam
+ * `runtimeAdapter.ts` defines.
  *
  * Unlike `codexAdapter.ts`, this implementation is **spike-backed**: every flag,
  * event shape, and capability claim below was exercised against a real
- * OpenCode 1.18.21 install on Windows during the T-OC0 spike
- * (planning/v2/opencode-runtime-TASKS.md §7), not read off documentation:
+ * OpenCode 1.18.21 install on Windows, not read off documentation:
  *
  * - `opencode run --agent <role> --format json "<prompt>"` runs one headless
  *   turn and exits; stdout is an NDJSON event stream whose `text` events carry
@@ -45,15 +44,15 @@ import type {
  * WHAT IS DELIBERATELY NOT CLAIMED
  * - `EXIT_GUARD` / `PER_AGENT_EXIT_GUARD` — no Stop-hook equivalent has been
  *   verified under `opencode run`. Exit checks stay the orchestrator's post-hoc
- *   job (T111/T-OC7) on this runtime, and every run that requests them is told
- *   so via `RuntimeGuardReport.unenforced`.
+ *   job on this runtime, and every run that requests them is told so via
+ *   `RuntimeGuardReport.unenforced`.
  * - `INTERACTIVE_PROMPTS` — `opencode run` is non-interactive; stages that put
  *   a question to a person cannot run here as designed.
- * - `PARALLEL_EXECUTION` — reserved for T35, unclaimed by every adapter.
- * - `models` — no catalogue is invented (T110's "เดายิงมั่ว" rule). A caller
- *   that knows what its installation reaches passes `models` in options;
- *   left empty, `RuntimeRegistry.reaching()` answers nothing rather than a
- *   fabricated everything.
+ * - `PARALLEL_EXECUTION` — unclaimed by every adapter.
+ * - `models` — no catalogue is invented. A caller that knows what its
+ *   installation reaches passes `models` in options; left empty,
+ *   `RuntimeRegistry.reaching()` answers nothing rather than a fabricated
+ *   everything.
  */
 
 const OPENCODE_CAPABILITIES: readonly RuntimeCapability[] = [

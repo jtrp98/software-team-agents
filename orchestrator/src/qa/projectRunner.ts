@@ -5,7 +5,6 @@ import type { RuntimeWorkspace } from "../runtime/runtimeAdapter.js";
 import { TargetConfigSchema } from "../targetcli/targetMeta.js";
 import type { DeterministicCheckId, DeterministicCheckResult, DeterministicRunner } from "./deterministic.js";
 
-/** The machine-readable subset of the existing static-analysis gate report. */
 interface StaticGateReport {
   verification?: "passed" | "failed" | "unverified";
   profile?: string;
@@ -33,13 +32,12 @@ const CHECK_FOR: Record<DeterministicCheckId, string> = {
 };
 
 /**
- * Turns a Target's configured scripts into the injected QA03 runner.
+ * Turns a Target's configured scripts into the injected deterministic runner.
  *
- * The framework static gate is preferred because it is the existing
- * deterministic implementation and returns all script results in one bounded
- * process.  Its promise is cached so `runDeterministicVerification` does not
- * spawn it once per check.  The package-script fallback exists for Targets
- * which have not installed the framework's `.claude` assets yet.
+ * The framework static gate is preferred: it returns all script results in
+ * one bounded process, and its promise is cached so `runDeterministicVerification`
+ * does not spawn it once per check. The package-script fallback exists for
+ * Targets which have not installed the framework's `.claude` assets yet.
  */
 export function createProjectRunner(opts: ProjectRunnerOptions): DeterministicRunner {
   const now = opts.now ?? Date.now;

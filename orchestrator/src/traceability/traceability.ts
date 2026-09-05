@@ -1,31 +1,24 @@
 import { parseOpenIssues } from "../orchestrator/failureClassifier.js";
 
 /**
- * Requirement Traceability (T19) — the chain TASKS.md asks for: Requirement
- * -> Design -> Task -> Test -> QA, so "does REQ-003 actually work" is a
- * lookup instead of a person re-reading four documents to reconstruct it by
- * hand.
+ * Requirement traceability: Requirement -> Design -> Task -> Test -> QA, so
+ * "does REQ-003 actually work" is a lookup instead of re-reading four
+ * documents by hand.
  *
- * The chain is built by following an id convention this task introduces:
- * `business-analyst` tags each Core Feature `REQ-NNN`; `system-analyst` tags
- * each Feature-by-Feature Feasibility row `DES-NNN` and states which
- * `REQ-NNN` it covers on the same line; `project-manager` tags each task
- * `BE-NNN`/`FE-NNN` and states which `DES-NNN` it implements, also on the
+ * Built by following an id convention: `business-analyst` tags each Core
+ * Feature `REQ-NNN`; `system-analyst` tags each Feasibility row `DES-NNN` and
+ * names the `REQ-NNN` it covers on the same line; `project-manager` tags each
+ * task `BE-NNN`/`FE-NNN` and names the `DES-NNN` it implements, also on the
  * same line. Same-line co-occurrence is the whole mechanism — no separate
- * mapping file to keep in sync, the same reasoning `taskGraph.ts` used for
- * deriving edges from `produces`/`consumes` rather than a hand-maintained
- * list.
+ * mapping file to keep in sync.
  *
- * `review.md`'s Open Issues already carry ids in free text — that's what
- * `failureClassifier.ts`'s `ID_PATTERN` was written to extract — so `status`
- * reuses `parseOpenIssues()` rather than re-parsing `review.md` a second way.
+ * Reuses `failureClassifier.ts`'s `parseOpenIssues()` rather than re-parsing
+ * `review.md`'s Open Issues ids a second way.
  *
- * `tests` is usually empty. CLAUDE.md's fixed stack makes automated tests
- * opt-in and typically absent, so there is nothing for most requirements to
- * cite there — that's a true and expected state, not a hole in the chain.
- * When a `TEST-NNN` id does appear (a Vitest suite naming one in a test
- * title or comment), it's picked up the same way everything else is: by
- * appearing on a line with the ids it verifies.
+ * `tests` is usually empty — automated tests are opt-in per CLAUDE.md's fixed
+ * stack, so that's an expected state, not a hole in the chain. A `TEST-NNN`
+ * id (from a Vitest suite naming one) is picked up the same way as everything
+ * else: by appearing on a line with the ids it verifies.
  */
 
 export type TraceStatus = "unplanned" | "planned" | "in-progress" | "blocked" | "verified";
@@ -91,7 +84,7 @@ function idsOnSameLineAs(markdown: string, anchors: string[], targetPrefix: stri
   return ordered;
 }
 
-/** True when `taskId`'s row in `planMd`'s task table (T52) has Status `verified` — `qa-engineer`'s mark, per `policies/documentation.md` §4, that a task is actually done. */
+/** True when `taskId`'s row in `planMd`'s task table has Status `verified` — `qa-engineer`'s mark, per `policies/documentation.md` §4, that a task is actually done. */
 function isTaskChecked(planMd: string, taskId: string): boolean {
   for (const line of planMd.split(/\r?\n/)) {
     if (!line.includes(taskId)) continue;

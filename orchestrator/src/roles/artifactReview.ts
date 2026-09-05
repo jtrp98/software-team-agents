@@ -5,40 +5,25 @@ import { canSeeKind } from "../knowledge/roleView.js";
 import { laneOf } from "./roleLane.js";
 
 /**
- * The one review flow every lane's artefacts go through (T104), before anything
- * is marked approved.
+ * The one review flow every lane's artefacts go through before anything is
+ * marked approved. The underlying rules live in `ownership.ts`: refuse
+ * `draft -> approved` directly, refuse an owner reviewing its own work, and
+ * let only a person approve. This module is the single entry point that
+ * applies those rules through `canTransition` — hand-editing an item's YAML
+ * bypasses every one of those checks and the version bump with them.
  *
- * WHAT WAS ALREADY THERE
+ * On top of that, a reviewer must also be able to *read* the kind
+ * (`canSeeKind`): a role whose context policy never puts `db-schema` in
+ * front of it cannot meaningfully review one, and letting it sign one off
+ * would record a check that never happened. The per-kind checklist exists so
+ * "reviewed" means the same thing twice — each line is a rule already stated
+ * in `policies/` or CLAUDE.md, phrased as a question, not new policy.
  *
- * The *rules* were: `ownership.ts` refuses `draft -> approved`, refuses an owner
- * reviewing its own work (T39's principle), and lets only a person approve. What
- * was missing was a way to actually perform a review that applies them — the
- * only way to move an item was to hand-edit its YAML, which bypasses every one
- * of those checks and the version bump with them.
- *
- * SO THIS ADDS THREE THINGS, NOT A NEW STATE MACHINE
- *
- *   1. **One entry point** that applies the transition through `canTransition`,
- *      so the rules cannot be walked around by editing a file.
- *   2. **A reviewer must be able to read the kind.** `canSeeKind` (T67) decides
- *      it. A role whose context policy never puts `db-schema` in front of it
- *      cannot meaningfully review a `db-schema`, and letting it sign one as
- *      reviewed records that a check happened when none did — the same emptiness
- *      T39 objects to in self-review, one step out.
- *   3. **A checklist per kind**, so "reviewed" means the same thing twice. Every
- *      line below is a rule stated somewhere in `policies/` or CLAUDE.md, phrased
- *      as the question a reviewer has to answer; none of them is new policy
- *      invented here.
- *
- * WHY THE REVIEWER'S NAME IS NOT STORED ON THE ITEM
- *
- * It would be a second copy of something git already holds — the same reasoning
- * T63 used to reject a sidecar history file, and the reason `knowledge/` is
- * one-file-per-item in the first place. There is a sharper reason too: items are
- * re-derived by discovery (T74-T79), so an annotation living on the item would
- * be silently wiped by a re-run, and a record that disappears without anybody
- * noticing is worse than no record. A *decision* is stored (T103's sign-off
- * carries `by`); a *transition* is history, and history is git's job.
+ * The reviewer's name is deliberately not stored on the item: it would be a
+ * second copy of something git already holds, and items are re-derived by
+ * discovery, so an annotation living on the item would be silently wiped by
+ * a re-run. A *decision* is stored (a sign-off carries `by`); a *transition*
+ * is history, and history is git's job.
  */
 
 /**
@@ -123,7 +108,7 @@ export function reviewItem(item: KnowledgeItem, reviewer: AgentStage, now: strin
   }
   if (!canSeeKind(reviewer, item.kind)) {
     throw new ArtifactReviewError(
-      `${reviewer} does not see ${item.kind} items (T67), so it cannot review ${item.id} — marking it reviewed would ` +
+      `${reviewer} does not see ${item.kind} items, so it cannot review ${item.id} — marking it reviewed would ` +
         "record a check that did not happen",
     );
   }

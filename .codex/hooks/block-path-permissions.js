@@ -31,8 +31,8 @@
  *
  * Not from here. The universal floor, the workspace artifact lists, the role reader and the glob
  * matcher are declared once in orchestrator/src/agents/pathPermissions.ts and rendered into the
- * `sta:guard-rules` block below (T-V5-020); --check-bindings fails on a hand edit. Outside the
- * markers is authored Claude-Code-specific code: identity, tool names, how a denial is reported.
+ * `sta:guard-rules` block below; --check-bindings fails on a hand edit. Outside the markers is
+ * authored Claude-Code-specific code: identity, tool names, how a denial is reported.
  *
  * WHY IT PARSES YAML BY HAND
  *
@@ -148,7 +148,7 @@ function run(input) {
     }
   }
 
-  // T-WG3 (extends T-UX13): workspace-level rules — identity-independent, so
+  // Workspace-level rules — identity-independent, so
   // they hold for interactive runs where no AGENTCLAUDE_ROLE is set. A `role:
   // dev` workspace owns app code plus the engineer-written docs
   // (review/security/deploy); every analysis artifact and registry file
@@ -226,7 +226,7 @@ function readRules(role) {
   const write = readList(text, 'write');
   const deny = readList(text, 'deny');
   if (write === null) return null; // not the shape this reader understands -- fail open
-  // T-V5-023: the contract holds the role boundary; where this stack puts code
+  // The contract holds the role boundary; where this stack puts code
   // comes from stacks/<profile>/stack.yaml, which no dependency-free reader here
   // can resolve. The orchestrator resolves it and hands it over on the same
   // channel as AGENTCLAUDE_ROLE. Both halves arrive together or neither does,

@@ -54,11 +54,11 @@ describe("workspace kind detection (T-ROLE-16)", () => {
   });
 
   /**
-   * T-V5-043 retired `knowledge-policy.yaml` as a marker. Detection decides which
+   * `knowledge-policy.yaml` is not a marker. Detection decides which
    * repository a session may write to, so all five outcomes are pinned here
    * rather than left to the composite case above.
    */
-  describe("T-V5-043 — detection after the third marker was retired", () => {
+  describe("detection after the third marker was retired", () => {
     function writeRole(root: string, role: string): void {
       fs.mkdirSync(path.join(root, ".agent-team"), { recursive: true });
       fs.writeFileSync(path.join(root, ".agent-team", "config.yaml"), `schema_version: 1\ntarget_id: x\nrole: ${role}\n`, "utf8");
@@ -127,11 +127,9 @@ describe("workspace kind detection (T-ROLE-16)", () => {
   });
 
   it("`_docs/` never makes an app repo ambiguous — this framework puts it there itself", () => {
-    // Regression: `_docs` counted as a Knowledge marker, so a target repo with a
-    // docs folder came back "ambiguous" and `init` demanded an explicit --role.
-    // Since module docs live at `_docs/module/<name>/` INSIDE the target, that
-    // eventually described every DEV workspace — the tool's own output made its
-    // own detection undecidable.
+    // Regression: `_docs` must not count as a Knowledge marker. Module docs
+    // live at `_docs/module/<name>/` INSIDE the target, so counting it would
+    // make every DEV workspace "ambiguous" once its first module doc lands.
     const target = tmpRoot("docs-target");
     fs.writeFileSync(path.join(target, "package.json"), "{}");
     fs.mkdirSync(path.join(target, "_docs", "module", "sales-crm"), { recursive: true });
@@ -163,7 +161,7 @@ describe("role asset profiles (T-ROLE-09/10/11)", () => {
     expect(include(".opencode/plugin/sta-guards.js")).toBe(true);
     expect(include("policies/documentation.md")).toBe(true);
     expect(include("CLAUDE.md")).toBe(true);
-    // T-V5-027: the document/plan checkers as CI are BA-workspace payload.
+    // The document/plan checkers are CI and are BA-workspace payload only.
     expect(include(".github/workflows/knowledge-ci.yml")).toBe(true);
 
     expect(include(".claude/agents/backend-engineer.md")).toBe(false);
@@ -182,7 +180,7 @@ describe("role asset profiles (T-ROLE-09/10/11)", () => {
     expect(include("contracts/backend.yaml")).toBe(true);
     expect(include("workflows/bugfix.yml")).toBe(true);
     expect(include("test-pyramid.yaml")).toBe(true);
-    // T-V5-027: a Target has no `_docs/**` of its own for these checks to run against.
+    // A Target has no `_docs/**` of its own for these checks to run against.
     expect(include(".github/workflows/knowledge-ci.yml")).toBe(false);
   });
 });
@@ -296,16 +294,12 @@ describe("write-policy launch wiring (T-ROLE-12/13)", () => {
 });
 
 /**
- * T-V5-042 replaced this block's original subject. It used to exercise the
- * committed `target.path` branch — resolution, its missing-path throw, its
- * not-a-Target-repo throw and its overlap guard. None of that coverage is lost:
- * every one of those validations lives on the surviving `target_id` path and is
- * asserted in the "target binding by id" block below ("no local mapping",
- * "without application markers — looksLikeTargetRoot still applies", "path
- * overlapping the Knowledge root"). What is asserted here instead is the
- * removal's own contract: the field is ignored, reported, and never fatal.
+ * Asserts the contract for the removed `target.path` field: it is ignored,
+ * reported, and never fatal. Validation for the surviving `target_id` path
+ * (missing mapping, not-a-Target-repo, overlap guard) lives in the "target
+ * binding by id" block below.
  */
-describe("target binding without the removed target.path (T-LV1 / T-V5-042)", () => {
+describe("target binding without the removed target.path", () => {
   function writeConfig(root: string, body: string): void {
     fs.mkdirSync(path.join(root, ".agent-team"), { recursive: true });
     fs.writeFileSync(path.join(root, ".agent-team", "config.yaml"), body, "utf8");
@@ -440,10 +434,9 @@ describe("target binding by id (T-V5-017 — one Target-location mechanism)", ()
 });
 
 describe("T-WG5 — the confirm-workspace checkpoint ships to both workspace roles' synced payload", () => {
-  // repo root's own templates/ snapshot, rebuilt by `npm run build:templates`
-  // (build:templates is required before this test passes — same as any other
-  // check against generated output; see CLAUDE.md's guardrail against
-  // patching templates/ directly instead of its sources).
+  // repo root's own templates/ snapshot; run `npm run build:templates` first
+  // if it's stale — see CLAUDE.md's guardrail against patching templates/
+  // directly instead of its sources.
   const templatesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "templates");
 
   it("policies/documentation.md's §0 checkpoint is included in both the BA and DEV asset profiles", () => {

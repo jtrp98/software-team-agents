@@ -78,7 +78,7 @@ import type { RuntimeTaskWorkRoot } from "./orchestrator/runtimeTask.js";
  * a person must decide (schema confirmation, a failed QA/security round past
  * retry, deploy approval).
  *
- * Since T01 the run is durable: state lives in `.workflow/state.db` and the
+ * The run is durable: state lives in `.workflow/state.db` and the
  * readable copy in `.workflow/state.yaml`, so answering `N` at a gate — or
  * closing the terminal, or losing the machine — no longer throws away the
  * stages that already ran. `--resume` picks the same task back up.
@@ -102,7 +102,7 @@ export interface CliArgs {
   checkPromptBudget: boolean;
   /** Check workflows/*.yml against the classifier and exit. Same audience. */
   checkWorkflows: boolean;
-  /** Check .codex/agents/*.toml renderings against their .claude/agents sources and exit (OFF10 M2). */
+  /** Check .codex/agents/*.toml renderings against their .claude/agents sources and exit. */
   checkBindings: boolean;
   /** Check project.yaml and stacks/ against the agent roster and exit. Same audience. */
   checkProfile: boolean;
@@ -110,31 +110,31 @@ export interface CliArgs {
   checkDecisions: boolean;
   /** Check test-pyramid.yaml against its schema and exit. Same audience. */
   checkTestPyramid: boolean;
-  /** Check that no agent can review its own work, and report pipelines that ship unreviewed (T39). Same audience. */
+  /** Check that no agent can review its own work, and report pipelines that ship unreviewed. Same audience. */
   checkReviewSeparation: boolean;
-  /** Check escalation-policy.yaml against the runtime policy and exit (T40). Same audience. */
+  /** Check escalation-policy.yaml against the runtime policy and exit. Same audience. */
   checkEscalationPolicy: boolean;
-  /** Check workspace.yaml, if one exists, against the filesystem and exit (T41). Same audience. */
+  /** Check workspace.yaml, if one exists, against the filesystem and exit. Same audience. */
   checkWorkspace: boolean;
-  /** Check repos.yaml, if one exists, against the filesystem and exit (T42). Same audience. */
+  /** Check repos.yaml, if one exists, against the filesystem and exit. Same audience. */
   checkRepos: boolean;
-  /** Check environments.yaml, if one exists, against its schema and exit (T43). Same audience. */
+  /** Check environments.yaml, if one exists, against its schema and exit. Same audience. */
   checkEnvironments: boolean;
-  /** Check every module's requirement/design/plan/review/security doc structure against its schema and exit (T53). Same audience. */
+  /** Check every module's requirement/design/plan/review/security doc structure against its schema and exit. Same audience. */
   checkDocStructure: boolean;
-  /** Check every module document and `##` section against its byte ceiling and exit (T-V5-033, F-04). Same audience. */
+  /** Check every module document and `##` section against its byte ceiling and exit. Same audience. */
   checkDocSize: boolean;
-  /** Validate every module's plan.md task table as a dependency graph — duplicate ids, missing/self/cyclic dependencies, owners, statuses, DES traceability, wave ordering — and exit (T-PM1.3). `--module <name>` scopes it to one plan. */
+  /** Validate every module's plan.md task table as a dependency graph — duplicate ids, missing/self/cyclic dependencies, owners, statuses, DES traceability, wave ordering — and exit. `--module <name>` scopes it to one plan. */
   checkPlan: boolean;
-  /** Check knowledge/*.yaml against its schema, its id/relation rules and its own cross-links, and exit (T61). Same audience. */
+  /** Check knowledge/*.yaml against its schema, its id/relation rules and its own cross-links, and exit. Same audience. */
   checkKnowledge: boolean;
-  /** Check .sta/manifest.json and .sta/config.yaml against the project's real files and exit (T98). Same audience. */
+  /** Check .sta/manifest.json and .sta/config.yaml against the project's real files and exit. Same audience. */
   checkInstallation: boolean;
-  /** Check every role workspace under knowledge/_roles/ — each lane's watermark against the knowledge it refers to — and exit (T99). Same audience. */
+  /** Check every role workspace under knowledge/_roles/ — each lane's watermark against the knowledge it refers to — and exit. Same audience. */
   checkRoles: boolean;
-  /** Snapshot every framework template file (T90) into an output directory, with manifest.json, and exit. Not a --check-*: it writes, it doesn't just report. */
+  /** Snapshot every framework template file into an output directory, with manifest.json, and exit. Not a --check-*: it writes, it doesn't just report. */
   buildTemplates?: string;
-  /** local/dev/staging/production (T43). Defaults to Environment.LOCAL; only used when creating a task — a --resume/--retry inherits the task's already-stored environment. */
+  /** local/dev/staging/production. Defaults to Environment.LOCAL; only used when creating a task — a --resume/--retry inherits the task's already-stored environment. */
   environment: Environment;
   dependsOn: string[];
   stateDb?: string;
@@ -143,37 +143,33 @@ export interface CliArgs {
   targetBindings: TargetBindings;
   /**
    * How much the spawned agent may do without a person answering a permission prompt.
-   * Absent = the executor's own default (`propose`), which is what every run did before
-   * T117 found that headless `propose` runs cannot write files or run commands at all —
-   * every tool request becomes an approval nobody is there to give. Unattended runs need
-   * at least `edit`; the framework's own hooks (block-git, path permissions, green-before-stop)
-   * stay enforced in every mode — this flag widens Claude Code's prompt behaviour only.
+   * Absent = the executor's own default (`propose`). Unattended runs need at least `edit`;
+   * the framework's own hooks (block-git, path permissions, green-before-stop) stay enforced
+   * in every mode — this flag widens Claude Code's prompt behaviour only.
    */
   autonomy?: RuntimeAutonomy;
   /**
-   * Which runtime adapter drives every stage of the headless pipeline
-   * (planning/v2 T-OC5). Absent/`claude-code` keeps the historical behaviour
-   * byte-identical; `codex`/`opencode` route through their adapters — both are
-   * partial (see each adapter's header) and say so via guard reports.
+   * Which runtime adapter drives every stage of the headless pipeline.
+   * Absent/`claude-code` keeps the default behaviour; `codex`/`opencode` route through
+   * their adapters — both are partial (see each adapter's header) and say so via guard reports.
    */
   runtime?: RuntimeId;
   /**
-   * Operator-visible model override for every stage of this run (T-V4-CAST-001),
+   * Operator-visible model override for every stage of this run,
    * the companion to `--runtime`. Forwarded to the runtime as an explicit
    * request; a value the selected runtime cannot reach is refused by its adapter,
-   * not passed through. Absent = each role's frontmatter `model:` governs, exactly
-   * as before the flag existed.
+   * not passed through. Absent = each role's frontmatter `model:` governs.
    */
   model?: string;
   /**
    * QA optimization (change-aware scope, deterministic pre-checks, TARGETED/FULL
-   * routing) is on by default for qa-engineer rounds; this flag restores the exact
-   * V1 executor behaviour for a task where someone explicitly wants it.
+   * routing) is on by default for qa-engineer rounds; this flag restores the
+   * unoptimized executor behaviour for a task where someone explicitly wants it.
    */
   noQaOptimization: boolean;
   /** Escape hatch for a Target whose deterministic tools are known-broken. */
   noDeterministicGate: boolean;
-  /** Post-hoc task token budget; pre-spawn caps remain T-V3TOK-100/101. */
+  /** Post-hoc task token budget. */
   tokenBudget?: number;
 }
 
@@ -193,7 +189,7 @@ const FLAG_TO_CLASSIFICATION: Record<string, keyof ClassificationInput> = {
 export class CliUsageError extends Error {}
 
 export const USAGE =
-  "usage (T31 verbs — thin wrappers over the flag-based form below, prefer these):\n" +
+  "usage (verbs — thin wrappers over the flag-based form below, prefer these):\n" +
   "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode>] [--model <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  sta approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
@@ -202,35 +198,35 @@ export const USAGE =
   "  sta pause  <task-id> [--project-root <path>]   freeze a task; run/resume/retry refuse it until resumed\n" +
   "  sta cancel <task-id> [--reason <text>] [--project-root <path>]   give up on a task for good; run/resume/retry refuse it permanently\n" +
   "  sta audit  <task-id> [--decisions] [--project-root <path>]   the WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail; --decisions shows only the choices\n" +
-  "  sta qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]   QA token/mode/retry picture per task (QA07); --baseline compares against a saved export\n" +
+  "  sta qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]   QA token/mode/retry picture per task; --baseline compares against a saved export\n" +
   "  sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]   token/context composition across orchestrated and interactive runs\n" +
   "  sta context <role> [--module <name>] [--phase <n,n>] [--task <id>] [--packet] [--json] [--project-root <path>]   deterministic context, or the latest validated execution packet\n" +
   "  sta knowledge get <id>[,<id>...] [--lane <ba|sa|uxui|dev>] [--json] [--project-root <path>]   retrieve only permitted knowledge fields (default lane: dev)\n" +
   "  sta knowledge migrate-v2 [--dry-run] [--json] [--project-root <knowledge-root>]   add origin/target_ids without changing item meaning or lifecycle\n" +
   "  sta knowledge reconcile --target <id> [--json] [--project-root <knowledge-root>]   read-only current/desired evidence classifier\n" +
   "  sta policy [<area>] [<section>] [--json] [--project-root <path>]   read one policies/ section instead of the whole file; no args lists every area and section\n" +
-  "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names (T41)\n" +
+  "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names\n" +
   "  sta init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
   "  sta configure knowledge-root <path> [--config-path <path>]       validate and save this installation's single Knowledge root\n" +
-    "  sta configure identity --figma-email <email> --claude-email <email> [--config-path <path>]   declare the design accounts (same address; emails only, never a token)\n" +
-  "  sta doctor [--project-root <path>]                               read-only diagnostics (T166); exit 1 on any FAIL, never mutates\n" +
-  "  sta runtimes                                    which runtimes exist and how well each is supported (T-V1-04)\n" +
+  "  sta configure identity --figma-email <email> --claude-email <email> [--config-path <path>]   declare the design accounts (same address; emails only, never a token)\n" +
+  "  sta doctor [--project-root <path>]                               read-only diagnostics; exit 1 on any FAIL, never mutates\n" +
+  "  sta runtimes                                    which runtimes exist and how well each is supported\n" +
   "  sta upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
-  "  sta migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending (T96)\n" +
+  "  sta migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending\n" +
   "  sta knowledge-migrate <dry-run|copy|verify|cutover> --source-root <path> --knowledge-root <path> [--now <ISO>] [--confirm I_CONFIRM_MIGRATION]   copy–verify–human-confirmed migration\n" +
   "  sta adopt   retired in V5 (ADR-024) — the one-time legacy import has run; no replacement\n" +
-  "  sta rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups` (T97)\n" +
+  "  sta rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups`\n" +
   "  sta list-backups [--project-root <path>]   list this project's .sta/backups/ snapshots, oldest first\n" +
-  "  sta roles [--module <name>] [--project-root <path>]   where BA, SA, UXUI and DEV each stand against knowledge/ (T99)\n" +
+  "  sta roles [--module <name>] [--project-root <path>]   where BA, SA, UXUI and DEV each stand against knowledge/\n" +
   "  sta roles ack <ba|sa|uxui|dev> <id>[,<id>...] --by <name> [--module <name>]   record that a person in that lane has seen those items\n" +
-  "  sta roles signoff <ba|sa|uxui|dev> --by <name> [--reject] [--note <text>] [--module <name>]   that lane's own approval gate (T103)\n" +
-  "  sta roles review <id> --as <agent>   move a knowledge item draft -> reviewed, with its checklist (T104)\n" +
-  "  sta roles approve <id> --by <name>   move a reviewed item to approved — a person only (T104)\n" +
-  "  sta roles inbox [<ba|sa|uxui|dev>] [--module <name>]   what each lane has to look at, derived fresh (T106)\n" +
-  "  sta roles impact <id>[,<id>...]   which lanes changing those items would reach, before changing them (T105)\n" +
-  "  sta roles context <ba|sa|uxui|dev> [<id>] [--full] [--module <name>]   what that lane may see, and via which role (T107)\n" +
+  "  sta roles signoff <ba|sa|uxui|dev> --by <name> [--reject] [--note <text>] [--module <name>]   that lane's own approval gate\n" +
+  "  sta roles review <id> --as <agent>   move a knowledge item draft -> reviewed, with its checklist\n" +
+  "  sta roles approve <id> --by <name>   move a reviewed item to approved — a person only\n" +
+  "  sta roles inbox [<ba|sa|uxui|dev>] [--module <name>]   what each lane has to look at, derived fresh\n" +
+  "  sta roles impact <id>[,<id>...]   which lanes changing those items would reach, before changing them\n" +
+  "  sta roles context <ba|sa|uxui|dev> [<id>] [--full] [--module <name>]   what that lane may see, and via which role\n" +
   "\n" +
-  "Runtime selection (T-V5-040 - one route, no execution modes): --runtime <id> and --model <name> are the explicit per-run choice; otherwise an optional per-role routing.by_role entry in .sta/config.yaml applies; otherwise the default runner plus each role's frontmatter model:. A route resolves ONE runtime - if it cannot execute (unavailable, below supported without per-runtime opt-in, missing a guard capability the stage requires) the task stops for a person instead of moving to another runner.\n" +
+  "Runtime selection (one route, no execution modes): --runtime <id> and --model <name> are the explicit per-run choice; otherwise an optional per-role routing.by_role entry in .sta/config.yaml applies; otherwise the default runner plus each role's frontmatter model:. A route resolves ONE runtime - if it cannot execute (unavailable, below supported without per-runtime opt-in, missing a guard capability the stage requires) the task stops for a person instead of moving to another runner.\n" +
   "  --model <name> overrides every stage's frontmatter model for this run (the same override routing.by_role carries); the runtime refuses a model it cannot reach rather than passing it through. Absent, each role's own model: governs.\n" +
   "\n" +
   "underlying flag-based form:\n" +
@@ -255,9 +251,9 @@ export const USAGE =
   "  sta --check-doc-size [--project-root <path>]       check every _docs/module/*/*.md document and `##` section against its byte ceiling (report-only until wired into CI)\n" +
   "  sta --check-plan [--module <name>] [--project-root <path>]  validate every module's plan.md as a task DAG (deps/cycle/owner/status/DES/waves)\n" +
   "  sta --check-knowledge [--project-root <path>]      check knowledge/*.yaml against its schema and cross-links\n" +
-  "  sta --build-templates <out-dir> [--project-root <path>]  snapshot framework template files + manifest.json (T90) into <out-dir>\n" +
-  "  sta --check-installation [--project-root <path>]   check .agent-team/manifest.json against the project's real files (T98) — needs an initialized workspace; fails on a bare Framework checkout by design\n" +
-  "  sta --check-roles [--project-root <path>]          check each role workspace's watermark against knowledge/ (T99)\n" +
+  "  sta --build-templates <out-dir> [--project-root <path>]  snapshot framework template files + manifest.json into <out-dir>\n" +
+  "  sta --check-installation [--project-root <path>]   check .agent-team/manifest.json against the project's real files — needs an initialized workspace; fails on a bare Framework checkout by design\n" +
+  "  sta --check-roles [--project-root <path>]          check each role workspace's watermark against knowledge/\n" +
   "  sta --version                                      show the Framework version this CLI runs\n" +
   "run/retry exit codes: 0 deployed · 1 blocked · 2 unknown gate · 3 rejected by a person · 4 parked — a gate awaits `sta approve <task-id> --yes|--no`\n" +
   `  classification flags: ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
@@ -400,7 +396,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       }
       model = value;
     } else if (arg === "--mode") {
-      // T-V5-040 - execution modes are removed: there is one route. The flag
+      // Execution modes are removed: there is one route. The flag
       // errors with its replacement for this release rather than being
       // silently accepted and ignored, which would change where a run lands
       // without telling anyone.
@@ -530,8 +526,8 @@ export function cliVersion(startDir: string = path.dirname(fileURLToPath(import.
 
 /**
  * Which `provideHumanApproval` field a gate's approval type maps to. Keyed on
- * `approvalType`, not on the edge's target state: T20 put `test-planner`
- * (and `project-manager` already did, for the "feature" pipeline) between
+ * `approvalType`, not on the edge's target state: `test-planner`
+ * (and `project-manager` already did, for the "feature" pipeline) sits between
  * DESIGN and IMPLEMENTATION, so the schema-confirmation gate's target can be
  * PLAN rather than IMPLEMENTATION directly — the approval type is what stays
  * stable, per gatePolicy.ts/approval.ts's matching fix.
@@ -546,7 +542,7 @@ export async function confirm(question: string): Promise<boolean> {
   }
 }
 
-/** TASKS.md T32's own example glyphs: ✅ 🔄 ⏳ — extended with the two states only pause/cancel can produce. */
+/** Status glyphs: ✅ 🔄 ⏳ — extended with the two states only pause/cancel can produce. */
 const STATUS_EMOJI: Record<TaskStatusKind, string> = {
   DEPLOYED: "✅",
   RUNNING: "🔄",
@@ -591,14 +587,14 @@ export function printListing(registry: TaskRegistry): void {
   if (stats && stats.widest > 1) {
     console.log(
       `[orchestrator] ${stats.tasks} tasks in ${stats.layers} batch(es); up to ${stats.widest} could run at once ` +
-        "(the orchestrator still runs one task at a time; T35's lock only makes that safe against " +
+        "(the orchestrator still runs one task at a time; the lock only makes that safe against " +
         "two processes racing on the same task, it doesn't make batches run concurrently).",
     );
   }
 }
 
 /**
- * T32's "real-time" half of the dashboard — polls the store and re-renders `printListing`'s
+ * The "real-time" half of the dashboard — polls the store and re-renders `printListing`'s
  * table. There is no server/UI layer in this project (CLAUDE.md's stack is Next.js for the
  * *product* this pipeline builds, not for the pipeline's own tooling), so "real-time" here means
  * a terminal view that refreshes itself, the same shape every other CLI in this space (docker
@@ -623,7 +619,7 @@ export async function watchListing(
 }
 
 /**
- * What the module's plan.md thinks of the task about to start (T-V3TOK-111).
+ * What the module's plan.md thinks of the task about to start.
  *
  * A warning, deliberately: the plan is PM's Work Graph and the store is the
  * orchestrator's runtime, and letting an LLM-authored document decide what may
@@ -756,7 +752,7 @@ function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orches
   // AGENTCLAUDE_INSTALLATION_CONFIG lets a test (or an unusual setup) point the
   // mode check at a specific file instead of the machine's real one — without
   // it, merely having configured an installation once flips every CLI test that
-  // creates a legacy code task, which the T35 run hit on a configured machine.
+  // creates a legacy code task.
   const installationConfigPath = process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined;
   if (args.targetBindings.frontend_target || args.targetBindings.backend_target) {
     const installation = loadInstallationConfig(installationConfigPath);
@@ -841,7 +837,7 @@ function budgetFor(args: CliArgs): Budget {
 }
 
 /**
- * `projects [--workspace <path>]` — T41's read-only fan-out: one line per
+ * `projects [--workspace <path>]` — read-only fan-out: one line per
  * project workspace.yaml names, each with its own store's status counts.
  *
  * Deliberately never opens a `SqliteTaskStore` for a project that has no
@@ -857,7 +853,7 @@ async function runProjectsVerb(rest: string[], defaultProjectRoot: string): Prom
   if (!hasWorkspace(root)) {
     console.log(
       `[orchestrator] no workspace.yaml at ${workspacePath(root)} — this project runs standalone. ` +
-        "Add one (T41) to list other project roots here, or use --project-root with status/audit directly.",
+        "Add one to list other project roots here, or use --project-root with status/audit directly.",
     );
     return 0;
   }
@@ -893,7 +889,7 @@ async function runProjectsVerb(rest: string[], defaultProjectRoot: string): Prom
   return 0;
 }
 
-/** `init --templates <dir> [--force]` — T92. */
+/** `init --templates <dir> [--force]`. */
 async function runInitVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
   const mode = flagValue(rest, "--mode");
@@ -910,7 +906,7 @@ async function runInitVerb(rest: string[], defaultProjectRoot: string): Promise<
       return 1;
     }
   }
-  // T-V5-038 — `legacy-project` mode (`.sta/` materialization via
+  // `legacy-project` mode (`.sta/` materialization via
   // packaging/initCommand.ts) is removed. Error naming the replacement for
   // this release rather than vanishing silently; `software-team-agents init`
   // (targetcli's installer) writes `.agent-team/` and converts a `.sta/`-only
@@ -923,7 +919,7 @@ async function runInitVerb(rest: string[], defaultProjectRoot: string): Promise<
 }
 
 /**
- * T-V5-041 — the legacy-project importer is gone with `orchestrator/src/adoption/`.
+ * The legacy-project importer is gone with `orchestrator/src/adoption/`.
  *
  * `ADR-024-docs-vs-knowledge.md` chose (a) and accepts explicitly that this
  * import becomes unrepeatable: the one run it had is committed in
@@ -971,10 +967,10 @@ async function runConfigureVerb(rest: string[], frameworkRoot: string): Promise<
   }
 }
 
-/** `upgrade --templates <dir>` — T95. */
+/** `upgrade --templates <dir>`. */
 async function runUpgradeVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
-  // T-V5-013 — the live lifecycle is `.agent-team/`; `sta upgrade` is a
+  // The live lifecycle is `.agent-team/`; `sta upgrade` is a
   // compatibility spelling for the same sync operation. The legacy branch
   // below remains available only to `.sta/` workspaces during the transition.
   if (fs.existsSync(path.join(projectRoot, ".agent-team", "manifest.json"))) {
@@ -997,7 +993,7 @@ async function runUpgradeVerb(rest: string[], defaultProjectRoot: string): Promi
       return 1;
     }
   }
-  // T-V5-038 — `legacy-project` mode (`.sta/` file-by-file upgrade via
+  // `legacy-project` mode (`.sta/` file-by-file upgrade via
   // packaging/upgradeCommand.ts) is removed. Error naming the replacement for
   // this release rather than vanishing silently: `software-team-agents init`
   // converts a `.sta/`-only workspace to `.agent-team/` (no content loss),
@@ -1013,7 +1009,7 @@ async function runUpgradeVerb(rest: string[], defaultProjectRoot: string): Promi
 /**
  * The production composition root.
  *
- * T-V5-039 — the paid API adapter is no longer constructed here at all:
+ * The paid API adapter is no longer constructed here at all:
  * `--runtime` only offers runtimes that can actually run, and `ApiAdapter`
  * (`runtime/apiAdapter.ts`) has no `invoke` in production, so every call it
  * received always returned `NOT_CONFIGURED`. The class itself survives as an
@@ -1027,7 +1023,7 @@ export function createProductionRuntimeRegistry(projectRoot: string): RuntimeReg
   ]);
 }
 
-/** `doctor` (T166) — aggregate read-only diagnostics; never mutates, exits non-zero only on FAIL. */
+/** `doctor` — aggregate read-only diagnostics; never mutates, exits non-zero only on FAIL. */
 async function runDoctorVerb(rest: string[]): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root");
   try {
@@ -1068,7 +1064,7 @@ async function runDoctorVerb(rest: string[]): Promise<number> {
   }
 }
 
-/** `migrate` — T96. A no-op, reported as such, when the project is already on the current .sta/ schema version. */
+/** `migrate` — a no-op, reported as such, when the project is already on the current .sta/ schema version. */
 async function runMigrateVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
   try {
@@ -1123,7 +1119,7 @@ async function runKnowledgeMigrateVerb(rest: string[], frameworkRoot: string): P
   }
 }
 
-/** `rollback [--backup <name>]` — T97. Defaults to the most recent snapshot. */
+/** `rollback [--backup <name>]`. Defaults to the most recent snapshot. */
 async function runRollbackVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
   const backup = flagValue(rest, "--backup");
@@ -1154,7 +1150,7 @@ async function runListBackupsVerb(rest: string[], defaultProjectRoot: string): P
 /**
  * The previous failed QA round's findings, read from the module's `review.md`
  * (`## Open Issues`) — the input a recheck plan needs so round N+1 verifies
- * the named findings first instead of starting over (QA06).
+ * the named findings first instead of starting over.
  *
  * Findings carry no file lists today because review.md does not name files;
  * freshness keys stay unknown, which planRecheck treats as "no cross-boundary
@@ -1235,7 +1231,7 @@ export async function productionQaInputs(opts: { docsRoot: string; moduleName: s
   };
 }
 
-/** Dispatches a T31 verb, translating the ones that are really the existing engine in disguise (`run`, `resume`, `retry`) rather than duplicating the step loop. */
+/** Dispatches a verb, translating the ones that are really the existing engine in disguise (`run`, `resume`, `retry`) rather than duplicating the step loop. */
 async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): Promise<number> {
   switch (verb) {
     case "run":
@@ -1310,7 +1306,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     return 0;
   }
 
-  // T-V4-CLI-002: the 18 `--check-*` flags are one table in cli/checkers.ts.
+  // The 18 `--check-*` flags are one table in cli/checkers.ts.
   // Evaluation order is the table order, matching the pre-table if-chain: the
   // flags are mutually exclusive in practice, and the first match wins and exits.
   for (const checker of CHECKERS) {
@@ -1341,7 +1337,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
 
     const taskId = args.taskId!;
 
-    // T35: refuse to step this task while another orchestrator process already holds it. Held
+    // Refuse to step this task while another orchestrator process already holds it. Held
     // for the rest of this function, released in the outer `finally` below, alongside the store.
     try {
       acquireTaskLock(args.projectRoot, taskId);
@@ -1354,7 +1350,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     }
     lockedTaskId = taskId;
 
-    // T31: pause/cancel are a human override the orchestrator's own state machine knows nothing
+    // Pause/cancel are a human override the orchestrator's own state machine knows nothing
     // about (see taskRegistry.ts's pause()/cancel()) — enforced here, once, before anything else
     // touches the task, rather than inside Orchestrator itself.
     const stored = store.loadTask(taskId);
@@ -1389,10 +1385,9 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       );
     }
 
-    // T109: the executor is now a RuntimeAdapter-driven one (T108) rather than a
-    // Claude-Code-specific spawn — swapping `runtime` here is the whole point of
-    // that seam. `guards` derives from `contracts/<role>.yaml` (T15), same as before.
-    // T-OC5: --runtime picks the adapter; the default stays byte-identical to
+    // The executor is driven by a RuntimeAdapter rather than a Claude-Code-specific spawn;
+    // `guards` derives from `contracts/<role>.yaml`, same as before.
+    // `--runtime` picks the adapter; the default stays byte-identical to
     // every run before the flag existed.
     let staConfig: ReturnType<typeof loadStaConfig> | undefined;
     try {
@@ -1435,29 +1430,27 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       moduleName: () => args.module!,
       guards: contractGuardResolver(args.projectRoot),
       phases: () => (args.phases.length > 0 ? args.phases : undefined),
-      // T-UX12: the gate reads the task's own stored level so TRIVIAL/SMALL
+      // The gate reads the task's own stored level so TRIVIAL/SMALL
       // frontend work is not blocked on the UX-artifact precondition its
       // pipeline deliberately skipped.
       taskLevel: () => stored?.classification.level,
       runtimeTask: (id) => store.loadTask(id)?.runtimeTask,
       taskRunLog: (id) => new RunLog(store.runsForTask(id)),
-      // Absent --autonomy keeps the executor's own default ("propose"), which is
-      // byte-identical to every run before the flag existed. Unattended runs pass
-      // it explicitly — T117's pilot showed headless "propose" cannot act.
+      // Absent --autonomy keeps the executor's own default ("propose").
+      // Unattended runs pass it explicitly.
       autonomy: args.autonomy,
-      // T42: absent when there's no repos.yaml — every stage then spawns in
-      // args.projectRoot exactly as before this task existed.
+      // Absent when there's no repos.yaml — every stage then spawns in args.projectRoot.
       stageRoots: loadStageRoots(args.projectRoot),
       // Three-repo mode is activated by the installation binding, never by a
       // per-run root override.  The persisted task is reloaded for every stage
       // so resume observes retirement/mapping changes before any adapter starts.
       threeRepoTask: resolveThreeRepoTaskLookup(args.projectRoot, store),
-      // T114: projects with V1.5 role workspaces get the same BA → SA → DEV
+      // Projects with role workspaces get the same BA → SA → DEV
       // handoff protection when the real orchestrator invokes an agent.
       // An absent knowledge directory means this is a legacy project, whose
-      // pre-V1.5 pipeline remains unchanged.
+      // pipeline remains unchanged.
       enforceRoleWorkflow: fs.existsSync(path.join(args.projectRoot, "knowledge")),
-      // T43: every stage's prompt states which environment this task targets — the task's own
+      // Every stage's prompt states which environment this task targets — the task's own
       // stored environment (survives --resume), not args.environment, which only matters on create.
       extraInstruction: `Environment: ${orchestrator.environment} — ${describeEnvironment(orchestrator.environment, args.projectRoot)}`,
     });
@@ -1468,7 +1461,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     // restores the exact V1 behaviour for a caller that wants it.
     // Resolve the same writable roots for change discovery, deterministic
     // checks, and evidence. In three-repo mode this remains the Target, never
-    // the Framework binding root. T-V4-CLI-003: one tested resolver, not four
+    // the Framework binding root. One tested resolver, not four
     // inline fail-open copies.
     const qaRoots = resolveWritableWorkRoots(args.projectRoot, taskId, store);
     const qaDocsRoot = resolveDocsRoot(args.projectRoot);
@@ -1549,7 +1542,7 @@ if (isMain) {
   // The default project is WHERE YOU STAND, not where this CLI is installed.
   // The old default (this file's package root) made every verb answer
   // "no knowledge item / no .sta here" when a user ran `sta` inside their own
-  // project without --project-root — the sandbox dogfood's F1.
+  // project without --project-root.
   const defaultProjectRoot = process.cwd();
   if (process.argv.slice(2).includes("--help") || process.argv.slice(2).includes("-h")) {
     console.log(USAGE);
@@ -1564,14 +1557,14 @@ if (isMain) {
         console.error(USAGE);
         process.exit(64);
       }
-      // T47: a clean, actionable message instead of a raw better-sqlite3/fs stack trace — the
+      // A clean, actionable message instead of a raw better-sqlite3/fs stack trace — the
       // same task id's resume/retry picks this back up once whatever made the file unavailable
       // clears, since DatabaseUnavailableError is only ever thrown before anything was written.
       if (e instanceof DatabaseUnavailableError) {
         console.error(`[orchestrator] ${e.message}`);
         process.exit(5);
       }
-      // T-V1-09 (dogfood F6): domain failures answer what/why/how-to-fix on one
+      // Domain failures answer what/why/how-to-fix on one
       // line; the stack is debugging detail, shown only when asked for.
       console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
       if (process.env.STA_DEBUG) console.error(e);

@@ -3,10 +3,10 @@ import { AgentStage } from "../types.js";
 import type { ThreeRepoRequestRoots } from "./preflight.js";
 
 /**
- * T-V4-CLI-003 — the extracted three-repo resolvers, tested directly.
+ * The extracted three-repo resolvers, tested directly.
  *
- * `loadInstallationConfig` and `preflightThreeRepoTask` are the two seams the
- * four former inline copies shared; mocking them lets each fail-open branch be
+ * `loadInstallationConfig` and `preflightThreeRepoTask` are the two seams
+ * shared across call sites; mocking them lets each fail-open branch be
  * exercised without a full framework/knowledge/target git fixture (that path is
  * covered end-to-end by `scripts/migration-fixtures.mjs`).
  */

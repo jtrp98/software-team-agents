@@ -19,8 +19,7 @@ import { readBootstrapState } from "../bootstrap/bootstrapStore.js";
 import { loadTargetRegistry } from "../threeRepo/targets.js";
 
 /**
- * The single entry point every agent asks the project knowledge through (T61,
- * and the seam T70's Shared Context API sits on).
+ * The single entry point every agent asks the project knowledge through.
  *
  * `query()` takes one filter for all nine kinds rather than nine per-kind
  * finders, and the graph methods walk relations without caring what the two
@@ -216,7 +215,7 @@ export class KnowledgeBase {
 
   /**
    * Requirement -> Architecture -> API/DB -> Task -> Test, the same chain
-   * `traceability.ts` reconstructs by reading four Markdown documents (T19).
+   * `traceability.ts` reconstructs by reading four Markdown documents.
    * Built from relations here instead of from same-line id co-occurrence
    * there, and the two are tested against each other on one data set — that
    * equivalence is the evidence this model holds what the pipeline already
@@ -399,10 +398,6 @@ export function checkKnowledge(projectRoot: string = defaultProjectRoot()): Know
     ...cross.problems,
     ...resolutionLoad.problems,
     ...policy.problems,
-    // T65's rule, actually enforced. `checkOwnership` existed and was tested
-    // from the day it was written, and nothing ever called it — so an item owned
-    // by a role that does not do that kind of work passed this check and CI.
-    // A rule nobody runs is documentation.
     ...checkOwnership(items).map((p) => `${p.id}: ${p.problem}`),
     // Declared conflicts only. A `conflicts-with` relation was written by
     // somebody who meant it, so an undecided one blocks; a duplicate found by
@@ -434,11 +429,6 @@ export function checkKnowledge(projectRoot: string = defaultProjectRoot()): Know
     }
   }
   allProblems.push(...bootstrapProblems);
-
-  // T-V5-041 removed adoption's half of this check with the subsystem it
-  // reported on. Everything else here is unchanged: the store itself (`_roles/`,
-  // `_conflicts/`, `_human-input/`, `_sources/`), ownership, the source registry
-  // and bootstrap state are all still validated.
 
   const notes: string[] = [...policy.notes];
   // A note, not a problem: keeping a deprecated item *because* something still

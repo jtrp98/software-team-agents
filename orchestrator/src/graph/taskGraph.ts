@@ -1,28 +1,18 @@
 import { AgentStage } from "../types.js";
 
 /**
- * A dependency graph over the individual tasks in a phase — `BE-004`, `FE-010`
- * — rather than over the phases themselves.
+ * A dependency graph over individual tasks (`BE-004`, `FE-010`), not phases.
  *
- * Phases are too coarse to schedule with. "Phase 2 comes after Phase 1" is true
- * but says nothing about the eight tasks inside Phase 2, so the only safe
- * reading of it was "run everything in written order", and the pipeline's one
- * ordering rule had to be a blanket one: backend-engineer before
- * frontend-engineer, always, per `policies/agent-boundaries.md` §6a.
+ * `policies/agent-boundaries.md` §6a requires backend-engineer before
+ * frontend-engineer, always — the frontend reads its types and API calls off
+ * what the backend actually built, and running both at once produced a real
+ * `staff-roles/sync` response-shape mismatch. But §6a also allows same-phase
+ * tasks that share no API contract to run in either order, which nobody could
+ * safely act on without knowing which tasks share a contract.
  *
- * That rule exists for a real reason — the frontend reads its types and API
- * calls off what the backend actually built, and running both at once produced
- * a real `staff-roles/sync` response-shape mismatch that cost an extra fix
- * round. But §6a also grants an exception nobody could act on: tasks in the
- * same phase that share no API contract may run in either order. Acting on it
- * required someone to know which tasks shared a contract, which is exactly the
- * knowledge a person is worst at holding across a phase.
- *
- * So the rule becomes an edge that is *derived*, not remembered: a frontend
- * task that consumes a contract a backend task produces gets an implicit
- * dependency on it. One that consumes nothing gets no edge, and can run
- * alongside. The ordering guarantee is strictly stronger than the blanket rule
- * where it matters, and absent where it never did.
+ * So the rule is derived rather than remembered: a frontend task that
+ * consumes a contract a backend task produces gets an implicit dependency on
+ * it. One that consumes nothing gets no edge, and can run alongside.
  *
  * The graph knows nothing about running anything. It answers "what may go now"
  * and "what must wait"; who executes and how many at a time is the caller's.
@@ -54,7 +44,7 @@ export interface TaskNode {
   /** Contracts this task reads. Consuming one it does not produce is what creates an implicit edge. */
   consumes?: string[];
   /**
-   * The `design.md` Contract Version this task was planned against (T18).
+   * The `design.md` Contract Version this task was planned against.
    * Not used by the graph itself — `dependsOn`/`produces`/`consumes` are what
    * scheduling reads — but carried on the node so consumers can flag a task
    * whose plan predates a later schema amendment, without a second parallel
@@ -236,10 +226,6 @@ export class TaskGraph {
   /**
    * The whole graph as batches: everything in one batch can run at the same
    * time, and every batch waits for the one before it.
-   *
-   * This is the answer to T10 — the schedule the blanket backend-then-frontend
-   * rule could never produce, because it had no way to tell an independent
-   * frontend task from a dependent one.
    */
   parallelLayers(): TaskNode[][] {
     const layers: TaskNode[][] = [];
@@ -277,12 +263,12 @@ export class TaskGraph {
 /**
  * Builds a graph from plan tasks, defaulting `consumes` for frontend work.
  *
- * A frontend task that names no contracts at all is the ambiguous case, and it
- * is the common one — most plans do not annotate contracts. Treating it as
- * independent would silently drop §6a's protection for every unannotated plan,
- * which is the failure that rule was written for. So an unannotated frontend
- * task depends on the backend tasks in its phase, exactly as the blanket rule
- * required; annotating it is what buys the parallelism back.
+ * An unannotated frontend task is the ambiguous, common case — most plans do
+ * not annotate contracts. Treating it as independent would silently drop
+ * §6a's protection for every unannotated plan, which is the failure that rule
+ * was written for. So an unannotated frontend task depends on the backend
+ * tasks in its phase, exactly as the blanket rule required; annotating it is
+ * what buys the parallelism back.
  */
 export function buildPlanGraph(nodes: TaskNode[]): TaskGraph {
   const withDefaults = nodes.map((node) => {

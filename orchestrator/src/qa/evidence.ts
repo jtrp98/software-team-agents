@@ -111,7 +111,7 @@ export interface EvidencePackageInput {
   deterministic?: DeterministicVerification;
   knownRisks: readonly string[];
   recheck?: RecheckPlan;
-  /** Hard line cap for the whole package — the bound that keeps it bounded. */
+  /** Hard line cap for the whole package. */
   maxLines?: number;
 }
 
@@ -139,11 +139,11 @@ export function buildEvidencePackage(input: EvidencePackageInput): string {
   ];
 
   if (input.deterministicGate === "disabled") {
-    // T-V5-036 (F-20) — this branch is reached only via the orchestrator's own
-    // `--no-deterministic-gate` escape hatch, i.e. a deliberate choice not to
-    // run the sweep for this round. It records that fact; it does not ask the
-    // LLM to run the sweep itself — a request in a prompt is not a fact, and
-    // there is no verified evidence the orchestrator can hand over instead.
+    // Reached only via the orchestrator's own `--no-deterministic-gate` escape
+    // hatch — a deliberate choice not to run the sweep for this round. This
+    // records that fact; it does not ask the LLM to run the sweep itself, since
+    // a request in a prompt is not a fact and there is no verified evidence to
+    // hand over instead.
     sections.push([
       "## Deterministic gate: disabled",
       "No deterministic sweep result is available for this round (`--no-deterministic-gate` was set for this run). Verify from the evidence in this package and direct inspection; do not treat the absence of a sweep result as a pass.",

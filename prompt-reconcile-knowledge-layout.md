@@ -103,7 +103,7 @@
    `plan.md` full of `- [x] [backend] …` checkboxes instead of the
    `| Task | Status | Owner | Depends on |` table with `BE-`/`FE-NNN` ids,
    `(DES-NNN)` traceability and `pending/in_progress/verified/blocked`
-   Status (`policies/documentation.md` §2, §4 — T52); a
+   Status (`policies/documentation.md` §2, §4); a
    `requirement.md` missing its `## References` table; knowledge items
    without `sources[]`. Run the Framework's own structural validators from
    the checkout, per module, and record each result:

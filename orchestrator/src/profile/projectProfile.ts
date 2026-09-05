@@ -13,7 +13,7 @@ import { defaultProjectRoot } from "../agents/agentContract.js";
  * default for the application currently being worked on.
  *
  * The one place a Framework self-check looks up what this package is built with, and
- * the technology profiles it can be built with (T13).
+ * the technology profiles it can be built with.
  *
  * Before this, "what stack is this?" was answered by reading
  * `.claude/agents/backend-engineer.md` and inferring. That worked while there
@@ -41,7 +41,7 @@ import { defaultProjectRoot } from "../agents/agentContract.js";
  */
 
 /**
- * T-V5-023 — one engineer role's path globs for one stack layout.
+ * One engineer role's path globs for one stack layout.
  *
  * `contracts/<role>.yaml` used to hold these, which tied the role boundary to a
  * single stack: `server/**`, `src/lib/**`, `app/api/**`, `prisma/**` describe a
@@ -89,7 +89,7 @@ export const StackProfileSchema = z.object({
   /** File extensions the offline security pattern sweep may inspect for this profile. Empty means unsupported, never clean. */
   scan_extensions: z.array(z.string().regex(/^\.[A-Za-z0-9]+$/)).default([]),
   capabilities: z.array(z.enum(Capability)),
-  /** T-V5-023 — stack-shaped engineer path globs, keyed by agent role. Absent means the role falls back to {@link STACK_PERMISSION_FALLBACK}. */
+  /** Stack-shaped engineer path globs, keyed by agent role. Absent means the role falls back to {@link STACK_PERMISSION_FALLBACK}. */
   permissions: z.record(z.string().min(1), StackRolePermissionsSchema).default({}),
 });
 export type StackProfile = z.infer<typeof StackProfileSchema>;
@@ -100,8 +100,8 @@ export const STACK_SCOPED_ROLES: readonly string[] = ["backend-engineer", "front
 /**
  * Where a role's globs come from when the resolved profile declares none — and
  * when a workspace has recorded no stack at all. Both point at the Node/Prisma
- * profiles, which carry exactly the globs the contracts carried before
- * T-V5-023, so an existing installation resolves the same write set it always
+ * profiles, which carry exactly the globs the contracts carried before,
+ * so an existing installation resolves the same write set it always
  * had rather than losing access.
  */
 export const STACK_PERMISSION_FALLBACK: Readonly<Record<string, string>> = {

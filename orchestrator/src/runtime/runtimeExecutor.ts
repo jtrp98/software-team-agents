@@ -45,7 +45,7 @@ import { loadModelTiers, type ModelTierId, type ModelTiers } from "./modelTiers.
 import { captureChangeSetFingerprint } from "../qa/changeSource.js";
 
 /**
- * An `AgentExecutor` built on a `RuntimeAdapter` (T108).
+ * An `AgentExecutor` built on a `RuntimeAdapter`.
  *
  * This is the whole point of the interface: the orchestrator gets the same
  * pluggable seam it always had, and what sits behind it is now a choice. Nothing
@@ -92,7 +92,7 @@ export interface RuntimeExecutorOptions {
    * UX-artifact precondition the classifier deliberately skipped for it.
    */
   taskLevel?: (taskId: string) => TaskLevel | undefined;
-  /** T42 � per-stage working directory for a project whose pipeline spans several repos. */
+  /** Per-stage working directory for a project whose pipeline spans several repos. */
   stageRoots?: Partial<Record<AgentStage, string>>;
   /** Phase 2's fail-closed resolver. When present it runs before adapter start. */
   threeRepoTask?: (taskId: string, stage: AgentStage) => { task: PersistedTask; roots: ThreeRepoRequestRoots };
@@ -101,13 +101,13 @@ export interface RuntimeExecutorOptions {
   /** Optional bounded retention override; the runtime-artifact default otherwise applies. */
   packetRetention?: number;
   /**
-   * T114 — make the BA → SA → DEV human handoffs a prerequisite of the lead
-   * stages. Off by default so a project that has not adopted V1.5 knowledge
-   * workspaces preserves the pre-T114 execution path.
+   * Makes the BA → SA → DEV human handoffs a prerequisite of the lead stages.
+   * Off by default so a project that has not adopted knowledge workspaces
+   * preserves the prior execution path.
    */
   enforceRoleWorkflow?: boolean;
   /**
-   * V3 production routing. When present, runtime/model selection, cached
+   * Production routing. When present, runtime/model selection, cached
    * availability, support policy and write-stage capabilities are resolved per
    * run. Left unset only for embedded compatibility callers and focused tests.
    */
@@ -118,7 +118,7 @@ export interface RuntimeExecutorOptions {
   riskSignals?: (taskId: string) => QaRiskSignals | undefined;
   /** Existing task telemetry, used only for pre-spawn task-token projection. */
   taskRunLog?: (taskId: string) => RunLog;
-  /** T111's verified capability picture per runtime id, passed through to `resolveRuntimeRoute` so its capability-policy diagnostic uses confirmed facts instead of a static claim, when available. */
+  /** The verified capability picture per runtime id, passed through to `resolveRuntimeRoute` so its capability-policy diagnostic uses confirmed facts instead of a static claim, when available. */
   verifiedCapabilities?: Readonly<Record<string, ReadonlySet<RuntimeCapability>>>;
   /** Optional plan tier lookup. An absent table deliberately leaves routing unchanged. */
   planTier?: (taskId: string) => string | undefined;
@@ -135,8 +135,8 @@ export interface RuntimeExecutorOptions {
  * for no reason.
  */
 /**
- * T-V5-023 — the stack layout globs a guard hook cannot resolve for itself,
- * packed for the environment channel that already carries `AGENTCLAUDE_ROLE`.
+ * The stack layout globs a guard hook cannot resolve for itself, packed for
+ * the environment channel that already carries `AGENTCLAUDE_ROLE`.
  *
  * Returns nothing at all for a role no stack profile scopes, so a non-engineer
  * stage's environment is unchanged. `read` is deliberately not sent: reading is
@@ -166,7 +166,7 @@ function unavailableFailure(runtimeId: string, reason: string): StructuredFailur
   };
 }
 
-/** Maps a runtime's normalised usage onto the fields the run log records (T26/T28). */
+/** Maps a runtime's normalised usage onto the fields the run log records. */
 function metricsFrom(result: RuntimeAgentResult, declared: {
   model?: string;
   promptVersion?: number;
@@ -257,9 +257,9 @@ async function fingerprintVerdict(result: AgentExecutorResult, projectRoot: stri
 }
 
 /**
- * T-V5-040 — the route resolves one candidate, so a run never changes runtime
- * mid-flight and there is no hop to describe. The two fields stay in the run
- * log (`fallback_reason` absent, `fallback_count` 0) so existing rows, readers
+ * The route resolves one candidate, so a run never changes runtime mid-flight
+ * and there is no hop to describe. The two fields stay in the run log
+ * (`fallback_reason` absent, `fallback_count` 0) so existing rows, readers
  * and the reporting schema keep their shape.
  */
 const NO_FALLBACK_HOPS = 0;
@@ -375,12 +375,13 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     const finish = (result: AgentExecutorResult): AgentExecutorResult =>
       packetPath ? { ...result, packetPath } : result;
 
-    // V3 routing remains above the orchestrator seam. Embedded callers that do
-    // not supply a registry retain the fixed-runtime compatibility behaviour.
+    // Production routing remains above the orchestrator seam. Embedded callers
+    // that do not supply a registry retain the fixed-runtime compatibility
+    // behaviour.
     const hasTargetWrite = threeRepo?.roots.workRoots.some((root) => root.access === "write") ?? false;
     let activeRuntime = runtime;
     let activeModel = resolveModel(role);
-    // T-V4-CAST-001 — whether `activeModel` is an operator-visible override (CLI
+    // Whether `activeModel` is an operator-visible override (CLI
     // `--model` / `.sta/config.yaml` routing) rather than the frontmatter
     // default, plus any effort named with it. The registry route is the only
     // channel that can set these; the embedded compatibility path below never
@@ -446,8 +447,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       contextBudgetMode,
     );
     if (contextBudget.warning && !contextBudget.rejected) {
-      // T-V3TOK-100 is deliberately observation-only. In particular, this
-      // happens after assembly and before execution without editing `prompt`.
+      // Deliberately observation-only: happens after assembly and before
+      // execution without editing `prompt`.
       console.warn(
         `[orchestrator] WARNING: ${role} context budget exceeded: ${contextBudget.contextChars} chars > ` +
           `${contextBudget.budgetChars} (${contextBudget.budgetSource}); overflow=${contextBudget.overflowChars}. Prompt is unchanged (warning mode).`,
@@ -463,9 +464,9 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       if (taskBudgetRejection) rejections.push(taskBudgetRejection);
       return rejections;
     };
-    // T-V5-040 — budget admissibility is evaluated for the one routed
-    // candidate. It never looks for another runtime to try: an inadmissible
-    // candidate fails the stage closed, with every rejection recorded.
+    // Budget admissibility is evaluated for the one routed candidate. It never
+    // looks for another runtime to try: an inadmissible candidate fails the
+    // stage closed, with every rejection recorded.
     const budgetRejections = candidateBudgetRejections();
     if (contextBudgetMode === "reject" && budgetRejections.length > 0) {
       return finish(failResult(
@@ -518,34 +519,13 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       budgetComposition: promptParts.budgetComposition,
     };
 
-    // T-V5-023 — the stack layout half of this role's write/deny rules. The
+    // The stack layout half of this role's write/deny rules. The
     // guard root is the same directory the runtime runs the agent in, because
     // that is where the hook reads `contracts/` and `stacks/` from; resolving
     // from anywhere else would hand a hook globs for a different workspace.
     const guardRoot = threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot;
     const guardStackRules = resolveGuardStackRules(role, guardRoot);
 
-    const executeActiveRuntime = (): Promise<RuntimeAgentResult> => activeRuntime.executeAgent({
-      role,
-      cwd: threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot,
-      bindingRoot: threeRepo?.roots.bindingRoot,
-      knowledgeRoot: threeRepo?.roots.knowledgeRoot,
-      workRoots: threeRepo?.roots.workRoots,
-      definitionPath: activeRuntime.binding.definitionPath(role),
-      prompt,
-      model: declared.model,
-      modelExplicit: activeModelExplicit,
-      effort: activeEffort,
-      autonomy,
-      guards,
-      env: {
-        AGENTCLAUDE_ROLE: role,
-        ...guardStackRules,
-        ...(hasTargetWrite ? { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify(threeRepo!.roots.workRoots.filter((root) => root.access === "write").map((root) => root.path)) } : {}),
-        ...(threeRepo?.roots.knowledgeRoot ? { AGENTCLAUDE_KNOWLEDGE_ROOT: threeRepo.roots.knowledgeRoot } : {}),
-      },
-      timeoutMs: opts.timeoutMs,
-    });
 
     let result: RuntimeAgentResult;
     if (hasTargetWrite && !activeRuntime.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)) {
@@ -577,7 +557,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         effort: activeEffort,
         autonomy,
         guards,
-        // T15: the framework's own channel for telling a guard which role is
+        // The framework's own channel for telling a guard which role is
         // acting. Set here rather than in an adapter because every runtime's
         // guards need it and none of them can work it out alone — a hook is not
         // told which agent it is guarding. An adapter may add its own variables
@@ -589,8 +569,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           // them the canonical write roots resolved by preflight; never derive
           // scope from cwd or an agent-provided path.
           ...(hasTargetWrite ? { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify(threeRepo!.roots.workRoots.filter((root) => root.access === "write").map((root) => root.path)) } : {}),
-          // T-WG7 — the read-only Knowledge context, for prompts/hooks that
-          // need to name where module documents actually live.
+          // The read-only Knowledge context, for prompts/hooks that need to
+          // name where module documents actually live.
           ...(threeRepo?.roots.knowledgeRoot ? { AGENTCLAUDE_KNOWLEDGE_ROOT: threeRepo.roots.knowledgeRoot } : {}),
         },
         timeoutMs: opts.timeoutMs,
@@ -611,7 +591,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       ));
     }
 
-    // T-OC7 — the post-hoc half of the exit-check contract. A runtime without
+    // The post-hoc half of the exit-check contract. A runtime without
     // an in-band exit guard (OpenCode today, Codex on every build) finishes
     // runs that requested `code-green`/`no-hardcoded-secret` with nobody
     // having run them. The gap must be loud where a person reads the run, not
@@ -625,8 +605,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       );
     }
 
-    // T-V5-040 — UNAVAILABLE stops the stage for a person. There is no second
-    // candidate to walk to: the route named one runtime, so an unavailable one
+    // UNAVAILABLE stops the stage for a person. There is no second candidate
+    // to walk to: the route named one runtime, so an unavailable one
     // escalates instead of silently moving the run somewhere else.
     if (result.status === "UNAVAILABLE") {
       const reason = `${result.diagnostics.join("; ") || result.text || "no reason given"}.`;

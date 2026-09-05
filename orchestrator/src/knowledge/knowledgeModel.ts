@@ -6,13 +6,13 @@ import addFormats from "ajv-formats";
 import { AgentStage } from "../types.js";
 
 /**
- * The shared Project Knowledge model (T61) — one shape for all nine entity
- * types V1.1 names: requirement, business rule, domain term, architecture,
+ * The shared Project Knowledge model — one shape for all nine entity
+ * types: requirement, business rule, domain term, architecture,
  * API, DB schema, decision, task, test.
  *
  * WHY ONE ENVELOPE AND NOT NINE TABLES
  *
- * T64/T67/T69/T70 all need to walk *across* kinds — "which tasks implement the
+ * Many queries need to walk *across* kinds — "which tasks implement the
  * API this requirement needs", "what does DEV see for this module". Split into
  * nine per-kind modules, every one of those questions becomes a join each
  * caller writes for itself, which is precisely the "subsystem you cannot query
@@ -34,10 +34,10 @@ import { AgentStage } from "../types.js";
  * Two rules JSON Schema cannot state without exploding into branches, and both
  * are load-bearing:
  *
- *   1. The id prefix must match the kind. The ids here are the *same* ids T19
- *      already traces (`REQ-`/`DES-`/`BE-`/`FE-`/`TEST-`, `ADR-NNN`), not a
- *      parallel id space, so `REQ-003` naming a `task` is a mistake to reject,
- *      not a value to accept.
+ *   1. The id prefix must match the kind. The ids here are the same ids
+ *      traceability already uses (`REQ-`/`DES-`/`BE-`/`FE-`/`TEST-`, `ADR-NNN`),
+ *      not a parallel id space, so `REQ-003` naming a `task` is a mistake to
+ *      reject, not a value to accept.
  *   2. A relation's two ends must be a legal pair. A graph where anything may
  *      point at anything is a flat list with arrows: check() could report
  *      nothing useful, and traverse() would return noise.
@@ -80,11 +80,11 @@ export interface SourceRef {
   type: SourceType;
   /** `path#L10-L24`, a table name, an OpenAPI path, a person's name, a role name. */
   locator: string;
-  /** When the source was read — not when the item was edited. T71's input. */
+  /** When the source was read — not when the item was edited. */
   captured_at: string;
   /** Hash of the slice read, so a later run can tell the source moved. null when unhashable (a person). */
   digest: string | null;
-  /** The registered raw source (T62) this came from, when there is one. */
+  /** The registered raw source this came from, when there is one. */
   source_id?: string;
   note?: string;
   origin?: { root: "knowledge" | "target" | "external"; target_id: string | null };
@@ -170,7 +170,7 @@ export interface TaskPayload {
   agent: AgentStage | null;
   phase: number | null;
   tag: "frontend" | "backend" | null;
-  /** plan.md's Status cell (T52). */
+  /** plan.md's Status cell. */
   plan_status: "pending" | "in_progress" | "verified" | "blocked";
   produces: string[];
   consumes: string[];
@@ -228,9 +228,7 @@ export const ID_PREFIXES: Record<KnowledgeKind, string[]> = {
   "ux-design": ["UX"],
 };
 
-// The id pattern itself lives in `knowledge-item.schema.json` and is enforced by
-// Ajv. It used to be duplicated here as an exported `ID_PATTERN` that nothing
-// read — a second copy of a rule, free to drift from the one actually applied.
+// The id pattern itself lives in `knowledge-item.schema.json` and is enforced by Ajv.
 
 /** The prefix half of an id — everything before the first hyphen. */
 export function prefixOf(id: string): string {
@@ -270,7 +268,7 @@ export const RELATION_RULES: Record<RelationType, RelationRule[]> = {
   ],
   constrains: [{ from: ["decision", "business-rule"], to: "any" }],
   supersedes: [{ from: "any", to: "same" }],
-  // T66's edge. Same-kind only: a requirement and a task cannot contradict each
+  // Same-kind only: a requirement and a task cannot contradict each
   // other, they can only fail to match, which is a different finding.
   "conflicts-with": [{ from: "any", to: "same" }],
   "derived-from": [{ from: "any", to: "any" }],

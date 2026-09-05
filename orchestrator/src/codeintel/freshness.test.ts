@@ -11,11 +11,6 @@ import {
 } from "./freshness.js";
 import { IndexError, MissingIndexError, StaleIndexError } from "./provider.js";
 
-/**
- * T-GR3 acceptance: all four statuses are produced and acted on, and there is
- * no way to bless a query without passing the gate.
- */
-
 const REV = "a".repeat(40);
 
 function tempRoot(): string {

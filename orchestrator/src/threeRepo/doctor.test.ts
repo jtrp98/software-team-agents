@@ -50,12 +50,10 @@ describe("runDoctor (T166)", () => {
 
   it("passes every structural check on a fully configured three-repo fixture", async () => {
     gitInit(knowledgeRoot);
-    // T-V5-038 — the doctor's "Framework installation" check now validates
-    // only the live `.agent-team/` layout; the legacy `.sta/`-only path this
-    // fixture used to build no longer passes (that installer is retired).
-    // Writing a real `.agent-team/manifest.json` also turns on "Managed asset
-    // freshness" (gated on `isTargetInitialized`), which requires a real git
-    // Target, so this fixture is now a real one too.
+    // The doctor's "Framework installation" check validates only the live
+    // `.agent-team/` layout. Writing a real `.agent-team/manifest.json` also
+    // turns on "Managed asset freshness" (gated on `isTargetInitialized`),
+    // which requires a real git Target, so this fixture is a real one too.
     gitInit(projectRoot);
     writeTargetManifest(projectRoot, { schema_version: 1, framework_version: "0.0.0-doctor-test", installed_at: NOW, updated_at: NOW, files: [] });
     writeTargetConfig(projectRoot, defaultTargetConfig("doctor-fixture", NOW));
@@ -154,7 +152,7 @@ describe("runDoctor (T166)", () => {
   });
 
   it("T-V5-002 (characterization — red until T-V5-005): doctor in an .agent-team-only workspace runs its project checks and never prescribes sta init --force", async () => {
-    // The workspace shape `software-team-agents init` produces (F-01/F-14):
+    // The workspace shape `software-team-agents init` produces:
     // .agent-team/{config.yaml,manifest.json}, no .sta/ anywhere, and the
     // machine's installation binding points at it (a BA Knowledge workspace).
     const workspace = path.join(base, "agent-team-workspace");

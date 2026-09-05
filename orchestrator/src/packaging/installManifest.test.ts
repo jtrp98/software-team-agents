@@ -31,12 +31,6 @@ function sample(): InstallManifest {
   };
 }
 
-/**
- * T-V5-038 — `isInstalled` and `checkInstallManifest` (ajv schema check)
- * existed only for the now-deleted `sta init`/`installValidation` legacy
- * branch and were removed with it; this module now serves only `sta
- * migrate` (T96), which reads/rewrites an existing manifest's schema_version.
- */
 describe("write / read", () => {
   it("round-trips exactly", () => {
     const root = tmpRoot();

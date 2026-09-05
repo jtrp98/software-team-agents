@@ -12,13 +12,10 @@ import { readBootstrapState } from "./bootstrapStore.js";
 import { validateDiscoveredKnowledge } from "./knowledgeValidation.js";
 
 /**
- * Discovery must never quietly undo a person's review.
- *
- * The bug this locks down: every item used to be written with `force: true`,
- * which skips T61's version check, so a second discovery pass reset an
- * `approved` item at version 3 back to `draft` at version 1 — while the
- * bootstrap state still said `ready` and still named the person who had
- * validated it. Nothing reported it.
+ * Discovery must never quietly undo a person's review: writing discovered
+ * items without a version check could reset an `approved` item back to
+ * `draft` while the bootstrap state still said `ready` and still named the
+ * person who had validated it, with nothing reporting it.
  */
 
 const NOW = "2026-08-20T09:00:00Z";
@@ -129,7 +126,6 @@ describe("re-running a stage over reviewed knowledge", () => {
     expect(statusOf(root, "DES-REPO-ROOT")).toEqual({ status: "draft", version: 2 });
     const written = loadKnowledge(root).items.find((i) => i.id === "DES-REPO-ROOT")!;
     expect(written.body).toBe("second read");
-    // The item was created on the first pass, and that is when it was created.
     expect(written.created_at).toBe(NOW);
     expect(written.updated_at).toBe(LATER);
   });

@@ -33,10 +33,10 @@ import { CLAUDE_SETTINGS_PATH, guardCoverage, guardCoverageIsPositive, inspectGu
 import { effectiveExecutionConfig, inertConfigKeys, loadStaConfig, type StaConfig } from "../packaging/staConfig.js";
 
 /**
- * T-TARGET-10 + T-ROLE-18 — `software-team-agents status`: the whole
- * architecture in one read-only screen, in the language of the role whose
- * workspace it is run from. A BA sees their Knowledge workspace with Target
- * marked NOT REQUIRED; a DEV sees Target plus a validated Knowledge binding.
+ * `software-team-agents status`: the whole architecture in one read-only
+ * screen, in the language of the role whose workspace it is run from. A BA
+ * sees their Knowledge workspace with Target marked NOT REQUIRED; a DEV sees
+ * Target plus a validated Knowledge binding.
  */
 
 export interface RuntimeReadiness {
@@ -53,9 +53,9 @@ export interface TargetStatus {
   workspaceKind: ReturnType<typeof detectWorkspaceKind>;
   knowledgeRoot?: string;
   knowledgeBinding?: { knowledgeRoot: string; via: string };
-  /** T-LV1 — BA-workspace only: the optional Target binding, by `target_id` through the local mapping; "invalid" carries the problem in targetRoot. Absent when unset (silent, never required). */
+  /** BA-workspace only: the optional Target binding, by `target_id` through the local mapping; "invalid" carries the problem in targetRoot. Absent when unset (silent, never required). */
   targetBinding?: { targetRoot: string; via: string };
-  /** T-V5-042 — set when the workspace still carries the removed committed `target.path`. Reported as a problem with its fix; never a load failure. */
+  /** Set when the workspace still carries the removed committed `target.path`. Reported as a problem with its fix; never a load failure. */
   removedTargetPathProblem?: string;
   targetId?: string;
   /** Cached deterministic Target profile; absent means not yet detected. */
@@ -70,26 +70,25 @@ export interface TargetStatus {
   /** Managed paths whose on-disk content matches neither pristine nor shipped. */
   conflictCount: number;
   /**
-   * T-WG9 — managed paths the project owned before the Framework ever synced
-   * them (`untracked-file` collisions): sync leaves them alone, which keeps the
+   * Managed paths the project owned before the Framework ever synced them
+   * (`untracked-file` collisions): sync leaves them alone, which keeps the
    * peace but can leave guards unwired. Reported per path so the prompt-setup
    * merge protocol can reconcile them; never a blocking condition.
    */
   projectOwnedPaths: string[];
   /** Complete read-only inventory of instructions that can affect this workspace. */
   instructionSurface: InstructionSurfaceEntry[];
-  /** T-WG2 — agent-prompt files on disk belonging to the other workspace role. Never legitimate; sync --force removes them. */
+  /** Agent-prompt files on disk belonging to the other workspace role. Never legitimate; sync --force removes them. */
   rosterDriftPaths: string[];
   managedFileCount: number;
   hooksInstalled: number;
   hooksRegistered: number;
   /**
-   * T-WG1 — installation.yaml binds a Knowledge root (marker-complete) that was
-   * never `init --role ba`'d there: every command past binding validation
-   * succeeds, so nothing else notices the BA-workspace prompts don't exist anywhere
-   * on the machine (F1 in workspace-guardrails-TASKS.md). Set to the bound
-   * root's path when this applies; absent otherwise (unbound, or bound and
-   * initialized).
+   * installation.yaml binds a Knowledge root (marker-complete) that was never
+   * `init --role ba`'d there: every command past binding validation succeeds,
+   * so nothing else notices the BA-workspace prompts don't exist anywhere on
+   * the machine. Set to the bound root's path when this applies; absent
+   * otherwise (unbound, or bound and initialized).
    */
   knowledgeBoundButUninitialized?: string;
   claude: RuntimeReadiness;
@@ -112,9 +111,9 @@ export function v3ExecutionStatus(
       detail: "not configured — defaults apply (one route / claude-code / deterministic gate enabled)",
     };
   }
-  // T-V5-040 — report only what the runtime actually reads. Keys a config still
-  // carries but nothing consumes are named as ignored rather than rendered as
-  // an "effective" value, which would describe behaviour that no longer exists.
+  // Report only what the runtime actually reads. Keys a config still carries
+  // but nothing consumes are named as ignored rather than rendered as an
+  // "effective" value, which would describe behaviour that no longer exists.
   const inert = inertConfigKeys(staConfig, execution);
   const roles = Object.keys(staConfig?.routing?.by_role ?? {}).length;
   return {
@@ -155,9 +154,9 @@ export function claudeReadiness(targetRoot: string, coverage?: GuardCoverage): R
 }
 
 /**
- * T-V5-008 — bindings alone are not readiness. Counting `.codex/agents/*.toml`
- * and reporting READY is exactly the F-05 defect: a Codex session launches with
- * no guard of any kind. READY now requires a positive guard verdict too.
+ * Bindings alone are not readiness: counting `.codex/agents/*.toml` and
+ * reporting READY would let a Codex session launch with no guard of any kind.
+ * READY requires a positive guard verdict too.
  */
 export function codexReadiness(targetRoot: string, coverage: GuardCoverage): RuntimeReadiness {
   const md = countFiles(path.join(targetRoot, ".claude", "agents"), ".md");
@@ -171,11 +170,10 @@ export function codexReadiness(targetRoot: string, coverage: GuardCoverage): Run
 }
 
 /**
- * OpenCode readiness (T-OC5): bindings must be present and the sta-guards
- * plugin wired — OpenCode's headless default posture is allow-all (planning/v2
- * spike §7), so a workspace without the plugin would run unguarded. T-V5-008
- * moves the plugin half into the shared guard verdict and makes the partial
- * coverage explicit about which guards do and do not run here.
+ * OpenCode readiness: bindings must be present and the sta-guards plugin
+ * wired — OpenCode's headless default posture is allow-all, so a workspace
+ * without the plugin would run unguarded. The shared guard verdict makes the
+ * partial coverage explicit about which guards do and do not run here.
  */
 export function opencodeReadiness(targetRoot: string, coverage: GuardCoverage): RuntimeReadiness {
   const md = countFiles(path.join(targetRoot, ".claude", "agents"), ".md");
@@ -244,8 +242,8 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
         config,
         include: role ? assetsForRole(role) : undefined,
         role,
-        // T-WG7 — a dev workspace's CLAUDE.md is judged against its rendered
-        // bytes, so a healthy rendered workspace reports zero conflicts.
+        // A dev workspace's CLAUDE.md is judged against its rendered bytes,
+        // so a healthy rendered workspace reports zero conflicts.
         derivedContent: devDerivedContent({
           targetRoot: roots.targetRoot,
           templatesDir,
@@ -298,7 +296,7 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     knowledgeBinding = knowledgeBinding ?? { knowledgeRoot: roots.targetRoot, via: "workspace" };
   }
 
-  // T-LV1 — BA-workspace-only, optional Target binding. Any resolution problem is
+  // BA-workspace-only, optional Target binding. Any resolution problem is
   // reported as "invalid" rather than thrown: status must never crash because
   // a Target binding is unset or wrong.
   let targetBinding: TargetBinding | undefined;
@@ -315,7 +313,7 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     }
   }
 
-  // T-WG1 — checked unconditionally (every status run, BA or DEV) against the
+  // Checked unconditionally (every status run, BA or DEV) against the
   // machine-wide installation binding, independent of this workspace's own
   // role: the whole point is to catch a Knowledge root nobody has ever
   // initialized, which is invisible from every other check here.
@@ -338,8 +336,8 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     knowledgeRoot: roots.knowledgeRoot,
     knowledgeBinding,
     targetBinding,
-    // T-V5-042 — the removed field is stripped by the schema, so without this
-    // an un-migrated workspace would show no Target and no reason why.
+    // The removed field is stripped by the schema, so without this an
+    // un-migrated workspace would show no Target and no reason why.
     removedTargetPathProblem: (() => {
       const legacy = removedTargetPath(roots.targetRoot);
       return legacy === undefined ? undefined : buildRemovedTargetPathProblem(legacy);
@@ -365,8 +363,8 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     hooksInstalled: guardWiring.hooksInstalled,
     hooksRegistered: guardWiring.hooksRegistered,
     knowledgeBoundButUninitialized,
-    // T-V5-008 — every runtime's readiness is decided by the same verdict
-    // function, so none of them can report READY without one.
+    // Every runtime's readiness is decided by the same verdict function, so
+    // none of them can report READY without one.
     claude: claudeReadiness(roots.targetRoot, guardCoverage({ runtime: "claude", targetRoot: roots.targetRoot, wiring: guardWiring })),
     codex: codexReadiness(roots.targetRoot, guardCoverage({ runtime: "codex", targetRoot: roots.targetRoot })),
     opencode: opencodeReadiness(roots.targetRoot, guardCoverage({ runtime: "opencode", targetRoot: roots.targetRoot })),
@@ -391,10 +389,10 @@ export function renderStatus(status: TargetStatus): string {
     } else {
       lines.push("Target: NOT REQUIRED (optional; not needed for BA work)");
     }
-    // T-V5-042 — a leftover committed target.path is a problem with a named
-    // fix, not a silent no-binding. Printed whether or not a target_id also
-    // resolved, so the machine-local content in a shared file is never
-    // invisible just because the workspace has since been migrated properly.
+    // A leftover committed target.path is a problem with a named fix, not a
+    // silent no-binding. Printed whether or not a target_id also resolved, so
+    // the machine-local content in a shared file is never invisible just
+    // because the workspace has since been migrated properly.
     if (status.removedTargetPathProblem) {
       lines.push(`  PROBLEM: ${status.removedTargetPathProblem}`);
     }
@@ -444,10 +442,10 @@ export function renderStatus(status: TargetStatus): string {
   lines.push(`  managed files: ${status.managedFileCount}`);
   lines.push(`  Framework guard registrations: ${status.hooksRegistered}/${status.hooksInstalled} registered`);
   if (status.conflictCount > 0) lines.push(`  conflicts: ${status.conflictCount} — run software-team-agents sync to see them`);
-  // T-WG9 — collision-aware reporting: paths the project owns are never a
-  // blocking condition, but leaving them silent is how a workspace ends up
-  // looking READY while its guards were never wired. Name each path and point
-  // at the merge protocol.
+  // Collision-aware reporting: paths the project owns are never a blocking
+  // condition, but leaving them silent is how a workspace ends up looking
+  // READY while its guards were never wired. Name each path and point at the
+  // merge protocol.
   if (status.projectOwnedPaths.length > 0) {
     lines.push(`  project-owned paths left alone (${status.projectOwnedPaths.length}):`);
     for (const p of status.projectOwnedPaths) {

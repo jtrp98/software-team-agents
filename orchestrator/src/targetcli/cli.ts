@@ -5,20 +5,19 @@ import { fileURLToPath } from "node:url";
 import { resolveFrameworkRoot } from "./roots.js";
 import { runTargetInit } from "./initCommand.js";
 import { gatherStatus, renderStatus } from "./statusCommand.js";
-import { TargetSyncConflictError, planSync, runTargetSync } from "./syncEngine.js";
+import { TargetSyncConflictError, runTargetSync } from "./syncEngine.js";
 import { readTargetManifest, isTargetInitialized, loadTargetConfig, TargetNotInitializedError } from "./targetMeta.js";
 import { installedFrameworkVersion } from "./version.js";
 import { runBa, runDev, type RuntimeName } from "./devCommand.js";
 import { assetsForRole, type WorkspaceRole } from "./roleWorkspace.js";
 
 /**
- * T-TARGET-01 + T-ROLE-03/04 — the Target-first, role-aware entry point.
- *
- * `software-team-agents init|sync|status|dev|ba`, always executed against the
- * repository the user's shell is standing in (process.cwd(), or --target-root).
- * Nothing here requires — or even accepts — cd-ing into the Framework repo;
- * that repo resolves itself from this file's installed location. `dev` runs a
- * DEV session from a Target; `ba` runs a BA session from the Knowledge repo.
+ * The Target-first, role-aware entry point: `software-team-agents init|sync|status|dev|ba`,
+ * always executed against the repository the user's shell is standing in
+ * (process.cwd(), or --target-root). Nothing here requires — or even accepts —
+ * cd-ing into the Framework repo; that repo resolves itself from this file's
+ * installed location. `dev` runs a DEV session from a Target; `ba` runs a BA
+ * session from the Knowledge repo.
  */
 
 export const TARGET_USAGE =
@@ -56,7 +55,7 @@ export interface TargetCliArgs {
   autoSync: boolean;
   runtime: RuntimeName;
   runtimeSelections: RuntimeName[];
-  /** T-V5-008 — explicit acceptance of a runtime that enforces no guard. */
+  /** Explicit acceptance of a runtime that enforces no guard. */
   allowUnguardedRuntime: boolean;
   json: boolean;
   help: boolean;
@@ -189,8 +188,8 @@ export async function runTargetCli(
         const updated = result.sync.performed.filter((p) => p.action === "update").length;
         const unchanged = result.sync.performed.filter((p) => p.action === "unchanged").length;
         console.log(`[software-team-agents]   managed assets: ${added} added, ${updated} updated, ${unchanged} already current`);
-        // T-V5-010 — init surfaces the same environment prerequisite objects
-        // launch preflight will later enforce. They remain advisory here.
+        // Surfaces the same environment prerequisite objects launch preflight
+        // will later enforce; advisory here, not enforced.
         for (const prerequisite of result.prerequisites) {
           if (!prerequisite.ok) console.log(`[software-team-agents] ! ${prerequisite.name} — ${prerequisite.detail}; Fix: ${prerequisite.fix}`);
         }

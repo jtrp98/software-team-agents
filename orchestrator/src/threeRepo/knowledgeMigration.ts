@@ -5,7 +5,6 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { checkKnowledge } from "../knowledge/knowledgeBase.js";
 import { loadKnowledge } from "../knowledge/knowledgeStore.js";
 import { freshnessOf } from "../knowledge/freshness.js";
-import { digestOfSource } from "../knowledge/sourceDigest.js";
 import { loadSourceRegistry } from "../knowledge/sourceRegistry.js";
 
 export const SB_WEB_HELPER_TARGET_ID = "sb-web-helper";

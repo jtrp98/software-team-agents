@@ -74,7 +74,7 @@ describe("classifyQaFailure", () => {
     expect(() => validateStructuredFailure(failure)).not.toThrow();
   });
 
-  /** The distinction that did not exist before T06: a schema gap is not a backend bug. */
+  /** A schema gap is not a backend bug. */
   it("classifies a schema gap as a contract failure owned by system-analyst", () => {
     const failure = classifyQaFailure(
       review(["| design.md ไม่ได้ระบุ field discount | Phase 2 | system-analyst | blocking | 0 |"]),
@@ -215,7 +215,6 @@ describe("classified failures routed by the orchestrator", () => {
     expect(route).toEqual({ kind: "RETRY_STAGE", stage: AgentStage.BACKEND_ENGINEER, reason: failure.reason });
   });
 
-  /** T06 names the owner, T07 gave the machine an edge to reach it — together they replace a blanket escalation. */
   it("recovers a contract failure to system-analyst instead of retrying an engineer", () => {
     const failure = classifyQaFailure(review(["| design gap | Phase 2 | system-analyst | blocking | 0 |"]))!;
     const route = routeFailure(failure, [AgentStage.SYSTEM_ANALYST, ...PIPELINE]);

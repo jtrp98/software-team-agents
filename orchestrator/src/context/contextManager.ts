@@ -39,7 +39,7 @@ const DOC_TO_CATEGORY: Partial<Record<DocKind, ArtifactType>> = {
 
 export type ReferencedSections = Partial<Record<DocKind, string[]>>;
 
-/** Resolves only the three reference fields P6 authorizes for document narrowing. */
+/** Resolves only the reference fields authorized for document narrowing. */
 export function handoffReferencedSections(stage: AgentStage, handoff: HandoffArtifact): ReferencedSections {
   const policy = CONTEXT_POLICY[stage];
   if (!policy) return {};

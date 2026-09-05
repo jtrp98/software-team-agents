@@ -420,7 +420,7 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
     }
   });
 
-  /** The layout half of an engineer's rules reaches a hook through the environment (T-V5-023). */
+  /** The layout half of an engineer's rules reaches a hook through the environment. */
   it("the generated stack-rule reader takes the channel the orchestrator writes, and trusts nothing else", () => {
     const body = renderGuardRuleBlock()
       .split("\n")

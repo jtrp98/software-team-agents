@@ -5,38 +5,29 @@ import Ajv, { type ValidateFunction } from "ajv";
 import addFormats from "ajv-formats";
 
 /**
- * Project Bootstrap state model (T73).
+ * Project Bootstrap state model.
  *
- * WHAT THIS IS
- *
- * TASKS_V1.md's diagram for V1.2 is a straight line: Discovery (T74-T79) builds
- * Project Knowledge (T61), a human validates it (T80), and the project becomes
- * `Ready`. T73 is that line — the state that tracks where a project sits on it
- * and the rule for when it is allowed to move forward.
- *
- * T74-T79 do not exist yet. This module does not depend on them existing: it
- * defines the stage ids they will fill in (`DiscoveryStageId`) and a status
- * derivation any of them can drive once they do. `bootstrapRunner.ts` is the
- * pluggable seam a stage implementation registers against.
+ * The bootstrap process is sequential: Discovery builds Project Knowledge,
+ * a human validates it, and the project becomes `Ready`. This model tracks
+ * where a project sits on that line and when it is allowed to move forward.
  *
  * STATUS IS DERIVED, NOT SET
  *
  * `computeStatus()` is the only place `ready` gets decided. A stored `status`
- * field that disagreed with the stages/validation that produced it would be
- * exactly the kind of "true" flag T52's plan.md work found already — a value
- * nobody re-derives, so it drifts. `checkBootstrapState()` re-derives it on
- * every read and rejects a file that disagrees with its own data.
+ * field that disagreed with the stages/validation that produced it would drift.
+ * `checkBootstrapState()` re-derives it on every read and rejects a file
+ * that disagrees with its own data.
  */
 
 export type DiscoveryStageId =
-  | "repository" // T74
-  | "documentation" // T75
-  | "db-schema" // T76
-  | "api" // T77
-  | "architecture" // T78
-  | "human-input"; // T79
+  | "repository"
+  | "documentation"
+  | "db-schema"
+  | "api"
+  | "architecture"
+  | "human-input";
 
-/** Fixed order — T73's diagram runs discovery before the human fills gaps it couldn't find. */
+/** Fixed order — runs discovery before the human fills gaps it couldn't find. */
 export const ALL_STAGES: readonly DiscoveryStageId[] = [
   "repository",
   "documentation",
@@ -79,7 +70,7 @@ function stagesSettled(stages: StageRecord[]): boolean {
 
 /**
  * `ready` requires both a settled discovery pass and a recorded human
- * validation (T80) — either alone leaves the project not actually ready:
+ * validation — either alone leaves the project not actually ready:
  * discovery with no review is an agent deciding on its own that its guesses
  * were good enough, and a validation timestamp with open stages would be
  * approving knowledge that does not exist yet.

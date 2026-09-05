@@ -1,6 +1,6 @@
 # Policy — Agent boundaries (§6, §6a, §8)
 
-Split from `.claude/shared/conventions.md` by T49. What no agent may decide for itself: whether
+What no agent may decide for itself: whether
 to invoke the next stage, in what order two engineers run, and when a stage is too heavy for the
 work in front of it.
 
@@ -37,15 +37,17 @@ The normal flow, and the loops back:
 ```
 setup (once per project)
    ↓
-business-analyst → system-analyst → project-manager → backend-engineer → frontend-engineer
-                                                                    ↓
-                                                              qa-engineer
-                                                    ↓            ↓            ↓
-                                         implementation bug   schema gap   business gap
-                                                    ↓            ↓            ↓
-                                      frontend/backend-engineer  system-analyst  business-analyst
-                                                                    ↓
-                                                  security (sensitive phases) → devops
+business-analyst → system-analyst → project-manager → test-planner
+                                                            ↓
+backend-engineer → [uxui-designer (consultant draft)] → frontend-engineer
+                                                            ↓
+                                                       qa-engineer
+                                             ↓              ↓            ↓
+                                  implementation bug   schema gap   business gap
+                                             ↓              ↓            ↓
+                                frontend/backend-engineer  system-analyst  business-analyst
+                                                            ↓
+                                            security (sensitive phases) → devops
 ```
 
 ---

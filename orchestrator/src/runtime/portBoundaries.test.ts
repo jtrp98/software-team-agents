@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * OFF04 — the boundary rule, enforced rather than remembered.
+ * The boundary rule, enforced rather than remembered.
  *
  * `runtimeAdapter.ts`'s whole reason to exist is that the orchestrator core
  * talks to a port while only the composition root knows which provider backs

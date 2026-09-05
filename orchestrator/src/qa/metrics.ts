@@ -2,7 +2,7 @@ import { AgentStage } from "../types.js";
 import type { RunRecord } from "../observability/runLog.js";
 
 /**
- * QA07 — QA cost & effectiveness metrics, read off the run log.
+ * QA cost & effectiveness metrics, read off the run log.
  *
  * Everything here is derived from records that already exist: a QA round's
  * tokens/cost/duration/context size are logged per run, and `qa_mode` (this
@@ -29,7 +29,7 @@ export interface TaskQaMetrics {
   unrecordedModeRounds: number;
   qaRetries: number;
   qaFailures: number;
-  /** T-V1-13A §8.12 — tokens spent on FAILed runs, the retry waste a cheaper pipeline must shrink. Every role's failed runs count, not just QA's. */
+  /** Tokens spent on FAILed runs, the retry waste a cheaper pipeline must shrink. Every role's failed runs count, not just QA's. */
   retryWasteTokens: number;
   avgQaContextChars: number | null;
   qaDurationMs: number;
@@ -73,8 +73,8 @@ export interface QaMetricsExport {
     targetedRounds: number;
     qaRetries: number;
     /**
-     * T-V1-13A §8.12 — total tokens over tasks that reached at least one PASS
-     * run, divided by the number of such tasks. Total ÷ *successful* on purpose:
+     * Total tokens over tasks that reached at least one PASS run, divided by
+     * the number of such tasks. Total ÷ *successful* on purpose:
      * an optimization that quietly fails more tasks must look more expensive per
      * success, never cheaper overall. Null when no task succeeded.
      */
@@ -153,8 +153,8 @@ export function compareBaselines(before: QaMetricsExport, after: QaMetricsExport
   };
 }
 
-// T-V3TOK-003 deliberately lives beside QA metrics: both are read-only views
-// over the same RunRecord store, not competing telemetry systems.
+// Deliberately lives beside QA metrics: both are read-only views over the
+// same RunRecord store, not competing telemetry systems.
 export interface TokenCompositionMetrics {
   static_chars: number | null;
   handoff_chars: number | null;
@@ -228,7 +228,7 @@ export interface TokenMetricsExport {
   totals: Omit<TaskTokenMetrics, "taskId" | "sessionKinds"> & V3OptimizationRollups;
 }
 
-/** V3 Phase 8 read-only derivations over task state plus the existing run log. */
+/** Read-only derivations over task state plus the existing run log. */
 export interface V3OptimizationRollups {
   /** Strict token spend across completed tasks divided by completed task count. */
   total_token_per_completed_task: number | null;

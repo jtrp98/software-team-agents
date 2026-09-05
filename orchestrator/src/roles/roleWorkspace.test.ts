@@ -2,7 +2,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { AgentStage } from "../types.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { UNIVERSAL_DENY, canWritePath } from "../agents/pathPermissions.js";
 import { KnowledgeBase } from "../knowledge/knowledgeBase.js";
@@ -14,7 +13,6 @@ import {
   AcknowledgementError,
   PROJECT_WIDE_DIR,
   ROLES_DIRNAME,
-  type RoleWorkspace,
   RoleWorkspaceError,
   acknowledge,
   checkRoleWorkspaces,
@@ -127,7 +125,7 @@ describe("laneView", () => {
     expect(view.active).toEqual(["BE-014", "FE-020"]);
   });
 
-  /** The V1.5 case in one test: SA amends the design while DEV is mid-task. */
+  /** SA amends the design while DEV is mid-task. */
   it("reports a dependency that moved while the lane was working", () => {
     const ws = acknowledge(emptyWorkspace("dev", "sales-crm", NOW), kb, ["API-shifts.list", "DES-003"], "Jaturapat", NOW);
     const after = new KnowledgeBase(bumped("DES-003"));
@@ -288,7 +286,7 @@ describe("the store", () => {
       [`knowledge/${ROLES_DIRNAME}/sales-crm/dev.yaml`]:
         "schema_version: 1\nlane: dev\nmodule: sales-crm\nseen: []\nupdated_at: 2026-08-21T10:00:00Z\napprovals: []\n",
     });
-    // `approvals` is T103's field and does not exist yet — a slot that validated
+    // `approvals` does not exist as a field yet — a slot that validated
     // nothing would look enforced and would not be.
     expect(() => loadRoleWorkspace("dev", "sales-crm", root)).toThrow(/approvals/);
   });
@@ -420,7 +418,7 @@ describe("no agent may write a role workspace", () => {
   /**
    * The floor, not a per-contract rule: an agent that could write one of these
    * could mark a change acknowledged on a person's behalf, which is exactly what
-   * V1.5's human-in-the-loop design forbids.
+   * the human-in-the-loop design forbids.
    */
   it("is in UNIVERSAL_DENY", () => {
     expect(UNIVERSAL_DENY).toContain("knowledge/_roles/**");
@@ -554,7 +552,7 @@ describe("the roles verb (T99)", () => {
     expect(result.out).toMatch(/never acknowledged: API-shifts\.list, DES-003/);
   });
 
-  /** T100: the lane's own stage and its next action print alongside T99's watermark status. */
+  /** The lane's own stage and its next action print alongside the watermark status. */
   it("prints the BA lane's stage and next action", async () => {
     const root = project();
     const result = await capture(["roles", "--module", "sales-crm", "--project-root", root], root);
@@ -605,7 +603,7 @@ describe("the roles sub-commands for T103-T107", () => {
   it("runs a whole lane from review to signed-off handoff", async () => {
     const root = project();
 
-    // RULE-007 is draft. Approving it before review is refused by T65.
+    // RULE-007 is draft. Approving it before review is refused.
     const early = await capture(["roles", "approve", "RULE-007", "--by", "Jaturapat", "--project-root", root], root);
     expect(early.code).toBe(1);
     expect(early.err).toMatch(/cannot go draft -> approved/);

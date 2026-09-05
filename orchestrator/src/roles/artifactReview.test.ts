@@ -27,10 +27,7 @@ describe("reviewItem (T104)", () => {
     expect(() => reviewItem(rule(), AgentStage.BUSINESS_ANALYST, NOW)).toThrow(StatusTransitionError);
   });
 
-  /**
-   * The check T104 adds on top of T65: a role whose context policy never puts
-   * this kind in front of it cannot meaningfully have reviewed it.
-   */
+  /** A role whose context policy never puts this kind in front of it cannot meaningfully have reviewed it. */
   it("refuses a reviewer that does not see the kind", () => {
     // devops does not read requirements documents, so it cannot review a business rule.
     expect(canSeeKind(AgentStage.DEVOPS, "business-rule")).toBe(false);

@@ -34,10 +34,10 @@ describe("validateInstallation", () => {
     expect(result.problems[0]).toContain("software-team-agents init");
   });
 
-  it("T-V5-002 (characterization — red until T-V5-004): an .agent-team-only workspace counts as installed", () => {
-    // The shape `software-team-agents init` actually produces: .agent-team/
-    // metadata and synced files, no .sta/ anywhere (F-01). A health check must
-    // not call a correctly installed workspace broken.
+  it("an .agent-team-only workspace counts as installed", () => {
+    // `software-team-agents init` produces .agent-team/ metadata and synced
+    // files, no .sta/ anywhere — a correctly installed workspace must not be
+    // reported as broken.
     const templatesDir = fixtureTemplatesDir();
     const workspace = tmpDir("sta-validate-agentteam-");
     fs.mkdirSync(path.join(workspace, ".git")); // standalone-repo marker, as the sync engine inspects it
@@ -54,9 +54,9 @@ describe("validateInstallation", () => {
     expect(result.problems).toEqual([]);
   });
 
-  /** T-V5-038 — the `.sta/`-only installer is gone; a workspace still on that
-   * layout gets a distinct, actionable message naming the conversion path,
-   * rather than being silently treated the same as a never-initialized one. */
+  /** A workspace still on the retired `.sta/`-only layout gets a distinct,
+   * actionable message naming the conversion path, rather than being silently
+   * treated the same as a never-initialized one. */
   it("reports a .sta/-only workspace as needing conversion, not just 'never initialized'", () => {
     const project = tmpDir("sta-validate-legacy-");
     fs.mkdirSync(path.join(project, ".sta"), { recursive: true });

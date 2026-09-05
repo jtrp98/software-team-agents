@@ -77,7 +77,7 @@ export const ExecutionPacketSchema = z
   });
 export type ExecutionPacket = z.infer<typeof ExecutionPacketSchema>;
 
-/** P6 handoffs are compact indexes, never another authored document. */
+/** Handoffs are compact indexes, never another authored document. */
 export const HANDOFF_MAX_BYTES = 2_048;
 const HandoffIdSchema = z.string().min(1).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const HandoffModuleSchema = z
@@ -151,7 +151,7 @@ export const RequirementsArtifactSchema = z.object({
     outScope: z.array(z.string()),
   }),
   actors: z.array(z.string()).min(1),
-  // What QA checks the delivered work against — never optional, never empty.
+  // What QA checks the delivered work against.
   acceptanceCriteria: z.array(z.string()).min(1),
   // CLAUDE.md's rule carried forward: an unsourced fact is an assumption, in writing.
   assumptions: z.array(
@@ -210,8 +210,7 @@ export type PlanArtifact = z.infer<typeof PlanArtifactSchema>;
 
 export const TestPlanArtifactSchema = z.object({
   taskId: z.string().min(1),
-  // One entry per requirement this test strategy covers — the REQ-NNN traceability id (T19),
-  // so a task's tests can be traced back to the requirement they verify.
+  // One entry per requirement this test strategy covers, by traceability id.
   items: z
     .array(
       z.object({
@@ -222,8 +221,8 @@ export const TestPlanArtifactSchema = z.object({
     )
     .min(1),
   // True only if the project actually has an automated test framework (opt-in per CLAUDE.md).
-  // False is a normal, expected value — most projects never opt in — and does not invalidate the plan:
-  // it still tells engineers/qa-engineer what *should* be exercised, by reading if nothing else.
+  // False is normal and does not invalidate the plan — it still tells engineers/qa-engineer
+  // what should be exercised, by reading if nothing else.
   hasAutomatedTests: z.boolean(),
 });
 export type TestPlanArtifact = z.infer<typeof TestPlanArtifactSchema>;
@@ -239,8 +238,8 @@ export const QaReportArtifactSchema = z
       passed: z.number().int().nonnegative(),
       failed: z.number().int().nonnegative(),
     }),
-    // Evidence-based QA (item 4): never accept a bare verbal PASS/FAIL —
-    // each entry must be a real, checkable pointer (log excerpt, coverage report path, etc).
+    // Never accept a bare verbal PASS/FAIL — each entry must be a real,
+    // checkable pointer (log excerpt, coverage report path, etc).
     evidence: z.array(z.string().min(1)).min(1),
     risks: z.array(z.string()),
     // True only if an actual automated suite (opt-in per CLAUDE.md) ran.

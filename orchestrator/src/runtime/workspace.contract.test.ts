@@ -7,7 +7,7 @@ import { MemoryWorkspace } from "./mockAdapter.js";
 import type { RuntimeWorkspace } from "./runtimeAdapter.js";
 
 /**
- * OFF04 — the Tool-execution port's contract, stated once and applied to every
+ * The Tool-execution port's contract, stated once and applied to every
  * implementation.
  *
  * `RuntimeWorkspace` is how the framework reads artifacts back (review.md,

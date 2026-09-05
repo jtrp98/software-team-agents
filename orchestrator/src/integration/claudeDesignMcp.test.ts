@@ -7,10 +7,9 @@ import {
 } from "./claudeDesignMcp.js";
 
 /**
- * T-CD1 — every branch of the Claude Design allowlist selector is fail-closed
- * and provable without a credential: the module owns only the verdict, the same
- * split `threeRepo/identities.ts` uses. What these tests buy: nobody can widen
- * the tool surface (or sneak a canvas mutation into a read-only run) without a
+ * Every branch of the Claude Design allowlist selector is fail-closed and
+ * provable without a credential. These tests ensure nobody can widen the tool
+ * surface (or sneak a canvas mutation into a read-only run) without a
  * deliberate constant change that shows up in this file's diff.
  */
 

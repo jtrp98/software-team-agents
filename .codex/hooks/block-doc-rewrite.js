@@ -2,37 +2,29 @@
 /*
  * PreToolUse guard for `policies/documentation.md` §4 — "Amend, don't regenerate".
  *
- * That rule is a prompt instruction: once a module doc exists, every agent is supposed to
- * amend it section-by-section with `Edit`, never blow it away with a full `Write`. Like the
- * git and outside-repo rules, it only holds as long as every agent remembers it — so this
- * hook enforces the mechanical half of it: a `Write` call whose target is one of the seven
- * per-module docs, and which already exists on disk, is blocked before it runs. `Edit` is
- * unaffected — that's the whole point, it's the only allowed way to change an existing doc.
+ * Once a module doc exists, agents are supposed to amend it section-by-section with `Edit`,
+ * never replace it with a `Write` — a prompt instruction that only holds as long as every
+ * agent remembers it. This hook enforces the mechanical half: a `Write` whose target is one
+ * of the seven per-module docs, and which already exists on disk, is blocked before it runs.
  *
  * Deliberately NOT blocked:
- *   - `Write` to one of these paths when the file does NOT exist yet — that's the doc's first
- *     creation (business-analyst making requirement.md, system-analyst making design.md, ...),
- *     which is exactly what `Write` is for.
- *   - `Write` to anything else (app code, `.claude/...`, `status.md`, or an archived round
- *     under a module's `review` subfolder) — this only watches the six live docs conventions.md
- *     §1 names.
- *   - `Edit`/`MultiEdit` on these docs — amending is the allowed path, not the blocked one.
- *     A `MultiEdit` can still gut a doc, but it goes through the same visible diff an
- *     `Edit` does, and blocking it wholesale would break every legitimate amend.
- *   - `NotebookEdit` — it only targets `.ipynb`, which the module-doc rule below never
- *     matches.
- *   - Shell redirection (`cat > doc`) — firewalling every path a shell command might
- *     touch is out of scope by design (same line `block-outside-repo.js` draws); the
- *     per-agent write contracts and review are the backstops there, not this hook.
+ *   - `Write` when the file does NOT exist yet — that's the doc's first creation
+ *     (business-analyst making requirement.md, system-analyst making design.md, ...).
+ *   - `Write` to anything else — this only watches the docs conventions.md §1 names.
+ *   - `Edit`/`MultiEdit` on these docs — amending is the allowed path. A `MultiEdit` can
+ *     still gut a doc, but it goes through the same visible diff an `Edit` does, and
+ *     blocking it wholesale would break every legitimate amend.
+ *   - `NotebookEdit` — it only targets `.ipynb`, which the module-doc rule below never matches.
+ *   - Shell redirection (`cat > doc`) — out of scope by design, same line
+ *     `block-outside-repo.js` draws.
  *
- * This hook cannot and does not know *which agent* is calling it — PreToolUse input carries
- * no subagent identity, only tool_name/tool_input. So it can't special-case "except
- * business-analyst creating it for the first time" by name; it doesn't need to, because the
- * file-exists check already produces exactly that behavior structurally.
+ * PreToolUse input carries no subagent identity, only tool_name/tool_input, so this can't
+ * special-case "except business-analyst creating it for the first time" — the file-exists
+ * check already produces that behavior structurally.
  *
- * Blocks by exiting 2, which returns the message on stderr to the model.
- * Anything it can't parse or resolve is allowed through — a guard that fails closed on
- * malformed input would break unrelated work, and this is a backstop, not the only rule.
+ * Blocks by exiting 2, which returns the message on stderr to the model. Anything it can't
+ * parse or resolve is allowed through — a guard that fails closed on malformed input would
+ * break unrelated work, and this is a backstop, not the only rule.
  */
 
 'use strict';
@@ -63,7 +55,7 @@ process.stdin.on('end', () => {
   process.exit(0);
 });
 
-/** The seven per-module docs conventions.md names, plus their fixed filenames. */
+/** The per-module docs named in conventions.md §1. */
 const GUARDED_NAMES = new Set([
   'requirement.md',
   'design.md',

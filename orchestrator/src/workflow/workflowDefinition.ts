@@ -14,29 +14,19 @@ export { workflowPath, workflowsDir };
  * Loads `workflows/<id>.yml` — which agents run, in what order, for one kind of
  * change.
  *
- * These files are **generated** (T-V3TOK-110, ADR-007). The authored sources are
- * `classification/taskClassifier.ts` for the behaviour and
- * `workflow/workflowCatalog.ts` for the prose the classifier does not model;
- * `scripts/regenerate-renderings.mjs` writes the files and
- * `checkAllWorkflows()` byte-checks them, the same arrangement `--check-bindings`
- * uses for `.codex/`, `.opencode/` and `.agents/skills`.
+ * These files are **generated** (ADR-007): `classification/taskClassifier.ts`
+ * is the authored behaviour, `workflow/workflowCatalog.ts` is the authored
+ * prose, `scripts/regenerate-renderings.mjs` writes the files, and
+ * `checkAllWorkflows()` byte-checks them — the same arrangement
+ * `--check-bindings` uses for `.codex/`, `.opencode/` and `.agents/skills`.
  *
- * Before that they were hand-written beside a hand-written classifier, with a
- * semantic lint comparing the two. That is a dual source of truth kept aligned by
- * a check that can only object after somebody has already forgotten — and the
- * files were never runtime inputs, so the duplication bought documentation at the
- * price of a permanent sync obligation.
+ * What this module owns is *reading* one: a target project's copy is
+ * validated against `schemas/workflow.schema.json` on the way in rather than
+ * trusted blindly.
  *
- * What this module still owns is *reading* one: a target project's copy is a real
- * file that a person can open, and it is validated against
- * `schemas/workflow.schema.json` on the way in rather than trusted because it was
- * generated once.
- *
- * Three workflows have no classification signal at all. `refactor`, `hotfix` and
- * `security-fix` are distinguished by *intent*, not by anything observable in
- * the change — a refactor and a bug fix look identical from outside — so they
- * are named explicitly by the caller rather than inferred. Pretending otherwise
- * would mean guessing at a distinction the diff does not contain.
+ * `refactor`, `hotfix` and `security-fix` have no classification signal —
+ * they are distinguished by *intent*, not by anything observable in the
+ * change, so they are named explicitly by the caller rather than inferred.
  */
 
 export type WorkflowTrigger =
@@ -180,16 +170,15 @@ export interface WorkflowCheckResult {
 /**
  * The check `--check-workflows` runs, in two halves.
  *
- * The first is the deterministic one: every committed `workflows/<id>.yml` is
- * byte-identical to what the catalog renders from the classifier today, with no
- * orphans. That is strictly stronger than the semantic comparison it replaced,
- * which only probed four flag combinations and so could not see a description, a
- * note or a priority drift at all.
+ * First, deterministic: every committed `workflows/<id>.yml` is
+ * byte-identical to what the catalog renders from the classifier today, with
+ * no orphans — strictly stronger than the semantic comparison it replaced,
+ * which only probed four flag combinations and could not see a description,
+ * note or priority drift.
  *
- * The second re-reads the files through the Ajv schema. Byte equality already
- * implies it here, but a target project's copy is a real file a person can open
- * and the loader is what a person's `sta` will use — a generated file that
- * violates its own schema should fail this check rather than the next run.
+ * Second, it re-reads the files through the Ajv schema. Byte equality already
+ * implies it here, but a generated file that violates its own schema should
+ * fail this check rather than the next run.
  */
 export function checkAllWorkflows(projectRoot: string = defaultProjectRoot()): WorkflowCheckResult {
   const fileCheck = checkWorkflowFiles(projectRoot);

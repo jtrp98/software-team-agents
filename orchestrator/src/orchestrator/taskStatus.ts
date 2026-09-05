@@ -24,8 +24,8 @@ export function stageStateOf(stage: AgentStage | undefined): TaskState | undefin
  * advance loop and any read-only view (state view, CLI listing) use, so they
  * can never disagree about who is assigned.
  *
- * `devops` is the one stage assigned at two different states instead of one
- * (T44): "prepare" at READY_TO_DEPLOY (Dockerfile/CI/dry-run — safe to run
+ * `devops` is the one stage assigned at two different states instead of one:
+ * "prepare" at READY_TO_DEPLOY (Dockerfile/CI/dry-run — safe to run
  * unattended) and "execute" at APPROVED (the actual deploy/migration command,
  * always after the human gate). `deployPrepared` is what tells the two runs
  * apart — `pipelineCursor` alone can't, because unlike backend/frontend's two
@@ -43,7 +43,7 @@ export function isAgentAssignedAt(stage: AgentStage, state: TaskState, deployPre
 
 /**
  * Coarse label for a state, for a person skimming `.workflow/state.yaml`
- * (TASKS.md T02's `phase: backend`). IMPLEMENTATION is the one state that
+ * (e.g. `phase: backend`). IMPLEMENTATION is the one state that
  * cannot be labelled from the state alone — backend and frontend share it —
  * so the agent holding it decides, and it falls back to the neutral label
  * rather than guessing when there is no agent to ask.

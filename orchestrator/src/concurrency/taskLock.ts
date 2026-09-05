@@ -2,19 +2,17 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 /**
- * File-level lock so two `sta` processes never step the same task at once (T35).
+ * File-level lock so two `sta` processes never step the same task at once.
  *
- * `--list`'s own printed note has said since T10/T11 that "the orchestrator still runs one task
- * at a time — concurrent execution needs file locking" — this is that lock. The problem it
- * prevents is concrete: two processes both holding the same task open would each spawn
- * `claude -p --agent <role>` for whatever stage they think is current, and both would write the
- * same `_docs/module/<name>/*.md` and app-code files at once. A per-task lock, held for exactly
- * the duration of one CLI invocation's step loop, is what makes that impossible without needing
- * per-file locks keyed off every contract's write globs (a much larger, separate design).
+ * Concurrent execution needs file locking: two processes both holding the same
+ * task open would each spawn an agent for whatever stage they think is current,
+ * and both would write the same files at once. A per-task lock, held for
+ * exactly the duration of one CLI invocation's step loop, prevents this
+ * without needing per-file locks keyed off contract write globs.
  *
  * NOT a general file lock — it locks a *task id*, not the files that task's stage happens to
  * write. Two DIFFERENT tasks that touch overlapping files (e.g. two phases of the same module)
- * are not covered; that risk already exists today and is unchanged by this.
+ * are not covered.
  */
 
 export class TaskLockedError extends Error {
@@ -32,7 +30,7 @@ interface LockPayload {
   acquiredAt: number;
 }
 
-/** Lock files older than this are treated as abandoned even if the PID liveness check can't tell — a stage that legitimately runs this long is not realistic (the runtime adapter's own default timeout is 30 minutes, T108/T109). */
+/** Lock files older than this are treated as abandoned even if the PID liveness check can't tell — a stage that legitimately runs this long is not realistic (the runtime adapter's own default timeout is 30 minutes). */
 const STALE_AFTER_MS = 60 * 60_000;
 
 export function defaultLockDir(projectRoot: string): string {

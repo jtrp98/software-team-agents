@@ -5,7 +5,7 @@ import { Capability } from "./capabilities.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 
 /**
- * What an agent can actually do, beyond which stage it occupies (T12).
+ * What an agent can actually do, beyond which stage it occupies.
  *
  * Role says *where* an agent sits in the pipeline; this says *what it is able to
  * build*. The two were the same thing only while there was exactly one stack. A
@@ -267,7 +267,7 @@ export function getAgent(stage: AgentStage): AgentRegistryEntry {
 }
 
 /**
- * Every agent that can do a thing (T12) — selection by what a task needs rather
+ * Every agent that can do a thing — selection by what a task needs rather
  * than by position in the pipeline.
  *
  * Returns all matches rather than one: which of several capable agents should

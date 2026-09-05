@@ -3,7 +3,6 @@ import { Orchestrator, type AgentExecutor, type AgentExecutorResult } from "./or
 import { classifyTask } from "../classification/taskClassifier.js";
 import { AgentStage, TaskState } from "../types.js";
 import { ArtifactType, ArtifactValidationError, type DesignArtifact, type QaReportArtifact, type SecurityReportArtifact } from "../artifacts/schemas.js";
-import { BudgetExceededError } from "../cost/costControl.js";
 import { validateStructuredFailure } from "../orchestrator/failure.js";
 import { ApprovalType } from "../gates/approval.js";
 import { AGENT_REGISTRY } from "../agents/registry.js";
@@ -59,7 +58,7 @@ async function runToCompletion(orch: Orchestrator, executor: AgentExecutor, maxS
   for (let i = 0; i < maxSteps; i++) {
     const status = await orch.step(executor);
     if (status.kind === "WAITING_FOR_HUMAN") {
-      // Keyed on approvalType, not on `to`: T20 put test-planner between DESIGN and
+      // Keyed on approvalType, not on `to`: test-planner sits between DESIGN and
       // IMPLEMENTATION, so the schema-confirmation gate's target is PLAN, not
       // IMPLEMENTATION directly (gatePolicy.ts/approval.ts's matching fix).
       const field = status.approvalType === ApprovalType.SCHEMA_CONFIRMATION ? "designApproved" : "humanApproved";
@@ -147,7 +146,7 @@ describe("Orchestrator", () => {
     expect(orch.machine.history).toEqual([
       TaskState.CREATED,
       TaskState.DESIGN,
-      TaskState.PLAN, // test-planner (T20), between system-analyst and the engineers
+      TaskState.PLAN, // test-planner, between system-analyst and the engineers
       TaskState.IMPLEMENTATION,
       TaskState.QA,
       TaskState.SECURITY,
@@ -270,7 +269,7 @@ describe("Orchestrator", () => {
     });
     await orch.step(executor);
     // PLAN (test-planner), not IMPLEMENTATION directly — the gate fires leaving DESIGN
-    // regardless of what sits immediately after it (T20).
+    // regardless of what sits immediately after it.
     expect(waiting).toEqual([`${TaskState.DESIGN}->${TaskState.PLAN}`]);
 
     const blocked: string[] = [];

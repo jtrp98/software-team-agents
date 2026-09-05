@@ -6,41 +6,28 @@ import { type RoleWorkspace, dependenciesOf } from "./roleWorkspace.js";
 import { signoffVerdict } from "./roleApproval.js";
 
 /**
- * Change propagation (T105) and impact notification (T106).
+ * Change propagation and impact notification, computed rather than delivered:
+ * a lane's inbox is derived fresh from that lane's own watermark, so nothing
+ * ever writes into another lane's file and there is no send to forget.
  *
- * WHY THIS IS COMPUTED AND NOT DELIVERED
+ * Beyond a lane's direct dependencies (the acknowledge list — bounded and
+ * actionable), this also surfaces:
  *
- * T99 already made the load-bearing choice: a lane's inbox is derived from that
- * lane's own watermark, so nothing ever writes into another lane's file. The
- * consequence is the one V1.5 asks for and the reason it is not left to
- * discipline — "propagate to every affected role, not just some cases" is
- * arithmetic here rather than a step somebody has to remember to run. There is
- * no send, so there is no send to forget.
- *
- * WHAT T105/T106 ADD OVER T99
- *
- * Two things, and both are real gaps rather than restatements:
- *
- *   1. **Transitive reach.** `dependenciesOf` (T99) is what a lane's items point
- *      at *directly*, which is the right list to *acknowledge* — bounded and
- *      actionable. It is the wrong list to be *told about*: when BA amends
- *      REQ-003, DEV points at the API, not at the requirement, so a direct-only
- *      walk leaves DEV uninformed about the thing that just invalidated its
- *      work. `impactOf` (T64) walks against the arrows and finds it, and the
- *      notification quotes the route so it is actionable rather than alarming.
+ *   1. **Transitive reach.** When BA amends REQ-003, DEV points at the API,
+ *      not at the requirement, so a direct-only walk leaves DEV uninformed
+ *      about the thing that just invalidated its work. `impactOf` walks
+ *      against the arrows and finds it, and the notification quotes the
+ *      route so it is actionable rather than alarming.
  *   2. **Sign-off invalidation.** A change upstream of a lane's own approved
- *      output is the case where that lane's T103 sign-off stops being true.
- *      `signoffVerdict` already detects it on the lane's own items; this reports
- *      it as a consequence of the change, so the person sees cause and effect in
- *      one place rather than noticing later that the gate reopened.
+ *      output is the case where that lane's sign-off stops being true.
+ *      `signoffVerdict` already detects it on the lane's own items; this
+ *      reports it as a consequence of the change, so the person sees cause
+ *      and effect in one place rather than noticing later that the gate
+ *      reopened.
  *
- * ONE NOTIFICATION KIND IS DELIBERATELY MISSING
- *
- * There is no push — no event emitted, no webhook. `events/domainEvents.ts`
- * exists and would take one, but a lane that is not running when the event fires
- * would miss it permanently, and a durable pull already covers every case a push
- * would. Adding an event type nothing durable depends on would be a mechanism
- * with no reader, which this repo has enough of already.
+ * There is deliberately no push notification (no event, no webhook): a lane
+ * that is not running when an event fires would miss it permanently, and a
+ * durable pull already covers every case a push would.
  */
 
 export type NotificationReason =
@@ -89,7 +76,7 @@ export function notificationsFor(
   const direct = dependenciesOf(lane, module, kb);
   const reported = new Set<string>();
 
-  // 1. Direct dependencies: the acknowledge list, exactly as T99 defines it.
+  // 1. Direct dependencies: the acknowledge list.
   for (const id of direct) {
     const current = versionOf(kb, id);
     const acknowledged = seen.get(id);

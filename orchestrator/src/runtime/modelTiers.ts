@@ -6,7 +6,7 @@ import { parse as parseYaml } from "yaml";
 export const MODEL_TIER_IDS = ["T1", "T2", "T3", "T4", "T5", "T6"] as const;
 export type ModelTierId = (typeof MODEL_TIER_IDS)[number];
 
-/** A camp is the provider-side name; T-V4-CAST-005 maps it to a runtime. */
+/** A camp is the provider-side name; it maps to a runtime. */
 export const MODEL_TIER_CAMPS = ["anthropic", "openai", "google", "zai"] as const;
 export type ModelTierCamp = (typeof MODEL_TIER_CAMPS)[number];
 

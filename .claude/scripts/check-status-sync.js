@@ -6,7 +6,7 @@
  *
  * Nothing currently checks that disagreement mechanically -- an agent has to notice it by
  * reading both. This script does the noticing for free: for every module folder, it counts
- * `verified` rows per phase in `plan.md`'s task table (T52) and compares them against what
+ * `verified` rows per phase in `plan.md`'s task table and compares them against what
  * `status.md` claims (the `implemented` symbol on each `- Phase N -- ...` line, and the
  * `**Now**: ... X of Y unchecked` line), and reports every mismatch.
  *
@@ -16,7 +16,7 @@
  * round, or just to catch a stale index before anyone acts on it.
  *
  * Parsing follows the exact status.md template in `policies/documentation.md` §2 and the
- * `## Phase N` / task-table structure every plan.md uses since T52 (a `| Task | Status | Owner |
+ * `## Phase N` / task-table structure every plan.md uses (a `| Task | Status | Owner |
  * Depends on |` row per task). A module whose plan has no parseable `## Phase N` section is
  * reported as DRIFT and fails the run — an unreadable plan is not a clean one — rather than
  * being silently skipped or treated as passing.
@@ -39,7 +39,7 @@ function findModules() {
     .filter((m) => fs.existsSync(m.planPath));
 }
 
-/** Counts task-table rows (T52) per `## Phase N` block in plan.md, by Status cell. */
+/** Counts task-table rows per `## Phase N` block in plan.md, by Status cell. */
 function parsePlan(text) {
   const lines = text.split(/\r?\n/);
   const phases = new Map(); // phaseNum -> { total, checked, unchecked }

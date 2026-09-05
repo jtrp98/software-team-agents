@@ -4,11 +4,11 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 /**
- * CHECKLIST_AI_Assisted — the setup playbook is an entry-point contract: both
- * Claude Code and Codex consume it as-is, and every flow inside it must route
- * through the official CLI rather than hand-rolling workspace changes. These
- * tests protect that contract against silent drift — a renamed command, a
- * dropped role, or a destructive instruction should fail here first.
+ * The setup playbook is an entry-point contract: both Claude Code and Codex
+ * consume it as-is, and every flow inside it must route through the official
+ * CLI rather than hand-rolling workspace changes. These tests protect that
+ * contract against silent drift — a renamed command, a dropped role, or a
+ * destructive instruction should fail here first.
  */
 
 function findRepoRoot(): string {

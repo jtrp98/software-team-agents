@@ -51,7 +51,7 @@ function recordEvents(orch: Orchestrator): { type: string; payload: unknown }[] 
   return seen;
 }
 
-describe("domain event vocabulary (T36)", () => {
+describe("domain event vocabulary", () => {
   it("names a verdict event only for the stages that verify something", () => {
     expect(verdictEventFor(AgentStage.QA_ENGINEER, true)).toBe("QA_PASSED");
     expect(verdictEventFor(AgentStage.QA_ENGINEER, false)).toBe("QA_FAILED");
@@ -74,7 +74,7 @@ describe("domain event vocabulary (T36)", () => {
   });
 });
 
-describe("Orchestrator emits domain events (T36)", () => {
+describe("Orchestrator emits domain events", () => {
   it("emits QA_PASSED with the round number on a first-pass round", async () => {
     const orch = new Orchestrator("T-PASS", classifyTask({ isClearBugFix: true, touchesBackend: true }));
     const events = recordEvents(orch);

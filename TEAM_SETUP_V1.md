@@ -1,9 +1,7 @@
 # Team Setup
 
-> **T-V5-029 (F-23/F-24):** onboarding walkthrough, install/update instructions และ Troubleshooting
-> ทั้งหมดย้ายไปรวมที่ [`README.md`](README.md) แล้ว — เพื่อไม่ให้มีสอง setup narrative ที่ไม่ตรงกัน
-> (ก่อนหน้านี้ไฟล์นี้ตั้งชื่อ `.tgz` ที่ไม่เคยมีอยู่จริงและอ้าง `.sta/` เป็น install path ปกติ ทั้งที่
-> workspace จริงทุกอันใช้ `.agent-team/`).
+> Onboarding walkthrough, install/update instructions และ Troubleshooting
+> ทั้งหมดย้ายไปรวมที่ [`README.md`](README.md) แล้ว เพื่อให้มี setup narrative เดียวที่ถูกต้องและเป็นปัจจุบัน:
 >
 > - **เริ่มต้นใช้งาน** (install → clone Knowledge → init → validate → ready) →
 >   [`README.md` § Getting Started](README.md#getting-started)

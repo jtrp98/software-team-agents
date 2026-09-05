@@ -1,5 +1,5 @@
 /**
- * T-GR1 — the seam between the orchestrator and any code-intelligence tool.
+ * The seam between the orchestrator and any code-intelligence tool.
  *
  * WHY AN INTERFACE AT ALL: the tool behind it (Graphify) releases almost daily,
  * and every operation here has a plain fallback (search/read as before) if it
@@ -19,7 +19,7 @@
  *   3. Any failure THROWS. Nothing here returns sentinel values — the resolver
  *      maps a throw onto the same search/read path the pipeline used before
  *      this module existed, so a broken provider degrades instead of crashing
- *      a task (T-GR11).
+ *      a task.
  */
 
 /** Where a fact came from. `inferred` results are hypotheses, not observations. */
@@ -61,7 +61,7 @@ export interface CodeCandidate {
 
 /**
  * Whether the index matches the checkout. The four states are exactly the ones
- * freshness policy acts on (T-GR3): `fresh` may be queried; anything else must
+ * freshness policy acts on: `fresh` may be queried; anything else must
  * fall back rather than silently serve an old map.
  */
 export type FreshnessStatus = "fresh" | "stale" | "missing" | "error";
@@ -118,8 +118,8 @@ export type CodeIntelOperation =
   | "getImpact";
 
 /**
- * The seven operations every provider implements (T-GR1 spec). Availability +
- * status first, five queries after — every query path goes through the
+ * The seven operations every provider implements. Availability + status
+ * first, five queries after — every query path goes through the
  * resolver's status gate, never around it.
  */
 export interface CodeIntelligenceProvider {
@@ -133,9 +133,9 @@ export interface CodeIntelligenceProvider {
 }
 
 /**
- * The failure taxonomy (T-GR2 error mapping, T-GR11 fallback triggers). One
- * base class so callers can catch broadly; named subclasses so audit records
- * and tests can be precise about *why* a fallback happened.
+ * The failure taxonomy. One base class so callers can catch broadly; named
+ * subclasses so audit records and tests can be precise about *why* a
+ * fallback happened.
  */
 export class CodeIntelligenceError extends Error {
   constructor(message: string) {

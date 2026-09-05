@@ -2,19 +2,18 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 /**
- * The packaging boundary for T90 (V1.4) — which files at the repo root are
- * "framework template": content a target project needs *materialized* at its
- * own root so Claude Code and the orchestrator's `--check-*` scripts can find
- * it, as opposed to the framework's own source (`orchestrator/src/**`), this
- * repo's own working docs (`TASKS_V1.md`, `HANDOFF*.md`, ...), or a project's
- * runtime/knowledge state (`.workflow/`, `knowledge/`, `_docs/`).
+ * The packaging boundary: which files at the repo root are "framework
+ * template" — content a target project needs *materialized* at its own root
+ * so Claude Code and the orchestrator's `--check-*` scripts can find it, as
+ * opposed to the framework's own source (`orchestrator/src/**`), this repo's
+ * own working docs, or a project's runtime/knowledge state (`.workflow/`,
+ * `knowledge/`, `_docs/`).
  *
- * This list is the one thing T91-T98 (CLI install, `init`, upgrade, migrate,
- * rollback) all build on — get it wrong here and every later task copies the
- * wrong boundary. See the T90 proposal in HANDOFF_V1.md for the reasoning:
- * `.claude/agents/*.md` must ship as real files in the target project because
- * Claude Code resolves subagents from the project's own `.claude/agents/`,
- * not from a package installed under `node_modules/`.
+ * This list is the one thing CLI install, `init`, upgrade, migrate, and
+ * rollback all build on — get it wrong here and everything downstream copies
+ * the wrong boundary. `.claude/agents/*.md` must ship as real files in the
+ * target project because Claude Code resolves subagents from the project's
+ * own `.claude/agents/`, not from a package installed under `node_modules/`.
  *
  * Each entry is a directory (recursive) or a single file, relative to the
  * repo root. Whole directories are walked at build time rather than globbed,
@@ -31,7 +30,7 @@ export interface TemplateSourceEntry {
 export const TEMPLATE_SOURCES: readonly TemplateSourceEntry[] = [
   { relPath: "CLAUDE.md", kind: "file" },
   { relPath: "AGENTS.md", kind: "file" },
-  // T-V5-027: the document/plan checkers as CI, for a BA/Knowledge workspace only
+  // The document/plan checkers as CI, for a BA/Knowledge workspace only
   // (see roleWorkspace.ts's assetsForRole). Templated like any other managed asset,
   // but — unlike the rest — committed at the destination rather than gitignored,
   // because GitHub only runs a workflow that is in the repository's own history.

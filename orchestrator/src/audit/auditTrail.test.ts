@@ -143,8 +143,7 @@ describe("toAuditEntry", () => {
       decision: null,
     });
     expect(entry.actor).toBe("recorded-actor");
-    // The rest were never recorded, so the derivation fills them — which is what
-    // makes rows written before T37 readable instead of a wall of nulls.
+    // The rest were never recorded, so the derivation fills them.
     expect(entry.input).toBe("design");
     expect(entry.decision).toBe("assign:backend-engineer");
   });
@@ -194,7 +193,6 @@ describe("audit trail over a real run (T37)", () => {
     expect(failed!.reason).toContain("API response mismatch");
     expect(failed!.decision).toBe(`retry:${AgentStage.BACKEND_ENGINEER}`);
 
-    // WHO acted, across the whole task, in the order they first acted.
     expect(actorsIn(trail)).toContain(ORCHESTRATOR_ACTOR);
     expect(actorsIn(trail)).toContain(AgentStage.QA_ENGINEER);
   });
@@ -320,8 +318,7 @@ describe("audit trail over a real run (T37)", () => {
       classifyTask({ isNewFeatureModuleOrProject: true, touchesSchema: true, touchesBackend: true }),
       { store },
     );
-    // Walk the run to the schema question: the interview gate now comes first on
-    // this pipeline, so answer it whenever it appears.
+    // Walk the run to the schema question, answering the interview gate whenever it appears.
     for (let i = 0; i < 20; i++) {
       const status = orch.status();
       if (status.kind === "WAITING_FOR_HUMAN" && status.approvalType === ApprovalType.REQUIREMENT_INTERVIEW) {
@@ -366,7 +363,7 @@ describe("SqliteTaskStore schema migration (T37)", () => {
 
   it("migrates a v2 database in place instead of refusing it", () => {
     const file = path.join(tempDir(), "old.db");
-    // Build a database exactly as the pre-T37 build would have written one.
+    // Build a database exactly as an older build would have written one.
     const legacy = new Database(file);
     legacy.exec(`
       CREATE TABLE tasks (task_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, state TEXT NOT NULL);
@@ -385,8 +382,7 @@ describe("SqliteTaskStore schema migration (T37)", () => {
     const store = new SqliteTaskStore(file);
     const events = store.eventsForTask("T-OLD");
     expect(events).toHaveLength(1);
-    // The old row survives with nulls, and the trail derives the rest from its payload —
-    // history written before T37 is readable, not a cutoff.
+    // The old row survives with nulls, and the trail derives the rest from its payload.
     expect(events[0].actor).toBeNull();
     expect(toAuditEntry(events[0]).decision).toBe("assign:backend-engineer");
 

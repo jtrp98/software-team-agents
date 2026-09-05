@@ -43,9 +43,8 @@ describe("APPROVAL_TYPE_OF_LANE (T103)", () => {
   });
 
   /**
-   * `REQUIREMENT_INTERVIEW` existed in the enum with no edge ever producing it —
-   * the one always-human point CLAUDE.md states most plainly had nothing
-   * enforcing it. This is what closes that.
+   * The one always-human point CLAUDE.md states most plainly — the
+   * requirement interview — must actually be reachable through this enum.
    */
   it("gives REQUIREMENT_INTERVIEW its first gate", () => {
     expect(Object.values(APPROVAL_TYPE_OF_LANE)).toContain(ApprovalType.REQUIREMENT_INTERVIEW);
@@ -119,8 +118,8 @@ describe("signoffVerdict", () => {
 
   /**
    * A rejection has to go stale too. "You rejected v4, here is v5" is a new
-   * question — a standing no that survived its subject being fixed would be the
-   * mirror of the bug T08 fixed in the other direction.
+   * question — a standing no that survived its subject being fixed would be
+   * unrevisitable without an override.
    */
   it("lets a fixed rejection be asked again instead of standing forever", () => {
     const fixed = baItems().map((i) => (i.id === "RULE-007" ? { ...i, version: 2 } : i)) as KnowledgeItem[];

@@ -8,37 +8,23 @@ import { catalogWorkflows } from "../workflow/workflowCatalog.js";
 import type { ClassificationInput } from "../classification/taskClassifier.js";
 
 /**
- * Creator and reviewer are different agents, always (T39).
+ * Creator and reviewer are different agents, always. Today that holds only
+ * because the registry happens to be written that way, not because anything
+ * enforces it — the risk shows up the moment someone gives `qa-engineer` a
+ * `Write` on app code "just to fix the obvious ones", at which point the
+ * pipeline's only correctness guarantee quietly becomes an agent marking its
+ * own homework. This check makes the arrangement stated and checked instead
+ * of merely remembered.
  *
- * WHAT THIS PIPELINE ALREADY GOT RIGHT, AND WHY IT STILL NEEDS A CHECK
- *
- * `qa-engineer` has never been allowed to write code and `backend-engineer` has
- * never been allowed to sign off its own work — not because anything enforced
- * it, but because the registry happens to be written that way. That is a
- * property of the current table, not a rule, and the difference shows up the
- * first time someone gives `qa-engineer` a `Write` on app code "just to fix the
- * obvious ones". Nothing today would object; the pipeline would keep running,
- * and its only correctness guarantee would quietly have become an agent marking
- * its own homework.
- *
- * So T39 is mostly not new machinery. It is making the existing arrangement
- * *stated and checked*, in the same way the hooks make `policies/*.md`'s rules
- * enforceable rather than remembered.
- *
- * THE THREE THINGS CHECKED, AND WHY EACH IS SEPARATE
- *
- *  1. A reviewer must not be able to produce what it reviews. Structural, hard
- *     failure — there is no legitimate configuration where a role both writes
- *     the code and issues the verdict on it.
- *  2. A reviewer must not hold WRITE_CODE at all. Stronger than (1) and worth
- *     stating separately: (1) is about artifacts the registry names, while a
- *     reviewer with a general write permission can change the very thing it is
+ * Three things checked, and why each is separate:
+ *  1. A reviewer must not produce what it reviews (structural, hard failure).
+ *  2. A reviewer must not hold WRITE_CODE at all — stronger than (1), since a
+ *     reviewer with a general write permission can change the thing it's
  *     about to judge without any artifact appearing anywhere.
- *  3. Whether a *pipeline* leaves produced work with nobody to review it. This
- *     one is reported, never failed: `workflows/typo.yml` deliberately says
- *     "engineer alone, no QA stage" for a copy fix, and a deliberate,
- *     written-down right-sizing decision is the user's to make. Reporting it
- *     keeps the choice visible; failing on it would override it.
+ *  3. Whether a *pipeline* leaves produced work with nobody to review it.
+ *     Reported, never failed: `workflows/typo.yml` deliberately runs the
+ *     engineer alone for a copy fix, and that right-sizing call is the
+ *     user's — reporting it keeps the choice visible without overriding it.
  */
 
 /** Which stages' work a reviewer's verdict covers. The reviewers are the two roles CLAUDE.md says never auto-chain — that is the same list, for the same reason. */
@@ -76,7 +62,7 @@ export class SelfReviewError extends Error {
   constructor(public readonly stage: AgentStage, public readonly artifactType: ArtifactType) {
     super(
       `${stage} may not produce ${artifactType}: a verdict has to come from a role that did not do the work ` +
-        "(T39 — no agent reviews its own work)",
+        "(no agent reviews its own work)",
     );
     this.name = "SelfReviewError";
   }
@@ -128,13 +114,12 @@ export function reviewCoverage(pipeline: readonly AgentStage[]): ReviewCoverage 
 /**
  * The input combinations a workflow is probed with.
  *
- * Asking with every `when:` switched on is the wrong question and hides the
- * answer: `workflows/typo.yml` gains a `security` step when
- * `touchesSensitiveArea` is set, and `security` reviews the engineers — so the
- * fully-on probe reports the typo workflow as covered, when the ordinary
+ * Asking with every `when:` switched on hides the answer: `workflows/typo.yml`
+ * gains a `security` step (a reviewer) once `touchesSensitiveArea` is set, so
+ * a fully-on probe would report it covered even though the ordinary,
  * non-sensitive copy fix it exists for has no reviewer at all. What matters is
- * whether *some* real input leaves work unreviewed, so these walk the plausible
- * shapes and report the worst.
+ * whether *some* real input leaves work unreviewed, so these walk the
+ * plausible shapes and report the worst.
  */
 const COVERAGE_PROBES: ClassificationInput[] = [
   { touchesBackend: true },
@@ -172,15 +157,14 @@ export interface ReviewSeparationResult {
 /**
  * The check `--check-review-separation` runs.
  *
- * Reads the workflow catalog as well as the registry, because "is the creator
- * separate from the reviewer?" is only half a question when asked of the roster
- * alone — the other half is whether the pipeline a given kind of change actually
- * runs contains a reviewer at all.
+ * Reads the workflow catalog as well as the registry: "is the creator
+ * separate from the reviewer?" is only half the question when asked of the
+ * roster alone — the other half is whether the pipeline a given kind of
+ * change actually runs contains a reviewer at all.
  *
- * `projectRoot` is accepted and ignored: both halves are now derived from code
- * (the registry and the classifier), so the answer no longer depends on which
- * directory the check is pointed at. Keeping the parameter keeps every caller —
- * the CLI flag, the release gate, the assert wrapper — unchanged.
+ * `projectRoot` is accepted and ignored — both halves are derived from code
+ * (registry + classifier) now, independent of directory — kept only so
+ * existing callers (CLI flag, release gate, assert wrapper) don't change.
  */
 export function checkReviewSeparation(_projectRoot: string = defaultProjectRoot()): ReviewSeparationResult {
   const problems: string[] = [];
@@ -229,7 +213,7 @@ export function checkReviewSeparation(_projectRoot: string = defaultProjectRoot(
   }
 
   // The pipelines each kind of change actually runs, read from the workflow
-  // catalog rather than by parsing `workflows/*.yml` (T-V3TOK-110, ADR-007).
+  // catalog rather than by parsing `workflows/*.yml` (ADR-007).
   // Those files are generated from this same catalog, so parsing them would ask
   // the question one indirection away from the answer — and would make this
   // check depend on a project root having been synced.

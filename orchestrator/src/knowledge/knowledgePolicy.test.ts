@@ -47,16 +47,14 @@ describe("loading", () => {
   });
 
   /**
-   * T-V5-047 — the rule used to live only in this repo's own
-   * `knowledge-policy.yaml`, which `NEVER_TEMPLATED` stops from ever being
-   * synced. Measured on the real corpus at the time: a `project-manager`
-   * retrieval in `knowledge-schoolbright` returned 50 items flagged
-   * `sensitive: true` with `withheld: []`. These pin the rule to the place that
-   * actually reaches a workspace.
+   * The redaction rule must live in the built-in default, not only in this
+   * repo's own `knowledge-policy.yaml` — that file is never templated into
+   * other workspaces, so relying on it alone silently loses the restriction
+   * everywhere else.
    */
   describe("T-V5-047 — the built-in policy carries the rule", () => {
     it("redacts sensitive items for devops and project-manager with NO file present", () => {
-      const policy = loadKnowledgePolicy(root); // `root` is an empty temp dir
+      const policy = loadKnowledgePolicy(root);
       expect(policyFor(AgentStage.DEVOPS, policy).sensitive).toBe("redacted");
       expect(policyFor(AgentStage.PROJECT_MANAGER, policy).sensitive).toBe("redacted");
       const visible = visibleItemFor(sensitiveModel, AgentStage.PROJECT_MANAGER, policy)!;

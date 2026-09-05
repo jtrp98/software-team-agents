@@ -12,13 +12,10 @@ import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
 import { runDeterministicVerification } from "./deterministic.js";
 
 /**
- * QA08 โ€” the QA optimization regression suite.
- *
- * One test per case in TASKS_QA_OPTIMIZATION.md's list. These are not unit
- * tests of the modules (their own files do that); each one exercises a
- * *routing promise* end to end โ€” change list in, mode decision + gate
- * behaviour out โ€” because the thing being regression-protected is that
- * spending fewer tokens never came at the cost of verification coverage.
+ * QA optimization regression suite: each test exercises a *routing promise*
+ * end to end (change list in, mode decision + gate behaviour out), because
+ * the thing being protected is that spending fewer tokens never comes at
+ * the cost of verification coverage.
  */
 
 let changed: () => string[] = () => ["src/small.ts"];
@@ -103,7 +100,6 @@ describe("QA08 retry/recheck routing", () => {
     const plan = planRecheck(previousFindings, [], fixTouched);
     expect(plan.newFilesOutsideFindings).toContain("web/OrderSummary.tsx");
 
-    // And mode selection honours that signal when the wrapper sets it.
     const decision = selectQaMode("T", buildQaScope({ taskId: "T", changedFiles: fixTouched }), {
       crossTargetImpact: true,
     });
@@ -131,7 +127,7 @@ describe("QA08 retry/recheck routing", () => {
     const pkg = captured[0].context.find((c) => c.source === "qa-evidence")!.content;
     expect(pkg).toContain("Recheck first");
     expect(pkg).toContain("[F1]");
-    // The touched evidence is named for regeneration โ€” the stale half of QA06.
+    // The touched evidence is named for regeneration since it is now stale.
     expect(pkg).toContain("Invalidated evidence");
   });
 
@@ -228,19 +224,17 @@ describe("QA08 orchestrator integration (decision persists; mode lands in the ru
         };
       },
       changedFiles: () => ["src/a.ts"],
-      riskSignals: () => ({ securitySensitive: true }), // forces FULL
+      riskSignals: () => ({ securitySensitive: true }),
     });
 
     await orch.step(exec); // backend
     const status = await orch.step(exec); // qa
     expect(status.kind).toBe("WAITING_FOR_HUMAN");
 
-    // The decision and its reasons are part of persisted gate evidenceโ€ฆ
     const stored = store.loadTask(orch.taskId)!;
     expect(stored.gateContext.qaModeDecision?.mode).toBe("FULL");
     expect(stored.gateContext.qaModeDecision?.reasons).toContain("security-sensitive change");
 
-    // โ€ฆand the run log carries the mode the round actually ran in (QA07).
     const runs = store.runsForTask(orch.taskId).filter((r) => r.agent === AgentStage.QA_ENGINEER);
     expect(runs).toHaveLength(1);
     expect(runs[0].qa_mode).toBe("TARGETED");

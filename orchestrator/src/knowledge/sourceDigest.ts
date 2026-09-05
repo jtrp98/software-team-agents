@@ -7,19 +7,19 @@ import * as path from "node:path";
  *
  * WHY THIS IS ITS OWN MODULE
  *
- * A source digest is written by one side (discovery, T74-T79, recording what it
- * read) and recomputed by another (freshness, T71, asking whether the material
- * moved). Those two numbers only mean anything *together*: a digest whose
+ * A source digest is written by one side (discovery, recording what it read)
+ * and recomputed by another (freshness, asking whether the material moved).
+ * Those two numbers only mean anything *together*: a digest whose
  * recomputation can never equal it does not say "the file changed", it says
- * nothing at all, while looking exactly like the strongest signal T71 has.
+ * nothing at all, while looking exactly like the strongest signal freshness has.
  *
- * That is not hypothetical. Every discovery stage used to carry its own
+ * That is not hypothetical: every discovery stage used to carry its own
  * `digestOf()` — five copies, all truncating to 16 hex — while freshness
  * computed the full 64, so *every* discovered item reported `source-changed`
- * against files nobody had touched. Two of the five hashed different text as
- * well (a regex match rather than the line it sat on; a model block rather than
- * the line range naming it), so widening the truncation alone would have fixed
- * three of five and left two silently wrong.
+ * against files nobody had touched. Two of the five also hashed different text
+ * (a regex match rather than the line it sat on; a model block rather than the
+ * line range naming it), so widening the truncation alone would not have fixed
+ * those two.
  *
  * So there is one function, both sides call it, and agreement is a property of
  * the code rather than a convention someone has to maintain. A digest recorded
@@ -29,8 +29,8 @@ import * as path from "node:path";
  * WHAT CANNOT BE HASHED RECORDS null
  *
  * A person, a conversation, a directory listing, a folder-name signal — these
- * have no bytes to hash, and `digest: null` is the schema's word for that
- * (T61). Inventing a digest for them is worse than having none: it reads as a
+ * have no bytes to hash, and `digest: null` is the schema's word for that.
+ * Inventing a digest for them is worse than having none: it reads as a
  * checkable claim and cannot be checked, so the check reports the material as
  * *gone* the first time anybody asks.
  */

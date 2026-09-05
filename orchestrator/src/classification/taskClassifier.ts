@@ -37,9 +37,9 @@ export interface ClassificationResult {
   sensitiveGate: boolean;
   /**
    * The caller's own `touchesSchema` signal, carried through so downstream
-   * consumers don't have to re-derive it from pipeline shape (which stopped
-   * working once a new-feature task that also touches a schema started with
-   * business-analyst instead of system-analyst).
+   * consumers don't have to re-derive it from pipeline shape — a new-feature
+   * task that also touches a schema starts with business-analyst, not
+   * system-analyst, so shape alone can't tell them apart.
    */
   touchesSchema?: boolean;
   reasons: string[];
@@ -48,11 +48,8 @@ export interface ClassificationResult {
 export type PmMode = "none" | "lightweight" | "full";
 
 /**
- * The existing PM boundary, now named so it cannot be mistaken for a missing
- * planner. Classification is Lightweight PM for every executable task; the
- * Full PM agent/document path is selected exactly when the already-shipped
- * pipeline contains project-manager. UNKNOWN remains human triage and has no
- * RuntimeTask.
+ * Every executable task is Lightweight PM; Full PM is selected exactly when
+ * the pipeline contains project-manager. UNKNOWN remains human triage.
  */
 export function pmMode(classification: ClassificationResult): PmMode {
   if (classification.level === TaskLevel.UNKNOWN) return "none";
@@ -60,7 +57,7 @@ export function pmMode(classification: ClassificationResult): PmMode {
 }
 
 /**
- * Whether this classification carries a design phase at all (T-UX11). Only
+ * Whether this classification carries a design phase at all. Only
  * these pipelines run uxui-designer: the work is about to decide what gets
  * built, so a UX pass has something to shape. A copy tweak or bug fix relies
  * on the module's existing signed UX artifact instead — the lane gate checks
@@ -80,8 +77,8 @@ function engineerStages(input: ClassificationInput, reasons: string[]): AgentSta
   // backend-engineer always precedes frontend-engineer within a phase — never parallel.
   if (input.touchesBackend) stages.push(AgentStage.BACKEND_ENGINEER);
   if (input.touchesFrontend) {
-    // The UX/UI consultant runs before the frontend engineer it advises
-    // (T-UX6) — but only where there is design work to advise on (T-UX11).
+    // The UX/UI consultant runs before the frontend engineer it advises,
+    // but only where there is design work to advise on.
     if (includesDesignPhase(input)) {
       stages.push(AgentStage.UXUI_DESIGNER);
     }
@@ -110,8 +107,7 @@ function withSecurityGate(
 
 /**
  * Classifies an incoming task and returns the level + pipeline it must run.
- * Every task must pass through this before entering the state machine (item 2) —
- * there is no "unclassified" path forward.
+ * Every task must pass through this — there is no "unclassified" path forward.
  */
 export function classifyTask(input: ClassificationInput): ClassificationResult {
   const reasons: string[] = [];
@@ -130,13 +126,11 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
   }
 
   if (input.isNewFeatureModuleOrProject) {
-    // A brand-new feature/module/project wins over the schema signal, no matter
-    // how the caller ordered the flags: the most common large task shape is
-    // "new feature that needs new tables", and it must get the full requirements
-    // interview (BA first), not silently degrade into the schema-only pipeline
-    // that skips business-analyst and project-manager. The schema obligations
-    // themselves — human confirmation before code is written against the model,
-    // a security pass — still apply on top.
+    // A new feature/module/project wins over the schema signal regardless of
+    // flag order: it must get the full requirements interview (BA first),
+    // not silently degrade into the schema-only pipeline that skips
+    // business-analyst and project-manager. The schema obligations — human
+    // confirmation, a security pass — still apply on top.
     const schemaAlso = Boolean(input.touchesSchema);
     reasons.push("new feature/module/project — needs full requirements interview, no stage skipped");
     if (schemaAlso) {
@@ -180,7 +174,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
     ];
     const { pipeline, sensitiveGate } = withSecurityGate(base, {
       ...input,
-      touchesSensitiveArea: true, // schema changes always get a security pass, per LARGE_CRITICAL example
+      touchesSensitiveArea: true, // schema changes always get a security pass
     });
     return {
       level: TaskLevel.LARGE_CRITICAL,

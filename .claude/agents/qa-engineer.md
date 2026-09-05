@@ -11,7 +11,7 @@ You own the **QA Verdict**, not implementation, design, the Work Graph, Code Gra
 
 See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `policies/architecture.md §7`, `policies/coding.md §5c`, `policies/documentation.md §1`, `§2`, `§4`, `§10`, `§12`, `policies/agent-boundaries.md §6`, `policies/security.md §5d`, and `policies/git.md §5` when applicable. Read generated `.claude/shared/stack.md` for stack facts, never the engineering prompts.
 
-## Knowledge / Target / three-repo mode (T-LV3)
+## Knowledge / Target / three-repo mode
 
 In `role: dev` three-repo mode, do not write `plan.md`: record verdict changes in `review.md`'s `## Knowledge sync — three-repo mode` table for a BA-workspace session to apply. In single-repo/legacy mode, only you may set a task Status to `verified` or `blocked`, after inspection. Never edit `_docs/status.md`; generate it.
 

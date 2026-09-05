@@ -8,13 +8,12 @@ import { defaultProjectRoot } from "../agents/agentContract.js";
 import type { KnowledgeItem, KnowledgeKind, Relation, SourceRef } from "./knowledgeModel.js";
 
 /**
- * Field-level context policy per role (T68).
+ * Field-level context policy per role.
  *
- * T67 answers "which kinds does this role see". This answers the finer
- * question: of an item it does see, which parts. Kept in `knowledge-policy.yaml`
- * rather than in this file, for the reason T15 kept path permissions in
- * `contracts/*.yaml` — a permission expressible only as TypeScript is one no
- * project outside this repo can set.
+ * Kind-level visibility answers "which kinds does this role see"; this answers
+ * the finer question: of an item it does see, which parts. Kept in
+ * `knowledge-policy.yaml` rather than in this file — a permission expressible
+ * only as TypeScript is one no project outside this repo can set.
  *
  * REDACTION IS NEVER SILENT
  *
@@ -53,17 +52,11 @@ export interface KnowledgePolicy {
 }
 
 /**
- * What applies when a project sets nothing.
- *
- * T-V5-047 — these rules used to live only in this repository's own
- * `knowledge-policy.yaml`, which `templateSources.ts` never syncs anywhere. The
- * effect, measured on the real corpus: a `project-manager` retrieval in
- * `knowledge-schoolbright` returned 50 items flagged `sensitive: true` with
- * `withheld: []` and full bodies, because the workspace's file was the stub
- * `version: 1`. The rule was written down in one repository and enforced in
- * none. Moving it here is the whole fix — the file remains an override for a
- * project that wants a different answer, and is no longer where the answer has
- * to be repeated to be true.
+ * What applies when a project sets nothing. These rules must live in code, not
+ * only in this repo's own `knowledge-policy.yaml` — that file is never synced
+ * to other projects, so a workspace with just the stub `version: 1` would
+ * silently get no field-level restrictions at all. The YAML file remains an
+ * override for a project that wants a different answer.
  *
  * `defaults` stays permissive on purpose: blanket field-level restriction breaks
  * pipelines when it is wrong (an engineer who cannot see the acceptance criteria
@@ -147,11 +140,10 @@ function fromRaw(raw: RawPolicy): KnowledgePolicy {
     hideFields: raw.defaults?.hide_fields ?? [],
   };
 
-  // T-V5-047 — an ABSENT key falls back to the built-in default; a key that is
-  // present, even as an empty map, is the project's answer and is taken as
-  // written. Rebuilding these from `raw` unconditionally would have made the
-  // 12-byte stub `version: 1` — which every workspace carries — silently erase
-  // the defaults above, which is exactly the failure this task is fixing.
+  // An ABSENT key falls back to the built-in default; a key that is present,
+  // even as an empty map, is the project's answer and is taken as written.
+  // Rebuilding these from `raw` unconditionally would let the stub
+  // `version: 1` file every workspace carries silently erase the defaults above.
   let roles: KnowledgePolicy["roles"];
   if (raw.roles === undefined) {
     roles = DEFAULT_KNOWLEDGE_POLICY.roles;
@@ -222,8 +214,6 @@ export interface PolicyCheckResult {
 export function checkKnowledgePolicyFile(projectRoot: string = defaultProjectRoot()): PolicyCheckResult {
   const filePath = knowledgePolicyPath(projectRoot);
   if (!fs.existsSync(filePath)) {
-    // T-V5-047 — this used to say "every role sees every field", which stopped
-    // being true when the two role rules moved into the built-in default.
     return {
       problems: [],
       notes: [

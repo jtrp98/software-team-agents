@@ -16,10 +16,6 @@ function phaseHeadingMatcher(phase: number): RegExp {
   return new RegExp(`(phase|เฟส)\\s*0*${phase}\\b`, "i");
 }
 
-function moduleHeadingMatcher(moduleName: string): RegExp {
-  return new RegExp(moduleName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-}
-
 const CHANGE_LOG = /change\s*log/i;
 const DATA_MODEL = /data\s*model/i;
 const FEASIBILITY_SUMMARY = /feasibility\s+summary/i;
@@ -216,12 +212,10 @@ function sliceRequirementSection(markdown: string, trace: TraceabilityScope): Tr
 }
 
 /**
- * T-V5-035 (F-04) — the subset of `selectDocContext`'s fallback conditions
- * that depend only on the document's own headings/ids, not on a run's stage,
- * phase or traceability graph. `--check-doc-structure` reuses this to flag a
- * document that would fall back to whole-document context on *any* run,
- * before a real run hits it — same predicates `selectDocContext` already
- * evaluates, not a second set of rules.
+ * Subset of `selectDocContext`'s fallback conditions that depend only on the
+ * document's own headings/ids, not on stage/phase/traceability. Reused by
+ * `--check-doc-structure` to flag a doc that would fall back to whole-document
+ * context on *any* run, before a real run hits it.
  */
 export function structuralFallbackReason(doc: DocKind, markdown: string): string | null {
   if (sectionMap(markdown).length === 0) {

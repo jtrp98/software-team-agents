@@ -201,7 +201,6 @@ describe("safe sync engine", () => {
       expect(conflictError.plan.conflicts.map((c) => c.path)).toEqual([".claude/settings.json"]);
       expect(conflictError.plan.conflicts[0]!.kind).toBe("user-modified");
     }
-    // Local edit survived untouched.
     expect(fs.readFileSync(settingsPath, "utf8")).toBe('{"hooks":{"PreToolUse":[{"edited":true}]}}');
   });
 
@@ -411,7 +410,7 @@ describe("safe sync engine — OpenCode renderings (T-OC2)", () => {
   });
 });
 
-// --- T-WG7 — DEV-workspace rendering of CLAUDE.md + the generated include ---
+// --- DEV-workspace rendering of CLAUDE.md + the generated include ---
 
 const DEV_V1: FixtureFile[] = [
   { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer", "builds backend") },
@@ -433,11 +432,10 @@ function installationConfigFixture(knowledgeRoot: string): string {
 
 describe("BA-workspace Target rendering (T-WG7 / T-V5-042)", () => {
   /**
-   * The BA half of the same renderer. It resolved its bound root from the
-   * committed `target.path` and *only* from there — so T-V5-042's removal would
-   * have silently dropped the "Target root" line out of every BA CLAUDE.md if
-   * the call had not been re-pointed at `target_id`. Nothing covered this
-   * before; that is why the regression was invisible.
+   * The BA half of the same renderer resolves its bound root through
+   * `target_id`, not a committed `target.path` — a path back to the old field
+   * would silently drop the "Target root" line out of every BA CLAUDE.md, so
+   * this is covered explicitly.
    */
   function baWorkspaceWithTarget(): { knowledge: string; app: string } {
     const knowledge = tmpRoot("ba-knowledge");
@@ -612,7 +610,7 @@ describe("T-V3-07 AGENTS.md rendered pointer ownership", () => {
     const duplicate = "# Same project rules\n";
     fs.writeFileSync(path.join(target, "CLAUDE.md"), duplicate, "utf8");
     fs.writeFileSync(path.join(target, "AGENTS.md"), duplicate, "utf8");
-    const first = sync(target);
+    sync(target);
     expect(stripBootstrapBlock(fs.readFileSync(path.join(target, "AGENTS.md"), "utf8"))).toBe(duplicate);
     const second = sync(target, { now: "2026-01-02T00:00:00Z", manifest: readTargetManifest(target), config: undefined, confirmAgentsPointer: true });
     const reduced = fs.readFileSync(path.join(target, "AGENTS.md"), "utf8");

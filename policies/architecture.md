@@ -1,6 +1,6 @@
 # Policy — The design is the contract (§7)
 
-Split from `.claude/shared/conventions.md` by T49. One rule: `design.md`'s Data Model and
+One rule: `design.md`'s Data Model and
 `schema.prisma` are a contract, not a draft either side may improvise around.
 
 ---

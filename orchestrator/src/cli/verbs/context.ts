@@ -31,8 +31,8 @@ export async function runContextVerb(rest: string[], defaultProjectRoot: string)
       projectRoot,
     });
     console.log(rest.includes("--json") ? JSON.stringify(contextCommandJson(result), null, 2) : renderContextCommand(result));
-    // T-V5-037 (F-18) — the one measurable-without-runtime-cooperation number
-    // `sta tokens` can report; fail-open, never changes this command's exit code.
+    // The one measurable-without-runtime-cooperation number `sta tokens` can
+    // report; fail-open, never changes this command's exit code.
     recordContextComposition({
       projectRoot,
       agent: result.stage,

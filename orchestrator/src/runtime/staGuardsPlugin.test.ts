@@ -5,9 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { pathToFileURL } from "node:url";
 
 /**
- * T-OC6 — the sta-guards OpenCode plugin, exercised through its real exported
- * factory (imported straight from `.opencode/plugin/sta-guards.js`, the same
- * file sync ships). The hook contract mirrors the Claude-side hooks: deny by
+ * The sta-guards OpenCode plugin, exercised through its real exported factory
+ * (imported straight from `.opencode/plugin/sta-guards.js`, the same file
+ * sync ships). The hook contract mirrors the Claude-side hooks: deny by
  * throwing a human-readable reason, fail open on anything unparseable.
  */
 

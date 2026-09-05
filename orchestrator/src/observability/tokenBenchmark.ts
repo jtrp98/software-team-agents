@@ -97,10 +97,11 @@ export function createTokenBenchmarkFixture(root = fs.mkdtempSync(path.join(os.t
 }
 
 /**
- * Same exact P0 document sizes, but with a complete REQ → DES → phase graph.
- * It also has an explicitly headed legacy appendix. P3B must keep that unknown
- * section; P6 may remove it only when a validated handoff supplies the
- * narrower task index, so the fixture measures both safety postures.
+ * Same exact document sizes as the plain fixture, but with a complete
+ * REQ → DES → phase graph. It also has an explicitly headed legacy appendix:
+ * a naive slicer must keep that unknown section, and only a validated handoff
+ * supplying the narrower task index may drop it — the fixture measures both
+ * safety postures.
  */
 export function createTraceableTokenBenchmarkFixture(
   root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-token-trace-benchmark-")),

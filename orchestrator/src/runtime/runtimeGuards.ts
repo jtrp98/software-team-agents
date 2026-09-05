@@ -8,7 +8,7 @@ import {
 import { ALL_EXIT_CHECKS, type RuntimeGuards } from "./runtimeAdapter.js";
 
 /**
- * Turning a role's contract into the guard set a run is given (T108).
+ * Turning a role's contract into the guard set a run is given.
  *
  * The globs already exist in `contracts/<role>.yaml` and are already read by
  * `agents/pathPermissions.ts`; this only reshapes them into the runtime-facing

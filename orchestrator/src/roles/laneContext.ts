@@ -6,40 +6,30 @@ import { canSeeKind, viewNameFor } from "../knowledge/roleView.js";
 import { LANE_LABEL, type RoleLane, rolesInLane } from "./roleLane.js";
 
 /**
- * Cross-role context sharing (T107) — what one lane may see of another's work,
- * and how.
- *
- * THE RULE, IN ONE SENTENCE
+ * Cross-role context sharing — what one lane may see of another's work, and how.
  *
  * A lane sees an item exactly as the role in that lane with the widest view
  * would see it, and never more — and every result says which role granted it.
  *
- * WHY THE UNION AND NOT THE INTERSECTION
+ * This is a union over the lane's roles, not an intersection: a lane is a
+ * person, and the person in the DEV lane genuinely runs `backend-engineer`,
+ * `qa-engineer` and `devops` at different moments in the same afternoon.
+ * Whatever any of those roles may put in front of them, they have already
+ * seen. An intersection would claim otherwise and would be false: it would
+ * hide a requirement's acceptance criteria from the DEV lane because
+ * `devops` — a role that ships work rather than implements it — is
+ * configured not to need them. `knowledge-policy.yaml`'s own note says why
+ * that direction is dangerous: "an engineer who cannot see the acceptance
+ * criteria will implement the wrong thing".
  *
- * A lane is a person, and the person in the DEV lane genuinely runs
- * `backend-engineer`, `qa-engineer` and `devops` at different moments in the same
- * afternoon. Whatever any of those roles may put in front of them, they have
- * already seen. An intersection would claim otherwise and would be false: it
- * would hide a requirement's acceptance criteria from the DEV lane because
- * `devops` — a role that ships work rather than implements it — is configured
- * not to need them. `knowledge-policy.yaml`'s own note says why that direction is
- * dangerous: "an engineer who cannot see the acceptance criteria will implement
- * the wrong thing".
- *
- * This is not a widening of T68. Every item a lane gets here is one that some
- * role in that lane is already permitted to retrieve under T67 and T68, through
- * `KnowledgeContext` — the same door, with the same field redaction, reporting
- * the same `withheld` list. What is added is the attribution: `viaRole` names
- * which role's permission was used, so the grant is auditable rather than
- * emergent. A lane can never reach a kind no role in it may see.
- *
- * WHY THIS IS `KnowledgeContext`'S FIRST REAL CALLER
- *
- * HANDOFF_V1.md §11.1 recorded that nothing in production called it — T99 and
- * T100 did not, because they compare *versions*, and a redacted view is the
- * wrong instrument for that. This is the case it was built for: a lane reading
- * another lane's *contents*. Anything here that bypassed it and read
- * `KnowledgeBase` directly would be the leak T69 exists to prevent.
+ * This is not a widening of per-role permissions: every item a lane gets here
+ * is one that some role in that lane is already permitted to retrieve
+ * through `KnowledgeContext` — the same door, with the same field redaction,
+ * reporting the same `withheld` list. What is added is the attribution:
+ * `viaRole` names which role's permission was used, so the grant is
+ * auditable rather than emergent. A lane can never reach a kind no role in
+ * it may see. Anything here that bypassed `KnowledgeContext` and read
+ * `KnowledgeBase` directly would reopen the leak that door exists to prevent.
  */
 
 export interface LaneVisibleItem extends RetrievedItem {
@@ -56,15 +46,7 @@ export interface LaneContextResult {
   hidden: string[];
 }
 
-/**
- * The kinds a lane may see: the union over its roles, computed through
- * `canSeeKind` rather than restated.
- *
- * This is the decision HANDOFF_V1.md §16.5 left open for V1.5 — `canSeeKind`
- * and `viewFor` had no caller and were pending use-or-delete. `canSeeKind` is
- * used here and in `artifactReview.ts`; `viewNameFor` was already taken by
- * `roleLane.ts` in T99.
- */
+/** The kinds a lane may see: the union over its roles, computed through `canSeeKind` rather than restated. */
 export function kindsForLane(lane: RoleLane): KnowledgeKind[] {
   const roles = rolesInLane(lane);
   return KNOWLEDGE_KINDS.filter((kind) => roles.some((role) => canSeeKind(role, kind)));

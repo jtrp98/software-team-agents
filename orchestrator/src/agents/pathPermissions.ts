@@ -6,7 +6,7 @@ import { AgentStage } from "../types.js";
 import { defaultProjectRoot, loadAgentContract } from "./agentContract.js";
 
 /**
- * Which paths each agent may write (T15).
+ * Which paths each agent may write.
  *
  * `permissions.capabilities` already said *what kind* of thing a role may do —
  * write code, write docs, deploy. It could not say *where*, so "backend-engineer
@@ -41,7 +41,7 @@ export const UNIVERSAL_DENY: string[] = [
   // rewriting the record of what it is allowed to do next.
   ".workflow/**",
   "dist/**",
-  // A role workspace (T99) records that a *person* in a lane acknowledged a
+  // A role workspace records that a *person* in a lane acknowledged a
   // change. An agent that could write one could mark its own work seen on that
   // person's behalf, which is the one thing V1.5's whole design forbids. So it
   // is denied at the floor rather than per contract: no agent, no mode, no
@@ -49,7 +49,7 @@ export const UNIVERSAL_DENY: string[] = [
   "knowledge/_roles/**",
 ];
 
-/** T-UX13/T-WG3: analysis artifacts and registry files whose home is the Knowledge repo, never a Target workspace. Engineer-owned docs (review/security/deploy) stay writable here. */
+/** Analysis artifacts and registry files whose home is the Knowledge repo, never a Target workspace. Engineer-owned docs (review/security/deploy) stay writable here. */
 export const WORKSPACE_BA_ARTIFACTS: readonly string[] = [
   "_docs/module/*/requirement.md",
   "_docs/module/*/design.md",
@@ -64,7 +64,7 @@ export const WORKSPACE_BA_ARTIFACTS: readonly string[] = [
   "knowledge-policy.yaml",
 ];
 
-/** T-WG3 mirror image: engineer/pipeline payload that belongs to a Target checkout, never a BA workspace. */
+/** Mirror image of WORKSPACE_BA_ARTIFACTS: engineer/pipeline payload that belongs to a Target checkout, never a BA workspace. */
 export const WORKSPACE_DEV_ARTIFACTS: readonly string[] = [
   "contracts/**",
   "workflows/**",
@@ -86,7 +86,7 @@ export function readWorkspaceRole(workspaceRoot: string): "ba" | "dev" | null {
   return m ? (m[1] as "ba" | "dev") : null;
 }
 
-/** T-WG3 — the why-text for a workspace-role deny, naming the Knowledge root when the launch supplied one. */
+/** The why-text for a workspace-role deny, naming the Knowledge root when the launch supplied one. */
 export function workspaceDenyWhy(role: "ba" | "dev", knowledgeRoot?: string): string {
   if (role === "dev") {
     const kb = knowledgeRoot || process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
@@ -147,19 +147,19 @@ function globToRegExp(pattern: string): RegExp {
 }
 
 /* ------------------------------------------------------------------------- *
- * T-V5-020 — ONE AUTHORED DECLARATION, GENERATED COPIES
+ * ONE AUTHORED DECLARATION, GENERATED COPIES
  *
  * The lists above, the role reader, the deny explanation and the matcher used
  * to exist in four hand-maintained copies — here, the two hooks, and the
  * `.codex/hooks` byte-mirror — held in agreement by comments containing the
  * word "Mirrors". That is a hope, not a mechanism, and they had already
- * diverged: F-06 found the workspace lists missing from *this* file.
+ * diverged.
  *
  * Each hook now carries a delimited block rendered by `renderGuardRuleBlock()`,
  * written by `scripts/regenerate-renderings.mjs`, byte-verified by
  * `checkBindings()`. The `.codex/hooks` mirror needs no rendering of its own —
- * byte-identity with its `.claude/hooks` source has been required since OFF10
- * M3. The block takes no dependency and parses under both a CommonJS and an
+ * byte-identity with its `.claude/hooks` source is required. The block takes
+ * no dependency and parses under both a CommonJS and an
  * ESM host; what the hosts genuinely differ about (how `fs`/`path` arrive,
  * which tool names carry a path, how a denial reaches the model) stays
  * authored in each hook.
@@ -171,7 +171,7 @@ function globToRegExp(pattern: string): RegExp {
  * ------------------------------------------------------------------------- */
 
 /**
- * T-V5-023 — the channel that carries an engineer's stack layout globs to a
+ * The channel that carries an engineer's stack layout globs to a
  * guard hook, as JSON `{write, deny}`.
  *
  * A hook cannot resolve them itself: they come from the Target's recorded
@@ -298,7 +298,7 @@ export function contractPathRules(agent: AgentStage | string, projectRoot: strin
 
 /**
  * The rules actually applied to a run: the contract's role boundary plus the
- * layout globs of the stack this workspace recorded (T-V5-023).
+ * layout globs of the stack this workspace recorded.
  *
  * The contract can no longer say `server/**` or `prisma/**` — those describe a
  * Node/Prisma repository, not a backend engineer — so the stack half comes from
@@ -333,7 +333,7 @@ export type WriteDecision =
  * Decides whether an agent may write a repo-relative path.
  *
  * Order is deliberate and not interchangeable: universal denies outrank
- * everything, workspace-role denies enforce repository boundaries (T-V5-019),
+ * everything, workspace-role denies enforce repository boundaries,
  * an agent's own deny outranks its allow, and anything the allow
  * list does not cover is refused. Allow-by-default would mean a new directory
  * is writable by every agent the moment it appears, which is the opposite of an
@@ -418,7 +418,7 @@ export interface PathRulesCheckResult {
 }
 
 /**
- * T-V5-023 — the surface a *role* contract may name. Everything here is part of
+ * The surface a *role* contract may name. Everything here is part of
  * this pipeline's own vocabulary: documents, policies, contracts, registries.
  * Anything else in an engineer contract describes a repository's layout, which
  * belongs to `stacks/<profile>/stack.yaml` — so the check is "is this glob part

@@ -12,7 +12,7 @@ import {
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 
 /**
- * A `RuntimeAdapter` backed by nothing at all (T108).
+ * A `RuntimeAdapter` backed by nothing at all.
  *
  * This exists to answer the question the interface is only worth having if it
  * can answer: can the orchestrator drive its pipeline end to end without any AI
@@ -49,7 +49,7 @@ export class MemoryWorkspace implements RuntimeWorkspace {
   async exists(relPath: string): Promise<boolean> {
     const key = normalize(relPath);
     if (this.files.has(key)) return true;
-    // A directory-shaped path (T111's binding-presence check) has no entry of
+    // A directory-shaped path (e.g. a binding-presence check) has no entry of
     // its own in a flat file map the way `LocalWorkspace`'s real filesystem
     // check does — so a directory "exists" here when some file lives under it.
     const prefix = `${key}/`;

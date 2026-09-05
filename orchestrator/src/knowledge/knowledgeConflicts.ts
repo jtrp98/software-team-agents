@@ -11,7 +11,7 @@ import type { KnowledgeBase } from "./knowledgeBase.js";
 import { knowledgeDir } from "./knowledgeStore.js";
 
 /**
- * Conflict detection and resolution (T66).
+ * Conflict detection and resolution.
  *
  * Knowledge arrives from several places — a document, the code, a person — and
  * they disagree. The rule this module exists to enforce is that an agent does

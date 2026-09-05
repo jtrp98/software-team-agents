@@ -138,8 +138,8 @@ describe("freshnessOf — the material underneath", () => {
     const digest = digestOfSource(locator, root)!;
     const item = itemWith([{ ...fileSource(locator, digest, daysAgo(1)), origin: { root: "knowledge" as const, target_id: null } }], "db-schema");
     const v2 = { ...item, schema_version: 2 as const, target_ids: ["backend"] };
-    // Before the fix, resolution returned the absolute path with the #L window
-    // dropped, so the WHOLE file was hashed and this read as changed.
+    // Origin resolution must preserve the #L window; losing it would hash the
+    // whole file instead of just this range and read as changed.
     expect(freshnessOf(v2, { now: NOW, projectRoot: root, knowledgeRoot: root }).verdict).toBe("fresh");
 
     fs.writeFileSync(path.join(root, "model.md"), "header\nmodel X {\n  id String\n}\nfooter\n", "utf8");

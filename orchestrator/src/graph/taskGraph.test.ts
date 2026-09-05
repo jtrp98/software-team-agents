@@ -17,7 +17,7 @@ function fe(id: string, over: Partial<TaskNode> = {}): TaskNode {
 }
 
 const ids = (nodes: TaskNode[]) => nodes.map((n) => n.id).sort();
-/** The edges pointing at one task. Was `TaskGraph.edgesInto`, removed in T-V3TOK-111 as a dead production API — the assertions it carried are about `resolveEdges`, so they stay. */
+/** Edges pointing at one task, for asserting on `resolveEdges` directly. */
 const edgesInto = (graph: TaskGraph, id: string) => graph.edges.filter((e) => e.to === id);
 
 describe("declared dependencies (T11)", () => {

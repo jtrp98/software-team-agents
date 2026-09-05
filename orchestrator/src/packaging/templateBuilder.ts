@@ -35,10 +35,10 @@ export function compareTemplateSnapshot(repoRoot: string, outDir: string): Templ
 }
 
 /**
- * T90 — snapshots every file `templateSources.ts` names into `outDir`,
+ * Snapshots every file `templateSources.ts` names into `outDir`,
  * preserving repo-root-relative paths, and writes `manifest.json` alongside
  * them. This is what `npm run build:templates` (and `--build-templates` on
- * the CLI) produces, and what a future `software-team-agents` npm package's
+ * the CLI) produces, and what the `software-team-agents` npm package's
  * `templates/` directory *is* — a build artifact of this repo, never checked
  * in itself (same as `dist/`).
  *

@@ -35,8 +35,8 @@ const NOT_CONFIGURED =
   "paid API transport is not configured; provide an official authenticated transport after enabling execution.allow_paid_fallback";
 
 /**
- * Fourth implementation of RuntimeAdapter. It is intentionally not a guard
- * runtime: Target-write stages are refused by runtimeExecutor before invoke.
+ * Intentionally not a guard runtime: Target-write stages are refused by
+ * runtimeExecutor before invoke.
  */
 export class ApiAdapter implements RuntimeAdapter {
   readonly id = PAID_API_RUNTIME_ID;

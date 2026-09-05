@@ -13,9 +13,9 @@ describe("contractGuards — one declaration of what a role may write (T108)", (
   });
 
   /**
-   * T-V5-023 — the contract carries the role boundary, the stack profile the
-   * layout. The adapter-level guard set has to carry both, or an orchestrated
-   * stage is handed a write scope that excludes the code it was asked to write.
+   * The contract carries the role boundary, the stack profile the layout. The
+   * adapter-level guard set has to carry both, or an orchestrated stage is
+   * handed a write scope that excludes the code it was asked to write.
    */
   it("carries the resolved stack layout, not just the contract's role-shaped globs", () => {
     const guards = contractGuards("backend-engineer", REPO_ROOT);

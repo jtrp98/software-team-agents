@@ -13,7 +13,7 @@ export interface InstallationIdentities {
 export interface InstallationConfig {
   schema_version: 1;
   knowledge_root: string;
-  /** Declared design-account identities (T-UX3). Optional: installs that never run the UX/UI stage need none. */
+  /** Declared design-account identities. Optional: installs that never run the UX/UI stage need none. */
   identities?: InstallationIdentities;
 }
 
@@ -102,8 +102,8 @@ export function configureKnowledgeRoot(knowledgeRoot: string, configPath = defau
     //  - a developer/source checkout (has .git): must be standalone, never a
     //    linked worktree sharing metadata across machines;
     //  - an npm-installed package under node_modules (no .git): perfectly
-    //    normal for end users (T91) — requiring Git here made every
-    //    clean-machine install fail before it started (T168 smoke catch).
+    //    normal for end users — requiring Git here made every clean-machine
+    //    install fail before it started.
     // Either way, Knowledge and Framework must not overlap on disk.
     const gitMarker = path.join(frameworkRoot, ".git");
     if (fs.existsSync(gitMarker)) {
@@ -142,7 +142,7 @@ export function configureKnowledgeRoot(knowledgeRoot: string, configPath = defau
 
 /**
  * Declares (or replaces) the design-account identities — `sta configure
- * identity --figma-email <e> --claude-email <e>` (T-UX3). Merges into whatever
+ * identity --figma-email <e> --claude-email <e>`. Merges into whatever
  * config already exists so binding a Knowledge root and declaring identities
  * are independent acts, in either order.
  *

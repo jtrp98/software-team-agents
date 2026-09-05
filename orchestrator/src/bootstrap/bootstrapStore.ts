@@ -6,9 +6,9 @@ import { knowledgeDir } from "../knowledge/knowledgeStore.js";
 import { checkBootstrapState, type BootstrapState } from "./bootstrapModel.js";
 
 /**
- * Read/write for `knowledge/_bootstrap/STATE.yaml` (T73).
+ * Read/write for `knowledge/_bootstrap/STATE.yaml`.
  *
- * Reserved directory, same reasoning as `_sources`/`_conflicts` (T62/T66):
+ * Reserved directory, same reasoning as `_sources`/`_conflicts`:
  * `_bootstrap` is skipped by the knowledge item walk, because a folder of
  * process state and a folder of items are indistinguishable from the outside.
  * See knowledgeStore.ts's `RESERVED_DIRS`, which this module's caller must

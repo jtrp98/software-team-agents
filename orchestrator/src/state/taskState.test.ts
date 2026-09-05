@@ -192,8 +192,8 @@ describe("forceBlock", () => {
   it("forces BLOCKED from an arbitrary mid-pipeline state, bypassing the structural graph", () => {
     let machine = initTaskMachine([AgentStage.BACKEND_ENGINEER, AgentStage.QA_ENGINEER], false);
     machine = transition(machine, TaskState.IMPLEMENTATION);
-    expect(canTransition(machine, TaskState.BLOCKED)).toBe(false); // not structurally valid...
-    machine = forceBlock(machine); // ...but forceBlock does it anyway
+    expect(canTransition(machine, TaskState.BLOCKED)).toBe(false);
+    machine = forceBlock(machine);
     expect(machine.current).toBe(TaskState.BLOCKED);
     expect(machine.history.at(-1)).toBe(TaskState.BLOCKED);
   });

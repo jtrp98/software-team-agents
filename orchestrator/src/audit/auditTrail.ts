@@ -3,22 +3,14 @@ import type { PersistedEvent, TaskStore } from "../store/taskStore.js";
 import { formatRunRouting, type RunRecord } from "../observability/runLog.js";
 
 /**
- * The audit trail (T37): WHO / WHAT / WHEN / WHY / INPUT / OUTPUT / DECISION for
+ * The audit trail: WHO / WHAT / WHEN / WHY / INPUT / OUTPUT / DECISION for
  * every event a task produced.
  *
- * WHAT WAS MISSING
- *
- * Events have been stored since T01 — `task_id`, `at`, `type`, `payload`. That
- * is WHEN and WHAT, and the payload happens to contain the rest, buried in a
- * different shape per event type. So "why did this task go back to
- * backend-engineer three times?" was answerable only by someone who knew the
- * payload shape of every event type and was willing to read JSON by hand.
- *
- * The point of T37 is that the decision record is the deliverable, not a
- * by-product: an AI pipeline that cannot show why it did what it did is one
- * nobody can correct. So the seven fields are made first-class — derived here
- * once, from the one place that knows every payload shape, and written into
- * their own columns rather than left implicit.
+ * The decision record is the deliverable, not a by-product: an AI pipeline
+ * that cannot show why it did what it did is one nobody can correct. So the
+ * seven fields are made first-class — derived here once, from the one place
+ * that knows every payload shape, and written into their own columns rather
+ * than left implicit in per-event-type JSON.
  *
  * WHY DERIVED *AND* STORED
  *
@@ -117,7 +109,7 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
         input: null,
         output: round === null ? "PASS" : `PASS (round ${round})`,
         // A verdict is a decision about someone else's work — that is exactly
-        // what separates a reviewer's "passed" from a producer's (see T39).
+        // what separates a reviewer's "passed" from a producer's.
         decision: "verdict:pass",
       };
     }
@@ -188,9 +180,9 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
         decision: "block",
       };
 
-    // Code-intelligence provider events (T-GR13): the optional graphify-backed
-    // context resolver reports through the same trail instead of a parallel
-    // observability system. Payloads carry metadata only — never source text.
+    // The optional graphify-backed context resolver reports through the same
+    // trail instead of a parallel observability system. Payloads carry
+    // metadata only — never source text.
     case "CODE_INTELLIGENCE_QUERY":
     case "CODE_INTELLIGENCE_HIT":
     case "CODE_INTELLIGENCE_FALLBACK":
@@ -281,12 +273,10 @@ export function auditTrail(store: Pick<TaskStore, "eventsForTask">, taskId: stri
 }
 
 /**
- * Only the entries that recorded a choice.
- *
- * This is the question T37 is actually for — "ย้อนดูการตัดสินใจของ AI" — and it
- * is a different list from "everything that happened": a completed agent run is
- * a fact, while routing a failure back to `system-analyst` is a decision that
- * could have gone another way and may have been wrong.
+ * Only the entries that recorded a choice — a different list from "everything
+ * that happened": a completed agent run is a fact, while routing a failure
+ * back to `system-analyst` is a decision that could have gone another way and
+ * may have been wrong.
  */
 export function decisionTrail(entries: readonly AuditEntry[]): AuditEntry[] {
   return entries.filter((e) => e.decision !== null);

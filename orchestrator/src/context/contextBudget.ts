@@ -2,7 +2,7 @@ import { StaConfigInvalidError, StaConfigMissingError, loadStaConfig, type StaCo
 import { checkBudget, DEFAULT_BUDGET } from "../cost/costControl.js";
 import type { RunLog } from "../observability/runLog.js";
 
-/** The complete, mutually-exclusive prompt accounting used by T-V3TOK-100. */
+/** The complete, mutually-exclusive prompt accounting. */
 export const CONTEXT_BUDGET_CLASSES = ["base", "task", "safety", "docs", "knowledge", "code", "tool_output", "reserve"] as const;
 export type ContextBudgetClass = (typeof CONTEXT_BUDGET_CLASSES)[number];
 export type ContextBudgetComposition = Record<ContextBudgetClass, number>;

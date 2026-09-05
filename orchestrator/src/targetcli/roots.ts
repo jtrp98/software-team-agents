@@ -4,9 +4,8 @@ import { fileURLToPath } from "node:url";
 import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
 
 /**
- * T-TARGET-01 / T-TARGET-02 — the root model for Target-first execution.
- *
- * Three roots, three responsibilities, never one standing in for another:
+ * The root model for Target-first execution. Three roots, three
+ * responsibilities, never one standing in for another:
  *
  *   targetRoot     the repository being developed; `process.cwd()` by
  *                  definition. Every write an agent makes lands here.
@@ -15,10 +14,10 @@ import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeR
  *   knowledgeRoot  optional shared Knowledge repository, bound machine-wide
  *                  via installation.yaml. Read-only context dependency.
  *
- * Nothing in this module may assume cwd === frameworkRoot: that assumption is
- * exactly what T-TARGET-22 removes. The framework root is resolved from this
- * module's own on-disk location (walk up until a `templates/manifest.json`
- * shows up), so it works identically in a checkout and under node_modules.
+ * Nothing in this module may assume cwd === frameworkRoot. The framework root
+ * is resolved from this module's own on-disk location (walk up until a
+ * `templates/manifest.json` shows up), so it works identically in a checkout
+ * and under node_modules.
  */
 
 export class TargetDetectionError extends Error {}
@@ -32,9 +31,8 @@ export interface Roots {
 
 /**
  * Module-document reads use the Knowledge binding exported by an interactive
- * three-repo launch; legacy/single-repo runs use the project itself. Keeping
- * this decision beside the three-root model prevents callers from inventing
- * conflicting precedence rules.
+ * three-repo launch; single-repo runs use the project itself. Kept beside the
+ * three-root model so callers don't invent conflicting precedence rules.
  */
 export function resolveContextDocsRoot(
   projectRoot: string,
@@ -55,9 +53,8 @@ function isDirectory(dir: string): boolean {
 /**
  * Walks up from `fromDir` looking for the package root — the directory that
  * holds `templates/manifest.json`. In a dev checkout that is the repo root;
- * in an installed package it is the package directory itself. The walk is the
- * whole point: no caller ever names the framework root explicitly, because a
- * hardcoded path would break one of the two shapes.
+ * in an installed package it is the package directory itself. No caller ever
+ * hardcodes the framework root, since that would break one of the two shapes.
  */
 export function resolveFrameworkRoot(fromDir = path.dirname(fileURLToPath(import.meta.url))): string {
   let cursor = path.resolve(fromDir);
@@ -74,11 +71,11 @@ export function resolveFrameworkRoot(fromDir = path.dirname(fileURLToPath(import
 }
 
 /**
- * Standalone-repo check for a Target, mirroring installation.ts's rule:
- * a directory-form `.git` with no `commondir`. Linked worktrees share metadata
- * with another checkout and cannot be an authority root. Inspected locally —
- * invoking git here would create the very policy violation the runtime guard
- * forbids.
+ * Standalone-repo check for a Target, mirroring installation.ts's rule: a
+ * directory-form `.git` with no `commondir`. Linked worktrees share metadata
+ * with another checkout and cannot be an authority root. Checked via the
+ * filesystem, not `git`, since invoking git here would itself be the state-
+ * changing-git violation the runtime guard forbids.
  */
 export type TargetVerdict = { ok: true; targetRoot: string } | { ok: false; problem: string };
 
@@ -112,7 +109,7 @@ export function validateTargetRoot(candidate: string): TargetVerdict {
   return { ok: true, targetRoot: canonical };
 }
 
-/** True when `candidate` is the Framework root itself or lives inside it — the pollution guard (T-TARGET-17). */
+/** True when `candidate` is the Framework root itself or lives inside it — guards against a Target polluting the Framework install. */
 export function isInsideFrameworkRoot(candidate: string, frameworkRoot: string): boolean {
   const target = path.resolve(candidate);
   const framework = path.resolve(frameworkRoot);

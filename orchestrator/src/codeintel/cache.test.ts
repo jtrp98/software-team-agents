@@ -13,9 +13,9 @@ import {
 } from "./cache.js";
 
 /**
- * T-GR4 acceptance: revision-scoped layout, working prune/retention with a
- * size cap, and — the DoD — nothing this module writes can ever end up inside
- * the Framework package because the default home is the OS cache area.
+ * Revision-scoped layout, working prune/retention with a size cap, and —
+ * critically — nothing this module writes can ever end up inside the
+ * Framework package because the default home is the OS cache area.
  */
 
 function tempRoot(): string {

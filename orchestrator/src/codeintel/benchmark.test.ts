@@ -3,15 +3,11 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { AgentStage } from "../types.js";
-import { measureEngineeringRetrieval, measureNaive, renderBenchmarkMarkdown, runDiscoveryBenchmark, type BenchmarkCase } from "./benchmark.js";
+import { measureEngineeringRetrieval, measureNaive, renderBenchmarkMarkdown, runDiscoveryBenchmark } from "./benchmark.js";
 import type { CodeIntelligenceProvider } from "./provider.js";
 import { renderEvidenceBlock } from "./resolver.js";
 
-/**
- * T-GR12 harness — deterministic fixture tree + fake provider; CI never
- * touches a real checkout or the real binary here.
- */
-
+// Deterministic fixture tree + fake provider; CI never touches a real checkout or the real binary here.
 function tempTarget(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "codeintel-bench-"));
   const files: Record<string, string> = {
@@ -65,7 +61,6 @@ describe("benchmark harness (T-GR12 tooling)", () => {
       )[0];
       expect(row.graph.filesConsidered).toBe(1);
       expect(row.graph.estTokens).toBe(Math.ceil(4000 / 4));
-      // naive swept all four files, graph named one
       expect(row.naive.filesConsidered).toBe(4);
       expect(row.tokenReduction).toBe(3.8);
     } finally {

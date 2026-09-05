@@ -1,9 +1,9 @@
 # Release Notes
 
-## Unreleased — V5 (simplification release, in progress)
+## software-team-agents 1.0.0 — V5 Simplification Release (2026-09-05)
 
 V5 adds no features. It closes half-finished transitions and makes existing enforcement honest.
-Behaviour changes users will feel are listed here as each task lands.
+Behaviour changes users will feel are listed below.
 
 ### Breaking changes
 
@@ -100,6 +100,41 @@ Behaviour changes users will feel are listed here as each task lands.
   their payload differs. `--version`'s regex shape (`\d+\.\d+\.\d+…`) is unchanged; the digest is
   semver build metadata appended, not a restructured string, and ordinary version comparisons
   (`sameMajor`, `classifySyncState`) ignore it exactly as they ignore any other build-metadata suffix.
+
+### Architecture and simplification
+
+- **Legacy `.sta/` installer and lifecycle verbs retired** (`T-V5-038`, audit finding `F-01`, `F-23`).
+  `software-team-agents init` is now the single installer entry point, writing `.agent-team/`.
+  The redundant legacy installer that created `.sta/`, along with its four stranded verbs
+  (`sta init --mode legacy-project`, `sta upgrade`, `sta repair`, `sta rollback`), has been removed.
+  Pre-V5 `.sta/`-only workspaces convert automatically and cleanly to `.agent-team/` upon `init`.
+- **`paid-api` runtime retired** (`T-V5-039`, audit finding `F-16`).
+  The unexecutable `paid-api` adapter and its options have been deleted. Supported runtimes are now
+  strictly `claude` (Supported), `codex` (Preview), and `opencode` (Experimental).
+- **Execution modes collapsed to one route** (`T-V5-040`, audit finding `F-17`).
+  The complex multi-mode system (`Single`/`Auto`/`Manual`), 5 precedence tiers, and camp-based routing
+  have been replaced with one deterministic, fail-closed route: flag > `routing.by_role` > default (`claude-code`).
+  An unavailable route stops for a human instead of hopping between runtimes.
+- **Legacy adoption subsystem retired** (`T-V5-041`, `T-V5-026`, `ADR-024`, audit finding `F-13`, `F-22`).
+  The one-time import subsystem (`sta adopt`, `_adoption/`, `.migration/`) has been removed (~3,121 lines).
+  Imported knowledge items remain authoritative under `knowledge/`.
+- **Machine-local paths removed from shared configuration** (`T-V5-042`, audit finding `F-08`).
+  Committed `target.path` in `.agent-team/config.yaml` is retired in favor of `target_id` combined with
+  machine-local mapping in `.workflow/targets.local.yaml`.
+- **Document size governance enforced by `--check-doc-size`** (`T-V5-033`, `T-V5-027`, audit finding `F-04`, `F-19`).
+  Hard ceilings per `policies/documentation.md` §4 (100 KB per section, 400 KB per module document)
+  are now enforced deterministically by `--check-doc-size` in both Framework release gates and Knowledge repository CI.
+
+### Knowledge repository editorial backlog (carried forward)
+
+- Real-world validation against `knowledge-schoolbright` in `T-V5-045` identified pre-existing document and plan
+  content issues that are now visible and enforced by V5 checkers:
+  - `--check-doc-structure`: 3 module documents lack structured REQ anchors (`crm-ai-support/requirement.md`, etc.).
+  - `--check-doc-size`: sections exceeding the byte ceiling (e.g. `WORD-01` in `sb-compass`).
+  - `--check-plan`: task DAG validation findings in `crm-ai-support/plan.md`.
+  - `--check-knowledge`: 10 stale registered sources pending content re-sync by BA/SA.
+  These findings are content debt owned by the BA/SA/PM team, not framework code bugs, and are tracked as
+  the Knowledge repository backlog carried forward past the V5 release.
 
 ## Internal V1 Stable
 

@@ -10,25 +10,12 @@ import {
 import { inspectManagedBlock } from "../targetcli/knowledgeRender.js";
 
 /**
- * T98 — checked after `init`/`upgrade`/`migrate`/`rollback`, and available on
- * its own as `--check-installation`: does the installation metadata actually
- * describe the project that's really on disk?
- *
- * T-V5-004 — the checker follows the installer. A workspace installed by
- * `software-team-agents init` carries `.agent-team/manifest.json` (F-01: the
- * previous `.sta/`-only check failed every correctly installed workspace), so
- * that manifest is validated when present, using the same structural model the
- * sync engine enforces (`checkTargetManifest`) — no second validation model.
- *
- * T-V5-038 — the `.sta/`-only installer (`sta init`/`sta upgrade`) is gone, so
- * there is no longer a legacy layout to validate here: a workspace with
- * neither `.agent-team/manifest.json` nor a `.sta/manifest.json` (a project
- * that never ran the current installer, or one still on the retired `.sta/`
- * layout) reports one actionable problem naming `software-team-agents init`
- * as the way forward. `.sta/` itself keeps validating separately, and only
- * for rollback, through `rollback.ts`'s own legacy-backup fallback — that is
- * a different mechanism (undo, not install-state checking) and out of scope
- * here.
+ * Validates only the current `.agent-team/manifest.json` layout, using the same
+ * structural model the sync engine enforces (`checkTargetManifest`) — no second
+ * validation model. A workspace on the retired `.sta/`-only layout, or never
+ * initialized at all, reports one actionable problem naming `software-team-agents
+ * init`. (`.sta/` still validates separately for rollback's own legacy-backup
+ * fallback in `rollback.ts` — a different mechanism, out of scope here.)
  *
  * `notes` (a file the project modified) are expected, ongoing state — a
  * modified framework file is not a problem, it's the whole point of never
@@ -88,11 +75,8 @@ function validateAgentTeamInstallation(projectRoot: string): InstallValidationRe
   for (const file of manifest.files) {
     const dest = path.join(projectRoot, file.path);
     if (!fs.existsSync(dest)) {
-      // Unlike the legacy .sta/ layout (whose upgrade skips missing files), the
-      // .agent-team sync engine restores any tracked-but-missing path on its
-      // next run — expected, self-healing ongoing state, so a note not a
-      // problem. Measured live in sb-web-student (31 dropped .opencode/commands
-      // renderings).
+      // The sync engine restores any tracked-but-missing path on its next run —
+      // expected, self-healing state, so this is a note, not a problem.
       notes.push(`${file.path} is missing from the project — \`software-team-agents sync\` will restore it`);
       continue;
     }

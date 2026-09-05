@@ -8,14 +8,10 @@ import type { StructuredFailure } from "./failure.js";
  * Turns a real `review.md` / `security.md` into the structured failure
  * `failure.ts` routes on.
  *
- * `failure.ts` (T01) defined the record and the routing but said in so many
- * words that producing one from a real document was T06's job and deliberately
- * absent. Until this existed the gap was silent rather than loud: the executor
- * simply omitted `failure`, and every failed round fell back to "send it to the
- * first implementation stage" — so a schema gap owned by `system-analyst` and a
- * genuine backend bug were routed identically, which is precisely the misrouting
- * `qa-engineer.md` warns produces rounds of an engineer guessing at a decision
- * that was never theirs.
+ * Without this, a schema gap owned by `system-analyst` and a genuine backend
+ * bug would route identically ("send it to the first implementation stage")
+ * — precisely the misrouting `qa-engineer.md` warns produces rounds of an
+ * engineer guessing at a decision that was never theirs.
  *
  * WHERE THE ANSWER COMES FROM
  *
@@ -66,10 +62,9 @@ export interface OpenIssueRow {
   /**
    * The role the row routes to, or null when it names none.
    *
-   * Was non-nullable before T38, because a line only became a row once it named
-   * a role. A row that states the *category* and no role is now kept too — it
-   * carries a real routing answer (see `category` below), and dropping it was
-   * how a written-down decision got treated as silence.
+   * A row that states the *category* and no role is kept too — it carries a
+   * real routing answer (see `category` below), and dropping it would treat
+   * a written-down decision as silence.
    */
   owner: AgentStage | null;
   /** The problem type, when the row states one outright. Never inferred from the prose. */
@@ -141,8 +136,8 @@ function isBlocking(line: string): boolean {
  * Reads the rows of `## Open Issues — all phases`.
  *
  * A line counts as a row once it names a role *or* states a problem category
- * (T38) — a header or separator does neither. The category-only case is the one
- * T38 adds: it carries a real routing answer, just not one phrased as a role.
+ * — a header or separator does neither. The category-only case carries a real
+ * routing answer, just not one phrased as a role.
  */
 export function parseOpenIssues(reviewMd: string): OpenIssueRow[] {
   const section = sectionText(reviewMd, OPEN_ISSUES);
@@ -184,11 +179,11 @@ export interface QaClassificationOptions {
   /** Overrides the ceiling for tests; `qa-engineer.md` fixes it at 2 in the real pipeline. */
   ceiling?: number;
   /**
-   * The stages this task actually runs (T38). Given, a stated category resolves
-   * to a stage the task can genuinely reach; withheld, it resolves to the
-   * category's canonical destination and `routeFailure` still refuses it if this
-   * pipeline has no such stage. Optional because the runtime executor is handed
-   * a stage and a task id, not a pipeline.
+   * The stages this task actually runs. Given, a stated category resolves to a
+   * stage the task can genuinely reach; withheld, it resolves to the category's
+   * canonical destination and `routeFailure` still refuses it if this pipeline
+   * has no such stage. Optional because the runtime executor is handed a stage
+   * and a task id, not a pipeline.
    */
   pipeline?: readonly AgentStage[];
 }
@@ -232,7 +227,7 @@ export function classifyQaFailure(reviewMd: string, opts: QaClassificationOption
     );
   }
 
-  // T38: no row named a role, but one may still have named the *kind* of problem.
+  // No row named a role, but one may still have named the *kind* of problem.
   // A stated category is a written decision, not an inference, so it routes —
   // and anything less than a single agreed category still stops for a person.
   if (owners.length === 0) {

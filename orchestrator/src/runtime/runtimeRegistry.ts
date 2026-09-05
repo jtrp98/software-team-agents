@@ -1,7 +1,7 @@
 import type { RuntimeAdapter, RuntimeProbe } from "./runtimeAdapter.js";
 
 /**
- * Which runtimes this process knows about (T108).
+ * Which runtimes this process knows about.
  *
  * Deliberately not a module-level singleton with side-effecting imports. A
  * registry that fills itself when a file is imported makes "which runtimes
@@ -9,8 +9,8 @@ import type { RuntimeAdapter, RuntimeProbe } from "./runtimeAdapter.js";
  * elsewhere to keep facts declarative — the caller constructs one and registers
  * what it means to offer.
  *
- * `select()` is deliberately absent. Choosing a runtime for a task is T112's
- * job, and it does not select on capability: with Claude Code and Codex having
+ * `select()` is deliberately absent. Choosing a runtime for a task is runtime
+ * routing's job, and it does not select on capability: with Claude Code and Codex having
  * the same guard and agent mechanisms, capability-based selection would pick
  * between two identical candidates. The axis that actually differs is which
  * models each can reach (`RuntimeAdapter.models`), which is why T112 continues

@@ -26,7 +26,7 @@ export type CommandResolver = (command: string) => ResolvedCommand | null;
 const KNOWN_NPM_CLI_PACKAGES: Record<string, readonly string[]> = {
   claude: ["node_modules", "@anthropic-ai", "claude-code"],
   // The npm package is `opencode-ai`; its shim wraps bin/opencode.exe (verified
-  // against a 1.18.21 Windows install during the T-OC0/T-OC6 spikes).
+  // against a 1.18.21 Windows install).
   opencode: ["node_modules", "opencode-ai"],
 };
 

@@ -3,8 +3,8 @@ import * as path from "node:path";
 import { checkTargetManifest } from "../targetcli/targetMeta.js";
 
 /**
- * T97 + T-V5-013 — undoes the most recent live `.agent-team` sync snapshot,
- * with a `.sta` fallback for legacy upgrade/migrate snapshots.
+ * Undoes the most recent live `.agent-team` sync snapshot, with a `.sta`
+ * fallback for legacy upgrade/migrate snapshots.
  *
  * Every backup directory upgrade/migrate creates holds exactly two kinds of
  * thing: the previous content of every file it overwrote (at the same

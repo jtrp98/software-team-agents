@@ -12,7 +12,7 @@ import { digestOfSource, parseLocator } from "./sourceDigest.js";
 import { resolveSource } from "./sourceResolver.js";
 
 /**
- * The raw-source registry (T62) — `knowledge/_sources/<SRC-id>.yaml`.
+ * The raw-source registry — `knowledge/_sources/<SRC-id>.yaml`.
  *
  * WHY A SOURCE IS ITS OWN RECORD AND NOT JUST A FIELD ON AN ITEM
  *
@@ -25,9 +25,9 @@ import { resolveSource } from "./sourceResolver.js";
  *   - one file backs eleven items; has it changed since any of them were written?
  *
  * So the registry stores the material, the item stores the conclusion, and
- * `sources[].source_id` joins them. That split is the whole of T62: raw
- * material and derived knowledge are different things with different lifetimes,
- * and a system that only records the second cannot tell you the first went stale.
+ * `sources[].source_id` joins them: raw material and derived knowledge are
+ * different things with different lifetimes, and a system that only records
+ * the second cannot tell you the first went stale.
  *
  * Reserved directory, not a module: `_sources` is skipped by the item walk
  * (knowledgeStore.ts's RESERVED_DIRS), because a folder of source records and a
@@ -239,9 +239,8 @@ export class SourceRegistry {
 export interface RegistryCrossCheck {
   problems: string[];
   /**
-   * Registered material whose digest no longer matches what is on disk — the
-   * third question the module note above opens with, and the one nothing used to
-   * answer. T71 checks the digest each *item* recorded; this checks the one the
+   * Registered material whose digest no longer matches what is on disk.
+   * Freshness checks the digest each *item* recorded; this checks the one the
    * *source* recorded, which is what tells you a file eleven items rest on has
    * moved without having to ask all eleven.
    *
@@ -258,7 +257,7 @@ export interface RegistryCrossCheck {
   /**
    * Item source refs that name a locator no record covers. Also not a problem:
    * a source can be cited without being registered. Reported because a project
-   * that means to track provenance (T72) wants the list.
+   * that means to track provenance wants the list.
    */
   unregisteredLocators: string[];
 }

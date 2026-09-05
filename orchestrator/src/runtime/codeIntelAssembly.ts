@@ -6,16 +6,16 @@ import { resolveCodeContext } from "../codeintel/resolver.js";
 import type { CodeIntelligenceProvider } from "../codeintel/provider.js";
 
 /**
- * Phase 4 wiring — the one place the optional provider touches a run's prompt.
+ * The one place the optional code-intelligence provider touches a run's prompt.
  *
- * The shape copies `sliceModuleDocsFor`'s contract exactly (T05, "additive by
- * design"): whatever happens — feature off, tool absent, index stale, timeout,
- * anything thrown — the answer is `[]`, and the prompt is byte-identical to a
- * pipeline without this module. Context enrichment is an optimization; the run
+ * The shape copies `sliceModuleDocsFor`'s "additive by design" contract:
+ * whatever happens — feature off, tool absent, index stale, timeout, anything
+ * thrown — the answer is `[]`, and the prompt is byte-identical to a pipeline
+ * without this module. Context enrichment is an optimization; the run
  * proceeding is the requirement.
  *
  * OFF is the default and reads one env var: `STA_CODE_INTEL=on`. There is no
- * settings-file surface (B2) and no hook — enabling is a per-machine decision,
+ * settings-file surface and no hook — enabling is a per-machine decision,
  * which is also why discovery scopes itself to the task's bound target root.
  */
 

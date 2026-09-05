@@ -307,22 +307,15 @@ export function inspectGuardWiring(options: {
   };
 }
 
-// --- guard coverage per runtime (T-V5-008 / F-05) ---------------------------
+// --- guard coverage per runtime -----------------------------------------
 
 /**
  * ONE guard verdict per runtime, for every caller that has to decide whether a
- * session is enforced.
+ * session is enforced. Every runtime gets an explicit verdict, so "this
+ * runtime has no mechanism at all" is a *stated* result rather than the
+ * absence of a check.
  *
- * Before this existed, `codexReadiness()` counted `.codex/agents/*.toml` and
- * printed READY without checking a single guard, and `workspacePreflight`
- * inspected guard wiring only when the launching runtime was Claude — so
- * `software-team-agents ba --runtime codex` started a session with none of the
- * six guards active, right after reporting `Codex: READY` (F-05). The fix is
- * not to check Claude less; it is to give every runtime an explicit verdict and
- * to make "this runtime has no mechanism at all" a *stated* result rather than
- * the absence of a check.
- *
- * The vocabulary is `RuntimeCapability` (T108), not a new registry: the same
+ * The vocabulary is `RuntimeCapability`, not a new registry: the same
  * guard families the adapters already report per run.
  */
 export type GuardCoverageLevel =
@@ -400,7 +393,7 @@ function claudeCoverage(wiring: GuardWiringStatus): GuardCoverage {
  * the plugin's own header says so, and OpenCode's default posture is allow-all,
  * so a missing plugin means nothing is enforced at all.
  */
-/** The `partial` verdict when the plugin is present — pure/static, so documentation (T-V5-031) can quote it without a workspace. */
+/** The `partial` verdict when the plugin is present — pure/static, so documentation can quote it without a workspace. */
 export function opencodeCoverageWithPlugin(): GuardCoverage {
   return {
     runtime: "opencode",
@@ -433,10 +426,9 @@ function opencodeCoverage(targetRoot: string): GuardCoverage {
  * `runtime/bindingGenerator.ts` records that Codex's hook-loading behaviour has
  * never been verified on a real install. Generated `.codex/agents/*.toml`
  * bindings are agent definitions, not enforcement. Until a mechanism exists and
- * is verified, the only honest verdict is `unguarded` — building one is
- * deliberately out of V5's scope.
+ * is verified, the only honest verdict is `unguarded`.
  */
-/** Pure/static — Codex has no per-workspace state to check, so this doubles as the documentation source (T-V5-031). */
+/** Pure/static — Codex has no per-workspace state to check, so this doubles as the documentation source. */
 export function codexCoverage(): GuardCoverage {
   return {
     runtime: "codex",

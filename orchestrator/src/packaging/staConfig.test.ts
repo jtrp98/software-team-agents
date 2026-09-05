@@ -72,8 +72,8 @@ describe("defaultStaConfig / writeStaConfig / loadStaConfig", () => {
   it("keeps V3 execution defaults additive and paid fallback off when the block is absent", () => {
     const config = defaultStaConfig();
     expect(config).toEqual({ schema_version: 1 });
-    // T-V5-040 — `mode` and `allow_handoff` are no longer resolved to an
-    // effective value because nothing reads them; they are reported as inert.
+    // `mode` and `allow_handoff` are no longer resolved to an effective value
+    // because nothing reads them; they are reported as inert.
     expect(effectiveExecutionConfig(config.execution)).toEqual({
       runner: "claude-code",
       allow_paid_fallback: false,
@@ -86,8 +86,8 @@ describe("defaultStaConfig / writeStaConfig / loadStaConfig", () => {
     expect(effectiveExecutionConfig({ mode: "auto" }).allow_paid_fallback).toBe(false);
   });
 
-  // T-V5-040 — a config written for the removed routing engine must still load,
-  // and every key nothing reads must be reported rather than silently honoured.
+  // A config written for the removed routing engine must still load, and
+  // every key nothing reads must be reported rather than silently honoured.
   it("still loads a config carrying the removed routing keys and names them inert", () => {
     const root = tmpRoot();
     fs.mkdirSync(path.dirname(staConfigPath(root)), { recursive: true });

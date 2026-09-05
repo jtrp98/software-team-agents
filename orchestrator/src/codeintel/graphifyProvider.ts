@@ -20,12 +20,12 @@ import {
 import { assertQueryAllowed, getStatus, graphFileFor } from "./freshness.js";
 
 /**
- * T-GR2 — the only code in the Framework that knows Graphify exists.
+ * The only code in the Framework that knows Graphify exists.
  *
- * Transport: CLI subprocess (decided from T-GR0 — local queries measured at
- * 1–2s, no server to keep alive; MCP stdio adds a process for no gain in V1).
- * Every call goes through the freshness gate FIRST (T-GR3) — there is no public
- * method that reaches the binary without one.
+ * Transport: CLI subprocess — local queries measured at 1–2s, no server to
+ * keep alive; MCP stdio adds a process for no gain in V1. Every call goes
+ * through the freshness gate FIRST — there is no public method that reaches
+ * the binary without one.
  *
  * What may never happen here, per hard bans:
  *   - graph.json / GRAPH_REPORT.md contents flowing into LLM context. The tool
@@ -57,7 +57,7 @@ export const DEFAULT_GRAPHIFY_CONFIG: Required<Omit<GraphifyProviderConfig, "pin
   maxCandidates: 50,
 };
 
-/** Injectable so tests run deterministic fixtures without a real binary (T-GR14). */
+/** Injectable so tests run deterministic fixtures without a real binary. */
 export type SubprocessRunner = (
   command: string,
   args: string[],
@@ -140,10 +140,10 @@ export class GraphifyProvider implements CodeIntelligenceProvider {
 
   async findPath(query: PathQuery): Promise<CodeCandidate[]> {
     assertQueryAllowed(await this.getStatus(query.target));
-    // Undirected on purpose: T-GR0 showed directed search misses real paths
-    // across import/call direction changes, which made the feature look broken
-    // when the data was fine. For discovery evidence, reachability beats strict
-    // directionality; the relation labels stay visible in results.
+    // Undirected on purpose: directed search misses real paths across
+    // import/call direction changes, which makes the feature look broken
+    // when the data is fine. For discovery evidence, reachability beats
+    // strict directionality; the relation labels stay visible in results.
     const args = ["path", query.from, query.to, "--undirected", "--graph", this.graph(query.target)];
     return this.candidatesFor(args, parseAffectedLines, "path");
   }
@@ -208,7 +208,7 @@ export class GraphifyProvider implements CodeIntelligenceProvider {
       throw new ProviderNotInstalledError(`"${this.config.command}" is not installed or not on PATH`);
     }
     if (result.code !== 0) {
-      // Metadata only: the last stderr line names the failure mode; full output stays out of logs (B7).
+      // Metadata only: the last stderr line names the failure mode; full output stays out of logs.
       const lastLine = result.stderr.trim().split(/\r?\n/).pop() ?? "(no stderr)";
       throw new ProviderUnavailableError(`${operation} exited ${result.code}: ${lastLine.slice(0, 300)}`);
     }

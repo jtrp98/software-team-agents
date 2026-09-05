@@ -19,12 +19,11 @@ import { renderGuardRuleBlock } from "../agents/pathPermissions.js";
 import { checkBindings } from "../runtime/bindingGenerator.js";
 
 /**
- * T-TARGET-18/19/20 + T-ROLE-22..26 — end-to-end tests against temporary
- * repositories. Everything runs through `runTargetCli`, the exact function the
- * bin calls. The workspace comes from the explicit cwd argument
- * (Target-first: the caller's location decides), and fixture Framework
- * installations stand in for the installed package so version upgrades are
- * deterministic.
+ * End-to-end tests against temporary repositories. Everything runs through
+ * `runTargetCli`, the exact function the bin calls. The workspace comes from
+ * the explicit cwd argument (Target-first: the caller's location decides),
+ * and fixture Framework installations stand in for the installed package so
+ * version upgrades are deterministic.
  */
 
 const roots: string[] = [];
@@ -666,10 +665,8 @@ describe("software-team-agents — target-first end to end", () => {
   });
 
   it("dev: a path the project already owned does NOT block the launch — same verdict as sync", async () => {
-    // Regression: the block/skip rule lived inline in runTargetSync and was not
-    // applied by workspacePreflight, so `sync` accepted a workspace that `dev`
-    // refused — one workspace, two verdicts. Both now route through
-    // isBlockingConflict.
+    // Both `sync` and `dev` must route through isBlockingConflict, or the same
+    // workspace could get two different verdicts.
     const target = makeTarget();
     const knowledge = makeKnowledgeRepo();
     // The project owns CLAUDE.md before this Framework is ever installed.
@@ -750,9 +747,9 @@ describe("software-team-agents — target-first end to end", () => {
     expect(fs.existsSync(path.join(codexTarget, ".codex", "agents", "backend-engineer.toml"))).toBe(true);
     expect(fs.existsSync(path.join(codexTarget, ".opencode"))).toBe(false);
 
-    // Pre-V5 manifests have no runtime list. If they already track bindings
-    // for every runtime, that history is the opt-in: a normal sync must retain
-    // all three until the user explicitly writes a narrower list.
+    // A legacy manifest with no runtime list, but that already tracks bindings
+    // for every runtime, is itself the opt-in: a normal sync must retain all
+    // three until the user explicitly writes a narrower list.
     const legacyTarget = makeTarget();
     expect(
       (await capture(() => runTargetCli(["init", "--runtime", "codex", "--runtime", "opencode"], legacyTarget, fw))).code,
@@ -819,7 +816,7 @@ describe("software-team-agents — target-first end to end", () => {
       { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer") },
       { relPath: ".claude/commands/summarize.md", content: "---\ndescription: sum\n---\nbody\n" },
       { relPath: ".claude/commands/_shared/guardrails.md", content: "---\ndescription: g\n---\n1. Rule\n" },
-      // Authored payload carrying the generated guard-rule block, exactly as the real plugin does (T-V5-020).
+      // Authored payload carrying the generated guard-rule block, exactly as the real plugin does.
       { relPath: ".opencode/plugin/sta-guards.js", content: `// authored plugin\n${renderGuardRuleBlock()}` },
       { relPath: "CLAUDE.md", content: "<!-- sta:bootstrap -->\n# b\n<!-- /sta:bootstrap -->\n" },
       { relPath: "AGENTS.md", content: "<!-- sta:bootstrap -->\n# b\n<!-- /sta:bootstrap -->\nFull operating rules: see [CLAUDE.md](CLAUDE.md).\n" },
@@ -887,8 +884,8 @@ describe("role workspace architecture (T-ROLE)", () => {
     expect(fs.existsSync(path.join(knowledge, ".claude", "agents", "backend-engineer.md"))).toBe(false);
     expect(fs.existsSync(path.join(knowledge, "contracts"))).toBe(false);
     expect(fs.existsSync(path.join(knowledge, "workflows"))).toBe(false);
-    // T-V5-007: Claude is the sole default runtime; no other binding family
-    // is materialised until the workspace explicitly opts in.
+    // Claude is the sole default runtime; no other binding family is
+    // materialised until the workspace explicitly opts in.
     expect(fs.existsSync(path.join(knowledge, ".codex", "agents", "business-analyst.toml"))).toBe(false);
     expect(fs.existsSync(path.join(knowledge, ".codex", "agents", "backend-engineer.toml"))).toBe(false);
 
@@ -915,10 +912,9 @@ describe("role workspace architecture (T-ROLE)", () => {
   });
 
   it("T-V5-001 (characterization — red until T-V5-011): same-version template drift must not report UP_TO_DATE", async () => {
-    // The live knowledge-schoolbright condition (F-02): the workspace synced at
-    // 1.0.0-rc.3 and every managed file is pristine, but the installed
-    // Framework's templates/ payload changed (there: policies/documentation.md
-    // and CLAUDE.md) without a version bump — an npm-link live clone pinned
+    // A real observed condition: the workspace synced at 1.0.0-rc.3 and every
+    // managed file is pristine, but the installed Framework's templates/
+    // payload changed without a version bump — an npm-link live clone pinned
     // across many commits.
     const knowledge = makeKnowledgeRepo();
     const payload = (documentation: string, claude: string): { relPath: string; content: string }[] => [
@@ -1470,8 +1466,8 @@ describe("role workspace architecture (T-ROLE)", () => {
       detail: expect.stringContaining("not configured — defaults apply"),
     });
 
-    // T-V5-040 — a config carrying the removed keys still loads, and status
-    // names them as ignored instead of rendering them as effective behaviour.
+    // A config carrying the removed keys still loads, and status names them as
+    // ignored instead of rendering them as effective behaviour.
     write(target, ".sta/config.yaml", "schema_version: 1\nexecution:\n  mode: auto\n  allow_paid_fallback: false\n");
     const configuredStatus = JSON.parse(
       (await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out,
@@ -1549,7 +1545,7 @@ describe("role workspace architecture (T-ROLE)", () => {
       expect((e as Error).message).toMatch(/Knowledge/);
     }
 
-    // Bind the sibling Knowledge repo via the workspace config (T-ROLE-06).
+    // Bind the sibling Knowledge repo via the workspace config.
     const config = defaultTargetConfig(path.basename(target), "2026-01-01T00:00:00Z", "dev");
     config.knowledge = { path: knowledge };
     writeTargetConfig(target, config);
@@ -1657,7 +1653,6 @@ describe("role workspace architecture (T-ROLE)", () => {
       { relPath: "CLAUDE.md", content: "# Framework instructions v1\n" },
       { relPath: ".claude/hooks/block-git.js", content: "module.exports = () => 1;\n" },
     ]);
-    const templatesV1 = path.join(fwV1, "templates");
 
     expect((await capture(() => runTargetCli(["init"], knowledge, fwV1))).code).toBe(0);
     expect((await capture(() => runTargetCli(["init"], target, fwV1, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);

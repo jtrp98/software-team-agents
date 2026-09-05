@@ -74,7 +74,6 @@ function runHook(hookFile, input, env) {
   return res.status;
 }
 
-/** Runs one of the checker scripts and returns its exit code. */
 function runScript(scriptFile, env) {
   const res = spawnSync(process.execPath, [path.join(SCRIPTS, scriptFile)], {
     encoding: 'utf8',
@@ -489,7 +488,7 @@ withTempProject((tmp) => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. static-analysis-gate.js — the full sweep before qa-engineer trusts a round (T22)
+// 6. static-analysis-gate.js — the full sweep before qa-engineer trusts a round
 // ---------------------------------------------------------------------------
 
 section('6. static-analysis-gate.js — lint/format/typecheck/build/test before QA (T22)');
@@ -636,7 +635,7 @@ withTempProject((tmp) => {
 });
 
 // ---------------------------------------------------------------------------
-// 6a. static-analysis-gate.js's security_scan — the "Code" checkpoint of T23 (Security as Continuous)
+// 6a. static-analysis-gate.js's security_scan — the "Code" checkpoint (Security as Continuous)
 // ---------------------------------------------------------------------------
 
 section("6a. static-analysis-gate.js's security_scan — curated dangerous-pattern sweep (T23)");
@@ -676,7 +675,7 @@ withTempProject((tmp) => {
 });
 
 // ---------------------------------------------------------------------------
-// 6b. static-analysis-gate.js's dependency_scan — offline curated advisory match (T24)
+// 6b. static-analysis-gate.js's dependency_scan — offline curated advisory match
 // ---------------------------------------------------------------------------
 
 section("6b. static-analysis-gate.js's dependency_scan — offline curated advisory match (T24)");
@@ -822,7 +821,7 @@ check(
 );
 
 // ---------------------------------------------------------------------------
-// 8. block-secret-leak.js — no handing off a hardcoded secret (T25)
+// 8. block-secret-leak.js — no handing off a hardcoded secret
 // ---------------------------------------------------------------------------
 
 section('8. block-secret-leak.js — no handing off a hardcoded secret (T25)');
@@ -906,7 +905,7 @@ check(
 );
 
 // ---------------------------------------------------------------------------
-// 9. block-path-permissions.js -- each agent writes only what its contract allows (T15)
+// 9. block-path-permissions.js -- each agent writes only what its contract allows
 // ---------------------------------------------------------------------------
 
 section('9. block-path-permissions.js -- per-agent write paths (T15)');
@@ -920,7 +919,7 @@ function runPathHook(tool, filePath, role, extraEnv) {
 }
 
 /**
- * T-V5-023 — the layout half of an engineer's path rules, as the orchestrator
+ * The layout half of an engineer's path rules, as the orchestrator
  * resolves it and hands it over beside AGENTCLAUDE_ROLE.
  *
  * A contract now holds only the role boundary; where a stack puts code lives in
@@ -969,9 +968,9 @@ check(
   BLOCK,
 );
 
-// T99: a role workspace records that a *person* acknowledged a change. An agent
-// that could write one could mark work seen on that person's behalf, which is the
-// one thing V1.5's design forbids -- so it is on the floor, not in a contract.
+// A role workspace records that a *person* acknowledged a change. An agent
+// that could write one could mark work seen on that person's behalf, which
+// this pipeline's design forbids -- so it is on the floor, not in a contract.
 check(
   'no role set -> knowledge/_roles/ is blocked (only a person writes a role workspace)',
   runPathHook('Write', path.join(ROOT, 'knowledge', '_roles', 'sales-crm', 'ba.yaml')),
@@ -1107,7 +1106,7 @@ check(
 })();
 
 // ---------------------------------------------------------------------------
-// 9b. T-UX13 — Target-workspace deny of Knowledge-side artifacts
+// 9b. Target-workspace deny of Knowledge-side artifacts
 // ---------------------------------------------------------------------------
 
 section('9b. T-UX13 — role: dev workspace blocks BA artifacts, whatever the session identity');
@@ -1130,7 +1129,7 @@ withTempProject((tmp) => {
   check('  engineer-owned security.md still allowed', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'security.md') } }, env), ALLOW);
   check('  app source still allowed', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'src', 'app.ts') } }, env), ALLOW);
 
-  // T-WG3 — the extended Knowledge-side set, plus the root-naming deny text.
+  // The extended Knowledge-side set, plus the root-naming deny text.
   check('  plan.md blocked (Knowledge-side now)', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'plan.md') } }, env), BLOCK);
   check('  _docs/status.md blocked', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'status.md') } }, env), BLOCK);
   check('  decisions blocked', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'decisions', 'DR-001.yaml') } }, env), BLOCK);
@@ -1178,12 +1177,12 @@ withTempProject((tmp) => {
 });
 
 // ---------------------------------------------------------------------------
-// 10. generate-status.js — status.md computed from the real docs, not hand-written (T51)
+// 10. generate-status.js — status.md computed from the real docs, not hand-written
 // ---------------------------------------------------------------------------
 
 section('10. generate-status.js — status.md is generated, not hand-written (T51)');
 
-/** A plan.md phase's task table (T52), one row per [title, status]. */
+/** A plan.md phase's task table, one row per [title, status]. */
 function taskTable(rows) {
   const header = '| Task | Status | Owner | Depends on |\n|---|---|---|---|';
   return `${header}\n${rows.map(([title, status]) => `| ${title} | ${status} | backend-engineer | — |`).join('\n')}\n`;
@@ -1317,7 +1316,7 @@ if (!fs.existsSync(COMMANDS_DIR)) {
       check(`${label}: frontmatter declares argument-hint`, /^\s*argument-hint:/m.test(frontmatter) ? 0 : 1, 0);
       check(`${label}: imports ${GUARDRAILS_IMPORT}`, content.includes(GUARDRAILS_IMPORT) ? 0 : 1, 0);
     } else {
-      // user-invocable:false on an include breaks the @-import from every command (spike T-CC1-d).
+      // user-invocable:false on an include breaks the @-import from every command.
       check(`${label}: hides behind no user-invocable flag`, /user-invocable\s*:\s*false/.test(frontmatter) ? 1 : 0, 0);
     }
 

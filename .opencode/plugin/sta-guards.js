@@ -1,8 +1,8 @@
 /*
- * sta-guards.js — the OpenCode half of this framework's tool-call guards
- * (planning/v2 T-OC6). Generated into every workspace by `sta init`/`sync`
- * and auto-loaded by OpenCode from `.opencode/plugin/` — no config wiring
- * needed (verified on the T-OC0 spike, OpenCode 1.18.21).
+ * sta-guards.js — the OpenCode half of this framework's tool-call guards.
+ * Generated into every workspace by `sta init`/`sync` and auto-loaded by
+ * OpenCode from `.opencode/plugin/` — no config wiring needed (verified on
+ * OpenCode 1.18.21).
  *
  * WHAT ENFORCES WHAT ON THIS RUNTIME
  *
@@ -17,8 +17,8 @@
  *   doc-rewrite / secret-leak / exit checks
  *                                → NOT enforced on OpenCode v1. The adapter
  *                                  reports them via RuntimeGuardReport
- *                                  .unenforced so T111 covers them post-hoc;
- *                                  porting them is roadmap, not a silent gap.
+ *                                  .unenforced post-hoc; porting them is
+ *                                  roadmap, not a silent gap.
  *
  * WHY THE DEFAULT POSTURE MATTERS
  *
@@ -170,8 +170,8 @@ export const StaGuards = async ({ project }) => {
       }
     }
 
-    // T-WG3 (extends T-UX13): workspace-level rule — identity-independent, so
-    // it holds for interactive sessions too. Mirrors block-path-permissions.js.
+    // Workspace-level rule — identity-independent, so it holds for
+    // interactive sessions too. Mirrors block-path-permissions.js.
     const wsRole = readWorkspaceRole(nodeFs, nodePath, root);
     if (wsRole === "dev") {
       for (const pattern of WORKSPACE_BA_ARTIFACTS) {
@@ -272,8 +272,8 @@ function readRules(nodeFs, nodePath, root, role) {
   const write = readList(text, "write");
   const deny = readList(text, "deny");
   if (write === null) return null; // not the shape this reader understands — fail open
-  // T-V5-023: contract = role boundary, stack profile = layout. The layout half
-  // arrives from the orchestrator on the AGENTCLAUDE_ROLE channel, because no
+  // Contract = role boundary, stack profile = layout. The layout half arrives
+  // from the orchestrator on the AGENTCLAUDE_ROLE channel, because no
   // dependency-free reader here can join .agent-team/config.yaml to stacks/.
   const stack = stackPathRules();
   return { write: write.concat(stack.write), deny: (deny === null ? [] : deny).concat(stack.deny) };

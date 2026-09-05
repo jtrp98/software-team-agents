@@ -64,7 +64,7 @@ describe("validateDiscoveredKnowledge", () => {
     expect(() => validateDiscoveredKnowledge("Nok", root, T2)).toThrow(BootstrapNotSettledError);
 
     const { items } = loadKnowledge(root);
-    expect(items[0]!.status).toBe("draft"); // untouched
+    expect(items[0]!.status).toBe("draft");
   });
 
   it("advances a draft item discovered by bootstrap all the way to approved, in two writes", async () => {

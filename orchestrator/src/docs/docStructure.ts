@@ -6,23 +6,20 @@ import { sectionMap, sectionText } from "../context/sections.js";
 import { structuralFallbackReason } from "../context/docSelection.js";
 
 /**
- * T53 — a schema per module document type (`requirement.md`, `design.md`, `plan.md`,
+ * A schema per module document type (`requirement.md`, `design.md`, `plan.md`,
  * `review.md`, `security.md`), so a missing required section is a mechanical finding
  * instead of something only caught if a person happens to notice.
  *
  * These documents are prose Markdown, not JSON or YAML, so a JSON Schema can't validate
- * them directly the way `state-view.schema.json`/`agent-contract.schema.json` validate
- * real data files. This module extracts a small, flat, boolean-and-count *structural
+ * them directly. This module extracts a small, flat, boolean-and-count *structural
  * summary* from each document — "does it have a `## Change Log` section", "how many
  * `## Phase N` headings does it have" — and it's that summary a schema validates. The
  * schema can therefore only ever say "this required section is missing" or "this doc has
- * zero phases" — it says nothing about whether the prose inside a section is any good,
- * the same limit `check-schema-contract.js`/`check-status-sync.js` already live with.
+ * zero phases" — it says nothing about whether the prose inside a section is any good.
  *
  * Every required section is checked against the exact fixed heading each agent's Output
  * template writes (`.claude/agents/<role>.md`) — a wording drift there and a wording
- * drift here have to be fixed together, the same relationship `.claude/tests/run.js`
- * already has with the hooks it tests.
+ * drift here have to be fixed together.
  */
 
 export type DocType = "requirement" | "design" | "plan" | "review" | "security";
@@ -131,21 +128,15 @@ export interface DocStructureCheckResult {
 }
 
 /**
- * T-V5-033 — `F-04`. Byte ceilings for a module document and for one of its `##`
- * sections, so a document that has grown past the point `sta context` can slice
- * usefully fails a check instead of being read in full by every stage forever.
+ * Byte ceilings for a module document and for one of its `##` sections, so a
+ * document that has grown past the point `sta context` can slice usefully fails
+ * a check instead of being read in full by every stage forever.
  *
- * Chosen from a direct measurement of `knowledge-schoolbright`'s real module
- * documents (`requirement.md`/`design.md`/`plan.md`/`review.md`/`security.md`
- * only — the same set `DOC_FILENAMES` already knows about), not guessed:
+ * Chosen from a direct measurement of real module documents (not guessed):
  * section bytes p50 3,563 / p90 25,961 / p95 35,684 / p99 63,524 / max 73,565
  * (n=149); document bytes p50 59,421 / p90 184,228 / p95 299,939 / max 420,181
  * (n=13). Both ceilings sit just above the p90–p95 band of that distribution,
  * so they flag genuine outliers without tripping the bulk of ordinary sections.
- * See `planning/v5/v5-6-evidence.md` for the full measurement and the
- * "Amended at implementation" note on `T-V5-033` explaining why the audit's
- * originally-named offenders (`WORD-01` 93,574 B, a closed-questions section
- * 37,697 B) no longer exist in the current repository to be named by size.
  */
 export const SECTION_SIZE_CEILING_BYTES = 40_000;
 export const DOCUMENT_SIZE_CEILING_BYTES = 200_000;
@@ -181,10 +172,9 @@ export function checkOneDocSize(markdown: string, label: string): DocStructureRe
  * same file set, same existence rule (a document not written yet is skipped,
  * not flagged) — against the byte ceilings above.
  *
- * `moduleName` scopes the measurement to one module, the same
- * `checkPlanGraphs(root, moduleName)` precedent `--check-plan` already uses —
- * T-V5-034's BA preflight note passes the resolved module so it measures one
- * module's documents, not the whole repository, and stays fast.
+ * `moduleName` scopes the measurement to one module (same precedent as
+ * `checkPlanGraphs(root, moduleName)` in `--check-plan`) so a BA preflight
+ * measures one module's documents, not the whole repository, and stays fast.
  */
 export function checkDocSize(projectRoot: string, moduleName?: string): DocStructureCheckResult {
   const moduleDir = path.join(projectRoot, "_docs", "module");

@@ -49,7 +49,7 @@ describe("production deterministic QA regression", () => {
       deterministicVerification: verification.verificationFor,
     });
 
-    await orchestrator.step(execute); // implementation model pass, then deterministic typecheck fail
+    await orchestrator.step(execute);
     expect(qaModelCalls).toBe(0);
     expect(orchestrator.machine.current).toBe("IMPLEMENTATION");
     const devRun = orchestrator.runLog.runsForTask("T-REAL-TSC").find((run) => run.agent === AgentStage.BACKEND_ENGINEER)!;

@@ -3,15 +3,14 @@ import type { KnowledgeItem, KnowledgeKind, KnowledgeStatus } from "./knowledgeM
 import type { KnowledgeBase } from "./knowledgeBase.js";
 
 /**
- * Ownership and status (T65).
+ * Ownership and status.
  *
- * `owner` and `status` were fields from T61 with nobody reading them beyond a
- * query filter. This is what reads them: who may move an item to which status,
- * and which roles may own which kind at all.
+ * `owner` and `status` are fields on the item; this is what reads them: who
+ * may move an item to which status, and which roles may own which kind at all.
  *
  * TWO RULES CARRIED IN FROM ELSEWHERE, NOT INVENTED HERE
  *
- *   1. Nobody reviews their own work. T39 established this for the pipeline
+ *   1. Nobody reviews their own work. The pipeline already established this
  *      (`reviewSeparation.ts`), and a knowledge item is the same situation: an
  *      owner marking their own item `reviewed` records that nothing happened.
  *   2. Only a person approves. `approved` means downstream work may rely on it,

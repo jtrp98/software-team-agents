@@ -6,13 +6,12 @@ export interface Budget {
   task_budget: number;
   /** Max cost a single agent run may spend. */
   agent_budget: number;
-  /** Mirrors item 5's hard retry limit — kept here only for visibility alongside the other budgets. */
+  /** Mirrors the hard retry limit elsewhere — kept here only for visibility alongside the other budgets. */
   retry_budget: number;
   /** Max total tokens for one task, across every agent run. */
   token_budget: number;
 }
 
-/** task-detail.md item 12's own example: max_retry: 3, max_token: 150000. */
 export const DEFAULT_BUDGET: Budget = {
   task_budget: Infinity,
   agent_budget: Infinity,
@@ -57,11 +56,7 @@ export class BudgetExceededError extends Error {
   }
 }
 
-/**
- * The enforcement point: called after each run is logged. Throws instead of
- * letting the task continue — task-detail.md's rule is STOP -> Human, not a
- * warning a caller could choose to ignore.
- */
+/** Called after each run is logged; throws (STOP -> Human) rather than a warning a caller could ignore. */
 export function assertBudget(log: RunLog, taskId: string, budget: Budget = DEFAULT_BUDGET): void {
   const result = checkBudget(log, taskId, budget);
   if (!result.withinBudget) {

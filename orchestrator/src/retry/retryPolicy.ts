@@ -1,7 +1,7 @@
 import { AgentStage, TaskState } from "../types.js";
 import { canTransition, initTaskMachine, transition, type TaskMachine } from "../state/taskState.js";
 
-/** Hard limit per task-detail.md item 5 — never override, never configure higher at runtime. */
+/** Hard limit — never override, never configure higher at runtime. */
 export const MAX_RETRY = 3;
 
 export type FailureKind = "qa" | "security";

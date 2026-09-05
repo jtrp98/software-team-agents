@@ -2,7 +2,7 @@ import type { KnowledgeItem, KnowledgeKind, RelationType } from "./knowledgeMode
 import type { KnowledgeBase } from "./knowledgeBase.js";
 
 /**
- * Graph questions over the knowledge base (T64).
+ * Graph questions over the knowledge base.
  *
  * `knowledgeBase.ts` already stores relations and walks one hop at a time. That
  * is enough to answer "what does this point at"; it is not enough for the two

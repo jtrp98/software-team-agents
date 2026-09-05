@@ -1,5 +1,5 @@
 /**
- * T-V1-04 — the one declaration of how well each runtime is actually supported.
+ * The one declaration of how well each runtime is actually supported.
  *
  * README's runtime table used to carry the status in prose (✅ / ⚠️ / 🧪), which
  * meant two sources of truth that could drift: the table could claim a level
@@ -15,10 +15,10 @@
  *   experimental  — spike-proven only; expect guard gaps, expect change
  *   unsupported   — not offered
  *
- * The rule for raising a level is T-V1-05's conformance suite: mandatory cases
+ * The rule for raising a level is the conformance suite: mandatory cases
  * passing deterministically is what upgrades a claim, not enthusiasm. A level
- * here that outruns the evidence is exactly the "claim support เกิน
- * implementation" failure T-V1-04 exists to prevent.
+ * here that outruns the evidence is exactly the "claim support beyond
+ * implementation" failure this module exists to prevent.
  */
 
 import { codexCoverage, opencodeCoverageWithPlugin } from "../targetcli/guardSettings.js";

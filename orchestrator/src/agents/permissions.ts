@@ -1,4 +1,4 @@
-/** The fixed permission vocabulary from task-detail.md item 10 — every role's permission list is drawn from this set only. */
+/** The fixed permission vocabulary — every role's permission list is drawn from this set only. */
 export enum Permission {
   READ = "read",
   WRITE_DOCS = "write_docs",

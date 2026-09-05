@@ -11,17 +11,13 @@ import { loadTargetConfig, writeTargetConfig } from "./targetMeta.js";
 import { stringify as stringifyYaml } from "yaml";
 
 /**
- * T-V5-008 — guard coverage is a launch requirement, not a support-level string.
+ * Guard coverage is a launch requirement, not a support-level string: every
+ * runtime must produce an explicit verdict, and `--runtime codex` must not be
+ * able to start a session with none of the six guards active.
  *
- * F-05: `codexReadiness()` counted `.codex/agents/*.toml` and printed READY
- * without checking a single guard, and `workspacePreflight` inspected guard
- * wiring only when the launching runtime was Claude. `--runtime codex`
- * therefore started sessions with none of the six guards active.
- *
- * These tests live in their own file rather than in
- * `targetCli.integration.test.ts` (the file T-V5-008 names) purely to avoid
- * colliding with the concurrent Phase-1 round editing that file; the fixtures
- * below mirror its own.
+ * These tests live in their own file rather than `targetCli.integration.test.ts`
+ * to avoid colliding with concurrent edits to that file; the fixtures below
+ * mirror its own.
  */
 
 const roots: string[] = [];
@@ -291,9 +287,9 @@ describe("T-V5-008 — guard coverage is a launch requirement", () => {
     settings.hooks.PreToolUse.pop();
     fs.writeFileSync(settingsPath, JSON.stringify(settings), "utf8");
 
-    // The registration gap fails preflight, exactly as before T-V5-008 ...
+    // The registration gap fails preflight ...
     expect(() => preflight(target, templatesDir)).toThrow(/Guards wired.*7\/8.*software-team-agents sync/);
-    // ... and the new acknowledgement flag cannot excuse it. A repairable fault
+    // ... and the acknowledgement flag cannot excuse it. A repairable fault
     // is never a deliberate choice.
     expect(() => preflight(target, templatesDir, { allowUnguardedRuntime: true })).toThrow(/Guards wired.*7\/8.*software-team-agents sync/);
     expect(gatherStatus({ targetRoot: target, templatesDir, installationConfigPath: NO_INSTALLATION }).claude.ready).toBe(false);

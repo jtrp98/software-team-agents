@@ -46,7 +46,7 @@ describe("three-repo knowledge migration", () => {
   it("reports count mismatch instead of permitting cutover", () => {
     const base = root(); const source = path.join(base, "source"); const knowledge = path.join(base, "knowledge");
     write(path.join(source, "_docs", "a.md"), "docs"); write(path.join(source, "knowledge", "pilot", "task", "BE-001.yaml"), item());
-    const options = { sourceRoot: source, knowledgeRoot: path.join(base, "knowledge"), now: "2026-08-21T01:00:00.000Z" };
+    const options = { sourceRoot: source, knowledgeRoot: knowledge, now: "2026-08-21T01:00:00.000Z" };
     const manifest = collectMigrationManifest(options);
     copyMigrationSource(manifest, options); transformMigratedKnowledge(options);
     expect(verifyMigration(manifest, options).ok).toBe(false);

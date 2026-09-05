@@ -33,13 +33,13 @@ function sha256(bytes: Buffer): string {
 }
 
 /**
- * T-V5-038 — `sta init`/`sta upgrade` (the code that used to produce these
- * `.sta/` fixtures for real) are retired; `rollback.ts`'s legacy `.sta/`
- * fallback survives for workspaces that already have such a snapshot on disk
- * from before this release, so these two helpers reproduce just enough of
- * that shape by hand — a tracked-files manifest, and an upgrade-style backup
- * snapshot pairing the previous file bytes with the previous manifest — to
- * keep exercising `rollbackSta`'s own legacy-restore behaviour.
+ * `sta init`/`sta upgrade` (the code that used to produce these `.sta/`
+ * fixtures for real) are retired; `rollback.ts`'s legacy `.sta/` fallback
+ * survives for workspaces that already have such a snapshot on disk, so
+ * these two helpers reproduce just enough of that shape by hand — a
+ * tracked-files manifest, and an upgrade-style backup snapshot pairing the
+ * previous file bytes with the previous manifest — to keep exercising
+ * `rollbackSta`'s own legacy-restore behaviour.
  */
 function writeStaInstall(root: string, frameworkVersion: string, files: Record<string, string>, now: string): void {
   writeFiles(root, files);
@@ -191,7 +191,7 @@ describe("rollbackSta", () => {
   });
 });
 
-/** Only used by the `.agent-team`-facing tests (T-V5-013), unchanged by T-V5-038. */
+/** Only used by the `.agent-team`-facing tests. */
 function fixtureTemplatesDir(version: string, files: Record<string, string>): string {
   const source = tmpDir("sta-rollback-source-");
   writeFiles(source, { ...files, "orchestrator/package.json": JSON.stringify({ name: "@agentclaude/orchestrator", version }) });

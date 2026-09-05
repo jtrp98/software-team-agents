@@ -11,9 +11,9 @@ const cliSource = fs.readFileSync(
 );
 
 /**
- * The frozen expectation for every descriptor. If a message or heading changes,
- * this test fails and the `T-V4-CLI-001` baseline must be re-justified — the two
- * are the oracle for "the 18 blocks still print byte-identically".
+ * The frozen expectation for every descriptor — the oracle for "every checker
+ * still prints byte-identically". If a message or heading changes, this test
+ * fails and the change must be deliberate.
  */
 const EXPECTED: Record<string, { ok: string; fail: string; notes: CheckerDescriptor["notes"] }> = {
   "--check-contracts": {
@@ -102,8 +102,6 @@ const EXPECTED: Record<string, { ok: string; fail: string; notes: CheckerDescrip
     notes: "leading",
   },
   "--check-installation": {
-    // T-V5-004 re-justified this baseline: the checker now follows the installer
-    // (.agent-team/ first, .sta/ as legacy), so the wording is layout-neutral.
     ok: "[orchestrator] installation metadata (.agent-team/) agrees with the project's real files.",
     fail: "[orchestrator] installation metadata has problems:",
     notes: "leading",
@@ -131,7 +129,7 @@ function captureConsole(fn: () => void): { out: string[]; err: string[] } {
   return { out, err };
 }
 
-describe("CHECKERS table (T-V4-CLI-002)", () => {
+describe("CHECKERS table", () => {
   it("carries the ok message, fail heading and notes mode for every descriptor", () => {
     const actual = Object.fromEntries(
       CHECKERS.map((c) => [c.cliFlag, { ok: c.okMessage, fail: c.failHeading, notes: c.notes }]),
@@ -161,7 +159,7 @@ describe("CHECKERS table (T-V4-CLI-002)", () => {
   });
 });
 
-describe("runChecker output (T-V4-CLI-002)", () => {
+describe("runChecker output", () => {
   const base: CheckerDescriptor = {
     flag: "checkContracts",
     cliFlag: "--check-x",
@@ -248,8 +246,6 @@ describe("runChecker output (T-V4-CLI-002)", () => {
       failHeading: "[orchestrator] teapot problems:",
       notes: "none",
     };
-    // No production code changed: the loop in runCli would pick it up from
-    // `[...CHECKERS, nineteenth]` unmodified.
     const { out } = captureConsole(() => {
       for (const c of [...CHECKERS.slice(0, 0), nineteenth]) {
         if (c.cliFlag === "--check-teapot") runChecker(c, "/r", undefined);

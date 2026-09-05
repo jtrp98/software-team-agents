@@ -107,22 +107,17 @@ describe("T-V3R-001 guardrail invariants", () => {
     expect(violations).toEqual([]);
   });
 
-  // T-V5-039 — the paid API runtime is never offered: no config or flag can
-  // make production construction reach `ApiAdapter` any more (previously an
-  // explicit `allowPaidFallback` opt-in registered it; that seam is gone).
+  // The paid API runtime is never offered: no config or flag can make
+  // production construction reach `ApiAdapter` any more.
   it("criterion 5 — the paid API runtime is never offered; ApiAdapter is unreachable from production construction", () => {
     const config = defaultStaConfig();
     expect(config.execution?.allow_paid_fallback ?? false).toBe(false);
     expect(createProductionRuntimeRegistry(REPO_ROOT).ids()).not.toContain("paid-api");
   });
 
-  // T-V5-040 rewrites this criterion, it does not drop it. The old wording
-  // ("an unregistered-runtime fallback preserves the exact RuntimeGuards
-  // object") was tied to `model_routing`'s compatibility fallback, which is
-  // removed: an unregistered routing target is now a closed route. The
-  // criterion therefore pins the strictly stronger pair — the unregistered
-  // target reaches no adapter at all, and the run that IS routed receives the
-  // caller's exact frozen guards object, unmutated.
+  // An unregistered routing target is a closed route: it must reach no
+  // adapter at all, while the run that IS routed still receives the caller's
+  // exact frozen guards object, unmutated.
   it("criterion 6 — an unregistered routing target reaches no adapter, and a routed run gets the exact RuntimeGuards object", async () => {
     const guards: RuntimeGuards = Object.freeze({
       writeAllow: Object.freeze(["server/**"]),

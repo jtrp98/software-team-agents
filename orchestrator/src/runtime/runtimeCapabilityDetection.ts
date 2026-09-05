@@ -2,10 +2,9 @@ import { RuntimeCapability, missingRequiredCapabilities } from "./runtimeCapabil
 import type { RuntimeAdapter, RuntimeProbe, RuntimeWorkspace } from "./runtimeAdapter.js";
 
 /**
- * Checks what a runtime *claims* against what its actual installation shows
- * (T111).
+ * Checks what a runtime *claims* against what its actual installation shows.
  *
- * `RuntimeAdapter.capabilities` (T108) is deliberately documented as a
+ * `RuntimeAdapter.capabilities` is deliberately documented as a
  * product-level claim, not a per-installation fact — a project that never ran
  * `sta init`, or deleted a hook, still gets an adapter reporting the same static
  * set. This module is the thing that reads the real project instead of trusting
@@ -28,7 +27,7 @@ import type { RuntimeAdapter, RuntimeProbe, RuntimeWorkspace } from "./runtimeAd
 
 export interface CapabilityCheck {
   readonly capability: RuntimeCapability;
-  /** What `RuntimeAdapter.capabilities` (T108) says, independent of installation. */
+  /** What `RuntimeAdapter.capabilities` says, independent of installation. */
   readonly claimed: boolean;
   /** Whether this module could confirm the claim against the real project. `false` with `claimed: true` is the gap this task exists to surface. */
   readonly verified: boolean;
@@ -41,9 +40,9 @@ export interface RuntimeCapabilityReport {
   readonly available: boolean;
   readonly probeReason?: string;
   readonly checks: readonly CapabilityCheck[];
-  /** `REQUIRED_RUNTIME_CAPABILITIES` (T108) this runtime neither claims nor has verified — the pipeline's own design assumes these, so an absence here is never merely informational. */
+  /** `REQUIRED_RUNTIME_CAPABILITIES` this runtime neither claims nor has verified — the pipeline's own design assumes these, so an absence here is never merely informational. */
   readonly missingRequired: readonly RuntimeCapability[];
-  /** Human-readable notes on what changes because of a gap above — what T112/a caller should do instead of pretending the capability is there. */
+  /** Human-readable notes on what changes because of a gap above — what a caller should do instead of pretending the capability is there. */
   readonly fallbacks: readonly string[];
 }
 
@@ -80,13 +79,11 @@ function commandsMention(entries: Array<{ hooks?: Array<{ command?: string }> }>
 
 /**
  * Claude Code's `settings.json` hooks array, checked for the *specific* guard
- * scripts CLAUDE.md names — not just "an array with something in it". This is
- * the deepening HANDOFF_V1.md §20.3 flagged as still owed after T109: a
+ * scripts CLAUDE.md names — not just "an array with something in it". A
  * `PreToolUse` array that exists but doesn't mention
- * `block-path-permissions.js` was previously reported as enforced by the
- * per-run guard report (T108/T109), because that check only asked "is there a
- * hook array". This one asks "is the hook that actually implements the rule
- * in it".
+ * `block-path-permissions.js` would otherwise be reported as enforced by the
+ * per-run guard report, because that check only asks "is there a hook array".
+ * This one asks "is the hook that actually implements the rule in it".
  */
 export const claudeCodeDeepGuardCheck: DeepGuardChecker = async (workspace, guardConfigPath) => {
   const raw = await workspace.readFile(guardConfigPath);
@@ -155,8 +152,8 @@ const GUARD_CAPABILITIES: readonly RuntimeCapability[] = [
 
 /**
  * Runs every check this module can make without spawning a real agent, and
- * reports claim-vs-verified per capability plus what a caller (T112, or a
- * person reading `sta --check-runtime`-style output) should fall back to.
+ * reports claim-vs-verified per capability plus what a caller (an orchestrator,
+ * or a person reading `sta --check-runtime`-style output) should fall back to.
  *
  * `deepGuardCheckers` is injectable, layered over `DEEP_GUARD_CHECKERS`, so a
  * caller can register one for a runtime this file doesn't know about yet
@@ -184,7 +181,7 @@ export async function detectRuntimeCapabilities(
       probeReason: probe.reason,
       checks,
       missingRequired: missingRequiredCapabilities(new Set()),
-      fallbacks: [`"${adapter.id}" cannot be used at all right now — route around it (T112) or fail closed rather than assuming any claimed capability holds`],
+      fallbacks: [`"${adapter.id}" cannot be used at all right now — route around it or fail closed rather than assuming any claimed capability holds`],
     };
   }
 

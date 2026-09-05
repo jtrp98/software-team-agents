@@ -7,41 +7,40 @@ import { isTargetInitialized, isUserOverridden, loadTargetConfig, readTargetMani
 import { runtimesForWorkspace, type WorkspaceRuntime } from "../targetcli/roleWorkspace.js";
 
 /**
- * The role-binding generator (OFF10 M2 / OFF03 P7): one role definition,
- * several renderings, ONE source of truth.
+ * The role-binding generator: one role definition, several renderings, ONE
+ * source of truth.
  *
  * `.claude/agents/<role>.md` is where a role's definition is authored. Each
  * other runtime gets a *rendered* binding generated from it — never
- * hand-maintained, so they can no longer drift the way they had (OFF05 DP3):
+ * hand-maintained, so they can no longer drift:
  *
  * - `.codex/agents/<role>.toml` — Codex's official custom-agent schema
- *   (OFF02 S6: name/description/developer_instructions), via
- *   `renderCodexBinding()`.
- * - `.opencode/agent/<role>.md` — OpenCode markdown agent (T-OC1), via
+ *   (name/description/developer_instructions), via `renderCodexBinding()`.
+ * - `.opencode/agent/<role>.md` — OpenCode markdown agent, via
  *   `renderOpenCodeBinding()`. Its frontmatter carries only
  *   description/mode/permission: OpenCode names an agent by its filename, and
  *   its own permission system is the runtime half of this framework's guards
- *   (the spike in planning/v2 proved the headless default posture is
- *   allow-all, so every binding carries explicit rules).
+ *   (a spike proved the headless default posture is allow-all, so every
+ *   binding carries explicit rules).
  *
- * The same one-source rule covers prompt shortcuts (T-OCC2/T-CXC2): each
+ * The same one-source rule covers prompt shortcuts: each
  * `.claude/commands/<name>.md` renders into `.opencode/commands/<name>.md`
  * and `.agents/skills/<name>/SKILL.md` (+ a fixed `agents/openai.yaml`) —
  * see `COMMAND_RENDERINGS` below.
  *
  * `checkBindings()` fails when what is on disk stops matching what this module
- * would generate; since OFF10 M3 it also fails when the straight
- * `.codex/hooks/*.js` mirrors stop matching their `.claude/hooks/*` sources,
- * and since T-V5-020 when a hook's generated `sta:guard-rules` block stops
- * matching the one authored declaration in `agents/pathPermissions.ts`.
+ * would generate; it also fails when the straight `.codex/hooks/*.js` mirrors
+ * stop matching their `.claude/hooks/*` sources, or when a hook's generated
+ * `sta:guard-rules` block stops matching the one authored declaration in
+ * `agents/pathPermissions.ts`.
  *
  * WHAT IS DELIBERATELY NOT CARRIED OVER
  * - `tools` — Claude tool names are provider vocabulary; each runtime configures
  *   tools its own way.
- * - `model` — model ids do not translate across vendors, and guessing them is
- *   exactly the "เดายิงมั่ว" the T110 header ruled out. Codex-side models come
- *   from its own `[agents]` defaults or explicit options; OpenCode-side from its
- *   own provider config (`opencode.json` / `-m`), effort via `--variant`.
+ * - `model` — model ids do not translate across vendors, and guessing them
+ *   would be wrong more often than not. Codex-side models come from its own
+ *   `[agents]` defaults or explicit options; OpenCode-side from its own
+ *   provider config (`opencode.json` / `-m`), effort via `--variant`.
  * - `version` — Claude frontmatter bookkeeping.
  * - `effort` IS carried over for Codex, as `model_reasoning_effort`, because it
  *   is a reasoning-depth intent rather than a vendor id. The OpenCode rendering
@@ -121,18 +120,16 @@ export function renderCodexBinding(md: string): string {
   return lines.join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// renderOpenCodeBinding — the OpenCode markdown rendering (T-OC1)
-// ---------------------------------------------------------------------------
+// renderOpenCodeBinding — the OpenCode markdown rendering
 
-/** Actions OpenCode's `permission:` frontmatter accepts (verified against 1.18 on the T-OC0 spike). */
+/** Actions OpenCode's `permission:` frontmatter accepts. */
 export type OpenCodePermissionAction = "allow" | "ask" | "deny";
 
 /**
  * Per-tool permission rules for one rendered agent. Keys are glob patterns as
  * OpenCode matches them (`git status*`, `plans/**`); values are actions.
- * OpenCode resolves overlapping patterns by specificity, not by listing order
- * (spike Q1), so this renderer is free to sort keys for stable output.
+ * OpenCode resolves overlapping patterns by specificity, not by listing order,
+ * so this renderer is free to sort keys for stable output.
  */
 export interface OpenCodePermissions {
   bash?: Record<string, OpenCodePermissionAction>;
@@ -219,25 +216,21 @@ export function renderOpenCodeBinding(md: string, permissions?: OpenCodePermissi
   return lines.join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// Command renderings (T-OCC2 / T-CXC2) — `.claude/commands/*.md` is also a
-// one-source-of-truth family, rendered per runtime that has no Claude-style
-// `@`-import:
+// Command renderings — `.claude/commands/*.md` is also a one-source-of-truth
+// family, rendered per runtime that has no Claude-style `@`-import:
 //
 // - `.opencode/commands/<name>.md` — OpenCode discovers these natively and
 //   invokes them as `/name`. Its `@file` references resolve from the project
-//   root, not from the command file's directory (T-OCC1 spike), so the shared
-//   guardrails are inlined into the rendered body rather than imported.
+//   root, not from the command file's directory, so the shared guardrails are
+//   inlined into the rendered body rather than imported.
 // - `.agents/skills/<name>/SKILL.md` — Codex Agent Skills (custom prompts were
 //   removed from codex-cli 0.117.0). Invoked explicitly as `$name`; the extra
 //   `agents/openai.yaml` turns implicit activation off so a skill only runs
-//   when a person types it (T-CXC1 spike proved the file parses and explicit
-//   invocation still works).
+//   when a person types it.
 //
 // Both renderings drop `argument-hint:` — a Claude frontmatter field with no
 // counterpart in either runtime — and replace the `@_shared/guardrails.md`
 // import line with the guardrails' numbered rules inline.
-// ---------------------------------------------------------------------------
 
 export interface ParsedCommandMd {
   description: string;
@@ -301,7 +294,7 @@ export function renderOpenCodeCommand(name: string, sourceMd: string, guardrails
   return ["---", `description: ${yamlDoubleQuoted(parsed.description)}`, "---", "", withInlinedGuardrails(parsed, guardrailsRules)].join("\n");
 }
 
-/** The fixed per-skill policy file: skills are human-typed shortcuts, never model-initiated (T-CXC1-d). */
+/** The fixed per-skill policy file: skills are human-typed shortcuts, never model-initiated. */
 export const CODEX_SKILL_OPENAI_YAML = "policy:\n  allow_implicit_invocation: false\n";
 
 /** Renders one Codex Agent Skill's SKILL.md (`name` comes from the directory; `description` passes through verbatim). */
@@ -481,14 +474,13 @@ export function isAgentBindingRendering(spec: BindingRendering): spec is AgentBi
 }
 
 /**
- * T-V5-018 — repo-relative directories that hold nothing but sync-generated
- * renderings, derived from the rendering declarations themselves so a future
- * rendering cannot be forgotten by the managed `.gitignore` block. Sync
- * regenerates every one of them on each run (`checkBindings` verifies the
- * bytes), which is what makes ignoring them safe. Root-file renderings
- * (AGENTS.md) and authored payload (`.claude/agents/*.md`,
- * `.opencode/plugin/sta-guards.js`) are deliberately absent: whether to commit
- * those stays the project's call.
+ * Repo-relative directories that hold nothing but sync-generated renderings,
+ * derived from the rendering declarations themselves so a future rendering
+ * cannot be forgotten by the managed `.gitignore` block. Sync regenerates
+ * every one of them on each run (`checkBindings` verifies the bytes), which is
+ * what makes ignoring them safe. Root-file renderings (AGENTS.md) and
+ * authored payload (`.claude/agents/*.md`, `.opencode/plugin/sta-guards.js`)
+ * are deliberately absent: whether to commit those stays the project's call.
  */
 export function derivedRenderingIgnorePaths(): readonly string[] {
   const dirs = new Set<string>();
@@ -594,9 +586,9 @@ export function checkBindings(projectRoot: string): BindingCheckResult {
     }
   }
 
-  // T-V3TOK-021: the stack digest is generated from the two engineering
-  // prompts, so PM/SA/QA never need to read whole engineering prompts merely
-  // to discover the stack.
+  // The stack digest is generated from the two engineering prompts, so
+  // PM/SA/QA never need to read whole engineering prompts merely to discover
+  // the stack.
   const stackSources = ["backend-engineer.md", "frontend-engineer.md"];
   if (stackSources.every((file) => fs.existsSync(path.join(claudeDir, file)))) {
     try {
@@ -611,7 +603,7 @@ export function checkBindings(projectRoot: string): BindingCheckResult {
     }
   }
 
-  // --- Command renderings (T-OCC3 / T-CXC3) --------------------------------
+  // --- Command renderings ---------------------------------------------------
   // `.claude/commands/*.md` renders into every runtime that lacks Claude's
   // `@`-import. Skipped entirely when the source dir is absent: a workspace
   // that never received the commands payload has nothing to verify.
@@ -637,14 +629,13 @@ export function checkBindings(projectRoot: string): BindingCheckResult {
     }
   }
 
-  // --- Guard rule block (T-V5-020) -----------------------------------------
+  // --- Guard rule block ------------------------------------------------------
   // `UNIVERSAL_DENY`, the workspace artifact lists and the matcher are declared
   // once in `agents/pathPermissions.ts` and rendered into each hook's
   // `sta:guard-rules` block. Verified here so a hand edit fails loudly instead
-  // of quietly making one enforcement point weaker than the other two — which
-  // is precisely how the TypeScript path came to be missing the workspace rules
-  // altogether (F-06). The `.codex/hooks` mirror needs no entry of its own: the
-  // parity check below already requires it to be byte-identical to its source.
+  // of quietly making one enforcement point weaker than another. The
+  // `.codex/hooks` mirror needs no entry of its own: the parity check below
+  // already requires it to be byte-identical to its source.
   {
     const expectedGuardBlock = renderGuardRuleBlock();
     for (const host of GUARD_RULE_HOSTS) {
@@ -672,15 +663,15 @@ export function checkBindings(projectRoot: string): BindingCheckResult {
     }
   }
 
-  // --- Hook parity (OFF10 M3 / OFF03 U2) -----------------------------------
+  // --- Hook parity -----------------------------------------------------------
   // The `.codex/hooks/*.js` copies exist because no Codex-side generator renders
   // them from anything else — they are straight mirrors of `.claude/hooks/*`,
   // and two of them once drifted so far they lost the writable-work-roots
-  // support their sources had (OFF01 U2). Mirrors get one rule: byte-identity
-  // with their source, checked here so the next silent divergence fails loudly.
-  // Removal of the whole construct is a separate, verified decision (OFF05 B4)
-  // — until Codex's load behaviour is proven on a real install, the mirror must
-  // at least never disagree with what it claims to mirror.
+  // support their sources had. Mirrors get one rule: byte-identity with their
+  // source, checked here so the next silent divergence fails loudly. Removing
+  // the whole construct is a separate, verified decision — until Codex's load
+  // behaviour is proven on a real install, the mirror must at least never
+  // disagree with what it claims to mirror.
   //
   // `package.json` is mirrored too, marker and all: it is what pins both
   // directories to CommonJS under an ESM host, and a mirror directory missing it

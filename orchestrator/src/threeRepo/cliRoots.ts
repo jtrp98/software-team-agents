@@ -1,14 +1,11 @@
 /**
- * T-V4-CLI-003 — the four duplicated three-repo root-resolution blocks from
- * `runCli`, extracted once.
- *
- * Until this task `runCli` carried the `loadInstallationConfig` →
- * `preflightThreeRepoTask` → filter-write-roots → swallow-and-default pattern
- * four times (V4-ANALYSIS §2.4): the QA work roots, the QA docs root, the
- * change-discovery closure, and the previous-round closure. Four independently
- * maintained copies of a fail-open `catch {}` drift, and a drifted copy
- * silently resolves QA against the wrong root — the one correctness risk in
- * this topic.
+ * The three-repo root-resolution logic `runCli` needs in four places (QA work
+ * roots, QA docs root, the change-discovery closure, and the previous-round
+ * closure), extracted once so the `loadInstallationConfig` ->
+ * `preflightThreeRepoTask` -> filter-write-roots -> swallow-and-default
+ * pattern has a single implementation instead of four independently
+ * maintained copies that could drift — a drifted copy would silently resolve
+ * QA against the wrong root.
  *
  * The fail-open contract is load-bearing and preserved exactly here: a missing
  * or unreadable installation config means "legacy project — `projectRoot`
@@ -34,10 +31,9 @@ const installationConfigPath = (): string | undefined =>
  * - three-repo mode → the Target's `write` work roots, deduped
  * - single-repo / legacy project / any installation-config load failure → `[projectRoot]`
  *
- * Byte-for-byte with the pre-extraction `qaRoots` block (`cli.ts`): the guard
- * `loadInstallationConfig()` call runs first so a missing config drops straight
- * into the fallback, `preflightThreeRepoTask` does the real resolution, and only
- * a non-empty write set replaces the default.
+ * The guard `loadInstallationConfig()` call runs first so a missing config
+ * drops straight into the fallback, `preflightThreeRepoTask` does the real
+ * resolution, and only a non-empty write set replaces the default.
  */
 export function resolveWritableWorkRoots(
   projectRoot: string,
@@ -67,8 +63,6 @@ export function resolveWritableWorkRoots(
  *
  * - three-repo mode → the installation's `knowledge_root`
  * - single-repo / legacy project / any installation-config load failure → `projectRoot`
- *
- * Byte-for-byte with the pre-extraction `qaDocsRoot` / `previousRound` blocks.
  */
 export function resolveDocsRoot(projectRoot: string): string {
   try {
@@ -84,9 +78,8 @@ export function resolveDocsRoot(projectRoot: string): string {
  * The per-stage `{ task, roots }` lookup the runtime executor calls, or
  * `undefined` when this is not a three-repo installation.
  *
- * Byte-for-byte with the pre-extraction `threeRepoTask` IIFE in `runCli`: the
- * outer `loadInstallationConfig` guard decides three-repo vs legacy once; the
- * returned callback reloads the task every stage (so `--resume` observes
+ * The outer `loadInstallationConfig` guard decides three-repo vs legacy once;
+ * the returned callback reloads the task every stage (so `--resume` observes
  * retirement/mapping changes) and throws if it vanished from the store.
  */
 export function resolveThreeRepoTaskLookup(

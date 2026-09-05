@@ -154,7 +154,7 @@ export function recordInteractiveSession(params: {
 }
 
 /**
- * T-V5-037 (F-18) — persists the one composition number `sta tokens` can
+ * Persists the one composition number `sta tokens` can
  * actually measure without runtime cooperation: what `sta context` assembled.
  * Reuses the existing interactive-session recording path (`RunLog` +
  * `TaskStore`), not a new store. Fail-open like `recordInteractiveSession`: a

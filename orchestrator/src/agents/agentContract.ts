@@ -11,20 +11,15 @@ import type { Capability } from "./capabilities.js";
 /**
  * Loads and checks `contracts/<agent-name>.yaml`.
  *
- * Before these files existed, an agent's input/output/permission rules were
- * spread across its own prompt, CLAUDE.md and policies/*.md — readable by a
- * person, checkable by nothing. These files state the same rules in a form a
- * program can verify, which is the whole point: a contract nobody can check is
- * a description, not a contract.
+ * These files state an agent's input/output/permission rules in a form a
+ * program can verify, rather than only in prose (its prompt, CLAUDE.md,
+ * policies/*.md).
  *
  * The in-process registry (agents/registry.ts) is still what the orchestrator
- * reads at runtime, and these files are checked against it rather than
- * replacing it. That is deliberate for now: `AGENT_REGISTRY` is a pure
- * constant that `orchestrator.ts`, `permissionPolicy.ts` and
- * `runtime/runtimeGuards.ts` use without knowing what a project root is, and
- * making it read files at import time would push that knowledge into all of
- * them. `assertContractsMatchRegistry()` is what keeps the two honest until
- * the folder restructure moves the source of truth here for good.
+ * reads at runtime; these files are checked against it rather than replacing
+ * it, since `AGENT_REGISTRY` is a pure constant that several modules use
+ * without knowing what a project root is. `assertContractsMatchRegistry()`
+ * keeps the two in agreement.
  */
 
 export interface AgentContract {
@@ -43,7 +38,7 @@ export interface AgentContract {
   };
 }
 
-/** Every agent that has a contract — the ten real roles. `human` is a gate, not an agent, and has none. */
+/** Every agent that has a contract. `human` is a gate, not an agent, and has none. */
 export const CONTRACTED_AGENTS: AgentStage[] = Object.values(AgentStage).filter((s) => s !== AgentStage.HUMAN);
 
 const SCHEMA_PATH = path.resolve(
@@ -125,7 +120,7 @@ export function loadAgentContract(agent: AgentStage | string, projectRoot: strin
   return contract;
 }
 
-/** Reads all ten. A missing or unreadable one fails the whole load: a partial set would silently exempt an agent from its own rules. */
+/** Reads every contract. A missing or unreadable one fails the whole load: a partial set would silently exempt an agent from its own rules. */
 export function loadAllAgentContracts(projectRoot: string = defaultProjectRoot()): Record<string, AgentContract> {
   const out: Record<string, AgentContract> = {};
   for (const agent of CONTRACTED_AGENTS) {
@@ -152,8 +147,7 @@ function describeDiff(label: string, contract: readonly string[], registry: read
 
 /**
  * Compares one contract against the registry entry the orchestrator actually
- * runs on. Returns every mismatch rather than the first — a contract that
- * disagrees in three places should say so once, not across three fix rounds.
+ * runs on. Returns every mismatch rather than the first.
  *
  * `input.required` and `input.optional` are compared as their union: the
  * registry has no notion of an optional input, so the split is information the

@@ -38,21 +38,21 @@ import { checkDocSize } from "../docs/docStructure.js";
 import { resolveModule } from "../agents/moduleDocs.js";
 
 /**
- * T-ROLE-03 / T-ROLE-04 / T-ROLE-19 — role-aware execution: preflight, then
- * hand over to the real agent runtime FROM the Role Workspace.
+ * Role-aware execution: preflight, then hand over to the real agent runtime
+ * FROM the Role Workspace.
  *
  *   ba  → cwd = knowledgeRoot. Framework ✓, Knowledge ✓ writable, tooling
  *         synced, Target never required.
  *   dev → cwd = targetRoot. Everything above plus a REQUIRED, validated
  *         Knowledge binding — a DEV session without project knowledge fails
- *         closed with recovery instructions (T-ROLE-08).
+ *         closed with recovery instructions.
  *
  * Both flows auto-initialize an unambiguous workspace on first run (init is
  * idempotent and never touches non-managed content), stop on sync conflicts
  * rather than forcing, and enforce write policy through the launch itself:
  * the session gets exactly its own workspace as cwd and an explicitly empty
  * AGENTCLAUDE_WRITABLE_WORK_ROOTS, so cross-repository writes hit the
- * block-outside-repo guard (T-ROLE-12/13).
+ * block-outside-repo guard.
  */
 
 export type RuntimeName = "claude" | "codex" | "opencode";
@@ -70,15 +70,15 @@ export interface RoleRunOptions {
   /** Sync managed files automatically when the plan is conflict-free (default true). */
   autoSync?: boolean;
   /**
-   * T-V5-008 — deliberately accept a session on a runtime that enforces no
-   * guard. Never a default and never implicit: without it, an unguarded runtime
-   * fails preflight. It cannot excuse a *broken* guard mechanism.
+   * Deliberately accept a session on a runtime that enforces no guard. Never
+   * a default and never implicit: without it, an unguarded runtime fails
+   * preflight. It cannot excuse a *broken* guard mechanism.
    */
   allowUnguardedRuntime?: boolean;
   now?: string;
   /** Overrides where the machine-wide installation binding is read from (tests; unusual setups). */
   installationConfigPath?: string;
-  /** T-V5-009: an explicit candidate is offered, never silently recorded. */
+  /** An explicit candidate is offered, never silently recorded. */
   knowledgeRoot?: string;
   /** Test/UI seam for the one interactive confirmation. */
   confirmKnowledgeBinding?: (candidate: string) => Promise<boolean>;
@@ -166,10 +166,10 @@ export interface WorkspaceContext {
   templatesDir: string;
   /** Resolved for DEV (required); also reported for BA when a machine-wide binding exists (informational only). */
   knowledge?: KnowledgeBinding;
-  /** T-LV1/T-V5-042 — resolved for BA when `target.target_id` is set and resolves; always optional, never blocks a BA session. */
+  /** Resolved for BA when `target.target_id` is set and resolves; always optional, never blocks a BA session. */
   target?: TargetBinding;
   runtime: RuntimeName;
-  /** T-V5-008 — the guard verdict this launch was allowed under, for the launch record. */
+  /** The guard verdict this launch was allowed under, for the launch record. */
   guards: GuardCoverage;
 }
 
@@ -251,12 +251,12 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
   // them. Check effective coverage before any auto-sync so an already-installed
   // but unregistered guard fails closed with this exact diagnosis.
   //
-  // T-V5-008 — this consults the verdict for whichever runtime is launching,
-  // not only Claude. A runtime with no mechanism at all (`unguarded`) stops the
-  // launch unless the user acknowledges it explicitly; a *broken* mechanism is
-  // never acknowledgeable, because it is a repairable fault rather than a
-  // deliberate choice, and letting a flag past it would weaken a guard that is
-  // enforced today.
+  // This consults the verdict for whichever runtime is launching, not only
+  // Claude. A runtime with no mechanism at all (`unguarded`) stops the launch
+  // unless the user acknowledges it explicitly; a *broken* mechanism is never
+  // acknowledgeable, because it is a repairable fault rather than a deliberate
+  // choice, and letting a flag past it would weaken a guard that is enforced
+  // today.
   const launchRuntime = options.runtime ?? "claude";
   const coverage = guardCoverage({
     runtime: launchRuntime,
@@ -314,8 +314,8 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
   // the user's back).
   try {
     const manifest = readTargetManifest(roots.targetRoot);
-    // T-WG7 — plan against rendered bytes so a dev workspace's CLAUDE.md is
-    // judged by what sync actually writes there, not by the shipped template.
+    // Plan against rendered bytes so a dev workspace's CLAUDE.md is judged by
+    // what sync actually writes there, not by the shipped template.
     const derived = devDerivedContent({
       targetRoot: roots.targetRoot,
       templatesDir,
@@ -364,7 +364,7 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
   // Role dependencies.
   /** Set exactly when role === "dev" and the binding resolved — the required-dependency result. */
   let devKnowledge: KnowledgeBinding | undefined;
-  /** T-LV1 — set exactly when role === "ba" and a Target binding resolved; always optional. */
+  /** Set exactly when role === "ba" and a Target binding resolved; always optional. */
   let baTarget: TargetBinding | undefined;
   if (role === "dev") {
     const resolved: KnowledgeBinding | undefined = (() => {
@@ -387,7 +387,7 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
     }
     devKnowledge = resolved;
     checks.push({ name: "Knowledge", ok: true, detail: `${resolved.knowledgeRoot} (via ${resolved.via})` });
-    // T-WG1 — a valid, marker-complete binding still leaves the BA workspace role
+    // A valid, marker-complete binding still leaves the BA workspace role
     // entirely unusable if nobody ever ran `init --role ba` there. DEV reads
     // Knowledge fine either way (it only needs the markers), so this is a
     // note, not a failing check.
@@ -407,10 +407,10 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
     } catch {
       // informational only — never blocks a BA session
     }
-    // T-LV1 — an optional Target binding lets BA read the real app repo
-    // (schema.prisma, code) without ever requiring it. Any problem is
-    // reported as a non-blocking check, exactly like T-WG1's "Knowledge (BA
-    // workspace role)" note — it is never a reason to fail preflight.
+    // An optional Target binding lets BA read the real app repo (schema.prisma,
+    // code) without ever requiring it. Any problem is reported as a
+    // non-blocking check, like the "Knowledge (BA workspace role)" note above —
+    // it is never a reason to fail preflight.
     try {
       const resolved = resolveTargetBinding({
         knowledgeRoot: roots.targetRoot,
@@ -425,10 +425,10 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
           detail: `${resolved.targetRoot} (via ${resolved.via}, read-only)`,
         });
       }
-      // T-V5-042 — the removed committed path is stripped by the schema, so
-      // say so here too: without it a workspace that still sets it only sees
-      // its Target quietly missing. Non-blocking, like every check in this
-      // block — a BA Target binding is optional by design (T-ROLE-07).
+      // The removed committed path is stripped by the schema, so say so here
+      // too: without it a workspace that still sets it only sees its Target
+      // quietly missing. Non-blocking, like every check in this block — a BA
+      // Target binding is optional by design.
       const legacy = removedTargetPath(roots.targetRoot);
       if (legacy !== undefined) {
         checks.push({ name: "Target (BA workspace role)", ok: true, detail: removedTargetPathProblem(legacy) });
@@ -441,10 +441,10 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
       }
     }
 
-    // T-V5-034 — the same `--check-doc-size` ceiling (F-04) as a non-blocking
-    // note: a BA is never stopped by document growth, only told about it, since
-    // blocking here would stand in the way of the very work needed to fix it
-    // (the CI wiring that does block lives in the BA workflow, T-V5-034 scope).
+    // The same `--check-doc-size` ceiling as a non-blocking note: a BA is
+    // never stopped by document growth, only told about it, since blocking
+    // here would stand in the way of the very work needed to fix it (the CI
+    // wiring that does block lives in the BA workflow).
     // Scoped to the one module `resolveModule` can resolve with no hint, the
     // same "never guess among candidates" rule `sta context` already applies —
     // an ambiguous or empty workspace measures nothing rather than the whole
@@ -498,9 +498,9 @@ async function runRoleSession(role: WorkspaceRole, options: RoleRunOptions): Pro
     throw e;
   }
   for (const c of ctx.checks) console.log(`[software-team-agents] ✓ ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
-  // T-V5-008 — an acknowledged unguarded launch is recorded as such on the
-  // launch line itself, so the session's own transcript states that none of the
-  // six guards was active.
+  // An acknowledged unguarded launch is recorded as such on the launch line
+  // itself, so the session's own transcript states that none of the six
+  // guards was active.
   const unguarded = ctx.guards.level === "unguarded" ? " [UNGUARDED SESSION — acknowledged]" : "";
   console.log(`[software-team-agents] starting ${ctx.runtime} (${WORKSPACE_ROLE_LABEL[role]})${unguarded} from ${ctx.workspaceRoot} ...`);
   const launch = options.launch ?? defaultLaunch;
