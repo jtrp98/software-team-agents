@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
+import { defaultInstallationConfigPath, loadInstallationConfig, InstallationConfigError } from "../threeRepo/installation.js";
 
 /**
  * The root model for Target-first execution. Three roots, three
@@ -33,13 +33,54 @@ export interface Roots {
  * Module-document reads use the Knowledge binding exported by an interactive
  * three-repo launch; single-repo runs use the project itself. Kept beside the
  * three-root model so callers don't invent conflicting precedence rules.
+ *
+ * Precedence: `env > installation.yaml > projectRoot`. The env var is what a
+ * launcher session (`software-team-agents ba|dev`) sets; the installation-config
+ * fallback is what makes a desktop session — which never goes through the
+ * launcher and so never has it — usable instead of failing on the first turn.
+ * A missing or invalid `installation.yaml` degrades to today's `projectRoot`
+ * behaviour; it must never throw.
  */
 export function resolveContextDocsRoot(
   projectRoot: string,
   env: { AGENTCLAUDE_KNOWLEDGE_ROOT?: string | undefined } = process.env,
 ): string {
   const knowledgeRoot = env.AGENTCLAUDE_KNOWLEDGE_ROOT?.trim();
-  return path.resolve(knowledgeRoot || projectRoot);
+  if (knowledgeRoot) return path.resolve(knowledgeRoot);
+  try {
+    const configured = loadInstallationConfig(defaultInstallationConfigPath()).knowledge_root;
+    if (configured) return path.resolve(configured);
+  } catch (error) {
+    if (!(error instanceof InstallationConfigError)) throw error;
+  }
+  return path.resolve(projectRoot);
+}
+
+/**
+ * The workspace's own recorded role, from the `role:` key `software-team-agents
+ * init` writes into `.agent-team/config.yaml`.
+ *
+ * This is the *workspace* role — which repository this checkout is, `ba` or
+ * `dev`. It is not an agent's role, and nothing derived from it can stand in
+ * for one: a guard hook carries no subagent identity, so `AGENTCLAUDE_ROLE` and
+ * the per-agent contract boundary it selects stay an orchestrated-run concern.
+ *
+ * Read on its own rather than through `loadTargetConfig`, so a config this CLI
+ * cannot fully parse (an older or newer schema) still yields its role instead
+ * of throwing detection away entirely — getting this wrong routes writes to the
+ * wrong repository. Anchored at column 0 with no newline in the separator: a
+ * `role:` nested under another key belongs to that key, and reading it as the
+ * workspace's own would flip the whole workspace's write policy.
+ */
+export function resolveWorkspaceRole(workspaceRoot: string): "ba" | "dev" | null {
+  let text: string;
+  try {
+    text = fs.readFileSync(path.join(workspaceRoot, ".agent-team", "config.yaml"), "utf8");
+  } catch {
+    return null;
+  }
+  const match = /^role:[ \t]*(ba|dev)[ \t]*$/m.exec(text);
+  return match ? (match[1] as "ba" | "dev") : null;
 }
 
 function isDirectory(dir: string): boolean {

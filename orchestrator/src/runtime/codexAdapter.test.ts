@@ -145,6 +145,54 @@ describe("CodexAdapter.executeAgent", () => {
     expect(result.text).toBe("it broke");
   });
 
+  // The stderr below is the observed tail of real `codex exec` runs against a stub
+  // upstream, MCP noise included — see planning/v6/v6-2-evidence.md for the captures.
+  const CODEX_NOISE = [
+    "Reading additional input from stdin...",
+    `2026-09-06T02:46:46.509637Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer resource_metadata=\\"https://mcp.figma.com/.well-known/oauth-protected-resource\\",scope=\\"mcp:connect\\"" })`,
+    "ERROR: Reconnecting... 5/5",
+  ].join("\n");
+
+  it.each([
+    ["ERROR: exceeded retry limit, last status: 429 Too Many Requests", "429"],
+    ["ERROR: unexpected status 401 Unauthorized: Incorrect API key provided., url: http://127.0.0.1:8791/v1/responses", "401"],
+    ["ERROR: unexpected status 403 Forbidden: You do not have access to this model., url: http://127.0.0.1:8792/v1/responses", "403"],
+  ])("reports UNAVAILABLE, not ERROR, when the provider refused to serve (%s)", async (errorLine) => {
+    const projectRoot = tmpProject();
+    writeRoleBinding(projectRoot, "backend-engineer");
+    const spawnSync: SpawnSync = () => cliResult(1, "", undefined, `${CODEX_NOISE}\n${errorLine}`);
+    const adapter = new CodexAdapter({ projectRoot, spawnSync });
+
+    const result = await adapter.executeAgent(baseRequest({ cwd: projectRoot }));
+
+    expect(result.status).toBe("UNAVAILABLE");
+    expect(result.diagnostics.join(" ")).toContain("provider refused to serve");
+    expect(result.diagnostics.join(" ")).toContain(errorLine);
+  });
+
+  it("keeps a genuine task failure as ERROR, even though every codex run carries `ERROR: Reconnecting` and MCP auth noise", async () => {
+    const projectRoot = tmpProject();
+    writeRoleBinding(projectRoot, "backend-engineer");
+    const spawnSync: SpawnSync = () => cliResult(1, "", undefined, `${CODEX_NOISE}\nERROR: the task's own test suite failed with 401 assertions unmet`);
+    const adapter = new CodexAdapter({ projectRoot, spawnSync });
+
+    const result = await adapter.executeAgent(baseRequest({ cwd: projectRoot }));
+
+    expect(result.status).toBe("ERROR");
+  });
+
+  it("keeps a 5xx as ERROR — codex reports it as high demand, which is not a refusal to serve this account", async () => {
+    const projectRoot = tmpProject();
+    writeRoleBinding(projectRoot, "backend-engineer");
+    const spawnSync: SpawnSync = () =>
+      cliResult(1, "", undefined, `${CODEX_NOISE}\nERROR: We're currently experiencing high demand, which may cause temporary errors.`);
+    const adapter = new CodexAdapter({ projectRoot, spawnSync });
+
+    const result = await adapter.executeAgent(baseRequest({ cwd: projectRoot }));
+
+    expect(result.status).toBe("ERROR");
+  });
+
   it("reports UNAVAILABLE, not ERROR, when the binary is missing (ENOENT)", async () => {
     const projectRoot = tmpProject();
     writeRoleBinding(projectRoot, "backend-engineer");

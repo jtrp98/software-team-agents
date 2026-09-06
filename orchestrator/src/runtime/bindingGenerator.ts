@@ -232,6 +232,92 @@ export function renderOpenCodeBinding(md: string, permissions?: OpenCodePermissi
 // counterpart in either runtime — and replace the `@_shared/guardrails.md`
 // import line with the guardrails' numbered rules inline.
 
+// --- Antigravity guard binding ---------------------------------------------
+
+/** Where AGY reads workspace-level hooks from, and the wrapper the rendering points at. */
+export const AGY_HOOKS_PATH = ".agents/hooks.json";
+export const AGY_GUARD_WRAPPER_PATH = ".agents/hooks/sta-guard.js";
+/** Top-level key this framework owns. AGY's hooks file is a map of arbitrary names, so a project's own entries live beside it untouched. */
+export const AGY_MANAGED_HOOK_KEY = "sta-guards";
+
+/**
+ * Tools registered with the wrapper, each as its own exact-string matcher.
+ * Every name is one AGY advertised in a real `init.tools` roster; whether the
+ * matcher field accepts anything richer than an exact tool name was never
+ * observed, so no alternation or pattern is emitted.
+ */
+const AGY_GUARDED_TOOLS: readonly string[] = [
+  "multi_replace_file_content",
+  "notebook_edit",
+  "replace_file_content",
+  "sed_file",
+  "write_to_file",
+];
+
+export interface AgyHookRegistration {
+  matcher: string;
+  hooks: Array<{ type: "command"; command: string; timeout: number }>;
+}
+
+/** The managed value under {@link AGY_MANAGED_HOOK_KEY} — the unit that is merged and drift-checked, not the whole file. */
+export function renderAgyManagedHooks(): { PreToolUse: AgyHookRegistration[] } {
+  return {
+    PreToolUse: AGY_GUARDED_TOOLS.map((tool) => ({
+      matcher: tool,
+      hooks: [{ type: "command" as const, command: `node ${AGY_GUARD_WRAPPER_PATH}`, timeout: 10 }],
+    })),
+  };
+}
+
+/** The whole file as shipped to a workspace that has none of its own. */
+export function renderAgyHooksJson(): string {
+  return `${JSON.stringify({ [AGY_MANAGED_HOOK_KEY]: renderAgyManagedHooks() }, null, 2)}\n`;
+}
+
+/** Reads back the managed entry alone. A file this cannot parse is an error, never an empty result that would read as "no drift". */
+export function readAgyManagedHooks(content: string): { value?: unknown; error?: string } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (e) {
+    return { error: `not valid JSON: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { error: "root must be a JSON object" };
+  const managed = (parsed as Record<string, unknown>)[AGY_MANAGED_HOOK_KEY];
+  if (managed === undefined) return { error: `no "${AGY_MANAGED_HOOK_KEY}" entry — regenerate the bindings` };
+  return { value: managed };
+}
+
+export interface AgyHooksMergeResult {
+  ok: boolean;
+  changed?: boolean;
+  content?: string;
+  error?: string;
+}
+
+/**
+ * Replaces this framework's own entry and leaves every other top-level key as
+ * the project wrote it. Whole-file replacement would delete a user's own hooks
+ * on the next sync, which is why the managed key exists at all.
+ */
+export function mergeAgyHooks(projectContent: string): AgyHooksMergeResult {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(projectContent);
+  } catch (e) {
+    return { ok: false, error: `${AGY_HOOKS_PATH} is not valid JSON: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, error: `${AGY_HOOKS_PATH} root must be a JSON object` };
+  }
+  const current = parsed as Record<string, unknown>;
+  const managed = renderAgyManagedHooks();
+  if (JSON.stringify(current[AGY_MANAGED_HOOK_KEY]) === JSON.stringify(managed)) {
+    return { ok: true, changed: false, content: projectContent };
+  }
+  return { ok: true, changed: true, content: `${JSON.stringify({ ...current, [AGY_MANAGED_HOOK_KEY]: managed }, null, 2)}\n` };
+}
+
 export interface ParsedCommandMd {
   description: string;
   argumentHint?: string;
@@ -549,7 +635,10 @@ export function checkBindings(projectRoot: string): BindingCheckResult {
   const manifest = isTargetInitialized(projectRoot) ? readTargetManifest(projectRoot) : undefined;
   // A non-workspace fixture keeps the historical all-renderings contract; an
   // initialized workspace checks exactly its recorded runtime set.
-  const runtimes = config || manifest ? new Set(runtimesForWorkspace(config, manifest)) : new Set<WorkspaceRuntime>(["claude", "codex", "opencode"]);
+  const runtimes = config || manifest ? new Set(runtimesForWorkspace(config, manifest)) : new Set<WorkspaceRuntime>(["claude", "codex", "opencode", "antigravity"]);
+  // `.agents/skills/` is Codex's command rendering; `.agents/hooks*` is Antigravity's
+  // guard binding. Same directory, two runtimes — checked below on the exact path,
+  // never on the `.agents/` prefix.
   const renderingRuntime = (dir: string): WorkspaceRuntime => dir.startsWith(".codex/") || dir.startsWith(".agents/") ? "codex" : "opencode";
 
   const mdRoles = listRoles(claudeDir);
@@ -658,6 +747,27 @@ export function checkBindings(projectRoot: string): BindingCheckResult {
       } else if (inspected.block !== expectedGuardBlock) {
         problems.push(
           `${host.path}: the sta:guard-rules block does not match the declaration in agents/pathPermissions.ts — edit the declaration, then run node scripts/regenerate-renderings.mjs`,
+        );
+      }
+    }
+  }
+
+  // --- Antigravity hooks.json ------------------------------------------------
+  // Only the managed key is compared. The rest of the file is the project's, by
+  // the same ownership rule that keeps `.claude/settings.json` project-owned:
+  // AGY's hooks file is a map of arbitrary top-level names, so a user's own
+  // registrations sit beside this one and must survive every sync.
+  if (runtimes.has("antigravity")) {
+    const abs = path.join(projectRoot, ...AGY_HOOKS_PATH.split("/"));
+    if (!fs.existsSync(abs)) {
+      problems.push(`missing ${AGY_HOOKS_PATH} — regenerate the bindings`);
+    } else if (!isUserOverridden(projectRoot, AGY_HOOKS_PATH, config)) {
+      const managed = readAgyManagedHooks(fs.readFileSync(abs, "utf8"));
+      if (managed.error !== undefined) {
+        problems.push(`${AGY_HOOKS_PATH}: ${managed.error}`);
+      } else if (JSON.stringify(managed.value) !== JSON.stringify(renderAgyManagedHooks())) {
+        problems.push(
+          `${AGY_HOOKS_PATH}: the "${AGY_MANAGED_HOOK_KEY}" entry does not match the rendering in runtime/bindingGenerator.ts — regenerate the bindings`,
         );
       }
     }

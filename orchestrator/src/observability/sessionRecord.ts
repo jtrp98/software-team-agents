@@ -46,6 +46,8 @@ function autoLoadedInstructionFiles(workspaceRoot: string, runtime: string): str
     return [path.join(workspaceRoot, "CLAUDE.md"), path.join(workspaceRoot, "CLAUDE.local.md")];
   }
   if (runtime === "codex" || runtime === "opencode") return [path.join(workspaceRoot, "AGENTS.md")];
+  // antigravity: no auto-loaded instruction file was observed on the spike, and
+  // counting one on the AGENTS.md convention alone would inflate this budget.
   return [];
 }
 

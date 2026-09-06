@@ -1,10 +1,22 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import { sliceModuleDocsWithSavings } from "../runtime/agentRunAssembly.js";
 import { buildContextCommand, ContextCommandError, contextCommandJson, renderContextCommand } from "./contextCommand.js";
+
+// T-V6-006: `env: {}` below means "no AGENTCLAUDE_KNOWLEDGE_ROOT", which now
+// falls through to installation.yaml — isolate it from whatever is real on
+// the machine running this suite, exactly like installation.test.ts does.
+const AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+beforeEach(() => {
+  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-context-command-test-no-installation.yaml");
+});
+afterEach(() => {
+  if (AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+  else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL;
+});
 
 function rootWith(modules: Record<string, Partial<Record<"requirement.md" | "design.md" | "plan.md", string>>>): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-context-command-"));
@@ -75,6 +87,18 @@ describe("sta context command (T-V3TOK-040/041/043)", () => {
     expect(rendered).toContain("slicing_saved=");
     expect(result.composition.direct_file_reads).toBe(5);
     expect(contextCommandJson(result)).toMatchObject({ composition: { doc_chars_before: expect.any(Number), saved_pct: expect.any(Number) } });
+  });
+
+  it("names why each unknown design.md section came back unplaceable, not just which (T-V6-001)", async () => {
+    const untagged = "# Design\n\n## Feature-by-Feature Feasibility\nDES-001 REQ-001 yes\n\n## Untagged Contract\nno ids here\n\n## Risks & Dependencies\nnone\n\n## Open Questions\nnone\n";
+    const root = rootWith({ sales: { "requirement.md": REQUIREMENT, "design.md": untagged, "plan.md": PLAN } });
+    const result = await buildContextCommand({ role: "backend-engineer", moduleHint: "sales", phases: [1], projectRoot: root, env: {} });
+    const design = contextCommandJson(result) as { savings_by_document: Array<{ doc: string; kept_as_unknown: string[]; kept_as_unknown_reasons: { heading: string; reason: string }[] }> };
+    const designEntry = design.savings_by_document.find((d) => d.doc === "design")!;
+    expect(designEntry.kept_as_unknown).toContain("Untagged Contract");
+    expect(designEntry.kept_as_unknown_reasons).toEqual(
+      expect.arrayContaining([{ heading: "Untagged Contract", reason: "no-des-id" }]),
+    );
   });
 
   it("names each fallback document and its structural reason, not just a count (T-V5-035)", async () => {

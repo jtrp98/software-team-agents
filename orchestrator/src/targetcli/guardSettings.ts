@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isUserOverridden, type TargetConfig, type TargetManifest } from "./targetMeta.js";
 import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
+import { AGY_GUARD_WRAPPER_PATH, AGY_HOOKS_PATH } from "../runtime/bindingGenerator.js";
 import type { WorkspaceRuntime } from "./roleWorkspace.js";
 
 export const CLAUDE_SETTINGS_PATH = ".claude/settings.json";
@@ -440,6 +441,48 @@ export function codexCoverage(): GuardCoverage {
   };
 }
 
+/**
+ * Antigravity's guard mechanism is real, and the binding this framework ships
+ * is nonetheless inert. Both halves are observed, and the gap between them is
+ * the whole verdict.
+ *
+ * On a real agy 1.1.27 install the `PreToolUse` deny path works exactly as its
+ * contract says: a hook returning `{"decision":"deny"}` blocks the tool step,
+ * and a hook that cannot even load blocks it too — fail-closed, confirmed. But
+ * that only happens when the hooks file sits in the machine-global
+ * customization root (`~/.gemini/config/hooks.json`). The workspace-level
+ * `.agents/hooks.json` this framework generates was never once consulted, in
+ * seven configurations across two versions.
+ *
+ * So the verdict stays `unguarded`, and the reason is not "unproven" any more:
+ * the file a workspace carries enforces nothing, and enforcement currently
+ * requires a per-machine install this framework does not perform. `partial`
+ * would let a launch preflight pass on a guard that is demonstrably not running.
+ */
+export function antigravityCoverageWithHooks(): GuardCoverage {
+  return {
+    runtime: "antigravity",
+    level: "unguarded",
+    enforced: [],
+    unenforced: ALL_GUARD_CAPABILITIES,
+    detail:
+      `${AGY_HOOKS_PATH} and ${AGY_GUARD_WRAPPER_PATH} are generated, but agy reads PreToolUse hooks only from the machine-global ~/.gemini/config/hooks.json — the workspace file is never consulted, verified on 1.1.27 — ` +
+      "so block-git, block-outside-repo, block-path-permissions, block-doc-rewrite, block-secret-leak and require-green-before-stop are all inactive in a workspace, however complete the binding looks",
+  };
+}
+
+function antigravityCoverage(targetRoot: string): GuardCoverage {
+  const withHooks = antigravityCoverageWithHooks();
+  const present =
+    fs.existsSync(path.join(targetRoot, ...AGY_HOOKS_PATH.split("/"))) &&
+    fs.existsSync(path.join(targetRoot, ...AGY_GUARD_WRAPPER_PATH.split("/")));
+  if (present) return withHooks;
+  return {
+    ...withHooks,
+    detail: `no ${AGY_HOOKS_PATH} / ${AGY_GUARD_WRAPPER_PATH} in this workspace — run software-team-agents sync; note that syncing them changes nothing until agy reads a workspace hooks file at all`,
+  };
+}
+
 export function guardCoverage(options: {
   runtime: WorkspaceRuntime;
   targetRoot: string;
@@ -451,6 +494,7 @@ export function guardCoverage(options: {
   wiring?: GuardWiringStatus;
 }): GuardCoverage {
   if (options.runtime === "codex") return codexCoverage();
+  if (options.runtime === "antigravity") return antigravityCoverage(options.targetRoot);
   if (options.runtime === "opencode") return opencodeCoverage(options.targetRoot);
   const wiring = options.wiring ?? (options.templatesDir === undefined
     ? undefined

@@ -6,6 +6,7 @@ import { describe, expect, it, beforeAll, afterAll } from "vitest";
 import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import { CodexAdapter } from "./codexAdapter.js";
 import { OpenCodeAdapter } from "./openCodeAdapter.js";
+import { AntigravityAdapter } from "./antigravityAdapter.js";
 import { MockRuntimeAdapter, okResult } from "./mockAdapter.js";
 import { NO_GUARDS } from "./runtimeAdapter.js";
 import type { RuntimeAdapter, RuntimeAgentRequest, SpawnSync } from "./runtimeAdapter.js";
@@ -43,13 +44,15 @@ function spawnResult(over: Partial<SpawnSyncReturns<string>>): SpawnSyncReturns<
 }
 
 /** A spawn that answers `--version` for its binary and a well-formed run result otherwise. */
-function fakeSpawn(binary: "claude" | "codex" | "opencode"): SpawnSync {
+function fakeSpawn(binary: "claude" | "codex" | "opencode" | "agy"): SpawnSync {
   return ((_command: string, args: string[]) => {
     if (args.includes("--version")) return spawnResult({ stdout: `0.0.0-${binary}-test\n` });
     if (args.includes("-p") || args.includes("exec")) {
       return spawnResult({
         stdout:
-          binary === "claude"
+          binary === "agy"
+            ? JSON.stringify({ conversation_id: "c", status: "SUCCESS", response: "done", duration_seconds: 1, num_turns: 1, usage: { input_tokens: 3, output_tokens: 4, total_tokens: 7 } })
+            : binary === "claude"
             ? JSON.stringify({ result: "done", is_error: false, usage: { input_tokens: 1, output_tokens: 2 }, total_cost_usd: 0 })
             : binary === "opencode"
               ? JSON.stringify({ type: "text", part: { type: "text", text: "done" } }) + "\n"
@@ -88,6 +91,7 @@ const implementations: [string, () => RuntimeAdapter][] = [
   ["ClaudeCodeAdapter", () => new ClaudeCodeAdapter({ projectRoot, spawnSync: fakeSpawn("claude") })],
   ["CodexAdapter", () => new CodexAdapter({ projectRoot, models: ["gpt-5-test"], spawnSync: fakeSpawn("codex") })],
   ["OpenCodeAdapter", () => new OpenCodeAdapter({ projectRoot, spawnSync: fakeSpawn("opencode") })],
+  ["AntigravityAdapter", () => new AntigravityAdapter({ projectRoot, spawnSync: fakeSpawn("agy") })],
 ];
 
 describe.each(implementations)("RuntimeAdapter contract โ€” %s", (_name, make) => {
@@ -185,6 +189,14 @@ describe("an unreachable runtime is UNAVAILABLE, never a throw", () => {
   it("OpenCodeAdapter maps a failed spawn to UNAVAILABLE", async () => {
     const adapter = new OpenCodeAdapter({ projectRoot, spawnSync: enoentSpawn() });
     // The binding must exist or the adapter fails fast before ever spawning.
+    await adapter.workspace.writeFile(adapter.binding.definitionPath("qa-engineer"), "role text");
+    const result = await adapter.executeAgent(requestFor(adapter));
+    expect(result.status).toBe("UNAVAILABLE");
+  });
+
+  it("AntigravityAdapter maps a failed spawn to UNAVAILABLE", async () => {
+    const adapter = new AntigravityAdapter({ projectRoot, spawnSync: enoentSpawn() });
+    // The role definition must exist or the adapter refuses before spawning.
     await adapter.workspace.writeFile(adapter.binding.definitionPath("qa-engineer"), "role text");
     const result = await adapter.executeAgent(requestFor(adapter));
     expect(result.status).toBe("UNAVAILABLE");

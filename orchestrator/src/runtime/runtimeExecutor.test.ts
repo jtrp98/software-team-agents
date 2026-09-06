@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { AgentStage } from "../types.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AgentStage, TaskLevel } from "../types.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 import { Orchestrator } from "../orchestrator/orchestrator.js";
 import { classifyTask } from "../classification/taskClassifier.js";
@@ -18,6 +18,18 @@ import { buildPromptParts } from "./agentRunAssembly.js";
 import { auditTrail } from "../audit/auditTrail.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { latestExecutionPacketPath, readExecutionPacket } from "../state/runtimeArtifacts.js";
+
+// T-V6-006: `env: {}` (used below) now falls through to installation.yaml
+// when AGENTCLAUDE_KNOWLEDGE_ROOT is unset — isolate it from whatever is
+// real on the machine running this suite.
+const AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+beforeEach(() => {
+  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-runtime-executor-test-no-installation.yaml");
+});
+afterEach(() => {
+  if (AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+  else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL;
+});
 
 /**
  * T108's central claim, under test: the orchestrator can run agents through the
@@ -912,6 +924,21 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
     expect(runtime.requests).toHaveLength(0);
   });
 
+  it("T-V6-015 (inert today — no real runtime this framework ships lacks INTERACTIVE_PROMPTS except antigravity, and no real .sta/config.yaml sets routing.order): refuses business-analyst on a runtime that cannot receive interactive prompts", async () => {
+    const runtime = new MockRuntimeAdapter({ id: "antigravity", capabilities: [RuntimeCapability.NAMED_AGENTS] });
+    const result = await executorFor(runtime)({ stage: AgentStage.BUSINESS_ANALYST, taskId: "T-1", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain('runtime "antigravity"');
+    expect(result.outcome.failure_reason).toContain("cannot receive interactive prompts");
+    expect(runtime.requests).toHaveLength(0);
+  });
+
+  it("T-V6-015: does not gate system-analyst on INTERACTIVE_PROMPTS — the same incapable runtime runs it", async () => {
+    const runtime = new MockRuntimeAdapter({ id: "antigravity", capabilities: [RuntimeCapability.NAMED_AGENTS] });
+    await executorFor(runtime)({ stage: AgentStage.SYSTEM_ANALYST, taskId: "T-1", context: [] });
+    expect(runtime.requests).toHaveLength(1);
+  });
+
   it("passes canonical roots rather than using cwd as Target scope", async () => {
     const runtime = new MockRuntimeAdapter({ respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
@@ -1170,5 +1197,194 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
     expect(result.outcome.result).toBe("FAIL");
     expect((result.outcome as { failure_reason?: string }).failure_reason).toContain("not registered");
     expect((result.outcome as { failure_reason?: string }).failure_reason).toContain("ghost-runtime");
+  });
+});
+
+describe("createRuntimeExecutor — T-V6-014 routing.order at precedence level 4", () => {
+  function orderedProject(routing: string): string {
+    const projectRoot = tmpProject();
+    writeAgentFile(projectRoot, "backend-engineer", "model: sonnet");
+    fs.mkdirSync(path.join(projectRoot, ".sta"), { recursive: true });
+    fs.writeFileSync(path.join(projectRoot, ".sta", "config.yaml"), routing, "utf8");
+    return projectRoot;
+  }
+
+  const ORDER = "schema_version: 1\nrouting:\n  order: [claude-code, codex]\n  fallback_on: unavailable\n  allow_below_supported: [codex]\n";
+
+  function pair(firstStatus: "UNAVAILABLE" | "ERROR" | "TIMEOUT", secondUnavailable = false) {
+    const first = new MockRuntimeAdapter({
+      id: "claude-code",
+      models: ["sonnet"],
+      respond: () => okResult({ status: firstStatus, exitCode: firstStatus === "UNAVAILABLE" ? null : 1, diagnostics: ["usage limit reached"] }),
+    });
+    const second = new MockRuntimeAdapter({
+      id: "codex",
+      models: ["sonnet"],
+      respond: () => (secondUnavailable ? okResult({ status: "UNAVAILABLE", exitCode: null, diagnostics: ["codex quota exhausted"] }) : okResult()),
+    });
+    return { first, second };
+  }
+
+  function run(projectRoot: string, adapters: MockRuntimeAdapter[], over: Record<string, unknown> = {}) {
+    return createRuntimeExecutor({
+      runtime: adapters[0]!,
+      registry: new RuntimeRegistry(adapters),
+      projectRoot,
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+      ...over,
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-ORDER", context: [] });
+  }
+
+  it("[ACCEPTANCE] UNAVAILABLE hops to the next entry and records the hop", async () => {
+    const { first, second } = pair("UNAVAILABLE");
+    const result = await run(orderedProject(ORDER), [first, second]);
+
+    expect(result.outcome).toMatchObject({
+      result: "PASS",
+      runtime: "codex",
+      requested_runtime: "claude-code",
+      routing_basis: "level-4",
+      fallback_count: 1,
+    });
+    expect(result.outcome.fallback_reason).toContain("usage limit reached");
+    expect(result.outcome.fallback_reason).toContain('moved this stage to "codex"');
+    expect(first.requests).toHaveLength(1);
+    expect(second.requests).toHaveLength(1);
+  });
+
+  it.each(["ERROR", "TIMEOUT"] as const)("[ACCEPTANCE] %s never hops, even with an order configured", async (status) => {
+    const { first, second } = pair(status);
+    const result = await run(orderedProject(ORDER), [first, second]);
+
+    expect(result.outcome).toMatchObject({ result: "FAIL", runtime: "claude-code", fallback_count: 0 });
+    expect(result.outcome.fallback_reason).toBeUndefined();
+    expect(second.requests).toEqual([]);
+  });
+
+  it("[ACCEPTANCE] exhaustion stops with every attempt named, and does not loop", async () => {
+    const { first, second } = pair("UNAVAILABLE", true);
+    const result = await run(orderedProject(ORDER), [first, second]);
+
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain("routing.order is exhausted");
+    expect(result.outcome.failure_reason).toContain("claude-code: usage limit reached");
+    expect(result.outcome.failure_reason).toContain("codex: codex quota exhausted");
+    expect(result.failure?.requiresHuman).toBe(true);
+    expect(first.requests).toHaveLength(1);
+    expect(second.requests).toHaveLength(1);
+  });
+
+  it("exhaustion by availability probe escalates to a person rather than spending a retry", async () => {
+    const projectRoot = orderedProject(ORDER);
+    const first = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"], probe: { available: false, reason: "claude offline" } });
+    const second = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"], probe: { available: false, reason: "codex offline" } });
+    const result = await run(projectRoot, [first, second]);
+
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain("routing.order is exhausted");
+    expect(result.outcome.failure_reason).toContain("claude offline");
+    expect(result.outcome.failure_reason).toContain("codex offline");
+    expect(result.failure?.requiresHuman).toBe(true);
+    expect(first.requests).toEqual([]);
+    expect(second.requests).toEqual([]);
+  });
+
+  it("--runtime (level 1) wins outright — the order is not consulted", async () => {
+    const { first, second } = pair("UNAVAILABLE");
+    const result = await run(orderedProject(ORDER), [first, second], { routingFlags: { runtime: "claude-code" } });
+
+    expect(result.outcome).toMatchObject({ result: "FAIL", routing_basis: "level-1", fallback_count: 0 });
+    expect(second.requests).toEqual([]);
+  });
+
+  it("routing.by_role (level 2) wins outright and still carries modelExplicit and effort", async () => {
+    const config = `${ORDER}  by_role:\n    backend-engineer:\n      runtime: claude-code\n      model: opus\n      effort: high\n`;
+    const first = new MockRuntimeAdapter({
+      id: "claude-code",
+      models: ["sonnet", "opus"],
+      respond: () => okResult({ status: "UNAVAILABLE", exitCode: null, diagnostics: ["usage limit reached"] }),
+    });
+    const second = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
+    const result = await run(orderedProject(config), [first, second]);
+
+    expect(result.outcome).toMatchObject({ result: "FAIL", routing_basis: "level-2", fallback_count: 0 });
+    expect(first.requests[0]).toMatchObject({ model: "opus", modelExplicit: true, effort: "high" });
+    expect(second.requests).toEqual([]);
+  });
+
+  it("a config with no routing.order behaves exactly as today: one candidate, no hop", async () => {
+    const { first, second } = pair("UNAVAILABLE");
+    const result = await run(orderedProject("schema_version: 1\n"), [first, second]);
+
+    expect(result.outcome).toMatchObject({ result: "FAIL", runtime: "claude-code", fallback_count: 0 });
+    expect(result.outcome.fallback_reason).toBeUndefined();
+    expect(result.failure?.requiresHuman).toBe(true);
+    expect(second.requests).toEqual([]);
+  });
+
+  const sensitive = () => ({
+    level: TaskLevel.MEDIUM,
+    pipeline: [AgentStage.BACKEND_ENGINEER],
+    requiresHumanApproval: false,
+    sensitiveGate: true,
+    reasons: [],
+  });
+
+  it("[ADR-025 #4] a switch inside a security-gate phase is written into review.md and into the run log", async () => {
+    const { first, second } = pair("UNAVAILABLE");
+    second.workspace.files.set("_docs/module/sales-crm/review.md", "# review.md\n\n## Open Issues — all phases\n\n- none\n");
+    const result = await run(orderedProject(ORDER), [first, second], { classification: sensitive });
+
+    expect(result.outcome).toMatchObject({ result: "PASS", runtime: "codex", fallback_count: 1 });
+    expect(result.outcome.fallback_reason).toContain("ADR-025 #4");
+
+    const review = second.workspace.files.get("_docs/module/sales-crm/review.md")!;
+    expect(review).toContain("## Open Issues — all phases");
+    expect(review).toContain("## Camp switch — verification invalidated");
+    expect(review).toContain("claude-code → codex");
+    expect(review).toContain("does not inherit this phase");
+  });
+
+  it("[ADR-025 #4] a switch whose invalidation cannot be recorded is refused, not laundered", async () => {
+    const { first, second } = pair("UNAVAILABLE");
+    vi.spyOn(second.workspace, "writeFile").mockRejectedValue(new Error("review.md is read-only here"));
+    const result = await run(orderedProject(ORDER), [first, second], { classification: sensitive });
+
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain("refusing the routing.order hop");
+    expect(result.outcome.failure_reason).toContain("review.md is read-only here");
+    expect(result.outcome.fallback_count).toBe(0);
+    expect(second.requests).toEqual([]);
+  });
+
+  it("[INTEGRATION] with Claude Code forced unavailable, the stage runs on antigravity and the log shows one hop", async () => {
+    const projectRoot = orderedProject(
+      "schema_version: 1\nrouting:\n  order: [claude-code, antigravity, codex]\n  fallback_on: unavailable\n  allow_below_supported: [antigravity, codex]\n",
+    );
+    const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"], probe: { available: false, reason: "usage limit reached for this subscription" } });
+    const agy = new MockRuntimeAdapter({ id: "antigravity", models: ["sonnet"] });
+    const codex = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
+    const result = await run(projectRoot, [claude, agy, codex]);
+
+    expect(result.outcome).toMatchObject({
+      result: "PASS",
+      runtime: "antigravity",
+      requested_runtime: "claude-code",
+      routing_basis: "level-4",
+      fallback_count: 1,
+    });
+    expect(result.outcome.fallback_reason).toContain("usage limit reached for this subscription");
+    expect(agy.requests).toHaveLength(1);
+    expect(claude.requests).toEqual([]);
+    expect(codex.requests).toEqual([]);
+  });
+
+  it("a phase with no security gate hops without touching review.md", async () => {
+    const { first, second } = pair("UNAVAILABLE");
+    const result = await run(orderedProject(ORDER), [first, second]);
+
+    expect(result.outcome.fallback_count).toBe(1);
+    expect(second.workspace.files.has("_docs/module/sales-crm/review.md")).toBe(false);
   });
 });

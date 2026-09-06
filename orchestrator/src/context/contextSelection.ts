@@ -65,7 +65,7 @@ export const CONTEXT_POLICY: Partial<Record<AgentStage, ContextPolicy>> = {
     ArtifactType.DESIGN,
     ArtifactType.QA_REPORT,
   ]),
-  [AgentStage.SYSTEM_ANALYST]: policy([ArtifactType.REQUIREMENTS, ArtifactType.QA_REPORT]),
+  [AgentStage.SYSTEM_ANALYST]: policy([ArtifactType.REQUIREMENTS, ArtifactType.DESIGN, ArtifactType.QA_REPORT]),
   [AgentStage.PROJECT_MANAGER]: policy([ArtifactType.DESIGN, ArtifactType.REQUIREMENTS]),
   [AgentStage.TEST_PLANNER]: policy([ArtifactType.REQUIREMENTS, ArtifactType.DESIGN, ArtifactType.PLAN]),
   // UX/UI reads only confirmed requirements/design, not code or reports — its

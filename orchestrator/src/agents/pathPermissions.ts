@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { STACK_SCOPED_ROLES, resolveStackPathRules } from "../profile/projectProfile.js";
+import { resolveWorkspaceRole } from "../targetcli/roots.js";
 import { loadTargetConfig } from "../targetcli/targetMeta.js";
 import { AgentStage } from "../types.js";
 import { defaultProjectRoot, loadAgentContract } from "./agentContract.js";
@@ -74,17 +75,13 @@ export const WORKSPACE_DEV_ARTIFACTS: readonly string[] = [
   "escalation-policy.yaml",
 ];
 
-/** Reads `role:` out of .agent-team/config.yaml (written by `software-team-agents init`). Null when absent/unreadable -- the rule then stays inactive, exactly like any legacy workspace. */
-export function readWorkspaceRole(workspaceRoot: string): "ba" | "dev" | null {
-  let text: string;
-  try {
-    text = fs.readFileSync(path.join(workspaceRoot, ".agent-team", "config.yaml"), "utf8");
-  } catch {
-    return null;
-  }
-  const m = /^\s*role:\s*(ba|dev)\s*$/m.exec(text);
-  return m ? (m[1] as "ba" | "dev") : null;
-}
+/**
+ * Re-export of the one workspace-role reader (`targetcli/roots.ts`), kept under
+ * this name because the guard rules are declared here and the rendered hook
+ * block must apply the identical rule. Null when absent/unreadable -- the rule
+ * then stays inactive, exactly like any legacy workspace.
+ */
+export const readWorkspaceRole = resolveWorkspaceRole;
 
 /** The why-text for a workspace-role deny, naming the Knowledge root when the launch supplied one. */
 export function workspaceDenyWhy(role: "ba" | "dev", knowledgeRoot?: string): string {
@@ -197,13 +194,14 @@ export interface GuardRuleHost {
   /** Repo-relative path, posix separators. */
   path: string;
   /** The runtime whose materialisation decides whether this host exists in a workspace at all. */
-  runtime: "claude" | "opencode";
+  runtime: "claude" | "opencode" | "antigravity";
 }
 
 /** Every file that carries the generated block. `.codex/hooks/*` is absent on purpose: it is a byte-mirror, already checked as one. */
 export const GUARD_RULE_HOSTS: readonly GuardRuleHost[] = [
   { path: ".claude/hooks/block-path-permissions.js", runtime: "claude" },
   { path: ".opencode/plugin/sta-guards.js", runtime: "opencode" },
+  { path: ".agents/hooks/sta-guard.js", runtime: "antigravity" },
 ];
 
 /**
@@ -214,7 +212,7 @@ const GUARD_RULE_FUNCTION_SOURCE: readonly string[] = [
   "function readWorkspaceRole(nodeFs, nodePath, workspaceRoot) {",
   "  let text;",
   "  try { text = nodeFs.readFileSync(nodePath.join(workspaceRoot, '.agent-team', 'config.yaml'), 'utf8'); } catch { return null; }",
-  "  const m = /^\\s*role:\\s*(ba|dev)\\s*$/m.exec(text);",
+  "  const m = /^role:[ \\t]*(ba|dev)[ \\t]*$/m.exec(text);",
   "  return m ? m[1] : null;",
   "}",
   "function workspaceDenyWhy(role) {",

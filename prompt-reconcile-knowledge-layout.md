@@ -8,7 +8,7 @@
 > `sta knowledge reconcile --target <id>`.
 
 > **What this is:** a playbook for an AI coding assistant (Claude Code, Codex,
-> OpenCode, or any agent that can read files and run shell commands) to
+> OpenCode, Antigravity, or any agent that can read files and run shell commands) to
 > reconcile an **existing** Knowledge repository whose on-disk file structure
 > doesn't match this Framework's canonical layout — because it predates the
 > Framework, was touched by another tool, or grew organically before anyone
@@ -81,7 +81,7 @@
 
 1. Resolve the canonical shape (Operating principle #1): the fixed top-level
    entries under a Knowledge repo root (`_docs/status.md`, `_docs/module/`,
-   `knowledge/`, `decisions/`, `policies/`, `.claude/`/`.codex/`/`.opencode/`,
+   `knowledge/`, `decisions/`, `policies/`, `.claude/`/`.codex/`/`.opencode/`/`.agents/`,
    `.agent-team/`, `targets.yaml`, `knowledge-policy.yaml`, `CLAUDE.md`,
    `.gitignore`, `.workflow/`), and the shape *inside* `_docs/module/<name>/`
    (`requirement.md`, `design.md`, `plan.md`, `test-plan.md`, `uxui/design.md`,
@@ -109,7 +109,7 @@
    the checkout, per module, and record each result:
 
    ```bash
-   sta --check-doc-structure       # every _docs/module/*/*.md's sections against its schema
+   sta --check-doc-structure       # every _docs/module/*/*.md's sections against its schema (including DES-NNN IDs on design.md contract sections)
    sta --check-plan                # every module's plan.md as a task DAG (deps/cycle/owner/status/DES/waves)
    sta --check-plan --module <name>   # scope to one module
    sta --check-knowledge           # knowledge/*.yaml against its schema and cross-links

@@ -207,11 +207,13 @@ describe("T-V5-040 one-route matrix", () => {
 });
 
 describe("T-V5-040 fail-closed evidence matrix", () => {
-  // What used to be `execution.mode: auto` plus `routing.order`. Both keys are
-  // now inert and must still load; the assertions below are that they change
-  // nothing about where the run goes.
+  // What used to be `execution.mode: auto`. These keys are inert and must still
+  // load; the assertions below are that they change nothing about where the run
+  // goes. `routing.order` is deliberately absent here — T-V6-014 reactivated it,
+  // and this matrix is the evidence that a config without it still fails closed
+  // exactly as before.
   const inertAutoConfig =
-    "schema_version: 1\nexecution:\n  mode: auto\n  allow_handoff: true\n  allow_paid_fallback: false\nrouting:\n  order: [claude-code, codex, opencode]\n  allow_below_supported: [codex, opencode]\n";
+    "schema_version: 1\nexecution:\n  mode: auto\n  allow_handoff: true\n  allow_paid_fallback: false\nrouting:\n  allow_below_supported: [codex, opencode]\n";
 
   it("a UNAVAILABLE result on a Target-write stage stops the task with no second runtime tried", async () => {
     const root = project(inertAutoConfig);
@@ -372,10 +374,9 @@ describe("T-V5-040 fail-closed evidence matrix", () => {
   });
 
   // T-V5-039 / T-V5-040 — `execution.allow_paid_fallback` is inert now that the
-  // paid runtime is never registered, and so is `routing.order`: an extra
-  // runtime present in the registry but absent from the route is never
-  // auto-appended as a candidate, regardless of either key's value. This is the
-  // removal of both the paid-only special case and the whole candidate chain.
+  // paid runtime is never registered: an extra runtime present in the registry
+  // but absent from the route is never auto-appended as a candidate, regardless
+  // of the key's value. Only an explicit `routing.order` names a fallback.
   it.each([false, true])("an unlisted registered runtime is never auto-appended to the fallback chain (allow_paid_fallback=%s)", async (allowPaidFallback) => {
     const root = project(
       `${inertAutoConfig.replace("allow_paid_fallback: false", `allow_paid_fallback: ${allowPaidFallback}`)}context_budget:\n  mode: reject\n  roles:\n    backend-engineer: 1\n`,

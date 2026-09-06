@@ -151,8 +151,10 @@ export { traceabilityScopeFor, type TraceabilityScope } from "./traceability.js"
 export {
   HANDOFF_REFERENCE_MAX_SECTION_RATIO,
   keepDesignSection,
+  keepDesignSectionUnknownReason,
   selectDocContext,
   type ContextRequest,
+  type DesignSectionUnknownReason,
   type DesignSectionVerdict,
   type SelectedContext,
 } from "./docSelection.js";

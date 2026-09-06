@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CliUsageError, USAGE, createProductionRuntimeRegistry, parseArgs, productionQaInputs, runCli, watchListing } from "./cli.js";
 import { defaultProjectRoot } from "./agents/agentContract.js";
 import { classifyTask } from "./classification/taskClassifier.js";
@@ -16,6 +16,19 @@ import { writeExecutionPacket } from "./state/runtimeArtifacts.js";
 import { RunLog } from "./observability/runLog.js";
 import { runTargetSync } from "./targetcli/syncEngine.js";
 import { resolveFrameworkRoot } from "./targetcli/roots.js";
+
+// T-V6-006: resolveContextDocsRoot now falls back to installation.yaml when
+// AGENTCLAUDE_KNOWLEDGE_ROOT is unset, so every fixture in this file that
+// relies on the plain projectRoot fallback must not see whatever
+// installation config (if any) is real on the machine running the suite.
+const AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+beforeEach(() => {
+  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-cli-test-no-installation.yaml");
+});
+afterEach(() => {
+  if (AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+  else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL;
+});
 
 describe("T-V5-013 live upgrade alias", () => {
   it("routes an .agent-team workspace through software-team-agents sync without requiring legacy --mode", async () => {
@@ -173,7 +186,7 @@ describe("T-V3R-032 production runtime composition", () => {
   it("constructs the complete runtime registry used by the real CLI executor call site", () => {
     // T-V5-039 — the paid API adapter is never constructed here; --runtime
     // only offers runtimes that can actually run.
-    expect(createProductionRuntimeRegistry(defaultProjectRoot()).ids()).toEqual(["claude-code", "codex", "opencode"]);
+    expect(createProductionRuntimeRegistry(defaultProjectRoot()).ids()).toEqual(["claude-code", "codex", "opencode", "antigravity"]);
     const source = fs.readFileSync(path.join(defaultProjectRoot(), "orchestrator", "src", "cli.ts"), "utf8");
     expect(source).toContain("registry: runtimeRegistry");
     expect(source).toContain("runtime: defaultRuntime");

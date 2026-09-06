@@ -16,7 +16,7 @@ import type { InstructionSurfaceEntry } from "../threeRepo/ownership.js";
 import { stringify as stringifyYaml } from "yaml";
 import { inspectBootstrapBlock, inspectGitignoreBlock, stripBootstrapBlock } from "./knowledgeRender.js";
 import { renderGuardRuleBlock } from "../agents/pathPermissions.js";
-import { checkBindings } from "../runtime/bindingGenerator.js";
+import { AGY_MANAGED_HOOK_KEY, checkBindings, renderAgyHooksJson, renderAgyManagedHooks } from "../runtime/bindingGenerator.js";
 
 /**
  * End-to-end tests against temporary repositories. Everything runs through
@@ -777,6 +777,50 @@ describe("software-team-agents — target-first end to end", () => {
     expect(narrowedConflict.code).toBe(2);
     expect(fs.readFileSync(binding, "utf8")).toContain("# local edit");
   });
+  it("T-V6-012: antigravity opt-in ships the guard binding, merging under the managed key instead of overwriting", async () => {
+    const files = [
+      { relPath: ".claude/agents/backend-engineer.md", content: AGENT_MD("backend-engineer") },
+      { relPath: ".agents/hooks.json", content: renderAgyHooksJson() },
+      { relPath: ".agents/hooks/sta-guard.js", content: "// wrapper\n" },
+      { relPath: ".agents/hooks/package.json", content: '{"type":"commonjs"}\n' },
+    ];
+    const fw = fakeFramework("3.1.0", files);
+
+    // A workspace that already authored its own AGY hook, before ever meeting
+    // this framework: its entry must survive every sync from here on.
+    const target = makeTarget();
+    const mine = { "my-own-guard": { PreToolUse: [{ matcher: "run_command", hooks: [{ type: "command", command: "node mine.js", timeout: 5 }] }] } };
+    fs.mkdirSync(path.join(target, ".agents"), { recursive: true });
+    fs.writeFileSync(path.join(target, ".agents", "hooks.json"), `${JSON.stringify(mine, null, 2)}\n`, "utf8");
+
+    expect((await capture(() => runTargetCli(["init", "--runtime", "antigravity"], target, fw))).code).toBe(0);
+    expect(loadTargetConfig(target)?.runtimes).toEqual(["claude", "antigravity"]);
+    expect(fs.existsSync(path.join(target, ".agents", "hooks", "sta-guard.js"))).toBe(true);
+
+    const after = JSON.parse(fs.readFileSync(path.join(target, ".agents", "hooks.json"), "utf8")) as Record<string, unknown>;
+    expect(after["my-own-guard"]).toEqual(mine["my-own-guard"]);
+    expect(after[AGY_MANAGED_HOOK_KEY]).toEqual(renderAgyManagedHooks());
+
+    // Re-syncing is a no-op on a file that already carries both halves.
+    expect((await capture(() => runTargetCli(["sync"], target, fw))).code).toBe(0);
+    expect(JSON.parse(fs.readFileSync(path.join(target, ".agents", "hooks.json"), "utf8"))).toEqual(after);
+
+    // And the guard binding is never listed as ignored: a gitignored guard
+    // travels with nobody.
+    const ignore = fs.readFileSync(path.join(target, ".gitignore"), "utf8");
+    expect(ignore).not.toMatch(/^\.agents\/hooks/m);
+    expect(ignore).not.toMatch(/^\.agents\/$/m);
+
+    // The guard payload travels with every workspace, exactly as the Claude
+    // hooks and the OpenCode plugin do — opting into the runtime later must not
+    // find a workspace whose guard was never shipped.
+    const plain = makeTarget();
+    expect((await capture(() => runTargetCli(["init"], plain, fw))).code).toBe(0);
+    expect(fs.existsSync(path.join(plain, ".agents", "hooks", "sta-guard.js"))).toBe(true);
+    // ... but nothing checks or reports it until the runtime is opted into.
+    expect(checkBindings(plain).problems.join("\n")).not.toMatch(/hooks\.json/);
+  });
+
 
   it("T-V5-016: policies stay materialised while the managed block marks them ignored", async () => {
     const knowledge = makeKnowledgeRepo();

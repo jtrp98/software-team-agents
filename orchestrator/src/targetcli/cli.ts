@@ -37,8 +37,9 @@ export const TARGET_USAGE =
   "  --force                sync/init: overwrite locally-modified managed files (backed up first)\n" +
   "  --confirm-agents-pointer sync: reduce a provable CLAUDE.md duplicate to the generated AGENTS.md pointer (backed up)\n" +
   "  --no-auto-sync         dev/ba: refuse to run when managed assets are outdated\n" +
-  "  --runtime <name>       dev/ba: claude (default), codex or opencode — guard coverage differs per\n" +
-  "                         runtime (claude: enforced, opencode: partial, codex: unguarded); run\n" +
+  "  --runtime <name>       dev/ba: claude (default), codex, opencode or antigravity — guard coverage\n" +
+  "                         differs per runtime (claude: enforced, opencode: partial, codex and\n" +
+  "                         antigravity: unguarded); run\n" +
   "                         `sta runtimes` for the coverage detail behind each verdict\n" +
   "  --allow-unguarded-runtime  dev/ba: deliberately launch a runtime that enforces no guard\n" +
   "  --json                 status: machine-readable output\n" +
@@ -101,8 +102,8 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
         break;
       case "--runtime": {
         const value = argv[++i] as RuntimeName | undefined;
-        if (value !== "claude" && value !== "codex" && value !== "opencode") {
-          throw new Error(`--runtime must be claude, codex or opencode (got ${value ?? "nothing"})`);
+        if (value !== "claude" && value !== "codex" && value !== "opencode" && value !== "antigravity") {
+          throw new Error(`--runtime must be claude, codex, opencode or antigravity (got ${value ?? "nothing"})`);
         }
         args.runtime = value;
         args.runtimeSelections.push(value);

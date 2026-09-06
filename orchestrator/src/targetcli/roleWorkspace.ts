@@ -1,10 +1,11 @@
-import * as fs from "node:fs";
+﻿import * as fs from "node:fs";
 import * as path from "node:path";
 import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
 import { loadLocalTargetMapping, LocalTargetMappingError, type ResolvedLocalTarget } from "../threeRepo/localTargets.js";
 import { loadTargetRegistry, targetById, TargetRegistryError } from "../threeRepo/targets.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import type { TemplateManifest } from "../packaging/templateManifest.js";
+import { resolveWorkspaceRole } from "./roots.js";
 import type { TargetConfig, TargetManifest } from "./targetMeta.js";
 
 /**
@@ -24,10 +25,13 @@ import type { TargetConfig, TargetManifest } from "./targetMeta.js";
 
 /** Where an interactive workspace runs and which managed payload it receives. */
 export type WorkspaceRole = "ba" | "dev";
-export type WorkspaceRuntime = "claude" | "codex" | "opencode";
+export type WorkspaceRuntime = "claude" | "codex" | "opencode" | "antigravity";
 
 /** The recorded set wins; a manifest with non-Claude renderings but no
- * recorded runtime config is conservatively treated as opt-in to every existing runtime. */
+ * recorded runtime config is conservatively treated as opt-in to the three runtimes that
+ * predate the recorded-set field. `antigravity` is deliberately absent: no manifest old
+ * enough to reach this branch can have been synced with it, so inferring it would demand
+ * bindings the workspace was never given. */
 export function runtimesForWorkspace(config: TargetConfig | undefined, manifest?: TargetManifest): readonly WorkspaceRuntime[] {
   if (config?.runtimes?.length) return config.runtimes;
   const legacyBindings = manifest?.files.some((file) =>
@@ -97,9 +101,18 @@ export function assetsForRole(role: WorkspaceRole): (relPath: string) => boolean
     // the plugin is authored payload; `.opencode/agent/` files are derived at
     // sync time and never ship in the template payload at all.
     if (relPath.startsWith(".opencode/plugin/")) return true;
+    // Antigravity's guard binding travels the same way, for the same reason.
+    if (relPath.startsWith(".agents/hooks/") || relPath === ".agents/hooks.json") return true;
     if (relPath.startsWith("policies/")) return true;
     // Only the BA/Knowledge side validates its own documents.
     if (relPath === ".github/workflows/knowledge-ci.yml") return true;
+    // project-manager runs only here, and `sta --check-plan` (which its
+    // prompt requires before handoff) needs this file to validate a cast Tier.
+    if (relPath === "model-tiers.yaml") return true;
+    if (relPath.startsWith(".claude/commands/")) {
+      if (relPath === ".claude/commands/verify.md") return false;
+      return true;
+    }
     // contracts/, workflows/, stacks/, layout.yaml, escalation-policy.yaml,
     // test-pyramid.yaml — engineer-pipeline payload, not BA tooling.
     return false;
@@ -161,22 +174,14 @@ export function hasKnowledgeMarkers(dir: string): boolean {
 }
 
 /**
- * The recorded role of an already-initialised workspace.
- *
- * Once `init` has run, the workspace *states* what it is; guessing from files
- * is only necessary before that. Read on its own rather than through
- * `loadTargetConfig` so a config this CLI cannot fully parse (an older or newer
- * schema) still yields its role instead of throwing detection away entirely —
- * getting this wrong routes writes to the wrong repository.
+ * The recorded role of an already-initialised workspace. Once `init` has run,
+ * the workspace *states* what it is; guessing from files is only necessary
+ * before that. One reader, in `roots.ts` — the guard hook applies the same rule
+ * to decide what this workspace may write, and two readers of one field are two
+ * answers waiting to disagree.
  */
 function recordedWorkspaceRole(dir: string): "ba" | "dev" | undefined {
-  try {
-    const raw = fs.readFileSync(path.join(dir, ".agent-team", "config.yaml"), "utf8");
-    const match = /^role:[ \t]*(ba|dev)[ \t]*$/m.exec(raw);
-    return match ? (match[1] as "ba" | "dev") : undefined;
-  } catch {
-    return undefined;
-  }
+  return resolveWorkspaceRole(dir) ?? undefined;
 }
 
 function hasAppSourceMarkers(dir: string): boolean {

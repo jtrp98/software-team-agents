@@ -1,0 +1,56 @@
+{
+  "sta-guards": {
+    "PreToolUse": [
+      {
+        "matcher": "multi_replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .agents/hooks/sta-guard.js",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "notebook_edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .agents/hooks/sta-guard.js",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .agents/hooks/sta-guard.js",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "sed_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .agents/hooks/sta-guard.js",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "write_to_file",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node .agents/hooks/sta-guard.js",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -19,8 +19,10 @@
  * So it takes identity from `AGENTCLAUDE_ROLE`, which the runtime executor and adapters set on
  * the child process before spawning an agent. When the orchestrator is
  * driving, the role is known and the agent's own rules apply. When a person is driving
- * interactively, there is no role, and this falls back to the UNIVERSAL_DENY floor -- the paths
- * no agent may write under any circumstances.
+ * interactively, there is no role and no way to derive one -- `role:` in
+ * .agent-team/config.yaml says which repository this checkout is, never which agent is typing --
+ * so the per-agent layer is skipped and two identity-independent layers remain: the
+ * UNIVERSAL_DENY floor, and the workspace boundary below, which needs no environment at all.
  *
  * That split is the honest design, not a compromise waiting to be fixed. A guard that enforced
  * nothing without an env var would be one forgotten export away from useless; a guard that
@@ -65,7 +67,7 @@ const WORKSPACE_DEV_ARTIFACTS = ['contracts/**', 'workflows/**', 'stacks/**', 'l
 function readWorkspaceRole(nodeFs, nodePath, workspaceRoot) {
   let text;
   try { text = nodeFs.readFileSync(nodePath.join(workspaceRoot, '.agent-team', 'config.yaml'), 'utf8'); } catch { return null; }
-  const m = /^\s*role:\s*(ba|dev)\s*$/m.exec(text);
+  const m = /^role:[ \t]*(ba|dev)[ \t]*$/m.exec(text);
   return m ? m[1] : null;
 }
 function workspaceDenyWhy(role) {

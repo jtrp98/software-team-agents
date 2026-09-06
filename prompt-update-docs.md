@@ -302,6 +302,8 @@ Verify them against:
 * task runners
 * build tools
 * actual executable entry points
+* CLI verbs (e.g. `sta changed`, `sta report`)
+* workflow slash commands (`/next`, `/status`, `/verify`, `/changed`)
 
 Examples:
 
@@ -464,6 +466,7 @@ CLAUDE.md
 .agents/
 .claude/
 .codex/
+.opencode/
 skills/
 commands/
 hooks/
@@ -478,7 +481,9 @@ Verify:
 
 * supported agents
 * supported runtimes
-* commands
+* commands and workflow slash commands (`/next`, `/status`, `/verify`, `/changed`)
+* rendered command bindings (`.claude/commands/*.md` as source of truth, mirrored to `.opencode/commands/*.md` and `.agents/skills/*/SKILL.md`)
+* role-based command distribution (BA workspace receives `/next`, `/status`, `/changed`, omitting `/verify`; DEV workspace receives all four)
 * hooks
 * tool permissions
 * workspace behavior

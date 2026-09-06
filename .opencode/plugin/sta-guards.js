@@ -70,7 +70,7 @@ const WORKSPACE_DEV_ARTIFACTS = ['contracts/**', 'workflows/**', 'stacks/**', 'l
 function readWorkspaceRole(nodeFs, nodePath, workspaceRoot) {
   let text;
   try { text = nodeFs.readFileSync(nodePath.join(workspaceRoot, '.agent-team', 'config.yaml'), 'utf8'); } catch { return null; }
-  const m = /^\s*role:\s*(ba|dev)\s*$/m.exec(text);
+  const m = /^role:[ \t]*(ba|dev)[ \t]*$/m.exec(text);
   return m ? m[1] : null;
 }
 function workspaceDenyWhy(role) {

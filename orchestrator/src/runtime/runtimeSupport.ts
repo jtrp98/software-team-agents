@@ -21,7 +21,7 @@
  * implementation" failure this module exists to prevent.
  */
 
-import { codexCoverage, opencodeCoverageWithPlugin } from "../targetcli/guardSettings.js";
+import { antigravityCoverageWithHooks, codexCoverage, opencodeCoverageWithPlugin } from "../targetcli/guardSettings.js";
 
 export type RuntimeSupportLevel = "supported" | "preview" | "experimental" | "unsupported";
 
@@ -33,7 +33,7 @@ export const SUPPORT_LEVELS: readonly RuntimeSupportLevel[] = [
 ];
 
 /** The ids `--runtime` accepts — kept as data so CLI validation and this table cannot name different sets. */
-export const RUNTIME_IDS = ["claude-code", "codex", "opencode"] as const;
+export const RUNTIME_IDS = ["claude-code", "codex", "opencode", "antigravity"] as const;
 export type RuntimeId = (typeof RUNTIME_IDS)[number];
 
 export interface RuntimeSupport {
@@ -59,6 +59,14 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
     claim:
       `spike-proven on 1.18.21 (probe, headless run, guards report); exit checks have no in-band enforcement (\`GUARD GAP\` + QA round cover it) and other versions' tool arg-shapes are unverified. ` +
       `Guard coverage (once synced): ${opencodeCoverageWithPlugin().detail}`,
+  },
+  antigravity: {
+    level: "experimental",
+    claim:
+      `verified end to end on a real agy 1.1.27/Windows 11 install: probe, headless \`-p\`, JSON envelope, token usage, and one full adapter round-trip returning OK with real usage. ` +
+      `No named-agent store and no cost figure in the envelope, so roles are folded into the prompt and cost is never reported. ` +
+      `The PreToolUse deny path is confirmed real (deny blocks; a hook that cannot load also blocks) but fires only from the machine-global hooks file, so the workspace binding enforces nothing and Target-write stages stay refused rather than run unguarded. ` +
+      `Guard coverage (once synced): ${antigravityCoverageWithHooks().detail}`,
   },
 };
 

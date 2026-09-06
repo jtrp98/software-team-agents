@@ -58,12 +58,13 @@ describe("the shipped decisions/", () => {
       "ADR-022-per-phase-model-tier.md",
       "ADR-023-v4-framework-feature-freeze.md",
       "ADR-024-docs-vs-knowledge.md",
+      "ADR-025-end-v4-freeze-and-routing-order.md",
     ]);
   });
 
   it("all load and validate against the schema", () => {
     const adrs = loadAllAdrs();
-    expect(adrs).toHaveLength(12);
+    expect(adrs).toHaveLength(13);
     for (const adr of adrs) {
       expect(adr.frontmatter.status).toBe("accepted");
     }

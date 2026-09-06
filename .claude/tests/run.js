@@ -43,6 +43,7 @@ const { spawnSync } = require('child_process');
 const ROOT = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const HOOKS = path.join(ROOT, '.claude', 'hooks');
 const CODEX_HOOKS = path.join(ROOT, '.codex', 'hooks');
+const AGY_HOOKS = path.join(ROOT, '.agents', 'hooks');
 const SCRIPTS = path.join(ROOT, '.claude', 'scripts');
 
 let passed = 0;
@@ -143,7 +144,7 @@ function section(title) {
 
 section('0. syntax — a guard that does not parse fails OPEN, so this runs first');
 
-for (const dir of [HOOKS, SCRIPTS, path.join(ROOT, '.claude', 'tests')]) {
+for (const dir of [HOOKS, SCRIPTS, AGY_HOOKS, path.join(ROOT, '.claude', 'tests')]) {
   if (!fs.existsSync(dir)) continue;
   for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.js'))) {
     const full = path.join(dir, file);
@@ -167,7 +168,7 @@ for (const dir of [HOOKS, SCRIPTS, path.join(ROOT, '.claude', 'tests')]) {
 
 section('0b. ESM host — a guard that cannot load fails OPEN, and --check cannot see it');
 
-for (const dir of [HOOKS, SCRIPTS]) {
+for (const dir of [HOOKS, SCRIPTS, AGY_HOOKS]) {
   if (!fs.existsSync(dir)) continue;
   const rel = path.relative(ROOT, dir).replace(/\\/g, '/');
   const markerPath = path.join(dir, 'package.json');
@@ -1176,6 +1177,44 @@ withTempProject((tmp) => {
   );
 });
 
+// What the workspace role is, and what it is not. `AGENTCLAUDE_ROLE` names one
+// of the eleven agent contracts; `role:` in .agent-team/config.yaml says which
+// repository this checkout is. Nothing derives one from the other, so a session
+// with no AGENTCLAUDE_ROLE gets workspace boundaries and no per-agent boundary.
+section('9c. T-V6-007 — the workspace role, read the same way everywhere');
+
+withTempProject((tmp) => {
+  const env = { CLAUDE_PROJECT_DIR: tmp };
+  const attempt = (rel) =>
+    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, ...rel.split('/')) } }, env);
+
+  write(path.join(tmp, '.agent-team', 'config.yaml'), 'schema_version: 1\ntarget_id: t\nrole: dev\ntarget:\n  target_id: other\n');
+  check('a top-level role: is read even with a nested block below it', attempt('_docs/module/m/plan.md'), BLOCK);
+
+  // `role:` under another key belongs to that key. Reading it as the
+  // workspace's own would silently apply the wrong repository's whole policy.
+  write(path.join(tmp, '.agent-team', 'config.yaml'), 'schema_version: 1\ntarget:\n  role: ba\n');
+  check('a role: nested under another key is not the workspace role', attempt('contracts/backend-engineer.yaml'), ALLOW);
+
+  write(path.join(tmp, '.agent-team', 'config.yaml'), 'schema_version: 1\nrole:\ndev\n');
+  check('a role: with no value on its line is not a role declaration', attempt('_docs/module/m/plan.md'), ALLOW);
+
+  // The per-agent contract boundary is orchestrated-only: the hook is a
+  // separate process with no subagent identity, so an interactive session
+  // cannot supply one and this file pins that rather than implying otherwise.
+  write(path.join(tmp, '.agent-team', 'config.yaml'), BA_CONFIG);
+  check('interactive ba workspace: plan.md allowed, no per-agent rule reachable', attempt('_docs/module/m/plan.md'), ALLOW);
+});
+
+// Run against ROOT, the one place `contracts/` exists: the hook resolves them
+// relative to the project dir, so a workspace without that directory has no
+// per-agent rule to apply even when a role is named.
+check(
+  'the same plan.md write is refused once the orchestrator names the role',
+  runPathHook('Write', path.join(ROOT, '_docs', 'module', 'm', 'plan.md'), 'frontend-engineer'),
+  BLOCK,
+);
+
 // ---------------------------------------------------------------------------
 // 10. generate-status.js — status.md computed from the real docs, not hand-written
 // ---------------------------------------------------------------------------
@@ -1281,7 +1320,7 @@ if (!fs.existsSync(COMMANDS_DIR)) {
   // Count is pinned to planning/v2/claude-commands-TASKS.md §1.1 (50 catalog − 17 personal/marketing
   // − rewrite [amend-don't-regenerate policy] − repurpose = 31). Change the number ONLY together
   // with that mapping document, and record why in the same diff.
-  check(`command count is exactly 31 per TASKS \u00a71.1 (got ${commandFiles.length})`, commandFiles.length === 31 ? 0 : 1, 0);
+  check(`command count is exactly 35 per TASKS \u00a71.1 (got ${commandFiles.length})`, commandFiles.length === 35 ? 0 : 1, 0);
 
   // Flat namespace: the only allowed subdirectory is _shared/ (imported fragments, not commands).
   check(
@@ -1345,7 +1384,7 @@ if (!fs.existsSync(OC_COMMANDS_DIR)) {
   check('.opencode/commands exists', 1, 0);
 } else {
   const ocFiles = fs.readdirSync(OC_COMMANDS_DIR, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith('.md')).map((e) => e.name).sort();
-  check(`opencode commands count is exactly 31 mirroring TASKS \u00a71.1 (got ${ocFiles.length})`, ocFiles.length === 31 ? 0 : 1, 0);
+  check(`opencode commands count is exactly 35 mirroring TASKS \u00a71.1 (got ${ocFiles.length})`, ocFiles.length === 35 ? 0 : 1, 0);
 
   for (const name of ocFiles) {
     const label = `opencode/commands/${name}`;
@@ -1386,7 +1425,7 @@ if (!fs.existsSync(SKILLS_DIR)) {
   check('.agents/skills exists', 1, 0);
 } else {
   const skillDirs = fs.readdirSync(SKILLS_DIR, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
-  check(`skill count is exactly 31 mirroring TASKS \u00a71.1 (got ${skillDirs.length})`, skillDirs.length === 31 ? 0 : 1, 0);
+  check(`skill count is exactly 35 mirroring TASKS \u00a71.1 (got ${skillDirs.length})`, skillDirs.length === 35 ? 0 : 1, 0);
 
   for (const dir of skillDirs) {
     const skillPath = path.join(SKILLS_DIR, dir, 'SKILL.md');

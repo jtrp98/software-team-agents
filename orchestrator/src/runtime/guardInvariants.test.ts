@@ -96,6 +96,7 @@ describe("T-V3R-001 guardrail invariants", () => {
   it("criterion 4 — no concrete adapter source reads a known credential path or auth-token environment variable", () => {
     const adapters = concreteAdapterSources();
     expect(adapters.map(({ file }) => file).sort()).toEqual([
+      "antigravityAdapter.ts",
       "apiAdapter.ts",
       "claudeCodeAdapter.ts",
       "codexAdapter.ts",

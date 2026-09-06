@@ -55,7 +55,7 @@ import { resolveModule } from "../agents/moduleDocs.js";
  * block-outside-repo guard.
  */
 
-export type RuntimeName = "claude" | "codex" | "opencode";
+export type RuntimeName = "claude" | "codex" | "opencode" | "antigravity";
 
 export interface PreflightCheck {
   name: string;

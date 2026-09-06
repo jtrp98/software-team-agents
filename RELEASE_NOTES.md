@@ -1,5 +1,69 @@
 # Release Notes
 
+## Version numbering rule — `package.json` (root), the number `software-team-agents --version` reports
+
+Not automated (this repo has no conventional-commit discipline, so a bumper would guess the bucket
+and could guess wrong, silently). Fixed instead so **only the bucket is mechanical** — a person still
+confirms the final number, but answers yes/no to a stated bucket + one-line reason, not an argument
+built fresh each release:
+
+| Bucket | When | Example |
+|---|---|---|
+| **Patch** (`x.y.Z+1`) | Bug fix only. No new capability, nothing a user must react to. | a hook stops fail-opening on a syntax error |
+| **Minor** (`x.Y+1.0`) | Adds capability, backward compatible. A new runtime/command/CLI verb, a previously-inert config key reactivated, a new optional field. | V6: `antigravity` adapter, `/next`/`/status`/`/verify`/`/changed`, `sta report`, `routing.order` |
+| **Major** (`X+1.0.0`) | A user must react — a guard that was off now refuses something that passed before, a previously-accepted value now rejected, a default flips. | (none shipped yet) |
+
+If a release mixes buckets, the highest one wins. `orchestrator/package.json`'s version is a separate,
+private dev/test number and this rule does not apply to it.
+
+---
+
+## software-team-agents 1.1.0 — V6 Capability Release (2026-09-06)
+
+V6 adds multi-runtime resilience, desktop app compatibility without launcher environment variables, and non-developer usability tools — keeping the pipeline working when provider quotas run out.
+
+### Breaking changes
+
+None. V6 is backward-compatible with 1.0.0.
+- **Contract section verification is report-only:** `checkDesignContractSections` (`T-V6-002`) checks `DES-NNN` anchors on unrecognised `design.md` sections under `--check-doc-structure`, but CI runs with `continue-on-error: true` (`knowledge-ci.yml`), so existing pipelines do not fail.
+- **Workspace role resolution is unified, not widened:** `resolveWorkspaceRole` (`T-V6-007`) anchors the regex to column 0 (`/^role:[ \t]*(ba|dev)[ \t]*$/m`), preventing misinterpretation of nested keys. Gate enumeration proved zero verdict changes (0/32) across live Knowledge and Target workspaces. Per-agent enforcement was not activated after gate review.
+
+### Runtime resilience and multi-provider routing
+
+- **Antigravity (`agy`) runtime adapter added at `experimental` support level** (`T-V6-011`, `T-V6-013`, `ADR-025`).
+  `antigravity` is registered as the fourth execution runtime (invoking the `agy` binary in headless mode). In accordance with measured evidence on `agy 1.1.27`, it declares `MODEL_SELECTION` and `STRUCTURED_RESULT`, but withholds `NAMED_AGENTS`, `COST_REPORTING`, `INTERACTIVE_PROMPTS`, and guard capabilities. Target-write stages are blocked on this runtime because project-level hooks are not loaded by headless `agy`, keeping write runs safely guarded while permitting read and analysis stages.
+- **`routing.order` reactivated with `UNAVAILABLE` fallback** (`T-V6-014`, `T-V6-015`, `ADR-025`).
+  Previously inert, `routing.order` now specifies a runtime preference order (e.g. `[claude-code, codex, antigravity]`) evaluated at precedence level 4. The pipeline hops to the next runtime on quota or outage (`UNAVAILABLE` only); task errors (`ERROR`, `TIMEOUT`) stop immediately without burning through providers. Switching runtimes across model camps mid-phase logs an audit entry and updates `review.md`. Non-interactive runtimes are automatically skipped for interactive stages (e.g. `business-analyst`).
+- **Quota errors classified as `UNAVAILABLE`** (`T-V6-008`).
+  HTTP 401, 403, and 429 quota exhaustion messages from Claude Code and Codex are now mapped to `UNAVAILABLE` instead of `TASK_FAILED`, preserving task retry budgets during upstream provider outages.
+
+### Desktop and environment independence
+
+- **Knowledge root resolution without launcher environment variables** (`T-V6-006`).
+  `resolveContextDocsRoot` falls back to `loadInstallationConfig().knowledge_root` when `AGENTCLAUDE_KNOWLEDGE_ROOT` is unset. Desktop sessions (such as Claude Code desktop or interactive IDEs) can now assemble context and run `sta context` without launcher-injected environment variables. Missing or unconfigured installation files degrade gracefully to `projectRoot`.
+- **`model-tiers.yaml` synced to BA workspaces** (`T-V6-005`).
+  `model-tiers.yaml` is now distributed to Knowledge workspaces during `sta sync`, allowing `project-manager` to validate task `Tier` annotations without schema errors.
+
+### Usability and non-developer tools
+
+- **Workflow slash commands** (`T-V6-016`).
+  Added `/next`, `/status`, and `/changed` (for both BA and DEV roles) plus `/verify` (DEV only). These commands guide users through module stages, inspect blocker states, surface tree changes, and verify phase completions directly inside supported chat and agent interfaces. Rendered across `.claude/commands/`, `.opencode/commands/`, and `.agents/skills/`.
+- **`sta changed` working tree inspection** (`T-V6-017`).
+  Surfaces uncommitted changes via read-only git inspection and executes deterministic static analysis checks, allowing operators to verify agent modifications before committing.
+- **`sta report` offline single-file HTML report** (`T-V6-018`).
+  Generates a self-contained, offline HTML dashboard depicting all module statuses, phase progress, and active blockers without any external stylesheet or script dependencies.
+
+### Context efficiency and document governance
+
+- **`design.md` fallback diagnostics** (`T-V6-001`).
+  When `design.md` cannot be sliced because >40% of its sections lack phase/contract associations, `sta context --json` now reports the exact reason for each unknown section (`no-des-id`, `traceability-unusable`, etc.) from a closed enum.
+- **Change Log archival policy authorized** (`T-V6-003`).
+  Updated `policies/documentation.md §4` and `system-analyst.md` to authorize moving aged `design.md` Change Log entries to `design-archive.md` when the document approaches byte ceilings.
+- **System Analyst context policy includes `design.md`** (`T-V6-004`).
+  SA now officially receives `design.md` as whole-document context in its context policy, reconciling context reporting with SA's existing read privileges.
+
+---
+
 ## software-team-agents 1.0.0 — V5 Simplification Release (2026-09-05)
 
 V5 adds no features. It closes half-finished transitions and makes existing enforcement honest.

@@ -23,6 +23,24 @@ describe("CONTEXT_POLICY", () => {
     );
   });
 
+  it("lets system-analyst read design.md through the accounted policy path (T-V6-004) — it still doesn't read plan.md or code", () => {
+    const p = CONTEXT_POLICY[AgentStage.SYSTEM_ANALYST]!;
+    expect(p.reads).toEqual(expect.arrayContaining([ArtifactType.REQUIREMENTS, ArtifactType.DESIGN, ArtifactType.QA_REPORT]));
+    expect(p.doesNotRead).toEqual(expect.arrayContaining([ArtifactType.PLAN, "backend-code", "frontend-code"]));
+  });
+
+  it("no longer throws when system-analyst explicitly requests DESIGN — it is now inside CONTEXT_POLICY", () => {
+    expect(() => selectContext(AgentStage.SYSTEM_ANALYST, { [ArtifactType.DESIGN]: "design content" }, [ArtifactType.DESIGN])).not.toThrow();
+    const ctx = selectContext(AgentStage.SYSTEM_ANALYST, { [ArtifactType.DESIGN]: "design content" }, [ArtifactType.DESIGN]);
+    expect(ctx.map((c) => c.source)).toEqual([ArtifactType.DESIGN]);
+  });
+
+  it("still throws when system-analyst explicitly requests PLAN — unaffected by T-V6-004", () => {
+    expect(() => selectContext(AgentStage.SYSTEM_ANALYST, { [ArtifactType.PLAN]: "plan content" }, [ArtifactType.PLAN])).toThrow(
+      ContextLeakageError,
+    );
+  });
+
   it("every role's reads and doesNotRead partition all categories with no overlap", () => {
     for (const p of Object.values(CONTEXT_POLICY)) {
       const overlap = p!.reads.filter((c) => p!.doesNotRead.includes(c));

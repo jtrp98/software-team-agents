@@ -1,0 +1,4 @@
+{
+  "//": "Pins this directory to CommonJS. Node resolves a .js file's module system from the NEAREST package.json, so without this marker a target project whose root package.json says \"type\": \"module\" makes this CommonJS wrapper throw ReferenceError: require is not defined. Under AGY that failure denies rather than allows, so it is loud instead of silent — but it denies every tool call in the workspace, which is its own outage. The marker keeps the wrapper loadable in either host.",
+  "type": "commonjs"
+}

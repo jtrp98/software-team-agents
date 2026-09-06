@@ -179,6 +179,15 @@ describe("validatePlanTasks — T-PM10.1", () => {
     expect(check.ok).toBe(true);
   });
 
+  it("T-V6-005 — a missing model-tiers.yaml reads as a Knowledge-workspace packaging fault, not user misconfiguration, when isKnowledgeWorkspace is set", () => {
+    const plain = validatePlanTasks([row({ id: "BE-001", tier: "T4" })]);
+    expect(plain.errors.join("\n")).toContain("model-tiers.yaml is not configured");
+
+    const inKnowledge = validatePlanTasks([row({ id: "BE-001", tier: "T4" })], { isKnowledgeWorkspace: true });
+    expect(inKnowledge.errors.join("\n")).toContain("missing from this Knowledge workspace's synced payload");
+    expect(inKnowledge.errors.join("\n")).toContain("software-team-agents ba");
+  });
+
   it("T-V4-CAST-004 — refuses reserved T1 and a tier absent from the table", () => {
     expect(validatePlanTasks([row({ id: "BE-001", tier: "T1" })], { modelTiers: MODEL_TIERS }).errors.join("\n"))
       .toContain("T1 is reserved");
@@ -403,6 +412,67 @@ describe("checkPlanGraphs", () => {
 
   it("treats a project before its first module as the normal empty state", () => {
     expect(checkPlanGraphs(project({}))).toEqual({ ok: true, problems: [], notes: ["no `_docs/module/` yet — nothing to check."] });
+  });
+
+  const MODEL_TIERS_YAML = `tiers:
+  T1:
+    reserved: true
+    camps:
+      anthropic: { model: a, effort: a, notes: a }
+      openai: { model: a, effort: a, notes: a }
+      google: { model: a, effort: a, notes: a }
+      zai: { model: a, effort: a, notes: a }
+  T2:
+    camps:
+      anthropic: { model: a, effort: a, notes: a }
+      openai: { model: a, effort: a, notes: a }
+      google: { model: a, effort: a, notes: a }
+      zai: { model: a, effort: a, notes: a }
+  T3:
+    camps:
+      anthropic: { model: a, effort: a, notes: a }
+      openai: { model: a, effort: a, notes: a }
+      google: { model: a, effort: a, notes: a }
+      zai: { model: a, effort: a, notes: a }
+  T4:
+    camps:
+      anthropic: { model: a, effort: a, notes: a }
+      openai: { model: a, effort: a, notes: a }
+      google: { model: a, effort: a, notes: a }
+      zai: { model: a, effort: a, notes: a }
+  T5:
+    camps:
+      anthropic: { model: a, effort: a, notes: a }
+      openai: { model: a, effort: a, notes: a }
+      google: { model: a, effort: a, notes: a }
+      zai: { model: a, effort: a, notes: a }
+  T6:
+    camps:
+      anthropic: { model: a, effort: a, notes: a }
+      openai: { model: a, effort: a, notes: a }
+      google: { model: a, effort: a, notes: a }
+      zai: { model: a, effort: a, notes: a }
+`;
+
+  it("T-V6-005 — a Knowledge workspace missing model-tiers.yaml reports the packaging-fault wording, not the generic one", () => {
+    const root = project({
+      "targets.yaml": "schema_version: 1\ntargets: []\n",
+      "_docs/module/sales/plan.md": TIERED_PHASE,
+    });
+    const result = checkPlanGraphs(root);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join("\n")).toContain("missing from this Knowledge workspace's synced payload");
+    expect(result.problems.join("\n")).toContain("software-team-agents ba");
+  });
+
+  it("T-V6-005 — [ACCEPTANCE] a plan casting a Tier passes once model-tiers.yaml is synced into the Knowledge workspace", () => {
+    const root = project({
+      "targets.yaml": "schema_version: 1\ntargets: []\n",
+      "_docs/module/sales/plan.md": TIERED_PHASE,
+      "model-tiers.yaml": MODEL_TIERS_YAML,
+    });
+    const result = checkPlanGraphs(root);
+    expect(result.ok).toBe(true);
   });
 });
 

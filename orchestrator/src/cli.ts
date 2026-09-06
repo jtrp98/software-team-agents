@@ -21,6 +21,7 @@ import { readModuleDoc } from "./agents/moduleDocs.js";
 import { ClaudeCodeAdapter } from "./runtime/claudeCodeAdapter.js";
 import { CodexAdapter } from "./runtime/codexAdapter.js";
 import { OpenCodeAdapter } from "./runtime/openCodeAdapter.js";
+import { AntigravityAdapter } from "./runtime/antigravityAdapter.js";
 import { RUNTIME_IDS, type RuntimeId } from "./runtime/runtimeSupport.js";
 import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "./runtime/runtimeRegistry.js";
 import { selectTierCamp } from "./runtime/tierCampSelection.js";
@@ -45,6 +46,8 @@ import { runTokensVerb } from "./cli/verbs/tokens.js";
 import { runContextVerb } from "./cli/verbs/context.js";
 import { runKnowledgeVerb } from "./cli/verbs/knowledge.js";
 import { runRuntimesVerb } from "./cli/verbs/runtimes.js";
+import { runChangedVerb } from "./cli/verbs/changed.js";
+import { runReportVerb } from "./cli/verbs/report.js";
 import { runTaskLoop } from "./cli/runTaskLoop.js";
 import { describeStatus, type TaskStatusKind } from "./orchestrator/taskStatus.js";
 import { formatRunRouting, RunLog } from "./observability/runLog.js";
@@ -190,7 +193,7 @@ export class CliUsageError extends Error {}
 
 export const USAGE =
   "usage (verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode>] [--model <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
+  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  sta approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
   "  sta resume  <task-id> --module <name> [--project-root <path>]   continue a task already in the store\n" +
@@ -211,6 +214,8 @@ export const USAGE =
   "  sta configure identity --figma-email <email> --claude-email <email> [--config-path <path>]   declare the design accounts (same address; emails only, never a token)\n" +
   "  sta doctor [--project-root <path>]                               read-only diagnostics; exit 1 on any FAIL, never mutates\n" +
   "  sta runtimes                                    which runtimes exist and how well each is supported\n" +
+  "  sta changed [--project-root <path>] [--json]     surface working-tree changes and deterministic green/red gate status\n" +
+  "  sta report  [--output <path>] [--module <name>] [--project-root <path>]   visual dashboard as a static offline HTML page\n" +
   "  sta upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
   "  sta migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending\n" +
   "  sta knowledge-migrate <dry-run|copy|verify|cutover> --source-root <path> --knowledge-root <path> [--now <ISO>] [--confirm I_CONFIRM_MIGRATION]   copy–verify–human-confirmed migration\n" +
@@ -230,7 +235,7 @@ export const USAGE =
   "  --model <name> overrides every stage's frontmatter model for this run (the same override routing.by_role carries); the runtime refuses a model it cannot reach rather than passing it through. Absent, each role's own model: governs.\n" +
   "\n" +
   "underlying flag-based form:\n" +
-  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode>] [--model <name>] <classification flags>\n" +
+  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] <classification flags>\n" +
   "  sta --task-id <id> --module <name> --resume        continue a task already in the store\n" +
   "  sta --task-id <id> --module <name> [--token-budget <n>] [--no-qa-optimization|--no-deterministic-gate]   run with optional QA/budget controls\n" +
   "  sta --list [--project-root <path>]                 show every task and stop\n" +
@@ -247,7 +252,7 @@ export const USAGE =
   "  sta --check-workspace [--project-root <path>]      check workspace.yaml (if any) against the filesystem\n" +
   "  sta --check-repos [--project-root <path>]          check repos.yaml (if any) against the filesystem\n" +
   "  sta --check-environments [--project-root <path>]   check environments.yaml (if any) against its schema\n" +
-  "  sta --check-doc-structure [--project-root <path>]  check every _docs/module/*/*.md's sections against its schema\n" +
+  "  sta --check-doc-structure [--project-root <path>]  check every _docs/module/*/*.md's sections against its schema, and that every design.md contract section carries a DES-NNN id (report-only until wired into CI)\n" +
   "  sta --check-doc-size [--project-root <path>]       check every _docs/module/*/*.md document and `##` section against its byte ceiling (report-only until wired into CI)\n" +
   "  sta --check-plan [--module <name>] [--project-root <path>]  validate every module's plan.md as a task DAG (deps/cycle/owner/status/DES/waves)\n" +
   "  sta --check-knowledge [--project-root <path>]      check knowledge/*.yaml against its schema and cross-links\n" +
@@ -820,6 +825,8 @@ const VERBS = [
   "configure",
   "doctor",
   "runtimes",
+  "changed",
+  "report",
 ] as const;
 type Verb = (typeof VERBS)[number];
 
@@ -1020,6 +1027,7 @@ export function createProductionRuntimeRegistry(projectRoot: string): RuntimeReg
     new ClaudeCodeAdapter({ projectRoot }),
     new CodexAdapter({ projectRoot }),
     new OpenCodeAdapter({ projectRoot }),
+    new AntigravityAdapter({ projectRoot }),
   ]);
 }
 
@@ -1287,6 +1295,10 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
       return runDoctorVerb(rest);
     case "runtimes":
       return runRuntimesVerb(rest, defaultProjectRoot);
+    case "changed":
+      return runChangedVerb(rest, defaultProjectRoot);
+    case "report":
+      return runReportVerb(rest, defaultProjectRoot);
   }
 }
 
