@@ -94,6 +94,7 @@ export interface TargetStatus {
   claude: RuntimeReadiness;
   codex: RuntimeReadiness;
   opencode: RuntimeReadiness;
+  antigravity: RuntimeReadiness;
   /** V3 omission is healthy: the effective values reproduce pre-V3 behavior. */
   v3Configuration: { configured: boolean; detail: string };
 }
@@ -182,6 +183,19 @@ export function opencodeReadiness(targetRoot: string, coverage: GuardCoverage): 
   if (agents < md) return { ready: false, detail: `${agents}/${md} bindings generated — run software-team-agents sync` };
   if (!guardCoverageIsPositive(coverage)) return { ready: false, detail: coverage.detail };
   return { ready: true, detail: `${agents} binding(s) match ${md} agent source(s); ${coverage.detail}` };
+}
+
+/**
+ * Antigravity readiness stops at the role sources: with no native agent store
+ * the adapter folds `.claude/agents/<role>.md` into the prompt, so there is no
+ * per-runtime binding count to compare. Guard coverage is always negative on
+ * this runtime, so readiness reports that reason rather than implying a
+ * workspace can be repaired into a guarded one by syncing again.
+ */
+export function antigravityReadiness(targetRoot: string, coverage: GuardCoverage): RuntimeReadiness {
+  const md = countFiles(path.join(targetRoot, ".claude", "agents"), ".md");
+  if (md === 0) return { ready: false, detail: "no agent sources synced yet — run software-team-agents sync" };
+  return { ready: false, detail: `${md} agent source(s) available; ${coverage.detail}` };
 }
 
 export function gatherStatus(options: { targetRoot?: string; templatesDir?: string; installationConfigPath?: string } = {}): TargetStatus {
@@ -368,6 +382,7 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     claude: claudeReadiness(roots.targetRoot, guardCoverage({ runtime: "claude", targetRoot: roots.targetRoot, wiring: guardWiring })),
     codex: codexReadiness(roots.targetRoot, guardCoverage({ runtime: "codex", targetRoot: roots.targetRoot })),
     opencode: opencodeReadiness(roots.targetRoot, guardCoverage({ runtime: "opencode", targetRoot: roots.targetRoot })),
+    antigravity: antigravityReadiness(roots.targetRoot, guardCoverage({ runtime: "antigravity", targetRoot: roots.targetRoot })),
     v3Configuration: v3ExecutionStatus(config, staConfig),
   };
 }
@@ -482,6 +497,7 @@ export function renderStatus(status: TargetStatus): string {
   lines.push(`Claude: ${status.claude.ready ? "READY" : "NOT READY"} — ${status.claude.detail}`);
   lines.push(`Codex: ${status.codex.ready ? "READY" : "NOT READY"} — ${status.codex.detail}`);
   lines.push(`OpenCode: ${status.opencode.ready ? "READY" : "NOT READY"} — ${status.opencode.detail}`);
+  lines.push(`Antigravity: ${status.antigravity.ready ? "READY" : "NOT READY"} — ${status.antigravity.detail}`);
   if (status.role !== "ba" && status.knowledgeRoot) lines.push(`Installation Knowledge root: ${status.knowledgeRoot}`);
   return lines.join("\n");
 }

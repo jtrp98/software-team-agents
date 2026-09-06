@@ -6,7 +6,8 @@ import { sha256Of } from "../packaging/templateManifest.js";
 import { runTargetCli } from "./cli.js";
 import { workspacePreflight, PreflightError, type RoleRunOptions } from "./devCommand.js";
 import { gatherStatus, renderStatus } from "./statusCommand.js";
-import { guardCoverage } from "./guardSettings.js";
+import { antigravityCoverageWithHooks, codexCoverage, guardCoverage, guardCoverageIsPositive, opencodeCoverageWithPlugin } from "./guardSettings.js";
+import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
 import { loadTargetConfig, writeTargetConfig } from "./targetMeta.js";
 import { stringify as stringifyYaml } from "yaml";
 
@@ -304,5 +305,41 @@ describe("T-V5-008 — guard coverage is a launch requirement", () => {
     const context = preflight(target, templatesDir, { runtime: "opencode", allowUnguardedRuntime: true });
     expect(context.guards.level).toBe("partial");
     expect(guardCheck(context.checks)?.detail).not.toMatch(/UNGUARDED/);
+  });
+});
+
+describe("T-V6-012 — Antigravity guard coverage tells the truth about an unobserved mechanism", () => {
+  it("reports unguarded even with both guard files present, because dispatch was never observed", () => {
+    const coverage = antigravityCoverageWithHooks();
+    expect(coverage.level).toBe("unguarded");
+    expect(coverage.enforced).toEqual([]);
+    expect(guardCoverageIsPositive(coverage)).toBe(false);
+    expect(coverage.detail).toMatch(/no `agy` hook dispatch has ever been observed/);
+  });
+
+  it("distinguishes a workspace missing the payload from one that has it, without upgrading either", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-agy-cov-"));
+    roots.push(root);
+    const missing = guardCoverage({ runtime: "antigravity", targetRoot: root });
+    expect(missing.level).toBe("unguarded");
+    expect(missing.detail).toMatch(/run software-team-agents sync/);
+
+    fs.mkdirSync(path.join(root, ".agents", "hooks"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".agents", "hooks.json"), "{}", "utf8");
+    fs.writeFileSync(path.join(root, ".agents", "hooks", "sta-guard.js"), "// wrapper", "utf8");
+    const present = guardCoverage({ runtime: "antigravity", targetRoot: root });
+    expect(present.level).toBe("unguarded");
+    expect(present).toEqual(antigravityCoverageWithHooks());
+  });
+
+  it("never claims PER_AGENT_EXIT_GUARD — AGY documents one Stop event with no subagent counterpart", () => {
+    expect(antigravityCoverageWithHooks().enforced).not.toContain(RuntimeCapability.PER_AGENT_EXIT_GUARD);
+    expect(antigravityCoverageWithHooks().unenforced).toContain(RuntimeCapability.PER_AGENT_EXIT_GUARD);
+  });
+
+  it("leaves Claude Code's and OpenCode's verdicts exactly as they were", () => {
+    expect(opencodeCoverageWithPlugin().level).toBe("partial");
+    expect(opencodeCoverageWithPlugin().enforced).toEqual([RuntimeCapability.PRE_TOOL_GUARD, RuntimeCapability.POST_TOOL_GUARD]);
+    expect(codexCoverage().level).toBe("unguarded");
   });
 });

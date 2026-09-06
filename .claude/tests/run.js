@@ -43,6 +43,7 @@ const { spawnSync } = require('child_process');
 const ROOT = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const HOOKS = path.join(ROOT, '.claude', 'hooks');
 const CODEX_HOOKS = path.join(ROOT, '.codex', 'hooks');
+const AGY_HOOKS = path.join(ROOT, '.agents', 'hooks');
 const SCRIPTS = path.join(ROOT, '.claude', 'scripts');
 
 let passed = 0;
@@ -143,7 +144,7 @@ function section(title) {
 
 section('0. syntax — a guard that does not parse fails OPEN, so this runs first');
 
-for (const dir of [HOOKS, SCRIPTS, path.join(ROOT, '.claude', 'tests')]) {
+for (const dir of [HOOKS, SCRIPTS, AGY_HOOKS, path.join(ROOT, '.claude', 'tests')]) {
   if (!fs.existsSync(dir)) continue;
   for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.js'))) {
     const full = path.join(dir, file);
@@ -167,7 +168,7 @@ for (const dir of [HOOKS, SCRIPTS, path.join(ROOT, '.claude', 'tests')]) {
 
 section('0b. ESM host — a guard that cannot load fails OPEN, and --check cannot see it');
 
-for (const dir of [HOOKS, SCRIPTS]) {
+for (const dir of [HOOKS, SCRIPTS, AGY_HOOKS]) {
   if (!fs.existsSync(dir)) continue;
   const rel = path.relative(ROOT, dir).replace(/\\/g, '/');
   const markerPath = path.join(dir, 'package.json');

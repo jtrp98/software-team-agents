@@ -1,5 +1,23 @@
 # Release Notes
 
+## Version numbering rule — `package.json` (root), the number `software-team-agents --version` reports
+
+Not automated (this repo has no conventional-commit discipline, so a bumper would guess the bucket
+and could guess wrong, silently). Fixed instead so **only the bucket is mechanical** — a person still
+confirms the final number, but answers yes/no to a stated bucket + one-line reason, not an argument
+built fresh each release:
+
+| Bucket | When | Example |
+|---|---|---|
+| **Patch** (`x.y.Z+1`) | Bug fix only. No new capability, nothing a user must react to. | a hook stops fail-opening on a syntax error |
+| **Minor** (`x.Y+1.0`) | Adds capability, backward compatible. A new runtime/command/CLI verb, a previously-inert config key reactivated, a new optional field. | V6: `antigravity` adapter, `/next`/`/status`/`/verify`/`/changed`, `sta report`, `routing.order` |
+| **Major** (`X+1.0.0`) | A user must react — a guard that was off now refuses something that passed before, a previously-accepted value now rejected, a default flips. | (none shipped yet) |
+
+If a release mixes buckets, the highest one wins. `orchestrator/package.json`'s version is a separate,
+private dev/test number and this rule does not apply to it.
+
+---
+
 ## software-team-agents 1.0.0 — V5 Simplification Release (2026-09-05)
 
 V5 adds no features. It closes half-finished transitions and makes existing enforcement honest.

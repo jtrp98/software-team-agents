@@ -29,6 +29,7 @@ import {
   type TargetStackConfig,
 } from "./targetMeta.js";
 import { CLAUDE_SETTINGS_PATH, mergeFrameworkGuards } from "./guardSettings.js";
+import { AGY_HOOKS_PATH, mergeAgyHooks } from "../runtime/bindingGenerator.js";
 import { BA_WORKSPACE_AGENTS, resolveTargetBinding, runtimesForWorkspace, type WorkspaceRole, type WorkspaceRuntime } from "./roleWorkspace.js";
 import { missingInstructionConsequence } from "../threeRepo/ownership.js";
 import { planTargetProfile } from "./targetProfile.js";
@@ -138,6 +139,30 @@ function planPayloadFiles(
     const tracked = oldFiles.get(file.path);
     if (!fs.existsSync(dest)) {
       planned.push(tracked ? { entry: { action: "restore", path: file.path }, copyFromTemplates: true } : { entry: { action: "add", path: file.path }, copyFromTemplates: true });
+      continue;
+    }
+    // A workspace that already has its own `.agents/hooks.json` keeps every key
+    // it wrote; only this framework's own entry is replaced. Whole-file copy
+    // would silently delete a user's hooks on every sync.
+    if (file.path === AGY_HOOKS_PATH && fs.existsSync(dest)) {
+      const merged = mergeAgyHooks(fs.readFileSync(dest, "utf8"));
+      if (!merged.ok) {
+        planned.push({
+          conflict: {
+            path: file.path,
+            kind: "unmergeable-settings",
+            detail: `${merged.error}; recovery: fix the JSON manually, claim ${AGY_HOOKS_PATH} in .agent-team/config.yaml overrides, or re-run with --force to replace it after backup`,
+          },
+        });
+      } else {
+        planned.push({
+          entry: {
+            action: merged.changed ? "update" : "unchanged",
+            path: file.path,
+            note: merged.changed ? "merge the managed AGY guard registration" : "managed AGY guard registration already current",
+          },
+        });
+      }
       continue;
     }
     if (file.path === CLAUDE_SETTINGS_PATH && !tracked) {
@@ -854,6 +879,20 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
       // is on disk when the project's is, and un-claiming the path later would
       // then mislabel the project's own file as "edited after sync".
       performed.push(plannedFor);
+      continue;
+    }
+    if (file.path === AGY_HOOKS_PATH && fs.existsSync(path.join(options.targetRoot, file.path))) {
+      const dest = path.join(options.targetRoot, file.path);
+      const merged = mergeAgyHooks(fs.readFileSync(dest, "utf8"));
+      if (!merged.ok || merged.content === undefined) throw new Error(`AGY hooks merge reached apply after preflight: ${merged.error ?? "no merged content"}`);
+      if (merged.changed) {
+        backup(file.path);
+        fs.writeFileSync(dest, merged.content, "utf8");
+        performed.push({ action: "update", path: file.path, note: "merged the managed AGY guard registration; project entries preserved" });
+      } else {
+        performed.push(plannedFor);
+      }
+      managedEntries.push(file);
       continue;
     }
     if (file.path === CLAUDE_SETTINGS_PATH && !oldFiles.has(file.path) && fs.existsSync(path.join(options.targetRoot, file.path))) {

@@ -42,6 +42,11 @@ export const TEMPLATE_SOURCES: readonly TemplateSourceEntry[] = [
   { relPath: ".claude/shared", kind: "dir" },
   { relPath: ".claude/settings.json", kind: "file" },
   { relPath: ".opencode/plugin", kind: "dir" },
+  // Antigravity's guard binding. `.agents/hooks.json` is deliberately a tracked,
+  // committed file rather than a derived-and-ignored one: a gitignored guard
+  // travels with nobody.
+  { relPath: ".agents/hooks", kind: "dir" },
+  { relPath: ".agents/hooks.json", kind: "file" },
   { relPath: "contracts", kind: "dir" },
   { relPath: "workflows", kind: "dir" },
   { relPath: "policies", kind: "dir" },

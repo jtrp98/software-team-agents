@@ -186,7 +186,7 @@ describe("T-V3R-032 production runtime composition", () => {
   it("constructs the complete runtime registry used by the real CLI executor call site", () => {
     // T-V5-039 — the paid API adapter is never constructed here; --runtime
     // only offers runtimes that can actually run.
-    expect(createProductionRuntimeRegistry(defaultProjectRoot()).ids()).toEqual(["claude-code", "codex", "opencode"]);
+    expect(createProductionRuntimeRegistry(defaultProjectRoot()).ids()).toEqual(["claude-code", "codex", "opencode", "antigravity"]);
     const source = fs.readFileSync(path.join(defaultProjectRoot(), "orchestrator", "src", "cli.ts"), "utf8");
     expect(source).toContain("registry: runtimeRegistry");
     expect(source).toContain("runtime: defaultRuntime");

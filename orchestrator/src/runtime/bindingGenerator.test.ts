@@ -19,6 +19,12 @@ import {
   renderOpenCodeBinding,
   renderOpenCodeCommand,
   withGitBashRules,
+  AGY_HOOKS_PATH,
+  AGY_MANAGED_HOOK_KEY,
+  mergeAgyHooks,
+  readAgyManagedHooks,
+  renderAgyHooksJson,
+  renderAgyManagedHooks,
 } from "./bindingGenerator.js";
 import { renderGuardRuleBlock } from "../agents/pathPermissions.js";
 import { extractDeveloperInstructions } from "./codexAdapter.js";
@@ -55,6 +61,10 @@ beforeEach(() => {
   const claude = "<!-- sta:bootstrap -->\n# bootstrap\n<!-- /sta:bootstrap -->\n\n# Full rules\n";
   fs.writeFileSync(path.join(root, "CLAUDE.md"), claude, "utf8");
   fs.writeFileSync(path.join(root, "AGENTS.md"), renderAgentsPointer(claude), "utf8");
+  // A non-workspace fixture keeps the historical all-renderings contract, so the
+  // AGY guard binding is part of a clean baseline like every other rendering.
+  fs.mkdirSync(path.join(root, ".agents"), { recursive: true });
+  fs.writeFileSync(path.join(root, AGY_HOOKS_PATH), renderAgyHooksJson(), "utf8");
 });
 
 afterEach(() => {
@@ -559,6 +569,14 @@ describe("T-V5-018 — derived rendering ignore paths", () => {
     expect(paths.some((p) => p.includes("sta-guards.js"))).toBe(false);
     expect(paths.some((p) => p.includes("AGENTS.md"))).toBe(false);
   });
+
+  it("never ignores the AGY guard binding — a gitignored guard travels with nobody", () => {
+    // `.agents/skills/` IS ignored (a derived command rendering) and sits in the
+    // same directory, so this is the one place the two could be confused.
+    const paths = derivedRenderingIgnorePaths();
+    expect(paths).toContain(".agents/skills/");
+    expect(paths.some((p) => AGY_HOOKS_PATH.startsWith(p) || p === ".agents/" || p.startsWith(".agents/hooks"))).toBe(false);
+  });
 });
 
 describe("checkBindings — generated guard rule block (T-V5-020)", () => {
@@ -663,5 +681,100 @@ describe("checkBindings — generated guard rule block (T-V5-020)", () => {
       "utf8",
     );
     expect(checkBindings(root).problems.join("\n")).not.toMatch(/sta-guards\.js/);
+  });
+});
+
+
+/**
+ * The AGY guard binding: one authored rule set, rendered into AGY's own file
+ * shape, merged rather than overwritten, and drift-checked like every other
+ * rendering.
+ */
+describe("Antigravity guard binding (T-V6-012)", () => {
+  function writeSources(role: string): void {
+    fs.writeFileSync(path.join(root, ".claude", "agents", `${role}.md`), SAMPLE_MD.replace("qa-engineer", role));
+  }
+  function agyWorkspace(runtimes: string): void {
+    fs.mkdirSync(path.join(root, ".agent-team"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, ".agent-team", "config.yaml"),
+      `schema_version: 1\ntarget_id: t\nregistered_at: 2026-01-01\nrole: dev\nruntimes: [${runtimes}]\noverrides: []\n`,
+      "utf8",
+    );
+  }
+
+  it("registers only tool names AGY was observed to advertise, one exact matcher each", () => {
+    const managed = renderAgyManagedHooks();
+    expect(managed.PreToolUse.map((entry) => entry.matcher)).toEqual([
+      "multi_replace_file_content",
+      "notebook_edit",
+      "replace_file_content",
+      "sed_file",
+      "write_to_file",
+    ]);
+    for (const entry of managed.PreToolUse) {
+      expect(entry.hooks).toEqual([{ type: "command", command: "node .agents/hooks/sta-guard.js", timeout: 10 }]);
+    }
+  });
+
+  it("carries no second copy of the rule data — the wrapper holds the shared block, the JSON holds only wiring", () => {
+    expect(renderAgyHooksJson()).not.toContain("UNIVERSAL_DENY");
+    expect(renderAgyHooksJson()).not.toContain("_docs/module");
+  });
+
+  it("fails --check-bindings when the managed entry drifts, and when the file is gone", () => {
+    writeSources("qa-engineer");
+    agyWorkspace("claude, antigravity");
+    fs.mkdirSync(path.join(root, ".agents"), { recursive: true });
+
+    fs.writeFileSync(path.join(root, AGY_HOOKS_PATH), renderAgyHooksJson(), "utf8");
+    expect(checkBindings(root).problems.join("\n")).not.toMatch(/hooks\.json/);
+
+    const drifted = JSON.parse(renderAgyHooksJson()) as Record<string, { PreToolUse: unknown[] }>;
+    drifted[AGY_MANAGED_HOOK_KEY].PreToolUse = [];
+    fs.writeFileSync(path.join(root, AGY_HOOKS_PATH), JSON.stringify(drifted, null, 2), "utf8");
+    expect(checkBindings(root).problems.join("\n")).toMatch(/does not match the rendering/);
+
+    fs.writeFileSync(path.join(root, AGY_HOOKS_PATH), "{ not json", "utf8");
+    expect(checkBindings(root).problems.join("\n")).toMatch(/not valid JSON/);
+
+    fs.rmSync(path.join(root, AGY_HOOKS_PATH));
+    expect(checkBindings(root).problems.join("\n")).toMatch(/missing \.agents\/hooks\.json/);
+  });
+
+  it("says nothing about hooks.json in a workspace that does not materialise this runtime", () => {
+    writeSources("qa-engineer");
+    agyWorkspace("claude");
+    fs.rmSync(path.join(root, AGY_HOOKS_PATH), { force: true });
+    expect(checkBindings(root).problems.join("\n")).not.toMatch(/hooks\.json/);
+  });
+
+  it("merges under the managed key and leaves a user's own hooks untouched", () => {
+    const userAuthored = JSON.stringify(
+      {
+        "my-own-guard": { PreToolUse: [{ matcher: "run_command", hooks: [{ type: "command", command: "node mine.js", timeout: 5 }] }] },
+        [AGY_MANAGED_HOOK_KEY]: { PreToolUse: [] },
+      },
+      null,
+      2,
+    );
+    const merged = mergeAgyHooks(userAuthored);
+    expect(merged.ok).toBe(true);
+    expect(merged.changed).toBe(true);
+    const after = JSON.parse(merged.content!) as Record<string, unknown>;
+    expect(after["my-own-guard"]).toEqual((JSON.parse(userAuthored) as Record<string, unknown>)["my-own-guard"]);
+    expect(after[AGY_MANAGED_HOOK_KEY]).toEqual(renderAgyManagedHooks());
+  });
+
+  it("reports no change when the managed key is already current, and refuses an unmergeable file", () => {
+    expect(mergeAgyHooks(renderAgyHooksJson())).toMatchObject({ ok: true, changed: false });
+    expect(mergeAgyHooks("[]").ok).toBe(false);
+    expect(mergeAgyHooks("{ not json").ok).toBe(false);
+  });
+
+  it("treats an unreadable managed entry as an error, never as an empty result that would read as no drift", () => {
+    expect(readAgyManagedHooks("{}").error).toMatch(/no "sta-guards" entry/);
+    expect(readAgyManagedHooks("[]").error).toMatch(/root must be a JSON object/);
+    expect(readAgyManagedHooks(renderAgyHooksJson()).error).toBeUndefined();
   });
 });

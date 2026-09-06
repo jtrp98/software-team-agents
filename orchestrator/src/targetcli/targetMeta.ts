@@ -120,7 +120,7 @@ export const TargetConfigSchema = z.object({
   /** Which role's workspace this repository is. Absent in configs from before this field existed — commands then detect or require --role. */
   role: z.enum(["ba", "dev"]).optional(),
   /** Runtime bindings materialised in this workspace. Absent is a pre-V5 config. */
-  runtimes: z.array(z.enum(["claude", "codex", "opencode"])).min(1).optional(),
+  runtimes: z.array(z.enum(["claude", "codex", "opencode", "antigravity"])).min(1).optional(),
   /** Repo-relative (or absolute) path binding to the team's Knowledge repo, committed with this workspace. */
   knowledge: z.object({ path: z.string().min(1) }).optional(),
   /**

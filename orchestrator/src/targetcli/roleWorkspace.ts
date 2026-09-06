@@ -25,10 +25,13 @@ import type { TargetConfig, TargetManifest } from "./targetMeta.js";
 
 /** Where an interactive workspace runs and which managed payload it receives. */
 export type WorkspaceRole = "ba" | "dev";
-export type WorkspaceRuntime = "claude" | "codex" | "opencode";
+export type WorkspaceRuntime = "claude" | "codex" | "opencode" | "antigravity";
 
 /** The recorded set wins; a manifest with non-Claude renderings but no
- * recorded runtime config is conservatively treated as opt-in to every existing runtime. */
+ * recorded runtime config is conservatively treated as opt-in to the three runtimes that
+ * predate the recorded-set field. `antigravity` is deliberately absent: no manifest old
+ * enough to reach this branch can have been synced with it, so inferring it would demand
+ * bindings the workspace was never given. */
 export function runtimesForWorkspace(config: TargetConfig | undefined, manifest?: TargetManifest): readonly WorkspaceRuntime[] {
   if (config?.runtimes?.length) return config.runtimes;
   const legacyBindings = manifest?.files.some((file) =>
@@ -98,6 +101,8 @@ export function assetsForRole(role: WorkspaceRole): (relPath: string) => boolean
     // the plugin is authored payload; `.opencode/agent/` files are derived at
     // sync time and never ship in the template payload at all.
     if (relPath.startsWith(".opencode/plugin/")) return true;
+    // Antigravity's guard binding travels the same way, for the same reason.
+    if (relPath.startsWith(".agents/hooks/") || relPath === ".agents/hooks.json") return true;
     if (relPath.startsWith("policies/")) return true;
     // Only the BA/Knowledge side validates its own documents.
     if (relPath === ".github/workflows/knowledge-ci.yml") return true;

@@ -194,13 +194,14 @@ export interface GuardRuleHost {
   /** Repo-relative path, posix separators. */
   path: string;
   /** The runtime whose materialisation decides whether this host exists in a workspace at all. */
-  runtime: "claude" | "opencode";
+  runtime: "claude" | "opencode" | "antigravity";
 }
 
 /** Every file that carries the generated block. `.codex/hooks/*` is absent on purpose: it is a byte-mirror, already checked as one. */
 export const GUARD_RULE_HOSTS: readonly GuardRuleHost[] = [
   { path: ".claude/hooks/block-path-permissions.js", runtime: "claude" },
   { path: ".opencode/plugin/sta-guards.js", runtime: "opencode" },
+  { path: ".agents/hooks/sta-guard.js", runtime: "antigravity" },
 ];
 
 /**

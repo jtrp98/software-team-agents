@@ -21,6 +21,7 @@ import { readModuleDoc } from "./agents/moduleDocs.js";
 import { ClaudeCodeAdapter } from "./runtime/claudeCodeAdapter.js";
 import { CodexAdapter } from "./runtime/codexAdapter.js";
 import { OpenCodeAdapter } from "./runtime/openCodeAdapter.js";
+import { AntigravityAdapter } from "./runtime/antigravityAdapter.js";
 import { RUNTIME_IDS, type RuntimeId } from "./runtime/runtimeSupport.js";
 import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "./runtime/runtimeRegistry.js";
 import { selectTierCamp } from "./runtime/tierCampSelection.js";
@@ -190,7 +191,7 @@ export class CliUsageError extends Error {}
 
 export const USAGE =
   "usage (verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode>] [--model <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
+  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  sta approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
   "  sta resume  <task-id> --module <name> [--project-root <path>]   continue a task already in the store\n" +
@@ -230,7 +231,7 @@ export const USAGE =
   "  --model <name> overrides every stage's frontmatter model for this run (the same override routing.by_role carries); the runtime refuses a model it cannot reach rather than passing it through. Absent, each role's own model: governs.\n" +
   "\n" +
   "underlying flag-based form:\n" +
-  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode>] [--model <name>] <classification flags>\n" +
+  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] <classification flags>\n" +
   "  sta --task-id <id> --module <name> --resume        continue a task already in the store\n" +
   "  sta --task-id <id> --module <name> [--token-budget <n>] [--no-qa-optimization|--no-deterministic-gate]   run with optional QA/budget controls\n" +
   "  sta --list [--project-root <path>]                 show every task and stop\n" +
@@ -1020,6 +1021,7 @@ export function createProductionRuntimeRegistry(projectRoot: string): RuntimeReg
     new ClaudeCodeAdapter({ projectRoot }),
     new CodexAdapter({ projectRoot }),
     new OpenCodeAdapter({ projectRoot }),
+    new AntigravityAdapter({ projectRoot }),
   ]);
 }
 

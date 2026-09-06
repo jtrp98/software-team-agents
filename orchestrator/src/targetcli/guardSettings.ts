@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isUserOverridden, type TargetConfig, type TargetManifest } from "./targetMeta.js";
 import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
+import { AGY_GUARD_WRAPPER_PATH, AGY_HOOKS_PATH } from "../runtime/bindingGenerator.js";
 import type { WorkspaceRuntime } from "./roleWorkspace.js";
 
 export const CLAUDE_SETTINGS_PATH = ".claude/settings.json";
@@ -440,6 +441,41 @@ export function codexCoverage(): GuardCoverage {
   };
 }
 
+/**
+ * Antigravity ships a guard binding whose dispatch has never been observed.
+ *
+ * `.agents/hooks.json` + `.agents/hooks/sta-guard.js` are generated into every
+ * antigravity workspace and the wrapper fails closed by construction — but no
+ * spike could make AGY's `PreToolUse` fire in headless mode under any of five
+ * configurations, so nothing here is *verified* enforcement. The one
+ * honest verdict is `unguarded`: a present file is not a mechanism, and calling
+ * this `partial` would let a launch preflight pass on a claim no run has ever
+ * demonstrated. This rises when the deny path is observed, not before.
+ */
+export function antigravityCoverageWithHooks(): GuardCoverage {
+  return {
+    runtime: "antigravity",
+    level: "unguarded",
+    enforced: [],
+    unenforced: ALL_GUARD_CAPABILITIES,
+    detail:
+      `${AGY_HOOKS_PATH} and ${AGY_GUARD_WRAPPER_PATH} are generated and fail closed by construction, but no \`agy\` hook dispatch has ever been observed in headless mode — ` +
+      "so block-git, block-outside-repo, block-path-permissions, block-doc-rewrite, block-secret-leak and require-green-before-stop are all treated as inactive until a real run demonstrates otherwise",
+  };
+}
+
+function antigravityCoverage(targetRoot: string): GuardCoverage {
+  const withHooks = antigravityCoverageWithHooks();
+  const present =
+    fs.existsSync(path.join(targetRoot, ...AGY_HOOKS_PATH.split("/"))) &&
+    fs.existsSync(path.join(targetRoot, ...AGY_GUARD_WRAPPER_PATH.split("/")));
+  if (present) return withHooks;
+  return {
+    ...withHooks,
+    detail: `no ${AGY_HOOKS_PATH} / ${AGY_GUARD_WRAPPER_PATH} in this workspace — run software-team-agents sync; note that even once present, this runtime's hook dispatch remains unobserved`,
+  };
+}
+
 export function guardCoverage(options: {
   runtime: WorkspaceRuntime;
   targetRoot: string;
@@ -451,6 +487,7 @@ export function guardCoverage(options: {
   wiring?: GuardWiringStatus;
 }): GuardCoverage {
   if (options.runtime === "codex") return codexCoverage();
+  if (options.runtime === "antigravity") return antigravityCoverage(options.targetRoot);
   if (options.runtime === "opencode") return opencodeCoverage(options.targetRoot);
   const wiring = options.wiring ?? (options.templatesDir === undefined
     ? undefined
