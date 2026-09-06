@@ -119,9 +119,35 @@ describe("defaultStaConfig / writeStaConfig / loadStaConfig", () => {
       "execution.allow_handoff",
       "execution.allow_paid_fallback",
       "routing.strategy",
-      "routing.order",
       "model_routing",
     ]);
+    // T-V6-014 — `routing.order` is read again, so reporting it as inert would
+    // tell a person the opposite of the truth.
+    expect(inertConfigKeys(loaded, loaded.execution)).not.toContain("routing.order");
+  });
+
+  // ADR-025 #6. A key that looks configured and changes nothing is exactly how
+  // `routing.order` died; `error` is refused rather than accepted and ignored.
+  it("refuses routing.fallback_on: error at load and accepts unavailable", () => {
+    const write = (value: string): string => {
+      const root = tmpRoot();
+      fs.mkdirSync(path.dirname(staConfigPath(root)), { recursive: true });
+      fs.writeFileSync(
+        staConfigPath(root),
+        ["schema_version: 1", "routing:", "  order: [claude-code, codex]", `  fallback_on: ${value}`, ""].join("\n"),
+        "utf8",
+      );
+      return root;
+    };
+
+    const refused = write("error");
+    expect(() => loadStaConfig(refused)).toThrow(StaConfigInvalidError);
+    expect(() => loadStaConfig(refused)).toThrow(/only "unavailable"/);
+    expect(inspectStaConfig(refused).problems.join("\n")).toContain("routing.fallback_on");
+
+    const accepted = write("unavailable");
+    expect(loadStaConfig(accepted).routing?.fallback_on).toBe("unavailable");
+    expect(inspectStaConfig(accepted)).toEqual({ problems: [], warnings: [] });
   });
 
   it("throws StaConfigMissingError when there is no config yet", () => {

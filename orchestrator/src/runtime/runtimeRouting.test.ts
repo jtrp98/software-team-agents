@@ -181,10 +181,9 @@ describe("resolveRuntimeRoute — V3 shape and compatibility", () => {
     expect(runtimeOnly.effort).toBeUndefined();
   });
 
-  // `routing.strategy` / `routing.order` (the old precedence level 3) are
-  // removed. A config carrying them still loads and the route falls through
-  // to the automatic default: no candidate list is built from them.
-  it("ignores routing.strategy/order and resolves one automatic candidate", () => {
+  // `routing.strategy` stays inert. `routing.order` is read again (T-V6-014) and
+  // resolves the whole walk at precedence level 4, head first.
+  it("ignores routing.strategy and resolves routing.order as the level-4 walk", () => {
     const result = route({
       config: {
         schema_version: 1,
@@ -196,8 +195,91 @@ describe("resolveRuntimeRoute — V3 shape and compatibility", () => {
       },
     });
     expect(result.precedenceLevel).toBe(4);
-    expect(result.candidates.map((candidate) => candidate.runtime.id)).toEqual(["claude-code"]);
+    expect(result.candidates.map((candidate) => candidate.runtime.id)).toEqual(["opencode", "codex", "claude-code"]);
+    expect(result.selected?.runtime.id).toBe("opencode");
     expect(result.candidates.every((candidate) => candidate.reason.length > 20)).toBe(true);
+  });
+
+  // The compatibility line this task is measured on.
+  it("a config with no routing.order still resolves exactly one automatic candidate", () => {
+    const result = route({ config: { schema_version: 1, routing: { strategy: "subscription-first" } } });
+    expect(result.precedenceLevel).toBe(4);
+    expect(result.candidates.map((candidate) => candidate.runtime.id)).toEqual(["claude-code"]);
+  });
+});
+
+describe("resolveRuntimeRoute — routing.order at precedence level 4", () => {
+  const order = { schema_version: 1 as const, routing: { order: ["claude-code", "codex", "opencode"], allow_below_supported: ["codex", "opencode"] } };
+
+  it("--runtime (level 1) wins outright and consults no ordering", () => {
+    const result = route({ config: order, flags: { runtime: "codex", model: "gpt-5" } });
+    expect(result.precedenceLevel).toBe(1);
+    expect(result.candidates.map((candidate) => candidate.runtime.id)).toEqual(["codex"]);
+    expect(result.selected?.modelExplicit).toBe(true);
+  });
+
+  it("routing.by_role (level 2) wins outright and keeps carrying modelExplicit and effort", () => {
+    const result = route({
+      config: {
+        ...order,
+        routing: { ...order.routing, by_role: { "backend-engineer": { runtime: "codex", model: "gpt-5", effort: "high" } } },
+      },
+    });
+    expect(result.precedenceLevel).toBe(2);
+    expect(result.candidates.map((candidate) => candidate.runtime.id)).toEqual(["codex"]);
+    expect(result.selected?.modelExplicit).toBe(true);
+    expect(result.effort).toBe("high");
+  });
+
+  it("skips an entry the probe reports unavailable and selects the next", () => {
+    const result = route({
+      config: order,
+      availability: { "claude-code": { available: false, reason: "quota exhausted" }, codex: { available: true }, opencode: { available: true } },
+    });
+    expect(result.selected?.runtime.id).toBe("codex");
+    expect(result.requested.runtimeId).toBe("claude-code");
+    expect(result.attempts[0]).toMatchObject({ runtimeId: "claude-code", unavailable: true });
+    expect(result.candidates.map((candidate) => candidate.runtime.id)).toEqual(["codex", "opencode"]);
+  });
+
+  it("exhaustion names every attempt and marks each as an availability skip", () => {
+    const result = route({
+      config: order,
+      availability: {
+        "claude-code": { available: false, reason: "quota exhausted" },
+        codex: { available: false, reason: "binary missing" },
+        opencode: { available: false, reason: "auth refused" },
+      },
+    });
+    expect(result.selected).toBeUndefined();
+    expect(result.error).toContain("routing.order is exhausted");
+    for (const fragment of ["claude-code", "quota exhausted", "codex", "binary missing", "opencode", "auth refused"]) {
+      expect(result.error).toContain(fragment);
+    }
+    expect(result.attempts.every((attempt) => attempt.unavailable)).toBe(true);
+  });
+
+  // A cast tier is a quality contract, not a model string: every entry resolves
+  // its own camp's cell, so a hop lands on the camp reached, never the head's model.
+  it("resolves the cast tier against each entry's own camp", () => {
+    const result = route({
+      config: { schema_version: 1, routing: { order: ["claude-code", "codex", "opencode"], allow_below_supported: ["codex", "opencode"] } },
+      tier: { id: "T4", table: tierTable },
+    });
+    expect(result.candidates.map((candidate) => [candidate.runtime.id, candidate.model, candidate.effort])).toEqual([
+      ["claude-code", "sonnet", "high"],
+      ["codex", "terra", "high"],
+      ["opencode", "glm-4.7", "thinking"],
+    ]);
+  });
+
+  it("a deduped order still walks, and an unregistered entry is skipped with a reason", () => {
+    const result = route({
+      config: { schema_version: 1, routing: { order: ["ghost-runtime", "claude-code", "claude-code"], allow_below_supported: [] } },
+    });
+    expect(result.attempts.map((attempt) => attempt.runtimeId)).toEqual(["ghost-runtime", "claude-code"]);
+    expect(result.attempts[0]?.skipReason).toContain("is not registered");
+    expect(result.selected?.runtime.id).toBe("claude-code");
   });
 });
 

@@ -18,11 +18,13 @@ import type { ModelTierId, ModelTiers } from "./modelTiers.js";
  * flags (level 1), an optional per-role `routing.by_role` entry (level 2), and
  * the named default runtime plus the role's frontmatter `model:` (level 4). The
  * level numbers are the historical ones so `routing_basis` in existing run logs
- * keeps its meaning; levels 3 and 5 are gone along with execution modes, the
- * handoff candidate chain and the legacy `model_routing` spelling.
+ * keeps its meaning; level 5 is gone along with the previous-failure walk and
+ * the legacy `model_routing` spelling.
  *
- * A route resolves at most ONE candidate. When that candidate may not execute,
- * the route fails closed with the reason — it never substitutes another runtime.
+ * Levels 1 and 2 resolve exactly ONE candidate and fail closed with the reason —
+ * they never substitute another runtime. Level 4 resolves the operator's
+ * `routing.order` as an ordered list; an entry the caller reports `UNAVAILABLE`
+ * hands over to the next one. Nothing else moves a stage between runtimes.
  */
 export type RoutingPrecedenceLevel = 1 | 2 | 4;
 
@@ -46,6 +48,8 @@ export interface RuntimeRouteAttempt {
   readonly reason: string;
   /** Evidence for a deterministic skip. Such an entry must never execute. */
   readonly skipReason?: string;
+  /** True when the skip was an availability probe, so a caller can escalate as infrastructure rather than as a task failure. */
+  readonly unavailable?: true;
 }
 
 export interface RequestedRuntimeRoute {
@@ -59,6 +63,7 @@ export interface RequestedRuntimeRoute {
 export interface RuntimeRoute {
   /** The decision record. Unlike `candidates`, this retains a deterministic skip as evidence. */
   readonly attempts: readonly RuntimeRouteAttempt[];
+  /** Eligible candidates in the operator's order. `[0]` is `selected`; the rest are reachable only by an `UNAVAILABLE` hop. */
   readonly candidates: readonly RuntimeRouteCandidate[];
   readonly selected?: RuntimeRouteCandidate;
   /** Compatibility projection of `selected`; new callers should consume the candidate. */
@@ -172,6 +177,24 @@ function byRoleRoute(
   };
 }
 
+/**
+ * Precedence level 4's candidate order. Absent (or a single entry) means the one
+ * automatic candidate, and every downstream fail-closed path behaves as it did
+ * before the key was read at all.
+ */
+function orderedRuntimeIds(config: StaConfig | null, diagnostics: string[]): string[] | undefined {
+  const order = config?.routing?.order;
+  if (!order || order.length === 0) return undefined;
+  const deduped = [...new Set(order)];
+  const runner = config?.execution?.runner;
+  if (runner !== undefined && deduped[0] !== runner) {
+    diagnostics.push(
+      `routing.order starts at "${deduped[0]}" while execution.runner names "${runner}" — the order wins at precedence level 4`,
+    );
+  }
+  return deduped;
+}
+
 function unresolved(
   requested: RequestedRuntimeRoute,
   precedenceLevel: RoutingPrecedenceLevel,
@@ -198,48 +221,59 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
   const byRole = byRoleRoute(config, opts.role, defaultRuntimeId, frontmatterModel);
 
   let precedenceLevel: RoutingPrecedenceLevel;
-  let spec: CandidateSpec;
+  let specs: CandidateSpec[];
   if (flagPresent) {
     precedenceLevel = 1;
     const runtimeId = opts.flags?.runtime ?? config?.execution?.runner ?? defaultRuntimeId;
-    spec = {
+    specs = [{
       runtimeId,
       model: opts.flags?.model ?? frontmatterModel,
       modelExplicit: opts.flags?.model !== undefined,
       reason: `explicit CLI flag selected runtime "${runtimeId}"${opts.flags?.model ? ` and model "${opts.flags.model}"` : ""}`,
-    };
+    }];
   } else if (byRole) {
     precedenceLevel = 2;
-    spec = byRole;
+    specs = [byRole];
   } else {
     precedenceLevel = 4;
-    const runtimeId = config?.execution?.runner ?? defaultRuntimeId;
+    const ordered = orderedRuntimeIds(config, diagnostics);
+    const runtimeIds = ordered ?? [config?.execution?.runner ?? defaultRuntimeId];
     // `modelExplicit: false` is stated, not omitted: a frontmatter default is a
     // reported non-override, and adapters read the field.
-    spec = { runtimeId, model: frontmatterModel, modelExplicit: false, reason: automaticReason(opts, runtimeId) };
+    specs = runtimeIds.map((runtimeId, index) => ({
+      runtimeId,
+      model: frontmatterModel,
+      modelExplicit: false,
+      reason: index === 0
+        ? automaticReason(opts, runtimeId)
+        : `routing.order position ${index + 1} selected runtime "${runtimeId}" as a fallback`,
+    }));
   }
 
   // Tier resolution is a source for model/effort, never a further precedence
-  // level. A direct model override retains its existing explicit priority.
-  if (opts.tier && !spec.modelExplicit) {
+  // level. A direct model override retains its existing explicit priority. Each
+  // entry resolves against its own runtime, so a hop lands on the camp's cell
+  // rather than carrying the head's model into another vendor.
+  specs = specs.map((spec) => {
+    if (!opts.tier || spec.modelExplicit) return spec;
     const binding = resolveTierBinding(opts.tier.table, opts.tier.id, spec.runtimeId);
-    if (binding !== null) {
-      spec = {
-        ...spec,
-        model: binding.model,
-        effort: binding.effort,
-        modelExplicit: true,
-        reason: `${spec.reason}; phase tier ${opts.tier.id} resolved for ${spec.runtimeId}`,
-      };
-    }
-  }
+    if (binding === null) return spec;
+    return {
+      ...spec,
+      model: binding.model,
+      effort: binding.effort,
+      modelExplicit: true,
+      reason: `${spec.reason}; phase tier ${opts.tier.id} resolved for ${spec.runtimeId}`,
+    };
+  });
 
+  const head = specs[0]!;
   const requested: RequestedRuntimeRoute = {
-    runtimeId: spec.runtimeId,
-    model: spec.model,
-    modelExplicit: spec.modelExplicit,
-    effort: spec.effort,
-    reason: spec.reason,
+    runtimeId: head.runtimeId,
+    model: head.model,
+    modelExplicit: head.modelExplicit,
+    effort: head.effort,
+    reason: head.reason,
   };
 
   if (opts.registry.ids().length === 0) {
@@ -249,17 +283,24 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
   const attempts: RuntimeRouteAttempt[] = [];
   const supportOptIns = new Set(config?.routing?.allow_below_supported ?? []);
   const required = requiredCapabilitiesFor(opts.stage, opts.hasTargetWrite ?? false);
-  const runtime = opts.registry.tryGet(spec.runtimeId);
-  const base = { model: spec.model, modelExplicit: spec.modelExplicit, effort: spec.effort, reason: spec.reason };
-  if (!runtime) {
-    const skipReason = `runtime "${spec.runtimeId}" is not registered`;
-    diagnostics.push(skipReason);
-    attempts.push({ runtimeId: spec.runtimeId, ...base, skipReason });
-  } else {
-    const probe = opts.availability?.[runtime.id];
-    if (probe?.available === false) {
-      diagnostics.push(`runtime "${runtime.id}" is unavailable: ${probe.reason ?? "no unavailability reason was reported"}`);
+  // With nowhere to walk to, a probe-unavailable candidate stays selected so the
+  // executor still classifies it `UNAVAILABLE` and escalates with the probe's
+  // own reason. Skipping it here would downgrade that to a plain route error.
+  const walkable = specs.length > 1;
+  for (const spec of specs) {
+    const runtime = opts.registry.tryGet(spec.runtimeId);
+    const base = { model: spec.model, modelExplicit: spec.modelExplicit, effort: spec.effort, reason: spec.reason };
+    if (!runtime) {
+      const skipReason = `runtime "${spec.runtimeId}" is not registered`;
+      diagnostics.push(skipReason);
+      attempts.push({ runtimeId: spec.runtimeId, ...base, skipReason });
+      continue;
     }
+    const probe = opts.availability?.[runtime.id];
+    const unavailable = probe?.available === false
+      ? `runtime "${runtime.id}" is unavailable: ${probe.reason ?? "no unavailability reason was reported"}`
+      : undefined;
+    if (unavailable) diagnostics.push(unavailable);
     const level = supportLevel(runtime.id);
     const declaredOrVerified = opts.verifiedCapabilities?.[runtime.id] ?? runtime.capabilities;
     const unmet = required.filter((capability) => !declaredOrVerified.has(capability));
@@ -269,7 +310,9 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     }
     // Only the automatic default is gated on support level; a runtime the
     // operator named explicitly is their call.
-    if (precedenceLevel === 4 && level !== "supported" && !supportOptIns.has(runtime.id)) {
+    if (walkable && unavailable) {
+      attempts.push({ runtimeId: runtime.id, runtime, ...base, skipReason: unavailable, unavailable: true });
+    } else if (precedenceLevel === 4 && level !== "supported" && !supportOptIns.has(runtime.id)) {
       const skipReason = `runtime "${runtime.id}" support level "${level}" is below "supported"; automatic routing requires routing.allow_below_supported to name this runtime`;
       diagnostics.push(skipReason);
       attempts.push({ runtimeId: runtime.id, runtime, ...base, skipReason });
@@ -297,23 +340,30 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     }
   }
 
-  const selected = capable.find((candidate) => candidate.runtime.id === spec.runtimeId);
+  const selected = capable[0];
   if (!selected) {
-    const probe = opts.availability?.[spec.runtimeId];
-    const level = supportLevel(spec.runtimeId);
+    const probe = opts.availability?.[head.runtimeId];
+    const level = supportLevel(head.runtimeId);
+    const runtime = opts.registry.tryGet(head.runtimeId);
     let error: string;
-    if (probe?.available === false) {
-      error = `runtime "${spec.runtimeId}" is unavailable: ${probe.reason ?? "no unavailability reason was reported"}`;
-    } else if (precedenceLevel === 4 && level !== "supported" && !supportOptIns.has(spec.runtimeId)) {
-      error = `refusing to auto-route to runtime "${spec.runtimeId}" at support level "${level}" without per-runtime opt-in`;
+    if (walkable) {
+      // Exhaustion is a stop, not a loop: every entry is named with why it was
+      // refused, so the operator does not have to re-derive the walk.
+      error = `routing.order is exhausted — no configured runtime could be used: ${
+        attempts.map((attempt) => `${attempt.runtimeId} (${attempt.skipReason ?? "no reason recorded"})`).join("; ")
+      }`;
+    } else if (probe?.available === false) {
+      error = `runtime "${head.runtimeId}" is unavailable: ${probe.reason ?? "no unavailability reason was reported"}`;
+    } else if (precedenceLevel === 4 && level !== "supported" && !supportOptIns.has(head.runtimeId)) {
+      error = `refusing to auto-route to runtime "${head.runtimeId}" at support level "${level}" without per-runtime opt-in`;
     } else if (opts.hasTargetWrite) {
       const declaredOrVerified = runtime
         ? (opts.verifiedCapabilities?.[runtime.id] ?? runtime.capabilities)
         : new Set<RuntimeCapability>();
       const unmet = required.filter((capability) => !declaredOrVerified.has(capability));
-      error = `runtime "${spec.runtimeId}" cannot enforce a pre-tool workspace guard for Target write access; refusing route with missing required capability: ${unmet.join(", ") || "unknown"}`;
+      error = `runtime "${head.runtimeId}" cannot enforce a pre-tool workspace guard for Target write access; refusing route with missing required capability: ${unmet.join(", ") || "unknown"}`;
     } else {
-      error = `no eligible candidate remains for requested runtime "${spec.runtimeId}"`;
+      error = `no eligible candidate remains for requested runtime "${head.runtimeId}"`;
     }
     return unresolved(requested, precedenceLevel, diagnostics, error, capable, attempts);
   }

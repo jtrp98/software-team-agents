@@ -173,7 +173,7 @@ Same verdict, three places: this table, `sta runtimes` (reads `RUNTIME_SUPPORT` 
 
 ### Runtime routing (V5 — one route)
 
-มีทางเลือก runtime/model ทางเดียว: `sta run` resolve **candidate เดียว**เสมอ. interactive `software-team-agents dev|ba --runtime <claude|codex|opencode>` ยังเป็น direct user choice และไม่ใช้ router.
+มีทางเลือก runtime/model ทางเดียว: `sta run` resolve **candidate เดียว** ยกเว้นเมื่อ operator ประกาศ `routing.order` ซึ่งทำงานที่ `level-4` เท่านั้น (ดูด้านล่าง). interactive `software-team-agents dev|ba --runtime <claude|codex|opencode>` ยังเป็น direct user choice และไม่ใช้ router.
 
 | ลำดับ | ที่มาของ route | precedence ใน run log |
 |---|---|---|
@@ -185,7 +185,9 @@ candidate ต้อง registered, available, และมี capability ที�
 
 ถ้า route นั้นรันไม่ได้ — unavailable, ต่ำกว่า supported โดยไม่ opt in, ขาด guard capability, หรือ runner คืน `UNAVAILABLE`/`ERROR`/`TIMEOUT` — pipeline **STOP → Human** พร้อมเหตุผล และ **ไม่ย้ายไป runner อื่น** (`fallback_count` เป็น 0 เสมอ). ไม่มีการเลือก provider เงียบ ๆ.
 
-config เก่ายังโหลดได้: `execution.mode`, `execution.allow_handoff`, `execution.allow_paid_fallback`, `routing.strategy`, `routing.order` และ `model_routing` ไม่ทำให้ config invalid แต่ไม่มีผลอะไรแล้ว — `software-team-agents status` รายงานเป็น `ignored keys: ...`. `sta run --mode ...` error พร้อมบอกคำสั่งแทนที่ (ไม่หายเงียบ) ตลอด release นี้.
+**ข้อยกเว้นเดียว — `routing.order` (ลำดับ 3 เท่านั้น).** ถ้า `.sta/config.yaml` ประกาศ `routing.order: [id, id, …]` ลำดับนั้นคือ candidate walk ของ `level-4`: entry แรกคือ main. runtime ที่ **`UNAVAILABLE`** (binary หาย, auth ปฏิเสธ, quota หมด) จะ hop ไป entry ถัดไป — **`ERROR` และ `TIMEOUT` ไม่ hop เด็ดขาด** เพราะเป็น task failure ไม่ใช่ outage. ทุก hop เขียน `fallback_reason` และ +1 ที่ `fallback_count`; หมดทุก entry แล้ว task **หยุด** พร้อมเหตุผลที่ระบุทุก attempt ไม่วนซ้ำ. `Tier` ที่ cast ไว้ resolve กับ camp ที่ไปถึงจริง ไม่ใช่ camp ที่วางแผนไว้. `--runtime`/`--model` (ลำดับ 1) และ `routing.by_role` (ลำดับ 2) ยังชนะขาด — ordering ไม่ถูกอ่านเลย. `routing.fallback_on` รับค่า `unavailable` ค่าเดียว; `error` ถูก **ปฏิเสธตอน load config** ไม่ใช่ ignore เงียบ. camp switch ที่เกิดกลาง phase `🔒 Security gate` ทำให้ QA/security pass เดิมของ phase นั้นเป็นโมฆะ และถูกเขียนลงทั้ง run log และ `review.md` (`ADR-025` #4).
+
+config เก่ายังโหลดได้: `execution.mode`, `execution.allow_handoff`, `execution.allow_paid_fallback`, `routing.strategy` และ `model_routing` ไม่ทำให้ config invalid แต่ไม่มีผลอะไรแล้ว — `software-team-agents status` รายงานเป็น `ignored keys: ...`. `sta run --mode ...` error พร้อมบอกคำสั่งแทนที่ (ไม่หายเงียบ) ตลอด release นี้.
 
 V5 flags ที่ `sta run` รับจริง:
 
@@ -621,14 +623,16 @@ Regenerate mirror ใน Framework repo เอง: `npm --prefix orchestrator ru
 
 Environment variables ที่ runtime ใช้: `AGENTCLAUDE_ROLE` (role ปัจจุบันสำหรับ path permissions), `AGENTCLAUDE_WRITABLE_WORK_ROOTS` (JSON array — interactive `dev|ba` ตั้ง `[]`; orchestrated Target-write stage ได้เฉพาะ canonical roots จาก three-repo preflight), และ `AGENTCLAUDE_KNOWLEDGE_ROOT` (read-only Knowledge context เมื่อ resolve ได้)
 
-Config ทั้งหมดเป็น optional; config ที่มีเพียง `schema_version: 1` ยัง parse และ resolve เป็น default runner (`claude-code`) + frontmatter model. ตัวอย่างที่ตั้ง per-role route และ support opt-in (หมายเหตุ: `execution.mode`/`allow_handoff`/`routing.strategy`/`routing.order`/`model_routing` โหลดได้แต่ไม่มีผล จึงไม่อยู่ในตัวอย่างนี้):
+Config ทั้งหมดเป็น optional; config ที่มีเพียง `schema_version: 1` ยัง parse และ resolve เป็น default runner (`claude-code`) + frontmatter model — และ config ที่ไม่มี `routing.order` ทำงานเหมือนเดิมทุกประการ. ตัวอย่างที่ตั้ง per-role route, support opt-in และ fallback order (หมายเหตุ: `execution.mode`/`allow_handoff`/`routing.strategy`/`model_routing` โหลดได้แต่ไม่มีผล จึงไม่อยู่ในตัวอย่างนี้):
 
 ```yaml
 schema_version: 1
 execution:
   runner: claude-code
 routing:
-  allow_below_supported: [codex, opencode]
+  order: [claude-code, codex, opencode]   # main → รอง → … ใช้ที่ level-4 เท่านั้น
+  fallback_on: unavailable                # ค่าเดียวที่รับ; "error" ถูกปฏิเสธตอน load
+  allow_below_supported: [codex, opencode]   # ทุก entry ใน order ที่ต่ำกว่า supported ต้องอยู่ที่นี่ ไม่งั้นถูกข้าม
   by_role:
     backend-engineer:
       runtime: codex

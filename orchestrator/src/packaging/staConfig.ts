@@ -66,7 +66,7 @@ export function effectiveExecutionConfig(config?: ExecutionConfig): EffectiveExe
 
 /** Keys a config may still carry that no code path reads. */
 export const INERT_EXECUTION_KEYS = ["mode", "allow_handoff", "allow_paid_fallback"] as const;
-export const INERT_ROUTING_KEYS = ["strategy", "order"] as const;
+export const INERT_ROUTING_KEYS = ["strategy"] as const;
 
 /** The inert keys a given config actually declares, for reporting. */
 export function inertConfigKeys(config: StaConfig | undefined, execution: ExecutionConfig | undefined): string[] {
@@ -103,14 +103,18 @@ export const StaConfigSchema = z.object({
    * spelling as well as a structured target; the latter avoids parsing when
    * both fields are configured explicitly.
    *
-   * `strategy` and `order` are ignored: the candidate-ordering
-   * policy they drove is removed along with the handoff chain, so there is no
-   * list to order. They stay declared for load compatibility only.
+   * `strategy` is ignored and stays declared for load compatibility only.
+   * `order` is the operator's precedence-level-4 walk; `fallback_on` is
+   * typed as a literal so `error` is refused at load rather than accepted and
+   * then quietly disobeyed.
    */
   routing: z
     .object({
       strategy: z.literal("subscription-first").optional(),
       order: z.array(z.string().min(1)).min(1).optional(),
+      fallback_on: z.literal("unavailable", {
+        message: 'accepts only "unavailable" — an ERROR is a task failure and never moves a stage to another runtime (ADR-025 #3)',
+      }).optional(),
       by_role: z
         .record(
           z.string().min(1),
