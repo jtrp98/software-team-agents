@@ -442,15 +442,22 @@ export function codexCoverage(): GuardCoverage {
 }
 
 /**
- * Antigravity ships a guard binding whose dispatch has never been observed.
+ * Antigravity's guard mechanism is real, and the binding this framework ships
+ * is nonetheless inert. Both halves are observed, and the gap between them is
+ * the whole verdict.
  *
- * `.agents/hooks.json` + `.agents/hooks/sta-guard.js` are generated into every
- * antigravity workspace and the wrapper fails closed by construction — but no
- * spike could make AGY's `PreToolUse` fire in headless mode under any of five
- * configurations, so nothing here is *verified* enforcement. The one
- * honest verdict is `unguarded`: a present file is not a mechanism, and calling
- * this `partial` would let a launch preflight pass on a claim no run has ever
- * demonstrated. This rises when the deny path is observed, not before.
+ * On a real agy 1.1.27 install the `PreToolUse` deny path works exactly as its
+ * contract says: a hook returning `{"decision":"deny"}` blocks the tool step,
+ * and a hook that cannot even load blocks it too — fail-closed, confirmed. But
+ * that only happens when the hooks file sits in the machine-global
+ * customization root (`~/.gemini/config/hooks.json`). The workspace-level
+ * `.agents/hooks.json` this framework generates was never once consulted, in
+ * seven configurations across two versions.
+ *
+ * So the verdict stays `unguarded`, and the reason is not "unproven" any more:
+ * the file a workspace carries enforces nothing, and enforcement currently
+ * requires a per-machine install this framework does not perform. `partial`
+ * would let a launch preflight pass on a guard that is demonstrably not running.
  */
 export function antigravityCoverageWithHooks(): GuardCoverage {
   return {
@@ -459,8 +466,8 @@ export function antigravityCoverageWithHooks(): GuardCoverage {
     enforced: [],
     unenforced: ALL_GUARD_CAPABILITIES,
     detail:
-      `${AGY_HOOKS_PATH} and ${AGY_GUARD_WRAPPER_PATH} are generated and fail closed by construction, but no \`agy\` hook dispatch has ever been observed in headless mode — ` +
-      "so block-git, block-outside-repo, block-path-permissions, block-doc-rewrite, block-secret-leak and require-green-before-stop are all treated as inactive until a real run demonstrates otherwise",
+      `${AGY_HOOKS_PATH} and ${AGY_GUARD_WRAPPER_PATH} are generated, but agy reads PreToolUse hooks only from the machine-global ~/.gemini/config/hooks.json — the workspace file is never consulted, verified on 1.1.27 — ` +
+      "so block-git, block-outside-repo, block-path-permissions, block-doc-rewrite, block-secret-leak and require-green-before-stop are all inactive in a workspace, however complete the binding looks",
   };
 }
 
@@ -472,7 +479,7 @@ function antigravityCoverage(targetRoot: string): GuardCoverage {
   if (present) return withHooks;
   return {
     ...withHooks,
-    detail: `no ${AGY_HOOKS_PATH} / ${AGY_GUARD_WRAPPER_PATH} in this workspace — run software-team-agents sync; note that even once present, this runtime's hook dispatch remains unobserved`,
+    detail: `no ${AGY_HOOKS_PATH} / ${AGY_GUARD_WRAPPER_PATH} in this workspace — run software-team-agents sync; note that syncing them changes nothing until agy reads a workspace hooks file at all`,
   };
 }
 

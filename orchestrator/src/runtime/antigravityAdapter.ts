@@ -24,14 +24,16 @@ import type {
  * documentation.
  *
  * WHAT IS DELIBERATELY NOT CLAIMED
- * - `PRE_TOOL_GUARD` / `POST_TOOL_GUARD` / `PROJECT_LEVEL_BINDING` — the spike
- *   could not make `.agents/hooks.json` fire in headless mode under any of five
- *   configurations (§8), so no guard capability is declared and Target-write
- *   stages are refused by `runtimeExecutor` before this adapter is reached.
- *   `guardConfigPath` stays `null` for the same reason: a workspace does ship a
- *   rendered `.agents/hooks.json`, but a rendered file whose dispatch has never
- *   been observed is not a mechanism. When the deny path is demonstrated,
- *   `guardConfigPath` and the capability set move together.
+ * - `PRE_TOOL_GUARD` / `POST_TOOL_GUARD` — the deny path itself is real and
+ *   verified on 1.1.27 (§13), but agy reads hooks only from the machine-global
+ *   `~/.gemini/config/hooks.json`; the `.agents/hooks.json` a workspace carries
+ *   was never consulted in seven configurations across two versions. A guard
+ *   that only exists if someone installed it on this particular machine is not
+ *   a capability this runtime has, so none is declared and `runtimeExecutor`
+ *   keeps refusing Target-write stages.
+ * - `PROJECT_LEVEL_BINDING` — actively disproven, not merely unobserved (§13).
+ *   `guardConfigPath` stays `null` for the same reason: a rendered file that the
+ *   runtime never reads is not a mechanism.
  * - `EXIT_GUARD` / `PER_AGENT_EXIT_GUARD` — no `Stop` hook was exercised, and
  *   AGY documents one `Stop` event with no subagent counterpart regardless.
  * - `NAMED_AGENTS` — `agy agents` stayed `[]` under both project-scoped
@@ -282,7 +284,7 @@ function guardReportFor(requested: RuntimeGuards): RuntimeGuardReport {
     enforced: [],
     unenforced,
     reason:
-      "no `agy` hook dispatch has been observed in headless mode — .agents/hooks.json did not fire under any tested configuration, so writes, git and exit checks are covered post-hoc by the orchestrator and the QA round, never by this runtime",
+      "agy reads PreToolUse hooks only from the machine-global ~/.gemini/config/hooks.json; the workspace's own .agents/hooks.json is never consulted, so writes, git and exit checks are covered post-hoc by the orchestrator and the QA round, never by this runtime",
   };
 }
 

@@ -309,12 +309,14 @@ describe("T-V5-008 — guard coverage is a launch requirement", () => {
 });
 
 describe("T-V6-012 — Antigravity guard coverage tells the truth about an unobserved mechanism", () => {
-  it("reports unguarded even with both guard files present, because dispatch was never observed", () => {
+  it("reports unguarded even with both guard files present, because agy never reads the workspace file", () => {
     const coverage = antigravityCoverageWithHooks();
     expect(coverage.level).toBe("unguarded");
     expect(coverage.enforced).toEqual([]);
     expect(guardCoverageIsPositive(coverage)).toBe(false);
-    expect(coverage.detail).toMatch(/no `agy` hook dispatch has ever been observed/);
+    // The deny path itself is real; the verdict is about which file agy reads.
+    expect(coverage.detail).toMatch(/only from the machine-global ~\/\.gemini\/config\/hooks\.json/);
+    expect(coverage.detail).toMatch(/never consulted/);
   });
 
   it("distinguishes a workspace missing the payload from one that has it, without upgrading either", () => {

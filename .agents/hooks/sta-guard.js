@@ -30,16 +30,23 @@
  * and a path guard that tried to parse shell would deny far more than it understands.
  * Doc-rewrite, secret-leak and exit checks have no AGY mechanism either.
  *
- * THE TRAP A READER WOULD NOT SEE
+ * THIS FILE IS CURRENTLY INERT, AND ITS PARSER IS KNOWN WRONG
  *
- * No transcript of AGY's PreToolUse stdin payload exists — the spike could not make
- * the hook fire at all (planning/v6/v6-agy-spike-evidence.md §8), so the field names
- * below are read from the observable stream-json tool step (`tool_name`,
- * `tool_info.parameters`) plus generic fallbacks, not from a captured hook input.
- * If the real payload names its fields differently, this wrapper denies everything
- * rather than allowing anything — the failure direction is deliberate, but it means
- * a first real run that denies every write is a shape mismatch to diagnose, not
- * necessarily a rule doing its job.
+ * Two facts were captured against a real agy 1.1.27 install
+ * (planning/v6/v6-agy-spike-evidence.md §13) after this wrapper was written:
+ *
+ *   1. agy reads PreToolUse hooks only from the machine-global
+ *      `~/.gemini/config/hooks.json`. The workspace `.agents/hooks.json` that
+ *      names this file is never consulted, so nothing here runs today.
+ *   2. The real payload is `{"toolCall": {"name": ..., "args": {...}}}` in
+ *      camelCase, the hook's cwd is the directory holding hooks.json (not the
+ *      workspace), and `workspacePaths` comes back empty. The extraction below
+ *      matches none of that — it would deny every call rather than allow a
+ *      legitimate write.
+ *
+ * Both are tracked as their own tasks. Until they land, treat this file as a
+ * shipped skeleton, not as enforcement: the fail-closed direction below is the
+ * only thing about it that is currently true.
  */
 
 'use strict';

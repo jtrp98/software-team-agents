@@ -63,8 +63,9 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
   antigravity: {
     level: "experimental",
     claim:
-      `spike-proven on agy 1.1.24/Windows 11 for headless \`-p\` runs only (probe, JSON envelope, --model refusal, --effort validation, resume, print-timeout); ` +
-      `no named-agent store, no cost figure in the envelope, and no hook dispatch could be observed at all, so Target-write stages are refused rather than run unguarded. ` +
+      `verified end to end on a real agy 1.1.27/Windows 11 install: probe, headless \`-p\`, JSON envelope, token usage, and one full adapter round-trip returning OK with real usage. ` +
+      `No named-agent store and no cost figure in the envelope, so roles are folded into the prompt and cost is never reported. ` +
+      `The PreToolUse deny path is confirmed real (deny blocks; a hook that cannot load also blocks) but fires only from the machine-global hooks file, so the workspace binding enforces nothing and Target-write stages stay refused rather than run unguarded. ` +
       `Guard coverage (once synced): ${antigravityCoverageWithHooks().detail}`,
   },
 };
