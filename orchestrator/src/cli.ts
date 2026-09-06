@@ -1498,6 +1498,12 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
             }),
           }))),
           requiredVerification: () => orchestrator.runtimeTask?.required_verification,
+          projectRoot: args.projectRoot,
+          changedFiles: async () => {
+            const roots = resolveWritableWorkRoots(args.projectRoot, taskId, store);
+            const results = await Promise.allSettled(roots.map((root) => gitChangedFiles(root)));
+            return [...new Set(results.flatMap((r) => (r.status === "fulfilled" ? r.value : [])))];
+          }
         });
     const postDevExecutor = verificationHook?.executor ?? withPostDevVerificationDisabled(runtimeExecutor);
 

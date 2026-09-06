@@ -176,3 +176,49 @@ task_types:
     expect(() => assertTestPyramid(root)).toThrow(TestPyramidMismatchError);
   });
 });
+
+import { refineVerificationFromScope } from "./testPyramid.js";
+import { buildQaScope } from "../qa/scope.js";
+
+describe("refineVerificationFromScope", () => {
+  const FULL_LEVELS: any[] = ["lint", "typecheck", "unit", "integration", "build"];
+
+  it("keeps full order if pyramid is unavailable", () => {
+    const sel = { levels: FULL_LEVELS, enforcement: "warn" as const, source: "full-order" as const, reason: "unavailable" };
+    const scope = buildQaScope({ taskId: "T1", changedFiles: ["api/orders.ts"] });
+    const refined = refineVerificationFromScope(sel, scope, null);
+    expect(refined.source).toBe("full-order");
+    expect(refined.levels).toEqual(FULL_LEVELS);
+    expect(refined.reason).toContain("unavailable");
+  });
+
+  it("keeps full order if scope is unbounded", () => {
+    const sel = { levels: FULL_LEVELS, enforcement: "warn" as const, source: "full-order" as const, reason: "task type missing" };
+    const scope = buildQaScope({ taskId: "T1", changedFiles: ["api/orders.ts"], maxFiles: 0 });
+    const pyramid = loadTestPyramid(fixtureRoot(VALID_YAML));
+    const refined = refineVerificationFromScope(sel, scope, pyramid);
+    expect(refined.source).toBe("full-order");
+    expect(refined.levels).toEqual(FULL_LEVELS);
+    expect(refined.reason).toContain("unbounded");
+  });
+
+  it("keeps full order if scope maps to unknown task types", () => {
+    const sel = { levels: FULL_LEVELS, enforcement: "warn" as const, source: "full-order" as const, reason: "task type missing" };
+    const scope = buildQaScope({ taskId: "T1", changedFiles: ["unknown/file.txt"] });
+    const pyramid = loadTestPyramid(fixtureRoot(VALID_YAML));
+    const refined = refineVerificationFromScope(sel, scope, pyramid);
+    expect(refined.source).toBe("full-order");
+    expect(refined.levels).toEqual(FULL_LEVELS);
+    expect(refined.reason).toContain("unknown task type");
+  });
+
+  it("narrows verification based on changed files (bounded narrowing)", () => {
+    const sel = { levels: FULL_LEVELS, enforcement: "warn" as const, source: "full-order" as const, reason: "task type missing" };
+    const scope = buildQaScope({ taskId: "T1", changedFiles: ["api/orders.ts"] });
+    const pyramid = loadTestPyramid(fixtureRoot(VALID_YAML));
+    const refined = refineVerificationFromScope(sel, scope, pyramid);
+    expect(refined.source).toBe("test-pyramid");
+    expect(refined.levels).toEqual(["lint", "typecheck", "unit", "api", "build"]);
+    expect(refined.reason).toContain("narrowed from change scope [api-endpoint]");
+  });
+});

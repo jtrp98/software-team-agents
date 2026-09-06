@@ -213,3 +213,105 @@ export function assertTestPyramid(projectRoot: string = defaultProjectRoot()): v
   const result = checkTestPyramid(projectRoot);
   if (!result.ok) throw new TestPyramidMismatchError(result.problems);
 }
+
+// Ensure QaScope is imported if not already. We will use a local interface to avoid circular deps if any, or just import it.
+import type { QaScope } from "../qa/scope.js";
+
+/** Map QaScope to test-pyramid.yaml task types based on file paths. */
+export function taskTypesFromScope(scope: QaScope): string[] {
+  if (!scope.bounded) return [];
+  const types = new Set<string>();
+  
+  const allFiles = [...scope.changedFiles, ...scope.impactedFiles];
+  for (const f of allFiles) {
+    const file = f.toLowerCase();
+    if (file.includes("prisma/") || file.includes("migrations/") || file.endsWith(".prisma")) {
+      types.add("data-model-change");
+    }
+    if (file.includes("api/") || file.includes("routes/") || file.endsWith("controller.ts") || file.endsWith(".route.ts")) {
+      types.add("api-endpoint");
+    }
+    if (file.endsWith(".tsx") || file.endsWith(".jsx") || file.endsWith(".vue") || file.endsWith(".svelte") || file.includes("components/") || file.includes("pages/") || file.includes("ui/")) {
+      types.add("ui-component");
+    }
+    if (file.includes("auth/") || file.includes("session")) {
+      types.add("auth-flow");
+    }
+  }
+  
+  return [...types];
+}
+
+/**
+ * Refines the build-time verification selection using the post-dev change scope.
+ * Narrowing is permitted as long as it respects the floor.
+ */
+export function refineVerificationFromScope(
+  selection: RuntimeVerificationSelection,
+  scope: QaScope,
+  pyramid: TestPyramid | null
+): RuntimeVerificationSelection {
+  if (!pyramid || selection.reason.includes("test-pyramid policy unavailable")) {
+    return {
+      ...selection,
+      reason: selection.reason + " — keeping full order because test-pyramid is unavailable",
+    };
+  }
+
+  if (!scope.bounded) {
+    return {
+      ...selection,
+      reason: selection.reason + " — change scope is unbounded, keeping full order",
+    };
+  }
+
+  const scopeTypes = taskTypesFromScope(scope);
+  if (scopeTypes.length === 0) {
+    return {
+      ...selection,
+      reason: selection.reason + " — change scope maps to unknown task type, keeping full order",
+    };
+  }
+
+  const requiredFromScope = new Set<TestLevel>();
+  for (const t of scopeTypes) {
+    const reqs = requiredLevelsFor(t, pyramid);
+    if (reqs) {
+      for (const req of reqs) requiredFromScope.add(req);
+    }
+  }
+
+  const floorLevels = new Set<TestLevel>();
+  if (selection.source === "test-pyramid") {
+    // The original selection was a valid task type from the pyramid. It is the floor.
+    for (const lvl of selection.levels) {
+      if (!ALWAYS_ON_VERIFICATION_LEVELS.includes(lvl as RuntimeVerificationLevel)) {
+        floorLevels.add(lvl as TestLevel);
+      }
+    }
+  }
+
+  for (const lvl of requiredFromScope) floorLevels.add(lvl);
+
+  const selected = new Set<RuntimeVerificationLevel>([
+    ...ALWAYS_ON_VERIFICATION_LEVELS,
+    ...floorLevels,
+  ]);
+  
+  const order: readonly RuntimeVerificationLevel[] = [
+    "lint",
+    "typecheck",
+    "unit",
+    "integration",
+    "api",
+    "e2e",
+    "build",
+  ];
+
+  return {
+    levels: order.filter((level) => selected.has(level)),
+    enforcement: selection.enforcement,
+    source: "test-pyramid",
+    reason: `narrowed from change scope [${scopeTypes.join(", ")}]`,
+  };
+}

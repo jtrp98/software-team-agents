@@ -7,6 +7,8 @@ import {
   type DeterministicRunner,
   type DeterministicVerification,
 } from "./deterministic.js";
+import { buildQaScope } from "./scope.js";
+import { loadTestPyramid, refineVerificationFromScope } from "../testing/testPyramid.js";
 
 const CODE_PRODUCING_STAGES = new Set<AgentStage>([
   AgentStage.BACKEND_ENGINEER,
@@ -20,6 +22,8 @@ export interface PostDevVerificationOptions {
   /** A fresh runner per sweep; each ProjectRunner caches only within that sweep. */
   deterministicRunner: (req: AgentExecutorRequest) => DeterministicRunner;
   requiredVerification: (req: AgentExecutorRequest) => RequiredVerification | null | undefined;
+  changedFiles?: (req: AgentExecutorRequest) => Promise<readonly string[]>;
+  projectRoot?: string;
 }
 
 export interface PostDevVerificationHook {
@@ -52,7 +56,40 @@ export function createPostDevVerificationHook(opts: PostDevVerificationOptions):
     const result = await opts.inner(req);
     if (!CODE_PRODUCING_STAGES.has(req.stage) || result.outcome.result === "FAIL") return result;
 
-    const required = opts.requiredVerification(req);
+    let required = opts.requiredVerification(req);
+
+    if (required?.status !== "deferred" && opts.changedFiles && opts.projectRoot && required) {
+      try {
+        const changedFiles = await opts.changedFiles(req);
+        const scope = buildQaScope({ taskId: req.taskId, changedFiles });
+        let pyramid;
+        try {
+          pyramid = loadTestPyramid(opts.projectRoot);
+        } catch {
+          pyramid = null;
+        }
+        
+        const refined = refineVerificationFromScope(
+          { 
+            levels: required.levels as any, 
+            enforcement: required.enforcement ?? "warn", 
+            reason: required.reason, 
+            source: required.status === "selected" ? "test-pyramid" : "full-order" 
+          },
+          scope,
+          pyramid
+        );
+        required = {
+          status: refined.source === "test-pyramid" ? "selected" : "full-order",
+          levels: refined.levels,
+          reason: refined.reason,
+          enforcement: refined.enforcement
+        };
+      } catch {
+        // Fallback silently if anything fails
+      }
+    }
+
     const verification = await runDeterministicVerification(opts.deterministicRunner(req), {
       levels: required?.status === "deferred" ? undefined : required?.levels,
       enforcement: required?.enforcement ?? "warn",
