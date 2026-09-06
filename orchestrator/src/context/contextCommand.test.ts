@@ -77,6 +77,18 @@ describe("sta context command (T-V3TOK-040/041/043)", () => {
     expect(contextCommandJson(result)).toMatchObject({ composition: { doc_chars_before: expect.any(Number), saved_pct: expect.any(Number) } });
   });
 
+  it("names why each unknown design.md section came back unplaceable, not just which (T-V6-001)", async () => {
+    const untagged = "# Design\n\n## Feature-by-Feature Feasibility\nDES-001 REQ-001 yes\n\n## Untagged Contract\nno ids here\n\n## Risks & Dependencies\nnone\n\n## Open Questions\nnone\n";
+    const root = rootWith({ sales: { "requirement.md": REQUIREMENT, "design.md": untagged, "plan.md": PLAN } });
+    const result = await buildContextCommand({ role: "backend-engineer", moduleHint: "sales", phases: [1], projectRoot: root, env: {} });
+    const design = contextCommandJson(result) as { savings_by_document: Array<{ doc: string; kept_as_unknown: string[]; kept_as_unknown_reasons: { heading: string; reason: string }[] }> };
+    const designEntry = design.savings_by_document.find((d) => d.doc === "design")!;
+    expect(designEntry.kept_as_unknown).toContain("Untagged Contract");
+    expect(designEntry.kept_as_unknown_reasons).toEqual(
+      expect.arrayContaining([{ heading: "Untagged Contract", reason: "no-des-id" }]),
+    );
+  });
+
   it("names each fallback document and its structural reason, not just a count (T-V5-035)", async () => {
     const root = rootWith({ sales: { "requirement.md": REQUIREMENT, "design.md": DESIGN, "plan.md": PLAN } });
     const unknown = await buildContextCommand({ role: "backend-engineer", moduleHint: "sales", taskId: "BE-999", projectRoot: root, env: {} });

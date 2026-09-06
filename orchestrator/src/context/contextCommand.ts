@@ -148,6 +148,12 @@ export function renderContextCommand(result: ContextCommandResult): string {
   const body = [...result.context.docs, ...result.context.knowledge, ...result.context.codeIntel].join("\n");
   const c = result.composition;
   const scope = result.phases.length > 0 ? result.phases.join(",") : "full/fail-open";
+  const fallbackUnknownLines = c.fallback_documents.flatMap((f) => {
+    const selected = result.context.selected.find((doc) => doc.doc === f.doc);
+    return (selected?.unknownSectionReasons ?? []).map(
+      (entry) => `    - unknown: "${entry.heading}" — ${entry.reason}`,
+    );
+  });
   const report = [
     "",
     "Context composition:",
@@ -155,6 +161,7 @@ export function renderContextCommand(result: ContextCommandResult): string {
     `- docs=${c.doc_chars} chars rendered; selected=${c.doc_selected_chars}/${c.doc_chars_before} source chars; slicing_saved=${c.saved_pct}%`,
     `- knowledge=${c.knowledge_chars} chars; code_intel=${c.code_intel_chars} chars; direct_file_reads=${c.direct_file_reads}; fallback_to_full=${c.fallback_to_full_documents}`,
     ...c.fallback_documents.map((f) => `  - fallback: ${f.doc} — ${f.reason}`),
+    ...fallbackUnknownLines,
   ].join("\n");
   return `${body}${report}`;
 }
@@ -185,6 +192,7 @@ export function contextCommandJson(result: ContextCommandResult): object {
       kept: doc.kept,
       skipped: doc.skipped,
       kept_as_unknown: doc.unknownSections,
+      kept_as_unknown_reasons: doc.unknownSectionReasons,
     })),
     documents: result.context.docs,
     knowledge: result.context.knowledge,

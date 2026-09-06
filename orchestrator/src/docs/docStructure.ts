@@ -4,6 +4,7 @@ import Ajv, { type ValidateFunction } from "ajv";
 import { fileURLToPath } from "node:url";
 import { sectionMap, sectionText } from "../context/sections.js";
 import { structuralFallbackReason } from "../context/docSelection.js";
+import { extractIds } from "../traceability/traceability.js";
 
 /**
  * A schema per module document type (`requirement.md`, `design.md`, `plan.md`,
@@ -46,6 +47,36 @@ function count(markdown: string, pattern: RegExp): number {
   return [...markdown.matchAll(pattern)].length;
 }
 
+/**
+ * design.md's schema-known `##` headings, keyed by the schema property each one
+ * satisfies. `extractStructure` and `checkDesignContractSections` below both read this
+ * one map (presence vs. exclusion) so they can't name the headings differently; the
+ * assertion right after it fails loudly if this map and the schema's `required` list
+ * ever disagree.
+ */
+const DESIGN_HEADING_PATTERN: Record<string, RegExp> = {
+  hasFeasibilitySummary: /^##\s+Feasibility Summary/im,
+  hasFeatureFeasibility: /^##\s+Feature-by-Feature Feasibility/im,
+  hasDataModel: /^##\s+Data Model/im,
+  hasModules: /^##\s+Modules\s*$/im,
+  hasRisks: /^##\s+Risks/im,
+  hasOpenQuestions: /^##\s+Unresolved Open Questions/im,
+  hasChangeLog: /^##\s+Change Log/im,
+};
+
+{
+  const required = JSON.parse(fs.readFileSync(schemaFile("design"), "utf8")).required as string[];
+  const known = Object.keys(DESIGN_HEADING_PATTERN);
+  const missing = required.filter((key) => !known.includes(key));
+  const extra = known.filter((key) => !required.includes(key));
+  if (missing.length > 0 || extra.length > 0) {
+    throw new Error(
+      `design.schema.json's required list and DESIGN_HEADING_PATTERN have drifted — ` +
+        `schema has no pattern for [${missing.join(", ")}], DESIGN_HEADING_PATTERN has no schema requirement for [${extra.join(", ")}]`,
+    );
+  }
+}
+
 /** The structural summary each doc type's schema validates. Shape differs per type. */
 export function extractStructure(docType: DocType, markdown: string): Record<string, unknown> {
   switch (docType) {
@@ -61,16 +92,11 @@ export function extractStructure(docType: DocType, markdown: string): Record<str
         hasReferences: has(markdown, /^##\s+References/im),
         hasChangeLog: has(markdown, /^##\s+Change Log/im),
       };
-    case "design":
-      return {
-        hasFeasibilitySummary: has(markdown, /^##\s+Feasibility Summary/im),
-        hasFeatureFeasibility: has(markdown, /^##\s+Feature-by-Feature Feasibility/im),
-        hasDataModel: has(markdown, /^##\s+Data Model/im),
-        hasModules: has(markdown, /^##\s+Modules\s*$/im),
-        hasRisks: has(markdown, /^##\s+Risks/im),
-        hasOpenQuestions: has(markdown, /^##\s+Unresolved Open Questions/im),
-        hasChangeLog: has(markdown, /^##\s+Change Log/im),
-      };
+    case "design": {
+      const out: Record<string, unknown> = {};
+      for (const [key, pattern] of Object.entries(DESIGN_HEADING_PATTERN)) out[key] = has(markdown, pattern);
+      return out;
+    }
     case "plan":
       return {
         hasPlanSummary: has(markdown, /^##\s+Plan Summary/im),
@@ -119,6 +145,26 @@ export function checkOneDoc(docType: DocType, markdown: string, label: string): 
   if (validate(structure)) return { ok: true, problems: [] };
   const problems = (validate.errors ?? []).map((e) => `${label}: ${e.instancePath || "(root)"} ${e.message ?? "is invalid"}`);
   return { ok: false, problems };
+}
+
+/**
+ * Every `##` section outside `DESIGN_HEADING_PATTERN`'s schema-known headings must carry
+ * at least one `DES-NNN` somewhere in its text — heading or body, placement is an
+ * editorial choice. A document with no contract sections passes trivially.
+ */
+export function checkDesignContractSections(markdown: string, label: string): DocStructureResult {
+  const problems: string[] = [];
+  for (const section of sectionMap(markdown)) {
+    const headingLine = `## ${section.heading}`;
+    const isSchemaKnown = Object.values(DESIGN_HEADING_PATTERN).some((pattern) => pattern.test(headingLine));
+    if (isSchemaKnown) continue;
+    if (extractIds(sectionText(markdown, section), "DES").length === 0) {
+      problems.push(
+        `${label} § "${section.heading}": no DES-NNN id — contract sections must carry a traceability id (policies/documentation.md §10)`,
+      );
+    }
+  }
+  return { ok: problems.length === 0, problems };
 }
 
 export interface DocStructureCheckResult {
@@ -247,6 +293,12 @@ export function checkDocStructure(projectRoot: string): DocStructureCheckResult 
       if (docType === "requirement" || docType === "design") {
         const reason = structuralFallbackReason(docType, markdown);
         if (reason) notes.push(`${name}/${DOC_FILENAMES[docType]}: would fall back to whole-document context — ${reason}`);
+      }
+      // Report-only: knowledge-ci.yml's structure-check step already runs with
+      // continue-on-error, so a problem here doesn't block CI yet.
+      if (docType === "design") {
+        const contract = checkDesignContractSections(markdown, `${name}/${DOC_FILENAMES[docType]}`);
+        problems.push(...contract.problems);
       }
     }
   }

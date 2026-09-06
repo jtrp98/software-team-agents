@@ -247,7 +247,7 @@ export const USAGE =
   "  sta --check-workspace [--project-root <path>]      check workspace.yaml (if any) against the filesystem\n" +
   "  sta --check-repos [--project-root <path>]          check repos.yaml (if any) against the filesystem\n" +
   "  sta --check-environments [--project-root <path>]   check environments.yaml (if any) against its schema\n" +
-  "  sta --check-doc-structure [--project-root <path>]  check every _docs/module/*/*.md's sections against its schema\n" +
+  "  sta --check-doc-structure [--project-root <path>]  check every _docs/module/*/*.md's sections against its schema, and that every design.md contract section carries a DES-NNN id (report-only until wired into CI)\n" +
   "  sta --check-doc-size [--project-root <path>]       check every _docs/module/*/*.md document and `##` section against its byte ceiling (report-only until wired into CI)\n" +
   "  sta --check-plan [--module <name>] [--project-root <path>]  validate every module's plan.md as a task DAG (deps/cycle/owner/status/DES/waves)\n" +
   "  sta --check-knowledge [--project-root <path>]      check knowledge/*.yaml against its schema and cross-links\n" +

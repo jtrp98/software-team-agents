@@ -9,6 +9,7 @@ import {
   DOC_FILENAME,
   HANDOFF_REFERENCE_MAX_SECTION_RATIO,
   handoffReferencedSections,
+  keepDesignSectionUnknownReason,
   sectionMap,
   selectDocContext,
   type DocKind,
@@ -481,6 +482,50 @@ describe("T-V3TOK-052 slicing safety invariants", () => {
     expect(out.kept).toContain("KPI & Scoring Rules");
     expect(out.text).toContain("CSV ต้องมี header ตรงตาม spec");
     expect(out.unknownSections).toEqual(expect.arrayContaining(["Import Rules", "KPI & Scoring Rules"]));
+  });
+
+  describe("T-V6-001: unknown sections carry a closed-enum reason", () => {
+    it("names both untagged sections' reason as no-des-id, alongside the heading", () => {
+      const out = selectDocContext(req(AgentStage.BACKEND_ENGINEER, "design", [2]), DESIGN);
+      expect(out.unknownSectionReasons).toEqual(
+        expect.arrayContaining([
+          { heading: "Import Rules", reason: "no-des-id" },
+          { heading: "KPI & Scoring Rules", reason: "no-des-id" },
+        ]),
+      );
+    });
+
+    it("keepDesignSectionUnknownReason: no DES-NNN id anywhere in the section", () => {
+      expect(keepDesignSectionUnknownReason("Untagged Rules", "prose with no ids", req(AgentStage.BACKEND_ENGINEER, "design"))).toBe("no-des-id");
+    });
+
+    it("keepDesignSectionUnknownReason: a phase-named heading when this request carries no phase", () => {
+      const request = { stage: AgentStage.BACKEND_ENGINEER, doc: "design" as const, moduleName: "sales-crm" };
+      expect(keepDesignSectionUnknownReason("Phase 3: Reporting", "DES-009 covers this phase", request)).toBe("phase-heading-no-context");
+    });
+
+    it("keepDesignSectionUnknownReason: DES-NNN present but traceability isn't usable for design", () => {
+      const request = {
+        stage: AgentStage.BACKEND_ENGINEER,
+        doc: "design" as const,
+        phases: [2],
+        moduleName: "sales-crm",
+        traceability: { usableForDesign: false, usableForRequirement: false, reason: "no plan.md yet", selectedTaskIds: new Set<string>(), selectedDesignRefs: new Set<string>(), plannedDesignRefs: new Set<string>(), relevantRequirementIds: new Set<string>(), plannedRequirementIds: new Set<string>() },
+      };
+      expect(keepDesignSectionUnknownReason("Contract X", "DES-050 covers it", request)).toBe("traceability-unusable");
+    });
+
+    it("keepDesignSectionUnknownReason: DES-NNN present, traceability usable, but the ids are neither fully selected nor fully planned-only", () => {
+      const request = {
+        stage: AgentStage.BACKEND_ENGINEER,
+        doc: "design" as const,
+        phases: [2],
+        moduleName: "sales-crm",
+        traceability: { usableForDesign: true, usableForRequirement: false, reason: "test", selectedTaskIds: new Set<string>(), selectedDesignRefs: new Set(["DES-001"]), plannedDesignRefs: new Set(["DES-001"]), relevantRequirementIds: new Set<string>(), plannedRequirementIds: new Set<string>() },
+      };
+      // DES-099 is neither selected nor planned at all — mixed with DES-001, which is planned.
+      expect(keepDesignSectionUnknownReason("Contract Y", "DES-001, DES-099", request)).toBe("mixed-traceability");
+    });
   });
 
   it("property 2: every dropped section is named beside the full-file path", () => {

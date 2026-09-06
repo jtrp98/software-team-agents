@@ -1,21 +1,17 @@
 ---
 id: ADR-025
 title: End the V4 freeze for a fourth runtime and operator-level routing order; quota exhaustion falls back on UNAVAILABLE only
-status: proposed
+status: accepted
 date: 2026-09-06
 ---
 
 ## Status
 
-**proposed — 2026-09-06.** Drafted by `T-V6-009` (`planning/v6/V6-TASKS.md`).
+**accepted — 2026-09-06.** Drafted by `T-V6-009` (`planning/v6/V6-TASKS.md`); signed off by the
+owner on the date above.
 
-> **This record is not binding until a person changes `status:` to `accepted` and sets `date:` to the
-> day they did it.** Acceptance is a human act and an agent never forges one
-> (`CLAUDE.md`, hard boundary). The substance below was decided by the owner across the V6 analysis
-> rounds; the sign-off has not been given.
->
-> **`T-V6-011` and `T-V6-014` must not start while this reads `proposed`** — they are the two
-> capabilities `ADR-023` currently forbids.
+> **`T-V6-011` and `T-V6-014` may now start** — this record is the accepted ADR `ADR-023`'s freeze
+> condition 3 required before either capability could begin.
 
 `REQ-17` justification gate: **4 of 5 questions answered.** Q3 (measurable reduction) is again a
 hypothesis with a measurement plan; Q4 (existing evidence) is answered for the defect half and

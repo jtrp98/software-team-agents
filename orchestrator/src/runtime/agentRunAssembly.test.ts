@@ -114,6 +114,7 @@ describe("renderSlicedDocs — fallback attribution (T-V5-035)", () => {
         kept: ["Feature-by-Feature Feasibility"],
         skipped: [],
         unknownSections: [],
+        unknownSectionReasons: [],
         fullDocument: true,
         reason: "more than 40% of design.md sections have unknown relevance (6/13) — parser confidence is insufficient, so the document is passed through whole",
         bytesBefore: 100,

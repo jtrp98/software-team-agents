@@ -36,19 +36,28 @@ export interface SelectedContext {
   kept: string[];
   skipped: string[];
   unknownSections: string[];
+  /** Why each `unknownSections` entry came back unplaceable. Only populated for `design`. */
+  unknownSectionReasons: { heading: string; reason: DesignSectionUnknownReason }[];
   fullDocument: boolean;
   reason: string;
   bytesBefore: number;
   bytesAfter: number;
 }
 
-function whole(doc: DocKind, markdown: string, reason: string, unknownSections: string[] = []): SelectedContext {
+function whole(
+  doc: DocKind,
+  markdown: string,
+  reason: string,
+  unknownSections: string[] = [],
+  unknownSectionReasons: { heading: string; reason: DesignSectionUnknownReason }[] = [],
+): SelectedContext {
   return {
     doc,
     text: markdown,
     kept: sectionMap(markdown).map((s) => s.heading),
     skipped: [],
     unknownSections,
+    unknownSectionReasons,
     fullDocument: true,
     reason,
     bytesBefore: markdown.length,
@@ -100,6 +109,24 @@ export function keepDesignSection(heading: string, text: string, req: ContextReq
     if (refs.every((id) => trace.plannedDesignRefs.has(id))) return "drop";
   }
   return "unknown";
+}
+
+export type DesignSectionUnknownReason =
+  | "phase-heading-no-context"
+  | "no-des-id"
+  | "traceability-unusable"
+  | "mixed-traceability"
+  | "modules-heading-ambiguous-module-match";
+
+/** Call only after `keepDesignSection` has returned `"unknown"` for this section — the
+ *  checks below skip every keep/drop branch and assume one already fired. */
+export function keepDesignSectionUnknownReason(heading: string, text: string, req: ContextRequest): DesignSectionUnknownReason {
+  const explicitPhase = /(phase|เน€เธเธช)\s*0*(\d+)\b/i.exec(heading);
+  const hasPhaseContext = !!(req.phases && req.phases.length > 0);
+  if (explicitPhase && !hasPhaseContext) return "phase-heading-no-context";
+  if (extractIds(text, "DES").length === 0) return "no-des-id";
+  if (!req.traceability?.usableForDesign) return "traceability-unusable";
+  return "mixed-traceability";
 }
 
 function normalizedModuleHeading(heading: string): string {
@@ -242,6 +269,7 @@ export function selectDocContext(req: ContextRequest, markdown: string): Selecte
   const kept: Section[] = [];
   const skipped: string[] = [];
   const unknownSections: string[] = [];
+  const unknownSectionReasons: { heading: string; reason: DesignSectionUnknownReason }[] = [];
   const keptText = new Map<number, string>();
 
   if (req.doc === "plan") {
@@ -271,19 +299,21 @@ export function selectDocContext(req: ContextRequest, markdown: string): Selecte
             skipped.push(...sliced.skipped);
           } else {
             unknownSections.push(s.heading);
+            unknownSectionReasons.push({ heading: s.heading, reason: "modules-heading-ambiguous-module-match" });
           }
         }
       } else if (verdict === "drop") skipped.push(s.heading);
       else {
         kept.push(s);
         unknownSections.push(s.heading);
+        unknownSectionReasons.push({ heading: s.heading, reason: keepDesignSectionUnknownReason(s.heading, original, req) });
       }
     }
     if (!sections.some((s) => isAlwaysReadDesignSection(s.heading))) {
       return whole(req.doc, markdown, "design.md has none of §10's always-read sections (Feasibility / Risks / Open Questions) — its structure is not the one this rule was written for, so it is passed through whole");
     }
     if (unknownSections.length / sections.length > 0.4) {
-      return whole(req.doc, markdown, `more than 40% of design.md sections have unknown relevance (${unknownSections.length}/${sections.length}) — parser confidence is insufficient, so the document is passed through whole`, unknownSections);
+      return whole(req.doc, markdown, `more than 40% of design.md sections have unknown relevance (${unknownSections.length}/${sections.length}) — parser confidence is insufficient, so the document is passed through whole`, unknownSections, unknownSectionReasons);
     }
   } else if (req.doc === "requirement") {
     const phases = req.phases ?? [];
@@ -330,7 +360,7 @@ export function selectDocContext(req: ContextRequest, markdown: string): Selecte
 
   const parts = [preamble(markdown, sections), ...kept.map((s) => keptText.get(s.start) ?? sectionText(markdown, s))];
   const text = parts.filter((p) => p.trim() !== "").join("\n\n");
-  return { doc: req.doc, text, kept: kept.map((s) => s.heading), skipped, unknownSections, fullDocument: false, reason: `§10 slice for ${req.stage}`, bytesBefore: markdown.length, bytesAfter: text.length };
+  return { doc: req.doc, text, kept: kept.map((s) => s.heading), skipped, unknownSections, unknownSectionReasons, fullDocument: false, reason: `§10 slice for ${req.stage}`, bytesBefore: markdown.length, bytesAfter: text.length };
 }
 
 export const HANDOFF_REFERENCE_MAX_SECTION_RATIO = 0.6;
@@ -396,6 +426,7 @@ export function narrowSelectedContext(normal: SelectedContext, references: reado
     kept: kept.map((section) => section.heading),
     skipped: [...new Set([...normal.skipped, ...narrowedOut])],
     unknownSections: normal.unknownSections.filter((heading) => kept.some((section) => section.heading === heading)),
+    unknownSectionReasons: normal.unknownSectionReasons.filter((entry) => kept.some((section) => section.heading === entry.heading)),
     fullDocument: false,
     reason: `${normal.reason}; narrowed by HANDOFF references within CONTEXT_POLICY`,
     bytesAfter: text.length,

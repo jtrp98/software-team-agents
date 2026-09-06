@@ -82,6 +82,15 @@ const PLAN = {
 const REVIEW = { bytesBefore: 3_400, bytesAfter: 3_402, savedPct: -0, kept: ["Open Issues", "Round 1"], skipped: [], unknownSections: [] };
 const TEST_PLAN = { bytesBefore: 1_200, bytesAfter: 1_200, savedPct: 0, kept: ["Coverage"], skipped: [], unknownSections: [] };
 const SECURITY = { bytesBefore: SECURITY_FIXTURE_BYTES, bytesAfter: SECURITY_FIXTURE_BYTES, savedPct: 0, kept: ["Findings"], skipped: [], unknownSections: [] };
+// system-analyst reads design.md whole (owns it, amends in full) — not a slice.
+const DESIGN_IN_FULL = {
+  bytesBefore: 67_000,
+  bytesAfter: 67_000,
+  savedPct: 0,
+  kept: ["Feature-by-Feature Feasibility", "Import Contract — DES-001", "Data Model", "Modules", "Risks & Dependencies", "Open Questions", "Change Log", "Legacy Design Appendix", "Reporting Contract — DES-002"],
+  skipped: [],
+  unknownSections: [],
+};
 
 const CHARACTERIZATION: Record<string, unknown> = {
   "setup:design": DESIGN,
@@ -89,6 +98,7 @@ const CHARACTERIZATION: Record<string, unknown> = {
   "business-analyst:design": DESIGN,
   "business-analyst:review": REVIEW,
   "system-analyst:requirement": REQUIREMENT_IN_FULL,
+  "system-analyst:design": DESIGN_IN_FULL,
   "system-analyst:review": REVIEW,
   "project-manager:design": DESIGN_WITH_DATA_MODEL,
   "project-manager:requirement": REQUIREMENT,
@@ -121,7 +131,7 @@ const CHARACTERIZATION: Record<string, unknown> = {
   "devops:design": DESIGN,
   "setup:aggregate": { bytesBefore: 67_000, bytesAfter: 13_287, savedPct: 80 },
   "business-analyst:aggregate": { bytesBefore: 82_400, bytesAfter: 28_689, savedPct: 65 },
-  "system-analyst:aggregate": { bytesBefore: 15_400, bytesAfter: 15_402, savedPct: -0 },
+  "system-analyst:aggregate": { bytesBefore: 82_400, bytesAfter: 82_402, savedPct: -0 },
   "project-manager:aggregate": { bytesBefore: 79_000, bytesAfter: 18_621, savedPct: 76 },
   "test-planner:aggregate": { bytesBefore: 96_000, bytesAfter: 13_884, savedPct: 86 },
   "uxui-designer:aggregate": { bytesBefore: 79_000, bytesAfter: 13_604, savedPct: 83 },

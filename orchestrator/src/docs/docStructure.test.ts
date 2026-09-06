@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  checkDesignContractSections,
   checkDocStructure,
   checkDocSize,
   checkOneDoc,
@@ -204,6 +205,47 @@ describe("checkOneDoc", () => {
   });
 });
 
+describe("design.md Change Log after an archive move (T-V6-003, policy-only — verifying the compatibility claim)", () => {
+  it("hasChangeLog still passes when the section holds only a pointer plus current-version entries", () => {
+    const archived = DESIGN_OK.replace(
+      "## Change Log\n- 2026-08-20: created\n",
+      "## Change Log\nOlder entries moved to `design-archive.md` — see § Change Log there.\n\n- 2026-08-20: created (current contract version)\n",
+    );
+    expect(checkOneDoc("design", archived, "m/design.md").ok).toBe(true);
+  });
+});
+
+describe("checkDesignContractSections (T-V6-002)", () => {
+  it("passes a design.md with no contract sections at all — trivially, not flagged", () => {
+    const result = checkDesignContractSections(DESIGN_OK, "m/design.md");
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
+  });
+
+  it("fails and names an untagged contract section", () => {
+    const broken = DESIGN_OK.replace(
+      "## Modules\nx\n",
+      "## Subject Score Aggregation Rules\nno id here\n\n## Modules\nx\n",
+    );
+    const result = checkDesignContractSections(broken, "m/design.md");
+    expect(result.ok).toBe(false);
+    expect(result.problems.some((p) => p.includes("m/design.md") && p.includes("Subject Score Aggregation Rules") && p.includes("DES-NNN"))).toBe(true);
+  });
+
+  it("passes a contract section that carries a DES-NNN id anywhere in its text, not only its heading", () => {
+    const tagged = DESIGN_OK.replace(
+      "## Modules\nx\n",
+      "## Subject Score Aggregation Rules\nSee DES-050 for the formula.\n\n## Modules\nx\n",
+    );
+    expect(checkDesignContractSections(tagged, "m/design.md").ok).toBe(true);
+  });
+
+  it("never flags one of the seven schema-known headings, even though it isn't itself DES-tagged", () => {
+    // DESIGN_OK's "Risks & Dependencies" and "Unresolved Open Questions" carry no DES-NNN.
+    expect(checkDesignContractSections(DESIGN_OK, "m/design.md").problems).toEqual([]);
+  });
+});
+
 describe("checkDocStructure", () => {
   let tmp: string;
 
@@ -266,6 +308,18 @@ describe("checkDocStructure", () => {
     );
     const result = checkDocStructure(tmp);
     expect(result.notes.some((n) => n.includes("crm/design.md") && n.includes("always-read"))).toBe(true);
+  });
+
+  it("reports an untagged design.md contract section as a problem (T-V6-002, report-only via CI's continue-on-error)", () => {
+    const dir = path.join(tmp, "_docs", "module", "crm");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "design.md"),
+      DESIGN_OK.replace("## Modules\nx\n", "## Subject Score Aggregation Rules\nno id here\n\n## Modules\nx\n"),
+    );
+    const result = checkDocStructure(tmp);
+    expect(result.ok).toBe(false);
+    expect(result.problems.some((p) => p.includes("crm/design.md") && p.includes("Subject Score Aggregation Rules"))).toBe(true);
   });
 
   it("does not note a well-formed requirement.md/design.md", () => {
