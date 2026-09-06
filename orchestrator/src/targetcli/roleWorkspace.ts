@@ -1,4 +1,4 @@
-import * as fs from "node:fs";
+﻿import * as fs from "node:fs";
 import * as path from "node:path";
 import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
 import { loadLocalTargetMapping, LocalTargetMappingError, type ResolvedLocalTarget } from "../threeRepo/localTargets.js";
@@ -109,6 +109,10 @@ export function assetsForRole(role: WorkspaceRole): (relPath: string) => boolean
     // project-manager runs only here, and `sta --check-plan` (which its
     // prompt requires before handoff) needs this file to validate a cast Tier.
     if (relPath === "model-tiers.yaml") return true;
+    if (relPath.startsWith(".claude/commands/")) {
+      if (relPath === ".claude/commands/verify.md") return false;
+      return true;
+    }
     // contracts/, workflows/, stacks/, layout.yaml, escalation-policy.yaml,
     // test-pyramid.yaml — engineer-pipeline payload, not BA tooling.
     return false;

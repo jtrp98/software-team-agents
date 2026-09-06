@@ -1,4 +1,4 @@
-import * as fs from "node:fs";
+﻿import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -168,6 +168,10 @@ describe("role asset profiles (T-ROLE-09/10/11)", () => {
     // T-V6-005: project-manager runs only in the BA workspace, and its
     // required `sta --check-plan` needs this file to validate a cast Tier.
     expect(include("model-tiers.yaml")).toBe(true);
+    expect(include(".claude/commands/next.md")).toBe(true);
+    expect(include(".claude/commands/status.md")).toBe(true);
+    expect(include(".claude/commands/_shared/guardrails.md")).toBe(true);
+    expect(include(".claude/commands/verify.md")).toBe(false);
 
     expect(include(".claude/agents/backend-engineer.md")).toBe(false);
     expect(include(".claude/agents/frontend-engineer.md")).toBe(false);
@@ -187,6 +191,10 @@ describe("role asset profiles (T-ROLE-09/10/11)", () => {
     expect(include("test-pyramid.yaml")).toBe(true);
     // A Target has no `_docs/**` of its own for these checks to run against.
     expect(include(".github/workflows/knowledge-ci.yml")).toBe(false);
+    expect(include(".claude/commands/next.md")).toBe(true);
+    expect(include(".claude/commands/status.md")).toBe(true);
+    expect(include(".claude/commands/verify.md")).toBe(true);
+    expect(include(".claude/commands/changed.md")).toBe(true);
   });
 });
 

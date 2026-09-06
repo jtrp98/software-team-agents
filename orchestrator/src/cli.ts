@@ -46,6 +46,8 @@ import { runTokensVerb } from "./cli/verbs/tokens.js";
 import { runContextVerb } from "./cli/verbs/context.js";
 import { runKnowledgeVerb } from "./cli/verbs/knowledge.js";
 import { runRuntimesVerb } from "./cli/verbs/runtimes.js";
+import { runChangedVerb } from "./cli/verbs/changed.js";
+import { runReportVerb } from "./cli/verbs/report.js";
 import { runTaskLoop } from "./cli/runTaskLoop.js";
 import { describeStatus, type TaskStatusKind } from "./orchestrator/taskStatus.js";
 import { formatRunRouting, RunLog } from "./observability/runLog.js";
@@ -212,6 +214,8 @@ export const USAGE =
   "  sta configure identity --figma-email <email> --claude-email <email> [--config-path <path>]   declare the design accounts (same address; emails only, never a token)\n" +
   "  sta doctor [--project-root <path>]                               read-only diagnostics; exit 1 on any FAIL, never mutates\n" +
   "  sta runtimes                                    which runtimes exist and how well each is supported\n" +
+  "  sta changed [--project-root <path>] [--json]     surface working-tree changes and deterministic green/red gate status\n" +
+  "  sta report  [--output <path>] [--module <name>] [--project-root <path>]   visual dashboard as a static offline HTML page\n" +
   "  sta upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
   "  sta migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending\n" +
   "  sta knowledge-migrate <dry-run|copy|verify|cutover> --source-root <path> --knowledge-root <path> [--now <ISO>] [--confirm I_CONFIRM_MIGRATION]   copy–verify–human-confirmed migration\n" +
@@ -821,6 +825,8 @@ const VERBS = [
   "configure",
   "doctor",
   "runtimes",
+  "changed",
+  "report",
 ] as const;
 type Verb = (typeof VERBS)[number];
 
@@ -1289,6 +1295,10 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string): 
       return runDoctorVerb(rest);
     case "runtimes":
       return runRuntimesVerb(rest, defaultProjectRoot);
+    case "changed":
+      return runChangedVerb(rest, defaultProjectRoot);
+    case "report":
+      return runReportVerb(rest, defaultProjectRoot);
   }
 }
 

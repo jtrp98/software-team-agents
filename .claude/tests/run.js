@@ -1320,7 +1320,7 @@ if (!fs.existsSync(COMMANDS_DIR)) {
   // Count is pinned to planning/v2/claude-commands-TASKS.md §1.1 (50 catalog − 17 personal/marketing
   // − rewrite [amend-don't-regenerate policy] − repurpose = 31). Change the number ONLY together
   // with that mapping document, and record why in the same diff.
-  check(`command count is exactly 31 per TASKS \u00a71.1 (got ${commandFiles.length})`, commandFiles.length === 31 ? 0 : 1, 0);
+  check(`command count is exactly 35 per TASKS \u00a71.1 (got ${commandFiles.length})`, commandFiles.length === 35 ? 0 : 1, 0);
 
   // Flat namespace: the only allowed subdirectory is _shared/ (imported fragments, not commands).
   check(
@@ -1384,7 +1384,7 @@ if (!fs.existsSync(OC_COMMANDS_DIR)) {
   check('.opencode/commands exists', 1, 0);
 } else {
   const ocFiles = fs.readdirSync(OC_COMMANDS_DIR, { withFileTypes: true }).filter((e) => e.isFile() && e.name.endsWith('.md')).map((e) => e.name).sort();
-  check(`opencode commands count is exactly 31 mirroring TASKS \u00a71.1 (got ${ocFiles.length})`, ocFiles.length === 31 ? 0 : 1, 0);
+  check(`opencode commands count is exactly 35 mirroring TASKS \u00a71.1 (got ${ocFiles.length})`, ocFiles.length === 35 ? 0 : 1, 0);
 
   for (const name of ocFiles) {
     const label = `opencode/commands/${name}`;
@@ -1425,7 +1425,7 @@ if (!fs.existsSync(SKILLS_DIR)) {
   check('.agents/skills exists', 1, 0);
 } else {
   const skillDirs = fs.readdirSync(SKILLS_DIR, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
-  check(`skill count is exactly 31 mirroring TASKS \u00a71.1 (got ${skillDirs.length})`, skillDirs.length === 31 ? 0 : 1, 0);
+  check(`skill count is exactly 35 mirroring TASKS \u00a71.1 (got ${skillDirs.length})`, skillDirs.length === 35 ? 0 : 1, 0);
 
   for (const dir of skillDirs) {
     const skillPath = path.join(SKILLS_DIR, dir, 'SKILL.md');
