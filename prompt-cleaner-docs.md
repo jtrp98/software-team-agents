@@ -563,6 +563,7 @@ CLAUDE.md
 .agents/
 .claude/
 .codex/
+.opencode/
 .github/
 skills/
 commands/

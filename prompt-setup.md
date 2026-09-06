@@ -70,7 +70,7 @@ Then, guided by what status reports:
 | Registered Targets | read `<knowledgeRoot>/targets.yaml` when a Knowledge root resolved |
 | Local path mappings | read `<knowledgeRoot>/.workflow/targets.local.yaml` if present |
 | Sync status of the current workspace | `status --json` → `syncState`, `syncedVersion`, `conflictCount`, `managedFileCount` |
-| Runtime readiness | `status --json` → `claude.ready`, `codex.ready`, `opencode.ready` (OpenCode needs bindings **and** `.opencode/plugin/sta-guards.js` — its headless default posture is allow-all, so a missing plugin means unguarded, not just incomplete) |
+| Runtime readiness | `status --json` → `claude.ready`, `codex.ready`, `opencode.ready`, `antigravity.ready` (OpenCode needs bindings **and** `.opencode/plugin/sta-guards.js` — its headless default posture is allow-all, so a missing plugin means unguarded, not just incomplete) |
 | Knowledge root bound but never initialized | `status --json` → `knowledgeBoundButUninitialized` (the bound root's path, or absent) — a machine-wide binding resolves, yet `<knowledgeRoot>/.agent-team/config.yaml` is absent, so BA-workspace prompts exist nowhere on this machine yet; `status`'s plain-text output prints the same fact as a `WARNING:` line with the exact fix command |
 | Roster drift in a workspace | `status --json` → `rosterDriftPaths` (array of paths; empty = none) — agent-prompt files under `.claude/agents/` / `.codex/agents/` / `.opencode/agent/` whose names belong to the *other* workspace role's roster (analysis prompts in a DEV workspace, engineer/reviewer prompts in a BA one); never legitimate regardless of how they got there |
 | Module docs stranded in a Target | `sta --check-workspace --project-root <path>` (the Framework's top-level CLI, not `software-team-agents`) — flags every file under a `role: dev` workspace's `_docs/module/**` plus a `## Modules` table in its `_docs/status.md`, each with the Knowledge-repo destination path |
@@ -184,18 +184,18 @@ already said):
   to run, not a name to notice and move on from. A weaker model can still read
   right past it and grep local files for module context instead; if you see that
   happen, run the command yourself and paste the result in, or tell the user
-  plainly that this runtime isn't following the instruction. If the variable is
-  empty, the session was not launched via `software-team-agents dev`/`ba` — say
-  so rather than substituting a local-file search.
+  plainly that this runtime isn't following the instruction. In desktop sessions lacking launcher env, this is supported (`T-V6-006`):
+  Knowledge root resolves from `installation.yaml` and role from
+  `.agent-team/config.yaml` (`T-V6-007`), so `sta context` runs directly.
 - **No analysis prompts here, by design.** A DEV/Target workspace carries only
   the engineer roster (`backend/frontend-engineer`, `qa-engineer`, `security`,
   `devops`). The BA-workspace prompts — including `uxui-designer` — are deliberately
   absent, and the engineering agents' contracts additionally deny writing
   requirement/design/test-plan docs, the module's `uxui/` folder, or anything
-  under `knowledge/` from this workspace (a bare session with no role is not yet
-  covered by a hook-level guard). If the user asks for
-  requirements or UX work "here", route them to the BA flow above instead of
-  working around the block.
+  under `knowledge/` from this workspace (in V6, desktop sessions derive
+  `role: dev` from `.agent-team/config.yaml` so guards enforce this even without
+  env, `T-V6-007`). If the user asks for requirements or UX work "here", route them to
+  the BA flow above instead of working around the block.
 - **Roster drift & stranded docs.** Before declaring DEV ready, check the two
   Phase 0 rows: other-workspace-role prompt files present here, and local `_docs/module/**`
   content. Roster drift is fixed by plain `sync`; if it reports conflicts, show
@@ -263,6 +263,10 @@ Read-only variant of everything above. Run every check, touch nothing — not ev
 `.agent-team/` regeneration. Produce the Final Report plus a Warnings section
 (missing bindings, outdated syncs, unregistered-but-present repos, remote mismatches).
 
+Note: Desktop sessions without launcher env are supported: Knowledge root resolves from
+`installation.yaml` (`T-V6-006`) and role from `.agent-team/config.yaml` (`T-V6-007`).
+Do not treat missing launcher env as a failure.
+
 ## Flow: Repair
 
 Common breakages, minimal fixes — canonical identities never change implicitly:
@@ -326,7 +330,7 @@ Knowledge : <path or "not required">
 Targets   : <ids> (local paths)
 Stack     : <resolved profile and package manager, or unresolved + confirmed fix>
 Sync      : <state>, managed files <n>, conflicts <n>
-Runtimes  : claude <READY/…>, codex <…>, opencode <…>
+Runtimes  : claude <READY/…>, codex <…>, opencode <…>, antigravity <…>
 Next      : cd <workspace> && software-team-agents <command>
 Warnings  : <anything worth watching, else "none">
 ```
