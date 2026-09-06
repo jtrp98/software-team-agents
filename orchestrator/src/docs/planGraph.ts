@@ -5,6 +5,7 @@ import { TaskGraph, TaskGraphError, CircularDependencyError, UnknownTaskError, t
 import { sections, firstTable, checkboxLines } from "./markdown.js";
 import { extractIds } from "../traceability/traceability.js";
 import { loadModelTiers, ModelTiersInvalidError, type ModelTiers } from "../runtime/modelTiers.js";
+import { detectWorkspaceKind } from "../targetcli/roleWorkspace.js";
 
 /**
  * The plan.md task table as a machine-checkable graph.
@@ -233,7 +234,7 @@ export interface PlanGraphCheck {
  */
 export function validatePlanTasks(
   tasks: PlanTaskRow[],
-  opts: { designMd?: string; modelTiers?: ModelTiers | null } = {},
+  opts: { designMd?: string; modelTiers?: ModelTiers | null; isKnowledgeWorkspace?: boolean } = {},
 ): PlanGraphCheck {
   const errors: string[] = [];
 
@@ -267,7 +268,11 @@ export function validatePlanTasks(
       continue;
     }
     if (opts.modelTiers === null || opts.modelTiers === undefined) {
-      errors.push(`phase ${phase} casts ${tier}, but model-tiers.yaml is not configured`);
+      errors.push(
+        opts.isKnowledgeWorkspace
+          ? `phase ${phase} casts ${tier}, but model-tiers.yaml is missing from this Knowledge workspace's synced payload — resync with \`software-team-agents ba\` to restore it`
+          : `phase ${phase} casts ${tier}, but model-tiers.yaml is not configured`,
+      );
       continue;
     }
     if (!(tier in opts.modelTiers)) {
@@ -527,6 +532,7 @@ export function checkPlanGraphForModule(
   docsModuleDir: string,
   module: string,
   modelTiers: ModelTiers | null = null,
+  isKnowledgeWorkspace = false,
 ): PlanGraphModuleResult {
   const planPath = path.join(docsModuleDir, module, "plan.md");
   const notes: string[] = [];
@@ -541,7 +547,7 @@ export function checkPlanGraphForModule(
   if (tasks.length === 0) {
     notes.push(`${module}/plan.md has no task rows under any ## Phase heading`);
   }
-  const check = validatePlanTasks(tasks, { designMd, modelTiers });
+  const check = validatePlanTasks(tasks, { designMd, modelTiers, isKnowledgeWorkspace });
   errors.push(...check.errors);
 
   const widest = Math.max(0, ...[...check.waves.values()]);
@@ -591,10 +597,11 @@ export function checkPlanGraphs(projectRoot: string, moduleName?: string): PlanG
     throw error;
   }
 
+  const isKnowledgeWorkspace = detectWorkspaceKind(projectRoot) === "knowledge";
   const problems: string[] = [];
   const notes: string[] = [];
   for (const module of modules) {
-    const result = checkPlanGraphForModule(docsModuleDir, module, modelTiers);
+    const result = checkPlanGraphForModule(docsModuleDir, module, modelTiers, isKnowledgeWorkspace);
     notes.push(...result.notes);
     problems.push(...result.errors.map((e) => `${module}/plan.md: ${e}`));
   }

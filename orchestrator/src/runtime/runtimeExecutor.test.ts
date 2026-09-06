@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentStage } from "../types.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 import { Orchestrator } from "../orchestrator/orchestrator.js";
@@ -18,6 +18,18 @@ import { buildPromptParts } from "./agentRunAssembly.js";
 import { auditTrail } from "../audit/auditTrail.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { latestExecutionPacketPath, readExecutionPacket } from "../state/runtimeArtifacts.js";
+
+// T-V6-006: `env: {}` (used below) now falls through to installation.yaml
+// when AGENTCLAUDE_KNOWLEDGE_ROOT is unset — isolate it from whatever is
+// real on the machine running this suite.
+const AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+beforeEach(() => {
+  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-runtime-executor-test-no-installation.yaml");
+});
+afterEach(() => {
+  if (AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+  else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL;
+});
 
 /**
  * T108's central claim, under test: the orchestrator can run agents through the

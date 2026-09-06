@@ -100,6 +100,9 @@ export function assetsForRole(role: WorkspaceRole): (relPath: string) => boolean
     if (relPath.startsWith("policies/")) return true;
     // Only the BA/Knowledge side validates its own documents.
     if (relPath === ".github/workflows/knowledge-ci.yml") return true;
+    // project-manager runs only here, and `sta --check-plan` (which its
+    // prompt requires before handoff) needs this file to validate a cast Tier.
+    if (relPath === "model-tiers.yaml") return true;
     // contracts/, workflows/, stacks/, layout.yaml, escalation-policy.yaml,
     // test-pyramid.yaml — engineer-pipeline payload, not BA tooling.
     return false;

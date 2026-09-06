@@ -6,12 +6,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   assetsForRole,
   detectWorkspaceKind,
+  filterManifestForRole,
   KnowledgeBindingError,
   launchEnv,
   resolveKnowledgeBinding,
   resolveTargetBinding,
   TargetBindingError,
 } from "./roleWorkspace.js";
+import type { TemplateManifest } from "../packaging/templateManifest.js";
 import { loadTargetConfig, removedTargetPath, removedTargetPathProblem } from "./targetMeta.js";
 
 const roots: string[] = [];
@@ -163,6 +165,9 @@ describe("role asset profiles (T-ROLE-09/10/11)", () => {
     expect(include("CLAUDE.md")).toBe(true);
     // The document/plan checkers are CI and are BA-workspace payload only.
     expect(include(".github/workflows/knowledge-ci.yml")).toBe(true);
+    // T-V6-005: project-manager runs only in the BA workspace, and its
+    // required `sta --check-plan` needs this file to validate a cast Tier.
+    expect(include("model-tiers.yaml")).toBe(true);
 
     expect(include(".claude/agents/backend-engineer.md")).toBe(false);
     expect(include(".claude/agents/frontend-engineer.md")).toBe(false);
@@ -182,6 +187,29 @@ describe("role asset profiles (T-ROLE-09/10/11)", () => {
     expect(include("test-pyramid.yaml")).toBe(true);
     // A Target has no `_docs/**` of its own for these checks to run against.
     expect(include(".github/workflows/knowledge-ci.yml")).toBe(false);
+  });
+});
+
+describe("T-V6-005 — model-tiers.yaml reaches the BA workspace (regression: role filter dropping a validator's required file)", () => {
+  function manifestOf(paths: string[]): TemplateManifest {
+    return {
+      schema_version: 1,
+      framework_version: "test",
+      generated_at: "2026-09-06T00:00:00Z",
+      files: paths.map((p) => ({ path: p, sha256: "0".repeat(64), size_bytes: 0 })),
+    };
+  }
+
+  it("filterManifestForRole(manifest, 'ba') includes model-tiers.yaml", () => {
+    const manifest = manifestOf(["model-tiers.yaml", "CLAUDE.md", "contracts/backend.yaml"]);
+    const filtered = filterManifestForRole(manifest, "ba");
+    expect(filtered.files.map((f) => f.path)).toContain("model-tiers.yaml");
+  });
+
+  it("filterManifestForRole(manifest, 'dev') also includes it — DEV carries the full pipeline payload", () => {
+    const manifest = manifestOf(["model-tiers.yaml", "contracts/backend.yaml"]);
+    const filtered = filterManifestForRole(manifest, "dev");
+    expect(filtered.files.map((f) => f.path)).toContain("model-tiers.yaml");
   });
 });
 

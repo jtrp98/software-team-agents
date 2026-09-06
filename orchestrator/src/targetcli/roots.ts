@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
+import { defaultInstallationConfigPath, loadInstallationConfig, InstallationConfigError } from "../threeRepo/installation.js";
 
 /**
  * The root model for Target-first execution. Three roots, three
@@ -33,13 +33,27 @@ export interface Roots {
  * Module-document reads use the Knowledge binding exported by an interactive
  * three-repo launch; single-repo runs use the project itself. Kept beside the
  * three-root model so callers don't invent conflicting precedence rules.
+ *
+ * Precedence: `env > installation.yaml > projectRoot`. The env var is what a
+ * launcher session (`software-team-agents ba|dev`) sets; the installation-config
+ * fallback is what makes a desktop session — which never goes through the
+ * launcher and so never has it — usable instead of failing on the first turn.
+ * A missing or invalid `installation.yaml` degrades to today's `projectRoot`
+ * behaviour; it must never throw.
  */
 export function resolveContextDocsRoot(
   projectRoot: string,
   env: { AGENTCLAUDE_KNOWLEDGE_ROOT?: string | undefined } = process.env,
 ): string {
   const knowledgeRoot = env.AGENTCLAUDE_KNOWLEDGE_ROOT?.trim();
-  return path.resolve(knowledgeRoot || projectRoot);
+  if (knowledgeRoot) return path.resolve(knowledgeRoot);
+  try {
+    const configured = loadInstallationConfig(defaultInstallationConfigPath()).knowledge_root;
+    if (configured) return path.resolve(configured);
+  } catch (error) {
+    if (!(error instanceof InstallationConfigError)) throw error;
+  }
+  return path.resolve(projectRoot);
 }
 
 function isDirectory(dir: string): boolean {
