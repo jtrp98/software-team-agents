@@ -29,6 +29,8 @@ describe("listPolicySections", () => {
       "agent-boundaries",
       "architecture",
       "coding",
+      "communication",
+      "data",
       "documentation",
       "git",
       "security",
