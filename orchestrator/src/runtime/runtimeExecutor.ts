@@ -26,6 +26,7 @@ import type {
 } from "./runtimeAdapter.js";
 import type { RuntimeRegistry } from "./runtimeRegistry.js";
 import {
+  requiredCapabilitiesFor,
   resolveRuntimeRoute,
   type RuntimeRouteAttempt,
   type RuntimeRouteCandidate,
@@ -405,6 +406,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // that do not supply a registry retain the fixed-runtime compatibility
     // behaviour.
     const hasTargetWrite = threeRepo?.roots.workRoots.some((root) => root.access === "write") ?? false;
+    const requiresInteractivity = requiredCapabilitiesFor(req.stage).includes(RuntimeCapability.INTERACTIVE_PROMPTS);
     let activeRuntime = runtime;
     let activeModel = resolveModel(role);
     // Whether `activeModel` is an operator-visible override (CLI
@@ -621,6 +623,15 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       // on the next camp would only move an unguarded run somewhere else.
       if (hasTargetWrite && !activeRuntime.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)) {
         return finish(failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot enforce a pre-tool workspace guard for Target write access`, declared));
+      }
+      // Second gate, deliberately worded differently: this is not a safety gap,
+      // it is a stage whose work — the interview — this runtime cannot do at
+      // all. `resolveRuntimeRoute` already skips an incapable candidate inside a
+      // configured `routing.order`'s walk; this is the defense-in-depth refusal
+      // for whatever reached here regardless (an explicitly named runtime, or a
+      // caller bypassing routing with a fixed `runtime` and no registry).
+      if (requiresInteractivity && !activeRuntime.capabilities.has(RuntimeCapability.INTERACTIVE_PROMPTS)) {
+        return finish(failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot receive interactive prompts required by this stage`, declared));
       }
       const activeProbe = routeAvailability[activeRuntime.id];
       if (activeProbe?.available === false) {

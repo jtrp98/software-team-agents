@@ -181,7 +181,7 @@ Same verdict, three places: this table, `sta runtimes` (reads `RUNTIME_SUPPORT` 
 | 2 | `routing.by_role.<role>` ใน `.sta/config.yaml` (`"runtime:model"` หรือ `{ runtime, model, effort }`) | `level-2` |
 | 3 | default runner (`execution.runner` หรือ `claude-code`) + `model:` ใน frontmatter ของ role | `level-4` |
 
-candidate ต้อง registered, available, และมี capability ที่ stage ต้องใช้ (Target-write stage ต้องมี `PRE_TOOL_GUARD`). automatic route (ลำดับ 3 — ลำดับเดียวที่คนไม่ได้เลือกเอง) ยังต้อง opt in ราย runtime ผ่าน `routing.allow_below_supported` ถ้า support level ต่ำกว่า `supported`.
+candidate ต้อง registered, available, และมี capability ที่ stage ต้องใช้ (Target-write stage ต้องมี `PRE_TOOL_GUARD`; `business-analyst` โดยเฉพาะต้องมี `INTERACTIVE_PROMPTS` — การสัมภาษณ์คือตัวงานของ stage นี้, `system-analyst`/`project-manager`/`test-planner` ไม่ถูกกฎนี้ เพราะ human gate ของ stage เหล่านั้นคือ `sta approve` ไม่ใช่ prompt กลาง run). candidate ที่ขาด capability ที่ต้องใช้ถูก**ตัดออก**เสมอ: ใน `routing.order` walk (ลำดับ 4) จะ hop ไป entry ถัดไปเหมือน `UNAVAILABLE`; ถ้าเป็น candidate เดียว (ลำดับ 1/2 หรือไม่มี `routing.order`) จะ**refuse**พร้อมเหตุผล — ขาด `PRE_TOOL_GUARD` refuse เพราะเป็น guard gap (ไม่ปลอดภัย), ขาด `INTERACTIVE_PROMPTS` refuse เพราะ camp นั้นทำงานของ stage นี้ไม่ได้ (ไม่ใช่เรื่องความปลอดภัย). automatic route (ลำดับ 3 — ลำดับเดียวที่คนไม่ได้เลือกเอง) ยังต้อง opt in ราย runtime ผ่าน `routing.allow_below_supported` ถ้า support level ต่ำกว่า `supported`.
 
 ถ้า route นั้นรันไม่ได้ — unavailable, ต่ำกว่า supported โดยไม่ opt in, ขาด guard capability, หรือ runner คืน `UNAVAILABLE`/`ERROR`/`TIMEOUT` — pipeline **STOP → Human** พร้อมเหตุผล และ **ไม่ย้ายไป runner อื่น** (`fallback_count` เป็น 0 เสมอ). ไม่มีการเลือก provider เงียบ ๆ.
 

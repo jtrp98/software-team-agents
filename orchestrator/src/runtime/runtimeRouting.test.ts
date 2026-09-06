@@ -92,6 +92,12 @@ describe("requiredCapabilitiesFor", () => {
     expect(requiredCapabilitiesFor(AgentStage.BACKEND_ENGINEER)).not.toContain(RuntimeCapability.INTERACTIVE_PROMPTS);
     expect(requiredCapabilitiesFor(AgentStage.BACKEND_ENGINEER, true)).toContain(RuntimeCapability.PRE_TOOL_GUARD);
   });
+
+  it("T-V6-015: system-analyst, project-manager and test-planner do not require INTERACTIVE_PROMPTS despite carrying AskUserQuestion in the tool list — their human gate is sta approve, not an in-run prompt", () => {
+    expect(requiredCapabilitiesFor(AgentStage.SYSTEM_ANALYST)).not.toContain(RuntimeCapability.INTERACTIVE_PROMPTS);
+    expect(requiredCapabilitiesFor(AgentStage.PROJECT_MANAGER)).not.toContain(RuntimeCapability.INTERACTIVE_PROMPTS);
+    expect(requiredCapabilitiesFor(AgentStage.TEST_PLANNER)).not.toContain(RuntimeCapability.INTERACTIVE_PROMPTS);
+  });
 });
 
 describe("resolveRuntimeRoute — V3 shape and compatibility", () => {
@@ -401,7 +407,7 @@ describe("resolveRuntimeRoute — availability, support and guard refusal", () =
     expect(result.error).toContain(RuntimeCapability.PRE_TOOL_GUARD);
   });
 
-  it("keeps a non-write capability shortfall diagnostic without weakening the stage", () => {
+  it("T-V6-015 (inert today — no real .sta/config.yaml sets routing.order): refuses business-analyst on the sole candidate when it lacks INTERACTIVE_PROMPTS, rather than running degraded", () => {
     const projectRoot = tmpProject();
     writeRoleFrontmatter(projectRoot, "business-analyst", "opus");
     const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["opus"], capabilities: [] });
@@ -413,7 +419,41 @@ describe("resolveRuntimeRoute — availability, support and guard refusal", () =
       config: null,
       availability: { "claude-code": { available: true } },
     });
+    expect(result.selected).toBeUndefined();
+    expect(result.error).toContain('runtime "claude-code"');
+    expect(result.error).toContain(RuntimeCapability.INTERACTIVE_PROMPTS);
+  });
+
+  it("T-V6-015: routing.order skips a business-analyst candidate lacking INTERACTIVE_PROMPTS and hops to the next", () => {
+    const projectRoot = tmpProject();
+    writeRoleFrontmatter(projectRoot, "business-analyst", "opus");
+    const antigravityLike = new MockRuntimeAdapter({ id: "antigravity-mock", models: ["opus"], capabilities: [] });
+    const claudeCode = new MockRuntimeAdapter({ id: "claude-code", models: ["opus"], capabilities: [RuntimeCapability.INTERACTIVE_PROMPTS] });
+    const result = resolveRuntimeRoute({
+      role: "business-analyst",
+      stage: AgentStage.BUSINESS_ANALYST,
+      projectRoot,
+      registry: new RuntimeRegistry([antigravityLike, claudeCode]),
+      config: { schema_version: 1, routing: { order: ["antigravity-mock", "claude-code"], allow_below_supported: ["antigravity-mock"] } },
+      availability: { "antigravity-mock": { available: true }, "claude-code": { available: true } },
+    });
+    expect(result.selected?.runtime).toBe(claudeCode);
+    const skipped = result.attempts.find((a) => a.runtimeId === "antigravity-mock");
+    expect(skipped?.skipReason).toContain(RuntimeCapability.INTERACTIVE_PROMPTS);
+  });
+
+  it("T-V6-015: system-analyst is unaffected by a missing INTERACTIVE_PROMPTS — the same runtime routes it fine", () => {
+    const projectRoot = tmpProject();
+    writeRoleFrontmatter(projectRoot, "system-analyst", "opus");
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["opus"], capabilities: [] });
+    const result = resolveRuntimeRoute({
+      role: "system-analyst",
+      stage: AgentStage.SYSTEM_ANALYST,
+      projectRoot,
+      registry: new RuntimeRegistry([runtime]),
+      config: null,
+      availability: { "claude-code": { available: true } },
+    });
     expect(result.selected?.runtime).toBe(runtime);
-    expect(result.diagnostics.join("\n")).toContain(RuntimeCapability.INTERACTIVE_PROMPTS);
   });
 });

@@ -924,6 +924,21 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
     expect(runtime.requests).toHaveLength(0);
   });
 
+  it("T-V6-015 (inert today — no real runtime this framework ships lacks INTERACTIVE_PROMPTS except antigravity, and no real .sta/config.yaml sets routing.order): refuses business-analyst on a runtime that cannot receive interactive prompts", async () => {
+    const runtime = new MockRuntimeAdapter({ id: "antigravity", capabilities: [RuntimeCapability.NAMED_AGENTS] });
+    const result = await executorFor(runtime)({ stage: AgentStage.BUSINESS_ANALYST, taskId: "T-1", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain('runtime "antigravity"');
+    expect(result.outcome.failure_reason).toContain("cannot receive interactive prompts");
+    expect(runtime.requests).toHaveLength(0);
+  });
+
+  it("T-V6-015: does not gate system-analyst on INTERACTIVE_PROMPTS — the same incapable runtime runs it", async () => {
+    const runtime = new MockRuntimeAdapter({ id: "antigravity", capabilities: [RuntimeCapability.NAMED_AGENTS] });
+    await executorFor(runtime)({ stage: AgentStage.SYSTEM_ANALYST, taskId: "T-1", context: [] });
+    expect(runtime.requests).toHaveLength(1);
+  });
+
   it("passes canonical roots rather than using cwd as Target scope", async () => {
     const runtime = new MockRuntimeAdapter({ respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });

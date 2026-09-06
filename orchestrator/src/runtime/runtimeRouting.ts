@@ -1,5 +1,4 @@
-import type { AgentStage } from "../types.js";
-import { getAgent } from "../agents/registry.js";
+import { AgentStage } from "../types.js";
 import { resolveAgentModel } from "../agents/agentModel.js";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
 import type { QaRiskSignals } from "../qa/mode.js";
@@ -116,11 +115,18 @@ export function parseModelRoute(value: string): { runtimeId?: string; model: str
   return { runtimeId: value.slice(0, idx), model: value.slice(idx + 1) };
 }
 
-/** Derive capability needs from the role plus the canonical Target access mode. */
+/**
+ * Derive capability needs from the role plus the canonical Target access mode.
+ *
+ * `INTERACTIVE_PROMPTS` is keyed to `business-analyst` specifically, not to
+ * `AskUserQuestion` tool presence: `system-analyst`/`project-manager` also
+ * carry that tool but their human gate is `sta approve`, not an in-run
+ * question, so a runtime that cannot prompt still runs them headless as
+ * designed. Only the interview itself is the stage's actual work.
+ */
 export function requiredCapabilitiesFor(stage: AgentStage, hasTargetWrite = false): RuntimeCapability[] {
-  const entry = getAgent(stage);
   const required: RuntimeCapability[] = [];
-  if (entry.tools.includes("AskUserQuestion")) required.push(RuntimeCapability.INTERACTIVE_PROMPTS);
+  if (stage === AgentStage.BUSINESS_ANALYST) required.push(RuntimeCapability.INTERACTIVE_PROMPTS);
   if (hasTargetWrite) required.push(RuntimeCapability.PRE_TOOL_GUARD);
   return required;
 }
@@ -316,7 +322,11 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
       const skipReason = `runtime "${runtime.id}" support level "${level}" is below "supported"; automatic routing requires routing.allow_below_supported to name this runtime`;
       diagnostics.push(skipReason);
       attempts.push({ runtimeId: runtime.id, runtime, ...base, skipReason });
-    } else if (unmet.length > 0 && (opts.hasTargetWrite ?? false)) {
+    } else if (unmet.length > 0) {
+      // Unconditional on hasTargetWrite: a stage's capability need (Target-write's
+      // PRE_TOOL_GUARD, business-analyst's INTERACTIVE_PROMPTS) always disqualifies
+      // a candidate here. What differs is what happens next — walkable, this is a
+      // hop to the next entry; not walkable, it falls through to the refusal below.
       attempts.push({
         runtimeId: runtime.id,
         runtime,
@@ -356,12 +366,18 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
       error = `runtime "${head.runtimeId}" is unavailable: ${probe.reason ?? "no unavailability reason was reported"}`;
     } else if (precedenceLevel === 4 && level !== "supported" && !supportOptIns.has(head.runtimeId)) {
       error = `refusing to auto-route to runtime "${head.runtimeId}" at support level "${level}" without per-runtime opt-in`;
-    } else if (opts.hasTargetWrite) {
+    } else if (required.length > 0) {
       const declaredOrVerified = runtime
         ? (opts.verifiedCapabilities?.[runtime.id] ?? runtime.capabilities)
         : new Set<RuntimeCapability>();
       const unmet = required.filter((capability) => !declaredOrVerified.has(capability));
-      error = `runtime "${head.runtimeId}" cannot enforce a pre-tool workspace guard for Target write access; refusing route with missing required capability: ${unmet.join(", ") || "unknown"}`;
+      // Two capabilities land here today and are worded differently on purpose,
+      // mirroring runtimeExecutor.ts's Target-write gate: a missing PRE_TOOL_GUARD
+      // is a guard gap (unsafe to run at all), a missing INTERACTIVE_PROMPTS is not
+      // — this candidate just cannot do the stage's actual work.
+      error = unmet.includes(RuntimeCapability.PRE_TOOL_GUARD)
+        ? `runtime "${head.runtimeId}" cannot enforce a pre-tool workspace guard for Target write access; refusing route with missing required capability: ${unmet.join(", ")}`
+        : `runtime "${head.runtimeId}" cannot run this stage: missing required capability ${unmet.join(", ") || "unknown"}`;
     } else {
       error = `no eligible candidate remains for requested runtime "${head.runtimeId}"`;
     }
