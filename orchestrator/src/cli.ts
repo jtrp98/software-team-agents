@@ -12,6 +12,7 @@ import { withQaOptimization, riskSignalsFromClassification } from "./qa/optimize
 import { gitChangedFiles, gitDiffSummary } from "./qa/changeSource.js";
 import { combineProjectRunners, createProjectRunner } from "./qa/projectRunner.js";
 import { createPostDevVerificationHook, withPostDevVerificationDisabled } from "./qa/verificationHook.js";
+import { createDocumentVerificationHook, withDocumentVerificationDisabled } from "./qa/documentVerificationHook.js";
 import { LocalWorkspace } from "./runtime/localWorkspace.js";
 import { DEFAULT_BUDGET, type Budget } from "./cost/costControl.js";
 import { loadStaConfig } from "./packaging/staConfig.js";
@@ -172,6 +173,7 @@ export interface CliArgs {
   noQaOptimization: boolean;
   /** Escape hatch for a Target whose deterministic tools are known-broken. */
   noDeterministicGate: boolean;
+  noDocumentGate: boolean;
   /** Post-hoc task token budget. */
   tokenBudget?: number;
 }
@@ -299,6 +301,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let model: string | undefined;
   let noQaOptimization = false;
   let noDeterministicGate = false;
+  let noDocumentGate = false;
   let tokenBudget: number | undefined;
   let version = false;
   const targetBindings: TargetBindings = { frontend_target: null, backend_target: null };
@@ -414,6 +417,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       noQaOptimization = true;
     } else if (arg === "--no-deterministic-gate") {
       noDeterministicGate = true;
+    } else if (arg === "--no-document-gate") {
+      noDocumentGate = true;
     } else if (arg === "--token-budget") {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value <= 0) throw new CliUsageError("--token-budget must be a positive integer");
@@ -498,6 +503,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     model,
     noQaOptimization,
     noDeterministicGate,
+    noDocumentGate,
     tokenBudget,
     version,
   };
@@ -553,9 +559,9 @@ const STATUS_EMOJI: Record<TaskStatusKind, string> = {
   RUNNING: "🔄",
   WAITING_FOR_HUMAN: "⏳",
   WAITING_FOR_DEPENDENCY: "⏳",
-  BLOCKED: "❌",
-  PAUSED: "⏸️",
-  CANCELLED: "🚫",
+  BLOCKED: "โ",
+  PAUSED: "โธ๏ธ",
+  CANCELLED: "๐ซ",
 };
 
 export function printListing(registry: TaskRegistry): void {
@@ -685,7 +691,7 @@ function promptForCamp(defaultRuntimeId: RuntimeId): RuntimeId {
 }
 
 /**
- * Resolves the Target side of `contract globs ∩ Target work roots` before
+ * Resolves the Target side of `contract globs โฉ Target work roots` before
  * RuntimeTask is persisted. This is the existing three-repo preflight, not a
  * second root resolver. Legacy single-repo runs retain their one shared root.
  */
@@ -1058,7 +1064,7 @@ async function runDoctorVerb(rest: string[]): Promise<number> {
       },
     });
     for (const c of report.checks) {
-      const mark = c.status === "PASS" ? "✓" : c.status === "WARNING" ? "!" : "✗";
+      const mark = c.status === "PASS" ? "โ“" : c.status === "WARNING" ? "!" : "โ—";
       console.log(`${mark} ${c.status.padEnd(7)} ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
       if (c.fix && c.status !== "PASS") console.log(`    Fix: ${c.fix}`);
     }
@@ -1494,6 +1500,16 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
           requiredVerification: () => orchestrator.runtimeTask?.required_verification,
         });
     const postDevExecutor = verificationHook?.executor ?? withPostDevVerificationDisabled(runtimeExecutor);
+
+    const documentHook = args.noDocumentGate
+      ? null
+      : createDocumentVerificationHook({
+          inner: postDevExecutor,
+          projectRoot: args.projectRoot,
+          moduleName: args.module,
+          blocking: true,
+        });
+    const docVerifiedExecutor = documentHook?.executor ?? withDocumentVerificationDisabled(postDevExecutor);
 
     const executor = args.noQaOptimization
       ? postDevExecutor

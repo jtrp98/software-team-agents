@@ -43,7 +43,7 @@ function qaArtifact(mode: "FULL" | "TARGETED", status: "PASS" | "FAIL" = "PASS")
 }
 
 describe("QA08 routing table", () => {
-  it("small isolated change โ’ TARGETED", async () => {
+  it("small isolated change → TARGETED", async () => {
     resetChangeSet(["src/small.ts"]);
     setSignals({});
     const decision = selectQaMode("T", buildQaScope({ taskId: "T", changedFiles: changed() }), signals());
@@ -55,7 +55,7 @@ describe("QA08 routing table", () => {
     ["schema change", { touchesSchema: true }],
     ["security-sensitive change", { securitySensitive: true }],
     ["cross-target change", { crossTargetImpact: true }],
-  ])("%s โ’ FULL", (_label, s) => {
+  ])("%s → FULL", (_label, s) => {
     const decision = selectQaMode(
       "T",
       buildQaScope({ taskId: "T", changedFiles: ["src/a.ts"] }),
@@ -106,7 +106,7 @@ describe("QA08 retry/recheck routing", () => {
     expect(decision.mode).toBe("FULL");
   });
 
-  it("QA fail โ’ fix โ’ targeted recheck keeps the recheck plan and stays TARGETED when confined", async () => {
+  it("QA fail → fix → targeted recheck keeps the recheck plan and stays TARGETED when confined", async () => {
     const captured: AgentExecutorRequest[] = [];
     const exec = withQaOptimization({
       inner: (req) => {
@@ -258,7 +258,7 @@ describe("QA08 orchestrator integration (decision persists; mode lands in the ru
     });
     await orch.step(exec);
     const status = await orch.step(exec);
-    // Past QA entirely โ€” this minimal pipeline has no devops stage, so a PASS
+    // Past QA entirely — this minimal pipeline has no devops stage, so a PASS
     // round with a matching decision carries the task all the way through.
     expect(orch.machine.current).toBe(TaskState.DEPLOYED);
     expect(status.kind).toBe("DEPLOYED");

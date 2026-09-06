@@ -89,7 +89,7 @@ function sampleRun(taskId = "T-1"): RunRecord {
     estimated_input_tokens: 1000,
     qa_mode: null,
     qa_effort: null,
-    deterministic_gate: null,
+    deterministic_gate: null, document_gate: null,
     runtime: "claude-code",
     requested_runtime: null,
     requested_model: null,

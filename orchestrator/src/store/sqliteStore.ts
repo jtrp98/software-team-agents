@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS runs (
   qa_mode            TEXT,
   qa_effort          TEXT,
   deterministic_gate TEXT,
+  document_gate      TEXT,
   runtime            TEXT,
   requested_runtime  TEXT,
   requested_model    TEXT,
@@ -181,6 +182,7 @@ interface RunRow {
   qa_mode: string | null;
   qa_effort: string | null;
   deterministic_gate: string | null;
+  document_gate: string | null;
   runtime: string | null;
   requested_runtime: string | null;
   requested_model: string | null;
@@ -293,6 +295,7 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
   8: (db) => {
     const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
     if (!existing.has("deterministic_gate")) db.exec("ALTER TABLE runs ADD COLUMN deterministic_gate TEXT");
+      if (!existing.has("document_gate")) db.exec("ALTER TABLE runs ADD COLUMN document_gate TEXT");
   },
   9: (db) => {
     // Warning-only context budget telemetry. Historical rows did not measure
@@ -445,8 +448,8 @@ export class SqliteTaskStore implements TaskStore {
   appendRun(record: RunRecord): void {
     this.db
       .prepare(
-        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, estimated_input_tokens, prompt_version, effort, qa_mode, qa_effort, deterministic_gate, runtime, requested_runtime, requested_model, routing_basis, fallback_reason, fallback_count, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars, verification_fingerprint)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, estimated_input_tokens, prompt_version, effort, qa_mode, qa_effort, deterministic_gate, document_gate, runtime, requested_runtime, requested_model, routing_basis, fallback_reason, fallback_count, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars, verification_fingerprint)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.task_id,
@@ -470,6 +473,7 @@ export class SqliteTaskStore implements TaskStore {
         record.qa_mode,
         record.qa_effort,
         record.deterministic_gate,
+        record.document_gate,
         record.runtime,
         record.requested_runtime,
         record.requested_model,
@@ -534,6 +538,7 @@ export class SqliteTaskStore implements TaskStore {
       qa_mode: r.qa_mode === "FULL" || r.qa_mode === "TARGETED" ? r.qa_mode : null,
       qa_effort: r.qa_effort === "skip" || r.qa_effort === "lightweight" || r.qa_effort === "full" ? r.qa_effort : null,
       deterministic_gate: r.deterministic_gate === "enabled" || r.deterministic_gate === "disabled" ? r.deterministic_gate : null,
+        document_gate: r.document_gate === "enabled" || r.document_gate === "disabled" ? r.document_gate : null,
       runtime: r.runtime,
       requested_runtime: r.requested_runtime,
       requested_model: r.requested_model,

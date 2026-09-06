@@ -109,6 +109,7 @@ describe("parseArgs", () => {
       mode: undefined,
       noQaOptimization: false,
       noDeterministicGate: false,
+      noDocumentGate: false,
       tokenBudget: undefined,
       version: false,
     });
@@ -155,6 +156,7 @@ describe("parseArgs", () => {
     const args = parseArgs(["--task-id", "T-1", "--module", "m", "--token-budget", "42000", "--no-deterministic-gate"], "/repo");
     expect(args.tokenBudget).toBe(42_000);
     expect(args.noDeterministicGate).toBe(true);
+    expect(parseArgs(["--task-id", "T-1", "--module", "m", "--no-document-gate"], "/repo").noDocumentGate).toBe(true);
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--token-budget", "0"], "/repo")).toThrow(CliUsageError);
   });
 
@@ -757,7 +759,7 @@ describe("T-V3TOK-003 tokens verb", () => {
       cache_read_tokens: null, context_chars: null, estimated_input_tokens: null, qa_mode: null, qa_effort: null, runtime: "claude",
       requested_runtime: null, requested_model: null, routing_basis: null, fallback_reason: null, fallback_count: null,
       session_kind: "interactive",
-      deterministic_gate: null,
+      deterministic_gate: null, document_gate: null,
       instruction_surface_bytes: 123,
       static_chars: 321, handoff_chars: null, doc_chars: null, doc_chars_before: null, knowledge_chars: null, code_intel_chars: null, tool_output_chars: null,
       context_budget_chars: 100, context_budget_source: "role", context_overflow_chars: 221, context_budget_warning: true,

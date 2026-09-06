@@ -452,8 +452,8 @@ describe("uxui-designer routes questions back to ba/sa (T-UX10)", () => {
       retryable: true,
       reason:
         owner === AgentStage.BUSINESS_ANALYST
-          ? "requirement.md does not say whether the loyalty tier UI is worth building � a business call"
-          : "design.md has no model for the referral widget the design source shows � a schema gap",
+          ? "requirement.md does not say whether the loyalty tier UI is worth building — a business call"
+          : "design.md has no model for the referral widget the design source shows — a schema gap",
       affected: ["UX-001"],
       requiresHuman: false,
     });
@@ -524,7 +524,7 @@ describe("uxui-designer routes questions back to ba/sa (T-UX10)", () => {
     expect(orch.machine.current).toBe(TaskState.DESIGN);
   });
 
-  it("fails closed when the owner is not in this pipeline � an incremental task has no BA to ask", async () => {
+  it("fails closed when the owner is not in this pipeline — an incremental task has no BA to ask", async () => {
     const classification = classifyTask({ isIncrementalFeature: true, touchesBackend: true, touchesFrontend: true });
     const orch = new Orchestrator("T-UX-NOBA", classification);
     // incremental: SA -> TP -> BE -> UXUI -> FE -> QA; the DESIGN->PLAN schema gate still fires.
