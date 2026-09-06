@@ -1176,6 +1176,44 @@ withTempProject((tmp) => {
   );
 });
 
+// What the workspace role is, and what it is not. `AGENTCLAUDE_ROLE` names one
+// of the eleven agent contracts; `role:` in .agent-team/config.yaml says which
+// repository this checkout is. Nothing derives one from the other, so a session
+// with no AGENTCLAUDE_ROLE gets workspace boundaries and no per-agent boundary.
+section('9c. T-V6-007 — the workspace role, read the same way everywhere');
+
+withTempProject((tmp) => {
+  const env = { CLAUDE_PROJECT_DIR: tmp };
+  const attempt = (rel) =>
+    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, ...rel.split('/')) } }, env);
+
+  write(path.join(tmp, '.agent-team', 'config.yaml'), 'schema_version: 1\ntarget_id: t\nrole: dev\ntarget:\n  target_id: other\n');
+  check('a top-level role: is read even with a nested block below it', attempt('_docs/module/m/plan.md'), BLOCK);
+
+  // `role:` under another key belongs to that key. Reading it as the
+  // workspace's own would silently apply the wrong repository's whole policy.
+  write(path.join(tmp, '.agent-team', 'config.yaml'), 'schema_version: 1\ntarget:\n  role: ba\n');
+  check('a role: nested under another key is not the workspace role', attempt('contracts/backend-engineer.yaml'), ALLOW);
+
+  write(path.join(tmp, '.agent-team', 'config.yaml'), 'schema_version: 1\nrole:\ndev\n');
+  check('a role: with no value on its line is not a role declaration', attempt('_docs/module/m/plan.md'), ALLOW);
+
+  // The per-agent contract boundary is orchestrated-only: the hook is a
+  // separate process with no subagent identity, so an interactive session
+  // cannot supply one and this file pins that rather than implying otherwise.
+  write(path.join(tmp, '.agent-team', 'config.yaml'), BA_CONFIG);
+  check('interactive ba workspace: plan.md allowed, no per-agent rule reachable', attempt('_docs/module/m/plan.md'), ALLOW);
+});
+
+// Run against ROOT, the one place `contracts/` exists: the hook resolves them
+// relative to the project dir, so a workspace without that directory has no
+// per-agent rule to apply even when a role is named.
+check(
+  'the same plan.md write is refused once the orchestrator names the role',
+  runPathHook('Write', path.join(ROOT, '_docs', 'module', 'm', 'plan.md'), 'frontend-engineer'),
+  BLOCK,
+);
+
 // ---------------------------------------------------------------------------
 // 10. generate-status.js — status.md computed from the real docs, not hand-written
 // ---------------------------------------------------------------------------

@@ -157,6 +157,24 @@ const CODEX_CAPABILITIES: readonly RuntimeCapability[] = [
   RuntimeCapability.PROJECT_LEVEL_BINDING,
 ];
 
+/**
+ * Codex's own final `ERROR:` lines when the provider refused to serve, each
+ * captured verbatim from a real `codex exec` run against a stub upstream
+ * (`planning/v6/v6-2-evidence.md`), never taken from vendor documentation:
+ *
+ *   ERROR: exceeded retry limit, last status: 429 Too Many Requests
+ *   ERROR: unexpected status 401 Unauthorized: Incorrect API key provided., url: …
+ *   ERROR: unexpected status 403 Forbidden: You do not have access to this model., url: …
+ *
+ * Line-anchored because every codex run — successful ones included — emits
+ * unrelated `ERROR: Reconnecting…` and MCP `AuthRequired` noise on the same
+ * stream; an unanchored substring match would classify healthy runs as
+ * provider refusals. A 5xx is deliberately absent: it surfaces as
+ * `ERROR: We're currently experiencing high demand…`, which is not a refusal to
+ * serve this account and stays ERROR.
+ */
+const PROVIDER_REFUSAL_PATTERN = /^ERROR: (?:exceeded retry limit, last status: 429\b|unexpected status 40[13]\b)/m;
+
 /** `RuntimeAutonomy` onto Codex's own sandbox/approval axes — assumption, unverified against a real install. See file header. */
 const SANDBOX_MODE: Record<RuntimeAutonomy, string> = {
   "read-only": "read-only",
@@ -398,6 +416,23 @@ export class CodexAdapter implements RuntimeAdapter {
     }
     const readCaveat = unreadableWorkRootCaveat(req.workRoots, req.autonomy);
     if (readCaveat) diagnostics.push(readCaveat);
+
+    // See PROVIDER_REFUSAL_PATTERN: a refusal to serve must not spend the
+    // task's retry budget or trigger recovery for something the task did not
+    // cause.
+    if (failed && PROVIDER_REFUSAL_PATTERN.test(stderr)) {
+      const line = stderr.split("\n").find((l) => PROVIDER_REFUSAL_PATTERN.test(l)) ?? "";
+      return {
+        status: "UNAVAILABLE",
+        exitCode: proc.status ?? null,
+        text: "",
+        usage,
+        model,
+        guards,
+        diagnostics: [...diagnostics, `\`codex\` provider refused to serve: ${line.trim()}`],
+        raw: { stdout, stderr },
+      };
+    }
 
     return {
       status: failed ? "ERROR" : "OK",

@@ -28,8 +28,14 @@ Several behaviours are worth knowing when you read the agent files:
   `deny` and `read` path globs, derived from the ownership table above. Enforcement is layered
   because a `PreToolUse` hook cannot see which subagent is acting: the orchestrator enforces it
   where identity is certain, and `.claude/hooks/block-path-permissions.js` reads the role from
-  `AGENTCLAUDE_ROLE` (set by the orchestrator) — falling back, in an interactive session, to the
-  floor no agent may cross at all (`.git/`, `node_modules/`, `.workflow/`, `dist/`). `read` is documentation rather than a
+  `AGENTCLAUDE_ROLE` (set by the orchestrator). An interactive session sets no such variable and
+  cannot: identity is per-subagent and the hook is a separate process that never learns it, so the
+  per-agent boundary is an orchestrated-run guarantee and nothing else. What an interactive session
+  still gets is the floor no agent may cross at all (`.git/`, `node_modules/`, `.workflow/`,
+  `dist/`, `knowledge/_roles/`) plus the *workspace* boundary — `role:` in `.agent-team/config.yaml`
+  says whether this checkout is the Knowledge or the Target repository, and the hook reads it
+  itself, so a Target session is refused `requirement.md` and a Knowledge session is refused
+  `contracts/` with no environment at all. `read` is documentation rather than a
   block: reading is non-destructive, and a read guard that got one path wrong would trap an agent
   for no safety gain. It is still checked for one thing — everything a role may write, it must be
   able to read, because these documents are amended, not regenerated.

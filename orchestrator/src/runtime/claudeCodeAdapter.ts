@@ -131,8 +131,21 @@ export function disallowRulesFromGuards(guards: RuntimeGuards): string[] {
   return [...rules];
 }
 
+/**
+ * Upstream statuses observed in this CLI's own envelope when the provider
+ * refused to serve. Each was captured from a real `claude -p` run, never taken
+ * from vendor documentation; the set stays closed for that reason, so a status
+ * nobody has seen keeps today's ERROR classification rather than being guessed
+ * into UNAVAILABLE.
+ */
+const PROVIDER_REFUSAL_STATUSES: ReadonlySet<number> = new Set([401, 403, 429]);
+
 interface ClaudeCliJsonResult {
   is_error?: boolean;
+  /** `"api_error"` when the run ended on an upstream HTTP failure rather than on the task. */
+  terminal_reason?: string;
+  /** The upstream HTTP status, present only alongside `terminal_reason: "api_error"`. */
+  api_error_status?: number;
   result?: string;
   total_cost_usd?: number;
   usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
@@ -406,6 +419,22 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       cachedInputTokens: cli.usage?.cache_read_input_tokens,
       costUsd: cli.total_cost_usd,
     };
+
+    // A refusal to serve is not a task failure: collapsing it into ERROR spends
+    // the task's retry budget and can trigger recovery for something the task
+    // did nothing to cause. Keyed on the envelope's own structured fields, so a
+    // task that merely mentions "429" in its output cannot reach this branch.
+    if (cli.is_error === true && cli.terminal_reason === "api_error" && typeof cli.api_error_status === "number" && PROVIDER_REFUSAL_STATUSES.has(cli.api_error_status)) {
+      return {
+        status: "UNAVAILABLE",
+        exitCode: proc.status ?? null,
+        text: "",
+        usage,
+        guards,
+        diagnostics: [...diagnostics, `\`claude\` provider refused to serve (HTTP ${cli.api_error_status}): ${cli.result ?? "no message"}`],
+        raw: cli,
+      };
+    }
 
     const cliFailed = proc.status !== 0 || cli.is_error === true;
     return {

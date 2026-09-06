@@ -228,7 +228,16 @@ export interface TokenMetricsExport {
   totals: Omit<TaskTokenMetrics, "taskId" | "sessionKinds"> & V3OptimizationRollups;
 }
 
-/** Read-only derivations over task state plus the existing run log. */
+/**
+ * Read-only derivations over task state plus the existing run log.
+ *
+ * A baseline that spans the point where the adapters began classifying a
+ * provider's refusal to serve as UNAVAILABLE is not comparable across that
+ * line: those runs used to burn retries as ERROR and now do not, so
+ * `retry_count` falls and `first_pass_success_rate` rises for a classification
+ * reason. Read a jump across that boundary as a corrected measurement, not as
+ * the pipeline having got better at the work.
+ */
 export interface V3OptimizationRollups {
   /** Strict token spend across completed tasks divided by completed task count. */
   total_token_per_completed_task: number | null;

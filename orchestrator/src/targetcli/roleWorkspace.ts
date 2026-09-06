@@ -5,6 +5,7 @@ import { loadLocalTargetMapping, LocalTargetMappingError, type ResolvedLocalTarg
 import { loadTargetRegistry, targetById, TargetRegistryError } from "../threeRepo/targets.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import type { TemplateManifest } from "../packaging/templateManifest.js";
+import { resolveWorkspaceRole } from "./roots.js";
 import type { TargetConfig, TargetManifest } from "./targetMeta.js";
 
 /**
@@ -164,22 +165,14 @@ export function hasKnowledgeMarkers(dir: string): boolean {
 }
 
 /**
- * The recorded role of an already-initialised workspace.
- *
- * Once `init` has run, the workspace *states* what it is; guessing from files
- * is only necessary before that. Read on its own rather than through
- * `loadTargetConfig` so a config this CLI cannot fully parse (an older or newer
- * schema) still yields its role instead of throwing detection away entirely —
- * getting this wrong routes writes to the wrong repository.
+ * The recorded role of an already-initialised workspace. Once `init` has run,
+ * the workspace *states* what it is; guessing from files is only necessary
+ * before that. One reader, in `roots.ts` — the guard hook applies the same rule
+ * to decide what this workspace may write, and two readers of one field are two
+ * answers waiting to disagree.
  */
 function recordedWorkspaceRole(dir: string): "ba" | "dev" | undefined {
-  try {
-    const raw = fs.readFileSync(path.join(dir, ".agent-team", "config.yaml"), "utf8");
-    const match = /^role:[ \t]*(ba|dev)[ \t]*$/m.exec(raw);
-    return match ? (match[1] as "ba" | "dev") : undefined;
-  } catch {
-    return undefined;
-  }
+  return resolveWorkspaceRole(dir) ?? undefined;
 }
 
 function hasAppSourceMarkers(dir: string): boolean {

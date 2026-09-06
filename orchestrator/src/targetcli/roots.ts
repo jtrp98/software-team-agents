@@ -56,6 +56,33 @@ export function resolveContextDocsRoot(
   return path.resolve(projectRoot);
 }
 
+/**
+ * The workspace's own recorded role, from the `role:` key `software-team-agents
+ * init` writes into `.agent-team/config.yaml`.
+ *
+ * This is the *workspace* role — which repository this checkout is, `ba` or
+ * `dev`. It is not an agent's role, and nothing derived from it can stand in
+ * for one: a guard hook carries no subagent identity, so `AGENTCLAUDE_ROLE` and
+ * the per-agent contract boundary it selects stay an orchestrated-run concern.
+ *
+ * Read on its own rather than through `loadTargetConfig`, so a config this CLI
+ * cannot fully parse (an older or newer schema) still yields its role instead
+ * of throwing detection away entirely — getting this wrong routes writes to the
+ * wrong repository. Anchored at column 0 with no newline in the separator: a
+ * `role:` nested under another key belongs to that key, and reading it as the
+ * workspace's own would flip the whole workspace's write policy.
+ */
+export function resolveWorkspaceRole(workspaceRoot: string): "ba" | "dev" | null {
+  let text: string;
+  try {
+    text = fs.readFileSync(path.join(workspaceRoot, ".agent-team", "config.yaml"), "utf8");
+  } catch {
+    return null;
+  }
+  const match = /^role:[ \t]*(ba|dev)[ \t]*$/m.exec(text);
+  return match ? (match[1] as "ba" | "dev") : null;
+}
+
 function isDirectory(dir: string): boolean {
   try {
     return fs.statSync(dir).isDirectory();

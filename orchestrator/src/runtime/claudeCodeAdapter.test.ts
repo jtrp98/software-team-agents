@@ -271,6 +271,41 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
     expect(result.text).toBe("boom");
   });
 
+  // Envelopes below are the observed fields of real `claude -p --output-format json`
+  // runs against a stub upstream — see planning/v6/v6-2-evidence.md for the verbatim captures.
+  it.each([
+    [429, "API Error: Server is temporarily limiting requests (not your usage limit) · This request would exceed your organization's rate limit"],
+    [401, "Invalid API key · Fix external API key"],
+    [403, "Failed to authenticate. API Error: 403 Your API key does not have permission to use the specified resource"],
+  ])("reports UNAVAILABLE, not ERROR, when the provider refused to serve (HTTP %i)", async (status, message) => {
+    const spawnSync = fakeCli({ is_error: true, terminal_reason: "api_error", api_error_status: status, subtype: "success", type: "result", result: message }, 1);
+    const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync });
+
+    const result = await adapter.executeAgent(baseRequest());
+
+    expect(result.status).toBe("UNAVAILABLE");
+    expect(result.diagnostics.join(" ")).toContain(`provider refused to serve (HTTP ${status})`);
+    expect(result.diagnostics.join(" ")).toContain(message);
+  });
+
+  it("keeps a genuine task failure as ERROR — an is_error envelope with no api_error_status is not a provider refusal", async () => {
+    const spawnSync = fakeCli({ is_error: true, result: "the task failed: 429 attempts exceeded in the code under test" }, 1);
+    const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync });
+
+    const result = await adapter.executeAgent(baseRequest());
+
+    expect(result.status).toBe("ERROR");
+  });
+
+  it("keeps ERROR for an api_error status outside the observed set — no pattern is shipped for a response nobody has seen", async () => {
+    const spawnSync = fakeCli({ is_error: true, terminal_reason: "api_error", api_error_status: 500, result: "API Error: 500" }, 1);
+    const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync });
+
+    const result = await adapter.executeAgent(baseRequest());
+
+    expect(result.status).toBe("ERROR");
+  });
+
   it("reports ERROR when is_error is true even with exit code 0", async () => {
     const spawnSync = fakeCli({ is_error: true, result: "claimed done but is_error" }, 0);
     const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync });
