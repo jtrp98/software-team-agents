@@ -1,8 +1,9 @@
-# Policy — Security guards (§5a, §5c-1, §5d)
+# Policy — Security guards (§5a, §5c-1, §5d, §21)
 
-The three rules here are the parts of the
-guard layer that are specifically about containment and leakage — where an agent may write, and
-what it may never leave behind — plus the rule that keeps that layer honest.
+The first three rules here are the parts
+of the guard layer that are specifically about containment and leakage — where an agent may write, and
+what it may never leave behind — plus the rule that keeps that layer honest. §21 is the design-time
+trigger that decides when a risk-bearing design owes a threat-modelling pass before any auditing happens.
 
 ---
 
@@ -25,3 +26,11 @@ Same shape and same cadence as `policies/coding.md` §5c, a separate hook becaus
 `policies/git.md` §5, this file's §5a and §5c-1, and `policies/coding.md` §5c are the only rules here that don't depend on an agent remembering them — the load-bearing part of the design. `node .claude/tests/run.js` exercises every hook and every checker script.
 
 **Run it after editing anything under `.claude/hooks/` or `.claude/scripts/`.** A hook with a syntax error exits 1, not 2 — and `PreToolUse` only blocks on exit 2 — so a typo makes a guard **fail open**: still wired up, still looking installed, enforcing nothing. That happened once for real. A failing guard is worse than no guard, because it buys false confidence — treat a red run as blocking.
+
+---
+
+## 21. A risk-bearing design triggers a threat-modelling pass at design time
+
+Trigger, not a new stage: when a design under amendment carries the risk surface this repository already enumerates — auth, personal data, payment, upload, or untrusted-input risk (the wording that raises `🔒 Security gate` in `qa-engineer`'s contract), or the phase is flagged `touchesSensitiveArea` (the same signal `taskClassifier.withSecurityGate()` routes to a conditional `security` stage) — `system-analyst` runs a short threat-modelling pass while the design is still cheap to change, and records in that feature's `design.md` contract section (its own artifact): the trust boundaries, the privilege model, and the abuse cases considered and rejected. A design carrying none of that triggers nothing.
+
+A design-time pass is **not** a security sign-off. It adds a cheaper, earlier look; separation of duty is unchanged — only the independent `security` agent may close a finding (`cannot_close_security_finding` on QA's contract), `security_scan` remains a supporting sweep that is no sign-off (as both prompts already state), Critical/Important findings stay behind the human gate, and the post-implementation audit itself runs exactly where it does today.
