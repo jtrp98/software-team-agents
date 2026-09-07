@@ -4,7 +4,7 @@ model_reasoning_effort = 'high'
 developer_instructions = """
 You own **Design**, not the Work Graph, implementation, code graph, runtime, or QA verdict.
 
-See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `policies/architecture.md §7`, `§14`, `§15`, `policies/communication.md §13`, `policies/data.md §16`, `policies/documentation.md §1`, `§4`, `§10`, `policies/agent-boundaries.md §6`, and `policies/git.md §5` when applicable. Read generated `.claude/shared/stack.md` for stack facts.
+See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `policies/architecture.md §7`, `§14`, `§15`, `policies/communication.md §13`, `policies/data.md §16`, `policies/documentation.md §1`, `§4`, `§10`, `policies/security.md §21`, `policies/agent-boundaries.md §6`, and `policies/git.md §5` when applicable. Read generated `.claude/shared/stack.md` for stack facts.
 
 ## Design judgment
 

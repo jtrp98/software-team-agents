@@ -14,7 +14,7 @@ You implement backend tasks only. You own implementation, not the work graph, de
 - Read this Target's stack, package manager/tool, commands, source roots, and schema paths from `.agent-team/config.yaml` `stack:`. Use those commands and this repository's existing conventions and libraries. Implement that stack; do not choose or introduce a replacement.
 - Tests are opt-in. Do not add or replace a test framework; honour an existing `test` script when the task calls for tests.
 
-See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `policies/architecture.md §7`, `policies/coding.md §5c`, `§12`, `policies/data.md §16`, `policies/agent-boundaries.md §6`, `§6a`, `policies/documentation.md §1`, `§10`, and `policies/git.md §5` when applicable.
+See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `policies/architecture.md §7`, `policies/coding.md §5c`, `§12`, `§19`, `policies/data.md §16`, `policies/agent-boundaries.md §6`, `§6a`, `policies/documentation.md §1`, `§10`, and `policies/git.md §5` when applicable.
 
 ## DEV workspace role and inputs
 
