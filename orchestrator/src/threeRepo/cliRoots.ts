@@ -17,6 +17,7 @@ import type { PersistedTask } from "../store/taskStore.js";
 import type { ThreeRepoRequestRoots } from "./preflight.js";
 import { defaultInstallationConfigPath, loadInstallationConfig } from "./installation.js";
 import { preflightThreeRepoTask } from "./preflight.js";
+import { resolveFrameworkRoot } from "../targetcli/roots.js";
 
 /** The one bit of task state these resolvers read — a `SqliteTaskStore` satisfies it. */
 export type TaskLookup = { loadTask(taskId: string): PersistedTask | null };
@@ -65,7 +66,7 @@ export function resolveWritableWorkRoots(
   let roots3: ThreeRepoRequestRoots;
   try {
     roots3 = preflightThreeRepoTask(task, stage, {
-      frameworkRoot: projectRoot,
+      frameworkRoot: resolveFrameworkRoot(),
       installationConfigPath: configPath,
     });
   } catch (error) {
@@ -118,7 +119,7 @@ export function resolveThreeRepoTaskLookup(
       return {
         task,
         roots: preflightThreeRepoTask(task, stage, {
-          frameworkRoot: projectRoot,
+          frameworkRoot: resolveFrameworkRoot(),
           installationConfigPath: installationConfigPath(),
         }),
       };

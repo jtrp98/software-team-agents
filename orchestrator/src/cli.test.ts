@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CliUsageError, USAGE, createProductionRuntimeRegistry, parseArgs, productionQaInputs, runCli, watchListing } from "./cli.js";
+import { CliUsageError, USAGE, contractRootForTask, createProductionRuntimeRegistry, parseArgs, productionQaInputs, runCli, watchListing } from "./cli.js";
 import { defaultProjectRoot } from "./agents/agentContract.js";
 import { classifyTask } from "./classification/taskClassifier.js";
 import { SqliteTaskStore } from "./store/sqliteStore.js";
@@ -229,6 +229,13 @@ describe("T-V3R-032 production runtime composition", () => {
     const source = fs.readFileSync(path.join(defaultProjectRoot(), "orchestrator", "src", "cli.ts"), "utf8");
     expect(source).toContain("registry: runtimeRegistry");
     expect(source).toContain("runtime: defaultRuntime");
+  });
+});
+
+describe("three-repo contract authority", () => {
+  it("uses the Framework contract for a bound Target while preserving the legacy workspace contract", () => {
+    expect(contractRootForTask("C:/target", { backend_target: "rainybot", frontend_target: null })).toBe(resolveFrameworkRoot());
+    expect(contractRootForTask("C:/legacy", { backend_target: null, frontend_target: null })).toBe("C:/legacy");
   });
 });
 

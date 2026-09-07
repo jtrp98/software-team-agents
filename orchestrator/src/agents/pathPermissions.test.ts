@@ -543,7 +543,7 @@ describe("T-V5-023 — stack-shaped path permissions live in the stack profile",
     for (const role of ["backend-engineer", "frontend-engineer"]) {
       const rules = contractPathRules(role, repoRoot);
       for (const glob of [...rules.read, ...rules.write, ...rules.deny]) {
-        expect(glob, `${role}: ${glob}`).toMatch(/^(?:_docs\/|\.claude\/|policies\/|contracts\/|workflows\/|stacks\/|knowledge\/|decisions\/|CLAUDE\.md$)/);
+        expect(glob, `${role}: ${glob}`).toMatch(/^(?:_docs\/|\.claude\/|policies\/|contracts\/|workflows\/|stacks\/|knowledge\/|decisions\/|(?:CLAUDE|README)\.md$)/);
       }
     }
   });
@@ -597,7 +597,7 @@ describe("T-V5-023 — stack-shaped path permissions live in the stack profile",
     workspace = makeWorkspace();
     const backend = pathRulesFor("backend-engineer", workspace);
     expect([...backend.write].sort()).toEqual(
-      ["_docs/status-archive.md", "_docs/status.md", "app/api/**", "package.json", "prisma/**", "server/**", "src/lib/**", "src/server/**"].sort(),
+      ["README.md", "_docs/status-archive.md", "_docs/status.md", "app/api/**", "package.json", "prisma/**", "server/**", "src/lib/**", "src/server/**"].sort(),
     );
     expect([...backend.deny].sort()).toEqual(["_docs/module/**", ".claude/**", "components/**", "contracts/**"].sort());
 
@@ -641,7 +641,7 @@ describe("T-V5-023 — stack-shaped path permissions live in the stack profile",
 
     const contract = path.join(workspace, "contracts", "backend-engineer.yaml");
     const text = fs.readFileSync(contract, "utf8");
-    fs.writeFileSync(contract, text.replace('write: ["_docs/status.md"', 'write: ["server/**", "_docs/status.md"'), "utf8");
+    fs.writeFileSync(contract, text.replace('write: ["README.md"', 'write: ["server/**", "README.md"'), "utf8");
 
     const result = checkPathRules(workspace);
     expect(result.ok).toBe(false);

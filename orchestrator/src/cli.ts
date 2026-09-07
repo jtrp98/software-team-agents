@@ -102,6 +102,17 @@ export function resolveQaWorkRoots(projectRoot: string, taskId: string, store: T
 }
 
 /**
+ * Three-repo tasks persist their execution scope from Framework-owned role
+ * contracts.  Resolve the packet guard from that same authority: using the
+ * Target's last-synced copy can silently filter a newly granted Framework
+ * path out of an otherwise valid RuntimeTask.  Legacy tasks remain governed
+ * by their single workspace's contract.
+ */
+export function contractRootForTask(projectRoot: string, bindings: TargetBindings): string {
+  return bindings.backend_target || bindings.frontend_target ? resolveFrameworkRoot() : projectRoot;
+}
+
+/**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
  * pipeline in the repo root — `npm run orchestrate -- <flags>` actually shells
  * out to `claude -p --agent <role>` for each stage classifyTask() selects,
@@ -821,7 +832,11 @@ function runtimeTaskWorkRoots(
       continue;
     }
     const resolved = preflightThreeRepoTask(preview, stage, {
-      frameworkRoot: args.projectRoot,
+      // `--project-root` is the Target workspace for a three-repo task.  The
+      // local Target mapping must instead compare that Target against the real
+      // Framework checkout, otherwise every valid Target appears to overlap
+      // its own "Framework root".
+      frameworkRoot: resolveFrameworkRoot(),
       installationConfigPath,
     });
     for (const root of resolved.workRoots) {
@@ -1353,6 +1368,9 @@ async function composeProductionTaskExecutor(
   fixedRoute?: FixedWaveRoute,
   dependencies: CliDependencies = {},
 ): Promise<TaskExecutorComposition> {
+  const task = store.loadTask(taskId);
+  if (!task) throw new Error(`cannot compose an executor for missing task ${taskId}`);
+  const contractRoot = contractRootForTask(args.projectRoot, task.targetBindings);
   const resolvedAutonomy = args.autonomy ?? "propose";
   if (resolvedAutonomy === "propose") {
     console.error(
@@ -1403,7 +1421,7 @@ async function composeProductionTaskExecutor(
     },
     projectRoot: args.projectRoot,
     moduleName: () => args.module!,
-    guards: contractGuardResolver(args.projectRoot),
+    guards: contractGuardResolver(contractRoot),
     phases: () => (args.phases.length > 0 ? args.phases : undefined),
     taskLevel: (id) => store.loadTask(id)?.classification.level,
     runtimeTask: (id) => store.loadTask(id)?.runtimeTask,
@@ -1531,18 +1549,19 @@ async function resolveWaveRoute(
   rows: readonly ReturnType<typeof parsePlanTasks>["tasks"][number][],
   store: TaskStore,
   dependencies: CliDependencies,
+  targetWorkspaceRoot: string,
 ): Promise<ResolvedWaveRoute> {
   const tiers = new Set(rows.map((row) => row.tier ?? "unassigned"));
   if (tiers.size !== 1) throw new CliUsageError(`one bounded wave resolved multiple tiers: ${[...tiers].join(", ")}`);
   const tierName = [...tiers][0]!;
   let tier: { id: ModelTierId; table: NonNullable<ReturnType<typeof loadModelTiers>> } | undefined;
   if ((MODEL_TIER_IDS as readonly string[]).includes(tierName) && tierName !== "T1") {
-    const table = loadModelTiers(args.projectRoot);
+    const table = loadModelTiers(targetWorkspaceRoot);
     if (table) tier = { id: tierName as ModelTierId, table };
   }
 
   let config: ReturnType<typeof loadStaConfig> | undefined;
-  try { config = loadStaConfig(args.projectRoot); } catch { config = undefined; }
+  try { config = loadStaConfig(targetWorkspaceRoot); } catch { config = undefined; }
   const camp = tier
     ? selectTierCamp({
         flagRuntime: args.runtime,
@@ -1554,12 +1573,12 @@ async function resolveWaveRoute(
       })
     : undefined;
   const defaultRuntimeId = camp?.runtimeId ?? args.runtime ?? config?.execution?.runner ?? DEFAULT_RUNTIME_ID;
-  const registry = runtimeRegistryFor(args.projectRoot, dependencies);
+  const registry = runtimeRegistryFor(targetWorkspaceRoot, dependencies);
   const availability = await registry.probeAll();
   const routes = rows.map((row) => resolveRuntimeRoute({
     role: row.owner,
     stage: row.owner as AgentStage,
-    projectRoot: args.projectRoot,
+    projectRoot: targetWorkspaceRoot,
     registry,
     defaultRuntimeId,
     config: config ?? null,
@@ -1620,7 +1639,7 @@ async function runWaveCli(
       console.error(`[orchestrator] recorded runtime ${active.manifest.runtime_id} is no longer registered`);
       return 1;
     }
-    const runtimeRegistry = runtimeRegistryFor(args.projectRoot, dependencies);
+    const runtimeRegistry = runtimeRegistryFor(active.manifest.target_root, dependencies);
     const runtime = runtimeRegistry.tryGet(active.manifest.runtime_id)!;
     const capabilityReport = await detectRuntimeCapabilities(runtime, {
       probe: await runtimeRegistry.probe(active.manifest.runtime_id),
@@ -1698,7 +1717,7 @@ async function runWaveCli(
   }
 
   const target = registeredWaveTarget(store, waveRows);
-  const route = await resolveWaveRoute(args, waveRows, store, dependencies);
+  const route = await resolveWaveRoute(args, waveRows, store, dependencies, target.root);
   if (!args.dryRun) {
     try {
       const existing = findActiveWaveRun(args.projectRoot, { module: args.module!, wave: args.wave!, targetRoot: target.root });

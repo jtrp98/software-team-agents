@@ -20,6 +20,9 @@ vi.mock("./installation.js", () => ({
 vi.mock("./preflight.js", () => ({
   preflightThreeRepoTask: (...a: unknown[]) => preflightThreeRepoTask(...a),
 }));
+vi.mock("../targetcli/roots.js", () => ({
+  resolveFrameworkRoot: () => "/framework/root",
+}));
 
 const { resolveWritableWorkRoots, resolveDocsRoot, resolveThreeRepoTaskLookup } = await import("./cliRoots.js");
 const originalInstallationConfig = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
@@ -83,13 +86,13 @@ describe("resolveWritableWorkRoots", () => {
     expect(() => resolveWritableWorkRoots(PR, "T-1", { loadTask: () => ({}) as never }, AgentStage.QA_ENGINEER)).toThrow(/T-1.*Target binding.*not usable/);
   });
 
-  it("passes the caller's explicit stage with frameworkRoot + config path", () => {
+  it("uses the real Framework root rather than the caller's Target workspace", () => {
     process.env.AGENTCLAUDE_INSTALLATION_CONFIG = "/somewhere/installation.yaml";
     loadInstallationConfig.mockReturnValue({ knowledge_root: "/kn" });
     preflightThreeRepoTask.mockReturnValue(workRoots([{ targetId: "a", path: "/repo/a", access: "write" }]));
     resolveWritableWorkRoots(PR, "T-9", { loadTask: () => ({}) as never }, AgentStage.QA_ENGINEER);
     expect(preflightThreeRepoTask).toHaveBeenCalledWith({}, AgentStage.QA_ENGINEER, {
-      frameworkRoot: PR,
+      frameworkRoot: "/framework/root",
       installationConfigPath: "/somewhere/installation.yaml",
     });
   });
