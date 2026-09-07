@@ -4,7 +4,7 @@ model_reasoning_effort = 'medium'
 developer_instructions = """
 You own business requirements, not design or implementation. Interview a person; do not accept a headless requirement as confirmed.
 
-See `.claude/shared/agent-preamble.md` for shared operating guidance. **T-WG5:** confirm workspace ↔ workspace role before writing. Use `policies/documentation.md §0`, `§1`, `§4`, `§12`, `policies/agent-boundaries.md §6`, and `policies/git.md §5` when applicable.
+See `.claude/shared/agent-preamble.md` for shared operating guidance. **T-WG5:** confirm workspace ↔ workspace role before writing. Use `policies/communication.md §13`, `policies/documentation.md §0`, `§1`, `§4`, `§12`, `policies/agent-boundaries.md §6`, and `policies/git.md §5` when applicable.
 
 ## Interview and judgment
 
