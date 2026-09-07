@@ -99,7 +99,7 @@ describe("checkpoint status parsing and messages", () => {
       .toEqual(["src/a.ts", "src/new.ts", "src/old.ts", "src/b.ts"]);
   });
 
-  it("sanitizes untrusted text, caps the subject and generates one trailer block", () => {
+  it("T-V7-031 strips newlines and control characters from checkpoint messages", () => {
     const [subject, trailers] = checkpointMessages({
       taskId: "BE-004\n--amend",
       taskDescription: "-leading\n" + "x".repeat(100),
@@ -154,6 +154,35 @@ describe("checkpoint integration", () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
+  it("T-V7-031 keeps hostile checkpoint text inside two single Git -m arguments", async () => {
+    const root = fixture();
+    const calls: string[][] = [];
+    try {
+      fs.writeFileSync(path.join(root, "src", "message.txt"), "message\n");
+      await checkpointTask(input(root, {
+        taskId: "BE-004\n--amend",
+        taskDescription: "-leading\r\nsubject\u0000with-control",
+        runId: "run-1\nInjected: no",
+        module: "orders\rmodule",
+        git: new GitCommandLayer({
+          cwd: root,
+          processRunner: async (args, options) => {
+            calls.push([...args]);
+            return defaultGitProcessRunner(args, options);
+          },
+        }),
+      }));
+      const commitArgs = calls.find((args) => args.includes("commit")) ?? [];
+      const messages = commitArgs.flatMap((arg, index) => arg === "-m" ? [commitArgs[index + 1]!] : []);
+      expect(messages).toHaveLength(2);
+      expect(messages[0]).toBe("sta(BE-004_--amend): -leading subject with-control");
+      expect(messages[0]).not.toMatch(/[\u0000-\u001f\u007f]/);
+      expect(messages[1]).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f]/);
+      expect(commitArgs).not.toContain("--amend");
+      expect(run(root, ["log", "-1", "--format=%s"])).toBe("sta(BE-004_--amend): -leading subject with-control");
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("refuses an adapter error before status or verification", async () => {
     const root = fixture();
     let processCalls = 0;
@@ -186,7 +215,7 @@ describe("checkpoint integration", () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("halts on a path outside writable roots before verification, staging or commit", async () => {
+  it("T-V7-031 halts a writable-root escape before verification, staging or commit", async () => {
     const root = fixture();
     let verificationCalls = 0;
     try {
@@ -201,19 +230,25 @@ describe("checkpoint integration", () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("halts on UNIVERSAL_DENY content before verification", async () => {
+  it.each([
+    ["contracts/escalated.yaml", "GUARD_FAILURE", "src"],
+    ["workflows/escalated.yml", "GUARD_FAILURE", "src"],
+    [".claude/settings.json", "GUARD_FAILURE", "src"],
+    [".workflow/forged.json", "DENIED_PATH", "."],
+  ] as const)("T-V7-031 halts an agent permission-widening write to %s", async (relativePath, expected, writableRoot) => {
     const root = fixture();
     try {
-      fs.mkdirSync(path.join(root, ".workflow"));
-      fs.writeFileSync(path.join(root, ".workflow", "forged.json"), "{}\n");
+      const destination = path.join(root, relativePath);
+      fs.mkdirSync(path.dirname(destination), { recursive: true });
+      fs.writeFileSync(destination, "forged\n");
       expect(await refusalKind(checkpointTask(input(root, {
-        writableRoots: [root],
-      })))).toBe("DENIED_PATH");
+        writableRoots: [path.join(root, writableRoot)],
+      })))).toBe(expected);
       expect(run(root, ["diff", "--cached", "--name-only"])).toBe("");
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("halts when a changed symlink resolves outside the writable root", async () => {
+  it("T-V7-031 halts a symlink escape outside the writable root", async () => {
     const root = fixture();
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), "sta-checkpoint-outside-"));
     try {

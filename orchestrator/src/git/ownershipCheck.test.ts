@@ -23,7 +23,7 @@ describe("git ownership checker", () => {
     expect(result.problems).toEqual([]);
   });
 
-  it("turns red for a planted push outside src/git", () => {
+  it("T-V7-031 remote push is unreachable: a planted push outside src/git turns the checker red", () => {
     const root = fixture({
       "feature.ts": 'import { execFile } from "node:child_process";\nexecFile("git", ["push", "origin", "main"]);\n',
     });
@@ -43,7 +43,7 @@ describe("git ownership checker", () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("treats an unlisted state-changing subcommand as mutation", () => {
+  it("T-V7-031 unsafe Git operations remain unreachable: an unlisted mutation turns the checker red", () => {
     const root = fixture({
       "bootstrap.ts": 'import { spawnSync } from "node:child_process";\nspawnSync("git", ["init"]);\n',
     });

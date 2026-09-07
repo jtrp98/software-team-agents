@@ -43,7 +43,7 @@ async function refusal(
 }
 
 describe("repository preflight refusal matrix", () => {
-  it("refuses modified tracked files first with a runnable restore command", async () => {
+  it("T-V7-031 refuses a dirty tracked workspace before branch creation", async () => {
     const root = fixture();
     try {
       fs.writeFileSync(path.join(root, "base.txt"), "modified\n");
@@ -182,7 +182,7 @@ describe("repository preflight refusal matrix", () => {
 });
 
 describe("per-run branch isolation", () => {
-  it("sanitizes bounded segments and produces a ref Git itself accepts", () => {
+  it("T-V7-031 sanitizes malicious module and branch input into a ref Git accepts", () => {
     const branch = generatedRunBranch("a b/c;rm -rf /", "run id:1");
     expect(branch).toBe("sta/run/a_b_c_rm_-rf__/run_id_1");
     expect(() => execFileSync("git", ["check-ref-format", "--branch", branch])).not.toThrow();

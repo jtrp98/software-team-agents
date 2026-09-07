@@ -118,7 +118,7 @@ describe("T-V6-018 — sta report verb", () => {
     expect(authMod?.phases[0].verified).toBe("✅ (FULL)");
   });
 
-  it("generateHtmlReport produces self-contained HTML with four blocks and zero external links", () => {
+  it("generateHtmlReport produces a self-contained report including bounded-run evidence", () => {
     const mockReport: ReportData = {
       projectName: "my-mock-project",
       generatedAt: "2026-09-06T12:00:00.000Z",
@@ -182,6 +182,39 @@ describe("T-V6-018 — sta report verb", () => {
         },
         disclaimer: "Deterministic gate notice",
       },
+      runs: [{
+        run_id: "01J00000000000000000000063",
+        target_root: "C:\\mock\\root",
+        module: "test-mod",
+        wave: 1,
+        state: "HUMAN_REVIEW",
+        base_branch: "main",
+        base_sha: "a".repeat(40),
+        run_branch: "sta/run/test-mod/01J00000000000000000000063",
+        task_order: ["BE-001"],
+        runtime_id: "claude-code",
+        tier: "T2",
+        model: "opus",
+        tasks: [{
+          task_id: "BE-001",
+          status: "CHECKPOINTED",
+          duration_ms: 2000,
+          changed_files: ["src/index.ts"],
+          checkpoint_sha: "b".repeat(40),
+          checkpoint_subject: "sta(BE-001): checkpoint",
+          gate: "passed",
+          gate_summary: "typecheck",
+        }],
+        next_required_human_action: "Review checkpoints with qa-engineer; only a human may declare MERGE_READY.",
+        merge_advisory: {
+          kind: "diverged",
+          command: "git switch main && git merge --ff-only sta/run/test-mod/01J00000000000000000000063",
+          advanced_by: 1,
+          overlapping_paths: ["src/index.ts"],
+        },
+        disclaimer: "Deterministic gate only — CHECKPOINTED is a durability fact, not a QA verdict.",
+      }],
+      orphanRunBranches: [{ target_root: "C:\\mock\\root", branch: "sta/run/orphan/old" }],
     };
 
     const html = generateHtmlReport(mockReport);
@@ -190,11 +223,12 @@ describe("T-V6-018 — sta report verb", () => {
     expect(html).toContain("<!DOCTYPE html>");
     expect(html).toContain("<title>STA Dashboard — my-mock-project</title>");
 
-    // 2. All 4 blocks present
+    // 2. Existing blocks and the additive run section are present
     expect(html).toContain("1. Modules × Phases Matrix");
     expect(html).toContain("2. Current Phase Plan (Phase 1)");
     expect(html).toContain("3. Open Issues / Reviews");
     expect(html).toContain("4. Working Tree Status");
+    expect(html).toContain("5. Bounded Runs");
 
     // 3. Block contents render
     expect(html).toContain("test-mod");
@@ -204,6 +238,13 @@ describe("T-V6-018 — sta report verb", () => {
     expect(html).toContain("Blocking");
     expect(html).toContain("src/index.ts");
     expect(html).toContain("Gate: PASSED");
+    expect(html).toContain("CHECKPOINTED");
+    expect(html).toContain("Next required human action:");
+    expect(html).toContain("base branch advanced by 1 commit");
+    expect(html).toContain("overlapping paths: src/index.ts");
+    expect(html).toContain("Orphan run branches — listed only, never removed:");
+    expect(html).toContain("CHECKPOINTED is a durability fact, not a QA verdict");
+    expect(html).not.toMatch(/\b(?:BE-001|1 tasks?)\s+(?:complete|done|passed)\b/i);
 
     // 4. Must be self-contained — ZERO external network requests
     expect(html).not.toMatch(/https?:\/\//i);

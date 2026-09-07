@@ -35,7 +35,7 @@ describe("closed Git command layer", () => {
     expect(isPathWithinRoot("C:\\Repository\\file.ts", "c:\\repo", "win32")).toBe(false);
   });
 
-  it("exports the one exact allow-list and no forbidden convenience methods", () => {
+  it("T-V7-031 exposes no push, reset, clean, tag, revert, rebase or merge operation", () => {
     expect(GIT_COMMAND_ALLOW_LIST).toEqual([
       "rev-parse",
       "symbolic-ref",
@@ -101,7 +101,7 @@ describe("closed Git command layer", () => {
 });
 
 describe("Git command integration", () => {
-  it("stages a file literally named -rf only as a path", async () => {
+  it("T-V7-031 blocks argument injection by staging a file named -rf only as a path", async () => {
     const root = fixture();
     try {
       fs.writeFileSync(path.join(root, "-rf"), "not a flag\n");

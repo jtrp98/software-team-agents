@@ -54,7 +54,7 @@ describe("T-V3R-003 runtime artifact contract", () => {
     expect(fs.existsSync(path.join(root, ".workflow"))).toBe(false);
   });
 
-  it("encodes task ids so path-like input cannot escape the runtime-state home", () => {
+  it("T-V7-031 blocks path traversal from an id-derived runtime artifact path", () => {
     const root = tempRoot();
     const resolved = runtimeArtifactPaths(root, "../outside").packets;
     expect(path.relative(path.join(root, ".workflow", "packets"), resolved)).not.toMatch(/^\.\.(?:[\\/]|$)/);

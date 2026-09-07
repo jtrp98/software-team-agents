@@ -35,7 +35,7 @@ describe("workspace run lock", () => {
     releaseWorkspaceRunLock(runtime, target, "run-1");
   });
 
-  it("refuses a second run on the same working tree, even for a different module", () => {
+  it("T-V7-031 refuses a second runner on the same Target, even for a different module", () => {
     const runtime = tempRoot();
     const target = tempRoot("sta-target-");
     acquireWorkspaceRunLock(runtime, target, "module-a-run");

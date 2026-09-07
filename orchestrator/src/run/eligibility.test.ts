@@ -103,7 +103,7 @@ describe("auto-eligibility A-J", () => {
     ["codex", "preview"],
     ["opencode", "experimental"],
     ["antigravity", "experimental"],
-  ])("clause G refuses %s and names support level %s", (runtimeId, level) => {
+  ])("T-V7-031 clause G refuses unsupported runtime %s and names support level %s", (runtimeId, level) => {
     const decision = evaluateAutoEligibility(intent(), live({ runtimeId }));
     expectClause(decision, "G");
     expect(renderAutoEligibility(decision).join("\n")).toContain(`support level "${level}"`);
@@ -115,7 +115,7 @@ describe("auto-eligibility A-J", () => {
     expectClause(evaluateAutoEligibility(intent(), live({ runtimeCapabilities: new Set() })), "G");
   });
 
-  it("clause H accepts one legacy root, refuses two roots, and fails closed when unresolved", () => {
+  it("T-V7-031 clause H refuses two writable Target roots", () => {
     expect(evaluateAutoEligibility(intent(), live({ writableTargetRoots: [path.resolve("legacy")] })).eligible).toBe(true);
     expectClause(evaluateAutoEligibility(intent(), live({ writableTargetRoots: [path.resolve("one"), path.resolve("two")] })), "H");
     expectClause(evaluateAutoEligibility(intent(), live({ writableTargetRoots: null })), "H");

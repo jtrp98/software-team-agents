@@ -233,7 +233,7 @@ describe("T-V3R-032 production runtime composition", () => {
 });
 
 describe("T-V7-028 bounded wave through the production CLI composition", () => {
-  it("registers metadata, keeps dry-run byte-clean, then runs one owner stage and checkpoints it", async () => {
+  it("T-V7-028/T-V7-031 keeps dry-run byte-clean, then completes the disposable-fixture success and failure paths", async () => {
     const project = fs.mkdtempSync(path.join(os.tmpdir(), "sta-wave-cli-"));
     const framework = resolveFrameworkRoot();
     const calls: RuntimeAgentRequest[] = [];

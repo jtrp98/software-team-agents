@@ -174,7 +174,8 @@ describe("bounded sequential wave runner", () => {
       "RUN_COMPLETED", "HUMAN_REVIEW_REQUIRED",
     ]);
     expect(git(target, "log", "--format=%s", "--reverse", preflight.runBranch)).toContain("sta(BE-1)");
-    expect(logs.join("\n")).toContain("not VERIFIED or DEPLOYED");
+    expect(logs.join("\n")).toContain("not VERIFIED, SECURITY_APPROVED, or MERGE_READY");
+    expect(logs.join("\n")).not.toMatch(/\b(?:tasks?|BE-\w+)\s+(?:done|complete|passed)\b/i);
     expect(renderWavePreview({ wave: 1, preview, route: selectedRoute, baseBranch: preflight.baseBranch, baseSha: preflight.baseSha })).toEqual([
       "[orchestrator] bounded wave 1: 2 task(s)",
       "[orchestrator] route runtime=claude-code tier=T2 model=opus",
@@ -182,7 +183,75 @@ describe("bounded sequential wave runner", () => {
       "[orchestrator] 1. BE-1 owner=backend-engineer ELIGIBLE",
       "[orchestrator] 2. BE-2 owner=backend-engineer ELIGIBLE",
     ]);
-  });
+  }, 15_000);
+
+  it("T-V7-031 reports real base-branch divergence and never merges automatically", async () => {
+    const target = repository();
+    const stateRoot = temp("sta-wave-divergence-state-");
+    const store = new MemoryTaskStore();
+    const registry = new TaskRegistry({ store });
+    const task = row("BE-DIVERGENCE");
+    register(registry, target, task);
+    const selectedRoute = route();
+    const preview = buildWavePreview({
+      planTasks: [task], wave: 1, maxTasks: 1, store, route: selectedRoute, repositoryState: "clean-ordinary",
+    });
+    const runId = "01J00000000000000000000061";
+    const commandLayer = new GitCommandLayer({ cwd: target });
+    const preflight = await inspectRepositoryPreflight(commandLayer, "orders", runId);
+
+    fs.writeFileSync(path.join(target, "base-advanced.txt"), "advanced while run was pending\n");
+    git(target, "add", "base-advanced.txt");
+    git(target, "commit", "-m", "advance base outside bounded run");
+    const advancedBaseSha = git(target, "rev-parse", "main");
+
+    const manifest: RunManifest = {
+      run_id: runId,
+      created_at: "2026-09-07T00:00:00.000Z",
+      target_root: target,
+      target_id: "target",
+      knowledge_root: stateRoot,
+      module: "orders",
+      wave: 1,
+      plan_hash: planHash([task]),
+      task_order: [task.id],
+      base_branch: preflight.baseBranch,
+      base_sha: preflight.baseSha,
+      run_branch: preflight.runBranch,
+      runtime_id: selectedRoute.runtimeId,
+      tier: selectedRoute.tier,
+      model: selectedRoute.model,
+      max_tasks: 1,
+      sta_version: "1.1.0",
+    };
+    const logs: string[] = [];
+    const code = await executeWave({
+      projectRoot: stateRoot,
+      manifest,
+      planTasks: [task],
+      preview,
+      preflight,
+      registry,
+      store,
+      route: selectedRoute,
+      git: commandLayer,
+      log: (line) => logs.push(line),
+      secretScanner: () => ({ ok: true, problems: [] }),
+      compose: async () => ({
+        executor: async () => {
+          fs.writeFileSync(path.join(target, "run-change.txt"), "bounded run change\n");
+          return { outcome: { result: "PASS", tokens: 1, cost: 0 } };
+        },
+        verificationFor: () => verification,
+      }),
+    });
+
+    expect(code).toBe(0);
+    expect(logs.join("\n")).toContain("base branch advanced by 1 commit");
+    expect(logs.join("\n")).toContain("git merge --ff-only");
+    expect(git(target, "rev-parse", "main")).toBe(advancedBaseSha);
+    expect(git(target, "branch", "--show-current")).toBe(preflight.runBranch);
+  }, 15_000);
 
   it("fails closed when registration classification carries a human gate", () => {
     const target = repository();
@@ -200,6 +269,34 @@ describe("bounded sequential wave runner", () => {
     });
     expect(preview.allEligible).toBe(false);
     expect(preview.tasks[0]!.decision.failures.some((failure) => failure.clause === "D")).toBe(true);
+  });
+
+  it("T-V7-031 refuses an otherwise eligible wave spanning two writable Targets", () => {
+    const firstTarget = repository();
+    const secondTarget = repository();
+    const store = new MemoryTaskStore();
+    const registry = new TaskRegistry({ store });
+    const tasks = [row("BE-1"), row("BE-2")];
+    register(registry, firstTarget, tasks[0]);
+    registry.create({
+      taskId: tasks[1].id,
+      classification: classifyTask({ isClearBugFix: true, touchesBackend: true }),
+      projectRoot: frameworkRoot,
+      taskText: tasks[1].description,
+      targetWorkRoots: [
+        { stage: AgentStage.BACKEND_ENGINEER, targetId: "second", path: secondTarget },
+        { stage: AgentStage.QA_ENGINEER, targetId: "second", path: secondTarget },
+      ],
+      changeAwareVerification: false,
+    });
+    const preview = buildWavePreview({
+      planTasks: tasks, wave: 1, maxTasks: 2, store, route: route(), repositoryState: "clean-ordinary",
+    });
+    expect(preview.allEligible).toBe(false);
+    expect(preview.tasks[0].decision.eligible).toBe(true);
+    expect(preview.tasks[1].decision.failures).toEqual(expect.arrayContaining([
+      expect.objectContaining({ clause: "H" }),
+    ]));
   });
 
   it.each([
@@ -236,7 +333,11 @@ describe("bounded sequential wave runner", () => {
       name: "denied changed path", runId: "01J00000000000000000000046", reason: "denied path", failure: undefined,
       expectedClass: "DENIED_PATH", outcome: "PASS" as const, writePath: ".workflow/forbidden.txt", caseVerification: verification,
     },
-  ])("halts and preserves on $name without retrying or checkpointing", async ({
+    {
+      name: "NO_CHANGES", runId: "01J00000000000000000000047", reason: "no changes", failure: undefined,
+      expectedClass: "NO_CHANGES", outcome: "PASS" as const, caseVerification: verification,
+    },
+  ])("T-V7-031 halts and preserves on $name without retrying or checkpointing", async ({
     runId, reason, failure, expectedClass, outcome, writePath, caseVerification,
   }) => {
     const target = repository();

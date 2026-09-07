@@ -127,7 +127,7 @@ function begin(stateRoot: string, run: RunManifest, taskId: string): void {
 }
 
 describe("wave crash recovery", () => {
-  it("kills a real runner process, refuses its dirty work, then resumes without rerunning the checkpointed owner", async () => {
+  it("T-V7-031 kills a real runner process, refuses dirty work, then resumes without rerunning the checkpointed owner", async () => {
     const stateRoot = temp("sta-kill-state-");
     const target = repository();
     const marker = path.join(stateRoot, "second-owner-started.marker");

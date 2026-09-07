@@ -19,6 +19,7 @@ import {
 import { applyRunJournalRecord, type RunState } from "./stateMachine.js";
 import { appendJournalRecord, type KnownJournalRecord, type RunManifest, writeRunManifest } from "./journal.js";
 import { evaluateAutoEligibility, renderAutoEligibility, tasksInDerivedWave, type AutoEligibilityDecision } from "./eligibility.js";
+import { deriveMergeAdvisory, renderMergeAdvisory } from "./observability.js";
 
 export interface ResolvedWaveRoute {
   runtimeId: string;
@@ -350,7 +351,7 @@ export async function executeWave(options: ExecuteWaveOptions): Promise<number> 
         });
         append({ ts: ts(), kind: "TASK_CHECKPOINTED", task_id: task.id, sha: checkpoint.sha });
         checkpointed.add(task.id);
-        log(`[orchestrator] ${task.id} CHECKPOINTED at ${checkpoint.sha}; this is not VERIFIED or DEPLOYED.`);
+        log(`[orchestrator] ${task.id} CHECKPOINTED at ${checkpoint.sha}; this is not VERIFIED, SECURITY_APPROVED, or MERGE_READY.`);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         const kind = error instanceof CheckpointRefusal ? error.kind : "git";
@@ -363,7 +364,10 @@ export async function executeWave(options: ExecuteWaveOptions): Promise<number> 
 
     append({ ts: ts(), kind: "RUN_COMPLETED" });
     append({ ts: ts(), kind: "HUMAN_REVIEW_REQUIRED" });
+    log(`[orchestrator] ${options.manifest.task_order.length} tasks CHECKPOINTED — none verified. Next: qa-engineer.`);
     log(`[orchestrator] wave ${options.manifest.wave} boundary reached; human review is required. Checkpoints are not verification or approval.`);
+    const advisory = await deriveMergeAdvisory(options.manifest, state, git);
+    for (const line of renderMergeAdvisory(options.manifest, advisory)) log(line);
     return 0;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
