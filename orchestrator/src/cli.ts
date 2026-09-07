@@ -63,7 +63,7 @@ import { migrateSta } from "./packaging/migration.js";
 import { configureIdentities, configureKnowledgeRoot, loadInstallationConfig } from "./threeRepo/installation.js";
 import { loadTargetRegistry } from "./threeRepo/targets.js";
 import { preflightThreeRepoTask } from "./threeRepo/preflight.js";
-import { resolveDocsRoot, resolveThreeRepoTaskLookup, resolveWritableWorkRoots } from "./threeRepo/cliRoots.js";
+import { resolveDocsRoot, resolveThreeRepoTaskLookup, resolveWritableWorkRoots, type TaskLookup } from "./threeRepo/cliRoots.js";
 import { exitCodeFor, runDoctor } from "./threeRepo/doctor.js";
 import { validateNewTaskBindings, type TargetBindings } from "./threeRepo/taskBindings.js";
 import { collectMigrationManifest, confirmCutover, copyMigrationSource, readMigrationManifest, transformMigratedKnowledge, verifyMigration, writeMigrationManifest } from "./threeRepo/knowledgeMigration.js";
@@ -72,6 +72,10 @@ import { runTargetCli } from "./targetcli/cli.js";
 import { buildPlanGraph, type TaskNode } from "./graph/taskGraph.js";
 import { parsePlanTasks } from "./docs/planGraph.js";
 import type { RuntimeTaskWorkRoot } from "./orchestrator/runtimeTask.js";
+
+export function resolveQaWorkRoots(projectRoot: string, taskId: string, store: TaskLookup): string[] {
+  return resolveWritableWorkRoots(projectRoot, taskId, store, AgentStage.QA_ENGINEER);
+}
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -1479,9 +1483,9 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     // restores the exact V1 behaviour for a caller that wants it.
     // Resolve the same writable roots for change discovery, deterministic
     // checks, and evidence. In three-repo mode this remains the Target, never
-    // the Framework binding root. One tested resolver, not four
+    // the Framework binding root. One tested resolver, not five
     // inline fail-open copies.
-    const qaRoots = resolveWritableWorkRoots(args.projectRoot, taskId, store);
+    const qaRoots = resolveQaWorkRoots(args.projectRoot, taskId, store);
     const qaDocsRoot = resolveDocsRoot(args.projectRoot);
     const qaInputs = await productionQaInputs({ docsRoot: qaDocsRoot, moduleName: args.module ?? "", taskId, roots: qaRoots });
 
@@ -1500,7 +1504,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
           requiredVerification: () => orchestrator.runtimeTask?.required_verification,
           projectRoot: args.projectRoot,
           changedFiles: async () => {
-            const roots = resolveWritableWorkRoots(args.projectRoot, taskId, store);
+            const roots = resolveQaWorkRoots(args.projectRoot, taskId, store);
             const results = await Promise.allSettled(roots.map((root) => gitChangedFiles(root)));
             return [...new Set(results.flatMap((r) => (r.status === "fulfilled" ? r.value : [])))];
           }
@@ -1526,7 +1530,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
             // projects have exactly one — the project root itself. A root whose
             // git fails contributes nothing rather than poisoning the others;
             // a total failure yields [], which scopes as unbounded → FULL.
-            const roots = resolveWritableWorkRoots(args.projectRoot, taskId, store);
+            const roots = resolveQaWorkRoots(args.projectRoot, taskId, store);
             const results = await Promise.allSettled(roots.map((root) => gitChangedFiles(root)));
             return [...new Set(results.flatMap((r) => (r.status === "fulfilled" ? r.value : [])))];
           },
