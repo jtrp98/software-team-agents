@@ -34,6 +34,7 @@ describe("listPolicySections", () => {
       "documentation",
       "git",
       "security",
+      "ux",
     ]);
     for (const entry of index) expect(entry.sections.length).toBeGreaterThan(0);
   });
