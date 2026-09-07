@@ -22,7 +22,7 @@ export type GitCommandId = (typeof GIT_COMMAND_ALLOW_LIST)[number];
 export type GitCommandRequest =
   | { readonly command: "rev-parse"; readonly mode: "head" | "git-dir" | "verify-ref"; readonly value?: string }
   | { readonly command: "symbolic-ref" }
-  | { readonly command: "status --porcelain" }
+  | { readonly command: "status --porcelain"; readonly nullTerminated?: boolean }
   | { readonly command: "ls-files"; readonly mode: "untracked" }
   | { readonly command: "diff"; readonly mode: "name-only" | "cached-name-only" | "stat"; readonly revision?: string; readonly paths?: readonly string[] }
   | { readonly command: "log"; readonly maxCount?: number; readonly grep?: string }
@@ -31,7 +31,7 @@ export type GitCommandRequest =
   | { readonly command: "switch -c"; readonly branch: string; readonly startPoint: string }
   | { readonly command: "branch"; readonly mode: "list"; readonly pattern?: string }
   | { readonly command: "add -- <paths>"; readonly paths: readonly string[] }
-  | { readonly command: "commit -m"; readonly message: string };
+  | { readonly command: "commit -m"; readonly messages: readonly string[] };
 
 export interface GitIdentity {
   readonly name: string;
@@ -114,7 +114,7 @@ export function defaultGitProcessRunner(args: readonly string[], options: GitPro
   });
 }
 
-function canonicalProspectivePath(candidate: string): string {
+export function canonicalProspectivePath(candidate: string): string {
   let existing = path.resolve(candidate);
   const tail: string[] = [];
   while (!fs.existsSync(existing)) {
@@ -183,7 +183,7 @@ function buildGitArgs(request: GitCommandRequest): string[] {
     case "symbolic-ref":
       return ["symbolic-ref", "--quiet", "--short", "HEAD"];
     case "status --porcelain":
-      return ["status", "--porcelain"];
+      return ["status", "--porcelain", ...(request.nullTerminated ? ["-z", "--untracked-files=all"] : [])];
     case "ls-files":
       return ["ls-files", "--others", "--exclude-standard"];
     case "diff": {
@@ -226,8 +226,10 @@ function buildGitArgs(request: GitCommandRequest): string[] {
       if (request.paths.length === 0) throw new GitCommandError("Git add requires at least one path");
       return ["add", "--", ...request.paths];
     case "commit -m":
-      if (!request.message || /\u0000/.test(request.message)) throw new GitCommandError("Commit message is not safe");
-      return ["commit", "--no-gpg-sign", "-m", request.message, "--"];
+      if (request.messages.length === 0 || request.messages.some((message) => !message || /\u0000/.test(message))) {
+        throw new GitCommandError("Commit message is not safe");
+      }
+      return ["commit", "--no-gpg-sign", ...request.messages.flatMap((message) => ["-m", message]), "--"];
     default: {
       const command = (request as { readonly command?: unknown }).command;
       throw new GitCommandError(`Git command is outside the closed allow-list: ${String(command)}`);
@@ -341,6 +343,10 @@ export class GitCommandLayer {
     return this.execute({ command: "status --porcelain" });
   }
 
+  statusPorcelainNull(): Promise<GitProcessResult> {
+    return this.execute({ command: "status --porcelain", nullTerminated: true });
+  }
+
   listUntrackedFiles(): Promise<GitProcessResult> {
     return this.execute({ command: "ls-files", mode: "untracked" });
   }
@@ -357,11 +363,11 @@ export class GitCommandLayer {
     return this.execute({ command: "add -- <paths>", paths });
   }
 
-  async commit(message: string): Promise<GitCommitResult> {
+  async commit(message: string | readonly string[]): Promise<GitCommitResult> {
     const config = readRepositoryGitConfig(this.cwd);
     let result: GitProcessResult;
     try {
-      result = await this.execute({ command: "commit -m", message });
+      result = await this.execute({ command: "commit -m", messages: typeof message === "string" ? [message] : message });
     } catch (error) {
       if (error instanceof GitCommandError && /author identity unknown|please tell me who you are|unable to auto-detect email address/i.test(error.message)) {
         throw new GitIdentityError();

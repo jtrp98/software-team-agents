@@ -28,6 +28,7 @@ import { checkPlanGraphs } from "../docs/planGraph.js";
 import { checkKnowledge } from "../knowledge/knowledgeBase.js";
 import { validateInstallation } from "../packaging/installValidation.js";
 import { checkRoleWorkspaces } from "../roles/roleWorkspace.js";
+import { checkGitOwnership } from "../git/ownershipCheck.js";
 
 /**
  * The one shape every checker's result is reduced to for printing. A plain
@@ -65,7 +66,8 @@ export type CheckerFlag =
   | "checkPlan"
   | "checkKnowledge"
   | "checkInstallation"
-  | "checkRoles";
+  | "checkRoles"
+  | "checkGitOwnership";
 
 /**
  * How a checker surfaces `result.notes` — byte-for-byte with the pre-table blocks:
@@ -264,6 +266,14 @@ export const CHECKERS: readonly CheckerDescriptor[] = [
     // "BA is behind on sales-crm" is the check working — what a lane needs to be
     // told, not a repo inconsistency to fail on.
     notes: "leading",
+  },
+  {
+    flag: "checkGitOwnership",
+    cliFlag: "--check-git-ownership",
+    run: (root) => toOutcome(checkGitOwnership(root)),
+    okMessage: "[orchestrator] Git mutation is owned by orchestrator/src/git/ and no forbidden remote or destructive subcommand exists.",
+    failHeading: "[orchestrator] Git ownership invariant has problems:",
+    notes: "none",
   },
 ];
 

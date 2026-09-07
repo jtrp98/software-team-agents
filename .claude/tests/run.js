@@ -275,6 +275,11 @@ for (const [name, input, expected] of gitCases) {
   check(name, runHook('block-git.js', input), expected);
 }
 
+const blockGitSource = fs.readFileSync(path.join(HOOKS, 'block-git.js'), 'utf8');
+const rejectedExecutionModeName = ['Auto', 'Runner', 'Mode'].join(' ');
+check('block-git has no persistent execution-mode branch', blockGitSource.includes(rejectedExecutionModeName) ? 1 : 0, 0);
+check('block-git has no environment-conditional git whitelist', /process\.env|AGENTCLAUDE_[A-Z_]*GIT/.test(blockGitSource) ? 1 : 0, 0);
+
 // ---------------------------------------------------------------------------
 // 2. block-outside-repo.js — `policies/security.md` §5a
 // ---------------------------------------------------------------------------

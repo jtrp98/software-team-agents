@@ -140,6 +140,8 @@ export interface CliArgs {
   checkInstallation: boolean;
   /** Check every role workspace under knowledge/_roles/ — each lane's watermark against the knowledge it refers to — and exit. Same audience. */
   checkRoles: boolean;
+  /** Check that only orchestrator/src/git/ can mutate Git and that remote/destructive subcommands are absent. */
+  checkGitOwnership: boolean;
   /** Snapshot every framework template file into an output directory, with manifest.json, and exit. Not a --check-*: it writes, it doesn't just report. */
   buildTemplates?: string;
   /** local/dev/staging/production. Defaults to Environment.LOCAL; only used when creating a task — a --resume/--retry inherits the task's already-stored environment. */
@@ -265,6 +267,7 @@ export const USAGE =
   "  sta --build-templates <out-dir> [--project-root <path>]  snapshot framework template files + manifest.json into <out-dir>\n" +
   "  sta --check-installation [--project-root <path>]   check .agent-team/manifest.json against the project's real files — needs an initialized workspace; fails on a bare Framework checkout by design\n" +
   "  sta --check-roles [--project-root <path>]          check each role workspace's watermark against knowledge/\n" +
+  "  sta --check-git-ownership [--project-root <path>]  check that Git mutation stays inside orchestrator/src/git/ and forbidden subcommands are absent\n" +
   "  sta --version                                      show the Framework version this CLI runs\n" +
   "run/retry exit codes: 0 deployed · 1 blocked · 2 unknown gate · 3 rejected by a person · 4 parked — a gate awaits `sta approve <task-id> --yes|--no`\n" +
   `  classification flags: ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
@@ -296,6 +299,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkKnowledgeFlag = false;
   let checkInstallationFlag = false;
   let checkRolesFlag = false;
+  let checkGitOwnershipFlag = false;
   let buildTemplatesOutDir: string | undefined;
   let environment: Environment = Environment.LOCAL;
   let dependsOn: string[] = [];
@@ -379,6 +383,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkInstallationFlag = true;
     } else if (arg === "--check-roles") {
       checkRolesFlag = true;
+    } else if (arg === "--check-git-ownership") {
+      checkGitOwnershipFlag = true;
     } else if (arg === "--build-templates") {
       buildTemplatesOutDir = argv[++i];
       if (!buildTemplatesOutDir) throw new CliUsageError("--build-templates requires an <out-dir> argument");
@@ -458,6 +464,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkKnowledgeFlag &&
     !checkInstallationFlag &&
     !checkRolesFlag &&
+    !checkGitOwnershipFlag &&
     !buildTemplatesOutDir
   ) {
     if (!taskId) throw new CliUsageError("--task-id is required");
@@ -496,6 +503,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkKnowledge: checkKnowledgeFlag,
     checkInstallation: checkInstallationFlag,
     checkRoles: checkRolesFlag,
+    checkGitOwnership: checkGitOwnershipFlag,
     buildTemplates: buildTemplatesOutDir,
     environment,
     dependsOn,
