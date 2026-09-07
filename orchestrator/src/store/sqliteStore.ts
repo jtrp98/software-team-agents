@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import Database from "better-sqlite3";
 import type { AgentStage } from "../types.js";
@@ -359,14 +360,40 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
 
 export class SqliteTaskStore implements TaskStore {
   private readonly db: Database.Database;
+  private readonly readOnly: boolean;
+  private snapshotDir: string | undefined;
 
   /** `:memory:` is accepted for tests; any other path has its parent directory created. */
-  constructor(filePath: string) {
+  constructor(filePath: string, options: { readonly?: boolean } = {}) {
+    this.readOnly = options.readonly === true;
     try {
-      if (filePath !== ":memory:") {
+      if (!this.readOnly && filePath !== ":memory:") {
         fs.mkdirSync(path.dirname(path.resolve(filePath)), { recursive: true });
       }
-      this.db = new Database(filePath);
+      // SQLite opens a WAL database read-only by creating/attaching `-shm` and `-wal`
+      // sidecars. A dry-run must not mutate even that project metadata, so open a
+      // disposable byte-for-byte temp snapshot instead of the project file.
+      // Refuse an outstanding WAL rather than silently reading a
+      // main-file snapshot that might lag committed state.
+      if (this.readOnly && fs.existsSync(`${filePath}-wal`) && fs.statSync(`${filePath}-wal`).size > 0) {
+        throw new Error("cannot take a mutation-free state snapshot while a SQLite WAL contains pending pages; retry after the writer closes");
+      }
+      if (this.readOnly) {
+        this.snapshotDir = fs.mkdtempSync(path.join(os.tmpdir(), "sta-state-snapshot-"));
+        const snapshotFile = path.join(this.snapshotDir, "state.db");
+        fs.copyFileSync(filePath, snapshotFile);
+        this.db = new Database(snapshotFile, { readonly: true, fileMustExist: true });
+      } else {
+        this.db = new Database(filePath);
+      }
+      if (this.readOnly) {
+        const found = Number((this.db.pragma("user_version", { simple: true }) as number) ?? 0);
+        if (found !== SCHEMA_VERSION) {
+          this.db.close();
+          throw new SchemaVersionMismatchError(found, SCHEMA_VERSION);
+        }
+        return;
+      }
       // WAL keeps a reader (`agent status`) from blocking the run that is writing.
       this.db.pragma("journal_mode = WAL");
       this.db.exec(DDL);
@@ -378,6 +405,10 @@ export class SqliteTaskStore implements TaskStore {
         this.migrate(found);
       }
     } catch (e) {
+      if (this.snapshotDir) {
+        fs.rmSync(this.snapshotDir, { recursive: true, force: true });
+        this.snapshotDir = undefined;
+      }
       // SchemaVersionMismatchError is already a specific, well-messaged refusal (and already
       // closed the handle itself in migrate()) — pass it through unchanged rather than
       // relabelling a deliberate refusal as "unavailable".
@@ -416,6 +447,7 @@ export class SqliteTaskStore implements TaskStore {
   }
 
   createTask(task: PersistedTask): void {
+    if (this.readOnly) throw new Error("state database was opened read-only");
     const exists = this.db.prepare("SELECT 1 FROM tasks WHERE task_id = ?").get(task.taskId);
     if (exists) throw new TaskAlreadyExistsError(task.taskId);
     this.db
@@ -424,6 +456,7 @@ export class SqliteTaskStore implements TaskStore {
   }
 
   saveTask(task: PersistedTask): void {
+    if (this.readOnly) throw new Error("state database was opened read-only");
     const info = this.db
       .prepare("UPDATE tasks SET updated_at = ?, state = ? WHERE task_id = ?")
       .run(task.updatedAt, JSON.stringify(task), task.taskId);
@@ -446,6 +479,7 @@ export class SqliteTaskStore implements TaskStore {
   }
 
   appendRun(record: RunRecord): void {
+    if (this.readOnly) throw new Error("state database was opened read-only");
     this.db
       .prepare(
         `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, estimated_input_tokens, prompt_version, effort, qa_mode, qa_effort, deterministic_gate, document_gate, runtime, requested_runtime, requested_model, routing_basis, fallback_reason, fallback_count, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars, verification_fingerprint)
@@ -571,6 +605,7 @@ export class SqliteTaskStore implements TaskStore {
   }
 
   appendEvent(event: NewEvent): void {
+    if (this.readOnly) throw new Error("state database was opened read-only");
     const record = parseNewEvent(event);
     this.db
       .prepare(
@@ -609,5 +644,9 @@ export class SqliteTaskStore implements TaskStore {
 
   close(): void {
     this.db.close();
+    if (this.snapshotDir) {
+      fs.rmSync(this.snapshotDir, { recursive: true, force: true });
+      this.snapshotDir = undefined;
+    }
   }
 }

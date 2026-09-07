@@ -263,6 +263,25 @@ export function readJournal(projectRoot: string, runId: string): JournalReadResu
   return { records, truncatedFinalLine };
 }
 
+/** Removes only an incomplete final JSONL fragment after it has been reported by `readJournal`. */
+export function repairTruncatedJournal(projectRoot: string, runId: string): boolean {
+  const result = readJournal(projectRoot, runId);
+  if (!result.truncatedFinalLine) return false;
+  const file = runArtifactPaths(projectRoot, runId).journal;
+  const body = fs.readFileSync(file, "utf8");
+  const lastNewline = Math.max(body.lastIndexOf("\n"), body.lastIndexOf("\r"));
+  const repaired = lastNewline < 0 ? "" : body.slice(0, lastNewline + 1);
+  const fd = fs.openSync(file, "r+");
+  try {
+    fs.ftruncateSync(fd, 0);
+    fs.writeFileSync(fd, repaired, "utf8");
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  return true;
+}
+
 export function pruneWaveRunArtifacts(
   projectRoot: string,
   currentRunId: string,

@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CliUsageError, USAGE, createProductionRuntimeRegistry, parseArgs, productionQaInputs, runCli, watchListing } from "./cli.js";
 import { defaultProjectRoot } from "./agents/agentContract.js";
@@ -16,6 +17,10 @@ import { writeExecutionPacket } from "./state/runtimeArtifacts.js";
 import { RunLog } from "./observability/runLog.js";
 import { runTargetSync } from "./targetcli/syncEngine.js";
 import { resolveFrameworkRoot } from "./targetcli/roots.js";
+import { RuntimeRegistry } from "./runtime/runtimeRegistry.js";
+import { LocalWorkspace } from "./runtime/localWorkspace.js";
+import type { RuntimeAdapter, RuntimeAgentRequest } from "./runtime/runtimeAdapter.js";
+import { RuntimeCapability } from "./runtime/runtimeCapabilities.js";
 
 // T-V6-006: resolveContextDocsRoot now falls back to installation.yaml when
 // AGENTCLAUDE_KNOWLEDGE_ROOT is unset, so every fixture in this file that
@@ -77,6 +82,12 @@ describe("parseArgs", () => {
       projectRoot: "/repo",
       classification: { isNewFeatureModuleOrProject: true, touchesBackend: true, touchesFrontend: true },
       resume: false,
+      registerOnly: false,
+      wave: undefined,
+      maxTasks: undefined,
+      dryRun: false,
+      resumeRun: false,
+      noWaveRunner: false,
       list: false,
       checkContracts: false,
       checkLayout: false,
@@ -172,6 +183,31 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--resume", "--backend-target", "api"], "/repo")).toThrow(/immutable/);
   });
 
+  it("keeps per-task --resume distinct from bounded-run --resume-run", () => {
+    const task = parseArgs(["--task-id", "T-1", "--module", "m", "--resume"], "/repo");
+    expect(task.resume).toBe(true);
+    expect(task.resumeRun).toBe(false);
+    const wave = parseArgs(["--wave", "2", "--module", "m", "--resume-run", "--autonomy", "edit"], "/repo");
+    expect(wave.resume).toBe(false);
+    expect(wave.resumeRun).toBe(true);
+    expect(wave.wave).toBe(2);
+  });
+
+  it("parses bounded wave limits and dry-run without adding a persistent autonomy surface", () => {
+    const args = parseArgs(["--wave", "3", "--module", "m", "--max-tasks", "4", "--dry-run"], "/repo");
+    expect(args).toMatchObject({ wave: 3, maxTasks: 4, dryRun: true, resumeRun: false });
+    expect(() => parseArgs(["--wave", "0", "--module", "m", "--dry-run"], "/repo")).toThrow(CliUsageError);
+    expect(() => parseArgs(["--wave", "1", "--module", "m", "--max-tasks", "0", "--dry-run"], "/repo")).toThrow(CliUsageError);
+    expect(() => parseArgs(["--auto-wave", "1", "--module", "m"], "/repo")).toThrow(CliUsageError);
+  });
+
+  it("accepts registration only with a concrete task classification and binding", () => {
+    expect(parseArgs([
+      "--task-id", "BE-1", "--module", "m", "--bug-fix", "--backend", "--backend-target", "api", "--register-only",
+    ], "/repo")).toMatchObject({ registerOnly: true, taskId: "BE-1", targetBindings: { frontend_target: null, backend_target: "api" } });
+    expect(() => parseArgs(["--wave", "1", "--module", "m", "--register-only"], "/repo")).toThrow(CliUsageError);
+  });
+
   it("throws CliUsageError when --task-id is missing", () => {
     expect(() => parseArgs(["--module", "m"], "/repo")).toThrow(CliUsageError);
   });
@@ -194,6 +230,173 @@ describe("T-V3R-032 production runtime composition", () => {
     expect(source).toContain("registry: runtimeRegistry");
     expect(source).toContain("runtime: defaultRuntime");
   });
+});
+
+describe("T-V7-028 bounded wave through the production CLI composition", () => {
+  it("registers metadata, keeps dry-run byte-clean, then runs one owner stage and checkpoints it", async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), "sta-wave-cli-"));
+    const framework = resolveFrameworkRoot();
+    const calls: RuntimeAgentRequest[] = [];
+    let failNext = false;
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      fs.cpSync(path.join(framework, "contracts"), path.join(project, "contracts"), { recursive: true });
+      fs.cpSync(path.join(framework, "stacks"), path.join(project, "stacks"), { recursive: true });
+      fs.cpSync(path.join(framework, ".claude", "agents"), path.join(project, ".claude", "agents"), { recursive: true });
+      fs.cpSync(path.join(framework, ".claude", "shared"), path.join(project, ".claude", "shared"), { recursive: true });
+      fs.mkdirSync(path.join(project, ".claude", "scripts"), { recursive: true });
+      fs.writeFileSync(path.join(project, ".claude", "settings.json"), JSON.stringify({ hooks: {
+        PreToolUse: [{ hooks: [{ command: "node .claude/hooks/block-path-permissions.js" }] }],
+        Stop: [{ hooks: [{ command: "node .claude/hooks/require-green-before-stop.js" }] }],
+        SubagentStop: [{ hooks: [{ command: "node .claude/hooks/require-green-before-stop.js" }] }],
+      } }));
+      fs.writeFileSync(path.join(project, ".claude", "scripts", "static-analysis-gate.js"), [
+        "const scan = process.argv.includes('--scan-files-for-secrets');",
+        "if (scan) console.log(JSON.stringify({ok:true,problems:[]}));",
+        "else console.log(JSON.stringify({verification:'passed',profile:'node',results:['lint','typecheck','test','build'].map(check=>({check,status:'passed'}))}));",
+      ].join("\n"));
+      const docs = path.join(project, "_docs", "module", "orders");
+      fs.mkdirSync(docs, { recursive: true });
+      const planPath = path.join(docs, "plan.md");
+      fs.writeFileSync(planPath, [
+        "# Plan", "", "## Phase 1: Orders", "",
+        "| Task | Status | Owner | Depends on |", "|---|---|---|---|",
+        "| BE-001 (DES-001) — implement orders | pending | backend-engineer | — |", "",
+      ].join("\n"));
+      fs.writeFileSync(path.join(docs, "requirement.md"), "# Requirements\n\n## Acceptance Criteria\n\n- orders work\n");
+      fs.writeFileSync(path.join(docs, "design.md"), "# Design\n\n## DES-001 — Orders\n\nImplement orders.\n");
+      fs.writeFileSync(path.join(docs, "test-plan.md"), "# Test Plan\n\n## Scope\n\nOrders.\n");
+      fs.writeFileSync(path.join(project, "package.json"), JSON.stringify({ scripts: {
+        lint: "node -e \"\"", typecheck: "node -e \"\"", test: "node -e \"\"", build: "node -e \"\"",
+      } }));
+      fs.writeFileSync(path.join(project, ".gitignore"), ".workflow/\n");
+      execFileSync("git", ["init", "-b", "main"], { cwd: project });
+      execFileSync("git", ["config", "user.name", "STA Test"], { cwd: project });
+      execFileSync("git", ["config", "user.email", "sta@example.test"], { cwd: project });
+      execFileSync("git", ["add", "."], { cwd: project });
+      execFileSync("git", ["commit", "-m", "fixture"], { cwd: project });
+
+      const adapter = (): RuntimeAdapter => ({
+        id: "claude-code",
+        displayName: "Fixture Claude",
+        binding: {
+          dir: ".claude",
+          definitionPath: (role) => `.claude/agents/${role}.md`,
+          guardConfigPath: ".claude/settings.json",
+        },
+        capabilities: new Set([
+          RuntimeCapability.NAMED_AGENTS,
+          RuntimeCapability.MODEL_SELECTION,
+          RuntimeCapability.PRE_TOOL_GUARD,
+          RuntimeCapability.EXIT_GUARD,
+          RuntimeCapability.PER_AGENT_EXIT_GUARD,
+          RuntimeCapability.PROJECT_LEVEL_BINDING,
+          RuntimeCapability.STRUCTURED_RESULT,
+        ]),
+        models: new Set(["opus"]),
+        workspace: new LocalWorkspace({ root: project }),
+        probe: async () => ({ available: true, version: "fixture" }),
+        executeAgent: async (request) => {
+          calls.push(request);
+          if (failNext) {
+            failNext = false;
+            return {
+              status: "ERROR",
+              exitCode: 1,
+              text: "fixture runtime error",
+              usage: {},
+              guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] },
+              diagnostics: ["fixture runtime error"],
+            };
+          }
+          fs.mkdirSync(path.join(project, "src", "server"), { recursive: true });
+          fs.writeFileSync(path.join(project, "src", "server", "orders.ts"), "export const orders = true;\n");
+          return {
+            status: "OK",
+            exitCode: 0,
+            text: "done",
+            usage: { inputTokens: 1, outputTokens: 1 },
+            model: "opus",
+            guards: {
+              enforced: [RuntimeCapability.PRE_TOOL_GUARD, RuntimeCapability.EXIT_GUARD, RuntimeCapability.PER_AGENT_EXIT_GUARD],
+              unenforced: [],
+            },
+            diagnostics: [],
+          };
+        },
+      });
+      const dependencies = { createRuntimeRegistry: () => new RuntimeRegistry([adapter()]) };
+
+      await expect(runCli([
+        "run", "--task-id", "BE-001", "--module", "orders", "--bug-fix", "--backend", "--register-only",
+        "--project-root", project,
+      ], project, dependencies)).resolves.toBe(0);
+      expect(calls).toHaveLength(0);
+
+      const stateDb = path.join(project, ".workflow", "state.db");
+      const before = {
+        state: fs.readFileSync(stateDb),
+        view: fs.readFileSync(path.join(project, ".workflow", "state.yaml")),
+        status: execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd: project, encoding: "utf8" }),
+        refs: execFileSync("git", ["branch", "--format=%(refname) %(objectname)"], { cwd: project, encoding: "utf8" }),
+      };
+      await expect(runCli([
+        "run", "--wave", "1", "--module", "orders", "--dry-run", "--runtime", "claude-code", "--model", "opus",
+        "--project-root", project,
+      ], project, dependencies)).resolves.toBe(0);
+      expect(calls).toHaveLength(0);
+      expect(fs.readFileSync(stateDb)).toEqual(before.state);
+      expect(fs.readFileSync(path.join(project, ".workflow", "state.yaml"))).toEqual(before.view);
+      expect(execFileSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd: project, encoding: "utf8" })).toBe(before.status);
+      expect(execFileSync("git", ["branch", "--format=%(refname) %(objectname)"], { cwd: project, encoding: "utf8" })).toBe(before.refs);
+      expect(fs.existsSync(`${stateDb}-wal`)).toBe(false);
+      expect(fs.existsSync(`${stateDb}-shm`)).toBe(false);
+
+      await expect(runCli([
+        "run", "--wave", "1", "--module", "orders", "--autonomy", "edit", "--runtime", "claude-code", "--model", "opus",
+        "--project-root", project,
+      ], project, dependencies)).resolves.toBe(0);
+      expect(calls.map((request) => request.role)).toEqual(["backend-engineer"]);
+      expect(execFileSync("git", ["log", "-1", "--format=%s"], { cwd: project, encoding: "utf8" })).toContain("sta(BE-001)");
+      const persisted = new SqliteTaskStore(stateDb);
+      try {
+        expect(persisted.loadTask("BE-001")?.classification.pipeline[persisted.loadTask("BE-001")!.pipelineCursor]).toBe(AgentStage.QA_ENGINEER);
+      } finally {
+        persisted.close();
+      }
+
+      fs.writeFileSync(planPath, [
+        "# Plan", "", "## Phase 1: Orders", "",
+        "| Task | Status | Owner | Depends on |", "|---|---|---|---|",
+        "| BE-001 (DES-001) — implement orders | verified | backend-engineer | — |", "",
+        "## Phase 2: More orders", "",
+        "| Task | Status | Owner | Depends on |", "|---|---|---|---|",
+        "| BE-002 (DES-001) — extend orders | pending | backend-engineer | BE-001 |", "",
+      ].join("\n"));
+      execFileSync("git", ["add", "_docs/module/orders/plan.md"], { cwd: project });
+      execFileSync("git", ["commit", "-m", "prepare second fixture wave"], { cwd: project });
+      await expect(runCli([
+        "run", "--task-id", "BE-002", "--module", "orders", "--bug-fix", "--backend", "--depends-on", "BE-001",
+        "--register-only", "--project-root", project,
+      ], project, dependencies)).resolves.toBe(0);
+      failNext = true;
+      const secondWave = [
+        "run", "--wave", "2", "--module", "orders", "--autonomy", "edit", "--runtime", "claude-code", "--model", "opus",
+        "--project-root", project,
+      ];
+      await expect(runCli(secondWave, project, dependencies)).resolves.toBe(1);
+      const callsAfterFailure = calls.length;
+      await expect(runCli(secondWave, project, dependencies)).resolves.toBe(1);
+      expect(calls).toHaveLength(callsAfterFailure);
+      expect(error.mock.calls.flat().join("\n")).toContain("unfinished bounded run");
+      expect(error.mock.calls.flat().join("\n")).toContain("--resume-run");
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 describe("productionQaInputs (T-V3TOK-062)", () => {

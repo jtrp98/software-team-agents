@@ -15,6 +15,10 @@ export interface AutoEligibilityClassification extends Pick<
   "touchesSchema" | "isProductionDeployOrMigration" | "touchesSensitiveArea"
 > {
   pipeline: readonly AgentStage[];
+  /** Persisted ClassificationResult guards; registration never has to reconstruct intake flags. */
+  requiresHumanApproval?: boolean;
+  sensitiveGate?: boolean;
+  level?: string;
 }
 
 /** PM-owned plan facts. No environment observation belongs in this shape. */
@@ -95,6 +99,9 @@ export function evaluateAutoEligibility(
       ["touchesSchema", live.classification.touchesSchema],
       ["isProductionDeployOrMigration", live.classification.isProductionDeployOrMigration],
       ["touchesSensitiveArea", live.classification.touchesSensitiveArea],
+      ["requiresHumanApproval", live.classification.requiresHumanApproval],
+      ["sensitiveGate", live.classification.sensitiveGate],
+      ["level=LARGE_CRITICAL", live.classification.level === "LARGE_CRITICAL"],
     ].filter(([, enabled]) => enabled === true).map(([name]) => name);
     if (sensitiveSignals.length > 0) {
       fail(failures, "D", `classification sets ${sensitiveSignals.join(", ")}`);

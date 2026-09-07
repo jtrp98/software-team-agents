@@ -25,7 +25,7 @@ export type GitCommandRequest =
   | { readonly command: "status --porcelain"; readonly nullTerminated?: boolean }
   | { readonly command: "ls-files"; readonly mode: "untracked" }
   | { readonly command: "diff"; readonly mode: "name-only" | "cached-name-only" | "stat"; readonly revision?: string; readonly paths?: readonly string[] }
-  | { readonly command: "log"; readonly maxCount?: number; readonly grep?: string }
+  | { readonly command: "log"; readonly maxCount?: number; readonly grep?: string; readonly revision?: string; readonly includeBody?: boolean }
   | { readonly command: "cat-file"; readonly object: string }
   | { readonly command: "merge-base"; readonly left: string; readonly right: string }
   | { readonly command: "switch -c"; readonly branch: string; readonly startPoint: string }
@@ -200,12 +200,16 @@ function buildGitArgs(request: GitCommandRequest): string[] {
       return args;
     }
     case "log": {
-      const args = ["log", "--format=%H"];
+      const args = ["log", request.includeBody ? "--format=%H%x00%B%x00" : "--format=%H"];
       if (request.maxCount !== undefined) {
         if (!Number.isInteger(request.maxCount) || request.maxCount < 1) throw new GitCommandError("log maxCount must be positive");
         args.push(`--max-count=${request.maxCount}`);
       }
       if (request.grep !== undefined) args.push(`--grep=${request.grep}`);
+      if (request.revision !== undefined) {
+        rejectOptionLike(request.revision, "revision");
+        args.push(request.revision);
+      }
       return args;
     }
     case "cat-file":
@@ -353,6 +357,18 @@ export class GitCommandLayer {
 
   listBranches(pattern?: string): Promise<GitProcessResult> {
     return this.execute({ command: "branch", mode: "list", pattern });
+  }
+
+  log(options: { maxCount?: number; grep?: string; revision?: string; includeBody?: boolean } = {}): Promise<GitProcessResult> {
+    return this.execute({ command: "log", ...options });
+  }
+
+  catFileExists(object: string): Promise<GitProcessResult> {
+    return this.execute({ command: "cat-file", object });
+  }
+
+  mergeBase(left: string, right: string): Promise<GitProcessResult> {
+    return this.execute({ command: "merge-base", left, right });
   }
 
   createBranch(branch: string, startPoint: string): Promise<GitProcessResult> {
