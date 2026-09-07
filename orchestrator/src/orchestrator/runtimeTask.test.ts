@@ -200,6 +200,8 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
       status: "selected",
       levels: ["lint", "typecheck", "unit", "build"],
       enforcement: "warn",
+      task_types: ["business-rule"],
+      selection_source: "task-classification",
     });
 
     const unknown = buildRuntimeTask({
@@ -212,6 +214,38 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
       status: "full-order",
       levels: ["lint", "typecheck", "unit", "integration", "build"],
       enforcement: "warn",
+      task_types: [],
+      selection_source: "full-order",
+    });
+  });
+
+  it("selects the schema task-type floor from classification and keeps the compatibility seam exact", () => {
+    const classification = classifyTask({ touchesSchema: true, touchesBackend: true });
+    const selected = buildRuntimeTask({
+      taskId: "T-PYRAMID-SCHEMA",
+      workflow: "schema-change",
+      classification,
+      projectRoot: defaultProjectRoot(),
+    })!;
+    expect(selected.required_verification).toMatchObject({
+      status: "selected",
+      levels: ["lint", "typecheck", "integration", "build"],
+      task_types: ["data-model-change"],
+      selection_source: "task-classification",
+    });
+
+    const compatibility = buildRuntimeTask({
+      taskId: "T-PYRAMID-SCHEMA-COMPAT",
+      workflow: "schema-change",
+      classification,
+      projectRoot: defaultProjectRoot(),
+      changeAwareVerification: false,
+    })!;
+    expect(compatibility.required_verification).toEqual({
+      status: "full-order",
+      levels: ["lint", "typecheck", "unit", "integration", "build"],
+      enforcement: "warn",
+      reason: expect.stringContaining('task type "schema-change" is absent'),
     });
   });
 

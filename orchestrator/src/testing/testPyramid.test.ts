@@ -9,10 +9,14 @@ import {
   assertTestPyramid,
   checkTestPyramid,
   loadTestPyramid,
+  refineVerificationFromScope,
   requiredLevelsFor,
   runtimeVerificationFor,
+  runtimeVerificationForClassification,
+  runtimeVerificationForTaskTypes,
   testPyramidPath,
 } from "./testPyramid.js";
+import { buildQaScope } from "../qa/scope.js";
 
 function fixtureRoot(content: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-pyramid-"));
@@ -28,6 +32,26 @@ task_types:
     required_levels: [unit, api]
   ui-component:
     description: A new or changed frontend component.
+    required_levels: [unit]
+`;
+
+const CHANGE_AWARE_YAML = `
+version: 1
+task_types:
+  api-endpoint:
+    description: A new or changed REST route.
+    required_levels: [unit, api]
+  data-model-change:
+    description: A new or changed database model.
+    required_levels: [integration]
+  business-rule:
+    description: A changed domain rule.
+    required_levels: [unit]
+  auth-flow:
+    description: A changed authentication flow.
+    required_levels: [unit, integration, api]
+  ui-component:
+    description: A changed UI component.
     required_levels: [unit]
 `;
 
@@ -131,6 +155,125 @@ describe("runtimeVerificationFor", () => {
   });
 });
 
+describe("change-aware runtime verification", () => {
+  it("uses canonical task types from structured classification instead of workflow ids", () => {
+    const pyramid = loadTestPyramid(fixtureRoot(CHANGE_AWARE_YAML));
+    const schema = runtimeVerificationForClassification("schema-change", { touchesSchema: true }, pyramid);
+    expect(schema).toMatchObject({
+      levels: ["lint", "typecheck", "integration", "build"],
+      taskTypes: ["data-model-change"],
+      selectionSource: "task-classification",
+    });
+
+    const businessRule = runtimeVerificationForClassification("business-rule", {}, pyramid);
+    expect(businessRule).toMatchObject({
+      levels: ["lint", "typecheck", "unit", "build"],
+      taskTypes: ["business-rule"],
+      selectionSource: "task-classification",
+    });
+
+    const unresolved = runtimeVerificationForClassification("bugfix", {}, pyramid);
+    expect(unresolved).toMatchObject({
+      levels: ["lint", "typecheck", "unit", "integration", "build"],
+      source: "full-order",
+      taskTypes: [],
+    });
+    expect(unresolved.reason).toContain("workflow ids are routing identifiers");
+  });
+
+  it("selects levels from a bounded post-implementation change scope", () => {
+    const pyramid = loadTestPyramid(fixtureRoot(CHANGE_AWARE_YAML));
+    const selection = runtimeVerificationForClassification("bugfix", {}, pyramid);
+    const refined = refineVerificationFromScope({
+      selection,
+      taskTypes: selection.taskTypes,
+      workflow: "bugfix",
+      classification: { sensitiveGate: false },
+      scope: buildQaScope({ taskId: "T1", changedFiles: ["src/routes/orders.route.ts"] }),
+      pyramid,
+    });
+    expect(refined).toMatchObject({
+      levels: ["lint", "typecheck", "unit", "api", "build"],
+      source: "test-pyramid",
+      taskTypes: ["api-endpoint"],
+      selectionSource: "change-scope",
+    });
+  });
+
+  it("never lets change scope weaken an existing task-type floor", () => {
+    const pyramid = loadTestPyramid(fixtureRoot(CHANGE_AWARE_YAML));
+    const floor = runtimeVerificationForTaskTypes(
+      ["auth-flow"],
+      pyramid,
+      "task-classification",
+      "fixture floor",
+    );
+    const refined = refineVerificationFromScope({
+      selection: floor,
+      taskTypes: floor.taskTypes,
+      workflow: "security-fix",
+      classification: { sensitiveGate: true },
+      scope: buildQaScope({ taskId: "T1", changedFiles: ["src/components/Login.tsx"] }),
+      pyramid,
+    });
+    expect(refined.levels).toEqual(["lint", "typecheck", "unit", "integration", "api", "build"]);
+    expect(refined.taskTypes).toEqual(["auth-flow", "ui-component"]);
+    expect(refined.reason).toContain("retained the build-time task-type floor");
+  });
+
+  it("keeps full order when scope is unbounded", () => {
+    const pyramid = loadTestPyramid(fixtureRoot(CHANGE_AWARE_YAML));
+    const selection = runtimeVerificationForClassification("bugfix", {}, pyramid);
+    const refined = refineVerificationFromScope({
+      selection,
+      workflow: "bugfix",
+      classification: { sensitiveGate: false },
+      scope: buildQaScope({ taskId: "T1", changedFiles: ["src/routes/orders.ts"], maxFiles: 0 }),
+      pyramid,
+    });
+    expect(refined).toMatchObject({
+      source: "full-order",
+      levels: ["lint", "typecheck", "unit", "integration", "build"],
+    });
+    expect(refined.reason).toContain("unbounded");
+  });
+
+  it("keeps full order when a changed file has no known task type", () => {
+    const pyramid = loadTestPyramid(fixtureRoot(CHANGE_AWARE_YAML));
+    const selection = runtimeVerificationForClassification("refactor", {}, pyramid);
+    const refined = refineVerificationFromScope({
+      selection,
+      workflow: "refactor",
+      classification: { sensitiveGate: false },
+      scope: buildQaScope({ taskId: "T1", changedFiles: ["src/domain/cache.ts"] }),
+      pyramid,
+    });
+    expect(refined).toMatchObject({
+      source: "full-order",
+      levels: ["lint", "typecheck", "unit", "integration", "build"],
+    });
+    expect(refined.reason).toContain("do not resolve");
+  });
+
+  it("keeps full order when the pyramid is unavailable", () => {
+    const pyramid = loadTestPyramid(fixtureRoot(CHANGE_AWARE_YAML));
+    const selection = runtimeVerificationForClassification("bugfix", {}, pyramid);
+    const refined = refineVerificationFromScope({
+      selection,
+      workflow: "bugfix",
+      classification: { sensitiveGate: false },
+      scope: buildQaScope({ taskId: "T1", changedFiles: ["src/routes/orders.ts"] }),
+      pyramid: null,
+      pyramidUnavailableReason: "fixture missing",
+    });
+    expect(refined).toMatchObject({
+      source: "full-order",
+      levels: ["lint", "typecheck", "unit", "integration", "build"],
+    });
+    expect(refined.reason).toContain("fixture missing");
+  });
+});
+
 describe("allLevels", () => {
   it("collects the union of every declared level, deduped", () => {
     const pyramid = loadTestPyramid(fixtureRoot(VALID_YAML));
@@ -174,51 +317,5 @@ task_types:
     required_levels: [api]
 `);
     expect(() => assertTestPyramid(root)).toThrow(TestPyramidMismatchError);
-  });
-});
-
-import { refineVerificationFromScope } from "./testPyramid.js";
-import { buildQaScope } from "../qa/scope.js";
-
-describe("refineVerificationFromScope", () => {
-  const FULL_LEVELS: any[] = ["lint", "typecheck", "unit", "integration", "build"];
-
-  it("keeps full order if pyramid is unavailable", () => {
-    const sel = { levels: FULL_LEVELS, enforcement: "warn" as const, source: "full-order" as const, reason: "unavailable" };
-    const scope = buildQaScope({ taskId: "T1", changedFiles: ["api/orders.ts"] });
-    const refined = refineVerificationFromScope(sel, scope, null);
-    expect(refined.source).toBe("full-order");
-    expect(refined.levels).toEqual(FULL_LEVELS);
-    expect(refined.reason).toContain("unavailable");
-  });
-
-  it("keeps full order if scope is unbounded", () => {
-    const sel = { levels: FULL_LEVELS, enforcement: "warn" as const, source: "full-order" as const, reason: "task type missing" };
-    const scope = buildQaScope({ taskId: "T1", changedFiles: ["api/orders.ts"], maxFiles: 0 });
-    const pyramid = loadTestPyramid(fixtureRoot(VALID_YAML));
-    const refined = refineVerificationFromScope(sel, scope, pyramid);
-    expect(refined.source).toBe("full-order");
-    expect(refined.levels).toEqual(FULL_LEVELS);
-    expect(refined.reason).toContain("unbounded");
-  });
-
-  it("keeps full order if scope maps to unknown task types", () => {
-    const sel = { levels: FULL_LEVELS, enforcement: "warn" as const, source: "full-order" as const, reason: "task type missing" };
-    const scope = buildQaScope({ taskId: "T1", changedFiles: ["unknown/file.txt"] });
-    const pyramid = loadTestPyramid(fixtureRoot(VALID_YAML));
-    const refined = refineVerificationFromScope(sel, scope, pyramid);
-    expect(refined.source).toBe("full-order");
-    expect(refined.levels).toEqual(FULL_LEVELS);
-    expect(refined.reason).toContain("unknown task type");
-  });
-
-  it("narrows verification based on changed files (bounded narrowing)", () => {
-    const sel = { levels: FULL_LEVELS, enforcement: "warn" as const, source: "full-order" as const, reason: "task type missing" };
-    const scope = buildQaScope({ taskId: "T1", changedFiles: ["api/orders.ts"] });
-    const pyramid = loadTestPyramid(fixtureRoot(VALID_YAML));
-    const refined = refineVerificationFromScope(sel, scope, pyramid);
-    expect(refined.source).toBe("test-pyramid");
-    expect(refined.levels).toEqual(["lint", "typecheck", "unit", "api", "build"]);
-    expect(refined.reason).toContain("narrowed from change scope [api-endpoint]");
   });
 });

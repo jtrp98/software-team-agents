@@ -93,4 +93,19 @@ describe("renderDeterministicVerification", () => {
     expect(text).toContain("error TS2345");
     expect(text).toContain("SKIPPED");
   });
+
+  it("renders the recorded change-aware selection and reason", async () => {
+    const v = await runDeterministicVerification((id) => pass(id), {
+      levels: ["lint", "unit", "build"],
+    });
+    v.selection = {
+      source: "change-scope",
+      taskTypes: ["ui-component"],
+      levels: ["lint", "unit", "build"],
+      reason: "bounded scope resolved every changed file",
+    };
+    const text = renderDeterministicVerification(v).join("\n");
+    expect(text).toContain("verification selection: change-scope; task types: ui-component");
+    expect(text).toContain("selection reason: bounded scope resolved every changed file");
+  });
 });

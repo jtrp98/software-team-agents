@@ -45,6 +45,12 @@ export interface DeterministicVerification {
   status: "passed" | "failed" | "skipped";
   enforcement: "warn" | "enforce";
   passed: boolean;
+  selection?: {
+    source: string;
+    taskTypes: string[];
+    levels: string[];
+    reason: string;
+  };
 }
 
 export interface DeterministicVerificationOptions {
@@ -129,16 +135,22 @@ export async function runDeterministicVerification(
 
 /** One-line summary for prompts / logs / the evidence package. */
 export function renderDeterministicVerification(v: DeterministicVerification): string[] {
+  const selectionLines = v.selection
+    ? [
+        `verification selection: ${v.selection.source}; task types: ${v.selection.taskTypes.join(", ") || "(none)"}`,
+        `selection reason: ${v.selection.reason}`,
+      ]
+    : [];
   if (v.status === "skipped") {
-    const lines = ["deterministic verification: no checks configured for this project — SKIPPED (not PASS)"];
+    const lines = [...selectionLines, "deterministic verification: no checks configured for this project — SKIPPED (not PASS)"];
     if (v.enforcement === "enforce" && v.missingRequired.length > 0) {
       lines.push(`BLOCKED by test-pyramid enforcement; missing required evidence: ${v.missingRequired.join(", ")}`);
     }
     return lines;
   }
-  const lines = v.ran.map(
+  const lines = [...selectionLines, ...v.ran.map(
     (r) => `- ${r.id}: ${r.status} (${r.durationMs}ms)${r.outputSummary ? ` — ${firstLine(r.outputSummary)}` : ""}`,
-  );
+  )];
   for (const id of v.skipped) lines.push(`- ${id}: SKIPPED (not configured)`);
   for (const level of v.missingRequired.filter((level) => checkForLevel(level) === null)) {
     lines.push(`- ${level}: SKIPPED (no V3 runtime runner)`);

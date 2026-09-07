@@ -1,14 +1,20 @@
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
+import type { ClassificationResult } from "../classification/taskClassifier.js";
 import { AgentStage } from "../types.js";
+import {
+  FULL_RUNTIME_VERIFICATION_LEVELS,
+  loadTestPyramid,
+  refineVerificationFromScope,
+  type RuntimeVerificationLevel,
+} from "../testing/testPyramid.js";
 import {
   renderDeterministicVerification,
   runDeterministicVerification,
   type DeterministicRunner,
   type DeterministicVerification,
 } from "./deterministic.js";
-import { buildQaScope } from "./scope.js";
-import { loadTestPyramid, refineVerificationFromScope } from "../testing/testPyramid.js";
+import { buildQaScope, type QaScopeInput } from "./scope.js";
 
 const CODE_PRODUCING_STAGES = new Set<AgentStage>([
   AgentStage.BACKEND_ENGINEER,
@@ -22,8 +28,13 @@ export interface PostDevVerificationOptions {
   /** A fresh runner per sweep; each ProjectRunner caches only within that sweep. */
   deterministicRunner: (req: AgentExecutorRequest) => DeterministicRunner;
   requiredVerification: (req: AgentExecutorRequest) => RequiredVerification | null | undefined;
-  changedFiles?: (req: AgentExecutorRequest) => Promise<readonly string[]>;
-  projectRoot?: string;
+  changeAware?: {
+    changedFiles: (req: AgentExecutorRequest) => Promise<readonly string[]> | readonly string[];
+    scopeInputs?: (req: AgentExecutorRequest) => Partial<QaScopeInput> | undefined;
+    projectRoot: string;
+    workflow: string;
+    classification: Pick<ClassificationResult, "sensitiveGate">;
+  };
 }
 
 export interface PostDevVerificationHook {
@@ -57,43 +68,86 @@ export function createPostDevVerificationHook(opts: PostDevVerificationOptions):
     if (!CODE_PRODUCING_STAGES.has(req.stage) || result.outcome.result === "FAIL") return result;
 
     let required = opts.requiredVerification(req);
-
-    if (required?.status !== "deferred" && opts.changedFiles && opts.projectRoot && required) {
+    let selectionRecorded = false;
+    if (required && required.status !== "deferred" && opts.changeAware) {
+      selectionRecorded = true;
       try {
-        const changedFiles = await opts.changedFiles(req);
-        const scope = buildQaScope({ taskId: req.taskId, changedFiles });
-        let pyramid;
+        const changedFiles = await opts.changeAware.changedFiles(req);
+        const extra = opts.changeAware.scopeInputs?.(req) ?? {};
+        const scope = buildQaScope({
+          ...extra,
+          taskId: req.taskId,
+          changedFiles: [...changedFiles],
+        });
+        let pyramid = null;
+        let pyramidUnavailableReason: string | undefined;
         try {
-          pyramid = loadTestPyramid(opts.projectRoot);
-        } catch {
-          pyramid = null;
+          pyramid = loadTestPyramid(opts.changeAware.projectRoot);
+        } catch (error) {
+          pyramidUnavailableReason = error instanceof Error ? error.message : String(error);
         }
-        
-        const refined = refineVerificationFromScope(
-          { 
-            levels: required.levels as any, 
-            enforcement: required.enforcement ?? "warn", 
-            reason: required.reason, 
-            source: required.status === "selected" ? "test-pyramid" : "full-order" 
+        const knownLevels = new Set<string>([
+          "lint",
+          "typecheck",
+          "unit",
+          "integration",
+          "api",
+          "e2e",
+          "build",
+        ]);
+        if (required.levels.some((level) => !knownLevels.has(level))) {
+          throw new Error(`required_verification contains an unknown level: ${required.levels.filter((level) => !knownLevels.has(level)).join(", ")}`);
+        }
+        const refined = refineVerificationFromScope({
+          selection: {
+            levels: required.levels as RuntimeVerificationLevel[],
+            enforcement: required.enforcement ?? "warn",
+            source: required.status === "selected" ? "test-pyramid" : "full-order",
+            reason: required.reason,
           },
+          taskTypes: required.task_types,
+          workflow: opts.changeAware.workflow,
+          classification: opts.changeAware.classification,
           scope,
-          pyramid
-        );
+          pyramid,
+          pyramidUnavailableReason,
+        });
         required = {
           status: refined.source === "test-pyramid" ? "selected" : "full-order",
           levels: refined.levels,
           reason: refined.reason,
-          enforcement: refined.enforcement
+          enforcement: refined.enforcement,
+          task_types: refined.taskTypes,
+          selection_source: refined.selectionSource,
         };
-      } catch {
-        // Fallback silently if anything fails
+      } catch (error) {
+        required = {
+          status: "full-order",
+          levels: [...FULL_RUNTIME_VERIFICATION_LEVELS],
+          reason: `change-aware selection unavailable; preserving the historical full deterministic order: ${error instanceof Error ? error.message : String(error)}`,
+          enforcement: required.enforcement ?? "warn",
+          task_types: required.task_types ?? [],
+          selection_source: "full-order",
+        };
       }
     }
 
-    const verification = await runDeterministicVerification(opts.deterministicRunner(req), {
+    const baseVerification = await runDeterministicVerification(opts.deterministicRunner(req), {
       levels: required?.status === "deferred" ? undefined : required?.levels,
       enforcement: required?.enforcement ?? "warn",
     });
+    const verification: DeterministicVerification =
+      selectionRecorded && required
+        ? {
+            ...baseVerification,
+            selection: {
+              source: required.selection_source ?? required.status,
+              taskTypes: required.task_types ?? [],
+              levels: [...required.levels],
+              reason: required.reason,
+            },
+          }
+        : baseVerification;
     evidence.set(req.taskId, verification);
 
     if (verification.passed) {

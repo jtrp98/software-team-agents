@@ -17,6 +17,7 @@ import {
   FULL_RUNTIME_VERIFICATION_LEVELS,
   loadTestPyramid,
   runtimeVerificationFor,
+  runtimeVerificationForClassification,
 } from "../testing/testPyramid.js";
 import { AgentStage, TaskLevel } from "../types.js";
 
@@ -65,6 +66,8 @@ export const RuntimeTaskSchema = z.object({
     levels: z.array(z.string()),
     reason: z.string().min(1),
     enforcement: z.enum(["warn", "enforce"]).optional(),
+    task_types: z.array(z.string()).optional(),
+    selection_source: z.enum(["task-classification", "change-scope", "full-order"]).optional(),
   }),
   evidence_required: z.array(z.string().min(1)).min(1),
   stop_conditions: z.array(z.string().min(1)).min(1),
@@ -88,6 +91,7 @@ export interface RuntimeTaskBuildInput {
   moduleName?: string;
   taskText?: string | { why: string; goal: string };
   targetWorkRoots?: readonly RuntimeTaskWorkRoot[];
+  changeAwareVerification?: boolean;
 }
 
 const MODULE_SOURCES = [
@@ -246,12 +250,24 @@ function acceptanceCriteria(input: RuntimeTaskBuildInput): RuntimeTask["acceptan
 
 function requiredVerification(input: RuntimeTaskBuildInput): RuntimeTask["required_verification"] {
   try {
-    const selection = runtimeVerificationFor(input.workflow, loadTestPyramid(input.projectRoot));
+    const pyramid = loadTestPyramid(input.projectRoot);
+    if (input.changeAwareVerification === false) {
+      const selection = runtimeVerificationFor(input.workflow, pyramid);
+      return {
+        status: selection.source === "test-pyramid" ? "selected" : "full-order",
+        levels: selection.levels,
+        reason: selection.reason,
+        enforcement: selection.enforcement,
+      };
+    }
+    const selection = runtimeVerificationForClassification(input.workflow, input.classification, pyramid);
     return {
       status: selection.source === "test-pyramid" ? "selected" : "full-order",
       levels: selection.levels,
       reason: selection.reason,
       enforcement: selection.enforcement,
+      task_types: selection.taskTypes,
+      selection_source: selection.selectionSource,
     };
   } catch (error) {
     // Embedded/legacy callers can point projectRoot at a Target which predates
@@ -262,6 +278,8 @@ function requiredVerification(input: RuntimeTaskBuildInput): RuntimeTask["requir
       levels: [...FULL_RUNTIME_VERIFICATION_LEVELS],
       reason: `test-pyramid policy unavailable; preserving the historical full deterministic order: ${error instanceof Error ? error.message : String(error)}`,
       enforcement: "warn",
+      task_types: [],
+      selection_source: "full-order",
     };
   }
 }

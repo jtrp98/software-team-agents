@@ -91,6 +91,7 @@ export class TaskRegistry {
     docsRoot?: string;
     moduleName?: string;
     targetWorkRoots?: readonly RuntimeTaskWorkRoot[];
+    changeAwareVerification?: boolean;
   }): Orchestrator {
     const dependsOn = params.dependsOn ?? [];
     const missing = dependsOn.filter((id) => this.store.loadTask(id) === null);
@@ -106,6 +107,7 @@ export class TaskRegistry {
       moduleName: params.moduleName,
       taskText: params.taskText,
       targetWorkRoots: params.targetWorkRoots,
+      changeAwareVerification: params.changeAwareVerification,
     });
 
     const orchestrator = new Orchestrator(params.taskId, params.classification, {

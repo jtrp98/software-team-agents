@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import Ajv, { type ValidateFunction } from "ajv";
 import { parse as parseYaml } from "yaml";
 import { defaultProjectRoot } from "../agents/agentContract.js";
+import type { ClassificationResult } from "../classification/taskClassifier.js";
+import type { QaScope } from "../qa/scope.js";
 
 /**
  * Reads `test-pyramid.yaml` — which test levels (unit/integration/api/e2e) a
@@ -55,6 +57,13 @@ export interface RuntimeVerificationSelection {
   enforcement: "warn" | "enforce";
   source: "test-pyramid" | "full-order";
   reason: string;
+}
+
+export type VerificationSelectionSource = "task-classification" | "change-scope" | "full-order";
+
+export interface TaskAwareVerificationSelection extends RuntimeVerificationSelection {
+  taskTypes: string[];
+  selectionSource: VerificationSelectionSource;
 }
 
 const SCHEMA_PATH = path.resolve(
@@ -160,6 +169,189 @@ export function runtimeVerificationFor(
   };
 }
 
+function fullOrderSelection(
+  enforcement: "warn" | "enforce",
+  reason: string,
+  taskTypes: readonly string[] = [],
+): TaskAwareVerificationSelection {
+  return {
+    levels: [...FULL_RUNTIME_VERIFICATION_LEVELS],
+    enforcement,
+    source: "full-order",
+    reason,
+    taskTypes: [...new Set(taskTypes)].sort(),
+    selectionSource: "full-order",
+  };
+}
+
+export function runtimeVerificationForTaskTypes(
+  taskTypes: readonly string[],
+  pyramid: TestPyramid,
+  selectionSource: Exclude<VerificationSelectionSource, "full-order">,
+  reason: string,
+): TaskAwareVerificationSelection {
+  const uniqueTypes = [...new Set(taskTypes)].sort();
+  const enforcement = pyramid.enforcement ?? "warn";
+  if (uniqueTypes.length === 0) {
+    return fullOrderSelection(
+      enforcement,
+      `${reason}; no test-pyramid task type resolved, preserving the historical full deterministic order`,
+    );
+  }
+
+  const unknownTypes = uniqueTypes.filter((taskType) => requiredLevelsFor(taskType, pyramid) === null);
+  if (unknownTypes.length > 0) {
+    return fullOrderSelection(
+      enforcement,
+      `${reason}; unknown test-pyramid task type(s): ${unknownTypes.join(", ")}, preserving the historical full deterministic order`,
+      uniqueTypes,
+    );
+  }
+
+  const selected = new Set<RuntimeVerificationLevel>(ALWAYS_ON_VERIFICATION_LEVELS);
+  for (const taskType of uniqueTypes) {
+    for (const level of requiredLevelsFor(taskType, pyramid) ?? []) selected.add(level);
+  }
+  const order: readonly RuntimeVerificationLevel[] = [
+    "lint",
+    "typecheck",
+    "unit",
+    "integration",
+    "api",
+    "e2e",
+    "build",
+  ];
+  return {
+    levels: order.filter((level) => selected.has(level)),
+    enforcement,
+    source: "test-pyramid",
+    reason: `${reason}; selected task type(s): ${uniqueTypes.join(", ")}`,
+    taskTypes: uniqueTypes,
+    selectionSource,
+  };
+}
+
+function structuredTaskTypes(workflow: string, classification: Pick<ClassificationResult, "touchesSchema">): string[] {
+  const taskTypes = new Set<string>();
+  if (classification.touchesSchema) taskTypes.add("data-model-change");
+  if (workflow === "business-rule") taskTypes.add("business-rule");
+  return [...taskTypes];
+}
+
+export function runtimeVerificationForClassification(
+  workflow: string,
+  classification: Pick<ClassificationResult, "touchesSchema">,
+  pyramid: TestPyramid,
+): TaskAwareVerificationSelection {
+  return runtimeVerificationForTaskTypes(
+    structuredTaskTypes(workflow, classification),
+    pyramid,
+    "task-classification",
+    `derived from structured classification for workflow "${workflow}"; workflow ids are routing identifiers, not test-pyramid task types`,
+  );
+}
+
+function taskTypesForPath(
+  rawPath: string,
+  classification: Pick<ClassificationResult, "sensitiveGate">,
+): string[] {
+  const file = rawPath.replaceAll("\\", "/").toLowerCase();
+  const taskTypes = new Set<string>();
+  if (file.endsWith(".prisma") || /(^|\/)migrations?(\/|$)/.test(file)) {
+    taskTypes.add("data-model-change");
+  }
+  if (/(^|\/)(api|routes?)(\/|$)/.test(file) || /\.(route|controller)\.[^.]+$/.test(file)) {
+    taskTypes.add("api-endpoint");
+  }
+  if (
+    /\.(tsx|jsx|vue|svelte)$/.test(file) ||
+    (/(^|\/)(components?|pages?|ui)(\/|$)/.test(file) && /\.(ts|js)$/.test(file))
+  ) {
+    taskTypes.add("ui-component");
+  }
+  if (classification.sensitiveGate && /(^|\/)(auth|session)(\/|$)/.test(file)) {
+    taskTypes.add("auth-flow");
+  }
+  return [...taskTypes];
+}
+
+export interface ChangeAwareVerificationInput {
+  selection: RuntimeVerificationSelection;
+  taskTypes?: readonly string[];
+  workflow: string;
+  classification: Pick<ClassificationResult, "sensitiveGate">;
+  scope: QaScope;
+  pyramid: TestPyramid | null;
+  pyramidUnavailableReason?: string;
+}
+
+export function refineVerificationFromScope(input: ChangeAwareVerificationInput): TaskAwareVerificationSelection {
+  if (!input.pyramid) {
+    return fullOrderSelection(
+      input.selection.enforcement,
+      `test-pyramid policy unavailable; preserving the historical full deterministic order${input.pyramidUnavailableReason ? `: ${input.pyramidUnavailableReason}` : ""}`,
+      input.taskTypes,
+    );
+  }
+  if (!input.scope.bounded) {
+    return fullOrderSelection(
+      input.selection.enforcement,
+      `change scope is unbounded (${input.scope.unboundedReason ?? "unknown reason"}); preserving the historical full deterministic order`,
+      input.taskTypes,
+    );
+  }
+
+  const taskTypes = new Set(input.taskTypes ?? []);
+  const businessRuleCoversTask = taskTypes.has("business-rule") && input.workflow === "business-rule";
+  const unresolvedChangedFiles: string[] = [];
+  for (const file of input.scope.changedFiles) {
+    const resolved = taskTypesForPath(file, input.classification);
+    if (resolved.length === 0 && !businessRuleCoversTask) unresolvedChangedFiles.push(file);
+    for (const taskType of resolved) taskTypes.add(taskType);
+  }
+  for (const file of input.scope.impactedFiles) {
+    for (const taskType of taskTypesForPath(file, input.classification)) taskTypes.add(taskType);
+  }
+
+  if (unresolvedChangedFiles.length > 0 || taskTypes.size === 0) {
+    const detail = unresolvedChangedFiles.length > 0
+      ? `changed file(s) do not resolve to a test-pyramid task type: ${unresolvedChangedFiles.join(", ")}`
+      : "no changed file or structured signal resolves to a test-pyramid task type";
+    return fullOrderSelection(
+      input.selection.enforcement,
+      `${detail}; preserving the historical full deterministic order`,
+      [...taskTypes],
+    );
+  }
+
+  const refined = runtimeVerificationForTaskTypes(
+    [...taskTypes],
+    input.pyramid,
+    "change-scope",
+    `refined from bounded post-implementation change scope for workflow "${input.workflow}"`,
+  );
+  if (refined.source === "full-order") return refined;
+
+  const floor = new Set(input.taskTypes?.length ? input.selection.levels : []);
+  for (const level of refined.levels) floor.add(level);
+  const order: readonly RuntimeVerificationLevel[] = [
+    "lint",
+    "typecheck",
+    "unit",
+    "integration",
+    "api",
+    "e2e",
+    "build",
+  ];
+  return {
+    ...refined,
+    levels: order.filter((level) => floor.has(level)),
+    reason: input.taskTypes?.length
+      ? `${refined.reason}; retained the build-time task-type floor`
+      : `${refined.reason}; no build-time task-type floor was available`,
+  };
+}
+
 /** Every level named by at least one task type — the vocabulary `test-plan.md`'s `**Levels:**` lines actually draw from. */
 export function allLevels(pyramid: TestPyramid): TestLevel[] {
   const levels = new Set<TestLevel>();
@@ -212,106 +404,4 @@ export class TestPyramidMismatchError extends Error {
 export function assertTestPyramid(projectRoot: string = defaultProjectRoot()): void {
   const result = checkTestPyramid(projectRoot);
   if (!result.ok) throw new TestPyramidMismatchError(result.problems);
-}
-
-// Ensure QaScope is imported if not already. We will use a local interface to avoid circular deps if any, or just import it.
-import type { QaScope } from "../qa/scope.js";
-
-/** Map QaScope to test-pyramid.yaml task types based on file paths. */
-export function taskTypesFromScope(scope: QaScope): string[] {
-  if (!scope.bounded) return [];
-  const types = new Set<string>();
-  
-  const allFiles = [...scope.changedFiles, ...scope.impactedFiles];
-  for (const f of allFiles) {
-    const file = f.toLowerCase();
-    if (file.includes("prisma/") || file.includes("migrations/") || file.endsWith(".prisma")) {
-      types.add("data-model-change");
-    }
-    if (file.includes("api/") || file.includes("routes/") || file.endsWith("controller.ts") || file.endsWith(".route.ts")) {
-      types.add("api-endpoint");
-    }
-    if (file.endsWith(".tsx") || file.endsWith(".jsx") || file.endsWith(".vue") || file.endsWith(".svelte") || file.includes("components/") || file.includes("pages/") || file.includes("ui/")) {
-      types.add("ui-component");
-    }
-    if (file.includes("auth/") || file.includes("session")) {
-      types.add("auth-flow");
-    }
-  }
-  
-  return [...types];
-}
-
-/**
- * Refines the build-time verification selection using the post-dev change scope.
- * Narrowing is permitted as long as it respects the floor.
- */
-export function refineVerificationFromScope(
-  selection: RuntimeVerificationSelection,
-  scope: QaScope,
-  pyramid: TestPyramid | null
-): RuntimeVerificationSelection {
-  if (!pyramid || selection.reason.includes("test-pyramid policy unavailable")) {
-    return {
-      ...selection,
-      reason: selection.reason + " — keeping full order because test-pyramid is unavailable",
-    };
-  }
-
-  if (!scope.bounded) {
-    return {
-      ...selection,
-      reason: selection.reason + " — change scope is unbounded, keeping full order",
-    };
-  }
-
-  const scopeTypes = taskTypesFromScope(scope);
-  if (scopeTypes.length === 0) {
-    return {
-      ...selection,
-      reason: selection.reason + " — change scope maps to unknown task type, keeping full order",
-    };
-  }
-
-  const requiredFromScope = new Set<TestLevel>();
-  for (const t of scopeTypes) {
-    const reqs = requiredLevelsFor(t, pyramid);
-    if (reqs) {
-      for (const req of reqs) requiredFromScope.add(req);
-    }
-  }
-
-  const floorLevels = new Set<TestLevel>();
-  if (selection.source === "test-pyramid") {
-    // The original selection was a valid task type from the pyramid. It is the floor.
-    for (const lvl of selection.levels) {
-      if (!ALWAYS_ON_VERIFICATION_LEVELS.includes(lvl as RuntimeVerificationLevel)) {
-        floorLevels.add(lvl as TestLevel);
-      }
-    }
-  }
-
-  for (const lvl of requiredFromScope) floorLevels.add(lvl);
-
-  const selected = new Set<RuntimeVerificationLevel>([
-    ...ALWAYS_ON_VERIFICATION_LEVELS,
-    ...floorLevels,
-  ]);
-  
-  const order: readonly RuntimeVerificationLevel[] = [
-    "lint",
-    "typecheck",
-    "unit",
-    "integration",
-    "api",
-    "e2e",
-    "build",
-  ];
-
-  return {
-    levels: order.filter((level) => selected.has(level)),
-    enforcement: selection.enforcement,
-    source: "test-pyramid",
-    reason: `narrowed from change scope [${scopeTypes.join(", ")}]`,
-  };
 }

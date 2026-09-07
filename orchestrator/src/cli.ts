@@ -806,6 +806,7 @@ function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orches
     docsRoot,
     moduleName: args.module,
     targetWorkRoots: runtimeTaskWorkRoots(args, taskId, classification),
+    changeAwareVerification: !args.noQaOptimization,
   });
 }
 
@@ -1488,6 +1489,11 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
     const qaRoots = resolveQaWorkRoots(args.projectRoot, taskId, store);
     const qaDocsRoot = resolveDocsRoot(args.projectRoot);
     const qaInputs = await productionQaInputs({ docsRoot: qaDocsRoot, moduleName: args.module ?? "", taskId, roots: qaRoots });
+    const qaChangedFiles = async (): Promise<string[]> => {
+      const roots = resolveQaWorkRoots(args.projectRoot, taskId, store);
+      const results = await Promise.allSettled(roots.map((root) => gitChangedFiles(root)));
+      return [...new Set(results.flatMap((result) => (result.status === "fulfilled" ? result.value : [])))];
+    };
 
     const verificationHook = args.noDeterministicGate
       ? null
@@ -1502,12 +1508,17 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
             }),
           }))),
           requiredVerification: () => orchestrator.runtimeTask?.required_verification,
-          projectRoot: args.projectRoot,
-          changedFiles: async () => {
-            const roots = resolveQaWorkRoots(args.projectRoot, taskId, store);
-            const results = await Promise.allSettled(roots.map((root) => gitChangedFiles(root)));
-            return [...new Set(results.flatMap((r) => (r.status === "fulfilled" ? r.value : [])))];
-          }
+          ...(args.noQaOptimization
+            ? {}
+            : {
+                changeAware: {
+                  changedFiles: qaChangedFiles,
+                  scopeInputs: qaInputs.scopeInputs,
+                  projectRoot: resolveFrameworkRoot(),
+                  workflow: orchestrator.runtimeTask?.workflow ?? "",
+                  classification: orchestrator.classification,
+                },
+              }),
         });
     const postDevExecutor = verificationHook?.executor ?? withPostDevVerificationDisabled(runtimeExecutor);
 
@@ -1525,15 +1536,9 @@ export async function runCli(argv: string[], defaultProjectRoot: string): Promis
       ? postDevExecutor
       : withQaOptimization({
           inner: postDevExecutor,
-          changedFiles: async () => {
-            // Read-only git inspection of every writable Target root; legacy
-            // projects have exactly one — the project root itself. A root whose
-            // git fails contributes nothing rather than poisoning the others;
-            // a total failure yields [], which scopes as unbounded → FULL.
-            const roots = resolveQaWorkRoots(args.projectRoot, taskId, store);
-            const results = await Promise.allSettled(roots.map((root) => gitChangedFiles(root)));
-            return [...new Set(results.flatMap((r) => (r.status === "fulfilled" ? r.value : [])))];
-          },
+          // A root whose git inspection fails contributes nothing; total
+          // failure yields [], which both selection and QA scope treat as FULL.
+          changedFiles: qaChangedFiles,
           ...(args.noDeterministicGate
             ? { deterministicGate: "disabled" as const }
             : {
