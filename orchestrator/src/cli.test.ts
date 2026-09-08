@@ -225,7 +225,11 @@ describe("T-V3R-032 production runtime composition", () => {
   it("constructs the complete runtime registry used by the real CLI executor call site", () => {
     // T-V5-039 — the paid API adapter is never constructed here; --runtime
     // only offers runtimes that can actually run.
-    expect(createProductionRuntimeRegistry(defaultProjectRoot()).ids()).toEqual(["claude-code", "codex", "opencode", "antigravity"]);
+    const registry = createProductionRuntimeRegistry(defaultProjectRoot());
+    expect(registry.ids()).toEqual(["claude-code", "codex", "opencode", "antigravity"]);
+    expect([...registry.get("codex").models]).toContain("gpt-6-astra");
+    expect([...registry.get("opencode").models]).toContain("zai-coding-plan/glm-5.2#max");
+    expect([...registry.get("antigravity").models]).toContain("gemini-3.8-flash-high");
     const source = fs.readFileSync(path.join(defaultProjectRoot(), "orchestrator", "src", "cli.ts"), "utf8");
     expect(source).toContain("registry: runtimeRegistry");
     expect(source).toContain("runtime: defaultRuntime");

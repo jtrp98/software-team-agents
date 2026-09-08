@@ -79,6 +79,25 @@ describe("CodexAdapter.executeAgent", () => {
     expect(last).toContain("hello world");
   });
 
+  it("passes an explicit tier model and effort to Codex, and rejects an unknown configured model", async () => {
+    const projectRoot = tmpProject();
+    writeRoleBinding(projectRoot, "backend-engineer");
+    let capturedArgs: string[] = [];
+    const spawnSync: SpawnSync = (_cmd, args) => {
+      capturedArgs = args;
+      return cliResult(0, "done");
+    };
+    const adapter = new CodexAdapter({ projectRoot, models: ["gpt-6-astra"], spawnSync });
+
+    await adapter.executeAgent(baseRequest({ cwd: projectRoot, model: "gpt-6-astra", modelExplicit: true, effort: "high" }));
+    expect(capturedArgs[capturedArgs.indexOf("--model") + 1]).toBe("gpt-6-astra");
+    expect(capturedArgs[capturedArgs.indexOf("--config") + 1]).toBe('model_reasoning_effort="high"');
+
+    const refused = await adapter.executeAgent(baseRequest({ cwd: projectRoot, model: "not-a-tier-model", modelExplicit: true }));
+    expect(refused.status).toBe("ERROR");
+    expect(refused.diagnostics.join(" ")).toContain("configured Codex tier catalogue");
+  });
+
   it("maps autonomy onto sandbox/approval flags", async () => {
     const projectRoot = tmpProject();
     writeRoleBinding(projectRoot, "backend-engineer");

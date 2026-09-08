@@ -1143,11 +1143,24 @@ async function runUpgradeVerb(rest: string[], defaultProjectRoot: string): Promi
  * unwired reference implementation; it is simply never registered.
  */
 export function createProductionRuntimeRegistry(projectRoot: string): RuntimeRegistry {
+  // The human-owned tier file is the one declarative source for models this
+  // installation may request.  Adapters use it as a catalogue to reject a
+  // typo before a provider call, rather than maintaining a second stale list.
+  const modelsFor = (camp: "openai" | "google" | "zai"): string[] => {
+    try {
+      const tiers = loadModelTiers(projectRoot);
+      return tiers ? [...new Set(MODEL_TIER_IDS.map((tier) => tiers[tier].camps[camp].model))] : [];
+    } catch {
+      // Runtime execution reports the malformed table through its existing
+      // route diagnostics; construction itself remains safe for `doctor`.
+      return [];
+    }
+  };
   return RuntimeRegistry.forProcess([
     new ClaudeCodeAdapter({ projectRoot }),
-    new CodexAdapter({ projectRoot }),
-    new OpenCodeAdapter({ projectRoot }),
-    new AntigravityAdapter({ projectRoot }),
+    new CodexAdapter({ projectRoot, models: modelsFor("openai") }),
+    new OpenCodeAdapter({ projectRoot, models: modelsFor("zai") }),
+    new AntigravityAdapter({ projectRoot, models: modelsFor("google") }),
   ]);
 }
 
