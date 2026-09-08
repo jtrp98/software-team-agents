@@ -11,16 +11,16 @@ tiers:
         effort: max
         notes: Maximum reasoning; reserved and never cast in the pipeline.
       openai:
-        model: gpt-5.6-sol
-        effort: xhigh
+        model: gpt-6-astra
+        effort: max
         notes: Maximum reasoning; reserved and never cast in the pipeline.
       google:
-        model: gemini-3-pro
-        effort: high
+        model: gemini-3.8-flash-high
+        effort: native
         notes: Maximum reasoning; reserved and never cast in the pipeline.
       zai:
-        model: glm-5.2
-        effort: thinking
+        model: zai-coding-plan/glm-5.2#max
+        effort: native
         notes: Maximum reasoning; reserved and never cast in the pipeline.
   T2:
     camps:
@@ -29,16 +29,16 @@ tiers:
         effort: high
         notes: Planning and security grade; the highest tier a plan may cast.
       openai:
-        model: gpt-5.6-sol
+        model: gpt-6-astra
         effort: high
         notes: Planning and security grade.
       google:
-        model: gemini-3.1-pro
-        effort: high
+        model: gemini-3.8-flash-high
+        effort: native
         notes: Planning and security grade.
       zai:
-        model: glm-5.2
-        effort: thinking
+        model: zai-coding-plan/glm-5.2#high
+        effort: native
         notes: Planning and security grade.
   T3:
     camps:
@@ -51,12 +51,12 @@ tiers:
         effort: medium
         notes: Analysis grade and risky implementation or QA verification.
       google:
-        model: gemini-3.1-pro
-        effort: medium
+        model: gemini-3.8-flash-medium
+        effort: native
         notes: Analysis grade and risky implementation or QA verification.
       zai:
-        model: glm-5.2
-        effort: thinking
+        model: zai-coding-plan/glm-5.2#high
+        effort: native
         notes: Analysis grade and risky implementation or QA verification.
   T4:
     camps:
@@ -69,12 +69,12 @@ tiers:
         effort: high
         notes: Hard or risky implementation across a contract or several modules.
       google:
-        model: gemini-3.7-flash
-        effort: high
+        model: gemini-3.7-flash-high
+        effort: native
         notes: Hard or risky implementation across a contract or several modules.
       zai:
-        model: glm-4.7
-        effort: thinking
+        model: zai-coding-plan/glm-4.7
+        effort: native
         notes: Hard or risky implementation across a contract or several modules.
   T5:
     camps:
@@ -87,17 +87,17 @@ tiers:
         effort: medium
         notes: Light implementation work.
       google:
-        model: gemini-3.7-flash
-        effort: medium
+        model: gemini-3.7-flash-medium
+        effort: native
         notes: Light implementation work.
       zai:
-        model: glm-4.7
-        effort: off
+        model: zai-coding-plan/glm-4.7#fast
+        effort: native
         notes: Light implementation work.
   T6:
     camps:
       anthropic:
-        model: haiku-4.5
+        model: haiku
         effort: low
         notes: Fast mechanical work such as setup, typos, and lint fixes.
       openai:
@@ -105,10 +105,10 @@ tiers:
         effort: low
         notes: Fast mechanical work such as setup, typos, and lint fixes.
       google:
-        model: gemini-3-flash-lite
-        effort: low
+        model: gemini-3.6-flash-low
+        effort: native
         notes: Fast mechanical work such as setup, typos, and lint fixes.
       zai:
-        model: glm-5-turbo
-        effort: off
+        model: zai-coding-plan/glm-4.7#fast
+        effort: native
         notes: Fast mechanical work such as setup, typos, and lint fixes.
