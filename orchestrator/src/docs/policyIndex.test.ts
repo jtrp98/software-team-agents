@@ -29,9 +29,12 @@ describe("listPolicySections", () => {
       "agent-boundaries",
       "architecture",
       "coding",
+      "communication",
+      "data",
       "documentation",
       "git",
       "security",
+      "ux",
     ]);
     for (const entry of index) expect(entry.sections.length).toBeGreaterThan(0);
   });

@@ -89,7 +89,7 @@ function sampleRun(taskId = "T-1"): RunRecord {
     estimated_input_tokens: 1000,
     qa_mode: null,
     qa_effort: null,
-    deterministic_gate: null,
+    deterministic_gate: null, document_gate: null,
     runtime: "claude-code",
     requested_runtime: null,
     requested_model: null,
@@ -342,6 +342,33 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
     } finally {
       fs.rmSync(path.dirname(file), { recursive: true, force: true });
     }
+  });
+
+  it("opens an existing state database read-only without creating or changing database files", () => {
+    const file = tmpDbPath();
+    try {
+      const writer = new SqliteTaskStore(file);
+      writer.createTask(sampleTask("T-READ"));
+      writer.close();
+      const before = new Map(fs.readdirSync(path.dirname(file)).map((name) => [name, fs.readFileSync(path.join(path.dirname(file), name))]));
+
+      const reader = new SqliteTaskStore(file, { readonly: true });
+      expect(reader.loadTask("T-READ")?.taskId).toBe("T-READ");
+      expect(() => reader.saveTask(sampleTask("T-READ"))).toThrow(/read-only/);
+      reader.close();
+
+      const afterNames = fs.readdirSync(path.dirname(file));
+      expect(afterNames).toEqual([...before.keys()]);
+      for (const name of afterNames) expect(fs.readFileSync(path.join(path.dirname(file), name))).toEqual(before.get(name));
+    } finally {
+      fs.rmSync(path.dirname(file), { recursive: true, force: true });
+    }
+  });
+
+  it("read-only open fails without creating the missing database parent", () => {
+    const file = tmpDbPath();
+    expect(() => new SqliteTaskStore(file, { readonly: true })).toThrow(DatabaseUnavailableError);
+    expect(fs.existsSync(path.dirname(file))).toBe(false);
   });
 
   it("refuses a database written by a different schema version instead of misreading it", () => {

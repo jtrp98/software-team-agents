@@ -500,11 +500,13 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       if (taskBudgetRejection) rejections.push(taskBudgetRejection);
       return rejections;
     };
-    // The stack layout half of this role's write/deny rules. The
-    // guard root is the same directory the runtime runs the agent in, because
-    // that is where the hook reads `contracts/` and `stacks/` from; resolving
-    // from anywhere else would hand a hook globs for a different workspace.
-    const guardRoot = threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot;
+    // A Target-writing stage must start in its canonical Target root.  The
+    // Framework binding remains explicit below, but a Framework cwd makes an
+    // agent inspect the wrong repository and can turn an otherwise valid
+    // packet into a no-change run.  The guard's stack rules must follow the
+    // same execution root.
+    const executionRoot = workRoot?.path ?? threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot;
+    const guardRoot = executionRoot;
     const guardStackRules = resolveGuardStackRules(role, guardRoot);
 
     let fallbackReason: string | undefined;
@@ -646,9 +648,9 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       } else try {
         result = await activeRuntime.executeAgent({
           role,
-          // Binding/config lives in the Framework root; workspace access arrives
-          // separately so changing cwd cannot widen a task's write scope.
-          cwd: threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot,
+          // `cwd` selects the repository the agent works in; scope stays
+          // independently bounded by canonical workRoots below.
+          cwd: executionRoot,
           bindingRoot: threeRepo?.roots.bindingRoot,
           knowledgeRoot: threeRepo?.roots.knowledgeRoot,
           workRoots: threeRepo?.roots.workRoots,

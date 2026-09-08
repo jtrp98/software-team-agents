@@ -18,6 +18,145 @@ private dev/test number and this rule does not apply to it.
 
 ---
 
+## software-team-agents 2.0.0 — V7 (RELEASABLE — release date pending, see Release status)
+
+> **Version 2.0.0 confirmed by a person on 2026-09-08** (bucket read mechanically from the table
+> above, reason below). `package.json` bumped to 2.0.0; `orchestrator/package.json`'s private
+> `0.3.0` untouched. **No release date is set** — dates come from a person.
+
+**Bucket: Major (`1.1.0 → 2.0.0`).** Reason, per the table: V7 contains guards that were
+off and now refuse what previously passed — an orchestrated run records document/plan validation
+failures and routes or stops instead of proceeding silently (`T-V7-004`), and `devops` now requires
+a performed, recorded restore-verification result before a deploy/migration can close
+(`T-V7-014`). Higher than the release's Minor elements (new CLI surface, new policy sections).
+
+### Breaking changes / behaviour a user will feel
+
+- **The orchestrated run loop now produces document-validation outcomes** (`T-V7-004`).
+  `--check-doc-structure` and `--check-plan` run from the orchestrator during a run; a structural
+  failure is recorded on the run record and routed back to the owning stage with no model between
+  failure and routing. A `plan.md` with a cycle, an unknown owner or an illegal `Tier`, or a
+  `design.md` missing required sections, is now a recorded, blocking outcome rather than something
+  nothing ever invoked. A checker that throws is a stricter, recorded outcome — never a silent pass.
+- **A deploy needs a restore result, not just a backup** (`T-V7-014`, `policies/data.md §16`).
+  The deploy sequence now includes restore verification as a performed and recorded step; an
+  environment where a restore cannot be performed yields a recorded *"not verified, because …"* —
+  never a silent skip. The human confirmation before a real deploy/migration is unchanged.
+- **Three-repo QA now verifies the Target, not the Framework root** (`T-V7-018`).
+  The writable-root resolver is deterministic: in three-repo mode, QA change discovery and the
+  deterministic gate resolve to the Target repository; a three-repo install with no resolvable
+  Target **refuses**, naming the task and the missing binding, instead of falling back to the
+  Framework repository. Legacy single-repo behaviour is unchanged.
+- **A bounded wave run creates a local branch and local commits in the Target**
+  (`T-V7-020`…`T-V7-030`). Each task that passes the deterministic gate is checkpointed as one
+  local commit with trailers on `sta/run/<module>/<run-id>` — a durability and attribution
+  boundary, reported as `CHECKPOINTED`, which is **not** a quality verdict and never means
+  done/passed/verified/approved. Nothing is pushed, merged or deleted; merging back to the base
+  branch stays a human's two commands (see `docs/bounded-wave-run.md`).
+
+### Enforcement repairs
+
+- **No prompt tells a role to run a command it has no tool for** (`T-V7-003`). The five `Bash`-less
+  roles (BA, SA, PM, test-planner, uxui-designer) had prompt lines removed that instructed shell
+  validation they cannot invoke; the obligations remain, validation happens in the orchestrator.
+  Policy retrieval for these roles is `Grep` heading + `Read` offset (`T-V7-002`).
+- **The document/plan validators are now invoked by something that blocks** (`T-V7-004`) — see the
+  first bullet above; this is the repair that changes run behaviour.
+
+### Policy expansion — 9 new numbered sections + `policies/git.md §22`
+
+Ten policy areas now resolve through `sta policy` (three new files: `communication.md`, `data.md`,
+`ux.md`): §13 plain language / progressive discovery / problem before solution (global, all roles);
+§14 quality attributes and §15 the design.md→ADR escalation trigger; §16 database operations and
+restore verification; §17 accessibility/responsive baseline and §18 design principles vs visual
+style; §19 senior engineering habits; §20 promoting a repeated deterministic check out of judgment;
+§21 design-time threat-modelling trigger; §22 the orchestrator-owned checkpoint contract (deliberately
+unpointed — reviewable via `sta policy git 22`). Each rule lives in exactly one canonical place;
+prompts carry pointer lines only and every prompt budget ceiling held (static floor grew
+38,762 → 40,073 B, inside unchanged ceilings).
+
+### Change-aware test-level selection (`T-V7-015`)
+
+Test levels are now selected from the change, not only from the task type: build-time selection
+uses structured signals (`touchesSchema`, `business-rule`) and a post-Dev refinement adds levels
+from changed API routes, schema/migrations, UI components and auth/session code. Refinement can
+only add on top of the task-type floor, never lower it. A confirmed pre-existing defect (workflow
+IDs passed where task types are expected — `runtimeTask.ts:249`) was resolved by a recorded human
+decision: `test-pyramid.yaml.task_types` is the verification contract, workflow IDs are routing
+identifiers only. `--no-qa-optimization` restores the previous behaviour.
+
+### Native Auto Execution — the bounded wave run (MVP, exact bounds)
+
+`sta run --wave <n> --module <name> [--max-tasks <k>] [--dry-run|--resume-run]` executes, strictly
+sequentially, the auto-eligible tasks of one wave on a dedicated local branch, checkpointing each
+task that passes the deterministic gate, halting on the first failure or ineligible task, and
+stopping at the end of the wave. Git mutation is owned solely by `orchestrator/src/git/`
+(closed allow-list), proven by `--check-git-ownership`; the Git-ownership boundary is ADR-026
+(accepted) and `policies/git.md §22`. Runs keep a manifest and append-only journal under
+`.workflow/`; a workspace run lock refuses a second runner; crash recovery reconciles the journal
+against real git and refuses on disagreement; `sta changed` / `sta report` / `sta status` show the
+run state with `CHECKPOINTED` vocabulary. `sta run --task-id` and every existing interactive
+workflow are unchanged and remain first-class.
+
+**What the runner does not do — there is no code path, not a guard:** it never pushes, never
+merges, never rolls back / resets / reverts / cleans / discards, never tags, never runs tasks in
+parallel, never resolves conflicts, never touches Knowledge (no Knowledge-writing role can join a
+run), refuses a run resolving to more than one writable Target, refuses any runtime whose support
+level is not `supported` (`claude-code` only — codex/opencode/antigravity are refused with their
+level named), creates no worktrees, and stores no persistent autonomy state. A failed task halts
+the run at its turn — nothing is skipped — and the failed diff is preserved.
+
+**Verification status of the runner, stated exactly:** the adversarial suite, crash/resume and
+end-to-end fixture tests passed against real temporary git repositories (validation §33's suite,
+`T-V7-031`). The **readiness gate is not signed off** — `T-V7-032`'s human sign-off and the pilot
+boxes are open. A human-approved controlled-dogfood deviation (2026-09-08, RainyBot confirmed
+disposable/low-risk) exercised three real runs; it is recorded in `planning/v7/v7-12-evidence.md`
+and is **not** the readiness sign-off. No V7 task was executed by the runner.
+
+### Release status
+
+**RELEASABLE** — `npm run release:check` passes all 31 steps (2026-09-08, after the fix below).
+No release date is set yet — dates come from a person.
+
+- **Fixed: the packed payload failed to load** (`orchestrator/src/git/ownershipCheck.ts`).
+  The first 2.0.0 candidate imported `typescript` — a devDependency, not shipped in the packed
+  payload — at module load time, so every command of an installed package crashed with
+  `Cannot find package 'typescript'` before reading argv. The parser now loads lazily (only when
+  there is a Framework source tree to scan) and stays fail-closed: a checkout with sources but no
+  parser reports an actionable problem and exits non-zero; a checkout with zero sources still
+  fails the vacuous-scan guard as before. Verified by 9/9 ownership-checker unit tests (two new:
+  parser-missing fail-closed, packed-shape no-parser), the four packed V3 migration fixtures
+  (5/5 fixtures, 36 assertions), and the full release gate (fixed on the user's explicit
+  instruction; recorded in `planning/v7/v7-7-evidence.md`).
+- **Environment note:** one gate step (`npm install` of the packed .tgz) builds
+  `better-sqlite3` from source when no prebuilt binary matches the local Node — it failed on one
+  earlier run (Node v24.19.0, no MSVC) and passed on later runs. Environment-dependent, not a
+  payload defect; re-check at release time on the shipping machine.
+
+All other gate steps are green (typecheck, full suite, build, 19 `--check-*`, `--check-installation`
+on a fresh init, templates/sources agreement, benchmark oracles).
+
+### Open items and their gates
+
+- **`F14` parallel execution / write-set lock** — gated on parallel execution *being proposed*,
+  not on the wave runner shipping (the runner is sequential by validated decision).
+- **`F13`/`F1`/`F26` model-tier and agent-count questions** — gated on ADR-022's ten-phase
+  `retry_count` trigger and a real token comparison (baseline + re-measure recorded this release).
+- **Mechanical accessibility checks in the static gate** — sequenced after `policies/ux.md`
+  (landed); still to be built.
+- **`F17` flaky-test lifecycle · `F23` audience-aware documentation** — gated on a Target that
+  needs them.
+- **`RISK-2`** — no adapter supports cancellation (all `spawnSync`); accepted, resume paths are
+  conservative by design.
+- **`RISK-3`** — quota can still be misclassified as `UNAVAILABLE`; the runner surfaces both
+  readings and never retries; the classifier fix is a separate change.
+- **Open `[HUMAN]` boxes** — the accessibility conformance-target source (`T-V7-008`, currently
+  `(assumption — unconfirmed)` treatment), the release date (version 2.0.0 is confirmed; a date is
+  not), and the Native Runner readiness gate verdict (`T-V7-032`).
+- Everything in `V7-TASKS.md` §21 stays rejected or deferred with its named gate.
+
+---
+
 ## software-team-agents 1.1.0 — V6 Capability Release (2026-09-06)
 
 V6 adds multi-runtime resilience, desktop app compatibility without launcher environment variables, and non-developer usability tools — keeping the pipeline working when provider quotas run out.

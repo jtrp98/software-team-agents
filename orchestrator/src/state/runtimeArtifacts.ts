@@ -4,7 +4,7 @@ import { ArtifactType, validateArtifact, type ExecutionPacket } from "../artifac
 import { AgentStage } from "../types.js";
 
 /** Regenerable artifact classes stored below the VCS-ignored runtime-state root. */
-export const RUNTIME_ARTIFACT_KINDS = ["packets", "evidence", "runs"] as const;
+export const RUNTIME_ARTIFACT_KINDS = ["packets", "evidence", "runs", "wave-runs"] as const;
 export type RuntimeArtifactKind = (typeof RUNTIME_ARTIFACT_KINDS)[number];
 
 /**
@@ -51,12 +51,15 @@ export interface PruneRuntimeArtifactsOptions {
   readonly currentArtifact: string;
   /** Maximum artifacts retained for this task and kind, including the current one. */
   readonly maxRunsPerTask?: number;
+  /** Existing task artifacts are files; durable wave runs are direct child directories. */
+  readonly artifactType?: "file" | "directory";
 }
 
 /**
- * Keeps the current artifact plus the newest remaining files by mtime, with a
+ * Keeps the current artifact plus the newest remaining siblings by mtime, with a
  * filename tie-break so equal timestamps prune identically on every run.
- * Directories and symlinks are never followed or removed.
+ * Symlinks are never followed or removed. Directory pruning is opt-in so the
+ * established task-keyed file behaviour cannot change accidentally.
  *
  * Returns deleted absolute paths in deterministic filename order.
  */
@@ -74,11 +77,15 @@ export function pruneRuntimeArtifacts(options: PruneRuntimeArtifactsOptions): st
     throw new Error(`current runtime artifact must be a direct child of ${taskDirectory}`);
   }
   const currentStat = fs.lstatSync(currentArtifact);
-  if (!currentStat.isFile()) throw new Error(`current runtime artifact is not a file: ${currentArtifact}`);
+  const artifactType = options.artifactType ?? "file";
+  const currentMatches = artifactType === "file" ? currentStat.isFile() : currentStat.isDirectory();
+  if (currentStat.isSymbolicLink() || !currentMatches) {
+    throw new Error(`current runtime artifact is not a ${artifactType}: ${currentArtifact}`);
+  }
 
   const files = fs
     .readdirSync(taskDirectory, { withFileTypes: true })
-    .filter((entry) => entry.isFile())
+    .filter((entry) => artifactType === "file" ? entry.isFile() : entry.isDirectory())
     .map((entry) => {
       const absolute = path.join(taskDirectory, entry.name);
       return { name: entry.name, absolute, mtimeMs: fs.statSync(absolute).mtimeMs };
@@ -96,7 +103,10 @@ export function pruneRuntimeArtifacts(options: PruneRuntimeArtifactsOptions): st
   const removed = files
     .filter((entry) => !keep.has(entry.absolute))
     .sort((a, b) => a.name.localeCompare(b.name));
-  for (const entry of removed) fs.unlinkSync(entry.absolute);
+  for (const entry of removed) {
+    if (artifactType === "file") fs.unlinkSync(entry.absolute);
+    else fs.rmSync(entry.absolute, { recursive: true });
+  }
   return removed.map((entry) => entry.absolute);
 }
 

@@ -59,12 +59,13 @@ describe("the shipped decisions/", () => {
       "ADR-023-v4-framework-feature-freeze.md",
       "ADR-024-docs-vs-knowledge.md",
       "ADR-025-end-v4-freeze-and-routing-order.md",
+      "ADR-026-trusted-orchestrator-git-ownership.md",
     ]);
   });
 
   it("all load and validate against the schema", () => {
     const adrs = loadAllAdrs();
-    expect(adrs).toHaveLength(13);
+    expect(adrs).toHaveLength(14);
     for (const adr of adrs) {
       expect(adr.frontmatter.status).toBe("accepted");
     }

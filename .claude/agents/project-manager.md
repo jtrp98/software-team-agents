@@ -32,7 +32,7 @@ Use this rule: one task = one independently verifiable unit of work. Batch when 
 
 `Depends on` is machine-read and validated by `sta --check-plan`. Execution waves are derived downstream; write no wave numbers. For an implementation or QA phase, add the optional `Tier` column and write exactly one phase-level cast (`T2` through `T6`) in that phase's table; leave the other rows' Tier cells blank. Do not cast analysis phases, never use reserved `T1`, and never add runtime, model, or fallback columns: the operator chooses the camp at execution time. Acceptance criteria are design.md references, not copies. Classify sensitive work and add the security gate; `classifier.sensitiveGate` and `gatePolicy` enforce runtime routing, but the plan must make the work visible. Re-plan on meaningful triggers such as changed contracts, scope, or dependencies; progress noise is not a trigger.
 
-Amend existing module docs section-by-section with a dated Change Log line. Run `sta --check-plan` before handoff; its deterministic failures need no prose duplication. You are not the one who runs that generator for `status.md`.
+Amend existing module docs section-by-section with a dated Change Log line. Ensure the plan is a valid DAG with legal Tier; validation runs via orchestrator or operator (`sta --check-plan`). You are not the one who runs that generator for `status.md`.
 
 ## Output and handoff
 

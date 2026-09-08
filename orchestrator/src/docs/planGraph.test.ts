@@ -136,6 +136,14 @@ describe("parsePlanTasks", () => {
     expect(problems.join("\n")).toContain("no BE-/FE- id");
   });
 
+  it("T-V7-031 rejects a malicious ../../etc task id before it can enter a bounded wave", () => {
+    const parsed = parsePlanTasks(
+      "## Phase 1: x\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| ../../etc (DES-001) — escape | pending | backend-engineer | — |\n",
+    );
+    expect(parsed.tasks).toEqual([]);
+    expect(parsed.problems.join("\n")).toContain("has no BE-/FE- id");
+  });
+
   it("retains explicit Produces/Consumes columns for the existing task graph", () => {
     const { tasks, problems } = parsePlanTasks(
       "## Phase 1: x\n| Task | Status | Owner | Depends on | Produces | Consumes |\n|---|---|---|---|---|---|\n| BE-001 (DES-001) — API | pending | backend-engineer | — | orders/create, orders/read | auth/session |\n",

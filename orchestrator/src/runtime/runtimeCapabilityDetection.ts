@@ -65,16 +65,19 @@ export type DeepGuardChecker = (
 
 interface ClaudeSettingsHooks {
   hooks?: {
-    PreToolUse?: Array<{ hooks?: Array<{ command?: string }> }>;
-    PostToolUse?: Array<{ hooks?: Array<{ command?: string }> }>;
-    Stop?: Array<{ hooks?: Array<{ command?: string }> }>;
-    SubagentStop?: Array<{ hooks?: Array<{ command?: string }> }>;
+    PreToolUse?: Array<{ hooks?: Array<{ command?: string; args?: unknown }> }>;
+    PostToolUse?: Array<{ hooks?: Array<{ command?: string; args?: unknown }> }>;
+    Stop?: Array<{ hooks?: Array<{ command?: string; args?: unknown }> }>;
+    SubagentStop?: Array<{ hooks?: Array<{ command?: string; args?: unknown }> }>;
   };
 }
 
-function commandsMention(entries: Array<{ hooks?: Array<{ command?: string }> }> | undefined, needle: string): boolean {
+function commandsMention(entries: Array<{ hooks?: Array<{ command?: string; args?: unknown }> }> | undefined, needle: string): boolean {
   if (!entries) return false;
-  return entries.some((entry) => (entry.hooks ?? []).some((h) => (h.command ?? "").includes(needle)));
+  return entries.some((entry) => (entry.hooks ?? []).some((hook) =>
+    (hook.command ?? "").includes(needle) ||
+    (Array.isArray(hook.args) && hook.args.some((arg) => typeof arg === "string" && arg.includes(needle))),
+  ));
 }
 
 /**

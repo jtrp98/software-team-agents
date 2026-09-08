@@ -73,7 +73,7 @@ describe("checkRoleExecutionGate (T114)", () => {
     expect(blocked.reason).toMatch(/no knowledge\/ directory/);
   });
 
-  it("lets engineers through when the knowledge directory exists but holds nothing โ€” `sta init` seeds it empty", () => {
+  it("lets engineers through when the knowledge directory exists but holds nothing — `sta init` seeds it empty", () => {
     const root = tmpProject();
     fs.mkdirSync(path.join(root, "knowledge"), { recursive: true });
     expect(checkRoleExecutionGate(root, "demo", AgentStage.BACKEND_ENGINEER, NOW)).toEqual({ allowed: true });
@@ -88,7 +88,7 @@ describe("checkRoleExecutionGate (T114)", () => {
     acknowledgeLane(root, kb, "dev", approveLane(root, kb, "sa"));
     expect(checkRoleExecutionGate(root, "sales-crm", AgentStage.BACKEND_ENGINEER, NOW)).toEqual({ allowed: true });
 
-    // No ux-design item at all โ’ blocked, and the reason names the UX requirement.
+    // No ux-design item at all → blocked, and the reason names the UX requirement.
     const noUx = checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW);
     expect(noUx.allowed).toBe(false);
     expect(noUx.reason).toMatch(/UX artifact/);
@@ -115,7 +115,7 @@ describe("checkRoleExecutionGate (T114)", () => {
     );
     expect(checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW)).toEqual({ allowed: true });
 
-    // The artifact moving to a new version invalidates that consent โ€” fail closed again.
+    // The artifact moving to a new version invalidates that consent — fail closed again.
     const nextVersion = { ...ux, version: (ux.version as number) + 1 };
     writeKnowledgeItem(nextVersion, root, { force: true });
     const stale = checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW);
@@ -124,9 +124,9 @@ describe("checkRoleExecutionGate (T114)", () => {
   });
 
   /**
-   * T-UX12 โ€” the UX-artifact precondition is a design-phase requirement.
+   * T-UX12 — the UX-artifact precondition is a design-phase requirement.
    * TRIVIAL/SMALL work has no design phase (the classifier schedules no
-   * uxui-designer for it either), so a small fix proceeds on the SAโ’DEV
+   * uxui-designer for it either), so a small fix proceeds on the SA→DEV
    * handoff alone; MEDIUM+ and an unknown level stay gated, fail-closed.
    */
   it("skips the UX-artifact precondition for TRIVIAL/SMALL tasks but keeps it for MEDIUM+ (T-UX12)", () => {
@@ -140,21 +140,21 @@ describe("checkRoleExecutionGate (T114)", () => {
     expect(checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW, { level: TaskLevel.TRIVIAL })).toEqual({ allowed: true });
     expect(checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW, { level: TaskLevel.SMALL })).toEqual({ allowed: true });
 
-    // MEDIUM+ still demands the signed artifactโ€ฆ
+    // MEDIUM+ still demands the signed artifact…
     const medium = checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW, { level: TaskLevel.MEDIUM });
     expect(medium.allowed).toBe(false);
     expect(medium.reason).toMatch(/UX artifact/);
     const large = checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW, { level: TaskLevel.LARGE_CRITICAL });
     expect(large.allowed).toBe(false);
 
-    // โ€ฆand an unknown level fails closed rather than skipping the gate.
+    // …and an unknown level fails closed rather than skipping the gate.
     const unknown = checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW, { level: TaskLevel.UNKNOWN });
     expect(unknown.allowed).toBe(false);
 
     // Absent level keeps the pre-T-UX12 behaviour exactly.
     expect(checkRoleExecutionGate(root, "sales-crm", AgentStage.FRONTEND_ENGINEER, NOW).allowed).toBe(false);
 
-    // The SAโ’DEV handoff itself was never waived by level โ€” only the UX precondition is.
+    // The SA→DEV handoff itself was never waived by level — only the UX precondition is.
     const saNotAcknowledged = tmpProject();
     const kb2 = approvedKnowledge(saNotAcknowledged);
     approveLane(saNotAcknowledged, kb2, "ba");

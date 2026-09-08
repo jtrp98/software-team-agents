@@ -122,9 +122,9 @@ describe("detectRuntimeCapabilities — claude-code deep guard check", () => {
       path.join(projectRoot, ".claude", "settings.json"),
       JSON.stringify({
         hooks: {
-          PreToolUse: [{ hooks: [{ command: "node .claude/hooks/block-path-permissions.js" }] }],
-          SubagentStop: [{ hooks: [{ command: "node .claude/hooks/require-green-before-stop.js" }, { command: "node .claude/hooks/block-secret-leak.js" }] }],
-          Stop: [{ hooks: [{ command: "node .claude/hooks/require-green-before-stop.js" }] }],
+          PreToolUse: [{ hooks: [{ command: "node", args: [".claude/hooks/block-path-permissions.js"] }] }],
+          SubagentStop: [{ hooks: [{ command: "node", args: [".claude/hooks/require-green-before-stop.js"] }, { command: "node", args: [".claude/hooks/block-secret-leak.js"] }] }],
+          Stop: [{ hooks: [{ command: "node", args: [".claude/hooks/require-green-before-stop.js"] }] }],
         },
       }),
       "utf8",

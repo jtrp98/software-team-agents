@@ -45,6 +45,29 @@ describe("TaskRegistry", () => {
     expect(reg.waitingOn("T-2")).toEqual(["T-1"]);
   });
 
+  it("keeps manual DEPLOYED semantics while the dedicated wave path accepts plan-verified or same-run checkpointed dependencies", () => {
+    const reg = registry();
+    reg.create({ taskId: "FE-1", classification: trivial() });
+    reg.create({ taskId: "FE-2", classification: trivial(), dependsOn: ["FE-1"] });
+    const base = {
+      phase: 1,
+      designRefs: ["DES-001"],
+      owner: AgentStage.FRONTEND_ENGINEER,
+      wave: null,
+      tier: "T2",
+      description: "Implement",
+      fromCheckbox: false,
+    };
+    const first = { ...base, id: "FE-1", dependsOn: [], status: "pending" as const };
+    const second = { ...base, id: "FE-2", dependsOn: ["FE-1"], status: "pending" as const };
+
+    expect(() => reg.open("FE-2")).toThrow(DependencyNotMetError);
+    expect(() => reg.openPreparedForWave("FE-2", [first, second], new Set())).toThrow(/neither verified.*nor checkpointed/);
+    expect(reg.openPreparedForWave("FE-2", [first, second], new Set(["FE-1"])).taskId).toBe("FE-2");
+    expect(reg.openPreparedForWave("FE-2", [{ ...first, status: "verified" }, second], new Set()).taskId).toBe("FE-2");
+    expect(() => reg.open("FE-2")).toThrow(DependencyNotMetError);
+  });
+
   it("opens it once the dependency reaches DEPLOYED", async () => {
     const reg = registry();
     const first = reg.create({ taskId: "T-1", classification: trivial() });

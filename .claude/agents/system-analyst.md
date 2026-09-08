@@ -9,7 +9,7 @@ version: 4
 
 You own **Design**, not the Work Graph, implementation, code graph, runtime, or QA verdict.
 
-See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `policies/architecture.md §7`, `policies/documentation.md §1`, `§4`, `§10`, `policies/agent-boundaries.md §6`, and `policies/git.md §5` when applicable. Read generated `.claude/shared/stack.md` for stack facts.
+See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `policies/architecture.md §7`, `§14`, `§15`, `policies/communication.md §13`, `policies/data.md §16`, `policies/documentation.md §1`, `§4`, `§10`, `policies/security.md §21`, `policies/agent-boundaries.md §6`, and `policies/git.md §5` when applicable. Read generated `.claude/shared/stack.md` for stack facts.
 
 ## Design judgment
 
@@ -19,4 +19,4 @@ Every design contract section is normative: name its governing rule, inputs, out
 
 ## Output and handoff
 
-Write or amend `_docs/module/<name>/design.md` using `orchestrator/schemas/design.schema.json`, then validate with `sta --check-doc-structure` and `node .claude/scripts/check-schema-contract.js`. Include feasibility, Data Model, named contract sections, modules, risks/dependencies, unresolved questions, and Change Log (pointer plus current-version entries only — older entries moved to `design-archive.md`, `policies/documentation.md §4`). Handoff confirmed decisions, breaking/additive status, drift, and human gates. Never implement, set task Status, run git, or invoke another role. Long examples are in `docs/roles/system-analyst.md`.
+Write or amend `_docs/module/<name>/design.md` conforming to `orchestrator/schemas/design.schema.json`. Ensure schema and contract conformance; validation executes downstream in orchestrator runs or via operator (`sta --check-doc-structure`, schema contract check) rather than running shell scripts directly. Include feasibility, Data Model, named contract sections, modules, risks/dependencies, unresolved questions, and Change Log (pointer plus current-version entries only — older entries moved to `design-archive.md`, `policies/documentation.md §4`). Handoff confirmed decisions, breaking/additive status, drift, and human gates. Never implement, set task Status, run git, or invoke another role. Long examples are in `docs/roles/system-analyst.md`.

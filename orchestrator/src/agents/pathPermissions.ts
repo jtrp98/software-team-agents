@@ -442,6 +442,7 @@ const ROLE_SHAPED_PREFIXES: readonly string[] = [
 const ROLE_SHAPED_FILES: readonly string[] = [
   "CLAUDE.md",
   "AGENTS.md",
+  "README.md",
   "layout.yaml",
   "targets.yaml",
   "knowledge-policy.yaml",

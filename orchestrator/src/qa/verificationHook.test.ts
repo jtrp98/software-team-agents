@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { classifyTask } from "../classification/taskClassifier.js";
+import { defaultProjectRoot } from "../agents/agentContract.js";
 import { Orchestrator, type AgentExecutorRequest } from "../orchestrator/orchestrator.js";
 import { AgentStage } from "../types.js";
 import { createPostDevVerificationHook, withPostDevVerificationDisabled } from "./verificationHook.js";
@@ -30,6 +31,63 @@ describe("post-Dev deterministic verification hook", () => {
     const result = await hook.executor(req(AgentStage.BACKEND_ENGINEER));
     expect(calls).toEqual(["lint", "typecheck", "unit-tests", "build"]);
     expect(result.outcome).toMatchObject({ result: "PASS", deterministic_gate: "enabled" });
+    expect(hook.verificationFor(req(AgentStage.BACKEND_ENGINEER))?.selection).toBeUndefined();
+  });
+
+  it("records the post-Dev selection and reason on deterministic run evidence", async () => {
+    const hook = createPostDevVerificationHook({
+      inner: async () => ({ outcome: { tokens: 5, cost: 0.1, result: "PASS" } }),
+      deterministicRunner: () => (id) => ({ id, status: "PASS", durationMs: 1, outputSummary: "ok" }),
+      requiredVerification: () => ({
+        status: "full-order",
+        levels: ["lint", "typecheck", "unit", "integration", "build"],
+        reason: "no build-time task type",
+        enforcement: "warn",
+        task_types: [],
+        selection_source: "full-order",
+      }),
+      changeAware: {
+        changedFiles: () => ["src/routes/orders.route.ts"],
+        projectRoot: defaultProjectRoot(),
+        workflow: "bugfix",
+        classification: { sensitiveGate: false },
+      },
+    });
+
+    await hook.executor(req(AgentStage.BACKEND_ENGINEER));
+    expect(hook.verificationFor(req(AgentStage.BACKEND_ENGINEER))?.selection).toMatchObject({
+      source: "change-scope",
+      taskTypes: ["api-endpoint"],
+      levels: ["lint", "typecheck", "unit", "api", "build"],
+      reason: expect.stringContaining("bounded post-implementation change scope"),
+    });
+  });
+
+  it("fails closed to full order and records why when change discovery throws", async () => {
+    const calls: string[] = [];
+    const hook = createPostDevVerificationHook({
+      inner: async () => ({ outcome: { tokens: 5, cost: 0.1, result: "PASS" } }),
+      deterministicRunner: () => (id) => {
+        calls.push(id);
+        return { id, status: "PASS", durationMs: 1, outputSummary: "ok" };
+      },
+      requiredVerification: () => required(["lint", "typecheck", "unit", "build"]),
+      changeAware: {
+        changedFiles: () => {
+          throw new Error("git unavailable");
+        },
+        projectRoot: defaultProjectRoot(),
+        workflow: "business-rule",
+        classification: { sensitiveGate: false },
+      },
+    });
+
+    await hook.executor(req(AgentStage.BACKEND_ENGINEER));
+    expect(calls).toEqual(["lint", "typecheck", "unit-tests", "integration-tests", "build"]);
+    expect(hook.verificationFor(req(AgentStage.BACKEND_ENGINEER))?.selection).toMatchObject({
+      source: "full-order",
+      reason: expect.stringContaining("git unavailable"),
+    });
   });
 
   it("returns a red check to the same Dev stage without a QA/model call", async () => {

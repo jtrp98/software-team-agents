@@ -939,14 +939,14 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
     expect(runtime.requests).toHaveLength(1);
   });
 
-  it("passes canonical roots rather than using cwd as Target scope", async () => {
+  it("runs a Target-writing stage in its canonical Target root while retaining explicit scope", async () => {
     const runtime = new MockRuntimeAdapter({ respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const task = { taskId: "T-target", classification, targetBindings: { frontend_target: null, backend_target: "api" } } as never;
     const executor = createRuntimeExecutor({ runtime, projectRoot: tmpProject(), moduleName: () => "sales-crm", guards: () => NO_GUARDS,
       threeRepoTask: () => ({ task, roots: { bindingRoot: "/framework", knowledgeRoot: "/knowledge", workRoots: [{ targetId: "api", path: "/api", access: "write" }] } }), });
     await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-target", context: [] });
-    expect(runtime.requests[0]).toMatchObject({ cwd: "/framework", bindingRoot: "/framework", knowledgeRoot: "/knowledge", workRoots: [{ targetId: "api", path: "/api", access: "write" }] });
+    expect(runtime.requests[0]).toMatchObject({ cwd: "/api", bindingRoot: "/framework", knowledgeRoot: "/knowledge", workRoots: [{ targetId: "api", path: "/api", access: "write" }] });
     // T-WG7 — the Knowledge root rides on the env so hooks/prompts can name it.
     expect(runtime.requests[0]!.env).toMatchObject({ AGENTCLAUDE_ROLE: "backend-engineer", AGENTCLAUDE_KNOWLEDGE_ROOT: "/knowledge" });
   });

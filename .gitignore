@@ -19,5 +19,5 @@ coverage/
 # release artifacts (CHECKLIST_PACKAGING_DISTRIBUTION) — built by `npm run release`
 /release/
 
-# internal planning docs (T-checklists/handoffs) � local only
+# internal planning docs (T-checklists/handoffs) — local only
 planning/

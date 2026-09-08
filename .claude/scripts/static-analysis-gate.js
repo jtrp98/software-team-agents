@@ -85,6 +85,26 @@ const SECURITY_PATTERNS = [
   { name: 'CORS wildcard origin combined with credentials', pattern: /Access-Control-Allow-Origin['"`]?\s*[:=]\s*['"`]\*/ },
 ];
 
+function securityPatternHits(files, patterns = SECURITY_PATTERNS) {
+  const hits = [];
+  for (const file of files) {
+    let text;
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch (error) {
+      if (error && error.code === 'ENOENT') continue;
+      throw error;
+    }
+    const lines = text.split(/\r?\n/);
+    lines.forEach((line, i) => {
+      for (const { name, pattern } of patterns) {
+        if (pattern.test(line)) hits.push(`${path.relative(root, file)}:${i + 1} — ${name}`);
+      }
+    });
+  }
+  return hits;
+}
+
 function yamlScalar(value) {
   const text = String(value || '').trim();
   if (text.startsWith('"') && text.endsWith('"')) {
@@ -193,21 +213,7 @@ function runSecurityScan(profile) {
   const files = [];
   for (const dir of sourceRoots) findFiles(path.resolve(root, dir), new Set(extensions), files);
 
-  const hits = [];
-  for (const file of files) {
-    let text;
-    try {
-      text = fs.readFileSync(file, 'utf8');
-    } catch {
-      continue;
-    }
-    const lines = text.split(/\r?\n/);
-    lines.forEach((line, i) => {
-      for (const { name, pattern } of SECURITY_PATTERNS) {
-        if (pattern.test(line)) hits.push(`${path.relative(root, file)}:${i + 1} — ${name}`);
-      }
-    });
-  }
+  const hits = securityPatternHits(files);
 
   return {
     dir: '(repo)',
@@ -331,6 +337,35 @@ function runProfileOne(check, command) {
 }
 
 function main() {
+  if (process.argv.includes('--scan-files-for-secrets')) {
+    let requested;
+    try {
+      requested = JSON.parse(fs.readFileSync(0, 'utf8'));
+      if (!Array.isArray(requested) || requested.some((item) => typeof item !== 'string')) throw new Error('expected a string array');
+    } catch (error) {
+      console.log(JSON.stringify({ ok: false, problems: [`invalid scan input: ${error.message}`] }));
+      process.exit(1);
+    }
+    const files = [];
+    for (const relative of requested) {
+      const absolute = path.resolve(root, relative);
+      const fromRoot = path.relative(root, absolute);
+      if (!relative || fromRoot.startsWith('..') || path.isAbsolute(fromRoot)) {
+        console.log(JSON.stringify({ ok: false, problems: [`scan path escapes the Target: ${relative}`] }));
+        process.exit(1);
+      }
+      files.push(absolute);
+    }
+    try {
+      const hits = securityPatternHits(files, SECURITY_PATTERNS.filter(({ name }) => /secret/i.test(name)));
+      console.log(JSON.stringify({ ok: hits.length === 0, problems: hits }));
+      process.exit(hits.length === 0 ? 0 : 1);
+    } catch (error) {
+      console.log(JSON.stringify({ ok: false, problems: [`secret scan failed: ${error.message}`] }));
+      process.exit(1);
+    }
+  }
+
   const profile = loadTargetProfile();
   const packageDirs = findPackageDirs(root, []);
   const results = [];

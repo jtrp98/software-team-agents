@@ -144,7 +144,7 @@ orchestrator/           ← CLI + state store + knowledge engine (Node/TypeScrip
 .agents/skills/*/       ← Codex Agent Skills rendering ของ commands (generated, checked by --check-bindings)
 contracts/*.yaml        ← read/write/deny path globs ต่อ role (machine-readable half ของ agent)
 workflows/*.yml         ← 11 workflows: typo → feature/deploy (right-sizing)
-policies/               ← กฎที่ทุก agent ใช้ร่วมกัน (coding/git/architecture/documentation/security/agent-boundaries)
+policies/               ← กฎที่ทุก agent ใช้ร่วมกัน (coding/git/architecture/documentation/security/agent-boundaries/communication/data/ux)
 stacks/                 ← stack profiles (node, frontend, dotnet, java, python)
 templates/              ← build artifact — snapshot ของ framework payload + manifest.json (regenerate ด้วย npm run build:templates ห้าม hand-edit)
 knowledge/              ← โครงสร้าง knowledge model (ดู knowledge/README.md)
@@ -417,6 +417,7 @@ pipeline ที่มี design phase (`--new-feature`, `--schema`, `--business-
 
 ```bash
 sta run      --task-id <id> --module <name> <classification flags> [--autonomy read-only|propose|edit|full] [--runtime claude-code|codex|opencode|antigravity]
+sta run      --wave <n> --module <name> [--max-tasks <k>] [--dry-run|--resume-run]   # bounded sequential wave run (V7) — local branch + checkpoint commit ต่อ task ที่ผ่าน deterministic gate, halt ที่ failure/ineligible ตัวแรก; ไม่ push/merge/rollback — คู่มือ: docs/bounded-wave-run.md (--resume-run คือ resume ระดับ run, ต่างจาก --resume ระดับ task)
 sta resume   --task-id <id> --module <name>          # continue task ใน store
 sta retry    --task-id <id> --module <name>          # same as resume
 sta pause    --task-id <id>                          # freeze; run/resume/retry refuse
@@ -569,7 +570,7 @@ sta configure identity --figma-email <email> --claude-email <email>
 - **Installed ≠ registered** — hook script ที่มีอยู่บน disk ยังไม่แปลว่า effective `.claude/settings.json` เรียกมัน. `software-team-agents status`/`software-team-agents status --json` แสดง `hooksRegistered/hooksInstalled`; `sta doctor` ตรวจ surface เดียวกันแบบ read-only.
 - **`Guards wired` เป็น launch gate** — preflight ของ `software-team-agents dev|ba` เทียบ Framework registrations ที่ติดตั้งกับ effective settings; ขาดแม้หนึ่งรายการ = FAIL พร้อม `software-team-agents sync`. ถ้า `.claude/settings.json` อยู่ใน `overrides`, gate รายงาน explicit user choice แทนการนับเป็น pass จาก wiring ที่ไม่มี.
 - **ฝั่ง OpenCode** — git deny เป็น declarative `permission.bash` globs ใน binding เอง (specificity wins); outside-root/contract path guards มาจาก `sta-guards.js` plugin (auto-load, throw = deny) · doc-rewrite/secret-leak/exit checks **ยังไม่ enforce in-band** → adapter รายงาน unenforced + executor ตะโกน `GUARD GAP` ให้ QA round เป็นตัวครอบ
-- **Validation flags** — `sta --check-*` 19 ตัว: `contracts, layout, workflows, profile, decisions, test-pyramid, review-separation, escalation-policy, workspace, repos, environments, doc-structure, plan, knowledge, installation, roles, doctor, conventions, bindings` (18 checker flags ใน suite มาตรฐาน + `--check-bindings` ใน CLI). `--check-plan [--module <name>]` ตรวจตาราง task ของทุก `plan.md` เป็น dependency graph แบบ deterministic (duplicate id / dangling·self·duplicate dependency / cycle / owner·status ผิด / DES traceability / wave ordering). `--check-workspace` ตรวจสองเรื่องที่ไม่เกี่ยวกัน: `workspace.yaml` (multi-project grouping) และ misplaced-docs scan — `role: dev` workspace ที่มี `_docs/module/**` หรือ Modules table ใน `status.md` โดนรายงานพร้อม hint ปลายทางใน Knowledge repo
+- **Validation flags** — `sta --check-*` 20 ตัว (registry เดียวใน `orchestrator/src/cli/checkers.ts`): `contracts, layout, prompt-budget, workflows, bindings, profile, decisions, test-pyramid, review-separation, escalation-policy, workspace, repos, environments, doc-structure, doc-size, plan, knowledge, installation, roles, git-ownership`. `--check-git-ownership` เพิ่มใน V7 — ตรวจว่า git mutation อยู่ใน `orchestrator/src/git/` เท่านั้นและไม่มี subcommand ต้องห้าม. `sta doctor` เป็น verb แยก (read-only diagnostics) ไม่นับในชุดนี้. `--check-plan [--module <name>]` ตรวจตาราง task ของทุก `plan.md` เป็น dependency graph แบบ deterministic (duplicate id / dangling·self·duplicate dependency / cycle / owner·status ผิด / DES traceability / wave ordering). `--check-workspace` ตรวจสองเรื่องที่ไม่เกี่ยวกัน: `workspace.yaml` (multi-project grouping) และ misplaced-docs scan — `role: dev` workspace ที่มี `_docs/module/**` หรือ Modules table ใน `status.md` โดนรายงานพร้อม hint ปลายทางใน Knowledge repo
 - **doctor** — `sta doctor --project-root <path>` รวม 9 checks แบบ read-only (installation, knowledge binding/schema, targets registry, local mappings, runtime adapter, state store, guard wiring) exit 1 เมื่อมี FAIL พร้อม "Fix:" ทุกข้อ
 - **Audit trail** — `sta audit <task-id>`
 

@@ -111,6 +111,11 @@ const EXPECTED: Record<string, { ok: string; fail: string; notes: CheckerDescrip
     fail: "[orchestrator] role workspaces have problems:",
     notes: "leading",
   },
+  "--check-git-ownership": {
+    ok: "[orchestrator] Git mutation is owned by orchestrator/src/git/ and no forbidden remote or destructive subcommand exists.",
+    fail: "[orchestrator] Git ownership invariant has problems:",
+    notes: "none",
+  },
 };
 
 function captureConsole(fn: () => void): { out: string[]; err: string[] } {
@@ -137,8 +142,8 @@ describe("CHECKERS table", () => {
     expect(actual).toEqual(EXPECTED);
   });
 
-  it("is a plain array of 19 rows in the same order the if-chain evaluated", () => {
-    expect(CHECKERS).toHaveLength(19);
+  it("is a plain array of 20 rows in the same order the if-chain evaluated", () => {
+    expect(CHECKERS).toHaveLength(20);
     expect(CHECKERS.map((c) => c.cliFlag)).toEqual(Object.keys(EXPECTED));
   });
 
@@ -237,8 +242,8 @@ describe("runChecker output", () => {
     expect(seen).toBe("sales-crm");
   });
 
-  it("a hypothetical 19th checker is exactly one self-contained row", () => {
-    const nineteenth: CheckerDescriptor = {
+  it("a hypothetical checker is exactly one self-contained row", () => {
+    const hypothetical: CheckerDescriptor = {
       flag: "checkRoles",
       cliFlag: "--check-teapot",
       run: () => ({ ok: true, problems: [], notes: [] }),
@@ -247,7 +252,7 @@ describe("runChecker output", () => {
       notes: "none",
     };
     const { out } = captureConsole(() => {
-      for (const c of [...CHECKERS.slice(0, 0), nineteenth]) {
+      for (const c of [...CHECKERS.slice(0, 0), hypothetical]) {
         if (c.cliFlag === "--check-teapot") runChecker(c, "/r", undefined);
       }
     });

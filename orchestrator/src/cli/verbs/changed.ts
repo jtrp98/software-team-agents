@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { gitChangedFiles } from "../../qa/changeSource.js";
+import { changedRunSummary, observeRuns, type ChangedRunSummary } from "../../run/observability.js";
 import { flagValue } from "../support.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -32,6 +33,7 @@ export interface ChangedSummary {
   changedFiles: string[];
   gate: GateReport;
   disclaimer: string;
+  run?: ChangedRunSummary;
 }
 
 const GATE_DISCLAIMER =
@@ -124,6 +126,11 @@ export async function getChangedSummary(projectRoot: string): Promise<ChangedSum
   }
 
   const gate = await executeStaticAnalysisGate(projectRoot);
+  let run: ChangedRunSummary | undefined;
+  try {
+    const latest = (await observeRuns(projectRoot))[0];
+    if (latest) run = changedRunSummary(latest);
+  } catch {}
 
   return {
     projectRoot,
@@ -132,6 +139,7 @@ export async function getChangedSummary(projectRoot: string): Promise<ChangedSum
     changedFiles,
     gate,
     disclaimer: GATE_DISCLAIMER,
+    run,
   };
 }
 
@@ -172,6 +180,14 @@ export async function runChangedVerb(rest: string[], defaultProjectRoot: string)
     }
   } else if (summary.gate.message) {
     console.log(`  ${summary.gate.message}`);
+  }
+
+  if (summary.run) {
+    console.log(`[orchestrator] run ${summary.run.run_id} branch=${summary.run.run_branch}`);
+    for (const checkpoint of summary.run.checkpoints) {
+      console.log(`[orchestrator] ${checkpoint.task_id} CHECKPOINTED at ${checkpoint.sha}: ${checkpoint.subject}`);
+    }
+    console.log("[orchestrator] notice: deterministic gate only; CHECKPOINTED is not a QA verdict.");
   }
 
   console.log(`[orchestrator] notice: ${summary.disclaimer}`);

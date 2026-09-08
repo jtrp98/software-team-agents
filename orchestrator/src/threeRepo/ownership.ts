@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { RUNTIME_ARTIFACT_KINDS } from "../state/runtimeArtifacts.js";
 
 export type RepositoryOwner = "framework" | "knowledge" | "target";
 export type InstallMode = "legacy-project" | "three-repo";
@@ -51,7 +52,7 @@ export const KNOWLEDGE_OWNED_PATHS = [
  * packets, verification evidence and runner output must never inherit durable
  * Knowledge ownership from that compatibility root.
  */
-export const KNOWLEDGE_DENIED_RUNTIME_DIRS = ["packets", "evidence", "runs"] as const;
+export const KNOWLEDGE_DENIED_RUNTIME_DIRS = RUNTIME_ARTIFACT_KINDS;
 
 export class RuntimeStateOwnershipError extends Error {
   constructor(relativePath: string, kind: string) {

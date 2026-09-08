@@ -1,4 +1,4 @@
-# Policy — Documentation discipline (§1, §2, §3, §4, §5b, §10, §11)
+# Policy — Documentation discipline (§0, §1, §2, §3, §4, §5b, §10, §11, §12)
 
 Everything about where a document lives, how
 it's kept current, how it's amended without losing history, how big it's allowed to get before

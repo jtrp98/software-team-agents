@@ -97,7 +97,7 @@ export function keepDesignSection(heading: string, text: string, req: ContextReq
   }
   if (MODULES_HEADING.test(heading)) return "keep";
 
-  const explicitPhase = /(phase|เน€เธเธช)\s*0*(\d+)\b/i.exec(heading);
+  const explicitPhase = /(phase|เฟส)\s*0*(\d+)\b/i.exec(heading);
   if (explicitPhase && req.phases && req.phases.length > 0) {
     return req.phases.includes(Number(explicitPhase[2])) ? "keep" : "drop";
   }
@@ -121,7 +121,7 @@ export type DesignSectionUnknownReason =
 /** Call only after `keepDesignSection` has returned `"unknown"` for this section — the
  *  checks below skip every keep/drop branch and assume one already fired. */
 export function keepDesignSectionUnknownReason(heading: string, text: string, req: ContextRequest): DesignSectionUnknownReason {
-  const explicitPhase = /(phase|เน€เธเธช)\s*0*(\d+)\b/i.exec(heading);
+  const explicitPhase = /(phase|เฟส)\s*0*(\d+)\b/i.exec(heading);
   const hasPhaseContext = !!(req.phases && req.phases.length > 0);
   if (explicitPhase && !hasPhaseContext) return "phase-heading-no-context";
   if (extractIds(text, "DES").length === 0) return "no-des-id";

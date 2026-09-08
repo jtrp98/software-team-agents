@@ -13,18 +13,18 @@ import type { RuntimeAdapter, RuntimeAgentRequest, SpawnSync } from "./runtimeAd
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 
 /**
- * OFF04 โ€” the Runtime port's contract, stated once and applied to every
+ * OFF04 — the Runtime port's contract, stated once and applied to every
  * implementation.
  *
  * `runtimeAdapter.ts` is the seam that keeps the orchestrator core provider-
  * blind. A contract that lives only in each adapter's own tests is not a
- * contract โ€” it is three private dialects. Everything asserted below is a
+ * contract — it is three private dialects. Everything asserted below is a
  * promise the core makes to itself about what *any* RuntimeAdapter does:
  * identity is stable, bindings address roles, capability claims stay inside the
  * declared enum, probes answer instead of throwing, and an unreachable runtime
  * comes back as `UNAVAILABLE` rather than as an exception or a task failure.
  *
- * Real runtimes are exercised only through injected spawns โ€” no test here
+ * Real runtimes are exercised only through injected spawns — no test here
  * requires `claude`/`codex` to exist on the machine (that is T111's
  * capability-verification job against real installations).
  */
@@ -94,7 +94,7 @@ const implementations: [string, () => RuntimeAdapter][] = [
   ["AntigravityAdapter", () => new AntigravityAdapter({ projectRoot, spawnSync: fakeSpawn("agy") })],
 ];
 
-describe.each(implementations)("RuntimeAdapter contract โ€” %s", (_name, make) => {
+describe.each(implementations)("RuntimeAdapter contract — %s", (_name, make) => {
   it("carries stable, non-empty identity", () => {
     const adapter = make();
     expect(adapter.id.length).toBeGreaterThan(0);

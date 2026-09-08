@@ -8,18 +8,18 @@ import type { AgentExecutorRequest } from "../orchestrator/orchestrator.js";
 import type { ContextItem } from "../context/contextSelection.js";
 
 /**
- * OFF07 โ€” Shared Knowledge is a consumer-independent capability.
+ * OFF07 — Shared Knowledge is a consumer-independent capability.
  *
  * The orchestrator curates context once, in one place (`agentRunAssembly.ts`),
  * and every runtime receives the result of that same curation. That is the
  * property that makes Shared Knowledge an organizational capability rather than
- * a Claude feature or a Codex feature โ€” but until now nothing proved it. This
+ * a Claude feature or a Codex feature — but until now nothing proved it. This
  * file is the proof, kept executable so the parity cannot silently rot:
  *
  *   1. the doc slice produced for a stage is byte-identical regardless of which
  *      runtime will consume it (slicing never sees a binding);
  *   2. the assembled prompt for an identical request is byte-identical;
- *   3. neither the slices nor the prompt ever name a runtime โ€” the assembly
+ *   3. neither the slices nor the prompt ever name a runtime — the assembly
  *      layer is vendor-blind by construction.
  *
  * If a future change makes context differ per provider, this test fails and the
@@ -37,7 +37,7 @@ function makeProject(docs: Record<string, string>): string {
 }
 
 const REQUIREMENT = [
-  "# REQ-101 โ€” Fixture module",
+  "# REQ-101 — Fixture module",
   "",
   "## Functional Requirements",
   "- FR-1 The fixture stores one string.",
@@ -46,7 +46,7 @@ const REQUIREMENT = [
 ].join("\n");
 
 const DESIGN = [
-  "# DES-101 โ€” Fixture module",
+  "# DES-101 — Fixture module",
   "",
   "## Feasibility",
   "A Map suffices.",
@@ -59,7 +59,7 @@ const DESIGN = [
 const PLAN = [
   "# PLAN-101",
   "",
-  "## Phase 1 โ€” Implement",
+  "## Phase 1 — Implement",
   "- Write the Map.",
 ].join("\n");
 
@@ -81,7 +81,7 @@ afterEach(() => {
   for (const dir of [claudeRoot, codexRoot]) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-describe("consumer parity โ€” one curation, every runtime", () => {
+describe("consumer parity — one curation, every runtime", () => {
   it("produces byte-identical doc slices for both consumers", () => {
     const forClaude = sliceModuleDocsFor(AgentStage.BACKEND_ENGINEER, { projectRoot: claudeRoot, moduleName: "fixture", phases: [1] });
     const forCodex = sliceModuleDocsFor(AgentStage.BACKEND_ENGINEER, { projectRoot: codexRoot, moduleName: "fixture", phases: [1] });
@@ -103,7 +103,7 @@ describe("consumer parity โ€” one curation, every runtime", () => {
     const forCodex = buildPrompt(requestFor(), undefined, sliced);
     expect(forCodex).toBe(forClaude);
     // The curated-context framing must also be identical when there is no
-    // prior-stage context at all โ€” the "no context" path is part of the contract.
+    // prior-stage context at all — the "no context" path is part of the contract.
     const empty = (): AgentExecutorRequest => ({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-parity", context: [] });
     expect(buildPrompt(empty())).toBe(buildPrompt(empty()));
   });
