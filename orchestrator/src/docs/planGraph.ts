@@ -6,6 +6,7 @@ import { sections, firstTable, checkboxLines } from "./markdown.js";
 import { extractIds } from "../traceability/traceability.js";
 import { loadModelTiers, ModelTiersInvalidError, type ModelTiers } from "../runtime/modelTiers.js";
 import { detectWorkspaceKind } from "../targetcli/roleWorkspace.js";
+import { isCanonicalPlan, parseCanonicalPlan } from "./planTask.js";
 
 /**
  * The plan.md task table as a machine-checkable graph.
@@ -51,6 +52,7 @@ const TASK_ID_PATTERN = /\b(?:BE|FE)-[A-Za-z0-9._-]+\b/;
 const DESIGN_REF_PATTERN = /\bDES-\d+\b/g;
 const ANALYSIS_OWNERS = new Set(["business-analyst", "system-analyst", "project-manager", "test-planner"]);
 
+/** Legacy compatibility view only, retained until T-V8-029. New semantics live in PlanTask. */
 export interface PlanTaskRow {
   /** Plan-level id, e.g. `BE-004`. Unique within the plan — validated, not assumed. */
   id: string;
@@ -210,6 +212,14 @@ function rowsForPhase(phaseNumber: number, body: string, problems: string[]): Pl
 
 /** Parses every `## Phase N` task row out of a plan.md. Never throws — bad rows come back as problems. */
 export function parsePlanTasks(planMd: string): ParsedPlan {
+  return parseLegacyPlanTasks(planMd);
+}
+
+/** Explicit pre-v1 adapter. Never silently flatten a canonical task into a row. */
+export function parseLegacyPlanTasks(planMd: string): ParsedPlan {
+  if (isCanonicalPlan(planMd)) {
+    throw new Error("PlanTask format 1 requires parseCanonicalPlan; the legacy runtime reader cannot execute this contract. See docs/plan-task-v1.md (V8 migration window).");
+  }
   const tasks: PlanTaskRow[] = [];
   const problems: string[] = [];
   for (const section of sections(planMd, 2)) {
@@ -542,7 +552,16 @@ export function checkPlanGraphForModule(
   const designPath = path.join(docsModuleDir, module, "design.md");
   const designMd = fs.existsSync(designPath) ? fs.readFileSync(designPath, "utf8") : undefined;
 
-  const { tasks, problems } = parsePlanTasks(fs.readFileSync(planPath, "utf8"));
+  const planMd = fs.readFileSync(planPath, "utf8");
+  if (isCanonicalPlan(planMd)) {
+    const requirementPath = path.join(docsModuleDir, module, "requirement.md");
+    const requirementMd = fs.existsSync(requirementPath) ? fs.readFileSync(requirementPath, "utf8") : "";
+    const canonical = parseCanonicalPlan(planMd, { requirementMd, designMd: designMd ?? "" });
+    return { module, ok: canonical.problems.length === 0, errors: canonical.problems,
+      notes: [`${module}/plan.md: ${canonical.tasks.length} canonical task(s), format 1; runtime graph integration follows T-V8-003`] };
+  }
+  const { tasks, problems } = parseLegacyPlanTasks(planMd);
+  notes.push(`${module}/plan.md: explicit legacy table compatibility adapter; canonical conversion requires complete semantic fields (docs/plan-task-v1.md)`);
   const errors = [...problems];
   if (tasks.length === 0) {
     notes.push(`${module}/plan.md has no task rows under any ## Phase heading`);

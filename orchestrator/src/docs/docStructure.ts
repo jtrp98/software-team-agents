@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { sectionMap, sectionText } from "../context/sections.js";
 import { structuralFallbackReason } from "../context/docSelection.js";
 import { extractIds } from "../traceability/traceability.js";
+import { isCanonicalPlan, parseCanonicalPlan } from "./planTask.js";
 
 /**
  * A schema per module document type (`requirement.md`, `design.md`, `plan.md`,
@@ -99,6 +100,7 @@ export function extractStructure(docType: DocType, markdown: string): Record<str
     }
     case "plan":
       return {
+        ...(isCanonicalPlan(markdown) ? { canonicalTasksValid: parseCanonicalPlan(markdown).problems.length === 0 } : {}),
         hasPlanSummary: has(markdown, /^##\s+Plan Summary/im),
         hasSequencingNotes: has(markdown, /^##\s+Sequencing Notes/im),
         hasOpenQuestions: has(markdown, /^##\s+Unresolved Open Questions/im),
@@ -144,6 +146,7 @@ export function checkOneDoc(docType: DocType, markdown: string, label: string): 
   const validate = validator(docType);
   if (validate(structure)) return { ok: true, problems: [] };
   const problems = (validate.errors ?? []).map((e) => `${label}: ${e.instancePath || "(root)"} ${e.message ?? "is invalid"}`);
+  if (docType === "plan" && isCanonicalPlan(markdown)) problems.push(...parseCanonicalPlan(markdown).problems.map(p=>`${label}: ${p}`));
   return { ok: false, problems };
 }
 
