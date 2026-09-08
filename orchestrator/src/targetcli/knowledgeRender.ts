@@ -84,6 +84,10 @@ export function renderBootstrapBlock(options: BootstrapRenderOptions): string {
   const lane = options.role.toUpperCase();
   const boundLabel = options.role === "dev" ? "Knowledge root (read-only)" : "Target root (optional, read-only)";
   const writes = options.role === "dev" ? "Target application code and DEV-role artifacts only" : "Knowledge requirements/design/planning artifacts only";
+  // `sta context` takes the agent role doing the work, never the workspace role
+  // this block was rendered for — naming `options.role` here would emit a
+  // command that exits with "unknown agent role".
+  const agentRoleExample = options.role === "dev" ? "backend-engineer" : "business-analyst";
   const block = [
     BOOTSTRAP_OPEN,
     "# software-team-agents bootstrap",
@@ -98,7 +102,7 @@ export function renderBootstrapBlock(options: BootstrapRenderOptions): string {
     "- Hard boundary: amend existing module docs section-by-section; never regenerate them.",
     "- Hard boundary: approvals/sign-offs are human acts; agents never forge them.",
     "- Hard boundary: dates and unclear business rules come from a person; never improvise them.",
-    `- Context: execute this as an actual shell command — not just read the name — before browsing files for module context yourself: \`$AGENTCLAUDE_CONTEXT_CMD ${options.role} --module <name> --phase <n>\` (fill in \`<name>\`/\`<n>\`). If that variable is empty/unset, this session was not launched via \`software-team-agents ${options.role}\` — say so and stop instead of grepping local files as a substitute.`,
+    `- Context: execute this as an actual shell command — not just read the name — before browsing files for module context yourself: \`$AGENTCLAUDE_CONTEXT_CMD <agent-role> --module <name> --phase <n>\`, where \`<agent-role>\` is the agent doing the work (e.g. \`${agentRoleExample}\`), never \`${options.role}\`. If that variable is empty/unset this session was not launched via \`software-team-agents ${options.role}\`: say so, then run \`sta context\` directly — it resolves the Knowledge root from this installation's own binding. Never grep local files as a substitute.`,
     "- Everything else: read only the needed section with `sta policy <area> <section>`.",
     BOOTSTRAP_CLOSE,
     "",

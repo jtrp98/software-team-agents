@@ -180,8 +180,10 @@ already said):
   sync `UP_TO_DATE`, runtimes READY.
 - **The bootstrap's `Context:` line is a shell command, not a reference.** The
   synced `AGENTS.md`/`CLAUDE.md` tells the runtime to execute
-  `$AGENTCLAUDE_CONTEXT_CMD <role> --module <name> --phase <n>` — a real command
-  to run, not a name to notice and move on from. A weaker model can still read
+  `$AGENTCLAUDE_CONTEXT_CMD <agent-role> --module <name> --phase <n>` — a real
+  command to run, not a name to notice and move on from. `<agent-role>` is the
+  agent doing the work (`backend-engineer`, …), never the workspace role
+  `dev`/`ba`, which `sta context` rejects as an unknown agent role. A weaker model can still read
   right past it and grep local files for module context instead; if you see that
   happen, run the command yourself and paste the result in, or tell the user
   plainly that this runtime isn't following the instruction. In desktop sessions lacking launcher env, this is supported (`T-V6-006`):
