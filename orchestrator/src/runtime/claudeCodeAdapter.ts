@@ -57,6 +57,14 @@ import { resolveNpmCliScript as resolveNpmCliScriptImpl, type CommandResolver } 
 const CLAUDE_CODE_MODELS: readonly string[] = ["opus", "sonnet", "haiku", "inherit"];
 
 /**
+ * The levels `claude --effort <level>` accepts. Verified against the installed
+ * CLI's own `--help`, the same way `CLAUDE_CODE_MODELS` is scoped to what the
+ * runtime can actually reach: an unreachable value is refused, never passed
+ * through to be rejected downstream at an unknown quality.
+ */
+const CLAUDE_CODE_EFFORTS: readonly string[] = ["low", "medium", "high", "xhigh", "max"];
+
+/**
  * What the Claude Code product claims, independent of any one project's
  * installation. `PARALLEL_EXECUTION` is deliberately absent — reserved for T35's
  * file-level locking work, which nothing here relies on yet.
@@ -338,14 +346,26 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       }
       overrideModel = req.model;
     }
-    if (req.modelExplicit && req.effort) {
-      // Claude Code's `claude -p` exposes no reasoning-effort control, so an
-      // explicitly requested effort cannot be applied here — recorded, never
-      // dropped in silence.
-      modelDiagnostics.push(
-        `requested reasoning effort "${req.effort}" was not applied: Claude Code's \`claude -p\` has no effort flag ` +
-          `(subagent frontmatter's \`effort:\` is honoured only when generating a Codex/OpenCode binding)`,
-      );
+    // `req.effort` is never a frontmatter default — the executor fills it only
+    // from a cast tier or a `routing.by_role` entry — so it is always an
+    // operator-visible choice and does not need `modelExplicit` to be honoured.
+    let overrideEffort: string | undefined;
+    if (req.effort) {
+      if (!CLAUDE_CODE_EFFORTS.includes(req.effort)) {
+        return {
+          status: "ERROR",
+          exitCode: null,
+          text: "",
+          usage: {},
+          guards: { enforced: [], unenforced: [] },
+          diagnostics: [
+            `refusing to run: reasoning effort "${req.effort}" is not one Claude Code accepts ` +
+              `(${CLAUDE_CODE_EFFORTS.join(", ")}) — fix model-tiers.yaml's anthropic cell or the ` +
+              `.sta/config.yaml routing entry rather than passing an unknown effort through to the runtime`,
+          ],
+        };
+      }
+      overrideEffort = req.effort;
     }
     const args = [
       "-p",
@@ -358,6 +378,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     ];
     // Override-only: with no explicit request this pushes nothing (see above).
     if (overrideModel) args.push("--model", overrideModel);
+    if (overrideEffort) args.push("--effort", overrideEffort);
     // Contract denies as hard permission rules, not just hook backstops.
     // Empty guards ⇒ no flag, keeping the no-guard request shape unchanged.
     //

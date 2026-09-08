@@ -202,7 +202,7 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
     expect(result.diagnostics.join(" ")).toMatch(/model "gpt-5" is not one Claude Code accepts/);
   });
 
-  it("T-V4-CAST-001 — records a diagnostic for an explicit effort rather than dropping it (no claude -p effort flag)", async () => {
+  it("T-V4-CAST-001 — a cast tier's effort reaches the model as `--effort`", async () => {
     let args: string[] = [];
     const spawnSync: SpawnSync = (_cmd, a) => {
       args = a;
@@ -213,9 +213,38 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
     const result = await adapter.executeAgent(baseRequest({ model: "sonnet", modelExplicit: true, effort: "high" }));
 
     expect(result.status).toBe("OK");
-    expect(args).not.toContain("--effort");
-    expect(args).not.toContain("high");
-    expect(result.diagnostics.join(" ")).toMatch(/reasoning effort "high" was not applied/);
+    expect(args[args.indexOf("--effort") + 1]).toBe("high");
+    expect(result.diagnostics.join(" ")).not.toMatch(/effort/);
+  });
+
+  it("an effort set without an explicit model is still applied — req.effort is never a frontmatter default", async () => {
+    let args: string[] = [];
+    const spawnSync: SpawnSync = (_cmd, a) => {
+      args = a;
+      return cliResult(0, JSON.stringify({ is_error: false, result: "done" }));
+    };
+    const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync });
+
+    const result = await adapter.executeAgent(baseRequest({ effort: "xhigh" }));
+
+    expect(result.status).toBe("OK");
+    expect(args).not.toContain("--model");
+    expect(args[args.indexOf("--effort") + 1]).toBe("xhigh");
+  });
+
+  it("refuses an effort Claude Code cannot reach rather than passing it through", async () => {
+    let spawned = false;
+    const spawnSync: SpawnSync = () => {
+      spawned = true;
+      return cliResult(0, JSON.stringify({ is_error: false, result: "done" }));
+    };
+    const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync });
+
+    const result = await adapter.executeAgent(baseRequest({ model: "sonnet", modelExplicit: true, effort: "thinking" }));
+
+    expect(spawned).toBe(false);
+    expect(result.status).toBe("ERROR");
+    expect(result.diagnostics.join(" ")).toMatch(/effort "thinking" is not one Claude Code accepts/);
   });
 
   it("runs in req.cwd, not the workspace root", async () => {
