@@ -1,11 +1,11 @@
-# Rules rationale — the 27 shared rules, in full
+# Rules rationale — the 28 shared rules, in full
 
 > These sections explain the full reasoning behind the shared operating rules across the pipeline,
 > including what enforces each of them:
 >
 > - 9 rules are `ENFORCED` — a hook, gate or contract blocks the violation and a test covers that block.
 > - 9 are `PARTIAL` — enforcement covers part of the rule; the operating card keeps the unenforced half.
-> - 8 are `PROMPT-ONLY` or `PARTIAL-KEEP` — nothing deterministic exists, so they stay in the card in full.
+> - 9 are `PROMPT-ONLY` or `PARTIAL-KEEP` — nothing deterministic exists, so they stay in the card in full.
 > - 1 (`run node .claude/tests/run.js after touching a guard`) is a rule for a person editing this
 >   framework, not for an agent at runtime.
 
@@ -24,6 +24,7 @@ Full text in `policies/*.md`; the short version:
 - **Only `qa-engineer` marks tasks done.** It sets a task's Status cell to `verified` (or `blocked`) in `plan.md`'s task table after inspecting real code. Engineers don't edit `plan.md` at all — their contracts deny `_docs/module/**` — so an engineer starting a row says so in its handoff instead of flipping the cell itself, and `project-manager`/`qa-engineer` are the only writers the table ever sees. Nobody else touches Status. **In three-repo mode this decision still originates only with `qa-engineer`** — a BA-workspace session applies the Status-cell write mechanically from `review.md`'s sync table, it never re-judges the verdict.
 - **Amend, don't regenerate.** Existing docs are updated with `Edit`, section by section, with a dated line appended to their `## Change Log`. Never a full rewrite.
 - **Handoff messages are concise.** The chat message an agent ends with — status updates and the "here's what's ready, here's who's next" handoff — leads with the result, not a restated plan or step-by-step narration; explain reasoning only where the next reader must decide something from it. This governs the chat message, not the documents themselves. `policies/documentation.md` §12 has the full rule.
+- **Conversations run in plain language — observe and mirror, never profile, problem before solution.** The only admissible evidence for how technical to sound is what the person says in this conversation, questions go out in small batches shaped by the answers, and a proposed solution is recorded as one proposal while the problem behind it becomes the requirement. This is the one V7 rule that holds across every agent rather than inside the interview — any role can end up talking to a person. `policies/communication.md` §13 has the full rule.
 - **`review.md` stays small.** It holds `Open Issues — all phases`, the current verify round, and `Unverified Behaviour` for phases that haven't deployed yet; `qa-engineer` moves closed rounds verbatim into `review/phase-N.md`. Those first and third sections outlive their round on purpose — a later stage reads them after the round that produced them stopped being current. Every engineer/`security`/`devops` run reads `review.md` in full, so closed-phase detail left in it is a tax on the whole pipeline. Nobody opens an archive file as part of normal startup.
 - **Dates come from the user.** No agent can reliably know today's date, so any agent writing a dated entry asks first and reuses that answer for the session.
 - **Engineers never decide a rule — they implement or they stop.** Neither engineer has `AskUserQuestion`, deliberately: a rule settled in a chat with an engineer never reaches `requirement.md` or `design.md`, so the next phase and the next session don't inherit it. Unclear logic goes back to `system-analyst` (which routes on to `business-analyst` if it's a business question), and `design.md`'s contract sections carry the bar — an engineer must never have to decide. Anything not covered is either written into a contract section or listed as explicitly out of scope; leaving it unmentioned is neither.

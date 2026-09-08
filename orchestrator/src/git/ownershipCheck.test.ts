@@ -62,6 +62,28 @@ describe("git ownership checker", () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
+  it("a packed-install shape (no orchestrator/src) runs the checker without any parser and still fails on the vacuous scan", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-git-ownership-packed-"));
+    try {
+      const result = checkGitOwnership(root, () => null);
+      expect(result.ok).toBe(false);
+      expect(result.scannedFiles).toBe(0);
+      expect(result.problems.join("\n")).not.toMatch(/typescript/);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("fails closed with an actionable problem when sources exist but the parser cannot load", () => {
+    const root = fixture({
+      "feature.ts": 'import { execFile } from "node:child_process";\nexecFile("git", ["status", "--porcelain"]);\n',
+    });
+    try {
+      const result = checkGitOwnership(root, () => null);
+      expect(result.ok).toBe(false);
+      expect(result.problems.join("\n")).toMatch(/typescript is not installed/);
+      expect(result.problems.join("\n")).toMatch(/npm install/);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("exempts only a .test.ts path and still catches a non-test filename containing test", () => {
     const root = fixture({
       "allowed.test.ts": 'import { execFileSync } from "node:child_process";\nexecFileSync("git", ["commit", "-m", "fixture"]);\n',

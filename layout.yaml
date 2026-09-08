@@ -171,7 +171,7 @@ concepts:
       - path: policies
         status: active
         pattern: "*.md"
-        holds: conventions.md split one file per area (T49) — coding, git, architecture, documentation, security, agent-boundaries
+        holds: one file per area — the six conventions.md splits (coding, git, architecture, documentation, security, agent-boundaries; T49) plus communication, data, ux (V7); README.md is the index
       - path: .opencode/plugin
         status: active
         pattern: "*.js"
