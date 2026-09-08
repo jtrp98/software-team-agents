@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import type { ClassificationInput } from "../classification/taskClassifier.js";
-import { deriveWaves, type PlanTaskRow } from "../docs/planGraph.js";
+import { deriveWaves, type WorkPlanTask } from "../docs/planGraph.js";
+import { taskGraphFromPlan } from "../graph/taskGraph.js";
 import { ApprovalType, type ApprovalRecord } from "../gates/approval.js";
 import type { DeterministicCheckId } from "../qa/deterministic.js";
 import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
@@ -23,8 +24,8 @@ export interface AutoEligibilityClassification extends Pick<
 
 /** PM-owned plan facts. No environment observation belongs in this shape. */
 export interface StaticEligibilityIntent {
-  task: Pick<PlanTaskRow, "id" | "owner" | "status" | "dependsOn">;
-  planTasks: readonly PlanTaskRow[];
+  task: Pick<WorkPlanTask, "id" | "owner" | "status" | "dependsOn">;
+  planTasks: readonly WorkPlanTask[];
 }
 
 /** Orchestrator-owned observations, resolved anew for this invocation. */
@@ -63,7 +64,7 @@ function runtimeSupport(runtimeId: string): { level: string } | null {
 }
 
 /** Uses graph-derived layering only; an authored Wave cell is never read as authority. */
-export function tasksInDerivedWave(tasks: readonly PlanTaskRow[], wave: number): PlanTaskRow[] {
+export function tasksInDerivedWave<T extends WorkPlanTask>(tasks: readonly T[], wave: number): T[] {
   const derived = deriveWaves([...tasks]);
   return tasks.filter((task) => derived.get(task.id) === wave);
 }
@@ -83,14 +84,12 @@ export function evaluateAutoEligibility(
     fail(failures, "B", `task status is "${task.status}", expected "pending"`);
   }
 
-  const tasksById = new Map(intent.planTasks.map((candidate) => [candidate.id, candidate]));
-  const unsatisfied = task.dependsOn.filter((dependencyId) => {
-    const dependency = tasksById.get(dependencyId);
-    return dependency?.status !== "verified" && !live.checkpointedTaskIds.has(dependencyId);
-  });
-  if (unsatisfied.length > 0) {
-    fail(failures, "C", `dependencies are neither verified nor checkpointed in this run: ${unsatisfied.join(", ")}`);
-  }
+  try {
+    const graph = taskGraphFromPlan(intent.planTasks);
+    const blocked = intent.planTasks.filter(t => t.status === "blocked").map(t => t.id);
+    const unsatisfied = graph.waitingOn(task.id, live.checkpointedTaskIds, blocked);
+    if (unsatisfied.length > 0) fail(failures, "C", `dependencies lack ledger/checkpoint evidence: ${unsatisfied.join(", ")}`);
+  } catch (error) { fail(failures, "C", `invalid plan graph: ${String(error)}`); }
 
   if (!live.classification) {
     fail(failures, "D", "classification could not be loaded");

@@ -1,3 +1,4 @@
+import { runtimeTaskFixture, FIXTURE_REVISION } from "./packetFixture.testSupport.js";
 import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -46,62 +47,21 @@ describe("buildPromptParts (T-V3TOK-001)", () => {
   });
 });
 
-describe("T-V3R-020 deterministic Task Compiler", () => {
-  it("keeps the prior prompt byte-identical except for the three RuntimeTask sections", () => {
-    const req = {
-      stage: AgentStage.BACKEND_ENGINEER,
-      taskId: "T-V3R-020",
-      context: [{ source: ArtifactType.HANDOFF, content: "handoff" }],
-    };
-    const runtimeTask: RuntimeTask = {
-      task_id: req.taskId,
-      workflow: "feature",
-      pm_mode: "full",
-      why: "formalize packet",
-      goal: "formalize packet",
-      source_of_truth: { status: "resolved", paths: ["requirement.md", "design.md"], reason: null },
-      dependencies: { task_ids: [], plan_readiness: "ready", waiting_on: [], reason: null },
-      scope: {
-        status: "resolved",
-        work_roots: [{
-          stage: req.stage,
-          target_id: "target",
-          root: "C:/target",
-          allow: [
-            { contract_glob: "server/**", effective_glob: "C:/target/server/**" },
-            { contract_glob: "widened/**", effective_glob: "C:/target/widened/**" },
-          ],
-        }],
-        reason: null,
-      },
-      do_not_touch: [".git/**"],
-      acceptance_criteria: { status: "resolved", items: ["packet validates", "scope stays narrow"], reason: null },
-      required_verification: { status: "deferred", levels: ["unit", "typecheck"], reason: "fixture" },
-      evidence_required: ["focused tests"],
-      stop_conditions: ["STOP on an unresolved rule"],
-    };
-    const sources = { docs: ["design context"], knowledge: ["knowledge context"] };
-    const before = buildPromptParts(req, "environment", sources);
-    const packet = compileExecutionPacket({
-      req,
-      role: "backend-engineer",
-      runtimeTask,
-      contractScope: { allow: ["server/**"], deny: [".git/**"] },
-      extra: "environment",
-      sources,
-    });
-    const sections = renderExecutionPacketSections(packet);
-    const withoutSections = sections.reduce((text, section) => text.replace(`\n${section}`, ""), packet.text);
-
-    expect(withoutSections).toBe(before.text);
-    expect(sections.map((section) => section.split("\n")[0])).toEqual([
-      "## Acceptance Criteria",
-      "## Required Verification",
-      "## Stop Conditions",
-    ]);
-    expect(packet.scope.allow).toEqual(["server/**"]);
-    expect(packet.scope.allow).not.toContain("widened/**");
-    expect(packet.sources).toEqual(expect.arrayContaining(["runtime-task", "requirement.md", "module-docs", "knowledge-brief"]));
+describe("T-V8-004 semantic Task Compiler", () => {
+  it("renders complete fields exactly once and narrows stale grants", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "v8-compiler-"));
+    try {
+      const runtimeTask = runtimeTaskFixture(root, { allow: ["server/**", "widened/**"] });
+      const packet = compileExecutionPacket({ req: { stage: AgentStage.BACKEND_ENGINEER, taskId: "T-PACKET", context: [] }, role: "backend-engineer", runtimeTask,
+        contractScope: { allow: ["server/**"], deny: [".git/**"] }, baseRevision: FIXTURE_REVISION, sources: { docs: ["UNRELATED PROSE"] } });
+      const sections = renderExecutionPacketSections(packet);
+      expect(packet.text).toBe(sections.join("\n\n"));
+      expect(new Set(sections.map(s => s.split("\n")[0])).size).toBe(sections.length);
+      expect(packet.scope.allow).toEqual(["server/**"]);
+      expect(packet.text).not.toContain("UNRELATED");
+      expect(packet.text).toContain(runtimeTask.contract.why);
+      expect(packet.text).toContain(runtimeTask.contract.objective);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 });
 

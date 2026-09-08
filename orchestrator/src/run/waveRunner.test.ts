@@ -11,6 +11,7 @@ import { inspectRepositoryPreflight } from "../git/preflight.js";
 import { TaskRegistry } from "../orchestrator/taskRegistry.js";
 import type { DeterministicVerification } from "../qa/deterministic.js";
 import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
+import { fixtureTask, writePacketPlan } from "../runtime/packetFixture.testSupport.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";
 import { AgentStage } from "../types.js";
 import { planHash, readJournal, type RunManifest } from "./journal.js";
@@ -85,11 +86,15 @@ function route(): ResolvedWaveRoute {
 }
 
 function register(registry: TaskRegistry, targetRoot: string, task: PlanTaskRow): void {
+  const docsRoot = temp("sta-wave-docs-");
+  writePacketPlan(docsRoot, [...task.dependsOn.map(id => fixtureTask({ id })), fixtureTask({ id: task.id, dependsOn: task.dependsOn })]);
   registry.create({
     taskId: task.id,
     classification: classifyTask({ isClearBugFix: true, touchesBackend: true }),
     dependsOn: task.dependsOn,
     projectRoot: frameworkRoot,
+    docsRoot,
+    moduleName: "packet-fixture",
     taskText: task.description,
     targetWorkRoots: [
       { stage: AgentStage.BACKEND_ENGINEER, targetId: "target", path: targetRoot },
@@ -278,10 +283,14 @@ describe("bounded sequential wave runner", () => {
     const registry = new TaskRegistry({ store });
     const tasks = [row("BE-1"), row("BE-2")];
     register(registry, firstTarget, tasks[0]);
+    const secondDocs = temp("sta-wave-docs-");
+    writePacketPlan(secondDocs, [fixtureTask({ id: tasks[1].id })]);
     registry.create({
       taskId: tasks[1].id,
       classification: classifyTask({ isClearBugFix: true, touchesBackend: true }),
       projectRoot: frameworkRoot,
+      docsRoot: secondDocs,
+      moduleName: "packet-fixture",
       taskText: tasks[1].description,
       targetWorkRoots: [
         { stage: AgentStage.BACKEND_ENGINEER, targetId: "second", path: secondTarget },

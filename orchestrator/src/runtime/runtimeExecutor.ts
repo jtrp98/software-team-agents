@@ -43,7 +43,9 @@ import { deriveHandoff } from "../agents/moduleDocs.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 import { assessContextBudget, contextBudgetRejections, formatBudgetRejection, resolveContextBudgetFromProject, resolveContextBudgetModeFromProject, taskTokenBudgetRejection, type ContextBudgetComposition } from "../context/contextBudget.js";
 import { RunLog } from "../observability/runLog.js";
-import { writeExecutionPacket } from "../state/runtimeArtifacts.js";
+import { writeExecutionPacket, nextExecutionPacketAttempt } from "../state/runtimeArtifacts.js";
+import { resolveTargetRevision } from "../codeintel/targetRevision.js";
+import type { DependencyEvidence } from "../artifacts/executionPacket.js";
 import { loadModelTiers, type ModelTierId, type ModelTiers } from "./modelTiers.js";
 import { captureChangeSetFingerprint } from "../qa/changeSource.js";
 
@@ -74,7 +76,7 @@ export interface RuntimeExecutorOptions {
    * for the real thing, or `() => NO_GUARDS` in a test that is explicitly not
    * testing guards.
    */
-  guards: (role: string) => RuntimeGuards;
+  guards: (role: string, layoutRoot?: string) => RuntimeGuards;
   /** How much autonomy each run gets. Defaults to `propose` — the orchestrator automates handoffs between the pipeline's confirmation points, it does not remove them. */
   autonomy?: RuntimeAutonomy;
   /**
@@ -101,6 +103,9 @@ export interface RuntimeExecutorOptions {
   threeRepoTask?: (taskId: string, stage: AgentStage) => { task: PersistedTask; roots: ThreeRepoRequestRoots };
   /** Stored Phase-1 task contract. Production supplies this for every runnable task. */
   runtimeTask?: (taskId: string) => RuntimeTask | null | undefined;
+  dependencyEvidence?: (taskId: string) => readonly DependencyEvidence[];
+  /** Fixture seam; production always resolves the actual current checkout. */
+  packetBaseRevision?: (root: string) => Promise<string>;
   /** Optional bounded retention override; the runtime-artifact default otherwise applies. */
   packetRetention?: number;
   /**
@@ -326,9 +331,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     } catch (error) {
       return failResult(`cannot use prior-stage handoff: ${String(error)}`);
     }
+    const runtimeTask = threeRepo?.task.runtimeTask ?? opts.runtimeTask?.(req.taskId) ?? null;
     let stageContext;
     try {
-      stageContext = sliceDocs
+      stageContext = sliceDocs && !(runtimeTask && "version" in runtimeTask && runtimeTask.version === 2)
         ? await assembleStageContext(req.stage, {
             projectRoot: opts.projectRoot,
             docsRoot: threeRepo?.roots.knowledgeRoot ?? opts.projectRoot,
@@ -349,33 +355,36 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       return failResult(`cannot assemble authorized handoff context: ${String(error)}`);
     }
 
+    const executionRoot = workRoot?.path ?? threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot;
     let guards: RuntimeGuards;
     try {
-      guards = opts.guards(role);
+      guards = opts.guards(role, executionRoot);
     } catch (e) {
       // The current role contract is the authority packet scope narrows. A run
       // with no resolved contract must not compile a packet or start an adapter.
       return failResult(`cannot start ${role}: ${String(e)}`);
     }
 
-    const runtimeTask = threeRepo?.task.runtimeTask ?? opts.runtimeTask?.(req.taskId) ?? null;
     let packetPath: string | undefined;
     let promptParts: PromptPartsResult;
     if (runtimeTask) {
       try {
+        const runtimeStateRoot = threeRepo?.roots.bindingRoot ?? opts.projectRoot;
         const packet = compileExecutionPacket({
           req,
           role,
           runtimeTask,
           contractScope: { allow: guards.writeAllow, deny: guards.writeDeny },
+          attempt: nextExecutionPacketAttempt(runtimeStateRoot, req.taskId, req.stage),
+          baseRevision: await (opts.packetBaseRevision ?? resolveTargetRevision)(executionRoot),
+          config: { target: loadTargetConfig(executionRoot), guardStackRules: resolveGuardStackRules(role, executionRoot) },
+          dependencyEvidence: opts.dependencyEvidence?.(req.taskId),
           extra: opts.extraInstruction,
-          sources: {
-            docs: stageContext.docs,
-            knowledge: stageContext.knowledge,
-            codeIntel: stageContext.codeIntel,
-          },
         });
-        const runtimeStateRoot = threeRepo?.roots.bindingRoot ?? opts.projectRoot;
+        if (JSON.stringify([...packet.scope.allow].sort()) !== JSON.stringify([...new Set(guards.writeAllow)].sort())) throw new Error("packet scope differs from the enforced stage contract; recompile with current stage grants");
+        const expectedRoots = threeRepo ? threeRepo.roots.workRoots.filter(root => root.access === "write").map(root => path.resolve(root.path)) : [path.resolve(executionRoot)];
+        if (JSON.stringify(packet.scope.roots.map(root => path.resolve(root)).sort()) !== JSON.stringify(expectedRoots.sort())) throw new Error("packet work roots differ from effective stage guard roots; recompile");
+        guards = { ...guards, writeAllow: packet.scope.allow, writeDeny: packet.scope.deny };
         const persisted = writeExecutionPacket({
           projectRoot: runtimeStateRoot,
           packet,
@@ -390,6 +399,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         return failResult(`cannot compile or persist execution packet for ${role}: ${String(error)}`);
       }
     } else {
+      if (opts.runtimeTask || threeRepo) return failResult(`task ${req.taskId}: missing semantic RuntimeTask; author canonical task fields and explicitly recompile before execution`);
       // Historical or embedded callers may have no RuntimeTask. Production
       // tasks created since state schema v13 always take the packet path above.
       promptParts = buildPromptParts(req, opts.extraInstruction, {
@@ -505,7 +515,6 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // agent inspect the wrong repository and can turn an otherwise valid
     // packet into a no-change run.  The guard's stack rules must follow the
     // same execution root.
-    const executionRoot = workRoot?.path ?? threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot;
     const guardRoot = executionRoot;
     const guardStackRules = resolveGuardStackRules(role, guardRoot);
 

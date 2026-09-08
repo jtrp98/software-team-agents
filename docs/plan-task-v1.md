@@ -5,7 +5,8 @@
 inferred `PlanTask` type. JSON snapshots are test output, never authoring inputs.
 The [canonical example](../orchestrator/src/docs/fixtures/canonical-plan.md) is
 the small versioned template. PM workflow/prompt adoption follows T-V8-008;
-this round establishes the deterministic contract and checker only.
+the canonical parser, graph consumers and packet compiler are integrated through
+T-V8-003/004.
 
 ## Grammar
 
@@ -32,11 +33,15 @@ The parser rejects a whole malformed plan, never exposes a partial task set.
 
 `parseCanonicalPlan(text, {requirementMd, designMd})` checks trace and contract
 references against the supplied authoritative documents, plus dependency IDs,
-duplicates and declared cycles. The CLI `--check-plan` supplies those documents
+duplicates and mixed declared/contract/phase cycles. The CLI `--check-plan` supplies those documents
 and fails on missing references. Parsing without documents is syntax/local
 reference validation only. A consumed external contract requires design.md.
-Full contract/phase graph construction and runtime propagation belong to T-V8-003;
-the new parser does not claim scheduler or readiness parity.
+`taskGraphFromPlan` preserves dependencies, produced/consumed contracts, owner and
+phase for validation, waves, readiness, QA impact, handoff and registration.
+Declared edges take diagnostic precedence over contract edges, then phase edges.
+Runtime readiness requires ledger/checkpoint completion; a verified Status cell
+alone cannot unlock a planned dependency. Unannotated legacy FE/BE ordering that
+would be ambiguous is refused; explicit empty contract lists mean independent.
 
 ## Identity
 
@@ -59,10 +64,13 @@ until its migration task; these are explicitly different versioned contracts.
 | Unsupported format, mixed tables and task sections | Refuse, never guess | Correct the declared format using the v1 example |
 
 The old `parsePlanTasks` export is a compatibility alias to the explicit legacy
-reader. It refuses v1 instead of flattening rich contracts. Legacy runtime
-consumers have not migrated in Round 01; v1 is a parser/checker contract, not a
-claim of executable runtime support. T-V8-003/004 integrate its consumers and
-T-V8-029 removes the adapter only after parity. Existing old table behavior and
-public reader signatures remain available; no authored module document is
-automatically rewritten. Rollback is removing the additive v1 parser/checker
-branch before consumers adopt it; do not feed v1 into a pre-v1 runtime.
+reader. It refuses v1 instead of flattening rich contracts. `readWorkPlan` returns
+the complete canonical object or an explicitly recognized legacy row. Planned
+execution requires canonical semantics and an immutable v2 packet; a thin table
+can still be inspected but cannot silently become an executable description.
+An unknown plan task requires `--ad-hoc`; a known task cannot use that flag to
+bypass dependencies. Ad-hoc selection does not waive packet semantic requirements.
+T-V8-029 retains ownership of retiring the legacy reader and wave lifecycle.
+No authored module document is automatically rewritten. A rollback must retain
+new canonical plans and v2 packets for audit and use a compatible reader; never
+resume them through an older thin-task compiler. See [ExecutionPacket v2](execution-packet-v2.md).

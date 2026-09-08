@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { AgentStage } from "../types.js";
 import { firstTable, sections } from "./markdown.js";
+import { taskGraphFromPlan } from "../graph/taskGraph.js";
 
 const text = z.string().trim().min(1);
 const taskId = z.string().regex(/^[A-Z][A-Z0-9]*-[A-Za-z0-9][A-Za-z0-9._-]*$/);
@@ -156,15 +157,8 @@ export function validateCanonicalReferences(tasks: readonly PlanTask[], refs?: P
       for (const c of [...t.produces, ...t.consumes]) if (!external.has(c)) problems.push(`task ${t.id}: unknown design contract ${c}`);
     }
   }
-  const visiting = new Set<string>(), done = new Set<string>();
-  const visit = (id: string) => {
-    if (visiting.has(id)) { problems.push(`task ${id}: dependency cycle`); return; }
-    if (done.has(id)) return;
-    visiting.add(id);
-    for (const dep of byId.get(id)?.dependsOn ?? []) if (byId.has(dep)) visit(dep);
-    visiting.delete(id); done.add(id);
-  };
-  for (const id of byId.keys()) visit(id);
+  try { taskGraphFromPlan(tasks); }
+  catch (error) { problems.push(String(error)); }
   return problems;
 }
 

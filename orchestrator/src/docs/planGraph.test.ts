@@ -18,6 +18,8 @@ function row(over: Partial<PlanTaskRow> & { id: string }): PlanTaskRow {
     phase: 1,
     designRefs: ["DES-001"],
     dependsOn: [],
+    produces: [],
+    consumes: [],
     status: "pending",
     owner: "backend-engineer",
     wave: null,
@@ -278,11 +280,10 @@ describe("validatePlanTasks — T-PM10.1", () => {
     expect(check.errors.join("\n")).toContain("cites DES-042, which design.md does not define");
   });
 
-  it("derives waves even when validation fails elsewhere", () => {
+  it("refuses executable waves when an owner is invalid", () => {
     const check = validatePlanTasks([row({ id: "BE-001", owner: "ghost" }), row({ id: "BE-002", dependsOn: ["BE-001"] })]);
     expect(check.ok).toBe(false);
-    expect(check.waves.get("BE-001")).toBe(1);
-    expect(check.waves.get("BE-002")).toBeGreaterThan(1);
+    expect(check.waves.size).toBe(0);
   });
 });
 

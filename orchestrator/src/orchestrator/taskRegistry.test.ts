@@ -45,7 +45,7 @@ describe("TaskRegistry", () => {
     expect(reg.waitingOn("T-2")).toEqual(["T-1"]);
   });
 
-  it("keeps manual DEPLOYED semantics while the dedicated wave path accepts plan-verified or same-run checkpointed dependencies", () => {
+  it("requires ledger or same-run checkpoints; plan Status cannot unlock either path", () => {
     const reg = registry();
     reg.create({ taskId: "FE-1", classification: trivial() });
     reg.create({ taskId: "FE-2", classification: trivial(), dependsOn: ["FE-1"] });
@@ -62,9 +62,9 @@ describe("TaskRegistry", () => {
     const second = { ...base, id: "FE-2", dependsOn: ["FE-1"], status: "pending" as const };
 
     expect(() => reg.open("FE-2")).toThrow(DependencyNotMetError);
-    expect(() => reg.openPreparedForWave("FE-2", [first, second], new Set())).toThrow(/neither verified.*nor checkpointed/);
+    expect(() => reg.openPreparedForWave("FE-2", [first, second], new Set())).toThrow(/ledger.*checkpoint evidence/);
     expect(reg.openPreparedForWave("FE-2", [first, second], new Set(["FE-1"])).taskId).toBe("FE-2");
-    expect(reg.openPreparedForWave("FE-2", [{ ...first, status: "verified" }, second], new Set()).taskId).toBe("FE-2");
+    expect(() => reg.openPreparedForWave("FE-2", [{ ...first, status: "verified" }, second], new Set())).toThrow(/ledger.*checkpoint evidence/);
     expect(() => reg.open("FE-2")).toThrow(DependencyNotMetError);
   });
 
@@ -201,13 +201,13 @@ describe("TaskRegistry as a dependency graph (T10/T11 wiring)", () => {
    * defence — it is what catches a store that was hand-edited or restored from a
    * backup written by something with looser rules.
    */
-  it("survives a dependency on a task the store no longer holds", () => {
+  it("refuses a dependency on a task the store no longer holds", () => {
     const { store, registry } = fixture();
     registry.create({ taskId: "A", classification: incremental() });
     const orphan = { ...store.loadTask("A")!, taskId: "B", dependsOn: ["GONE"] };
     store.createTask(orphan);
 
-    expect(() => registry.readyLayers()).not.toThrow();
+    expect(() => registry.readyLayers()).toThrow(/GONE/);
   });
 });
 

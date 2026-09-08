@@ -1,12 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { AgentStage } from "../types.js";
-import { TaskGraph, TaskGraphError, CircularDependencyError, UnknownTaskError, type TaskNode } from "../graph/taskGraph.js";
+import { taskGraphFromPlan, TaskGraphError, CircularDependencyError, UnknownTaskError, type PlanGraphTask } from "../graph/taskGraph.js";
 import { sections, firstTable, checkboxLines } from "./markdown.js";
 import { extractIds } from "../traceability/traceability.js";
 import { loadModelTiers, ModelTiersInvalidError, type ModelTiers } from "../runtime/modelTiers.js";
 import { detectWorkspaceKind } from "../targetcli/roleWorkspace.js";
-import { isCanonicalPlan, parseCanonicalPlan } from "./planTask.js";
+import { isCanonicalPlan, parseCanonicalPlan, type PlanTask } from "./planTask.js";
 
 /**
  * The plan.md task table as a machine-checkable graph.
@@ -31,14 +31,10 @@ import { isCanonicalPlan, parseCanonicalPlan } from "./planTask.js";
  * runtime state — that remains the orchestrator's store's job; this
  * is the plan-side mirror a person or a driver reads before creating tasks.
  *
- * A run consults this mirror as an **advisory** and nothing more. `sta run` prints
- * {@link planReadinessAdvisory} when the task it was handed is behind an
- * unfinished dependency, and then runs it anyway. The authority model is the
- * reason for the restraint: PM owns the Work Graph, the orchestrator owns
- * runtime. A plan document is an LLM-authored artifact that can be stale or
- * simply not cover the task at hand, so letting it decide what may execute
- * would move a gate into the wrong layer. It tells the operator what the plan
- * believes; the store still decides what runs.
+ * Document readiness is a human view only. Planned execution uses this full
+ * graph with persisted completion/checkpoint evidence; it never prints a
+ * warning and proceeds past an unmet edge. The legacy advisory export remains
+ * read-only compatibility until T-V8-029.
  */
 
 export type PlanTaskStatus = "pending" | "in_progress" | "verified" | "blocked";
@@ -215,6 +211,18 @@ export function parsePlanTasks(planMd: string): ParsedPlan {
   return parseLegacyPlanTasks(planMd);
 }
 
+/** A rich task stays rich. The legacy row is explicitly distinguishable by absence of version. */
+export type WorkPlanTask = PlanTask | PlanTaskRow;
+export function readWorkPlan(planMd: string): { tasks: WorkPlanTask[]; problems: string[] } {
+  return isCanonicalPlan(planMd) ? parseCanonicalPlan(planMd) : parseLegacyPlanTasks(planMd);
+}
+export function taskDesignRefs(task: WorkPlanTask): string[] {
+  return "version" in task ? task.traceability.filter(id => id.startsWith("DES-")) : task.designRefs;
+}
+export function taskObjective(task: WorkPlanTask): string {
+  return "version" in task ? task.objective : task.description;
+}
+
 /** Explicit pre-v1 adapter. Never silently flatten a canonical task into a row. */
 export function parseLegacyPlanTasks(planMd: string): ParsedPlan {
   if (isCanonicalPlan(planMd)) {
@@ -357,6 +365,11 @@ export function validatePlanTasks(
   let derived: Map<string, number> = new Map();
   try {
     derived = deriveWaves(tasks);
+    const graph = taskGraphFromPlan(tasks);
+    for (const edge of graph.edges.filter(edge => edge.kind !== "declared")) {
+      const from = byId.get(edge.from)!, to = byId.get(edge.to)!;
+      if (from.wave !== null && to.wave !== null && from.wave >= to.wave) errors.push(`task ${to.id}: authored wave ${to.wave} conflicts with ${edge.kind} dependency ${from.id} in wave ${from.wave}`);
+    }
   } catch (error) {
     if (error instanceof CircularDependencyError) {
       errors.push(`${error.message}`);
@@ -379,33 +392,28 @@ export function validatePlanTasks(
  * waits on strictly lower waves. Not runtime state — the orchestrator still
  * checks dependency status before dispatch.
  */
-export function deriveWaves(tasks: PlanTaskRow[]): Map<string, number> {
-  const nodes: TaskNode[] = tasks.map((t) => ({
-    id: t.id,
-    phase: t.phase,
-    dependsOn: t.dependsOn.filter((d) => d !== t.id),
-  }));
-  const graph = new TaskGraph(nodes);
+export function deriveWaves(tasks: readonly PlanGraphTask[]): Map<string, number> {
+  const graph = taskGraphFromPlan(tasks);
   const waves = new Map<string, number>();
   graph.parallelLayers().forEach((layer, i) => layer.forEach((n) => waves.set(n.id, i + 1)));
   return waves;
 }
 
-export interface PlanWaiting {
-  task: PlanTaskRow;
+export interface PlanWaiting<T = WorkPlanTask> {
+  task: T;
   /** Dependency ids not yet `verified`. */
   waitingOn: string[];
 }
 
-export interface PlanReadiness {
+export interface PlanReadiness<T = WorkPlanTask> {
   /** `pending`, every dependency `verified` — may start now, in document order. */
-  ready: PlanTaskRow[];
+  ready: T[];
   /** `in_progress` — started, not finished. */
-  started: PlanTaskRow[];
-  done: PlanTaskRow[];
+  started: T[];
+  done: T[];
   /** `blocked` rows, plus every pending row behind one — named so downstream stalls are visible, not silent. */
-  stalledByBlocked: PlanTaskRow[];
-  waiting: PlanWaiting[];
+  stalledByBlocked: T[];
+  waiting: PlanWaiting<T>[];
   /** Static waves over the whole plan (derived, 1-based). */
   waves: Map<string, number>;
 }
@@ -418,15 +426,17 @@ export interface PlanReadiness {
  * Pure function of the parsed rows: re-running after a retry/resume cannot
  * drift, because there is no stored readiness to drift from.
  */
-export function readinessOf(tasks: PlanTaskRow[]): PlanReadiness {
+export function readinessOf<T extends WorkPlanTask>(tasks: readonly T[]): PlanReadiness<T> {
+  const graph = taskGraphFromPlan(tasks);
   const verified = new Set(tasks.filter((t) => t.status === "verified").map((t) => t.id));
   const blockedIds = new Set(tasks.filter((t) => t.status === "blocked").map((t) => t.id));
+  const stalledIds = new Set([...blockedIds].flatMap(id => graph.descendantsOf(id)));
 
-  const ready: PlanTaskRow[] = [];
-  const started: PlanTaskRow[] = [];
-  const done: PlanTaskRow[] = [];
-  const stalledByBlocked: PlanTaskRow[] = [];
-  const waiting: PlanWaiting[] = [];
+  const ready: T[] = [];
+  const started: T[] = [];
+  const done: T[] = [];
+  const stalledByBlocked: T[] = [];
+  const waiting: PlanWaiting<T>[] = [];
 
   for (const task of tasks) {
     if (task.status === "verified") {
@@ -441,8 +451,8 @@ export function readinessOf(tasks: PlanTaskRow[]): PlanReadiness {
       started.push(task);
       continue;
     }
-    const unmet = task.dependsOn.filter((dep) => !verified.has(dep));
-    if (unmet.some((dep) => blockedIds.has(dep))) {
+    const unmet = graph.waitingOn(task.id, verified, blockedIds);
+    if (stalledIds.has(task.id)) {
       stalledByBlocked.push(task);
       continue;
     }
@@ -453,12 +463,7 @@ export function readinessOf(tasks: PlanTaskRow[]): PlanReadiness {
     ready.push(task);
   }
 
-  let waves: Map<string, number>;
-  try {
-    waves = deriveWaves(tasks);
-  } catch {
-    waves = new Map(); // an invalid graph still gets a readiness answer; validatePlanTasks reports why
-  }
+  const waves = deriveWaves(tasks);
   return { ready, started, done, stalledByBlocked, waiting, waves };
 }
 
@@ -494,7 +499,8 @@ export function planReadinessAdvisory(planMd: string, taskId: string): PlanReadi
   }
   if (!parsed.tasks.some((task) => task.id === taskId)) return null;
 
-  const readiness = readinessOf(parsed.tasks);
+  let readiness: PlanReadiness<PlanTaskRow>;
+  try { readiness = readinessOf(parsed.tasks); } catch { return null; }
   if (readiness.ready.some((task) => task.id === taskId)) return null;
   if (readiness.done.some((task) => task.id === taskId)) {
     return { taskId, reason: "plan.md already marks it verified", waitingOn: [] };
@@ -558,7 +564,7 @@ export function checkPlanGraphForModule(
     const requirementMd = fs.existsSync(requirementPath) ? fs.readFileSync(requirementPath, "utf8") : "";
     const canonical = parseCanonicalPlan(planMd, { requirementMd, designMd: designMd ?? "" });
     return { module, ok: canonical.problems.length === 0, errors: canonical.problems,
-      notes: [`${module}/plan.md: ${canonical.tasks.length} canonical task(s), format 1; runtime graph integration follows T-V8-003`] };
+      notes: [`${module}/plan.md: ${canonical.tasks.length} canonical task(s), format 1; ${canonical.problems.length ? 0 : Math.max(0, ...deriveWaves(canonical.tasks).values())} wave(s)`] };
   }
   const { tasks, problems } = parseLegacyPlanTasks(planMd);
   notes.push(`${module}/plan.md: explicit legacy table compatibility adapter; canonical conversion requires complete semantic fields (docs/plan-task-v1.md)`);

@@ -1,3 +1,4 @@
+import { runtimeTaskFixture, FIXTURE_REVISION } from "./packetFixture.testSupport.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -117,36 +118,14 @@ describe("createRuntimeExecutor — what reaches the adapter (T108)", () => {
         return okResult();
       },
     });
-    const runtimeTask: RuntimeTask = {
-      task_id: "T-PACKET",
-      workflow: "bugfix",
-      pm_mode: "lightweight",
-      why: "persist packet",
-      goal: "persist packet",
-      source_of_truth: { status: "unavailable", paths: [], reason: "fixture" },
-      dependencies: { task_ids: [], plan_readiness: "untracked", waiting_on: [], reason: "fixture" },
-      scope: {
-        status: "resolved",
-        work_roots: [{
-          stage: AgentStage.BACKEND_ENGINEER,
-          target_id: "legacy",
-          root,
-          allow: [{ contract_glob: "server/**", effective_glob: path.join(root, "server", "**") }],
-        }],
-        reason: null,
-      },
-      do_not_touch: [".git/**"],
-      acceptance_criteria: { status: "resolved", items: ["packet round-trips"], reason: null },
-      required_verification: { status: "deferred", levels: [], reason: "fixture" },
-      evidence_required: ["packet JSON"],
-      stop_conditions: ["STOP on invalid packet"],
-    };
+    const runtimeTask = runtimeTaskFixture(root);
     const executor = createRuntimeExecutor({
       runtime,
       projectRoot: root,
       moduleName: () => "sales-crm",
       guards: () => ({ ...NO_GUARDS, writeAllow: ["server/**"] }),
       runtimeTask: () => runtimeTask,
+      packetBaseRevision: async () => FIXTURE_REVISION,
       sliceModuleDocs: false,
     });
 
@@ -901,10 +880,17 @@ describe("the orchestrator drives a whole task through the interface (T108)", ()
  * needed to know either runtime's name for this to happen.
  */
 describe("createRuntimeExecutor — three-repo guard enforcement", () => {
+  function scopedFixture(taskId: string) {
+    const bindingRoot = tmpProject(), knowledgeRoot = tmpProject(), targetRoot = tmpProject();
+    const runtimeTask = runtimeTaskFixture(knowledgeRoot, { taskId, targetRoot, allow: [] });
+    return { bindingRoot, knowledgeRoot, targetRoot, runtimeTask };
+  }
   it("does not start a Target-write run when the runtime lacks a pre-tool guard", async () => {
     const runtime = new MockRuntimeAdapter({ id: "claude-code", capabilities: [RuntimeCapability.NAMED_AGENTS] });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const scoped = scopedFixture("T-target");
     const task = {
+      runtimeTask: scoped.runtimeTask,
       taskId: "T-target",
       classification,
       targetBindings: { frontend_target: null, backend_target: "api" },
@@ -915,7 +901,8 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
       moduleName: () => "sales-crm",
       guards: () => NO_GUARDS,
       registry: new RuntimeRegistry([runtime]),
-      threeRepoTask: () => ({ task, roots: { bindingRoot: "/framework", knowledgeRoot: "/knowledge", workRoots: [{ targetId: "api", path: "/api", access: "write" }] } }),
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "write" }] } }),
     });
     const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-target", context: [] });
     expect(result.outcome.result).toBe("FAIL");
@@ -942,34 +929,39 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
   it("runs a Target-writing stage in its canonical Target root while retaining explicit scope", async () => {
     const runtime = new MockRuntimeAdapter({ respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
-    const task = { taskId: "T-target", classification, targetBindings: { frontend_target: null, backend_target: "api" } } as never;
+    const scoped = scopedFixture("T-target");
+    const task = { runtimeTask: scoped.runtimeTask, taskId: "T-target", classification, targetBindings: { frontend_target: null, backend_target: "api" } } as never;
     const executor = createRuntimeExecutor({ runtime, projectRoot: tmpProject(), moduleName: () => "sales-crm", guards: () => NO_GUARDS,
-      threeRepoTask: () => ({ task, roots: { bindingRoot: "/framework", knowledgeRoot: "/knowledge", workRoots: [{ targetId: "api", path: "/api", access: "write" }] } }), });
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "write" }] } }), });
     await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-target", context: [] });
-    expect(runtime.requests[0]).toMatchObject({ cwd: "/api", bindingRoot: "/framework", knowledgeRoot: "/knowledge", workRoots: [{ targetId: "api", path: "/api", access: "write" }] });
+    expect(runtime.requests[0]).toMatchObject({ cwd: scoped.targetRoot, bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "write" }] });
     // T-WG7 — the Knowledge root rides on the env so hooks/prompts can name it.
-    expect(runtime.requests[0]!.env).toMatchObject({ AGENTCLAUDE_ROLE: "backend-engineer", AGENTCLAUDE_KNOWLEDGE_ROOT: "/knowledge" });
+    expect(runtime.requests[0]!.env).toMatchObject({ AGENTCLAUDE_ROLE: "backend-engineer", AGENTCLAUDE_KNOWLEDGE_ROOT: scoped.knowledgeRoot });
   });
 
   it("T-V1-16 two-Target isolation: the guard env carries only the write-access root, never the read-only sibling", async () => {
     const runtime = new MockRuntimeAdapter({ respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true, touchesFrontend: true });
-    const task = { taskId: "T-two", classification, targetBindings: { frontend_target: "web", backend_target: "api" } } as never;
+    const scoped = scopedFixture("T-two");
+    const task = { runtimeTask: scoped.runtimeTask, taskId: "T-two", classification, targetBindings: { frontend_target: "web", backend_target: "api" } } as never;
+    const otherTargetRoot = tmpProject();
     const workRoots = [
-      { targetId: "api", path: "/repos/api", access: "write" as const },
-      { targetId: "web", path: "/repos/web", access: "read" as const },
+      { targetId: "api", path: scoped.targetRoot, access: "write" as const },
+      { targetId: "web", path: otherTargetRoot, access: "read" as const },
     ];
     const executor = createRuntimeExecutor({
       runtime,
       projectRoot: tmpProject(),
       moduleName: () => "sales-crm",
       guards: () => NO_GUARDS,
-      threeRepoTask: () => ({ task, roots: { bindingRoot: "/framework", knowledgeRoot: "/knowledge", workRoots } }),
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, workRoots } }),
     });
     await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-two", context: [] });
     const writable = JSON.parse(runtime.requests[0]!.env!.AGENTCLAUDE_WRITABLE_WORK_ROOTS!);
-    expect(writable).toEqual(["/repos/api"]);
-    expect(JSON.stringify(writable)).not.toContain("/repos/web");
+    expect(writable).toEqual([scoped.targetRoot]);
+    expect(JSON.stringify(writable)).not.toContain(otherTargetRoot);
   });
 });
 

@@ -1,5 +1,5 @@
 import { AgentStage } from "../types.js";
-import { parsePlanTasks } from "../docs/planGraph.js";
+import { readWorkPlan, taskDesignRefs } from "../docs/planGraph.js";
 import { buildTraceChain } from "../traceability/traceability.js";
 import type { DocKind } from "./contextManager.js";
 import type { DesignSectionVerdict } from "./docSelection.js";
@@ -44,17 +44,25 @@ export function traceabilityScopeFor(
 ): TraceabilityScope {
   if (!requirementMd || !designMd || !planMd) return unavailableTrace("requirement.md, design.md, or plan.md is missing");
   if (!phases || phases.length === 0) return unavailableTrace("no phase was supplied");
-  const parsed = parsePlanTasks(planMd);
+  const parsed = readWorkPlan(planMd);
   if (parsed.problems.length > 0) return unavailableTrace(`plan.md task structure is not reliable: ${parsed.problems[0]}`);
   const exactTask = taskId ? parsed.tasks.find((task) => task.id === taskId) : undefined;
   const selectedTasks = exactTask ? [exactTask] : parsed.tasks.filter((task) => phases.includes(task.phase));
   if (selectedTasks.length === 0) return unavailableTrace(`plan.md has no parseable task in phase ${phases.join(", ")}`);
-  if (selectedTasks.some((task) => task.designRefs.length === 0)) {
+  if (selectedTasks.some((task) => taskDesignRefs(task).length === 0)) {
     return unavailableTrace("at least one selected plan task has no DES-NNN relationship");
   }
 
-  const selectedDesignRefs = new Set(selectedTasks.flatMap((task) => task.designRefs));
-  const plannedDesignRefs = new Set(parsed.tasks.flatMap((task) => task.designRefs));
+  const selectedDesignRefs = new Set(selectedTasks.flatMap(taskDesignRefs));
+  const plannedDesignRefs = new Set(parsed.tasks.flatMap(taskDesignRefs));
+  if (selectedTasks.every(task => "version" in task)) {
+    return {
+      usableForDesign: true, usableForRequirement: true, reason: "canonical task trace references",
+      selectedTaskIds: new Set(selectedTasks.map(t => t.id)), selectedDesignRefs, plannedDesignRefs,
+      relevantRequirementIds: new Set(selectedTasks.flatMap(t => t.traceability.filter(id => id.startsWith("REQ-")))),
+      plannedRequirementIds: new Set(parsed.tasks.flatMap(t => "version" in t ? t.traceability.filter(id => id.startsWith("REQ-")) : [])),
+    };
+  }
   const chain = buildTraceChain({ requirementMd, designMd, planMd });
   const relevantRequirementIds = new Set(
     chain

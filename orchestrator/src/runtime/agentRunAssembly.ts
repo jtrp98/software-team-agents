@@ -1,4 +1,10 @@
 import { AgentStage } from "../types.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import { RuntimeTaskV2Schema, assertRuntimeTaskFresh } from "../orchestrator/runtimeTask.js";
+import { planTaskHash } from "../docs/planTask.js";
+import { PacketFieldsSchema, renderPacketSections, renderPacketText, stableHash, contentHash, type DependencyEvidence, type PacketFields } from "../artifacts/executionPacket.js";
 import {
   ArtifactType,
   validateArtifact,
@@ -8,7 +14,7 @@ import {
 import type { AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { parseQaReport, parseSecurityReport, readModuleDoc } from "../agents/moduleDocs.js";
-import { parsePlanTasks } from "../docs/planGraph.js";
+import { readWorkPlan, taskDesignRefs } from "../docs/planGraph.js";
 import {
   ContextManager,
   handoffReferencedSections,
@@ -241,7 +247,8 @@ export function referencedKnowledgeIds(docsRoot: string, moduleName: string, tas
   if (!taskId) return [];
   try {
     const plan = readModuleDoc(docsRoot, moduleName, "plan.md");
-    return plan === null ? [] : parsePlanTasks(plan).tasks.find((task) => task.id === taskId)?.designRefs ?? [];
+    const task = plan === null ? undefined : readWorkPlan(plan).tasks.find(task => task.id === taskId);
+    return task ? taskDesignRefs(task) : [];
   } catch {
     return [];
   }
@@ -387,74 +394,73 @@ function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
-/** Renders the ExecutionPacket sections appended to the prompt. */
-export function renderExecutionPacketSections(fields: Pick<ExecutionPacket, "acceptance_criteria" | "required_verification" | "stop_conditions">): string[] {
-  const section = (title: string, values: readonly string[], empty: string): string =>
-    [`## ${title}`, ...(values.length > 0 ? values.map((value) => `- ${value}`) : [`- ${empty}`])].join("\n");
-  return [
-    section("Acceptance Criteria", fields.acceptance_criteria, "unavailable"),
-    section("Required Verification", fields.required_verification, "deferred"),
-    section("Stop Conditions", fields.stop_conditions, "none declared"),
-  ];
-}
+export const renderExecutionPacketSections = renderPacketSections;
 
 export interface CompileExecutionPacketInput {
   req: AgentExecutorRequest;
   role: string;
   runtimeTask: RuntimeTask;
   contractScope: ExecutionPacketScopeContract;
+  /** Chosen before compilation, never reallocated by persistence after a collision. */
+  attempt?: number;
+  baseRevision?: string;
+  config?: unknown;
+  dependencyEvidence?: readonly DependencyEvidence[];
+  retrievalCandidates?: PacketFields["retrieval_candidates"];
   extra?: string;
+  /** Legacy context input is deliberately not rendered; v2 selects exact records. */
   sources?: Omit<PromptSources, "task">;
 }
 
-/**
- * Compiles one execution-ready packet with deterministic lookup/select/filter/
- * compose/template operations only. This module deliberately has no runtime
- * adapter import, constructor, registry, or model call.
- */
+export function packetCompilerHash(): string {
+  const extension = path.extname(fileURLToPath(import.meta.url));
+  return stableHash(["./agentRunAssembly", "../artifacts/executionPacket", "../artifacts/schemas", "../docs/taskReferences", "../orchestrator/runtimeTask"].map(name => contentHash(fs.readFileSync(new URL(`${name}${extension}`, import.meta.url)))));
+}
+
+/** No model calls, inferred semantics, whole-document fallback or packet mutation. */
 export function compileExecutionPacket(input: CompileExecutionPacketInput): ExecutionPacket {
-  if (input.runtimeTask.task_id !== input.req.taskId) {
-    throw new Error(`RuntimeTask ${input.runtimeTask.task_id} cannot compile packet for ${input.req.taskId}`);
+  const parsed = RuntimeTaskV2Schema.safeParse(input.runtimeTask);
+  if (!parsed.success) throw new Error(`task ${input.req.taskId}: legacy/incomplete RuntimeTask is audit-only; explicitly recompile a canonical plan in a new attempt`);
+  const task = parsed.data;
+  if (task.task_id !== input.req.taskId) throw new Error(`RuntimeTask ${task.task_id} cannot compile packet for ${input.req.taskId}`);
+  assertRuntimeTaskFresh(task);
+  const roots = task.scope.work_roots.filter(root => root.stage === input.req.stage);
+  const allow = unique(roots.flatMap(root => root.allow.map(entry => entry.contract_glob)).filter(glob => input.contractScope.allow.includes(glob)));
+  const candidates = input.retrievalCandidates ?? [];
+  for (const candidate of candidates) {
+    if (candidate.revision !== input.baseRevision || contentHash(fs.readFileSync(candidate.path)) !== candidate.hash) throw new Error(`retrieval evidence drift: ${candidate.path}`);
   }
-  const contractAllow = new Set(input.contractScope.allow);
-  const allow = unique(
-    input.runtimeTask.scope.work_roots
-      .filter((root) => root.stage === input.req.stage)
-      .flatMap((root) => root.allow.map((entry) => entry.contract_glob))
-      .filter((glob) => contractAllow.has(glob)),
-  );
-  const fields = {
-    acceptance_criteria: [...input.runtimeTask.acceptance_criteria.items],
-    required_verification: [...input.runtimeTask.required_verification.levels],
-    stop_conditions: [...input.runtimeTask.stop_conditions],
-  };
-  const prompt = buildPromptParts(input.req, input.extra, {
-    ...input.sources,
-    task: renderExecutionPacketSections(fields),
-  });
-  const sourceKinds = [
-    "runtime-task",
-    ...input.runtimeTask.source_of_truth.paths,
-    ...input.req.context.map((item) => item.source),
-    ...(input.sources?.docs?.length ? ["module-docs"] : []),
-    ...(input.sources?.knowledge?.length ? ["knowledge-brief"] : []),
-    ...(input.sources?.codeIntel?.length ? ["code-intelligence"] : []),
-    ...(input.sources?.toolOutput?.length ? ["tool-output"] : []),
-  ];
-  return validateArtifact(ArtifactType.EXECUTION_PACKET, {
-    ...prompt,
-    task_id: input.req.taskId,
-    stage: input.req.stage,
-    role: input.role,
-    ...fields,
-    scope: {
-      // RuntimeTask proposes the stage scope; the current role contract is the
-      // authority. Filtering here means stale task state can only narrow.
-      allow,
-      deny: unique([...input.runtimeTask.do_not_touch, ...input.contractScope.deny]),
+  const evidence = new Map((input.dependencyEvidence ?? []).map(d => [d.task_id, d]));
+  if (evidence.size !== (input.dependencyEvidence ?? []).length) throw new Error("duplicate dependency evidence");
+  const fields = PacketFieldsSchema.parse({
+    version: 2, attempt: input.attempt ?? 1, task_id: input.req.taskId, stage: input.req.stage, role: input.role,
+    contract: task.contract,
+    dependencies: task.dependencies.outputs.map(d => {
+      const completion = evidence.get(d.task_id);
+      if (!completion) throw new Error(`task ${task.task_id}: dependency ${d.task_id} lacks completion/output evidence`);
+      return { ...d, evidence: completion };
+    }),
+    selected_traces: task.selected_traces,
+    scope: { roots: unique(roots.map(root => root.root)), allow, deny: unique(input.contractScope.deny) },
+    retrieval_candidates: candidates, required_verification: task.required_verification,
+    stop_conditions: task.stop_conditions,
+    expansion_pointers: [task.plan_source + "#" + task.task_id, ...task.selected_traces.map(ref => ref.source)],
+    stage_instructions: input.extra ?? "",
+    verification_context: input.req.context.filter(item => item.source === "qa-evidence"),
+    identity: {
+      task_hash: planTaskHash({ ...task.contract, status: "pending" }), plan_hash: task.plan_hash,
+      artifact_hashes: task.artifact_hashes,
+      config_hash: stableHash({ config: input.config ?? null, guards: input.contractScope, verification: task.required_verification, roots }),
+      compiler_version: "v8-packet-2", compiler_hash: packetCompilerHash(), base_revision: input.baseRevision,
     },
-    sources: unique(sourceKinds),
   });
+  const text = renderPacketText(fields);
+  const payload = {
+    ...fields, text,
+    composition: { static_chars: 0, handoff_chars: text.length, doc_chars: 0, knowledge_chars: 0, code_intel_chars: 0, tool_output_chars: 0 },
+    budgetComposition: { base: 0, task: text.length, safety: 0, docs: 0, knowledge: 0, code: 0, tool_output: 0, reserve: 0 },
+  };
+  return validateArtifact(ArtifactType.EXECUTION_PACKET, { ...payload, packet_hash: stableHash(payload) });
 }
 
 /** Compatibility wrapper for existing callers/tests using the old sliced array. */

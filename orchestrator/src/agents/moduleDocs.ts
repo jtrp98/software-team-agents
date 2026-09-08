@@ -10,8 +10,8 @@ import {
 } from "../artifacts/schemas.js";
 import { AgentStage } from "../types.js";
 import { firstTable, sections } from "../docs/markdown.js";
-import { parsePlanTasks } from "../docs/planGraph.js";
-import { buildPlanGraph, type TaskNode } from "../graph/taskGraph.js";
+import { readWorkPlan, taskDesignRefs } from "../docs/planGraph.js";
+import { taskGraphFromPlan } from "../graph/taskGraph.js";
 import { extractIds } from "../traceability/traceability.js";
 
 /**
@@ -323,22 +323,14 @@ export function deriveHandoff(
         return { artifact: capRecord(minimalHandoff(stage, moduleName, opts), notes), notes, complete: false };
       }
     } else if (stage === AgentStage.PROJECT_MANAGER) {
-      const parsed = parsePlanTasks(planText ?? docText);
+      const parsed = readWorkPlan(planText ?? docText);
       if (parsed.problems.length > 0 || parsed.tasks.length === 0) {
         notes.push(`plan.md could not be derived cleanly (${parsed.problems.join("; ") || "no task rows"}); emitted the minimal handoff`);
         return { artifact: capRecord(minimalHandoff(stage, moduleName, opts), notes), notes, complete: false };
       }
       const selected = opts.phases?.length ? parsed.tasks.filter((task) => opts.phases!.includes(task.phase)) : parsed.tasks;
-      const nodes: TaskNode[] = parsed.tasks.map((task) => ({
-        id: task.id,
-        phase: task.phase,
-        agent: Object.values(AgentStage).includes(task.owner as AgentStage) ? task.owner as AgentStage : undefined,
-        dependsOn: task.dependsOn,
-        produces: task.produces,
-        consumes: task.consumes,
-      }));
-      const graph = buildPlanGraph(nodes);
-      record.implements = unique(selected.flatMap((task) => task.designRefs));
+      const graph = taskGraphFromPlan(parsed.tasks);
+      record.implements = unique(selected.flatMap(taskDesignRefs));
       record.contract_refs.produces = selected.flatMap((task) => graph.nodes.get(task.id)?.produces ?? []).map(compactReference);
       record.contract_refs.consumes = selected.flatMap((task) => graph.nodes.get(task.id)?.consumes ?? []).map(compactReference);
       const phases = unique(selected.map((task) => task.phase));

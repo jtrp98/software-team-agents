@@ -18,7 +18,7 @@ export async function runContextVerb(rest: string[], defaultProjectRoot: string)
       const stage = stageForRole(role);
       const packetPath = latestExecutionPacketPath(projectRoot, taskId, stage);
       if (!packetPath) throw new ContextCommandError(`no persisted execution packet for ${taskId}/${stage}`, 4);
-      const packet = readExecutionPacket(packetPath);
+      const packet = readExecutionPacketForAudit(packetPath);
       console.log(rest.includes("--json") ? JSON.stringify(packet, null, 2) : renderContextPacket(packet));
       return 0;
     }
@@ -52,6 +52,6 @@ export async function runContextVerb(rest: string[], defaultProjectRoot: string)
 import * as path from "node:path";
 import { CliUsageError } from "../../cli.js";
 import { buildContextCommand, ContextCommandError, contextCommandJson, renderContextCommand, renderContextPacket, stageForRole } from "../../context/contextCommand.js";
-import { latestExecutionPacketPath, readExecutionPacket } from "../../state/runtimeArtifacts.js";
+import { latestExecutionPacketPath, readExecutionPacketForAudit } from "../../state/runtimeArtifacts.js";
 import { recordContextComposition } from "../../observability/sessionRecord.js";
 import { flagValue, positionalArg } from "../support.js";

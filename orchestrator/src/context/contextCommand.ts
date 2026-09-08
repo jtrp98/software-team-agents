@@ -1,7 +1,7 @@
 import { AgentStage } from "../types.js";
 import { AGENT_REGISTRY } from "../agents/registry.js";
 import { readModuleDoc, resolveModule } from "../agents/moduleDocs.js";
-import { parsePlanTasks } from "../docs/planGraph.js";
+import { readWorkPlan } from "../docs/planGraph.js";
 import { resolveContextDocsRoot } from "../targetcli/roots.js";
 import { assembleStageContext, type StageContextAssembly } from "../runtime/agentRunAssembly.js";
 import type { ExecutionPacket } from "../artifacts/schemas.js";
@@ -79,7 +79,7 @@ function phasesFor(
   if (!taskId) return { phases: [], resolution: "none" };
   const plan = readModuleDoc(docsRoot, moduleName, "plan.md");
   if (plan !== null) {
-    const task = parsePlanTasks(plan).tasks.find((row) => row.id === taskId);
+    const task = readWorkPlan(plan).tasks.find((row) => row.id === taskId);
     if (task) return { phases: [task.phase], resolution: "task" };
   }
   // Unknown task scope must not be guessed. An empty phase set makes plan and
@@ -167,7 +167,7 @@ export function renderContextCommand(result: ContextCommandResult): string {
 }
 
 /** `sta context --packet` renders the exact validated prompt handed to a runtime. */
-export function renderContextPacket(packet: ExecutionPacket): string {
+export function renderContextPacket(packet: Pick<ExecutionPacket, "text">): string {
   return packet.text;
 }
 

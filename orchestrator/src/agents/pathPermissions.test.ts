@@ -552,6 +552,9 @@ describe("T-V5-023 — stack-shaped path permissions live in the stack profile",
     workspace = makeWorkspace(dotnetConfig(["ClassOnlineWeb"]));
 
     const backend = pathRulesFor("backend-engineer", workspace);
+    // Packet registration and execution may load contracts from Framework while
+    // the effective layout belongs to a separate Target.
+    expect(pathRulesFor("backend-engineer", repoRoot, workspace)).toEqual(backend);
     expect(backend.write).toContain("ClassOnlineWeb/**");
     expect(backend.write.length).toBeGreaterThan(0);
     expect(canWritePath(backend, "ClassOnlineWeb/Controllers/StudentController.cs").allowed).toBe(true);

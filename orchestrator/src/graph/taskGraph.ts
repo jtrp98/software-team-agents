@@ -54,6 +54,41 @@ export interface TaskNode {
   description?: string;
 }
 
+/** The graph projection shared by canonical tasks and the explicit legacy adapter. */
+export interface PlanGraphTask {
+  id: string;
+  owner: string;
+  phase: number;
+  dependsOn: readonly string[];
+  produces?: readonly string[];
+  consumes?: readonly string[];
+}
+
+/** The only plan-to-node constructor. No semantic edge may be dropped by a caller. */
+export function taskGraphFromPlan(tasks: readonly PlanGraphTask[]): TaskGraph {
+  const producers = new Map<string, string>();
+  for (const task of tasks) {
+    if (!Object.values(AgentStage).includes(task.owner as AgentStage) || task.owner === AgentStage.HUMAN) {
+      throw new TaskGraphError(`task ${task.id}: unknown owner ${task.owner}`);
+    }
+    if (task.owner === AgentStage.FRONTEND_ENGINEER && task.produces === undefined && task.consumes === undefined) {
+      const ambiguous = tasks.filter(t => t.owner === AgentStage.BACKEND_ENGINEER && t.phase === task.phase && !task.dependsOn.includes(t.id));
+      if (ambiguous.length) throw new TaskGraphError(`task ${task.id}: ambiguous legacy ordering with ${ambiguous.map(t => t.id).join(", ")}; explicitly declare dependencies or produces/consumes (empty means independent)`);
+    }
+    for (const contract of task.produces ?? []) {
+      const prior = producers.get(contract);
+      if (prior && prior !== task.id) throw new TaskGraphError(`task ${task.id}: ambiguous producer of ${contract} (also ${prior}); clarify the plan before execution`);
+      producers.set(contract, task.id);
+    }
+  }
+  return buildPlanGraph(tasks.map(task => ({
+    id: task.id, agent: task.owner as AgentStage, phase: task.phase,
+    dependsOn: [...task.dependsOn],
+    ...(task.produces === undefined ? {} : { produces: [...task.produces] }),
+    ...(task.consumes === undefined ? {} : { consumes: [...task.consumes] }),
+  })));
+}
+
 export class TaskGraphError extends Error {
   constructor(message: string) {
     super(message);
@@ -157,7 +192,9 @@ export class TaskGraph {
     // Phase edges: the last tasks of an earlier phase gate the first of a later one.
     const byPhase = new Map<number, string[]>();
     for (const node of this.nodes.values()) {
-      const phase = node.phase ?? 0;
+      // Explicit ad-hoc pipelines have no plan phase and must not acquire one.
+      if (node.phase === undefined) continue;
+      const phase = node.phase;
       byPhase.set(phase, [...(byPhase.get(phase) ?? []), node.id]);
     }
     const phases = [...byPhase.keys()].sort((a, b) => a - b);
@@ -209,6 +246,39 @@ export class TaskGraph {
     const set = this.incoming.get(id);
     if (!set) throw new TaskGraphError(`no task "${id}" in this graph`);
     return [...set];
+  }
+
+  /** Transitive impact in input order, excluding the changed task itself. */
+  descendantsOf(id: string): string[] {
+    this.dependenciesOf(id); // Reject unknown identities, including empty graphs.
+    const affected = new Set([id]);
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const edge of this.edges) if (affected.has(edge.from) && !affected.has(edge.to)) {
+        affected.add(edge.to); changed = true;
+      }
+    }
+    return [...this.nodes.keys()].filter(key => key !== id && affected.has(key));
+  }
+
+  dependencyOutputsOf(id: string): { taskId: string; produces: string[]; edges: ResolvedEdge[] }[] {
+    return this.dependenciesOf(id).map(taskId => ({
+      taskId, produces: [...(this.nodes.get(taskId)!.produces ?? [])],
+      edges: this.edges.filter(edge => edge.from === taskId && edge.to === id),
+    }));
+  }
+
+  /** Completion is supplied by the caller's ledger; plan Status never enters this query. */
+  waitingOn(id: string, completed: Iterable<string>, blocked: Iterable<string> = []): string[] {
+    const done = new Set(completed), stalled = new Set(blocked);
+    for (const key of [...stalled]) for (const descendant of this.descendantsOf(key)) stalled.add(descendant);
+    const memo = new Map<string, boolean>();
+    const complete = (key: string): boolean => {
+      if (!memo.has(key)) memo.set(key, done.has(key) && !stalled.has(key) && this.dependenciesOf(key).every(complete));
+      return memo.get(key)!;
+    };
+    return this.dependenciesOf(id).filter(dep => !complete(dep));
   }
 
   /**

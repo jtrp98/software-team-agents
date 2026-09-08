@@ -8,6 +8,7 @@ import { createRuntimeExecutor } from "./runtimeExecutor.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { NO_GUARDS, type RuntimeAgentRequest } from "./runtimeAdapter.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
+import { FIXTURE_REVISION, runtimeTaskFixture } from "./packetFixture.testSupport.js";
 
 const roots: string[] = [];
 function fixture(): string {
@@ -98,6 +99,8 @@ describe("ApiAdapter — paid path safety", () => {
       moduleName: () => "phase-4",
       guards: () => NO_GUARDS,
       sliceModuleDocs: false,
+      runtimeTask: () => runtimeTaskFixture(path.join(root, "knowledge"), { taskId: "T-API-WRITE", targetRoot: path.join(root, "target"), allow: [] }),
+      packetBaseRevision: async () => FIXTURE_REVISION,
       threeRepoTask: () => ({
         task: { taskId: "T-API-WRITE" } as never,
         roots: {

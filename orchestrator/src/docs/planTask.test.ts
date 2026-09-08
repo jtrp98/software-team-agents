@@ -44,7 +44,7 @@ describe("canonical PlanTask v1",()=>{
     expect(parseCanonicalPlan(renderCanonicalTasks([task(),task()]),refs).problems.join(" ")).toContain("duplicate task ID");
     const second={...task(),id:"FE-005",dependsOn:["BE-004"]};
     expect(parseCanonicalPlan(renderCanonicalTasks([task(),second]),refs).problems.join(" ")).toContain("ambiguous producer");
-    expect(parseCanonicalPlan(renderCanonicalTasks([{...task(),dependsOn:["FE-005"]},{...second,produces:[]}]),refs).problems.join(" ")).toContain("cycle");
+    expect(parseCanonicalPlan(renderCanonicalTasks([{...task(),dependsOn:["FE-005"]},{...second,produces:[]}]),refs).problems.join(" ")).toContain("circular dependency");
     expect(parseCanonicalPlan(fixture.replace("### Task BE-004", "| Task | Status |\n\n### Task BE-004"),refs).problems.join(" ")).toContain("unexpected phase content");
     expect(parseCanonicalPlan(fixture + "\n## Task BE-009 — malformed\n",refs).problems.join(" ")).toContain("unknown plan heading");
     expect(()=>parseLegacyPlanTasks(fixture.replace("PlanTask format: 1","plantask format : 1"))).toThrow(/legacy runtime/);

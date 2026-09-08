@@ -1,16 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
-import { loadAgentContract } from "../agents/agentContract.js";
+import { pathRulesFor } from "../agents/pathPermissions.js";
 import {
-  extractAcceptanceCriteria,
   moduleDocPath,
   readModuleDoc,
-  resolveModule,
 } from "../agents/moduleDocs.js";
-import { UNIVERSAL_DENY } from "../agents/pathPermissions.js";
 import { pmMode, type ClassificationResult } from "../classification/taskClassifier.js";
-import { parsePlanTasks, readinessOf } from "../docs/planGraph.js";
+import { taskGraphFromPlan } from "../graph/taskGraph.js";
 import { DEFAULT_ESCALATION_POLICY, type Severity } from "../escalation/escalationPolicy.js";
 import { FORBIDDEN_COMMANDS } from "../runtime/runtimeGuards.js";
 import {
@@ -20,6 +17,9 @@ import {
   runtimeVerificationForClassification,
 } from "../testing/testPyramid.js";
 import { AgentStage, TaskLevel } from "../types.js";
+import { isCanonicalPlan, parseCanonicalPlan, planTaskHash, type PlanTask } from "../docs/planTask.js";
+import { selectTaskReference } from "../docs/taskReferences.js";
+import { TaskContractSchema, SourceHashSchema, SelectedTraceSchema, DependencySchema, VerificationSchema, Sha256Schema, contentHash, stableHash } from "../artifacts/executionPacket.js";
 
 const AvailabilitySchema = z.object({
   status: z.enum(["resolved", "unavailable"]),
@@ -44,7 +44,7 @@ const RuntimeTaskScopeRootSchema = z.object({
  * `expected_changes` is intentionally absent: predicting files would be the
  * only field here that needs model reasoning.
  */
-export const RuntimeTaskSchema = z.object({
+export const LegacyRuntimeTaskSchema = z.object({
   task_id: z.string().min(1),
   workflow: z.string().min(1),
   pm_mode: z.enum(["lightweight", "full"]),
@@ -72,6 +72,20 @@ export const RuntimeTaskSchema = z.object({
   evidence_required: z.array(z.string().min(1)).min(1),
   stop_conditions: z.array(z.string().min(1)).min(1),
 });
+export type LegacyRuntimeTask = z.infer<typeof LegacyRuntimeTaskSchema>;
+
+export const RuntimeTaskV2Schema = z.strictObject({
+  version: z.literal(2), task_id: z.string().min(1), workflow: z.string().min(1), pm_mode: z.enum(["lightweight", "full"]),
+  contract: TaskContractSchema,
+  plan_source: z.string().min(1), plan_hash: Sha256Schema,
+  artifact_hashes: z.array(SourceHashSchema).min(2), selected_traces: z.array(SelectedTraceSchema).min(1),
+  dependencies: z.object({ task_ids: z.array(z.string()), outputs: z.array(DependencySchema) }),
+  scope: LegacyRuntimeTaskSchema.shape.scope,
+  required_verification: VerificationSchema,
+  stop_conditions: z.array(z.string().min(1)).min(1),
+});
+export const RuntimeTaskSchema = z.union([RuntimeTaskV2Schema, LegacyRuntimeTaskSchema]);
+export type RuntimeTaskV2 = z.infer<typeof RuntimeTaskV2Schema>;
 export type RuntimeTask = z.infer<typeof RuntimeTaskSchema>;
 
 /** One already-resolved Target root that a stage may write. */
@@ -89,163 +103,10 @@ export interface RuntimeTaskBuildInput {
   projectRoot: string;
   docsRoot?: string;
   moduleName?: string;
+  /** @deprecated Retained at the call boundary only; never used as semantic input. */
   taskText?: string | { why: string; goal: string };
   targetWorkRoots?: readonly RuntimeTaskWorkRoot[];
   changeAwareVerification?: boolean;
-}
-
-const MODULE_SOURCES = [
-  "requirement.md",
-  "design.md",
-  "plan.md",
-  "test-plan.md",
-  "review.md",
-  "security.md",
-  "deploy.md",
-] as const;
-
-function normalized(value: string): string {
-  return value.replace(/\\/g, "/");
-}
-
-function unique(values: readonly string[]): string[] {
-  return [...new Set(values)];
-}
-
-function taskText(input: RuntimeTaskBuildInput): { why: string; goal: string } {
-  if (typeof input.taskText === "string" && input.taskText.trim() !== "") {
-    return { why: input.taskText.trim(), goal: input.taskText.trim() };
-  }
-  if (input.taskText && typeof input.taskText !== "string") {
-    const why = input.taskText.why.trim();
-    const goal = input.taskText.goal.trim();
-    if (why !== "" && goal !== "") return { why, goal };
-  }
-  // Existing callers supplied only a task id before RuntimeTask existed. The
-  // id is preserved as deterministic text instead of changing their CLI shape.
-  return { why: input.taskId, goal: input.taskId };
-}
-
-function sourceOfTruth(input: RuntimeTaskBuildInput): RuntimeTask["source_of_truth"] {
-  const docsRoot = input.docsRoot ?? input.projectRoot;
-  const resolution = resolveModule(docsRoot, input.moduleName);
-  if (resolution.status !== "one") {
-    const reason =
-      resolution.status === "many"
-        ? `module is ambiguous (${resolution.candidates.join(", ")})`
-        : input.moduleName
-          ? `module "${input.moduleName}" has no requirement.md or design.md`
-          : "no module document set is available";
-    return { status: "unavailable", paths: [], reason };
-  }
-  const paths = MODULE_SOURCES.map((filename) => moduleDocPath(docsRoot, resolution.module, filename))
-    .filter((file) => fs.existsSync(file))
-    .map((file) => normalized(path.resolve(file)));
-  return paths.length > 0
-    ? { status: "resolved", paths, reason: null }
-    : { status: "unavailable", paths: [], reason: `module "${resolution.module}" has no readable source documents` };
-}
-
-function dependencyFacts(input: RuntimeTaskBuildInput): RuntimeTask["dependencies"] {
-  const declared = [...(input.dependsOn ?? [])];
-  const docsRoot = input.docsRoot ?? input.projectRoot;
-  if (!input.moduleName) {
-    return {
-      task_ids: unique(declared),
-      plan_readiness: "untracked",
-      waiting_on: [],
-      reason: "no module was supplied, so plan.md readiness is unavailable",
-    };
-  }
-  const planMd = readModuleDoc(docsRoot, input.moduleName, "plan.md");
-  if (planMd === null) {
-    return {
-      task_ids: unique(declared),
-      plan_readiness: "untracked",
-      waiting_on: [],
-      reason: "module has no plan.md; runtime dependencies remain authoritative",
-    };
-  }
-  const parsed = parsePlanTasks(planMd);
-  const row = parsed.tasks.find((task) => task.id === input.taskId);
-  if (!row) {
-    return {
-      task_ids: unique(declared),
-      plan_readiness: "untracked",
-      waiting_on: [],
-      reason: "task is not a plan.md row; runtime dependencies remain authoritative",
-    };
-  }
-  const readiness = readinessOf(parsed.tasks);
-  const waiting = readiness.waiting.find((entry) => entry.task.id === input.taskId)?.waitingOn ?? [];
-  const planReadiness: RuntimeTask["dependencies"]["plan_readiness"] = readiness.ready.some((task) => task.id === input.taskId)
-    ? "ready"
-    : readiness.started.some((task) => task.id === input.taskId)
-      ? "started"
-      : readiness.done.some((task) => task.id === input.taskId)
-        ? "verified"
-        : readiness.stalledByBlocked.some((task) => task.id === input.taskId)
-          ? "blocked"
-          : "waiting";
-  return {
-    task_ids: unique([...declared, ...row.dependsOn]),
-    plan_readiness: planReadiness,
-    waiting_on: unique(waiting),
-    reason: parsed.problems.length > 0 ? `plan parser reported: ${parsed.problems.join("; ")}` : null,
-  };
-}
-
-function scopeFor(input: RuntimeTaskBuildInput): RuntimeTask["scope"] {
-  const pipeline = new Set(input.classification.pipeline);
-  const workRoots = (input.targetWorkRoots ?? []).filter((root) => pipeline.has(root.stage));
-  const scoped = workRoots.map((root) => {
-    const contract = loadAgentContract(root.stage, input.projectRoot);
-    const absoluteRoot = normalized(path.resolve(root.path));
-    return {
-      stage: root.stage,
-      target_id: root.targetId,
-      root: absoluteRoot,
-      // This is the literal intersection: no effective glob exists without
-      // both a contract grant and a resolved Target work root.
-      allow: contract.permissions.write.map((contractGlob) => ({
-        contract_glob: contractGlob,
-        effective_glob: normalized(path.resolve(root.path, ...contractGlob.split("/"))),
-      })),
-    };
-  });
-  return scoped.length > 0
-    ? { status: "resolved", work_roots: scoped, reason: null }
-    : {
-        status: "unavailable",
-        work_roots: [],
-        reason: "no writable Target work root was resolved; no contract glob was promoted into effective scope",
-      };
-}
-
-function doNotTouch(input: RuntimeTaskBuildInput): string[] {
-  const roleDenies = input.classification.pipeline
-    .filter((stage) => stage !== AgentStage.HUMAN)
-    .flatMap((stage) => loadAgentContract(stage, input.projectRoot).permissions.deny);
-  return unique([...UNIVERSAL_DENY, ...roleDenies]);
-}
-
-function acceptanceCriteria(input: RuntimeTaskBuildInput): RuntimeTask["acceptance_criteria"] {
-  const docsRoot = input.docsRoot ?? input.projectRoot;
-  if (!input.moduleName) {
-    return { status: "unavailable", items: [], reason: "no module was supplied, so requirement.md is unavailable" };
-  }
-  const requirementMd = readModuleDoc(docsRoot, input.moduleName, "requirement.md");
-  if (requirementMd === null) {
-    return { status: "unavailable", items: [], reason: "module has no requirement.md" };
-  }
-  const items = extractAcceptanceCriteria(requirementMd);
-  return items.length > 0
-    ? { status: "resolved", items, reason: null }
-    : {
-        status: "unavailable",
-        items: [],
-        reason: "requirement.md contains no deterministic Acceptance Criteria section or column",
-      };
 }
 
 function requiredVerification(input: RuntimeTaskBuildInput): RuntimeTask["required_verification"] {
@@ -302,7 +163,8 @@ function stopConditions(input: RuntimeTaskBuildInput): string[] {
   const escalation = DEFAULT_ESCALATION_POLICY.severity[severity];
   return [
     ...FORBIDDEN_COMMANDS.map((command) => `STOP before state-changing ${command} commands`),
-    `STOP after ${escalation.max_retry} automatic retry round(s) for ${severity} severity`,
+    "STOP after two automatic repair rounds for ordinary work; further repair requires a human decision",
+    `Global defensive retry ceiling: ${escalation.max_retry} for ${severity} severity; this does not authorize additional ordinary repair`,
     ...(escalation.approval ? [`STOP for human approval when ${severity} severity escalates`] : []),
     ...(escalation.stop_pipeline ? [`STOP the pipeline immediately for ${severity} severity`] : []),
     "STOP rather than inventing any unavailable RuntimeTask field",
@@ -313,24 +175,60 @@ function stopConditions(input: RuntimeTaskBuildInput): string[] {
  * Deterministically materializes the RuntimeTask. This module imports no
  * RuntimeAdapter and exposes no adapter/model dependency by design.
  */
-export function buildRuntimeTask(input: RuntimeTaskBuildInput): RuntimeTask | null {
+export function buildRuntimeTask(input: RuntimeTaskBuildInput): RuntimeTaskV2 | null {
   const mode = pmMode(input.classification);
-  if (mode === "none") return null;
-  const text = taskText(input);
-  const verification = requiredVerification(input);
-  return RuntimeTaskSchema.parse({
-    task_id: input.taskId,
-    workflow: input.workflow,
-    pm_mode: mode,
-    why: text.why,
-    goal: text.goal,
-    source_of_truth: sourceOfTruth(input),
-    dependencies: dependencyFacts(input),
-    scope: scopeFor(input),
-    do_not_touch: doNotTouch(input),
-    acceptance_criteria: acceptanceCriteria(input),
-    required_verification: verification,
-    evidence_required: verification.levels.map((level) => `record the deterministic result for required verification level: ${level}`),
-    stop_conditions: stopConditions(input),
+  if (mode === "none" || !input.moduleName) return null;
+  const docsRoot = input.docsRoot ?? input.projectRoot;
+  const planMd = readModuleDoc(docsRoot, input.moduleName, "plan.md");
+  if (planMd === null) return null;
+  if (!isCanonicalPlan(planMd)) throw new Error(`task ${input.taskId}: legacy plan cannot compile a manual-grade RuntimeTask; use migrateLegacyTaskTable for complete tables or author missing fields using docs/plan-task-v1.md`);
+  const requirementMd = readModuleDoc(docsRoot, input.moduleName, "requirement.md") ?? "";
+  const designMd = readModuleDoc(docsRoot, input.moduleName, "design.md") ?? "";
+  const parsed = parseCanonicalPlan(planMd, { requirementMd, designMd });
+  if (parsed.problems.length) throw new Error(`task ${input.taskId}: ${parsed.problems.join("; ")}`);
+  const task = parsed.tasks.find(t => t.id === input.taskId);
+  if (!task) return null;
+  const graph = taskGraphFromPlan(parsed.tasks);
+  const source = (name: string) => path.resolve(moduleDocPath(docsRoot, input.moduleName!, name));
+  const selected = [...new Set([...task.traceability, ...task.produces, ...task.consumes])].map(id => {
+    const design = id.startsWith("DES-") || id.startsWith("Contract:");
+    return selectTaskReference(design ? designMd : requirementMd, id, source(design ? "design.md" : "requirement.md"));
   });
+  const workRoots = (input.targetWorkRoots ?? []).filter(root => input.classification.pipeline.includes(root.stage));
+  const verification = requiredVerification(input);
+  const { status: _status, ...contract } = task;
+  return RuntimeTaskV2Schema.parse({
+    version: 2, task_id: task.id, workflow: input.workflow, pm_mode: mode, contract,
+    plan_source: source("plan.md"), plan_hash: canonicalPlanHash(parsed.tasks),
+    artifact_hashes: [
+      { source: source("requirement.md"), hash: contentHash(requirementMd) },
+      { source: source("design.md"), hash: contentHash(designMd) },
+    ],
+    selected_traces: selected,
+    dependencies: { task_ids: graph.dependenciesOf(task.id), outputs: graph.dependencyOutputsOf(task.id).map(d => ({ task_id: d.taskId, produces: d.produces, edges: d.edges.map(e => e.kind) })) },
+    scope: { status: workRoots.length ? "resolved" : "unavailable", reason: workRoots.length ? null : "no stage work root was resolved", work_roots: workRoots.map(root => ({
+      stage: root.stage, target_id: root.targetId, root: path.resolve(root.path),
+      allow: pathRulesFor(root.stage, input.projectRoot, root.path).write.map(glob => ({ contract_glob: glob, effective_glob: path.resolve(root.path, ...glob.split("/")) })),
+    })) },
+    required_verification: verification,
+    stop_conditions: [...stopConditions(input), ...task.humanGate.map(gate => `STOP for the existing ${gate} human gate; this packet is not approval`)],
+  });
+}
+
+export function canonicalPlanHash(tasks: readonly PlanTask[]): string { return stableHash(tasks.map(planTaskHash)); }
+
+/** Refuse stale authored inputs before allocating or sending a new packet. */
+export function assertRuntimeTaskFresh(task: RuntimeTaskV2): void {
+  for (const artifact of task.artifact_hashes) if (contentHash(fs.readFileSync(artifact.source)) !== artifact.hash) throw new Error(`artifact hash drift: ${artifact.source}; recompile in a new attempt`);
+  const parsed = parseCanonicalPlan(fs.readFileSync(task.plan_source, "utf8"));
+  if (parsed.problems.length || canonicalPlanHash(parsed.tasks) !== task.plan_hash) throw new Error(`plan hash drift: ${task.plan_source}; recompile in a new attempt`);
+  const canonical = parsed.tasks.find(t => t.id === task.task_id);
+  if (!canonical || planTaskHash(canonical) !== planTaskHash({ ...task.contract, status: "pending" })) throw new Error("task contract differs from the canonical source; recompile");
+  const graph = taskGraphFromPlan(parsed.tasks);
+  const outputs = graph.dependencyOutputsOf(task.task_id).map(d => ({ task_id: d.taskId, produces: d.produces, edges: d.edges.map(e => e.kind) }));
+  if (stableHash(outputs) !== stableHash(task.dependencies.outputs) || stableHash(graph.dependenciesOf(task.task_id)) !== stableHash(task.dependencies.task_ids)) throw new Error("dependency graph drift; recompile");
+  for (const ref of task.selected_traces) {
+    const source = ref.source.slice(0, ref.source.lastIndexOf("#"));
+    if (!task.artifact_hashes.some(a => a.source === source) || stableHash(selectTaskReference(fs.readFileSync(source, "utf8"), ref.id, source)) !== stableHash(ref)) throw new Error(`selected reference drift: ${ref.id}`);
+  }
 }

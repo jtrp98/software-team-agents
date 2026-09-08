@@ -1,3 +1,4 @@
+import { packetFixture } from "../runtime/packetFixture.testSupport.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -24,22 +25,10 @@ afterEach(() => {
   while (roots.length > 0) fs.rmSync(roots.pop()!, { recursive: true, force: true });
 });
 
-function packet(overrides: Partial<ExecutionPacket> = {}): ExecutionPacket {
-  const text = "Task T-PACKET\n## Acceptance Criteria\n- round trip";
-  return {
-    text,
-    composition: { static_chars: text.length, handoff_chars: 0, doc_chars: 0, knowledge_chars: 0, code_intel_chars: 0, tool_output_chars: 0 },
-    budgetComposition: { base: text.length, task: 0, safety: 0, docs: 0, knowledge: 0, code: 0, tool_output: 0, reserve: 0 },
-    task_id: "T-PACKET",
-    stage: AgentStage.BACKEND_ENGINEER,
-    role: "backend-engineer",
-    acceptance_criteria: ["round trip"],
-    required_verification: ["unit"],
-    stop_conditions: ["STOP on ambiguity"],
-    scope: { allow: ["server/**"], deny: [".git/**"] },
-    sources: ["runtime-task"],
-    ...overrides,
-  };
+let packetSourceRoot: string | undefined;
+function packet(attempt = 1): ExecutionPacket {
+  if (!packetSourceRoot || !fs.existsSync(packetSourceRoot)) packetSourceRoot = tempRoot();
+  return packetFixture(packetSourceRoot, { attempt });
 }
 
 describe("T-V3R-003 runtime artifact contract", () => {
@@ -163,7 +152,7 @@ describe("T-V3R-021 execution packet persistence", () => {
   it("retains the current attempt while enforcing the per-task bound", () => {
     const framework = tempRoot();
     for (let attempt = 1; attempt <= 3; attempt++) {
-      writeExecutionPacket({ projectRoot: framework, packet: packet(), maxRunsPerTask: 2 });
+      writeExecutionPacket({ projectRoot: framework, packet: packet(attempt), maxRunsPerTask: 2 });
     }
     const directory = runtimeArtifactPaths(framework, "T-PACKET").packets;
     expect(fs.readdirSync(directory).sort()).toEqual(["backend-engineer-2.json", "backend-engineer-3.json"]);

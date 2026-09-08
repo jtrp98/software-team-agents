@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { PlanTaskRow } from "../docs/planGraph.js";
+import type { WorkPlanTask } from "../docs/planGraph.js";
 import { GitCommandLayer } from "../git/commandLayer.js";
 import { parsePersistedTask, type PersistedTask, type TaskStore } from "../store/taskStore.js";
 import {
@@ -175,7 +175,7 @@ function dirtyRecoveryMessage(taskId: string): string {
 export async function reconcileWaveRunForResume(options: {
   projectRoot: string;
   active: ActiveWaveRun;
-  planTasks: readonly PlanTaskRow[];
+  planTasks: readonly WorkPlanTask[];
   staVersion: string;
   store: TaskStore;
   git?: GitCommandLayer;

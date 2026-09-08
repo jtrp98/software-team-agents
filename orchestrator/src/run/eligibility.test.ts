@@ -78,11 +78,11 @@ describe("auto-eligibility A-J", () => {
     expectClause(evaluateAutoEligibility(intent({ status: "in_progress" }), live()), "B");
   });
 
-  it("clause C accepts verified or same-run checkpointed dependencies and halts otherwise", () => {
+  it("clause C requires completion evidence and rejects status-only completion", () => {
     const dependency = row({ id: "BE-0", status: "pending" });
     const current = row({ dependsOn: [dependency.id] });
     expectClause(evaluateAutoEligibility(intent(current, [dependency, current]), live()), "C");
-    expect(evaluateAutoEligibility(intent(current, [{ ...dependency, status: "verified" }, current]), live()).eligible).toBe(true);
+    expect(evaluateAutoEligibility(intent(current, [{ ...dependency, status: "verified" }, current]), live()).eligible).toBe(false);
     expect(evaluateAutoEligibility(intent(current, [dependency, current]), live({ checkpointedTaskIds: new Set([dependency.id]) })).eligible).toBe(true);
   });
 

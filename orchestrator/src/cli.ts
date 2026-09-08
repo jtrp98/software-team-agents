@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as readline from "node:readline/promises";
-import { AgentStage } from "./types.js";
+import { AgentStage, TaskState } from "./types.js";
 import { classifyTask, type ClassificationInput } from "./classification/taskClassifier.js";
 import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
@@ -57,7 +57,6 @@ import { assertNoWorkspaceRunLock } from "./concurrency/workspaceRunLock.js";
 import { hasWorkspace, loadWorkspace, workspacePath, type Workspace } from "./workspace/workspace.js";
 import { loadStageRoots } from "./repos/repoMap.js";
 import { Environment, describeEnvironment, isEnvironment } from "./environment/environment.js";
-import { planReadinessAdvisory } from "./docs/planGraph.js";
 import { buildTemplates } from "./packaging/templateBuilder.js";
 import { runThreeRepoInit, runThreeRepoUpgrade } from "./packaging/threeRepoCommand.js";
 import { migrateSta } from "./packaging/migration.js";
@@ -70,9 +69,11 @@ import { validateNewTaskBindings, type TargetBindings } from "./threeRepo/taskBi
 import { collectMigrationManifest, confirmCutover, copyMigrationSource, readMigrationManifest, transformMigratedKnowledge, verifyMigration, writeMigrationManifest } from "./threeRepo/knowledgeMigration.js";
 import { listBackups, rollbackSta } from "./packaging/rollback.js";
 import { runTargetCli } from "./targetcli/cli.js";
-import { buildPlanGraph, type TaskNode } from "./graph/taskGraph.js";
-import { parsePlanTasks } from "./docs/planGraph.js";
+import { taskGraphFromPlan } from "./graph/taskGraph.js";
+import { readWorkPlan, taskObjective, taskDesignRefs } from "./docs/planGraph.js";
 import type { RuntimeTaskWorkRoot } from "./orchestrator/runtimeTask.js";
+import { stableHash, contentHash } from "./artifacts/executionPacket.js";
+import { unmetDependencies } from "./orchestrator/taskStatus.js";
 import type { TaskStore } from "./store/taskStore.js";
 import type { TaskExecutorComposition } from "./run/waveRunner.js";
 import { buildWavePreview, executeWave, renderWavePreview, type ResolvedWaveRoute } from "./run/waveRunner.js";
@@ -193,6 +194,7 @@ export interface CliArgs {
   /** local/dev/staging/production. Defaults to Environment.LOCAL; only used when creating a task — a --resume/--retry inherits the task's already-stored environment. */
   environment: Environment;
   dependsOn: string[];
+  adHoc: boolean;
   stateDb?: string;
   /** Phases of plan.md this run touches, used to slice module docs per `policies/documentation.md` §10. Empty = send the plan whole. */
   phases: number[];
@@ -247,7 +249,7 @@ export class CliUsageError extends Error {}
 
 export const USAGE =
   "usage (verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
+  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
   "  sta run --task-id <id> --module <name> <classification flags> [bindings/dependencies] --register-only   persist wave metadata; start no agent and perform no Git operation\n" +
   "  sta run --wave <n> --module <name> [--max-tasks <k>] [--dry-run|--resume-run] [--autonomy <edit|full>] [--runtime <id>] [--model <name>]   bounded sequential owner-stage checkpoints\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
@@ -291,7 +293,7 @@ export const USAGE =
   "  --model <name> overrides every stage's frontmatter model for this run (the same override routing.by_role carries); the runtime refuses a model it cannot reach rather than passing it through. Absent, each role's own model: governs.\n" +
   "\n" +
   "underlying flag-based form:\n" +
-  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] <classification flags>\n" +
+  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] <classification flags>\n" +
   "  sta --task-id <id> --module <name> --resume        continue a task already in the store\n" +
   "  sta --task-id <id> --module <name> [--token-budget <n>] [--no-qa-optimization|--no-deterministic-gate]   run with optional QA/budget controls\n" +
   "  sta --list [--project-root <path>]                 show every task and stop\n" +
@@ -357,6 +359,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let buildTemplatesOutDir: string | undefined;
   let environment: Environment = Environment.LOCAL;
   let dependsOn: string[] = [];
+  let adHoc = false;
   let phases: number[] = [];
   let autonomy: RuntimeAutonomy | undefined;
   let runtime: RuntimeId | undefined;
@@ -385,6 +388,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     } else if (arg === "--backend-target") {
       targetBindings.backend_target = argv[++i] ?? null;
       if (!targetBindings.backend_target) throw new CliUsageError("--backend-target requires a Target id");
+    } else if (arg === "--ad-hoc") {
+      adHoc = true;
     } else if (arg === "--depends-on") {
       dependsOn = (argv[++i] ?? "")
         .split(",")
@@ -604,6 +609,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     buildTemplates: buildTemplatesOutDir,
     environment,
     dependsOn,
+    adHoc,
     stateDb,
     phases,
     targetBindings,
@@ -738,53 +744,12 @@ export async function watchListing(
   }
 }
 
-/**
- * What the module's plan.md thinks of the task about to start.
- *
- * A warning, deliberately: the plan is PM's Work Graph and the store is the
- * orchestrator's runtime, and letting an LLM-authored document decide what may
- * execute would move a gate across that boundary. Silent whenever the plan has
- * nothing to say — no module flag, no plan.md, or a task the plan never listed,
- * which is the ordinary case for ad-hoc work.
- *
- * Never throws. A malformed plan is `--check-plan`'s problem to report; it must
- * not stop a run that was otherwise going to work.
- */
-function warnIfPlanSaysNotReady(args: CliArgs, taskId: string): void {
-  if (!args.module) return;
-  try {
-    const docsRoot = resolveContextDocsRoot(args.projectRoot);
-    const planMd = readModuleDoc(docsRoot, args.module, "plan.md");
-    if (planMd === null) return;
-    const advisory = planReadinessAdvisory(planMd, taskId);
-    if (!advisory) return;
-    console.warn(
-      `[orchestrator] plan readiness: ${advisory.taskId} is not ready — ${advisory.reason}. ` +
-        "Running anyway; this is advice from plan.md, not a gate (PM owns the work graph, the orchestrator owns runtime).",
-    );
-  } catch {
-    // Advisory only — an unreadable plan never stops a run.
-  }
-}
-
-/** Deterministic task text: prefer the caller-named plan row, preserve taskId for ad-hoc work. */
-function runtimeTaskText(args: CliArgs, taskId: string, docsRoot: string): string {
-  if (!args.module) return taskId;
-  try {
-    const planMd = readModuleDoc(docsRoot, args.module, "plan.md");
-    if (planMd === null) return taskId;
-    return parsePlanTasks(planMd).tasks.find((task) => task.id === taskId)?.description || taskId;
-  } catch {
-    return taskId;
-  }
-}
-
 /** Optional phase-tier metadata is advisory input to routing, never a runtime gate. */
 function plannedTier(args: CliArgs, taskId: string): string | undefined {
   if (!args.module) return undefined;
   try {
     const planMd = readModuleDoc(resolveContextDocsRoot(args.projectRoot), args.module, "plan.md");
-    return planMd === null ? undefined : parsePlanTasks(planMd).tasks.find((task) => task.id === taskId)?.tier;
+    return planMd === null ? undefined : readWorkPlan(planMd).tasks.find((task) => task.id === taskId)?.tier;
   } catch {
     return undefined;
   }
@@ -892,7 +857,6 @@ function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orches
       if (!(error instanceof Error) || !error.message.startsWith("cannot read installation config")) throw error;
     }
   }
-  warnIfPlanSaysNotReady(args, taskId);
   // Naming the workflow makes the generated `workflows/<id>.yml` reachable from
   // a run: the file that explains *why* this pipeline is shaped this way is one
   // `cat` away, rather than something a reader has to match up by eye.
@@ -902,14 +866,14 @@ function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orches
   );
   for (const reason of classification.reasons) console.log(`[orchestrator]   reason: ${reason}`);
   const docsRoot = resolveContextDocsRoot(args.projectRoot);
-  return registry.create({
+  const created = registry.create({
     taskId,
     classification,
     dependsOn: args.dependsOn,
+    adHoc: args.adHoc,
     environment: args.environment,
     targetBindings: args.targetBindings,
     workflow: resolveWorkflowId(args.classification),
-    taskText: runtimeTaskText(args, taskId, docsRoot),
     // Contracts are Framework-owned even when --project-root is a Target.
     projectRoot: resolveFrameworkRoot(),
     docsRoot,
@@ -917,6 +881,7 @@ function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orches
     targetWorkRoots: runtimeTaskWorkRoots(args, taskId, classification),
     changeAwareVerification: !args.noQaOptimization,
   });
+  return args.registerOnly ? created : registry.open(taskId);
 }
 
 const VERBS = [
@@ -1324,31 +1289,15 @@ function previousRoundFromDocs(docsRoot: string, moduleName: string, taskId: str
 export async function productionQaInputs(opts: { docsRoot: string; moduleName: string; taskId: string; roots: readonly string[] }) {
   const planMd = readModuleDoc(opts.docsRoot, opts.moduleName, "plan.md") ?? "";
   const designMd = readModuleDoc(opts.docsRoot, opts.moduleName, "design.md") ?? "";
-  const parsed = parsePlanTasks(planMd);
+  const parsed = readWorkPlan(planMd);
+  if (parsed.problems.length) throw new Error(`invalid QA plan: ${parsed.problems.join("; ")}`);
   const task = parsed.tasks.find((row) => row.id === opts.taskId);
-  const nodes: TaskNode[] = parsed.tasks.map((row) => ({
-    id: row.id,
-    phase: row.phase,
-    dependsOn: row.dependsOn,
-    agent: Object.values(AgentStage).includes(row.owner as AgentStage) ? row.owner as AgentStage : undefined,
-    description: row.description,
-  }));
   let affectedTaskIds: string[] = [];
   let affectedPhases: number[] = [];
   if (task) {
-    try {
-      const graph = buildPlanGraph(nodes);
-      affectedTaskIds = graph.edges
-        .filter((edge) => edge.from === task.id || edge.to === task.id)
-        .flatMap((edge) => [edge.from, edge.to])
-        .filter((id) => id !== task.id)
-        .filter((id, index, all) => all.indexOf(id) === index)
-        .sort();
+      const graph = taskGraphFromPlan(parsed.tasks);
+      affectedTaskIds = [...new Set([...graph.dependenciesOf(task.id), ...graph.descendantsOf(task.id)])].sort();
       affectedPhases = [...new Set([task.phase, ...affectedTaskIds.map((id) => graph.nodes.get(id)?.phase).filter((phase): phase is number => phase !== undefined)])].sort((a, b) => a - b);
-    } catch {
-      // Invalid plan graph is itself visible to QA through its plan reference;
-      // do not invent graph impact from malformed metadata.
-    }
   }
   const riskRef = /^##\s+Risks\s*&\s*Dependencies\s*$/im.test(designMd) ? ["design.md#Risks-&-Dependencies"] : [];
   const diffParts = await Promise.all(opts.roots.map(async (root) => {
@@ -1361,9 +1310,9 @@ export async function productionQaInputs(opts: { docsRoot: string; moduleName: s
 
   return {
     packageInputs: () => ({
-      taskIntent: task ? task.description : `Task ${opts.taskId} in module ${opts.moduleName}; no matching plan row was found.`,
+      taskIntent: task ? taskObjective(task) : `Task ${opts.taskId} in module ${opts.moduleName}; no matching plan row was found.`,
       acceptanceCriteria: task
-        ? [...task.designRefs.map((ref) => `design.md#${ref}`), `plan.md#${task.id}`]
+        ? [...taskDesignRefs(task).map((ref) => `design.md#${ref}`), `plan.md#${task.id}`]
         : [`plan.md#${opts.taskId}`],
       diffSummary: diffParts.length > 0 ? diffParts.join("\n") : "No writable Target root was resolved; inspect the scoped files directly.",
       knownRisks: riskRef,
@@ -1438,6 +1387,18 @@ async function composeProductionTaskExecutor(
     phases: () => (args.phases.length > 0 ? args.phases : undefined),
     taskLevel: (id) => store.loadTask(id)?.classification.level,
     runtimeTask: (id) => store.loadTask(id)?.runtimeTask,
+    dependencyEvidence: (id) => {
+      const task = store.loadTask(id);
+      const all = store.listTasks();
+      return (task?.dependsOn ?? []).map(dependencyId => {
+        const dependency = store.loadTask(dependencyId);
+        if (!dependency || dependency.machine.current !== TaskState.DEPLOYED || dependency.paused || dependency.cancelled || unmetDependencies(dependency, all).length) throw new Error(`dependency ${dependencyId} lacks complete ledger evidence`);
+        return {
+          task_id: dependencyId, status: "complete" as const, source: `task-store:${dependencyId}`, hash: stableHash(dependency),
+          outputs: Object.entries(dependency.artifacts).map(([kind, text]) => ({ source: `task-store:${dependencyId}/artifacts/${kind}`, hash: contentHash(text) })),
+        };
+      });
+    },
     taskRunLog: (id) => new RunLog(store.runsForTask(id)),
     autonomy: args.autonomy,
     stageRoots: loadStageRoots(args.projectRoot),
@@ -1522,14 +1483,14 @@ async function composeProductionTaskExecutor(
 function loadWavePlan(args: CliArgs) {
   const planMd = readModuleDoc(resolveContextDocsRoot(args.projectRoot), args.module!, "plan.md");
   if (planMd === null) throw new CliUsageError(`module ${args.module} has no plan.md`);
-  const parsed = parsePlanTasks(planMd);
+  const parsed = readWorkPlan(planMd);
   if (parsed.problems.length > 0) {
     throw new CliUsageError(`plan.md is not runnable:\n- ${parsed.problems.join("\n- ")}`);
   }
   return parsed.tasks;
 }
 
-function registeredWaveTarget(store: TaskStore, rows: readonly ReturnType<typeof parsePlanTasks>["tasks"][number][]) {
+function registeredWaveTarget(store: TaskStore, rows: readonly ReturnType<typeof readWorkPlan>["tasks"][number][]) {
   const resolved = rows.map((row) => {
     const task = store.loadTask(row.id);
     const roots = task?.runtimeTask?.scope.work_roots.filter((root) => root.stage === row.owner) ?? [];
@@ -1559,7 +1520,7 @@ function registeredWaveTarget(store: TaskStore, rows: readonly ReturnType<typeof
 
 async function resolveWaveRoute(
   args: CliArgs,
-  rows: readonly ReturnType<typeof parsePlanTasks>["tasks"][number][],
+  rows: readonly ReturnType<typeof readWorkPlan>["tasks"][number][],
   store: TaskStore,
   dependencies: CliDependencies,
   targetWorkspaceRoot: string,
@@ -1917,6 +1878,13 @@ export async function runCli(argv: string[], defaultProjectRoot: string, depende
   );
   const registry = new TaskRegistry({
     store,
+    planTasks: () => {
+      const md = args.module ? readModuleDoc(resolveContextDocsRoot(args.projectRoot), args.module, "plan.md") : null;
+      if (md === null) return null;
+      const plan = readWorkPlan(md);
+      if (plan.problems.length) throw new CliUsageError(`invalid plan: ${plan.problems.join("; ")}`);
+      return plan.tasks;
+    },
     budget: budgetFor(args),
     ...(args.dryRun ? {} : { stateViewPath: defaultStateViewPath(args.projectRoot) }),
   });

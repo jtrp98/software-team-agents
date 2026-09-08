@@ -7,7 +7,10 @@ import { renderTokenBenchmarkMarkdown } from "../codeintel/benchmark.js";
 import { ContextManager } from "../context/contextManager.js";
 import { estimateInputTokens } from "../context/contextBudget.js";
 import { renderSlicedDocs, buildPromptParts, compileExecutionPacket, sliceModuleDocsWithSavings } from "../runtime/agentRunAssembly.js";
-import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
+import { buildRuntimeTask, type RuntimeTaskV2 } from "../orchestrator/runtimeTask.js";
+import { PlanTaskSchema, renderCanonicalTasks } from "../docs/planTask.js";
+import { defaultProjectRoot } from "../agents/agentContract.js";
+import { classifyTask } from "../classification/taskClassifier.js";
 import { AgentStage } from "../types.js";
 
 export const TOKEN_BENCHMARK_DOC_BYTES = {
@@ -267,36 +270,24 @@ export interface ExecutionPacketPromptBenchmark {
   afterPromptCharacters: number;
 }
 
-function benchmarkRuntimeTask(fixture: { root: string; moduleName: string }, stages: readonly AgentStage[]): RuntimeTask {
+function benchmarkRuntimeTask(fixture: { root: string; moduleName: string }, stages: readonly AgentStage[]): RuntimeTaskV2 {
   const sourceRoot = path.join(fixture.root, "_docs", "module", fixture.moduleName);
-  return {
-    task_id: "BE-001",
-    workflow: "feature",
-    pm_mode: "full",
-    why: "deliver the pinned benchmark task",
-    goal: "deliver the pinned benchmark task",
-    source_of_truth: {
-      status: "resolved",
-      paths: ["requirement.md", "design.md", "plan.md", "test-plan.md"].map((name) => path.join(sourceRoot, name)),
-      reason: null,
-    },
-    dependencies: { task_ids: [], plan_readiness: "ready", waiting_on: [], reason: null },
-    scope: {
-      status: "resolved",
-      work_roots: stages.map((stage) => ({
-        stage,
-        target_id: "benchmark-target",
-        root: fixture.root,
-        allow: [{ contract_glob: "**/*", effective_glob: path.join(fixture.root, "**", "*") }],
-      })),
-      reason: null,
-    },
-    do_not_touch: [".git/**"],
-    acceptance_criteria: { status: "resolved", items: ["pinned acceptance criterion"], reason: null },
-    required_verification: { status: "deferred", levels: [], reason: "test-pyramid selection is deferred" },
-    evidence_required: ["record verification evidence"],
-    stop_conditions: ["STOP on an unresolved business rule", "STOP before a state-changing git command"],
-  };
+  const task = PlanTaskSchema.parse({
+    version: 1, id: "BE-001", phase: 1, title: "Selected import", objective: "Import the selected row with its documented fields.",
+    why: "The pinned fixture requires a stable import result.", owner: "backend-engineer", dependsOn: [],
+    traceability: ["REQ-001", "AC-001.1", "DES-001"], produces: [], consumes: [], risk: ["low"], humanGate: [], status: "pending",
+    scopeAndConstraints: "Limit changes to the selected import behavior.", retrievalHints: "Search the import handler and its focused regression.",
+    doNotModify: "Unrelated archive and administration behavior.", acceptanceCriteria: "The selected import preserves the documented fields.",
+    validationAndEvidence: "Run the focused import regression and record the command, exit code and result.", compatibility: "Preserve the existing import response contract.",
+  });
+  fs.writeFileSync(path.join(sourceRoot, "plan.md"), renderCanonicalTasks([task]));
+  fs.appendFileSync(path.join(sourceRoot, "requirement.md"), "\n## Acceptance Criteria\n- AC-001.1: The selected row imports without changing its fields.\n");
+  const classification = { ...classifyTask({ isClearBugFix: true, touchesBackend: true }), pipeline: [...stages] };
+  const runtimeTask = buildRuntimeTask({ taskId: task.id, workflow: "bugfix", classification, projectRoot: defaultProjectRoot(), docsRoot: fixture.root, moduleName: fixture.moduleName,
+    targetWorkRoots: stages.map(stage => ({ stage, targetId: "benchmark-target", path: fixture.root })),
+  })!;
+  for (const root of runtimeTask.scope.work_roots) root.allow = [{ contract_glob: "**/*", effective_glob: path.join(fixture.root, "**", "*") }];
+  return runtimeTask;
 }
 
 /** Exact legacy prompt vs ExecutionPacket prompt on the pinned Large workload. */
@@ -304,7 +295,7 @@ export function runExecutionPacketPromptBenchmark(frameworkRoot: string): Execut
   const fixture = createTraceableTokenBenchmarkFixture();
   try {
     const handoffs = largeHandoffs(fixture);
-    const runtimeTask = benchmarkRuntimeTask(fixture, WORKLOAD_STAGES.Large);
+
     let beforePromptCharacters = 0;
     let afterPromptCharacters = 0;
     for (const stage of WORKLOAD_STAGES.Large) {
@@ -320,12 +311,16 @@ export function runExecutionPacketPromptBenchmark(frameworkRoot: string): Execut
       const req = { taskId: "BE-001", stage, context };
       const sources = { docs: sliced.docs };
       beforePromptCharacters += staticChars(frameworkRoot, stage) + buildPromptParts(req, undefined, sources).text.length;
+    }
+    const runtimeTask = benchmarkRuntimeTask(fixture, WORKLOAD_STAGES.Large);
+    for (const stage of WORKLOAD_STAGES.Large) {
+      const req = { taskId: "BE-001", stage, context: [] };
       afterPromptCharacters += staticChars(frameworkRoot, stage) + compileExecutionPacket({
         req,
         role: stage,
         runtimeTask,
         contractScope: { allow: ["**/*"], deny: [".git/**"] },
-        sources,
+        baseRevision: "a".repeat(40),
       }).text.length;
     }
     return { beforePromptCharacters, afterPromptCharacters };

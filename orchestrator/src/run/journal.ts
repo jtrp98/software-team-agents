@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { PlanTaskRow } from "../docs/planGraph.js";
+import type { WorkPlanTask } from "../docs/planGraph.js";
 import { DEFAULT_RUNTIME_ARTIFACT_RETENTION, pruneRuntimeArtifacts } from "../state/runtimeArtifacts.js";
 
 export interface RunManifest {
@@ -127,8 +127,8 @@ export function runArtifactPaths(projectRoot: string, runId: string): RunArtifac
   };
 }
 
-function stableTaskTable(tasks: readonly PlanTaskRow[]): unknown[] {
-  return tasks.map((task) => ({
+function stableTaskTable(tasks: readonly WorkPlanTask[]): unknown[] {
+  return tasks.map((task) => ("version" in task ? task : {
     id: task.id,
     phase: task.phase,
     designRefs: [...task.designRefs],
@@ -144,7 +144,7 @@ function stableTaskTable(tasks: readonly PlanTaskRow[]): unknown[] {
   }));
 }
 
-export function planHash(tasks: readonly PlanTaskRow[]): string {
+export function planHash(tasks: readonly WorkPlanTask[]): string {
   return createHash("sha256").update(JSON.stringify(stableTaskTable(tasks)), "utf8").digest("hex");
 }
 

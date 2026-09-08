@@ -1,0 +1,149 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`T-V8-004 manual-grade packet > round-trips complete backend-engineer semantics and a golden model-visible view 1`] = `
+"## Objective
+Return the existing order summary for an empty order.
+
+## Why
+Clients need a stable empty-order response.
+
+## Task and dependencies
+T-PACKET — Preserve the order summary; phase 1; owner backend-engineer; current stage backend-engineer; attempt 1
+Declared dependencies: none
+
+## Selected requirements, acceptance and design
+REQ-007 — <fixture>/_docs/module/packet-fixture/requirement.md#REQ-007
+- REQ-007: Selected fixture requirement for empty orders.
+
+AC-007.2 — <fixture>/_docs/module/packet-fixture/requirement.md#AC-007.2
+- AC-007.2: Selected fixture requirement for empty orders.
+
+DES-011 — <fixture>/_docs/module/packet-fixture/design.md#DES-011
+- DES-011: Preserve the documented order response contract.
+
+## Contracts
+Produces: none
+Consumes: none
+
+## Scope and constraints
+Preserve the response contract while handling empty line items.
+
+## Effective stage guard
+Roots:
+- <fixture>
+Allow:
+- server/**
+Deny:
+- .git/**
+
+## Do not modify
+Authentication, database schema and unrelated response fields.
+
+## Compatibility
+Preserve existing nonempty-order serialization. The patch can be removed independently.
+
+## Retrieval hints
+Search for the OrderSummary serializer and its empty-order test; confirm paths against source.
+
+## Verified retrieval candidates
+none
+
+## Required implementation behavior
+AC-007.2: An empty order returns the documented zero total without an exception.
+
+## Validation and expected evidence
+Run the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.
+
+Levels: lint, typecheck, unit, integration, build
+Verification policy: full-order; enforcement: warn
+
+## Risk and human gates
+Risk: shared-contract
+Human gates: none
+
+## Stop conditions
+- STOP before state-changing git commands
+- STOP after two automatic repair rounds for ordinary work; further repair requires a human decision
+- Global defensive retry ceiling: 3 for medium severity; this does not authorize additional ordinary repair
+- STOP rather than inventing any unavailable RuntimeTask field
+
+## Expansion pointers
+- <fixture>/_docs/module/packet-fixture/plan.md#T-PACKET
+- <fixture>/_docs/module/packet-fixture/requirement.md#REQ-007
+- <fixture>/_docs/module/packet-fixture/requirement.md#AC-007.2
+- <fixture>/_docs/module/packet-fixture/design.md#DES-011"
+`;
+
+exports[`T-V8-004 manual-grade packet > round-trips complete qa-engineer semantics and a golden model-visible view 1`] = `
+"## Objective
+Return the existing order summary for an empty order.
+
+## Why
+Clients need a stable empty-order response.
+
+## Task and dependencies
+T-PACKET — Preserve the order summary; phase 1; owner backend-engineer; current stage qa-engineer; attempt 1
+Declared dependencies: none
+
+## Selected requirements, acceptance and design
+REQ-007 — <fixture>/_docs/module/packet-fixture/requirement.md#REQ-007
+- REQ-007: Selected fixture requirement for empty orders.
+
+AC-007.2 — <fixture>/_docs/module/packet-fixture/requirement.md#AC-007.2
+- AC-007.2: Selected fixture requirement for empty orders.
+
+DES-011 — <fixture>/_docs/module/packet-fixture/design.md#DES-011
+- DES-011: Preserve the documented order response contract.
+
+## Contracts
+Produces: none
+Consumes: none
+
+## Scope and constraints
+Preserve the response contract while handling empty line items.
+
+## Effective stage guard
+Roots:
+- <fixture>
+Allow:
+- server/**
+Deny:
+- .git/**
+
+## Do not modify
+Authentication, database schema and unrelated response fields.
+
+## Compatibility
+Preserve existing nonempty-order serialization. The patch can be removed independently.
+
+## Retrieval hints
+Search for the OrderSummary serializer and its empty-order test; confirm paths against source.
+
+## Verified retrieval candidates
+none
+
+## Required implementation behavior
+AC-007.2: An empty order returns the documented zero total without an exception.
+
+## Validation and expected evidence
+Run the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.
+
+Levels: lint, typecheck, unit, integration, build
+Verification policy: full-order; enforcement: warn
+
+## Risk and human gates
+Risk: shared-contract
+Human gates: none
+
+## Stop conditions
+- STOP before state-changing git commands
+- STOP after two automatic repair rounds for ordinary work; further repair requires a human decision
+- Global defensive retry ceiling: 3 for medium severity; this does not authorize additional ordinary repair
+- STOP rather than inventing any unavailable RuntimeTask field
+
+## Expansion pointers
+- <fixture>/_docs/module/packet-fixture/plan.md#T-PACKET
+- <fixture>/_docs/module/packet-fixture/requirement.md#REQ-007
+- <fixture>/_docs/module/packet-fixture/requirement.md#AC-007.2
+- <fixture>/_docs/module/packet-fixture/design.md#DES-011"
+`;

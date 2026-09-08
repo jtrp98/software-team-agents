@@ -1,3 +1,4 @@
+import { packetFixture, fixtureTask, writePacketPlan } from "./runtime/packetFixture.testSupport.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -112,6 +113,7 @@ describe("parseArgs", () => {
       buildTemplates: undefined,
       environment: Environment.LOCAL,
       dependsOn: [],
+      adHoc: false,
       stateDb: undefined,
       phases: [],
       targetBindings: { frontend_target: null, backend_target: null },
@@ -269,14 +271,8 @@ describe("T-V7-028 bounded wave through the production CLI composition", () => {
       ].join("\n"));
       const docs = path.join(project, "_docs", "module", "orders");
       fs.mkdirSync(docs, { recursive: true });
-      const planPath = path.join(docs, "plan.md");
-      fs.writeFileSync(planPath, [
-        "# Plan", "", "## Phase 1: Orders", "",
-        "| Task | Status | Owner | Depends on |", "|---|---|---|---|",
-        "| BE-001 (DES-001) — implement orders | pending | backend-engineer | — |", "",
-      ].join("\n"));
-      fs.writeFileSync(path.join(docs, "requirement.md"), "# Requirements\n\n## Acceptance Criteria\n\n- orders work\n");
-      fs.writeFileSync(path.join(docs, "design.md"), "# Design\n\n## DES-001 — Orders\n\nImplement orders.\n");
+      const firstPlanTask = fixtureTask({ id: "BE-001" });
+      writePacketPlan(project, [firstPlanTask], "orders");
       fs.writeFileSync(path.join(docs, "test-plan.md"), "# Test Plan\n\n## Scope\n\nOrders.\n");
       fs.writeFileSync(path.join(project, "package.json"), JSON.stringify({ scripts: {
         lint: "node -e \"\"", typecheck: "node -e \"\"", test: "node -e \"\"", build: "node -e \"\"",
@@ -364,10 +360,11 @@ describe("T-V7-028 bounded wave through the production CLI composition", () => {
       expect(fs.existsSync(`${stateDb}-wal`)).toBe(false);
       expect(fs.existsSync(`${stateDb}-shm`)).toBe(false);
 
-      await expect(runCli([
+      const firstWaveExit = await runCli([
         "run", "--wave", "1", "--module", "orders", "--autonomy", "edit", "--runtime", "claude-code", "--model", "opus",
         "--project-root", project,
-      ], project, dependencies)).resolves.toBe(0);
+      ], project, dependencies);
+      expect(firstWaveExit, [...log.mock.calls, ...error.mock.calls].flat().join("\n")).toBe(0);
       expect(calls.map((request) => request.role)).toEqual(["backend-engineer"]);
       expect(execFileSync("git", ["log", "-1", "--format=%s"], { cwd: project, encoding: "utf8" })).toContain("sta(BE-001)");
       const persisted = new SqliteTaskStore(stateDb);
@@ -377,14 +374,15 @@ describe("T-V7-028 bounded wave through the production CLI composition", () => {
         persisted.close();
       }
 
-      fs.writeFileSync(planPath, [
-        "# Plan", "", "## Phase 1: Orders", "",
-        "| Task | Status | Owner | Depends on |", "|---|---|---|---|",
-        "| BE-001 (DES-001) — implement orders | verified | backend-engineer | — |", "",
-        "## Phase 2: More orders", "",
-        "| Task | Status | Owner | Depends on |", "|---|---|---|---|",
-        "| BE-002 (DES-001) — extend orders | pending | backend-engineer | BE-001 |", "",
-      ].join("\n"));
+      // Explicit synthetic ledger evidence for the next fixture dependency.
+      // Editing the plan Status alone must never unlock the next wave.
+      const completedStore = new SqliteTaskStore(defaultStateDbPath(project));
+      try {
+        const first = completedStore.loadTask("BE-001")!;
+        completedStore.saveTask({ ...first, machine: { ...first.machine, current: TaskState.DEPLOYED } });
+      } finally { completedStore.close(); }
+
+      writePacketPlan(project, [{ ...firstPlanTask, status: "verified" }, fixtureTask({ id: "BE-002", phase: 2, dependsOn: ["BE-001"] })], "orders");
       execFileSync("git", ["add", "_docs/module/orders/plan.md"], { cwd: project });
       execFileSync("git", ["commit", "-m", "prepare second fixture wave"], { cwd: project });
       await expect(runCli([
@@ -1055,20 +1053,7 @@ describe("T-V3TOK-041 context verb", () => {
 
   it("renders the latest persisted packet without reopening module documents", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-context-packet-"));
-    const text = "Task T-PACKET\n## Acceptance Criteria\n- inspectable";
-    const packet: ExecutionPacket = {
-      text,
-      composition: { static_chars: text.length, handoff_chars: 0, doc_chars: 0, knowledge_chars: 0, code_intel_chars: 0, tool_output_chars: 0 },
-      budgetComposition: { base: text.length, task: 0, safety: 0, docs: 0, knowledge: 0, code: 0, tool_output: 0, reserve: 0 },
-      task_id: "T-PACKET",
-      stage: AgentStage.BACKEND_ENGINEER,
-      role: "backend-engineer",
-      acceptance_criteria: ["inspectable"],
-      required_verification: [],
-      stop_conditions: ["STOP on invalid state"],
-      scope: { allow: ["server/**"], deny: [".git/**"] },
-      sources: ["runtime-task"],
-    };
+    const packet = packetFixture(root);
     writeExecutionPacket({ projectRoot: root, packet });
     const logs: string[] = [];
     const original = console.log;

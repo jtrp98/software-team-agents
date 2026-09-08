@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ArtifactType, validateArtifact, type ExecutionPacket } from "../artifacts/schemas.js";
+import { ArtifactType, validateArtifact, LegacyExecutionPacketSchema, type LegacyExecutionPacket, type ExecutionPacket } from "../artifacts/schemas.js";
 import { AgentStage } from "../types.js";
 
 /** Regenerable artifact classes stored below the VCS-ignored runtime-state root. */
@@ -167,6 +167,10 @@ function nextPacketAttempt(taskDirectory: string, stage: AgentStage): number {
   return attempts.length === 0 ? 1 : Math.max(...attempts) + 1;
 }
 
+export function nextExecutionPacketAttempt(projectRoot: string, taskId: string, stage: AgentStage): number {
+  return nextPacketAttempt(runtimeArtifactPaths(projectRoot, taskId).packets, stage);
+}
+
 export interface WriteExecutionPacketOptions {
   projectRoot: string;
   packet: ExecutionPacket;
@@ -188,25 +192,25 @@ export function writeExecutionPacket(options: WriteExecutionPacketOptions): Pers
   }
   const packet = validateArtifact(ArtifactType.EXECUTION_PACKET, options.packet);
   const taskDirectory = runtimeArtifactPaths(options.projectRoot, packet.task_id).packets;
-  let attempt = nextPacketAttempt(taskDirectory, packet.stage);
+  const attempt = packet.attempt;
   assertPacketStorageOwnership(taskDirectory, options.forbiddenRoots ?? [], options.projectRoot);
   fs.mkdirSync(taskDirectory, { recursive: true });
 
   // Re-resolve after mkdir so a pre-existing junction cannot become trusted by
   // virtue of the directory now existing.
   assertPacketStorageOwnership(taskDirectory, options.forbiddenRoots ?? [], options.projectRoot);
-  let packetPath: string;
-  while (true) {
-    packetPath = path.join(taskDirectory, `${stageFilePrefix(packet.stage)}${attempt}.json`);
+  const packetPath = path.join(taskDirectory, `${stageFilePrefix(packet.stage)}${attempt}.json`);
     assertPacketStorageOwnership(packetPath, options.forbiddenRoots ?? [], options.projectRoot);
     try {
-      fs.writeFileSync(packetPath, `${JSON.stringify(packet, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
-      break;
+      const fd = fs.openSync(packetPath, "wx");
+      try { fs.writeFileSync(fd, `${JSON.stringify(packet, null, 2)}\n`, "utf8"); fs.fsyncSync(fd); }
+      finally { fs.closeSync(fd); }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      attempt += 1;
+      const existing = readExecutionPacket(packetPath);
+      if (existing.packet_hash !== packet.packet_hash) throw new Error(`immutable packet drift for ${packet.task_id}/${packet.stage}/attempt ${attempt}; create an explicit new attempt`);
+      return { path: packetPath, attempt, removed: [] };
     }
-  }
 
   // A packet is not considered persisted until the on-disk bytes pass the
   // same public artifact schema used at compile time.
@@ -219,10 +223,25 @@ export function writeExecutionPacket(options: WriteExecutionPacketOptions): Pers
   return { path: packetPath, attempt, removed };
 }
 
-export function readExecutionPacket(packetPath: string): ExecutionPacket {
+export function readExecutionPacket(packetPath: string, expected?: { packetHash?: string; baseRevision?: string; planHash?: string; configHash?: string; compilerHash?: string }): ExecutionPacket {
   const stat = fs.lstatSync(packetPath);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`execution packet is not a regular file: ${packetPath}`);
-  return validateArtifact(ArtifactType.EXECUTION_PACKET, JSON.parse(fs.readFileSync(packetPath, "utf8")));
+  const raw = JSON.parse(fs.readFileSync(packetPath, "utf8"));
+  if (raw.version !== 2) throw new Error("legacy packet is audit-only; explicitly recompile in a new attempt before execution");
+  const packet = validateArtifact(ArtifactType.EXECUTION_PACKET, raw);
+  for (const [name, actual, wanted] of [
+    ["packet", packet.packet_hash, expected?.packetHash], ["base revision", packet.identity.base_revision, expected?.baseRevision],
+    ["plan", packet.identity.plan_hash, expected?.planHash], ["config", packet.identity.config_hash, expected?.configHash],
+    ["compiler", packet.identity.compiler_hash, expected?.compilerHash],
+  ]) if (wanted !== undefined && actual !== wanted) throw new Error(`${name} hash/revision drift; recompile in a new attempt`);
+  return packet;
+}
+
+export function readExecutionPacketForAudit(packetPath: string): ExecutionPacket | LegacyExecutionPacket {
+  const stat = fs.lstatSync(packetPath);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`execution packet is not a regular file: ${packetPath}`);
+  const raw = JSON.parse(fs.readFileSync(packetPath, "utf8"));
+  return raw.version === 2 ? readExecutionPacket(packetPath) : LegacyExecutionPacketSchema.parse(raw);
 }
 
 /** Latest regular packet for a stage, ordered by its numeric attempt. */

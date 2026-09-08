@@ -177,5 +177,10 @@ export function describeStatus(task: PersistedTask, allTasks?: readonly Persiste
 /** Dependency ids that have not reached DEPLOYED — a missing task counts as unmet, never as satisfied. */
 export function unmetDependencies(task: PersistedTask, allTasks: readonly PersistedTask[]): string[] {
   const byId = new Map(allTasks.map((t) => [t.taskId, t]));
-  return task.dependsOn.filter((id) => byId.get(id)?.machine.current !== TaskState.DEPLOYED);
+  const satisfied = (id: string, ancestors: Set<string>): boolean => {
+    const dependency = byId.get(id);
+    if (!dependency || dependency.cancelled || dependency.paused || dependency.machine.current !== TaskState.DEPLOYED || ancestors.has(id)) return false;
+    return dependency.dependsOn.every(dep => satisfied(dep, new Set([...ancestors, id])));
+  };
+  return task.dependsOn.filter(id => !satisfied(id, new Set([task.taskId])));
 }

@@ -1,11 +1,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { PlanTaskRow } from "../docs/planGraph.js";
+import { taskObjective, type WorkPlanTask } from "../docs/planGraph.js";
+import { taskGraphFromPlan } from "../graph/taskGraph.js";
 import { checkpointTask, CheckpointRefusal, type SecretScanner } from "../git/checkpoint.js";
 import { GitCommandLayer } from "../git/commandLayer.js";
 import type { RepositoryPreflightResult } from "../git/preflight.js";
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult, Orchestrator } from "../orchestrator/orchestrator.js";
 import type { TaskRegistry } from "../orchestrator/taskRegistry.js";
+import { unmetDependencies } from "../orchestrator/taskStatus.js";
+import { TaskState } from "../types.js";
 import type { DeterministicCheckId, DeterministicVerification } from "../qa/deterministic.js";
 import { deterministicChecksForLevels, renderDeterministicVerification } from "../qa/deterministic.js";
 import type { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
@@ -29,7 +32,7 @@ export interface ResolvedWaveRoute {
 }
 
 export interface WaveTaskPreview {
-  row: PlanTaskRow;
+  row: WorkPlanTask;
   stored: PersistedTask | null;
   decision: AutoEligibilityDecision;
   targetRoot: string | null;
@@ -51,7 +54,7 @@ export interface TaskExecutorComposition {
 export interface ExecuteWaveOptions {
   projectRoot: string;
   manifest: RunManifest;
-  planTasks: readonly PlanTaskRow[];
+  planTasks: readonly WorkPlanTask[];
   preview: WavePreview;
   preflight?: RepositoryPreflightResult;
   checkpointedTaskIds?: ReadonlySet<string>;
@@ -59,7 +62,7 @@ export interface ExecuteWaveOptions {
   registry: TaskRegistry;
   store: TaskStore;
   route: ResolvedWaveRoute;
-  compose: (task: PlanTaskRow, orchestrator: Orchestrator) => Promise<TaskExecutorComposition>;
+  compose: (task: WorkPlanTask, orchestrator: Orchestrator) => Promise<TaskExecutorComposition>;
   git?: GitCommandLayer;
   now?: () => Date;
   log?: (message: string) => void;
@@ -109,7 +112,7 @@ export function discoverExecutableVerificationChecks(targetRoot: string): Determ
 }
 
 export function buildWavePreview(options: {
-  planTasks: readonly PlanTaskRow[];
+  planTasks: readonly WorkPlanTask[];
   wave: number;
   maxTasks: number;
   store: Pick<TaskStore, "loadTask">;
@@ -119,6 +122,9 @@ export function buildWavePreview(options: {
 }): WavePreview {
   const rows = tasksInDerivedWave(options.planTasks, options.wave).slice(0, options.maxTasks);
   const hypotheticalCheckpoints = new Set(options.checkpointedTaskIds ?? []);
+  const storedTasks = options.planTasks.flatMap(t => { const stored = options.store.loadTask(t.id); return stored ? [stored] : []; });
+  for (const task of storedTasks) if (task.machine.current === TaskState.DEPLOYED && !task.paused && !task.cancelled && !unmetDependencies(task, storedTasks).length) hypotheticalCheckpoints.add(task.taskId);
+  const graph = taskGraphFromPlan(options.planTasks);
   const previews: WaveTaskPreview[] = [];
   let sharedRoot: string | null = null;
   let sharedTargetId: string | null = null;
@@ -143,7 +149,7 @@ export function buildWavePreview(options: {
     const selected = deterministicChecksForLevels(required);
     const executable = root ? discoverExecutableVerificationChecks(root).filter((check) => selected.includes(check)) : null;
     const dependencyMatch = stored
-      ? JSON.stringify([...stored.dependsOn].sort()) === JSON.stringify([...row.dependsOn].sort())
+      ? JSON.stringify([...stored.dependsOn].sort()) === JSON.stringify(graph.dependenciesOf(row.id).sort())
       : false;
     const cursorOwner = stored?.classification.pipeline[stored.pipelineCursor];
     const decision = evaluateAutoEligibility(
@@ -346,7 +352,7 @@ export async function executeWave(options: ExecuteWaveOptions): Promise<number> 
           taskId: task.id,
           module: options.manifest.module,
           planHash: options.manifest.plan_hash,
-          taskDescription: task.description,
+          taskDescription: taskObjective(task),
           secretScanner: options.secretScanner,
         });
         append({ ts: ts(), kind: "TASK_CHECKPOINTED", task_id: task.id, sha: checkpoint.sha });

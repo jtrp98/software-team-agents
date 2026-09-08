@@ -13,6 +13,7 @@ import { NO_GUARDS, type RuntimeRunStatus } from "./runtimeAdapter.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { resolveRuntimeRoute } from "./runtimeRouting.js";
 import * as contextBudget from "../context/contextBudget.js";
+import { FIXTURE_REVISION, runtimeTaskFixture } from "./packetFixture.testSupport.js";
 
 const roots: string[] = [];
 function project(config?: string): string {
@@ -238,6 +239,8 @@ describe("T-V5-040 fail-closed evidence matrix", () => {
       guards: () => NO_GUARDS,
       sliceModuleDocs: false,
       threeRepoTask: () => targetTask(root),
+      runtimeTask: () => runtimeTaskFixture(path.join(root, "knowledge"), { taskId: "T-MATRIX", targetRoot: path.join(root, "target"), allow: [] }),
+      packetBaseRevision: async () => FIXTURE_REVISION,
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-MATRIX", context: [] });
 
     expect(result.outcome).toMatchObject({

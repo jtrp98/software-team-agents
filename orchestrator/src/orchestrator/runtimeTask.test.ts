@@ -1,3 +1,4 @@
+import { fixtureTask, writePacketPlan } from "../runtime/packetFixture.testSupport.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -81,12 +82,8 @@ function fixture(): { docsRoot: string; targetRoot: string } {
   const targetRoot = path.join(base, "target");
   fs.mkdirSync(moduleDir, { recursive: true });
   fs.mkdirSync(targetRoot, { recursive: true });
-  fs.writeFileSync(
-    path.join(moduleDir, "requirement.md"),
-    "# Orders\n\n## Overview\nOrders.\n\n## Acceptance Criteria\n\n- A user can create an order.\n- Invalid input is rejected.\n",
-    "utf8",
-  );
-  fs.writeFileSync(path.join(moduleDir, "design.md"), "# Design\n\n## Feature-by-Feature Feasibility\nReady.\n", "utf8");
+  const ids = [...Object.keys(SIGNAL_INPUTS), "hotfix", "refactor", "security-fix"].map(id => `T-${id}`).concat(["T-SCOPE", "T-RESUME", "T-PYRAMID-KNOWN", "T-PYRAMID-UNKNOWN", "T-PYRAMID-SCHEMA", "T-PYRAMID-SCHEMA-COMPAT"]);
+  writePacketPlan(docsRoot, ids.map(id => fixtureTask({ id })), "orders");
   return { docsRoot, targetRoot };
 }
 
@@ -111,18 +108,7 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
       "refactor",
       "security-fix",
     ];
-    const executionFields = [
-      "why",
-      "goal",
-      "source_of_truth",
-      "dependencies",
-      "scope",
-      "do_not_touch",
-      "acceptance_criteria",
-      "required_verification",
-      "evidence_required",
-      "stop_conditions",
-    ] as const;
+    const executionFields = ["contract", "plan_source", "plan_hash", "artifact_hashes", "selected_traces", "dependencies", "scope", "required_verification", "stop_conditions"] as const;
 
     const evidence = workflowIds.map((workflow) => {
       const classification = classificationFor(workflow);
@@ -138,13 +124,13 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
       });
       expect(runtimeTask).not.toBeNull();
       expect(executionFields.every((field) => runtimeTask![field] !== undefined)).toBe(true);
-      expect(runtimeTask!.source_of_truth.status).toBe("resolved");
-      expect(runtimeTask!.acceptance_criteria.items).toHaveLength(2);
+      expect(runtimeTask!.contract.objective).not.toBe(runtimeTask!.contract.why);
+      expect(runtimeTask!.selected_traces.map(t => t.id)).toEqual(["REQ-007", "AC-007.2", "DES-011"]);
       expect(runtimeTask!.scope.status).toBe("resolved");
       return { workflow, fields: executionFields.length, model_calls: adapterTripwire.constructions };
     });
 
-    expect(evidence).toEqual(workflowIds.map((workflow) => ({ workflow, fields: 10, model_calls: 0 })));
+    expect(evidence).toEqual(workflowIds.map((workflow) => ({ workflow, fields: 9, model_calls: 0 })));
     expect(adapterTripwire.constructions).toBe(0);
   });
 
@@ -170,7 +156,7 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
     expect(runtimeTask.scope.work_roots[0].allow.length).toBeGreaterThan(0);
     expect(
       runtimeTask.scope.work_roots[0].allow.every(
-        (entry) => entry.effective_glob.startsWith(targetRoot.replace(/\\/g, "/")) && entry.contract_glob !== "",
+        (entry) => entry.effective_glob.replace(/\\/g, "/").startsWith(targetRoot.replace(/\\/g, "/")) && entry.contract_glob !== "",
       ),
     ).toBe(true);
     expect(JSON.stringify(runtimeTask.scope)).not.toContain("not-a-work-root");
@@ -183,14 +169,13 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
       classification: classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true }),
       projectRoot: defaultProjectRoot(),
     })!;
-    expect(runtimeTask.source_of_truth).toMatchObject({ status: "unavailable", paths: [] });
-    expect(runtimeTask.acceptance_criteria).toMatchObject({ status: "unavailable", items: [] });
-    expect(runtimeTask.scope).toMatchObject({ status: "unavailable", work_roots: [] });
-    expect(runtimeTask.stop_conditions.join(" ")).toMatch(/STOP rather than inventing/);
+    expect(runtimeTask).toBeNull();
   });
 
   it("populates required verification from the executable pyramid and preserves unknown full order", () => {
+    const { docsRoot } = fixture();
     const known = buildRuntimeTask({
+      docsRoot, moduleName: "orders",
       taskId: "T-PYRAMID-KNOWN",
       workflow: "business-rule",
       classification: classifyTask({ touchesBusinessRuleOnly: true, touchesBackend: true }),
@@ -205,6 +190,7 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
     });
 
     const unknown = buildRuntimeTask({
+      docsRoot, moduleName: "orders",
       taskId: "T-PYRAMID-UNKNOWN",
       workflow: "bugfix",
       classification: classifyTask({ isClearBugFix: true, touchesBackend: true }),
@@ -221,7 +207,9 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
 
   it("selects the schema task-type floor from classification and keeps the compatibility seam exact", () => {
     const classification = classifyTask({ touchesSchema: true, touchesBackend: true });
+    const { docsRoot } = fixture();
     const selected = buildRuntimeTask({
+      docsRoot, moduleName: "orders",
       taskId: "T-PYRAMID-SCHEMA",
       workflow: "schema-change",
       classification,
@@ -235,6 +223,7 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
     });
 
     const compatibility = buildRuntimeTask({
+      docsRoot, moduleName: "orders",
       taskId: "T-PYRAMID-SCHEMA-COMPAT",
       workflow: "schema-change",
       classification,
