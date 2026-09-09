@@ -1,7 +1,21 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
-import type { CodeIntelligenceProvider } from "../codeintel/provider.js";
-import { CODE_INTEL_ENV, CODE_INTEL_PIN_ENV, CODE_INTEL_BIN_ENV, codeIntelEnabled, codeIntelSlices, defaultProviderConfig } from "./codeIntelAssembly.js";
+import type { CodeIntelligenceProvider, RelevantCodeQuery } from "../codeintel/provider.js";
+import { contentHash } from "../artifacts/executionPacket.js";
+import { buildTaskRetrievalQuery, type RetrievalTaskFields } from "../context/retrievalQuery.js";
+import {
+  CODE_INTEL_ENV,
+  CODE_INTEL_PIN_ENV,
+  CODE_INTEL_BIN_ENV,
+  codeIntelEnabled,
+  codeIntelContext,
+  codeIntelSlices,
+  defaultProviderConfig,
+  retrievalCandidatesForPacket,
+} from "./codeIntelAssembly.js";
 
 /**
  * Wiring contract: OFF (the default) is byte-identical to a pipeline without
@@ -122,5 +136,98 @@ describe("codeIntelSlices", () => {
     // With no real index under the default cache root this still answers empty,
     // but it must be the *missing-index* path (provider ran), not "disabled".
     expect(slices).toEqual([]);
+  });
+});
+
+const TASK: RetrievalTaskFields = {
+  id: "T-Q1", objective: "Add task-specific retrieval instead of a bare module query.",
+  scopeAndConstraints: "Touch only the context/runtime layer.",
+  retrievalHints: "Hypothesis: findRelevantCode only ever sees the module name.\nQuery: Locate codeIntelSlices callers and the module-name query site.\nProvenance: DES-011",
+  traceability: ["REQ-011", "AC-011.1", "DES-011"], produces: [], consumes: [],
+};
+
+describe("codeIntelContext — T-V8-011 task-first query construction", () => {
+  it("generic-query replacement: a task query's description replaces the bare module name", async () => {
+    let seen: RelevantCodeQuery | undefined;
+    const provider = fakeProvider();
+    provider.findRelevantCode = async (query) => {
+      seen = query;
+      return [{ location: { file: "src/a.ts", line: 4 }, symbol: "a", score: 1, provenance: "extracted" }];
+    };
+    const query = buildTaskRetrievalQuery(TASK);
+    const result = await codeIntelContext({ ...INPUT, query }, {
+      enabled: true, resolveRevision: async () => "a".repeat(40), providerFactory: () => provider,
+    });
+    expect(result.used).toBe(true);
+    expect(result.description).toBe(query.description);
+    expect(seen?.description).toBe(query.description);
+    expect(seen?.description).not.toBe(INPUT.moduleName);
+    expect(seen?.description).toContain("Locate codeIntelSlices callers");
+    expect(result.queryReason).toContain("T-Q1");
+  });
+
+  it("safe-fallback: a module-fallback query (no task fields resolved) behaves exactly like the pre-T-V8-011 bare module-name query", async () => {
+    let seen: RelevantCodeQuery | undefined;
+    const provider = fakeProvider();
+    provider.findRelevantCode = async (q) => { seen = q; return []; };
+    const fallback = buildTaskRetrievalQuery(undefined, { moduleName: INPUT.moduleName });
+    await codeIntelContext({ ...INPUT, query: fallback }, {
+      enabled: true, resolveRevision: async () => "a".repeat(40), providerFactory: () => provider,
+    });
+    expect(seen?.description).toBe(INPUT.moduleName);
+  });
+
+  it("no query supplied at all preserves the historical moduleName-only behaviour byte for byte", async () => {
+    let seen: RelevantCodeQuery | undefined;
+    const provider = fakeProvider();
+    provider.findRelevantCode = async (q) => { seen = q; return []; };
+    const result = await codeIntelContext(INPUT, {
+      enabled: true, resolveRevision: async () => "a".repeat(40), providerFactory: () => provider,
+    });
+    expect(seen?.description).toBe(INPUT.moduleName);
+    expect(result.queryReason).toContain("bare module name was used");
+  });
+
+  it("records provenance (queryReason) even when the provider finds nothing", async () => {
+    const result = await codeIntelContext({ ...INPUT, query: buildTaskRetrievalQuery(TASK) }, {
+      enabled: true, resolveRevision: async () => "a".repeat(40), providerFactory: () => fakeProvider("missing"),
+    });
+    expect(result.used).toBe(false);
+    expect(result.queryReason).toContain("T-Q1");
+  });
+
+  it("disabled/missing-input reasons are still visible even without a query", async () => {
+    expect((await codeIntelContext(INPUT, { env: {} })).fallbackReason).toBe("disabled");
+    expect((await codeIntelContext({ ...INPUT, moduleName: undefined }, { enabled: true })).fallbackReason).toBe("missing-inputs");
+  });
+});
+
+describe("retrievalCandidatesForPacket", () => {
+  it("maps discovery candidates onto verified packet retrieval candidates, hashed off the real file", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sta-retrieval-"));
+    const file = path.join(dir, "src", "a.ts");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, "export const a = 1;\n");
+    const revision = "a".repeat(40);
+    const candidates = retrievalCandidatesForPacket(
+      [{ location: { file: "src/a.ts", line: 1 }, symbol: "a", relation: "defines", score: 1, provenance: "extracted" }],
+      dir,
+      revision,
+    );
+    expect(candidates).toEqual([{
+      path: path.resolve(dir, "src/a.ts"), symbol: "a",
+      provenance: "extracted discovery via findRelevantCode (defines)",
+      revision, hash: contentHash(fs.readFileSync(file)),
+    }]);
+  });
+
+  it("drops an unreadable candidate instead of throwing — enrichment must never fail packet compilation", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sta-retrieval-"));
+    const candidates = retrievalCandidatesForPacket(
+      [{ location: { file: "src/does-not-exist.ts" }, score: 1, provenance: "extracted" }],
+      dir,
+      "a".repeat(40),
+    );
+    expect(candidates).toEqual([]);
   });
 });

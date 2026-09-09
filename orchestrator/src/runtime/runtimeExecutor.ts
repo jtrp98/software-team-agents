@@ -15,9 +15,12 @@ import {
   failResult,
   qaArtifactResult,
   securityArtifactResult,
+  suppressRawHandoffWhenNarrowed,
   type PromptPartsResult,
   type RunMetrics,
 } from "./agentRunAssembly.js";
+import { codeIntelContext as defaultCodeIntelContext, retrievalCandidatesForPacket, type CodeIntelSliceDeps } from "./codeIntelAssembly.js";
+import { buildTaskRetrievalQuery } from "../context/retrievalQuery.js";
 import type {
   RuntimeAdapter,
   RuntimeAgentResult,
@@ -138,6 +141,15 @@ export interface RuntimeExecutorOptions {
   frozenModelRoute?: boolean;
   /** Original persisted winner basis for a frozen route. */
   frozenRoutingBasis?: string;
+  /**
+   * T-V8-011 — files already known changed for this task/round (e.g. a QA
+   * repair round's real diff), fed into the task-specific retrieval query.
+   * Absent by default: a fresh DEV round has no diff yet, and that is a fact,
+   * not a failure.
+   */
+  changedFiles?: (taskId: string) => Promise<string[]>;
+  /** Test seam; production always uses the real `codeIntelAssembly.codeIntelContext` (OFF unless `STA_CODE_INTEL=on`). */
+  codeIntelContext?: (input: Parameters<typeof defaultCodeIntelContext>[0], deps?: CodeIntelSliceDeps) => ReturnType<typeof defaultCodeIntelContext>;
 }
 
 /**
@@ -281,6 +293,43 @@ async function fingerprintVerdict(result: AgentExecutorResult, projectRoot: stri
 const NO_FALLBACK_HOPS = 0;
 
 /**
+ * T-V8-011 — the packet's `retrieval_candidates` (`artifacts/executionPacket.ts`
+ * `RetrievalCandidateSchema`), populated from a task-specific query instead of
+ * the bare module name. Historically this field was never populated at all —
+ * `compileExecutionPacket` always saw `retrievalCandidates: undefined` here —
+ * so PM's authored `Query:` retrieval hint never reached an actual lookup.
+ *
+ * Additive by design, same posture as every other optional enrichment in this
+ * file: OFF by default (`STA_CODE_INTEL`), and any missing input or failure
+ * answers `[]` rather than blocking packet compilation. A v1/legacy
+ * RuntimeTask has no `contract` to query from, so it answers `[]` too — the
+ * legacy compatibility path already refuses to reach this branch at all
+ * (`RuntimeTaskV2Schema.safeParse` inside `compileExecutionPacket`).
+ */
+async function packetRetrievalCandidates(
+  opts: RuntimeExecutorOptions,
+  req: AgentExecutorRequest,
+  runtimeTask: RuntimeTask,
+  moduleName: string,
+  targetRoot: string,
+  targetId: string | undefined,
+  baseRevision: string,
+): Promise<ReturnType<typeof retrievalCandidatesForPacket> | undefined> {
+  if (!("version" in runtimeTask) || runtimeTask.version !== 2) return undefined;
+  try {
+    const changedFiles = await opts.changedFiles?.(req.taskId).catch(() => []) ?? [];
+    const query = buildTaskRetrievalQuery(runtimeTask.contract, { moduleName, changedFiles });
+    const codeIntel = opts.codeIntelContext ?? defaultCodeIntelContext;
+    const result = await codeIntel({ stage: req.stage, taskId: req.taskId, moduleName, targetRoot, targetId, query, revision: baseRevision });
+    if (result.candidates.length === 0) return undefined;
+    return retrievalCandidatesForPacket(result.candidates, targetRoot, baseRevision);
+  } catch {
+    // Discovery enrichment must never block packet compilation.
+    return undefined;
+  }
+}
+
+/**
  * `ADR-025` #4 — an automatic camp switch inside a `🔒 Security gate` phase
  * invalidates that phase's earlier `qa-engineer` / `security` passes.
  *
@@ -378,15 +427,17 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     if (runtimeTask) {
       try {
         const runtimeStateRoot = threeRepo?.roots.bindingRoot ?? opts.projectRoot;
+        const baseRevision = await (opts.packetBaseRevision ?? resolveTargetRevision)(executionRoot);
         const packet = compileExecutionPacket({
           req,
           role,
           runtimeTask,
           contractScope: { allow: guards.writeAllow, deny: guards.writeDeny },
           attempt: nextExecutionPacketAttempt(runtimeStateRoot, req.taskId, req.stage),
-          baseRevision: await (opts.packetBaseRevision ?? resolveTargetRevision)(executionRoot),
+          baseRevision,
           config: { target: loadTargetConfig(executionRoot), guardStackRules: resolveGuardStackRules(role, executionRoot) },
           dependencyEvidence: opts.dependencyEvidence?.(req.taskId),
+          retrievalCandidates: await packetRetrievalCandidates(opts, req, runtimeTask, moduleName, executionRoot, workRoot?.targetId, baseRevision),
           extra: opts.extraInstruction,
         });
         if (JSON.stringify([...packet.scope.allow].sort()) !== JSON.stringify([...new Set(guards.writeAllow)].sort())) throw new Error("packet scope differs from the enforced stage contract; recompile with current stage grants");
@@ -419,7 +470,11 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       if (opts.runtimeTask || threeRepo) return failResult(`task ${req.taskId}: missing semantic RuntimeTask; author canonical task fields and explicitly recompile before execution`);
       // Historical or embedded callers may have no RuntimeTask. Production
       // tasks created since state schema v13 always take the packet path above.
-      promptParts = buildPromptParts(req, opts.extraInstruction, {
+      // T-V8-011: once a doc slice was already narrowed using this HANDOFF, its
+      // provenance is visible in the kept text — printing the same references
+      // again as raw JSON would be duplication, not context.
+      const promptReq = { ...req, context: suppressRawHandoffWhenNarrowed(req.context, stageContext.selected) };
+      promptParts = buildPromptParts(promptReq, opts.extraInstruction, {
         docs: stageContext.docs,
         knowledge: stageContext.knowledge,
         codeIntel: stageContext.codeIntel,

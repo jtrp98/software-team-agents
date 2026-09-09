@@ -25,6 +25,9 @@ export interface ContextComposition {
   fallback_to_full_documents: number;
   fallback_documents: { doc: string; reason: string }[];
   direct_file_reads: number;
+  /** T-V8-011 — provenance for the retrieval query codeIntel was actually queried with. */
+  retrieval_query_source: "task" | "module-fallback";
+  retrieval_query_reason: string;
 }
 
 export interface ContextCommandResult {
@@ -139,6 +142,8 @@ export async function buildContextCommand(input: ContextCommandInput): Promise<C
         .filter((doc) => doc.fullDocument)
         .map((doc) => ({ doc: doc.doc, reason: doc.reason })),
       direct_file_reads: context.directFileReads,
+      retrieval_query_source: context.retrievalQuery.source,
+      retrieval_query_reason: context.retrievalQuery.reason,
     },
   };
 }
@@ -160,6 +165,7 @@ export function renderContextCommand(result: ContextCommandResult): string {
     `- role=${result.role} module=${result.module} phases=${scope} phase_source=${result.phaseResolution}`,
     `- docs=${c.doc_chars} chars rendered; selected=${c.doc_selected_chars}/${c.doc_chars_before} source chars; slicing_saved=${c.saved_pct}%`,
     `- knowledge=${c.knowledge_chars} chars; code_intel=${c.code_intel_chars} chars; direct_file_reads=${c.direct_file_reads}; fallback_to_full=${c.fallback_to_full_documents}`,
+    `- retrieval_query: source=${c.retrieval_query_source} — ${c.retrieval_query_reason}`,
     ...c.fallback_documents.map((f) => `  - fallback: ${f.doc} — ${f.reason}`),
     ...fallbackUnknownLines,
   ].join("\n");

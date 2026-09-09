@@ -152,6 +152,70 @@ describe("createRuntimeExecutor — what reaches the adapter (T108)", () => {
     expect(persisted.scope.allow).toEqual(["server/**"]);
   });
 
+  it("T-V8-011: retrieval candidates are populated from a task-specific query, not the bare module name, and verified against the real file", async () => {
+    const root = tmpProject();
+    const runtime = new MockRuntimeAdapter();
+    const runtimeTask = runtimeTaskFixture(root);
+    let seenModuleName: string | undefined;
+    let seenDescription: string | undefined;
+    const executor = createRuntimeExecutor({
+      runtime,
+      projectRoot: root,
+      moduleName: () => "sales-crm",
+      guards: () => ({ ...NO_GUARDS, writeAllow: ["server/**"] }),
+      runtimeTask: () => runtimeTask,
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      sliceModuleDocs: false,
+      codeIntelContext: async (input) => {
+        seenModuleName = input.moduleName;
+        seenDescription = input.query?.description;
+        return {
+          slices: [], used: true, queryReason: input.query?.reason ?? "",
+          candidates: [{ location: { file: "src/evidence.ts", line: 1 }, symbol: "fixtureEvidence", provenance: "extracted", score: 1 }],
+        };
+      },
+    });
+
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-PACKET", context: [] });
+    const persisted = readExecutionPacket(latestExecutionPacketPath(root, "T-PACKET", AgentStage.BACKEND_ENGINEER)!);
+
+    // Generic-query replacement: the description sent for discovery is the
+    // task's own query text (its Query hint from retrievalHints), not the
+    // bare module name that reached codeIntelSlices before T-V8-011.
+    expect(seenDescription).toContain("Locate definitions and references for the selected fixture design.");
+    expect(seenDescription).not.toBe(seenModuleName);
+
+    // The candidate is verified: real path, real hash off the current working tree.
+    expect(persisted.retrieval_candidates).toEqual([{
+      path: path.resolve(root, "src/evidence.ts"), symbol: "fixtureEvidence",
+      provenance: "extracted discovery via findRelevantCode",
+      revision: FIXTURE_REVISION, hash: expect.any(String),
+    }]);
+    expect(persisted.text).toContain("src/evidence.ts");
+    expect(result.outcome.result).toBe("PASS");
+  });
+
+  it("T-V8-011: retrieval candidates stay empty (never block compilation) when code intelligence finds nothing or the seam is absent", async () => {
+    const root = tmpProject();
+    const runtime = new MockRuntimeAdapter();
+    const runtimeTask = runtimeTaskFixture(root);
+    const executor = createRuntimeExecutor({
+      runtime,
+      projectRoot: root,
+      moduleName: () => "sales-crm",
+      guards: () => ({ ...NO_GUARDS, writeAllow: ["server/**"] }),
+      runtimeTask: () => runtimeTask,
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      sliceModuleDocs: false,
+      codeIntelContext: async () => { throw new Error("provider unavailable"); },
+    });
+
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-PACKET", context: [] });
+    const persisted = readExecutionPacket(latestExecutionPacketPath(root, "T-PACKET", AgentStage.BACKEND_ENGINEER)!);
+    expect(persisted.retrieval_candidates).toEqual([]);
+    expect(result.outcome.result).toBe("PASS");
+  });
+
   it("passes the guard set through untouched, so the adapter can wire it into its own binding", async () => {
     const guards: RuntimeGuards = {
       writeAllow: ["src/**"],
@@ -450,6 +514,40 @@ describe("metrics — normalising any runtime's usage into the run log (T26/T28)
     expect(result.outcome.result).toBe("FAIL");
     expect(result.outcome.failure_reason).toContain("failed contract validation");
     expect(runtime.requests).toHaveLength(0);
+  });
+
+  it("T-V8-011: raw HANDOFF JSON is omitted from the prompt once doc slicing already narrowed using it — its provenance stays", async () => {
+    const root = tmpProject();
+    const docs = path.join(root, "_docs", "module", "sales-crm");
+    fs.mkdirSync(docs, { recursive: true });
+    fs.writeFileSync(path.join(docs, "design.md"), [
+      "# Design",
+      "## Feature-by-Feature Feasibility", "safe",
+      "## Risks & Dependencies", "safe",
+      "## Open Questions", "none",
+      "## Orders Contract — DES-001", "selected",
+      "## Future Contract — DES-997", "future ".repeat(100),
+      "## Future Contract — DES-998", "future ".repeat(100),
+      "## Future Contract — DES-999", "future ".repeat(100),
+    ].join("\n"));
+    const runtime = new MockRuntimeAdapter();
+    const handoff = {
+      task_id: "T-1", implements: ["DES-001"], module: "sales-crm", phase: 1,
+      constraint_refs: [], contract_refs: { produces: ["design.md#Orders-Contract-%E2%80%94-DES-001"], consumes: [] },
+      decision_refs: [], test_refs: [], artifact_refs: [], open_findings: [], budget: null,
+    };
+    const result = await executorFor(runtime, { projectRoot: root, phases: () => [1] })({
+      stage: AgentStage.PROJECT_MANAGER,
+      taskId: "T-1",
+      context: [{ source: ArtifactType.HANDOFF, content: JSON.stringify(handoff) }],
+    });
+    expect(result.outcome.result).toBeDefined();
+    const prompt = runtime.requests[0].prompt;
+    expect(prompt).toContain("slice pointed to by the structured HANDOFF");
+    expect(prompt).toContain("Orders Contract");
+    expect(prompt).not.toContain('"task_id":"T-1"');
+    expect(prompt).not.toContain('"contract_refs"');
+    expect(prompt).toContain("omitted");
   });
 
   it("T-V3TOK-052 property 8 — sta context fragments produce the byte-identical sta run prompt", async () => {

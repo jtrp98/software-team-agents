@@ -1428,6 +1428,17 @@ async function composeProductionTaskExecutor(
     threeRepoTask: resolveThreeRepoTaskLookup(args.projectRoot, store),
     enforceRoleWorkflow: fs.existsSync(path.join(args.projectRoot, "knowledge")),
     extraInstruction: `Environment: ${orchestrator.environment} — ${describeEnvironment(orchestrator.environment, args.projectRoot)}`,
+    // T-V8-011 — feeds a real diff into task-specific retrieval when one
+    // exists (a QA round, a repair attempt); a fresh DEV round simply has none yet.
+    changedFiles: async (id) => {
+      try {
+        const roots = resolveQaWorkRoots(args.projectRoot, id, store);
+        const results = await Promise.allSettled(roots.map((root) => gitChangedFiles(root)));
+        return [...new Set(results.flatMap((result) => (result.status === "fulfilled" ? result.value : [])))];
+      } catch {
+        return [];
+      }
+    },
   });
 
   const qaRoots = resolveQaWorkRoots(args.projectRoot, taskId, store);

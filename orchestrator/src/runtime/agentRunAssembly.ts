@@ -27,6 +27,7 @@ import { codeIntelSlices } from "./codeIntelAssembly.js";
 import { knowledgeBriefFor } from "./knowledgeBriefAssembly.js";
 import { assertContextComposition, emptyContextBudgetComposition, type ContextBudgetComposition } from "../context/contextBudget.js";
 import { renderBusinessInputEvidence } from "../gates/businessInput.js";
+import { buildTaskRetrievalQuery, type TaskRetrievalQuery } from "../context/retrievalQuery.js";
 
 /**
  * This module is the deterministic Task Compiler: everything about running a
@@ -224,6 +225,35 @@ export function handoffFromContext(context: readonly ContextItem[]): HandoffArti
   return validateArtifact(ArtifactType.HANDOFF, JSON.parse(item.content));
 }
 
+/**
+ * T-V8-011 — drops the raw HANDOFF JSON from model-visible `req.context` once
+ * `renderSlicedDocs` has already narrowed a doc slice using that same
+ * HANDOFF (`docSelection.ts` tags the resulting `SelectedContext.reason` with
+ * "narrowed by HANDOFF references" — see `narrowSelectedContext`). At that
+ * point every reference the handoff carries is already visible, with
+ * provenance, in the kept section text and the slice notice; printing the
+ * compact index a second time as raw JSON is duplication, not context. When
+ * nothing was narrowed the raw record is the only place those references
+ * appear, so it stays.
+ */
+export function suppressRawHandoffWhenNarrowed(
+  context: readonly ContextItem[],
+  selected: readonly SelectedContext[],
+): ContextItem[] {
+  const narrowed = selected.some((doc) => doc.reason.includes("narrowed by HANDOFF references"));
+  if (!narrowed) return [...context];
+  return context.map((item) =>
+    item.source === ArtifactType.HANDOFF
+      ? {
+          ...item,
+          content:
+            "(omitted — the module documents above were already narrowed using this HANDOFF's references; their provenance note names it. " +
+            "Run `sta context` for the raw pointer record if you need it.)",
+        }
+      : item,
+  );
+}
+
 export interface StageContextOptions extends SliceOptions {
   /** Root used for framework/legacy knowledge lookup; docs may live elsewhere. */
   projectRoot: string;
@@ -238,6 +268,8 @@ export interface StageContextOptions extends SliceOptions {
 export interface StageContextAssembly extends SlicedModuleDocs {
   knowledge: string[];
   codeIntel: string[];
+  /** T-V8-011 — the retrieval query codeIntel was actually queried with, for `sta context` evidence/provenance. */
+  retrievalQuery: TaskRetrievalQuery;
 }
 
 /**
@@ -254,6 +286,30 @@ export function referencedKnowledgeIds(docsRoot: string, moduleName: string, tas
   } catch {
     return [];
   }
+}
+
+/**
+ * T-V8-011 — the retrieval query a stage's optional code-intelligence lookup
+ * should use, built from the exact canonical task named by `taskId` rather
+ * than the module name alone. Only a canonical (v1, `"version" in task`)
+ * plan row carries retrieval-relevant fields; a legacy row or an
+ * unresolvable plan/task falls back to the module name, safely and visibly,
+ * exactly like `referencedKnowledgeIds` above does for knowledge ids.
+ */
+export function taskRetrievalQueryFor(
+  docsRoot: string,
+  moduleName: string,
+  taskId: string | undefined,
+  opts: { changedFiles?: readonly string[] } = {},
+): TaskRetrievalQuery {
+  try {
+    const plan = taskId ? readModuleDoc(docsRoot, moduleName, "plan.md") : null;
+    const task = plan === null ? undefined : readWorkPlan(plan).tasks.find(task => task.id === taskId);
+    if (task && "version" in task) return buildTaskRetrievalQuery(task, { moduleName, changedFiles: opts.changedFiles });
+  } catch {
+    // Falls through to the safe module-name query below — same additive posture as referencedKnowledgeIds.
+  }
+  return buildTaskRetrievalQuery(undefined, { moduleName, changedFiles: opts.changedFiles });
 }
 
 /**
@@ -277,6 +333,7 @@ export async function assembleStageContext(stage: AgentStage, opts: StageContext
     referencedIds: referencedKnowledgeIds(opts.docsRoot, opts.moduleName, opts.taskId),
     targetRoot: opts.targetRoot,
   });
+  const retrievalQuery = taskRetrievalQueryFor(opts.docsRoot, opts.moduleName, opts.taskId);
   let codeIntel: string[] = [];
   try {
     codeIntel = await codeIntelSlices({
@@ -285,11 +342,12 @@ export async function assembleStageContext(stage: AgentStage, opts: StageContext
       moduleName: opts.moduleName,
       targetRoot: opts.targetRoot,
       targetId: opts.targetId,
+      query: retrievalQuery,
     });
   } catch {
     codeIntel = [];
   }
-  return { ...sliced, knowledge, codeIntel };
+  return { ...sliced, knowledge, codeIntel, retrievalQuery };
 }
 
 export interface PromptComposition {

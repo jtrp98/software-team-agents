@@ -1,4 +1,4 @@
-import { runtimeTaskFixture, FIXTURE_REVISION } from "./packetFixture.testSupport.js";
+import { runtimeTaskFixture, writePacketPlan, fixtureTask, FIXTURE_REVISION } from "./packetFixture.testSupport.js";
 import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -6,7 +6,18 @@ import * as path from "node:path";
 import { ArtifactType, type HandoffArtifact } from "../artifacts/schemas.js";
 import { AgentStage } from "../types.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
-import { buildPrompt, buildPromptParts, compileExecutionPacket, handoffFromContext, referencedKnowledgeIds, renderExecutionPacketSections, renderSlicedDocs, sliceModuleDocsWithSavings } from "./agentRunAssembly.js";
+import {
+  buildPrompt,
+  buildPromptParts,
+  compileExecutionPacket,
+  handoffFromContext,
+  referencedKnowledgeIds,
+  renderExecutionPacketSections,
+  renderSlicedDocs,
+  sliceModuleDocsWithSavings,
+  suppressRawHandoffWhenNarrowed,
+  taskRetrievalQueryFor,
+} from "./agentRunAssembly.js";
 import type { SelectedContext } from "../context/docSelection.js";
 import type { ContextManager } from "../context/contextManager.js";
 
@@ -155,6 +166,64 @@ describe("sliceModuleDocsWithSavings", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("taskRetrievalQueryFor (T-V8-011)", () => {
+  it("builds a task-specific query from the canonical plan row named by taskId", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-retrieval-query-"));
+    try {
+      const task = fixtureTask({ id: "T-RQ1", produces: [] });
+      writePacketPlan(root, [task], "sales");
+      const query = taskRetrievalQueryFor(root, "sales", "T-RQ1");
+      expect(query.source).toBe("task");
+      expect(query.description).toContain(task.objective);
+      expect(query.description).toContain("Locate definitions and references for the selected fixture design.");
+      expect(query.ids).toContain("T-RQ1");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the module name, safely, for an unknown task id or missing plan", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-retrieval-query-fallback-"));
+    try {
+      const task = fixtureTask({ id: "T-RQ1", produces: [] });
+      writePacketPlan(root, [task], "sales");
+      expect(taskRetrievalQueryFor(root, "sales", "T-UNKNOWN")).toMatchObject({ source: "module-fallback", description: "sales" });
+      expect(taskRetrievalQueryFor(root, "no-such-module", "T-RQ1")).toMatchObject({ source: "module-fallback", description: "no-such-module" });
+      expect(taskRetrievalQueryFor(root, "sales", undefined)).toMatchObject({ source: "module-fallback", description: "sales" });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("suppressRawHandoffWhenNarrowed (T-V8-011)", () => {
+  const handoffItem = { source: ArtifactType.HANDOFF, content: JSON.stringify({ task_id: "T-1" }) };
+  const otherItem = { source: ArtifactType.REQUIREMENTS, content: "REQ-1" };
+
+  function selectedWith(reason: string): SelectedContext[] {
+    return [{ doc: "design", text: "x", kept: [], skipped: [], unknownSections: [], unknownSectionReasons: [], fullDocument: false, reason, bytesBefore: 1, bytesAfter: 1 }];
+  }
+
+  it("leaves context untouched when nothing was narrowed by the handoff", () => {
+    const selected = selectedWith("§10 slice for backend-engineer");
+    expect(suppressRawHandoffWhenNarrowed([handoffItem, otherItem], selected)).toEqual([handoffItem, otherItem]);
+  });
+
+  it("replaces only the raw HANDOFF item's content once a slice was narrowed by it — every other item is untouched", () => {
+    const selected = selectedWith("§10 slice for backend-engineer; narrowed by HANDOFF references within CONTEXT_POLICY");
+    const result = suppressRawHandoffWhenNarrowed([handoffItem, otherItem], selected);
+    expect(result[0].source).toBe(ArtifactType.HANDOFF);
+    expect(result[0].content).not.toContain('"task_id"');
+    expect(result[0].content).toContain("omitted");
+    expect(result[1]).toEqual(otherItem);
+  });
+
+  it("is a no-op when context carries no HANDOFF item at all", () => {
+    const selected = selectedWith("narrowed by HANDOFF references");
+    expect(suppressRawHandoffWhenNarrowed([otherItem], selected)).toEqual([otherItem]);
   });
 });
 

@@ -50,6 +50,8 @@ describe("recordContextComposition (T-V5-037)", () => {
     fallback_to_full_documents: 0,
     fallback_documents: [],
     direct_file_reads: 2,
+    retrieval_query_source: "module-fallback",
+    retrieval_query_reason: "test fixture",
   };
 
   it("persists a measured assembled size and estimated tokens through the existing session-record path", () => {
