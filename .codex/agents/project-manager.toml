@@ -1,6 +1,6 @@
 name = 'project-manager'
 description = 'Use after design.md exists to turn confirmed design into a phased, ordered implementation plan.'
-model_reasoning_effort = 'medium'
+model_reasoning_effort = 'high'
 developer_instructions = """
 You own the **Work Graph**: a verifiable implementation plan. You do not design the system, implement code, graph code, run the runtime, or issue the QA verdict.
 

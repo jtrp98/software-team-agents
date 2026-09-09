@@ -80,6 +80,24 @@ describe("durable wave run journal", () => {
     expect(readRunManifest(root, RUN_ID).module).toBe("orders");
   });
 
+  it("T-V8-005 persists effective route policy while old manifests remain readable without re-resolution", () => {
+    const currentRoot = tempRoot();
+    const current = manifest({
+      effort: "high",
+      route_basis: "tier=T4,model=task-tier:T4,effort=task-tier:T4",
+      route_requested: { taskTier: "T4", roleDefaultTier: "T5" },
+    });
+    writeRunManifest(currentRoot, current);
+    expect(readRunManifest(currentRoot, RUN_ID)).toEqual(current);
+
+    const legacyRoot = tempRoot();
+    const legacy = manifest();
+    writeRunManifest(legacyRoot, legacy);
+    expect(readRunManifest(legacyRoot, RUN_ID)).toEqual(legacy);
+    expect(readRunManifest(legacyRoot, RUN_ID)).not.toHaveProperty("effort");
+    expect(readRunManifest(legacyRoot, RUN_ID)).not.toHaveProperty("route_basis");
+  });
+
   it("generates sortable ULID-style run ids", () => {
     const random = () => Buffer.alloc(10);
     const first = createRunId(() => 1_000, random);

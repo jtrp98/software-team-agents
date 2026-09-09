@@ -15,6 +15,7 @@ import {
   parseCommandMd,
   renderCodexBinding,
   renderAgentsPointer,
+  renderAgentPolicyCompatibility,
   renderCodexSkill,
   renderOpenCodeBinding,
   renderOpenCodeCommand,
@@ -26,6 +27,7 @@ import {
   renderAgyHooksJson,
   renderAgyManagedHooks,
 } from "./bindingGenerator.js";
+import type { ModelTierPolicy } from "./modelTiers.js";
 import { renderGuardRuleBlock } from "../agents/pathPermissions.js";
 import { extractDeveloperInstructions } from "./codexAdapter.js";
 
@@ -75,6 +77,7 @@ describe("parseAgentMd", () => {
   it("reads name/description/effort and leaves other fields out of the way", () => {
     const parsed = parseAgentMd(SAMPLE_MD);
     expect(parsed.name).toBe("qa-engineer");
+    expect(parsed.model).toBe("sonnet");
     expect(parsed.effort).toBe("high");
     expect(parsed.description).toContain('ask "ตรวจงานหน่อย"');
     expect(parsed.body).toBe("You are QA. Never mark verified without inspecting code.");
@@ -88,6 +91,25 @@ describe("parseAgentMd", () => {
   it("fails loudly when name or description is missing", () => {
     expect(() => parseAgentMd("no frontmatter at all")).toThrow(/fence/);
     expect(() => parseAgentMd("---\ntools: Read\n---\nbody")).toThrow(/name/);
+  });
+});
+
+describe("T-V8-005 generated model-policy compatibility frontmatter", () => {
+  const policy = {
+    tiers: {
+      T3: { reserved: false, camps: { anthropic: { model: "central-model", effort: "medium", notes: "human choice" } } },
+    },
+    roleDefaults: { "qa-engineer": "T3" },
+    legacyRoleDefaults: false,
+  } as unknown as ModelTierPolicy;
+
+  it("replaces model/effort from the central role Tier without changing authored body fields", () => {
+    const rendered = renderAgentPolicyCompatibility(SAMPLE_MD, policy);
+    expect(rendered).toContain("# sta:model-policy");
+    expect(rendered).toContain("model: central-model");
+    expect(rendered).toContain("effort: medium");
+    expect(rendered).not.toContain("model: sonnet");
+    expect(parseAgentMd(rendered).body).toBe(parseAgentMd(SAMPLE_MD).body);
   });
 });
 

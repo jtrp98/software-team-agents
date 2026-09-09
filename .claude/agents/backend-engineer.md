@@ -2,6 +2,7 @@
 name: backend-engineer
 description: Use for backend API, database, business-logic, auth, and backend scaffolding work. Implement the Target-resolved stack; do not choose a replacement.
 tools: Write, Edit, Read, Glob, Grep, Bash
+# sta:model-policy — model/effort generated from model-tiers.yaml
 model: sonnet
 effort: medium
 version: 3

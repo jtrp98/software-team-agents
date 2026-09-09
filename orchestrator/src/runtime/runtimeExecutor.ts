@@ -46,7 +46,8 @@ import { RunLog } from "../observability/runLog.js";
 import { writeExecutionPacket, nextExecutionPacketAttempt } from "../state/runtimeArtifacts.js";
 import { resolveTargetRevision } from "../codeintel/targetRevision.js";
 import type { DependencyEvidence } from "../artifacts/executionPacket.js";
-import { loadModelTiers, type ModelTierId, type ModelTiers } from "./modelTiers.js";
+import { formatModelPolicyBasis } from "./tierRouting.js";
+import type { ModelTierPolicy } from "./modelTiers.js";
 import { captureChangeSetFingerprint } from "../qa/changeSource.js";
 
 /**
@@ -82,9 +83,8 @@ export interface RuntimeExecutorOptions {
   /**
    * Which model a role runs on.
    *
-   * Defaults to the role definition's own `model:` frontmatter — T58's answer,
-   * and still the only declaration of it. This function is the seam T112 fills
-   * when a per-task or per-policy override has to layer over that.
+   * Embedded compatibility only. Production registry routing resolves the V8
+   * policy; callers without a registry retain the role definition's model.
    */
   model?: (role: string) => string | undefined;
   timeoutMs?: number;
@@ -128,8 +128,14 @@ export interface RuntimeExecutorOptions {
   taskRunLog?: (taskId: string) => RunLog;
   /** The verified capability picture per runtime id, passed through to `resolveRuntimeRoute` so its capability-policy diagnostic uses confirmed facts instead of a static claim, when available. */
   verifiedCapabilities?: Readonly<Record<string, ReadonlySet<RuntimeCapability>>>;
-  /** Optional plan tier lookup. An absent table deliberately leaves routing unchanged. */
+  /** Optional canonical task Tier lookup. */
   planTier?: (taskId: string) => string | undefined;
+  /** Policy fixture seam; production loads model-tiers.yaml when this is undefined. */
+  modelPolicy?: ModelTierPolicy | null;
+  /** Replays persisted runtime/model/effort without consulting the current policy/frontmatter. */
+  frozenModelRoute?: boolean;
+  /** Original persisted winner basis for a frozen route. */
+  frozenRoutingBasis?: string;
 }
 
 /**
@@ -425,7 +431,11 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // channel that can set these; the embedded compatibility path below never
     // forwards a model past an adapter that ignores it, exactly as before.
     let activeModelExplicit = false;
-    let activeEffort: string | undefined;
+    let activeEffort: string | undefined = opts.registry ? undefined : resolveAgentEffort(opts.projectRoot, role) ?? undefined;
+    // Legacy frontmatter effort was telemetry-only before V8. Keep that
+    // compatibility contract while forwarding centrally resolved or operator
+    // effort to adapters.
+    let activeAdapterEffort: string | undefined;
     let routeAvailability: Readonly<Record<string, { available: boolean; reason?: string }>> = {};
     const routingDiagnostics: string[] = [];
     let requestedRuntime: string | undefined;
@@ -437,14 +447,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     let preRouteSkips: readonly RuntimeRouteAttempt[] = [];
     const classification = opts.classification?.(req.taskId);
     if (opts.registry) {
-      let tier: { id: ModelTierId; table: ModelTiers } | undefined;
       const tierId = opts.planTier?.(req.taskId);
-      try {
-        const table = loadModelTiers(opts.projectRoot);
-        if (table && tierId && tierId !== "T1" && tierId in table) tier = { id: tierId as ModelTierId, table };
-      } catch (error) {
-        routingDiagnostics.push(`model tiers were ignored: ${error instanceof Error ? error.message : String(error)}`);
-      }
       routeAvailability = await opts.registry.probeAll();
       const route = resolveRuntimeRoute({
         role,
@@ -458,12 +461,16 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         availability: routeAvailability,
         hasTargetWrite,
         verifiedCapabilities: opts.verifiedCapabilities,
-        tier,
+        modelPolicy: opts.frozenModelRoute ? null : opts.modelPolicy,
+        taskTier: opts.frozenModelRoute ? undefined : tierId,
+        allowLegacyPolicyCompatibility: !opts.frozenModelRoute,
       });
       routingDiagnostics.push(...route.diagnostics);
       requestedRuntime = route.requested.runtimeId;
       requestedModel = route.requested.model;
-      routingBasis = `level-${route.precedenceLevel}`;
+      routingBasis = opts.frozenRoutingBasis ?? (route.selected
+        ? `level-${route.precedenceLevel};${formatModelPolicyBasis(route.selected.policyResolution)}`
+        : `level-${route.precedenceLevel}`);
       if (route.error || !route.selected) {
         const routeFailure = [route.error ?? "runtime route resolved no selected candidate", ...route.diagnostics].join(" | ");
         const failed = failResult(
@@ -486,6 +493,9 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       activeModel = route.selected.model ?? activeModel;
       activeModelExplicit = route.selected.modelExplicit ?? false;
       activeEffort = route.effort;
+      activeAdapterEffort = route.selected.policyResolution.effortBasis === "legacy-frontmatter"
+        ? undefined
+        : route.effort;
       fallbackQueue = route.candidates.slice(1);
       // A candidate the route filtered out before reaching the selected one is a
       // hop too: the stage left the runtime the log records as requested.
@@ -585,7 +595,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           {
             model: activeModel,
             promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
-            effort: resolveAgentEffort(opts.projectRoot, role) ?? undefined,
+            effort: activeEffort,
             context_chars: prompt.length,
             estimated_input_tokens: contextBudget.estimatedInputTokens,
             ...promptParts.composition,
@@ -615,7 +625,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       const declared = {
         model: activeModel,
         promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
-        effort: resolveAgentEffort(opts.projectRoot, role) ?? undefined,
+        effort: activeEffort,
         context_chars: prompt.length,
         estimated_input_tokens: contextBudget.estimatedInputTokens,
         composition: promptParts.composition,
@@ -667,7 +677,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           prompt,
           model: declared.model,
           modelExplicit: activeModelExplicit,
-          effort: activeEffort,
+          effort: activeAdapterEffort,
           autonomy,
           guards,
           // The framework's own channel for telling a guard which role is
@@ -751,6 +761,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       activeModel = next.model ?? resolveModel(role);
       activeModelExplicit = next.modelExplicit ?? false;
       activeEffort = next.effort;
+      activeAdapterEffort = next.policyResolution.effortBasis === "legacy-frontmatter"
+        ? undefined
+        : next.effort;
+      routingBasis = routingBasis?.split(";")[0] + `;${formatModelPolicyBasis(next.policyResolution)}`;
     }
 
     if (result.status !== "OK") {

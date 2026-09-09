@@ -2,7 +2,8 @@
 name: test-planner
 description: Use after plan.md exists to define the test strategy before implementation. Writes test-plan.md; never writes or runs tests.
 tools: Read, Glob, Grep, Write, Edit
-model: sonnet
+# sta:model-policy — model/effort generated from model-tiers.yaml
+model: opus
 effort: medium
 version: 2
 ---

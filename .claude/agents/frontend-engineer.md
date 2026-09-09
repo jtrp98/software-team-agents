@@ -2,6 +2,7 @@
 name: frontend-engineer
 description: Use for frontend pages, components, styling, state, and UI scaffolding. Implement the Target-resolved stack; do not choose a replacement.
 tools: Write, Edit, Read, Glob, Grep, Bash
+# sta:model-policy — model/effort generated from model-tiers.yaml
 model: sonnet
 effort: medium
 version: 3

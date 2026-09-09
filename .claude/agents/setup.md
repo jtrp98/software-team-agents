@@ -2,7 +2,8 @@
 name: setup
 description: Use once per project before feature work to scaffold the actual codebase. Use when no usable package/app/schema scaffold exists.
 tools: Bash, Write, Edit, Read, Glob, Grep, AskUserQuestion
-model: sonnet
+# sta:model-policy — model/effort generated from model-tiers.yaml
+model: haiku
 effort: low
 version: 3
 ---

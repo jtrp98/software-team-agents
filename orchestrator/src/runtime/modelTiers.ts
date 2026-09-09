@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parse as parseYaml } from "yaml";
+import { AgentStage } from "../types.js";
 
 /** The stable quality labels in ADR-022; bindings remain human-owned YAML. */
 export const MODEL_TIER_IDS = ["T1", "T2", "T3", "T4", "T5", "T6"] as const;
@@ -23,6 +24,21 @@ export interface ModelTier {
 
 export type ModelTiers = Readonly<Record<ModelTierId, ModelTier>>;
 
+/** Every executable role may have one central default or explicitly defer to the runtime. */
+export const MODEL_POLICY_ROLES = Object.values(AgentStage).filter((role) => role !== AgentStage.HUMAN);
+export const RUNTIME_DEFAULT_TIER = "runtime-default" as const;
+export type RoleDefaultTier = ModelTierId | typeof RUNTIME_DEFAULT_TIER;
+
+/**
+ * The human-owned execution policy. `legacyRoleDefaults` is true only for a
+ * pre-V8 tier file, whose agent frontmatter remains a compatibility input.
+ */
+export interface ModelTierPolicy {
+  readonly tiers: ModelTiers;
+  readonly roleDefaults: Readonly<Record<string, RoleDefaultTier>>;
+  readonly legacyRoleDefaults: boolean;
+}
+
 export class ModelTiersInvalidError extends Error {
   constructor(public readonly problems: readonly string[]) {
     super(`model-tiers.yaml is invalid:\n${problems.map((problem) => `  - ${problem}`).join("\n")}`);
@@ -38,7 +54,7 @@ export function modelTiersPath(projectRoot: string): string {
  * Parse only the file's declared shape. This deliberately says nothing about
  * whether a model is adequate for a tier or comparable with another camp.
  */
-export function parseModelTiers(raw: string): ModelTiers {
+export function parseModelTierPolicy(raw: string): ModelTierPolicy {
   let parsed: unknown;
   try {
     parsed = parseYaml(raw);
@@ -48,7 +64,10 @@ export function parseModelTiers(raw: string): ModelTiers {
 
   const problems: string[] = [];
   const root = record(parsed);
-  const tierValues = root?.tiers;
+  if (!root) throw new ModelTiersInvalidError(["root must be a mapping"]);
+  allowedKeys(root, ["role_defaults", "tiers"], "root", problems);
+
+  const tierValues = root.tiers;
   const tiers = record(tierValues);
   if (!tiers) {
     throw new ModelTiersInvalidError(['"tiers" must be a mapping']);
@@ -86,15 +105,47 @@ export function parseModelTiers(raw: string): ModelTiers {
     }
     if (Object.keys(cells).length === MODEL_TIER_CAMPS.length) result[tierId] = { reserved, camps: cells };
   }
+  const roleDefaults = {} as Record<string, RoleDefaultTier>;
+  const legacyRoleDefaults = root.role_defaults === undefined;
+  if (!legacyRoleDefaults) {
+    const declared = record(root.role_defaults);
+    if (!declared) {
+      problems.push('"role_defaults" must be a mapping');
+    } else {
+      exactKeys(declared, MODEL_POLICY_ROLES, "role_defaults", problems);
+      for (const role of MODEL_POLICY_ROLES) {
+        const value = declared[role];
+        if (value === RUNTIME_DEFAULT_TIER) {
+          roleDefaults[role] = value;
+        } else if (typeof value !== "string" || !(MODEL_TIER_IDS as readonly string[]).includes(value)) {
+          problems.push(`role_defaults.${role} must be one of ${MODEL_TIER_IDS.join(", ")} or ${RUNTIME_DEFAULT_TIER}`);
+        } else if (value === "T1") {
+          problems.push(`role_defaults.${role} must not use reserved T1; T1 requires an explicit human operator choice`);
+        } else {
+          roleDefaults[role] = value as ModelTierId;
+        }
+      }
+    }
+  }
+
   if (problems.length > 0) throw new ModelTiersInvalidError(problems);
-  return result as ModelTiers;
+  return { tiers: result as ModelTiers, roleDefaults, legacyRoleDefaults };
+}
+
+/** Compatibility projection retained for callers that need only the tier cells. */
+export function parseModelTiers(raw: string): ModelTiers {
+  return parseModelTierPolicy(raw).tiers;
 }
 
 /** Missing table means the optional tier capability is not configured. */
 export function loadModelTiers(projectRoot: string): ModelTiers | null {
+  return loadModelTierPolicy(projectRoot)?.tiers ?? null;
+}
+
+export function loadModelTierPolicy(projectRoot: string): ModelTierPolicy | null {
   const target = modelTiersPath(projectRoot);
   if (!fs.existsSync(target)) return null;
-  return parseModelTiers(fs.readFileSync(target, "utf8"));
+  return parseModelTierPolicy(fs.readFileSync(target, "utf8"));
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -107,6 +158,11 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[], 
   const expectedSet = new Set(expected);
   for (const key of expected) if (!(key in value)) problems.push(`${location} is missing ${key}`);
   for (const key of Object.keys(value)) if (!expectedSet.has(key)) problems.push(`${location} has unexpected key ${key}`);
+}
+
+function allowedKeys(value: Record<string, unknown>, allowed: readonly string[], location: string, problems: string[]): void {
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(value)) if (!allowedSet.has(key)) problems.push(`${location} has unexpected key ${key}`);
 }
 
 function nonBlankString(value: unknown, location: string, problems: string[]): string | null {

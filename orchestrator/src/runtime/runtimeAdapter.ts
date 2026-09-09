@@ -139,21 +139,20 @@ export interface RuntimeAgentRequest {
   /** Model to run on, or undefined to take the runtime's own default. */
   readonly model?: string;
   /**
-   * True when `model` was set by an operator-visible override — the `--model` CLI
-   * flag or `.sta/config.yaml` routing — rather than resolved from role
-   * frontmatter or an automatic default.
+   * True when the orchestrator resolved a concrete model that must be sent to
+   * the runtime: an operator override or a task/role Tier cell.
    *
    * An adapter that would otherwise ignore `model` to avoid contradicting its
    * runtime's own per-role configuration (Claude Code resolves the model from
    * subagent frontmatter) MUST honour it when this is true, and MUST refuse a
    * value its runtime cannot reach rather than pass it through. With this false
-   * or absent, `model` carries only the resolved default and an adapter is free
-   * to ignore it exactly as before.
+   * or absent, `model` is only a legacy compatibility/runtime default and an
+   * adapter is free to ignore it exactly as before.
    */
   readonly modelExplicit?: boolean;
   /**
-   * Explicitly requested reasoning effort, paired with an explicit `model`.
-   * Undefined = the runtime's / binding's own default. An adapter whose
+   * Effective reasoning effort resolved with the model. Undefined = the
+   * runtime's / binding's own default. An adapter whose
    * runtime exposes no effort control records a diagnostic rather than
    * dropping this silently.
    */

@@ -2,7 +2,8 @@
 name: system-analyst
 description: Use after requirement.md exists to assess feasibility, design modules and data contracts, and handle delivered-module change requests before planning.
 tools: Read, Glob, Grep, AskUserQuestion, Write, Edit
-model: sonnet
+# sta:model-policy — model/effort generated from model-tiers.yaml
+model: opus
 effort: high
 version: 4
 ---

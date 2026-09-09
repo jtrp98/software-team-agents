@@ -2,7 +2,8 @@
 name: business-analyst
 description: Use to interview for a new feature/project or change request and produce or amend requirement.md. Never writes code or chooses a stack.
 tools: AskUserQuestion, Write, Edit, Read, Glob, Grep
-model: sonnet
+# sta:model-policy — model/effort generated from model-tiers.yaml
+model: opus
 effort: medium
 version: 4
 ---

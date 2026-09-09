@@ -8,7 +8,7 @@ import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { MockRuntimeAdapter } from "./mockAdapter.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { parseModelRoute, requiredCapabilitiesFor, resolveRuntimeRoute, type ResolveRuntimeRouteOptions } from "./runtimeRouting.js";
-import type { ModelTiers } from "./modelTiers.js";
+import type { ModelTierPolicy, ModelTiers } from "./modelTiers.js";
 
 const tierTable = {
   T1: { reserved: true, camps: { anthropic: { model: "opus", effort: "max", notes: "x" }, openai: { model: "sol", effort: "xhigh", notes: "x" }, google: { model: "pro", effort: "high", notes: "x" }, zai: { model: "glm", effort: "thinking", notes: "x" } } },
@@ -37,8 +37,8 @@ function routingFixture(): {
   writeRoleFrontmatter(projectRoot, "backend-engineer", "sonnet");
   const registry = new RuntimeRegistry([
     new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet", "opus"] }),
-    new MockRuntimeAdapter({ id: "codex", models: ["gpt-5", "sonnet"] }),
-    new MockRuntimeAdapter({ id: "opencode", models: ["sonnet"] }),
+    new MockRuntimeAdapter({ id: "codex", models: ["gpt-5", "sonnet", "sol", "terra", "luna"] }),
+    new MockRuntimeAdapter({ id: "opencode", models: ["sonnet", "glm", "glm-4.7", "turbo"] }),
   ]);
   return {
     projectRoot,
@@ -75,6 +75,75 @@ describe("T-V4-CAST-005", () => {
     const resolved = route();
     expect(resolved.precedenceLevel).toBe(4);
     expect(resolved.selected).toMatchObject({ model: "sonnet", effort: undefined, modelExplicit: false });
+  });
+});
+
+describe("T-V8-005 role/task model policy", () => {
+  const policy: ModelTierPolicy = {
+    tiers: tierTable,
+    roleDefaults: {
+      "business-analyst": "T3",
+      "system-analyst": "T2",
+      "project-manager": "T2",
+      "qa-engineer": "T3",
+      "backend-engineer": "T5",
+      devops: "runtime-default",
+    },
+    legacyRoleDefaults: false,
+  };
+
+  it.each([
+    ["business-analyst", AgentStage.BUSINESS_ANALYST, "T3", "opus", "medium"],
+    ["system-analyst", AgentStage.SYSTEM_ANALYST, "T2", "opus", "high"],
+    ["project-manager", AgentStage.PROJECT_MANAGER, "T2", "opus", "high"],
+    ["qa-engineer", AgentStage.QA_ENGINEER, "T3", "opus", "medium"],
+  ])("resolves the %s role default", (roleName, stage, tier, model, effort) => {
+    const resolved = route({ role: roleName, stage, modelPolicy: policy });
+    expect(resolved.selected, resolved.error).toMatchObject({ model, effort });
+    expect(resolved.selected?.policyResolution).toMatchObject({ effectiveTier: tier, modelBasis: `role-default-tier:${tier}` });
+  });
+
+  it("applies task Tier over role default, then explicit operator model/effort over the task", () => {
+    const task = route({ modelPolicy: policy, taskTier: "T4" });
+    expect(task.selected).toMatchObject({ model: "sonnet", effort: "high" });
+    expect(task.selected?.policyResolution.requested).toMatchObject({ taskTier: "T4", roleDefaultTier: "T5" });
+
+    const operator = route({
+      modelPolicy: policy,
+      taskTier: "T4",
+      flags: { runtime: "claude-code", model: "opus", effort: "max" },
+    });
+    expect(operator).toMatchObject({
+      requested: { model: "opus", effort: "max" },
+      selected: { model: "opus", effort: "max", policyResolution: { modelBasis: "operator-model", effortBasis: "operator-effort" } },
+    });
+  });
+
+  it("keeps runtime choice separate: a runtime-only by_role route still receives the task Tier's camp cell", () => {
+    const resolved = route({
+      modelPolicy: policy,
+      taskTier: "T4",
+      config: { schema_version: 1, routing: { by_role: { "backend-engineer": { runtime: "codex" } } } },
+    });
+    expect(resolved.precedenceLevel).toBe(2);
+    expect(resolved.selected).toMatchObject({ runtime: expect.objectContaining({ id: "codex" }), model: "terra", effort: "high" });
+  });
+
+  it("uses an intentional runtime default and ignores compatibility frontmatter", () => {
+    const resolved = route({ role: "devops", stage: AgentStage.DEVOPS, modelPolicy: policy });
+    expect(resolved.selected).toMatchObject({ model: undefined, effort: undefined, modelExplicit: false });
+    expect(resolved.selected?.policyResolution.modelBasis).toBe("runtime-default");
+  });
+
+  it("fails closed for reserved/invalid task Tier and an unsupported policy cell", () => {
+    expect(route({ modelPolicy: policy, taskTier: "T1" }).error).toContain("reserved");
+    expect(route({ modelPolicy: policy, taskTier: "T9" }).error).toContain("invalid");
+    const unsupported = route({
+      modelPolicy: { ...policy, tiers: { ...tierTable, T4: { ...tierTable.T4, camps: { ...tierTable.T4.camps, anthropic: { model: "not-declared", effort: "high", notes: "x" } } } } },
+      taskTier: "T4",
+    });
+    expect(unsupported.selected).toBeUndefined();
+    expect(unsupported.error).toContain("unsupported model");
   });
 });
 

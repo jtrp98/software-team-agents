@@ -183,9 +183,16 @@ Same verdict, three places: this table, `sta runtimes` (reads `RUNTIME_SUPPORT` 
 
 | ลำดับ | ที่มาของ route | precedence ใน run log |
 |---|---|---|
-| 1 | `--runtime <id>` และ/หรือ `--model <name>` ของ run นั้น | `level-1` |
+| 1 | `--runtime <id>` และ/หรือ `--model <name>` / `--effort <name>` ของ run นั้น | `level-1` |
 | 2 | `routing.by_role.<role>` ใน `.sta/config.yaml` (`"runtime:model"` หรือ `{ runtime, model, effort }`) | `level-2` |
-| 3 | default runner (`execution.runner` หรือ `claude-code`) หรือ `routing.order` (เมื่อตั้งค่า) + `model:` ใน frontmatter ของ role | `level-4` |
+| 3 | default runner (`execution.runner` หรือ `claude-code`) หรือ `routing.order` (เมื่อตั้งค่า) | `level-4` |
+
+ตารางนี้เลือก runtime/camp เท่านั้น. หลังได้ camp แล้ว resolver กลางเลือก model/effort ด้วย precedence
+`operator model/effort → task Tier → role default Tier → runtime default` และบันทึก effective Tier,
+requested values และ winner basis ใน route/manifest. `model:`/`effort:` ใน role frontmatter เป็น generated
+compatibility output จาก `model-tiers.yaml`, ไม่ใช่ authority แยก; `--check-bindings` จับ drift. PlanTask ของ
+owner ใดก็มี optional Tier `T2`–`T6` ได้, ส่วน `T1`/ค่าที่ไม่รองรับ fail closed. ดูตัวอย่างและ DEV override
+policy ที่ [`docs/tier-and-effort-run.md`](docs/tier-and-effort-run.md)
 
 candidate ต้อง registered, available, และมี capability ที่ stage ต้องใช้ (Target-write stage ต้องมี `PRE_TOOL_GUARD`; `business-analyst` โดยเฉพาะต้องมี `INTERACTIVE_PROMPTS` — การสัมภาษณ์คือตัวงานของ stage นี้, `system-analyst`/`project-manager`/`test-planner` ไม่ถูกกฎนี้ เพราะ human gate ของ stage เหล่านั้นคือ `sta approve` ไม่ใช่ prompt กลาง run). candidate ที่ขาด capability ที่ต้องใช้ถูก**ตัดออก**เสมอ: ใน `routing.order` walk (ลำดับ 4) จะ hop ไป entry ถัดไปเหมือน `UNAVAILABLE`; ถ้าเป็น candidate เดียว (ลำดับ 1/2 หรือไม่มี `routing.order`) จะ**refuse**พร้อมเหตุผล — ขาด `PRE_TOOL_GUARD` refuse เพราะเป็น guard gap (ไม่ปลอดภัย), ขาด `INTERACTIVE_PROMPTS` refuse เพราะ camp นั้นทำงานของ stage นี้ไม่ได้ (ไม่ใช่เรื่องความปลอดภัย). automatic route (ลำดับ 3 — ลำดับเดียวที่คนไม่ได้เลือกเอง) ยังต้อง opt in ราย runtime ผ่าน `routing.allow_below_supported` ถ้า support level ต่ำกว่า `supported`.
 
@@ -201,6 +208,7 @@ V5 flags ที่ `sta run` รับจริง:
 |---|---|
 | `--runtime <claude-code|codex|opencode|antigravity>` | เลือก runner สำหรับ run นี้ (precedence 1) |
 | `--model <name>` | explicit model override สำหรับทุก stage ของ run นี้; runtime ปฏิเสธ model ที่มันใช้ไม่ได้ |
+| `--effort <name>` | explicit effort override สำหรับทุก stage ของ run นี้; adapter ปฏิเสธ vocabulary/capability ที่มันใช้ไม่ได้ |
 | `--no-qa-optimization` | กลับไปใช้ executor QA แบบก่อน optimization สำหรับ task นี้; ไม่ใช่ QA skip |
 | `--no-deterministic-gate` | explicit escape hatch ปิด deterministic pre-check สำหรับ task นี้; default gate เปิด |
 | `--token-budget <n>` | positive integer, post-hoc task token ceiling; ไม่ใช่ pre-spawn context cap |

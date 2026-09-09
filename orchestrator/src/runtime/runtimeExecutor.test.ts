@@ -19,6 +19,7 @@ import { buildPromptParts } from "./agentRunAssembly.js";
 import { auditTrail } from "../audit/auditTrail.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { latestExecutionPacketPath, readExecutionPacket } from "../state/runtimeArtifacts.js";
+import type { ModelTierPolicy } from "./modelTiers.js";
 
 // T-V6-006: `env: {}` (used below) now falls through to installation.yaml
 // when AGENTCLAUDE_KNOWLEDGE_ROOT is unset — isolate it from whatever is
@@ -1004,12 +1005,12 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
       model: "sonnet",
       requested_runtime: "claude-code",
       requested_model: "sonnet",
-      routing_basis: "level-4",
+      routing_basis: expect.stringContaining("level-4;tier=runtime-default,model=legacy-frontmatter"),
       fallback_count: 0,
     });
   });
 
-  it("keeps a cast task on its frontmatter model when model-tiers.yaml is absent", async () => {
+  it("fails closed when a cast task has no model-tiers.yaml to resolve it", async () => {
     const projectRoot = tmpProject();
     writeAgentFile(projectRoot, "backend-engineer", "model: sonnet");
     const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
@@ -1021,8 +1022,10 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
       guards: () => NO_GUARDS,
       planTier: () => "T4",
     });
-    await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-NO-TIER-TABLE", context: [] });
-    expect(runtime.requests[0]).toMatchObject({ model: "sonnet", modelExplicit: false, effort: undefined });
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-NO-TIER-TABLE", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain("model-tiers.yaml is missing");
+    expect(runtime.requests).toHaveLength(0);
   });
 
   it("T-V4-CAST-001 — a --model routing flag reaches the adapter as an explicit override; a resolved default does not", async () => {
@@ -1046,6 +1049,53 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
     );
     expect(runtime.requests[1].model).toBe("opus");
     expect(runtime.requests[1].modelExplicit).toBe(true);
+  });
+
+  it("T-V8-005 — forwards central role policy to the adapter and records the effective effort/basis, not stale frontmatter", async () => {
+    const projectRoot = tmpProject();
+    writeAgentFile(projectRoot, "backend-engineer", "model: stale-frontmatter\neffort: stale-frontmatter");
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["central-model"] });
+    const modelPolicy = {
+      tiers: {
+        T5: { reserved: false, camps: { anthropic: { model: "central-model", effort: "high", notes: "human choice" } } },
+      },
+      roleDefaults: { "backend-engineer": "T5" },
+      legacyRoleDefaults: false,
+    } as unknown as ModelTierPolicy;
+    const result = await createRuntimeExecutor({
+      runtime,
+      registry: new RuntimeRegistry([runtime]),
+      projectRoot,
+      modelPolicy,
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-POLICY", context: [] });
+
+    expect(runtime.requests[0]).toMatchObject({ model: "central-model", effort: "high", modelExplicit: true });
+    expect(result.outcome).toMatchObject({ model: "central-model", effort: "high", requested_model: "central-model" });
+    expect(result.outcome.routing_basis).toContain("role-default-tier:T5");
+    expect(result.outcome.routing_basis).not.toContain("stale-frontmatter");
+  });
+
+  it("T-V8-005 — replays a frozen persisted route without re-resolving today's Tier policy or frontmatter", async () => {
+    const projectRoot = tmpProject();
+    writeAgentFile(projectRoot, "backend-engineer", "model: changed-later\neffort: changed-later");
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["frozen-model"] });
+    const frozenBasis = "level-4;tier=T5,model=role-default-tier:T5,effort=role-default-tier:T5";
+    const result = await createRuntimeExecutor({
+      runtime,
+      registry: new RuntimeRegistry([runtime]),
+      routingFlags: { runtime: "claude-code", model: "frozen-model", effort: "medium" },
+      frozenModelRoute: true,
+      frozenRoutingBasis: frozenBasis,
+      planTier: () => "T4",
+      projectRoot,
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-FROZEN", context: [] });
+
+    expect(runtime.requests[0]).toMatchObject({ model: "frozen-model", effort: "medium", modelExplicit: true });
+    expect(result.outcome).toMatchObject({ model: "frozen-model", effort: "medium", routing_basis: frozenBasis });
   });
 
   it("refuses an unavailable selected runtime before adapter start and preserves the probe reason", async () => {
@@ -1236,7 +1286,7 @@ describe("createRuntimeExecutor — T-V6-014 routing.order at precedence level 4
       result: "PASS",
       runtime: "codex",
       requested_runtime: "claude-code",
-      routing_basis: "level-4",
+      routing_basis: "level-4;tier=runtime-default,model=legacy-frontmatter,effort=runtime-default",
       fallback_count: 1,
     });
     expect(result.outcome.fallback_reason).toContain("usage limit reached");
@@ -1286,7 +1336,11 @@ describe("createRuntimeExecutor — T-V6-014 routing.order at precedence level 4
     const { first, second } = pair("UNAVAILABLE");
     const result = await run(orderedProject(ORDER), [first, second], { routingFlags: { runtime: "claude-code" } });
 
-    expect(result.outcome).toMatchObject({ result: "FAIL", routing_basis: "level-1", fallback_count: 0 });
+    expect(result.outcome).toMatchObject({
+      result: "FAIL",
+      routing_basis: "level-1;tier=runtime-default,model=legacy-frontmatter,effort=runtime-default",
+      fallback_count: 0,
+    });
     expect(second.requests).toEqual([]);
   });
 
@@ -1300,7 +1354,11 @@ describe("createRuntimeExecutor — T-V6-014 routing.order at precedence level 4
     const second = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
     const result = await run(orderedProject(config), [first, second]);
 
-    expect(result.outcome).toMatchObject({ result: "FAIL", routing_basis: "level-2", fallback_count: 0 });
+    expect(result.outcome).toMatchObject({
+      result: "FAIL",
+      routing_basis: "level-2;tier=runtime-default,model=operator-model,effort=operator-effort",
+      fallback_count: 0,
+    });
     expect(first.requests[0]).toMatchObject({ model: "opus", modelExplicit: true, effort: "high" });
     expect(second.requests).toEqual([]);
   });
@@ -1363,7 +1421,7 @@ describe("createRuntimeExecutor — T-V6-014 routing.order at precedence level 4
       result: "PASS",
       runtime: "antigravity",
       requested_runtime: "claude-code",
-      routing_basis: "level-4",
+      routing_basis: "level-4;tier=runtime-default,model=legacy-frontmatter,effort=runtime-default",
       fallback_count: 1,
     });
     expect(result.outcome.fallback_reason).toContain("usage limit reached for this subscription");

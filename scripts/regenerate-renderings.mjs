@@ -27,7 +27,9 @@ import {
   defaultOpenCodePermissions,
   loadCommandGuardrails,
   listCommands,
+  renderAgentPolicyCompatibility,
 } from "../orchestrator/dist/runtime/bindingGenerator.js";
+import { loadModelTierPolicy } from "../orchestrator/dist/runtime/modelTiers.js";
 import { renderStackDigest } from "../orchestrator/dist/profile/stackDigest.js";
 import { generateWorkflowFiles } from "../orchestrator/dist/workflow/workflowCatalog.js";
 import {
@@ -75,6 +77,14 @@ const roleFiles = fs.existsSync(agentsDir)
   ? fs.readdirSync(agentsDir).filter((f) => f.endsWith(".md")).sort()
   : [];
 if (roleFiles.length === 0) throw new Error("no .claude/agents/*.md sources found");
+const modelPolicy = loadModelTierPolicy(ROOT);
+if (modelPolicy && !modelPolicy.legacyRoleDefaults) {
+  for (const f of roleFiles) {
+    const rel = `.claude/agents/${f}`;
+    const md = fs.readFileSync(path.join(agentsDir, f), "utf8");
+    emit(rel, renderAgentPolicyCompatibility(md, modelPolicy));
+  }
+}
 for (const spec of BINDING_RENDERINGS.filter((candidate) => candidate.kind === "agent-set")) {
   const keep = new Set();
   for (const f of roleFiles) {

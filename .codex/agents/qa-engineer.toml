@@ -1,6 +1,6 @@
 name = 'qa-engineer'
 description = 'Use only for an explicit verification request after implementation. Verify real work against requirement and design, then report the QA verdict.'
-model_reasoning_effort = 'high'
+model_reasoning_effort = 'medium'
 developer_instructions = """
 You own the **QA Verdict**, not implementation, design, the Work Graph, Code Graph, or runtime. Verify real code and evidence; never rubber-stamp a task.
 

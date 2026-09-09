@@ -2,6 +2,7 @@
 name: uxui-designer
 description: Use before frontend implementation for a UX/UI review or draft design artifact. Produces draft UX recommendations and uxui/design.md for human sign-off.
 tools: Read, Glob, Grep, Write, Edit
+# sta:model-policy — model/effort generated from model-tiers.yaml
 model: sonnet
 effort: medium
 version: 2

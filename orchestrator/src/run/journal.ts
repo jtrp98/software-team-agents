@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { WorkPlanTask } from "../docs/planGraph.js";
 import { DEFAULT_RUNTIME_ARTIFACT_RETENTION, pruneRuntimeArtifacts } from "../state/runtimeArtifacts.js";
+import type { ModelPolicyRequest } from "../runtime/tierRouting.js";
 
 export interface RunManifest {
   run_id: string;
@@ -20,6 +21,10 @@ export interface RunManifest {
   runtime_id: string;
   tier: string;
   model: string;
+  /** V8 additions are optional so pre-V8 manifests remain readable and retain their recorded route. */
+  effort?: string;
+  route_basis?: string;
+  route_requested?: ModelPolicyRequest;
   max_tasks: number;
   sta_version: string;
 }
@@ -225,6 +230,21 @@ function validateManifest(value: unknown): RunManifest {
   for (const field of stringFields) {
     if (typeof candidate[field] !== "string" || (candidate[field] as string).length === 0) {
       throw new Error(`run manifest field ${field} must be a non-empty string`);
+    }
+  }
+  for (const field of ["effort", "route_basis"] as const) {
+    if (candidate[field] !== undefined && (typeof candidate[field] !== "string" || (candidate[field] as string).length === 0)) {
+      throw new Error(`run manifest field ${field} must be a non-empty string when present`);
+    }
+  }
+  if (candidate.route_requested !== undefined) {
+    if (!candidate.route_requested || typeof candidate.route_requested !== "object" || Array.isArray(candidate.route_requested)) {
+      throw new Error("run manifest field route_requested must be an object when present");
+    }
+    for (const [key, value] of Object.entries(candidate.route_requested as Record<string, unknown>)) {
+      if (!["operatorModel", "operatorEffort", "taskTier", "roleDefaultTier"].includes(key) || typeof value !== "string" || value.length === 0) {
+        throw new Error(`run manifest field route_requested.${key} must be a recognized non-empty string`);
+      }
     }
   }
   if (!Number.isInteger(candidate.wave) || (candidate.wave as number) < 1) {

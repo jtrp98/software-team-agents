@@ -156,6 +156,15 @@ describe("parseArgs", () => {
     expect(USAGE).toContain("--model");
   });
 
+  it("T-V8-005 — parses an operator effort override and leaves vocabulary validation to the adapter", () => {
+    const explicit = parseArgs(["--task-id", "T-1", "--module", "m", "--effort", "provider-native-high"], "/repo");
+    expect(explicit.effort).toBe("provider-native-high");
+    expect(parseArgs(["--task-id", "T-1", "--module", "m"], "/repo").effort).toBeUndefined();
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--effort"], "/repo")).toThrow(CliUsageError);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--effort", "--backend"], "/repo")).toThrow(CliUsageError);
+    expect(USAGE).toContain("--effort");
+  });
+
   // T-V5-040 — execution modes are gone; the flag must not vanish silently.
   it("T-V5-040 rejects the removed --mode flag and names its replacement", () => {
     for (const mode of ["single", "auto", "manual", "silent"] as const) {
@@ -256,6 +265,7 @@ describe("T-V7-028 bounded wave through the production CLI composition", () => {
     try {
       fs.cpSync(path.join(framework, "contracts"), path.join(project, "contracts"), { recursive: true });
       fs.cpSync(path.join(framework, "stacks"), path.join(project, "stacks"), { recursive: true });
+      fs.copyFileSync(path.join(framework, "model-tiers.yaml"), path.join(project, "model-tiers.yaml"));
       fs.cpSync(path.join(framework, ".claude", "agents"), path.join(project, ".claude", "agents"), { recursive: true });
       fs.cpSync(path.join(framework, ".claude", "shared"), path.join(project, ".claude", "shared"), { recursive: true });
       fs.mkdirSync(path.join(project, ".claude", "scripts"), { recursive: true });

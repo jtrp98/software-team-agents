@@ -2,6 +2,19 @@
 # Cross-camp cells are approximations chosen by a person, not equivalences.
 # No automated process refreshes this file; edit it only when its human owner chooses to.
 
+role_defaults:
+  setup: T6
+  business-analyst: T3
+  system-analyst: T2
+  project-manager: T2
+  test-planner: T3
+  uxui-designer: T5
+  backend-engineer: T5
+  frontend-engineer: T5
+  qa-engineer: T3
+  security: T2
+  devops: T5
+
 tiers:
   T1:
     reserved: true

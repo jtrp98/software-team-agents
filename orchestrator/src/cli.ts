@@ -83,11 +83,14 @@ import { GitCommandLayer } from "./git/commandLayer.js";
 import { inspectRepositoryPreflight } from "./git/preflight.js";
 import { resolveRuntimeRoute } from "./runtime/runtimeRouting.js";
 import { loadModelTiers, MODEL_TIER_IDS, type ModelTierId } from "./runtime/modelTiers.js";
+import { formatModelPolicyBasis } from "./runtime/tierRouting.js";
 import { tasksInDerivedWave } from "./run/eligibility.js";
 
 interface FixedWaveRoute {
   runtimeId: RuntimeId;
   model?: string;
+  effort?: string;
+  basis?: string;
 }
 
 export interface CliDependencies {
@@ -219,6 +222,8 @@ export interface CliArgs {
    * not passed through. Absent = each role's frontmatter `model:` governs.
    */
   model?: string;
+  /** Operator-visible reasoning-effort override; runtime adapters validate their own vocabulary. */
+  effort?: string;
   /**
    * QA optimization (change-aware scope, deterministic pre-checks, TARGETED/FULL
    * routing) is on by default for qa-engineer rounds; this flag restores the
@@ -249,9 +254,9 @@ export class CliUsageError extends Error {}
 
 export const USAGE =
   "usage (verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
+  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] [--effort <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
   "  sta run --task-id <id> --module <name> <classification flags> [bindings/dependencies] --register-only   persist wave metadata; start no agent and perform no Git operation\n" +
-  "  sta run --wave <n> --module <name> [--max-tasks <k>] [--dry-run|--resume-run] [--autonomy <edit|full>] [--runtime <id>] [--model <name>]   bounded sequential owner-stage checkpoints\n" +
+  "  sta run --wave <n> --module <name> [--max-tasks <k>] [--dry-run|--resume-run] [--autonomy <edit|full>] [--runtime <id>] [--model <name>] [--effort <name>]   bounded sequential owner-stage checkpoints\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  sta approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
   "  sta resume  <task-id> --module <name> [--project-root <path>]   continue a task already in the store\n" +
@@ -289,11 +294,11 @@ export const USAGE =
   "  sta roles impact <id>[,<id>...]   which lanes changing those items would reach, before changing them\n" +
   "  sta roles context <ba|sa|uxui|dev> [<id>] [--full] [--module <name>]   what that lane may see, and via which role\n" +
   "\n" +
-  "Runtime selection (one route, no execution modes): --runtime <id> and --model <name> are the explicit per-run choice; otherwise an optional per-role routing.by_role entry in .sta/config.yaml applies; otherwise the default runner plus each role's frontmatter model:. A route resolves ONE runtime - if it cannot execute (unavailable, below supported without per-runtime opt-in, missing a guard capability the stage requires) the task stops for a person instead of moving to another runner.\n" +
-  "  --model <name> overrides every stage's frontmatter model for this run (the same override routing.by_role carries); the runtime refuses a model it cannot reach rather than passing it through. Absent, each role's own model: governs.\n" +
+  "Runtime selection and model policy are separate: --runtime <id>, routing.by_role, then the configured runtime/order choose the camp. Model/effort resolve as explicit --model/--effort (or routing.by_role values), canonical task Tier, model-tiers.yaml role default, then an intentional runtime default. Legacy frontmatter is read only when the tier file predates role_defaults.\n" +
+  "  --model <name> and --effort <name> are explicit operator overrides for this run; adapters validate their own vocabulary. Task/role Tier cells are validated and fail closed when unsupported.\n" +
   "\n" +
   "underlying flag-based form:\n" +
-  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] <classification flags>\n" +
+  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] [--effort <name>] <classification flags>\n" +
   "  sta --task-id <id> --module <name> --resume        continue a task already in the store\n" +
   "  sta --task-id <id> --module <name> [--token-budget <n>] [--no-qa-optimization|--no-deterministic-gate]   run with optional QA/budget controls\n" +
   "  sta --list [--project-root <path>]                 show every task and stop\n" +
@@ -364,6 +369,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let autonomy: RuntimeAutonomy | undefined;
   let runtime: RuntimeId | undefined;
   let model: string | undefined;
+  let effort: string | undefined;
   let noQaOptimization = false;
   let noDeterministicGate = false;
   let noDocumentGate = false;
@@ -488,6 +494,12 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
         throw new CliUsageError(`--model requires a model name (got ${value ?? "nothing"})`);
       }
       model = value;
+    } else if (arg === "--effort") {
+      const value = argv[++i];
+      if (!value || value.startsWith("--")) {
+        throw new CliUsageError(`--effort requires a runtime-supported effort name (got ${value ?? "nothing"})`);
+      }
+      effort = value;
     } else if (arg === "--mode") {
       // Execution modes are removed: there is one route. The flag
       // errors with its replacement for this release rather than being
@@ -495,7 +507,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       // without telling anyone.
       throw new CliUsageError(
         "--mode is removed: `sta run` has one route (execution modes single/auto/manual no longer exist). " +
-          "Use --runtime <id> and/or --model <name> for this run, or routing.by_role in .sta/config.yaml for a per-role runner/model. " +
+          "Use --runtime <id>, --model <name> and/or --effort <name> for this run, or routing.by_role in .sta/config.yaml for a per-role override. " +
           "A route that cannot execute always stops for a person; nothing hands off to another runner.",
       );
     } else if (arg === "--no-qa-optimization") {
@@ -616,6 +628,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     autonomy,
     runtime,
     model,
+    effort,
     noQaOptimization,
     noDeterministicGate,
     noDocumentGate,
@@ -1367,14 +1380,16 @@ async function composeProductionTaskExecutor(
   const defaultRuntime = runtimeRegistry.tryGet(defaultRuntimeId);
   if (!defaultRuntime) throw new Error(`configured Single runner "${defaultRuntimeId}" is not registered`);
   const routingFlags = fixedRoute
-    ? { runtime: fixedRoute.runtimeId, ...(fixedRoute.model ? { model: fixedRoute.model } : {}) }
-    : args.runtime || args.model
-      ? { runtime: args.runtime, model: args.model }
+    ? { runtime: fixedRoute.runtimeId, ...(fixedRoute.model ? { model: fixedRoute.model } : {}), ...(fixedRoute.effort ? { effort: fixedRoute.effort } : {}) }
+    : args.runtime || args.model || args.effort
+      ? { runtime: args.runtime, model: args.model, effort: args.effort }
       : undefined;
   const runtimeExecutor = createRuntimeExecutor({
     runtime: defaultRuntime,
     registry: runtimeRegistry,
     routingFlags,
+    frozenModelRoute: fixedRoute !== undefined,
+    frozenRoutingBasis: fixedRoute?.basis,
     planTier: (id) => plannedTier(args, id),
     classification: (id) => store.loadTask(id)?.classification,
     riskSignals: (id) => {
@@ -1528,15 +1543,11 @@ async function resolveWaveRoute(
   const tiers = new Set(rows.map((row) => row.tier ?? "unassigned"));
   if (tiers.size !== 1) throw new CliUsageError(`one bounded wave resolved multiple tiers: ${[...tiers].join(", ")}`);
   const tierName = [...tiers][0]!;
-  let tier: { id: ModelTierId; table: NonNullable<ReturnType<typeof loadModelTiers>> } | undefined;
-  if ((MODEL_TIER_IDS as readonly string[]).includes(tierName) && tierName !== "T1") {
-    const table = loadModelTiers(targetWorkspaceRoot);
-    if (table) tier = { id: tierName as ModelTierId, table };
-  }
+  const taskTier = (MODEL_TIER_IDS as readonly string[]).includes(tierName) ? tierName as ModelTierId : undefined;
 
   let config: ReturnType<typeof loadStaConfig> | undefined;
   try { config = loadStaConfig(targetWorkspaceRoot); } catch { config = undefined; }
-  const camp = tier
+  const camp = taskTier
     ? selectTierCamp({
         flagRuntime: args.runtime,
         configuredRuntime: config?.execution?.runner,
@@ -1556,15 +1567,17 @@ async function resolveWaveRoute(
     registry,
     defaultRuntimeId,
     config: config ?? null,
-    flags: args.runtime || args.model ? { runtime: args.runtime, model: args.model } : undefined,
+    flags: args.runtime || args.model || args.effort ? { runtime: args.runtime, model: args.model, effort: args.effort } : undefined,
     classification: store.loadTask(row.id)?.classification,
     availability,
     hasTargetWrite: true,
-    tier,
+    taskTier,
   }));
   const failed = routes.find((route) => route.error || !route.selected);
   if (failed) throw new CliUsageError(`wave route could not be resolved once at preflight: ${failed.error ?? failed.diagnostics.join(" | ")}`);
-  const identities = new Set(routes.map((route) => `${route.selected!.runtime.id}\0${route.selected!.model ?? ""}`));
+  const identities = new Set(routes.map((route) =>
+    `${route.selected!.runtime.id}\0${route.selected!.model ?? ""}\0${route.selected!.effort ?? ""}\0${formatModelPolicyBasis(route.selected!.policyResolution)}`,
+  ));
   if (identities.size !== 1) {
     throw new CliUsageError("plan-row owners resolve different runtime/model routes; split them into separate bounded runs");
   }
@@ -1574,8 +1587,11 @@ async function resolveWaveRoute(
   });
   return {
     runtimeId: selected.runtime.id,
-    tier: tierName,
+    tier: selected.policyResolution.effectiveTier ?? tierName,
     model: selected.model ?? "runtime-default",
+    effort: selected.effort,
+    basis: `level-${routes[0]!.precedenceLevel};${formatModelPolicyBasis(selected.policyResolution)}`,
+    requested: selected.policyResolution.requested,
     capabilities: new Set(capabilityReport.checks.filter((check) => check.verified).map((check) => check.capability)),
   };
 }
@@ -1622,6 +1638,9 @@ async function runWaveCli(
       runtimeId: active.manifest.runtime_id,
       tier: active.manifest.tier,
       model: active.manifest.model,
+      effort: active.manifest.effort,
+      basis: active.manifest.route_basis,
+      requested: active.manifest.route_requested,
       capabilities: new Set(capabilityReport.checks.filter((check) => check.verified).map((check) => check.capability)),
     };
     const git = new GitCommandLayer({ cwd: active.manifest.target_root });
@@ -1684,7 +1703,12 @@ async function runWaveCli(
         task.id,
         orchestrator,
         store,
-        { runtimeId: route.runtimeId as RuntimeId, ...(route.model === "runtime-default" ? {} : { model: route.model }) },
+        {
+          runtimeId: route.runtimeId as RuntimeId,
+          ...(route.model === "runtime-default" ? {} : { model: route.model }),
+          ...(route.effort ? { effort: route.effort } : {}),
+          ...(route.basis ? { basis: route.basis } : {}),
+        },
         dependencies,
       ),
     });
@@ -1750,6 +1774,9 @@ async function runWaveCli(
     runtime_id: route.runtimeId,
     tier: route.tier,
     model: route.model,
+    effort: route.effort,
+    route_basis: route.basis,
+    route_requested: route.requested,
     max_tasks: preview.tasks.length,
     sta_version: cliVersion(),
   };
@@ -1768,7 +1795,12 @@ async function runWaveCli(
       task.id,
       orchestrator,
       store,
-      { runtimeId: route.runtimeId as RuntimeId, ...(route.model === "runtime-default" ? {} : { model: route.model }) },
+      {
+        runtimeId: route.runtimeId as RuntimeId,
+        ...(route.model === "runtime-default" ? {} : { model: route.model }),
+        ...(route.effort ? { effort: route.effort } : {}),
+        ...(route.basis ? { basis: route.basis } : {}),
+      },
       dependencies,
     ),
   });

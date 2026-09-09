@@ -46,7 +46,6 @@ const VALID_OWNERS: readonly string[] = Object.values(AgentStage).filter((s) => 
 
 const TASK_ID_PATTERN = /\b(?:BE|FE)-[A-Za-z0-9._-]+\b/;
 const DESIGN_REF_PATTERN = /\bDES-\d+\b/g;
-const ANALYSIS_OWNERS = new Set(["business-analyst", "system-analyst", "project-manager", "test-planner"]);
 
 /** Legacy compatibility view only, retained until T-V8-029. New semantics live in PlanTask. */
 export interface PlanTaskRow {
@@ -277,10 +276,6 @@ export function validatePlanTasks(
   for (const [phase, phaseTasks] of tasksByPhase) {
     const tier = phaseTasks[0]?.tier;
     if (!tier) continue;
-    if (phaseTasks.every((task) => ANALYSIS_OWNERS.has(task.owner.trim().toLowerCase()))) {
-      errors.push(`phase ${phase} casts ${tier}, but analysis phases must not carry a Tier`);
-      continue;
-    }
     if (tier === "T1") {
       errors.push(`phase ${phase} casts T1, but T1 is reserved and cannot be cast in the pipeline`);
       continue;

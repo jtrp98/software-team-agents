@@ -173,23 +173,15 @@ A **module folder** is a delivery unit with its own doc set and phase numbering;
 
 ## Model and effort per agent
 
-Set in each agent's frontmatter. The split puts the expensive model where a mistake propagates furthest, and the cheap one where the volume is:
+`model-tiers.yaml` is the single policy authority. It maps human-owned Tier cells to each runtime camp and
+declares role defaults: setup T6; BA/test-planner/QA T3; SA/PM/security T2; UX/backend/frontend/devops T5.
+A canonical task may override its role with optional T2–T6; operator model/effort wins for that bounded run,
+then task Tier, role Tier, and finally intentional runtime default. Runtime/camp selection is a separate decision.
 
-| Agent | `model` | `effort` | Why |
-|---|---|---|---|
-| `setup` | sonnet | low | mechanical, runs once per project |
-| `business-analyst` | opus | medium | short output, but an error here contaminates everything downstream |
-| `system-analyst` | opus | high | hardest reasoning in the chain; a wrong schema is the costliest mistake available |
-| `project-manager` | sonnet | medium | decomposition from an already-confirmed design |
-| `test-planner` | sonnet | medium | derives test items from an already-confirmed design/plan — same tier as decomposition, not the same tier as the design decision itself |
-| `uxui-designer` | sonnet | medium | analysis of an already-confirmed design against a design source; output is a draft a person reviews, so a miss costs one review round, not shipped UI |
-| `frontend-engineer` | sonnet | medium | highest volume, highest output — where the savings actually are |
-| `backend-engineer` | sonnet | medium | same |
-| `qa-engineer` | sonnet | high | comparison work, so `effort: high` buys more here than the tier does — but note this is the highest-leverage cost decision in the table: with tests opt-in and usually absent, this agent is the *only* correctness guarantee in the chain and nothing re-checks it. `opus` is the upgrade to reach for first if verification starts missing things |
-| `security` | opus | high | adversarial reasoning; what it misses, nobody catches |
-| `devops` | sonnet | medium | little reasoning, high stakes — guarded by confirmation rules instead |
-
-To change one, edit that agent's frontmatter. `inherit` follows the session's `/model`.
+The `model:`/`effort:` fields in `.claude/agents/*.md` are generated compatibility output for tools that still
+read role frontmatter. Do not edit them independently: regenerate them with the repository rendering command,
+and use `--check-bindings` to detect drift. Provider model identifiers and effort cells remain only in
+`model-tiers.yaml`; see [tier-and-effort-run.md](tier-and-effort-run.md) for operator examples and exact precedence.
 
 **Every agent's frontmatter also carries `version:`** — a plain integer, starting at 1, bumped by whoever edits that agent's prompt meaningfully. This is log-only: Claude Code resolves a subagent from exactly `.claude/agents/<role>.md`, so only the prompt currently at that path can ever run — nothing here lets a task pin or run an older version. `orchestrator/src/agents/agentModel.ts`'s `resolveAgentVersion()` reads it the same way `resolveAgentModel()` reads `model:`, and `orchestrator/src/runtime/runtimeExecutor.ts` logs it on every run (`RunRecord.promptVersion`) so a task's history says which prompt version actually ran it — via whichever `RuntimeAdapter` is configured, `claudeCodeAdapter.ts` today.
 

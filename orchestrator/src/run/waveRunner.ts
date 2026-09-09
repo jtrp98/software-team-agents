@@ -12,6 +12,7 @@ import { TaskState } from "../types.js";
 import type { DeterministicCheckId, DeterministicVerification } from "../qa/deterministic.js";
 import { deterministicChecksForLevels, renderDeterministicVerification } from "../qa/deterministic.js";
 import type { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
+import type { ModelPolicyRequest } from "../runtime/tierRouting.js";
 import type { PersistedTask, TaskStore } from "../store/taskStore.js";
 import {
   acquireWorkspaceRunLock,
@@ -28,6 +29,9 @@ export interface ResolvedWaveRoute {
   runtimeId: string;
   tier: string;
   model: string;
+  effort?: string;
+  basis?: string;
+  requested?: ModelPolicyRequest;
   capabilities: ReadonlySet<RuntimeCapability>;
 }
 
@@ -202,7 +206,7 @@ export function renderWavePreview(options: {
 }): string[] {
   const lines = [
     `[orchestrator] bounded wave ${options.wave}: ${options.preview.tasks.length} task(s)`,
-    `[orchestrator] route runtime=${options.route.runtimeId} tier=${options.route.tier} model=${options.route.model}`,
+    `[orchestrator] route runtime=${options.route.runtimeId} tier=${options.route.tier} model=${options.route.model} effort=${options.route.effort ?? "runtime-default"}${options.route.basis ? ` basis=${options.route.basis}` : ""}`,
     `[orchestrator] base branch=${options.baseBranch} sha=${options.baseSha}`,
   ];
   for (const [index, task] of options.preview.tasks.entries()) {

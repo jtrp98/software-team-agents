@@ -205,9 +205,10 @@ describe("validatePlanTasks — T-PM10.1", () => {
       .toContain("T9, which is absent from model-tiers.yaml");
   });
 
-  it("T-V4-CAST-004 — refuses a tier on an analysis phase", () => {
+  it("T-V8-005 — permits a Tier on an analysis task as well as implementation/QA", () => {
     const check = validatePlanTasks([row({ id: "BE-001", owner: "project-manager", tier: "T2" })], { modelTiers: MODEL_TIERS });
-    expect(check.errors.join("\n")).toContain("analysis phases must not carry a Tier");
+    expect(check.errors).toEqual([]);
+    expect(check.ok).toBe(true);
   });
 
   it("rejects a duplicate task id, naming both phases", () => {

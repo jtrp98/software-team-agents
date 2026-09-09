@@ -2,9 +2,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 /**
- * Resolves which model a stage actually runs on by reading `.claude/agents/<role>.md`'s own
- * frontmatter — the single source of truth. `AGENT_REGISTRY` (agents/registry.ts) deliberately
- * carries no copy of it, to avoid two definitions of the same fact drifting apart.
+ * Reads the Claude binding's model compatibility rendering. V8 runtime routing
+ * uses model-tiers.yaml as its authority; this reader remains for pre-V8 tier
+ * files and embedded callers that do not opt into the runtime registry.
  *
  * Returns `null`, never throws, when the file is missing or has no parseable `model:` line — a
  * stage whose model can't be resolved should log as "unknown", not stop the run.
@@ -56,7 +56,7 @@ export function parseVersionFromFrontmatter(text: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** Reads the configured model-reasoning effort for telemetry only. */
+/** Reads the generated/legacy frontmatter effort compatibility value. */
 export function resolveAgentEffort(projectRoot: string, role: string): string | null {
   const file = path.join(projectRoot, ".claude", "agents", `${role}.md`);
   try {

@@ -183,7 +183,7 @@ describe("bounded sequential wave runner", () => {
     expect(logs.join("\n")).not.toMatch(/\b(?:tasks?|BE-\w+)\s+(?:done|complete|passed)\b/i);
     expect(renderWavePreview({ wave: 1, preview, route: selectedRoute, baseBranch: preflight.baseBranch, baseSha: preflight.baseSha })).toEqual([
       "[orchestrator] bounded wave 1: 2 task(s)",
-      "[orchestrator] route runtime=claude-code tier=T2 model=opus",
+      "[orchestrator] route runtime=claude-code tier=T2 model=opus effort=runtime-default",
       `[orchestrator] base branch=${preflight.baseBranch} sha=${preflight.baseSha}`,
       "[orchestrator] 1. BE-1 owner=backend-engineer ELIGIBLE",
       "[orchestrator] 2. BE-2 owner=backend-engineer ELIGIBLE",

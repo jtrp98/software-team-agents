@@ -2,8 +2,9 @@
 name: project-manager
 description: Use after design.md exists to turn confirmed design into a phased, ordered implementation plan.
 tools: Read, Glob, Grep, AskUserQuestion, Write, Edit
-model: sonnet
-effort: medium
+# sta:model-policy — model/effort generated from model-tiers.yaml
+model: opus
+effort: high
 version: 4
 ---
 

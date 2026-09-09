@@ -2,8 +2,9 @@
 name: qa-engineer
 description: Use only for an explicit verification request after implementation. Verify real work against requirement and design, then report the QA verdict.
 tools: Read, Glob, Grep, Bash, AskUserQuestion, Write, Edit
+# sta:model-policy — model/effort generated from model-tiers.yaml
 model: opus
-effort: high
+effort: medium
 version: 3
 ---
 
