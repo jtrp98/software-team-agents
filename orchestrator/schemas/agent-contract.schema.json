@@ -190,6 +190,9 @@
         "unsourced_facts_marked_assumption",
         "flags_sensitive_phases",
         "no_design_url_scraping",
+        "risk_triggered_design_confirmation",
+        "addressable_design_evidence",
+        "canonical_semantic_tasks",
         "figma_read_only_mcp",
         "claude_design_mcp_draft_only"
       ]

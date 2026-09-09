@@ -10,7 +10,7 @@ export function approvalFieldFor(approvalType: ApprovalType | null): "requiremen
 }
 
 export const APPROVAL_PROMPT: Record<ApprovalType, string> = {
-  [ApprovalType.SCHEMA_CONFIRMATION]: "Confirm the data model in design.md before any code is written against it",
+  [ApprovalType.SCHEMA_CONFIRMATION]: "Confirm the exact risk-triggered design boundary: schema/migration, breaking compatibility, critical security, or material ambiguity",
   [ApprovalType.DEPLOY]: "Approve an actual deploy/migration to production",
   [ApprovalType.QA_FAILURE]: "A QA round came back ⚠️/❌ and needs a decision",
   [ApprovalType.SECURITY_RISK]: "A Critical/Important security finding is unresolved",

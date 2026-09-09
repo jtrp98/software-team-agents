@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { RuntimeTaskV2Schema, assertRuntimeTaskFresh } from "../orchestrator/runtimeTask.js";
 import { planTaskHash } from "../docs/planTask.js";
 import { PacketFieldsSchema, renderPacketSections, renderPacketText, stableHash, contentHash, type DependencyEvidence, type PacketFields } from "../artifacts/executionPacket.js";
+import { verifyDesignEvidence } from "../docs/designEvidence.js";
 import {
   ArtifactType,
   validateArtifact,
@@ -422,7 +423,7 @@ export interface CompileExecutionPacketInput {
 
 export function packetCompilerHash(): string {
   const extension = path.extname(fileURLToPath(import.meta.url));
-  return stableHash(["./agentRunAssembly", "../artifacts/executionPacket", "../artifacts/schemas", "../docs/taskReferences", "../orchestrator/runtimeTask"].map(name => contentHash(fs.readFileSync(new URL(`${name}${extension}`, import.meta.url)))));
+  return stableHash(["./agentRunAssembly", "../artifacts/executionPacket", "../artifacts/schemas", "../docs/designEvidence", "../docs/taskReferences", "../orchestrator/runtimeTask"].map(name => contentHash(fs.readFileSync(new URL(`${name}${extension}`, import.meta.url)))));
 }
 
 /** No model calls, inferred semantics, whole-document fallback or packet mutation. */
@@ -433,6 +434,17 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
   if (task.task_id !== input.req.taskId) throw new Error(`RuntimeTask ${task.task_id} cannot compile packet for ${input.req.taskId}`);
   assertRuntimeTaskFresh(task);
   const roots = task.scope.work_roots.filter(root => root.stage === input.req.stage);
+  if (!task.design_evidence) throw new Error(`task ${task.task_id}: design evidence migration required before unattended packet compilation`);
+  if (!input.baseRevision) throw new Error(`task ${task.task_id}: base revision is required to verify design evidence`);
+  const targetRoots = unique(task.scope.work_roots.map(root => root.root));
+  for (const ref of task.design_evidence) {
+    const matching = targetRoots.filter(root => fs.existsSync(path.resolve(root, ...ref.path.replace(/\\/g, "/").split("/"))));
+    const evidenceRoot = matching[0] ?? targetRoots[0];
+    if (!evidenceRoot) throw new Error(`design evidence cannot be verified without a Target root: ${ref.id}`);
+    const singleRepoKnowledge = task.artifact_hashes.some(artifact => artifact.source === path.resolve(evidenceRoot, "_docs", "module", path.basename(path.dirname(task.plan_source)), "design.md"));
+    const problems = verifyDesignEvidence([ref], { targetRoot: evidenceRoot, currentRevision: input.baseRevision, allowContentStableRevision: singleRepoKnowledge });
+    if (problems.length) throw new Error(`design evidence drift: ${problems.join("; ")}`);
+  }
   const allow = unique(roots.flatMap(root => root.allow.map(entry => entry.contract_glob)).filter(glob => input.contractScope.allow.includes(glob)));
   const candidates = input.retrievalCandidates ?? [];
   for (const candidate of candidates) {
@@ -456,6 +468,7 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
       return { ...d, evidence: completion };
     }),
     selected_traces: task.selected_traces,
+    design_evidence: task.design_evidence,
     scope: { roots: unique(roots.map(root => root.root)), allow, deny: unique(input.contractScope.deny) },
     retrieval_candidates: candidates, required_verification: task.required_verification,
     stop_conditions: task.stop_conditions,

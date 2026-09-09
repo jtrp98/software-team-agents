@@ -27,7 +27,9 @@ Preserve the response contract while handling empty line items.
 
 #### Retrieval hints
 
-Search for the OrderSummary serializer and its empty-order test; confirm paths against source.
+Hypothesis: The OrderSummary serializer and empty-order regression are likely boundaries; confirm symbols and paths against current source.
+Query: Locate definitions and references for Contract:OrderSummary.v2 and the empty-order behavior.
+Provenance: DES-011, Contract:OrderSummary.v2
 
 #### Do not modify
 
@@ -39,7 +41,7 @@ AC-007.2: An empty order returns the documented zero total without an exception.
 
 #### Required validation and expected evidence
 
-Run the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.
+Verify AC-007.2 with the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.
 
 #### Rollback/compatibility notes
 

@@ -4,9 +4,10 @@
 `orchestrator/src/docs/planTask.ts` defines its internal normalized object and
 inferred `PlanTask` type. JSON snapshots are test output, never authoring inputs.
 The [canonical example](../orchestrator/src/docs/fixtures/canonical-plan.md) is
-the small versioned template. PM workflow/prompt adoption follows T-V8-008;
-the canonical parser, graph consumers and packet compiler are integrated through
-T-V8-003/004.
+the small versioned template. The [semantic cases](../orchestrator/src/docs/fixtures/semantic-plan-cases.md)
+show independently bounded feature, bug, schema, and refactor work. The PM prompt,
+parser, graph consumers, evidence selector, gate policy, and packet compiler share
+this contract.
 
 ## Grammar
 
@@ -18,30 +19,52 @@ duplicate or empty fields fail. Tier is the only optional metadata line and
 accepts T2–T6; runtime routing/role Tier policy is outside this parser.
 Owner is one of the eleven agent role names. Status is pending, in_progress,
 verified or blocked. Lists use comma-separated values or exactly `none` for
-an empty list. Traceability must contain REQ, AC and DES IDs; duplicate references
-fail. Contract IDs use `Contract:Name.vN`, with positive version N.
+an empty list. Traceability must contain REQ, AC and DES IDs and may select `DEC-NNN`;
+duplicate references fail. Contract IDs use `Contract:Name.vN`, with positive
+version N. When addressable design is supplied, every selected DES/DEC/Contract
+must exist and carry evidence.
 
 Risk accepts low, medium, high, critical, shared-contract, authorization, schema,
 security, data-loss, breaking-contract or business. Human gate accepts business,
-schema, breaking-contract, security, plan-approval, deployment or migration;
+schema, breaking-contract, security, design-ambiguity, plan-approval, deployment or migration;
 `none` means no declared gate, never approval. Gate enforcement remains with the
-existing safety kernel. Scope/constraints, retrieval hints, do-not-modify,
-acceptance, required validation/evidence and compatibility are each one
-nonempty Markdown body. Retrieval paths are hints, not verified source truth.
+existing safety kernel. Schema, migration, breaking-contract, Critical security,
+and material-ambiguity design triggers require matching task gates. Scope/constraints,
+retrieval hints, do-not-modify, acceptance, required validation/evidence and
+compatibility are each one nonempty Markdown body. Retrieval hints must state
+`Hypothesis:`, `Query:`, and `Provenance:`; provenance is an exact subset of the
+task's selected DES/DEC/Contract claims. Concepts, symbols, routes, migrations,
+likely module boundaries, and paths remain hypotheses until current source
+confirms them; graph/LSP relationships remain inferred.
 Code fences are allowed inside these bodies; headings inside a fence are text.
 The parser rejects a whole malformed plan, never exposes a partial task set.
 
 `parseCanonicalPlan(text, {requirementMd, designMd})` checks trace and contract
-references against the supplied authoritative documents, plus dependency IDs,
-duplicates and mixed declared/contract/phase cycles. The CLI `--check-plan` supplies those documents
+references against the supplied authoritative documents, task-local AC identity,
+retrieval provenance, risk/design gate parity, duplicate semantic bodies, dependency
+IDs, duplicates and mixed declared/contract/phase cycles. Acceptance and validation
+must each cite every task-selected AC and must not import unrelated AC IDs. The CLI `--check-plan` supplies those documents
 and fails on missing references. Parsing without documents is syntax/local
-reference validation only. A consumed external contract requires design.md.
+reference validation only. A normalized semantic field copied verbatim from the
+supplied requirement/design is rejected: cite its stable ID and author the bounded
+task interpretation. A consumed external contract requires design.md.
 `taskGraphFromPlan` preserves dependencies, produced/consumed contracts, owner and
 phase for validation, waves, readiness, QA impact, handoff and registration.
 Declared edges take diagnostic precedence over contract edges, then phase edges.
 Runtime readiness requires ledger/checkpoint completion; a verified Status cell
 alone cannot unlock a planned dependency. Unannotated legacy FE/BE ordering that
 would be ambiguous is refused; explicit empty contract lists mean independent.
+
+## Downstream consumers
+
+Every field is executable input, not formatting. Version and identity feed the
+compiler/migration; phase, dependencies, produces and consumes feed the DAG,
+readiness and handoff; owner feeds runtime; Tier is a per-task recommendation to
+the central route resolver. Traceability and retrieval hints select bounded
+context. Risk and human gates feed gate policy. Status feeds readiness/QA sync.
+Objective/why/title, scope, do-not-modify, acceptance, validation/evidence and
+compatibility feed DEV/QA packets, deterministic verification, and rollback.
+`PLAN_TASK_FIELD_CONSUMERS` is the machine-checked complete map.
 
 ## Identity
 

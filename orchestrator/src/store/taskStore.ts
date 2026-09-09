@@ -8,6 +8,7 @@ import { Environment } from "../environment/environment.js";
 import type { RunRecord } from "../observability/runLog.js";
 import { RuntimeTaskSchema } from "../orchestrator/runtimeTask.js";
 import { BusinessInputEvidenceSchema } from "../gates/businessInput.js";
+import { DesignGateAssessmentSchema } from "../docs/designEvidence.js";
 
 /**
  * Everything the orchestrator holds about one task, in a form that survives
@@ -57,6 +58,7 @@ export const PersistedTaskSchema = z.object({
   gateContext: z.object({
     requirementApproved: z.boolean().optional(),
     businessInput: BusinessInputEvidenceSchema.optional(),
+    designAssessment: DesignGateAssessmentSchema.optional(),
     designApproved: z.boolean().optional(),
     humanApproved: z.boolean().optional(),
     qaReport: QaReportArtifactSchema.optional(),

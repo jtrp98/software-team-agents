@@ -16,9 +16,10 @@ import { writePacketPlan } from "../runtime/packetFixture.testSupport.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 
 const base = parseCanonicalPlan(fs.readFileSync(new URL("../docs/fixtures/canonical-plan.md", import.meta.url), "utf8")).tasks[0];
+const retrieval = (...refs: string[]) => `Hypothesis: The selected graph boundary is likely relevant; confirm it against current source.\nQuery: Locate definitions and references for the selected claims.\nProvenance: ${refs.join(", ")}`;
 function tasks(): PlanTask[] {
-  return [base, { ...base, id: "FE-005", owner: AgentStage.FRONTEND_ENGINEER, produces: [], consumes: base.produces },
-    { ...base, id: "BE-006", phase: 2, produces: [], dependsOn: ["FE-005"] }];
+  return [base, { ...base, id: "FE-005", owner: AgentStage.FRONTEND_ENGINEER, produces: [], consumes: base.produces, retrievalHints: retrieval("DES-011", ...base.produces) },
+    { ...base, id: "BE-006", phase: 2, produces: [], dependsOn: ["FE-005"], retrievalHints: retrieval("DES-011") }];
 }
 
 describe("T-V8-003 full-field graph consumers", () => {
@@ -32,7 +33,7 @@ describe("T-V8-003 full-field graph consumers", () => {
       expect(registry.graph().edges).toEqual(taskGraphFromPlan(plan).edges);
       expect(registry.waitingOn("FE-005")).toEqual(["BE-004"]);
       expect(registry.readyTasks().map(t => t.taskId)).toEqual(["BE-004"]);
-      writePacketPlan(root, [plan[0], { ...plan[1], consumes: [] }]);
+      writePacketPlan(root, [plan[0], { ...plan[1], consumes: [], retrievalHints: retrieval("DES-011") }]);
       expect(() => registry.open("FE-005")).toThrow(/graph drift/);
       expect(() => registry.waitingOn("FE-005")).toThrow(/graph drift/);
       expect(() => registry.readyTasks()).toThrow(/graph drift/);

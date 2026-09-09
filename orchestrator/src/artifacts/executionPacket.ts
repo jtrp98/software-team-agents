@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { PlanTaskSchema } from "../docs/planTask.js";
 import { AgentStage } from "../types.js";
+import { DesignEvidenceRefSchema } from "../docs/designEvidence.js";
 
 const text = z.string().min(1);
 export const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
@@ -40,6 +41,8 @@ export const PacketFieldsSchema = z.strictObject({
   contract: TaskContractSchema,
   dependencies: z.array(DependencySchema.extend({ evidence: DependencyEvidenceSchema })),
   selected_traces: z.array(SelectedTraceSchema).min(1),
+  /** Optional only so persisted pre-T-V8-007 v2 packets remain audit-readable. New compilation always supplies it. */
+  design_evidence: z.array(DesignEvidenceRefSchema).optional(),
   scope: z.strictObject({ roots: z.array(text), allow: z.array(text), deny: z.array(text) }),
   retrieval_candidates: z.array(RetrievalCandidateSchema),
   required_verification: VerificationSchema,
@@ -70,6 +73,7 @@ export function renderPacketSections(packet: PacketFields): string[] {
       ...packet.dependencies.map(d => `${d.task_id} [${d.edges.join(", ")}]: complete; produces ${d.produces.join(", ") || "none"}; evidence ${d.evidence.source} (${d.evidence.hash})\n${list(d.evidence.outputs.map(o => `${o.source} (${o.hash})`))}`),
     ].join("\n")),
     section("Selected requirements, acceptance and design", packet.selected_traces.map(r => `${r.id} — ${r.source}\n${r.text}`).join("\n\n")),
+    ...(packet.design_evidence ? [section("Addressable design evidence", list(packet.design_evidence.map(ref => `${ref.id} -> ${ref.claim}: ${ref.state}; ${ref.path}#${ref.symbol}:${ref.line}; revision ${ref.revision}; ${ref.basis}/${ref.tool}; SHA-256 ${ref.hash}`)))] : []),
     section("Contracts", `Produces: ${t.produces.join(", ") || "none"}\nConsumes: ${t.consumes.join(", ") || "none"}`),
     section("Scope and constraints", t.scopeAndConstraints),
     section("Effective stage guard", `Roots:\n${list(packet.scope.roots)}\nAllow:\n${list(packet.scope.allow)}\nDeny:\n${list(packet.scope.deny)}`),

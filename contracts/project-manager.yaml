@@ -14,6 +14,8 @@ constraints:
   - no_next_agent_invocation
   - amend_not_regenerate
   - dates_from_user
+  - evidence_required
+  - canonical_semantic_tasks
   # Any phase touching auth, personal data, payments, uploads or untrusted input is marked in writing,
   # not remembered — devops gates on that mark later.
   - flags_sensitive_phases

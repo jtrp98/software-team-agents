@@ -56,6 +56,34 @@ describe("deriveHandoff (T-V3TOK-091)", () => {
     expect(derived.artifact.contract_refs).toEqual({ produces: ["orders/create"], consumes: ["auth/session"] });
   });
 
+  it("derives exact addressable SA claim identities instead of heading approximations", () => {
+    const hash = "a".repeat(64);
+    const revision = "b".repeat(40);
+    const evidence = (id: string, claim: string) =>
+      `Evidence ${id}: claim=${claim} | state=confirmed | path=src/orders.ts | symbol=orders | line=1 | revision=${revision} | basis=source | tool=rg-read | hash=${hash}`;
+    const design = [
+      "# Design",
+      "Design evidence format: 1",
+      "## DES-021 — Order export",
+      "Contract:OrderExport.v1 — response boundary.",
+      "DEC-021 — keep the route additive.",
+      evidence("EVD-021", "DES-021"),
+      evidence("EVD-022", "Contract:OrderExport.v1"),
+      evidence("EVD-023", "DEC-021"),
+      "Compatibility: additive-internal",
+      "Data/schema: unchanged",
+      "Migration/backfill: none",
+      "Security: none",
+      "Fallback: disable the additive route.",
+      "Material ambiguity: none",
+    ].join("\n");
+    const derived = deriveHandoff(AgentStage.SYSTEM_ANALYST, "sales", design, undefined, { taskId: "T-1" });
+    expect(derived.complete).toBe(true);
+    expect(derived.artifact.implements).toEqual(["DES-021"]);
+    expect(derived.artifact.contract_refs.produces).toEqual(["Contract:OrderExport.v1"]);
+    expect(derived.artifact.decision_refs).toEqual(["DEC-021"]);
+  });
+
   it("derives test-planner and UX/UI references without copied prose", () => {
     const tests = deriveHandoff(AgentStage.TEST_PLANNER, "sales", "# Test Plan\n\n## Coverage\n- TP-009 verifies REQ-001\n", undefined, { taskId: "T-1" });
     expect(tests.artifact.test_refs).toEqual(["TP-009"]);

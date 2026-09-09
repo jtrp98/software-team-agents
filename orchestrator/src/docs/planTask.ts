@@ -3,10 +3,11 @@ import { z } from "zod";
 import { AgentStage } from "../types.js";
 import { firstTable, sections } from "./markdown.js";
 import { taskGraphFromPlan } from "../graph/taskGraph.js";
+import { designEvidenceForClaims, parseDesignEvidence } from "./designEvidence.js";
 
 const text = z.string().trim().min(1);
 const taskId = z.string().regex(/^[A-Z][A-Z0-9]*-[A-Za-z0-9][A-Za-z0-9._-]*$/);
-const traceId = z.string().regex(/^(?:REQ-\d+|AC-\d+(?:\.\d+)?|DES-\d+)$/);
+const traceId = z.string().regex(/^(?:REQ-\d+|AC-\d+(?:\.\d+)?|DES-\d+|DEC-\d+)$/);
 const contractId = z.string().regex(/^Contract:[A-Za-z][A-Za-z0-9_.-]*\.v[1-9]\d*$/);
 const unique = <T extends z.ZodType>(item: T) => z.array(item).refine(xs => new Set(xs).size === xs.length, "duplicate entry");
 
@@ -25,7 +26,7 @@ export const PlanTaskSchema = z.strictObject({
   produces: unique(contractId),
   consumes: unique(contractId),
   risk: unique(z.enum(["low", "medium", "high", "critical", "shared-contract", "authorization", "schema", "security", "data-loss", "breaking-contract", "business"])).min(1),
-  humanGate: unique(z.enum(["business", "schema", "breaking-contract", "security", "plan-approval", "deployment", "migration"])),
+  humanGate: unique(z.enum(["business", "schema", "breaking-contract", "security", "design-ambiguity", "plan-approval", "deployment", "migration"])),
   status: z.enum(["pending", "in_progress", "verified", "blocked"]),
   scopeAndConstraints: text,
   retrievalHints: text,
@@ -35,6 +36,16 @@ export const PlanTaskSchema = z.strictObject({
   compatibility: text,
 });
 export type PlanTask = z.infer<typeof PlanTaskSchema>;
+export const PLAN_TASK_FIELD_CONSUMERS: Record<keyof PlanTask, readonly string[]> = {
+  version: ["compiler", "migration"], id: ["compiler", "DAG", "run ledger"], phase: ["DAG", "context"],
+  title: ["DEV", "QA"], objective: ["DEV", "QA"], why: ["DEV", "QA"], owner: ["compiler", "runtime"],
+  tier: ["route resolver"], dependsOn: ["DAG", "readiness", "run ledger"], traceability: ["compiler", "context", "DEV", "QA"],
+  produces: ["DAG", "dependency handoff"], consumes: ["DAG", "dependency handoff"], risk: ["gate policy", "QA"],
+  humanGate: ["gate policy", "run controller"], status: ["readiness", "QA sync"], scopeAndConstraints: ["compiler", "DEV", "QA"],
+  retrievalHints: ["context resolver", "DEV", "QA"], doNotModify: ["compiler", "DEV", "QA"],
+  acceptanceCriteria: ["compiler", "DEV", "QA"], validationAndEvidence: ["deterministic verifier", "DEV", "QA"],
+  compatibility: ["DEV", "QA", "rollback"],
+};
 export interface PlanReferences { requirementMd: string; designMd: string }
 export interface CanonicalPlan { tasks: PlanTask[]; problems: string[] }
 
@@ -140,8 +151,40 @@ export function validateCanonicalReferences(tasks: readonly PlanTask[], refs?: P
   const produced = new Map<string, string>();
   const external = new Set(refs?.designMd.match(/Contract:[A-Za-z][A-Za-z0-9_.-]*\.v[1-9]\d*/g) ?? []);
   const reqs = new Set(refs?.requirementMd.match(/\b(?:REQ-\d+|AC-\d+(?:\.\d+)?)\b/g) ?? []);
-  const designs = new Set(refs?.designMd.match(/\bDES-\d+\b/g) ?? []);
+  const parsedDesign = refs ? parseDesignEvidence(refs.designMd) : undefined;
+  if (parsedDesign?.mode === "addressable") problems.push(...parsedDesign.problems);
+  const designs = new Set(parsedDesign?.mode === "addressable" ? parsedDesign.claims : refs?.designMd.match(/\b(?:DES|DEC)-\d+\b|Contract:[A-Za-z][A-Za-z0-9_.-]*\.v[1-9]\d*/g) ?? []);
+  const authoredNormativeText = refs ? normalize(`${refs.requirementMd}\n${refs.designMd}`).replace(/\s+/g, " ").toLowerCase() : "";
   for (const t of tasks) {
+    const semanticBodies = { objective: t.objective, why: t.why, scopeAndConstraints: t.scopeAndConstraints, retrievalHints: t.retrievalHints, doNotModify: t.doNotModify, acceptanceCriteria: t.acceptanceCriteria, validationAndEvidence: t.validationAndEvidence, compatibility: t.compatibility };
+    const normalizedBodies = Object.values(semanticBodies).map(value => value.trim().replace(/\s+/g, " ").toLowerCase());
+    if (new Set(normalizedBodies).size !== normalizedBodies.length) problems.push(`task ${t.id}: normative semantic fields must not repeat the same text`);
+    if (refs) for (const [field, value] of Object.entries(semanticBodies)) {
+      const normalized = value.trim().replace(/\s+/g, " ").toLowerCase();
+      if (normalized.length >= 20 && authoredNormativeText.includes(normalized)) problems.push(`task ${t.id}: ${field} repeats normative prose from requirement.md/design.md; select IDs and author task-specific interpretation`);
+    }
+    const selectedAcs = t.traceability.filter(id => id.startsWith("AC-"));
+    const authoredAcs = new Set(t.acceptanceCriteria.match(/\bAC-\d+(?:\.\d+)?\b/g) ?? []);
+    const validationAcs = new Set(t.validationAndEvidence.match(/\bAC-\d+(?:\.\d+)?\b/g) ?? []);
+    for (const id of selectedAcs) {
+      if (!authoredAcs.has(id)) problems.push(`task ${t.id}: acceptance criteria omits selected ${id}`);
+      if (!validationAcs.has(id)) problems.push(`task ${t.id}: validation/evidence omits selected ${id}`);
+    }
+    for (const id of authoredAcs) if (!selectedAcs.includes(id)) problems.push(`task ${t.id}: unrelated acceptance ID ${id} is not in Traceability`);
+    for (const id of validationAcs) if (!selectedAcs.includes(id)) problems.push(`task ${t.id}: unrelated validation ID ${id} is not in Traceability`);
+    const hintParts = ["Hypothesis", "Query", "Provenance"].map(label => new RegExp(`(?:^|\\n|;\\s*)${label}:\\s*\\S`, "im").test(t.retrievalHints));
+    if (hintParts.some(found => !found)) problems.push(`task ${t.id}: Retrieval hints requires Hypothesis, Query and Provenance lines; paths/symbols remain hypotheses until resolved`);
+    const provenanceLine = /(?:^|\n|;\s*)Provenance:\s*([^\n;]+)/im.exec(t.retrievalHints)?.[1] ?? "";
+    const provenanceIds = provenanceLine.match(/\b(?:DES|DEC)-\d+\b|Contract:[A-Za-z][A-Za-z0-9_.-]*\.v[1-9]\d*/g) ?? [];
+    const taskDesignRefs = [...t.traceability.filter(id => /^(?:DES|DEC)-/.test(id)), ...t.produces, ...t.consumes];
+    if (provenanceIds.length === 0 || provenanceIds.some(id => !taskDesignRefs.includes(id))) problems.push(`task ${t.id}: Retrieval hint provenance must name only this task's DES/DEC/Contract refs`);
+    const requiredRiskGates = new Set<string>();
+    if (t.risk.includes("schema")) requiredRiskGates.add("schema");
+    if (t.risk.includes("breaking-contract")) requiredRiskGates.add("breaking-contract");
+    if (t.risk.includes("business")) requiredRiskGates.add("business");
+    if (t.risk.includes("security") && t.risk.includes("critical")) requiredRiskGates.add("security");
+    if (t.risk.includes("data-loss")) requiredRiskGates.add("migration");
+    for (const gate of requiredRiskGates) if (!t.humanGate.includes(gate as PlanTask["humanGate"][number])) problems.push(`task ${t.id}: risk ${gate} requires human gate ${gate}`);
     if (byId.has(t.id)) problems.push(`task ${t.id}: duplicate task ID`);
     byId.set(t.id, t);
     for (const contract of t.produces) {
@@ -153,8 +196,19 @@ export function validateCanonicalReferences(tasks: readonly PlanTask[], refs?: P
     for (const dep of t.dependsOn) if (dep === t.id || !byId.has(dep)) problems.push(`task ${t.id}: self/unknown dependency ${dep}`);
     for (const c of t.consumes) if (refs && !produced.has(c) && !external.has(c)) problems.push(`task ${t.id}: unknown consumed contract ${c}; declare a producer or supply design.md definition`);
     if (refs) {
-      for (const id of t.traceability) if (!(id.startsWith("DES-") ? designs : reqs).has(id)) problems.push(`task ${t.id}: unknown trace reference ${id}`);
+      for (const id of t.traceability) if ((/^(?:DES|DEC)-/.test(id) ? !designs.has(id) : !reqs.has(id))) problems.push(`task ${t.id}: unknown trace reference ${id}`);
       for (const c of [...t.produces, ...t.consumes]) if (!external.has(c)) problems.push(`task ${t.id}: unknown design contract ${c}`);
+      if (parsedDesign?.mode === "addressable" && parsedDesign.problems.length === 0) {
+        const selected = [...t.traceability.filter(id => /^(?:DES|DEC)-/.test(id)), ...t.produces, ...t.consumes];
+        try { designEvidenceForClaims(parsedDesign, selected); }
+        catch (error) { problems.push(`task ${t.id}: ${error instanceof Error ? error.message : String(error)}`); }
+        const triggers = [...new Set(parsedDesign.sections.filter(section => section.claims.some(id => selected.includes(id))).flatMap(section => section.triggers))];
+        const gateFor = { schema: "schema", migration: "migration", "breaking-contract": "breaking-contract", "critical-security": "security", "material-ambiguity": "design-ambiguity" } as const;
+        for (const trigger of triggers) {
+          const gate = gateFor[trigger];
+          if (!t.humanGate.includes(gate)) problems.push(`task ${t.id}: design trigger ${trigger} requires human gate ${gate}`);
+        }
+      }
     }
   }
   try { taskGraphFromPlan(tasks); }

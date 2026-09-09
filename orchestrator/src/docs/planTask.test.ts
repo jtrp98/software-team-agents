@@ -50,7 +50,7 @@ describe("canonical PlanTask v1",()=>{
     expect(()=>parseLegacyPlanTasks(fixture.replace("PlanTask format: 1","plantask format : 1"))).toThrow(/legacy runtime/);
   });
   it("ignores fake task headings in fenced semantic content; fails unclosed fences",()=>{
-    const t={...task(),retrievalHints:"```text\n### Task BE-900 — example\nOwner: nobody\n```"};
+    const t={...task(),retrievalHints:`${task().retrievalHints}\n\`\`\`text\n### Task BE-900 — example\nOwner: nobody\n\`\`\``};
     expect(parseCanonicalPlan(renderCanonicalTasks([t]),refs).tasks).toEqual([t]);
     expect(parseCanonicalPlan(renderCanonicalTasks([t]).replace("Owner: nobody\n```","Owner: nobody"),refs).problems.join(" ")).toContain("unclosed");
   });
@@ -79,7 +79,7 @@ describe("explicit migration window",()=>{
   it("old rows remain readable, never silently canonical",()=>{expect(parseLegacyPlanTasks(thin).tasks[0].id).toBe("BE-004");expect(parseCanonicalPlan(thin).problems.join(" ")).toContain("BE-004");expect(migrateLegacyTaskTable(thin).problems.join(" ")).toContain("objective");expect(()=>parseLegacyPlanTasks(fixture)).toThrow(/legacy runtime reader/);});
   it("refuses unsupported version, checkbox-only and ambiguous table",()=>{expect(parseCanonicalPlan(fixture.replace("format: 1","format: 99")).problems.length).toBeGreaterThan(0);expect(migrateLegacyTaskTable("## Phase 1\n- [ ] BE-004").problems.length).toBeGreaterThan(0);expect(migrateLegacyTaskTable(thin.replace("BE-004 —","BE-004 (DES-011) —")).problems.join(" ")).toContain("ambiguous");});
   it("losslessly converts a fully specified expanded table, with no inferred prose",()=>{
-    const t=task();const cols=["Task","Objective","Why","Owner","Tier","Depends on","Traceability","Produces","Consumes","Risk","Human gate","Status","Scope and constraints","Retrieval hints","Do not modify","Acceptance criteria","Required validation and expected evidence","Rollback/compatibility notes"];
+    const t={...task(),retrievalHints:task().retrievalHints.replace(/\n/g,"; ")};const cols=["Task","Objective","Why","Owner","Tier","Depends on","Traceability","Produces","Consumes","Risk","Human gate","Status","Scope and constraints","Retrieval hints","Do not modify","Acceptance criteria","Required validation and expected evidence","Rollback/compatibility notes"];
     const cells=[`${t.id} — ${t.title}`,t.objective,t.why,t.owner,t.tier!,"none",t.traceability.join(", "),t.produces.join(", "),"none",t.risk.join(", "),"none",t.status,t.scopeAndConstraints,t.retrievalHints,t.doNotModify,t.acceptanceCriteria,t.validationAndEvidence,t.compatibility];
     const md=`# Plan\n\n## Plan Summary\nPreserve this authored strategy.\n\n## Phase 1\n\n| ${cols.join(" | ")} |\n| ${cols.map(()=>"---").join(" | ")} |\n| ${cells.join(" | ")} |\n\n## Change Log\nPreserve this authored history.\n`;
     const result=migrateLegacyTaskTable(md,refs);expect(result.problems).toEqual([]);expect(result.tasks).toEqual([t]);expect(parseCanonicalPlan(result.markdown!,refs).tasks).toEqual([t]);

@@ -6,6 +6,7 @@ import { sectionMap, sectionText } from "../context/sections.js";
 import { structuralFallbackReason } from "../context/docSelection.js";
 import { extractIds } from "../traceability/traceability.js";
 import { isCanonicalPlan, parseCanonicalPlan } from "./planTask.js";
+import { parseDesignEvidence } from "./designEvidence.js";
 
 /**
  * A schema per module document type (`requirement.md`, `design.md`, `plan.md`,
@@ -96,6 +97,8 @@ export function extractStructure(docType: DocType, markdown: string): Record<str
     case "design": {
       const out: Record<string, unknown> = {};
       for (const [key, pattern] of Object.entries(DESIGN_HEADING_PATTERN)) out[key] = has(markdown, pattern);
+      const evidence = parseDesignEvidence(markdown);
+      if (evidence.mode === "addressable") out.designEvidenceValid = evidence.problems.length === 0;
       return out;
     }
     case "plan":
@@ -147,6 +150,7 @@ export function checkOneDoc(docType: DocType, markdown: string, label: string): 
   if (validate(structure)) return { ok: true, problems: [] };
   const problems = (validate.errors ?? []).map((e) => `${label}: ${e.instancePath || "(root)"} ${e.message ?? "is invalid"}`);
   if (docType === "plan" && isCanonicalPlan(markdown)) problems.push(...parseCanonicalPlan(markdown).problems.map(p=>`${label}: ${p}`));
+  if (docType === "design") problems.push(...parseDesignEvidence(markdown).problems.map(problem => `${label}: ${problem}`));
   return { ok: false, problems };
 }
 
@@ -300,6 +304,8 @@ export function checkDocStructure(projectRoot: string): DocStructureCheckResult 
       // Report-only: knowledge-ci.yml's structure-check step already runs with
       // continue-on-error, so a problem here doesn't block CI yet.
       if (docType === "design") {
+        const evidence = parseDesignEvidence(markdown);
+        if (evidence.mode === "legacy") notes.push(`${name}/design.md: safe whole-section compatibility fallback only — migrate to Design evidence format 1 before unattended execution`);
         const contract = checkDesignContractSections(markdown, `${name}/${DOC_FILENAMES[docType]}`);
         problems.push(...contract.problems);
       }

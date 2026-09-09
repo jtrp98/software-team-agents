@@ -94,6 +94,12 @@ export const ExecutionPacketSchema = PacketFieldsSchema.extend({
   const expected = new Set([...packet.contract.traceability, ...packet.contract.produces, ...packet.contract.consumes]);
   if (selected.length !== expected.size || new Set(selected).size !== selected.length || selected.some(id => !expected.has(id))) fail("selected references differ from exact task trace/contract set");
   for (const reference of packet.selected_traces) if (reference.hash !== contentHash(reference.text)) fail(`selected reference text hash drift: ${reference.id}`);
+  if (packet.design_evidence) {
+    const expectedDesign = new Set([...packet.contract.traceability.filter(id => /^(?:DES|DEC)-/.test(id)), ...packet.contract.produces, ...packet.contract.consumes]);
+    const evidenced = new Set(packet.design_evidence.map(ref => ref.claim));
+    for (const id of expectedDesign) if (!evidenced.has(id)) fail(`selected design evidence omits ${id}`);
+    for (const id of evidenced) if (!expectedDesign.has(id)) fail(`selected design evidence includes unrelated ${id}`);
+  }
   if (new Set(packet.dependencies.map(d => d.task_id)).size !== packet.dependencies.length) fail("duplicate dependency output");
   for (const d of packet.dependencies) if (d.task_id !== d.evidence.task_id) fail("dependency evidence identity mismatch");
 });
@@ -114,7 +120,7 @@ const HandoffReferenceSchema = z
   .max(192)
   .regex(/^[A-Za-z0-9%][A-Za-z0-9%._~:/#-]*$/, "must be a compact reference, not prose");
 const HandoffImplementationSchema = z.string().min(1).max(64).regex(/^(?:REQ|DES)-[A-Za-z0-9._-]+$/);
-const HandoffDecisionSchema = z.string().min(1).max(64).regex(/^(?:ADR|RULE)-[A-Za-z0-9._-]+$/);
+const HandoffDecisionSchema = z.string().min(1).max(64).regex(/^(?:ADR|RULE|DEC)-[A-Za-z0-9._-]+$/);
 const HandoffTestSchema = z
   .string()
   .min(1)

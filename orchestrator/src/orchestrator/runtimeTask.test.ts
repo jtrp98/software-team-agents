@@ -108,7 +108,7 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
       "refactor",
       "security-fix",
     ];
-    const executionFields = ["contract", "plan_source", "plan_hash", "artifact_hashes", "selected_traces", "dependencies", "scope", "required_verification", "stop_conditions"] as const;
+    const executionFields = ["contract", "plan_source", "plan_hash", "artifact_hashes", "selected_traces", "design_evidence", "dependencies", "scope", "required_verification", "stop_conditions"] as const;
 
     const evidence = workflowIds.map((workflow) => {
       const classification = classificationFor(workflow);
@@ -130,7 +130,7 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
       return { workflow, fields: executionFields.length, model_calls: adapterTripwire.constructions };
     });
 
-    expect(evidence).toEqual(workflowIds.map((workflow) => ({ workflow, fields: 9, model_calls: 0 })));
+    expect(evidence).toEqual(workflowIds.map((workflow) => ({ workflow, fields: 10, model_calls: 0 })));
     expect(adapterTripwire.constructions).toBe(0);
   });
 

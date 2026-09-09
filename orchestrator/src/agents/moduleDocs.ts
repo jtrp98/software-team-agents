@@ -11,6 +11,7 @@ import {
 import { AgentStage } from "../types.js";
 import { firstTable, sections } from "../docs/markdown.js";
 import { readWorkPlan, taskDesignRefs } from "../docs/planGraph.js";
+import { parseDesignEvidence } from "../docs/designEvidence.js";
 import { taskGraphFromPlan } from "../graph/taskGraph.js";
 import { extractIds } from "../traceability/traceability.js";
 
@@ -313,12 +314,19 @@ export function deriveHandoff(
         return { artifact: capRecord(minimalHandoff(stage, moduleName, opts), notes), notes, complete: false };
       }
     } else if (stage === AgentStage.SYSTEM_ANALYST) {
-      record.implements = extractIds(docText, "DES");
-      const contracts = sections(docText, 2).filter((section) => /contract/i.test(section.title));
-      record.contract_refs.produces = contracts.map((section) => headingReference(source, section.title));
-      record.decision_refs = unique([...extractIds(docText, "ADR"), ...extractIds(docText, "RULE")]);
+      const addressable = parseDesignEvidence(docText);
+      if (addressable.mode === "addressable" && addressable.problems.length === 0) {
+        record.implements = addressable.claims.filter((id) => id.startsWith("DES-"));
+        record.contract_refs.produces = addressable.claims.filter((id) => id.startsWith("Contract:"));
+        record.decision_refs = addressable.claims.filter((id) => id.startsWith("DEC-"));
+      } else {
+        record.implements = extractIds(docText, "DES");
+        const contracts = sections(docText, 2).filter((section) => /contract/i.test(section.title));
+        record.contract_refs.produces = contracts.map((section) => headingReference(source, section.title));
+        record.decision_refs = unique([...extractIds(docText, "ADR"), ...extractIds(docText, "RULE")]);
+      }
       record.open_findings = openFindings(source, docText, /^Unresolved Open Questions?$/i, AgentStage.SYSTEM_ANALYST);
-      if (record.implements.length === 0 || contracts.length === 0) {
+      if (record.implements.length === 0 || record.contract_refs.produces.length === 0) {
         notes.push("design.md has no derivable DES ids or contract headings; emitted the minimal handoff");
         return { artifact: capRecord(minimalHandoff(stage, moduleName, opts), notes), notes, complete: false };
       }

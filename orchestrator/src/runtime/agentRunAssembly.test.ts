@@ -63,6 +63,21 @@ describe("T-V8-004 semantic Task Compiler", () => {
       expect(packet.text).toContain(runtimeTask.contract.objective);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
+
+  it("fails packet compilation on a stale separate-Target design revision", () => {
+    const docsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "v8-stale-docs-"));
+    const targetRoot = fs.mkdtempSync(path.join(os.tmpdir(), "v8-stale-target-"));
+    try {
+      const runtimeTask = runtimeTaskFixture(docsRoot, { targetRoot, allow: ["server/**"] });
+      expect(() => compileExecutionPacket({
+        req: { stage: AgentStage.BACKEND_ENGINEER, taskId: "T-PACKET", context: [] }, role: "backend-engineer", runtimeTask,
+        contractScope: { allow: ["server/**"], deny: [".git/**"] }, baseRevision: "b".repeat(40),
+      })).toThrow(/design evidence drift.*stale revision/);
+    } finally {
+      fs.rmSync(docsRoot, { recursive: true, force: true });
+      fs.rmSync(targetRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("renderSlicedDocs — fallback attribution (T-V5-035)", () => {

@@ -5,7 +5,7 @@ export function selectTaskReference(markdown: string, id: string, source: string
   const lines = markdown.replace(/\r\n?/g, "\n").split("\n");
   const declaration = (line: string): string | undefined => {
     const text = line.replace(/^\s*(?:#{1,6}\s+|[-*]\s+(?:\[[ xX]\]\s+)?|\|\s*)?/, "").replace(/^[`*]+/, "");
-    return /^(REQ-\d+|AC-\d+(?:\.\d+)?|DES-\d+|Contract:[A-Za-z][A-Za-z0-9_.-]*\.v[1-9]\d*)(?=[\s:|`*—-]|$)/.exec(text)?.[1];
+    return /^(REQ-\d+|AC-\d+(?:\.\d+)?|DES-\d+|DEC-\d+|Contract:[A-Za-z][A-Za-z0-9_.-]*\.v[1-9]\d*)(?=[\s:|`*—-]|$)/.exec(text)?.[1];
   };
   const starts = lines.flatMap((line, i) => declaration(line) === id ? [i] : []);
   if (starts.length !== 1) throw new Error(`${source}: ${id} requires exactly one addressable declaration; found ${starts.length}. Author an ID heading/list/table row, then recompile`);

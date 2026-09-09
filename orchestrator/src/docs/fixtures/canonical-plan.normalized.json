@@ -24,10 +24,10 @@
     "humanGate": [],
     "status": "pending",
     "scopeAndConstraints": "Preserve the response contract while handling empty line items.",
-    "retrievalHints": "Search for the OrderSummary serializer and its empty-order test; confirm paths against source.",
+    "retrievalHints": "Hypothesis: The OrderSummary serializer and empty-order regression are likely boundaries; confirm symbols and paths against current source.\nQuery: Locate definitions and references for Contract:OrderSummary.v2 and the empty-order behavior.\nProvenance: DES-011, Contract:OrderSummary.v2",
     "doNotModify": "Authentication, database schema and unrelated response fields.",
     "acceptanceCriteria": "AC-007.2: An empty order returns the documented zero total without an exception.",
-    "validationAndEvidence": "Run the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.",
+    "validationAndEvidence": "Verify AC-007.2 with the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.",
     "compatibility": "Preserve existing nonempty-order serialization. The patch can be removed independently."
   }
 ]

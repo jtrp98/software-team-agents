@@ -19,6 +19,7 @@ import {
 import { AgentStage, TaskLevel } from "../types.js";
 import { isCanonicalPlan, parseCanonicalPlan, planTaskHash, type PlanTask } from "../docs/planTask.js";
 import { selectTaskReference } from "../docs/taskReferences.js";
+import { designEvidenceForClaims, parseDesignEvidence, DesignEvidenceRefSchema } from "../docs/designEvidence.js";
 import { TaskContractSchema, SourceHashSchema, SelectedTraceSchema, DependencySchema, VerificationSchema, Sha256Schema, contentHash, stableHash } from "../artifacts/executionPacket.js";
 
 const AvailabilitySchema = z.object({
@@ -79,6 +80,8 @@ export const RuntimeTaskV2Schema = z.strictObject({
   contract: TaskContractSchema,
   plan_source: z.string().min(1), plan_hash: Sha256Schema,
   artifact_hashes: z.array(SourceHashSchema).min(2), selected_traces: z.array(SelectedTraceSchema).min(1),
+  /** Optional only for persisted pre-T-V8-007 rows. New builds require and populate exact evidence. */
+  design_evidence: z.array(DesignEvidenceRefSchema).optional(),
   dependencies: z.object({ task_ids: z.array(z.string()), outputs: z.array(DependencySchema) }),
   scope: LegacyRuntimeTaskSchema.shape.scope,
   required_verification: VerificationSchema,
@@ -188,18 +191,21 @@ export function buildRuntimeTask(input: RuntimeTaskBuildInput): RuntimeTaskV2 | 
   if (parsed.problems.length) throw new Error(`task ${input.taskId}: ${parsed.problems.join("; ")}`);
   const task = parsed.tasks.find(t => t.id === input.taskId);
   if (!task) return null;
+  const design = parseDesignEvidence(designMd);
+  const designClaims = [...task.traceability.filter(id => /^(?:DES|DEC)-/.test(id)), ...task.produces, ...task.consumes];
+  const designEvidence = designEvidenceForClaims(design, designClaims);
   const graph = taskGraphFromPlan(parsed.tasks);
   const source = (name: string) => path.resolve(moduleDocPath(docsRoot, input.moduleName!, name));
   const selected = [...new Set([...task.traceability, ...task.produces, ...task.consumes])].map(id => {
-    const design = id.startsWith("DES-") || id.startsWith("Contract:");
-    return selectTaskReference(design ? designMd : requirementMd, id, source(design ? "design.md" : "requirement.md"));
+    const isDesign = /^(?:DES|DEC)-/.test(id) || id.startsWith("Contract:");
+    return selectTaskReference(isDesign ? designMd : requirementMd, id, source(isDesign ? "design.md" : "requirement.md"));
   });
   const workRoots = (input.targetWorkRoots ?? []).filter(root => input.classification.pipeline.includes(root.stage));
   const verification = requiredVerification(input);
   const { status: _status, ...contract } = task;
   return RuntimeTaskV2Schema.parse({
     version: 2, task_id: task.id, workflow: input.workflow, pm_mode: mode, contract,
-    plan_source: source("plan.md"), plan_hash: canonicalPlanHash(parsed.tasks),
+    plan_source: source("plan.md"), plan_hash: canonicalPlanHash(parsed.tasks), design_evidence: designEvidence,
     artifact_hashes: [
       { source: source("requirement.md"), hash: contentHash(requirementMd) },
       { source: source("design.md"), hash: contentHash(designMd) },

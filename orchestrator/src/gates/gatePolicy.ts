@@ -7,6 +7,7 @@ import {
   businessGateReason,
   type BusinessInputEvidence,
 } from "./businessInput.js";
+import type { DesignGateAssessment } from "../docs/designEvidence.js";
 
 /**
  * Evidence available to gate a transition. This is deliberately separate
@@ -18,6 +19,8 @@ export interface GateContext {
   requirementApproved?: boolean;
   /** Structured intake evidence. Complete confirmed input discharges only the redundant interview. */
   businessInput?: BusinessInputEvidence;
+  /** Risk facts derived from design.md after SA completes; absent rows keep the legacy universal gate. */
+  designAssessment?: DesignGateAssessment;
   designApproved?: boolean;
   qaReport?: QaReportArtifact;
   securityReport?: SecurityReportArtifact;
@@ -33,6 +36,13 @@ export interface GateContext {
 export interface GateResult {
   allowed: boolean;
   reason?: string;
+}
+
+export function designGateReason(assessment: DesignGateAssessment): string {
+  if (assessment.mode === "legacy") {
+    return "DESIGN_EVIDENCE_MIGRATION required — legacy design uses safe whole-section fallback and cannot feed unattended execution until Design evidence format 1 is authored";
+  }
+  return `DESIGN_RISK_CONFIRMATION required — ${assessment.triggers.join(", ")}`;
 }
 
 /**
@@ -73,9 +83,17 @@ export function checkGate(from: TaskState, to: TaskState, ctx: GateContext): Gat
   // a plan or a test strategy built against an unconfirmed schema is exactly as wrong as code
   // built against one.
   if (from === TaskState.DESIGN) {
+    if (ctx.designAssessment?.mode === "addressable" && ctx.designAssessment.canProceedWithoutConfirmation) {
+      return { allowed: true };
+    }
     return ctx.designApproved
       ? { allowed: true }
-      : { allowed: false, reason: "DESIGN_APPROVED required before development can start" };
+      : {
+          allowed: false,
+          reason: ctx.designAssessment
+            ? designGateReason(ctx.designAssessment)
+            : "DESIGN_APPROVED required before development can start (legacy universal-gate compatibility)",
+        };
   }
 
   if (from === TaskState.QA && to !== TaskState.QA_FAILED) {

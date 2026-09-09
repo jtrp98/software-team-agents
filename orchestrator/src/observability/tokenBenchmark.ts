@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { deriveHandoff } from "../agents/moduleDocs.js";
 import { ArtifactType, type HandoffArtifact } from "../artifacts/schemas.js";
+import { contentHash } from "../artifacts/executionPacket.js";
 import { renderTokenBenchmarkMarkdown } from "../codeintel/benchmark.js";
 import { ContextManager } from "../context/contextManager.js";
 import { estimateInputTokens } from "../context/contextBudget.js";
@@ -276,10 +277,21 @@ function benchmarkRuntimeTask(fixture: { root: string; moduleName: string }, sta
     version: 1, id: "BE-001", phase: 1, title: "Selected import", objective: "Import the selected row with its documented fields.",
     why: "The pinned fixture requires a stable import result.", owner: "backend-engineer", dependsOn: [],
     traceability: ["REQ-001", "AC-001.1", "DES-001"], produces: [], consumes: [], risk: ["low"], humanGate: [], status: "pending",
-    scopeAndConstraints: "Limit changes to the selected import behavior.", retrievalHints: "Search the import handler and its focused regression.",
-    doNotModify: "Unrelated archive and administration behavior.", acceptanceCriteria: "The selected import preserves the documented fields.",
-    validationAndEvidence: "Run the focused import regression and record the command, exit code and result.", compatibility: "Preserve the existing import response contract.",
+    scopeAndConstraints: "Limit changes to the selected import behavior.",
+    retrievalHints: "Hypothesis: The import handler and focused regression are likely boundaries; confirm them against current source.\nQuery: Locate definitions and references for the selected import behavior.\nProvenance: DES-001",
+    doNotModify: "Unrelated archive and administration behavior.", acceptanceCriteria: "AC-001.1: The selected import preserves the documented fields.",
+    validationAndEvidence: "Verify AC-001.1 with the focused import regression and record the command, exit code and result.", compatibility: "Preserve the existing import response contract.",
   });
+  const evidenceSource = "export const selectedImport = 'current';\n";
+  fs.mkdirSync(path.join(fixture.root, "src"), { recursive: true });
+  fs.writeFileSync(path.join(fixture.root, "src", "evidence.ts"), evidenceSource);
+  const evidence = (id: string, claim: string) => `Evidence ${id}: claim=${claim} | state=confirmed | path=src/evidence.ts | symbol=selectedImport | line=1 | revision=${"a".repeat(40)} | basis=source | tool=benchmark-read | hash=${contentHash(evidenceSource)}`;
+  fs.writeFileSync(path.join(sourceRoot, "design.md"), [
+    "# Design", "Design evidence format: 1", "## DES-001 — Selected import", "Contract:SelectedImport.v1 — benchmark boundary.", "DEC-001 — preserve the import response.",
+    evidence("EVD-001", "DES-001"), evidence("EVD-002", "Contract:SelectedImport.v1"), evidence("EVD-003", "DEC-001"),
+    "Compatibility: unchanged", "Data/schema: unchanged", "Migration/backfill: none", "Security: none",
+    "Fallback: retain the current import handler.", "Material ambiguity: none",
+  ].join("\n"));
   fs.writeFileSync(path.join(sourceRoot, "plan.md"), renderCanonicalTasks([task]));
   fs.appendFileSync(path.join(sourceRoot, "requirement.md"), "\n## Acceptance Criteria\n- AC-001.1: The selected row imports without changing its fields.\n");
   const classification = { ...classifyTask({ isClearBugFix: true, touchesBackend: true }), pipeline: [...stages] };

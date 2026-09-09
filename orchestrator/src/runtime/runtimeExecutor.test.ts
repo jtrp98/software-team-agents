@@ -66,6 +66,18 @@ function executorFor(runtime: MockRuntimeAdapter, over: Record<string, unknown> 
 
 const PASSING_REVIEW = ["## Round 1 (FULL)", "- everything checks out ✅", "- 12 passed, 0 failed"].join("\n");
 
+function addressableDesign(overrides: { compatibility?: string; schema?: string; migration?: string; security?: string; ambiguity?: string } = {}): string {
+  const revision = "a".repeat(40), hash = "b".repeat(64);
+  const evidence = (id: string, claim: string) => `Evidence ${id}: claim=${claim} | state=confirmed | path=src/orders.ts | symbol=orders | line=1 | revision=${revision} | basis=source | tool=rg-read | hash=${hash}`;
+  return [
+    "# Design", "Design evidence format: 1", "## DES-001 — Orders", "Contract:Orders.v1 — order boundary.", "DEC-001 — keep one boundary.",
+    evidence("EVD-001", "DES-001"), evidence("EVD-002", "Contract:Orders.v1"), evidence("EVD-003", "DEC-001"),
+    `Compatibility: ${overrides.compatibility ?? "additive-internal"}`, `Data/schema: ${overrides.schema ?? "unchanged"}`,
+    `Migration/backfill: ${overrides.migration ?? "none"}`, `Security: ${overrides.security ?? "none"}`,
+    "Fallback: disable the additive order boundary.", `Material ambiguity: ${overrides.ambiguity ?? "none"}`,
+  ].join("\n");
+}
+
 describe("createRuntimeExecutor — what reaches the adapter (T108)", () => {
   it("T-V4-COST-006 records frontmatter effort without changing the adapter effort", async () => {
     const projectRoot = tmpProject();
@@ -1049,6 +1061,26 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
     );
     expect(runtime.requests[1].model).toBe("opus");
     expect(runtime.requests[1].modelExplicit).toBe(true);
+  });
+
+  it("carries the parsed design assessment from SA output into the runtime gate", async () => {
+    const lowRisk = new MockRuntimeAdapter({ files: { "_docs/module/sales-crm/design.md": addressableDesign() } });
+    const low = await executorFor(lowRisk)({ stage: AgentStage.SYSTEM_ANALYST, taskId: "T-LOW", context: [] });
+    expect(low.outcome.result).toBe("PASS");
+    expect(low.gateEvidence?.designAssessment).toMatchObject({ triggers: [], canProceedWithoutConfirmation: true });
+
+    const schema = new MockRuntimeAdapter({ files: { "_docs/module/sales-crm/design.md": addressableDesign({ schema: "additive", migration: "required" }) } });
+    const high = await executorFor(schema)({ stage: AgentStage.SYSTEM_ANALYST, taskId: "T-SCHEMA", context: [] });
+    expect(high.outcome.result).toBe("PASS");
+    expect(high.gateEvidence?.designAssessment).toMatchObject({ triggers: ["schema", "migration"], canProceedWithoutConfirmation: false });
+  });
+
+  it("fails an SA run that declares addressable format with incomplete claim evidence", async () => {
+    const invalid = addressableDesign().replace("DEC-001 — keep one boundary.\n", "");
+    const runtime = new MockRuntimeAdapter({ files: { "_docs/module/sales-crm/design.md": invalid } });
+    const result = await executorFor(runtime)({ stage: AgentStage.SYSTEM_ANALYST, taskId: "T-BAD-DESIGN", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain("invalid addressable design evidence");
   });
 
   it("T-V8-005 — forwards central role policy to the adapter and records the effective effort/basis, not stale frontmatter", async () => {

@@ -40,6 +40,7 @@ import type { PersistedTask } from "../store/taskStore.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import type { ThreeRepoRequestRoots } from "../threeRepo/preflight.js";
 import { deriveHandoff } from "../agents/moduleDocs.js";
+import { parseDesignEvidence } from "../docs/designEvidence.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 import { assessContextBudget, contextBudgetRejections, formatBudgetRejection, resolveContextBudgetFromProject, resolveContextBudgetModeFromProject, taskTokenBudgetRejection, type ContextBudgetComposition } from "../context/contextBudget.js";
 import { RunLog } from "../observability/runLog.js";
@@ -809,6 +810,17 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           metrics,
         ));
       }
+      let gateEvidence: AgentExecutorResult["gateEvidence"];
+      if (req.stage === AgentStage.SYSTEM_ANALYST) {
+        const design = parseDesignEvidence(doc);
+        if (design.mode === "addressable" && design.problems.length > 0) {
+          return finish(failResult(
+            `system-analyst produced invalid addressable design evidence: ${design.problems.join("; ")}`,
+            metrics,
+          ));
+        }
+        gateEvidence = { designAssessment: design.gate };
+      }
       const handoff = deriveHandoff(req.stage, moduleName, doc, ownedDoc === "plan.md" ? doc : undefined, {
         taskId: req.taskId,
         phases,
@@ -820,6 +832,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         outcome: { ...metrics, result: "PASS" },
         artifactType: ArtifactType.HANDOFF,
         artifact: handoff.artifact,
+        gateEvidence,
       });
     }
 

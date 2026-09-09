@@ -19,7 +19,10 @@ AC-007.2 — <fixture>/_docs/module/packet-fixture/requirement.md#AC-007.2
 - AC-007.2: Selected fixture requirement for empty orders.
 
 DES-011 — <fixture>/_docs/module/packet-fixture/design.md#DES-011
-- DES-011: Preserve the documented order response contract.
+## DES-011 — Fixture contract
+
+## Addressable design evidence
+- EVD-001 -> DES-011: confirmed; src/evidence.ts#fixtureEvidence:1; revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; source/fixture-read; SHA-256 a93da9c408f065b0781cc186575ed9de9b571bde59f80d7ab11fc11010a73426
 
 ## Contracts
 Produces: none
@@ -43,7 +46,9 @@ Authentication, database schema and unrelated response fields.
 Preserve existing nonempty-order serialization. The patch can be removed independently.
 
 ## Retrieval hints
-Search for the OrderSummary serializer and its empty-order test; confirm paths against source.
+Hypothesis: The fixture symbol is a likely boundary; confirm it against current source.
+Query: Locate definitions and references for the selected fixture design.
+Provenance: DES-011
 
 ## Verified retrieval candidates
 none
@@ -52,7 +57,7 @@ none
 AC-007.2: An empty order returns the documented zero total without an exception.
 
 ## Validation and expected evidence
-Run the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.
+Verify AC-007.2 with the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.
 
 Levels: lint, typecheck, unit, integration, build
 Verification policy: full-order; enforcement: warn
@@ -93,7 +98,10 @@ AC-007.2 — <fixture>/_docs/module/packet-fixture/requirement.md#AC-007.2
 - AC-007.2: Selected fixture requirement for empty orders.
 
 DES-011 — <fixture>/_docs/module/packet-fixture/design.md#DES-011
-- DES-011: Preserve the documented order response contract.
+## DES-011 — Fixture contract
+
+## Addressable design evidence
+- EVD-001 -> DES-011: confirmed; src/evidence.ts#fixtureEvidence:1; revision aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; source/fixture-read; SHA-256 a93da9c408f065b0781cc186575ed9de9b571bde59f80d7ab11fc11010a73426
 
 ## Contracts
 Produces: none
@@ -117,7 +125,9 @@ Authentication, database schema and unrelated response fields.
 Preserve existing nonempty-order serialization. The patch can be removed independently.
 
 ## Retrieval hints
-Search for the OrderSummary serializer and its empty-order test; confirm paths against source.
+Hypothesis: The fixture symbol is a likely boundary; confirm it against current source.
+Query: Locate definitions and references for the selected fixture design.
+Provenance: DES-011
 
 ## Verified retrieval candidates
 none
@@ -126,7 +136,7 @@ none
 AC-007.2: An empty order returns the documented zero total without an exception.
 
 ## Validation and expected evidence
-Run the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.
+Verify AC-007.2 with the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.
 
 Levels: lint, typecheck, unit, integration, build
 Verification policy: full-order; enforcement: warn
