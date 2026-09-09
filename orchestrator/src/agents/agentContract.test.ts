@@ -145,6 +145,15 @@ describe("diffContractAgainstRegistry", () => {
     expect(diffContractAgainstRegistry(swapped)).toEqual([]);
   });
 
+  it("treats the conditional test-plan as optional for DEV and QA without removing their PlanTask authorities", () => {
+    for (const stage of [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER, AgentStage.QA_ENGINEER]) {
+      const contract = realContract(stage);
+      expect(contract.input.required, stage).not.toContain("test-plan");
+      expect(contract.input.optional, stage).toContain("test-plan");
+      expect(contract.input.required, stage).toContain("plan");
+    }
+  });
+
   it("catches an input the registry never grants", () => {
     const contract = realContract(AgentStage.BACKEND_ENGINEER);
     const issues = diffContractAgainstRegistry({

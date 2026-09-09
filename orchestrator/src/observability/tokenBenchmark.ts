@@ -58,8 +58,8 @@ export interface LargeHandoffBenchmarkComparison {
 
 const WORKLOAD_STAGES: Record<TokenBenchmarkRow["workload"], readonly AgentStage[]> = {
   Small: [AgentStage.BACKEND_ENGINEER], // workflows/typo.yml, backend branch
-  Medium: [AgentStage.SYSTEM_ANALYST, AgentStage.TEST_PLANNER, AgentStage.BACKEND_ENGINEER, AgentStage.UXUI_DESIGNER, AgentStage.FRONTEND_ENGINEER, AgentStage.QA_ENGINEER, AgentStage.SECURITY],
-  Large: [AgentStage.BUSINESS_ANALYST, AgentStage.SYSTEM_ANALYST, AgentStage.PROJECT_MANAGER, AgentStage.TEST_PLANNER, AgentStage.BACKEND_ENGINEER, AgentStage.UXUI_DESIGNER, AgentStage.FRONTEND_ENGINEER, AgentStage.QA_ENGINEER, AgentStage.SECURITY],
+  Medium: [AgentStage.SYSTEM_ANALYST, AgentStage.BACKEND_ENGINEER, AgentStage.UXUI_DESIGNER, AgentStage.FRONTEND_ENGINEER, AgentStage.QA_ENGINEER, AgentStage.SECURITY],
+  Large: [AgentStage.BUSINESS_ANALYST, AgentStage.SYSTEM_ANALYST, AgentStage.PROJECT_MANAGER, AgentStage.BACKEND_ENGINEER, AgentStage.UXUI_DESIGNER, AgentStage.FRONTEND_ENGINEER, AgentStage.QA_ENGINEER, AgentStage.SECURITY],
 };
 
 function fixedDocument(seed: string, bytes: number): string {
@@ -176,6 +176,64 @@ export function runTokenBenchmark(frameworkRoot: string): TokenBenchmarkRow[] {
       const inputTokens = estimateInputTokens(inputChars);
       return { workload, inputTokens, outputTokens: null, totalTokens: inputTokens, modelCalls: WORKLOAD_STAGES[workload].length, filesOpened, docBytes, retries: 0, qualityGatesPassed: null };
     });
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  }
+}
+
+export interface ConditionalTestPlannerTokenComparison {
+  ordinary: TokenBenchmarkRow;
+  triggered: TokenBenchmarkRow;
+  savedInputTokens: number;
+  savedModelCalls: number;
+  savedDocumentBytes: number;
+}
+
+/**
+ * Same pinned Large workload with and without the one conditional specialist
+ * call. This is a composition comparison, not a provider-usage claim.
+ */
+export function runConditionalTestPlannerTokenComparison(frameworkRoot: string): ConditionalTestPlannerTokenComparison {
+  const fixture = createTokenBenchmarkFixture();
+  const testPlanPath = path.join(fixture.root, "_docs", "module", fixture.moduleName, "test-plan.md");
+  const testPlan = fs.readFileSync(testPlanPath, "utf8");
+  const measure = (stages: readonly AgentStage[]): TokenBenchmarkRow => {
+    let inputChars = 0;
+    let docBytes = 0;
+    let filesOpened = 0;
+    for (const stage of stages) {
+      const cm = new ContextManager({ projectRoot: fixture.root, moduleName: fixture.moduleName });
+      const selected = cm.forStage(stage);
+      const renderedDocs = renderSlicedDocs(selected, cm);
+      docBytes += selected.reduce((sum, doc) => sum + doc.text.length, 0);
+      filesOpened += selected.length;
+      inputChars += staticChars(frameworkRoot, stage) + buildPromptParts({ taskId: "Large-fixture", stage, context: [] }, undefined, { docs: renderedDocs }).text.length;
+    }
+    const inputTokens = estimateInputTokens(inputChars);
+    return { workload: "Large", inputTokens, outputTokens: null, totalTokens: inputTokens, modelCalls: stages.length, filesOpened, docBytes, retries: 0, qualityGatesPassed: null };
+  };
+  try {
+    fs.unlinkSync(testPlanPath);
+    const ordinary = measure(WORKLOAD_STAGES.Large);
+    fs.writeFileSync(testPlanPath, testPlan, "utf8");
+    const triggered = measure([
+      AgentStage.BUSINESS_ANALYST,
+      AgentStage.SYSTEM_ANALYST,
+      AgentStage.PROJECT_MANAGER,
+      AgentStage.TEST_PLANNER,
+      AgentStage.BACKEND_ENGINEER,
+      AgentStage.UXUI_DESIGNER,
+      AgentStage.FRONTEND_ENGINEER,
+      AgentStage.QA_ENGINEER,
+      AgentStage.SECURITY,
+    ]);
+    return {
+      ordinary,
+      triggered,
+      savedInputTokens: triggered.inputTokens - ordinary.inputTokens,
+      savedModelCalls: triggered.modelCalls - ordinary.modelCalls,
+      savedDocumentBytes: triggered.docBytes - ordinary.docBytes,
+    };
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true });
   }

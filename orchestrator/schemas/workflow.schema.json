@@ -86,9 +86,9 @@
             ]
           },
           "when": {
-            "description": "Condition for including this step. Omitted means always. \"always_sensitive\" marks a workflow that forces a security pass regardless of what the caller said.",
+            "description": "Condition for including this step. Omitted means always. \"always_sensitive\" marks a workflow that forces a security pass regardless of what the caller said. \"test_strategy_required\" is selected only by the closed conditional test-strategy trigger policy.",
             "type": "string",
-            "enum": ["touchesBackend", "touchesFrontend", "touchesSensitiveArea", "always_sensitive"]
+            "enum": ["touchesBackend", "touchesFrontend", "touchesSensitiveArea", "always_sensitive", "test_strategy_required"]
           },
           "note": { "type": "string", "minLength": 1 }
         }

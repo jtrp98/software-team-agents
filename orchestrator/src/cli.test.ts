@@ -156,6 +156,16 @@ describe("parseArgs", () => {
     expect(USAGE).toContain("--model");
   });
 
+  it("parses the closed conditional test-strategy trigger vocabulary", () => {
+    const args = parseArgs([
+      "--task-id", "T-1", "--module", "m", "--new-feature", "--backend",
+      "--test-strategy", "security,cross-task,security",
+    ], "/repo");
+    expect(args.classification.testStrategyTriggers).toEqual(["security", "cross-task"]);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--test-strategy", "guess"], "/repo")).toThrow(/one or more of/);
+    expect(USAGE).toContain("--test-strategy");
+  });
+
   it("T-V8-005 — parses an operator effort override and leaves vocabulary validation to the adapter", () => {
     const explicit = parseArgs(["--task-id", "T-1", "--module", "m", "--effort", "provider-native-high"], "/repo");
     expect(explicit.effort).toBe("provider-native-high");
@@ -1072,6 +1082,58 @@ describe("T-V3TOK-041 context verb", () => {
       expect(await runCli(["context", "backend-engineer", "--task", "T-PACKET", "--packet", "--json", "--project-root", root], root)).toBe(0);
       expect(JSON.parse(logs.join("\n"))).toMatchObject({ task_id: "T-PACKET", scope: { allow: ["server/**"] } });
       expect(USAGE).toContain("--packet");
+    } finally {
+      console.log = original;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("T-V8-010 snapshots read-only generated checklist/prompt views and unresolved freshness", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-context-views-"));
+    const packet = packetFixture(root);
+    writeExecutionPacket({ projectRoot: root, packet });
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+    try {
+      expect(await runCli(["context", "backend-engineer", "--task", "T-PACKET", "--packet", "--views", "--json", "--project-root", root], root)).toBe(4);
+      const view = JSON.parse(logs.join("\n"));
+      expect(view).toMatchObject({
+        authority: { kind: "generated-view", mutable: false, controls_status: false, controls_readiness: false },
+        checklist: { task_id: "T-PACKET" },
+        prompt_preview: { state: "stale", unresolved_retrieval: true, prompt: { text: packet.text } },
+      });
+      expect(view.prompt_preview.prompt.bytes).toBe(view.prompt_preview.persisted_packet.text_bytes);
+      expect(view.prompt_preview.prompt.hash).toBe(view.prompt_preview.persisted_packet.text_hash);
+      expect(view.prompt_preview.stale_reasons.join("\n")).toContain("target revision is unavailable");
+      expect(USAGE).toContain("--views");
+      expect({
+        authority: view.authority,
+        checklist_sources: view.checklist.items.map((item: { source_path: string }) => item.source_path),
+        state: view.prompt_preview.state,
+        unresolved_retrieval: view.prompt_preview.unresolved_retrieval,
+        byte_equal: view.prompt_preview.prompt.bytes === view.prompt_preview.persisted_packet.text_bytes,
+        hash_equal: view.prompt_preview.prompt.hash === view.prompt_preview.persisted_packet.text_hash,
+      }).toMatchInlineSnapshot(`
+        {
+          "authority": {
+            "controls_readiness": false,
+            "controls_status": false,
+            "kind": "generated-view",
+            "mutable": false,
+            "source": "canonical-plan-task+execution-packet",
+          },
+          "byte_equal": true,
+          "checklist_sources": [
+            "contract.acceptanceCriteria",
+            "contract.validationAndEvidence",
+            "contract.compatibility",
+          ],
+          "hash_equal": true,
+          "state": "stale",
+          "unresolved_retrieval": true,
+        }
+      `);
     } finally {
       console.log = original;
       fs.rmSync(root, { recursive: true, force: true });

@@ -43,3 +43,18 @@ The ordinary two-repair stop appears in the packet; the existing global retry
 ceiling is labeled defense in depth. Controller/repair lifecycle enforcement,
 route-policy changes, retrieval-provider selection and wave retirement remain
 with their later V8 tasks. A packet is neither a QA verdict nor human approval.
+
+## Generated task views
+
+`context <task-id> --packet --views` derives two disposable read-only views from
+the persisted v2 packet. The checklist maps only canonical PlanTask acceptance,
+validation/evidence, human-gate and compatibility fields. It stores no checked
+state and cannot change readiness, status, gates or approval.
+
+The prompt preview calls the same packet renderer used by execution and must be
+byte-for-byte and hash-for-hash equal to the persisted packet text. It labels the
+plan, source artifact, config/guard, compiler and Target revision identities,
+whether retrieval remains unresolved, and whether current inputs make the view
+executable or stale. Every emitted prompt section has a packet-field source-map
+entry. Missing current identity, changed source bytes or retrieval/revision drift
+marks the view stale; the caller must recompile instead of executing the view.

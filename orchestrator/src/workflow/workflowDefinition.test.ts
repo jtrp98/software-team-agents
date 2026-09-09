@@ -160,6 +160,41 @@ describe("pipelineFromWorkflow", () => {
       AgentStage.SECURITY,
     );
   });
+
+  it("includes test-planner only for a named shared-strategy trigger", () => {
+    const feature = loadWorkflow("feature");
+    const ordinary = pipelineFromWorkflow(feature, { isNewFeatureModuleOrProject: true, touchesBackend: true });
+    const complex = pipelineFromWorkflow(feature, {
+      isNewFeatureModuleOrProject: true,
+      touchesBackend: true,
+      testStrategyTriggers: ["multi-system"],
+    });
+    expect(ordinary).not.toContain(AgentStage.TEST_PLANNER);
+    expect(complex).toContain(AgentStage.TEST_PLANNER);
+  });
+
+  it("adapts a pre-V8 unconditional test-planner row without restoring mandatory calls", () => {
+    const legacy: WorkflowDefinition = {
+      ...loadWorkflow("feature"),
+      steps: [
+        { agent: AgentStage.TEST_PLANNER },
+        { agent: AgentStage.BACKEND_ENGINEER },
+        { agent: AgentStage.QA_ENGINEER },
+      ],
+    };
+    expect(pipelineFromWorkflow(legacy, { touchesBackend: true })).toEqual([
+      AgentStage.BACKEND_ENGINEER,
+      AgentStage.QA_ENGINEER,
+    ]);
+    expect(pipelineFromWorkflow(legacy, {
+      touchesBackend: true,
+      testStrategyTriggers: ["cross-task"],
+    })).toEqual([
+      AgentStage.TEST_PLANNER,
+      AgentStage.BACKEND_ENGINEER,
+      AgentStage.QA_ENGINEER,
+    ]);
+  });
 });
 
 describe("loadWorkflow", () => {

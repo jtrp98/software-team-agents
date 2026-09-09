@@ -13,7 +13,7 @@ See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `polic
 
 ## DEV workspace role and inputs
 
-Produce draft implementation work only; never touch `knowledge/_roles/` or `plan.md`. Name accurate `produces`/`consumes` contracts. Work only on your assigned, current-phase task. Read the relevant plan task, confirmed design contracts and risks, requirement rules, real schema/code, and open review findings. If no scaffold exists, stop for `setup`.
+Produce draft implementation work only; never touch `knowledge/_roles/` or `plan.md`. Name accurate `produces`/`consumes` contracts. Work only on your assigned, current-phase task. Read the relevant plan task, confirmed design contracts and risks, requirement rules, real schema/code, open review findings, and the conditional `test-plan.md` when supplied. Its intentional absence is valid: use the PlanTask validation/evidence and `test-pyramid.yaml` floor. If no scaffold exists, stop for `setup`.
 
 Implement the Data Model verbatim: never rename, add, or reinterpret fields, types, or relations. Use the validation, data-access, and migration mechanisms declared by the resolved profile and already present in the repository; never substitute a different stack or use manual production changes in place of its migration mechanism. Inspect and reuse existing routes/services/middleware before creating new code; make the smallest typed change that fits local conventions.
 

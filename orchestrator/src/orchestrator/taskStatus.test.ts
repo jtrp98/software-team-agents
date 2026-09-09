@@ -6,7 +6,11 @@ import { newPersistedTask, type PersistedTask } from "../store/taskStore.js";
 import { describeStatus, isAgentAssignedAt, phaseOf, stageStateOf, unmetDependencies } from "./taskStatus.js";
 
 function task(overrides: Partial<PersistedTask> = {}): PersistedTask {
-  const classification = classifyTask({ isIncrementalFeature: true, touchesBackend: true });
+  const classification = classifyTask({
+    isIncrementalFeature: true,
+    touchesBackend: true,
+    testStrategyTriggers: ["cross-task"],
+  });
   return {
     ...newPersistedTask({
       taskId: "T-1",

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { RuntimeTaskV2Schema, assertRuntimeTaskFresh } from "../orchestrator/runtimeTask.js";
 import { planTaskHash } from "../docs/planTask.js";
-import { PacketFieldsSchema, renderPacketSections, renderPacketText, stableHash, contentHash, type DependencyEvidence, type PacketFields } from "../artifacts/executionPacket.js";
+import { PacketFieldsSchema, packetConfigHash, renderPacketSections, renderPacketText, stableHash, contentHash, type DependencyEvidence, type PacketFields } from "../artifacts/executionPacket.js";
 import { verifyDesignEvidence } from "../docs/designEvidence.js";
 import {
   ArtifactType,
@@ -478,7 +478,12 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
     identity: {
       task_hash: planTaskHash({ ...task.contract, status: "pending" }), plan_hash: task.plan_hash,
       artifact_hashes: task.artifact_hashes,
-      config_hash: stableHash({ config: input.config ?? null, guards: input.contractScope, verification: task.required_verification, roots }),
+      config_hash: packetConfigHash({
+        config: input.config ?? null,
+        guards: { allow, deny: unique(input.contractScope.deny) },
+        verification: task.required_verification,
+        roots: unique(roots.map(root => root.root)),
+      }),
       compiler_version: "v8-packet-2", compiler_hash: packetCompilerHash(), base_revision: input.baseRevision,
     },
   });

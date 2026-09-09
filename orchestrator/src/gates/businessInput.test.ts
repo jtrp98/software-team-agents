@@ -342,7 +342,11 @@ describe("T-V8-006 orchestration, prompt, resume, and invalidation", () => {
   it("does not rerun BA for an ordinary implementation repair", async () => {
     const orch = new Orchestrator(
       "T-REPAIR",
-      classifyTask({ touchesBusinessRuleOnly: true, touchesBackend: true }),
+      classifyTask({
+        touchesBusinessRuleOnly: true,
+        touchesBackend: true,
+        testStrategyTriggers: ["cross-task"],
+      }),
       { businessInput: completeInput() },
     );
 

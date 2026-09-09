@@ -14,6 +14,7 @@ requires_human_approval: true
 steps:
   - agent: system-analyst
   - agent: test-planner
+    when: test_strategy_required
   - agent: backend-engineer
     when: touchesBackend
   - agent: uxui-designer

@@ -218,7 +218,12 @@ describe("audit trail over a real run (T37)", () => {
     const store = new MemoryTaskStore();
     const orch = new Orchestrator(
       "T-INPUT",
-      classifyTask({ isNewFeatureModuleOrProject: true, touchesSchema: true, touchesBackend: true }),
+      classifyTask({
+        isNewFeatureModuleOrProject: true,
+        touchesSchema: true,
+        touchesBackend: true,
+        testStrategyTriggers: ["cross-task"],
+      }),
       { store },
     );
 

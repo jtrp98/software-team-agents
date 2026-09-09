@@ -29,7 +29,12 @@ const pass: AgentExecutorResult = { outcome: { tokens: 100, cost: 0.01, result: 
 
 /** An incremental feature: system-analyst -> test-planner -> backend -> uxui-designer -> frontend -> qa. */
 function incremental() {
-  return classifyTask({ isIncrementalFeature: true, touchesBackend: true, touchesFrontend: true });
+  return classifyTask({
+    isIncrementalFeature: true,
+    touchesBackend: true,
+    touchesFrontend: true,
+    testStrategyTriggers: ["cross-task"],
+  });
 }
 
 describe("Orchestrator persistence (T01)", () => {

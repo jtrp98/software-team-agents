@@ -58,7 +58,7 @@ Several behaviours are worth knowing when you read the agent files:
 ```
 setup (once per project)
    ↓
-business-analyst → system-analyst → project-manager → test-planner → backend-engineer → uxui-designer → frontend-engineer
+business-analyst → system-analyst → project-manager → [test-planner when shared strategy is triggered] → backend-engineer → uxui-designer → frontend-engineer
                                                                                                           ↓
                                                                                                     qa-engineer
                                                                                           ↓            ↓            ↓
@@ -75,10 +75,10 @@ business-analyst → system-analyst → project-manager → test-planner → bac
 | `business-analyst` | business requirements | `review.md`, `design.md`, `requirement.md` (amend) | `requirement.md` |
 | `system-analyst` | feasibility + data model | `requirement.md`, `review.md`, stack files | `design.md` |
 | `project-manager` | work graph — phased task list as a validated dependency DAG (`sta --check-plan`) | `design.md`, `requirement.md`, `status.md`'s Scaffold line | `plan.md` |
-| `test-planner` | test strategy | `requirement.md`, `design.md`, `plan.md` | `test-plan.md` |
+| `test-planner` | shared test strategy for cross-task, multi-system, migration, security, or release work | `requirement.md`, `design.md`, `plan.md` | conditional `test-plan.md` |
 | `uxui-designer` | UX/UI analysis + recommendations (read-only consultant; drafts only, a person signs off) | `requirement.md`, `design.md`, design sources under `knowledge/_sources/design/<module>/`, Figma via read-only MCP, Claude Design via fail-closed MCP (draft-only) | `_docs/module/*/uxui/**`, `knowledge/*/ux-design/**` (`UX-*` drafts) |
-| `frontend-engineer` | UI code | `plan.md`, `design.md`, `requirement.md`, `test-plan.md`, `review.md`, the module's signed UX artifact | app code |
-| `backend-engineer` | API/DB code | `plan.md`, `design.md`, `requirement.md`, `test-plan.md`, `review.md` | app code |
+| `frontend-engineer` | UI code | `plan.md`, `design.md`, `requirement.md`, optional `test-plan.md`, `review.md`, the module's signed UX artifact | app code |
+| `backend-engineer` | API/DB code | `plan.md`, `design.md`, `requirement.md`, optional `test-plan.md`, `review.md` | app code |
 | `qa-engineer` | verification | all docs + `schema.prisma` + real code | `review.md`, `review/phase-N.md`, task Status cells and add-only `🔒 Security gate` in `plan.md` |
 | `security` | security audit | `requirement.md`, `design.md`, `review.md`, `schema.prisma`, real code | `security.md` |
 | `devops` | deploy, CI, migrations | `status.md`, `review.md`, `security.md`, `plan.md`, `design.md`, `schema.prisma`, stack files | `deploy.md`, infra files |
@@ -93,7 +93,7 @@ Every agent also reads `_docs/status.md` when it starts and regenerates it (`nod
 
 `uxui-designer` runs immediately before `frontend-engineer`, but only in pipelines that carry a design phase — feature, business-rule, schema-change and incremental work (`workflows/typo.yml`-class small fixes rely on the module's existing signed artifact instead). It analyzes the module's design source — a Figma file over a read-only MCP connection, export/handoff files a person placed in `knowledge/_sources/design/<module>/`, or Anthropic's Claude Design server over its MCP (Path C: reads ingest a design; explicit write mode may seed a draft mockup on the canvas; the tool allowlist is frozen and fail-closed in `orchestrator/src/integration/claudeDesignMcp.ts`, ADR-005) — and produces draft `UX-*` recommendations plus `_docs/module/<name>/uxui/design.md`. Everything it writes is draft — a person reviews, approves, and records the UXUI lane sign-off (`sta roles signoff uxui --by <name>`), and frontend work does not start until that gate is current. The gate itself follows the same right-sizing: TRIVIAL/SMALL tasks skip the UX-artifact precondition (no design phase, no uxui round was scheduled), while MEDIUM+ — and any unknown level, fail-closed — still require it; the SA→DEV handoff checks apply at every level. It never scrapes a design URL and never calls a destructive canvas tool; the Figma connection is read-only, identity-gated, and Claude Design output stays draft-only (see README, "Design sources & identities"). A question that is not its to answer — is this UI worth building, or can it be built — is reported as structured data and routed back to `business-analyst`/`system-analyst` automatically; if this pipeline has no such stage, it stops for a person instead of guessing.
 
-`test-planner` runs after `project-manager`, before the engineers — deciding what needs testing and at what level (unit/integration/API/E2E) so `backend-engineer`/`frontend-engineer` build against a stated strategy instead of each guessing their own, and `qa-engineer` verifies against it instead of inventing one per round. It participates in normal auto-chaining like every other stage — only a triggered human gate stops the chain. Right-sizing still applies: small work that skips `project-manager` skips `test-planner` too (see below).
+`test-planner` is conditional after `project-manager`, before the engineers. A separate shared strategy is selected only by the closed deterministic triggers `cross-task`, `multi-system`, `migration`, `security`, and `release`. Ordinary task-level validation and expected evidence stay in the canonical PlanTask, with `test-pyramid.yaml` providing the minimum verification floor; DEV and QA therefore accept an absent `test-plan.md`. When triggered, the role decides coordinated unit/integration/API/E2E coverage that cannot be derived safely from one task. The test floor is never lowered by skipping the role.
 
 `setup` runs once per project, before Phase 1. Everything after that loops per phase.
 

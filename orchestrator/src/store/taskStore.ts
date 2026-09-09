@@ -9,6 +9,7 @@ import type { RunRecord } from "../observability/runLog.js";
 import { RuntimeTaskSchema } from "../orchestrator/runtimeTask.js";
 import { BusinessInputEvidenceSchema } from "../gates/businessInput.js";
 import { DesignGateAssessmentSchema } from "../docs/designEvidence.js";
+import { TEST_STRATEGY_TRIGGERS } from "../classification/taskClassifier.js";
 
 /**
  * Everything the orchestrator holds about one task, in a form that survives
@@ -30,6 +31,7 @@ export const PersistedTaskSchema = z.object({
     pipeline: z.array(z.enum(AgentStage)),
     requiresHumanApproval: z.boolean(),
     sensitiveGate: z.boolean(),
+    testStrategyTriggers: z.array(z.enum(TEST_STRATEGY_TRIGGERS)).optional(),
     reasons: z.array(z.string()),
   }),
   /**

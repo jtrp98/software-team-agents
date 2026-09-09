@@ -35,6 +35,21 @@ export function stableHash(value: unknown): string {
 }
 export function contentHash(text: string | Buffer): string { return createHash("sha256").update(text).digest("hex"); }
 
+/** Public, reproducible config identity used by compilation and preview drift checks. */
+export function packetConfigHash(input: {
+  config: unknown;
+  guards: { allow: readonly string[]; deny: readonly string[] };
+  verification: z.infer<typeof VerificationSchema>;
+  roots: readonly string[];
+}): string {
+  return stableHash({
+    config: input.config,
+    guards: { allow: [...input.guards.allow], deny: [...input.guards.deny] },
+    verification: input.verification,
+    roots: [...input.roots],
+  });
+}
+
 export const PacketFieldsSchema = z.strictObject({
   version: z.literal(2), attempt: z.number().int().positive(), task_id: text,
   stage: z.enum(AgentStage), role: text,

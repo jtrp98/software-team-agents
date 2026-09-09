@@ -99,7 +99,11 @@ describe("Full pipeline integration", () => {
 
   it("drives a LARGE_CRITICAL task through both approval gates and a QA retry, crashing and resuming from a real SqliteTaskStore mid-run", async () => {
     const store = openStore();
-    const classification = classifyTask({ touchesSchema: true, touchesBackend: true });
+    const classification = classifyTask({
+      touchesSchema: true,
+      touchesBackend: true,
+      testStrategyTriggers: ["migration"],
+    });
     const executor = makeExecutor({
       [AgentStage.SYSTEM_ANALYST]: () => ({
         outcome: { tokens: 2000, cost: 0.2, result: "PASS" },

@@ -200,6 +200,7 @@ const EXPLICIT_BEHAVIOUR: Readonly<
     level: TaskLevel.MEDIUM,
     requiresHumanApproval: true,
     steps: [
+      { agent: AgentStage.TEST_PLANNER, when: "test_strategy_required" },
       { agent: AgentStage.BACKEND_ENGINEER, when: "touchesBackend" },
       { agent: AgentStage.FRONTEND_ENGINEER, when: "touchesFrontend" },
       { agent: AgentStage.QA_ENGINEER },
@@ -210,6 +211,7 @@ const EXPLICIT_BEHAVIOUR: Readonly<
     level: TaskLevel.SMALL,
     requiresHumanApproval: false,
     steps: [
+      { agent: AgentStage.TEST_PLANNER, when: "test_strategy_required" },
       { agent: AgentStage.BACKEND_ENGINEER, when: "touchesBackend" },
       { agent: AgentStage.FRONTEND_ENGINEER, when: "touchesFrontend" },
       { agent: AgentStage.QA_ENGINEER },
@@ -220,6 +222,7 @@ const EXPLICIT_BEHAVIOUR: Readonly<
     level: TaskLevel.LARGE_CRITICAL,
     requiresHumanApproval: true,
     steps: [
+      { agent: AgentStage.TEST_PLANNER, when: "test_strategy_required" },
       { agent: AgentStage.BACKEND_ENGINEER, when: "touchesBackend" },
       { agent: AgentStage.FRONTEND_ENGINEER, when: "touchesFrontend" },
       { agent: AgentStage.QA_ENGINEER },
@@ -295,6 +298,7 @@ const BACKEND_ONLY: ClassificationInput = { touchesBackend: true };
 const FRONTEND_ONLY: ClassificationInput = { touchesFrontend: true };
 const BOTH_ENGINEERS: ClassificationInput = { touchesBackend: true, touchesFrontend: true };
 const SENSITIVE: ClassificationInput = { touchesBackend: true, touchesFrontend: true, touchesSensitiveArea: true };
+const TEST_STRATEGY: ClassificationInput = { touchesBackend: true, touchesFrontend: true, testStrategyTriggers: ["cross-task"] };
 
 /**
  * Reads one workflow out of the classifier by asking it the five questions the
@@ -312,6 +316,7 @@ function deriveSteps(signal: keyof ClassificationInput, id: string): WorkflowSte
   const backend = pipelineFor(BACKEND_ONLY);
   const frontend = pipelineFor(FRONTEND_ONLY);
   const sensitive = pipelineFor(SENSITIVE);
+  const testStrategy = pipelineFor(TEST_STRATEGY);
 
   const steps: WorkflowStep[] = [];
   for (const stage of sensitive) {
@@ -341,12 +346,18 @@ function deriveSteps(signal: keyof ClassificationInput, id: string): WorkflowSte
         "the `when:` vocabulary cannot express that, so the generated file would be wrong",
     );
   }
+  if (testStrategy.includes(AgentStage.TEST_PLANNER) && !steps.some(step => step.agent === AgentStage.TEST_PLANNER)) {
+    const plannerAt = testStrategy.indexOf(AgentStage.TEST_PLANNER);
+    const nextStage = testStrategy.slice(plannerAt + 1).find(stage => steps.some(step => step.agent === stage));
+    const insertAt = nextStage === undefined ? steps.length : steps.findIndex(step => step.agent === nextStage);
+    steps.splice(insertAt, 0, { agent: AgentStage.TEST_PLANNER, when: "test_strategy_required" });
+  }
   return steps;
 }
 
 /** One derived workflow: everything behavioural comes from the classifier, everything prose from {@link WORKFLOW_DOCS}. */
 function deriveSignalWorkflow(id: string, signal: keyof ClassificationInput, priority: number): WorkflowDefinition {
-  const shapes = [NO_FLAGS, BACKEND_ONLY, FRONTEND_ONLY, BOTH_ENGINEERS, SENSITIVE].map((flags) =>
+  const shapes = [NO_FLAGS, BACKEND_ONLY, FRONTEND_ONLY, BOTH_ENGINEERS, SENSITIVE, TEST_STRATEGY].map((flags) =>
     classifyTask({ ...flags, [signal]: true }),
   );
   const [first] = shapes;

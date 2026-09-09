@@ -37,8 +37,8 @@ The normal flow, and the loops back:
 ```
 setup (once per project)
    ↓
-business-analyst → system-analyst → project-manager → test-planner
-                                                            ↓
+business-analyst → system-analyst → project-manager → [test-planner when strategy-triggered]
+                                                                         ↓
 backend-engineer → [uxui-designer (consultant draft)] → frontend-engineer
                                                             ↓
                                                        qa-engineer
@@ -72,11 +72,11 @@ Match the entry point to the size of the change:
 |---|---|---|
 | Copy/styling tweak | `backend-engineer` (if it touches the API) → `frontend-engineer` — no QA stage by design (`workflows/typo.yml`) | `business-analyst`, `system-analyst`, `project-manager`, `test-planner`, `qa-engineer` |
 | A bug where the requirement and schema are already clear | engineer → `qa-engineer` | `business-analyst`, `system-analyst`, `project-manager`, `test-planner` |
-| A change that adds or alters a field/table/relation | `system-analyst` (amend mode) → `test-planner` → engineer → `qa-engineer` (+ `security`) | `business-analyst`, `project-manager` |
-| A change to business rules, but no schema impact | `business-analyst` (amend) → `system-analyst` (amend) → `test-planner` → engineer → `qa-engineer` | `project-manager` |
-| A new feature, module, or project | `business-analyst`, full chain — even when it also needs new tables: confirmed input is normalized or missing facts are interviewed first, and schema confirmation follows | nothing |
+| A change that adds or alters a field/table/relation | `system-analyst` (amend mode) → engineer → `qa-engineer` (+`test-planner` only for cross-task/system/migration/security/release strategy; +`security`) | `business-analyst`, `project-manager` |
+| A change to business rules, but no schema impact | `business-analyst` (amend) → `system-analyst` (amend) → engineer → `qa-engineer` (+`test-planner` only for a named shared-strategy trigger) | `project-manager` |
+| A new feature, module, or project | `business-analyst`, full chain — confirmed input is normalized or missing facts are interviewed first, schema confirmation follows when needed, and `test-planner` runs only for a named shared-strategy trigger | nothing |
 
-(`test-planner` travels with every pipeline that has a phased plan; it only appears in a row's "start at" column where that plan exists. `devops` enters only through deploy/hotfix/security-fix workflows.)
+`test-planner` is selected only by the deterministic `cross-task`, `multi-system`, `migration`, `security`, or `release` trigger set. Its absence is intentional for ordinary work: PlanTask validation/evidence plus `test-pyramid.yaml` remain authoritative. `devops` enters only through deploy/hotfix/security-fix workflows.
 
 `project-manager` is only needed when there's enough work to need phasing and ordering. One or two tasks don't need a plan — the user can hand them straight to an engineer.
 

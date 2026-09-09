@@ -121,7 +121,11 @@ describe("Orchestrator", () => {
   });
 
   it("drives a LARGE_CRITICAL schema-change task through both human-approval gates to DEPLOYED", async () => {
-    const classification = classifyTask({ touchesSchema: true, touchesBackend: true });
+    const classification = classifyTask({
+      touchesSchema: true,
+      touchesBackend: true,
+      testStrategyTriggers: ["migration"],
+    });
     const orch = new Orchestrator("T-LARGE", classification);
     const executor = makeExecutor({
       [AgentStage.SYSTEM_ANALYST]: () => ({
@@ -157,7 +161,11 @@ describe("Orchestrator", () => {
   });
 
   it("stops at WAITING_FOR_HUMAN for design approval and never runs the engineer until approved", async () => {
-    const classification = classifyTask({ touchesSchema: true, touchesBackend: true });
+    const classification = classifyTask({
+      touchesSchema: true,
+      touchesBackend: true,
+      testStrategyTriggers: ["migration"],
+    });
     const orch = new Orchestrator("T-GATE", classification);
     const executor = makeExecutor({
       [AgentStage.SYSTEM_ANALYST]: () => ({
@@ -256,7 +264,11 @@ describe("Orchestrator", () => {
   });
 
   it("emits WAITING_FOR_HUMAN and TASK_BLOCKED at the right points", async () => {
-    const classification = classifyTask({ touchesSchema: true, touchesBackend: true });
+    const classification = classifyTask({
+      touchesSchema: true,
+      touchesBackend: true,
+      testStrategyTriggers: ["migration"],
+    });
     const orch = new Orchestrator("T-GATE-EVENT", classification);
     const waiting: string[] = [];
     orch.events.on("WAITING_FOR_HUMAN", (e) => waiting.push(`${e.from}->${e.to}`));
@@ -478,7 +490,12 @@ describe("uxui-designer routes questions back to ba/sa (T-UX10)", () => {
     throw new Error("uxui-designer was never assigned");
   }
 
-  const feature = () => classifyTask({ isNewFeatureModuleOrProject: true, touchesBackend: true, touchesFrontend: true });
+  const feature = () => classifyTask({
+    isNewFeatureModuleOrProject: true,
+    touchesBackend: true,
+    touchesFrontend: true,
+    testStrategyTriggers: ["cross-task"],
+  });
 
   it("a value question routes back to business-analyst at REQUIREMENT, not forward to frontend", async () => {
     const orch = new Orchestrator("T-UX-BA", feature());
@@ -525,7 +542,12 @@ describe("uxui-designer routes questions back to ba/sa (T-UX10)", () => {
   });
 
   it("fails closed when the owner is not in this pipeline — an incremental task has no BA to ask", async () => {
-    const classification = classifyTask({ isIncrementalFeature: true, touchesBackend: true, touchesFrontend: true });
+    const classification = classifyTask({
+      isIncrementalFeature: true,
+      touchesBackend: true,
+      touchesFrontend: true,
+      testStrategyTriggers: ["cross-task"],
+    });
     const orch = new Orchestrator("T-UX-NOBA", classification);
     // incremental: SA -> TP -> BE -> UXUI -> FE -> QA; the DESIGN->PLAN schema gate still fires.
     await orch.step(() => pass); // system-analyst

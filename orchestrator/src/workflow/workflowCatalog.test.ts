@@ -24,6 +24,7 @@ const PROBES: ClassificationInput[] = [
   { touchesFrontend: true },
   { touchesBackend: true, touchesFrontend: true },
   { touchesBackend: true, touchesFrontend: true, touchesSensitiveArea: true },
+  { touchesBackend: true, touchesFrontend: true, testStrategyTriggers: ["cross-task"] },
 ];
 
 const SIGNAL_OF: Record<string, keyof ClassificationInput> = {
@@ -135,6 +136,14 @@ describe("the workflow catalog", () => {
       const be = agents.indexOf(AgentStage.BACKEND_ENGINEER);
       const fe = agents.indexOf(AgentStage.FRONTEND_ENGINEER);
       if (be !== -1 && fe !== -1) expect(be, workflow.workflow).toBeLessThan(fe);
+    }
+  });
+
+  it("renders test-planner as a conditional step for every workflow", () => {
+    for (const workflow of Object.values(catalogWorkflows())) {
+      const step = workflow.steps.find(candidate => candidate.agent === AgentStage.TEST_PLANNER);
+      if (workflow.workflow === "triage") expect(step, workflow.workflow).toBeUndefined();
+      else expect(step?.when, workflow.workflow).toBe("test_strategy_required");
     }
   });
 });

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as readline from "node:readline/promises";
 import { AgentStage, TaskState } from "./types.js";
-import { classifyTask, type ClassificationInput } from "./classification/taskClassifier.js";
+import { classifyTask, TEST_STRATEGY_TRIGGERS, type ClassificationInput, type TestStrategyTrigger } from "./classification/taskClassifier.js";
 import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
 import { createRuntimeExecutor } from "./runtime/runtimeExecutor.js";
@@ -237,7 +237,8 @@ export interface CliArgs {
   tokenBudget?: number;
 }
 
-const FLAG_TO_CLASSIFICATION: Record<string, keyof ClassificationInput> = {
+type BooleanClassificationKey = Exclude<keyof ClassificationInput, "testStrategyTriggers">;
+const FLAG_TO_CLASSIFICATION: Record<string, BooleanClassificationKey> = {
   "--typo": "isTypoOrCopyOnly",
   "--bug-fix": "isClearBugFix",
   "--schema": "touchesSchema",
@@ -254,7 +255,7 @@ export class CliUsageError extends Error {}
 
 export const USAGE =
   "usage (verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  sta run --task-id <id> --module <name> <classification flags> [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] [--effort <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
+  "  sta run --task-id <id> --module <name> <classification flags> [--test-strategy <cross-task,multi-system,migration,security,release>] [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] [--effort <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
   "  sta run --task-id <id> --module <name> <classification flags> [bindings/dependencies] --register-only   persist wave metadata; start no agent and perform no Git operation\n" +
   "  sta run --wave <n> --module <name> [--max-tasks <k>] [--dry-run|--resume-run] [--autonomy <edit|full>] [--runtime <id>] [--model <name>] [--effort <name>]   bounded sequential owner-stage checkpoints\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
@@ -266,7 +267,7 @@ export const USAGE =
   "  sta audit  <task-id> [--decisions] [--project-root <path>]   the WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail; --decisions shows only the choices\n" +
   "  sta qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]   QA token/mode/retry picture per task; --baseline compares against a saved export\n" +
   "  sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]   token/context composition across orchestrated and interactive runs\n" +
-  "  sta context <role> [--module <name>] [--phase <n,n>] [--task <id>] [--packet] [--json] [--project-root <path>]   deterministic context, or the latest validated execution packet\n" +
+  "  sta context <role> [--module <name>] [--phase <n,n>] [--task <id>] [--packet] [--views] [--json] [--project-root <path>]   deterministic context, latest validated packet, or read-only generated checklist/prompt views\n" +
   "  sta knowledge get <id>[,<id>...] [--lane <ba|sa|uxui|dev>] [--json] [--project-root <path>]   retrieve only permitted knowledge fields (default lane: dev)\n" +
   "  sta knowledge migrate-v2 [--dry-run] [--json] [--project-root <knowledge-root>]   add origin/target_ids without changing item meaning or lifecycle\n" +
   "  sta knowledge reconcile --target <id> [--json] [--project-root <knowledge-root>]   read-only current/desired evidence classifier\n" +
@@ -401,6 +402,13 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
         .split(",")
         .map((s) => s.trim())
         .filter((s) => s !== "");
+    } else if (arg === "--test-strategy") {
+      const values = (argv[++i] ?? "").split(",").map(value => value.trim()).filter(Boolean);
+      const invalid = values.filter(value => !(TEST_STRATEGY_TRIGGERS as readonly string[]).includes(value));
+      if (values.length === 0 || invalid.length > 0) {
+        throw new CliUsageError(`--test-strategy must contain one or more of: ${TEST_STRATEGY_TRIGGERS.join(", ")} (got ${invalid.join(", ") || "nothing"})`);
+      }
+      classification.testStrategyTriggers = [...new Set(values)] as TestStrategyTrigger[];
     } else if (arg === "--phase") {
       phases = (argv[++i] ?? "")
         .split(",")

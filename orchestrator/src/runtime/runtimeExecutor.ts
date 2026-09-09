@@ -42,6 +42,7 @@ import type { ThreeRepoRequestRoots } from "../threeRepo/preflight.js";
 import { deriveHandoff } from "../agents/moduleDocs.js";
 import { parseDesignEvidence } from "../docs/designEvidence.js";
 import { ArtifactType } from "../artifacts/schemas.js";
+import { generatePromptPreview } from "../views/generatedTaskViews.js";
 import { assessContextBudget, contextBudgetRejections, formatBudgetRejection, resolveContextBudgetFromProject, resolveContextBudgetModeFromProject, taskTokenBudgetRejection, type ContextBudgetComposition } from "../context/contextBudget.js";
 import { RunLog } from "../observability/runLog.js";
 import { writeExecutionPacket, nextExecutionPacketAttempt } from "../state/runtimeArtifacts.js";
@@ -157,7 +158,7 @@ export interface RuntimeExecutorOptions {
  * stage's environment is unchanged. `read` is deliberately not sent: reading is
  * not enforced as a block anywhere, and a hook has no use for it.
  */
-function resolveGuardStackRules(role: string, guardRoot: string): Record<string, string> {
+export function resolveGuardStackRules(role: string, guardRoot: string): Record<string, string> {
   let rules;
   try {
     const stack = loadTargetConfig(guardRoot)?.stack;
@@ -391,6 +392,15 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         if (JSON.stringify([...packet.scope.allow].sort()) !== JSON.stringify([...new Set(guards.writeAllow)].sort())) throw new Error("packet scope differs from the enforced stage contract; recompile with current stage grants");
         const expectedRoots = threeRepo ? threeRepo.roots.workRoots.filter(root => root.access === "write").map(root => path.resolve(root.path)) : [path.resolve(executionRoot)];
         if (JSON.stringify(packet.scope.roots.map(root => path.resolve(root)).sort()) !== JSON.stringify(expectedRoots.sort())) throw new Error("packet work roots differ from effective stage guard roots; recompile");
+        const preview = generatePromptPreview(packet, {
+          current_revision: packet.identity.base_revision,
+          current_config_hash: packet.identity.config_hash,
+          current_compiler_hash: packet.identity.compiler_hash,
+          current_plan_hash: packet.identity.plan_hash,
+        });
+        if (preview.state !== "executable" || preview.prompt.text !== packet.text || preview.prompt.hash !== preview.persisted_packet.text_hash) {
+          throw new Error(`generated prompt preview drift: ${preview.stale_reasons.join("; ") || "prompt bytes differ"}`);
+        }
         guards = { ...guards, writeAllow: packet.scope.allow, writeDeny: packet.scope.deny };
         const persisted = writeExecutionPacket({
           projectRoot: runtimeStateRoot,

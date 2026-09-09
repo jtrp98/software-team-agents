@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ContextManager } from "../context/contextManager.js";
 import { AgentStage } from "../types.js";
-import { TOKEN_BENCHMARK_DOC_BYTES, createTokenBenchmarkFixture, createTraceableTokenBenchmarkFixture, renderTokenBenchmarkBaseline, runExecutionPacketPromptBenchmark, runLargeHandoffBenchmark, runTokenBenchmark } from "./tokenBenchmark.js";
+import { TOKEN_BENCHMARK_DOC_BYTES, createTokenBenchmarkFixture, createTraceableTokenBenchmarkFixture, renderTokenBenchmarkBaseline, runConditionalTestPlannerTokenComparison, runExecutionPacketPromptBenchmark, runLargeHandoffBenchmark, runTokenBenchmark } from "./tokenBenchmark.js";
 import { compareTokenBaselines } from "../qa/metrics.js";
 
 function frameworkFixture(): string {
@@ -37,6 +37,17 @@ describe("T-V3TOK-004 token benchmark", () => {
       const output = renderTokenBenchmarkBaseline(root, "2026-08-26");
       expect(output).toContain("| Large |");
       expect(output).toContain("not reported");
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("T-V8-009 records the deterministic composition saved when an ordinary task skips test-planner", () => {
+    const root = frameworkFixture();
+    try {
+      const comparison = runConditionalTestPlannerTokenComparison(root);
+      expect(comparison).toEqual(runConditionalTestPlannerTokenComparison(root));
+      expect(comparison.savedModelCalls).toBe(1);
+      expect(comparison.savedInputTokens).toBeGreaterThan(0);
+      expect(comparison.savedDocumentBytes).toBeGreaterThan(0);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
