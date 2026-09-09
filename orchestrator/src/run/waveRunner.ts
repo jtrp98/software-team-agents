@@ -160,6 +160,7 @@ export function buildWavePreview(options: {
       { task: row, planTasks: options.planTasks },
       {
         classification: stored?.classification ?? null,
+        businessInput: stored?.gateContext.businessInput ?? null,
         checkpointedTaskIds: hypotheticalCheckpoints,
         approvals: stored?.approvals ?? null,
         runtimeId: options.route.runtimeId,

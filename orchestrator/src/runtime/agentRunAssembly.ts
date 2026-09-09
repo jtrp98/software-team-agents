@@ -25,6 +25,7 @@ import { classifyQaFailure, classifySecurityFailure } from "../orchestrator/fail
 import { codeIntelSlices } from "./codeIntelAssembly.js";
 import { knowledgeBriefFor } from "./knowledgeBriefAssembly.js";
 import { assertContextComposition, emptyContextBudgetComposition, type ContextBudgetComposition } from "../context/contextBudget.js";
+import { renderBusinessInputEvidence } from "../gates/businessInput.js";
 
 /**
  * This module is the deterministic Task Compiler: everything about running a
@@ -345,6 +346,13 @@ export function buildPromptParts(req: AgentExecutorRequest, extra?: string, sour
     { kind: "static_chars", text: `Task ${req.taskId} — you are running as the \`${req.stage}\` stage of this repo's pipeline (see the repo's own agent documentation).` },
     { kind: "static_chars", text: "" },
   ];
+  if (req.stage === AgentStage.BUSINESS_ANALYST && req.businessInput) {
+    parts.push({
+      kind: "handoff_chars",
+      budgetKind: "task",
+      text: renderBusinessInputEvidence(req.businessInput),
+    });
+  }
   if (req.context.length === 0) {
     parts.push({ kind: "handoff_chars", text: "No prior-stage context was supplied for this task — proceed from the repo's own docs (`_docs/status.md` first, per convention)." });
   } else {
@@ -432,6 +440,13 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
   }
   const evidence = new Map((input.dependencyEvidence ?? []).map(d => [d.task_id, d]));
   if (evidence.size !== (input.dependencyEvidence ?? []).length) throw new Error("duplicate dependency evidence");
+  const businessInputInstruction =
+    input.req.stage === AgentStage.BUSINESS_ANALYST && input.req.businessInput
+      ? renderBusinessInputEvidence(input.req.businessInput)
+      : "";
+  const stageInstructions = [businessInputInstruction, input.extra ?? ""]
+    .filter((part) => part.length > 0)
+    .join("\n\n");
   const fields = PacketFieldsSchema.parse({
     version: 2, attempt: input.attempt ?? 1, task_id: input.req.taskId, stage: input.req.stage, role: input.role,
     contract: task.contract,
@@ -445,7 +460,7 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
     retrieval_candidates: candidates, required_verification: task.required_verification,
     stop_conditions: task.stop_conditions,
     expansion_pointers: [task.plan_source + "#" + task.task_id, ...task.selected_traces.map(ref => ref.source)],
-    stage_instructions: input.extra ?? "",
+    stage_instructions: stageInstructions,
     verification_context: input.req.context.filter(item => item.source === "qa-evidence"),
     identity: {
       task_hash: planTaskHash({ ...task.contract, status: "pending" }), plan_hash: task.plan_hash,

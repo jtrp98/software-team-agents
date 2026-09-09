@@ -23,7 +23,7 @@ import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
 
 // Deliberately a two-stage pipeline (backend-engineer -> qa-engineer) with no human gate at all
 // (no system-analyst/schema-confirmation, no deploy approval) — these tests are about
-// resume/idempotency mechanics, not about driving through the five always-human stops, which
+// resume/idempotency mechanics, not about driving through the human-gate stops, which
 // are covered elsewhere (gatePolicy.test.ts et al). Same classification sampleTask() already uses.
 const trivial = () => classifyTask({ isClearBugFix: true, touchesBackend: true });
 

@@ -14,7 +14,7 @@ export const APPROVAL_PROMPT: Record<ApprovalType, string> = {
   [ApprovalType.DEPLOY]: "Approve an actual deploy/migration to production",
   [ApprovalType.QA_FAILURE]: "A QA round came back ⚠️/❌ and needs a decision",
   [ApprovalType.SECURITY_RISK]: "A Critical/Important security finding is unresolved",
-  [ApprovalType.REQUIREMENT_INTERVIEW]: "A requirement needs a person, not an inference",
+  [ApprovalType.REQUIREMENT_INTERVIEW]: "Answer the displayed missing confirmation or material business question; generic approval cannot supply a missing decision",
   [ApprovalType.UXUI_SIGNOFF]: "Confirm the current UX/UI artifact before frontend work starts",
 };
 

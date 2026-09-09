@@ -167,6 +167,27 @@ describe("requiredCapabilitiesFor", () => {
     expect(requiredCapabilitiesFor(AgentStage.PROJECT_MANAGER)).not.toContain(RuntimeCapability.INTERACTIVE_PROMPTS);
     expect(requiredCapabilitiesFor(AgentStage.TEST_PLANNER)).not.toContain(RuntimeCapability.INTERACTIVE_PROMPTS);
   });
+
+  it("T-V8-006: complete confirmed BA input removes only the redundant interactive capability", () => {
+    const confirmed = {
+      version: 1 as const,
+      mode: "confirmed" as const,
+      source: { type: "user-confirmed" as const, locator: "intake://routing-test" },
+      owner: "Product owner",
+      scope: ["Refund eligibility"],
+      requirement_ids: ["REQ-301"],
+      acceptance_criteria_ids: ["AC-301.1"],
+      decisions: [],
+      assumptions: [],
+    };
+
+    expect(requiredCapabilitiesFor(AgentStage.BUSINESS_ANALYST, false, confirmed)).not.toContain(
+      RuntimeCapability.INTERACTIVE_PROMPTS,
+    );
+    expect(
+      requiredCapabilitiesFor(AgentStage.BUSINESS_ANALYST, false, { ...confirmed, source: null }),
+    ).toContain(RuntimeCapability.INTERACTIVE_PROMPTS);
+  });
 });
 
 describe("resolveRuntimeRoute — V3 shape and compatibility", () => {

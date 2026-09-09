@@ -105,7 +105,7 @@ export interface LaneSpec {
   primaryKind: KnowledgeKind;
   /** Where approved work goes next. `null` for the last lane in the chain. */
   handoffTo: RoleLane | null;
-  /** CLAUDE.md's always-human point for this lane, in the words the person will read. */
+  /** This lane's human sign-off wording. Risk-triggered task gates are separate. */
   humanGate: string;
   /** Reasons this lane's approved work must not move on. Generic ones are in the engine. */
   blockers(approved: KnowledgeItem[], kb: KnowledgeBase): string[];
@@ -132,8 +132,7 @@ export const BA_WORKFLOW: LaneSpec = {
   primaryKind: "requirement",
   handoffTo: "sa",
   humanGate:
-    "a requirement is never inferred — the person in the BA lane sits the interview and approves what it produced " +
-    "(CLAUDE.md's first always-human point)",
+    "a requirement is never inferred — approved requirements carry provenance-bearing confirmation; material choices and authority come from a person",
   blockers(approved) {
     return approved
       .filter((item) => item.kind === "requirement" && (item.payload as RequirementPayload).acceptance_criteria.length === 0)
@@ -173,9 +172,7 @@ export const SA_WORKFLOW: LaneSpec = {
   leadAgent: AgentStage.SYSTEM_ANALYST,
   primaryKind: "architecture",
   handoffTo: "dev",
-  humanGate:
-    "the data model is confirmed with a person before any code is written against it " +
-    "(CLAUDE.md's second always-human point)",
+  humanGate: "the data model is confirmed with a person before any code is written against it",
   blockers(approved) {
     const problems: string[] = [];
     for (const item of approved) {
@@ -239,8 +236,7 @@ export const DEV_WORKFLOW: LaneSpec = {
   primaryKind: "task",
   handoffTo: null,
   humanGate:
-    "a person approves the deploy or migration itself, and any ⚠️/❌ QA round or 🔴/🟠 security finding on the way " +
-    "(CLAUDE.md's third, fourth and fifth always-human points)",
+    "a person approves the deploy or migration itself and decides any triggered QA/security escalation on the way",
   blockers(approved, kb) {
     const problems: string[] = [];
     const producerOf = new Map<string, KnowledgeItem>();

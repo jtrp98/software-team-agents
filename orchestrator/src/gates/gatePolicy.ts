@@ -2,6 +2,11 @@ import { TaskState } from "../types.js";
 import { canTransition, transition, type TaskMachine } from "../state/taskState.js";
 import type { QaReportArtifact, SecurityReportArtifact } from "../artifacts/schemas.js";
 import { canCloseWith, type QaModeDecision } from "../qa/mode.js";
+import {
+  assessBusinessInput,
+  businessGateReason,
+  type BusinessInputEvidence,
+} from "./businessInput.js";
 
 /**
  * Evidence available to gate a transition. This is deliberately separate
@@ -9,8 +14,10 @@ import { canCloseWith, type QaModeDecision } from "../qa/mode.js";
  * no idea whether a design was approved or a QA report passed.
  */
 export interface GateContext {
-  /** The requirement interview was answered by a person (always-human point #1). */
+  /** The interactive requirement fallback was answered by a person. */
   requirementApproved?: boolean;
+  /** Structured intake evidence. Complete confirmed input discharges only the redundant interview. */
+  businessInput?: BusinessInputEvidence;
   designApproved?: boolean;
   qaReport?: QaReportArtifact;
   securityReport?: SecurityReportArtifact;
@@ -29,20 +36,34 @@ export interface GateResult {
 }
 
 /**
- * The four gate conditions, each keyed to the edge it guards. Agents never
+ * The gate conditions, each keyed to the edge it guards. Agents never
  * call this directly and never get to decide the answer — only the
  * orchestrator consults it, same as canTransition.
  */
 export function checkGate(from: TaskState, to: TaskState, ctx: GateContext): GateResult {
-  // Gated on leaving REQUIREMENT at all: a requirement is never inferred
-  // (CLAUDE.md always-human point #1). business-analyst's own run may produce
-  // requirement.md, but the pipeline does not build a design on top of it until
-  // a person has answered the interview. Pipelines without a BA stage never sit
-  // in REQUIREMENT, so they never see this gate.
+  // Gated on leaving REQUIREMENT at all. Complete, provenance-bearing input
+  // may skip a redundant interview, but an unresolved material business choice
+  // or missing authority remains a hard stop even if a generic interview flag
+  // was supplied. Incomplete/explicitly interactive input keeps the legacy
+  // human-interview fallback.
   if (from === TaskState.REQUIREMENT) {
+    if (ctx.businessInput) {
+      const assessment = assessBusinessInput(ctx.businessInput);
+      if (assessment.humanGates.length > 0) {
+        return { allowed: false, reason: businessGateReason(assessment) };
+      }
+      if (assessment.canNormalizeWithoutInterview) return { allowed: true };
+      return ctx.requirementApproved
+        ? { allowed: true }
+        : { allowed: false, reason: businessGateReason(assessment) };
+    }
     return ctx.requirementApproved
       ? { allowed: true }
-      : { allowed: false, reason: "REQUIREMENT_INTERVIEW required — a person answers the requirements interview" };
+      : {
+          allowed: false,
+          reason:
+            "REQUIREMENT_INTERVIEW required — interactive interview required because no confirmed-input evidence was supplied",
+        };
   }
 
   // Gated on leaving DESIGN at all, not specifically on landing in IMPLEMENTATION:

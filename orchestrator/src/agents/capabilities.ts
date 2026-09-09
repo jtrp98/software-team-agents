@@ -11,6 +11,7 @@
  * same work more precisely.
  */
 export enum Capability {
+  REQUIREMENTS_NORMALIZATION = "requirements-normalization",
   REQUIREMENTS_INTERVIEW = "requirements-interview",
   FEASIBILITY_ANALYSIS = "feasibility-analysis",
   SCHEMA_DESIGN = "schema-design",

@@ -422,7 +422,11 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // that do not supply a registry retain the fixed-runtime compatibility
     // behaviour.
     const hasTargetWrite = threeRepo?.roots.workRoots.some((root) => root.access === "write") ?? false;
-    const requiresInteractivity = requiredCapabilitiesFor(req.stage).includes(RuntimeCapability.INTERACTIVE_PROMPTS);
+    const requiresInteractivity = requiredCapabilitiesFor(
+      req.stage,
+      false,
+      req.businessInput,
+    ).includes(RuntimeCapability.INTERACTIVE_PROMPTS);
     let activeRuntime = runtime;
     let activeModel = resolveModel(role);
     // Whether `activeModel` is an operator-visible override (CLI
@@ -460,6 +464,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         riskSignals: opts.riskSignals?.(req.taskId),
         availability: routeAvailability,
         hasTargetWrite,
+        businessInput: req.businessInput,
         verifiedCapabilities: opts.verifiedCapabilities,
         modelPolicy: opts.frozenModelRoute ? null : opts.modelPolicy,
         taskTier: opts.frozenModelRoute ? undefined : tierId,

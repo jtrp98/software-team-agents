@@ -1,0 +1,84 @@
+[
+  {
+    "name": "complete confirmed intake",
+    "expected_mode": "confirmed-input",
+    "evidence": {
+      "version": 1,
+      "mode": "confirmed",
+      "source": { "type": "user-confirmed", "locator": "intake://fixture/confirmed" },
+      "owner": "Product owner",
+      "scope": ["Refund eligibility"],
+      "requirement_ids": ["REQ-201"],
+      "acceptance_criteria_ids": ["AC-201.1"],
+      "decisions": [],
+      "assumptions": []
+    }
+  },
+  {
+    "name": "incomplete intake uses interactive fallback",
+    "expected_mode": "interactive-fallback",
+    "evidence": {
+      "version": 1,
+      "mode": "confirmed",
+      "source": null,
+      "owner": "Product owner",
+      "scope": [],
+      "requirement_ids": ["REQ-202"],
+      "acceptance_criteria_ids": [],
+      "decisions": [],
+      "assumptions": []
+    }
+  },
+  {
+    "name": "material business ambiguity gates",
+    "expected_mode": "human-gate",
+    "evidence": {
+      "version": 1,
+      "mode": "confirmed",
+      "source": { "type": "approved-artifact", "locator": "requirements://fixture/material" },
+      "owner": "Product owner",
+      "scope": ["Partial refunds"],
+      "requirement_ids": ["REQ-203"],
+      "acceptance_criteria_ids": ["AC-203.1"],
+      "decisions": [
+        {
+          "id": "DEC-203",
+          "status": "unresolved",
+          "kind": "business",
+          "material": true,
+          "question": "Do partial refunds consume the full refund window?",
+          "owner": "Commerce director",
+          "answer": null,
+          "source": null
+        }
+      ],
+      "assumptions": []
+    }
+  },
+  {
+    "name": "technical ambiguity routes to SA",
+    "expected_mode": "confirmed-input",
+    "evidence": {
+      "version": 1,
+      "mode": "confirmed",
+      "source": { "type": "user-confirmed", "locator": "intake://fixture/technical" },
+      "owner": "Product owner",
+      "scope": ["Refund expiry"],
+      "requirement_ids": ["REQ-204"],
+      "acceptance_criteria_ids": ["AC-204.1"],
+      "decisions": [
+        {
+          "id": "DEC-204",
+          "status": "unresolved",
+          "kind": "technical",
+          "material": true,
+          "question": "Which persisted timestamp currently starts the refund window?",
+          "owner": "Engineering",
+          "answer": null,
+          "source": null
+        }
+      ],
+      "assumptions": []
+    }
+  }
+]

@@ -71,6 +71,12 @@ describe("the shipped contracts", () => {
   });
 
   it("carry the constraints that matter most, on the agents they bind", () => {
+    expect(realContract(AgentStage.BUSINESS_ANALYST).constraints).toContain(
+      "confirmed_input_or_human_gate",
+    );
+    expect(realContract(AgentStage.BUSINESS_ANALYST).constraints).not.toContain(
+      "human_confirmation_required",
+    );
     expect(realContract(AgentStage.BACKEND_ENGINEER).constraints).toContain("no_schema_guessing");
     expect(realContract(AgentStage.FRONTEND_ENGINEER).constraints).toContain("green_before_handoff");
     expect(realContract(AgentStage.QA_ENGINEER).constraints).toContain("cannot_close_security_finding");

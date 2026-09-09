@@ -122,8 +122,8 @@ describe("classifyTask", () => {
       AgentStage.FRONTEND_ENGINEER,
       AgentStage.QA_ENGINEER,
     ]);
-    // The requirements interview is always-human point #1 — a new feature never
-    // spawns business-analyst headless without a person answering it.
+    // A new feature never skips BA; confirmed-input versus interview is
+    // decided later from trusted evidence.
     expect(result.requiresHumanApproval).toBe(true);
   });
 

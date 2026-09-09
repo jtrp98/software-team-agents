@@ -17,7 +17,7 @@ export interface ClassificationInput {
   /** Adds a feature to an existing module where requirements are already understood
    *  well enough to skip a business-analyst interview. */
   isIncrementalFeature?: boolean;
-  /** Brand-new feature, module, or project — needs a full requirements interview. */
+  /** Brand-new feature, module, or project — needs full BA normalization/interview handling. */
   isNewFeatureModuleOrProject?: boolean;
   /** An actual production deploy or DB migration. */
   isProductionDeployOrMigration?: boolean;
@@ -127,15 +127,16 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
 
   if (input.isNewFeatureModuleOrProject) {
     // A new feature/module/project wins over the schema signal regardless of
-    // flag order: it must get the full requirements interview (BA first),
+    // flag order: it must get business analysis (BA first; confirmed intake may
+    // be normalized without a redundant interview),
     // not silently degrade into the schema-only pipeline that skips
     // business-analyst and project-manager. The schema obligations — human
     // confirmation, a security pass — still apply on top.
     const schemaAlso = Boolean(input.touchesSchema);
-    reasons.push("new feature/module/project — needs full requirements interview, no stage skipped");
+    reasons.push("new feature/module/project — needs business analysis, no stage skipped");
     if (schemaAlso) {
       reasons.push(
-        "also touches data model — requirements interview comes first, then the same human schema confirmation as any schema change",
+        "also touches data model — business analysis comes first, then the same human schema confirmation as any schema change",
       );
     }
     const base = [

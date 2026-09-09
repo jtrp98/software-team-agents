@@ -37,6 +37,7 @@ function intent(overrides: Partial<PlanTaskRow> = {}, planTasks?: PlanTaskRow[])
 function live(overrides: Partial<LiveEligibilityContext> = {}): LiveEligibilityContext {
   return {
     classification: { pipeline: [AgentStage.BACKEND_ENGINEER] },
+    businessInput: null,
     checkpointedTaskIds: new Set(),
     approvals: [],
     runtimeId: "claude-code",
@@ -97,6 +98,29 @@ describe("auto-eligibility A-J", () => {
 
   it("clause F derives interactive requirements from the existing capability policy", () => {
     expectClause(evaluateAutoEligibility(intent(), live({ classification: { pipeline: [AgentStage.BUSINESS_ANALYST] } })), "F");
+  });
+
+  it("T-V8-006 clause F permits a BA stage with complete confirmed input", () => {
+    const businessInput = {
+      version: 1 as const,
+      mode: "confirmed" as const,
+      source: { type: "user-confirmed" as const, locator: "intake://eligibility-test" },
+      owner: "Product owner",
+      scope: ["Refund eligibility"],
+      requirement_ids: ["REQ-302"],
+      acceptance_criteria_ids: ["AC-302.1"],
+      decisions: [],
+      assumptions: [],
+    };
+    expect(
+      evaluateAutoEligibility(
+        intent(),
+        live({
+          classification: { pipeline: [AgentStage.BUSINESS_ANALYST] },
+          businessInput,
+        }),
+      ).failures.some((failure) => failure.clause === "F"),
+    ).toBe(false);
   });
 
   it.each([

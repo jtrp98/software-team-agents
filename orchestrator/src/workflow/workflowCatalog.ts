@@ -104,11 +104,11 @@ const WORKFLOW_DOCS: Readonly<Record<string, WorkflowDoc>> = {
     },
   },
   feature: {
-    rationale: ["Brand-new feature, module or project: nothing is assumed, so no stage is skipped."],
-    description: "New feature, module or project - the full chain, starting from a requirements interview.",
+    rationale: ["Brand-new feature, module or project: no stage is skipped; BA validates confirmed intake or interviews for what is missing."],
+    description: "New feature, module or project - the full chain, starting from business analysis.",
     priorityRationale: [
       "Above `schema-change` (priority 2): a brand-new feature/module/project that",
-      "also touches the schema still starts from the requirements interview — it",
+      "also touches the schema still starts from business analysis — it",
       "must not silently degrade into the schema-only pipeline that skips",
       "business-analyst and project-manager.",
     ],
@@ -151,7 +151,7 @@ const WORKFLOW_DOCS: Readonly<Record<string, WorkflowDoc>> = {
     description: "Data model change - routes through system-analyst, schema confirmation always needs a person.",
     priorityRationale: [
       "Below `feature` (priority 1): a brand-new feature/module that also needs new",
-      "tables must run the full requirements interview first — this pipeline is for",
+      "tables must run the full BA normalization/interview step first — this pipeline is for",
       "schema work on something that already exists.",
     ],
     notes: {

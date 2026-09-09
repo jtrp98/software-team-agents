@@ -94,7 +94,7 @@ export function renderBootstrapBlock(options: BootstrapRenderOptions): string {
     `- Workspace role: **${lane}** (\`${options.role}\`) — writes ${writes}.`,
     `- Workspace root (writable): ${displayPath(options.workspaceRoot)}`,
     `- ${boundLabel}: ${displayPath(options.boundRoot)}`,
-    "- Human gates: requirements interview; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.",
+    "- Human gates: material unresolved business choice or missing authority; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.",
     "- Hard boundary: no state-changing git.",
     "- Hard boundary: write only inside resolved writable workspace roots.",
     "- Hard boundary: write only paths allowed by the active role contract.",

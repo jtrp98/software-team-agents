@@ -2,6 +2,10 @@ import { AgentStage } from "../types.js";
 import { resolveAgentEffort, resolveAgentModel } from "../agents/agentModel.js";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
 import type { QaRiskSignals } from "../qa/mode.js";
+import {
+  assessBusinessInput,
+  type BusinessInputEvidence,
+} from "../gates/businessInput.js";
 import { StaConfigInvalidError, StaConfigMissingError, loadStaConfig, type StaConfig } from "../packaging/staConfig.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "./runtimeRegistry.js";
@@ -111,6 +115,8 @@ export interface ResolveRuntimeRouteOptions {
   readonly availability?: Readonly<Record<string, RuntimeProbe>>;
   /** True only when this stage has a canonical Target root with write access. */
   readonly hasTargetWrite?: boolean;
+  /** Confirmed BA intake removes the need for an in-run interview; all other BA input keeps it. */
+  readonly businessInput?: BusinessInputEvidence;
   readonly verifiedCapabilities?: Readonly<Record<string, ReadonlySet<RuntimeCapability>>>;
   /** Current V8 policy. Undefined loads model-tiers.yaml; null is an intentional absent-policy fixture. */
   readonly modelPolicy?: ModelTierPolicy | null;
@@ -139,15 +145,30 @@ export function parseModelRoute(value: string): { runtimeId?: string; model: str
 /**
  * Derive capability needs from the role plus the canonical Target access mode.
  *
- * `INTERACTIVE_PROMPTS` is keyed to `business-analyst` specifically, not to
+ * `INTERACTIVE_PROMPTS` is keyed to a BA run that still needs an interview,
+ * not merely to `AskUserQuestion` tool presence. Complete confirmed input is
+ * normalized without another interview; incomplete or absent input preserves
+ * the interactive fallback.
+ *
+ * The requirement is not inferred from
  * `AskUserQuestion` tool presence: `system-analyst`/`project-manager` also
  * carry that tool but their human gate is `sta approve`, not an in-run
  * question, so a runtime that cannot prompt still runs them headless as
  * designed. Only the interview itself is the stage's actual work.
  */
-export function requiredCapabilitiesFor(stage: AgentStage, hasTargetWrite = false): RuntimeCapability[] {
+export function requiredCapabilitiesFor(
+  stage: AgentStage,
+  hasTargetWrite = false,
+  businessInput?: BusinessInputEvidence,
+): RuntimeCapability[] {
   const required: RuntimeCapability[] = [];
-  if (stage === AgentStage.BUSINESS_ANALYST) required.push(RuntimeCapability.INTERACTIVE_PROMPTS);
+  const confirmedBaRun =
+    stage === AgentStage.BUSINESS_ANALYST &&
+    businessInput !== undefined &&
+    assessBusinessInput(businessInput).canNormalizeWithoutInterview;
+  if (stage === AgentStage.BUSINESS_ANALYST && !confirmedBaRun) {
+    required.push(RuntimeCapability.INTERACTIVE_PROMPTS);
+  }
   if (hasTargetWrite) required.push(RuntimeCapability.PRE_TOOL_GUARD);
   return required;
 }
@@ -329,7 +350,11 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
 
   const attempts: RuntimeRouteAttempt[] = [];
   const supportOptIns = new Set(config?.routing?.allow_below_supported ?? []);
-  const required = requiredCapabilitiesFor(opts.stage, opts.hasTargetWrite ?? false);
+  const required = requiredCapabilitiesFor(
+    opts.stage,
+    opts.hasTargetWrite ?? false,
+    opts.businessInput,
+  );
   // With nowhere to walk to, a probe-unavailable candidate stays selected so the
   // executor still classifies it `UNAVAILABLE` and escalates with the probe's
   // own reason. Skipping it here would downgrade that to a plain route error.

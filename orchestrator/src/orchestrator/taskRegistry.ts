@@ -16,6 +16,7 @@ import {
   type RuntimeTaskWorkRoot,
 } from "./runtimeTask.js";
 import type { RunRecord } from "../observability/runLog.js";
+import type { BusinessInputEvidence } from "../gates/businessInput.js";
 import { readWorkPlan, type WorkPlanTask } from "../docs/planGraph.js";
 import { readModuleDoc } from "../agents/moduleDocs.js";
 
@@ -120,6 +121,8 @@ export class TaskRegistry {
     moduleName?: string;
     targetWorkRoots?: readonly RuntimeTaskWorkRoot[];
     changeAwareVerification?: boolean;
+    /** Trusted intake supplied by the task creator; an executing agent cannot grant this to itself. */
+    businessInput?: BusinessInputEvidence;
     adHoc?: boolean;
   }): Orchestrator {
     const planMd = params.moduleName ? readModuleDoc(params.docsRoot ?? params.projectRoot ?? defaultProjectRoot(), params.moduleName, "plan.md") : null;
@@ -154,6 +157,7 @@ export class TaskRegistry {
       environment: params.environment,
       targetBindings: params.targetBindings,
       runtimeTask,
+      businessInput: params.businessInput,
     });
     this.refreshStateView();
     return orchestrator;

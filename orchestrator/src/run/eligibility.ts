@@ -8,6 +8,7 @@ import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
 import { requiredCapabilitiesFor } from "../runtime/runtimeRouting.js";
 import { RUNTIME_SUPPORT, type RuntimeId } from "../runtime/runtimeSupport.js";
 import { AgentStage } from "../types.js";
+import type { BusinessInputEvidence } from "../gates/businessInput.js";
 
 export type EligibilityClause = "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J";
 
@@ -31,6 +32,8 @@ export interface StaticEligibilityIntent {
 /** Orchestrator-owned observations, resolved anew for this invocation. */
 export interface LiveEligibilityContext {
   classification: AutoEligibilityClassification | null;
+  /** Trusted persisted intake for deciding whether a BA stage still needs interaction. */
+  businessInput: BusinessInputEvidence | null;
   checkpointedTaskIds: ReadonlySet<string>;
   approvals: readonly Pick<ApprovalRecord, "type" | "required" | "status">[] | null;
   runtimeId: string | null;
@@ -127,7 +130,9 @@ export function evaluateAutoEligibility(
     fail(failures, "F", "pipeline could not be read because classification is unavailable");
   } else {
     const interactiveStages = live.classification.pipeline.filter((stage) =>
-      requiredCapabilitiesFor(stage).includes(RuntimeCapability.INTERACTIVE_PROMPTS),
+      requiredCapabilitiesFor(stage, false, live.businessInput ?? undefined).includes(
+        RuntimeCapability.INTERACTIVE_PROMPTS,
+      ),
     );
     if (interactiveStages.length > 0) {
       fail(failures, "F", `pipeline requires interactive prompts in ${interactiveStages.join(", ")}`);

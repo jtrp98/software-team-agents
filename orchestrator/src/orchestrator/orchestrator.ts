@@ -39,6 +39,12 @@ import { Environment } from "../environment/environment.js";
 import { type StructuredFailure } from "./failure.js";
 import { isAgentAssignedAt, stageStateOf } from "./taskStatus.js";
 import type { RuntimeTask } from "./runtimeTask.js";
+import {
+  assessBusinessInput,
+  businessGateReason,
+  BusinessInputEvidenceSchema,
+  type BusinessInputEvidence,
+} from "../gates/businessInput.js";
 
 export interface AgentExecutorRequest {
   stage: AgentStage;
@@ -52,6 +58,8 @@ export interface AgentExecutorRequest {
    * build the recheck plan instead of re-verifying from scratch.
    */
   qaRound?: number;
+  /** Bounded intake evidence, supplied only to the BA stage. */
+  businessInput?: BusinessInputEvidence;
 }
 
 export interface AgentExecutorResult {
@@ -60,8 +68,8 @@ export interface AgentExecutorResult {
   artifact?: unknown;
   /** Runtime-state path of the exact packet used for this attempt. */
   packetPath?: string;
-  /** Evidence a human, not this agent, actually supplied (e.g. relayed approval) — rare; usually set via provideHumanApproval instead. */
-  gateEvidence?: Partial<GateContext>;
+  /** Relayed legacy gate flags. Confirmed BA intake is trusted task input and cannot be supplied by an executing agent. */
+  gateEvidence?: Partial<Omit<GateContext, "businessInput">>;
   /** Internal marker: post-Dev deterministic failure keeps the cursor on this Dev stage. */
   postDevVerificationFailed?: boolean;
   /**
@@ -124,6 +132,8 @@ export interface OrchestratorOptions {
   targetBindings?: TargetBindings;
   /** Deterministic execution contract built by TaskRegistry before persistence. */
   runtimeTask?: RuntimeTask | null;
+  /** Validated business intake used to select confirmed-input versus interactive BA mode. */
+  businessInput?: BusinessInputEvidence;
 }
 
 function assertCanProduce(stage: AgentStage, artifactType: ArtifactType): void {
@@ -235,7 +245,9 @@ export class Orchestrator {
       this.runLog = new RunLog(this.store.runsForTask(taskId));
     } else {
       this.run = initTaskRun(classification.pipeline, classification.requiresHumanApproval);
-      this.gateContext = {};
+      this.gateContext = opts?.businessInput
+        ? { businessInput: BusinessInputEvidenceSchema.parse(opts.businessInput) }
+        : {};
       this.artifactStore = {};
       this.pipelineCursor = 0;
       this.blockedReason = undefined;
@@ -258,6 +270,7 @@ export class Orchestrator {
           environment: this.taskEnvironment,
           targetBindings: opts?.targetBindings,
           runtimeTask: this.runtimeTask,
+          gateContext: this.gateContext,
         }),
       );
     }
@@ -375,7 +388,7 @@ export class Orchestrator {
 
   /**
    * The legacy entry point, kept working: it maps a gate field back to the
-   * approval type that feeds it. Callers that know which of the five decisions
+   * approval type that feeds it. Callers that know which decision
    * they are answering should use `decideApproval` instead — this cannot
    * express a rejection distinctly.
    */
@@ -394,6 +407,42 @@ export class Orchestrator {
       return;
     }
     this.decideApproval(type, value);
+  }
+
+  /**
+   * Replaces BA intake through the trusted host seam. This is the only way an
+   * exact human answer can discharge a material-business gate: approving the
+   * generic gate flag alone never manufactures the missing decision.
+   */
+  provideBusinessInput(
+    input: BusinessInputEvidence,
+    opts: { by?: string } = {},
+  ): void {
+    if (this.run.machine.current !== TaskState.REQUIREMENT) {
+      throw new Error(
+        `business input can only be replaced at REQUIREMENT; current state is ${this.run.machine.current}`,
+      );
+    }
+    const parsed = BusinessInputEvidenceSchema.parse(input);
+    const changed =
+      JSON.stringify(this.gateContext.businessInput) !== JSON.stringify(parsed);
+    this.gateContext = { ...this.gateContext, businessInput: parsed };
+    if (changed) {
+      const baIndex = this.pipeline.indexOf(AgentStage.BUSINESS_ANALYST);
+      if (baIndex !== -1) this.pipelineCursor = baIndex;
+    }
+    const pending = findApproval(this.approvals, ApprovalType.REQUIREMENT_INTERVIEW);
+    if (
+      assessBusinessInput(parsed).canNormalizeWithoutInterview &&
+      pending?.status === "pending"
+    ) {
+      this.decideApproval(ApprovalType.REQUIREMENT_INTERVIEW, true, {
+        by: opts.by ?? parsed.owner ?? undefined,
+        note: "resolved by updated confirmed-input evidence",
+      });
+      return;
+    }
+    this.persist();
   }
 
   /**
@@ -529,6 +578,47 @@ export class Orchestrator {
       }
 
       const stage = this.pipeline[this.pipelineCursor];
+      // A pre-classified material business question has no reason to spend a BA
+      // run before the authorized owner answers it. Park at REQUIREMENT with
+      // the exact question; once trusted evidence is updated, BA runs once to
+      // normalize that meaningful requirement version.
+      if (
+        current === TaskState.REQUIREMENT &&
+        stage === AgentStage.BUSINESS_ANALYST &&
+        this.gateContext.businessInput
+      ) {
+        const assessment = assessBusinessInput(this.gateContext.businessInput);
+        if (assessment.humanGates.length > 0) {
+          const next = forwardState(this.run.machine);
+          if (!next) {
+            this.blockedReason = "material business gate has no forward state";
+            return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
+          }
+          const reason = businessGateReason(assessment);
+          const existing = findApproval(this.approvals, ApprovalType.REQUIREMENT_INTERVIEW);
+          if (existing?.status === "rejected") {
+            this.blockedReason =
+              `${ApprovalType.REQUIREMENT_INTERVIEW} was rejected` +
+              `${existing.decidedBy ? ` by ${existing.decidedBy}` : ""}` +
+              `${existing.note ? `: ${existing.note}` : ""}`;
+            this.run = { ...this.run, machine: forceBlock(this.run.machine) };
+            return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
+          }
+          this.openApproval({
+            type: ApprovalType.REQUIREMENT_INTERVIEW,
+            reason,
+            from: current,
+            to: next,
+          });
+          return this.settle({
+            kind: "WAITING_FOR_HUMAN",
+            from: current,
+            to: next,
+            reason,
+            approvalType: ApprovalType.REQUIREMENT_INTERVIEW,
+          });
+        }
+      }
       if (stage !== undefined && isAgentAssignedAt(stage, current, this.deployPrepared)) {
         return this.settle({ kind: "RUNNING", stage });
       }
@@ -649,6 +739,11 @@ export class Orchestrator {
       }
     }
     if (result.gateEvidence) {
+      if ("businessInput" in result.gateEvidence) {
+        throw new Error(
+          "businessInput is trusted task-creation evidence; an executing agent cannot supply or replace it",
+        );
+      }
       this.gateContext = { ...this.gateContext, ...result.gateEvidence };
     }
 
@@ -784,8 +879,7 @@ export class Orchestrator {
         // Both stop the task, but a person still has to be told *what* they are
         // being asked about. Recording the approval gives the stop a type and a
         // reason in the ledger instead of only an opaque BLOCKED string — these
-        // are two of CLAUDE.md's five always-human points, and they were the two
-        // that left no trace of having been reached.
+        // risk-triggered gates previously left no trace of having been reached.
         this.openApproval({
           type: failureKind === "qa" ? ApprovalType.QA_FAILURE : ApprovalType.SECURITY_RISK,
           reason: action.reason,
@@ -898,7 +992,17 @@ export class Orchestrator {
       assertPermission(stage, Permission.DEPLOY);
     }
     const start = now();
-    const result = await executor({ stage, taskId: this.taskId, context, deployPhase, qaRound });
+    const result = await executor({
+      stage,
+      taskId: this.taskId,
+      context,
+      deployPhase,
+      qaRound,
+      businessInput:
+        stage === AgentStage.BUSINESS_ANALYST
+          ? this.gateContext.businessInput
+          : undefined,
+    });
     const end = now();
 
     return this.reportCompletion(stage, result, { start, end });

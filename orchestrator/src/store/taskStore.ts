@@ -7,6 +7,7 @@ import { QaModeDecisionSchema } from "../qa/mode.js";
 import { Environment } from "../environment/environment.js";
 import type { RunRecord } from "../observability/runLog.js";
 import { RuntimeTaskSchema } from "../orchestrator/runtimeTask.js";
+import { BusinessInputEvidenceSchema } from "../gates/businessInput.js";
 
 /**
  * Everything the orchestrator holds about one task, in a form that survives
@@ -54,6 +55,8 @@ export const PersistedTaskSchema = z.object({
    * on a QA report that no longer parses.
    */
   gateContext: z.object({
+    requirementApproved: z.boolean().optional(),
+    businessInput: BusinessInputEvidenceSchema.optional(),
     designApproved: z.boolean().optional(),
     humanApproved: z.boolean().optional(),
     qaReport: QaReportArtifactSchema.optional(),
@@ -226,6 +229,7 @@ export function newPersistedTask(params: {
   environment?: Environment;
   targetBindings?: PersistedTask["targetBindings"];
   runtimeTask?: PersistedTask["runtimeTask"];
+  gateContext?: PersistedTask["gateContext"];
 }): PersistedTask {
   return {
     taskId: params.taskId,
@@ -236,7 +240,7 @@ export function newPersistedTask(params: {
     runtimeTask: params.runtimeTask ?? null,
     machine: params.machine,
     retries: { qa: 0, security: 0 },
-    gateContext: {},
+    gateContext: params.gateContext ?? {},
     approvals: [],
     artifacts: {},
     pipelineCursor: 0,
