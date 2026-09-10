@@ -108,6 +108,7 @@ export class BoundedRunController {
       return this.result("GATE", run.halt_reason ?? "run is awaiting a recorded human decision");
     }
     this.qaRounds = this.ledger.eventsForRun(run.run_id).filter((event) => event.kind === "QA_ROUND_STARTED").length;
+    this.rehydrateScheduledRepair(run);
 
     try {
       await this.reconcileInterruptedCheckpoint(run);
@@ -234,6 +235,37 @@ export class BoundedRunController {
       git: this.options.git, firstAttempt: attempt, now: this.now,
     });
     await this.session.reconcileHeadCheckpoint(attempt);
+  }
+
+  /**
+   * T-V8-022 — a resumed repair attempt must still be a repair.
+   *
+   * `repairForTask` is process-local, so before this a crash between
+   * `QA_REPAIR_SCHEDULED` and the repair attempt's freeze produced a fresh
+   * ordinary attempt: same task, no finding, no invalidated-evidence list.
+   * The scheduling event already carries every field of the instruction, so
+   * the durable record is rehydrated rather than a second copy persisted.
+   * Only the latest event counts, and only for tasks the run has not since
+   * settled — a repair whose task is now CHECKPOINTED/DONE is closed.
+   */
+  private rehydrateScheduledRepair(run: LedgerRun): void {
+    const scheduled = this.ledger.eventsForRun(run.run_id).filter((event) => event.kind === "QA_REPAIR_SCHEDULED");
+    const latest = scheduled[scheduled.length - 1];
+    if (!latest?.task_id) return;
+    const owner = latest.payload.owner;
+    if (typeof owner !== "string") return;
+    const repair: RepairInstruction = {
+      taskId: latest.task_id,
+      owner: owner as AgentStage,
+      reason: latest.reason ?? `repair scheduled in round ${String(latest.payload.round ?? "?")}`,
+      findingIds: Array.isArray(latest.payload.findings) ? latest.payload.findings.map(String) : [],
+      invalidates: Array.isArray(latest.payload.invalidates) ? latest.payload.invalidates.map(String) : [],
+      requiresHuman: false,
+    };
+    for (const taskId of new Set([repair.taskId, ...repair.invalidates])) {
+      const task = this.ledger.readTask(run.run_id, taskId);
+      if (task && !["CHECKPOINTED", "DONE"].includes(task.status)) this.repairForTask.set(taskId, repair);
+    }
   }
 
   private requeueRepair(run: LedgerRun, repair: RepairInstruction): void {

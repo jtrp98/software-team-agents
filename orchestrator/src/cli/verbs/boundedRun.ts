@@ -261,15 +261,22 @@ function renderPreview(input: {
   return lines;
 }
 
+/** Same comparison `git/guardedRun.ts` uses for a resolved root. */
+function sameRoot(left: string, right: string): boolean {
+  return path.resolve(left).toLocaleLowerCase("en-US") === path.resolve(right).toLocaleLowerCase("en-US");
+}
+
 export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: string, dependencies: CliDependencies = {}): Promise<number> {
   const args = parseBoundedRunArgs(rest, defaultProjectRoot);
   const { store, registry } = openStore(args.projectRoot, args.stateDb);
   const ledger = new SqliteRunLedger(store, { projectRoot: args.projectRoot });
   const runtimeRegistry: RuntimeRegistry = (dependencies.createRuntimeRegistry ?? createProductionRuntimeRegistry)(args.projectRoot);
   const defaultRuntimeId = args.runtime ?? DEFAULT_RUNTIME_ID;
-  const targetRoot = path.resolve(args.targetRoot ?? args.projectRoot);
-  const targetId = args.targetId ?? "legacy-project";
-  const knowledgeRoot = path.resolve(args.knowledgeRoot ?? args.projectRoot);
+  // Reassigned on --resume: a frozen run owns its Target, and re-deriving it
+  // from flags is how a resume ends up writing into the wrong repository.
+  let targetRoot = path.resolve(args.targetRoot ?? args.projectRoot);
+  let targetId = args.targetId ?? "legacy-project";
+  let knowledgeRoot = path.resolve(args.knowledgeRoot ?? args.projectRoot);
   const docsRoot = resolveContextDocsRoot(args.projectRoot);
   // Contract/agent-registry authority: `resolveFrameworkRoot()` only applies to
   // a three-repo, Target-bound task (`contractRootForTask`'s existing rule) —
@@ -287,6 +294,28 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
         console.error(`[bounded-run] no such run: ${runId}`);
         return 1;
       }
+      // T-V8-022 — the roots come from the frozen run, never from this
+      // invocation's flags. Every attempt, checkpoint and base revision in
+      // the ledger was frozen against `run.target_root`; re-deriving it from
+      // `--target-root ?? --project-root` made an ordinary
+      // `sta bounded-run --resume <id> --module m` point at the project root
+      // instead. An explicit flag that disagrees is a refusal, not an
+      // override, because the alternative is writing into another repository.
+      const rootDrift = [
+        args.targetRoot && !sameRoot(args.targetRoot, run.target_root)
+          ? `--target-root ${path.resolve(args.targetRoot)} != frozen ${run.target_root}` : null,
+        args.knowledgeRoot && !sameRoot(args.knowledgeRoot, run.knowledge_root)
+          ? `--knowledge-root ${path.resolve(args.knowledgeRoot)} != frozen ${run.knowledge_root}` : null,
+        args.targetId && args.targetId !== run.target_id
+          ? `--target-id ${args.targetId} != frozen ${run.target_id}` : null,
+      ].filter((item): item is string => item !== null);
+      if (rootDrift.length > 0) {
+        console.error(`[bounded-run] cannot resume ${runId}: ${rootDrift.join("; ")} — recompile explicitly rather than repointing a frozen run`);
+        return 1;
+      }
+      targetRoot = run.target_root;
+      targetId = run.target_id;
+      knowledgeRoot = run.knowledge_root;
       const moduleName = args.module ?? run.module;
       const planMarkdown = readModuleDoc(docsRoot, moduleName, "plan.md");
       if (planMarkdown === null) {

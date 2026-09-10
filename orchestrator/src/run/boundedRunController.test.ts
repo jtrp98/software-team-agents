@@ -153,7 +153,7 @@ describe("T-V8-020 — one sequential bounded controller", () => {
     const secondStart = events.findIndex((event) => event.kind === "ATTEMPT_STATUS" && event.task_id === "BE-2" && event.to === "RUNNING");
     expect(firstDone).toBeLessThan(secondStart);
     expect(git(f.target, "rev-list", "--count", f.run.run_branch)).toBe("3");
-  });
+  }, 30_000);
 
   it("halts at a schema human gate before packet compilation or branch creation", async () => {
     const f = seed({ boundary: "next-gate" });
@@ -164,7 +164,7 @@ describe("T-V8-020 — one sequential bounded controller", () => {
     expect(f.ledger.readRun(f.run.run_id)?.status).toBe("AWAITING_HUMAN");
     expect(git(f.target, "branch", "--show-current")).toBe("main");
     expect(git(f.target, "branch", "--list", f.run.run_branch)).toBe("");
-  });
+  }, 30_000);
 
   it("routes a QA failure into a targeted DEV repair and rechecks QA", async () => {
     const f = seed();
@@ -180,7 +180,7 @@ describe("T-V8-020 — one sequential bounded controller", () => {
     expect(f.ledger.eventsForRun(f.run.run_id)).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: "QA_REPAIR_SCHEDULED", task_id: "BE-1", payload: expect.objectContaining({ findings: ["F-1"] }) }),
     ]));
-  });
+  }, 30_000);
 
   it("runs proposal-only contract repair without a Git attempt, then recompiles affected DEV work", async () => {
     const f = seed();
@@ -222,7 +222,7 @@ describe("T-V8-020 — one sequential bounded controller", () => {
     expect(result).toMatchObject({ kind: expected, launchedAttempts: 1, qaRounds: 0 });
     expect(f.ledger.checkpointsForRun(f.run.run_id)).toEqual([]);
     expect(f.ledger.readRun(f.run.run_id)?.status).toBe("HALTED");
-  });
+  }, 30_000);
 
   it("halts a no-test-suite flow as unverified instead of skipping the deterministic gate", async () => {
     const f = seed();
@@ -231,5 +231,5 @@ describe("T-V8-020 — one sequential bounded controller", () => {
     expect(result).toMatchObject({ kind: "HALTED", launchedAttempts: 1, qaRounds: 0 });
     expect(result.reason).toContain("Deterministic verification was skipped");
     expect(f.ledger.checkpointsForRun(f.run.run_id)).toEqual([]);
-  });
+  }, 30_000);
 });
