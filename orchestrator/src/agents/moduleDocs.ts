@@ -407,6 +407,69 @@ function bulletsUnder(markdown: string, heading: string): string[] {
   return out;
 }
 
+/**
+ * T-V8-014 - the ids a `## Per-Task Results` line may carry a verdict for.
+ *
+ * Deliberately closed rather than "any capitalized token with a hyphen": a
+ * greedy pattern picks up `SHA-256` and `TS-2322` out of evidence prose and
+ * files them as acceptance criteria, which turns the coverage check into
+ * noise. Trace ids and durable finding ids have exact grammars
+ * (`docs/planTask.ts`, `artifacts/finding.ts`); plan task ids follow
+ * `planGraph.ts`'s own `BE`/`FE` convention, and the round's own task id is
+ * always admissible whatever its prefix.
+ */
+const VERDICT_ID_RE = /\b(?:REQ-\d+|AC-\d+(?:\.\d+)?|DES-\d+|DEC-\d+|FIND-[0-9a-f]{16}|(?:BE|FE)-[A-Za-z0-9._-]+)\b/g;
+
+/**
+ * Reads the per-id verdicts out of a round.
+ *
+ * `qa-engineer.md` requires a `## Per-Task Results` section whose lines carry
+ * an id and one of ✅ Verified / ⚠️ Partial / ❌ Failed. Only ✅ maps to PASS:
+ * a Partial is not a pass, and `qa-engineer.md` already stops a Partial for a
+ * human. Nothing is inferred when a line carries no marker - an unmarked id
+ * simply is not a verdict, and leaving it out is what makes the gap visible
+ * to `checkQaVerdictCoverage` rather than silently covered.
+ */
+export function parseTaskVerdicts(round: string, taskId: string): Record<string, "PASS" | "FAIL"> {
+  const lines = round.split(/\r?\n/);
+  const heading = /^##+\s+Per-Task Results\b/i;
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) if (heading.test(lines[i].trim())) start = i;
+  // Bounded to its own section, not "from the heading to the end of the
+  // document": `## Unverified Behaviour`, `## Issues Found` and the change log
+  // all carry ✅/❌ markers next to ids, and folding those into the verdict
+  // map would credit an id with a verdict the results section never gave it.
+  let body: string[];
+  if (start === -1) {
+    // No results section at all. Reading the whole round is better than
+    // reporting nothing for a document that did state its results under an
+    // older heading - and a round that states nothing still maps nothing.
+    body = lines;
+  } else {
+    const end = lines.findIndex((line, i) => i > start && /^##+\s/.test(line.trim()));
+    body = lines.slice(start + 1, end === -1 ? lines.length : end);
+  }
+
+  const verdicts: Record<string, "PASS" | "FAIL"> = {};
+  for (const rawLine of body) {
+    const line = rawLine.trim();
+    if (/^##+\s/.test(line)) continue;
+    const pass = line.includes("✅");
+    const fail = line.includes("❌") || line.includes("⚠");
+    if (!pass && !fail) continue;
+    const ids = new Set<string>(line.match(VERDICT_ID_RE) ?? []);
+    if (line.includes(taskId)) ids.add(taskId);
+    for (const id of ids) {
+      // A line carrying both markers fails every id it names: the safe reading
+      // of an ambiguous verdict is the one that does not close work. Same rule
+      // across lines - once an id has failed, a later ✅ does not lift it.
+      if (verdicts[id] === "FAIL") continue;
+      verdicts[id] = fail ? "FAIL" : "PASS";
+    }
+  }
+  return verdicts;
+}
+
 export interface ParsedQaReport {
   artifact: QaReportArtifact;
   /** True when the mode marker `(FULL)`/`(TARGETED)` could not be found — defaulted to TARGETED (fails closed on deploy gate) rather than guessed. */
@@ -469,11 +532,19 @@ export function parseQaReport(taskId: string, reviewMd: string): ParsedQaReport 
     evidence = [`parsed from review.md (task ${taskId}) — no bulleted evidence lines found in the current round`];
   }
 
+  const requirements = parseTaskVerdicts(round, taskId);
+
   const artifact: QaReportArtifact = {
     taskId,
-    status,
+    // A PASS that mapped no id at all cannot be represented: the artifact
+    // schema refuses it (T-V8-014's no-bare-PASS floor), and silently
+    // manufacturing a `{ [taskId]: "PASS" }` entry to satisfy the schema
+    // would be inventing the verdict the document failed to state. Reading it
+    // as FAIL is the same fail-closed rule this parser already applies to an
+    // unrecognizable status line.
+    status: status === "PASS" && Object.keys(requirements).length === 0 ? "FAIL" : status,
     mode,
-    requirements: {},
+    requirements,
     tests: { passed, failed },
     evidence,
     risks: [],

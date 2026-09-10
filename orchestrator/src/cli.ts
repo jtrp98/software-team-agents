@@ -17,6 +17,13 @@ import { LocalWorkspace } from "./runtime/localWorkspace.js";
 import { DEFAULT_BUDGET, type Budget } from "./cost/costControl.js";
 import { loadStaConfig } from "./packaging/staConfig.js";
 import type { QaFindingRecord } from "./qa/evidence.js";
+import { buildQaTaskContract, type QaTaskContract } from "./qa/taskContract.js";
+import { repairQaSignals } from "./retry/repairRoute.js";
+import {
+  latestExecutionPacketPath,
+  readExecutionPacketForAudit,
+  readFindingsForTask,
+} from "./state/runtimeArtifacts.js";
 import { parseOpenIssues } from "./orchestrator/failureClassifier.js";
 import { readModuleDoc } from "./agents/moduleDocs.js";
 import { ClaudeCodeAdapter } from "./runtime/claudeCodeAdapter.js";
@@ -1307,18 +1314,33 @@ function previousRoundFromDocs(docsRoot: string, moduleName: string, taskId: str
  * already-derived task graph.  These are references and summaries, not copied
  * requirements or source payloads; QA may still request the named source.
  */
-export async function productionQaInputs(opts: { docsRoot: string; moduleName: string; taskId: string; roots: readonly string[] }) {
+export async function productionQaInputs(opts: {
+  docsRoot: string;
+  moduleName: string;
+  taskId: string;
+  roots: readonly string[];
+  /**
+   * T-V8-014 - the Framework root holding this task's runtime artifacts.
+   * Optional: without it the contract still carries the authored acceptance
+   * text and the graph radius, and simply reports that no packet/finding
+   * evidence was resolvable rather than pretending there was none.
+   */
+  projectRoot?: string;
+  /** This round's real changed-file manifest, resolved by the caller that owns the Target roots. */
+  changedFiles?: readonly string[];
+}) {
   const planMd = readModuleDoc(opts.docsRoot, opts.moduleName, "plan.md") ?? "";
   const designMd = readModuleDoc(opts.docsRoot, opts.moduleName, "design.md") ?? "";
   const parsed = readWorkPlan(planMd);
   if (parsed.problems.length) throw new Error(`invalid QA plan: ${parsed.problems.join("; ")}`);
   const task = parsed.tasks.find((row) => row.id === opts.taskId);
+  let graph: ReturnType<typeof taskGraphFromPlan> | undefined;
   let affectedTaskIds: string[] = [];
   let affectedPhases: number[] = [];
   if (task) {
-      const graph = taskGraphFromPlan(parsed.tasks);
+      graph = taskGraphFromPlan(parsed.tasks);
       affectedTaskIds = [...new Set([...graph.dependenciesOf(task.id), ...graph.descendantsOf(task.id)])].sort();
-      affectedPhases = [...new Set([task.phase, ...affectedTaskIds.map((id) => graph.nodes.get(id)?.phase).filter((phase): phase is number => phase !== undefined)])].sort((a, b) => a - b);
+      affectedPhases = [...new Set([task.phase, ...affectedTaskIds.map((id) => graph!.nodes.get(id)?.phase).filter((phase): phase is number => phase !== undefined)])].sort((a, b) => a - b);
   }
   const riskRef = /^##\s+Risks\s*&\s*Dependencies\s*$/im.test(designMd) ? ["design.md#Risks-&-Dependencies"] : [];
   const diffParts = await Promise.all(opts.roots.map(async (root) => {
@@ -1329,8 +1351,24 @@ export async function productionQaInputs(opts: { docsRoot: string; moduleName: s
     }
   }));
 
+  // The exact contract is only constructible from a canonical PlanTask: a
+  // legacy row has no authored acceptance text, no `produces`/`consumes` and
+  // no traceability split, so there is nothing to bind QA to that would not
+  // be invented here. Those rounds keep the pre-T-V8-014 pointer package.
+  const contract: QaTaskContract | undefined =
+    task && "version" in task
+      ? buildQaTaskContract({
+          task,
+          graph,
+          ...(opts.projectRoot ? { packet: latestQaPacketEvidence(opts.projectRoot, task.id, task.owner as AgentStage) } : {}),
+          ...(opts.projectRoot ? { findings: readTaskFindingsSafely(opts.projectRoot, task.id) } : {}),
+          changedFiles: opts.changedFiles ?? [],
+        })
+      : undefined;
+
   return {
     packageInputs: () => ({
+      ...(contract ? { taskContract: contract } : {}),
       taskIntent: task ? taskObjective(task) : `Task ${opts.taskId} in module ${opts.moduleName}; no matching plan row was found.`,
       acceptanceCriteria: task
         ? [...taskDesignRefs(task).map((ref) => `design.md#${ref}`), `plan.md#${task.id}`]
@@ -1339,7 +1377,36 @@ export async function productionQaInputs(opts: { docsRoot: string; moduleName: s
       knownRisks: riskRef,
     }),
     scopeInputs: () => ({ affectedTaskIds, affectedPhases }),
+    taskContract: () => contract,
   };
+}
+
+/**
+ * The immutable packet the owner stage last executed under, when one is on
+ * disk. Read tolerantly and discarded on any problem: a QA round must not be
+ * blocked because an older attempt's audit record no longer parses, and a
+ * contract that says "no packet identity was resolvable" is honest where a
+ * fabricated hash would not be.
+ */
+function latestQaPacketEvidence(projectRoot: string, taskId: string, stage: AgentStage) {
+  try {
+    const packetPath = latestExecutionPacketPath(projectRoot, taskId, stage);
+    if (!packetPath) return undefined;
+    const packet = readExecutionPacketForAudit(packetPath);
+    if (!("version" in packet) || packet.version !== 2) return undefined;
+    return { stage: packet.stage, attempt: packet.attempt, identity: packet.identity, dependencies: packet.dependencies, packet_hash: packet.packet_hash };
+  } catch {
+    return undefined;
+  }
+}
+
+/** Durable findings for this task. Same tolerance: an unreadable store yields none, never a thrown QA round. */
+function readTaskFindingsSafely(projectRoot: string, taskId: string) {
+  try {
+    return readFindingsForTask(projectRoot, taskId);
+  } catch {
+    return [];
+  }
 }
 
 /** The single production executor composition used by both manual and bounded-wave task paths. */
@@ -1442,17 +1509,23 @@ async function composeProductionTaskExecutor(
   });
 
   const qaRoots = resolveQaWorkRoots(args.projectRoot, taskId, store);
-  const qaInputs = await productionQaInputs({
-    docsRoot: resolveDocsRoot(args.projectRoot),
-    moduleName: args.module ?? "",
-    taskId,
-    roots: qaRoots,
-  });
   const qaChangedFiles = async (): Promise<string[]> => {
     const roots = resolveQaWorkRoots(args.projectRoot, taskId, store);
     const results = await Promise.allSettled(roots.map((root) => gitChangedFiles(root)));
     return [...new Set(results.flatMap((result) => (result.status === "fulfilled" ? result.value : [])))];
   };
+  // Resolved once, before composition: the contract carries the real file
+  // manifest, and `withQaOptimization`'s contract hook is synchronous because
+  // a packet's identity must not depend on a call that can still be in flight.
+  const qaContractChangedFiles = await qaChangedFiles().catch(() => [] as string[]);
+  const qaInputs = await productionQaInputs({
+    docsRoot: resolveDocsRoot(args.projectRoot),
+    moduleName: args.module ?? "",
+    taskId,
+    roots: qaRoots,
+    projectRoot: args.projectRoot,
+    changedFiles: qaContractChangedFiles,
+  });
 
   const verificationHook = args.noDeterministicGate
     ? null
@@ -1499,7 +1572,15 @@ async function composeProductionTaskExecutor(
           : { deterministicGate: "enabled" as const, deterministicVerification: verificationHook!.verificationFor }),
         packageInputs: qaInputs.packageInputs,
         scopeInputs: qaInputs.scopeInputs,
-        riskSignals: () => riskSignalsFromClassification(orchestrator.classification),
+        taskContract: qaInputs.taskContract,
+        // T-V8-015: a repair whose route demands FULL cannot be discharged by
+        // a TARGETED round. Read live from the orchestrator (a derivation of
+        // the persisted last failure), so a resumed repair round is held to
+        // the same requirement as the one that raised it.
+        riskSignals: () => ({
+          ...riskSignalsFromClassification(orchestrator.classification),
+          ...orchestrator.repairRoute ? repairQaSignals(orchestrator.repairRoute) : {},
+        }),
         taskLevel: () => orchestrator.classification.level,
         previousRound: () => previousRoundFromDocs(resolveDocsRoot(args.projectRoot), args.module ?? "", taskId),
       });

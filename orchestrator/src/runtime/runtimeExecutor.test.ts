@@ -64,7 +64,16 @@ function executorFor(runtime: MockRuntimeAdapter, over: Record<string, unknown> 
   });
 }
 
-const PASSING_REVIEW = ["## Round 1 (FULL)", "- everything checks out ✅", "- 12 passed, 0 failed"].join("\n");
+// T-V8-014: a passing round has to map at least one id to a verdict under
+// `## Per-Task Results`; a status with no per-id verdict reads as FAIL.
+const PASSING_REVIEW = [
+  "## Round 1 (FULL)",
+  "- everything checks out ✅",
+  "- 12 passed, 0 failed",
+  "",
+  "## Per-Task Results",
+  "- BE-001 — ✅ Verified: order boundary matches DES-001",
+].join("\n");
 
 function addressableDesign(overrides: { compatibility?: string; schema?: string; migration?: string; security?: string; ambiguity?: string } = {}): string {
   const revision = "a".repeat(40), hash = "b".repeat(64);

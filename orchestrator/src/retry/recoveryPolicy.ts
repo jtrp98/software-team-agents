@@ -103,7 +103,22 @@ export function decideRecovery(input: RecoveryInput): RecoveryAction {
     };
   }
 
-  // 1a. Then what this severity is allowed to do at all. Above the routing
+  // 1a. Infrastructure before severity, and before routing. A provider outage
+  //     or exhausted quota has no owner to send the task to and no fix to
+  //     verify; the only correct outcome is to stop and let the same stage be
+  //     resumed. `recordFailure({ countsAsDefect: false })` is the other half
+  //     of the same rule — this decides the route, that protects the budget.
+  if (failure?.category === "infrastructure") {
+    return {
+      kind: "ESCALATE",
+      strategy: "escalate_to_human",
+      reason:
+        `infrastructure/quota failure halts the run without consuming a ${kind} defect retry — ` +
+        `resume the same stage once the provider is available: ${failure.reason}`,
+    };
+  }
+
+  // 1b. Then what this severity is allowed to do at all. Above the routing
   //     decision, not inside it: a critical failure is not a routing question —
   //     there is no owner to send it to that makes it safe to keep going. All
   //     three outcomes here ESCALATE rather than ABORT, because the global budget

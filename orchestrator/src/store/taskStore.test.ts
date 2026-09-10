@@ -32,7 +32,7 @@ function passingQaReport(): QaReportArtifact {
     taskId: "T-1",
     status: "PASS",
     mode: "FULL",
-    requirements: {},
+    requirements: { "T-1": "PASS" },
     tests: { passed: 1, failed: 0 },
     evidence: ["ok"],
     risks: [],

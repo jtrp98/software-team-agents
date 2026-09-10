@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { deriveHandoff, listModules, moduleDocPath, readModuleDoc, parseQaReport, parseSecurityReport, resolveModule } from "./moduleDocs.js";
+import { deriveHandoff, listModules, moduleDocPath, readModuleDoc, parseQaReport, parseTaskVerdicts, parseSecurityReport, resolveModule } from "./moduleDocs.js";
 import { AgentStage } from "../types.js";
 
 describe("deriveHandoff (T-V3TOK-091)", () => {
@@ -223,6 +223,10 @@ describe("parseQaReport", () => {
       "- 42 passed, 0 failed",
       "- typecheck ✅ lint ✅ build ✅",
       "",
+      "## Per-Task Results",
+      "- BE-004 — ✅ Verified: routes match DES-011",
+      "- AC-007.2 — ✅ Verified: empty order returns zero total",
+      "",
       "## Unverified Behaviour — undeployed phases",
     ].join("\n");
     const { artifact, modeInferred } = parseQaReport("T-1", md);
@@ -231,6 +235,76 @@ describe("parseQaReport", () => {
     expect(modeInferred).toBe(false);
     expect(artifact.tests).toEqual({ passed: 42, failed: 0 });
     expect(artifact.hasAutomatedTests).toBe(true);
+    // The BE-004 line names DES-011 in its evidence, so that id is verdicted too.
+    expect(artifact.requirements).toEqual({ "BE-004": "PASS", "DES-011": "PASS", "AC-007.2": "PASS" });
+  });
+
+  // T-V8-014: a status without a per-id verdict is an assertion, not a verdict.
+  it("reads a PASS round that maps no id as FAIL rather than manufacturing a verdict", () => {
+    const md = [
+      "## Round 3 (FULL)",
+      "- checked backend routes against design.md ✅",
+      "- 42 passed, 0 failed",
+      "",
+      "## Unverified Behaviour — undeployed phases",
+    ].join("\n");
+    const { artifact } = parseQaReport("T-1", md);
+    expect(artifact.status).toBe("FAIL");
+    expect(artifact.requirements).toEqual({});
+  });
+
+  it("maps a Partial to FAIL — a Partial is not a pass", () => {
+    const md = [
+      "## Round 4 (FULL)",
+      "**Status:** ⚠️ Partial (FULL)",
+      "- 3 passed, 0 failed",
+      "",
+      "## Per-Task Results",
+      "- BE-004 — ✅ Verified",
+      "- AC-007.2 — ⚠️ Partial: rule inspected, no executable coverage",
+      "",
+      "## Unverified Behaviour",
+      "- AC-007.2 read only",
+    ].join("\n");
+    const { artifact } = parseQaReport("BE-004", md);
+    expect(artifact.status).toBe("FAIL");
+    expect(artifact.requirements).toEqual({ "BE-004": "PASS", "AC-007.2": "FAIL" });
+  });
+});
+
+describe("parseTaskVerdicts", () => {
+  it("reads only its own section, not markers from later sections", () => {
+    const md = [
+      "## Per-Task Results",
+      "- BE-004 — ✅ Verified",
+      "",
+      "## Issues Found",
+      "- AC-007.2 ❌ still broken in the follow-up phase",
+    ].join("\n");
+    expect(parseTaskVerdicts(md, "BE-004")).toEqual({ "BE-004": "PASS" });
+  });
+
+  it("does not file evidence prose like SHA-256 or TS-2322 as an acceptance criterion", () => {
+    const md = ["## Per-Task Results", "- BE-004 — ✅ Verified; SHA-256 abc, no TS-2322 remaining"].join("\n");
+    expect(parseTaskVerdicts(md, "BE-004")).toEqual({ "BE-004": "PASS" });
+  });
+
+  it("fails an id once, permanently — a later ✅ on the same id does not lift it", () => {
+    const md = [
+      "## Per-Task Results",
+      "- AC-007.2 — ❌ Failed: throws on empty order",
+      "- AC-007.2 — ✅ Verified: passes for nonempty orders",
+    ].join("\n");
+    expect(parseTaskVerdicts(md, "BE-004")).toEqual({ "AC-007.2": "FAIL" });
+  });
+
+  it("reads durable finding ids so an open finding's recheck is checkable", () => {
+    const md = ["## Per-Task Results", "- FIND-0123456789abcdef — ✅ Verified: fix confirmed"].join("\n");
+    expect(parseTaskVerdicts(md, "BE-004")).toEqual({ "FIND-0123456789abcdef": "PASS" });
+  });
+
+  it("maps nothing from a round that states no marked verdict", () => {
+    expect(parseTaskVerdicts("## Per-Task Results\n- BE-004 looks fine to me", "BE-004")).toEqual({});
   });
 
   it("reads a round with any ⚠️/❌ marker as FAIL even if some checks passed", () => {

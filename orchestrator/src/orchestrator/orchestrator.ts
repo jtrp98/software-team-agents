@@ -3,6 +3,7 @@ import type { ClassificationResult } from "../classification/taskClassifier.js";
 import { forceBlock, forwardState, recoverTo, transition, type TaskMachine } from "../state/taskState.js";
 import { MAX_RETRY, initTaskRun, recordFailure, type TaskRun } from "../retry/retryPolicy.js";
 import { decideRecovery, type RecoveryAction } from "../retry/recoveryPolicy.js";
+import { routeRepair, type RepairRoute } from "../retry/repairRoute.js";
 import { policyFor } from "../escalation/escalationPolicy.js";
 import { routeFailure } from "./failure.js";
 import { checkGate, type GateContext } from "../gates/gatePolicy.js";
@@ -211,6 +212,16 @@ export class Orchestrator {
   private stateBeforeFailure: TaskState = TaskState.CREATED;
   /** What the last failure resolved to. Exposed for the CLI and the run log; not persisted — it is derived, not state. */
   private lastRecovery: RecoveryAction | null = null;
+  /**
+   * The deterministic repair route for the most recent failure (T-V8-015).
+   * Process-local, exactly like `lastRecovery`: it is a derivation of the
+   * persisted `lastFailure`, so a resumed task recomputes it rather than
+   * reading a second stored copy that could drift from the failure it
+   * describes. `invalidates` is empty here because this class holds no task
+   * graph; the descendant set is computed by whoever owns the graph, from the
+   * same `invalidationSetFor`.
+   */
+  private lastRepairRoute: RepairRoute | null = null;
 
   constructor(taskId: string, classification: ClassificationResult, opts?: OrchestratorOptions) {
     const restore = opts?.restore;
@@ -317,6 +328,11 @@ export class Orchestrator {
   /** How the most recent failure was resolved, or null if none has happened in this process. */
   get recovery(): RecoveryAction | null {
     return this.lastRecovery;
+  }
+
+  /** The deterministic repair route for the most recent failure, or null if none has happened in this process. */
+  get repairRoute(): RepairRoute | null {
+    return this.lastRepairRoute;
   }
 
   /** The exact row this orchestrator would persist right now. */
@@ -794,7 +810,13 @@ export class Orchestrator {
     const failureKind = stage === AgentStage.QA_ENGINEER ? "qa" : stage === AgentStage.SECURITY ? "security" : null;
     if (failureKind && result.outcome.result === "FAIL") {
       this.stateBeforeFailure = this.run.machine.current;
-      this.run = recordFailure(this.run, failureKind);
+      // An infrastructure outcome moves the state but not the defect budget
+      // (T-V8-015). The `requiresHumanStop` branch above already covered the
+      // UNAVAILABLE case; this covers an infrastructure failure reported
+      // without `requiresHuman`, which previously spent a retry round.
+      this.run = recordFailure(this.run, failureKind, {
+        countsAsDefect: result.failure?.category !== "infrastructure",
+      });
       this.applyFailureRoute(failureKind, result.failure);
     }
 
@@ -857,6 +879,23 @@ export class Orchestrator {
    * calls — it supplies facts, the orchestrator draws the conclusion.
    */
   private applyFailureRoute(failureKind: "qa" | "security", failure: StructuredFailure | undefined): void {
+    // Recorded alongside the recovery action, not instead of it: the action
+    // says which state the task moves to, the route says what the repair
+    // consists of, what it invalidates, and whether the round after it has to
+    // be FULL. Both are derived from the same failure, and both are audit
+    // records rather than instructions to any agent.
+    this.lastRepairRoute = failure
+      ? routeRepair({
+          finding: {
+            task_id: this.taskId,
+            category: failure.category,
+            owner: failure.owner,
+            retryable: failure.retryable,
+            requires_human: failure.requiresHuman,
+          },
+          pipeline: this.pipeline,
+        })
+      : null;
     const action = decideRecovery({
       failure,
       kind: failureKind,

@@ -8,6 +8,7 @@ import {
 } from "../agents/moduleDocs.js";
 import { pmMode, type ClassificationResult } from "../classification/taskClassifier.js";
 import { taskGraphFromPlan } from "../graph/taskGraph.js";
+import { MAX_RETRY } from "../retry/retryPolicy.js";
 import { DEFAULT_ESCALATION_POLICY, type Severity } from "../escalation/escalationPolicy.js";
 import { FORBIDDEN_COMMANDS } from "../runtime/runtimeGuards.js";
 import {
@@ -167,7 +168,12 @@ function stopConditions(input: RuntimeTaskBuildInput): string[] {
   return [
     ...FORBIDDEN_COMMANDS.map((command) => `STOP before state-changing ${command} commands`),
     "STOP after two automatic repair rounds for ordinary work; further repair requires a human decision",
-    `Global defensive retry ceiling: ${escalation.max_retry} for ${severity} severity; this does not authorize additional ordinary repair`,
+    // T-V8-015: this line used to print the *severity* ceiling under the
+    // label "global", which read as one number when it was two. Now that
+    // every ordinary severity is bounded at two, the mislabel would have made
+    // the packet contradict the line above it. Both numbers are named, and
+    // which is which is explicit.
+    `Global defensive retry ceiling: ${MAX_RETRY}; the ${severity}-severity automatic ceiling is ${escalation.max_retry}, and neither authorizes additional ordinary repair`,
     ...(escalation.approval ? [`STOP for human approval when ${severity} severity escalates`] : []),
     ...(escalation.stop_pipeline ? [`STOP the pipeline immediately for ${severity} severity`] : []),
     "STOP rather than inventing any unavailable RuntimeTask field",

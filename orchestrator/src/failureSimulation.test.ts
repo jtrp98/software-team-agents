@@ -10,7 +10,8 @@ function qaReport(taskId: string, status: "PASS" | "FAIL"): QaReportArtifact {
     taskId,
     status,
     mode: "FULL",
-    requirements: {},
+    // A PASS must map at least one verdict (T-V8-014); FAIL is unconstrained.
+    requirements: { [taskId]: status },
     tests: { passed: status === "PASS" ? 10 : 8, failed: status === "PASS" ? 0 : 2 },
     evidence: ["log"],
     risks: [],

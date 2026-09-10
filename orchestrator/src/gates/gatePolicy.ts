@@ -2,6 +2,7 @@ import { TaskState } from "../types.js";
 import { canTransition, transition, type TaskMachine } from "../state/taskState.js";
 import type { QaReportArtifact, SecurityReportArtifact } from "../artifacts/schemas.js";
 import { canCloseWith, type QaModeDecision } from "../qa/mode.js";
+import { checkQaVerdictCoverage } from "../qa/verdict.js";
 import {
   assessBusinessInput,
   businessGateReason,
@@ -31,6 +32,16 @@ export interface GateContext {
    * to its original behavior.
    */
   qaModeDecision?: QaModeDecision;
+  /**
+   * T-V8-014 - the task/AC/DES/finding ids this round's report has to give a
+   * verdict for (`requiredVerdictIds`). Optional for the same reason
+   * `qaModeDecision` is: a row written before the contract-bound QA package
+   * has none, and inventing one would be a fabricated requirement rather than
+   * a stricter gate. `withQaOptimization` already rejects an under-covered
+   * report before it gets here; this is the defense-in-depth copy, so a
+   * caller that composes the gate without that wrapper is still held to it.
+   */
+  qaVerdictRequirements?: string[];
 }
 
 export interface GateResult {
@@ -103,7 +114,16 @@ export function checkGate(from: TaskState, to: TaskState, ctx: GateContext): Gat
     // A decision of FULL is only discharged by a report that says FULL.
     // Without a recorded decision this is a no-op.
     const close = canCloseWith(ctx.qaModeDecision, ctx.qaReport.mode);
-    return close.allowed ? { allowed: true } : { allowed: false, reason: close.reason };
+    if (!close.allowed) return { allowed: false, reason: close.reason };
+    if (ctx.qaVerdictRequirements && ctx.qaVerdictRequirements.length > 0) {
+      const coverage = checkQaVerdictCoverage({
+        report: ctx.qaReport,
+        required: ctx.qaVerdictRequirements,
+        decision: ctx.qaModeDecision,
+      });
+      if (!coverage.ok) return { allowed: false, reason: `QA_VERDICT_COVERAGE required - ${coverage.problems.join(" | ")}` };
+    }
+    return { allowed: true };
   }
 
   if (from === TaskState.SECURITY && to !== TaskState.SECURITY_FAILED) {

@@ -282,6 +282,17 @@ export const QaReportArtifactSchema = z
     },
     { message: "status PASS requires every requirement PASS and zero failed tests" },
   )
+  // T-V8-014: no bare PASS. `Object.values({}).every(...)` is vacuously true,
+  // so the refine above accepted a PASS that named no requirement at all - a
+  // status without a verdict. Which ids specifically must appear is the
+  // round's own contract (`requiredVerdictIds`, enforced by
+  // `checkQaVerdictCoverage`); this is the floor that makes the omission
+  // impossible to express in the first place.
+  .refine((report) => report.status !== "PASS" || Object.keys(report.requirements).length > 0, {
+    message:
+      "status PASS requires at least one requirement verdict - a PASS that maps no task/AC/DES id to a result is an assertion, not a verdict",
+    path: ["requirements"],
+  })
   .refine(
     (report) => report.hasAutomatedTests || report.unverifiedBehaviour.length > 0,
     {

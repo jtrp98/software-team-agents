@@ -70,6 +70,11 @@ export const PersistedTaskSchema = z.object({
     // rows written before the optimization layer simply have no decision,
     // which is true rather than broken.
     qaModeDecision: QaModeDecisionSchema.optional(),
+    // The verdict-coverage requirement rides with the mode decision for the
+    // same reason: a resumed round must close (or refuse to close) on exactly
+    // the ids the original round was held to, not on a set re-derived from a
+    // plan that may have been amended since.
+    qaVerdictRequirements: z.array(z.string().min(1)).optional(),
   }),
   /**
    * Every human decision this task has asked for, with its answer.

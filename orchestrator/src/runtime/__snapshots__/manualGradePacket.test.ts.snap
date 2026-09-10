@@ -69,7 +69,7 @@ Human gates: none
 ## Stop conditions
 - STOP before state-changing git commands
 - STOP after two automatic repair rounds for ordinary work; further repair requires a human decision
-- Global defensive retry ceiling: 3 for medium severity; this does not authorize additional ordinary repair
+- Global defensive retry ceiling: 3; the medium-severity automatic ceiling is 2, and neither authorizes additional ordinary repair
 - STOP rather than inventing any unavailable RuntimeTask field
 
 ## Expansion pointers
@@ -148,7 +148,7 @@ Human gates: none
 ## Stop conditions
 - STOP before state-changing git commands
 - STOP after two automatic repair rounds for ordinary work; further repair requires a human decision
-- Global defensive retry ceiling: 3 for medium severity; this does not authorize additional ordinary repair
+- Global defensive retry ceiling: 3; the medium-severity automatic ceiling is 2, and neither authorizes additional ordinary repair
 - STOP rather than inventing any unavailable RuntimeTask field
 
 ## Expansion pointers
