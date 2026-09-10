@@ -39,7 +39,7 @@ import {
 // the new field back as null ("not recorded"), nothing is guessed and nothing is lost. A
 // migration that would need to reinterpret or rewrite existing data does not go in this list (see
 // MIGRATIONS below), and an unknown version refuses to open rather than risk misreading it.
-const SCHEMA_VERSION = 17;
+const SCHEMA_VERSION = 18;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -64,10 +64,12 @@ CREATE TABLE IF NOT EXISTS runs (
   input_tokens       INTEGER,
   output_tokens      INTEGER,
   cache_read_tokens  INTEGER,
+  cache_creation_tokens INTEGER,
   context_chars      INTEGER,
   estimated_input_tokens INTEGER,
   prompt_version     INTEGER,
   effort             TEXT,
+  requested_effort   TEXT,
   qa_mode            TEXT,
   qa_effort          TEXT,
   deterministic_gate TEXT,
@@ -176,10 +178,12 @@ interface RunRow {
   input_tokens: number | null;
   output_tokens: number | null;
   cache_read_tokens: number | null;
+  cache_creation_tokens: number | null;
   context_chars: number | null;
   estimated_input_tokens: number | null;
   prompt_version: number | null;
   effort: string | null;
+  requested_effort: string | null;
   qa_mode: string | null;
   qa_effort: string | null;
   deterministic_gate: string | null;
@@ -356,6 +360,13 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
     if (!existing.has("verification_fingerprint")) db.exec("ALTER TABLE runs ADD COLUMN verification_fingerprint TEXT");
   },
+  17: (db) => {
+    // T-V8-012: an old row never measured cache-creation usage or a separate
+    // requested-effort decision; null is the only truthful backfill for both.
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    if (!existing.has("cache_creation_tokens")) db.exec("ALTER TABLE runs ADD COLUMN cache_creation_tokens INTEGER");
+    if (!existing.has("requested_effort")) db.exec("ALTER TABLE runs ADD COLUMN requested_effort TEXT");
+  },
 };
 
 export class SqliteTaskStore implements TaskStore {
@@ -482,8 +493,8 @@ export class SqliteTaskStore implements TaskStore {
     if (this.readOnly) throw new Error("state database was opened read-only");
     this.db
       .prepare(
-        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, context_chars, estimated_input_tokens, prompt_version, effort, qa_mode, qa_effort, deterministic_gate, document_gate, runtime, requested_runtime, requested_model, routing_basis, fallback_reason, fallback_count, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars, verification_fingerprint)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, context_chars, estimated_input_tokens, prompt_version, effort, requested_effort, qa_mode, qa_effort, deterministic_gate, document_gate, runtime, requested_runtime, requested_model, routing_basis, fallback_reason, fallback_count, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars, verification_fingerprint)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.task_id,
@@ -500,10 +511,12 @@ export class SqliteTaskStore implements TaskStore {
         record.input_tokens,
         record.output_tokens,
         record.cache_read_tokens,
+        record.cache_creation_tokens ?? null,
         record.context_chars,
         record.estimated_input_tokens,
         record.promptVersion,
         record.effort,
+        record.requested_effort ?? null,
         record.qa_mode,
         record.qa_effort,
         record.deterministic_gate,
@@ -559,6 +572,7 @@ export class SqliteTaskStore implements TaskStore {
       model: r.model,
       promptVersion: r.prompt_version,
       effort: r.effort,
+      requested_effort: r.requested_effort,
       tokens: r.tokens,
       cost: r.cost,
       result: r.result === "FAIL" ? "FAIL" : "PASS",
@@ -567,6 +581,7 @@ export class SqliteTaskStore implements TaskStore {
       input_tokens: r.input_tokens,
       output_tokens: r.output_tokens,
       cache_read_tokens: r.cache_read_tokens,
+      cache_creation_tokens: r.cache_creation_tokens,
       context_chars: r.context_chars,
       estimated_input_tokens: r.estimated_input_tokens,
       qa_mode: r.qa_mode === "FULL" || r.qa_mode === "TARGETED" ? r.qa_mode : null,

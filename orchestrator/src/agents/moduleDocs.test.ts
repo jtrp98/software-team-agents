@@ -101,6 +101,45 @@ describe("deriveHandoff (T-V3TOK-091)", () => {
   });
 });
 
+describe("T-V8-013 open_findings ids survive rewrite/archive, unlike positional OPEN-### numbering", () => {
+  function baWith(openQuestionsBody: string[], prefix: string[] = []): string {
+    return [
+      "# Requirement",
+      ...prefix,
+      "## Core Features",
+      "- REQ-001 create order",
+      "## Open Questions",
+      ...openQuestionsBody,
+    ].join("\n");
+  }
+
+  it("keeps the same finding id when unrelated content changes above the heading", () => {
+    const before = deriveHandoff(AgentStage.BUSINESS_ANALYST, "sales", baWith(["- Who owns refunds?"]), undefined, { taskId: "T-1" });
+    const after = deriveHandoff(AgentStage.BUSINESS_ANALYST, "sales", baWith(["- Who owns refunds?"], ["## New Section", "unrelated content inserted above"]), undefined, { taskId: "T-1" });
+    expect(before.artifact.open_findings[0].id).toBe(after.artifact.open_findings[0].id);
+  });
+
+  it("keeps the same finding id when reordered among other findings in the same section", () => {
+    const before = deriveHandoff(AgentStage.BUSINESS_ANALYST, "sales", baWith(["- Who owns refunds?", "- What is the SLA?"]), undefined, { taskId: "T-1" });
+    const after = deriveHandoff(AgentStage.BUSINESS_ANALYST, "sales", baWith(["- What is the SLA?", "- Who owns refunds?"]), undefined, { taskId: "T-1" });
+    const beforeIds = new Set(before.artifact.open_findings.map((f) => f.id));
+    const afterIds = new Set(after.artifact.open_findings.map((f) => f.id));
+    expect(afterIds).toEqual(beforeIds);
+  });
+
+  it("mints a different id when the finding's own text actually changes", () => {
+    const original = deriveHandoff(AgentStage.BUSINESS_ANALYST, "sales", baWith(["- Who owns refunds?"]), undefined, { taskId: "T-1" });
+    const reworded = deriveHandoff(AgentStage.BUSINESS_ANALYST, "sales", baWith(["- Who owns refunds after a chargeback?"]), undefined, { taskId: "T-1" });
+    expect(original.artifact.open_findings[0].id).not.toBe(reworded.artifact.open_findings[0].id);
+  });
+
+  it("no longer numbers findings by position — the same content in a different module still gets a stable, non-sequential id", () => {
+    const id = deriveHandoff(AgentStage.BUSINESS_ANALYST, "sales", baWith(["- Who owns refunds?"]), undefined, { taskId: "T-1" }).artifact.open_findings[0].id;
+    expect(id).toMatch(/^OPEN-[0-9a-f]{12}$/);
+    expect(id).not.toBe("OPEN-001");
+  });
+});
+
 describe("moduleDocPath / readModuleDoc", () => {
   it("resolves under _docs/module/<name>/", () => {
     expect(moduleDocPath("/root", "sales-crm", "review.md")).toBe(

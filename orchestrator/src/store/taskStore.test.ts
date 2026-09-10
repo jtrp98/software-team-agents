@@ -77,6 +77,7 @@ function sampleRun(taskId = "T-1"): RunRecord {
     model: "sonnet",
     promptVersion: 1,
     effort: "medium",
+    requested_effort: null,
     tokens: 1234,
     cost: 0.5,
     result: "PASS",
@@ -85,6 +86,7 @@ function sampleRun(taskId = "T-1"): RunRecord {
     input_tokens: 1000,
     output_tokens: 234,
     cache_read_tokens: null,
+    cache_creation_tokens: null,
     context_chars: 4000,
     estimated_input_tokens: 1000,
     qa_mode: null,
@@ -540,7 +542,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       }
 
       const versionCheck = new Database(file, { readonly: true });
-        expect(versionCheck.pragma("user_version", { simple: true })).toBe(17);
+        expect(versionCheck.pragma("user_version", { simple: true })).toBe(18);
       expect((versionCheck.pragma("table_info(runs)") as { name: string }[]).filter((column) => routingColumns.includes(column.name as typeof routingColumns[number])).map((column) => column.name)).toEqual([...routingColumns]);
       versionCheck.close();
 
@@ -549,6 +551,67 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       try {
         expect(reopened.runsForTask("T-V11")).toEqual([legacy]);
         expect(reopened.runsForTask("T-V12")).toEqual([routed]);
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      fs.rmSync(path.dirname(file), { recursive: true, force: true });
+    }
+  });
+
+  it("T-V8-012: a v17 database migrates cache-creation tokens and requested effort in as null, preserving every other legacy run fact", () => {
+    const file = tmpDbPath();
+    try {
+      const seed = new SqliteTaskStore(file);
+      const legacy = sampleRun("T-V17");
+      seed.appendRun(legacy);
+      seed.close();
+
+      const raw = new Database(file);
+      raw.exec("ALTER TABLE runs DROP COLUMN cache_creation_tokens");
+      raw.exec("ALTER TABLE runs DROP COLUMN requested_effort");
+      raw.pragma("user_version = 17");
+      raw.close();
+
+      const migrated = new SqliteTaskStore(file);
+      try {
+        expect(migrated.runsForTask("T-V17")).toEqual([{ ...legacy, cache_creation_tokens: null, requested_effort: null }]);
+        const decided = { ...sampleRun("T-V18"), cache_creation_tokens: 900, requested_effort: "high", effort: "high" };
+        migrated.appendRun(decided);
+        expect(migrated.runsForTask("T-V18")).toEqual([decided]);
+      } finally {
+        migrated.close();
+      }
+
+      const versionCheck = new Database(file, { readonly: true });
+      try {
+        expect(versionCheck.pragma("user_version", { simple: true })).toBe(18);
+      } finally {
+        versionCheck.close();
+      }
+    } finally {
+      fs.rmSync(path.dirname(file), { recursive: true, force: true });
+    }
+  });
+
+  it("T-V8-012: opening a v17 database twice does not re-run the migration or disturb data", () => {
+    const file = tmpDbPath();
+    try {
+      const seed = new SqliteTaskStore(file);
+      const legacy = sampleRun("T-V17B");
+      seed.appendRun(legacy);
+      seed.close();
+
+      const raw = new Database(file);
+      raw.exec("ALTER TABLE runs DROP COLUMN cache_creation_tokens");
+      raw.exec("ALTER TABLE runs DROP COLUMN requested_effort");
+      raw.pragma("user_version = 17");
+      raw.close();
+
+      new SqliteTaskStore(file).close();
+      const reopened = new SqliteTaskStore(file);
+      try {
+        expect(reopened.runsForTask("T-V17B")).toEqual([{ ...legacy, cache_creation_tokens: null, requested_effort: null }]);
       } finally {
         reopened.close();
       }
@@ -582,7 +645,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
 
       const verify = new Database(file, { readonly: true });
       try {
-        expect(verify.pragma("user_version", { simple: true })).toBe(17);
+        expect(verify.pragma("user_version", { simple: true })).toBe(18);
         expect((verify.prepare("SELECT state FROM tasks WHERE task_id = ?").get("T-V12") as { state: string }).state).toBe(legacyBytes);
       } finally {
         verify.close();

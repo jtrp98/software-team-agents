@@ -292,6 +292,7 @@ export function parseOpenCodeJsonl(stdout: string): { text: string; usage: Runti
   let inputTokens: number | undefined;
   let outputTokens: number | undefined;
   let cachedInputTokens: number | undefined;
+  let cacheCreationInputTokens: number | undefined;
   let costUsd: number | undefined;
   let model: string | undefined;
   let finishReason: string | undefined;
@@ -316,6 +317,11 @@ export function parseOpenCodeJsonl(stdout: string): { text: string; usage: Runti
         if (typeof tokens.output === "number") outputTokens = tokens.output;
         const cache = tokens.cache as Record<string, unknown> | undefined;
         if (cache && typeof cache === "object" && typeof cache.read === "number") cachedInputTokens = cache.read;
+        // T-V8-012: `openCodeAdapter.test.ts`'s SPIKE_NDJSON fixture is a real
+        // 1.18.21 manual-testing transcript and it carries `cache.write`
+        // alongside `cache.read` — this was previously read only for `.read`,
+        // silently dropping the cache-creation half of the same object.
+        if (cache && typeof cache === "object" && typeof cache.write === "number") cacheCreationInputTokens = cache.write;
       }
     }
     if (typeof part.model === "string" && part.model.length > 0) model = part.model;
@@ -323,8 +329,8 @@ export function parseOpenCodeJsonl(stdout: string): { text: string; usage: Runti
   return {
     text: texts.join(""),
     usage:
-      inputTokens !== undefined || outputTokens !== undefined || cachedInputTokens !== undefined || costUsd !== undefined
-        ? { inputTokens, outputTokens, cachedInputTokens, costUsd }
+      inputTokens !== undefined || outputTokens !== undefined || cachedInputTokens !== undefined || cacheCreationInputTokens !== undefined || costUsd !== undefined
+        ? { inputTokens, outputTokens, cachedInputTokens, cacheCreationInputTokens, costUsd }
         : {},
     model,
     finishReason,

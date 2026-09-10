@@ -290,6 +290,28 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
     expect(result.model).toBeUndefined();
   });
 
+  it("T-V8-012 reports cache-creation tokens distinctly from cache-read tokens", async () => {
+    const spawnSync = fakeCli({
+      is_error: false, result: "done", total_cost_usd: 0.03,
+      usage: { input_tokens: 100, output_tokens: 40, cache_read_input_tokens: 10, cache_creation_input_tokens: 25 },
+    });
+    const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync });
+
+    const result = await adapter.executeAgent(baseRequest());
+
+    expect(result.usage.cachedInputTokens).toBe(10);
+    expect(result.usage.cacheCreationInputTokens).toBe(25);
+  });
+
+  it("T-V8-012 leaves cache-creation tokens undefined (not 0) when the envelope carries none", async () => {
+    const spawnSync = fakeCli({ is_error: false, result: "done", total_cost_usd: 0.02, usage: { input_tokens: 100, output_tokens: 40, cache_read_input_tokens: 10 } });
+    const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync });
+
+    const result = await adapter.executeAgent(baseRequest());
+
+    expect(result.usage.cacheCreationInputTokens).toBeUndefined();
+  });
+
   it("reports ERROR (not OK) when the CLI exits non-zero", async () => {
     const spawnSync = fakeCli({ is_error: true, result: "boom" }, 1);
     const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync });

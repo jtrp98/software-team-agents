@@ -13,6 +13,8 @@ export interface RunRecord {
   promptVersion: number | null;
   /** Agent-frontmatter reasoning effort; distinct from the QA risk gate's qa_effort. */
   effort: string | null;
+  /** T-V8-012 — the effort actually requested of the runtime for this attempt, independent of whether the runtime echoes one back (`effort` above is the observed value, falling back to this one — same shape as `requested_model`/`model`). */
+  requested_effort?: string | null;
   tokens: number;
   cost: number;
   result: "PASS" | "FAIL";
@@ -23,6 +25,8 @@ export interface RunRecord {
   output_tokens: number | null;
   /** Prompt-cache tokens read this run, per the CLI's own usage report — null when the executor doesn't report one. */
   cache_read_tokens: number | null;
+  /** T-V8-012 — prompt-cache tokens *written* this run (`RuntimeUsage.cacheCreationInputTokens`). Null when the runtime's envelope carries no such counter, never 0. */
+  cache_creation_tokens?: number | null;
   /** Size (characters) of the prompt actually sent this run — the context-size half of "token/context tracking", independent of the response's token usage. */
   context_chars: number | null;
   /** Deterministic input-token approximation from context_chars; null for historical rows. */
@@ -81,6 +85,7 @@ export interface RunOutcome {
   model?: string;
   promptVersion?: number;
   effort?: string;
+  requested_effort?: string;
   tokens: number;
   cost: number;
   result: "PASS" | "FAIL";
@@ -89,6 +94,7 @@ export interface RunOutcome {
   input_tokens?: number;
   output_tokens?: number;
   cache_read_tokens?: number;
+  cache_creation_tokens?: number;
   context_chars?: number;
   estimated_input_tokens?: number;
   runtime?: string;
@@ -137,10 +143,11 @@ function reported(value: string | number | null): string {
  * output would make an unknown route look like a same-runner decision.
  */
 export function formatRunRouting(run: RunRecord): string {
-  const effort = reported(run.effort);
   return `runner=${reported(run.requested_runtime)} → ${reported(run.runtime)} ` +
     `model=${reported(run.requested_model)} → ${reported(run.model)} ` +
-    `effort=${effort} basis=${reported(run.routing_basis)} fallback_count=${reported(run.fallback_count)} ` +
+    // T-V8-012: same requested → observed shape as runner/model above — see
+    // `RunRecord.requested_effort`'s doc comment for why this used to be one value.
+    `effort=${reported(run.requested_effort ?? null)} → ${reported(run.effort)} basis=${reported(run.routing_basis)} fallback_count=${reported(run.fallback_count)} ` +
     `fallback_reason=${reported(run.fallback_reason)}`;
 }
 
@@ -183,6 +190,7 @@ export class RunLog {
       model: params.outcome.model ?? null,
       promptVersion: params.outcome.promptVersion ?? null,
       effort: params.outcome.effort ?? null,
+      requested_effort: params.outcome.requested_effort ?? null,
       tokens: params.outcome.tokens,
       cost: params.outcome.cost,
       result: params.outcome.result,
@@ -191,6 +199,7 @@ export class RunLog {
       input_tokens: params.outcome.input_tokens ?? null,
       output_tokens: params.outcome.output_tokens ?? null,
       cache_read_tokens: params.outcome.cache_read_tokens ?? null,
+      cache_creation_tokens: params.outcome.cache_creation_tokens ?? null,
       context_chars: params.outcome.context_chars ?? null,
       estimated_input_tokens: params.outcome.estimated_input_tokens ?? null,
       runtime: params.outcome.runtime ?? null,

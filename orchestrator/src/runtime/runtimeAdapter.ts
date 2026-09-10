@@ -184,9 +184,22 @@ export type RuntimeRunStatus =
   | "UNAVAILABLE";
 
 export interface RuntimeUsage {
+  /** Uncached input tokens — the portion of the prompt the provider actually priced at the full input rate this turn. */
   readonly inputTokens?: number;
   readonly outputTokens?: number;
+  /** Prompt-cache tokens *read* this turn (discounted, already-cached input). */
   readonly cachedInputTokens?: number;
+  /**
+   * T-V8-012 — prompt-cache tokens *written* this turn: the input that was
+   * newly cached for a future turn to read, priced at its own (higher) rate.
+   * Distinct from `cachedInputTokens` (a read) and from `inputTokens`
+   * (uncached) — collapsing any of the three into another would misreport
+   * which portion of input was actually billed at which rate. Undefined, not
+   * 0, when the runtime's envelope carries no such counter (every adapter but
+   * `claudeCodeAdapter.ts` today) — see `RuntimeUsage.inputTokens`'s sibling
+   * fields for the same "absent ≠ 0" contract.
+   */
+  readonly cacheCreationInputTokens?: number;
   /** Undefined, not 0, when the runtime does not report cost — see `RuntimeCapability.COST_REPORTING`. 0 would claim the run was free. */
   readonly costUsd?: number;
 }
@@ -227,6 +240,14 @@ export interface RuntimeAgentResult {
    * The model the runtime says it actually used, when it says. Not the one that was requested.
    */
   readonly model?: string;
+  /**
+   * T-V8-012 — the reasoning effort the runtime says it actually ran with, when
+   * it says. Not the one that was requested (`RuntimeAgentRequest.effort`).
+   * Undefined for every adapter today — no envelope this framework drives
+   * echoes effort back — so `metricsFrom` falls back to the requested value,
+   * exactly as it already does for `model` above.
+   */
+  readonly effort?: string;
   readonly guards: RuntimeGuardReport;
   /** Anything the adapter wants a person to see in the log — a parse that fell back, a flag it had to drop. */
   readonly diagnostics: readonly string[];

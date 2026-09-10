@@ -82,8 +82,24 @@ describe("parseOpenCodeJsonl", () => {
   it("joins text parts in order and lifts tokens/cost from step_finish (spike shape)", () => {
     const parsed = parseOpenCodeJsonl(SPIKE_NDJSON);
     expect(parsed.text).toBe("SPIKE_OK");
-    expect(parsed.usage).toEqual({ inputTokens: 6019, outputTokens: 16, cachedInputTokens: 3, costUsd: 0 });
+    // T-V8-012: `cache.write` is real evidence in this spike shape (previously
+    // dropped) — a reported 0 is a fact ("nothing new was cached this turn"),
+    // not the same as the field being absent.
+    expect(parsed.usage).toEqual({ inputTokens: 6019, outputTokens: 16, cachedInputTokens: 3, cacheCreationInputTokens: 0, costUsd: 0 });
     expect(parsed.finishReason).toBe("stop");
+  });
+
+  it("T-V8-012 reports non-zero cache-creation tokens distinctly from cache-read", () => {
+    const ndjson = [
+      JSON.stringify({
+        type: "step_finish",
+        timestamp: 1,
+        part: { id: "p1", reason: "stop", type: "step-finish", tokens: { total: 100, input: 40, output: 10, reasoning: 0, cache: { write: 25, read: 15 } }, cost: 0.01 },
+      }),
+      "",
+    ].join("\n");
+    const parsed = parseOpenCodeJsonl(ndjson);
+    expect(parsed.usage).toEqual({ inputTokens: 40, outputTokens: 10, cachedInputTokens: 15, cacheCreationInputTokens: 25, costUsd: 0.01 });
   });
 
   it("never throws on garbage lines and keeps absent fields undefined, never zero", () => {

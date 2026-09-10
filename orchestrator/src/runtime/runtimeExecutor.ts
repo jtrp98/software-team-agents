@@ -16,6 +16,7 @@ import {
   qaArtifactResult,
   securityArtifactResult,
   suppressRawHandoffWhenNarrowed,
+  measureRolePrefixChars,
   type PromptPartsResult,
   type RunMetrics,
 } from "./agentRunAssembly.js";
@@ -218,6 +219,8 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
   fallback_count?: number;
   contextBudget: ReturnType<typeof assessContextBudget>;
   budgetComposition: ContextBudgetComposition;
+  /** T-V8-012 — measured once per attempt by `measureRolePrefixChars`; null when unmeasurable, never fabricated as 0. */
+  role_prefix_chars: number | null;
 }): RunMetrics {
   const input_tokens = result.usage.inputTokens;
   const output_tokens = result.usage.outputTokens;
@@ -228,7 +231,11 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     // frontmatter value, which is the one thing the log must not do.
     model: result.model ?? declared.model,
     promptVersion: declared.promptVersion,
-    effort: declared.effort,
+    // T-V8-012: same requested/observed split `model` already had — the
+    // runtime rarely echoes effort back today (see `RuntimeAgentResult.effort`),
+    // so this reads identically to before until an adapter starts reporting one.
+    effort: result.effort ?? declared.effort,
+    requested_effort: declared.effort,
     tokens: (input_tokens ?? 0) + (output_tokens ?? 0),
     // `?? 0` here, unlike the `costUsd?: number` in the envelope: the run log's
     // `cost` is a number by contract, and "this runtime does not report cost" is
@@ -238,6 +245,7 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     input_tokens,
     output_tokens,
     cache_read_tokens: result.usage.cachedInputTokens,
+    cache_creation_tokens: result.usage.cacheCreationInputTokens,
     context_chars: declared.context_chars,
     estimated_input_tokens: declared.estimated_input_tokens,
     runtime: declared.runtime,
@@ -249,6 +257,7 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     session_kind: "orchestrated",
     ...declared.composition,
     doc_chars_before: declared.doc_chars_before,
+    instruction_surface_bytes: declared.role_prefix_chars ?? undefined,
     context_budget_chars: declared.contextBudget.budgetChars ?? undefined,
     context_budget_source: declared.contextBudget.budgetSource ?? undefined,
     context_overflow_chars: declared.contextBudget.overflowChars ?? undefined,
@@ -598,6 +607,9 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // same execution root.
     const guardRoot = executionRoot;
     const guardStackRules = resolveGuardStackRules(role, guardRoot);
+    // T-V8-012: measured once — role and binding root are fixed for the whole
+    // retry loop below; only runtime/model/effort change across a fallback hop.
+    const rolePrefixChars = measureRolePrefixChars(threeRepo?.roots.bindingRoot ?? opts.projectRoot, req.stage);
 
     let fallbackReason: string | undefined;
     let fallbackCount: number | undefined = opts.registry ? NO_FALLBACK_HOPS : undefined;
@@ -667,10 +679,12 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
             model: activeModel,
             promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
             effort: activeEffort,
+            requested_effort: activeEffort,
             context_chars: prompt.length,
             estimated_input_tokens: contextBudget.estimatedInputTokens,
             ...promptParts.composition,
             doc_chars_before: stageContext.docCharsBefore,
+            instruction_surface_bytes: rolePrefixChars ?? undefined,
             runtime: activeRuntime.id,
             requested_runtime: requestedRuntime,
             requested_model: requestedModel,
@@ -701,6 +715,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         estimated_input_tokens: contextBudget.estimatedInputTokens,
         composition: promptParts.composition,
         doc_chars_before: stageContext.docCharsBefore,
+        role_prefix_chars: rolePrefixChars,
         runtime: activeRuntime.id,
         requested_runtime: requestedRuntime,
         requested_model: requestedModel,

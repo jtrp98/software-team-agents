@@ -64,6 +64,8 @@ export interface RunMetrics {
   fallback_count?: number;
   session_kind?: "orchestrated" | "interactive";
   static_chars?: number;
+  /** T-V8-012 — measured by `measureRolePrefixChars`; see that function's doc comment for what this does and does not include. */
+  instruction_surface_bytes?: number;
   handoff_chars?: number;
   doc_chars?: number;
   doc_chars_before?: number;
@@ -82,6 +84,21 @@ export interface RunMetrics {
   context_code_chars?: number;
   context_tool_output_chars?: number;
   context_reserve_chars?: number;
+  /**
+   * T-V8-012 — prompt-cache tokens *written* this run (see
+   * `RuntimeUsage.cacheCreationInputTokens`). Sibling of `cache_read_tokens`;
+   * absent, not 0, when the runtime's envelope carries no such counter.
+   */
+  cache_creation_tokens?: number;
+  /**
+   * T-V8-012 — the reasoning effort actually asked of the runtime for this
+   * attempt, independent of whether the runtime echoes one back. `effort`
+   * above stays the observed value (falling back to this one when the runtime
+   * reports none, exactly like `model` already falls back to what was
+   * declared) — the two now read the requested/observed decision apart
+   * instead of collapsing it into a single field.
+   */
+  requested_effort?: string;
 }
 
 /**
@@ -98,6 +115,39 @@ export const DEPLOY_PHASE_INSTRUCTION: Record<"prepare" | "execute", string> = {
     "Deploy phase: EXECUTE. The orchestrator's structural approval gate for this deploy has already been granted — this run is what actually issues the deploy/migration command, then verifies the result (service health, and — for a migration — the schema/data actually match what was intended). " +
     "Still follow your own agent instructions for what to confirm and verify; the gate having passed doesn't relax those. Report failure plainly if verification doesn't pass — do not soften it into a success.",
 };
+
+/**
+ * T-V8-012 — the static instruction bytes a native named-agent runtime
+ * (Claude Code today) loads before an orchestrated stage's own turn begins:
+ * `CLAUDE.md`, every policy file, and the one role prompt this stage runs as.
+ *
+ * Distinct from `PromptComposition.static_chars`: that field is only the
+ * framework-generated header/footer text `buildPromptParts` actually appends
+ * to `req.prompt` (and its sum is asserted to equal `prompt.length` — see
+ * `assertContextComposition` below), so folding these bytes into it would
+ * silently break that invariant for text the runtime loads on its own and
+ * this framework never sent. This function measures the OTHER, previously
+ * unmeasured-for-orchestrated-runs half — the interactive counterpart already
+ * exists as `observability/sessionRecord.ts`'s `measureWorkspaceStatic`, whose
+ * `instruction_surface_bytes` field this shares (see `runtimeExecutor.ts`).
+ *
+ * Returns null (not 0) when any of the three cannot be read — a role prompt
+ * or policy file this run could not measure is a fact about the run, not an
+ * empty prefix.
+ */
+export function measureRolePrefixChars(frameworkRoot: string, stage: AgentStage): number | null {
+  try {
+    const chars = (file: string): number => fs.readFileSync(file, "utf8").length;
+    const policyRoot = path.join(frameworkRoot, "policies");
+    const policies = fs
+      .readdirSync(policyRoot, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+      .reduce((sum, entry) => sum + chars(path.join(policyRoot, entry.name)), 0);
+    return chars(path.join(frameworkRoot, "CLAUDE.md")) + policies + chars(path.join(frameworkRoot, ".claude", "agents", `${stage}.md`));
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Renders the sliced module docs, and — just as importantly — says what was cut.

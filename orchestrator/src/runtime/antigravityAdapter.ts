@@ -305,6 +305,9 @@ function usageFrom(envelope: AgyEnvelope | null): RuntimeUsage {
     inputTokens: numberOrUndefined(usage.input_tokens),
     outputTokens: numberOrUndefined(usage.output_tokens),
     cachedInputTokens: numberOrUndefined(usage.cache_read_tokens),
+    // T-V8-012: no cache-creation counter is in `AgyEnvelope.usage` (§1b) —
+    // `cacheCreationInputTokens` stays unset, same unobserved-≠-0 posture as
+    // `COST_REPORTING` above.
   };
   return mapped.inputTokens === undefined && mapped.outputTokens === undefined && mapped.cachedInputTokens === undefined ? {} : mapped;
 }

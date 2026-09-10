@@ -156,7 +156,7 @@ interface ClaudeCliJsonResult {
   api_error_status?: number;
   result?: string;
   total_cost_usd?: number;
-  usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
+  usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
   /** Present only when the run passed `--json-schema`. */
   structured_output?: unknown;
 }
@@ -438,6 +438,10 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       inputTokens: cli.usage?.input_tokens,
       outputTokens: cli.usage?.output_tokens,
       cachedInputTokens: cli.usage?.cache_read_input_tokens,
+      // T-V8-012: `planning/v4/benchmark`'s per-model usage recovery is the
+      // evidence this field is real and was previously omitted — see
+      // `build-metrics.mjs`'s `raw_access_decision` note.
+      cacheCreationInputTokens: cli.usage?.cache_creation_input_tokens,
       costUsd: cli.total_cost_usd,
     };
 

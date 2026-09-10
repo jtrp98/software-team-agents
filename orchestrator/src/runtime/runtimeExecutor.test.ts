@@ -93,6 +93,83 @@ describe("createRuntimeExecutor — what reaches the adapter (T108)", () => {
     expect(runtime.requests[0]!.effort).toBeUndefined();
   });
 
+  it("T-V8-012 records cache-creation tokens distinctly from cache-read tokens", async () => {
+    const runtime = new MockRuntimeAdapter({
+      respond: () => okResult({ usage: { inputTokens: 100, outputTokens: 20, cachedInputTokens: 10, cacheCreationInputTokens: 25 } }),
+    });
+    const result = await executorFor(runtime)({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-CACHE", context: [] });
+    expect(result.outcome.cache_read_tokens).toBe(10);
+    expect(result.outcome.cache_creation_tokens).toBe(25);
+    // Cache-creation reconciliation is additive; it does not redefine the
+    // pre-existing input+output `tokens` total.
+    expect(result.outcome.tokens).toBe(120);
+  });
+
+  it("T-V8-012 leaves cache-creation tokens undefined when the adapter never reports one", async () => {
+    const runtime = new MockRuntimeAdapter({ respond: () => okResult({ usage: { inputTokens: 100, outputTokens: 20 } }) });
+    const result = await executorFor(runtime)({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-NOCACHE", context: [] });
+    expect(result.outcome.cache_creation_tokens).toBeUndefined();
+  });
+
+  it("T-V8-012 separates requested effort from the observed one, falling back when the runtime reports none", async () => {
+    const runtime = new MockRuntimeAdapter({ respond: () => okResult() });
+    const result = await createRuntimeExecutor({
+      runtime,
+      projectRoot: tmpProject(),
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+      registry: new RuntimeRegistry([runtime]),
+      routingFlags: { effort: "high" },
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-EFFORT-2", context: [] });
+    expect(result.outcome.requested_effort).toBe("high");
+    // No adapter today echoes effort back, so the observed value falls back to
+    // the requested one — same shape `model` already had before this task.
+    expect(result.outcome.effort).toBe("high");
+  });
+
+  it("T-V8-012 prefers the runtime's own observed effort over the requested one when it reports one", async () => {
+    const runtime = new MockRuntimeAdapter({ respond: () => okResult({ effort: "medium" }) });
+    const result = await createRuntimeExecutor({
+      runtime,
+      projectRoot: tmpProject(),
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+      registry: new RuntimeRegistry([runtime]),
+      routingFlags: { effort: "high" },
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-EFFORT-3", context: [] });
+    expect(result.outcome.requested_effort).toBe("high");
+    expect(result.outcome.effort).toBe("medium");
+  });
+
+  it("T-V8-012 measures instruction-surface bytes for an orchestrated run when the framework root has one", async () => {
+    const root = tmpProject();
+    fs.writeFileSync(path.join(root, "CLAUDE.md"), "root instructions", "utf8");
+    fs.mkdirSync(path.join(root, "policies"), { recursive: true });
+    fs.writeFileSync(path.join(root, "policies", "coding.md"), "policy text", "utf8");
+    writeAgentFile(root, "backend-engineer", "model: sonnet");
+    const runtime = new MockRuntimeAdapter();
+    const result = await createRuntimeExecutor({
+      runtime,
+      projectRoot: root,
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-PREFIX", context: [] });
+    // "root instructions" (18) + "policy text" (11) + the frontmatter'd role file body.
+    expect(result.outcome.instruction_surface_bytes).toBeGreaterThan(0);
+  });
+
+  it("T-V8-012 leaves instruction-surface bytes unreported (not 0) when the role prompt cannot be read", async () => {
+    const root = tmpProject(); // no CLAUDE.md, no policies/, no .claude/agents/*.md
+    const runtime = new MockRuntimeAdapter();
+    const result = await createRuntimeExecutor({
+      runtime,
+      projectRoot: root,
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-NOPREFIX", context: [] });
+    expect(result.outcome.instruction_surface_bytes).toBeUndefined();
+  });
+
   it("addresses the agent by this framework's role name and the binding's own path", async () => {
     const runtime = new MockRuntimeAdapter({ id: "some-runtime" });
     const executor = executorFor(runtime);

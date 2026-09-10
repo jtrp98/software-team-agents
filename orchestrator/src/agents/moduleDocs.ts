@@ -14,6 +14,7 @@ import { readWorkPlan, taskDesignRefs } from "../docs/planGraph.js";
 import { parseDesignEvidence } from "../docs/designEvidence.js";
 import { taskGraphFromPlan } from "../graph/taskGraph.js";
 import { extractIds } from "../traceability/traceability.js";
+import { contentHash } from "../artifacts/executionPacket.js";
 
 /**
  * Bridges the real pipeline's Markdown docs (`_docs/module/<name>/review.md`,
@@ -224,6 +225,20 @@ function minimalHandoff(stage: AgentStage, moduleName: string, opts: HandoffDeri
   };
 }
 
+/**
+ * T-V8-013 — a finding index entry's `id` must survive `review.md`/`design.md`
+ * rewrites and archive moves (policies/documentation.md's own archival
+ * discipline), so it cannot be the line's *position*: the same open question
+ * reworded elsewhere, or with an unrelated bullet added above it, would
+ * otherwise mint a new identity for an issue nobody resolved. Hashing the
+ * heading plus the bullet's own text keeps the id stable across everything
+ * except an edit to that exact finding — which is exactly when a new id is
+ * correct, because the finding itself changed.
+ */
+function openFindingId(filename: string, headingTitle: string, representativeText: string): string {
+  return `OPEN-${contentHash(`${filename}|${headingTitle}|${representativeText}`).slice(0, 12)}`;
+}
+
 function openFindings(
   filename: string,
   docText: string,
@@ -237,10 +252,14 @@ function openFindings(
     .map((line) => line.trim())
     .filter((line) => line !== "" && !/^(?:—|-|none\.?|n\/a|ไม่มี)$/i.test(line));
   if (lines.length === 0) return [];
-  const count = Math.min(16, Math.max(1, lines.filter((line) => /^[-*]|^\d+[.)]|^\|/.test(line)).length));
+  const bulletLines = lines.filter((line) => /^[-*]|^\d+[.)]|^\|/.test(line));
+  const count = Math.min(16, Math.max(1, bulletLines.length));
   const base = headingReference(filename, section.title);
   return Array.from({ length: count }, (_, index) => ({
-    id: `OPEN-${String(index + 1).padStart(3, "0")}`,
+    // One id per actual bullet line when there is one; a single collapsed
+    // pointer over the whole section's prose when the heading has none —
+    // same count/summary shape as before, only the id's derivation changed.
+    id: openFindingId(filename, section.title, bulletLines[index] ?? lines.join("\n")),
     owner,
     summary: `${base}:${index + 1}`,
   }));

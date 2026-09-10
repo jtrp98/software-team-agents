@@ -2,9 +2,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ArtifactType, validateArtifact, LegacyExecutionPacketSchema, type LegacyExecutionPacket, type ExecutionPacket } from "../artifacts/schemas.js";
 import { AgentStage } from "../types.js";
+import { FindingSchema, RepairPacketSchema, assertCanTransitionFinding, type Finding, type RepairPacket } from "../artifacts/finding.js";
 
 /** Regenerable artifact classes stored below the VCS-ignored runtime-state root. */
-export const RUNTIME_ARTIFACT_KINDS = ["packets", "evidence", "runs", "wave-runs"] as const;
+export const RUNTIME_ARTIFACT_KINDS = ["packets", "evidence", "runs", "wave-runs", "findings", "repair-packets"] as const;
 export type RuntimeArtifactKind = (typeof RUNTIME_ARTIFACT_KINDS)[number];
 
 /**
@@ -18,6 +19,8 @@ export interface RuntimeArtifactPaths {
   readonly packets: string;
   readonly evidence: string;
   readonly runs: string;
+  readonly findings: string;
+  readonly repairPackets: string;
 }
 
 function taskPathSegment(taskId: string): string {
@@ -41,6 +44,8 @@ export function runtimeArtifactPaths(projectRoot: string, taskId: string): Runti
     packets: path.join(workflowRoot, "packets", task),
     evidence: path.join(workflowRoot, "evidence", task),
     runs: path.join(workflowRoot, "runs", task),
+    findings: path.join(workflowRoot, "findings", task),
+    repairPackets: path.join(workflowRoot, "repair-packets", task),
   };
 }
 
@@ -259,4 +264,149 @@ export function latestExecutionPacketPath(projectRoot: string, taskId: string, s
     .filter((entry) => Number.isInteger(entry.attempt) && entry.attempt > 0)
     .sort((a, b) => b.attempt - a.attempt);
   return candidates[0]?.path ?? null;
+}
+
+// -- T-V8-013: durable finding and repair-packet persistence ----------------
+//
+// A `Finding` is unlike a packet: its identity (`finding_id`) is fixed at
+// creation, but its `status` field is expected to change over its lifecycle
+// (OPEN -> FIX_CLAIMED -> VERIFIED -> ACCEPTED). Packet storage's
+// write-once/drift-refuses-silently model is therefore the wrong shape here —
+// `writeFinding` instead keeps exactly one file per `finding_id` (so a
+// re-derived duplicate — same defect, different attempt — always resolves to
+// the same path, satisfying "IDs survive review archive/rewrite and resolve
+// to one attempt/packet"), and every write after the first must pass
+// `assertCanTransitionFinding` against the record already on disk before it
+// is allowed to land. That is the actual enforcement point for "DEV cannot
+// close QA/security findings": the check runs here, at the only place a
+// status change becomes durable, not merely in an in-memory helper nothing
+// is obliged to call.
+
+export function readFindingRecord(findingPath: string): Finding {
+  const stat = fs.lstatSync(findingPath);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`finding record is not a regular file: ${findingPath}`);
+  return FindingSchema.parse(JSON.parse(fs.readFileSync(findingPath, "utf8")));
+}
+
+export interface WriteFindingOptions {
+  projectRoot: string;
+  finding: Finding;
+  /** Who is making this write — checked against the finding's own transition rule when a prior record exists. */
+  actor: AgentStage | "human";
+  forbiddenRoots?: readonly string[];
+}
+
+export interface PersistedFinding {
+  path: string;
+  /** False when this write updated an existing record's status rather than raising a new finding. */
+  created: boolean;
+}
+
+/**
+ * The fields that describe the defect itself — they must not change across
+ * writes sharing a `finding_id`, or the identity that id names is a lie.
+ * `run_id`/`attempt`/`packet_hash` are deliberately excluded: a resumed or
+ * re-occurring defect legitimately carries a new one of each on every write
+ * (that is the whole point of resolving to "one attempt" — the *current*
+ * one), and `status`/`evidence_refs` are the fields its lifecycle exists to
+ * change.
+ */
+function findingIdentityPayload(finding: Finding): Pick<Finding, "finding_id" | "task_id" | "category" | "owner" | "raised_by" | "severity" | "acceptance_ids" | "design_ids" | "files" | "expected" | "observed" | "retryable" | "requires_human"> {
+  const { finding_id, task_id, category, owner, raised_by, severity, acceptance_ids, design_ids, files, expected, observed, retryable, requires_human } = finding;
+  return { finding_id, task_id, category, owner, raised_by, severity, acceptance_ids, design_ids, files, expected, observed, retryable, requires_human };
+}
+
+export function writeFinding(options: WriteFindingOptions): PersistedFinding {
+  const finding = FindingSchema.parse(options.finding);
+  const taskDirectory = runtimeArtifactPaths(options.projectRoot, finding.task_id).findings;
+  assertPacketStorageOwnership(taskDirectory, options.forbiddenRoots ?? [], options.projectRoot);
+  fs.mkdirSync(taskDirectory, { recursive: true });
+  assertPacketStorageOwnership(taskDirectory, options.forbiddenRoots ?? [], options.projectRoot);
+  const findingPath = path.join(taskDirectory, `${finding.finding_id}.json`);
+  assertPacketStorageOwnership(findingPath, options.forbiddenRoots ?? [], options.projectRoot);
+
+  if (!fs.existsSync(findingPath)) {
+    if (finding.status !== "OPEN") throw new Error(`finding ${finding.finding_id}: first persisted write must be OPEN, got ${finding.status}`);
+    fs.writeFileSync(findingPath, `${JSON.stringify(finding, null, 2)}\n`, "utf8");
+    return { path: findingPath, created: true };
+  }
+
+  const existing = readFindingRecord(findingPath);
+  if (JSON.stringify(findingIdentityPayload(existing)) !== JSON.stringify(findingIdentityPayload(finding))) {
+    throw new Error(
+      `finding ${finding.finding_id}: identity fields differ from the persisted record — a defect's identity never changes after it is raised, only its status/evidence do; derive a new finding_id instead`,
+    );
+  }
+  assertCanTransitionFinding(existing, finding.status, options.actor);
+  fs.writeFileSync(findingPath, `${JSON.stringify(finding, null, 2)}\n`, "utf8");
+  return { path: findingPath, created: false };
+}
+
+/** Every persisted finding for a task, oldest-id-first (deterministic, not creation-order dependent). */
+export function readFindingsForTask(projectRoot: string, taskId: string): Finding[] {
+  const taskDirectory = runtimeArtifactPaths(projectRoot, taskId).findings;
+  if (!fs.existsSync(taskDirectory)) return [];
+  return fs
+    .readdirSync(taskDirectory, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
+    .map((entry) => readFindingRecord(path.join(taskDirectory, entry.name)))
+    .sort((a, b) => a.finding_id.localeCompare(b.finding_id));
+}
+
+export interface WriteRepairPacketOptions {
+  projectRoot: string;
+  packet: RepairPacket;
+  forbiddenRoots?: readonly string[];
+  maxRunsPerTask?: number;
+}
+
+export interface PersistedRepairPacket {
+  path: string;
+  removed: string[];
+}
+
+export function readRepairPacket(repairPacketPath: string): RepairPacket {
+  const stat = fs.lstatSync(repairPacketPath);
+  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`repair packet is not a regular file: ${repairPacketPath}`);
+  return RepairPacketSchema.parse(JSON.parse(fs.readFileSync(repairPacketPath, "utf8")));
+}
+
+/**
+ * Write-once and immutable, exactly like `writeExecutionPacket`: a repair
+ * packet is a point-in-time compilation (original packet + finding + the
+ * diff/evidence/delta at that moment), never edited after the fact. Named by
+ * its own `repair_packet_hash` rather than an attempt counter, so recompiling
+ * from identical inputs is idempotent (same file, no duplicate) while any
+ * real change in the diff/evidence/delta lands as a new, separate file.
+ */
+export function writeRepairPacket(options: WriteRepairPacketOptions): PersistedRepairPacket {
+  if (options.maxRunsPerTask !== undefined && (!Number.isInteger(options.maxRunsPerTask) || options.maxRunsPerTask < 1)) {
+    throw new Error(`runtime artifact retention must be a positive integer, got ${String(options.maxRunsPerTask)}`);
+  }
+  const packet = RepairPacketSchema.parse(options.packet);
+  const taskDirectory = runtimeArtifactPaths(options.projectRoot, packet.finding.task_id).repairPackets;
+  assertPacketStorageOwnership(taskDirectory, options.forbiddenRoots ?? [], options.projectRoot);
+  fs.mkdirSync(taskDirectory, { recursive: true });
+  assertPacketStorageOwnership(taskDirectory, options.forbiddenRoots ?? [], options.projectRoot);
+  const repairPacketPath = path.join(taskDirectory, `${packet.finding.finding_id}-${packet.repair_packet_hash.slice(0, 16)}.json`);
+  assertPacketStorageOwnership(repairPacketPath, options.forbiddenRoots ?? [], options.projectRoot);
+
+  try {
+    const fd = fs.openSync(repairPacketPath, "wx");
+    try { fs.writeFileSync(fd, `${JSON.stringify(packet, null, 2)}\n`, "utf8"); fs.fsyncSync(fd); }
+    finally { fs.closeSync(fd); }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const existing = readRepairPacket(repairPacketPath);
+    if (existing.repair_packet_hash !== packet.repair_packet_hash) throw new Error(`immutable repair-packet drift for ${packet.finding.finding_id}; recompile as an explicit new repair packet`);
+    return { path: repairPacketPath, removed: [] };
+  }
+
+  readRepairPacket(repairPacketPath);
+  const removed = pruneRuntimeArtifacts({
+    taskDirectory,
+    currentArtifact: repairPacketPath,
+    maxRunsPerTask: options.maxRunsPerTask,
+  });
+  return { path: repairPacketPath, removed };
 }

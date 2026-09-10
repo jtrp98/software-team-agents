@@ -71,6 +71,9 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
       if (typeof usage.input_tokens === "number") inputTokens = usage.input_tokens;
       if (typeof usage.output_tokens === "number") outputTokens = usage.output_tokens;
       if (typeof usage.cache_read_input_tokens === "number") cachedInputTokens = usage.cache_read_input_tokens;
+      // T-V8-012: no cache-*creation* counter has ever been observed in a Codex
+      // JSONL event; `RuntimeUsage.cacheCreationInputTokens` stays unset here,
+      // same absent-≠-0 posture as every other unconfirmed field on this adapter.
     }
     if (typeof event.total_cost_usd === "number") costUsd = event.total_cost_usd;
     if (typeof event.model === "string" && event.model.length > 0) model = event.model;

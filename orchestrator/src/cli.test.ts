@@ -1046,6 +1046,38 @@ describe("T-V3TOK-003 tokens verb", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("T-V8-012 reports cache-creation tokens and usage attributed by category", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-tokens-category-"));
+    const store = new SqliteTaskStore(defaultStateDbPath(dir));
+    store.appendRun(new RunLog().record({
+      task_id: "T-cat", agent: AgentStage.BACKEND_ENGINEER, start_time: 1, end_time: 2,
+      outcome: { tokens: 150, input_tokens: 100, output_tokens: 20, cache_read_tokens: 10, cache_creation_tokens: 30, cost: 0, result: "PASS", retry_count: 0 },
+    }));
+    store.appendRun(new RunLog().record({
+      task_id: "T-cat", agent: AgentStage.QA_ENGINEER, start_time: 2, end_time: 3,
+      outcome: { tokens: 50, input_tokens: 40, output_tokens: 10, cost: 0, result: "PASS", retry_count: 0 },
+    }));
+    store.close();
+    const logs: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => { logs.push(args.join(" ")); };
+    try {
+      // Grouped by task (default) the two rows' cache fields don't both report,
+      // so the task-level total is honestly unknown, not a fabricated partial sum.
+      expect(await runCli(["tokens", "--project-root", dir], dir)).toBe(0);
+      expect(logs.join("\n")).toContain("cache-created=not reported");
+
+      logs.length = 0;
+      expect(await runCli(["tokens", "--by", "category", "--project-root", dir], dir)).toBe(0);
+      const output = logs.join("\n");
+      expect(output).toContain("category DEV: runs=1 input=100 output=20 cached=10 cache-created=30 total=120");
+      expect(output).toContain("category QA: runs=1 input=40 output=10 cached=not reported cache-created=not reported total=50");
+    } finally {
+      console.log = original;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("T-V3TOK-041 context verb", () => {

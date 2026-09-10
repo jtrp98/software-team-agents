@@ -186,12 +186,79 @@ export interface TaskTokenMetrics {
   efforts: string[];
   outputTokens: number | null;
   cachedTokens: number | null;
+  /** T-V8-012 — prompt-cache tokens *written* (`RunRecord.cache_creation_tokens`); sibling of `cachedTokens` (tokens *read*). */
+  cacheCreationTokens: number | null;
   totalTokens: number | null;
   retryWasteTokens: number | null;
   instructionSurfaceBytes: number | null;
   composition: TokenCompositionMetrics;
   contextBudget: ContextBudgetMetrics;
   sessionKinds: Record<"orchestrated" | "interactive" | "not_reported", number>;
+}
+
+/**
+ * T-V8-012 — which of the roles/routes this run's usage attributes to.
+ *
+ * BA/SA/PM/QA map straight off `AgentStage`. Every engineering/consultant
+ * stage (backend-engineer, frontend-engineer, uxui-designer, test-planner,
+ * devops, setup) and the security reviewer fold into DEV — this module does
+ * not yet have a durable finding/repair identity to split "implementation"
+ * from "review" any finer (T-V8-013 introduces one). `repair` overrides every
+ * other bucket for a retried round: a repair packet reruns the *same* role,
+ * so distinguishing it needs `retry_count`, not a different `agent`.
+ * `orchestration` is the one category with no real agent attempt behind it —
+ * `sessionRecord.ts`'s synthetic `session:`/`context:` task-id rows, which
+ * measure workspace/composition bytes rather than an executed stage.
+ */
+export type UsageCategory = "BA" | "SA" | "PM" | "DEV" | "QA" | "repair" | "orchestration";
+
+const CATEGORY_BY_AGENT: Partial<Record<AgentStage, UsageCategory>> = {
+  [AgentStage.BUSINESS_ANALYST]: "BA",
+  [AgentStage.SYSTEM_ANALYST]: "SA",
+  [AgentStage.PROJECT_MANAGER]: "PM",
+  [AgentStage.QA_ENGINEER]: "QA",
+  [AgentStage.SECURITY]: "QA",
+};
+
+/** Deterministic category for one run — see `UsageCategory`'s doc comment for the exact rule. */
+export function usageCategory(run: RunRecord): UsageCategory {
+  if (run.task_id.startsWith("session:") || run.task_id.startsWith("context:")) return "orchestration";
+  if (run.retry_count > 0) return "repair";
+  return CATEGORY_BY_AGENT[run.agent] ?? "DEV";
+}
+
+export interface CategoryMetrics {
+  category: UsageCategory;
+  runCount: number;
+  totalTokens: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cachedTokens: number | null;
+  cacheCreationTokens: number | null;
+}
+
+/** One row per category actually present in `runs` — an unused category is simply absent, never a fabricated zero row. */
+export function categoryMetrics(runs: readonly RunRecord[]): CategoryMetrics[] {
+  const groups = new Map<UsageCategory, RunRecord[]>();
+  for (const run of runs) {
+    const category = usageCategory(run);
+    groups.set(category, [...(groups.get(category) ?? []), run]);
+  }
+  const order: UsageCategory[] = ["BA", "SA", "PM", "DEV", "QA", "repair", "orchestration"];
+  return order
+    .filter((category) => groups.has(category))
+    .map((category) => {
+      const categoryRuns = groups.get(category)!;
+      return {
+        category,
+        runCount: categoryRuns.length,
+        totalTokens: strictSum(categoryRuns, totalTokensFor),
+        inputTokens: strictSum(categoryRuns, (run) => run.input_tokens),
+        outputTokens: strictSum(categoryRuns, (run) => run.output_tokens),
+        cachedTokens: strictSum(categoryRuns, (run) => run.cache_read_tokens),
+        cacheCreationTokens: strictSum(categoryRuns, (run) => run.cache_creation_tokens ?? null),
+      };
+    });
 }
 
 export interface TokenRoleMetrics {
@@ -223,6 +290,8 @@ export interface TokenMetricsExport {
   exportedAt: number;
   tasks: TaskTokenMetrics[];
   roles: TokenRoleMetrics[];
+  /** T-V8-012 — usage grouped by BA/SA/PM/DEV/QA/repair/orchestration (`usageCategory`), not by literal `AgentStage`. */
+  categories: CategoryMetrics[];
   /** Every run with an authoritative context budget, never synthetic aggregate rows. */
   contextBudgetRuns: ContextBudgetRunMetric[];
   totals: Omit<TaskTokenMetrics, "taskId" | "sessionKinds"> & V3OptimizationRollups;
@@ -245,6 +314,13 @@ export interface V3OptimizationRollups {
   first_pass_success_rate: number | null;
   /** Runs with at least one reported fallback hop divided by all runs. */
   fallback_rate: number | null;
+  /**
+   * T-V8-012 — the share of measured context that is pure orchestration
+   * overhead (`context_base_chars` + `context_safety_chars`) rather than
+   * task/docs/knowledge/code/tool-output content, over every run with an
+   * authoritative context budget. Null when no run measured one.
+   */
+  orchestration_input_share: number | null;
 }
 
 const COMPOSITION_FIELDS = ["static_chars", "handoff_chars", "doc_chars", "knowledge_chars", "code_intel_chars", "tool_output_chars"] as const;
@@ -306,6 +382,7 @@ export function taskTokenMetrics(runs: readonly RunRecord[]): TaskTokenMetrics {
     efforts: [...new Set(runs.map((run) => run.effort ?? "not reported"))].sort(),
     outputTokens: strictSum(runs, (run) => run.output_tokens),
     cachedTokens: strictSum(runs, (run) => run.cache_read_tokens),
+    cacheCreationTokens: strictSum(runs, (run) => run.cache_creation_tokens ?? null),
     totalTokens: strictSum(runs, totalTokensFor),
     // No failed rows is a known zero; one failed row with unreported usage is
     // unknown, never a fabricated zero.
@@ -385,10 +462,16 @@ export function tokenMetricsExport(
     ? null
     : completed.reduce((sum, task) => sum + task.totalTokens!, 0);
   const fallbackCount = strictSum(runs, (run) => run.fallback_count);
+  const budgetMeasured = runs.filter((run) => run.context_chars !== null && run.context_chars > 0 && run.context_base_chars !== null && run.context_safety_chars !== null);
+  const orchestrationInputShare =
+    budgetMeasured.length === 0
+      ? null
+      : budgetMeasured.reduce((sum, run) => sum + (run.context_base_chars! + run.context_safety_chars!) / run.context_chars!, 0) / budgetMeasured.length;
   return {
     exportedAt: (opts?.now ?? Date.now)(),
     tasks,
     roles: roleMetrics(runs),
+    categories: categoryMetrics(runs),
     contextBudgetRuns: contextBudgetRunsFor(runs),
     totals: {
       runCount: aggregate.runCount,
@@ -399,6 +482,7 @@ export function tokenMetricsExport(
       efforts: aggregate.efforts,
       outputTokens: aggregate.outputTokens,
       cachedTokens: aggregate.cachedTokens,
+      cacheCreationTokens: aggregate.cacheCreationTokens,
       totalTokens: aggregate.totalTokens,
       retryWasteTokens: aggregate.retryWasteTokens,
       instructionSurfaceBytes: aggregate.instructionSurfaceBytes,
@@ -413,6 +497,7 @@ export function tokenMetricsExport(
           ? null
           : completed.filter((task) => task.retryCount === 0).length / completed.length,
       fallback_rate: fallbackCount === null ? null : runs.filter((run) => run.fallback_count! > 0).length / runs.length,
+      orchestration_input_share: orchestrationInputShare,
     },
   };
 }

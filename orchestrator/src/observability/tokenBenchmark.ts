@@ -7,7 +7,7 @@ import { contentHash } from "../artifacts/executionPacket.js";
 import { renderTokenBenchmarkMarkdown } from "../codeintel/benchmark.js";
 import { ContextManager } from "../context/contextManager.js";
 import { estimateInputTokens } from "../context/contextBudget.js";
-import { renderSlicedDocs, buildPromptParts, compileExecutionPacket, sliceModuleDocsWithSavings } from "../runtime/agentRunAssembly.js";
+import { renderSlicedDocs, buildPromptParts, compileExecutionPacket, sliceModuleDocsWithSavings, measureRolePrefixChars } from "../runtime/agentRunAssembly.js";
 import { buildRuntimeTask, type RuntimeTaskV2 } from "../orchestrator/runtimeTask.js";
 import { PlanTaskSchema, renderCanonicalTasks } from "../docs/planTask.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
@@ -150,11 +150,9 @@ export function createTraceableTokenBenchmarkFixture(
   return { root, moduleName };
 }
 
+/** T-V8-012: shares `measureRolePrefixChars`'s exact measurement with the production per-run metric; every fixture path here is guaranteed present, so `?? 0` never masks a real read failure. */
 function staticChars(frameworkRoot: string, stage: AgentStage): number {
-  const chars = (file: string): number => fs.readFileSync(file, "utf8").length;
-  const policyRoot = path.join(frameworkRoot, "policies");
-  const policies = fs.readdirSync(policyRoot, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith(".md")).reduce((sum, entry) => sum + chars(path.join(policyRoot, entry.name)), 0);
-  return chars(path.join(frameworkRoot, "CLAUDE.md")) + policies + chars(path.join(frameworkRoot, ".claude", "agents", `${stage}.md`));
+  return measureRolePrefixChars(frameworkRoot, stage) ?? 0;
 }
 
 /** Deterministically estimates the current pipeline's input floor from pinned docs and current managed sources. */

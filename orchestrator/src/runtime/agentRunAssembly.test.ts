@@ -11,6 +11,7 @@ import {
   buildPromptParts,
   compileExecutionPacket,
   handoffFromContext,
+  measureRolePrefixChars,
   referencedKnowledgeIds,
   renderExecutionPacketSections,
   renderSlicedDocs,
@@ -248,5 +249,41 @@ describe("referencedKnowledgeIds", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("measureRolePrefixChars (T-V8-012)", () => {
+  it("sums CLAUDE.md, every policy file, and the one role's prompt", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "role-prefix-"));
+    try {
+      fs.writeFileSync(path.join(root, "CLAUDE.md"), "1234567890"); // 10
+      fs.mkdirSync(path.join(root, "policies"), { recursive: true });
+      fs.writeFileSync(path.join(root, "policies", "coding.md"), "12345"); // 5
+      fs.writeFileSync(path.join(root, "policies", "security.md"), "123"); // 3
+      fs.writeFileSync(path.join(root, "policies", "ignored.txt"), "should not count");
+      fs.mkdirSync(path.join(root, ".claude", "agents"), { recursive: true });
+      fs.writeFileSync(path.join(root, ".claude", "agents", `${AgentStage.BACKEND_ENGINEER}.md`), "12"); // 2
+      fs.writeFileSync(path.join(root, ".claude", "agents", `${AgentStage.QA_ENGINEER}.md`), "should not count either");
+
+      expect(measureRolePrefixChars(root, AgentStage.BACKEND_ENGINEER)).toBe(20);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null, not 0, when the role prompt is missing", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "role-prefix-missing-"));
+    try {
+      fs.writeFileSync(path.join(root, "CLAUDE.md"), "root");
+      fs.mkdirSync(path.join(root, "policies"), { recursive: true });
+      // No .claude/agents/backend-engineer.md at all.
+      expect(measureRolePrefixChars(root, AgentStage.BACKEND_ENGINEER)).toBeNull();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null, not 0, when the framework root itself does not exist", () => {
+    expect(measureRolePrefixChars(path.join(os.tmpdir(), "sta-role-prefix-does-not-exist"), AgentStage.BACKEND_ENGINEER)).toBeNull();
   });
 });
