@@ -55,6 +55,8 @@ import type { DependencyEvidence } from "../artifacts/executionPacket.js";
 import { formatModelPolicyBasis } from "./tierRouting.js";
 import type { ModelTierPolicy } from "./modelTiers.js";
 import { captureChangeSetFingerprint } from "../qa/changeSource.js";
+import type { LedgerAttempt } from "../ledger/runLedger.js";
+import { assertAdapterRequestMatchesAttempt } from "../ledger/attemptFreeze.js";
 
 /**
  * An `AgentExecutor` built on a `RuntimeAdapter`.
@@ -140,6 +142,17 @@ export interface RuntimeExecutorOptions {
   modelPolicy?: ModelTierPolicy | null;
   /** Replays persisted runtime/model/effort without consulting the current policy/frontmatter. */
   frozenModelRoute?: boolean;
+  /**
+   * T-V8-018 — the ledger record this stage is executing under.
+   *
+   * When present it *is* the route: no candidate is re-resolved, no
+   * `routing.order` hop may fire, and the adapter request is asserted against
+   * the frozen values immediately before every invocation. `frozenModelRoute`
+   * above only stopped today's policy from being re-read; this stops the
+   * selected provider itself from changing after the attempt began, which is
+   * the difference between a reproducible attempt and a plausible one.
+   */
+  frozenAttempt?: LedgerAttempt;
   /** Original persisted winner basis for a frozen route. */
   frozenRoutingBasis?: string;
   /**
@@ -525,7 +538,37 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     /** Entries the route already refused before the selected one. */
     let preRouteSkips: readonly RuntimeRouteAttempt[] = [];
     const classification = opts.classification?.(req.taskId);
-    if (opts.registry) {
+    const frozen = opts.frozenAttempt;
+    if (frozen) {
+      // The ledger already chose. Re-resolving would at best reproduce this
+      // decision and at worst quietly replace it, so the only thing left to do
+      // is look the adapter up by the recorded id and refuse if it is gone.
+      const adapter = opts.registry?.tryGet(frozen.observed.runtime);
+      if (!adapter) {
+        return finish(failResult(
+          `cannot start ${role}: frozen attempt ${frozen.attempt_id} names runtime "${frozen.observed.runtime}", which is not registered in this process`,
+        ));
+      }
+      if (frozen.stage !== req.stage || frozen.task_id !== req.taskId) {
+        return finish(failResult(
+          `cannot start ${role}: frozen attempt ${frozen.attempt_id} belongs to ${frozen.task_id}/${frozen.stage}, not ${req.taskId}/${req.stage}`,
+        ));
+      }
+      routeAvailability = opts.registry ? await opts.registry.probeAll() : {};
+      activeRuntime = adapter;
+      activeModel = frozen.observed.model ?? undefined;
+      activeModelExplicit = frozen.model_explicit;
+      activeEffort = frozen.observed.effort ?? undefined;
+      activeAdapterEffort = frozen.observed.effort ?? undefined;
+      requestedRuntime = frozen.requested.runtime;
+      requestedModel = frozen.requested.model ?? undefined;
+      routingBasis = frozen.route_basis;
+      // Emptied explicitly: a frozen attempt has no fallback. A provider that
+      // becomes unavailable halts the run and a person (or an explicit
+      // reroute) creates the next attempt.
+      fallbackQueue = [];
+      preRouteSkips = [];
+    } else if (opts.registry) {
       const tierId = opts.planTier?.(req.taskId);
       routeAvailability = await opts.registry.probeAll();
       const route = resolveRuntimeRoute({
@@ -739,6 +782,22 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       // caller bypassing routing with a fixed `runtime` and no registry).
       if (requiresInteractivity && !activeRuntime.capabilities.has(RuntimeCapability.INTERACTIVE_PROMPTS)) {
         return finish(failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot receive interactive prompts required by this stage`, declared));
+      }
+      // T-V8-018: the last thing checked before an adapter is reachable. It is
+      // outside the try/catch below on purpose — a mismatch here is not an
+      // adapter bug to be relabelled, it is a refusal to invoke a provider the
+      // ledger did not record.
+      if (frozen) {
+        try {
+          assertAdapterRequestMatchesAttempt(frozen, {
+            runtimeId: activeRuntime.id,
+            model: declared.model,
+            modelExplicit: activeModelExplicit,
+            effort: activeAdapterEffort,
+          });
+        } catch (error) {
+          return finish(failResult(error instanceof Error ? error.message : String(error), declared));
+        }
       }
       const activeProbe = routeAvailability[activeRuntime.id];
       if (activeProbe?.available === false) {

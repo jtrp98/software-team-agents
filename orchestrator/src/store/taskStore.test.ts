@@ -542,7 +542,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       }
 
       const versionCheck = new Database(file, { readonly: true });
-        expect(versionCheck.pragma("user_version", { simple: true })).toBe(18);
+        expect(versionCheck.pragma("user_version", { simple: true })).toBe(19);
       expect((versionCheck.pragma("table_info(runs)") as { name: string }[]).filter((column) => routingColumns.includes(column.name as typeof routingColumns[number])).map((column) => column.name)).toEqual([...routingColumns]);
       versionCheck.close();
 
@@ -585,7 +585,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
 
       const versionCheck = new Database(file, { readonly: true });
       try {
-        expect(versionCheck.pragma("user_version", { simple: true })).toBe(18);
+        expect(versionCheck.pragma("user_version", { simple: true })).toBe(19);
       } finally {
         versionCheck.close();
       }
@@ -645,7 +645,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
 
       const verify = new Database(file, { readonly: true });
       try {
-        expect(verify.pragma("user_version", { simple: true })).toBe(18);
+        expect(verify.pragma("user_version", { simple: true })).toBe(19);
         expect((verify.prepare("SELECT state FROM tasks WHERE task_id = ?").get("T-V12") as { state: string }).state).toBe(legacyBytes);
       } finally {
         verify.close();

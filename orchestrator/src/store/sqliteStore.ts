@@ -39,7 +39,7 @@ import {
 // the new field back as null ("not recorded"), nothing is guessed and nothing is lost. A
 // migration that would need to reinterpret or rewrite existing data does not go in this list (see
 // MIGRATIONS below), and an unknown version refuses to open rather than risk misreading it.
-const SCHEMA_VERSION = 18;
+const SCHEMA_VERSION = 19;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -117,6 +117,55 @@ CREATE TABLE IF NOT EXISTS events (
   decision TEXT
 );
 CREATE INDEX IF NOT EXISTS events_task_id ON events (task_id);
+`;
+
+/**
+ * T-V8-016 ledger DDL, named separately so the fresh-file path and migration 18
+ * create byte-identical tables instead of two definitions free to drift.
+ */
+export const LEDGER_DDL = `
+-- T-V8-016: the run ledger. Same file, same transaction as the tasks table, so a whole
+-- plan registers atomically (T-V8-017) instead of one row at a time.
+CREATE TABLE IF NOT EXISTS ledger_runs (
+  run_id     TEXT PRIMARY KEY,
+  module     TEXT NOT NULL,
+  target_root TEXT NOT NULL,
+  status     TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  record     TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS ledger_tasks (
+  run_id   TEXT NOT NULL,
+  task_id  TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  record   TEXT NOT NULL,
+  PRIMARY KEY (run_id, task_id)
+);
+CREATE TABLE IF NOT EXISTS ledger_attempts (
+  attempt_id TEXT PRIMARY KEY,
+  run_id     TEXT NOT NULL,
+  task_id    TEXT NOT NULL,
+  attempt    INTEGER NOT NULL,
+  record     TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ledger_attempts_task ON ledger_attempts (run_id, task_id, attempt);
+CREATE TABLE IF NOT EXISTS ledger_checkpoints (
+  run_id  TEXT NOT NULL,
+  task_id TEXT NOT NULL,
+  sha     TEXT NOT NULL,
+  at      INTEGER NOT NULL,
+  record  TEXT NOT NULL,
+  PRIMARY KEY (run_id, task_id, sha)
+);
+CREATE TABLE IF NOT EXISTS ledger_events (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  run_id  TEXT NOT NULL,
+  task_id TEXT,
+  at      INTEGER NOT NULL,
+  record  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ledger_events_run ON ledger_events (run_id, id);
 `;
 
 /** Named once so the DDL above and the migration below cannot drift apart. */
@@ -367,12 +416,21 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
     if (!existing.has("cache_creation_tokens")) db.exec("ALTER TABLE runs ADD COLUMN cache_creation_tokens INTEGER");
     if (!existing.has("requested_effort")) db.exec("ALTER TABLE runs ADD COLUMN requested_effort TEXT");
   },
+  18: (db) => {
+    // T-V8-016: the ledger tables are new and empty. An existing file gains
+    // them without a single historical byte being read, rewritten, or
+    // reinterpreted — a pre-ledger database simply has no runs, which is true
+    // rather than broken, and `adapters.ts` reads its wave runs from the
+    // journal instead.
+    db.exec(LEDGER_DDL);
+  },
 };
 
 export class SqliteTaskStore implements TaskStore {
   private readonly db: Database.Database;
   private readonly readOnly: boolean;
   private snapshotDir: string | undefined;
+  private inTransaction = false;
 
   /** `:memory:` is accepted for tests; any other path has its parent directory created. */
   constructor(filePath: string, options: { readonly?: boolean } = {}) {
@@ -408,6 +466,7 @@ export class SqliteTaskStore implements TaskStore {
       // WAL keeps a reader (`agent status`) from blocking the run that is writing.
       this.db.pragma("journal_mode = WAL");
       this.db.exec(DDL);
+      this.db.exec(LEDGER_DDL);
 
       const found = Number((this.db.pragma("user_version", { simple: true }) as number) ?? 0);
       if (found === 0) {
@@ -455,6 +514,44 @@ export class SqliteTaskStore implements TaskStore {
       })();
       version = next;
     }
+  }
+
+  /**
+   * One SQLite transaction around `fn`.
+   *
+   * This is what makes T-V8-017 atomic: the ledger tables live in this same
+   * file, so registering a whole plan — every task row, every ledger row —
+   * either commits together or leaves nothing behind. better-sqlite3's
+   * `transaction()` rolls back on any throw, including one raised by
+   * validation inside the callback, which is deliberately how a refusal
+   * reaches "no registration state changed".
+   *
+   * A nested call *joins* the open transaction and runs inline rather than
+   * opening a second one. That is what a caller almost always means — a ledger
+   * helper called from inside a registration must commit or roll back with it,
+   * not separately — and it fails in the safe direction: an inner unit is
+   * rolled back with the outer one, never committed while the outer aborts.
+   */
+  transaction<T>(fn: () => T): T {
+    if (this.readOnly) throw new Error("state database was opened read-only");
+    if (this.inTransaction) return fn();
+    this.inTransaction = true;
+    try {
+      return this.db.transaction(fn)();
+    } finally {
+      this.inTransaction = false;
+    }
+  }
+
+  /**
+   * The raw handle, for the ledger implementation that shares this file.
+   *
+   * Deliberately named: it is not a general escape hatch. `SqliteRunLedger` is
+   * the only caller, and it exists so ledger and task writes share one
+   * transaction instead of becoming two stores that can half-commit.
+   */
+  ledgerDatabase(): Database.Database {
+    return this.db;
   }
 
   createTask(task: PersistedTask): void {

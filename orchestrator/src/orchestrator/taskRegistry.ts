@@ -79,6 +79,8 @@ export class TaskRegistry {
   private readonly now?: () => number;
   private readonly stateViewPath?: string;
   private readonly planTasks?: TaskRegistryOptions["planTasks"];
+  /** True while a `transaction()` is open: the file-backed state view cannot be rolled back, so it waits for the commit. */
+  private deferStateView = false;
 
   constructor(opts: TaskRegistryOptions) {
     this.store = opts.store;
@@ -356,8 +358,33 @@ export class TaskRegistry {
     return graph.waitingOn(taskId, completed, plan.filter(t => t.status === "blocked").map(t => t.id));
   }
 
+  /**
+   * One all-or-nothing registration unit (T-V8-017).
+   *
+   * Two things have to be true together for whole-plan registration to be
+   * atomic: the store writes must share a transaction, and the human-readable
+   * `.workflow/state.yaml` must not be rewritten from a half-built store part
+   * way through. The state view is a file, so it cannot participate in the
+   * rollback — the fix is not to write it until the transaction has committed.
+   */
+  transaction<T>(fn: () => T): T {
+    const outermost = !this.deferStateView;
+    this.deferStateView = true;
+    try {
+      const result = this.store.transaction(fn);
+      if (outermost) {
+        this.deferStateView = false;
+        this.refreshStateView();
+      }
+      return result;
+    } finally {
+      if (outermost) this.deferStateView = false;
+    }
+  }
+
   /** Rewrites the human-readable view, if this registry was given a path for it. */
   refreshStateView(): void {
+    if (this.deferStateView) return;
     if (!this.stateViewPath) return;
     writeStateViewFromStore(this.stateViewPath, this.store, { now: this.now?.() ?? Date.now() });
   }

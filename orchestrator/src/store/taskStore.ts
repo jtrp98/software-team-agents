@@ -202,6 +202,14 @@ export class PersistedStateCorruptError extends Error {
  * cannot be mutated back into the store.
  */
 export interface TaskStore {
+  /**
+   * Runs `fn` as one all-or-nothing unit: every write inside it lands together
+   * or none of them does, including writes made through a run ledger backed by
+   * the same file. Added for T-V8-017, whose whole point is that a plan cannot
+   * half-register. A nested call joins the open transaction and runs inline, so
+   * an inner unit commits with the outer one or is rolled back with it.
+   */
+  transaction<T>(fn: () => T): T;
   /** Throws TaskAlreadyExistsError rather than overwriting — creating a task twice is a bug, not an update. */
   createTask(task: PersistedTask): void;
   /** Upsert of an existing task. Throws TaskNotFoundError if it was never created. */

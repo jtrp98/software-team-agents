@@ -79,7 +79,7 @@ describe("recordContextComposition (T-V5-037)", () => {
   it("never throws when the store write fails — fail-open, like recordInteractiveSession", () => {
     const failingStore = {
       appendRun: () => { throw new Error("db locked"); },
-      createTask() {}, saveTask() {}, loadTask() { return null; }, listTasks() { return []; },
+      transaction<T>(fn: () => T) { return fn(); }, createTask() {}, saveTask() {}, loadTask() { return null; }, listTasks() { return []; },
       runsForTask() { return []; }, allRuns() { return []; }, appendEvent() {}, eventsForTask() { return []; }, close() {},
     };
     expect(() =>
