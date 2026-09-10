@@ -127,15 +127,54 @@ describe("codeIntelSlices", () => {
   });
 
   it("a factory returning undefined falls back to the default provider — never a silent disable", async () => {
-    const slices = await codeIntelSlices(INPUT, {
-      enabled: true,
-      resolveRevision: async () => "sandbox-r1",
-      providerFactory: () => undefined as unknown as CodeIntelligenceProvider,
-      env: { [CODE_INTEL_BIN_ENV]: process.env[CODE_INTEL_BIN_ENV] ?? "graphify" },
-    });
-    // With no real index under the default cache root this still answers empty,
-    // but it must be the *missing-index* path (provider ran), not "disabled".
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sta-default-provider-"));
+    const slices = await codeIntelSlices(
+      // Unique targetId: a real Graphify cache for the shared `sb-web-helper`
+      // fixture id can exist on a machine that ran the T-V8-024 spike, which
+      // would make this test's provider path (and hence any comment about
+      // *why* it answers empty) depend on that machine-local cache state.
+      { ...INPUT, targetId: "sta-default-provider-test-target", targetRoot: dir },
+      {
+        enabled: true,
+        resolveRevision: async () => "sandbox-r1",
+        providerFactory: () => undefined as unknown as CodeIntelligenceProvider,
+        env: { [CODE_INTEL_BIN_ENV]: process.env[CODE_INTEL_BIN_ENV] ?? "graphify" },
+      },
+    );
+    // No real Graphify index exists for this target/revision, and the fixture
+    // directory has no file matching the module-name query, so the default
+    // chain (Graphify -> NativeSearchProvider, T-V8-023) still answers empty —
+    // but it must be the *empty-result* path (both providers ran), not "disabled".
     expect(slices).toEqual([]);
+  });
+
+  it("T-V8-023: with no Graphify index, the default chain falls through to NativeSearchProvider and still completes the task", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sta-native-fallback-"));
+    const file = path.join(dir, "src", "crm-case-dashboard.ts");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'export const dashboard = "crm case dashboard";\n');
+
+    const result = await codeIntelContext(
+      // A unique targetId — NOT the shared `sb-web-helper` fixture id, which
+      // has a real (stale, for any revision but the one it was built from)
+      // Graphify cache on machines that ran the T-V8-024 spike. Reusing it
+      // here would make this test's outcome depend on that machine-local
+      // cache state instead of the fixture this test actually controls.
+      { ...INPUT, targetId: "sta-native-fallback-test-target", targetRoot: dir },
+      {
+        enabled: true,
+        resolveRevision: async () => "sandbox-r1",
+        providerFactory: () => undefined as unknown as CodeIntelligenceProvider,
+        env: { [CODE_INTEL_BIN_ENV]: process.env[CODE_INTEL_BIN_ENV] ?? "graphify" },
+      },
+    );
+
+    expect(result.used).toBe(true);
+    expect(result.fallbackReason).toBeUndefined();
+    expect(result.candidates[0].location.file).toBe("src/crm-case-dashboard.ts");
+    // Native results are always `inferred` — a keyword hit is a hypothesis,
+    // never an extracted structural fact (unlike a real graph edge).
+    expect(result.candidates[0].provenance).toBe("inferred");
   });
 });
 

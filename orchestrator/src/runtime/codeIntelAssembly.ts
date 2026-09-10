@@ -2,7 +2,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { AgentStage } from "../types.js";
 import { defaultCacheRoot } from "../codeintel/cache.js";
+import { createFallbackChainProvider } from "../codeintel/fallbackChainProvider.js";
 import { GraphifyProvider } from "../codeintel/graphifyProvider.js";
+import { NativeSearchProvider } from "../codeintel/nativeSearchProvider.js";
 import { resolveTargetRevision } from "../codeintel/targetRevision.js";
 import { resolveCodeContext, type FallbackReason } from "../codeintel/resolver.js";
 import type { CodeCandidate, CodeIntelligenceProvider } from "../codeintel/provider.js";
@@ -105,7 +107,21 @@ export async function codeIntelContext(input: CodeIntelSliceInput, deps: CodeInt
     // An injected factory may return nothing (it is a test/extension seam) —
     // that means "use the default", never "silently disable": silent disables
     // are indistinguishable from broken installs when debugging.
-    provider = built ?? new GraphifyProvider({ cacheRoot: defaultCacheRoot(), config: defaultProviderConfig(deps.env) });
+    //
+    // The default is a chain, not a bare graph provider (T-V8-023): Graphify
+    // first when configured/installed/fresh, else `NativeSearchProvider` —
+    // the always-available, no-install, no-index baseline — so "no graph
+    // provider exists" still completes the task with bounded, current-source
+    // evidence instead of nothing. This is not a D-V8-04 vendor selection:
+    // Graphify stays exactly as opt-in as before (`STA_CODE_INTEL=on`), and
+    // the chain degrades to `NativeSearchProvider` alone the moment Graphify
+    // is absent, which is every machine that has not installed it.
+    provider =
+      built ??
+      createFallbackChainProvider([
+        new GraphifyProvider({ cacheRoot: defaultCacheRoot(), config: defaultProviderConfig(deps.env) }),
+        new NativeSearchProvider(),
+      ]);
     const revision = input.revision ?? (await (deps.resolveRevision ?? ((root) => resolveTargetRevision(root)))(input.targetRoot));
     const result = await resolveCodeContext(
       { enabled: true, provider, now: deps.now },
