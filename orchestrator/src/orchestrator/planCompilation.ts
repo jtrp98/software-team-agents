@@ -102,6 +102,122 @@ export interface PlanRegistrationResult {
   trace: string[];
 }
 
+/** The half of `PlanRegistrationInput` a read-only resolve needs — no run/target/branch identity yet. */
+export type PlanScopeResolutionInput = Pick<PlanRegistrationInput, "planMarkdown" | "references" | "scope" | "module" | "registry" | "store" | "classificationFor">;
+
+export interface ResolvedPlanTask {
+  taskId: string;
+  owner: AgentStage;
+  phase: number;
+  dependsOn: string[];
+  produces: string[];
+  consumes: string[];
+  classification: ClassificationResult;
+}
+
+/**
+ * The pure, non-mutating half of plan compilation: validate, hash and order
+ * one scope. `compileAndRegisterPlan` and `previewPlanRegistration` both call
+ * this and only this to answer "what scope, in what order, under what plan
+ * hash" — so a preview and the run it precedes are never two computations
+ * that merely ought to agree, they are one. Classification is deliberately
+ * not resolved here — see `previewPlanRegistration`.
+ */
+export function resolvePlanScope(input: PlanScopeResolutionInput): { order: string[]; planHash: string; byId: Map<string, PlanTask>; trace: string[] } {
+  if (!isCanonicalPlan(input.planMarkdown)) {
+    throw new PlanRegistrationError(
+      "legacy-plan",
+      `module ${input.module}: plan.md is not canonical PlanTask format 1; convert it explicitly with migrateLegacyTaskTable ` +
+        "(see docs/plan-task-v1.md) rather than having a bounded run reinterpret a legacy table",
+    );
+  }
+  const parsed = parseCanonicalPlan(input.planMarkdown, input.references);
+  if (parsed.problems.length > 0) {
+    throw new PlanRegistrationError("invalid-plan", `module ${input.module}: plan.md is not registrable`, parsed.problems);
+  }
+
+  const selected = selectScope(parsed.tasks, input.scope);
+  if (selected.length === 0) {
+    throw new PlanRegistrationError("empty-scope", `module ${input.module}: the selected scope contains no task`);
+  }
+
+  const selectedIds = new Set(selected.map((task) => task.id));
+  const notClosed: string[] = [];
+  for (const task of selected) {
+    for (const dependency of task.dependsOn) {
+      if (selectedIds.has(dependency)) continue;
+      const stored = input.store.loadTask(dependency);
+      if (!stored) notClosed.push(`task ${task.id} depends on ${dependency}, which is neither in this scope nor registered`);
+    }
+  }
+  if (notClosed.length > 0) {
+    throw new PlanRegistrationError("scope-not-closed", `module ${input.module}: selected scope is not dependency-closed`, notClosed);
+  }
+
+  let order: string[];
+  try {
+    const graph = taskGraphFromPlan(selected);
+    order = graph.parallelLayers().flatMap((layer) => layer.map((node) => node.id).sort());
+  } catch (error) {
+    throw new PlanRegistrationError("graph", `module ${input.module}: plan graph is not executable: ${String(error)}`);
+  }
+
+  const byId = new Map(selected.map((task) => [task.id, task]));
+  const already = selected.filter((task) => input.registry.has(task.id));
+  if (already.length > 0) {
+    throw new PlanRegistrationError(
+      "already-registered",
+      `module ${input.module}: task(s) ${already.map((task) => task.id).join(", ")} are already registered; ` +
+        "immutable registration metadata is never replaced — select a different scope or start a new plan",
+    );
+  }
+
+  const planHash = runScopeHash(order.map((id) => byId.get(id)!));
+  const trace: string[] = [
+    `plan_hash=${planHash} tasks=${order.length} scope=${input.scope.kind}`,
+    `order=${order.join(" -> ")}`,
+  ];
+
+  return { order, planHash, byId, trace };
+}
+
+/**
+ * Read-only preview of what `compileAndRegisterPlan` would freeze for this
+ * scope: selected task order, plan hash and per-task classification/gates —
+ * with no ledger run created, no task registered, and no store touched.
+ *
+ * Order/hash/refusals come from `resolvePlanScope`, the exact function
+ * `compileAndRegisterPlan` calls for the same purpose, so the two can never
+ * disagree about the scope itself. Classification is recomputed here from the
+ * same deterministic inputs (`classificationFor`/`classificationInputForPlanTask`
+ * + `classifyTask`) rather than threaded through from `resolvePlanScope`,
+ * because `compileAndRegisterPlan` must classify each task interleaved with
+ * its own registration (a fault mid-loop must leave earlier tasks visible
+ * pre-rollback) — a second, purely-for-display pass here does not disturb that.
+ */
+export function previewPlanRegistration(input: PlanScopeResolutionInput): { order: string[]; planHash: string; tasks: ResolvedPlanTask[]; trace: string[] } {
+  const resolved = resolvePlanScope(input);
+  const conflictProblems: string[] = [];
+  const tasks: ResolvedPlanTask[] = resolved.order.map((taskId) => {
+    const task = resolved.byId.get(taskId)!;
+    const classification = classifyTask(input.classificationFor?.(task) ?? classificationInputForPlanTask(task));
+    conflictProblems.push(...classificationConflicts(task, classification));
+    return {
+      taskId,
+      owner: task.owner as AgentStage,
+      phase: task.phase,
+      dependsOn: [...task.dependsOn],
+      produces: [...task.produces],
+      consumes: [...task.consumes],
+      classification,
+    };
+  });
+  if (conflictProblems.length > 0) {
+    throw new PlanRegistrationError("classification-conflict", `module ${input.module}: classification contradicts authored plan risk`, conflictProblems);
+  }
+  return { order: resolved.order, planHash: resolved.planHash, tasks, trace: resolved.trace };
+}
+
 /**
  * Identity for the exact tasks this run froze, in the exact order it froze them.
  *
@@ -171,65 +287,10 @@ function selectScope(tasks: readonly PlanTask[], scope: PlanRunScope): PlanTask[
  */
 export function compileAndRegisterPlan(input: PlanRegistrationInput): PlanRegistrationResult {
   const now = input.now ?? Date.now;
-  if (!isCanonicalPlan(input.planMarkdown)) {
-    throw new PlanRegistrationError(
-      "legacy-plan",
-      `module ${input.module}: plan.md is not canonical PlanTask format 1; convert it explicitly with migrateLegacyTaskTable ` +
-        "(see docs/plan-task-v1.md) rather than having a bounded run reinterpret a legacy table",
-    );
-  }
-  const parsed = parseCanonicalPlan(input.planMarkdown, input.references);
-  if (parsed.problems.length > 0) {
-    throw new PlanRegistrationError("invalid-plan", `module ${input.module}: plan.md is not registrable`, parsed.problems);
-  }
-
-  const selected = selectScope(parsed.tasks, input.scope);
-  if (selected.length === 0) {
-    throw new PlanRegistrationError("empty-scope", `module ${input.module}: the selected scope contains no task`);
-  }
-
-  // Scope closure: a selected task whose dependency is neither selected nor
-  // already complete would register into a graph that can never become ready.
-  const selectedIds = new Set(selected.map((task) => task.id));
-  const notClosed: string[] = [];
-  for (const task of selected) {
-    for (const dependency of task.dependsOn) {
-      if (selectedIds.has(dependency)) continue;
-      const stored = input.store.loadTask(dependency);
-      if (!stored) notClosed.push(`task ${task.id} depends on ${dependency}, which is neither in this scope nor registered`);
-    }
-  }
-  if (notClosed.length > 0) {
-    throw new PlanRegistrationError("scope-not-closed", `module ${input.module}: selected scope is not dependency-closed`, notClosed);
-  }
-
-  // Cycles, unknown ids, ambiguous producers and legacy frontend ordering all
-  // surface from the one canonical constructor, not from a second traversal.
-  let order: string[];
-  try {
-    const graph = taskGraphFromPlan(selected);
-    order = graph.parallelLayers().flatMap((layer) => layer.map((node) => node.id).sort());
-  } catch (error) {
-    throw new PlanRegistrationError("graph", `module ${input.module}: plan graph is not executable: ${String(error)}`);
-  }
-
-  const byIdForHash = new Map(selected.map((task) => [task.id, task]));
-  const already = selected.filter((task) => input.registry.has(task.id));
-  if (already.length > 0) {
-    throw new PlanRegistrationError(
-      "already-registered",
-      `module ${input.module}: task(s) ${already.map((task) => task.id).join(", ")} are already registered; ` +
-        "immutable registration metadata is never replaced — select a different scope or start a new plan",
-    );
-  }
-
-  const planHash = runScopeHash(order.map((id) => byIdForHash.get(id)!));
+  const resolved = resolvePlanScope(input);
+  const { order, planHash, byId } = resolved;
+  const trace = [...resolved.trace];
   const timestamp = now();
-  const byId = new Map(selected.map((task) => [task.id, task]));
-  const trace: string[] = [
-    `plan_hash=${planHash} tasks=${order.length} scope=${input.scope.kind}`,
-    `order=${order.join(" -> ")}`,
-  ];
 
   const run: LedgerRun = {
     ledger_version: LEDGER_SCHEMA_VERSION,

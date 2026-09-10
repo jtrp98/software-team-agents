@@ -13,6 +13,7 @@ import {
   assertPlanUnchanged,
   classificationInputForPlanTask,
   compileAndRegisterPlan,
+  previewPlanRegistration,
   runScopeHash,
   type PlanRunScope,
 } from "./planCompilation.js";
@@ -368,5 +369,50 @@ describe("T-V8-017 — derived classification and drift", () => {
       }
     }
     expect([...orders]).toEqual(["BE-004,FE-010"]);
+  });
+});
+
+describe("T-V8-021 — preview and execution resolve the same scope", () => {
+  function preview(overrides: { scope?: PlanRunScope; classificationFor?: Parameters<typeof previewPlanRegistration>[0]["classificationFor"] } = {}) {
+    return previewPlanRegistration({
+      registry, store, planMarkdown, references: refs,
+      scope: overrides.scope ?? { kind: "all" },
+      module: "orders",
+      ...(overrides.classificationFor ? { classificationFor: overrides.classificationFor } : {}),
+    });
+  }
+
+  it("resolves the same order, plan hash and per-task classification the real registration freezes, without registering anything", () => {
+    const previewed = preview();
+    const registered = register();
+    expect(previewed.order).toEqual(registered.run.task_order);
+    expect(previewed.planHash).toBe(registered.planHash);
+    expect(previewed.tasks.map((t) => [t.taskId, t.owner, t.phase, t.dependsOn])).toEqual(
+      registered.tasks.map((t) => [t.task_id, t.owner, t.phase, t.depends_on]),
+    );
+    expect(previewed.tasks.map((t) => t.classification.level)).toEqual(
+      registered.tasks.map((t) => store.loadTask(t.task_id)!.classification.level),
+    );
+  });
+
+  it("touches neither the store nor the registry", () => {
+    preview();
+    expect(store.listTasks()).toEqual([]);
+    expect(registry.has("BE-004")).toBe(false);
+  });
+
+  it("surfaces the same refusals compileAndRegisterPlan would, before any mutation", () => {
+    expect(() => preview({ scope: { kind: "tasks", taskIds: ["NOPE"] } })).toThrow(PlanRegistrationError);
+    expect(() =>
+      preview({ classificationFor: (task) => ({ ...classificationInputForPlanTask(task), touchesSchema: false, isIncrementalFeature: true }) }),
+    ).not.toThrow(); // the fixture plan carries no schema risk, so this override does not conflict
+    const schemaPlan = planMarkdown.replace("Risk: shared-contract\nHuman gate: none", "Risk: schema\nHuman gate: schema");
+    expect(() =>
+      previewPlanRegistration({
+        registry, store, planMarkdown: schemaPlan, references: refs, scope: { kind: "all" }, module: "orders",
+        classificationFor: (task) => ({ ...classificationInputForPlanTask(task), touchesSchema: false, isIncrementalFeature: true }),
+      }),
+    ).toThrow(/declares a schema change but the supplied classification does not/);
+    expect(store.listTasks()).toEqual([]);
   });
 });

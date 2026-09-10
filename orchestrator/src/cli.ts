@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import * as readline from "node:readline/promises";
 import { AgentStage, TaskState } from "./types.js";
 import { classifyTask, TEST_STRATEGY_TRIGGERS, type ClassificationInput, type TestStrategyTrigger } from "./classification/taskClassifier.js";
+import { FLAG_TO_CLASSIFICATION, type BooleanClassificationKey } from "./classification/classificationFlags.js";
 import { Orchestrator } from "./orchestrator/orchestrator.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
 import { createRuntimeExecutor } from "./runtime/runtimeExecutor.js";
@@ -56,6 +57,7 @@ import { runKnowledgeVerb } from "./cli/verbs/knowledge.js";
 import { runRuntimesVerb } from "./cli/verbs/runtimes.js";
 import { runChangedVerb } from "./cli/verbs/changed.js";
 import { runReportVerb } from "./cli/verbs/report.js";
+import { runBoundedRunVerb, BOUNDED_RUN_USAGE } from "./cli/verbs/boundedRun.js";
 import { runTaskLoop } from "./cli/runTaskLoop.js";
 import { describeStatus, type TaskStatusKind } from "./orchestrator/taskStatus.js";
 import { formatRunRouting, RunLog } from "./observability/runLog.js";
@@ -244,19 +246,8 @@ export interface CliArgs {
   tokenBudget?: number;
 }
 
-type BooleanClassificationKey = Exclude<keyof ClassificationInput, "testStrategyTriggers">;
-const FLAG_TO_CLASSIFICATION: Record<string, BooleanClassificationKey> = {
-  "--typo": "isTypoOrCopyOnly",
-  "--bug-fix": "isClearBugFix",
-  "--schema": "touchesSchema",
-  "--business-rule": "touchesBusinessRuleOnly",
-  "--incremental": "isIncrementalFeature",
-  "--new-feature": "isNewFeatureModuleOrProject",
-  "--deploy": "isProductionDeployOrMigration",
-  "--sensitive": "touchesSensitiveArea",
-  "--backend": "touchesBackend",
-  "--frontend": "touchesFrontend",
-};
+export type { BooleanClassificationKey };
+export { FLAG_TO_CLASSIFICATION };
 
 export class CliUsageError extends Error {}
 
@@ -287,6 +278,7 @@ export const USAGE =
   "  sta runtimes                                    which runtimes exist and how well each is supported\n" +
   "  sta changed [--project-root <path>] [--json]     surface working-tree changes and deterministic green/red gate status\n" +
   "  sta report  [--output <path>] [--module <name>] [--project-root <path>]   visual dashboard as a static offline HTML page\n" +
+  `  ${BOUNDED_RUN_USAGE.split("\n").join("\n  ")}   explicit bounded run: intake/preview/freeze, then DEV -> verification -> checkpoint -> coherent QA/repair to a chosen boundary\n` +
   "  sta upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
   "  sta migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending\n" +
   "  sta knowledge-migrate <dry-run|copy|verify|cutover> --source-root <path> --knowledge-root <path> [--now <ISO>] [--confirm I_CONFIRM_MIGRATION]   copy–verify–human-confirmed migration\n" +
@@ -940,6 +932,7 @@ const VERBS = [
   "runtimes",
   "changed",
   "report",
+  "bounded-run",
 ] as const;
 type Verb = (typeof VERBS)[number];
 
@@ -1966,6 +1959,8 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string, d
       return runChangedVerb(rest, defaultProjectRoot);
     case "report":
       return runReportVerb(rest, defaultProjectRoot);
+    case "bounded-run":
+      return runBoundedRunVerb(rest, defaultProjectRoot, dependencies);
   }
 }
 
