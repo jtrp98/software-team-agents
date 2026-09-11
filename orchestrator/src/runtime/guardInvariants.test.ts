@@ -12,7 +12,7 @@ import type { RuntimeGuards } from "./runtimeAdapter.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { compileExecutionPacket } from "./agentRunAssembly.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
-import { createProductionRuntimeRegistry } from "../cli.js";
+import { createProductionRuntimeRegistry } from "../cli/composition/runtimeRegistry.js";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const RUNTIME_ROOT = path.join(REPO_ROOT, "orchestrator", "src", "runtime");

@@ -2,12 +2,8 @@ import * as path from "node:path";
 import { AgentStage } from "../../types.js";
 import { flagValue } from "../support.js";
 import { openStore } from "../support.js";
-import {
-  CliUsageError,
-  cliVersion,
-  createProductionRuntimeRegistry,
-  type CliDependencies,
-} from "../../cli.js";
+import { CliUsageError, cliVersion } from "../../cli.js";
+import { createProductionRuntimeRegistry, type CliDependencies } from "../composition/runtimeRegistry.js";
 import { FLAG_TO_CLASSIFICATION, type BooleanClassificationKey } from "../../classification/classificationFlags.js";
 import type { ClassificationInput } from "../../classification/taskClassifier.js";
 import {

@@ -1,4 +1,4 @@
-import { printListing, watchListing } from "../../cli.js";
+import { printListing, watchListing } from "../rendering/taskListing.js";
 import { describeStatus } from "../../orchestrator/taskStatus.js";
 import { RunLog } from "../../observability/runLog.js";
 import { LEGACY_RUN_RECORD_NOTICE, observeRuns } from "../../run/observability.js";

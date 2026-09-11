@@ -6,7 +6,7 @@ import { classifyTask } from "../classification/taskClassifier.js";
 import { initTaskMachine } from "../state/taskState.js";
 import { newPersistedTask } from "../store/taskStore.js";
 import { AgentStage } from "../types.js";
-import { resolveQaWorkRoots } from "../cli.js";
+import { resolveQaWorkRoots } from "./cliRoots.js";
 import { resolveWritableWorkRoots } from "./cliRoots.js";
 
 const INSTALLATION_CONFIG_ENV = "AGENTCLAUDE_INSTALLATION_CONFIG";

@@ -6,7 +6,7 @@ import { taskGraphFromPlan } from "./taskGraph.js";
 import { parseCanonicalPlan, renderCanonicalTasks, type PlanTask } from "../docs/planTask.js";
 import { deriveWaves, readinessOf, readWorkPlan } from "../docs/planGraph.js";
 import { deriveHandoff } from "../agents/moduleDocs.js";
-import { productionQaInputs } from "../cli.js";
+import { productionQaInputs } from "../qa/productionQaInputs.js";
 import { AgentStage, TaskState } from "../types.js";
 import { TaskRegistry } from "../orchestrator/taskRegistry.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";

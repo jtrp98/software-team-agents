@@ -28,7 +28,7 @@ import type { TaskStore } from "../store/taskStore.js";
 import { stableHash, type DependencyEvidence } from "../artifacts/executionPacket.js";
 import { readModuleDoc } from "../agents/moduleDocs.js";
 import { parseOpenIssues } from "../orchestrator/failureClassifier.js";
-import { productionQaInputs } from "../cli.js";
+import { productionQaInputs } from "../qa/productionQaInputs.js";
 import type { SecretScanner } from "../git/checkpoint.js";
 import { combineProjectRunners, createProjectRunner } from "../qa/projectRunner.js";
 import { LocalWorkspace } from "../runtime/localWorkspace.js";
