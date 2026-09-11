@@ -127,3 +127,26 @@ Decided by: dev  Date: 11/09/2026
   past the pinned `v0.9.49` output shape and breaks the adapter, or (c) GitNexus's targeted commands
   (`context`/`trace`/`impact`, untested here) are evaluated and outperform Graphify on a real task
   set — any of these reopens D-V8-04 rather than silently overriding this ADR.
+
+## Addendum — T-V8-026 benchmark-replay criterion waived (2026-09-11)
+
+`T-V8-026`'s acceptance criteria require "the selected integration meets the T-V8-024 outcome
+threshold in a replay." Round 17 (`planning/v8/evidence/round-17.md`) confirmed this replay cannot
+run: no threshold was ever predeclared or measured, because T-V8-024's formal spike never ran (see
+"Context" above — Round 15 stayed blocked; the informal demo that followed does not supply a
+threshold either).
+
+Presented with exactly that choice — run the full T-V8-024 spike first, or waive T-V8-026's
+replay criterion and accept this ADR's preliminary evidence as sufficient — the human owner chose
+directly in this session:
+
+- [x] Waive T-V8-026's "meets the T-V8-024 outcome threshold in a replay" criterion; accept this
+      ADR's preliminary evidence as sufficient to close T-V8-026.
+- [ ] Run the full T-V8-024 spike before T-V8-026 can close.
+
+Decided by: dev  Date: 11/09/2026
+
+This addendum resolves only T-V8-026's replay requirement. It does not reopen, widen, or change the
+Option A provider selection above, and it does not retroactively claim T-V8-024's acceptance criteria
+are met — the "Assumptions carried" and "Reconsideration trigger" text above stands unchanged and
+still governs when this whole decision should be revisited.
