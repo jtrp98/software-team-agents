@@ -14,7 +14,11 @@ export interface RunDiskSnapshot {
   truncatedFinalLine: boolean;
 }
 
-/** Rebuilds current run identity and state using only its durable files. */
+/**
+ * Rebuilds a **legacy** wave run's identity and final state from its durable
+ * files alone. After T-V8-029 nothing writes those files, so this reads history
+ * — see `run/journal.ts`'s header.
+ */
 export function loadRunDiskSnapshot(projectRoot: string, runId: string): RunDiskSnapshot {
   const manifest = readRunManifest(projectRoot, runId);
   const journal = readJournal(projectRoot, runId);

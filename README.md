@@ -425,7 +425,8 @@ pipeline ที่มี design phase (`--new-feature`, `--schema`, `--business-
 
 ```bash
 sta run      --task-id <id> --module <name> <classification flags> [--autonomy read-only|propose|edit|full] [--runtime claude-code|codex|opencode|antigravity]
-sta run      --wave <n> --module <name> [--max-tasks <k>] [--dry-run|--resume-run]   # bounded sequential wave run (V7) — local branch + checkpoint commit ต่อ task ที่ผ่าน deterministic gate, halt ที่ failure/ineligible ตัวแรก; ไม่ push/merge/rollback — คู่มือ: docs/bounded-wave-run.md (--resume-run คือ resume ระดับ run, ต่างจาก --resume ระดับ task)
+sta bounded-run --module <name> (--all|--phase <n>|--task <id,...>) [--until next-gate|qa|done] [--dry-run] [--autonomy edit|full]   # bounded run (V8) — compile+freeze plan scope ใน transaction เดียว แล้วเดิน DAG ผ่าน DEV → deterministic verification → checkpoint → coherent QA/repair; ไม่ push/merge/rollback — คู่มือ: docs/bounded-run.md
+sta bounded-run --resume <run-id> --module <name> [--dry-run]       # resume ระดับ run จาก ledger (ต่างจาก --resume ระดับ task); V7 --wave/--register-only/--resume-run ปลดแล้ว — docs/bounded-wave-run.md
 sta resume   --task-id <id> --module <name>          # continue task ใน store
 sta retry    --task-id <id> --module <name>          # same as resume
 sta pause    --task-id <id>                          # freeze; run/resume/retry refuse

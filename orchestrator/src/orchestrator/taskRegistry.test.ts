@@ -45,27 +45,20 @@ describe("TaskRegistry", () => {
     expect(reg.waitingOn("T-2")).toEqual(["T-1"]);
   });
 
-  it("requires ledger or same-run checkpoints; plan Status cannot unlock either path", () => {
+  /**
+   * T-V8-029 — the wave-only `openPreparedForWave` path is gone. Plan `Status`
+   * was never allowed to unlock `open()`, and that is now the only rule: a
+   * planned run's readiness comes from the frozen ledger DAG
+   * (`ledger/runLedger.ts` `readiness()`), never from a plan cell.
+   */
+  it("keeps plan Status unable to unlock open(); ledger readiness is the planned-run authority", () => {
     const reg = registry();
     reg.create({ taskId: "FE-1", classification: trivial() });
     reg.create({ taskId: "FE-2", classification: trivial(), dependsOn: ["FE-1"] });
-    const base = {
-      phase: 1,
-      designRefs: ["DES-001"],
-      owner: AgentStage.FRONTEND_ENGINEER,
-      wave: null,
-      tier: "T2",
-      description: "Implement",
-      fromCheckbox: false,
-    };
-    const first = { ...base, id: "FE-1", dependsOn: [], status: "pending" as const };
-    const second = { ...base, id: "FE-2", dependsOn: ["FE-1"], status: "pending" as const };
 
     expect(() => reg.open("FE-2")).toThrow(DependencyNotMetError);
-    expect(() => reg.openPreparedForWave("FE-2", [first, second], new Set())).toThrow(/ledger.*checkpoint evidence/);
-    expect(reg.openPreparedForWave("FE-2", [first, second], new Set(["FE-1"])).taskId).toBe("FE-2");
-    expect(() => reg.openPreparedForWave("FE-2", [{ ...first, status: "verified" }, second], new Set())).toThrow(/ledger.*checkpoint evidence/);
-    expect(() => reg.open("FE-2")).toThrow(DependencyNotMetError);
+    expect(reg.waitingOn("FE-2")).toEqual(["FE-1"]);
+    expect("openPreparedForWave" in reg).toBe(false);
   });
 
   it("opens it once the dependency reaches DEPLOYED", async () => {

@@ -3,7 +3,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
-import { appendJournalRecord, writeRunManifest, type KnownJournalRecord, type RunManifest } from "../../run/journal.js";
+import { type KnownJournalRecord, type RunManifest } from "../../run/journal.js";
+import { appendLegacyWaveRecord, writeLegacyWaveRun } from "../../run/legacyWaveRecord.testSupport.js";
 import { getChangedSummary, runChangedVerb } from "./changed.js";
 
 function git(dir: string, ...args: string[]): string {
@@ -68,7 +69,7 @@ describe("T-V6-017 — sta changed verb", () => {
         base_branch: baseBranch, base_sha: baseSha, run_branch: runBranch, runtime_id: "claude-code", tier: "T2",
         model: "opus", max_tasks: 1, sta_version: "1.1.0",
       };
-      writeRunManifest(fixture.dir, manifest);
+      writeLegacyWaveRun(fixture.dir, manifest);
       const records: KnownJournalRecord[] = [
         { ts: "2026-09-07T00:00:00.000Z", kind: "RUN_STARTED" },
         { ts: "2026-09-07T00:00:01.000Z", kind: "RUN_ISOLATED" },
@@ -80,7 +81,7 @@ describe("T-V6-017 — sta changed verb", () => {
         { ts: "2026-09-07T00:00:07.000Z", kind: "RUN_COMPLETED" },
         { ts: "2026-09-07T00:00:08.000Z", kind: "HUMAN_REVIEW_REQUIRED" },
       ];
-      for (const record of records) appendJournalRecord(fixture.dir, runId, record);
+      for (const record of records) appendLegacyWaveRecord(fixture.dir, runId, record);
 
       const summary = await getChangedSummary(fixture.dir);
       expect(summary.run).toEqual({

@@ -1,7 +1,7 @@
 import { printListing, watchListing } from "../../cli.js";
 import { describeStatus } from "../../orchestrator/taskStatus.js";
 import { RunLog } from "../../observability/runLog.js";
-import { observeRuns } from "../../run/observability.js";
+import { LEGACY_RUN_RECORD_NOTICE, observeRuns } from "../../run/observability.js";
 import { flagValue, openStore, positionalArg } from "../support.js";
 
 const ACTIVE_RUN_STATES = new Set(["CREATED", "PREFLIGHT", "ISOLATED", "TASK_READY", "TASK_RUNNING", "VALIDATING", "CHECKPOINTED", "WAVE_COMPLETE"]);
@@ -22,9 +22,13 @@ export async function runStatusVerb(rest: string[], defaultProjectRoot: string):
     }
     if (!taskId) {
       printListing(registry);
+      // T-V8-029 — `.workflow/wave-runs/` is legacy: the retired wave runner was
+      // its only writer, so anything here predates V8. Say so on every line
+      // rather than letting an unfinished old record read as a live run.
       const runs = (await observeRuns(projectRoot)).filter((run) => ACTIVE_RUN_STATES.has(run.state) || run.state === "HALTED");
       for (const run of runs) {
-        console.log(`[orchestrator] bounded run ${run.run_id}: ${run.state} module=${run.module} wave=${run.wave} branch=${run.run_branch}`);
+        console.log(`[orchestrator] legacy wave run ${run.run_id}: ${run.state} module=${run.module} wave=${run.wave} branch=${run.run_branch}`);
+        console.log(`[orchestrator]   ${LEGACY_RUN_RECORD_NOTICE}`);
         console.log(`[orchestrator]   next required human action: ${run.next_required_human_action}`);
         if (run.tasks.some((task) => task.status === "CHECKPOINTED")) {
           console.log(`[orchestrator]   ${run.disclaimer}`);

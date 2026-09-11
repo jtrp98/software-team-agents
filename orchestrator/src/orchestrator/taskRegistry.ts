@@ -37,13 +37,6 @@ export class DependencyNotMetError extends Error {
   }
 }
 
-export class WaveTaskNotPreparedError extends Error {
-  constructor(public readonly taskId: string, message: string) {
-    super(`task ${taskId} is not prepared for this wave: ${message}`);
-    this.name = "WaveTaskNotPreparedError";
-  }
-}
-
 export interface TaskRegistryOptions {
   store: TaskStore;
   budget?: Budget;
@@ -186,52 +179,6 @@ export class TaskRegistry {
     const waitingOn = this.waitingOn(taskId);
     if (waitingOn.length > 0) throw new DependencyNotMetError(taskId, waitingOn);
     return Orchestrator.fromPersisted(task, this.store, this.orchestratorOptions());
-  }
-
-  /**
-   * Wave-only open path. Ledger completion and same-run checkpoints are the
-   * dependency authority here; the ordinary `open()` DEPLOYED rule above is
-   * intentionally untouched. Registration remains the authority for the
-   * immutable classification, Target binding, and RuntimeTask contract.
-   */
-  openPreparedForWave(
-    taskId: string,
-    planTasks: readonly WorkPlanTask[],
-    checkpointedTaskIds: ReadonlySet<string>,
-  ): Orchestrator {
-    const task = this.store.loadTask(taskId);
-    if (!task) throw new TaskNotFoundError(taskId);
-    const row = planTasks.find((candidate) => candidate.id === taskId);
-    if (!row) throw new WaveTaskNotPreparedError(taskId, "no matching plan.md row exists");
-
-    const storedDependencies = [...task.dependsOn].sort();
-    const graph = taskGraphFromPlan(planTasks);
-    const plannedDependencies = graph.dependenciesOf(taskId).sort();
-    if (JSON.stringify(storedDependencies) !== JSON.stringify(plannedDependencies)) {
-      throw new WaveTaskNotPreparedError(
-        taskId,
-        `registered dependencies (${storedDependencies.join(", ") || "none"}) do not match plan.md (${plannedDependencies.join(", ") || "none"})`,
-      );
-    }
-
-    const completed = new Set([...checkpointedTaskIds, ...this.store.listTasks().filter(t => t.machine.current === TaskState.DEPLOYED && !t.cancelled && !t.paused).map(t => t.taskId)]);
-    const waitingOn = graph.waitingOn(taskId, completed, planTasks.filter(t => t.status === "blocked").map(t => t.id));
-    if (waitingOn.length > 0) {
-      throw new WaveTaskNotPreparedError(
-        taskId,
-        `dependencies lack ledger/checkpoint evidence: ${waitingOn.join(", ")}`,
-      );
-    }
-
-    if (task.cancelled) throw new WaveTaskNotPreparedError(taskId, `registered task is cancelled (${task.cancelReason ?? "no reason recorded"})`);
-    if (task.paused) throw new WaveTaskNotPreparedError(taskId, "registered task is paused");
-    const orchestrator = Orchestrator.fromPersisted(task, this.store, this.orchestratorOptions());
-    const status = orchestrator.status();
-    if (status.kind !== "RUNNING" || status.stage !== row.owner) {
-      const actual = status.kind === "RUNNING" ? status.stage : status.kind;
-      throw new WaveTaskNotPreparedError(taskId, `next stored stage is ${actual}, but plan owner is ${row.owner}`);
-    }
-    return orchestrator;
   }
 
   has(taskId: string): boolean {

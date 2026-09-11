@@ -7,7 +7,8 @@ import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";
 import { newPersistedTask } from "../store/taskStore.js";
 import { AgentStage, TaskLevel, TaskState } from "../types.js";
-import { createRunId, writeRunManifest, appendJournalRecord, type RunManifest } from "../run/journal.js";
+import { createRunId, type RunManifest } from "../run/journal.js";
+import { appendLegacyWaveRecord, writeLegacyWaveRun } from "../run/legacyWaveRecord.testSupport.js";
 import { SqliteRunLedger } from "./sqliteRunLedger.js";
 import {
   LEDGER_SCHEMA_VERSION,
@@ -334,7 +335,7 @@ describe("T-V8-016 — versioned compatibility adapters (dual-read, never dual-w
       run_branch: `sta/run/${waveRunId}`, runtime_id: "claude-code", tier: "T2", model: "claude-opus-5",
       max_tasks: 2, sta_version: "2.0.0",
     };
-    writeRunManifest(root, manifest);
+    writeLegacyWaveRun(root, manifest);
     for (const record of [
       { ts: new Date(5_001).toISOString(), kind: "RUN_STARTED" as const },
       { ts: new Date(5_002).toISOString(), kind: "RUN_ISOLATED" as const },
@@ -342,7 +343,7 @@ describe("T-V8-016 — versioned compatibility adapters (dual-read, never dual-w
       { ts: new Date(5_004).toISOString(), kind: "TASK_STARTED" as const, task_id: "BE-004" },
       { ts: new Date(5_005).toISOString(), kind: "TASK_AGENT_DONE" as const, task_id: "BE-004" },
       { ts: new Date(5_006).toISOString(), kind: "TASK_CHECKPOINTED" as const, task_id: "BE-004", sha: "def5678" },
-    ]) appendJournalRecord(root, waveRunId, record);
+    ]) appendLegacyWaveRecord(root, waveRunId, record);
     const journalBefore = fs.readFileSync(path.join(root, ".workflow", "wave-runs", waveRunId, "journal.jsonl"), "utf8");
 
     const owners = new Map([["BE-004", AgentStage.BACKEND_ENGINEER], ["FE-010", AgentStage.FRONTEND_ENGINEER]]);
@@ -366,7 +367,7 @@ describe("T-V8-016 — versioned compatibility adapters (dual-read, never dual-w
 
   it("lets exactly one store claim current truth for a run id", () => {
     const waveRunId = createRunId();
-    writeRunManifest(root, {
+    writeLegacyWaveRun(root, {
       run_id: waveRunId, created_at: new Date(5_000).toISOString(), target_root: path.join(root, "target"),
       target_id: "orders-target", knowledge_root: path.join(root, "knowledge"), module: "orders", wave: 1,
       plan_hash: HASH_C, task_order: ["BE-004"], base_branch: "main", base_sha: "abc1234",

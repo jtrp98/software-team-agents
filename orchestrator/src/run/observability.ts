@@ -6,6 +6,23 @@ import type { KnownJournalRecord, RunManifest } from "./journal.js";
 import { loadRunDiskSnapshot } from "./snapshot.js";
 import type { RunState } from "./stateMachine.js";
 
+/**
+ * T-V8-029 — read-only observation of **legacy** wave-run records.
+ *
+ * `listRunIds`/`observeRun` walk `.workflow/wave-runs/`, which no code path
+ * writes any more: a unified bounded run records everything in the ledger and
+ * is read with `sta bounded-run --resume <id> --dry-run` (readiness) or
+ * `ledger/auditExport.ts`. Every caller here (`sta status`, `sta report`,
+ * `sta changed`) therefore labels what it prints as a legacy record rather
+ * than as current authority.
+ *
+ * The Git-side helpers (`deriveMergeAdvisory`, `listOrphanRunBranches`) are
+ * deliberately kept: a person still owns integration and cleanup of any run
+ * branch, old or new, and these only ever read.
+ */
+export const LEGACY_RUN_RECORD_NOTICE =
+  "Legacy wave-run record (pre-V8). It is inspectable but cannot be resumed; bounded runs record state in the run ledger.";
+
 export const CHECKPOINT_DISCLAIMER =
   "Deterministic gate only — CHECKPOINTED is a durability fact, not a QA verdict. QA evaluation is performed by qa-engineer.";
 
@@ -182,10 +199,15 @@ async function checkpointDetails(git: GitCommandLayer, sha: string): Promise<{ s
 
 function nextHumanAction(state: RunState, failureReason?: string): string {
   if (state === "HUMAN_REVIEW" || state === "WAVE_COMPLETE") return "Review checkpoints with qa-engineer; only a human may declare MERGE_READY.";
-  if (state === "HALTED") return `Inspect the preserved run${failureReason ? ` (${failureReason})` : ""}, fix the cause, then explicitly use --resume-run.`;
+  if (state === "HALTED") {
+    return (
+      `Inspect the preserved run${failureReason ? ` (${failureReason})` : ""} and its branch, then decide manually. ` +
+      "This record cannot be resumed: the wave runner it belongs to was retired in V8."
+    );
+  }
   if (state === "REFUSED") return `Resolve the refusal before starting another bounded run${failureReason ? ` (${failureReason})` : ""}.`;
   if (state === "CANCELLED" || state === "STALE") return "Inspect the preserved run branch and decide whether to keep or remove it manually.";
-  return "Allow the current bounded run to reach a checkpoint or halt; do not merge its branch.";
+  return "This legacy record was left mid-run by a retired runner; inspect its branch and decide manually. Do not merge it without review.";
 }
 
 export async function observeRun(projectRoot: string, runId: string): Promise<RunObservation> {

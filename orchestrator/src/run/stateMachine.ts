@@ -1,5 +1,20 @@
 import type { KnownJournalRecord } from "./journal.js";
 
+/**
+ * T-V8-029 — the wave run state machine, kept **only** to interpret records an
+ * earlier STA version already wrote.
+ *
+ * It is no longer an execution authority: nothing transitions a live run
+ * through these states, because `ledger/vocabulary.ts` owns the one run/task/
+ * attempt vocabulary the unified controller drives, and it publishes its whole
+ * transition table with every audit export. What is left here is a pure
+ * reduction used by `ledger/adapters.ts` (`projectWaveRun`) and
+ * `run/observability.ts` to say what an old journal ended up meaning.
+ *
+ * Do not add a state or a transition for new behaviour. A new fact about a live
+ * run belongs in the ledger vocabulary; this table describes a closed format.
+ */
+
 export const RUN_STATES = [
   "CREATED",
   "PREFLIGHT",

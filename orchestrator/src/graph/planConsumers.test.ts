@@ -8,7 +8,6 @@ import { deriveWaves, readinessOf, readWorkPlan } from "../docs/planGraph.js";
 import { deriveHandoff } from "../agents/moduleDocs.js";
 import { productionQaInputs } from "../cli.js";
 import { AgentStage, TaskState } from "../types.js";
-import { tasksInDerivedWave } from "../run/eligibility.js";
 import { TaskRegistry } from "../orchestrator/taskRegistry.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";
 import { classifyTask } from "../classification/taskClassifier.js";
@@ -45,8 +44,9 @@ describe("T-V8-003 full-field graph consumers", () => {
       ["FE-005", "BE-006", "declared"], ["BE-004", "FE-005", "contract"], ["BE-004", "BE-006", "phase"],
     ]);
     expect(graph.nodes.get("FE-005")).toMatchObject({ agent: "frontend-engineer", phase: 1, produces: [], consumes: base.produces });
+    // T-V8-029 removed `tasksInDerivedWave` with the wave runner; derived layering itself stays,
+    // because it is plan-graph information a reader still wants. It selects no execution scope.
     expect([...deriveWaves(plan)]).toEqual([["BE-004", 1], ["FE-005", 2], ["BE-006", 3]]);
-    expect(tasksInDerivedWave(plan, 2)).toEqual([plan[1]]);
     expect(graph.descendantsOf("BE-004")).toEqual(["FE-005", "BE-006"]);
     expect(graph.dependencyOutputsOf("FE-005")[0]).toMatchObject({ taskId: "BE-004", produces: base.produces });
     expect(graph.waitingOn("FE-005", [])).toEqual(["BE-004"]);

@@ -31,10 +31,10 @@ import { isCanonicalPlan, parseCanonicalPlan, type PlanTask } from "./planTask.j
  * runtime state — that remains the orchestrator's store's job; this
  * is the plan-side mirror a person or a driver reads before creating tasks.
  *
- * Document readiness is a human view only. Planned execution uses this full
- * graph with persisted completion/checkpoint evidence; it never prints a
- * warning and proceeds past an unmet edge. The legacy advisory export remains
- * read-only compatibility until T-V8-029.
+ * Document readiness is a human view only, and after T-V8-029 that is all it
+ * is: planned execution reads the frozen ledger DAG (`RunLedger.readiness`),
+ * not this file, and there is no longer any export that prints a readiness
+ * warning and proceeds past an unmet edge.
  */
 
 export type PlanTaskStatus = "pending" | "in_progress" | "verified" | "blocked";
@@ -460,75 +460,6 @@ export function readinessOf<T extends WorkPlanTask>(tasks: readonly T[]): PlanRe
 
   const waves = deriveWaves(tasks);
   return { ready, started, done, stalledByBlocked, waiting, waves };
-}
-
-export interface PlanReadinessAdvisory {
-  taskId: string;
-  /** Why the plan does not consider this task startable, in one operator-readable line. */
-  reason: string;
-  /** Dependency ids the plan says are not `verified` yet. Empty when the row is blocked or already running. */
-  waitingOn: string[];
-}
-
-/**
- * What the plan document believes about one task, for `sta run` to print before
- * it starts.
- *
- * Returns `null` in every case where the plan has nothing useful to say — no
- * plan, an unparseable one, a task id the plan never mentions, or a row that is
- * ready. Silence matters as much as the warning: an ad-hoc task that was never
- * a plan row is normal, and warning on those would train the operator to ignore
- * the line that does matter.
- *
- * This is advice, never a gate. The caller prints it and proceeds; nothing here
- * returns a failure, sets an exit code, or touches the store — runtime readiness
- * stays the orchestrator's, per the authority model (PM = Work Graph,
- * Orchestrator = Runtime).
- */
-export function planReadinessAdvisory(planMd: string, taskId: string): PlanReadinessAdvisory | null {
-  let parsed: ParsedPlan;
-  try {
-    parsed = parsePlanTasks(planMd);
-  } catch {
-    return null;
-  }
-  if (!parsed.tasks.some((task) => task.id === taskId)) return null;
-
-  let readiness: PlanReadiness<PlanTaskRow>;
-  try { readiness = readinessOf(parsed.tasks); } catch { return null; }
-  if (readiness.ready.some((task) => task.id === taskId)) return null;
-  if (readiness.done.some((task) => task.id === taskId)) {
-    return { taskId, reason: "plan.md already marks it verified", waitingOn: [] };
-  }
-  if (readiness.started.some((task) => task.id === taskId)) {
-    return { taskId, reason: "plan.md already marks it in_progress", waitingOn: [] };
-  }
-
-  const waiting = readiness.waiting.find((entry) => entry.task.id === taskId);
-  if (waiting) {
-    const statusOf = (id: string) => parsed.tasks.find((task) => task.id === id)?.status ?? "unknown";
-    return {
-      taskId,
-      reason: `plan.md says it waits on ${waiting.waitingOn.map((id) => `${id} (${statusOf(id)})`).join(", ")}`,
-      waitingOn: [...waiting.waitingOn],
-    };
-  }
-
-  const stalled = readiness.stalledByBlocked.find((task) => task.id === taskId);
-  if (stalled) {
-    const blocked = stalled.dependsOn.filter((dep) =>
-      parsed.tasks.some((task) => task.id === dep && task.status === "blocked"),
-    );
-    return {
-      taskId,
-      reason:
-        blocked.length > 0
-          ? `plan.md says it is behind blocked work: ${blocked.join(", ")}`
-          : "plan.md marks it blocked",
-      waitingOn: blocked,
-    };
-  }
-  return null;
 }
 
 export interface PlanGraphModuleResult {

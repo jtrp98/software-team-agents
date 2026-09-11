@@ -33,6 +33,7 @@ import type { SecretScanner } from "../git/checkpoint.js";
 import { combineProjectRunners, createProjectRunner } from "../qa/projectRunner.js";
 import { LocalWorkspace } from "../runtime/localWorkspace.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
+import { evaluateUnattendedGate, renderUnattendedGate } from "./unattendedGate.js";
 
 /**
  * T-V8-021 — the real `BoundedRunServices` behind the bounded-run CLI.
@@ -120,7 +121,7 @@ function usageFrom(outcome: AgentExecutorResult["outcome"]): LedgerAttempt["usag
   };
 }
 
-/** Mirrors `run/waveRunner.ts`'s `failureClass` — the same three-way split, for the same reason. */
+/** The three-way provider/runtime split the retired wave runner also used: quota and infrastructure are not task defects. */
 function failureCategory(result: AgentExecutorResult): "quota" | "unavailable" | "runtime" {
   const text = `${result.outcome.failure_reason ?? ""} ${result.failure?.reason ?? ""}`;
   if (/quota|rate.?limit|usage.?limit/i.test(text)) return "quota";
@@ -158,6 +159,21 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
     if (!runtimeTask || !("version" in runtimeTask) || runtimeTask.version !== 2) {
       return { kind: "halt", reason: `task ${task.task_id} has no canonical RuntimeTask; recompile the plan before a bounded run can prepare it` };
     }
+    // T-V8-029 — the human boundary the retired wave path enforced in
+    // `evaluateAutoEligibility`. Evaluated before any route probe or packet
+    // compile, so a gated task costs nothing and mutates nothing.
+    const gate = evaluateUnattendedGate({
+      taskId: task.task_id,
+      owner: task.owner,
+      classification: persisted?.classification ?? null,
+      businessInput: persisted?.gateContext.businessInput ?? null,
+      approvals: persisted?.approvals ?? null,
+      paused: persisted?.paused,
+      cancelled: persisted?.cancelled,
+      cancelReason: persisted?.cancelReason ?? null,
+    });
+    if (gate.length > 0) return { kind: "gate", reason: renderUnattendedGate(task.task_id, gate) };
+
     const role = getAgent(task.owner).role;
     const targetWrite = task.owner === AgentStage.BACKEND_ENGINEER || task.owner === AgentStage.FRONTEND_ENGINEER;
     const guards = options.guards(role, options.targetRoot);

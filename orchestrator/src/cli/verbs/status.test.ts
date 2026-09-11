@@ -2,11 +2,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { appendJournalRecord, writeRunManifest, type RunManifest } from "../../run/journal.js";
+import { type RunManifest } from "../../run/journal.js";
+import { appendLegacyWaveRecord, writeLegacyWaveRun } from "../../run/legacyWaveRecord.testSupport.js";
+import { LEGACY_RUN_RECORD_NOTICE } from "../../run/observability.js";
 import { runStatusVerb } from "./status.js";
 
-describe("T-V7-030 — sta status bounded runs", () => {
-  it("lists active and halted runs with derived next human actions", async () => {
+describe("T-V8-029 — sta status labels legacy wave-run records", () => {
+  it("lists them with derived next human actions and names them as unresumable legacy records", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-status-run-"));
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
@@ -17,24 +19,26 @@ describe("T-V7-030 — sta status bounded runs", () => {
         base_branch: "main", base_sha: "a".repeat(40), run_branch: `sta/run/orders/${runId}`,
         runtime_id: "claude-code", tier: "T2", model: "opus", max_tasks: 1, sta_version: "1.1.0",
       };
-      writeRunManifest(root, manifest);
-      appendJournalRecord(root, runId, { ts: "2026-09-07T00:00:00.000Z", kind: "RUN_STARTED" });
-      appendJournalRecord(root, runId, { ts: "2026-09-07T00:00:01.000Z", kind: "RUN_ISOLATED" });
-      appendJournalRecord(root, runId, { ts: "2026-09-07T00:00:02.000Z", kind: "TASK_READY", task_id: "BE-1" });
-      appendJournalRecord(root, runId, { ts: "2026-09-07T00:00:03.000Z", kind: "RUN_HALTED", reason: "gate unavailable" });
+      writeLegacyWaveRun(root, manifest);
+      appendLegacyWaveRecord(root, runId, { ts: "2026-09-07T00:00:00.000Z", kind: "RUN_STARTED" });
+      appendLegacyWaveRecord(root, runId, { ts: "2026-09-07T00:00:01.000Z", kind: "RUN_ISOLATED" });
+      appendLegacyWaveRecord(root, runId, { ts: "2026-09-07T00:00:02.000Z", kind: "TASK_READY", task_id: "BE-1" });
+      appendLegacyWaveRecord(root, runId, { ts: "2026-09-07T00:00:03.000Z", kind: "RUN_HALTED", reason: "gate unavailable" });
       const activeId = "01J00000000000000000000065";
-      writeRunManifest(root, { ...manifest, run_id: activeId, run_branch: `sta/run/orders/${activeId}` });
-      appendJournalRecord(root, activeId, { ts: "2026-09-07T00:01:00.000Z", kind: "RUN_STARTED" });
-      appendJournalRecord(root, activeId, { ts: "2026-09-07T00:01:01.000Z", kind: "RUN_ISOLATED" });
-      appendJournalRecord(root, activeId, { ts: "2026-09-07T00:01:02.000Z", kind: "TASK_READY", task_id: "BE-1" });
-      appendJournalRecord(root, activeId, { ts: "2026-09-07T00:01:03.000Z", kind: "TASK_STARTED", task_id: "BE-1" });
+      writeLegacyWaveRun(root, { ...manifest, run_id: activeId, run_branch: `sta/run/orders/${activeId}` });
+      appendLegacyWaveRecord(root, activeId, { ts: "2026-09-07T00:01:00.000Z", kind: "RUN_STARTED" });
+      appendLegacyWaveRecord(root, activeId, { ts: "2026-09-07T00:01:01.000Z", kind: "RUN_ISOLATED" });
+      appendLegacyWaveRecord(root, activeId, { ts: "2026-09-07T00:01:02.000Z", kind: "TASK_READY", task_id: "BE-1" });
+      appendLegacyWaveRecord(root, activeId, { ts: "2026-09-07T00:01:03.000Z", kind: "TASK_STARTED", task_id: "BE-1" });
 
       expect(await runStatusVerb(["--project-root", root], root)).toBe(0);
       const output = log.mock.calls.map((call) => call.join(" ")).join("\n");
-      expect(output).toContain(`bounded run ${runId}: HALTED module=orders wave=2`);
-      expect(output).toContain(`bounded run ${activeId}: TASK_RUNNING module=orders wave=2`);
+      expect(output).toContain(`legacy wave run ${runId}: HALTED module=orders wave=2`);
+      expect(output).toContain(`legacy wave run ${activeId}: TASK_RUNNING module=orders wave=2`);
       expect(output).toContain("next required human action:");
-      expect(output).toContain("--resume-run");
+      expect(output).toContain(LEGACY_RUN_RECORD_NOTICE);
+      // The retired resume surface must not be advertised as a way forward.
+      expect(output).not.toContain("--resume-run");
     } finally {
       log.mockRestore();
       fs.rmSync(root, { recursive: true, force: true });

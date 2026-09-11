@@ -225,6 +225,74 @@ describe("sta bounded-run (CLI)", () => {
     expect(logs.some((l) => l.includes("sta bounded-run --resume"))).toBe(true);
   });
 
+  /**
+   * T-V8-029 — the human/approval boundary is enforced by the production
+   * `prepareTask` now, not only by a stubbed service in the fault matrix.
+   *
+   * Before this, `renderPreview` *printed* `gates=schema` and the run went
+   * ahead and launched the task anyway: the wave runner's
+   * `evaluateAutoEligibility` was the only thing that had ever refused on a
+   * classification gate, and it was not on this path.
+   *
+   * Control: "runs an eligible task to COMPLETED through the real CLI
+   * dispatch" above is this same fixture, same `completingAdapter`, same
+   * registry, without `--schema` — and it completes. So the stop below is the
+   * gate, not an unavailable runtime or a broken fixture.
+   */
+  it("stops a classification-gated task before any attempt", async () => {
+    const { root, targetRoot } = project(roots, git);
+    const adapter = completingAdapter(targetRoot);
+    const registry = new RuntimeRegistry([adapter]);
+
+    const gatedLogs: string[] = [];
+    const spy = console.log;
+    console.log = (line: string) => gatedLogs.push(line);
+    let gatedCode: number;
+    try {
+      gatedCode = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--schema", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit"],
+        root,
+        { createRuntimeRegistry: () => registry },
+      );
+    } finally {
+      console.log = spy;
+    }
+    expect(gatedCode).toBe(4);
+    const gatedOutput = gatedLogs.join("\n");
+    expect(gatedOutput).toContain("GATE");
+    expect(gatedOutput).toContain("not eligible for unattended execution");
+    // Which signals appear is `classifyTask`'s answer, not this gate's: a `--schema`
+    // task classifies LARGE_CRITICAL and carries both the approval and security gate.
+    expect(gatedOutput).toContain("classification sets requiresHumanApproval, sensitiveGate, level=LARGE_CRITICAL");
+    // Nothing launched, so nothing could have written the Target.
+    expect(adapter.requests).toEqual([]);
+    expect(gatedOutput).toContain("(attempts=0, qa_rounds=0)");
+    expect(git(targetRoot, "branch", "--list", "sta/run/*")).toBe("");
+
+    // The gate is durable, not just printed: a resume reports the recorded
+    // AWAITING_HUMAN state and the blocked task rather than starting work.
+    const runId = gatedLogs.find((line) => line.includes("froze run"))!.match(/froze run (\S+):/)![1]!;
+    const resumeLogs: string[] = [];
+    const resumeSpy = console.log;
+    console.log = (line: string) => resumeLogs.push(line);
+    let resumeCode: number;
+    try {
+      resumeCode = await runCli(
+        ["bounded-run", "--resume", runId, "--module", "orders", "--project-root", root, "--dry-run"],
+        root,
+        { createRuntimeRegistry: () => registry },
+      );
+    } finally {
+      console.log = resumeSpy;
+    }
+    expect(resumeCode).toBe(0);
+    const resumeOutput = resumeLogs.join("\n");
+    expect(resumeOutput).toContain("status=AWAITING_HUMAN");
+    expect(resumeOutput).toContain("blocked=BE-004");
+    expect(adapter.requests).toEqual([]);
+
+  }, 30_000);
+
   it("--resume reports current readiness without mutating state under --dry-run", async () => {
     const { root, targetRoot } = project(roots, git);
     const registry = new RuntimeRegistry([]);

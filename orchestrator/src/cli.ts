@@ -84,22 +84,18 @@ import type { RuntimeTaskWorkRoot } from "./orchestrator/runtimeTask.js";
 import { stableHash, contentHash } from "./artifacts/executionPacket.js";
 import { unmetDependencies } from "./orchestrator/taskStatus.js";
 import type { TaskStore } from "./store/taskStore.js";
-import type { TaskExecutorComposition } from "./run/waveRunner.js";
-import { buildWavePreview, executeWave, renderWavePreview, type ResolvedWaveRoute } from "./run/waveRunner.js";
-import { appendJournalRecord, createRunId, planHash, type RunManifest } from "./run/journal.js";
-import { findActiveWaveRun, reconcileWaveRunForResume, WaveRunRecoveryError } from "./run/recovery.js";
-import { GitCommandLayer } from "./git/commandLayer.js";
-import { inspectRepositoryPreflight } from "./git/preflight.js";
-import { resolveRuntimeRoute } from "./runtime/runtimeRouting.js";
 import { loadModelTiers, MODEL_TIER_IDS, type ModelTierId } from "./runtime/modelTiers.js";
-import { formatModelPolicyBasis } from "./runtime/tierRouting.js";
-import { tasksInDerivedWave } from "./run/eligibility.js";
+import type { AgentExecutor } from "./orchestrator/orchestrator.js";
+import type { DeterministicVerification } from "./qa/deterministic.js";
 
-interface FixedWaveRoute {
-  runtimeId: RuntimeId;
-  model?: string;
-  effort?: string;
-  basis?: string;
+/**
+ * What `composeProductionTaskExecutor` hands the single-task loop. It used to
+ * live in `run/waveRunner.ts`, which T-V8-029 retired; the unified bounded run
+ * composes its own services in `run/boundedRunServices.ts` instead.
+ */
+export interface TaskExecutorComposition {
+  executor: AgentExecutor;
+  verificationFor(taskId: string): DeterministicVerification | undefined;
 }
 
 export interface CliDependencies {
@@ -149,15 +145,6 @@ export interface CliArgs {
   version: boolean;
   /** Continue a task that already exists in the store instead of creating one. */
   resume: boolean;
-  /** Register immutable per-task execution metadata without starting an agent or touching Git. */
-  registerOnly: boolean;
-  /** One graph-derived wave for this bounded invocation. */
-  wave?: number;
-  maxTasks?: number;
-  dryRun: boolean;
-  resumeRun: boolean;
-  /** Explicit off-seam for installations that disable bounded execution. */
-  noWaveRunner: boolean;
   /** Removed V5 surface retained only as an always-undefined parse shape for compatibility tests/callers. */
   mode?: undefined;
   /** Print every task in the store and exit, without running anything. */
@@ -251,11 +238,43 @@ export { FLAG_TO_CLASSIFICATION };
 
 export class CliUsageError extends Error {}
 
+/**
+ * T-V8-029 - the retired wave surfaces, refused by name rather than as an
+ * unrecognized argument.
+ *
+ * A script that still passes one of these deserves to be told what replaced
+ * it. `sta bounded-run` compiles and registers a whole selected plan scope in
+ * one transaction (`orchestrator/planCompilation.ts`), so the one-by-one
+ * `--register-only` preparation step and the separate `--wave` execution and
+ * `--resume-run` lifecycle have no successor to map onto individually.
+ */
+export const RETIRED_WAVE_FLAGS = new Set([
+  "--register-only",
+  "--wave",
+  "--max-tasks",
+  "--dry-run",
+  "--resume-run",
+  "--no-wave-runner",
+]);
+
+export function retiredWaveFlagMessage(flag: string): string {
+  const replacement =
+    flag === "--register-only"
+      ? "`sta bounded-run` registers the whole selected plan scope atomically; there is no per-task preparation step to run first"
+      : flag === "--dry-run"
+        ? "use `sta bounded-run ... --dry-run`, which previews scope, order, gates and base revision without freezing anything"
+        : flag === "--resume-run"
+          ? "use `sta bounded-run --resume <run-id>`; `--resume` keeps its per-task meaning"
+          : "use `sta bounded-run --module <name> (--all | --phase <n> | --task <id,...>) [--until next-gate|qa|done]`";
+  return (
+    flag + " was retired in V8 along with the wave runner: " + replacement + ". " +
+    "Existing `.workflow/wave-runs/` records stay readable via `sta status`/`sta report`, but cannot be resumed."
+  );
+}
+
 export const USAGE =
   "usage (verbs — thin wrappers over the flag-based form below, prefer these):\n" +
   "  sta run --task-id <id> --module <name> <classification flags> [--test-strategy <cross-task,multi-system,migration,security,release>] [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] [--effort <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
-  "  sta run --task-id <id> --module <name> <classification flags> [bindings/dependencies] --register-only   persist wave metadata; start no agent and perform no Git operation\n" +
-  "  sta run --wave <n> --module <name> [--max-tasks <k>] [--dry-run|--resume-run] [--autonomy <edit|full>] [--runtime <id>] [--model <name>] [--effort <name>]   bounded sequential owner-stage checkpoints\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  sta approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
   "  sta resume  <task-id> --module <name> [--project-root <path>]   continue a task already in the store\n" +
@@ -334,12 +353,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let projectRoot = defaultProjectRoot;
   let stateDb: string | undefined;
   let resume = false;
-  let registerOnly = false;
-  let wave: number | undefined;
-  let maxTasks: number | undefined;
-  let dryRun = false;
-  let resumeRun = false;
-  let noWaveRunner = false;
   let list = false;
   let checkContracts = false;
   let checkLayoutFlag = false;
@@ -415,22 +428,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
         .filter((v) => Number.isInteger(v) && v > 0);
     } else if (arg === "--resume") {
       resume = true;
-    } else if (arg === "--register-only") {
-      registerOnly = true;
-    } else if (arg === "--wave") {
-      const value = Number(argv[++i]);
-      if (!Number.isInteger(value) || value <= 0) throw new CliUsageError("--wave must be a positive integer");
-      wave = value;
-    } else if (arg === "--max-tasks") {
-      const value = Number(argv[++i]);
-      if (!Number.isInteger(value) || value <= 0) throw new CliUsageError("--max-tasks must be a positive integer");
-      maxTasks = value;
-    } else if (arg === "--dry-run") {
-      dryRun = true;
-    } else if (arg === "--resume-run") {
-      resumeRun = true;
-    } else if (arg === "--no-wave-runner") {
-      noWaveRunner = true;
+    } else if (RETIRED_WAVE_FLAGS.has(arg)) {
+      throw new CliUsageError(retiredWaveFlagMessage(arg));
     } else if (arg === "--list") {
       list = true;
     } else if (arg === "--check-contracts") {
@@ -561,7 +560,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkGitOwnershipFlag &&
     !buildTemplatesOutDir
   ) {
-    if (!taskId && wave === undefined) throw new CliUsageError("--task-id is required (or select a bounded run with --wave <n>)");
+    if (!taskId) throw new CliUsageError("--task-id is required (a whole plan scope is `sta bounded-run` instead)");
     if (!moduleName) throw new CliUsageError("--module is required (the _docs/module/<name>/ this task belongs to)");
   }
   if (resume && dependsOn.length > 0) {
@@ -570,39 +569,12 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   if (resume && (targetBindings.frontend_target || targetBindings.backend_target)) {
     throw new CliUsageError("Target bindings are immutable; --frontend-target/--backend-target cannot be used with --resume");
   }
-  if (registerOnly && resume) throw new CliUsageError("--register-only cannot be combined with --resume");
-  if (registerOnly && wave !== undefined) throw new CliUsageError("--register-only prepares one --task-id, not a whole --wave");
-  if ((dryRun || resumeRun || maxTasks !== undefined) && wave === undefined) {
-    throw new CliUsageError("--dry-run, --resume-run and --max-tasks require --wave <n>");
-  }
-  if (wave !== undefined) {
-    if (taskId) throw new CliUsageError("--wave derives task ids from plan.md; do not also pass --task-id");
-    if (resume) throw new CliUsageError("--resume keeps its per-task meaning; use --resume-run for a bounded run");
-    if (dependsOn.length > 0 || targetBindings.frontend_target || targetBindings.backend_target) {
-      throw new CliUsageError("wave classification, dependencies and Target bindings come from pre-registered task records");
-    }
-    if (Object.keys(classification).length > 0) {
-      throw new CliUsageError("classification flags belong on --register-only; a wave never applies one classification to every task");
-    }
-    if (noDeterministicGate) throw new CliUsageError("a bounded wave cannot disable its deterministic checkpoint gate");
-    if (noWaveRunner) throw new CliUsageError("bounded wave execution is disabled by --no-wave-runner");
-    if (!dryRun && autonomy !== "edit" && autonomy !== "full") {
-      throw new CliUsageError("a bounded wave is unattended; pass --autonomy edit or --autonomy full");
-    }
-  }
-
   return {
     taskId,
     module: moduleName,
     projectRoot,
     classification,
     resume,
-    registerOnly,
-    wave,
-    maxTasks,
-    dryRun,
-    resumeRun,
-    noWaveRunner,
     mode: undefined,
     list,
     checkContracts,
@@ -901,7 +873,8 @@ function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orches
     targetWorkRoots: runtimeTaskWorkRoots(args, taskId, classification),
     changeAwareVerification: !args.noQaOptimization,
   });
-  return args.registerOnly ? created : registry.open(taskId);
+  void created;
+  return registry.open(taskId);
 }
 
 const VERBS = [
@@ -1408,7 +1381,6 @@ async function composeProductionTaskExecutor(
   taskId: string,
   orchestrator: Orchestrator,
   store: TaskStore,
-  fixedRoute?: FixedWaveRoute,
   dependencies: CliDependencies = {},
 ): Promise<TaskExecutorComposition> {
   const task = store.loadTask(taskId);
@@ -1431,33 +1403,27 @@ async function composeProductionTaskExecutor(
   }
   const executionConfig = staConfig?.execution;
   const phaseTier = plannedTier(args, taskId);
-  const tierCamp = fixedRoute
-    ? undefined
-    : phaseTier
-      ? selectTierCamp({
-          flagRuntime: args.runtime,
-          configuredRuntime: executionConfig?.runner,
-          hasConfiguredRoleRoute: staConfig?.routing?.by_role !== undefined,
-          isTTY: process.stdin.isTTY === true,
-          defaultRuntimeId: DEFAULT_RUNTIME_ID,
-          prompt: () => promptForCamp(DEFAULT_RUNTIME_ID),
-        })
-      : undefined;
-  const defaultRuntimeId = fixedRoute?.runtimeId ?? tierCamp?.runtimeId ?? args.runtime ?? executionConfig?.runner ?? DEFAULT_RUNTIME_ID;
+  const tierCamp = phaseTier
+    ? selectTierCamp({
+        flagRuntime: args.runtime,
+        configuredRuntime: executionConfig?.runner,
+        hasConfiguredRoleRoute: staConfig?.routing?.by_role !== undefined,
+        isTTY: process.stdin.isTTY === true,
+        defaultRuntimeId: DEFAULT_RUNTIME_ID,
+        prompt: () => promptForCamp(DEFAULT_RUNTIME_ID),
+      })
+    : undefined;
+  const defaultRuntimeId = tierCamp?.runtimeId ?? args.runtime ?? executionConfig?.runner ?? DEFAULT_RUNTIME_ID;
   const runtimeRegistry = runtimeRegistryFor(args.projectRoot, dependencies);
   const defaultRuntime = runtimeRegistry.tryGet(defaultRuntimeId);
   if (!defaultRuntime) throw new Error(`configured Single runner "${defaultRuntimeId}" is not registered`);
-  const routingFlags = fixedRoute
-    ? { runtime: fixedRoute.runtimeId, ...(fixedRoute.model ? { model: fixedRoute.model } : {}), ...(fixedRoute.effort ? { effort: fixedRoute.effort } : {}) }
-    : args.runtime || args.model || args.effort
-      ? { runtime: args.runtime, model: args.model, effort: args.effort }
-      : undefined;
+  const routingFlags = args.runtime || args.model || args.effort
+    ? { runtime: args.runtime, model: args.model, effort: args.effort }
+    : undefined;
   const runtimeExecutor = createRuntimeExecutor({
     runtime: defaultRuntime,
     registry: runtimeRegistry,
     routingFlags,
-    frozenModelRoute: fixedRoute !== undefined,
-    frozenRoutingBasis: fixedRoute?.basis,
     planTier: (id) => plannedTier(args, id),
     classification: (id) => store.loadTask(id)?.classification,
     riskSignals: (id) => {
@@ -1588,317 +1554,6 @@ async function composeProductionTaskExecutor(
   };
 }
 
-function loadWavePlan(args: CliArgs) {
-  const planMd = readModuleDoc(resolveContextDocsRoot(args.projectRoot), args.module!, "plan.md");
-  if (planMd === null) throw new CliUsageError(`module ${args.module} has no plan.md`);
-  const parsed = readWorkPlan(planMd);
-  if (parsed.problems.length > 0) {
-    throw new CliUsageError(`plan.md is not runnable:\n- ${parsed.problems.join("\n- ")}`);
-  }
-  return parsed.tasks;
-}
-
-function registeredWaveTarget(store: TaskStore, rows: readonly ReturnType<typeof readWorkPlan>["tasks"][number][]) {
-  const resolved = rows.map((row) => {
-    const task = store.loadTask(row.id);
-    const roots = task?.runtimeTask?.scope.work_roots.filter((root) => root.stage === row.owner) ?? [];
-    const unique = new Map<string, { root: string; targetId: string }>();
-    for (const candidate of roots) {
-      try {
-        const root = fs.realpathSync.native(path.resolve(candidate.root));
-        unique.set(root, { root, targetId: candidate.target_id });
-      } catch {}
-    }
-    return unique.size === 1 ? [...unique.values()][0]! : null;
-  });
-  const missing = rows.filter((_, index) => resolved[index] === null).map((row) => row.id);
-  if (missing.length > 0) {
-    throw new CliUsageError(
-      `wave tasks are not registered with exactly one writable owner Target root: ${missing.join(", ")}; ` +
-        "prepare each with `sta run --task-id ... --register-only`",
-    );
-  }
-  const roots = new Set(resolved.map((entry) => entry!.root));
-  const ids = new Set(resolved.map((entry) => entry!.targetId));
-  if (roots.size !== 1 || ids.size !== 1) {
-    throw new CliUsageError("every task in one bounded wave must resolve to the same Target id and writable working tree");
-  }
-  return resolved[0]!;
-}
-
-async function resolveWaveRoute(
-  args: CliArgs,
-  rows: readonly ReturnType<typeof readWorkPlan>["tasks"][number][],
-  store: TaskStore,
-  dependencies: CliDependencies,
-  targetWorkspaceRoot: string,
-): Promise<ResolvedWaveRoute> {
-  const tiers = new Set(rows.map((row) => row.tier ?? "unassigned"));
-  if (tiers.size !== 1) throw new CliUsageError(`one bounded wave resolved multiple tiers: ${[...tiers].join(", ")}`);
-  const tierName = [...tiers][0]!;
-  const taskTier = (MODEL_TIER_IDS as readonly string[]).includes(tierName) ? tierName as ModelTierId : undefined;
-
-  let config: ReturnType<typeof loadStaConfig> | undefined;
-  try { config = loadStaConfig(targetWorkspaceRoot); } catch { config = undefined; }
-  const camp = taskTier
-    ? selectTierCamp({
-        flagRuntime: args.runtime,
-        configuredRuntime: config?.execution?.runner,
-        hasConfiguredRoleRoute: config?.routing?.by_role !== undefined,
-        isTTY: process.stdin.isTTY === true,
-        defaultRuntimeId: DEFAULT_RUNTIME_ID,
-        prompt: () => promptForCamp(DEFAULT_RUNTIME_ID),
-      })
-    : undefined;
-  const defaultRuntimeId = camp?.runtimeId ?? args.runtime ?? config?.execution?.runner ?? DEFAULT_RUNTIME_ID;
-  const registry = runtimeRegistryFor(targetWorkspaceRoot, dependencies);
-  const availability = await registry.probeAll();
-  const routes = rows.map((row) => resolveRuntimeRoute({
-    role: row.owner,
-    stage: row.owner as AgentStage,
-    projectRoot: targetWorkspaceRoot,
-    registry,
-    defaultRuntimeId,
-    config: config ?? null,
-    flags: args.runtime || args.model || args.effort ? { runtime: args.runtime, model: args.model, effort: args.effort } : undefined,
-    classification: store.loadTask(row.id)?.classification,
-    availability,
-    hasTargetWrite: true,
-    taskTier,
-  }));
-  const failed = routes.find((route) => route.error || !route.selected);
-  if (failed) throw new CliUsageError(`wave route could not be resolved once at preflight: ${failed.error ?? failed.diagnostics.join(" | ")}`);
-  const identities = new Set(routes.map((route) =>
-    `${route.selected!.runtime.id}\0${route.selected!.model ?? ""}\0${route.selected!.effort ?? ""}\0${formatModelPolicyBasis(route.selected!.policyResolution)}`,
-  ));
-  if (identities.size !== 1) {
-    throw new CliUsageError("plan-row owners resolve different runtime/model routes; split them into separate bounded runs");
-  }
-  const selected = routes[0]!.selected!;
-  const capabilityReport = await detectRuntimeCapabilities(selected.runtime, {
-    probe: availability[selected.runtime.id],
-  });
-  return {
-    runtimeId: selected.runtime.id,
-    tier: selected.policyResolution.effectiveTier ?? tierName,
-    model: selected.model ?? "runtime-default",
-    effort: selected.effort,
-    basis: `level-${routes[0]!.precedenceLevel};${formatModelPolicyBasis(selected.policyResolution)}`,
-    requested: selected.policyResolution.requested,
-    capabilities: new Set(capabilityReport.checks.filter((check) => check.verified).map((check) => check.capability)),
-  };
-}
-
-async function runWaveCli(
-  args: CliArgs,
-  store: TaskStore,
-  registry: TaskRegistry,
-  dependencies: CliDependencies,
-): Promise<number> {
-  const planTasks = loadWavePlan(args);
-  const waveRows = tasksInDerivedWave(planTasks, args.wave!).slice(0, args.maxTasks ?? Number.MAX_SAFE_INTEGER);
-  if (waveRows.length === 0) throw new CliUsageError(`derived wave ${args.wave} has no tasks`);
-
-  if (args.resumeRun) {
-    const registeredTarget = registeredWaveTarget(store, waveRows);
-    let active;
-    try {
-      active = findActiveWaveRun(args.projectRoot, {
-        module: args.module!,
-        wave: args.wave!,
-        targetRoot: registeredTarget.root,
-      });
-    } catch (error) {
-      console.error(`[orchestrator] ${error instanceof Error ? error.message : String(error)}`);
-      return 1;
-    }
-    if (active.manifest.target_id !== registeredTarget.targetId) {
-      console.error(
-        `[orchestrator] recorded Target id ${active.manifest.target_id} disagrees with registered Target id ${registeredTarget.targetId}`,
-      );
-      return 1;
-    }
-    if (!(RUNTIME_IDS as readonly string[]).includes(active.manifest.runtime_id)) {
-      console.error(`[orchestrator] recorded runtime ${active.manifest.runtime_id} is no longer registered`);
-      return 1;
-    }
-    const runtimeRegistry = runtimeRegistryFor(active.manifest.target_root, dependencies);
-    const runtime = runtimeRegistry.tryGet(active.manifest.runtime_id)!;
-    const capabilityReport = await detectRuntimeCapabilities(runtime, {
-      probe: await runtimeRegistry.probe(active.manifest.runtime_id),
-    });
-    const route: ResolvedWaveRoute = {
-      runtimeId: active.manifest.runtime_id,
-      tier: active.manifest.tier,
-      model: active.manifest.model,
-      effort: active.manifest.effort,
-      basis: active.manifest.route_basis,
-      requested: active.manifest.route_requested,
-      capabilities: new Set(capabilityReport.checks.filter((check) => check.verified).map((check) => check.capability)),
-    };
-    const git = new GitCommandLayer({ cwd: active.manifest.target_root });
-    let recovered;
-    try {
-      recovered = await reconcileWaveRunForResume({
-        projectRoot: args.projectRoot,
-        active,
-        planTasks,
-        staVersion: cliVersion(),
-        store,
-        git,
-      });
-    } catch (error) {
-      if (error instanceof WaveRunRecoveryError && error.kind === "STALE") {
-        try {
-          const record = { ts: new Date().toISOString(), kind: "RUN_STALE", reason: error.message } as const;
-          // Only HALTED can transition to STALE; other disagreements remain untouched evidence.
-          if (active.state === "HALTED") appendJournalRecord(args.projectRoot, active.manifest.run_id, record);
-        } catch {}
-      }
-      console.error(`[orchestrator] ${error instanceof Error ? error.message : String(error)}`);
-      return 1;
-    }
-    for (const message of recovered.messages) console.log(`[orchestrator] recovery: ${message}`);
-    const preview = buildWavePreview({
-      planTasks,
-      wave: args.wave!,
-      maxTasks: active.manifest.task_order.length,
-      store,
-      route,
-      repositoryState: "clean-ordinary",
-      checkpointedTaskIds: recovered.checkpointedTaskIds,
-    });
-    if (preview.tasks.map((item) => item.row.id).join("\0") !== active.manifest.task_order.join("\0")) {
-      console.error("[orchestrator] STALE: derived task order no longer matches the run manifest");
-      return 1;
-    }
-    for (const line of renderWavePreview({
-      wave: args.wave!,
-      preview,
-      route,
-      baseBranch: active.manifest.base_branch,
-      baseSha: active.manifest.base_sha,
-    })) console.log(line);
-    if (!preview.allEligible) return 1;
-    return executeWave({
-      projectRoot: args.projectRoot,
-      manifest: active.manifest,
-      planTasks,
-      preview,
-      checkpointedTaskIds: recovered.checkpointedTaskIds,
-      initialState: recovered.state,
-      registry,
-      store,
-      route,
-      git,
-      compose: (task, orchestrator) => composeProductionTaskExecutor(
-        args,
-        task.id,
-        orchestrator,
-        store,
-        {
-          runtimeId: route.runtimeId as RuntimeId,
-          ...(route.model === "runtime-default" ? {} : { model: route.model }),
-          ...(route.effort ? { effort: route.effort } : {}),
-          ...(route.basis ? { basis: route.basis } : {}),
-        },
-        dependencies,
-      ),
-    });
-  }
-
-  const target = registeredWaveTarget(store, waveRows);
-  const route = await resolveWaveRoute(args, waveRows, store, dependencies, target.root);
-  if (!args.dryRun) {
-    try {
-      const existing = findActiveWaveRun(args.projectRoot, { module: args.module!, wave: args.wave!, targetRoot: target.root });
-      console.error(
-        `[orchestrator] unfinished bounded run ${existing.manifest.run_id} already owns this command identity; ` +
-          "refusing a second run. Continue it with --resume-run.",
-      );
-      return 1;
-    } catch (error) {
-      if (!(error instanceof WaveRunRecoveryError) || error.kind !== "NOT_FOUND") {
-        console.error(`[orchestrator] ${error instanceof Error ? error.message : String(error)}`);
-        return 1;
-      }
-    }
-  }
-  const runId = createRunId();
-  const git = new GitCommandLayer({ cwd: target.root });
-  let preflight;
-  try {
-    preflight = await inspectRepositoryPreflight(git, args.module!, runId);
-  } catch (error) {
-    console.error(`[orchestrator] ${error instanceof Error ? error.message : String(error)}`);
-    return 1;
-  }
-  const preview = buildWavePreview({
-    planTasks,
-    wave: args.wave!,
-    maxTasks: args.maxTasks ?? Number.MAX_SAFE_INTEGER,
-    store,
-    route,
-    repositoryState: "clean-ordinary",
-  });
-  for (const line of renderWavePreview({
-    wave: args.wave!,
-    preview,
-    route,
-    baseBranch: preflight.baseBranch,
-    baseSha: preflight.baseSha,
-  })) console.log(line);
-  if (args.dryRun) return preview.allEligible ? 0 : 1;
-  if (!preview.allEligible) return 1;
-
-  const manifest: RunManifest = {
-    run_id: runId,
-    created_at: new Date().toISOString(),
-    target_root: target.root,
-    target_id: target.targetId,
-    knowledge_root: resolveContextDocsRoot(args.projectRoot),
-    module: args.module!,
-    wave: args.wave!,
-    plan_hash: planHash(planTasks),
-    task_order: preview.tasks.map((item) => item.row.id),
-    base_branch: preflight.baseBranch,
-    base_sha: preflight.baseSha,
-    run_branch: preflight.runBranch,
-    runtime_id: route.runtimeId,
-    tier: route.tier,
-    model: route.model,
-    effort: route.effort,
-    route_basis: route.basis,
-    route_requested: route.requested,
-    max_tasks: preview.tasks.length,
-    sta_version: cliVersion(),
-  };
-  return executeWave({
-    projectRoot: args.projectRoot,
-    manifest,
-    planTasks,
-    preview,
-    preflight,
-    registry,
-    store,
-    route,
-    git,
-    compose: (task, orchestrator) => composeProductionTaskExecutor(
-      args,
-      task.id,
-      orchestrator,
-      store,
-      {
-        runtimeId: route.runtimeId as RuntimeId,
-        ...(route.model === "runtime-default" ? {} : { model: route.model }),
-        ...(route.effort ? { effort: route.effort } : {}),
-        ...(route.basis ? { basis: route.basis } : {}),
-      },
-      dependencies,
-    ),
-  });
-}
-
 /** Dispatches a verb, translating the ones that are really the existing engine in disguise (`run`, `resume`, `retry`) rather than duplicating the step loop. */
 async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string, dependencies: CliDependencies): Promise<number> {
   switch (verb) {
@@ -1999,10 +1654,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string, depende
     return 0;
   }
 
-  const store = new SqliteTaskStore(
-    args.stateDb ?? defaultStateDbPath(args.projectRoot),
-    args.dryRun ? { readonly: true } : {},
-  );
+  const store = new SqliteTaskStore(args.stateDb ?? defaultStateDbPath(args.projectRoot));
   const registry = new TaskRegistry({
     store,
     planTasks: () => {
@@ -2013,27 +1665,13 @@ export async function runCli(argv: string[], defaultProjectRoot: string, depende
       return plan.tasks;
     },
     budget: budgetFor(args),
-    ...(args.dryRun ? {} : { stateViewPath: defaultStateViewPath(args.projectRoot) }),
+    stateViewPath: defaultStateViewPath(args.projectRoot),
   });
   let lockedTaskId: string | undefined;
 
   try {
     if (args.list) {
       printListing(registry);
-      return 0;
-    }
-
-    if (args.wave !== undefined) return await runWaveCli(args, store, registry, dependencies);
-
-    if (args.registerOnly) {
-      const taskId = args.taskId!;
-      if (registry.has(taskId)) {
-        throw new CliUsageError(`task ${taskId} is already registered; immutable metadata cannot be replaced`);
-      }
-      openTask(registry, args, taskId);
-      console.log(
-        `[orchestrator] registered task ${taskId} for bounded-wave use; no agent was started and no Git operation was performed.`,
-      );
       return 0;
     }
 
@@ -2074,7 +1712,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string, depende
       assertNoWorkspaceRunLock(args.projectRoot, targetRoot);
     }
 
-    const composition = await composeProductionTaskExecutor(args, taskId, orchestrator, store, undefined, dependencies);
+    const composition = await composeProductionTaskExecutor(args, taskId, orchestrator, store, dependencies);
 
     return await runTaskLoop(orchestrator, registry, composition.executor, {
       log: (message) => console.log(message),
