@@ -474,6 +474,18 @@ describe("resolveRuntimeRoute — availability, support and guard refusal", () =
     expect(explicit.selected?.runtime.id).toBe("codex");
   });
 
+  it("T-V8-031 never lets below-supported opt-in promote an explicit OpenCode route to unattended Target writes", () => {
+    const result = route({
+      flags: { runtime: "opencode", model: "glm" },
+      config: { schema_version: 1, routing: { allow_below_supported: ["opencode"] } },
+      hasTargetWrite: true,
+    });
+    expect(result.selected).toBeUndefined();
+    expect(result.candidates).toEqual([]);
+    expect(result.error).toContain("not certified for unattended Target writes");
+    expect(result.error).toContain("analysis/proposal");
+  });
+
   it("excludes and refuses a Target-write runtime missing PRE_TOOL_GUARD", () => {
     const projectRoot = tmpProject();
     writeRoleFrontmatter(projectRoot, "backend-engineer", "sonnet");

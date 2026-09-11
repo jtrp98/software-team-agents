@@ -9,6 +9,7 @@ import { CliUsageError, runCli } from "../../cli.js";
 import { parseBoundedRunArgs, BOUNDED_RUN_USAGE } from "./boundedRun.js";
 import { RuntimeRegistry } from "../../runtime/runtimeRegistry.js";
 import { MockRuntimeAdapter, okResult } from "../../runtime/mockAdapter.js";
+import { RuntimeCapability } from "../../runtime/runtimeCapabilities.js";
 import { SqliteRunLedger } from "../../ledger/sqliteRunLedger.js";
 import { SqliteTaskStore } from "../../store/sqliteStore.js";
 import { defaultStateDbPath } from "../../store/stateView.js";
@@ -111,10 +112,14 @@ export function completingAdapter(targetRoot: string): MockRuntimeAdapter {
             "- AC-007.2: ✅ Verified — zero-total response confirmed by inspection.\n" +
             "- DES-011: ✅ Verified — serializer boundary preserved.\n",
         );
-        return okResult();
+        return okResult({
+          guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] },
+        });
       }
       fs.writeFileSync(path.join(targetRoot, "README.md"), "# orders\n\nReviewed the empty-order summary path.\n");
-      return okResult();
+      return okResult({
+        guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] },
+      });
     },
     files: {
       ".mock/guards.json": JSON.stringify({

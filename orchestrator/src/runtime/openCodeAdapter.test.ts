@@ -158,6 +158,32 @@ describe("OpenCodeAdapter", () => {
     expect(args[args.indexOf("--variant") + 1]).toBe("max");
   });
 
+  it("T-V8-031 refuses unsupported explicit model and separate effort before spawn", async () => {
+    const root = projectWithBinding();
+    const { spawn, calls } = okSpawn();
+    const adapter = new OpenCodeAdapter({
+      projectRoot: root,
+      models: ["zai-coding-plan/glm-4.7#fast"],
+      spawnSync: spawn,
+    });
+
+    const badModel = await adapter.executeAgent(requestFor(root, {
+      model: "unknown/model#max",
+      modelExplicit: true,
+    }));
+    expect(badModel).toMatchObject({ status: "ERROR", exitCode: null });
+    expect(badModel.diagnostics.join("\n")).toContain("not in this workspace's configured OpenCode tier catalogue");
+
+    const badEffort = await adapter.executeAgent(requestFor(root, {
+      model: "zai-coding-plan/glm-4.7#fast",
+      modelExplicit: true,
+      effort: "high",
+    }));
+    expect(badEffort).toMatchObject({ status: "ERROR", exitCode: null });
+    expect(badEffort.diagnostics.join("\n")).toContain("would be ignored rather than observed");
+    expect(calls.some((call) => call.args.includes("run"))).toBe(false);
+  });
+
   it("refuses to run when the binding is missing — silent default-agent fallback is worse than an error", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-opencode-empty-"));
     roots.push(root);

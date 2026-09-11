@@ -472,7 +472,7 @@ describe("T-V1-05 runtime conformance — one matrix, every runtime", () => {
 
     const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-V3R-001", context: [] });
     expect(result.outcome.result).toBe("FAIL");
-    expect((result.outcome as { failure_reason?: string }).failure_reason).toMatch(/cannot enforce a pre-tool workspace guard/);
+    expect((result.outcome as { failure_reason?: string }).failure_reason).toMatch(/not certified for unattended Target writes|cannot enforce a pre-tool workspace guard/);
     expect(fallback.requests).toHaveLength(0);
     expect(unsafe.requests).toHaveLength(0);
   });

@@ -10,7 +10,7 @@ import { StaConfigInvalidError, StaConfigMissingError, loadStaConfig, type StaCo
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "./runtimeRegistry.js";
 import type { RuntimeAdapter, RuntimeProbe } from "./runtimeAdapter.js";
-import { RUNTIME_SUPPORT, type RuntimeSupportLevel } from "./runtimeSupport.js";
+import { isUnattendedTargetWriteCertified, RUNTIME_SUPPORT, type RuntimeSupportLevel } from "./runtimeSupport.js";
 import {
   loadModelTierPolicy,
   type ModelTierId,
@@ -380,6 +380,13 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
       : undefined;
     if (unavailable) diagnostics.push(unavailable);
     const level = supportLevel(runtime.id);
+    const targetWriteUncertified = (opts.hasTargetWrite ?? false) && !isUnattendedTargetWriteCertified(runtime.id);
+    if (targetWriteUncertified) {
+      diagnostics.push(
+        `runtime "${runtime.id}" is not certified for unattended Target writes at support level "${level}"; ` +
+        `routing.allow_below_supported applies only to analysis/proposal routes`,
+      );
+    }
     const declaredOrVerified = opts.verifiedCapabilities?.[runtime.id] ?? runtime.capabilities;
     const unmet = required.filter((capability) => !declaredOrVerified.has(capability));
     const evidence = opts.verifiedCapabilities?.[runtime.id] ? "verified" : "declared";
@@ -390,6 +397,13 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     // operator named explicitly is their call.
     if (walkable && unavailable) {
       attempts.push({ runtimeId: runtime.id, runtime, ...base, skipReason: unavailable, unavailable: true });
+    } else if (targetWriteUncertified) {
+      attempts.push({
+        runtimeId: runtime.id,
+        runtime,
+        ...base,
+        skipReason: `runtime "${runtime.id}" is not certified for unattended Target writes at support level "${level}"`,
+      });
     } else if (precedenceLevel === 4 && level !== "supported" && !supportOptIns.has(runtime.id)) {
       const skipReason = `runtime "${runtime.id}" support level "${level}" is below "supported"; automatic routing requires routing.allow_below_supported to name this runtime`;
       diagnostics.push(skipReason);
@@ -452,6 +466,10 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
       }`;
     } else if (probe?.available === false) {
       error = `runtime "${head.runtimeId}" is unavailable: ${probe.reason ?? "no unavailability reason was reported"}`;
+    } else if ((opts.hasTargetWrite ?? false) && !isUnattendedTargetWriteCertified(head.runtimeId)) {
+      error =
+        `runtime "${head.runtimeId}" is not certified for unattended Target writes at support level "${level}"; ` +
+        `routing.allow_below_supported applies only to analysis/proposal routes`;
     } else if (precedenceLevel === 4 && level !== "supported" && !supportOptIns.has(head.runtimeId)) {
       error = `refusing to auto-route to runtime "${head.runtimeId}" at support level "${level}" without per-runtime opt-in`;
     } else if (required.length > 0) {

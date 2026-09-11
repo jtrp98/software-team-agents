@@ -37,6 +37,7 @@ import {
   type RuntimeRouteFlags,
 } from "./runtimeRouting.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import { isUnattendedTargetWriteCertified } from "./runtimeSupport.js";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
 import type { QaRiskSignals } from "../qa/mode.js";
 import { checkRoleExecutionGate } from "../roles/roleExecutionGate.js";
@@ -509,7 +510,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // Production routing remains above the orchestrator seam. Embedded callers
     // that do not supply a registry retain the fixed-runtime compatibility
     // behaviour.
-    const hasTargetWrite = threeRepo?.roots.workRoots.some((root) => root.access === "write") ?? false;
+    const writableRootPaths = threeRepo
+      ? threeRepo.roots.workRoots.filter((root) => root.access === "write").map((root) => root.path)
+      : (opts.frozenAttempt?.guard_evidence.writable_roots ?? []);
+    const hasTargetWrite = writableRootPaths.length > 0 || (opts.frozenAttempt?.guard_evidence.target_write ?? false);
     const requiresInteractivity = requiredCapabilitiesFor(
       req.stage,
       false,
@@ -771,6 +775,13 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
 
       // A guard gap refuses; it never hops. Landing the same Target-write stage
       // on the next camp would only move an unguarded run somewhere else.
+      if (hasTargetWrite && !isUnattendedTargetWriteCertified(activeRuntime.id)) {
+        return finish(failResult(
+          `cannot start ${role}: runtime "${activeRuntime.id}" is not certified for unattended Target writes; ` +
+          `V8 permits non-Claude runtimes for analysis/proposal only until separate complete UAT and human promotion`,
+          declared,
+        ));
+      }
       if (hasTargetWrite && !activeRuntime.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)) {
         return finish(failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot enforce a pre-tool workspace guard for Target write access`, declared));
       }
@@ -836,7 +847,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
             // Guard hooks receive only tool paths, not this task's binding. Give
             // them the canonical write roots resolved by preflight; never derive
             // scope from cwd or an agent-provided path.
-            ...(hasTargetWrite ? { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify(threeRepo!.roots.workRoots.filter((root) => root.access === "write").map((root) => root.path)) } : {}),
+            ...(hasTargetWrite ? { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify(writableRootPaths) } : {}),
             // The read-only Knowledge context, for prompts/hooks that need to
             // name where module documents actually live.
             ...(threeRepo?.roots.knowledgeRoot ? { AGENTCLAUDE_KNOWLEDGE_ROOT: threeRepo.roots.knowledgeRoot } : {}),

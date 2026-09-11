@@ -165,6 +165,33 @@ export class OpenCodeAdapter implements RuntimeAdapter {
       };
     }
 
+    if (req.model && req.modelExplicit && this.models.size > 0 && !this.models.has(req.model)) {
+      return {
+        status: "ERROR",
+        exitCode: null,
+        text: "",
+        usage: {},
+        guards: { enforced: [], unenforced: [] },
+        diagnostics: [
+          `refusing to run: model "${req.model}" is not in this workspace's configured OpenCode tier catalogue ` +
+            `(${[...this.models].join(", ")})`,
+        ],
+      };
+    }
+    if (req.effort && req.effort !== "native") {
+      return {
+        status: "ERROR",
+        exitCode: null,
+        text: "",
+        usage: {},
+        guards: { enforced: [], unenforced: [] },
+        diagnostics: [
+          `refusing to run: OpenCode effort is selected by the model's #variant suffix; separate effort ` +
+            `"${req.effort}" would be ignored rather than observed`,
+        ],
+      };
+    }
+
     const guards = await this.guardReportFor(req.guards);
 
     const args = ["run", "--format", "json", "--agent", req.role];

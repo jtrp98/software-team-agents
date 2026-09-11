@@ -13,6 +13,7 @@ import { compileAndRegisterPlan } from "../orchestrator/planCompilation.js";
 import { createRunId } from "./journal.js";
 import { RuntimeRegistry } from "../runtime/runtimeRegistry.js";
 import { MockRuntimeAdapter, okResult } from "../runtime/mockAdapter.js";
+import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
 import { contractGuardResolver } from "../runtime/runtimeGuards.js";
 import { BoundedRunController } from "./boundedRunController.js";
 import { createProductionBoundedRunServices } from "./boundedRunServices.js";
@@ -261,10 +262,14 @@ describe("T-V8-021 — production BoundedRunServices against a real registered t
               "- AC-007.2: ✅ Verified — zero-total response confirmed by inspection.\n" +
               "- DES-011: ✅ Verified — serializer boundary preserved.\n",
           );
-          return okResult();
+          return okResult({
+            guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] },
+          });
         }
         fs.writeFileSync(path.join(targetRoot, "README.md"), "# orders\n\nReviewed the empty-order summary path.\n");
-        return okResult();
+        return okResult({
+          guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] },
+        });
       },
       // `detectRuntimeCapabilities`'s deep guard checker for "claude-code"
       // requires the workspace's own `settings.json`-shaped guard config to

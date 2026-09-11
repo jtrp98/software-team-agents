@@ -103,6 +103,25 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
     expect(runtime.requests).toHaveLength(0);
   });
 
+  it("T-V8-031 refuses a previously frozen non-Claude Target-write attempt after support policy is enforced", async () => {
+    const runtime = new MockRuntimeAdapter({ id: "opencode", models: ["glm-4.7"], respond: () => okResult() });
+    const result = await createRuntimeExecutor({
+      runtime,
+      projectRoot: tmpProject(),
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+      registry: new RuntimeRegistry([runtime]),
+      frozenAttempt: frozen({
+        requested: { runtime: "opencode", model: "glm-4.7", effort: "high" },
+        observed: { runtime: "opencode", model: "glm-4.7", effort: "high" },
+        guard_evidence: { target_write: true, pre_tool_guard: true, writable_roots: ["C:/target"] },
+      }),
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain('runtime "opencode" is not certified for unattended Target writes');
+    expect(runtime.requests).toHaveLength(0);
+  });
+
   it("sends the ledger's model even when it is not this executor's own default, and conformance agrees", async () => {
     const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"], respond: () => okResult() });
     const result = await createRuntimeExecutor({

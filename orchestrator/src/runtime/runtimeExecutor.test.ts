@@ -1124,7 +1124,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
   });
 
   it("runs a Target-writing stage in its canonical Target root while retaining explicit scope", async () => {
-    const runtime = new MockRuntimeAdapter({ respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const scoped = scopedFixture("T-target");
     const task = { runtimeTask: scoped.runtimeTask, taskId: "T-target", classification, targetBindings: { frontend_target: null, backend_target: "api" } } as never;
@@ -1138,7 +1138,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
   });
 
   it("T-V1-16 two-Target isolation: the guard env carries only the write-access root, never the read-only sibling", async () => {
-    const runtime = new MockRuntimeAdapter({ respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true, touchesFrontend: true });
     const scoped = scopedFixture("T-two");
     const task = { runtimeTask: scoped.runtimeTask, taskId: "T-two", classification, targetBindings: { frontend_target: "web", backend_target: "api" } } as never;

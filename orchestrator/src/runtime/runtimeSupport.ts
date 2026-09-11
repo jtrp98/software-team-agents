@@ -46,19 +46,19 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
   "claude-code": {
     level: "supported",
     claim:
-      "headless pipeline, hooks/guards and exit checks verified end to end; the default runtime for `sta run` and interactive launches",
+      "headless pipeline, hooks/guards and exit checks verified end to end; the default runtime for `sta run` and interactive launches, and the only V8 runtime certified for unattended Target writes",
   },
   codex: {
     level: "preview",
     claim:
       `interactive sessions via \`--runtime codex\` work and bindings generate completely; the headless adapter has never been verified against a real install — UAT covers Claude Code only. ` +
-      `Guard coverage: ${codexCoverage().detail} — a launch requires --allow-unguarded-runtime (T-V5-008)`,
+      `Guard coverage: ${codexCoverage().detail} — a launch requires --allow-unguarded-runtime (T-V5-008). Analysis/proposal only; unattended Target writes are refused`,
   },
   opencode: {
     level: "experimental",
     claim:
       `spike-proven on 1.18.21 (probe, headless run, guards report); exit checks have no in-band enforcement (\`GUARD GAP\` + QA round cover it) and other versions' tool arg-shapes are unverified. ` +
-      `Guard coverage (once synced): ${opencodeCoverageWithPlugin().detail}`,
+      `Guard coverage (once synced): ${opencodeCoverageWithPlugin().detail}. Analysis/proposal only in V8; partial guards do not certify unattended Target writes`,
   },
   antigravity: {
     level: "experimental",
@@ -69,6 +69,16 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
       `Guard coverage (once synced): ${antigravityCoverageWithHooks().detail}`,
   },
 };
+
+/**
+ * A support-level opt-in may enable an analysis/proposal route, but it must
+ * never promote Target writes. In V8, the `supported` level is earned only by
+ * complete real-install headless + guard UAT, so it is also the single
+ * machine-readable certification boundary for unattended Target mutation.
+ */
+export function isUnattendedTargetWriteCertified(runtimeId: string): boolean {
+  return runtimeId in RUNTIME_SUPPORT && RUNTIME_SUPPORT[runtimeId as RuntimeId].level === "supported";
+}
 
 /** One line per runtime, registry order preserved — the shape both `sta runtimes` and the README table render. */
 export function describeRuntimeSupport(): string[] {

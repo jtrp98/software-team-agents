@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "../../cli.js";
 import { RuntimeRegistry } from "../../runtime/runtimeRegistry.js";
 import { MockRuntimeAdapter, okResult } from "../../runtime/mockAdapter.js";
+import { RuntimeCapability } from "../../runtime/runtimeCapabilities.js";
 import { SqliteRunLedger } from "../../ledger/sqliteRunLedger.js";
 import { SqliteTaskStore } from "../../store/sqliteStore.js";
 import { defaultStateDbPath } from "../../store/stateView.js";
@@ -92,6 +93,10 @@ function inspect<T>(root: string, read: (ledger: SqliteRunLedger) => T): T {
 function flakyAdapter(targetRoot: string, failFirstDev: boolean): MockRuntimeAdapter {
   let devCalls = 0;
   let self: MockRuntimeAdapter;
+  const guardedResult = (overrides: Parameters<typeof okResult>[0] = {}) => okResult({
+    guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] },
+    ...overrides,
+  });
   const adapter = new MockRuntimeAdapter({
     id: "claude-code",
     models: ["sonnet"],
@@ -105,14 +110,14 @@ function flakyAdapter(targetRoot: string, failFirstDev: boolean): MockRuntimeAda
             "- AC-007.2: ✅ Verified — zero-total response confirmed by inspection.\n" +
             "- DES-011: ✅ Verified — serializer boundary preserved.\n",
         );
-        return okResult();
+        return guardedResult();
       }
       devCalls += 1;
       if (failFirstDev && devCalls === 1) {
-        return okResult({ status: "UNAVAILABLE", exitCode: 1, text: "provider unavailable: upstream 503 during the attempt" });
+        return guardedResult({ status: "UNAVAILABLE", exitCode: 1, text: "provider unavailable: upstream 503 during the attempt" });
       }
       fs.writeFileSync(path.join(targetRoot, "README.md"), "# orders\n\nReviewed the empty-order summary path.\n");
-      return okResult();
+      return guardedResult();
     },
     files: {
       ".mock/guards.json": JSON.stringify({
