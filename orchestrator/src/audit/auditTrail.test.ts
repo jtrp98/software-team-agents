@@ -14,7 +14,7 @@ import {
   HUMAN_ACTOR,
   ORCHESTRATOR_ACTOR,
 } from "./auditTrail.js";
-import { Orchestrator } from "../orchestrator/orchestrator.js";
+import { Orchestrator, type AgentExecutor } from "../orchestrator/orchestrator.js";
 import { classifyTask } from "../classification/taskClassifier.js";
 import { AgentStage } from "../types.js";
 import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
@@ -153,7 +153,7 @@ describe("audit trail over a real run (T37)", () => {
   function runToDeployed(store: MemoryTaskStore, taskId: string) {
     const orch = new Orchestrator(taskId, classifyTask({ isClearBugFix: true, touchesBackend: true }), { store });
     let calls = 0;
-    const executor = (req: { stage: AgentStage }) => {
+    const executor: AgentExecutor = (req) => {
       if (req.stage === AgentStage.QA_ENGINEER) {
         const first = calls++ === 0;
         return {
@@ -234,20 +234,28 @@ describe("audit trail over a real run (T37)", () => {
         continue;
       }
       if (status.kind !== "RUNNING") break;
-      const producesDesign = status.stage === AgentStage.SYSTEM_ANALYST;
+      // Same as real production (runtimeExecutor.ts's `ownedDoc` branch): a doc-producing
+      // stage's validated artifact is always its HANDOFF, never a structured
+      // Requirements/Design/Plan/TestPlan payload (T-V8-028 removed those unused schemas).
+      const producesHandoff = status.stage === AgentStage.SYSTEM_ANALYST;
       orch.reportCompletion(
         status.stage,
-        producesDesign
+        producesHandoff
           ? {
               outcome: { tokens: 1, cost: 0, result: "PASS" },
-              artifactType: ArtifactType.DESIGN,
+              artifactType: ArtifactType.HANDOFF,
               artifact: {
-                taskId: "T-INPUT",
-                feasibility: "feasible",
-                dataModel: [{ model: "Refund", fields: [{ name: "id", type: "string" }] }],
-                risks: [],
-                openQuestions: [],
-                contract: ["refund status must be REFUNDED"],
+                task_id: "T-INPUT",
+                implements: [],
+                module: "test-module",
+                phase: 1,
+                constraint_refs: [],
+                contract_refs: { produces: [], consumes: [] },
+                decision_refs: [],
+                test_refs: [],
+                artifact_refs: [],
+                open_findings: [],
+                budget: null,
               },
             }
           : { outcome: { tokens: 1, cost: 0, result: "PASS" } },
@@ -260,8 +268,8 @@ describe("audit trail over a real run (T37)", () => {
       (e) => e.type === "AGENT_ASSIGNED" && e.decision === `assign:${AgentStage.TEST_PLANNER}`,
     );
     expect(nextAssignment).toBeDefined();
-    // The design system-analyst produced is what the next stage is handed.
-    expect(nextAssignment!.input).toContain(ArtifactType.DESIGN);
+    // The handoff system-analyst produced is what the next stage is handed.
+    expect(nextAssignment!.input).toContain(ArtifactType.HANDOFF);
 
     // And an empty hand-over is recorded as empty rather than invented: the very
     // first stage has nothing upstream of it to be given.

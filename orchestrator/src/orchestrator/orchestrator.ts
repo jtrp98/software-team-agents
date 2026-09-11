@@ -22,6 +22,7 @@ import {
   validateArtifact,
   type QaReportArtifact,
   type SecurityReportArtifact,
+  type ValidatableArtifactType,
 } from "../artifacts/schemas.js";
 import { selectContext, type ContextCategory, type ContextItem } from "../context/contextSelection.js";
 import { RunLog, type RunOutcome } from "../observability/runLog.js";
@@ -65,7 +66,7 @@ export interface AgentExecutorRequest {
 
 export interface AgentExecutorResult {
   outcome: RunOutcome;
-  artifactType?: ArtifactType;
+  artifactType?: ValidatableArtifactType;
   artifact?: unknown;
   /** Runtime-state path of the exact packet used for this attempt. */
   packetPath?: string;
@@ -106,7 +107,7 @@ export interface OrchestratorEventMap extends DomainEventMap {
   /** `inputs` is the artifact categories this stage is actually handed — the same slice `step()` passes to the executor. */
   AGENT_ASSIGNED: { taskId: string; stage: AgentStage; inputs: ContextCategory[] };
   /** `artifactType` is what the stage produced, or null for a stage whose work is only code on disk. */
-  AGENT_COMPLETED: { taskId: string; stage: AgentStage; outcome: RunOutcome; artifactType: ArtifactType | null; packetPath: string | null };
+  AGENT_COMPLETED: { taskId: string; stage: AgentStage; outcome: RunOutcome; artifactType: ValidatableArtifactType | null; packetPath: string | null };
   WAITING_FOR_HUMAN: { taskId: string; from: TaskState; to: TaskState; reason: string; approvalType: ApprovalType | null };
   TASK_BLOCKED: { taskId: string; reason: string };
   TASK_DEPLOYED: { taskId: string };
@@ -137,7 +138,7 @@ export interface OrchestratorOptions {
   businessInput?: BusinessInputEvidence;
 }
 
-function assertCanProduce(stage: AgentStage, artifactType: ArtifactType): void {
+function assertCanProduce(stage: AgentStage, artifactType: ValidatableArtifactType): void {
   if (!AGENT_REGISTRY[stage].outputs.includes(artifactType)) {
     throw new Error(`${stage} is not registered (item 9) to produce ${artifactType}`);
   }

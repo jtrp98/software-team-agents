@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Orchestrator, type AgentExecutor, type AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { classifyTask } from "../classification/taskClassifier.js";
 import { AgentStage, TaskState } from "../types.js";
-import { ArtifactType, type DesignArtifact, type QaReportArtifact, type SecurityReportArtifact } from "../artifacts/schemas.js";
+import { ArtifactType, type HandoffArtifact, type QaReportArtifact, type SecurityReportArtifact } from "../artifacts/schemas.js";
 import { ApprovalType } from "../gates/approval.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
 
@@ -21,13 +21,21 @@ import { SqliteTaskStore } from "../store/sqliteStore.js";
  * mid-run; every test here does, at least once.
  */
 
-const okDesign: DesignArtifact = {
-  taskId: "T",
-  feasibility: "feasible",
-  dataModel: [{ model: "Refund", fields: [{ name: "id", type: "string" }] }],
-  risks: [],
-  openQuestions: [],
-  contract: ["refund status must be REFUNDED"],
+// A doc-producing stage's validated artifact is always its HANDOFF (see
+// runtime/runtimeExecutor.ts's `ownedDoc` branch) — never a structured
+// Requirements/Design/Plan/TestPlan payload; T-V8-028 removed those unused schemas.
+const okHandoff: HandoffArtifact = {
+  task_id: "T",
+  implements: [],
+  module: "test-module",
+  phase: 1,
+  constraint_refs: [],
+  contract_refs: { produces: [], consumes: [] },
+  decision_refs: [],
+  test_refs: [],
+  artifact_refs: [],
+  open_findings: [],
+  budget: null,
 };
 
 function qaReport(status: "PASS" | "FAIL"): QaReportArtifact {
@@ -107,8 +115,8 @@ describe("Full pipeline integration", () => {
     const executor = makeExecutor({
       [AgentStage.SYSTEM_ANALYST]: () => ({
         outcome: { tokens: 2000, cost: 0.2, result: "PASS" },
-        artifactType: ArtifactType.DESIGN,
-        artifact: okDesign,
+        artifactType: ArtifactType.HANDOFF,
+        artifact: okHandoff,
       }),
       [AgentStage.QA_ENGINEER]: (idx) => ({
         outcome: { tokens: 800, cost: 0.05, result: idx === 0 ? "FAIL" : "PASS" },

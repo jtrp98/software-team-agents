@@ -78,68 +78,6 @@ describe("ExecutionPacket", () => {
   });
 });
 
-describe("RequirementsArtifact", () => {
-  const valid = {
-    taskId: "T-1",
-    title: "Add refund flow",
-    businessGoal: "Let support staff issue refunds",
-    scope: { inScope: ["refund by order id"], outScope: ["partial refunds"] },
-    actors: ["support-staff"],
-    acceptanceCriteria: ["a refunded order shows status=REFUNDED"],
-    assumptions: [{ statement: "refund limit is 100000 THB", confirmed: false }],
-    references: [],
-  };
-
-  it("accepts a well-formed requirements doc", () => {
-    expect(validateArtifact(ArtifactType.REQUIREMENTS, valid)).toEqual(valid);
-  });
-
-  it("rejects a requirements doc with no acceptance criteria", () => {
-    expect(() =>
-      validateArtifact(ArtifactType.REQUIREMENTS, { ...valid, acceptanceCriteria: [] }),
-    ).toThrow(ArtifactValidationError);
-  });
-
-  it("lists every failing field, not just the first", () => {
-    try {
-      validateArtifact(ArtifactType.REQUIREMENTS, { ...valid, acceptanceCriteria: [], actors: [] });
-      expect.unreachable();
-    } catch (e) {
-      expect(e).toBeInstanceOf(ArtifactValidationError);
-      const err = e as ArtifactValidationError;
-      expect(err.issues.some((i) => i.includes("acceptanceCriteria"))).toBe(true);
-      expect(err.issues.some((i) => i.includes("actors"))).toBe(true);
-    }
-  });
-});
-
-describe("DesignArtifact", () => {
-  it("accepts an empty dataModel for a non-schema task but requires a contract", () => {
-    const valid = {
-      taskId: "T-1",
-      feasibility: "feasible, no schema change",
-      dataModel: [],
-      risks: [],
-      openQuestions: [],
-      contract: ["refund status must be REFUNDED, no other string"],
-    };
-    expect(validateArtifact(ArtifactType.DESIGN, valid)).toEqual(valid);
-  });
-
-  it("rejects a design doc with no contract clauses", () => {
-    expect(() =>
-      validateArtifact(ArtifactType.DESIGN, {
-        taskId: "T-1",
-        feasibility: "ok",
-        dataModel: [],
-        risks: [],
-        openQuestions: [],
-        contract: [],
-      }),
-    ).toThrow(ArtifactValidationError);
-  });
-});
-
 describe("QaReportArtifact — evidence-based QA", () => {
   const base = {
     taskId: "T-1",
@@ -244,28 +182,5 @@ describe("SecurityReportArtifact", () => {
         ],
       }),
     ).toThrow(ArtifactValidationError);
-  });
-});
-
-describe("PlanArtifact", () => {
-  it("requires at least one phase", () => {
-    expect(() => validateArtifact(ArtifactType.PLAN, { taskId: "T-1", phases: [] })).toThrow(
-      ArtifactValidationError,
-    );
-  });
-
-  it("accepts a phase with a security gate flag", () => {
-    const plan = {
-      taskId: "T-1",
-      phases: [
-        {
-          id: "P1",
-          name: "Phase 1: refund flow",
-          securityGate: true,
-          tasks: [{ id: "T1", description: "refund endpoint", tag: "backend" as const, done: false }],
-        },
-      ],
-    };
-    expect(validateArtifact(ArtifactType.PLAN, plan)).toEqual(plan);
   });
 });

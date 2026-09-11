@@ -2,20 +2,28 @@ import { describe, expect, it } from "vitest";
 import { Orchestrator, type AgentExecutor, type AgentExecutorResult } from "./orchestrator.js";
 import { classifyTask } from "../classification/taskClassifier.js";
 import { AgentStage, TaskState } from "../types.js";
-import { ArtifactType, ArtifactValidationError, type DesignArtifact, type QaReportArtifact, type SecurityReportArtifact } from "../artifacts/schemas.js";
+import { ArtifactType, ArtifactValidationError, type HandoffArtifact, type QaReportArtifact, type SecurityReportArtifact } from "../artifacts/schemas.js";
 import { validateStructuredFailure } from "../orchestrator/failure.js";
 import { ApprovalType } from "../gates/approval.js";
 import { AGENT_REGISTRY } from "../agents/registry.js";
 import { PermissionDeniedError } from "../agents/permissionPolicy.js";
 import { Permission } from "../agents/permissions.js";
 
-const okDesign: DesignArtifact = {
-  taskId: "T",
-  feasibility: "feasible",
-  dataModel: [{ model: "Refund", fields: [{ name: "id", type: "string" }] }],
-  risks: [],
-  openQuestions: [],
-  contract: ["refund status must be REFUNDED"],
+// A doc-producing stage's validated artifact is always its HANDOFF (see
+// runtime/runtimeExecutor.ts's `ownedDoc` branch) — never a structured
+// Requirements/Design/Plan/TestPlan payload; T-V8-028 removed those unused schemas.
+const okHandoff: HandoffArtifact = {
+  task_id: "T",
+  implements: [],
+  module: "test-module",
+  phase: 1,
+  constraint_refs: [],
+  contract_refs: { produces: [], consumes: [] },
+  decision_refs: [],
+  test_refs: [],
+  artifact_refs: [],
+  open_findings: [],
+  budget: null,
 };
 
 function qaReport(status: "PASS" | "FAIL"): QaReportArtifact {
@@ -130,8 +138,8 @@ describe("Orchestrator", () => {
     const executor = makeExecutor({
       [AgentStage.SYSTEM_ANALYST]: () => ({
         outcome: { tokens: 2000, cost: 0.2, result: "PASS" },
-        artifactType: ArtifactType.DESIGN,
-        artifact: okDesign,
+        artifactType: ArtifactType.HANDOFF,
+        artifact: okHandoff,
       }),
       [AgentStage.QA_ENGINEER]: () => ({
         outcome: { tokens: 800, cost: 0.05, result: "PASS" },
@@ -170,8 +178,8 @@ describe("Orchestrator", () => {
     const executor = makeExecutor({
       [AgentStage.SYSTEM_ANALYST]: () => ({
         outcome: { tokens: 2000, cost: 0.2, result: "PASS" },
-        artifactType: ArtifactType.DESIGN,
-        artifact: okDesign,
+        artifactType: ArtifactType.HANDOFF,
+        artifact: okHandoff,
       }),
     });
 
@@ -275,8 +283,8 @@ describe("Orchestrator", () => {
     const executor = makeExecutor({
       [AgentStage.SYSTEM_ANALYST]: () => ({
         outcome: { tokens: 100, cost: 0.01, result: "PASS" },
-        artifactType: ArtifactType.DESIGN,
-        artifact: okDesign,
+        artifactType: ArtifactType.HANDOFF,
+        artifact: okHandoff,
       }),
     });
     await orch.step(executor);
@@ -292,8 +300,8 @@ describe("Orchestrator", () => {
     const executor2 = makeExecutor({
       [AgentStage.SYSTEM_ANALYST]: () => ({
         outcome: { tokens: 100, cost: 0.01, result: "PASS" },
-        artifactType: ArtifactType.DESIGN,
-        artifact: okDesign,
+        artifactType: ArtifactType.HANDOFF,
+        artifact: okHandoff,
       }),
     });
     await orch2.step(executor2);
