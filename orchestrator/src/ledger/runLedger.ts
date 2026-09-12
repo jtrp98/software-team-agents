@@ -47,6 +47,12 @@ export const LedgerRunSchema = z.strictObject({
   /** How far this explicit foreground run may proceed. Never a persistent mode. */
   boundary: z.enum(RUN_BOUNDARIES),
   module: text,
+  /**
+   * The run's git identity (redefined in V9 T-V9-011): The repository whose
+   * branch and base SHA this run is pinned to. For multi-Target runs, this is
+   * the explicit git-identity root, never an arbitrary default. Per-task target
+   * bindings and work roots are resolved per task in the task store.
+   */
   target_id: text,
   target_root: text,
   knowledge_root: text,

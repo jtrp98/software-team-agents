@@ -13,6 +13,7 @@ import { RuntimeCapability } from "../../runtime/runtimeCapabilities.js";
 import { SqliteRunLedger } from "../../ledger/sqliteRunLedger.js";
 import { SqliteTaskStore } from "../../store/sqliteStore.js";
 import { defaultStateDbPath } from "../../store/stateView.js";
+import { AgentStage } from "../../types.js";
 
 /**
  * T-V8-021 — CLI-level coverage for the explicit bounded-run command:
@@ -89,6 +90,23 @@ describe("parseBoundedRunArgs", () => {
 
   it("rejects an unrecognized flag rather than silently ignoring it", () => {
     expect(() => parseBoundedRunArgs(["--module", "m", "--all", "--dry-run", "--not-a-flag"], "/repo")).toThrow(/unrecognized argument/);
+  });
+
+  it("accumulates repeatable --target-id into targetIds and sets single targetId (T-V9-011)", () => {
+    const single = parseBoundedRunArgs(["--module", "m", "--all", "--dry-run", "--target-id", "api"], "/repo");
+    expect(single.targetIds).toEqual(["api"]);
+    expect(single.targetId).toBe("api");
+
+    const multi = parseBoundedRunArgs(
+      ["--module", "m", "--all", "--dry-run", "--target-id", "api", "--target-id", "web"],
+      "/repo",
+    );
+    expect(multi.targetIds).toEqual(["api", "web"]);
+    expect(multi.targetId).toBeUndefined();
+
+    expect(() => parseBoundedRunArgs(["--module", "m", "--all", "--dry-run", "--target-id"], "/repo")).toThrow(
+      /--target-id requires a value/,
+    );
   });
 
   it("USAGE names every classification override flag and both invocation forms", () => {
@@ -338,5 +356,472 @@ describe("sta bounded-run (CLI)", () => {
     expect(code).toBe(0);
     expect(logs.some((l) => l.includes(`resuming run ${runId}`))).toBe(true);
     expect(logs.some((l) => l.includes("readiness:"))).toBe(true);
+  });
+});
+
+
+interface ThreeRepoFixture {
+  root: string;
+  knowledgeRoot: string;
+  targetApi: string;
+  targetWeb: string;
+  installationConfig: string;
+}
+
+function threeRepoBoundedRunProject(
+  rootsList: string[],
+  gitRunner: (root: string, ...args: string[]) => string,
+  options: {
+    multiTask?: boolean;
+    omitPlanTargets?: boolean;
+    retiredApi?: boolean;
+    originMismatch?: boolean;
+  } = {},
+): ThreeRepoFixture {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-cli-"));
+  rootsList.push(root);
+
+  const knowledgeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-kn-"));
+  rootsList.push(knowledgeRoot);
+  gitRunner(knowledgeRoot, "init", "-b", "main");
+  gitRunner(knowledgeRoot, "config", "user.name", "Fixture");
+  gitRunner(knowledgeRoot, "config", "user.email", "fixture@example.invalid");
+
+  const targetApi = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-api-"));
+  rootsList.push(targetApi);
+  gitRunner(targetApi, "init", "-b", "main");
+  gitRunner(targetApi, "config", "user.name", "Fixture");
+  gitRunner(targetApi, "config", "user.email", "fixture@example.invalid");
+  gitRunner(targetApi, "config", "remote.origin.url", options.originMismatch ? "https://github.com/acme/wrong.git" : "https://github.com/acme/api.git");
+  fs.mkdirSync(path.join(targetApi, "src"), { recursive: true });
+  const orderSource = "export function orderSummary(): number { return 0; }\n";
+  fs.writeFileSync(path.join(targetApi, "src", "orders.ts"), orderSource);
+  fs.writeFileSync(path.join(targetApi, "package.json"), JSON.stringify({ name: "orders-api", scripts: { test: "node -e \"process.exit(0)\"" } }, null, 2));
+  fs.mkdirSync(path.join(targetApi, ".claude", "scripts"), { recursive: true });
+  fs.writeFileSync(
+    path.join(targetApi, ".claude", "scripts", "static-analysis-gate.js"),
+    "process.stdout.write(JSON.stringify({ ok: true, problems: [] }));\nprocess.exit(0);\n",
+  );
+  gitRunner(targetApi, "add", "--", "src/orders.ts", "package.json", ".claude/scripts/static-analysis-gate.js");
+  gitRunner(targetApi, "commit", "-m", "initial", "--");
+  const headSha = gitRunner(targetApi, "rev-parse", "HEAD");
+  const orderHash = sha256(orderSource);
+
+  const targetWeb = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-web-"));
+  rootsList.push(targetWeb);
+  gitRunner(targetWeb, "init", "-b", "main");
+  gitRunner(targetWeb, "config", "user.name", "Fixture");
+  gitRunner(targetWeb, "config", "user.email", "fixture@example.invalid");
+  gitRunner(targetWeb, "config", "remote.origin.url", "https://github.com/acme/web.git");
+  fs.mkdirSync(path.join(targetWeb, "src"), { recursive: true });
+  fs.writeFileSync(path.join(targetWeb, "src", "App.tsx"), "export function App() { return null; }\n");
+  fs.writeFileSync(path.join(targetWeb, "package.json"), JSON.stringify({ name: "orders-web", scripts: { test: "node -e \"process.exit(0)\"" } }, null, 2));
+  fs.mkdirSync(path.join(targetWeb, ".claude", "scripts"), { recursive: true });
+  fs.writeFileSync(
+    path.join(targetWeb, ".claude", "scripts", "static-analysis-gate.js"),
+    "process.stdout.write(JSON.stringify({ ok: true, problems: [] }));\nprocess.exit(0);\n",
+  );
+  gitRunner(targetWeb, "add", "--", "src/App.tsx", "package.json", ".claude/scripts/static-analysis-gate.js");
+  gitRunner(targetWeb, "commit", "-m", "initial", "--");
+
+  fs.writeFileSync(
+    path.join(knowledgeRoot, "targets.yaml"),
+    `schema_version: 1\ntargets:\n  - target_id: api\n    name: Orders API\n    remote_url: https://github.com/acme/api.git\n    status: ${options.retiredApi ? "retired" : "active"}\n    type: backend\n  - target_id: web\n    name: Orders Web\n    remote_url: https://github.com/acme/web.git\n    status: active\n    type: frontend\n`,
+  );
+  fs.mkdirSync(path.join(knowledgeRoot, ".workflow"), { recursive: true });
+  fs.writeFileSync(
+    path.join(knowledgeRoot, ".workflow", "targets.local.yaml"),
+    `schema_version: 1\ntargets:\n  api:\n    path: ${JSON.stringify(targetApi)}\n  web:\n    path: ${JSON.stringify(targetWeb)}\n`,
+  );
+  gitRunner(knowledgeRoot, "add", "--", "targets.yaml");
+  gitRunner(knowledgeRoot, "commit", "-m", "initial", "--");
+
+  const installationConfig = path.join(root, "installation.yaml");
+  fs.writeFileSync(
+    installationConfig,
+    `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledgeRoot)}\n`,
+  );
+  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = installationConfig;
+
+  const requirement = "# Requirement\n\n- REQ-007: Order summary responses stay stable when no line item exists.\n- AC-007.2: Zero-total responses for orders with no line items must stay serializable.\n";
+  const design = `# Design
+
+Design evidence format: 1
+
+## Feasibility Summary
+
+Independently implementable.
+
+## Feature-by-Feature Feasibility
+
+One declaration below defines the selected behavior.
+
+## Data Model
+
+No schema changes.
+
+## DES-011 \u2014 Order summary response
+Contract:OrderSummary.v2 \u2014 the empty-order response shape.
+Contract:OrderWeb.v1 \u2014 the web UI contract shape.
+DEC-011 \u2014 keep summary construction behind one serializer boundary.
+Evidence EVD-011: claim=DES-011 | state=confirmed | path=src/orders.ts | symbol=orderSummary | line=1 | revision=${headSha} | basis=source | tool=rg-read | hash=${orderHash}
+Evidence EVD-012: claim=Contract:OrderSummary.v2 | state=confirmed | path=src/orders.ts | symbol=orderSummary | line=1 | revision=${headSha} | basis=source | tool=rg-read | hash=${orderHash}
+Evidence EVD-013: claim=DEC-011 | state=confirmed | path=src/orders.ts | symbol=orderSummary | line=1 | revision=${headSha} | basis=source | tool=rg-read | hash=${orderHash}
+Evidence EVD-014: claim=Contract:OrderWeb.v1 | state=confirmed | path=src/orders.ts | symbol=orderSummary | line=1 | revision=${headSha} | basis=source | tool=rg-read | hash=${orderHash}
+Compatibility: unchanged
+Data/schema: unchanged
+Migration/backfill: none
+Security: none
+Fallback: retain the current empty-order handler.
+Material ambiguity: none
+
+## Modules
+
+Orders service.
+
+## Targets
+
+- api
+- web
+
+## Risks & Dependencies
+
+The per-section decision records are authoritative.
+
+## Unresolved Open Questions
+
+\u2014
+
+## Change Log
+
+- Undated fixture; no human sign-off is implied.
+`;
+
+  const singlePlan = `# Plan
+
+PlanTask format: 1
+
+## Plan Summary
+Deliver one independently verifiable contract-preserving task.
+
+## Phase 1: Orders
+
+### Task BE-004 \u2014 Preserve the order summary
+
+Objective: Return the existing order summary for an empty order.
+Why: Clients need a stable empty-order response.
+Owner: backend-engineer
+Tier: T4
+Depends on: none
+Traceability: REQ-007, AC-007.2, DES-011
+Produces: Contract:OrderSummary.v2
+Consumes: none
+Risk: shared-contract
+Human gate: none
+Status: pending
+${options.omitPlanTargets ? "" : "Targets: api\n"}
+#### Scope and constraints
+
+Preserve the response contract while handling empty line items.
+
+#### Retrieval hints
+
+Hypothesis: The OrderSummary serializer and empty-order regression are likely boundaries; confirm symbols and paths against current source.
+Query: Locate definitions and references for Contract:OrderSummary.v2 and the empty-order behavior.
+Provenance: DES-011, Contract:OrderSummary.v2
+
+#### Do not modify
+
+Authentication, database schema and unrelated response fields.
+
+#### Acceptance criteria
+
+AC-007.2: An empty order returns the documented zero total without an exception.
+
+#### Required validation and expected evidence
+
+Verify AC-007.2 with the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.
+
+#### Rollback/compatibility notes
+
+Preserve existing nonempty-order serialization. The patch can be removed independently.
+
+## Sequencing Notes
+No preceding implementation is required.
+
+## Unresolved Open Questions
+None.
+
+## Change Log
+Undated canonical fixture; no human sign-off is implied.
+`;
+
+  const multiPlan = `# Plan
+
+PlanTask format: 1
+
+## Plan Summary
+Deliver two tasks across two targets.
+
+## Phase 1: Orders
+
+### Task BE-004 \u2014 Preserve the order summary
+
+Objective: Return the existing order summary for an empty order.
+Why: Clients need a stable empty-order response.
+Owner: backend-engineer
+Tier: T4
+Depends on: none
+Traceability: REQ-007, AC-007.2, DES-011
+Produces: Contract:OrderSummary.v2
+Consumes: none
+Risk: shared-contract
+Human gate: none
+Status: pending
+Targets: api
+
+#### Scope and constraints
+
+Preserve the response contract while handling empty line items.
+
+#### Retrieval hints
+
+Hypothesis: The OrderSummary serializer and empty-order regression are likely boundaries; confirm symbols and paths against current source.
+Query: Locate definitions and references for Contract:OrderSummary.v2 and the empty-order behavior.
+Provenance: DES-011, Contract:OrderSummary.v2
+
+#### Do not modify
+
+Authentication, database schema and unrelated response fields.
+
+#### Acceptance criteria
+
+AC-007.2: An empty order returns the documented zero total without an exception.
+
+#### Required validation and expected evidence
+
+Verify AC-007.2 with the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.
+
+#### Rollback/compatibility notes
+
+Preserve existing nonempty-order serialization. The patch can be removed independently.
+
+### Task FE-005 \u2014 Render the order summary
+
+Objective: Render the order summary on web.
+Why: Users need to view order summaries.
+Owner: frontend-engineer
+Tier: T4
+Depends on: BE-004
+Traceability: REQ-007, AC-007.2, DES-011
+Produces: Contract:OrderWeb.v1
+Consumes: Contract:OrderSummary.v2
+Risk: shared-contract
+Human gate: none
+Status: pending
+Targets: web
+
+#### Scope and constraints
+
+Render order summary in web interface.
+
+#### Retrieval hints
+
+Hypothesis: App component renders order summary.
+Query: Locate definitions and references for Contract:OrderSummary.v2 and the empty-order behavior.
+Provenance: DES-011, Contract:OrderSummary.v2, Contract:OrderWeb.v1
+
+#### Do not modify
+
+Authentication, database schema and unrelated response fields.
+
+#### Acceptance criteria
+
+AC-007.2: An empty order returns the documented zero total without an exception.
+
+#### Required validation and expected evidence
+
+Verify AC-007.2 with unit tests. Record commands, exit codes and response assertions.
+
+#### Rollback/compatibility notes
+
+Preserve existing nonempty-order serialization. The patch can be removed independently.
+
+## Sequencing Notes
+No preceding implementation is required.
+
+## Unresolved Open Questions
+None.
+
+## Change Log
+Undated canonical fixture; no human sign-off is implied.
+`;
+
+  const plan = options.multiTask ? multiPlan : singlePlan;
+
+  const docs = path.join(knowledgeRoot, "_docs", "module", "orders");
+  fs.mkdirSync(docs, { recursive: true });
+  fs.writeFileSync(path.join(docs, "plan.md"), plan);
+  fs.writeFileSync(path.join(docs, "requirement.md"), requirement);
+  fs.writeFileSync(path.join(docs, "design.md"), design);
+
+  const templateContracts = path.join(fileURLToPath(new URL("../../../../templates/contracts", import.meta.url)));
+  const contracts = path.join(root, "contracts");
+  fs.mkdirSync(contracts, { recursive: true });
+  for (const role of ["backend-engineer", "frontend-engineer", "qa-engineer"]) {
+    fs.copyFileSync(path.join(templateContracts, `${role}.yaml`), path.join(contracts, `${role}.yaml`));
+  }
+
+  return { root, knowledgeRoot, targetApi, targetWeb, installationConfig };
+}
+
+describe("T-V9-011 sta bounded-run Target binding reconciliation", () => {
+  it("three-repo bounded run populates registry-validated targetBindings and preflight-derived targetWorkRoots", async () => {
+    const { root, targetApi } = threeRepoBoundedRunProject(roots, git);
+    const adapter = completingAdapter(targetApi);
+    const registry = new RuntimeRegistry([adapter]);
+    const logs: string[] = [];
+    const spy = console.log;
+    console.log = (line: string) => logs.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
+        root,
+        { createRuntimeRegistry: () => registry },
+      );
+    } finally {
+      console.log = spy;
+    }
+    expect(code).toBe(0);
+    expect(logs.some((l) => l.includes("froze run"))).toBe(true);
+    expect(logs.some((l) => l.includes("COMPLETED"))).toBe(true);
+
+    const store = new SqliteTaskStore(defaultStateDbPath(root));
+    try {
+      const task = store.loadTask("BE-004");
+      expect(task).toBeDefined();
+      expect(task!.targetBindings).toEqual({
+        targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }],
+      });
+      const canonicalApi = fs.realpathSync.native(targetApi);
+      expect(task!.runtimeTask!.scope.work_roots).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ stage: AgentStage.BACKEND_ENGINEER, target_id: "api", root: canonicalApi }),
+          expect.objectContaining({ stage: AgentStage.QA_ENGINEER, target_id: "api", root: canonicalApi }),
+        ]),
+      );
+    } finally {
+      store.close();
+    }
+  }, 30_000);
+
+  it("bounded run against a retired Target is refused before any attempt starts", async () => {
+    const { root, targetApi } = threeRepoBoundedRunProject(roots, git, { retiredApi: true });
+    const adapter = completingAdapter(targetApi);
+    const registry = new RuntimeRegistry([adapter]);
+    const errors: string[] = [];
+    const spy = console.error;
+    console.error = (line: string) => errors.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
+        root,
+        { createRuntimeRegistry: () => registry },
+      );
+    } finally {
+      console.error = spy;
+    }
+    expect(code).toBe(1);
+    expect(errors.some((l) => l.includes("[bounded-run] refused:") && l.includes("retired"))).toBe(true);
+    expect(adapter.requests).toEqual([]);
+    expect(fs.existsSync(path.join(root, "state.db"))).toBe(false);
+  });
+
+  it("bounded run against a Target with origin remote mismatch is refused before any attempt starts", async () => {
+    const { root, targetApi } = threeRepoBoundedRunProject(roots, git, { originMismatch: true });
+    const adapter = completingAdapter(targetApi);
+    const registry = new RuntimeRegistry([adapter]);
+    const errors: string[] = [];
+    const spy = console.error;
+    console.error = (line: string) => errors.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
+        root,
+        { createRuntimeRegistry: () => registry },
+      );
+    } finally {
+      console.error = spy;
+    }
+    expect(code).toBe(1);
+    expect(errors.some((l) => l.includes("[bounded-run] refused:") && l.includes("expected canonical remote_url"))).toBe(true);
+    expect(adapter.requests).toEqual([]);
+    expect(fs.existsSync(path.join(root, "state.db"))).toBe(false);
+  });
+
+  it("multi-Target run without explicit git-identity root is refused", async () => {
+    const { root, targetApi } = threeRepoBoundedRunProject(roots, git, { multiTask: true });
+    const adapter = completingAdapter(targetApi);
+    const registry = new RuntimeRegistry([adapter]);
+    const errors: string[] = [];
+    const spy = console.error;
+    console.error = (line: string) => errors.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--project-root", root, "--autonomy", "edit"],
+        root,
+        { createRuntimeRegistry: () => registry },
+      );
+    } finally {
+      console.error = spy;
+    }
+    expect(code).toBe(1);
+    expect(errors.some((l) => l.includes("[bounded-run] refused: run spans multiple Targets (api, web) \u2014 git-identity root must be named explicitly with --target-root"))).toBe(true);
+    expect(adapter.requests).toEqual([]);
+    expect(fs.existsSync(path.join(root, "state.db"))).toBe(false);
+  });
+
+  it("multi-Target run with explicit git-identity root previews cleanly under --dry-run", async () => {
+    const { root, targetApi } = threeRepoBoundedRunProject(roots, git, { multiTask: true });
+    const logs: string[] = [];
+    const spy = console.log;
+    console.log = (line: string) => logs.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-root", targetApi, "--project-root", root, "--dry-run"],
+        root,
+      );
+    } finally {
+      console.log = spy;
+    }
+    expect(code).toBe(0);
+    expect(logs.some((l) => l.includes("tasks=2"))).toBe(true);
+    expect(logs.some((l) => l.includes("target root=") && l.includes("id=api"))).toBe(true);
+    expect(fs.existsSync(path.join(root, "state.db"))).toBe(false);
+  });
+
+  it("fallback to --target-id when plan does not declare Targets:", async () => {
+    const { root, targetApi } = threeRepoBoundedRunProject(roots, git, { omitPlanTargets: true });
+    const logs: string[] = [];
+    const spy = console.log;
+    console.log = (line: string) => logs.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--dry-run"],
+        root,
+      );
+    } finally {
+      console.log = spy;
+    }
+    expect(code).toBe(0);
+    expect(logs.some((l) => l.includes("tasks=1"))).toBe(true);
+    expect(logs.some((l) => l.includes("target root=") && l.includes("id=api"))).toBe(true);
+    expect(fs.existsSync(path.join(root, "state.db"))).toBe(false);
   });
 });
