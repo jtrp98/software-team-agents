@@ -91,12 +91,67 @@ describe("runDoctor (T166)", () => {
     });
     expect(byName["Installation config (Knowledge root binding)"].status).toBe("PASS");
     expect(byName["Knowledge root standalone"].status).toBe("PASS");
-    expect(byName["Target registry (targets.yaml)"].status).toBe("PASS");
+    // V9 T-V9-003: an untyped Target is usable-with-caveat — WARNING naming the id and the fix, never a FAIL.
+    expect(byName["Target registry (targets.yaml)"].status).toBe("WARNING");
+    expect(byName["Target registry (targets.yaml)"].detail).toContain("sb-web-helper");
+    expect(byName["Target registry (targets.yaml)"].fix).toMatch(/type: frontend \| backend \| fullstack/);
+    // No typed Target exists in this fixture, so the cross-check has nothing to speak about.
+    expect(byName["Target type vs stack profile"]).toMatchObject({ status: "PASS", detail: expect.stringContaining("no typed Target") });
     // A registered target without a local mapping is usable-with-caveat.
     expect(byName["Local Target mappings (.workflow/targets.local.yaml)"].status).toBe("WARNING");
     expect(byName["Local Target mappings (.workflow/targets.local.yaml)"].fix).toMatch(/targets\.local\.yaml/);
     expect(byName["Runtime adapter (claude CLI)"].status).toBe("PASS");
     expect(exitCodeFor(report)).toBe(0);
+  });
+
+  it("T-V9-003: reports a typed Target whose type admits a role its stack profile does not scope", async () => {
+    gitInit(knowledgeRoot);
+    const nodeStack = [
+      "stack:",
+      "  profile: node",
+      "  package_manager: npm",
+      "  commands:",
+      "    install: npm install",
+      "    build: npm run build",
+      "    test: npm test",
+      "    lint: npm run lint",
+      "    typecheck: npm run typecheck",
+      "  schema_paths: []",
+      '  source_roots: ["."]',
+      `  detected_at: ${NOW}`,
+      `  fingerprint: "sha256:${"0".repeat(64)}"`,
+    ];
+    const writeTypedTarget = (id: string): string => {
+      const dir = path.join(base, id);
+      gitInit(dir);
+      fs.mkdirSync(path.join(dir, ".agent-team"), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, ".agent-team", "config.yaml"),
+        [`schema_version: 1`, `target_id: ${id}`, `registered_at: ${NOW}`, "role: dev", "overrides: []", ...nodeStack, ""].join("\n"),
+      );
+      return dir;
+    };
+    const web = writeTypedTarget("sales-web"); // node profile scopes no frontend-engineer globs
+    const api = writeTypedTarget("sales-api"); // node profile scopes backend-engineer — no finding
+    fs.writeFileSync(
+      path.join(knowledgeRoot, "targets.yaml"),
+      "schema_version: 1\ntargets:\n  - target_id: sales-web\n    name: Sales Web\n    remote_url: https://github.com/a/sales-web.git\n    status: active\n    type: frontend\n  - target_id: sales-api\n    name: Sales API\n    remote_url: https://github.com/a/sales-api.git\n    status: active\n    type: backend\n",
+    );
+    fs.mkdirSync(path.join(knowledgeRoot, ".workflow"), { recursive: true });
+    fs.writeFileSync(
+      path.join(knowledgeRoot, ".workflow", "targets.local.yaml"),
+      `schema_version: 1\ntargets:\n  sales-web:\n    path: ${JSON.stringify(web)}\n  sales-api:\n    path: ${JSON.stringify(api)}\n`,
+    );
+    fs.writeFileSync(configPath, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledgeRoot)}\n`);
+
+    const report = await runDoctor({ installationConfigPath: configPath, probe: passingProbe });
+    expect(report.checks.find((c) => c.name === "Target registry (targets.yaml)")).toMatchObject({ status: "PASS" });
+    const mismatch = report.checks.find((c) => c.name === "Target type vs stack profile");
+    expect(mismatch).toBeDefined();
+    expect(mismatch!.status).toBe("WARNING");
+    expect(mismatch!.detail).toContain("sales-web");
+    expect(mismatch!.detail).toContain("permissions.frontend-engineer");
+    expect(mismatch!.detail).not.toContain("sales-api");
   });
 
   it("reports pre-V3 omission as PASS and remains byte-for-byte read-only", async () => {

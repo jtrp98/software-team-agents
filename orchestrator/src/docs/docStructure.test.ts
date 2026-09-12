@@ -12,6 +12,7 @@ import {
   SECTION_SIZE_CEILING_BYTES,
   DOCUMENT_SIZE_CEILING_BYTES,
 } from "./docStructure.js";
+import { parseModuleTargets, readModuleTargets } from "./moduleTargets.js";
 
 const REQUIREMENT_OK = `
 # Sales CRM — Requirements
@@ -212,6 +213,64 @@ describe("design.md Change Log after an archive move (T-V6-003, policy-only — 
       "## Change Log\nOlder entries moved to `design-archive.md` — see § Change Log there.\n\n- 2026-08-20: created (current contract version)\n",
     );
     expect(checkOneDoc("design", archived, "m/design.md").ok).toBe(true);
+  });
+});
+
+describe("design.md ## Targets (T-V9-004)", () => {
+  const DESIGN_WITH_TARGETS = DESIGN_OK.replace(
+    "## Data Model",
+    "## Targets\n- sales-web (frontend-engineer)\n- sales-api\n- sales-web\n\n## Data Model",
+  );
+
+  it("marks hasTargets only when the section is present — computed outside DESIGN_HEADING_PATTERN, so the drift guard tolerates the optional property", () => {
+    expect(extractStructure("design", DESIGN_WITH_TARGETS).hasTargets).toBe(true);
+    expect("hasTargets" in extractStructure("design", DESIGN_OK)).toBe(false);
+  });
+
+  it("passes a design.md that declares Targets, and one that declares none", () => {
+    expect(checkOneDoc("design", DESIGN_WITH_TARGETS, "m/design.md").ok).toBe(true);
+    expect(checkOneDoc("design", DESIGN_OK, "m/design.md").ok).toBe(true);
+  });
+
+  it("readModuleTargets returns the declared ids in document order, de-duplicated; empty when the module declares none", () => {
+    expect(readModuleTargets(DESIGN_WITH_TARGETS)).toEqual(["sales-web", "sales-api"]);
+    expect(readModuleTargets(DESIGN_OK)).toEqual([]);
+  });
+
+  it("never flags ## Targets for carrying no DES-NNN id", () => {
+    const result = checkDesignContractSections(DESIGN_WITH_TARGETS, "m/design.md");
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
+  });
+
+  it("reports a malformed section instead of silently dropping it", () => {
+    const malformed = DESIGN_OK.replace(
+      "## Data Model",
+      [
+        "## Targets",
+        "- Sales_Web",
+        "- sales-api because the module needs it",
+        "- sales-web (qa-engineer)",
+        "",
+        "## Data Model",
+      ].join("\n"),
+    );
+    const parsed = parseModuleTargets(malformed);
+    expect(parsed.present).toBe(true);
+    // The third line's id parses; only its role annotation is invalid.
+    expect(parsed.ids).toEqual(["sales-web"]);
+    expect(parsed.problems).toHaveLength(3);
+    const result = checkOneDoc("design", malformed, "m/design.md");
+    expect(result.ok).toBe(false);
+    expect(result.problems.some((p) => p.includes("m/design.md") && p.includes("Sales_Web"))).toBe(true);
+    expect(result.problems.some((p) => p.includes("no rationale"))).toBe(true);
+    expect(result.problems.some((p) => p.includes("qa-engineer"))).toBe(true);
+  });
+
+  it("treats a look-alike heading (## Targets and more prose) as a contract section, not the declaration", () => {
+    const lookalike = DESIGN_OK.replace("## Data Model", "## Targets and rollout stages\nno DES id\n\n## Data Model");
+    expect(parseModuleTargets(lookalike).present).toBe(false);
+    expect(checkDesignContractSections(lookalike, "m/design.md").ok).toBe(false);
   });
 });
 

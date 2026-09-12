@@ -5,15 +5,33 @@ import Ajv, { type ValidateFunction } from "ajv";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 export type TargetStatus = "active" | "retired";
-export interface TargetEntry { target_id: string; name: string; remote_url: string; status: TargetStatus; }
+/** The repository's delivery role (V9 AD-1) — declared once on the Target, never derived from its stack. */
+export type TargetType = "frontend" | "backend" | "fullstack";
+export interface TargetEntry { target_id: string; name: string; remote_url: string; status: TargetStatus; type?: TargetType; }
 export interface TargetRegistry { schema_version: 1; targets: TargetEntry[]; }
 export class TargetRegistryError extends Error {}
+
+/** The engineer roles a Target type admits. Validation against bindings is T-V9-008's job; doctor reports the stack-profile side of this today. */
+export const TARGET_TYPE_ROLES: Readonly<Record<TargetType, readonly string[]>> = {
+  frontend: ["frontend-engineer"],
+  backend: ["backend-engineer"],
+  fullstack: ["frontend-engineer", "backend-engineer"],
+};
 
 const SCHEMA_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "schemas", "targets.schema.json");
 let compiled: ValidateFunction | undefined;
 function validator(): ValidateFunction {
   if (!compiled) compiled = new Ajv({ allErrors: true, strict: true }).compile(JSON.parse(fs.readFileSync(SCHEMA_PATH, "utf8")));
   return compiled;
+}
+
+function formatSchemaErrors(validate: ValidateFunction): string {
+  return (validate.errors ?? [])
+    .map((e) => {
+      const allowed = (e.params as { allowedValues?: unknown[] } | undefined)?.allowedValues;
+      return `${e.instancePath || "(root)"} ${e.message}${allowed ? ` (${allowed.map(String).join(", ")})` : ""}`;
+    })
+    .join("; ");
 }
 export function targetsPath(knowledgeRoot: string): string { return path.join(knowledgeRoot, "targets.yaml"); }
 
@@ -23,7 +41,7 @@ export function loadTargetRegistry(knowledgeRoot: string): TargetRegistry {
   try { parsed = parseYaml(fs.readFileSync(file, "utf8")); }
   catch (error) { throw new TargetRegistryError(`cannot read Target registry ${file}: ${error instanceof Error ? error.message : String(error)}`); }
   const validate = validator();
-  if (!validate(parsed)) throw new TargetRegistryError(`Target registry is invalid: ${(validate.errors ?? []).map((e) => `${e.instancePath || "(root)"} ${e.message}`).join("; ")}`);
+  if (!validate(parsed)) throw new TargetRegistryError(`Target registry is invalid: ${formatSchemaErrors(validate)}`);
   const registry = parsed as TargetRegistry;
   const duplicates = registry.targets.filter((entry, index) => registry.targets.findIndex((candidate) => candidate.target_id === entry.target_id) !== index).map((entry) => entry.target_id);
   if (duplicates.length) throw new TargetRegistryError(`Target registry has duplicate target_id values: ${[...new Set(duplicates)].join(", ")}`);
@@ -40,7 +58,7 @@ export function loadTargetRegistry(knowledgeRoot: string): TargetRegistry {
  * previous registry first so an existing target's identity cannot be replaced. */
 export function writeTargetRegistry(knowledgeRoot: string, next: TargetRegistry): void {
   const validate = validator();
-  if (!validate(next)) throw new TargetRegistryError(`Target registry is invalid: ${(validate.errors ?? []).map((e) => `${e.instancePath || "(root)"} ${e.message}`).join("; ")}`);
+  if (!validate(next)) throw new TargetRegistryError(`Target registry is invalid: ${formatSchemaErrors(validate)}`);
   const file = targetsPath(knowledgeRoot);
   if (fs.existsSync(file)) assertTargetIdsImmutable(loadTargetRegistry(knowledgeRoot), next);
   for (const target of next.targets) {

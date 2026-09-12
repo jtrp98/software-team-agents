@@ -16,6 +16,7 @@
   ],
   "properties": {
     "designEvidenceValid": { "const": true, "description": "When Design evidence format 1 is present, stable DES/Contract/DEC claims, EVD provenance, risk decisions and evidence grammar are valid; legacy designs omit this during the migration window." },
+    "hasTargets": { "const": true, "description": "## Targets — the Target ids this module spans, one per line, optional engineer role(s), ids only (V9 AD-2). Optional during the migration window: a module that declares none is unscoped, not invalid." },
     "hasFeasibilitySummary": { "const": true, "description": "## Feasibility Summary" },
     "hasFeatureFeasibility": { "const": true, "description": "## Feature-by-Feature Feasibility" },
     "hasDataModel": { "const": true, "description": "## Data Model — the confirmed Prisma schema, policies/architecture.md §7" },

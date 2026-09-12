@@ -5,7 +5,8 @@ import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { validateInstallation } from "../packaging/installValidation.js";
 import { assertStandaloneKnowledgeRoot, defaultInstallationConfigPath, loadInstallationConfig } from "./installation.js";
 import { loadLocalTargetMapping } from "./localTargets.js";
-import { loadTargetRegistry } from "./targets.js";
+import { loadTargetRegistry, TARGET_TYPE_ROLES, type TargetEntry, type TargetType } from "./targets.js";
+import { loadStackProfile } from "../profile/projectProfile.js";
 import { detectInstructionSurface, isNestedInstruction, type InstructionSurfaceEntry } from "./ownership.js";
 import { isTargetInitialized, loadTargetConfig, readTargetManifest, type TargetConfig, type TargetManifest } from "../targetcli/targetMeta.js";
 import { detectWorkspaceKind } from "../targetcli/roleWorkspace.js";
@@ -232,6 +233,16 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
     checks.push(
       check("Target registry (targets.yaml)", "create targets.yaml in the Knowledge root, or remove it to stay in legacy single-repo mode", () => {
         registry = loadTargetRegistry(knowledgeRootValue!);
+        // A Target with no declared type is usable-with-caveat (V9 T-V9-003):
+        // nothing validates engineer roles against it until a person declares one.
+        const untyped = registry.targets.filter((target) => target.type === undefined).map((target) => target.target_id);
+        if (untyped.length > 0) {
+          return {
+            status: "WARNING",
+            detail: `${untyped.length} of ${registry.targets.length} target(s) declare no type: ${untyped.join(", ")}`,
+            fix: `declare type: frontend | backend | fullstack under each id in targets.yaml (${untyped.join(", ")})`,
+          };
+        }
         return { status: "PASS", detail: `${registry.targets.length} target(s registered)` };
       }),
     );
@@ -249,6 +260,60 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
         } catch (error) {
           return { status: "WARNING", detail: error instanceof Error ? error.message : String(error), fix: "create/fix .workflow/targets.local.yaml in the Knowledge root" };
         }
+      }),
+    );
+
+    checks.push(
+      check("Target type vs stack profile", "correct the Target's type in targets.yaml, or declare the missing permissions.<role> in the resolved stacks/<profile>/stack.yaml", () => {
+        if (!registry) throw new Error("registry unavailable");
+        const typed = registry.targets.filter((target): target is TargetEntry & { type: TargetType } => target.type !== undefined);
+        if (typed.length === 0) return { status: "PASS", detail: "no typed Target to cross-check yet" };
+        let mappings: ReturnType<typeof loadLocalTargetMapping>;
+        try {
+          mappings = loadLocalTargetMapping(knowledgeRootValue!, registry, defaultProjectRoot());
+        } catch (error) {
+          return { status: "WARNING", detail: `cannot cross-check typed Targets: ${error instanceof Error ? error.message : String(error)}`, fix: "create/fix .workflow/targets.local.yaml in the Knowledge root" };
+        }
+        const localPathById = new Map(mappings.map((mapping) => [mapping.target_id, mapping.path]));
+        const problems: string[] = [];
+        let checked = 0;
+        for (const target of typed) {
+          const localPath = localPathById.get(target.target_id);
+          // Absent mappings and unresolved stacks are the two sibling checks'
+          // findings already — this cross-check only speaks when both exist.
+          if (!localPath) continue;
+          let config: TargetConfig | undefined;
+          try {
+            config = loadTargetConfig(localPath);
+          } catch {
+            config = undefined;
+          }
+          if (!config?.stack) continue;
+          let profile;
+          try {
+            profile = loadStackProfile(config.stack.profile, defaultProjectRoot());
+          } catch {
+            continue;
+          }
+          checked++;
+          for (const role of TARGET_TYPE_ROLES[target.type]) {
+            if (!profile.permissions[role]) {
+              problems.push(
+                `${target.target_id} declares type "${target.type}" (admits ${role}) but ` +
+                  `stacks/${config.stack.profile}/stack.yaml declares no permissions.${role} — ` +
+                  "that engineer would resolve an empty write set and fail on its first write",
+              );
+            }
+          }
+        }
+        if (problems.length > 0) return { status: "WARNING", detail: problems.join("; ") };
+        const skipped = typed.length - checked;
+        return {
+          status: "PASS",
+          detail:
+            `${checked} typed target(s) cross-checked against their resolved stack profile(s)` +
+            (skipped > 0 ? `; ${skipped} skipped (no local checkout or resolved stack)` : ""),
+        };
       }),
     );
   } else {
