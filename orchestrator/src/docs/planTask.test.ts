@@ -1,8 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
+import { z } from "zod";
 import { PlanTaskSchema, parseCanonicalPlan, planTaskHash, renderCanonicalTasks, migrateLegacyTaskTable, type PlanTask } from "./planTask.js";
 import { parseLegacyPlanTasks, checkPlanGraphForModule } from "./planGraph.js";
 import { checkOneDoc } from "./docStructure.js";
@@ -85,5 +87,37 @@ describe("explicit migration window",()=>{
     const result=migrateLegacyTaskTable(md,refs);expect(result.problems).toEqual([]);expect(result.tasks).toEqual([t]);expect(parseCanonicalPlan(result.markdown!,refs).tasks).toEqual([t]);
     expect(result.markdown).toContain("Preserve this authored strategy.");expect(result.markdown).toContain("Preserve this authored history.");
     expect(migrateLegacyTaskTable(md.replace("| Objective |","| Owner |"),refs).problems.join(" ")).toContain("duplicate/unknown");
+  });
+});
+
+/** T-V9-002 — the PlanTask hash invariant, frozen before any field is added (gates T-V9-005).
+ *
+ *  Rule for authors of new PlanTask fields: optional fields are APPENDED at the end of the shape
+ *  (zod `.extend`) — never inserted mid-shape, never given a non-`undefined` default.
+ *  Mechanism, asserted below: planTaskHash hashes JSON.stringify(parse(task)); JSON.stringify
+ *  omits keys whose value is `undefined`, so an ABSENT optional key is hash-invisible wherever it
+ *  sits in the shape, while a PRESENT value — authored or default-filled — is hash-visible at its
+ *  shape position. Append-at-the-end is the convention that keeps that visibility auditable, and
+ *  T-V9-005 must re-run these assertions after adding `targets`. `stableHash`
+ *  (artifacts/executionPacket.ts) is a different mechanism on purpose — do not switch
+ *  planTaskHash to it; that would move every existing hash. */
+describe("planTaskHash invariant (T-V9-002)",()=>{
+  /** Mirrors planTaskHash over a caller-supplied schema, so the invariant can be exercised on a
+   *  local shape extension without touching the shipped PlanTaskSchema. */
+  const hashOver=(schema:{parse(task:unknown):unknown},task:unknown)=>{
+    const {status:_status,...semantic}=schema.parse(task) as Record<string,unknown>;
+    return createHash("sha256").update(JSON.stringify(semantic)).digest("hex");
+  };
+  const hashOfFixture=planTaskHash(task());
+  it("pins the literal hash of the fixed fixture",()=>expect(hashOfFixture).toBe("654e7da045c8bc6913d424026f2db546732c8d94df4f46dbba4359ef93d6ec76"));
+  it("mirrors planTaskHash exactly when the shape is unchanged",()=>expect(hashOver(PlanTaskSchema,task())).toBe(hashOfFixture));
+  it("an optional key appended to the shape and left absent leaves the hash byte-identical",()=>{
+    expect(hashOver(PlanTaskSchema.extend({targets:z.array(z.string()).optional()}),task())).toBe(hashOfFixture);
+  });
+  it("a present value for the appended key moves the hash — the mechanism, not just the absence",()=>{
+    expect(hashOver(PlanTaskSchema.extend({targets:z.array(z.string()).optional()}),{...task(),targets:["tgt-a"]})).not.toBe(hashOfFixture);
+  });
+  it("a non-`undefined` default is hash-visible — PlanTask fields must never carry one",()=>{
+    expect(hashOver(PlanTaskSchema.extend({targets:z.array(z.string()).default([])}),task())).not.toBe(hashOfFixture);
   });
 });
