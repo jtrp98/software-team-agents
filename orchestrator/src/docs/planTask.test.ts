@@ -8,6 +8,8 @@ import { z } from "zod";
 import { PlanTaskSchema, parseCanonicalPlan, planTaskHash, renderCanonicalTasks, migrateLegacyTaskTable, type PlanTask } from "./planTask.js";
 import { parseLegacyPlanTasks, checkPlanGraphForModule } from "./planGraph.js";
 import { checkOneDoc } from "./docStructure.js";
+import { assertRuntimeTaskFresh } from "../orchestrator/runtimeTask.js";
+import { runtimeTaskFixture } from "../runtime/packetFixture.testSupport.js";
 
 const fixture = fs.readFileSync(fileURLToPath(new URL("./fixtures/canonical-plan.md",import.meta.url)),"utf8");
 const refs = {requirementMd:"REQ-007 AC-007.2",designMd:"DES-011 Contract:OrderSummary.v2"};
@@ -62,7 +64,7 @@ describe("canonical PlanTask v1",()=>{
     expect(planTaskHash(Object.fromEntries(Object.entries(task()).reverse()) as PlanTask)).toBe(planTaskHash(task()));
   });
   it("semantic fields each affect hash; generated roundtrips preserve intent for 40 variants",()=>{
-    const changes: Partial<PlanTask>={id:"BE-005",phase:2,title:"Changed",objective:"Different outcome",why:"Different rationale",owner:"qa-engineer",tier:"T3",dependsOn:["BE-003"],traceability:["REQ-008","AC-008.1","DES-012"],produces:["Contract:Other.v1"],consumes:["Contract:Other.v1"],risk:["high"],humanGate:["schema"],scopeAndConstraints:"Changed",retrievalHints:"Changed",doNotModify:"Changed",acceptanceCriteria:"Changed",validationAndEvidence:"Changed",compatibility:"Changed"};
+    const changes: Partial<PlanTask>={id:"BE-005",phase:2,title:"Changed",objective:"Different outcome",why:"Different rationale",owner:"qa-engineer",tier:"T3",dependsOn:["BE-003"],traceability:["REQ-008","AC-008.1","DES-012"],produces:["Contract:Other.v1"],consumes:["Contract:Other.v1"],risk:["high"],humanGate:["schema"],scopeAndConstraints:"Changed",retrievalHints:"Changed",doNotModify:"Changed",acceptanceCriteria:"Changed",validationAndEvidence:"Changed",compatibility:"Changed",targets:["targets-changed"]};
     for(const [k,v] of Object.entries(changes)) expect(planTaskHash({...task(),[k]:v})).not.toBe(planTaskHash(task()));
     for(let i=0;i<40;i++){const t={...task(),title:`Case ${i}`,why:`Reason ${i}\u0e01`,tier:undefined};expect(parseCanonicalPlan(renderCanonicalTasks([t]),refs).tasks[0]).toEqual(t);}
   });
@@ -121,3 +123,107 @@ describe("planTaskHash invariant (T-V9-002)",()=>{
     expect(hashOver(PlanTaskSchema.extend({targets:z.array(z.string()).default([])}),task())).not.toBe(hashOfFixture);
   });
 });
+
+describe("PlanTask optional Targets: field (T-V9-005)", () => {
+  const hashOfFixture = planTaskHash(task());
+
+  it("canonical plan without Targets: parses with targets === undefined and byte-identical hash", () => {
+    const t = task();
+    expect(t.targets).toBeUndefined();
+    expect(planTaskHash(t)).toBe("654e7da045c8bc6913d424026f2db546732c8d94df4f46dbba4359ef93d6ec76");
+    expect(planTaskHash(t)).toBe(hashOfFixture);
+  });
+
+  it("parses a plan with Targets: sales-api, sales-web to both ids", () => {
+    const md = fixture.replace("Status: pending", "Targets: sales-api, sales-web\nStatus: pending");
+    const r = parseCanonicalPlan(md, refs);
+    expect(r.problems).toEqual([]);
+    expect(r.tasks[0].targets).toEqual(["sales-api", "sales-web"]);
+  });
+
+  it("parses Targets: none to an empty array", () => {
+    const md = fixture.replace("Status: pending", "Targets: none\nStatus: pending");
+    const r = parseCanonicalPlan(md, refs);
+    expect(r.problems).toEqual([]);
+    expect(r.tasks[0].targets).toEqual([]);
+  });
+
+  it("renderCanonicalTasks round-trips a task without Targets (omits the line)", () => {
+    const rendered = renderCanonicalTasks([task()]);
+    expect(rendered).not.toContain("Targets:");
+    const r = parseCanonicalPlan(rendered, refs);
+    expect(r.problems).toEqual([]);
+    expect(r.tasks[0].targets).toBeUndefined();
+    expect(r.tasks[0]).toEqual(task());
+  });
+
+  it("renderCanonicalTasks round-trips a task with Targets: sales-api, sales-web", () => {
+    const tWithTargets: PlanTask = { ...task(), targets: ["sales-api", "sales-web"] };
+    const rendered = renderCanonicalTasks([tWithTargets]);
+    expect(rendered).toContain("Targets: sales-api, sales-web");
+    const r = parseCanonicalPlan(rendered, refs);
+    expect(r.problems).toEqual([]);
+    expect(r.tasks[0].targets).toEqual(["sales-api", "sales-web"]);
+    expect(r.tasks[0]).toEqual(tWithTargets);
+  });
+
+  it("renderCanonicalTasks round-trips a task with Targets: none", () => {
+    const tEmptyTargets: PlanTask = { ...task(), targets: [] };
+    const rendered = renderCanonicalTasks([tEmptyTargets]);
+    expect(rendered).toContain("Targets: none");
+    const r = parseCanonicalPlan(rendered, refs);
+    expect(r.problems).toEqual([]);
+    expect(r.tasks[0].targets).toEqual([]);
+    expect(r.tasks[0]).toEqual(tEmptyTargets);
+  });
+
+  it("reports a duplicate id in one task", () => {
+    const md = fixture.replace("Status: pending", "Targets: sales-api, sales-api\nStatus: pending");
+    const r = parseCanonicalPlan(md, refs);
+    expect(r.tasks).toEqual([]);
+    expect(r.problems.join(" ")).toContain("targets: duplicate entry");
+  });
+
+  it("reports a malformed target id", () => {
+    const md = fixture.replace("Status: pending", "Targets: Sales_Api\nStatus: pending");
+    const r = parseCanonicalPlan(md, refs);
+    expect(r.tasks).toEqual([]);
+    expect(r.problems.join(" ")).toContain("targets.0");
+  });
+
+  it("reports duplicate Targets: metadata line in one task", () => {
+    const md = fixture.replace("Status: pending", "Targets: sales-api\nTargets: sales-web\nStatus: pending");
+    const r = parseCanonicalPlan(md, refs);
+    expect(r.tasks).toEqual([]);
+    expect(r.problems.join(" ")).toContain("duplicate field 'Targets'");
+  });
+
+  it("targets presence and ordering moves the planTaskHash", () => {
+    const baseHash = planTaskHash(task());
+    const withOne = planTaskHash({ ...task(), targets: ["sales-api"] });
+    const withTwo = planTaskHash({ ...task(), targets: ["sales-api", "sales-web"] });
+    const withTwoReversed = planTaskHash({ ...task(), targets: ["sales-web", "sales-api"] });
+    expect(withOne).not.toBe(baseHash);
+    expect(withTwo).not.toBe(baseHash);
+    expect(withTwo).not.toBe(withOne);
+    expect(withTwoReversed).not.toBe(withTwo);
+  });
+
+  it("assertRuntimeTaskFresh reports no drift for a packet compiled without Targets", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "v9-runtask-fresh-"));
+    try {
+      const runtimeTask = runtimeTaskFixture(dir);
+      expect(() => assertRuntimeTaskFresh(runtimeTask)).not.toThrow();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not validate target ids against targets.yaml yet (deferred to T-V9-009)", () => {
+    const md = fixture.replace("Status: pending", "Targets: non-existent-target-999\nStatus: pending");
+    const r = parseCanonicalPlan(md, refs);
+    expect(r.problems).toEqual([]);
+    expect(r.tasks[0].targets).toEqual(["non-existent-target-999"]);
+  });
+});
+

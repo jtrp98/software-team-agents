@@ -10,6 +10,7 @@ const taskId = z.string().regex(/^[A-Z][A-Z0-9]*-[A-Za-z0-9][A-Za-z0-9._-]*$/);
 const traceId = z.string().regex(/^(?:REQ-\d+|AC-\d+(?:\.\d+)?|DES-\d+|DEC-\d+)$/);
 const contractId = z.string().regex(/^Contract:[A-Za-z][A-Za-z0-9_.-]*\.v[1-9]\d*$/);
 const unique = <T extends z.ZodType>(item: T) => z.array(item).refine(xs => new Set(xs).size === xs.length, "duplicate entry");
+const targetId = z.string().regex(/^[a-z][a-z0-9-]*$/);
 
 /** Internal normalization only. plan.md is the authored authority; no JSON sidecar. */
 export const PlanTaskSchema = z.strictObject({
@@ -34,6 +35,7 @@ export const PlanTaskSchema = z.strictObject({
   acceptanceCriteria: text,
   validationAndEvidence: text,
   compatibility: text,
+  targets: unique(targetId).optional(),
 });
 export type PlanTask = z.infer<typeof PlanTaskSchema>;
 export const PLAN_TASK_FIELD_CONSUMERS: Record<keyof PlanTask, readonly string[]> = {
@@ -45,6 +47,7 @@ export const PLAN_TASK_FIELD_CONSUMERS: Record<keyof PlanTask, readonly string[]
   retrievalHints: ["context resolver", "DEV", "QA"], doNotModify: ["compiler", "DEV", "QA"],
   acceptanceCriteria: ["compiler", "DEV", "QA"], validationAndEvidence: ["deterministic verifier", "DEV", "QA"],
   compatibility: ["DEV", "QA", "rollback"],
+  targets: ["plan validator", "compiler", "DEV", "QA"],
 };
 export interface PlanReferences { requirementMd: string; designMd: string }
 export interface CanonicalPlan { tasks: PlanTask[]; problems: string[] }
@@ -53,6 +56,7 @@ const fields = {
   "Objective": "objective", "Why": "why", "Owner": "owner", "Tier": "tier",
   "Depends on": "dependsOn", "Traceability": "traceability", "Produces": "produces",
   "Consumes": "consumes", "Risk": "risk", "Human gate": "humanGate", "Status": "status",
+  "Targets": "targets",
 } as const;
 const bodies = {
   "Scope and constraints": "scopeAndConstraints", "Retrieval hints": "retrievalHints",
@@ -60,7 +64,7 @@ const bodies = {
   "Required validation and expected evidence": "validationAndEvidence",
   "Rollback/compatibility notes": "compatibility",
 } as const;
-const listFields = new Set(["dependsOn", "traceability", "produces", "consumes", "risk", "humanGate"]);
+const listFields = new Set(["dependsOn", "traceability", "produces", "consumes", "risk", "humanGate", "targets"]);
 export const isCanonicalPlan = (md: string): boolean => /^\s*PlanTask\s+format\b|^#{1,6}\s+Task\b/im.test(md);
 const normalize = (s: string) => s.replace(/\r\n?/g, "\n").trim();
 
@@ -265,6 +269,7 @@ export function migrateLegacyTaskTable(markdown: string, refs?: PlanReferences):
       for (const [label,key] of Object.entries({...fields,...bodies})) {
         const value = values[label];
         if (key === "tier" && !value) continue;
+        if (key === "targets" && !value) continue;
         obj[key] = listFields.has(key) && value !== undefined ? (value === "none" ? [] : value.split(",").map(s=>s.trim())) : value;
       }
       const parsed = PlanTaskSchema.safeParse(obj);

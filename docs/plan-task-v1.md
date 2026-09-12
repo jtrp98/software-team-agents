@@ -15,8 +15,11 @@ Use exactly one `PlanTask format: 1`, `## Phase N` (positive integer), then
 `### Task BE-004 — title` and the example's metadata lines and `####` headings.
 IDs accept a role prefix and nonempty alphanumeric suffix (also dot, dash and
 underscore). Labels are case-sensitive. Fields/headings occur once; unknown,
-duplicate or empty fields fail. Tier is the only optional metadata line and
-accepts T2–T6; runtime routing/role Tier policy is outside this parser.
+duplicate or empty fields fail. Tier and Targets are optional metadata lines. Tier accepts T2–T6; runtime
+routing/role Tier policy is outside this parser. Targets is an optional list of
+target IDs (or none) naming the repositories the task touches; it carries target
+IDs only, while the engineer role remains on Owner (pairing them is validated by
+downstream checkers, never derived from target types).
 Owner is one of the eleven agent role names. Status is pending, in_progress,
 verified or blocked. Lists use comma-separated values or exactly `none` for
 an empty list. Traceability must contain REQ, AC and DES IDs and may select `DEC-NNN`;
@@ -60,7 +63,8 @@ would be ambiguous is refused; explicit empty contract lists mean independent.
 Every field is executable input, not formatting. Version and identity feed the
 compiler/migration; phase, dependencies, produces and consumes feed the DAG,
 readiness and handoff; owner feeds runtime; Tier is a per-task recommendation to
-the central route resolver. Traceability and retrieval hints select bounded
+the central route resolver; Targets feeds plan validation, packet compilation,
+and multi-target DEV/QA execution. Traceability and retrieval hints select bounded
 context. Risk and human gates feed gate policy. Status feeds readiness/QA sync.
 Objective/why/title, scope, do-not-modify, acceptance, validation/evidence and
 compatibility feed DEV/QA packets, deterministic verification, and rollback.
