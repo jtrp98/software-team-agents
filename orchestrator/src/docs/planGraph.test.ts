@@ -11,6 +11,7 @@ import {
   type PlanTaskRow,
 } from "./planGraph.js";
 import { parseModelTiers } from "../runtime/modelTiers.js";
+import { renderCanonicalTasks, type PlanTask } from "./planTask.js";
 
 function row(over: Partial<PlanTaskRow> & { id: string }): PlanTaskRow {
   return {
@@ -482,5 +483,188 @@ describe("checkPlanGraphs", () => {
     });
     const result = checkPlanGraphs(root);
     expect(result.ok).toBe(true);
+  });
+
+  // --- T-V9-009: --check-plan validates a task's Targets: --------------------
+
+  const TARGETS_YAML = `schema_version: 1
+targets:
+  - target_id: sales-api
+    name: Sales API
+    remote_url: https://example.com/sales-api.git
+    status: active
+    type: backend
+  - target_id: sales-web
+    name: Sales Web
+    remote_url: https://example.com/sales-web.git
+    status: active
+    type: frontend
+  - target_id: sales-all
+    name: Sales Fullstack
+    remote_url: https://example.com/sales-all.git
+    status: active
+    type: fullstack
+  - target_id: sales-worker
+    name: Retired worker
+    remote_url: https://example.com/sales-worker.git
+    status: retired
+`;
+
+  const REQ_MD = "REQ-001\nAC-001.1\n";
+  const DESIGN_MD = `## Feature-by-Feature Feasibility
+DES-001 — covers REQ-001: order summary contract.
+Contract:OrderSummary.v1 — response shape.
+
+## Targets
+- sales-api
+- sales-web
+`;
+
+  const CANONICAL_TASK: PlanTask = {
+    version: 1,
+    id: "BE-101",
+    phase: 1,
+    title: "Order summary contract",
+    objective: "Serve the order summary event through the API contract.",
+    why: "The web client renders the summary on its order screen.",
+    owner: "backend-engineer",
+    dependsOn: [],
+    traceability: ["REQ-001", "AC-001.1", "DES-001"],
+    produces: ["Contract:OrderSummary.v1"],
+    consumes: [],
+    risk: ["low"],
+    humanGate: [],
+    status: "pending",
+    scopeAndConstraints: "Keep the response contract stable while the change lands across repositories.",
+    retrievalHints: "Hypothesis: The order summary serializer is the boundary; confirm against current source.\nQuery: Locate definitions and references for Contract:OrderSummary.v1.\nProvenance: DES-001, Contract:OrderSummary.v1",
+    doNotModify: "Authentication, database schema and unrelated response fields.",
+    acceptanceCriteria: "AC-001.1: An empty order returns the documented zero total without an exception.",
+    validationAndEvidence: "Verify AC-001.1 with the empty-order regression; record commands, exit codes and response assertions.",
+    compatibility: "Existing nonempty orders serialize unchanged and the patch reverts independently.",
+  };
+
+  const canonicalPlanFile = (targets?: string[]): string =>
+    renderCanonicalTasks([targets === undefined ? CANONICAL_TASK : { ...CANONICAL_TASK, targets }]);
+
+  const targetProject = (planMd: string, extra: Record<string, string> = {}): string =>
+    project({
+      "targets.yaml": TARGETS_YAML,
+      "_docs/module/sales/requirement.md": REQ_MD,
+      "_docs/module/sales/design.md": DESIGN_MD,
+      "_docs/module/sales/plan.md": planMd,
+      ...extra,
+    });
+
+  it("T-V9-009 — fails a task naming an unknown Target, naming task id, Target id and the fix", () => {
+    const result = checkPlanGraphs(targetProject(canonicalPlanFile(["sales-ghost"])));
+    expect(result.ok).toBe(false);
+    const problem = result.problems.join("\n");
+    expect(problem).toContain('task BE-101: Target "sales-ghost" is not present');
+    expect(problem).toContain("targets.yaml");
+    expect(problem).toContain('add "sales-ghost" to targets.yaml or remove it');
+  });
+
+  it("T-V9-009 — fails a task naming a retired Target", () => {
+    const result = checkPlanGraphs(
+      targetProject(canonicalPlanFile(["sales-worker"]), {
+        "_docs/module/sales/design.md": `${DESIGN_MD}- sales-worker\n`,
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.problems.join("\n")).toContain('task BE-101: Target "sales-worker" is retired');
+    expect(result.problems.join("\n")).toContain("reactivate it in targets.yaml");
+  });
+
+  it("T-V9-009 — fails a task naming a Target outside the module's declared ## Targets set", () => {
+    const result = checkPlanGraphs(targetProject(canonicalPlanFile(["sales-all"])));
+    expect(result.ok).toBe(false);
+    expect(result.problems.join("\n")).toContain(
+      'task BE-101: Target "sales-all" is outside module "sales" declared ## Targets (sales-api, sales-web)',
+    );
+  });
+
+  it("T-V9-009 — fails frontend-engineer against a type: backend Target", () => {
+    const result = checkPlanGraphs(
+      targetProject(canonicalPlanFile(["sales-api"]).replace("Owner: backend-engineer", "Owner: frontend-engineer")),
+    );
+    expect(result.ok).toBe(false);
+    const problem = result.problems.join("\n");
+    expect(problem).toContain('Owner "frontend-engineer" is not admitted by Target "sales-api" type "backend"');
+    expect(problem).toContain("backend-engineer");
+  });
+
+  it("T-V9-009 — passes frontend-engineer and backend-engineer against a declared type: fullstack Target", () => {
+    const design = `${DESIGN_MD}- sales-all\n`;
+    const frontend = checkPlanGraphs(
+      targetProject(canonicalPlanFile(["sales-all"]).replace("Owner: backend-engineer", "Owner: frontend-engineer"), {
+        "_docs/module/sales/design.md": design,
+      }),
+    );
+    expect(frontend.ok).toBe(true);
+    const backend = checkPlanGraphs(
+      targetProject(canonicalPlanFile(["sales-all"]), { "_docs/module/sales/design.md": design }),
+    );
+    expect(backend.ok).toBe(true);
+  });
+
+  it("T-V9-009 — a task with no Targets: is unaffected, even where targets.yaml is unreachable", () => {
+    const root = project({ "_docs/module/sales/plan.md": TABLE_PLAN });
+    const legacy = checkPlanGraphs(root);
+    expect(legacy.ok).toBe(true);
+    expect(legacy.notes.join("\n")).not.toContain("targets.yaml");
+
+    const canonical = checkPlanGraphs(
+      project({
+        "_docs/module/sales/requirement.md": REQ_MD,
+        "_docs/module/sales/design.md": DESIGN_MD,
+        "_docs/module/sales/plan.md": canonicalPlanFile(undefined),
+      }),
+    );
+    expect(canonical.ok).toBe(true);
+    expect(canonical.notes.join("\n")).not.toContain("Target checks");
+  });
+
+  it("T-V9-009 — an unreachable targets.yaml skips the Target checks with a note, and the rest of the check is unchanged", () => {
+    const result = checkPlanGraphs(
+      project({
+        "_docs/module/sales/requirement.md": REQ_MD,
+        "_docs/module/sales/design.md": DESIGN_MD,
+        "_docs/module/sales/plan.md": canonicalPlanFile(["sales-api", "sales-web"]),
+      }),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.notes.join("\n")).toContain("targets.yaml is not reachable");
+    expect(result.notes.join("\n")).toContain("Target checks on 1 task(s) declaring Targets: are skipped");
+    expect(result.notes.join("\n")).toContain("sales/plan.md: 1 canonical task(s), format 1");
+  });
+
+  it("T-V9-009 — a present-but-invalid targets.yaml fails the check instead of skipping", () => {
+    const result = checkPlanGraphs(
+      targetProject(canonicalPlanFile(["sales-api"]), {
+        "targets.yaml": "schema_version: 1\ntargets:\n  - target_id: Sales-Api\n    name: Bad id case\n    remote_url: not-a-remote\n    status: retired-unknown\n",
+      }),
+    );
+    expect(result.ok).toBe(false);
+    expect(result.problems.join("\n")).toContain("Target registry is invalid");
+  });
+
+  it("T-V9-009 — an untyped Target passes plan validation (schema v1 compatibility), like binding validation", () => {
+    const result = checkPlanGraphs(
+      targetProject(canonicalPlanFile(["sales-api"]), {
+        "targets.yaml": "schema_version: 1\ntargets:\n  - target_id: sales-api\n    name: Sales API\n    remote_url: https://example.com/sales-api.git\n    status: active\n",
+      }),
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("T-V9-009 — a module declaring no Targets is exempt, and the exemption is logged", () => {
+    const result = checkPlanGraphs(
+      targetProject(canonicalPlanFile(["sales-api"]), {
+        "_docs/module/sales/design.md": DESIGN_MD.replace("## Targets\n- sales-api\n- sales-web\n", ""),
+      }),
+    );
+    expect(result.ok).toBe(true);
+    expect(result.notes.join("\n")).toContain('module "sales" declares no Targets');
+    expect(result.notes.join("\n")).toContain("remains unscoped");
   });
 });

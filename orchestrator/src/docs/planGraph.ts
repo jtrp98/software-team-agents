@@ -7,6 +7,15 @@ import { extractIds } from "../traceability/traceability.js";
 import { loadModelTiers, ModelTiersInvalidError, type ModelTiers } from "../runtime/modelTiers.js";
 import { detectWorkspaceKind } from "../targetcli/roleWorkspace.js";
 import { isCanonicalPlan, parseCanonicalPlan, type PlanTask } from "./planTask.js";
+import { readModuleTargets } from "./moduleTargets.js";
+import {
+  loadTargetRegistry,
+  TARGET_TYPE_ROLES,
+  targetById,
+  targetsPath,
+  TargetRegistryError,
+  type TargetRegistry,
+} from "../threeRepo/targets.js";
 
 /**
  * The plan.md task table as a machine-checkable graph.
@@ -469,12 +478,99 @@ export interface PlanGraphModuleResult {
   notes: string[];
 }
 
+/** Loads `targets.yaml` for Target checks; `null` when it is not reachable from this workspace. */
+export type PlanTargetRegistryLoader = () => TargetRegistry | null;
+
+/**
+ * The engineer roles a Target's `type` admits — the only owners a type can
+ * validate. Other owners carrying `Targets:` are still checked for resolution,
+ * retirement and module scope; AD-4 keeps their stages derived from the work,
+ * never from the Target type.
+ */
+const ENGINEER_TARGET_OWNERS: ReadonlySet<string> = new Set(["frontend-engineer", "backend-engineer"]);
+
+export interface PlanTaskTargetCheckResult {
+  errors: string[];
+  notes: string[];
+}
+
+/**
+ * Validates every canonical task's authored `Targets:` against the registry the
+ * T-V9-007 resolver reads — each id must resolve in `targets.yaml`, be active,
+ * sit inside the module's declared `## Targets` set (T-V9-004's parser), and
+ * have a `type` that admits the task's `Owner` (the `TARGET_TYPE_ROLES` table
+ * T-V9-008's binding validation uses, so plan and runtime give one answer).
+ * Every error names the task id, the Target id and the fix.
+ *
+ * `Targets:` is optional: a plan whose tasks declare none engages nothing here,
+ * and a workspace where `targets.yaml` is unreachable skips the checks with a
+ * note — the same failure-tolerant reading `loadModelTiers` uses for its
+ * missing table. A registry that exists but is invalid still fails the check:
+ * skipping on a broken registry would hide exactly the fact a plan author needs.
+ */
+export function validatePlanTaskTargets(
+  tasks: readonly PlanTask[],
+  context: { module: string; designMd: string | null; projectRoot: string; loadRegistry: PlanTargetRegistryLoader },
+): PlanTaskTargetCheckResult {
+  const result: PlanTaskTargetCheckResult = { errors: [], notes: [] };
+  const declaring = tasks.filter((task) => (task.targets?.length ?? 0) > 0);
+  if (declaring.length === 0) return result;
+
+  const registry = context.loadRegistry();
+  if (registry === null) {
+    result.notes.push(
+      `targets.yaml is not reachable from ${targetsPath(context.projectRoot)} — Target checks on ${declaring.length} task(s) declaring Targets: are skipped; run --check-plan where the registry lives (the Knowledge workspace) to validate them`,
+    );
+    return result;
+  }
+
+  const declared = context.designMd === null ? [] : readModuleTargets(context.designMd);
+  const designPath = path.join(context.projectRoot, "_docs", "module", context.module, "design.md");
+  if (declared.length === 0) {
+    result.notes.push(
+      `module "${context.module}" declares no Targets in ${designPath}; module-scope validation of Targets: is exempt and the module remains unscoped`,
+    );
+  }
+  const declaredSet = new Set(declared);
+
+  for (const task of declaring) {
+    for (const targetId of task.targets!) {
+      let entry;
+      try {
+        entry = targetById(registry, targetId);
+      } catch {
+        result.errors.push(
+          `task ${task.id}: Target "${targetId}" is not present in ${targetsPath(context.projectRoot)} — add "${targetId}" to targets.yaml or remove it from this task's Targets:`,
+        );
+        continue;
+      }
+      if (entry.status === "retired") {
+        result.errors.push(
+          `task ${task.id}: Target "${targetId}" is retired — reactivate it in targets.yaml before planning work against it, or remove it from this task's Targets:`,
+        );
+      }
+      if (declared.length > 0 && !declaredSet.has(targetId)) {
+        result.errors.push(
+          `task ${task.id}: Target "${targetId}" is outside module "${context.module}" declared ## Targets (${declared.join(", ")}) — add "${targetId}" to ${designPath} ## Targets, or bind the task to a declared Target`,
+        );
+      }
+      if (entry.type !== undefined && ENGINEER_TARGET_OWNERS.has(task.owner) && !TARGET_TYPE_ROLES[entry.type].includes(task.owner)) {
+        result.errors.push(
+          `task ${task.id}: Owner "${task.owner}" is not admitted by Target "${targetId}" type "${entry.type}" (${TARGET_TYPE_ROLES[entry.type].join(", ")}) — change the task's Owner to an admitted role, or correct the Target type in targets.yaml if the repository scope is wrong`,
+        );
+      }
+    }
+  }
+  return result;
+}
+
 /** Validates one module's plan.md (and its design.md DES refs, when design.md exists). */
 export function checkPlanGraphForModule(
   docsModuleDir: string,
   module: string,
   modelTiers: ModelTiers | null = null,
   isKnowledgeWorkspace = false,
+  targetRegistryLoader: PlanTargetRegistryLoader | null = null,
 ): PlanGraphModuleResult {
   const planPath = path.join(docsModuleDir, module, "plan.md");
   const notes: string[] = [];
@@ -489,8 +585,18 @@ export function checkPlanGraphForModule(
     const requirementPath = path.join(docsModuleDir, module, "requirement.md");
     const requirementMd = fs.existsSync(requirementPath) ? fs.readFileSync(requirementPath, "utf8") : "";
     const canonical = parseCanonicalPlan(planMd, { requirementMd, designMd: designMd ?? "" });
-    return { module, ok: canonical.problems.length === 0, errors: canonical.problems,
-      notes: [`${module}/plan.md: ${canonical.tasks.length} canonical task(s), format 1; ${canonical.problems.length ? 0 : Math.max(0, ...deriveWaves(canonical.tasks).values())} wave(s)`] };
+    const projectRoot = path.join(docsModuleDir, "..", "..");
+    const loadRegistry = targetRegistryLoader ?? (() => (fs.existsSync(targetsPath(projectRoot)) ? loadTargetRegistry(projectRoot) : null));
+    const targetCheck = canonical.problems.length === 0
+      ? validatePlanTaskTargets(canonical.tasks, { module, designMd: designMd ?? null, projectRoot, loadRegistry })
+      : { errors: [], notes: [] };
+    return { module,
+      ok: canonical.problems.length === 0 && targetCheck.errors.length === 0,
+      errors: [...canonical.problems, ...targetCheck.errors],
+      notes: [
+        `${module}/plan.md: ${canonical.tasks.length} canonical task(s), format 1; ${canonical.problems.length ? 0 : Math.max(0, ...deriveWaves(canonical.tasks).values())} wave(s)`,
+        ...targetCheck.notes,
+      ] };
   }
   const { tasks, problems } = parseLegacyPlanTasks(planMd);
   notes.push(`${module}/plan.md: explicit legacy table compatibility adapter; canonical conversion requires complete semantic fields (docs/plan-task-v1.md)`);
@@ -549,10 +655,29 @@ export function checkPlanGraphs(projectRoot: string, moduleName?: string): PlanG
   }
 
   const isKnowledgeWorkspace = detectWorkspaceKind(projectRoot) === "knowledge";
+  // Loaded at most once per check, and only when a canonical task actually
+  // declares Targets: — a missing registry is the tolerated skip-with-note
+  // case (see validatePlanTaskTargets); a present-but-invalid one fails the
+  // check the same way an invalid model-tiers.yaml does.
+  let targetRegistry: TargetRegistry | null | undefined;
+  const loadRegistry: PlanTargetRegistryLoader = () => {
+    if (targetRegistry === undefined) {
+      targetRegistry = fs.existsSync(targetsPath(projectRoot)) ? loadTargetRegistry(projectRoot) : null;
+    }
+    return targetRegistry;
+  };
   const problems: string[] = [];
   const notes: string[] = [];
   for (const module of modules) {
-    const result = checkPlanGraphForModule(docsModuleDir, module, modelTiers, isKnowledgeWorkspace);
+    let result: PlanGraphModuleResult;
+    try {
+      result = checkPlanGraphForModule(docsModuleDir, module, modelTiers, isKnowledgeWorkspace, loadRegistry);
+    } catch (error) {
+      if (error instanceof TargetRegistryError) {
+        return { ok: false, problems: [error.message], notes };
+      }
+      throw error;
+    }
     notes.push(...result.notes);
     problems.push(...result.errors.map((e) => `${module}/plan.md: ${e}`));
   }

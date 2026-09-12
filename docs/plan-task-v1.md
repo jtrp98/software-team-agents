@@ -19,7 +19,8 @@ duplicate or empty fields fail. Tier and Targets are optional metadata lines. Ti
 routing/role Tier policy is outside this parser. Targets is an optional list of
 target IDs (or none) naming the repositories the task touches; it carries target
 IDs only, while the engineer role remains on Owner (pairing them is validated by
-downstream checkers, never derived from target types).
+downstream checkers, never derived from target types). The authoring rule and
+what `--check-plan` validates are in `## Targets and task splitting` below.
 Owner is one of the eleven agent role names. Status is pending, in_progress,
 verified or blocked. Lists use comma-separated values or exactly `none` for
 an empty list. Traceability must contain REQ, AC and DES IDs and may select `DEC-NNN`;
@@ -58,13 +59,35 @@ Runtime readiness requires ledger/checkpoint completion; a verified Status cell
 alone cannot unlock a planned dependency. Unannotated legacy FE/BE ordering that
 would be ambiguous is refused; explicit empty contract lists mean independent.
 
+## Targets and task splitting
+
+`Targets:` is a permission, not an obligation. A task **may** name several
+Targets when the change is logically atomic and the Targets are kept in sync:
+a contract published by the API and consumed by the web client in the same
+release is one task (`Targets: sales-api, sales-web`). Split per Target only
+when the work is genuinely separable; never split a task merely because it
+touches two repositories. Rewriting the billing engine (API) alongside an
+unrelated redesign of the web navigation is two tasks, not one. `Owner:` stays
+the role the work belongs to; `Targets:` says where it lands; one task must not
+name two Targets for the same engineer role.
+
+`--check-plan` validates each named id against `targets.yaml`: the id must
+exist, be active, sit inside the module's declared `design.md` `## Targets` set,
+and — when the owner is an engineer role — the Target's declared `type` must
+admit that owner. An untyped Target passes under schema v1 compatibility,
+mirroring binding validation. A task carrying no `Targets:` is unchecked, and
+the checks skip with a note in a workspace where `targets.yaml` is unreachable.
+The checks run on canonical task sections; a legacy table carries no `Targets:`
+field. The engineer role is never derived from the Target type.
+
 ## Downstream consumers
 
 Every field is executable input, not formatting. Version and identity feed the
 compiler/migration; phase, dependencies, produces and consumes feed the DAG,
 readiness and handoff; owner feeds runtime; Tier is a per-task recommendation to
-the central route resolver; Targets feeds plan validation, packet compilation,
-and multi-target DEV/QA execution. Traceability and retrieval hints select bounded
+the central route resolver; Targets feeds `--check-plan` Target validation
+(registry existence, active status, module `## Targets` scope,
+type-admits-Owner), packet compilation, and multi-target DEV/QA execution. Traceability and retrieval hints select bounded
 context. Risk and human gates feed gate policy. Status feeds readiness/QA sync.
 Objective/why/title, scope, do-not-modify, acceptance, validation/evidence and
 compatibility feed DEV/QA packets, deterministic verification, and rollback.
