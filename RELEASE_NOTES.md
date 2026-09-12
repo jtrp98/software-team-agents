@@ -18,6 +18,18 @@ private dev/test number and this rule does not apply to it.
 
 ---
 
+## software-team-agents 2.0.1 — V8 repair candidate (release date pending)
+
+**Bucket: Patch (`2.0.0 → 2.0.1`).** This release fixes release-gate defects
+without adding a new command, runtime, configuration field, or user-visible
+capability: clean builds no longer retain retired compiled modules, the Codex
+skill mirror matches its 35 source commands, the setup prompt is back within
+its byte budget, and Windows bounded-run fixtures tolerate transient cleanup
+locks. `orchestrator/package.json` remains the separate private dev/test
+package at `0.3.0`.
+
+---
+
 ## software-team-agents 2.0.0 — V7 (RELEASABLE — release date pending, see Release status)
 
 > **Version 2.0.0 confirmed by a person on 2026-09-08** (bucket read mechanically from the table

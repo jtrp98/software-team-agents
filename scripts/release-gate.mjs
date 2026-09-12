@@ -155,6 +155,7 @@ for (const flag of [
 }
 
 // --- 5/6 · packed migration fixtures and packaged distribution E2E -----------
+run("packed-install retry harness", "node --test scripts/packed-install-retry.test.mjs", { quiet: true });
 run("four packed V3 migration fixtures", "node scripts/migration-fixtures.mjs");
 run("packaged .tgz E2E (fresh env, real bins)", "node scripts/packaged-e2e.mjs");
 

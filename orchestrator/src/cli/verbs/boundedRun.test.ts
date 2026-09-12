@@ -43,12 +43,16 @@ beforeEach(() => {
   delete process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
   process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-boundedrun-test-no-installation.yaml");
 });
-afterEach(() => {
+afterEach(async () => {
   if (KNOWLEDGE_ROOT_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
   else process.env.AGENTCLAUDE_KNOWLEDGE_ROOT = KNOWLEDGE_ROOT_ORIGINAL;
   if (INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
   else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = INSTALLATION_CONFIG_ORIGINAL;
-  for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+  await Promise.all(
+    roots.splice(0).map((root) =>
+      fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }),
+    ),
+  );
 });
 
 describe("parseBoundedRunArgs", () => {
