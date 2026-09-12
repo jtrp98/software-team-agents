@@ -1,11 +1,11 @@
-# Brand-new feature, module or project: nothing is assumed, so no stage is skipped.
+# Brand-new feature, module or project: no stage is skipped; BA validates confirmed intake or interviews for what is missing.
 workflow: feature
-description: New feature, module or project - the full chain, starting from a requirements interview.
+description: New feature, module or project - the full chain, starting from business analysis.
 trigger:
   kind: signal
   signal: isNewFeatureModuleOrProject
   # Above `schema-change` (priority 2): a brand-new feature/module/project that
-  # also touches the schema still starts from the requirements interview — it
+  # also touches the schema still starts from business analysis — it
   # must not silently degrade into the schema-only pipeline that skips
   # business-analyst and project-manager.
   priority: 1
@@ -16,6 +16,7 @@ steps:
   - agent: system-analyst
   - agent: project-manager
   - agent: test-planner
+    when: test_strategy_required
   - agent: backend-engineer
     when: touchesBackend
   - agent: uxui-designer

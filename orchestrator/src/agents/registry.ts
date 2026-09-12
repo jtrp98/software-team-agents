@@ -69,7 +69,9 @@ const RAW_REGISTRY: Record<AgentStage, AgentRegistryEntry> = {
   [AgentStage.BUSINESS_ANALYST]: {
     name: AgentStage.BUSINESS_ANALYST,
     role: "business-analyst",
-    responsibilities: ["interview the user and produce/amend requirements.md"],
+    responsibilities: [
+      "normalize confirmed business input or interview for missing business facts, then produce/amend requirement.md",
+    ],
     inputs: ["qa-report", "design"],
     outputs: ["requirements", ArtifactType.HANDOFF],
     tools: ["AskUserQuestion", "Write", "Edit", "Read", "Glob", "Grep"],
@@ -79,7 +81,7 @@ const RAW_REGISTRY: Record<AgentStage, AgentRegistryEntry> = {
       languages: [],
       frameworks: [],
       database: [],
-      capabilities: [Capability.REQUIREMENTS_INTERVIEW],
+      capabilities: [Capability.REQUIREMENTS_NORMALIZATION, Capability.REQUIREMENTS_INTERVIEW],
     },
   },
   [AgentStage.SYSTEM_ANALYST]: {
@@ -118,8 +120,8 @@ const RAW_REGISTRY: Record<AgentStage, AgentRegistryEntry> = {
     name: AgentStage.TEST_PLANNER,
     role: "test-planner",
     responsibilities: [
-      "decide what needs testing and at what level (unit/integration/API/E2E), before implementation starts",
-      "write test-plan.md so engineers and qa-engineer share one test strategy instead of each guessing their own",
+      "define cross-task/system/migration/security/release test strategy only when the closed trigger policy selects it",
+      "write one conditional test-plan.md shared by the affected tasks and qa-engineer",
     ],
     inputs: ["requirements", "design", "plan"],
     outputs: ["test-plan", ArtifactType.HANDOFF],

@@ -15,10 +15,8 @@ import type { LaneSignoff, RoleWorkspace, SignoffItemRef } from "./roleWorkspace
  * one that gates a handoff.
  *
  * The gate each lane carries reuses `ApprovalType` rather than inventing a
- * new set of names: CLAUDE.md already names five points that always wait for
- * a person, and three of them are exactly one per lane — the requirement
- * interview (BA), the schema confirmation (SA), and the deploy (DEV).
- * `gates/approval.ts` already enumerates all five for the task ledger; a
+ * new set of names. The task ledger already has stable identities for BA
+ * confirmation/interview handling, schema confirmation and deploy; a
  * second enum would be two names for one rule.
  *
  * There is deliberately no `pending` state stored here. A lane whose items
@@ -34,7 +32,7 @@ import type { LaneSignoff, RoleWorkspace, SignoffItemRef } from "./roleWorkspace
  * changed ids named.
  */
 
-/** Which of the five always-human points is this lane's gate. */
+/** Which stable human-approval identity this lane reuses for sign-off. */
 export const APPROVAL_TYPE_OF_LANE: Record<RoleLane, ApprovalType> = {
   ba: ApprovalType.REQUIREMENT_INTERVIEW,
   sa: ApprovalType.SCHEMA_CONFIRMATION,

@@ -15,9 +15,13 @@ import {
   failResult,
   qaArtifactResult,
   securityArtifactResult,
+  suppressRawHandoffWhenNarrowed,
+  measureRolePrefixChars,
   type PromptPartsResult,
   type RunMetrics,
 } from "./agentRunAssembly.js";
+import { codeIntelContext as defaultCodeIntelContext, retrievalCandidatesForPacket, type CodeIntelSliceDeps } from "./codeIntelAssembly.js";
+import { buildTaskRetrievalQuery } from "../context/retrievalQuery.js";
 import type {
   RuntimeAdapter,
   RuntimeAgentResult,
@@ -33,6 +37,7 @@ import {
   type RuntimeRouteFlags,
 } from "./runtimeRouting.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import { isUnattendedTargetWriteCertified } from "./runtimeSupport.js";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
 import type { QaRiskSignals } from "../qa/mode.js";
 import { checkRoleExecutionGate } from "../roles/roleExecutionGate.js";
@@ -40,12 +45,19 @@ import type { PersistedTask } from "../store/taskStore.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import type { ThreeRepoRequestRoots } from "../threeRepo/preflight.js";
 import { deriveHandoff } from "../agents/moduleDocs.js";
+import { parseDesignEvidence } from "../docs/designEvidence.js";
 import { ArtifactType } from "../artifacts/schemas.js";
+import { generatePromptPreview } from "../views/generatedTaskViews.js";
 import { assessContextBudget, contextBudgetRejections, formatBudgetRejection, resolveContextBudgetFromProject, resolveContextBudgetModeFromProject, taskTokenBudgetRejection, type ContextBudgetComposition } from "../context/contextBudget.js";
 import { RunLog } from "../observability/runLog.js";
-import { writeExecutionPacket } from "../state/runtimeArtifacts.js";
-import { loadModelTiers, type ModelTierId, type ModelTiers } from "./modelTiers.js";
+import { writeExecutionPacket, nextExecutionPacketAttempt } from "../state/runtimeArtifacts.js";
+import { resolveTargetRevision } from "../codeintel/targetRevision.js";
+import type { DependencyEvidence } from "../artifacts/executionPacket.js";
+import { formatModelPolicyBasis } from "./tierRouting.js";
+import type { ModelTierPolicy } from "./modelTiers.js";
 import { captureChangeSetFingerprint } from "../qa/changeSource.js";
+import type { LedgerAttempt } from "../ledger/runLedger.js";
+import { assertAdapterRequestMatchesAttempt } from "../ledger/attemptFreeze.js";
 
 /**
  * An `AgentExecutor` built on a `RuntimeAdapter`.
@@ -74,15 +86,14 @@ export interface RuntimeExecutorOptions {
    * for the real thing, or `() => NO_GUARDS` in a test that is explicitly not
    * testing guards.
    */
-  guards: (role: string) => RuntimeGuards;
+  guards: (role: string, layoutRoot?: string) => RuntimeGuards;
   /** How much autonomy each run gets. Defaults to `propose` — the orchestrator automates handoffs between the pipeline's confirmation points, it does not remove them. */
   autonomy?: RuntimeAutonomy;
   /**
    * Which model a role runs on.
    *
-   * Defaults to the role definition's own `model:` frontmatter — T58's answer,
-   * and still the only declaration of it. This function is the seam T112 fills
-   * when a per-task or per-policy override has to layer over that.
+   * Embedded compatibility only. Production registry routing resolves the V8
+   * policy; callers without a registry retain the role definition's model.
    */
   model?: (role: string) => string | undefined;
   timeoutMs?: number;
@@ -101,6 +112,9 @@ export interface RuntimeExecutorOptions {
   threeRepoTask?: (taskId: string, stage: AgentStage) => { task: PersistedTask; roots: ThreeRepoRequestRoots };
   /** Stored Phase-1 task contract. Production supplies this for every runnable task. */
   runtimeTask?: (taskId: string) => RuntimeTask | null | undefined;
+  dependencyEvidence?: (taskId: string) => readonly DependencyEvidence[];
+  /** Fixture seam; production always resolves the actual current checkout. */
+  packetBaseRevision?: (root: string) => Promise<string>;
   /** Optional bounded retention override; the runtime-artifact default otherwise applies. */
   packetRetention?: number;
   /**
@@ -123,8 +137,34 @@ export interface RuntimeExecutorOptions {
   taskRunLog?: (taskId: string) => RunLog;
   /** The verified capability picture per runtime id, passed through to `resolveRuntimeRoute` so its capability-policy diagnostic uses confirmed facts instead of a static claim, when available. */
   verifiedCapabilities?: Readonly<Record<string, ReadonlySet<RuntimeCapability>>>;
-  /** Optional plan tier lookup. An absent table deliberately leaves routing unchanged. */
+  /** Optional canonical task Tier lookup. */
   planTier?: (taskId: string) => string | undefined;
+  /** Policy fixture seam; production loads model-tiers.yaml when this is undefined. */
+  modelPolicy?: ModelTierPolicy | null;
+  /** Replays persisted runtime/model/effort without consulting the current policy/frontmatter. */
+  frozenModelRoute?: boolean;
+  /**
+   * T-V8-018 — the ledger record this stage is executing under.
+   *
+   * When present it *is* the route: no candidate is re-resolved, no
+   * `routing.order` hop may fire, and the adapter request is asserted against
+   * the frozen values immediately before every invocation. `frozenModelRoute`
+   * above only stopped today's policy from being re-read; this stops the
+   * selected provider itself from changing after the attempt began, which is
+   * the difference between a reproducible attempt and a plausible one.
+   */
+  frozenAttempt?: LedgerAttempt;
+  /** Original persisted winner basis for a frozen route. */
+  frozenRoutingBasis?: string;
+  /**
+   * T-V8-011 — files already known changed for this task/round (e.g. a QA
+   * repair round's real diff), fed into the task-specific retrieval query.
+   * Absent by default: a fresh DEV round has no diff yet, and that is a fact,
+   * not a failure.
+   */
+  changedFiles?: (taskId: string) => Promise<string[]>;
+  /** Test seam; production always uses the real `codeIntelAssembly.codeIntelContext` (OFF unless `STA_CODE_INTEL=on`). */
+  codeIntelContext?: (input: Parameters<typeof defaultCodeIntelContext>[0], deps?: CodeIntelSliceDeps) => ReturnType<typeof defaultCodeIntelContext>;
 }
 
 /**
@@ -145,7 +185,7 @@ export interface RuntimeExecutorOptions {
  * stage's environment is unchanged. `read` is deliberately not sent: reading is
  * not enforced as a block anywhere, and a hook has no use for it.
  */
-function resolveGuardStackRules(role: string, guardRoot: string): Record<string, string> {
+export function resolveGuardStackRules(role: string, guardRoot: string): Record<string, string> {
   let rules;
   try {
     const stack = loadTargetConfig(guardRoot)?.stack;
@@ -193,6 +233,8 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
   fallback_count?: number;
   contextBudget: ReturnType<typeof assessContextBudget>;
   budgetComposition: ContextBudgetComposition;
+  /** T-V8-012 — measured once per attempt by `measureRolePrefixChars`; null when unmeasurable, never fabricated as 0. */
+  role_prefix_chars: number | null;
 }): RunMetrics {
   const input_tokens = result.usage.inputTokens;
   const output_tokens = result.usage.outputTokens;
@@ -203,7 +245,11 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     // frontmatter value, which is the one thing the log must not do.
     model: result.model ?? declared.model,
     promptVersion: declared.promptVersion,
-    effort: declared.effort,
+    // T-V8-012: same requested/observed split `model` already had — the
+    // runtime rarely echoes effort back today (see `RuntimeAgentResult.effort`),
+    // so this reads identically to before until an adapter starts reporting one.
+    effort: result.effort ?? declared.effort,
+    requested_effort: declared.effort,
     tokens: (input_tokens ?? 0) + (output_tokens ?? 0),
     // `?? 0` here, unlike the `costUsd?: number` in the envelope: the run log's
     // `cost` is a number by contract, and "this runtime does not report cost" is
@@ -213,6 +259,7 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     input_tokens,
     output_tokens,
     cache_read_tokens: result.usage.cachedInputTokens,
+    cache_creation_tokens: result.usage.cacheCreationInputTokens,
     context_chars: declared.context_chars,
     estimated_input_tokens: declared.estimated_input_tokens,
     runtime: declared.runtime,
@@ -224,6 +271,7 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     session_kind: "orchestrated",
     ...declared.composition,
     doc_chars_before: declared.doc_chars_before,
+    instruction_surface_bytes: declared.role_prefix_chars ?? undefined,
     context_budget_chars: declared.contextBudget.budgetChars ?? undefined,
     context_budget_source: declared.contextBudget.budgetSource ?? undefined,
     context_overflow_chars: declared.contextBudget.overflowChars ?? undefined,
@@ -266,6 +314,43 @@ async function fingerprintVerdict(result: AgentExecutorResult, projectRoot: stri
  * their shape.
  */
 const NO_FALLBACK_HOPS = 0;
+
+/**
+ * T-V8-011 — the packet's `retrieval_candidates` (`artifacts/executionPacket.ts`
+ * `RetrievalCandidateSchema`), populated from a task-specific query instead of
+ * the bare module name. Historically this field was never populated at all —
+ * `compileExecutionPacket` always saw `retrievalCandidates: undefined` here —
+ * so PM's authored `Query:` retrieval hint never reached an actual lookup.
+ *
+ * Additive by design, same posture as every other optional enrichment in this
+ * file: OFF by default (`STA_CODE_INTEL`), and any missing input or failure
+ * answers `[]` rather than blocking packet compilation. A v1/legacy
+ * RuntimeTask has no `contract` to query from, so it answers `[]` too — the
+ * legacy compatibility path already refuses to reach this branch at all
+ * (`RuntimeTaskV2Schema.safeParse` inside `compileExecutionPacket`).
+ */
+async function packetRetrievalCandidates(
+  opts: RuntimeExecutorOptions,
+  req: AgentExecutorRequest,
+  runtimeTask: RuntimeTask,
+  moduleName: string,
+  targetRoot: string,
+  targetId: string | undefined,
+  baseRevision: string,
+): Promise<ReturnType<typeof retrievalCandidatesForPacket> | undefined> {
+  if (!("version" in runtimeTask) || runtimeTask.version !== 2) return undefined;
+  try {
+    const changedFiles = await opts.changedFiles?.(req.taskId).catch(() => []) ?? [];
+    const query = buildTaskRetrievalQuery(runtimeTask.contract, { moduleName, changedFiles });
+    const codeIntel = opts.codeIntelContext ?? defaultCodeIntelContext;
+    const result = await codeIntel({ stage: req.stage, taskId: req.taskId, moduleName, targetRoot, targetId, query, revision: baseRevision });
+    if (result.candidates.length === 0) return undefined;
+    return retrievalCandidatesForPacket(result.candidates, targetRoot, baseRevision);
+  } catch {
+    // Discovery enrichment must never block packet compilation.
+    return undefined;
+  }
+}
 
 /**
  * `ADR-025` #4 — an automatic camp switch inside a `🔒 Security gate` phase
@@ -326,9 +411,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     } catch (error) {
       return failResult(`cannot use prior-stage handoff: ${String(error)}`);
     }
+    const runtimeTask = threeRepo?.task.runtimeTask ?? opts.runtimeTask?.(req.taskId) ?? null;
     let stageContext;
     try {
-      stageContext = sliceDocs
+      stageContext = sliceDocs && !(runtimeTask && "version" in runtimeTask && runtimeTask.version === 2)
         ? await assembleStageContext(req.stage, {
             projectRoot: opts.projectRoot,
             docsRoot: threeRepo?.roots.knowledgeRoot ?? opts.projectRoot,
@@ -349,33 +435,47 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       return failResult(`cannot assemble authorized handoff context: ${String(error)}`);
     }
 
+    const executionRoot = workRoot?.path ?? threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot;
     let guards: RuntimeGuards;
     try {
-      guards = opts.guards(role);
+      guards = opts.guards(role, executionRoot);
     } catch (e) {
       // The current role contract is the authority packet scope narrows. A run
       // with no resolved contract must not compile a packet or start an adapter.
       return failResult(`cannot start ${role}: ${String(e)}`);
     }
 
-    const runtimeTask = threeRepo?.task.runtimeTask ?? opts.runtimeTask?.(req.taskId) ?? null;
     let packetPath: string | undefined;
     let promptParts: PromptPartsResult;
     if (runtimeTask) {
       try {
+        const runtimeStateRoot = threeRepo?.roots.bindingRoot ?? opts.projectRoot;
+        const baseRevision = await (opts.packetBaseRevision ?? resolveTargetRevision)(executionRoot);
         const packet = compileExecutionPacket({
           req,
           role,
           runtimeTask,
           contractScope: { allow: guards.writeAllow, deny: guards.writeDeny },
+          attempt: nextExecutionPacketAttempt(runtimeStateRoot, req.taskId, req.stage),
+          baseRevision,
+          config: { target: loadTargetConfig(executionRoot), guardStackRules: resolveGuardStackRules(role, executionRoot) },
+          dependencyEvidence: opts.dependencyEvidence?.(req.taskId),
+          retrievalCandidates: await packetRetrievalCandidates(opts, req, runtimeTask, moduleName, executionRoot, workRoot?.targetId, baseRevision),
           extra: opts.extraInstruction,
-          sources: {
-            docs: stageContext.docs,
-            knowledge: stageContext.knowledge,
-            codeIntel: stageContext.codeIntel,
-          },
         });
-        const runtimeStateRoot = threeRepo?.roots.bindingRoot ?? opts.projectRoot;
+        if (JSON.stringify([...packet.scope.allow].sort()) !== JSON.stringify([...new Set(guards.writeAllow)].sort())) throw new Error("packet scope differs from the enforced stage contract; recompile with current stage grants");
+        const expectedRoots = threeRepo ? threeRepo.roots.workRoots.filter(root => root.access === "write").map(root => path.resolve(root.path)) : [path.resolve(executionRoot)];
+        if (JSON.stringify(packet.scope.roots.map(root => path.resolve(root)).sort()) !== JSON.stringify(expectedRoots.sort())) throw new Error("packet work roots differ from effective stage guard roots; recompile");
+        const preview = generatePromptPreview(packet, {
+          current_revision: packet.identity.base_revision,
+          current_config_hash: packet.identity.config_hash,
+          current_compiler_hash: packet.identity.compiler_hash,
+          current_plan_hash: packet.identity.plan_hash,
+        });
+        if (preview.state !== "executable" || preview.prompt.text !== packet.text || preview.prompt.hash !== preview.persisted_packet.text_hash) {
+          throw new Error(`generated prompt preview drift: ${preview.stale_reasons.join("; ") || "prompt bytes differ"}`);
+        }
+        guards = { ...guards, writeAllow: packet.scope.allow, writeDeny: packet.scope.deny };
         const persisted = writeExecutionPacket({
           projectRoot: runtimeStateRoot,
           packet,
@@ -390,9 +490,14 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         return failResult(`cannot compile or persist execution packet for ${role}: ${String(error)}`);
       }
     } else {
+      if (opts.runtimeTask || threeRepo) return failResult(`task ${req.taskId}: missing semantic RuntimeTask; author canonical task fields and explicitly recompile before execution`);
       // Historical or embedded callers may have no RuntimeTask. Production
       // tasks created since state schema v13 always take the packet path above.
-      promptParts = buildPromptParts(req, opts.extraInstruction, {
+      // T-V8-011: once a doc slice was already narrowed using this HANDOFF, its
+      // provenance is visible in the kept text — printing the same references
+      // again as raw JSON would be duplication, not context.
+      const promptReq = { ...req, context: suppressRawHandoffWhenNarrowed(req.context, stageContext.selected) };
+      promptParts = buildPromptParts(promptReq, opts.extraInstruction, {
         docs: stageContext.docs,
         knowledge: stageContext.knowledge,
         codeIntel: stageContext.codeIntel,
@@ -405,8 +510,15 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // Production routing remains above the orchestrator seam. Embedded callers
     // that do not supply a registry retain the fixed-runtime compatibility
     // behaviour.
-    const hasTargetWrite = threeRepo?.roots.workRoots.some((root) => root.access === "write") ?? false;
-    const requiresInteractivity = requiredCapabilitiesFor(req.stage).includes(RuntimeCapability.INTERACTIVE_PROMPTS);
+    const writableRootPaths = threeRepo
+      ? threeRepo.roots.workRoots.filter((root) => root.access === "write").map((root) => root.path)
+      : (opts.frozenAttempt?.guard_evidence.writable_roots ?? []);
+    const hasTargetWrite = writableRootPaths.length > 0 || (opts.frozenAttempt?.guard_evidence.target_write ?? false);
+    const requiresInteractivity = requiredCapabilitiesFor(
+      req.stage,
+      false,
+      req.businessInput,
+    ).includes(RuntimeCapability.INTERACTIVE_PROMPTS);
     let activeRuntime = runtime;
     let activeModel = resolveModel(role);
     // Whether `activeModel` is an operator-visible override (CLI
@@ -415,7 +527,11 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // channel that can set these; the embedded compatibility path below never
     // forwards a model past an adapter that ignores it, exactly as before.
     let activeModelExplicit = false;
-    let activeEffort: string | undefined;
+    let activeEffort: string | undefined = opts.registry ? undefined : resolveAgentEffort(opts.projectRoot, role) ?? undefined;
+    // Legacy frontmatter effort was telemetry-only before V8. Keep that
+    // compatibility contract while forwarding centrally resolved or operator
+    // effort to adapters.
+    let activeAdapterEffort: string | undefined;
     let routeAvailability: Readonly<Record<string, { available: boolean; reason?: string }>> = {};
     const routingDiagnostics: string[] = [];
     let requestedRuntime: string | undefined;
@@ -426,15 +542,38 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     /** Entries the route already refused before the selected one. */
     let preRouteSkips: readonly RuntimeRouteAttempt[] = [];
     const classification = opts.classification?.(req.taskId);
-    if (opts.registry) {
-      let tier: { id: ModelTierId; table: ModelTiers } | undefined;
-      const tierId = opts.planTier?.(req.taskId);
-      try {
-        const table = loadModelTiers(opts.projectRoot);
-        if (table && tierId && tierId !== "T1" && tierId in table) tier = { id: tierId as ModelTierId, table };
-      } catch (error) {
-        routingDiagnostics.push(`model tiers were ignored: ${error instanceof Error ? error.message : String(error)}`);
+    const frozen = opts.frozenAttempt;
+    if (frozen) {
+      // The ledger already chose. Re-resolving would at best reproduce this
+      // decision and at worst quietly replace it, so the only thing left to do
+      // is look the adapter up by the recorded id and refuse if it is gone.
+      const adapter = opts.registry?.tryGet(frozen.observed.runtime);
+      if (!adapter) {
+        return finish(failResult(
+          `cannot start ${role}: frozen attempt ${frozen.attempt_id} names runtime "${frozen.observed.runtime}", which is not registered in this process`,
+        ));
       }
+      if (frozen.stage !== req.stage || frozen.task_id !== req.taskId) {
+        return finish(failResult(
+          `cannot start ${role}: frozen attempt ${frozen.attempt_id} belongs to ${frozen.task_id}/${frozen.stage}, not ${req.taskId}/${req.stage}`,
+        ));
+      }
+      routeAvailability = opts.registry ? await opts.registry.probeAll() : {};
+      activeRuntime = adapter;
+      activeModel = frozen.observed.model ?? undefined;
+      activeModelExplicit = frozen.model_explicit;
+      activeEffort = frozen.observed.effort ?? undefined;
+      activeAdapterEffort = frozen.observed.effort ?? undefined;
+      requestedRuntime = frozen.requested.runtime;
+      requestedModel = frozen.requested.model ?? undefined;
+      routingBasis = frozen.route_basis;
+      // Emptied explicitly: a frozen attempt has no fallback. A provider that
+      // becomes unavailable halts the run and a person (or an explicit
+      // reroute) creates the next attempt.
+      fallbackQueue = [];
+      preRouteSkips = [];
+    } else if (opts.registry) {
+      const tierId = opts.planTier?.(req.taskId);
       routeAvailability = await opts.registry.probeAll();
       const route = resolveRuntimeRoute({
         role,
@@ -447,13 +586,18 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         riskSignals: opts.riskSignals?.(req.taskId),
         availability: routeAvailability,
         hasTargetWrite,
+        businessInput: req.businessInput,
         verifiedCapabilities: opts.verifiedCapabilities,
-        tier,
+        modelPolicy: opts.frozenModelRoute ? null : opts.modelPolicy,
+        taskTier: opts.frozenModelRoute ? undefined : tierId,
+        allowLegacyPolicyCompatibility: !opts.frozenModelRoute,
       });
       routingDiagnostics.push(...route.diagnostics);
       requestedRuntime = route.requested.runtimeId;
       requestedModel = route.requested.model;
-      routingBasis = `level-${route.precedenceLevel}`;
+      routingBasis = opts.frozenRoutingBasis ?? (route.selected
+        ? `level-${route.precedenceLevel};${formatModelPolicyBasis(route.selected.policyResolution)}`
+        : `level-${route.precedenceLevel}`);
       if (route.error || !route.selected) {
         const routeFailure = [route.error ?? "runtime route resolved no selected candidate", ...route.diagnostics].join(" | ");
         const failed = failResult(
@@ -476,6 +620,9 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       activeModel = route.selected.model ?? activeModel;
       activeModelExplicit = route.selected.modelExplicit ?? false;
       activeEffort = route.effort;
+      activeAdapterEffort = route.selected.policyResolution.effortBasis === "legacy-frontmatter"
+        ? undefined
+        : route.effort;
       fallbackQueue = route.candidates.slice(1);
       // A candidate the route filtered out before reaching the selected one is a
       // hop too: the stage left the runtime the log records as requested.
@@ -505,9 +652,11 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // agent inspect the wrong repository and can turn an otherwise valid
     // packet into a no-change run.  The guard's stack rules must follow the
     // same execution root.
-    const executionRoot = workRoot?.path ?? threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot;
     const guardRoot = executionRoot;
     const guardStackRules = resolveGuardStackRules(role, guardRoot);
+    // T-V8-012: measured once — role and binding root are fixed for the whole
+    // retry loop below; only runtime/model/effort change across a fallback hop.
+    const rolePrefixChars = measureRolePrefixChars(threeRepo?.roots.bindingRoot ?? opts.projectRoot, req.stage);
 
     let fallbackReason: string | undefined;
     let fallbackCount: number | undefined = opts.registry ? NO_FALLBACK_HOPS : undefined;
@@ -576,11 +725,13 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           {
             model: activeModel,
             promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
-            effort: resolveAgentEffort(opts.projectRoot, role) ?? undefined,
+            effort: activeEffort,
+            requested_effort: activeEffort,
             context_chars: prompt.length,
             estimated_input_tokens: contextBudget.estimatedInputTokens,
             ...promptParts.composition,
             doc_chars_before: stageContext.docCharsBefore,
+            instruction_surface_bytes: rolePrefixChars ?? undefined,
             runtime: activeRuntime.id,
             requested_runtime: requestedRuntime,
             requested_model: requestedModel,
@@ -606,11 +757,12 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       const declared = {
         model: activeModel,
         promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
-        effort: resolveAgentEffort(opts.projectRoot, role) ?? undefined,
+        effort: activeEffort,
         context_chars: prompt.length,
         estimated_input_tokens: contextBudget.estimatedInputTokens,
         composition: promptParts.composition,
         doc_chars_before: stageContext.docCharsBefore,
+        role_prefix_chars: rolePrefixChars,
         runtime: activeRuntime.id,
         requested_runtime: requestedRuntime,
         requested_model: requestedModel,
@@ -623,6 +775,13 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
 
       // A guard gap refuses; it never hops. Landing the same Target-write stage
       // on the next camp would only move an unguarded run somewhere else.
+      if (hasTargetWrite && !isUnattendedTargetWriteCertified(activeRuntime.id)) {
+        return finish(failResult(
+          `cannot start ${role}: runtime "${activeRuntime.id}" is not certified for unattended Target writes; ` +
+          `V8 permits non-Claude runtimes for analysis/proposal only until separate complete UAT and human promotion`,
+          declared,
+        ));
+      }
       if (hasTargetWrite && !activeRuntime.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)) {
         return finish(failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot enforce a pre-tool workspace guard for Target write access`, declared));
       }
@@ -634,6 +793,22 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       // caller bypassing routing with a fixed `runtime` and no registry).
       if (requiresInteractivity && !activeRuntime.capabilities.has(RuntimeCapability.INTERACTIVE_PROMPTS)) {
         return finish(failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot receive interactive prompts required by this stage`, declared));
+      }
+      // T-V8-018: the last thing checked before an adapter is reachable. It is
+      // outside the try/catch below on purpose — a mismatch here is not an
+      // adapter bug to be relabelled, it is a refusal to invoke a provider the
+      // ledger did not record.
+      if (frozen) {
+        try {
+          assertAdapterRequestMatchesAttempt(frozen, {
+            runtimeId: activeRuntime.id,
+            model: declared.model,
+            modelExplicit: activeModelExplicit,
+            effort: activeAdapterEffort,
+          });
+        } catch (error) {
+          return finish(failResult(error instanceof Error ? error.message : String(error), declared));
+        }
       }
       const activeProbe = routeAvailability[activeRuntime.id];
       if (activeProbe?.available === false) {
@@ -658,7 +833,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           prompt,
           model: declared.model,
           modelExplicit: activeModelExplicit,
-          effort: activeEffort,
+          effort: activeAdapterEffort,
           autonomy,
           guards,
           // The framework's own channel for telling a guard which role is
@@ -672,7 +847,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
             // Guard hooks receive only tool paths, not this task's binding. Give
             // them the canonical write roots resolved by preflight; never derive
             // scope from cwd or an agent-provided path.
-            ...(hasTargetWrite ? { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify(threeRepo!.roots.workRoots.filter((root) => root.access === "write").map((root) => root.path)) } : {}),
+            ...(hasTargetWrite ? { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify(writableRootPaths) } : {}),
             // The read-only Knowledge context, for prompts/hooks that need to
             // name where module documents actually live.
             ...(threeRepo?.roots.knowledgeRoot ? { AGENTCLAUDE_KNOWLEDGE_ROOT: threeRepo.roots.knowledgeRoot } : {}),
@@ -742,6 +917,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       activeModel = next.model ?? resolveModel(role);
       activeModelExplicit = next.modelExplicit ?? false;
       activeEffort = next.effort;
+      activeAdapterEffort = next.policyResolution.effortBasis === "legacy-frontmatter"
+        ? undefined
+        : next.effort;
+      routingBasis = routingBasis?.split(";")[0] + `;${formatModelPolicyBasis(next.policyResolution)}`;
     }
 
     if (result.status !== "OK") {
@@ -781,6 +960,17 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           metrics,
         ));
       }
+      let gateEvidence: AgentExecutorResult["gateEvidence"];
+      if (req.stage === AgentStage.SYSTEM_ANALYST) {
+        const design = parseDesignEvidence(doc);
+        if (design.mode === "addressable" && design.problems.length > 0) {
+          return finish(failResult(
+            `system-analyst produced invalid addressable design evidence: ${design.problems.join("; ")}`,
+            metrics,
+          ));
+        }
+        gateEvidence = { designAssessment: design.gate };
+      }
       const handoff = deriveHandoff(req.stage, moduleName, doc, ownedDoc === "plan.md" ? doc : undefined, {
         taskId: req.taskId,
         phases,
@@ -792,6 +982,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         outcome: { ...metrics, result: "PASS" },
         artifactType: ArtifactType.HANDOFF,
         artifact: handoff.artifact,
+        gateEvidence,
       });
     }
 

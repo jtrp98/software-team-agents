@@ -54,9 +54,15 @@ export interface PrerequisiteCheck {
   fix: string;
 }
 
+/** Runtime ids are stable configuration values; executable names are provider-specific install facts. */
+export function runtimeCommand(runtime: WorkspaceRuntime): string {
+  return runtime === "antigravity" ? "agy" : runtime;
+}
+
 export function probeRuntime(runtime: WorkspaceRuntime): { available: boolean; detail?: string } {
-  const result = spawnSync(runtime, ["--version"], { encoding: "utf8", shell: process.platform === "win32", timeout: 15_000 });
-  if (result.error || result.status !== 0) return { available: false, detail: `"${runtime} --version" failed` };
+  const command = runtimeCommand(runtime);
+  const result = spawnSync(command, ["--version"], { encoding: "utf8", shell: process.platform === "win32", timeout: 15_000 });
+  if (result.error || result.status !== 0) return { available: false, detail: `"${command} --version" failed` };
   return { available: true, detail: (result.stdout ?? "").trim().split("\n")[0] };
 }
 
@@ -69,7 +75,7 @@ export function environmentPrerequisites(
     name: `Runtime (${runtime})`,
     ok: result.available,
     detail: result.detail ?? (result.available ? "available" : `${runtime} is unavailable`),
-    fix: `install ${runtime} and make sure it is on PATH`,
+    fix: `install ${runtimeCommand(runtime)} and make sure it is on PATH`,
   }];
 }
 

@@ -23,6 +23,8 @@ import {
   type QaFindingRecord,
   type RecheckPlan,
 } from "./evidence.js";
+import { requiredVerdictIds, qaRiskSignalsFromTask, type QaTaskContract } from "./taskContract.js";
+import { checkQaVerdictCoverage, describeQaVerdictCoverage } from "./verdict.js";
 
 /**
  * QA optimization wired around the executor seam.
@@ -75,6 +77,14 @@ export interface QaOptimizationOptions {
   packageInputs?: (req: AgentExecutorRequest) => Partial<EvidencePackageInput> | undefined;
   /** Scope enrichment (dependency map, knowledge refs, task-graph impact). */
   scopeInputs?: (req: AgentExecutorRequest) => Partial<QaScopeInput> | undefined;
+  /**
+   * T-V8-014 - the exact task contract this round verifies against. When
+   * supplied it becomes the package's standard of proof, its declared risk
+   * contributes FULL signals, and the returned report's verdict coverage is
+   * enforced. Absent keeps the pre-T-V8-014 pointer-based package: weaker,
+   * but unchanged, so an interactive or legacy-plan round still runs.
+   */
+  taskContract?: (req: AgentExecutorRequest) => QaTaskContract | undefined;
   /** Recorded on the QA run so the explicit deterministic escape hatch is auditable. */
   deterministicGate?: "enabled" | "disabled";
 }
@@ -99,8 +109,21 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
       ...extra,
     });
 
+    const contract = opts.taskContract?.(req);
+    // Union, not override: the intake classification and the plan's own
+    // declared risk each know something the other does not, and a FULL
+    // trigger from either is still a FULL trigger.
+    const taskSignals: QaRiskSignals = contract
+      ? qaRiskSignalsFromTask({ risk: contract.risk, humanGate: contract.humanGate })
+      : {};
+    const callerSignals = opts.riskSignals?.(req) ?? {};
     const signals: QaRiskSignals = {
-      ...(opts.riskSignals?.(req) ?? {}),
+      touchesSchema: callerSignals.touchesSchema || taskSignals.touchesSchema,
+      changesSharedContract: callerSignals.changesSharedContract || taskSignals.changesSharedContract,
+      securitySensitive: callerSignals.securitySensitive || taskSignals.securitySensitive,
+      migrationOrCutover: callerSignals.migrationOrCutover || taskSignals.migrationOrCutover,
+      crossTargetImpact: callerSignals.crossTargetImpact,
+      releaseGateRequiresFull: callerSignals.releaseGateRequiresFull,
     };
 
     const previous = opts.previousRound?.(req);
@@ -157,22 +180,30 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
           gateEvidence: { ...(failed.gateEvidence ?? {}), qaModeDecision: decision },
         };
       }
+      // The low-risk skip closes on deterministic evidence alone, so it may
+      // only claim what a mechanical sweep actually proves: this task ran its
+      // checks green. Every acceptance/design id stays explicitly unverified
+      // rather than being folded silently into the PASS - that is the
+      // difference between a cheap round and an underscoped one.
+      const skipRequired = contract ? requiredVerdictIds(contract) : [];
       const report: QaReportArtifact = {
         taskId: req.taskId,
         status: "PASS",
         mode: decision.mode,
-        requirements: {},
+        requirements: { [req.taskId]: "PASS" },
         tests: { passed: deterministic.ran.length, failed: deterministic.failures.length },
         evidence: renderDeterministicVerification(deterministic),
         risks: [],
         hasAutomatedTests: deterministic.ran.some((check) => check.id === "unit-tests" || check.id === "integration-tests"),
-        unverifiedBehaviour: [],
+        unverifiedBehaviour: skipRequired
+          .filter((id) => id !== req.taskId)
+          .map((id) => `${id} - read but not executed: this round closed on the low-risk deterministic skip, which verifies mechanical checks only`),
       };
       return {
         outcome: { tokens: 0, cost: 0, result: "PASS", qa_effort: "skip", deterministic_gate: gateOutcome },
         artifactType: ArtifactType.QA_REPORT,
         artifact: report,
-        gateEvidence: { qaModeDecision: decision },
+        gateEvidence: { qaModeDecision: decision, ...(skipRequired.length > 0 ? { qaVerdictRequirements: skipRequired } : {}) },
       };
     }
 
@@ -183,6 +214,7 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
       effort,
       deterministicGate: opts.deterministicGate ?? (opts.deterministicVerification ? "enabled" : "disabled"),
       scope,
+      ...(contract ? { taskContract: contract } : {}),
       taskIntent: "",
       acceptanceCriteria: [],
       diffSummary: "",
@@ -197,7 +229,7 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
       context: [...req.context, { source: "qa-evidence", content: pkg }],
     });
 
-    return {
+    const withPolicy: AgentExecutorResult = {
       ...result,
       outcome: {
         ...result.outcome,
@@ -205,6 +237,45 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
         deterministic_gate: gateOutcome,
       },
       gateEvidence: { ...(result.gateEvidence ?? {}), qaModeDecision: decision },
+    };
+    if (!contract) return withPolicy;
+
+    const required = requiredVerdictIds(contract);
+    const enriched: AgentExecutorResult = {
+      ...withPolicy,
+      gateEvidence: { ...(withPolicy.gateEvidence ?? {}), qaVerdictRequirements: required },
+    };
+    // Only a report the QA agent itself produced is checked here. The
+    // synthesized skip report above already states its own coverage honestly,
+    // and a round that produced no report at all is a different failure with
+    // its own existing path.
+    if (enriched.artifactType !== ArtifactType.QA_REPORT || !enriched.artifact) return enriched;
+
+    const coverage = checkQaVerdictCoverage({ report: enriched.artifact as QaReportArtifact, required, decision });
+    if (coverage.ok) return enriched;
+
+    // Fail-closed, and deliberately without the artifact: an under-covered
+    // PASS must not reach the gate as a passing qa-report at all, because the
+    // gate checks evidence rather than re-deriving whether evidence exists.
+    // The gap is QA's own verification gap, not an engineer's defect, so it
+    // routes back to qa-engineer instead of to implementation.
+    const failed = failResult(
+      `QA report for ${req.taskId} cannot close its round - ${describeQaVerdictCoverage(coverage)}`,
+      withPolicy.outcome,
+    );
+    return {
+      ...failed,
+      outcome: { ...failed.outcome, result: "FAIL", qa_effort: effort.effort, deterministic_gate: gateOutcome },
+      gateEvidence: { qaModeDecision: decision, qaVerdictRequirements: required },
+      failure: {
+        category: "test",
+        owner: AgentStage.QA_ENGINEER,
+        severity: "high",
+        retryable: true,
+        reason: coverage.problems.join(" | "),
+        affected: [req.taskId],
+        requiresHuman: false,
+      },
     };
   };
 }

@@ -14,8 +14,10 @@ constraints:
   - no_next_agent_invocation
   - amend_not_regenerate
   - dates_from_user
-  # A schema nobody confirmed is a guess that everything downstream treats as settled.
-  - human_confirmation_required
+  - evidence_required
+  # Only risk-bearing design changes stop for a human; low-risk additive internal work does not inherit a universal ceremony.
+  - risk_triggered_design_confirmation
+  - addressable_design_evidence
 permissions:
   capabilities: [read, write_docs]
   # Owns design.md. prisma/** is denied on purpose: the schema is written by setup and backend-engineer, and design.md is the contract it must match.

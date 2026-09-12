@@ -165,9 +165,9 @@ Guard coverage per runtime is the same verdict `dev`/`ba` preflight consults bef
 
 | Runtime | สถานะ | Guard coverage |
 |---|---|---|
-| **Claude Code** | ✅ **Supported** — implemented + verified (pipeline, guards, capability probe) | **enforced** — all six guards wired and verified (`block-git`, `block-outside-repo`, `block-path-permissions`, `block-doc-rewrite`, `block-secret-leak`, `require-green-before-stop`) |
-| **Codex** | ⚠️ **Preview** — `software-team-agents dev\|ba --runtime codex` เปิด interactive session ได้ และ `.codex/agents/*.toml` + skills mirror `.agents/skills/**` ถูก generate ครบ (skills invoke `$name` ได้จริงบน codex-cli 0.149) แต่ headless pipeline (`sta run`) วิ่งบน Claude Code เป็น default; `CodexAdapter` ฝั่ง orchestrator ยังเป็น implementation ที่ไม่เคย verify กับ install จริง | **unguarded** — the payload ships no Codex hook wiring at all; a launch requires `--allow-unguarded-runtime` |
-| **OpenCode** | 🧪 **Experimental** — bindings `.opencode/agent/*.md` + plugin `sta-guards.js` sync ครบ, commands mirror `.opencode/commands/**` generate ครบ (`/name` ผ่าน `opencode run --command`), `dev\|ba --runtime opencode` เปิด session ได้, headless เลือกได้ด้วย `sta run --runtime opencode`; adapter/permission ผ่านการ spike พิสูจน์แล้วแต่ exit checks (typecheck/secret ตอนจบ run) ยังไม่มี in-band — รายงานเป็น GUARD GAP และให้ QA round เป็นตัวครอบ | **partial** — `.opencode/plugin/sta-guards.js` enforces `block-outside-repo` + `block-path-permissions`, each binding's permission block enforces `block-git`; `block-doc-rewrite`, `block-secret-leak`, `require-green-before-stop` have no OpenCode mechanism. A workspace **missing the plugin** is `unguarded`, not merely partial (OpenCode's default posture is allow-all) |
+| **Claude Code** | ✅ **Supported** — implemented + verified (pipeline, guards, capability probe); the only V8 runtime certified for unattended Target writes | **enforced** — all six guards wired and verified (`block-git`, `block-outside-repo`, `block-path-permissions`, `block-doc-rewrite`, `block-secret-leak`, `require-green-before-stop`) |
+| **Codex** | ⚠️ **Preview** — `software-team-agents dev\|ba --runtime codex` เปิด interactive session ได้ และ `.codex/agents/*.toml` + skills mirror `.agents/skills/**` ถูก generate ครบ (skills invoke `$name` ได้จริงบน codex-cli 0.149) แต่ headless pipeline (`sta run`) วิ่งบน Claude Code เป็น default; `CodexAdapter` ฝั่ง orchestrator ยังเป็น implementation ที่ไม่เคย verify กับ install จริง; V8 จำกัดไว้ที่ analysis/proposal และ refuse unattended Target writes | **unguarded** — the payload ships no Codex hook wiring at all; a launch requires `--allow-unguarded-runtime` |
+| **OpenCode** | 🧪 **Experimental** — bindings `.opencode/agent/*.md` + plugin `sta-guards.js` sync ครบ, commands mirror `.opencode/commands/**` generate ครบ (`/name` ผ่าน `opencode run --command`), `dev\|ba --runtime opencode` เปิด session ได้, headless เลือกได้ด้วย `sta run --runtime opencode`; adapter/permission ผ่านการ spike พิสูจน์แล้วแต่ exit checks (typecheck/secret ตอนจบ run) ยังไม่มี in-band — รายงานเป็น GUARD GAP และให้ QA round เป็นตัวครอบ; V8 จำกัดไว้ที่ analysis/proposal และ partial guards ไม่ถือเป็น certification สำหรับ unattended Target writes | **partial** — `.opencode/plugin/sta-guards.js` enforces `block-outside-repo` + `block-path-permissions`, each binding's permission block enforces `block-git`; `block-doc-rewrite`, `block-secret-leak`, `require-green-before-stop` have no OpenCode mechanism. A workspace **missing the plugin** is `unguarded`, not merely partial (OpenCode's default posture is allow-all) |
 | **Antigravity** | 🧪 **Experimental** — runtime id `antigravity`, binary `agy`; `sta run --runtime antigravity` และ `dev\|ba --runtime antigravity` รับแล้ว. **Verify บน install จริง agy 1.1.27/Windows 11**: probe, headless `-p`, JSON envelope, token usage และ adapter round-trip เต็มรอบคืน `OK` พร้อม usage จริง. ไม่มี project agent store → role ถูก fold เข้า prompt; envelope ไม่มีช่อง cost → ไม่ claim `COST_REPORTING`; Target-write stages ยังถูกปฏิเสธ ไม่ใช่วิ่งแบบ unguarded | **unguarded** — deny path **มีจริงและ fail closed จริง** (hook คืน `deny` → block; hook ที่ load ไม่ขึ้น → block) แต่ agy อ่าน hooks **จาก `~/.gemini/config/hooks.json` ระดับเครื่องเท่านั้น** — `.agents/hooks.json` ใน workspace ไม่เคยถูกอ่านเลย (ทดสอบ 7 คอนฟิก ข้าม 2 version) → guard ที่ ship มากับ repo ไม่ enforce อะไรเลย |
 
 Same verdict, three places: this table, `sta runtimes` (reads `RUNTIME_SUPPORT` directly), and
@@ -183,9 +183,16 @@ Same verdict, three places: this table, `sta runtimes` (reads `RUNTIME_SUPPORT` 
 
 | ลำดับ | ที่มาของ route | precedence ใน run log |
 |---|---|---|
-| 1 | `--runtime <id>` และ/หรือ `--model <name>` ของ run นั้น | `level-1` |
+| 1 | `--runtime <id>` และ/หรือ `--model <name>` / `--effort <name>` ของ run นั้น | `level-1` |
 | 2 | `routing.by_role.<role>` ใน `.sta/config.yaml` (`"runtime:model"` หรือ `{ runtime, model, effort }`) | `level-2` |
-| 3 | default runner (`execution.runner` หรือ `claude-code`) หรือ `routing.order` (เมื่อตั้งค่า) + `model:` ใน frontmatter ของ role | `level-4` |
+| 3 | default runner (`execution.runner` หรือ `claude-code`) หรือ `routing.order` (เมื่อตั้งค่า) | `level-4` |
+
+ตารางนี้เลือก runtime/camp เท่านั้น. หลังได้ camp แล้ว resolver กลางเลือก model/effort ด้วย precedence
+`operator model/effort → task Tier → role default Tier → runtime default` และบันทึก effective Tier,
+requested values และ winner basis ใน route/manifest. `model:`/`effort:` ใน role frontmatter เป็น generated
+compatibility output จาก `model-tiers.yaml`, ไม่ใช่ authority แยก; `--check-bindings` จับ drift. PlanTask ของ
+owner ใดก็มี optional Tier `T2`–`T6` ได้, ส่วน `T1`/ค่าที่ไม่รองรับ fail closed. ดูตัวอย่างและ DEV override
+policy ที่ [`docs/tier-and-effort-run.md`](docs/tier-and-effort-run.md)
 
 candidate ต้อง registered, available, และมี capability ที่ stage ต้องใช้ (Target-write stage ต้องมี `PRE_TOOL_GUARD`; `business-analyst` โดยเฉพาะต้องมี `INTERACTIVE_PROMPTS` — การสัมภาษณ์คือตัวงานของ stage นี้, `system-analyst`/`project-manager`/`test-planner` ไม่ถูกกฎนี้ เพราะ human gate ของ stage เหล่านั้นคือ `sta approve` ไม่ใช่ prompt กลาง run). candidate ที่ขาด capability ที่ต้องใช้ถูก**ตัดออก**เสมอ: ใน `routing.order` walk (ลำดับ 4) จะ hop ไป entry ถัดไปเหมือน `UNAVAILABLE`; ถ้าเป็น candidate เดียว (ลำดับ 1/2 หรือไม่มี `routing.order`) จะ**refuse**พร้อมเหตุผล — ขาด `PRE_TOOL_GUARD` refuse เพราะเป็น guard gap (ไม่ปลอดภัย), ขาด `INTERACTIVE_PROMPTS` refuse เพราะ camp นั้นทำงานของ stage นี้ไม่ได้ (ไม่ใช่เรื่องความปลอดภัย). automatic route (ลำดับ 3 — ลำดับเดียวที่คนไม่ได้เลือกเอง) ยังต้อง opt in ราย runtime ผ่าน `routing.allow_below_supported` ถ้า support level ต่ำกว่า `supported`.
 
@@ -201,6 +208,7 @@ V5 flags ที่ `sta run` รับจริง:
 |---|---|
 | `--runtime <claude-code|codex|opencode|antigravity>` | เลือก runner สำหรับ run นี้ (precedence 1) |
 | `--model <name>` | explicit model override สำหรับทุก stage ของ run นี้; runtime ปฏิเสธ model ที่มันใช้ไม่ได้ |
+| `--effort <name>` | explicit effort override สำหรับทุก stage ของ run นี้; adapter ปฏิเสธ vocabulary/capability ที่มันใช้ไม่ได้ |
 | `--no-qa-optimization` | กลับไปใช้ executor QA แบบก่อน optimization สำหรับ task นี้; ไม่ใช่ QA skip |
 | `--no-deterministic-gate` | explicit escape hatch ปิด deterministic pre-check สำหรับ task นี้; default gate เปิด |
 | `--token-budget <n>` | positive integer, post-hoc task token ceiling; ไม่ใช่ pre-spawn context cap |
@@ -417,7 +425,8 @@ pipeline ที่มี design phase (`--new-feature`, `--schema`, `--business-
 
 ```bash
 sta run      --task-id <id> --module <name> <classification flags> [--autonomy read-only|propose|edit|full] [--runtime claude-code|codex|opencode|antigravity]
-sta run      --wave <n> --module <name> [--max-tasks <k>] [--dry-run|--resume-run]   # bounded sequential wave run (V7) — local branch + checkpoint commit ต่อ task ที่ผ่าน deterministic gate, halt ที่ failure/ineligible ตัวแรก; ไม่ push/merge/rollback — คู่มือ: docs/bounded-wave-run.md (--resume-run คือ resume ระดับ run, ต่างจาก --resume ระดับ task)
+sta bounded-run --module <name> (--all|--phase <n>|--task <id,...>) [--until next-gate|qa|done] [--dry-run] [--autonomy edit|full]   # bounded run (V8) — compile+freeze plan scope ใน transaction เดียว แล้วเดิน DAG ผ่าน DEV → deterministic verification → checkpoint → coherent QA/repair; ไม่ push/merge/rollback — คู่มือ: docs/bounded-run.md
+sta bounded-run --resume <run-id> --module <name> [--dry-run]       # resume ระดับ run จาก ledger (ต่างจาก --resume ระดับ task); V7 --wave/--register-only/--resume-run ปลดแล้ว — docs/bounded-wave-run.md
 sta resume   --task-id <id> --module <name>          # continue task ใน store
 sta retry    --task-id <id> --module <name>          # same as resume
 sta pause    --task-id <id>                          # freeze; run/resume/retry refuse

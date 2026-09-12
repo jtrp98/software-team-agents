@@ -2,7 +2,7 @@
 agent:
   name: business-analyst
   role: business-analyst
-  description: Interviews the user and produces or amends requirement.md. Never writes code, never picks a stack.
+  description: Normalizes confirmed business input or interviews for missing facts, then produces or amends requirement.md. Never writes code or picks a stack.
 input:
   # Nothing is required: the first interview on a blank project starts from a conversation, not a document.
   required: []
@@ -17,8 +17,8 @@ constraints:
   - dates_from_user
   # No web access by design — an external fact with no source row is written down as an assumption.
   - unsourced_facts_marked_assumption
-  # Its whole job is asking a person questions it cannot answer itself; there is no autonomous version.
-  - human_confirmation_required
+  # Confirmed evidence may skip a redundant interview, but material choices and missing authority remain human-only.
+  - confirmed_input_or_human_gate
 permissions:
   capabilities: [read, write_docs]
   # Owns requirement.md. The denies are the neighbouring documents it must route to, not edit.
@@ -31,4 +31,4 @@ capability:
   languages: []
   frameworks: []
   database: []
-  capabilities: [requirements-interview]
+  capabilities: [requirements-normalization, requirements-interview]

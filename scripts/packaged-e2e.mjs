@@ -28,9 +28,24 @@ import { execFileSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { installPackedWithRetry } from "./packed-install-retry.mjs";
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+const RETIRED_COMPILED_PATHS = [
+  "orchestrator/dist/packaging/initCommand.js",
+  "orchestrator/dist/packaging/initCommand.test.js",
+  "orchestrator/dist/packaging/upgradeCommand.js",
+  "orchestrator/dist/packaging/upgradeCommand.test.js",
+  "orchestrator/dist/routing/routingPolicy.js",
+  "orchestrator/dist/run/eligibility.js",
+  "orchestrator/dist/run/eligibility.test.js",
+  "orchestrator/dist/run/killWaveFixture.test.js",
+  "orchestrator/dist/run/recovery.js",
+  "orchestrator/dist/run/recovery.test.js",
+  "orchestrator/dist/run/waveRunner.js",
+  "orchestrator/dist/run/waveRunner.test.js",
+];
 
 let step = 0;
 let failures = 0;
@@ -108,7 +123,7 @@ try {
   fs.mkdirSync(fresh, { recursive: true });
   fs.writeFileSync(path.join(fresh, "package.json"), JSON.stringify({ name: "fresh-env", private: true }, null, 2));
   try {
-    npm(["install", "--no-audit", "--no-fund", "--loglevel=error", tgz], fresh);
+    installPackedWithRetry(npm, fresh, tgz, "e2e");
     ok(`npm install <tgz> into "${path.basename(fresh)}" (path contains a space)`);
   } catch (e) {
     fail("npm install <tgz>", String(e));
@@ -119,6 +134,13 @@ try {
   const binDir = path.join(fresh, "node_modules", ".bin");
   const staBin = path.join(binDir, process.platform === "win32" ? "sta.cmd" : "sta");
   const targetBin = path.join(binDir, process.platform === "win32" ? "software-team-agents.cmd" : "software-team-agents");
+
+  const retiredStillShipped = RETIRED_COMPILED_PATHS.filter((rel) => fs.existsSync(path.join(pkgDir, ...rel.split("/"))));
+  expectCond(
+    "shipped payload excludes every retired wave-lifecycle module",
+    retiredStillShipped.length === 0,
+    retiredStillShipped.join("\n"),
+  );
 
   // --- fixtures (spaces everywhere on purpose) -------------------------------
   const knowledgeRepo = path.join(stage, "Knowledge Repo");

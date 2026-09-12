@@ -306,12 +306,12 @@ export function contractPathRules(agent: AgentStage | string, projectRoot: strin
  * carry the exact globs the contracts used to hold, so nothing that is writable
  * today stops being writable.
  */
-export function pathRulesFor(agent: AgentStage | string, projectRoot: string = defaultProjectRoot()): PathRules {
+export function pathRulesFor(agent: AgentStage | string, projectRoot: string = defaultProjectRoot(), layoutRoot: string = projectRoot): PathRules {
   const contract = contractPathRules(agent, projectRoot);
-  const stack = loadTargetConfig(projectRoot)?.stack;
+  const stack = loadTargetConfig(layoutRoot)?.stack;
   const layout = resolveStackPathRules({
     role: String(agent),
-    projectRoot,
+    projectRoot: layoutRoot,
     profile: stack?.profile,
     sourceRoots: stack?.source_roots,
   });

@@ -2,6 +2,7 @@
 name: devops
 description: Use after verified work to prepare infrastructure, CI, environments, migrations, and human-approved deployment.
 tools: Bash, Read, Write, Edit, Glob, Grep, AskUserQuestion
+# sta:model-policy — model/effort generated from model-tiers.yaml
 model: sonnet
 effort: medium
 version: 2

@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { AgentStage } from "../types.js";
+import { PacketFieldsSchema, renderPacketText, stableHash, Sha256Schema, contentHash } from "./executionPacket.js";
+import { planTaskHash } from "../docs/planTask.js";
 
 /**
  * Required-field schemas for every artifact type in the pipeline. An agent's
@@ -45,7 +47,7 @@ const ContextBudgetCompositionSchema = z
  * The deterministic handoff from Task Compiler to runtime execution. It is a
  * regenerable Local Runtime State artifact, never an authored module document.
  */
-export const ExecutionPacketSchema = z
+export const LegacyExecutionPacketSchema = z
   .object({
     text: z.string().min(1),
     composition: PromptCompositionSchema,
@@ -75,7 +77,48 @@ export const ExecutionPacketSchema = z
       ctx.addIssue({ code: "custom", path: ["budgetComposition"], message: `budget composition totals ${budgetChars}, expected text length ${packet.text.length}` });
     }
   });
+export type LegacyExecutionPacket = z.infer<typeof LegacyExecutionPacketSchema>;
+
+export const ExecutionPacketSchema = PacketFieldsSchema.extend({
+  text: z.string().min(1), composition: PromptCompositionSchema,
+  budgetComposition: ContextBudgetCompositionSchema, packet_hash: Sha256Schema,
+}).superRefine((packet, ctx) => {
+  const fail = (message: string) => ctx.addIssue({ code: "custom", message });
+  if (packet.text !== renderPacketText(packet)) fail("packet text diverges from its semantic fields");
+  const { packet_hash, ...payload } = packet;
+  if (packet_hash !== stableHash(payload)) fail("packet hash drift");
+  if (packet.identity.task_hash !== planTaskHash({ ...packet.contract, status: "pending" })) fail("canonical task hash drift");
+  if (packet.task_id !== packet.contract.id || packet.role !== packet.stage) fail("packet task/stage identity mismatch");
+  for (const composition of [packet.composition, packet.budgetComposition]) if (Object.values(composition).reduce((sum, n) => sum + n, 0) !== packet.text.length) fail("packet composition does not cover the rendered text");
+  const selected = packet.selected_traces.map(t => t.id);
+  const expected = new Set([...packet.contract.traceability, ...packet.contract.produces, ...packet.contract.consumes]);
+  if (selected.length !== expected.size || new Set(selected).size !== selected.length || selected.some(id => !expected.has(id))) fail("selected references differ from exact task trace/contract set");
+  for (const reference of packet.selected_traces) if (reference.hash !== contentHash(reference.text)) fail(`selected reference text hash drift: ${reference.id}`);
+  if (packet.design_evidence) {
+    const expectedDesign = new Set([...packet.contract.traceability.filter(id => /^(?:DES|DEC)-/.test(id)), ...packet.contract.produces, ...packet.contract.consumes]);
+    const evidenced = new Set(packet.design_evidence.map(ref => ref.claim));
+    for (const id of expectedDesign) if (!evidenced.has(id)) fail(`selected design evidence omits ${id}`);
+    for (const id of evidenced) if (!expectedDesign.has(id)) fail(`selected design evidence includes unrelated ${id}`);
+  }
+  if (new Set(packet.dependencies.map(d => d.task_id)).size !== packet.dependencies.length) fail("duplicate dependency output");
+  for (const d of packet.dependencies) if (d.task_id !== d.evidence.task_id) fail("dependency evidence identity mismatch");
+});
 export type ExecutionPacket = z.infer<typeof ExecutionPacketSchema>;
+
+/**
+ * The artifact types an agent's completion can actually carry a validated
+ * structured payload for. `REQUIREMENTS`/`DESIGN`/`PLAN`/`TEST_PLAN` are not
+ * here — T-V8-028 found no production path ever constructs one (the five
+ * doc-producing stages emit `HANDOFF` derived from their real Markdown file;
+ * see `runtime/runtimeExecutor.ts`'s `ownedDoc` branch). Those enum members
+ * still exist on `ArtifactType` because `ContextCategory` reuses them to tag
+ * which module document a context slice came from.
+ */
+export type ValidatableArtifactType =
+  | ArtifactType.HANDOFF
+  | ArtifactType.EXECUTION_PACKET
+  | ArtifactType.QA_REPORT
+  | ArtifactType.SECURITY_REPORT;
 
 /** Handoffs are compact indexes, never another authored document. */
 export const HANDOFF_MAX_BYTES = 2_048;
@@ -92,7 +135,7 @@ const HandoffReferenceSchema = z
   .max(192)
   .regex(/^[A-Za-z0-9%][A-Za-z0-9%._~:/#-]*$/, "must be a compact reference, not prose");
 const HandoffImplementationSchema = z.string().min(1).max(64).regex(/^(?:REQ|DES)-[A-Za-z0-9._-]+$/);
-const HandoffDecisionSchema = z.string().min(1).max(64).regex(/^(?:ADR|RULE)-[A-Za-z0-9._-]+$/);
+const HandoffDecisionSchema = z.string().min(1).max(64).regex(/^(?:ADR|RULE|DEC)-[A-Za-z0-9._-]+$/);
 const HandoffTestSchema = z
   .string()
   .min(1)
@@ -142,91 +185,6 @@ export const HandoffArtifactSchema = z
   });
 export type HandoffArtifact = z.infer<typeof HandoffArtifactSchema>;
 
-export const RequirementsArtifactSchema = z.object({
-  taskId: z.string().min(1),
-  title: z.string().min(1),
-  businessGoal: z.string().min(1),
-  scope: z.object({
-    inScope: z.array(z.string()).min(1),
-    outScope: z.array(z.string()),
-  }),
-  actors: z.array(z.string()).min(1),
-  // What QA checks the delivered work against.
-  acceptanceCriteria: z.array(z.string()).min(1),
-  // CLAUDE.md's rule carried forward: an unsourced fact is an assumption, in writing.
-  assumptions: z.array(
-    z.object({
-      statement: z.string().min(1),
-      confirmed: z.boolean(),
-    }),
-  ),
-  references: z.array(
-    z.object({
-      fact: z.string().min(1),
-      source: z.string().min(1),
-    }),
-  ),
-});
-export type RequirementsArtifact = z.infer<typeof RequirementsArtifactSchema>;
-
-export const DesignArtifactSchema = z.object({
-  taskId: z.string().min(1),
-  feasibility: z.string().min(1),
-  // Empty only when the task genuinely doesn't touch the data model.
-  dataModel: z.array(
-    z.object({
-      model: z.string().min(1),
-      fields: z.array(z.object({ name: z.string().min(1), type: z.string().min(1) })),
-    }),
-  ),
-  risks: z.array(z.string()),
-  openQuestions: z.array(z.string()),
-  // Rules an engineer implements or stops on — never decides itself.
-  contract: z.array(z.string()).min(1),
-});
-export type DesignArtifact = z.infer<typeof DesignArtifactSchema>;
-
-export const PlanArtifactSchema = z.object({
-  taskId: z.string().min(1),
-  phases: z
-    .array(
-      z.object({
-        id: z.string().min(1),
-        name: z.string().min(1),
-        securityGate: z.boolean(),
-        tasks: z.array(
-          z.object({
-            id: z.string().min(1),
-            description: z.string().min(1),
-            tag: z.enum(["frontend", "backend"]),
-            done: z.boolean(),
-          }),
-        ),
-      }),
-    )
-    .min(1),
-});
-export type PlanArtifact = z.infer<typeof PlanArtifactSchema>;
-
-export const TestPlanArtifactSchema = z.object({
-  taskId: z.string().min(1),
-  // One entry per requirement this test strategy covers, by traceability id.
-  items: z
-    .array(
-      z.object({
-        requirementId: z.string().min(1),
-        levels: z.array(z.enum(["unit", "integration", "api", "e2e"])).min(1),
-        rationale: z.string().min(1),
-      }),
-    )
-    .min(1),
-  // True only if the project actually has an automated test framework (opt-in per CLAUDE.md).
-  // False is normal and does not invalidate the plan — it still tells engineers/qa-engineer
-  // what should be exercised, by reading if nothing else.
-  hasAutomatedTests: z.boolean(),
-});
-export type TestPlanArtifact = z.infer<typeof TestPlanArtifactSchema>;
-
 export const QaReportArtifactSchema = z
   .object({
     taskId: z.string().min(1),
@@ -254,6 +212,17 @@ export const QaReportArtifactSchema = z
     },
     { message: "status PASS requires every requirement PASS and zero failed tests" },
   )
+  // T-V8-014: no bare PASS. `Object.values({}).every(...)` is vacuously true,
+  // so the refine above accepted a PASS that named no requirement at all - a
+  // status without a verdict. Which ids specifically must appear is the
+  // round's own contract (`requiredVerdictIds`, enforced by
+  // `checkQaVerdictCoverage`); this is the floor that makes the omission
+  // impossible to express in the first place.
+  .refine((report) => report.status !== "PASS" || Object.keys(report.requirements).length > 0, {
+    message:
+      "status PASS requires at least one requirement verdict - a PASS that maps no task/AC/DES id to a result is an assertion, not a verdict",
+    path: ["requirements"],
+  })
   .refine(
     (report) => report.hasAutomatedTests || report.unverifiedBehaviour.length > 0,
     {
@@ -290,15 +259,11 @@ export const SecurityReportArtifactSchema = z
 export type SecurityReportArtifact = z.infer<typeof SecurityReportArtifactSchema>;
 
 export const ARTIFACT_SCHEMAS = {
-  [ArtifactType.REQUIREMENTS]: RequirementsArtifactSchema,
-  [ArtifactType.DESIGN]: DesignArtifactSchema,
-  [ArtifactType.PLAN]: PlanArtifactSchema,
-  [ArtifactType.TEST_PLAN]: TestPlanArtifactSchema,
   [ArtifactType.QA_REPORT]: QaReportArtifactSchema,
   [ArtifactType.SECURITY_REPORT]: SecurityReportArtifactSchema,
   [ArtifactType.HANDOFF]: HandoffArtifactSchema,
   [ArtifactType.EXECUTION_PACKET]: ExecutionPacketSchema,
-} as const;
+} as const satisfies Record<ValidatableArtifactType, z.ZodTypeAny>;
 
 export class ArtifactValidationError extends Error {
   constructor(
@@ -311,10 +276,6 @@ export class ArtifactValidationError extends Error {
 }
 
 interface ArtifactDataMap {
-  [ArtifactType.REQUIREMENTS]: RequirementsArtifact;
-  [ArtifactType.DESIGN]: DesignArtifact;
-  [ArtifactType.PLAN]: PlanArtifact;
-  [ArtifactType.TEST_PLAN]: TestPlanArtifact;
   [ArtifactType.QA_REPORT]: QaReportArtifact;
   [ArtifactType.SECURITY_REPORT]: SecurityReportArtifact;
   [ArtifactType.HANDOFF]: HandoffArtifact;
@@ -327,7 +288,7 @@ interface ArtifactDataMap {
  * the point of a fixed schema is that the next stage never has to guess why
  * a doc was rejected.
  */
-export function validateArtifact<T extends ArtifactType>(
+export function validateArtifact<T extends ValidatableArtifactType>(
   type: T,
   data: unknown,
 ): ArtifactDataMap[T] {

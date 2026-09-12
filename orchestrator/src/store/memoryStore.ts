@@ -23,6 +23,31 @@ export class MemoryTaskStore implements TaskStore {
   private tasks = new Map<string, PersistedTask>();
   private runs: RunRecord[] = [];
   private events: PersistedEvent[] = [];
+  private inTransaction = false;
+
+  /**
+   * Snapshot-and-restore, which is what "transaction" means for three in-memory
+   * collections. It has to behave identically to the SQLite store's rollback or
+   * the atomicity tests written against this store prove nothing about the real
+   * one — the same reasoning as the clone-in/clone-out rule above.
+   */
+  transaction<T>(fn: () => T): T {
+    if (this.inTransaction) return fn();
+    const tasks = new Map([...this.tasks].map(([id, task]) => [id, structuredClone(task)] as const));
+    const runs = this.runs.map((r) => ({ ...r }));
+    const events = this.events.map((e) => structuredClone(e));
+    this.inTransaction = true;
+    try {
+      return fn();
+    } catch (error) {
+      this.tasks = tasks;
+      this.runs = runs;
+      this.events = events;
+      throw error;
+    } finally {
+      this.inTransaction = false;
+    }
+  }
 
   createTask(task: PersistedTask): void {
     if (this.tasks.has(task.taskId)) throw new TaskAlreadyExistsError(task.taskId);

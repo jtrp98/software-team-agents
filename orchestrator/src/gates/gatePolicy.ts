@@ -2,6 +2,13 @@ import { TaskState } from "../types.js";
 import { canTransition, transition, type TaskMachine } from "../state/taskState.js";
 import type { QaReportArtifact, SecurityReportArtifact } from "../artifacts/schemas.js";
 import { canCloseWith, type QaModeDecision } from "../qa/mode.js";
+import { checkQaVerdictCoverage } from "../qa/verdict.js";
+import {
+  assessBusinessInput,
+  businessGateReason,
+  type BusinessInputEvidence,
+} from "./businessInput.js";
+import type { DesignGateAssessment } from "../docs/designEvidence.js";
 
 /**
  * Evidence available to gate a transition. This is deliberately separate
@@ -9,8 +16,12 @@ import { canCloseWith, type QaModeDecision } from "../qa/mode.js";
  * no idea whether a design was approved or a QA report passed.
  */
 export interface GateContext {
-  /** The requirement interview was answered by a person (always-human point #1). */
+  /** The interactive requirement fallback was answered by a person. */
   requirementApproved?: boolean;
+  /** Structured intake evidence. Complete confirmed input discharges only the redundant interview. */
+  businessInput?: BusinessInputEvidence;
+  /** Risk facts derived from design.md after SA completes; absent rows keep the legacy universal gate. */
+  designAssessment?: DesignGateAssessment;
   designApproved?: boolean;
   qaReport?: QaReportArtifact;
   securityReport?: SecurityReportArtifact;
@@ -21,6 +32,16 @@ export interface GateContext {
    * to its original behavior.
    */
   qaModeDecision?: QaModeDecision;
+  /**
+   * T-V8-014 - the task/AC/DES/finding ids this round's report has to give a
+   * verdict for (`requiredVerdictIds`). Optional for the same reason
+   * `qaModeDecision` is: a row written before the contract-bound QA package
+   * has none, and inventing one would be a fabricated requirement rather than
+   * a stricter gate. `withQaOptimization` already rejects an under-covered
+   * report before it gets here; this is the defense-in-depth copy, so a
+   * caller that composes the gate without that wrapper is still held to it.
+   */
+  qaVerdictRequirements?: string[];
 }
 
 export interface GateResult {
@@ -28,21 +49,42 @@ export interface GateResult {
   reason?: string;
 }
 
+export function designGateReason(assessment: DesignGateAssessment): string {
+  if (assessment.mode === "legacy") {
+    return "DESIGN_EVIDENCE_MIGRATION required — legacy design uses safe whole-section fallback and cannot feed unattended execution until Design evidence format 1 is authored";
+  }
+  return `DESIGN_RISK_CONFIRMATION required — ${assessment.triggers.join(", ")}`;
+}
+
 /**
- * The four gate conditions, each keyed to the edge it guards. Agents never
+ * The gate conditions, each keyed to the edge it guards. Agents never
  * call this directly and never get to decide the answer — only the
  * orchestrator consults it, same as canTransition.
  */
 export function checkGate(from: TaskState, to: TaskState, ctx: GateContext): GateResult {
-  // Gated on leaving REQUIREMENT at all: a requirement is never inferred
-  // (CLAUDE.md always-human point #1). business-analyst's own run may produce
-  // requirement.md, but the pipeline does not build a design on top of it until
-  // a person has answered the interview. Pipelines without a BA stage never sit
-  // in REQUIREMENT, so they never see this gate.
+  // Gated on leaving REQUIREMENT at all. Complete, provenance-bearing input
+  // may skip a redundant interview, but an unresolved material business choice
+  // or missing authority remains a hard stop even if a generic interview flag
+  // was supplied. Incomplete/explicitly interactive input keeps the legacy
+  // human-interview fallback.
   if (from === TaskState.REQUIREMENT) {
+    if (ctx.businessInput) {
+      const assessment = assessBusinessInput(ctx.businessInput);
+      if (assessment.humanGates.length > 0) {
+        return { allowed: false, reason: businessGateReason(assessment) };
+      }
+      if (assessment.canNormalizeWithoutInterview) return { allowed: true };
+      return ctx.requirementApproved
+        ? { allowed: true }
+        : { allowed: false, reason: businessGateReason(assessment) };
+    }
     return ctx.requirementApproved
       ? { allowed: true }
-      : { allowed: false, reason: "REQUIREMENT_INTERVIEW required — a person answers the requirements interview" };
+      : {
+          allowed: false,
+          reason:
+            "REQUIREMENT_INTERVIEW required — interactive interview required because no confirmed-input evidence was supplied",
+        };
   }
 
   // Gated on leaving DESIGN at all, not specifically on landing in IMPLEMENTATION:
@@ -52,9 +94,17 @@ export function checkGate(from: TaskState, to: TaskState, ctx: GateContext): Gat
   // a plan or a test strategy built against an unconfirmed schema is exactly as wrong as code
   // built against one.
   if (from === TaskState.DESIGN) {
+    if (ctx.designAssessment?.mode === "addressable" && ctx.designAssessment.canProceedWithoutConfirmation) {
+      return { allowed: true };
+    }
     return ctx.designApproved
       ? { allowed: true }
-      : { allowed: false, reason: "DESIGN_APPROVED required before development can start" };
+      : {
+          allowed: false,
+          reason: ctx.designAssessment
+            ? designGateReason(ctx.designAssessment)
+            : "DESIGN_APPROVED required before development can start (legacy universal-gate compatibility)",
+        };
   }
 
   if (from === TaskState.QA && to !== TaskState.QA_FAILED) {
@@ -64,7 +114,16 @@ export function checkGate(from: TaskState, to: TaskState, ctx: GateContext): Gat
     // A decision of FULL is only discharged by a report that says FULL.
     // Without a recorded decision this is a no-op.
     const close = canCloseWith(ctx.qaModeDecision, ctx.qaReport.mode);
-    return close.allowed ? { allowed: true } : { allowed: false, reason: close.reason };
+    if (!close.allowed) return { allowed: false, reason: close.reason };
+    if (ctx.qaVerdictRequirements && ctx.qaVerdictRequirements.length > 0) {
+      const coverage = checkQaVerdictCoverage({
+        report: ctx.qaReport,
+        required: ctx.qaVerdictRequirements,
+        decision: ctx.qaModeDecision,
+      });
+      if (!coverage.ok) return { allowed: false, reason: `QA_VERDICT_COVERAGE required - ${coverage.problems.join(" | ")}` };
+    }
+    return { allowed: true };
   }
 
   if (from === TaskState.SECURITY && to !== TaskState.SECURITY_FAILED) {

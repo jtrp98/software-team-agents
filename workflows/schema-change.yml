@@ -6,7 +6,7 @@ trigger:
   kind: signal
   signal: touchesSchema
   # Below `feature` (priority 1): a brand-new feature/module that also needs new
-  # tables must run the full requirements interview first — this pipeline is for
+  # tables must run the full BA normalization/interview step first — this pipeline is for
   # schema work on something that already exists.
   priority: 2
 level: LARGE_CRITICAL
@@ -14,6 +14,7 @@ requires_human_approval: true
 steps:
   - agent: system-analyst
   - agent: test-planner
+    when: test_strategy_required
   - agent: backend-engineer
     when: touchesBackend
   - agent: uxui-designer

@@ -4,8 +4,8 @@ agent:
   role: frontend-engineer
   description: Implements UI code from design.md and from the API the backend actually built.
 input:
-  required: [plan, design, requirements, test-plan]
-  optional: [qa-report, frontend-code]
+  required: [plan, design, requirements]
+  optional: [test-plan, qa-report, frontend-code]
 output:
   required: [frontend-code]
 constraints:

@@ -3,7 +3,7 @@
 - Workspace role: resolved at sync (`ba` / `dev`) — writes only artifacts allowed by that role.
 - Workspace root (writable): **resolved at sync**
 - Bound Knowledge/Target root (read-only): **resolved at sync or UNBOUND**
-- Human gates: requirements interview; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.
+- Human gates: material unresolved business choice or missing authority; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.
 - Hard boundary: no state-changing git.
 - Hard boundary: write only inside resolved writable workspace roots.
 - Hard boundary: write only paths allowed by the active role contract.
@@ -94,7 +94,7 @@ change bypassing `system-analyst` is the exact failure this pipeline exists to p
 | A bug where requirement + schema are already clear | engineer → `qa-engineer` | BA, SA, PM, test-planner | **Judgement retained; P3 insufficient** — all bug attempts failed the frozen oracle and arm C token totals were not reported. |
 | Adds or alters a field/table/relation | `system-analyst` (amend) → `test-planner` → engineer → `qa-engineer` (+`security`) | BA, PM | **Judgement** — P3 did not isolate schema-change work. |
 | Changes a business rule, no schema impact | `business-analyst` (amend) → `system-analyst` (amend) → `test-planner` → engineer → `qa-engineer` | PM | **Judgement** — P3 did not isolate business-rule work. |
-| A new feature, module, or project | `business-analyst`, full chain — even when it also needs new tables: the interview comes first, the schema confirmation after it | nothing | **Judgement retained; P3 insufficient** — all feature attempts failed the frozen oracle and arm C token totals were not reported. |
+| A new feature, module, or project | `business-analyst`, full chain — confirmed intake may be normalized without a redundant interview; unresolved material business choices stop first, and schema confirmation follows when needed | nothing | **Judgement retained; P3 insufficient** — all feature attempts failed the frozen oracle and arm C token totals were not reported. |
 
 `project-manager` earns its run only when there is enough work to phase; one or two tasks go straight
 to an engineer, and `test-planner` goes with it.

@@ -155,6 +155,66 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
     expect(schemaArgs).not.toContain("do the thing");
   });
 
+  it("T-V8-031 — recovers Claude Code custom-agent JSON only after local schema validation", async () => {
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      properties: { verdict: { type: "string", enum: ["pass", "fail"] } },
+      required: ["verdict"],
+    };
+    const adapter = new ClaudeCodeAdapter({
+      projectRoot: tmpProject(),
+      outputSchema: schema,
+      spawnSync: fakeCli({ is_error: false, result: '{"verdict":"pass"}' }),
+    });
+
+    const result = await adapter.executeAgent(baseRequest());
+
+    expect(result.status).toBe("OK");
+    expect(result.structured).toEqual({ verdict: "pass" });
+    expect(result.diagnostics.join(" ")).toMatch(/omitted structured_output.*validated it locally/);
+  });
+
+  it("T-V8-031 — fails closed when a schema-requested custom-agent result is free-form or invalid", async () => {
+    const schema = {
+      type: "object",
+      additionalProperties: false,
+      properties: { verdict: { type: "string", enum: ["pass", "fail"] } },
+      required: ["verdict"],
+    };
+    for (const resultText of ["```json\n{\"verdict\":\"pass\"}\n```", '{"verdict":"unknown"}']) {
+      const adapter = new ClaudeCodeAdapter({
+        projectRoot: tmpProject(),
+        outputSchema: schema,
+        spawnSync: fakeCli({ is_error: false, result: resultText }),
+      });
+
+      const result = await adapter.executeAgent(baseRequest());
+
+      expect(result.status).toBe("ERROR");
+      expect(result.structured).toBeUndefined();
+      expect(result.diagnostics.length).toBeGreaterThan(0);
+    }
+  });
+
+  it("T-V8-031 — refuses an invalid output schema before spawning Claude", async () => {
+    let spawned = false;
+    const adapter = new ClaudeCodeAdapter({
+      projectRoot: tmpProject(),
+      outputSchema: { type: "not-a-json-schema-type" },
+      spawnSync: () => {
+        spawned = true;
+        return cliResult(0, "{}");
+      },
+    });
+
+    const result = await adapter.executeAgent(baseRequest());
+
+    expect(spawned).toBe(false);
+    expect(result.status).toBe("ERROR");
+    expect(result.diagnostics.join(" ")).toMatch(/invalid structured-output schema/);
+  });
+
   it("T-V4-CAST-001 — forwards --model only for an explicit override, and the no-override arg list is byte-identical", async () => {
     const capture = () => {
       let args: string[] = [];
@@ -288,6 +348,28 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
     expect(result.usage.cachedInputTokens).toBe(10);
     expect(result.usage.costUsd).toBe(0.02);
     expect(result.model).toBeUndefined();
+  });
+
+  it("T-V8-012 reports cache-creation tokens distinctly from cache-read tokens", async () => {
+    const spawnSync = fakeCli({
+      is_error: false, result: "done", total_cost_usd: 0.03,
+      usage: { input_tokens: 100, output_tokens: 40, cache_read_input_tokens: 10, cache_creation_input_tokens: 25 },
+    });
+    const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync });
+
+    const result = await adapter.executeAgent(baseRequest());
+
+    expect(result.usage.cachedInputTokens).toBe(10);
+    expect(result.usage.cacheCreationInputTokens).toBe(25);
+  });
+
+  it("T-V8-012 leaves cache-creation tokens undefined (not 0) when the envelope carries none", async () => {
+    const spawnSync = fakeCli({ is_error: false, result: "done", total_cost_usd: 0.02, usage: { input_tokens: 100, output_tokens: 40, cache_read_input_tokens: 10 } });
+    const adapter = new ClaudeCodeAdapter({ projectRoot: tmpProject(), spawnSync });
+
+    const result = await adapter.executeAgent(baseRequest());
+
+    expect(result.usage.cacheCreationInputTokens).toBeUndefined();
   });
 
   it("reports ERROR (not OK) when the CLI exits non-zero", async () => {

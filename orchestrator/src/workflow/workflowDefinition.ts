@@ -5,7 +5,7 @@ import Ajv, { type ValidateFunction } from "ajv";
 import { parse as parseYaml } from "yaml";
 import { AgentStage, TaskLevel } from "../types.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
-import type { ClassificationInput } from "../classification/taskClassifier.js";
+import { testPlannerDecision, type ClassificationInput } from "../classification/taskClassifier.js";
 import { catalogWorkflows, checkWorkflowFiles, workflowPath, workflowsDir } from "./workflowCatalog.js";
 
 export { workflowPath, workflowsDir };
@@ -35,7 +35,7 @@ export type WorkflowTrigger =
 
 export interface WorkflowStep {
   agent: AgentStage;
-  when?: "touchesBackend" | "touchesFrontend" | "touchesSensitiveArea" | "always_sensitive";
+  when?: "touchesBackend" | "touchesFrontend" | "touchesSensitiveArea" | "always_sensitive" | "test_strategy_required";
   note?: string;
 }
 
@@ -153,9 +153,14 @@ export function resolveWorkflowId(
 export function pipelineFromWorkflow(workflow: WorkflowDefinition, input: ClassificationInput): AgentStage[] {
   const stages: AgentStage[] = [];
   for (const step of workflow.steps) {
+    // Compatibility adapter for pre-V8 generated workflows: an old
+    // unconditional test-planner row is interpreted through the new policy,
+    // never as authority to restore mandatory calls.
+    if (step.agent === AgentStage.TEST_PLANNER && !testPlannerDecision(input).required) continue;
     if (step.when === "touchesBackend" && !input.touchesBackend) continue;
     if (step.when === "touchesFrontend" && !input.touchesFrontend) continue;
     if (step.when === "touchesSensitiveArea" && !input.touchesSensitiveArea) continue;
+    if (step.when === "test_strategy_required" && !testPlannerDecision(input).required) continue;
     // always_sensitive: included regardless of what the caller said.
     if (!stages.includes(step.agent) || step.agent !== AgentStage.SECURITY) stages.push(step.agent);
   }

@@ -46,7 +46,7 @@ Several behaviours are worth knowing when you read the agent files:
   finally actionable instead of being knowledge someone had to hold. `--list` shows the batches.
   The orchestrator still runs one task at a time: executing a batch concurrently needs file-level
   locking first.
-- **An approval is a record, not a flag.** Each of the five always-human points carries a type, a
+- **An approval is a record, not a flag.** Each human-gate identity carries a type, a
   status, who answered and when. The one that mattered: a rejection is now stored as `rejected`, so
   it blocks the task — previously `false` and "never asked" were the same value, and a "no" quietly
   became a re-prompt until someone said yes.
@@ -58,7 +58,7 @@ Several behaviours are worth knowing when you read the agent files:
 ```
 setup (once per project)
    ↓
-business-analyst → system-analyst → project-manager → test-planner → backend-engineer → uxui-designer → frontend-engineer
+business-analyst → system-analyst → project-manager → [test-planner when shared strategy is triggered] → backend-engineer → uxui-designer → frontend-engineer
                                                                                                           ↓
                                                                                                     qa-engineer
                                                                                           ↓            ↓            ↓
@@ -75,10 +75,10 @@ business-analyst → system-analyst → project-manager → test-planner → bac
 | `business-analyst` | business requirements | `review.md`, `design.md`, `requirement.md` (amend) | `requirement.md` |
 | `system-analyst` | feasibility + data model | `requirement.md`, `review.md`, stack files | `design.md` |
 | `project-manager` | work graph — phased task list as a validated dependency DAG (`sta --check-plan`) | `design.md`, `requirement.md`, `status.md`'s Scaffold line | `plan.md` |
-| `test-planner` | test strategy | `requirement.md`, `design.md`, `plan.md` | `test-plan.md` |
+| `test-planner` | shared test strategy for cross-task, multi-system, migration, security, or release work | `requirement.md`, `design.md`, `plan.md` | conditional `test-plan.md` |
 | `uxui-designer` | UX/UI analysis + recommendations (read-only consultant; drafts only, a person signs off) | `requirement.md`, `design.md`, design sources under `knowledge/_sources/design/<module>/`, Figma via read-only MCP, Claude Design via fail-closed MCP (draft-only) | `_docs/module/*/uxui/**`, `knowledge/*/ux-design/**` (`UX-*` drafts) |
-| `frontend-engineer` | UI code | `plan.md`, `design.md`, `requirement.md`, `test-plan.md`, `review.md`, the module's signed UX artifact | app code |
-| `backend-engineer` | API/DB code | `plan.md`, `design.md`, `requirement.md`, `test-plan.md`, `review.md` | app code |
+| `frontend-engineer` | UI code | `plan.md`, `design.md`, `requirement.md`, optional `test-plan.md`, `review.md`, the module's signed UX artifact | app code |
+| `backend-engineer` | API/DB code | `plan.md`, `design.md`, `requirement.md`, optional `test-plan.md`, `review.md` | app code |
 | `qa-engineer` | verification | all docs + `schema.prisma` + real code | `review.md`, `review/phase-N.md`, task Status cells and add-only `🔒 Security gate` in `plan.md` |
 | `security` | security audit | `requirement.md`, `design.md`, `review.md`, `schema.prisma`, real code | `security.md` |
 | `devops` | deploy, CI, migrations | `status.md`, `review.md`, `security.md`, `plan.md`, `design.md`, `schema.prisma`, stack files | `deploy.md`, infra files |
@@ -93,7 +93,7 @@ Every agent also reads `_docs/status.md` when it starts and regenerates it (`nod
 
 `uxui-designer` runs immediately before `frontend-engineer`, but only in pipelines that carry a design phase — feature, business-rule, schema-change and incremental work (`workflows/typo.yml`-class small fixes rely on the module's existing signed artifact instead). It analyzes the module's design source — a Figma file over a read-only MCP connection, export/handoff files a person placed in `knowledge/_sources/design/<module>/`, or Anthropic's Claude Design server over its MCP (Path C: reads ingest a design; explicit write mode may seed a draft mockup on the canvas; the tool allowlist is frozen and fail-closed in `orchestrator/src/integration/claudeDesignMcp.ts`, ADR-005) — and produces draft `UX-*` recommendations plus `_docs/module/<name>/uxui/design.md`. Everything it writes is draft — a person reviews, approves, and records the UXUI lane sign-off (`sta roles signoff uxui --by <name>`), and frontend work does not start until that gate is current. The gate itself follows the same right-sizing: TRIVIAL/SMALL tasks skip the UX-artifact precondition (no design phase, no uxui round was scheduled), while MEDIUM+ — and any unknown level, fail-closed — still require it; the SA→DEV handoff checks apply at every level. It never scrapes a design URL and never calls a destructive canvas tool; the Figma connection is read-only, identity-gated, and Claude Design output stays draft-only (see README, "Design sources & identities"). A question that is not its to answer — is this UI worth building, or can it be built — is reported as structured data and routed back to `business-analyst`/`system-analyst` automatically; if this pipeline has no such stage, it stops for a person instead of guessing.
 
-`test-planner` runs after `project-manager`, before the engineers — deciding what needs testing and at what level (unit/integration/API/E2E) so `backend-engineer`/`frontend-engineer` build against a stated strategy instead of each guessing their own, and `qa-engineer` verifies against it instead of inventing one per round. It participates in normal auto-chaining like every other stage — the only things that stop the chain are the five always-human points above. Right-sizing still applies: small work that skips `project-manager` skips `test-planner` too (see below).
+`test-planner` is conditional after `project-manager`, before the engineers. A separate shared strategy is selected only by the closed deterministic triggers `cross-task`, `multi-system`, `migration`, `security`, and `release`. Ordinary task-level validation and expected evidence stay in the canonical PlanTask, with `test-pyramid.yaml` providing the minimum verification floor; DEV and QA therefore accept an absent `test-plan.md`. When triggered, the role decides coordinated unit/integration/API/E2E coverage that cannot be derived safely from one task. The test floor is never lowered by skipping the role.
 
 `setup` runs once per project, before Phase 1. Everything after that loops per phase.
 
@@ -173,23 +173,15 @@ A **module folder** is a delivery unit with its own doc set and phase numbering;
 
 ## Model and effort per agent
 
-Set in each agent's frontmatter. The split puts the expensive model where a mistake propagates furthest, and the cheap one where the volume is:
+`model-tiers.yaml` is the single policy authority. It maps human-owned Tier cells to each runtime camp and
+declares role defaults: setup T6; BA/test-planner/QA T3; SA/PM/security T2; UX/backend/frontend/devops T5.
+A canonical task may override its role with optional T2–T6; operator model/effort wins for that bounded run,
+then task Tier, role Tier, and finally intentional runtime default. Runtime/camp selection is a separate decision.
 
-| Agent | `model` | `effort` | Why |
-|---|---|---|---|
-| `setup` | sonnet | low | mechanical, runs once per project |
-| `business-analyst` | opus | medium | short output, but an error here contaminates everything downstream |
-| `system-analyst` | opus | high | hardest reasoning in the chain; a wrong schema is the costliest mistake available |
-| `project-manager` | sonnet | medium | decomposition from an already-confirmed design |
-| `test-planner` | sonnet | medium | derives test items from an already-confirmed design/plan — same tier as decomposition, not the same tier as the design decision itself |
-| `uxui-designer` | sonnet | medium | analysis of an already-confirmed design against a design source; output is a draft a person reviews, so a miss costs one review round, not shipped UI |
-| `frontend-engineer` | sonnet | medium | highest volume, highest output — where the savings actually are |
-| `backend-engineer` | sonnet | medium | same |
-| `qa-engineer` | sonnet | high | comparison work, so `effort: high` buys more here than the tier does — but note this is the highest-leverage cost decision in the table: with tests opt-in and usually absent, this agent is the *only* correctness guarantee in the chain and nothing re-checks it. `opus` is the upgrade to reach for first if verification starts missing things |
-| `security` | opus | high | adversarial reasoning; what it misses, nobody catches |
-| `devops` | sonnet | medium | little reasoning, high stakes — guarded by confirmation rules instead |
-
-To change one, edit that agent's frontmatter. `inherit` follows the session's `/model`.
+The `model:`/`effort:` fields in `.claude/agents/*.md` are generated compatibility output for tools that still
+read role frontmatter. Do not edit them independently: regenerate them with the repository rendering command,
+and use `--check-bindings` to detect drift. Provider model identifiers and effort cells remain only in
+`model-tiers.yaml`; see [tier-and-effort-run.md](tier-and-effort-run.md) for operator examples and exact precedence.
 
 **Every agent's frontmatter also carries `version:`** — a plain integer, starting at 1, bumped by whoever edits that agent's prompt meaningfully. This is log-only: Claude Code resolves a subagent from exactly `.claude/agents/<role>.md`, so only the prompt currently at that path can ever run — nothing here lets a task pin or run an older version. `orchestrator/src/agents/agentModel.ts`'s `resolveAgentVersion()` reads it the same way `resolveAgentModel()` reads `model:`, and `orchestrator/src/runtime/runtimeExecutor.ts` logs it on every run (`RunRecord.promptVersion`) so a task's history says which prompt version actually ran it — via whichever `RuntimeAdapter` is configured, `claudeCodeAdapter.ts` today.
 

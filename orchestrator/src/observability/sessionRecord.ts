@@ -213,6 +213,6 @@ export function interactiveSessionRecordForTest(params: {
 }): RunRecord | null {
   // Small test-only capture seam that still exercises the production recorder.
   const records: RunRecord[] = [];
-  recordInteractiveSession({ ...params, store: { appendRun: (r) => records.push(r), createTask() {}, saveTask() {}, loadTask() { return null; }, listTasks() { return []; }, runsForTask() { return []; }, allRuns() { return []; }, appendEvent() {}, eventsForTask() { return []; }, close() {} } });
+  recordInteractiveSession({ ...params, store: { appendRun: (r) => records.push(r), transaction<T>(fn: () => T) { return fn(); }, createTask() {}, saveTask() {}, loadTask() { return null; }, listTasks() { return []; }, runsForTask() { return []; }, allRuns() { return []; }, appendEvent() {}, eventsForTask() { return []; }, close() {} } });
   return records[0] ?? null;
 }

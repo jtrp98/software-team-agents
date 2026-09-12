@@ -43,10 +43,10 @@ export class GuardResolutionError extends Error {
  * between them is worse than one that stops. Callers that genuinely want no
  * guards say so with `NO_GUARDS`.
  */
-export function contractGuards(role: string, projectRoot: string): RuntimeGuards {
+export function contractGuards(role: string, projectRoot: string, layoutRoot: string = projectRoot): RuntimeGuards {
   let rules;
   try {
-    rules = pathRulesFor(role, projectRoot);
+    rules = pathRulesFor(role, projectRoot, layoutRoot);
   } catch (e) {
     throw new GuardResolutionError(role, e);
   }
@@ -69,6 +69,6 @@ export function contractGuards(role: string, projectRoot: string): RuntimeGuards
 }
 
 /** `contractGuards` curried per role, the shape `createRuntimeExecutor` wants. */
-export function contractGuardResolver(projectRoot: string): (role: string) => RuntimeGuards {
-  return (role) => contractGuards(role, projectRoot);
+export function contractGuardResolver(projectRoot: string): (role: string, layoutRoot?: string) => RuntimeGuards {
+  return (role, layoutRoot) => contractGuards(role, projectRoot, layoutRoot);
 }

@@ -247,7 +247,7 @@ describe("T114: BA -> SA -> DEV integration (real files, fresh reload at every s
     expect(devState.handoff.blockers).toEqual([]);
     expect(devState.handoff.carries).toEqual([]); // verified + joined: nothing left to carry
 
-    // ---------- DEV signs the lane off — the pipeline's third always-human point (deploy) ----------
+    // ---------- DEV signs the lane off — reusing the deploy approval identity ----------
     writeRoleWorkspace(
       recordSignoff(loadRoleWorkspace("dev", MODULE, root, NOW), {
         approved: approvedOwnedBy("dev"),

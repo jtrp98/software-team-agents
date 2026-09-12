@@ -1488,37 +1488,37 @@ const PM_PROMPT = fs.readFileSync(path.join(ROOT, '.claude', 'agents', 'project-
 const PM_CONTRACT = fs.readFileSync(path.join(ROOT, 'contracts', 'project-manager.yaml'), 'utf8');
 
 check('pm: decomposition is one independently verifiable unit, batched by shared boundary (T-PM3.1)',
-  /one task = one independently verifiable unit of work/.test(PM_PROMPT) && /Batch when the boundary is shared/.test(PM_PROMPT) ? 0 : 1, 0);
+  /One task is one independently verifiable unit/.test(PM_PROMPT) && /Batch only when owner, dependency, acceptance, and rollback are shared/.test(PM_PROMPT) ? 0 : 1, 0);
 // The old imperative sentences are what this pins gone; the words "per endpoint" may
 // still appear inside the negation that replaced them ("nothing mandates one task per endpoint…").
 check('pm: no mandatory per-endpoint/per-component/per-model split left behind',
   !/tasks — one task per endpoint/.test(PM_PROMPT) && !/that's 6 task rows/.test(PM_PROMPT) && !/one task per Prisma model\/migration/.test(PM_PROMPT) ? 0 : 1, 0);
 check('pm: split rule names dependency/owner/security/migration boundaries (T-PM3.2)',
-  /Split when a boundary differs[\s\S]{0,400}security sensitivity[\s\S]{0,200}deploy\/migration boundary/.test(PM_PROMPT) ? 0 : 1, 0);
+  /split when owner, dependency, contract, proof, security, deployment, or migration differs/.test(PM_PROMPT) ? 0 : 1, 0);
 check('pm: scaffolding fact comes from status.md Scaffold line, not Target filesystem inspection (T-PM6.1)',
   /## Scaffold` line/.test(PM_PROMPT) && !/\(does `package\.json`/.test(PM_PROMPT) && /Don't look for `package\.json`/.test(PM_PROMPT) ? 0 : 1, 0);
-check('pm: Graphify owns code relationships — no inferring source files or impact analysis (T-PM2.2)',
-  /Graphify.*owns source-code relationships/.test(PM_PROMPT) && /Never infer source files/.test(PM_PROMPT) ? 0 : 1, 0);
+check('pm: Graphify owns code discovery while PM retrieval stays provenance-bearing hypothesis (T-PM2.2/T-V8-008)',
+  /Graphify code discovery/.test(PM_PROMPT) && /retrieval hypotheses/.test(PM_PROMPT) && /name DES\/DEC\/Contract provenance/.test(PM_PROMPT) && !/Never infer source files/.test(PM_PROMPT) ? 0 : 1, 0);
 check('pm: orchestrator owns runtime readiness — PM never marks a task ready (T-PM5.1)',
-  /orchestrator owns runtime readiness/.test(PM_PROMPT) && /you never mark a task ready/.test(PM_PROMPT) ? 0 : 1, 0);
+  /Orchestrator runtime/.test(PM_PROMPT) && /never mark a task ready/.test(PM_PROMPT) ? 0 : 1, 0);
 check('pm: Plan Mode is an optional engineer-side preflight, never part of PM flow (T-PM9.1)',
-  /Plan Mode is an engineer-side preflight/.test(PM_PROMPT) && /never part of your flow/.test(PM_PROMPT) ? 0 : 1, 0);
+  /Plan Mode is DEV preflight, not your flow/.test(PM_PROMPT) ? 0 : 1, 0);
 check('pm: re-plan only on meaningful triggers, not progress noise (T-PM9.2)',
   /Re-plan on meaningful triggers/.test(PM_PROMPT) && /is not a trigger/.test(PM_PROMPT) ? 0 : 1, 0);
 check('pm: Depends on is machine-read and validated by sta --check-plan (T-PM1.1/T-PM1.3)',
   /`Depends on` is machine-read/.test(PM_PROMPT) && /--check-plan/.test(PM_PROMPT) ? 0 : 1, 0);
 check('pm: waves are derived downstream; PM writes no wave numbers (T-PM1.2)',
   /Execution waves are derived downstream/.test(PM_PROMPT) ? 0 : 1, 0);
-check('pm: acceptance criteria are references into design.md, not copied prose (T-PM4.2)',
-  /references, not copies/.test(PM_PROMPT) ? 0 : 1, 0);
+check('pm: acceptance criteria select exact AC identities and do not copy unrelated authority prose (T-PM4.2/T-V8-008)',
+  /Do not copy the full requirement or design/.test(PM_PROMPT) && /select only that task's exact AC IDs/.test(PM_PROMPT) ? 0 : 1, 0);
 check('pm: prompt does not assign status regeneration to PM (no Bash tool exists here) (T-PM7.1)',
-  !/regenerating it with `node \.claude\/scripts\/generate-status\.js`/.test(PM_PROMPT) && /not the one who runs that generator/.test(PM_PROMPT) ? 0 : 1, 0);
+  !/regenerating it with `node \.claude\/scripts\/generate-status\.js`/.test(PM_PROMPT) && /do not generate `status\.md`/.test(PM_PROMPT) ? 0 : 1, 0);
 check('pm: contract write list owns plan.md only — generated status files are not writable by PM (T-PM7.2)',
   /write:\s*\["_docs\/module\/\*\/plan\.md"\]/.test(PM_CONTRACT) && !/_docs\/status[^"']*\]\s*$/.test(PM_CONTRACT.match(/write:.*/)?.[0] ?? '') ? 0 : 1, 0);
 check('pm: blocking ambiguity escalates upstream (user question or back to system-analyst), never guessed (T-PM10.2)',
   /ask the user directly/.test(PM_PROMPT) && /stop and send it back to `system-analyst`/.test(PM_PROMPT) ? 0 : 1, 0);
 check('pm: security-sensitive uncertainty splits rather than hides inside a batch (T-PM10.2)',
-  /a sensitive endpoint hidden inside a CRUD batch costs a missed gate/.test(PM_PROMPT) ? 0 : 1, 0);
+  /Split and flag hidden sensitive work/.test(PM_PROMPT) ? 0 : 1, 0);
 
 
 

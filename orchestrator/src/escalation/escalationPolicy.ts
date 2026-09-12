@@ -48,8 +48,12 @@ export interface EscalationPolicy {
 export const DEFAULT_ESCALATION_POLICY: EscalationPolicy = {
   version: 1,
   severity: {
-    low: { autonomous: true, max_retry: 3, approval: false, stop_pipeline: false },
-    medium: { autonomous: true, max_retry: 3, approval: false, stop_pipeline: false },
+    // Two, not three, for every ordinary severity (T-V8-015). The global
+    // MAX_RETRY of 3 stays as defense in depth, but the limit that governs a
+    // normal repair round is now one number across code, policy and prompts
+    // instead of "three unless the failure happened to be blocking".
+    low: { autonomous: true, max_retry: 2, approval: false, stop_pipeline: false },
+    medium: { autonomous: true, max_retry: 2, approval: false, stop_pipeline: false },
     // Two, not three: CLAUDE.md's "a fix that fails twice gets escalated, not
     // re-sent", and failureClassifier.ts's REROUTE_CEILING. The runtime budget
     // was the one place still saying three.

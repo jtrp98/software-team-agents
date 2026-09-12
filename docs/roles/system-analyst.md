@@ -1,3 +1,5 @@
 # System-analyst rationale
 
-The role owns technical feasibility, data modeling, and interface contracts. The prompt keeps schema confirmation, additive/breaking, and contract judgments.
+The role owns technical feasibility, data modeling, and interface contracts. Its design claims are stable identities (`DES-NNN`, `Contract:Name.vN`, `DEC-NNN`) backed by addressable `EVD-NNN` records. Each record locates current Target evidence by path, symbol, line, revision, tool/basis, and content hash, so later planning and packet assembly can select and revalidate the exact claim rather than copying a whole design document.
+
+Confirmation is proportional to consequence. Schema change, migration/backfill, breaking compatibility, Critical security impact, and unresolved material ambiguity are human gates. Current low-risk additive-internal work may proceed when its evidence is valid and its fallback is explicit. Graph and LSP output improves discovery but remains inferred until source or schema confirms it. Legacy designs retain safe whole-section reading for inspection and require migration before unattended execution. The complete syntax and compatibility behavior are in [Design evidence v1](../design-evidence-v1.md).

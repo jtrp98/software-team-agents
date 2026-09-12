@@ -136,9 +136,16 @@ describe("decideRecovery honours the severity policy (T40)", () => {
     expect(MAX_RETRY).toBeGreaterThan(2);
   });
 
-  it("gives a medium-severity failure the fuller budget a non-blocking issue deserves", () => {
-    const action = decide({ failure: failure({ severity: "medium" }), run: runAtFailedQa(3) });
-    expect(action.kind).toBe("RETRY");
+  // T-V8-015: low and medium used to get the full global budget of three,
+  // which made "how many repair rounds does an ordinary finding get" depend on
+  // how the failure happened to be graded. Every ordinary severity now stops
+  // after two; MAX_RETRY stays at three as defense in depth.
+  it.each(["low", "medium"] as const)("stops a %s-severity failure after two rounds, like every ordinary severity", (severity) => {
+    expect(decide({ failure: failure({ severity }), run: runAtFailedQa(2) }).kind).toBe("RETRY");
+    const third = decide({ failure: failure({ severity }), run: runAtFailedQa(3) });
+    expect(third.kind).toBe("ESCALATE");
+    expect(third.reason).toContain("at most 2 automatic round(s)");
+    expect(MAX_RETRY).toBeGreaterThan(2);
   });
 
   it("reports the ceiling that actually applies, not the global one", () => {

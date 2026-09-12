@@ -3,7 +3,7 @@
 - Workspace role: resolved at sync (`ba` / `dev`) — writes only artifacts allowed by that role.
 - Workspace root (writable): **resolved at sync**
 - Bound Knowledge/Target root (read-only): **resolved at sync or UNBOUND**
-- Human gates: requirements interview; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.
+- Human gates: material unresolved business choice or missing authority; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.
 - Hard boundary: no state-changing git.
 - Hard boundary: write only inside resolved writable workspace roots.
 - Hard boundary: write only paths allowed by the active role contract.

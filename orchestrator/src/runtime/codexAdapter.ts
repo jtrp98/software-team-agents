@@ -71,6 +71,9 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
       if (typeof usage.input_tokens === "number") inputTokens = usage.input_tokens;
       if (typeof usage.output_tokens === "number") outputTokens = usage.output_tokens;
       if (typeof usage.cache_read_input_tokens === "number") cachedInputTokens = usage.cache_read_input_tokens;
+      // T-V8-012: no cache-*creation* counter has ever been observed in a Codex
+      // JSONL event; `RuntimeUsage.cacheCreationInputTokens` stays unset here,
+      // same absent-≠-0 posture as every other unconfirmed field on this adapter.
     }
     if (typeof event.total_cost_usd === "number") costUsd = event.total_cost_usd;
     if (typeof event.model === "string" && event.model.length > 0) model = event.model;
@@ -190,6 +193,9 @@ const APPROVAL_MODE: Record<RuntimeAutonomy, string> = {
   full: "never",
 };
 
+/** Codex's current configurable reasoning levels for the GPT-5.6/Astra family. */
+const CODEX_REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
+
 export interface CodexAdapterOptions {
   /** Root of the target project — where `.codex/agents/<role>.md` and `_docs/` live. */
   projectRoot: string;
@@ -308,6 +314,36 @@ export class CodexAdapter implements RuntimeAdapter {
 
     const prompt = `${instructions}\n\n---\n\n${req.prompt}`;
 
+    // Tier bindings are explicit runtime choices.  Unlike role frontmatter,
+    // they must become Codex CLI arguments or the run merely records the
+    // intended tier while silently using Codex's configured default.
+    if (req.modelExplicit && req.model && this.models.size > 0 && !this.models.has(req.model)) {
+      return {
+        status: "ERROR",
+        exitCode: null,
+        text: "",
+        usage: {},
+        guards,
+        diagnostics: [
+          `refusing to run: model "${req.model}" is not in this workspace's configured Codex tier catalogue ` +
+            `(${[...this.models].join(", ")})`,
+        ],
+      };
+    }
+    if (req.effort && !CODEX_REASONING_EFFORTS.has(req.effort)) {
+      return {
+        status: "ERROR",
+        exitCode: null,
+        text: "",
+        usage: {},
+        guards,
+        diagnostics: [
+          `refusing to run: reasoning effort "${req.effort}" is not supported by the Codex tier adapter ` +
+            `(${[...CODEX_REASONING_EFFORTS].join(", ")})`,
+        ],
+      };
+    }
+
     // Preflight write roots become sandbox-native --add-dir grants
     // (OS-enforced) instead of living only in env the sandbox never read.
     const addDirs = addDirArgsFor(req.workRoots, req.autonomy);
@@ -330,6 +366,8 @@ export class CodexAdapter implements RuntimeAdapter {
       "--ask-for-approval",
       APPROVAL_MODE[req.autonomy],
       ...addDirs,
+      ...(req.modelExplicit && req.model ? ["--model", req.model] : []),
+      ...(req.effort ? ["--config", `model_reasoning_effort=\"${req.effort}\"`] : []),
       "--json",
       ...(schemaFile ? ["--output-schema", schemaFile] : []),
       "-o",

@@ -3,6 +3,7 @@ import { GateBlockedError, checkGate, gatedTransition } from "./gatePolicy.js";
 import { initTaskMachine, transition } from "../state/taskState.js";
 import { AgentStage, TaskState } from "../types.js";
 import type { QaReportArtifact, SecurityReportArtifact } from "../artifacts/schemas.js";
+import { DesignGateAssessmentSchema } from "../docs/designEvidence.js";
 
 const passingQaReport: QaReportArtifact = {
   taskId: "T-1",
@@ -32,6 +33,28 @@ describe("checkGate", () => {
     const result = checkGate(TaskState.DESIGN, TaskState.IMPLEMENTATION, { designApproved: true });
     expect(result.allowed).toBe(true);
   });
+
+  it("allows an addressable low-risk additive internal design without a ceremonial approval", () => {
+    const designAssessment = DesignGateAssessmentSchema.parse({
+      mode: "addressable", triggers: [], canProceedWithoutConfirmation: true,
+      migrationRequired: false, unresolvedClaims: [], inferredClaims: [],
+    });
+    expect(checkGate(TaskState.DESIGN, TaskState.PLAN, { designAssessment })).toEqual({ allowed: true });
+  });
+
+  it.each(["schema", "migration", "breaking-contract", "critical-security", "material-ambiguity"] as const)(
+    "keeps the %s design trigger fail-closed until a person confirms it",
+    (trigger) => {
+      const designAssessment = DesignGateAssessmentSchema.parse({
+        mode: "addressable", triggers: [trigger], canProceedWithoutConfirmation: false,
+        migrationRequired: false, unresolvedClaims: [], inferredClaims: [],
+      });
+      const blocked = checkGate(TaskState.DESIGN, TaskState.PLAN, { designAssessment });
+      expect(blocked.allowed).toBe(false);
+      expect(blocked.reason).toContain(trigger);
+      expect(checkGate(TaskState.DESIGN, TaskState.PLAN, { designAssessment, designApproved: true })).toEqual({ allowed: true });
+    },
+  );
 
   /** test-planner and project-manager can sit between DESIGN and IMPLEMENTATION,
    *  so the gate must fire leaving DESIGN at all — not only on the literal

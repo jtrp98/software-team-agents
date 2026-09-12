@@ -9,5 +9,7 @@ trigger:
 level: LARGE_CRITICAL
 requires_human_approval: true
 steps:
+  - agent: test-planner
+    when: test_strategy_required
   - agent: devops
     note: refuses to ship a phase qa-engineer has not accepted, whatever this file says

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { classifyTask, pmMode, type ClassificationInput } from "./taskClassifier.js";
+import { classifyTask, pmMode, testPlannerDecision, TEST_STRATEGY_TRIGGERS, type ClassificationInput } from "./taskClassifier.js";
 import { AgentStage, TaskLevel } from "../types.js";
 import { catalogWorkflows } from "../workflow/workflowCatalog.js";
 import { pipelineFromWorkflow } from "../workflow/workflowDefinition.js";
@@ -73,7 +73,6 @@ describe("classifyTask", () => {
     expect(result.level).toBe(TaskLevel.MEDIUM);
     expect(result.pipeline).toEqual([
       AgentStage.SYSTEM_ANALYST,
-      AgentStage.TEST_PLANNER,
       AgentStage.BACKEND_ENGINEER,
       AgentStage.QA_ENGINEER,
     ]);
@@ -85,7 +84,6 @@ describe("classifyTask", () => {
     expect(result.pipeline).toEqual([
       AgentStage.BUSINESS_ANALYST,
       AgentStage.SYSTEM_ANALYST,
-      AgentStage.TEST_PLANNER,
       AgentStage.BACKEND_ENGINEER,
       AgentStage.QA_ENGINEER,
     ]);
@@ -98,7 +96,6 @@ describe("classifyTask", () => {
     expect(result.sensitiveGate).toBe(true);
     expect(result.pipeline).toEqual([
       AgentStage.SYSTEM_ANALYST,
-      AgentStage.TEST_PLANNER,
       AgentStage.BACKEND_ENGINEER,
       AgentStage.QA_ENGINEER,
       AgentStage.SECURITY,
@@ -116,14 +113,13 @@ describe("classifyTask", () => {
       AgentStage.BUSINESS_ANALYST,
       AgentStage.SYSTEM_ANALYST,
       AgentStage.PROJECT_MANAGER,
-      AgentStage.TEST_PLANNER,
       AgentStage.BACKEND_ENGINEER,
       AgentStage.UXUI_DESIGNER,
       AgentStage.FRONTEND_ENGINEER,
       AgentStage.QA_ENGINEER,
     ]);
-    // The requirements interview is always-human point #1 — a new feature never
-    // spawns business-analyst headless without a person answering it.
+    // A new feature never skips BA; confirmed-input versus interview is
+    // decided later from trusted evidence.
     expect(result.requiresHumanApproval).toBe(true);
   });
 
@@ -159,6 +155,29 @@ describe("classifyTask", () => {
     expect(result.level).toBe(TaskLevel.LARGE_CRITICAL);
     expect(result.pipeline).toEqual([AgentStage.DEVOPS]);
     expect(result.requiresHumanApproval).toBe(true);
+  });
+
+  it("makes test-planner conditional on the closed deterministic strategy trigger set", () => {
+    const ordinary = classifyTask({ isNewFeatureModuleOrProject: true, touchesBackend: true });
+    expect(testPlannerDecision({ isNewFeatureModuleOrProject: true })).toMatchObject({ required: false, triggers: [] });
+    expect(ordinary.pipeline).not.toContain(AgentStage.TEST_PLANNER);
+
+    for (const trigger of TEST_STRATEGY_TRIGGERS) {
+      const input = { isNewFeatureModuleOrProject: true, touchesBackend: true, testStrategyTriggers: [trigger] } as const;
+      const result = classifyTask(input);
+      expect(result.pipeline, trigger).toContain(AgentStage.TEST_PLANNER);
+      expect(result.pipeline.indexOf(AgentStage.TEST_PLANNER), trigger).toBeGreaterThan(result.pipeline.indexOf(AgentStage.PROJECT_MANAGER));
+      expect(result.pipeline.indexOf(AgentStage.TEST_PLANNER), trigger).toBeLessThan(result.pipeline.indexOf(AgentStage.BACKEND_ENGINEER));
+      expect(result.testStrategyTriggers, trigger).toEqual([trigger]);
+    }
+  });
+
+  it("deduplicates and sorts strategy triggers for reproducible routing", () => {
+    expect(testPlannerDecision({ testStrategyTriggers: ["security", "cross-task", "security"] })).toEqual({
+      required: true,
+      triggers: ["cross-task", "security"],
+      reason: "conditional system test strategy required for: cross-task, security",
+    });
   });
 
   it("production deploy takes priority even if other flags are set", () => {
@@ -198,7 +217,7 @@ describe("classifyTask", () => {
     ).toBe("full");
   });
 
-  it("keeps all ten workflow stage/level/approval outputs byte-identical to the Phase 1 baseline", () => {
+  it("keeps all ten ordinary workflow stage/level/approval outputs byte-identical to the V8 conditional baseline", () => {
     const signalInputs: Record<string, ClassificationInput> = {
       typo: { isTypoOrCopyOnly: true, touchesBackend: true, touchesFrontend: true },
       bugfix: { isClearBugFix: true, touchesBackend: true, touchesFrontend: true },

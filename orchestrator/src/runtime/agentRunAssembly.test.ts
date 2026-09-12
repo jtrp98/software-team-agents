@@ -1,3 +1,4 @@
+import { runtimeTaskFixture, writePacketPlan, fixtureTask, FIXTURE_REVISION } from "./packetFixture.testSupport.js";
 import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -5,7 +6,19 @@ import * as path from "node:path";
 import { ArtifactType, type HandoffArtifact } from "../artifacts/schemas.js";
 import { AgentStage } from "../types.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
-import { buildPrompt, buildPromptParts, compileExecutionPacket, handoffFromContext, referencedKnowledgeIds, renderExecutionPacketSections, renderSlicedDocs, sliceModuleDocsWithSavings } from "./agentRunAssembly.js";
+import {
+  buildPrompt,
+  buildPromptParts,
+  compileExecutionPacket,
+  handoffFromContext,
+  measureRolePrefixChars,
+  referencedKnowledgeIds,
+  renderExecutionPacketSections,
+  renderSlicedDocs,
+  sliceModuleDocsWithSavings,
+  suppressRawHandoffWhenNarrowed,
+  taskRetrievalQueryFor,
+} from "./agentRunAssembly.js";
 import type { SelectedContext } from "../context/docSelection.js";
 import type { ContextManager } from "../context/contextManager.js";
 
@@ -46,62 +59,36 @@ describe("buildPromptParts (T-V3TOK-001)", () => {
   });
 });
 
-describe("T-V3R-020 deterministic Task Compiler", () => {
-  it("keeps the prior prompt byte-identical except for the three RuntimeTask sections", () => {
-    const req = {
-      stage: AgentStage.BACKEND_ENGINEER,
-      taskId: "T-V3R-020",
-      context: [{ source: ArtifactType.HANDOFF, content: "handoff" }],
-    };
-    const runtimeTask: RuntimeTask = {
-      task_id: req.taskId,
-      workflow: "feature",
-      pm_mode: "full",
-      why: "formalize packet",
-      goal: "formalize packet",
-      source_of_truth: { status: "resolved", paths: ["requirement.md", "design.md"], reason: null },
-      dependencies: { task_ids: [], plan_readiness: "ready", waiting_on: [], reason: null },
-      scope: {
-        status: "resolved",
-        work_roots: [{
-          stage: req.stage,
-          target_id: "target",
-          root: "C:/target",
-          allow: [
-            { contract_glob: "server/**", effective_glob: "C:/target/server/**" },
-            { contract_glob: "widened/**", effective_glob: "C:/target/widened/**" },
-          ],
-        }],
-        reason: null,
-      },
-      do_not_touch: [".git/**"],
-      acceptance_criteria: { status: "resolved", items: ["packet validates", "scope stays narrow"], reason: null },
-      required_verification: { status: "deferred", levels: ["unit", "typecheck"], reason: "fixture" },
-      evidence_required: ["focused tests"],
-      stop_conditions: ["STOP on an unresolved rule"],
-    };
-    const sources = { docs: ["design context"], knowledge: ["knowledge context"] };
-    const before = buildPromptParts(req, "environment", sources);
-    const packet = compileExecutionPacket({
-      req,
-      role: "backend-engineer",
-      runtimeTask,
-      contractScope: { allow: ["server/**"], deny: [".git/**"] },
-      extra: "environment",
-      sources,
-    });
-    const sections = renderExecutionPacketSections(packet);
-    const withoutSections = sections.reduce((text, section) => text.replace(`\n${section}`, ""), packet.text);
+describe("T-V8-004 semantic Task Compiler", () => {
+  it("renders complete fields exactly once and narrows stale grants", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "v8-compiler-"));
+    try {
+      const runtimeTask = runtimeTaskFixture(root, { allow: ["server/**", "widened/**"] });
+      const packet = compileExecutionPacket({ req: { stage: AgentStage.BACKEND_ENGINEER, taskId: "T-PACKET", context: [] }, role: "backend-engineer", runtimeTask,
+        contractScope: { allow: ["server/**"], deny: [".git/**"] }, baseRevision: FIXTURE_REVISION, sources: { docs: ["UNRELATED PROSE"] } });
+      const sections = renderExecutionPacketSections(packet);
+      expect(packet.text).toBe(sections.join("\n\n"));
+      expect(new Set(sections.map(s => s.split("\n")[0])).size).toBe(sections.length);
+      expect(packet.scope.allow).toEqual(["server/**"]);
+      expect(packet.text).not.toContain("UNRELATED");
+      expect(packet.text).toContain(runtimeTask.contract.why);
+      expect(packet.text).toContain(runtimeTask.contract.objective);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
 
-    expect(withoutSections).toBe(before.text);
-    expect(sections.map((section) => section.split("\n")[0])).toEqual([
-      "## Acceptance Criteria",
-      "## Required Verification",
-      "## Stop Conditions",
-    ]);
-    expect(packet.scope.allow).toEqual(["server/**"]);
-    expect(packet.scope.allow).not.toContain("widened/**");
-    expect(packet.sources).toEqual(expect.arrayContaining(["runtime-task", "requirement.md", "module-docs", "knowledge-brief"]));
+  it("fails packet compilation on a stale separate-Target design revision", () => {
+    const docsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "v8-stale-docs-"));
+    const targetRoot = fs.mkdtempSync(path.join(os.tmpdir(), "v8-stale-target-"));
+    try {
+      const runtimeTask = runtimeTaskFixture(docsRoot, { targetRoot, allow: ["server/**"] });
+      expect(() => compileExecutionPacket({
+        req: { stage: AgentStage.BACKEND_ENGINEER, taskId: "T-PACKET", context: [] }, role: "backend-engineer", runtimeTask,
+        contractScope: { allow: ["server/**"], deny: [".git/**"] }, baseRevision: "b".repeat(40),
+      })).toThrow(/design evidence drift.*stale revision/);
+    } finally {
+      fs.rmSync(docsRoot, { recursive: true, force: true });
+      fs.rmSync(targetRoot, { recursive: true, force: true });
+    }
   });
 });
 
@@ -183,6 +170,64 @@ describe("sliceModuleDocsWithSavings", () => {
   });
 });
 
+describe("taskRetrievalQueryFor (T-V8-011)", () => {
+  it("builds a task-specific query from the canonical plan row named by taskId", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-retrieval-query-"));
+    try {
+      const task = fixtureTask({ id: "T-RQ1", produces: [] });
+      writePacketPlan(root, [task], "sales");
+      const query = taskRetrievalQueryFor(root, "sales", "T-RQ1");
+      expect(query.source).toBe("task");
+      expect(query.description).toContain(task.objective);
+      expect(query.description).toContain("Locate definitions and references for the selected fixture design.");
+      expect(query.ids).toContain("T-RQ1");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the module name, safely, for an unknown task id or missing plan", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-retrieval-query-fallback-"));
+    try {
+      const task = fixtureTask({ id: "T-RQ1", produces: [] });
+      writePacketPlan(root, [task], "sales");
+      expect(taskRetrievalQueryFor(root, "sales", "T-UNKNOWN")).toMatchObject({ source: "module-fallback", description: "sales" });
+      expect(taskRetrievalQueryFor(root, "no-such-module", "T-RQ1")).toMatchObject({ source: "module-fallback", description: "no-such-module" });
+      expect(taskRetrievalQueryFor(root, "sales", undefined)).toMatchObject({ source: "module-fallback", description: "sales" });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("suppressRawHandoffWhenNarrowed (T-V8-011)", () => {
+  const handoffItem = { source: ArtifactType.HANDOFF, content: JSON.stringify({ task_id: "T-1" }) };
+  const otherItem = { source: ArtifactType.REQUIREMENTS, content: "REQ-1" };
+
+  function selectedWith(reason: string): SelectedContext[] {
+    return [{ doc: "design", text: "x", kept: [], skipped: [], unknownSections: [], unknownSectionReasons: [], fullDocument: false, reason, bytesBefore: 1, bytesAfter: 1 }];
+  }
+
+  it("leaves context untouched when nothing was narrowed by the handoff", () => {
+    const selected = selectedWith("§10 slice for backend-engineer");
+    expect(suppressRawHandoffWhenNarrowed([handoffItem, otherItem], selected)).toEqual([handoffItem, otherItem]);
+  });
+
+  it("replaces only the raw HANDOFF item's content once a slice was narrowed by it — every other item is untouched", () => {
+    const selected = selectedWith("§10 slice for backend-engineer; narrowed by HANDOFF references within CONTEXT_POLICY");
+    const result = suppressRawHandoffWhenNarrowed([handoffItem, otherItem], selected);
+    expect(result[0].source).toBe(ArtifactType.HANDOFF);
+    expect(result[0].content).not.toContain('"task_id"');
+    expect(result[0].content).toContain("omitted");
+    expect(result[1]).toEqual(otherItem);
+  });
+
+  it("is a no-op when context carries no HANDOFF item at all", () => {
+    const selected = selectedWith("narrowed by HANDOFF references");
+    expect(suppressRawHandoffWhenNarrowed([otherItem], selected)).toEqual([otherItem]);
+  });
+});
+
 describe("referencedKnowledgeIds", () => {
   it("uses only the authoritative plan task row's design references", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-knowledge-refs-"));
@@ -204,5 +249,41 @@ describe("referencedKnowledgeIds", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("measureRolePrefixChars (T-V8-012)", () => {
+  it("sums CLAUDE.md, every policy file, and the one role's prompt", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "role-prefix-"));
+    try {
+      fs.writeFileSync(path.join(root, "CLAUDE.md"), "1234567890"); // 10
+      fs.mkdirSync(path.join(root, "policies"), { recursive: true });
+      fs.writeFileSync(path.join(root, "policies", "coding.md"), "12345"); // 5
+      fs.writeFileSync(path.join(root, "policies", "security.md"), "123"); // 3
+      fs.writeFileSync(path.join(root, "policies", "ignored.txt"), "should not count");
+      fs.mkdirSync(path.join(root, ".claude", "agents"), { recursive: true });
+      fs.writeFileSync(path.join(root, ".claude", "agents", `${AgentStage.BACKEND_ENGINEER}.md`), "12"); // 2
+      fs.writeFileSync(path.join(root, ".claude", "agents", `${AgentStage.QA_ENGINEER}.md`), "should not count either");
+
+      expect(measureRolePrefixChars(root, AgentStage.BACKEND_ENGINEER)).toBe(20);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null, not 0, when the role prompt is missing", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "role-prefix-missing-"));
+    try {
+      fs.writeFileSync(path.join(root, "CLAUDE.md"), "root");
+      fs.mkdirSync(path.join(root, "policies"), { recursive: true });
+      // No .claude/agents/backend-engineer.md at all.
+      expect(measureRolePrefixChars(root, AgentStage.BACKEND_ENGINEER)).toBeNull();
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null, not 0, when the framework root itself does not exist", () => {
+    expect(measureRolePrefixChars(path.join(os.tmpdir(), "sta-role-prefix-does-not-exist"), AgentStage.BACKEND_ENGINEER)).toBeNull();
   });
 });

@@ -143,6 +143,20 @@ const CHARACTERIZATION: Record<string, unknown> = {
 };
 
 describe("T-V4-CTX-001 ContextManager characterization", () => {
+  it("T-V8-009 tolerates an intentionally absent conditional test-plan for DEV and QA", () => {
+    const fixture = createCharacterizationFixture();
+    try {
+      fs.unlinkSync(path.join(fixture.root, "_docs", "module", fixture.moduleName, "test-plan.md"));
+      for (const stage of [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER, AgentStage.QA_ENGINEER]) {
+        const selected = new ContextManager({ projectRoot: fixture.root, moduleName: fixture.moduleName }).forStage(stage, [1]);
+        expect(selected.map(item => item.doc), stage).not.toContain("test-plan");
+        expect(selected.map(item => item.doc), stage).toEqual(expect.arrayContaining(["plan", "design", "requirement"]));
+      }
+    } finally {
+      fs.rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   it("pins every ContextManager stage × document-policy pair and each stage aggregate", () => {
     const fixture = createCharacterizationFixture();
     try {

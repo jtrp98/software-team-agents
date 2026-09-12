@@ -1,4 +1,5 @@
 import { spawnSync as nodeSpawnSync, type SpawnSyncReturns } from "node:child_process";
+import Ajv, { type ValidateFunction } from "ajv";
 import { LocalWorkspace } from "./localWorkspace.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import type {
@@ -156,8 +157,8 @@ interface ClaudeCliJsonResult {
   api_error_status?: number;
   result?: string;
   total_cost_usd?: number;
-  usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number };
-  /** Present only when the run passed `--json-schema`. */
+  usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
+  /** Present on ordinary `--json-schema` runs; Claude Code 2.1.268 omits it when `--agent` is also used. */
   structured_output?: unknown;
 }
 
@@ -251,9 +252,11 @@ export interface ClaudeCodeAdapterOptions {
   /** Injectable for tests; defaults to `process.platform`. */
   platform?: string;
   /**
-   * OFF10 M6 — when set, every run passes `--json-schema` and the envelope's
-   * `structured_output` lands on `RuntimeAgentResult.structured`. **Off by
-   * default**: the pipeline's prompt contract promises agents a free-form
+   * OFF10 M6 — when set, every run passes `--json-schema`. The envelope's
+   * `structured_output` lands on `RuntimeAgentResult.structured`; for the
+   * observed Claude Code 2.1.268 `--agent` omission, an exact JSON `result` is
+   * accepted only after the same schema validates locally. **Off by default**:
+   * the pipeline's prompt contract promises agents a free-form
    * summary ("the orchestrator reads … not a special reply format"), so flipping
    * this on is a caller decision (e.g. a QA03 hardening pass), never a side
    * effect of using this adapter.
@@ -278,6 +281,8 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
   private readonly resolveCommand: CommandResolver;
   private readonly platform: string;
   private readonly outputSchema?: Record<string, unknown>;
+  private readonly outputValidator?: ValidateFunction;
+  private readonly outputSchemaError?: string;
 
   constructor(opts: ClaudeCodeAdapterOptions) {
     this.workspace = new LocalWorkspace({ root: opts.projectRoot });
@@ -286,6 +291,13 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
     this.resolveCommand = opts.resolveCommand ?? resolveNpmCliScriptImpl;
     this.platform = opts.platform ?? process.platform;
     this.outputSchema = opts.outputSchema;
+    if (this.outputSchema) {
+      try {
+        this.outputValidator = new Ajv({ allErrors: true, strict: true }).compile(this.outputSchema);
+      } catch (error) {
+        this.outputSchemaError = String(error);
+      }
+    }
   }
 
   /**
@@ -321,6 +333,16 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
   }
 
   async executeAgent(req: RuntimeAgentRequest): Promise<RuntimeAgentResult> {
+    if (this.outputSchema && !this.outputValidator) {
+      return {
+        status: "ERROR",
+        exitCode: null,
+        text: "",
+        usage: {},
+        guards: { enforced: [], unenforced: [] },
+        diagnostics: [`refusing to run: invalid structured-output schema: ${this.outputSchemaError ?? "unknown schema error"}`],
+      };
+    }
     // req.model is turned into `--model` ONLY when the caller marks it an
     // operator-visible override (`req.modelExplicit`) — the `--model` CLI flag or
     // `.sta/config.yaml` routing. Absent that, the subagent's own
@@ -438,6 +460,10 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       inputTokens: cli.usage?.input_tokens,
       outputTokens: cli.usage?.output_tokens,
       cachedInputTokens: cli.usage?.cache_read_input_tokens,
+      // T-V8-012: `planning/v4/benchmark`'s per-model usage recovery is the
+      // evidence this field is real and was previously omitted — see
+      // `build-metrics.mjs`'s `raw_access_decision` note.
+      cacheCreationInputTokens: cli.usage?.cache_creation_input_tokens,
       costUsd: cli.total_cost_usd,
     };
 
@@ -457,7 +483,41 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       };
     }
 
-    const cliFailed = proc.status !== 0 || cli.is_error === true;
+    let structured: unknown;
+    let structuredFailed = false;
+    if (this.outputSchema && this.outputValidator) {
+      let candidate = cli.structured_output;
+      let recoveredFromResult = false;
+      if (candidate === undefined && typeof cli.result === "string") {
+        try {
+          candidate = JSON.parse(cli.result.trim()) as unknown;
+          recoveredFromResult = true;
+        } catch {
+          // A schema-requested run must return machine-readable JSON. Deliberately
+          // do not strip Markdown fences or scrape a JSON-looking substring: that
+          // would turn free-form prose into a trusted structured result.
+        }
+      }
+      if (candidate === undefined) {
+        structuredFailed = true;
+        diagnostics.push("`claude --json-schema` returned no structured_output and its result was not exact JSON");
+      } else if (!this.outputValidator(candidate)) {
+        structuredFailed = true;
+        const details = (this.outputValidator.errors ?? [])
+          .map((error) => `${error.instancePath || "/"} ${error.message ?? "is invalid"}`)
+          .join("; ");
+        diagnostics.push(`structured output failed local schema validation${details ? `: ${details}` : ""}`);
+      } else {
+        structured = candidate;
+        if (recoveredFromResult) {
+          diagnostics.push(
+            "`claude --agent` omitted structured_output; recovered the exact JSON result and validated it locally against the requested schema",
+          );
+        }
+      }
+    }
+
+    const cliFailed = proc.status !== 0 || cli.is_error === true || structuredFailed;
     return {
       status: cliFailed ? "ERROR" : "OK",
       exitCode: proc.status ?? null,
@@ -469,10 +529,10 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
       model: undefined,
       guards,
       diagnostics,
-      // M6: present only on schema-requested runs where the CLI delivered one —
-      // a stray envelope field on a free-form run must not masquerade as a
-      // schema-validated document.
-      structured: this.outputSchema ? cli.structured_output : undefined,
+      // M6: present only on schema-requested runs where the CLI delivered an
+      // envelope value or exact JSON result that passed local validation. A
+      // stray envelope field on a free-form run cannot masquerade as one.
+      structured,
       raw: cli,
     };
   }

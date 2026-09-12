@@ -1,21 +1,37 @@
 import { AgentStage } from "../types.js";
-import { resolveAgentModel } from "../agents/agentModel.js";
+import { resolveAgentEffort, resolveAgentModel } from "../agents/agentModel.js";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
 import type { QaRiskSignals } from "../qa/mode.js";
+import {
+  assessBusinessInput,
+  type BusinessInputEvidence,
+} from "../gates/businessInput.js";
 import { StaConfigInvalidError, StaConfigMissingError, loadStaConfig, type StaConfig } from "../packaging/staConfig.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "./runtimeRegistry.js";
 import type { RuntimeAdapter, RuntimeProbe } from "./runtimeAdapter.js";
-import { RUNTIME_SUPPORT, type RuntimeSupportLevel } from "./runtimeSupport.js";
-import { resolveTierBinding } from "./tierRouting.js";
-import type { ModelTierId, ModelTiers } from "./modelTiers.js";
+import { isUnattendedTargetWriteCertified, RUNTIME_SUPPORT, type RuntimeSupportLevel } from "./runtimeSupport.js";
+import {
+  loadModelTierPolicy,
+  type ModelTierId,
+  type ModelTierPolicy,
+  type ModelTiers,
+} from "./modelTiers.js";
+import {
+  formatModelPolicyBasis,
+  ModelPolicyResolutionError,
+  resolveEffectiveModelPolicy,
+  type EffectiveModelPolicyResolution,
+} from "./tierRouting.js";
 
 /**
  * One explicit route.
  *
- * Three sources, in this order, and nothing else: the `--runtime`/`--model`
+ * Runtime selection has three sources, in this order: `--runtime` (level 1),
  * flags (level 1), an optional per-role `routing.by_role` entry (level 2), and
- * the named default runtime plus the role's frontmatter `model:` (level 4). The
+ * the named default runtime / `routing.order` (level 4). Model/effort policy is
+ * resolved independently as operator override → task Tier → role Tier → runtime
+ * default; frontmatter is read only for a pre-V8 compatibility policy. The
  * level numbers are the historical ones so `routing_basis` in existing run logs
  * keeps its meaning; level 5 is gone along with the previous-failure walk and
  * the legacy `model_routing` spelling.
@@ -30,11 +46,12 @@ export type RoutingPrecedenceLevel = 1 | 2 | 4;
 export interface RuntimeRouteCandidate {
   readonly runtime: RuntimeAdapter;
   readonly model?: string;
-  /** True when `model` came from an operator-visible override (CLI flag / `routing.by_role`), not frontmatter. */
+  /** True when the adapter must receive `model`, including a Tier-derived value. */
   readonly modelExplicit?: boolean;
-  /** Reasoning effort named alongside an explicit model in `routing.by_role`. */
+  /** Effective reasoning effort from the same central policy resolver. */
   readonly effort?: string;
   readonly reason: string;
+  readonly policyResolution: EffectiveModelPolicyResolution;
 }
 
 /** The route decision, including a candidate refused before execution. */
@@ -45,6 +62,7 @@ export interface RuntimeRouteAttempt {
   readonly modelExplicit?: boolean;
   readonly effort?: string;
   readonly reason: string;
+  readonly policyResolution?: EffectiveModelPolicyResolution;
   /** Evidence for a deterministic skip. Such an entry must never execute. */
   readonly skipReason?: string;
   /** True when the skip was an availability probe, so a caller can escalate as infrastructure rather than as a task failure. */
@@ -57,6 +75,7 @@ export interface RequestedRuntimeRoute {
   readonly modelExplicit?: boolean;
   readonly effort?: string;
   readonly reason: string;
+  readonly policyResolution?: EffectiveModelPolicyResolution;
 }
 
 export interface RuntimeRoute {
@@ -80,6 +99,7 @@ export interface RuntimeRoute {
 export interface RuntimeRouteFlags {
   readonly runtime?: string;
   readonly model?: string;
+  readonly effort?: string;
 }
 
 export interface ResolveRuntimeRouteOptions {
@@ -95,16 +115,23 @@ export interface ResolveRuntimeRouteOptions {
   readonly availability?: Readonly<Record<string, RuntimeProbe>>;
   /** True only when this stage has a canonical Target root with write access. */
   readonly hasTargetWrite?: boolean;
+  /** Confirmed BA intake removes the need for an in-run interview; all other BA input keeps it. */
+  readonly businessInput?: BusinessInputEvidence;
   readonly verifiedCapabilities?: Readonly<Record<string, ReadonlySet<RuntimeCapability>>>;
-  /** A phase tier resolves model/effort through this route's existing precedence. */
+  /** Current V8 policy. Undefined loads model-tiers.yaml; null is an intentional absent-policy fixture. */
+  readonly modelPolicy?: ModelTierPolicy | null;
+  /** Optional canonical task Tier. */
+  readonly taskTier?: string;
+  /** False only when replaying an already-frozen persisted route. */
+  readonly allowLegacyPolicyCompatibility?: boolean;
+  /** Pre-V8 compatibility input; new callers use modelPolicy + taskTier. */
   readonly tier?: { id: ModelTierId; table: ModelTiers };
 }
 
 interface CandidateSpec {
   readonly runtimeId: string;
-  readonly model?: string;
-  readonly modelExplicit?: boolean;
-  readonly effort?: string;
+  readonly operatorModel?: string;
+  readonly operatorEffort?: string;
   readonly reason: string;
 }
 
@@ -118,15 +145,30 @@ export function parseModelRoute(value: string): { runtimeId?: string; model: str
 /**
  * Derive capability needs from the role plus the canonical Target access mode.
  *
- * `INTERACTIVE_PROMPTS` is keyed to `business-analyst` specifically, not to
+ * `INTERACTIVE_PROMPTS` is keyed to a BA run that still needs an interview,
+ * not merely to `AskUserQuestion` tool presence. Complete confirmed input is
+ * normalized without another interview; incomplete or absent input preserves
+ * the interactive fallback.
+ *
+ * The requirement is not inferred from
  * `AskUserQuestion` tool presence: `system-analyst`/`project-manager` also
  * carry that tool but their human gate is `sta approve`, not an in-run
  * question, so a runtime that cannot prompt still runs them headless as
  * designed. Only the interview itself is the stage's actual work.
  */
-export function requiredCapabilitiesFor(stage: AgentStage, hasTargetWrite = false): RuntimeCapability[] {
+export function requiredCapabilitiesFor(
+  stage: AgentStage,
+  hasTargetWrite = false,
+  businessInput?: BusinessInputEvidence,
+): RuntimeCapability[] {
   const required: RuntimeCapability[] = [];
-  if (stage === AgentStage.BUSINESS_ANALYST) required.push(RuntimeCapability.INTERACTIVE_PROMPTS);
+  const confirmedBaRun =
+    stage === AgentStage.BUSINESS_ANALYST &&
+    businessInput !== undefined &&
+    assessBusinessInput(businessInput).canNormalizeWithoutInterview;
+  if (stage === AgentStage.BUSINESS_ANALYST && !confirmedBaRun) {
+    required.push(RuntimeCapability.INTERACTIVE_PROMPTS);
+  }
   if (hasTargetWrite) required.push(RuntimeCapability.PRE_TOOL_GUARD);
   return required;
 }
@@ -161,7 +203,6 @@ function byRoleRoute(
   config: StaConfig | null,
   role: string,
   defaultRuntimeId: string,
-  frontmatterModel: string | undefined,
 ): CandidateSpec | undefined {
   const byRole = config?.routing?.by_role?.[role];
   if (byRole === undefined) return undefined;
@@ -169,16 +210,14 @@ function byRoleRoute(
     const parsed = parseModelRoute(byRole);
     return {
       runtimeId: parsed.runtimeId ?? defaultRuntimeId,
-      model: parsed.model,
-      modelExplicit: true,
+      operatorModel: parsed.model,
       reason: `routing.by_role selected "${byRole}" for role "${role}"`,
     };
   }
   return {
     runtimeId: byRole.runtime,
-    model: byRole.model ?? frontmatterModel,
-    modelExplicit: byRole.model !== undefined,
-    effort: byRole.effort,
+    operatorModel: byRole.model,
+    operatorEffort: byRole.effort,
     reason: `routing.by_role selected runtime "${byRole.runtime}" for role "${role}"`,
   };
 }
@@ -222,9 +261,10 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
   const defaultRuntimeId = opts.defaultRuntimeId ?? DEFAULT_RUNTIME_ID;
   const config = opts.config !== undefined ? opts.config : loadConfigSafely(opts.projectRoot, diagnostics);
   const frontmatterModel = resolveAgentModel(opts.projectRoot, opts.role) ?? undefined;
+  const frontmatterEffort = resolveAgentEffort(opts.projectRoot, opts.role) ?? undefined;
 
-  const flagPresent = opts.flags?.runtime !== undefined || opts.flags?.model !== undefined;
-  const byRole = byRoleRoute(config, opts.role, defaultRuntimeId, frontmatterModel);
+  const flagPresent = opts.flags?.runtime !== undefined || opts.flags?.model !== undefined || opts.flags?.effort !== undefined;
+  const byRole = byRoleRoute(config, opts.role, defaultRuntimeId);
 
   let precedenceLevel: RoutingPrecedenceLevel;
   let specs: CandidateSpec[];
@@ -233,8 +273,8 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     const runtimeId = opts.flags?.runtime ?? config?.execution?.runner ?? defaultRuntimeId;
     specs = [{
       runtimeId,
-      model: opts.flags?.model ?? frontmatterModel,
-      modelExplicit: opts.flags?.model !== undefined,
+      operatorModel: opts.flags?.model,
+      operatorEffort: opts.flags?.effort,
       reason: `explicit CLI flag selected runtime "${runtimeId}"${opts.flags?.model ? ` and model "${opts.flags.model}"` : ""}`,
     }];
   } else if (byRole) {
@@ -244,42 +284,64 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     precedenceLevel = 4;
     const ordered = orderedRuntimeIds(config, diagnostics);
     const runtimeIds = ordered ?? [config?.execution?.runner ?? defaultRuntimeId];
-    // `modelExplicit: false` is stated, not omitted: a frontmatter default is a
-    // reported non-override, and adapters read the field.
     specs = runtimeIds.map((runtimeId, index) => ({
       runtimeId,
-      model: frontmatterModel,
-      modelExplicit: false,
       reason: index === 0
         ? automaticReason(opts, runtimeId)
         : `routing.order position ${index + 1} selected runtime "${runtimeId}" as a fallback`,
     }));
   }
 
-  // Tier resolution is a source for model/effort, never a further precedence
-  // level. A direct model override retains its existing explicit priority. Each
-  // entry resolves against its own runtime, so a hop lands on the camp's cell
-  // rather than carrying the head's model into another vendor.
-  specs = specs.map((spec) => {
-    if (!opts.tier || spec.modelExplicit) return spec;
-    const binding = resolveTierBinding(opts.tier.table, opts.tier.id, spec.runtimeId);
-    if (binding === null) return spec;
-    return {
-      ...spec,
-      model: binding.model,
-      effort: binding.effort,
-      modelExplicit: true,
-      reason: `${spec.reason}; phase tier ${opts.tier.id} resolved for ${spec.runtimeId}`,
-    };
-  });
+  let modelPolicy: ModelTierPolicy | null;
+  try {
+    modelPolicy = opts.tier
+      ? { tiers: opts.tier.table, roleDefaults: {}, legacyRoleDefaults: true }
+      : opts.modelPolicy !== undefined
+        ? opts.modelPolicy
+        : loadModelTierPolicy(opts.projectRoot);
+  } catch (error) {
+    const head = specs[0]!;
+    const requested = { runtimeId: head.runtimeId, model: head.operatorModel, effort: head.operatorEffort, reason: head.reason };
+    const message = `model policy could not be read: ${error instanceof Error ? error.message : String(error)}`;
+    diagnostics.push(message);
+    return unresolved(requested, precedenceLevel, diagnostics, message);
+  }
 
-  const head = specs[0]!;
+  const taskTier = opts.taskTier ?? opts.tier?.id;
+  let resolvedSpecs: Array<CandidateSpec & EffectiveModelPolicyResolution>;
+  try {
+    resolvedSpecs = specs.map((spec) => ({
+      ...spec,
+      ...resolveEffectiveModelPolicy({
+        role: opts.role,
+        runtimeId: spec.runtimeId,
+        policy: modelPolicy,
+        taskTier,
+        operatorModel: spec.operatorModel,
+        operatorEffort: spec.operatorEffort,
+        legacyFrontmatterModel: frontmatterModel,
+        legacyFrontmatterEffort: frontmatterEffort,
+        allowLegacyCompatibility: opts.allowLegacyPolicyCompatibility,
+      }),
+    }));
+  } catch (error) {
+    const head = specs[0]!;
+    const requested = { runtimeId: head.runtimeId, model: head.operatorModel, effort: head.operatorEffort, reason: head.reason };
+    const message = error instanceof ModelPolicyResolutionError ? error.message : String(error);
+    diagnostics.push(message);
+    return unresolved(requested, precedenceLevel, diagnostics, message);
+  }
+
+  for (const spec of resolvedSpecs) diagnostics.push(...spec.diagnostics);
+
+  const head = resolvedSpecs[0]!;
   const requested: RequestedRuntimeRoute = {
     runtimeId: head.runtimeId,
     model: head.model,
     modelExplicit: head.modelExplicit,
     effort: head.effort,
-    reason: head.reason,
+    reason: `${head.reason}; ${formatModelPolicyBasis(head)}`,
+    policyResolution: head,
   };
 
   if (opts.registry.ids().length === 0) {
@@ -288,14 +350,24 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
 
   const attempts: RuntimeRouteAttempt[] = [];
   const supportOptIns = new Set(config?.routing?.allow_below_supported ?? []);
-  const required = requiredCapabilitiesFor(opts.stage, opts.hasTargetWrite ?? false);
+  const required = requiredCapabilitiesFor(
+    opts.stage,
+    opts.hasTargetWrite ?? false,
+    opts.businessInput,
+  );
   // With nowhere to walk to, a probe-unavailable candidate stays selected so the
   // executor still classifies it `UNAVAILABLE` and escalates with the probe's
   // own reason. Skipping it here would downgrade that to a plain route error.
   const walkable = specs.length > 1;
-  for (const spec of specs) {
+  for (const spec of resolvedSpecs) {
     const runtime = opts.registry.tryGet(spec.runtimeId);
-    const base = { model: spec.model, modelExplicit: spec.modelExplicit, effort: spec.effort, reason: spec.reason };
+    const base = {
+      model: spec.model,
+      modelExplicit: spec.modelExplicit,
+      effort: spec.effort,
+      reason: `${spec.reason}; ${formatModelPolicyBasis(spec)}`,
+      policyResolution: spec,
+    };
     if (!runtime) {
       const skipReason = `runtime "${spec.runtimeId}" is not registered`;
       diagnostics.push(skipReason);
@@ -308,6 +380,13 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
       : undefined;
     if (unavailable) diagnostics.push(unavailable);
     const level = supportLevel(runtime.id);
+    const targetWriteUncertified = (opts.hasTargetWrite ?? false) && !isUnattendedTargetWriteCertified(runtime.id);
+    if (targetWriteUncertified) {
+      diagnostics.push(
+        `runtime "${runtime.id}" is not certified for unattended Target writes at support level "${level}"; ` +
+        `routing.allow_below_supported applies only to analysis/proposal routes`,
+      );
+    }
     const declaredOrVerified = opts.verifiedCapabilities?.[runtime.id] ?? runtime.capabilities;
     const unmet = required.filter((capability) => !declaredOrVerified.has(capability));
     const evidence = opts.verifiedCapabilities?.[runtime.id] ? "verified" : "declared";
@@ -318,6 +397,13 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     // operator named explicitly is their call.
     if (walkable && unavailable) {
       attempts.push({ runtimeId: runtime.id, runtime, ...base, skipReason: unavailable, unavailable: true });
+    } else if (targetWriteUncertified) {
+      attempts.push({
+        runtimeId: runtime.id,
+        runtime,
+        ...base,
+        skipReason: `runtime "${runtime.id}" is not certified for unattended Target writes at support level "${level}"`,
+      });
     } else if (precedenceLevel === 4 && level !== "supported" && !supportOptIns.has(runtime.id)) {
       const skipReason = `runtime "${runtime.id}" support level "${level}" is below "supported"; automatic routing requires routing.allow_below_supported to name this runtime`;
       diagnostics.push(skipReason);
@@ -339,15 +425,31 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
   }
 
   const capable: RuntimeRouteCandidate[] = attempts
-    .filter((attempt): attempt is RuntimeRouteAttempt & { runtime: RuntimeAdapter } => !!attempt.runtime && !attempt.skipReason)
-    .map((attempt) => ({ runtime: attempt.runtime, model: attempt.model, modelExplicit: attempt.modelExplicit, effort: attempt.effort, reason: attempt.reason }));
+    .filter((attempt): attempt is RuntimeRouteAttempt & { runtime: RuntimeAdapter; policyResolution: EffectiveModelPolicyResolution } => !!attempt.runtime && !!attempt.policyResolution && !attempt.skipReason)
+    .map((attempt) => ({
+      runtime: attempt.runtime,
+      model: attempt.model,
+      modelExplicit: attempt.modelExplicit,
+      effort: attempt.effort,
+      reason: attempt.reason,
+      policyResolution: attempt.policyResolution,
+    }));
 
-  for (const candidate of capable) {
+  const unsupportedPolicyCandidate = capable.find((candidate) => {
     if (candidate.model && !candidate.runtime.models.has(candidate.model)) {
-      diagnostics.push(
-        `runtime "${candidate.runtime.id}" does not declare it can reach model "${candidate.model}" (declares: ${[...candidate.runtime.models].join(", ") || "none"}) — requesting it anyway; the run may fail`,
-      );
+      const detail = `runtime "${candidate.runtime.id}" does not declare it can reach model "${candidate.model}" (declares: ${[...candidate.runtime.models].join(", ") || "none"})`;
+      if (candidate.policyResolution.modelBasis.startsWith("task-tier:") || candidate.policyResolution.modelBasis.startsWith("role-default-tier:")) {
+        diagnostics.push(`${detail}; refusing unsupported model-tier cell`);
+        return true;
+      } else {
+        diagnostics.push(`${detail} — requesting the explicit/legacy value anyway; the adapter must validate it`);
+      }
     }
+    return false;
+  });
+  if (unsupportedPolicyCandidate) {
+    const error = `model-tier policy resolved unsupported model "${unsupportedPolicyCandidate.model}" for runtime "${unsupportedPolicyCandidate.runtime.id}"; refusing route`;
+    return unresolved(requested, precedenceLevel, diagnostics, error, [], attempts);
   }
 
   const selected = capable[0];
@@ -364,6 +466,10 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
       }`;
     } else if (probe?.available === false) {
       error = `runtime "${head.runtimeId}" is unavailable: ${probe.reason ?? "no unavailability reason was reported"}`;
+    } else if ((opts.hasTargetWrite ?? false) && !isUnattendedTargetWriteCertified(head.runtimeId)) {
+      error =
+        `runtime "${head.runtimeId}" is not certified for unattended Target writes at support level "${level}"; ` +
+        `routing.allow_below_supported applies only to analysis/proposal routes`;
     } else if (precedenceLevel === 4 && level !== "supported" && !supportOptIns.has(head.runtimeId)) {
       error = `refusing to auto-route to runtime "${head.runtimeId}" at support level "${level}" without per-runtime opt-in`;
     } else if (required.length > 0) {

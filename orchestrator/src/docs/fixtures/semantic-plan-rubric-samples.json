@@ -1,0 +1,38 @@
+[
+  {
+    "artifactId": "BLIND-PLAN-A",
+    "taskKind": "feature",
+    "status": "unscored-human-review-required",
+    "dimensions": {
+      "requirementCoverage": "semantic-plan-cases.md#BE-FEATURE-001:Traceability/Acceptance criteria",
+      "architectureValidity": "semantic-plan-cases.md#BE-FEATURE-001:Produces/Rollback compatibility notes",
+      "taskExecutability": "semantic-plan-cases.md#BE-FEATURE-001:Owner/Depends on/Scope and constraints",
+      "promptSpecificity": "semantic-plan-cases.md#BE-FEATURE-001:Objective/Retrieval hints/Required validation",
+      "riskHandling": "semantic-plan-cases.md#BE-FEATURE-001:Risk/Human gate/Fallback"
+    }
+  },
+  {
+    "artifactId": "BLIND-PLAN-B",
+    "taskKind": "schema",
+    "status": "unscored-human-review-required",
+    "dimensions": {
+      "requirementCoverage": "semantic-plan-cases.md#BE-SCHEMA-001:Traceability/Acceptance criteria",
+      "architectureValidity": "semantic-plan-cases.md#BE-SCHEMA-001:Produces/Rollback compatibility notes",
+      "taskExecutability": "semantic-plan-cases.md#BE-SCHEMA-001:Owner/Depends on/Scope and constraints",
+      "promptSpecificity": "semantic-plan-cases.md#BE-SCHEMA-001:Objective/Retrieval hints/Required validation",
+      "riskHandling": "semantic-plan-cases.md#BE-SCHEMA-001:Risk/Human gate/Migration"
+    }
+  },
+  {
+    "artifactId": "BLIND-PLAN-C",
+    "taskKind": "refactor",
+    "status": "unscored-human-review-required",
+    "dimensions": {
+      "requirementCoverage": "semantic-plan-cases.md#BE-REFACTOR-001:Traceability/Acceptance criteria",
+      "architectureValidity": "semantic-plan-cases.md#BE-REFACTOR-001:Produces/Rollback compatibility notes",
+      "taskExecutability": "semantic-plan-cases.md#BE-REFACTOR-001:Owner/Depends on/Scope and constraints",
+      "promptSpecificity": "semantic-plan-cases.md#BE-REFACTOR-001:Objective/Retrieval hints/Required validation",
+      "riskHandling": "semantic-plan-cases.md#BE-REFACTOR-001:Risk/Human gate/Compatibility"
+    }
+  }
+]

@@ -10,6 +10,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { installPackedWithRetry } from "./packed-install-retry.mjs";
 
 const repoRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1")), "..");
 const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
@@ -140,7 +141,7 @@ try {
   installRoot = path.join(stage, "Packed Package Installation");
   fs.mkdirSync(installRoot, { recursive: true });
   fs.writeFileSync(path.join(installRoot, "package.json"), JSON.stringify({ name: "migration-harness", private: true }, null, 2));
-  npm(["install", "--no-audit", "--no-fund", "--loglevel=error", tgz], installRoot);
+  installPackedWithRetry(npm, installRoot, tgz, "fixture");
 
   const packageRoot = path.join(installRoot, "node_modules", "software-team-agents");
   const binRoot = path.join(installRoot, "node_modules", ".bin");

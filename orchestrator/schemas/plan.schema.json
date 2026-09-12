@@ -7,6 +7,7 @@
   "additionalProperties": false,
   "required": ["hasPlanSummary", "hasSequencingNotes", "hasOpenQuestions", "hasChangeLog", "phaseCount"],
   "properties": {
+    "canonicalTasksValid": { "const": true, "description": "When PlanTask format 1 is present, every complete semantic task must pass PlanTaskSchema, exact AC/provenance checks, design-triggered gate checks, and graph validation; legacy summaries omit this property during the explicit migration window." },
     "hasPlanSummary": { "const": true, "description": "## Plan Summary" },
     "hasSequencingNotes": { "const": true, "description": "## Sequencing Notes" },
     "hasOpenQuestions": { "const": true, "description": "## Unresolved Open Questions" },

@@ -57,7 +57,7 @@ describe("T-V3-06 bootstrap rendering", () => {
     expect(Buffer.byteLength(block, "utf8")).toBeLessThanOrEqual(BOOTSTRAP_BUDGET_BYTES);
     expect(block).toContain("AGENTCLAUDE_CONTEXT_CMD");
     expect(block).toContain("sta policy <area> <section>");
-    expect(block).toContain("requirements interview");
+    expect(block).toContain("material unresolved business choice or missing authority");
     expect(block).not.toMatch(/\|\s*Agent\s*\|/i);
     expect(block).not.toMatch(/## Roles|pipeline narrative|## Rules nothing enforces/i);
     expect((block.match(/sta policy/g) ?? [])).toHaveLength(1);
@@ -72,7 +72,7 @@ describe("T-V3-06 bootstrap rendering", () => {
       - Workspace role: **DEV** (\`dev\`) — writes Target application code and DEV-role artifacts only.
       - Workspace root (writable): \`C:\\src\\schoolbright-app\`
       - Knowledge root (read-only): \`C:\\src\\schoolbright-knowledge\`
-      - Human gates: requirements interview; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.
+      - Human gates: material unresolved business choice or missing authority; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.
       - Hard boundary: no state-changing git.
       - Hard boundary: write only inside resolved writable workspace roots.
       - Hard boundary: write only paths allowed by the active role contract.
@@ -91,7 +91,7 @@ describe("T-V3-06 bootstrap rendering", () => {
       - Workspace role: **BA** (\`ba\`) — writes Knowledge requirements/design/planning artifacts only.
       - Workspace root (writable): \`C:\\src\\schoolbright-knowledge\`
       - Target root (optional, read-only): \`C:\\src\\schoolbright-app\`
-      - Human gates: requirements interview; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.
+      - Human gates: material unresolved business choice or missing authority; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.
       - Hard boundary: no state-changing git.
       - Hard boundary: write only inside resolved writable workspace roots.
       - Hard boundary: write only paths allowed by the active role contract.

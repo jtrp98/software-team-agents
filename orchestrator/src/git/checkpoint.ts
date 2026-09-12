@@ -19,6 +19,9 @@ export type CheckpointRefusalKind =
   | "DETERMINISTIC_FAILED"
   | "DETERMINISTIC_SKIPPED"
   | "SECRET_DETECTED"
+  | "TASK_CONTRACT_VIOLATION"
+  | "UNEXPECTED_DEPENDENCY_CHANGE"
+  | "STAGING_MISMATCH"
   | "INVALID_METADATA";
 
 export class CheckpointRefusal extends Error {
@@ -45,6 +48,10 @@ export interface CheckpointInput {
   readonly module: string;
   readonly planHash: string;
   readonly taskDescription: string;
+  /** Exact current-stage write contract carried by the immutable packet. */
+  readonly allowedPathGlobs?: readonly string[];
+  /** Identity of the immutable packet executed by this attempt. */
+  readonly packetHash?: string;
   readonly secretScanner?: SecretScanner;
 }
 
@@ -53,6 +60,40 @@ export interface CheckpointResult {
   readonly changedPaths: readonly string[];
   readonly verification: DeterministicVerification;
   readonly gpgSigningBypassed: boolean;
+}
+
+const DEPENDENCY_CONTROL_FILES = new Set([
+  "package.json", "package-lock.json", "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock", "bun.lockb",
+  "pyproject.toml", "poetry.lock", "pdm.lock", "pipfile", "pipfile.lock", "requirements.txt",
+  "uv.lock", "pixi.lock",
+  "cargo.toml", "cargo.lock", "go.mod", "go.sum", "gemfile", "gemfile.lock", "composer.json", "composer.lock",
+  "pom.xml", "build.gradle", "build.gradle.kts", "gradle.lockfile", "packages.lock.json", "packages.config",
+  "directory.packages.props", "nuget.config", "paket.dependencies", "paket.lock",
+  "deno.lock", "mix.exs", "mix.lock", "pubspec.yaml", "pubspec.lock",
+  "podfile", "podfile.lock", "package.swift", "package.resolved",
+]);
+
+export function isDependencyControlPath(relativePath: string): boolean {
+  const basename = path.posix.basename(relativePath.replace(/\\/g, "/")).toLowerCase();
+  return DEPENDENCY_CONTROL_FILES.has(basename)
+    || /^requirements(?:[._-].+)?\.txt$/u.test(basename)
+    || /\.(?:csproj|fsproj|vbproj)$/u.test(basename);
+}
+
+export function assertTaskContractPaths(changedPaths: readonly string[], allowedPathGlobs: readonly string[]): void {
+  if (allowedPathGlobs.length === 0) {
+    throw new CheckpointRefusal("TASK_CONTRACT_VIOLATION", "The immutable task packet contains no writable path; no checkpoint may be staged.");
+  }
+  const outside = changedPaths.filter((changed) => {
+    const normalized = changed.replace(/\\/g, "/");
+    return !allowedPathGlobs.some((glob) => matchesGlob(glob.replace(/\\/g, "/"), normalized));
+  });
+  if (outside.length > 0) {
+    throw new CheckpointRefusal(
+      "TASK_CONTRACT_VIOLATION",
+      `Changed path(s) are outside the immutable task/stage write contract: ${outside.join(", ")}`,
+    );
+  }
 }
 
 function parseStatusPathToken(token: string): string {
@@ -133,6 +174,7 @@ export function checkpointMessages(input: {
   readonly runId: string;
   readonly module: string;
   readonly planHash: string;
+  readonly packetHash?: string;
   readonly verification: DeterministicVerification;
 }): readonly [string, string] {
   const taskId = taskSegment(input.taskId);
@@ -155,6 +197,7 @@ export function checkpointMessages(input: {
       `STA-Task-Id: ${trailerValue(input.taskId, "task id")}`,
       `STA-Module: ${trailerValue(input.module, "module")}`,
       `STA-Plan-Hash: ${trailerValue(input.planHash, "plan hash")}`,
+      ...(input.packetHash === undefined ? [] : [`STA-Packet-Hash: ${trailerValue(input.packetHash, "packet hash")}`]),
       `STA-Gate: ${gate}`,
     ].join("\n"),
   ];
@@ -196,6 +239,14 @@ export async function checkpointTask(input: CheckpointInput): Promise<Checkpoint
   }
 
   const safePaths = assertCheckpointPaths(input.git.cwd, changedPaths, input.writableRoots);
+  if (input.allowedPathGlobs !== undefined) assertTaskContractPaths(safePaths, input.allowedPathGlobs);
+  const dependencyChanges = safePaths.filter(isDependencyControlPath);
+  if (dependencyChanges.length > 0) {
+    throw new CheckpointRefusal(
+      "UNEXPECTED_DEPENDENCY_CHANGE",
+      `Dependency manifest/lockfile change requires human review and was not staged: ${dependencyChanges.join(", ")}`,
+    );
+  }
   const verification = await input.runVerification();
   if (verification.status === "skipped") {
     throw new CheckpointRefusal("DETERMINISTIC_SKIPPED", "Deterministic verification was skipped; no checkpoint was created.");
@@ -210,6 +261,23 @@ export async function checkpointTask(input: CheckpointInput): Promise<Checkpoint
   }
 
   await input.git.addPaths(safePaths);
+  const stagedPaths = parsePorcelainStatus((await input.git.statusPorcelainNull()).stdout)
+    .filter((changed) => safePaths.includes(changed.replace(/\\/g, "/")));
+  const cachedPaths = (await input.git.execute({ command: "diff", mode: "cached-name-only" })).stdout
+    .split(/\r?\n/).map((item) => item.trim()).filter(Boolean).map((item) => item.replace(/\\/g, "/"));
+  const expected = [...new Set(safePaths)].sort();
+  const actual = [...new Set(cachedPaths)].sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new CheckpointRefusal(
+      "STAGING_MISMATCH",
+      `Exact staging manifest mismatch; expected [${expected.join(", ")}], staged [${actual.join(", ")}]. Work is preserved for inspection.`,
+    );
+  }
+  // Keep the porcelain read above as an independent post-add observation. It
+  // also catches a path disappearing between validation and staging.
+  if (stagedPaths.length !== expected.length) {
+    throw new CheckpointRefusal("STAGING_MISMATCH", "A changed path disappeared or changed identity while exact staging was in progress.");
+  }
   const messages = checkpointMessages({ ...input, verification });
   const committed = await input.git.commit(messages);
   const sha = (await input.git.revParseHead()).stdout.trim();

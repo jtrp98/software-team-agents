@@ -7,13 +7,13 @@
 # so the same kind of task could get thorough coverage in one module and none in the next,
 # depending on who was reasoning about it that day and how much of design.md's Contract
 # sections they weighed. This file is the floor that judgment starts from: it doesn't replace
-# test-planner's per-requirement judgment (a floor can't know the specific case), but a task
-# type's required_levels is never quietly skipped without a reason recorded in test-plan.md's
-# Unresolved Open Questions.
+# PlanTask's per-task validation (a floor can't know the specific case), but a task
+# type's required_levels is never quietly skipped. A conditional test-plan may add
+# cross-task/system/migration/security/release strategy; it never lowers this floor.
 #
 # WHO READS THIS
 #
-# `.claude/agents/test-planner.md` consults it while deciding levels per REQ-NNN, and
+# `.claude/agents/test-planner.md` consults it when a conditional strategy is triggered, and
 # `orchestrator/src/testing/testPyramid.ts` feeds the same floor into RuntimeTask and
 # deterministic execution. V3 is warning-only unless a project explicitly sets
 # `enforcement: enforce`; an omitted value therefore preserves existing exit behaviour.

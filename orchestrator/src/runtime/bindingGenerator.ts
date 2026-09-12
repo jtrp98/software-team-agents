@@ -5,6 +5,12 @@ import { renderStackDigest, stackDigestPath } from "../profile/stackDigest.js";
 import { inspectBootstrapBlock, inspectMarkerBlock } from "../targetcli/knowledgeRender.js";
 import { isTargetInitialized, isUserOverridden, loadTargetConfig, readTargetManifest } from "../targetcli/targetMeta.js";
 import { runtimesForWorkspace, type WorkspaceRuntime } from "../targetcli/roleWorkspace.js";
+import {
+  loadModelTierPolicy,
+  ModelTiersInvalidError,
+  RUNTIME_DEFAULT_TIER,
+  type ModelTierPolicy,
+} from "./modelTiers.js";
 
 /**
  * The role-binding generator: one role definition, several renderings, ONE
@@ -50,6 +56,7 @@ import { runtimesForWorkspace, type WorkspaceRuntime } from "../targetcli/roleWo
 export interface ParsedAgentMd {
   name: string;
   description: string;
+  model?: string;
   effort?: string;
   /** The markdown body after the frontmatter fence, LF-normalized. */
   body: string;
@@ -82,9 +89,37 @@ export function parseAgentMd(md: string): ParsedAgentMd {
   return {
     name,
     description,
+    model: fields.get("model"),
     effort: fields.get("effort"),
     body: body.replace(/^\n+/, "").replace(/\s+$/, ""),
   };
+}
+
+export const MODEL_POLICY_FRONTMATTER_MARKER = "# sta:model-policy — model/effort generated from model-tiers.yaml";
+
+/**
+ * Keep Claude's native frontmatter as a compatibility rendering, never a
+ * second policy authority. The role body and every unrelated field are
+ * byte-stable apart from LF normalization.
+ */
+export function renderAgentPolicyCompatibility(md: string, policy: ModelTierPolicy): string {
+  const normalized = md.replace(/\r\n/g, "\n");
+  if (policy.legacyRoleDefaults) return normalized;
+  const parsed = parseAgentMd(normalized);
+  const roleDefault = policy.roleDefaults[parsed.name];
+  if (!roleDefault) throw new Error(`model-tiers.yaml has no role default for ${parsed.name}`);
+
+  const closeIndex = normalized.indexOf("\n---\n", 4);
+  const header = normalized.slice(4, closeIndex).split("\n").filter((line) =>
+    line !== MODEL_POLICY_FRONTMATTER_MARKER && !/^(?:model|effort)\s*:/.test(line));
+  const generated = [MODEL_POLICY_FRONTMATTER_MARKER];
+  if (roleDefault !== RUNTIME_DEFAULT_TIER) {
+    const binding = policy.tiers[roleDefault].camps.anthropic;
+    generated.push(`model: ${binding.model}`, `effort: ${binding.effort}`);
+  }
+  const versionIndex = header.findIndex((line) => /^version\s*:/.test(line));
+  header.splice(versionIndex === -1 ? header.length : versionIndex, 0, ...generated);
+  return `---\n${header.join("\n")}\n---\n${normalized.slice(closeIndex + "\n---\n".length)}`;
 }
 
 /**
@@ -644,6 +679,28 @@ export function checkBindings(projectRoot: string): BindingCheckResult {
   const mdRoles = listRoles(claudeDir);
   if (mdRoles.length === 0) {
     return { ok: false, problems: [`no agent definitions found in ${claudeDir}`] };
+  }
+
+  let modelPolicy: ModelTierPolicy | null = null;
+  try {
+    modelPolicy = loadModelTierPolicy(projectRoot);
+  } catch (error) {
+    if (error instanceof ModelTiersInvalidError) problems.push(error.message);
+    else throw error;
+  }
+  if (modelPolicy && !modelPolicy.legacyRoleDefaults) {
+    for (const role of mdRoles) {
+      const sourcePath = path.join(claudeDir, `${role}.md`);
+      try {
+        const actual = fs.readFileSync(sourcePath, "utf8").replace(/\r\n/g, "\n");
+        const expected = renderAgentPolicyCompatibility(actual, modelPolicy);
+        if (actual !== expected) {
+          problems.push(`${role}: .claude/agents/${role}.md model/effort frontmatter does not match model-tiers.yaml — run node scripts/regenerate-renderings.mjs`);
+        }
+      } catch (error) {
+        problems.push(`${role}: cannot render model-policy compatibility frontmatter — ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
   }
 
   for (const spec of BINDING_RENDERINGS) {

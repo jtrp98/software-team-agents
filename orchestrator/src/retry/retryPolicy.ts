@@ -1,8 +1,18 @@
 import { AgentStage, TaskState } from "../types.js";
 import { canTransition, initTaskMachine, transition, type TaskMachine } from "../state/taskState.js";
 
-/** Hard limit — never override, never configure higher at runtime. */
+/**
+ * The global hard ceiling. Defense in depth only: ordinary findings stop after
+ * two automatic rounds under `escalation-policy.yaml`, which is the limit that
+ * actually governs a normal repair. This one exists so that no path — a
+ * missing severity, an unrecognized failure, a caller composing the policy
+ * itself — can retry more than three times. Never override, never configure
+ * higher at runtime.
+ */
 export const MAX_RETRY = 3;
+
+/** The automatic rounds an *ordinary* (low/medium/high) finding gets. `escalation-policy.yaml` is the authority; this names it for callers and tests. */
+export const ORDINARY_REPAIR_ROUNDS = 2;
 
 export type FailureKind = "qa" | "security";
 
@@ -40,9 +50,25 @@ const FAILED_STATE: Record<FailureKind, TaskState> = {
  * that decision is made, so no agent and no other code path can keep a task
  * retrying forever.
  */
-export function recordFailure(run: TaskRun, kind: FailureKind): TaskRun {
+export interface RecordFailureOptions {
+  /**
+   * False for an infrastructure/quota/runtime-unavailability outcome: it is
+   * not a defect with a fix-verify-close lifecycle, so it must not spend a
+   * budget that exists to bound how many times a *defect* is re-attempted
+   * (T-V8-015). The state still moves — the round did fail — but the counter
+   * does not, so a provider outage cannot exhaust a task's repair budget.
+   * Defaults to true, which is the pre-T-V8-015 behaviour for every caller
+   * that does not classify its failure.
+   */
+  countsAsDefect?: boolean;
+}
+
+export function recordFailure(run: TaskRun, kind: FailureKind, options: RecordFailureOptions = {}): TaskRun {
   const failedState = FAILED_STATE[kind];
-  const retries: RetryBudget = { ...run.retries, [kind]: run.retries[kind] + 1 };
+  const countsAsDefect = options.countsAsDefect ?? true;
+  const retries: RetryBudget = countsAsDefect
+    ? { ...run.retries, [kind]: run.retries[kind] + 1 }
+    : { ...run.retries };
   const machineAtFailed = transition(run.machine, failedState);
 
   // Escalate straight to BLOCKED either when the budget is spent, or when

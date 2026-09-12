@@ -71,6 +71,12 @@ describe("the shipped contracts", () => {
   });
 
   it("carry the constraints that matter most, on the agents they bind", () => {
+    expect(realContract(AgentStage.BUSINESS_ANALYST).constraints).toContain(
+      "confirmed_input_or_human_gate",
+    );
+    expect(realContract(AgentStage.BUSINESS_ANALYST).constraints).not.toContain(
+      "human_confirmation_required",
+    );
     expect(realContract(AgentStage.BACKEND_ENGINEER).constraints).toContain("no_schema_guessing");
     expect(realContract(AgentStage.FRONTEND_ENGINEER).constraints).toContain("green_before_handoff");
     expect(realContract(AgentStage.QA_ENGINEER).constraints).toContain("cannot_close_security_finding");
@@ -137,6 +143,15 @@ describe("diffContractAgainstRegistry", () => {
       input: { required: [...contract.input.optional], optional: [...contract.input.required] },
     };
     expect(diffContractAgainstRegistry(swapped)).toEqual([]);
+  });
+
+  it("treats the conditional test-plan as optional for DEV and QA without removing their PlanTask authorities", () => {
+    for (const stage of [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER, AgentStage.QA_ENGINEER]) {
+      const contract = realContract(stage);
+      expect(contract.input.required, stage).not.toContain("test-plan");
+      expect(contract.input.optional, stage).toContain("test-plan");
+      expect(contract.input.required, stage).toContain("plan");
+    }
   });
 
   it("catches an input the registry never grants", () => {

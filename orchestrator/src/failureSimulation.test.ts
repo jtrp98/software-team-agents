@@ -3,14 +3,15 @@ import { Orchestrator, type AgentExecutor, type AgentExecutorResult } from "./or
 import { classifyTask } from "./classification/taskClassifier.js";
 import { AgentStage } from "./types.js";
 import { ApprovalType } from "./gates/approval.js";
-import { ArtifactType, type DesignArtifact, type QaReportArtifact } from "./artifacts/schemas.js";
+import { ArtifactType, type HandoffArtifact, type QaReportArtifact } from "./artifacts/schemas.js";
 
 function qaReport(taskId: string, status: "PASS" | "FAIL"): QaReportArtifact {
   return {
     taskId,
     status,
     mode: "FULL",
-    requirements: {},
+    // A PASS must map at least one verdict (T-V8-014); FAIL is unconstrained.
+    requirements: { [taskId]: status },
     tests: { passed: status === "PASS" ? 10 : 8, failed: status === "PASS" ? 0 : 2 },
     evidence: ["log"],
     risks: [],
@@ -70,13 +71,21 @@ describe("Failure Simulation (T56)", () => {
   });
 
   it("scenario: security critical finding — escalates to a person immediately, no automatic round (see also escalationPolicy.test.ts's decideRecovery unit tests)", async () => {
-    const okDesign: DesignArtifact = {
-      taskId: "T-SIM-SECURITY",
-      feasibility: "feasible",
-      dataModel: [{ model: "Refund", fields: [{ name: "id", type: "string" }] }],
-      risks: [],
-      openQuestions: [],
-      contract: ["refund status must be REFUNDED"],
+    // A doc-producing stage's validated artifact is always its HANDOFF (see
+    // runtime/runtimeExecutor.ts's `ownedDoc` branch) — never a structured
+    // Requirements/Design/Plan/TestPlan payload; T-V8-028 removed those unused schemas.
+    const okHandoff: HandoffArtifact = {
+      task_id: "T-SIM-SECURITY",
+      implements: [],
+      module: "test-module",
+      phase: 1,
+      constraint_refs: [],
+      contract_refs: { produces: [], consumes: [] },
+      decision_refs: [],
+      test_refs: [],
+      artifact_refs: [],
+      open_findings: [],
+      budget: null,
     };
     const classification = classifyTask({ touchesSchema: true, touchesBackend: true });
     const orch = new Orchestrator("T-SIM-SECURITY", classification);
@@ -84,8 +93,8 @@ describe("Failure Simulation (T56)", () => {
     const executor = makeExecutor({
       [AgentStage.SYSTEM_ANALYST]: () => ({
         outcome: { tokens: 100, cost: 0.01, result: "PASS" },
-        artifactType: ArtifactType.DESIGN,
-        artifact: okDesign,
+        artifactType: ArtifactType.HANDOFF,
+        artifact: okHandoff,
       }),
       [AgentStage.QA_ENGINEER]: () => ({
         outcome: { tokens: 100, cost: 0.01, result: "PASS" },

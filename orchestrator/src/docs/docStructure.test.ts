@@ -322,13 +322,15 @@ describe("checkDocStructure", () => {
     expect(result.problems.some((p) => p.includes("crm/design.md") && p.includes("Subject Score Aggregation Rules"))).toBe(true);
   });
 
-  it("does not note a well-formed requirement.md/design.md", () => {
+  it("keeps well-formed legacy design readable while noting the unattended migration boundary", () => {
     const dir = path.join(tmp, "_docs", "module", "crm");
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "requirement.md"), REQUIREMENT_OK);
     fs.writeFileSync(path.join(dir, "design.md"), DESIGN_OK);
     const result = checkDocStructure(tmp);
-    expect(result.notes).toEqual([]);
+    expect(result.notes).toEqual([
+      "crm/design.md: safe whole-section compatibility fallback only — migrate to Design evidence format 1 before unattended execution",
+    ]);
   });
 });
 

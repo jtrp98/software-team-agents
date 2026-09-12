@@ -1,8 +1,24 @@
-import { createHash, randomBytes } from "node:crypto";
+/**
+ * T-V8-029 — read-only reader for pre-V8 wave-run records.
+ *
+ * Every writer this module once exported (`writeRunManifest`,
+ * `appendJournalRecord`, `repairTruncatedJournal`, `pruneWaveRunArtifacts`)
+ * and the `planHash` the wave manifest froze belonged to the retired wave
+ * lifecycle. The unified run writes through `ledger/runLedger.ts`, hashes a
+ * plan scope with `orchestrator/planCompilation.ts`, and exports JSON through
+ * `ledger/auditExport.ts`. What remains here is the parsing and validation
+ * needed to *read* an existing `.workflow/wave-runs/<id>` directory — for
+ * `ledger/adapters.ts`'s versioned projection and `run/observability.ts` —
+ * plus `createRunId`, which is the run identity format the ledger also uses.
+ *
+ * Consequence, and it is deliberate: an old wave run can be inspected but not
+ * resumed. No code path appends to its journal, so it cannot become a second
+ * live authority.
+ */
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { PlanTaskRow } from "../docs/planGraph.js";
-import { DEFAULT_RUNTIME_ARTIFACT_RETENTION, pruneRuntimeArtifacts } from "../state/runtimeArtifacts.js";
+import type { ModelPolicyRequest } from "../runtime/tierRouting.js";
 
 export interface RunManifest {
   run_id: string;
@@ -20,6 +36,10 @@ export interface RunManifest {
   runtime_id: string;
   tier: string;
   model: string;
+  /** V8 additions are optional so pre-V8 manifests remain readable and retain their recorded route. */
+  effort?: string;
+  route_basis?: string;
+  route_requested?: ModelPolicyRequest;
   max_tasks: number;
   sta_version: string;
 }
@@ -117,7 +137,7 @@ function safeRunSegment(runId: string): string {
   return trimmed;
 }
 
-/** Wave runs are a sibling kind because `.workflow/runs/` is task-keyed already. */
+/** Legacy wave-run records live here; `.workflow/runs/` was already task-keyed. Nothing writes this directory after T-V8-029. */
 export function runArtifactPaths(projectRoot: string, runId: string): RunArtifactPaths {
   const directory = path.join(path.resolve(projectRoot), ".workflow", "wave-runs", safeRunSegment(runId));
   return {
@@ -127,59 +147,11 @@ export function runArtifactPaths(projectRoot: string, runId: string): RunArtifac
   };
 }
 
-function stableTaskTable(tasks: readonly PlanTaskRow[]): unknown[] {
-  return tasks.map((task) => ({
-    id: task.id,
-    phase: task.phase,
-    designRefs: [...task.designRefs],
-    dependsOn: [...task.dependsOn],
-    status: task.status,
-    owner: task.owner,
-    wave: task.wave,
-    tier: task.tier ?? null,
-    description: task.description,
-    fromCheckbox: task.fromCheckbox,
-    produces: task.produces === undefined ? null : [...task.produces],
-    consumes: task.consumes === undefined ? null : [...task.consumes],
-  }));
-}
-
-export function planHash(tasks: readonly PlanTaskRow[]): string {
-  return createHash("sha256").update(JSON.stringify(stableTaskTable(tasks)), "utf8").digest("hex");
-}
-
-function syncWrite(file: string, contents: string, flag: "wx" | "a"): void {
-  const fd = fs.openSync(file, flag);
-  try {
-    fs.writeFileSync(fd, contents, "utf8");
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-}
-
-/** Writes the immutable manifest. `wx` makes a repeated write a refusal. */
-export function writeRunManifest(projectRoot: string, manifest: RunManifest): string {
-  validateManifest(manifest);
-  const paths = runArtifactPaths(projectRoot, manifest.run_id);
-  fs.mkdirSync(paths.directory, { recursive: true });
-  syncWrite(paths.manifest, `${JSON.stringify(manifest, null, 2)}\n`, "wx");
-  return paths.manifest;
-}
-
 export function readRunManifest(projectRoot: string, runId: string): RunManifest {
   const file = runArtifactPaths(projectRoot, runId).manifest;
   const stat = fs.lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`run manifest is not a regular file: ${file}`);
   return validateManifest(JSON.parse(fs.readFileSync(file, "utf8")));
-}
-
-/** Appends and flushes one complete JSONL record before returning. */
-export function appendJournalRecord(projectRoot: string, runId: string, record: KnownJournalRecord): string {
-  const paths = runArtifactPaths(projectRoot, runId);
-  readRunManifest(projectRoot, runId);
-  syncWrite(paths.journal, `${JSON.stringify(record)}\n`, "a");
-  return paths.journal;
 }
 
 function parseRecord(value: unknown, lineNumber: number): JournalRecord {
@@ -227,6 +199,21 @@ function validateManifest(value: unknown): RunManifest {
       throw new Error(`run manifest field ${field} must be a non-empty string`);
     }
   }
+  for (const field of ["effort", "route_basis"] as const) {
+    if (candidate[field] !== undefined && (typeof candidate[field] !== "string" || (candidate[field] as string).length === 0)) {
+      throw new Error(`run manifest field ${field} must be a non-empty string when present`);
+    }
+  }
+  if (candidate.route_requested !== undefined) {
+    if (!candidate.route_requested || typeof candidate.route_requested !== "object" || Array.isArray(candidate.route_requested)) {
+      throw new Error("run manifest field route_requested must be an object when present");
+    }
+    for (const [key, value] of Object.entries(candidate.route_requested as Record<string, unknown>)) {
+      if (!["operatorModel", "operatorEffort", "taskTier", "roleDefaultTier"].includes(key) || typeof value !== "string" || value.length === 0) {
+        throw new Error(`run manifest field route_requested.${key} must be a recognized non-empty string`);
+      }
+    }
+  }
   if (!Number.isInteger(candidate.wave) || (candidate.wave as number) < 1) {
     throw new Error("run manifest field wave must be a positive integer");
   }
@@ -261,37 +248,4 @@ export function readJournal(projectRoot: string, runId: string): JournalReadResu
     }
   }
   return { records, truncatedFinalLine };
-}
-
-/** Removes only an incomplete final JSONL fragment after it has been reported by `readJournal`. */
-export function repairTruncatedJournal(projectRoot: string, runId: string): boolean {
-  const result = readJournal(projectRoot, runId);
-  if (!result.truncatedFinalLine) return false;
-  const file = runArtifactPaths(projectRoot, runId).journal;
-  const body = fs.readFileSync(file, "utf8");
-  const lastNewline = Math.max(body.lastIndexOf("\n"), body.lastIndexOf("\r"));
-  const repaired = lastNewline < 0 ? "" : body.slice(0, lastNewline + 1);
-  const fd = fs.openSync(file, "r+");
-  try {
-    fs.ftruncateSync(fd, 0);
-    fs.writeFileSync(fd, repaired, "utf8");
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-  return true;
-}
-
-export function pruneWaveRunArtifacts(
-  projectRoot: string,
-  currentRunId: string,
-  maximum = DEFAULT_RUNTIME_ARTIFACT_RETENTION,
-): string[] {
-  const current = runArtifactPaths(projectRoot, currentRunId).directory;
-  return pruneRuntimeArtifacts({
-    taskDirectory: path.dirname(current),
-    currentArtifact: current,
-    maxRunsPerTask: maximum,
-    artifactType: "directory",
-  });
 }

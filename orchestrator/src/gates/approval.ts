@@ -9,11 +9,11 @@ import { TaskState } from "../types.js";
  * was asked/answered, and by whom; the gate booleans are derived from this ledger.
  */
 
-/** The five points CLAUDE.md says always wait for a person, whatever mode the pipeline is running in. */
+/** Human approval identities used when a risk-triggered gate actually opens. */
 export enum ApprovalType {
-  /** business-analyst running at all — a requirement is never inferred. */
+  /** Interactive BA fallback or an exact unresolved material business question. */
   REQUIREMENT_INTERVIEW = "requirement-interview",
-  /** system-analyst's data model, before any code is written against it. */
+  /** Stable compatibility identity for the risk-triggered design gate (schema, migration, breaking, critical security, ambiguity). */
   SCHEMA_CONFIRMATION = "schema-confirmation",
   /** Any ⚠️/❌ QA round. */
   QA_FAILURE = "qa-failure",
@@ -55,14 +55,12 @@ export type ApprovalLedger = ApprovalRecord[];
  * does not invent new stopping points.
  */
 export function approvalTypeForEdge(from: TaskState, to: TaskState): ApprovalType | null {
-  // A requirement is never inferred (CLAUDE.md's always-human point #1): leaving
-  // the REQUIREMENT state needs a person's answer, whatever pipeline brought a
-  // business-analyst stage into existence. Pipelines that skip BA never enter
-  // the state, so they are unaffected.
+  // The BA gate policy decides whether confirmed evidence discharges this edge.
+  // When it does not, this stable approval identity records the exact reason;
+  // pipelines that skip BA never enter REQUIREMENT and remain unaffected.
   if (from === TaskState.REQUIREMENT) return ApprovalType.REQUIREMENT_INTERVIEW;
-  // Matches gatePolicy.ts's checkGate: gated on leaving DESIGN at all, since PLAN (project-manager
-  // and/or test-planner) can sit between DESIGN and IMPLEMENTATION and must not be reachable
-  // without the same confirmation IMPLEMENTATION requires.
+  // Matches gatePolicy.ts's risk-triggered DESIGN check. The persisted string remains
+  // schema-confirmation for old ledgers; the current reason records the exact trigger set.
   if (from === TaskState.DESIGN) return ApprovalType.SCHEMA_CONFIRMATION;
   if (from === TaskState.READY_TO_DEPLOY && to === TaskState.APPROVED) return ApprovalType.DEPLOY;
   return null;

@@ -99,6 +99,11 @@ export function resolveDocsRoot(projectRoot: string): string {
   return projectRoot;
 }
 
+/** Thin wrapper naming the QA-side caller's intent — same resolver, same rules. */
+export function resolveQaWorkRoots(projectRoot: string, taskId: string, store: TaskLookup): string[] {
+  return resolveWritableWorkRoots(projectRoot, taskId, store, AgentStage.QA_ENGINEER);
+}
+
 /**
  * The per-stage `{ task, roots }` lookup the runtime executor calls, or
  * `undefined` when this is not a three-repo installation.

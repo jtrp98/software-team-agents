@@ -18,8 +18,9 @@ policies/
 
 A citation like "conventions.md §7" reads `policies/architecture.md §7`; `.claude/shared/conventions.md` itself is a short pointer table for compatibility.
 
-The bounded wave run has a user-facing guide at `docs/bounded-wave-run.md`; it points at
-`policies/git.md §22` and `decisions/ADR-026` rather than restating them.
+The bounded run has a user-facing guide at `docs/bounded-run.md`; it points at
+`policies/git.md §22` and `decisions/ADR-026` rather than restating them. The V7 wave form it
+replaced is recorded as retired in `docs/bounded-wave-run.md`.
 
 ## What belongs here
 

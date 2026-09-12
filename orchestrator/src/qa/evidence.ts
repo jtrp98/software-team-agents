@@ -24,6 +24,8 @@ import type { DeterministicVerification } from "./deterministic.js";
 import { renderDeterministicVerification } from "./deterministic.js";
 import type { QaScope } from "./scope.js";
 import { renderQaScope } from "./scope.js";
+import type { QaTaskContract } from "./taskContract.js";
+import { renderQaTaskContract } from "./taskContract.js";
 
 export interface EvidenceRecord {
   id: string;
@@ -104,6 +106,16 @@ export interface EvidencePackageInput {
   /** Controls the one mechanical instruction that exists only on the escape-hatch path. */
   deterministicGate?: "enabled" | "disabled";
   scope: QaScope;
+  /**
+   * T-V8-014 — the exact task contract this round verifies against: authored
+   * acceptance text, traceability, attempt/packet identity, dependency
+   * outputs, graph blast radius, real file manifest, and open findings.
+   * Optional so an interactive or legacy-plan round still produces a package;
+   * when absent the pointer-based `taskIntent`/`acceptanceCriteria` fields
+   * below are all a round has, which is exactly the thin input this field
+   * replaces.
+   */
+  taskContract?: QaTaskContract;
   /** One-paragraph statement of what this task was supposed to achieve. */
   taskIntent: string;
   acceptanceCriteria: readonly string[];
@@ -118,13 +130,23 @@ export interface EvidencePackageInput {
 const DEFAULT_MAX_LINES = 120;
 
 /**
+ * A contract-bearing package carries the authored acceptance text and the
+ * verdict-mapping list, both of which have to arrive whole — truncating them
+ * would reintroduce the underscoped round this task exists to prevent. The
+ * cap is still a cap (nothing here is unbounded); it is raised, and the
+ * contract is rendered before the optional sections so overflow lands on the
+ * supplementary material rather than on the standard of proof.
+ */
+const DEFAULT_MAX_LINES_WITH_CONTRACT = 320;
+
+/**
  * The bounded `### qa-evidence` block handed to qa-engineer ahead of any
  * source. Every section is capped; overflow is truncated with an explicit
  * marker rather than silently cut, so the agent knows to ask (JIT) instead
  * of reasoning over a partial picture it believes is whole.
  */
 export function buildEvidencePackage(input: EvidencePackageInput): string {
-  const cap = input.maxLines ?? DEFAULT_MAX_LINES;
+  const cap = input.maxLines ?? (input.taskContract ? DEFAULT_MAX_LINES_WITH_CONTRACT : DEFAULT_MAX_LINES);
   const sections: string[][] = [
     [`QA evidence package for ${input.taskId} (read this before opening source files)`],
     [
@@ -133,8 +155,12 @@ export function buildEvidencePackage(input: EvidencePackageInput): string {
       ...(input.effort ? [`- Effort: ${input.effort.effort} — ${input.effort.reasons.join("; ")}`] : []),
     ],
     renderQaScope(input.scope).map((l) => `- ${l}`),
-    ["## Task intent", wrap(input.taskIntent)],
-    ["## Acceptance criteria", ...input.acceptanceCriteria.map((c) => `- ${c}`)],
+    ...(input.taskContract
+      ? [renderQaTaskContract(input.taskContract)]
+      : [
+          ["## Task intent", wrap(input.taskIntent)],
+          ["## Acceptance criteria", ...input.acceptanceCriteria.map((c) => `- ${c}`)],
+        ]),
     ["## Diff summary", wrap(input.diffSummary || "(none supplied)")],
   ];
 

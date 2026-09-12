@@ -139,21 +139,20 @@ export interface RuntimeAgentRequest {
   /** Model to run on, or undefined to take the runtime's own default. */
   readonly model?: string;
   /**
-   * True when `model` was set by an operator-visible override — the `--model` CLI
-   * flag or `.sta/config.yaml` routing — rather than resolved from role
-   * frontmatter or an automatic default.
+   * True when the orchestrator resolved a concrete model that must be sent to
+   * the runtime: an operator override or a task/role Tier cell.
    *
    * An adapter that would otherwise ignore `model` to avoid contradicting its
    * runtime's own per-role configuration (Claude Code resolves the model from
    * subagent frontmatter) MUST honour it when this is true, and MUST refuse a
    * value its runtime cannot reach rather than pass it through. With this false
-   * or absent, `model` carries only the resolved default and an adapter is free
-   * to ignore it exactly as before.
+   * or absent, `model` is only a legacy compatibility/runtime default and an
+   * adapter is free to ignore it exactly as before.
    */
   readonly modelExplicit?: boolean;
   /**
-   * Explicitly requested reasoning effort, paired with an explicit `model`.
-   * Undefined = the runtime's / binding's own default. An adapter whose
+   * Effective reasoning effort resolved with the model. Undefined = the
+   * runtime's / binding's own default. An adapter whose
    * runtime exposes no effort control records a diagnostic rather than
    * dropping this silently.
    */
@@ -185,9 +184,22 @@ export type RuntimeRunStatus =
   | "UNAVAILABLE";
 
 export interface RuntimeUsage {
+  /** Uncached input tokens — the portion of the prompt the provider actually priced at the full input rate this turn. */
   readonly inputTokens?: number;
   readonly outputTokens?: number;
+  /** Prompt-cache tokens *read* this turn (discounted, already-cached input). */
   readonly cachedInputTokens?: number;
+  /**
+   * T-V8-012 — prompt-cache tokens *written* this turn: the input that was
+   * newly cached for a future turn to read, priced at its own (higher) rate.
+   * Distinct from `cachedInputTokens` (a read) and from `inputTokens`
+   * (uncached) — collapsing any of the three into another would misreport
+   * which portion of input was actually billed at which rate. Undefined, not
+   * 0, when the runtime's envelope carries no such counter (every adapter but
+   * `claudeCodeAdapter.ts` today) — see `RuntimeUsage.inputTokens`'s sibling
+   * fields for the same "absent ≠ 0" contract.
+   */
+  readonly cacheCreationInputTokens?: number;
   /** Undefined, not 0, when the runtime does not report cost — see `RuntimeCapability.COST_REPORTING`. 0 would claim the run was free. */
   readonly costUsd?: number;
 }
@@ -228,6 +240,14 @@ export interface RuntimeAgentResult {
    * The model the runtime says it actually used, when it says. Not the one that was requested.
    */
   readonly model?: string;
+  /**
+   * T-V8-012 — the reasoning effort the runtime says it actually ran with, when
+   * it says. Not the one that was requested (`RuntimeAgentRequest.effort`).
+   * Undefined for every adapter today — no envelope this framework drives
+   * echoes effort back — so `metricsFrom` falls back to the requested value,
+   * exactly as it already does for `model` above.
+   */
+  readonly effort?: string;
   readonly guards: RuntimeGuardReport;
   /** Anything the adapter wants a person to see in the log — a parse that fell back, a flag it had to drop. */
   readonly diagnostics: readonly string[];

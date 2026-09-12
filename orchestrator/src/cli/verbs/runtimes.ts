@@ -19,6 +19,6 @@ export async function runRuntimesVerb(rest: string[], defaultProjectRoot: string
   return 0;
 }
 import * as path from "node:path";
-import { createProductionRuntimeRegistry } from "../../cli.js";
+import { createProductionRuntimeRegistry } from "../composition/runtimeRegistry.js";
 import { describeRuntimeSupport } from "../../runtime/runtimeSupport.js";
 import { flagValue } from "../support.js";

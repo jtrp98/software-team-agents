@@ -13,6 +13,7 @@ import { NO_GUARDS, type RuntimeRunStatus } from "./runtimeAdapter.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { resolveRuntimeRoute } from "./runtimeRouting.js";
 import * as contextBudget from "../context/contextBudget.js";
+import { FIXTURE_REVISION, runtimeTaskFixture } from "./packetFixture.testSupport.js";
 
 const roots: string[] = [];
 function project(config?: string): string {
@@ -45,7 +46,8 @@ function targetTask(root: string) {
  * T-V5-040 replaces T-V3R-040's three-mode matrix. Execution modes, the handoff
  * candidate chain and the legacy `model_routing` spelling are removed, so the
  * matrix is now the three surviving route sources — flag (precedence 1),
- * `routing.by_role` (2), default runtime plus frontmatter model (4) — and the
+ * `routing.by_role` (2), default runtime plus legacy frontmatter compatibility
+ * (4) — and the
  * property that every route resolves exactly one runtime.
  */
 describe("T-V5-040 one-route matrix", () => {
@@ -65,7 +67,7 @@ describe("T-V5-040 one-route matrix", () => {
       result: "PASS",
       runtime: "claude-code",
       requested_runtime: "claude-code",
-      routing_basis: "level-4",
+      routing_basis: "level-4;tier=runtime-default,model=legacy-frontmatter,effort=runtime-default",
       fallback_count: 0,
     });
     expect(claude.requests).toHaveLength(1);
@@ -176,7 +178,7 @@ describe("T-V5-040 one-route matrix", () => {
       result: "PASS",
       requested_runtime: "codex",
       runtime: "codex",
-      routing_basis: "level-2",
+      routing_basis: "level-2;tier=runtime-default,model=operator-model,effort=runtime-default",
       fallback_count: 0,
     });
     expect(claude.requests).toHaveLength(0);
@@ -200,7 +202,11 @@ describe("T-V5-040 one-route matrix", () => {
       sliceModuleDocs: false,
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-MATRIX", context: [] });
 
-    expect(result.outcome).toMatchObject({ result: "PASS", runtime: "claude-code", routing_basis: "level-1" });
+    expect(result.outcome).toMatchObject({
+      result: "PASS",
+      runtime: "claude-code",
+      routing_basis: "level-1;tier=runtime-default,model=legacy-frontmatter,effort=runtime-default",
+    });
     expect(codex.requests).toHaveLength(0);
     expect(claude.requests).toHaveLength(1);
   });
@@ -238,6 +244,8 @@ describe("T-V5-040 fail-closed evidence matrix", () => {
       guards: () => NO_GUARDS,
       sliceModuleDocs: false,
       threeRepoTask: () => targetTask(root),
+      runtimeTask: () => runtimeTaskFixture(path.join(root, "knowledge"), { taskId: "T-MATRIX", targetRoot: path.join(root, "target"), allow: [] }),
+      packetBaseRevision: async () => FIXTURE_REVISION,
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-MATRIX", context: [] });
 
     expect(result.outcome).toMatchObject({

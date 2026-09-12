@@ -1,4 +1,11 @@
 import { AgentStage } from "../types.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import { RuntimeTaskV2Schema, assertRuntimeTaskFresh } from "../orchestrator/runtimeTask.js";
+import { planTaskHash } from "../docs/planTask.js";
+import { PacketFieldsSchema, packetConfigHash, renderPacketSections, renderPacketText, stableHash, contentHash, type DependencyEvidence, type PacketFields } from "../artifacts/executionPacket.js";
+import { verifyDesignEvidence } from "../docs/designEvidence.js";
 import {
   ArtifactType,
   validateArtifact,
@@ -8,7 +15,7 @@ import {
 import type { AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { parseQaReport, parseSecurityReport, readModuleDoc } from "../agents/moduleDocs.js";
-import { parsePlanTasks } from "../docs/planGraph.js";
+import { readWorkPlan, taskDesignRefs } from "../docs/planGraph.js";
 import {
   ContextManager,
   handoffReferencedSections,
@@ -19,6 +26,8 @@ import { classifyQaFailure, classifySecurityFailure } from "../orchestrator/fail
 import { codeIntelSlices } from "./codeIntelAssembly.js";
 import { knowledgeBriefFor } from "./knowledgeBriefAssembly.js";
 import { assertContextComposition, emptyContextBudgetComposition, type ContextBudgetComposition } from "../context/contextBudget.js";
+import { renderBusinessInputEvidence } from "../gates/businessInput.js";
+import { buildTaskRetrievalQuery, type TaskRetrievalQuery } from "../context/retrievalQuery.js";
 
 /**
  * This module is the deterministic Task Compiler: everything about running a
@@ -55,6 +64,8 @@ export interface RunMetrics {
   fallback_count?: number;
   session_kind?: "orchestrated" | "interactive";
   static_chars?: number;
+  /** T-V8-012 — measured by `measureRolePrefixChars`; see that function's doc comment for what this does and does not include. */
+  instruction_surface_bytes?: number;
   handoff_chars?: number;
   doc_chars?: number;
   doc_chars_before?: number;
@@ -73,6 +84,21 @@ export interface RunMetrics {
   context_code_chars?: number;
   context_tool_output_chars?: number;
   context_reserve_chars?: number;
+  /**
+   * T-V8-012 — prompt-cache tokens *written* this run (see
+   * `RuntimeUsage.cacheCreationInputTokens`). Sibling of `cache_read_tokens`;
+   * absent, not 0, when the runtime's envelope carries no such counter.
+   */
+  cache_creation_tokens?: number;
+  /**
+   * T-V8-012 — the reasoning effort actually asked of the runtime for this
+   * attempt, independent of whether the runtime echoes one back. `effort`
+   * above stays the observed value (falling back to this one when the runtime
+   * reports none, exactly like `model` already falls back to what was
+   * declared) — the two now read the requested/observed decision apart
+   * instead of collapsing it into a single field.
+   */
+  requested_effort?: string;
 }
 
 /**
@@ -89,6 +115,39 @@ export const DEPLOY_PHASE_INSTRUCTION: Record<"prepare" | "execute", string> = {
     "Deploy phase: EXECUTE. The orchestrator's structural approval gate for this deploy has already been granted — this run is what actually issues the deploy/migration command, then verifies the result (service health, and — for a migration — the schema/data actually match what was intended). " +
     "Still follow your own agent instructions for what to confirm and verify; the gate having passed doesn't relax those. Report failure plainly if verification doesn't pass — do not soften it into a success.",
 };
+
+/**
+ * T-V8-012 — the static instruction bytes a native named-agent runtime
+ * (Claude Code today) loads before an orchestrated stage's own turn begins:
+ * `CLAUDE.md`, every policy file, and the one role prompt this stage runs as.
+ *
+ * Distinct from `PromptComposition.static_chars`: that field is only the
+ * framework-generated header/footer text `buildPromptParts` actually appends
+ * to `req.prompt` (and its sum is asserted to equal `prompt.length` — see
+ * `assertContextComposition` below), so folding these bytes into it would
+ * silently break that invariant for text the runtime loads on its own and
+ * this framework never sent. This function measures the OTHER, previously
+ * unmeasured-for-orchestrated-runs half — the interactive counterpart already
+ * exists as `observability/sessionRecord.ts`'s `measureWorkspaceStatic`, whose
+ * `instruction_surface_bytes` field this shares (see `runtimeExecutor.ts`).
+ *
+ * Returns null (not 0) when any of the three cannot be read — a role prompt
+ * or policy file this run could not measure is a fact about the run, not an
+ * empty prefix.
+ */
+export function measureRolePrefixChars(frameworkRoot: string, stage: AgentStage): number | null {
+  try {
+    const chars = (file: string): number => fs.readFileSync(file, "utf8").length;
+    const policyRoot = path.join(frameworkRoot, "policies");
+    const policies = fs
+      .readdirSync(policyRoot, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+      .reduce((sum, entry) => sum + chars(path.join(policyRoot, entry.name)), 0);
+    return chars(path.join(frameworkRoot, "CLAUDE.md")) + policies + chars(path.join(frameworkRoot, ".claude", "agents", `${stage}.md`));
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Renders the sliced module docs, and — just as importantly — says what was cut.
@@ -216,6 +275,35 @@ export function handoffFromContext(context: readonly ContextItem[]): HandoffArti
   return validateArtifact(ArtifactType.HANDOFF, JSON.parse(item.content));
 }
 
+/**
+ * T-V8-011 — drops the raw HANDOFF JSON from model-visible `req.context` once
+ * `renderSlicedDocs` has already narrowed a doc slice using that same
+ * HANDOFF (`docSelection.ts` tags the resulting `SelectedContext.reason` with
+ * "narrowed by HANDOFF references" — see `narrowSelectedContext`). At that
+ * point every reference the handoff carries is already visible, with
+ * provenance, in the kept section text and the slice notice; printing the
+ * compact index a second time as raw JSON is duplication, not context. When
+ * nothing was narrowed the raw record is the only place those references
+ * appear, so it stays.
+ */
+export function suppressRawHandoffWhenNarrowed(
+  context: readonly ContextItem[],
+  selected: readonly SelectedContext[],
+): ContextItem[] {
+  const narrowed = selected.some((doc) => doc.reason.includes("narrowed by HANDOFF references"));
+  if (!narrowed) return [...context];
+  return context.map((item) =>
+    item.source === ArtifactType.HANDOFF
+      ? {
+          ...item,
+          content:
+            "(omitted — the module documents above were already narrowed using this HANDOFF's references; their provenance note names it. " +
+            "Run `sta context` for the raw pointer record if you need it.)",
+        }
+      : item,
+  );
+}
+
 export interface StageContextOptions extends SliceOptions {
   /** Root used for framework/legacy knowledge lookup; docs may live elsewhere. */
   projectRoot: string;
@@ -230,6 +318,8 @@ export interface StageContextOptions extends SliceOptions {
 export interface StageContextAssembly extends SlicedModuleDocs {
   knowledge: string[];
   codeIntel: string[];
+  /** T-V8-011 — the retrieval query codeIntel was actually queried with, for `sta context` evidence/provenance. */
+  retrievalQuery: TaskRetrievalQuery;
 }
 
 /**
@@ -241,10 +331,35 @@ export function referencedKnowledgeIds(docsRoot: string, moduleName: string, tas
   if (!taskId) return [];
   try {
     const plan = readModuleDoc(docsRoot, moduleName, "plan.md");
-    return plan === null ? [] : parsePlanTasks(plan).tasks.find((task) => task.id === taskId)?.designRefs ?? [];
+    const task = plan === null ? undefined : readWorkPlan(plan).tasks.find(task => task.id === taskId);
+    return task ? taskDesignRefs(task) : [];
   } catch {
     return [];
   }
+}
+
+/**
+ * T-V8-011 — the retrieval query a stage's optional code-intelligence lookup
+ * should use, built from the exact canonical task named by `taskId` rather
+ * than the module name alone. Only a canonical (v1, `"version" in task`)
+ * plan row carries retrieval-relevant fields; a legacy row or an
+ * unresolvable plan/task falls back to the module name, safely and visibly,
+ * exactly like `referencedKnowledgeIds` above does for knowledge ids.
+ */
+export function taskRetrievalQueryFor(
+  docsRoot: string,
+  moduleName: string,
+  taskId: string | undefined,
+  opts: { changedFiles?: readonly string[] } = {},
+): TaskRetrievalQuery {
+  try {
+    const plan = taskId ? readModuleDoc(docsRoot, moduleName, "plan.md") : null;
+    const task = plan === null ? undefined : readWorkPlan(plan).tasks.find(task => task.id === taskId);
+    if (task && "version" in task) return buildTaskRetrievalQuery(task, { moduleName, changedFiles: opts.changedFiles });
+  } catch {
+    // Falls through to the safe module-name query below — same additive posture as referencedKnowledgeIds.
+  }
+  return buildTaskRetrievalQuery(undefined, { moduleName, changedFiles: opts.changedFiles });
 }
 
 /**
@@ -268,6 +383,7 @@ export async function assembleStageContext(stage: AgentStage, opts: StageContext
     referencedIds: referencedKnowledgeIds(opts.docsRoot, opts.moduleName, opts.taskId),
     targetRoot: opts.targetRoot,
   });
+  const retrievalQuery = taskRetrievalQueryFor(opts.docsRoot, opts.moduleName, opts.taskId);
   let codeIntel: string[] = [];
   try {
     codeIntel = await codeIntelSlices({
@@ -276,11 +392,12 @@ export async function assembleStageContext(stage: AgentStage, opts: StageContext
       moduleName: opts.moduleName,
       targetRoot: opts.targetRoot,
       targetId: opts.targetId,
+      query: retrievalQuery,
     });
   } catch {
     codeIntel = [];
   }
-  return { ...sliced, knowledge, codeIntel };
+  return { ...sliced, knowledge, codeIntel, retrievalQuery };
 }
 
 export interface PromptComposition {
@@ -338,6 +455,13 @@ export function buildPromptParts(req: AgentExecutorRequest, extra?: string, sour
     { kind: "static_chars", text: `Task ${req.taskId} — you are running as the \`${req.stage}\` stage of this repo's pipeline (see the repo's own agent documentation).` },
     { kind: "static_chars", text: "" },
   ];
+  if (req.stage === AgentStage.BUSINESS_ANALYST && req.businessInput) {
+    parts.push({
+      kind: "handoff_chars",
+      budgetKind: "task",
+      text: renderBusinessInputEvidence(req.businessInput),
+    });
+  }
   if (req.context.length === 0) {
     parts.push({ kind: "handoff_chars", text: "No prior-stage context was supplied for this task — proceed from the repo's own docs (`_docs/status.md` first, per convention)." });
   } else {
@@ -387,74 +511,97 @@ function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
-/** Renders the ExecutionPacket sections appended to the prompt. */
-export function renderExecutionPacketSections(fields: Pick<ExecutionPacket, "acceptance_criteria" | "required_verification" | "stop_conditions">): string[] {
-  const section = (title: string, values: readonly string[], empty: string): string =>
-    [`## ${title}`, ...(values.length > 0 ? values.map((value) => `- ${value}`) : [`- ${empty}`])].join("\n");
-  return [
-    section("Acceptance Criteria", fields.acceptance_criteria, "unavailable"),
-    section("Required Verification", fields.required_verification, "deferred"),
-    section("Stop Conditions", fields.stop_conditions, "none declared"),
-  ];
-}
+export const renderExecutionPacketSections = renderPacketSections;
 
 export interface CompileExecutionPacketInput {
   req: AgentExecutorRequest;
   role: string;
   runtimeTask: RuntimeTask;
   contractScope: ExecutionPacketScopeContract;
+  /** Chosen before compilation, never reallocated by persistence after a collision. */
+  attempt?: number;
+  baseRevision?: string;
+  config?: unknown;
+  dependencyEvidence?: readonly DependencyEvidence[];
+  retrievalCandidates?: PacketFields["retrieval_candidates"];
   extra?: string;
+  /** Legacy context input is deliberately not rendered; v2 selects exact records. */
   sources?: Omit<PromptSources, "task">;
 }
 
-/**
- * Compiles one execution-ready packet with deterministic lookup/select/filter/
- * compose/template operations only. This module deliberately has no runtime
- * adapter import, constructor, registry, or model call.
- */
+export function packetCompilerHash(): string {
+  const extension = path.extname(fileURLToPath(import.meta.url));
+  return stableHash(["./agentRunAssembly", "../artifacts/executionPacket", "../artifacts/schemas", "../docs/designEvidence", "../docs/taskReferences", "../orchestrator/runtimeTask"].map(name => contentHash(fs.readFileSync(new URL(`${name}${extension}`, import.meta.url)))));
+}
+
+/** No model calls, inferred semantics, whole-document fallback or packet mutation. */
 export function compileExecutionPacket(input: CompileExecutionPacketInput): ExecutionPacket {
-  if (input.runtimeTask.task_id !== input.req.taskId) {
-    throw new Error(`RuntimeTask ${input.runtimeTask.task_id} cannot compile packet for ${input.req.taskId}`);
+  const parsed = RuntimeTaskV2Schema.safeParse(input.runtimeTask);
+  if (!parsed.success) throw new Error(`task ${input.req.taskId}: legacy/incomplete RuntimeTask is audit-only; explicitly recompile a canonical plan in a new attempt`);
+  const task = parsed.data;
+  if (task.task_id !== input.req.taskId) throw new Error(`RuntimeTask ${task.task_id} cannot compile packet for ${input.req.taskId}`);
+  assertRuntimeTaskFresh(task);
+  const roots = task.scope.work_roots.filter(root => root.stage === input.req.stage);
+  if (!task.design_evidence) throw new Error(`task ${task.task_id}: design evidence migration required before unattended packet compilation`);
+  if (!input.baseRevision) throw new Error(`task ${task.task_id}: base revision is required to verify design evidence`);
+  const targetRoots = unique(task.scope.work_roots.map(root => root.root));
+  for (const ref of task.design_evidence) {
+    const matching = targetRoots.filter(root => fs.existsSync(path.resolve(root, ...ref.path.replace(/\\/g, "/").split("/"))));
+    const evidenceRoot = matching[0] ?? targetRoots[0];
+    if (!evidenceRoot) throw new Error(`design evidence cannot be verified without a Target root: ${ref.id}`);
+    const singleRepoKnowledge = task.artifact_hashes.some(artifact => artifact.source === path.resolve(evidenceRoot, "_docs", "module", path.basename(path.dirname(task.plan_source)), "design.md"));
+    const problems = verifyDesignEvidence([ref], { targetRoot: evidenceRoot, currentRevision: input.baseRevision, allowContentStableRevision: singleRepoKnowledge });
+    if (problems.length) throw new Error(`design evidence drift: ${problems.join("; ")}`);
   }
-  const contractAllow = new Set(input.contractScope.allow);
-  const allow = unique(
-    input.runtimeTask.scope.work_roots
-      .filter((root) => root.stage === input.req.stage)
-      .flatMap((root) => root.allow.map((entry) => entry.contract_glob))
-      .filter((glob) => contractAllow.has(glob)),
-  );
-  const fields = {
-    acceptance_criteria: [...input.runtimeTask.acceptance_criteria.items],
-    required_verification: [...input.runtimeTask.required_verification.levels],
-    stop_conditions: [...input.runtimeTask.stop_conditions],
-  };
-  const prompt = buildPromptParts(input.req, input.extra, {
-    ...input.sources,
-    task: renderExecutionPacketSections(fields),
-  });
-  const sourceKinds = [
-    "runtime-task",
-    ...input.runtimeTask.source_of_truth.paths,
-    ...input.req.context.map((item) => item.source),
-    ...(input.sources?.docs?.length ? ["module-docs"] : []),
-    ...(input.sources?.knowledge?.length ? ["knowledge-brief"] : []),
-    ...(input.sources?.codeIntel?.length ? ["code-intelligence"] : []),
-    ...(input.sources?.toolOutput?.length ? ["tool-output"] : []),
-  ];
-  return validateArtifact(ArtifactType.EXECUTION_PACKET, {
-    ...prompt,
-    task_id: input.req.taskId,
-    stage: input.req.stage,
-    role: input.role,
-    ...fields,
-    scope: {
-      // RuntimeTask proposes the stage scope; the current role contract is the
-      // authority. Filtering here means stale task state can only narrow.
-      allow,
-      deny: unique([...input.runtimeTask.do_not_touch, ...input.contractScope.deny]),
+  const allow = unique(roots.flatMap(root => root.allow.map(entry => entry.contract_glob)).filter(glob => input.contractScope.allow.includes(glob)));
+  const candidates = input.retrievalCandidates ?? [];
+  for (const candidate of candidates) {
+    if (candidate.revision !== input.baseRevision || contentHash(fs.readFileSync(candidate.path)) !== candidate.hash) throw new Error(`retrieval evidence drift: ${candidate.path}`);
+  }
+  const evidence = new Map((input.dependencyEvidence ?? []).map(d => [d.task_id, d]));
+  if (evidence.size !== (input.dependencyEvidence ?? []).length) throw new Error("duplicate dependency evidence");
+  const businessInputInstruction =
+    input.req.stage === AgentStage.BUSINESS_ANALYST && input.req.businessInput
+      ? renderBusinessInputEvidence(input.req.businessInput)
+      : "";
+  const stageInstructions = [businessInputInstruction, input.extra ?? ""]
+    .filter((part) => part.length > 0)
+    .join("\n\n");
+  const fields = PacketFieldsSchema.parse({
+    version: 2, attempt: input.attempt ?? 1, task_id: input.req.taskId, stage: input.req.stage, role: input.role,
+    contract: task.contract,
+    dependencies: task.dependencies.outputs.map(d => {
+      const completion = evidence.get(d.task_id);
+      if (!completion) throw new Error(`task ${task.task_id}: dependency ${d.task_id} lacks completion/output evidence`);
+      return { ...d, evidence: completion };
+    }),
+    selected_traces: task.selected_traces,
+    design_evidence: task.design_evidence,
+    scope: { roots: unique(roots.map(root => root.root)), allow, deny: unique(input.contractScope.deny) },
+    retrieval_candidates: candidates, required_verification: task.required_verification,
+    stop_conditions: task.stop_conditions,
+    expansion_pointers: [task.plan_source + "#" + task.task_id, ...task.selected_traces.map(ref => ref.source)],
+    stage_instructions: stageInstructions,
+    verification_context: input.req.context.filter(item => item.source === "qa-evidence"),
+    identity: {
+      task_hash: planTaskHash({ ...task.contract, status: "pending" }), plan_hash: task.plan_hash,
+      artifact_hashes: task.artifact_hashes,
+      config_hash: packetConfigHash({
+        config: input.config ?? null,
+        guards: { allow, deny: unique(input.contractScope.deny) },
+        verification: task.required_verification,
+        roots: unique(roots.map(root => root.root)),
+      }),
+      compiler_version: "v8-packet-2", compiler_hash: packetCompilerHash(), base_revision: input.baseRevision,
     },
-    sources: unique(sourceKinds),
   });
+  const text = renderPacketText(fields);
+  const payload = {
+    ...fields, text,
+    composition: { static_chars: 0, handoff_chars: text.length, doc_chars: 0, knowledge_chars: 0, code_intel_chars: 0, tool_output_chars: 0 },
+    budgetComposition: { base: 0, task: text.length, safety: 0, docs: 0, knowledge: 0, code: 0, tool_output: 0, reserve: 0 },
+  };
+  return validateArtifact(ArtifactType.EXECUTION_PACKET, { ...payload, packet_hash: stableHash(payload) });
 }
 
 /** Compatibility wrapper for existing callers/tests using the old sliced array. */

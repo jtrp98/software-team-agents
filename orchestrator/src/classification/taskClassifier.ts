@@ -17,7 +17,7 @@ export interface ClassificationInput {
   /** Adds a feature to an existing module where requirements are already understood
    *  well enough to skip a business-analyst interview. */
   isIncrementalFeature?: boolean;
-  /** Brand-new feature, module, or project — needs a full requirements interview. */
+  /** Brand-new feature, module, or project — needs full BA normalization/interview handling. */
   isNewFeatureModuleOrProject?: boolean;
   /** An actual production deploy or DB migration. */
   isProductionDeployOrMigration?: boolean;
@@ -25,6 +25,57 @@ export interface ClassificationInput {
   touchesSensitiveArea?: boolean;
   touchesBackend?: boolean;
   touchesFrontend?: boolean;
+  /**
+   * A separate test-planner document is justified only when per-task
+   * PlanTask validation cannot express the shared strategy.  The values are a
+   * closed, caller-supplied vocabulary so routing never guesses from prose.
+   */
+  testStrategyTriggers?: readonly TestStrategyTrigger[];
+}
+
+export const TEST_STRATEGY_TRIGGERS = [
+  "cross-task",
+  "multi-system",
+  "migration",
+  "security",
+  "release",
+] as const;
+export type TestStrategyTrigger = (typeof TEST_STRATEGY_TRIGGERS)[number];
+
+export interface TestPlannerDecision {
+  required: boolean;
+  triggers: TestStrategyTrigger[];
+  reason: string;
+}
+
+/**
+ * One deterministic authority for the conditional specialist decision.
+ * Ordinary validation remains in PlanTask and the test pyramid; no heuristic
+ * prose scan or model call may add this stage.
+ */
+export function testPlannerDecision(input: ClassificationInput): TestPlannerDecision {
+  const triggers = [...new Set(input.testStrategyTriggers ?? [])].sort() as TestStrategyTrigger[];
+  const invalid = triggers.filter((trigger) => !(TEST_STRATEGY_TRIGGERS as readonly string[]).includes(trigger));
+  if (invalid.length) {
+    throw new Error(`unknown test-strategy trigger(s): ${invalid.join(", ")}`);
+  }
+  return triggers.length
+    ? {
+        required: true,
+        triggers,
+        reason: `conditional system test strategy required for: ${triggers.join(", ")}`,
+      }
+    : {
+        required: false,
+        triggers: [],
+        reason: "ordinary task validation/evidence stays in canonical PlanTask; test-pyramid floors still apply",
+      };
+}
+
+function conditionalTestPlanner(input: ClassificationInput, reasons: string[]): AgentStage[] {
+  const decision = testPlannerDecision(input);
+  reasons.push(decision.reason);
+  return decision.required ? [AgentStage.TEST_PLANNER] : [];
 }
 
 export interface ClassificationResult {
@@ -42,6 +93,8 @@ export interface ClassificationResult {
    * system-analyst, so shape alone can't tell them apart.
    */
   touchesSchema?: boolean;
+  /** Exact closed trigger set that caused the conditional specialist stage. */
+  testStrategyTriggers?: TestStrategyTrigger[];
   reasons: string[];
 }
 
@@ -118,31 +171,33 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
     );
     return {
       level: TaskLevel.LARGE_CRITICAL,
-      pipeline: [AgentStage.DEVOPS],
+      pipeline: [...conditionalTestPlanner(input, reasons), AgentStage.DEVOPS],
       requiresHumanApproval: true,
       sensitiveGate: Boolean(input.touchesSensitiveArea),
+      testStrategyTriggers: testPlannerDecision(input).triggers,
       reasons,
     };
   }
 
   if (input.isNewFeatureModuleOrProject) {
     // A new feature/module/project wins over the schema signal regardless of
-    // flag order: it must get the full requirements interview (BA first),
+    // flag order: it must get business analysis (BA first; confirmed intake may
+    // be normalized without a redundant interview),
     // not silently degrade into the schema-only pipeline that skips
     // business-analyst and project-manager. The schema obligations — human
     // confirmation, a security pass — still apply on top.
     const schemaAlso = Boolean(input.touchesSchema);
-    reasons.push("new feature/module/project — needs full requirements interview, no stage skipped");
+    reasons.push("new feature/module/project — needs business analysis, no stage skipped");
     if (schemaAlso) {
       reasons.push(
-        "also touches data model — requirements interview comes first, then the same human schema confirmation as any schema change",
+        "also touches data model — business analysis comes first, then the same human schema confirmation as any schema change",
       );
     }
     const base = [
       AgentStage.BUSINESS_ANALYST,
       AgentStage.SYSTEM_ANALYST,
       AgentStage.PROJECT_MANAGER,
-      AgentStage.TEST_PLANNER,
+      ...conditionalTestPlanner(input, reasons),
       ...engineerStages(input, reasons),
       AgentStage.QA_ENGINEER,
     ];
@@ -158,6 +213,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
       requiresHumanApproval: true,
       sensitiveGate,
       touchesSchema: schemaAlso,
+      testStrategyTriggers: testPlannerDecision(input).triggers,
       reasons,
     };
   }
@@ -168,7 +224,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
     );
     const base = [
       AgentStage.SYSTEM_ANALYST,
-      AgentStage.TEST_PLANNER,
+      ...conditionalTestPlanner(input, reasons),
       ...engineerStages(input, reasons),
       AgentStage.QA_ENGINEER,
     ];
@@ -182,6 +238,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
       requiresHumanApproval: true,
       sensitiveGate,
       touchesSchema: true,
+      testStrategyTriggers: testPlannerDecision(input).triggers,
       reasons,
     };
   }
@@ -191,7 +248,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
     const base = [
       AgentStage.BUSINESS_ANALYST,
       AgentStage.SYSTEM_ANALYST,
-      AgentStage.TEST_PLANNER,
+      ...conditionalTestPlanner(input, reasons),
       ...engineerStages(input, reasons),
       AgentStage.QA_ENGINEER,
     ];
@@ -201,6 +258,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
       pipeline,
       requiresHumanApproval: false,
       sensitiveGate,
+      testStrategyTriggers: testPlannerDecision(input).triggers,
       reasons,
     };
   }
@@ -209,7 +267,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
     reasons.push("incremental feature on existing module — business-analyst and project-manager skipped");
     const base = [
       AgentStage.SYSTEM_ANALYST,
-      AgentStage.TEST_PLANNER,
+      ...conditionalTestPlanner(input, reasons),
       ...engineerStages(input, reasons),
       AgentStage.QA_ENGINEER,
     ];
@@ -219,32 +277,35 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
       pipeline,
       requiresHumanApproval: false,
       sensitiveGate,
+      testStrategyTriggers: testPlannerDecision(input).triggers,
       reasons,
     };
   }
 
   if (input.isClearBugFix) {
     reasons.push("bug fix, requirement and schema already clear — BA/SA/PM all skipped");
-    const base = [...engineerStages(input, reasons), AgentStage.QA_ENGINEER];
+    const base = [...conditionalTestPlanner(input, reasons), ...engineerStages(input, reasons), AgentStage.QA_ENGINEER];
     const { pipeline, sensitiveGate } = withSecurityGate(base, input);
     return {
       level: TaskLevel.SMALL,
       pipeline,
       requiresHumanApproval: false,
       sensitiveGate,
+      testStrategyTriggers: testPlannerDecision(input).triggers,
       reasons,
     };
   }
 
   if (input.isTypoOrCopyOnly) {
     reasons.push("copy/styling only — engineer only, no QA stage");
-    const base = engineerStages(input, reasons);
+    const base = [...conditionalTestPlanner(input, reasons), ...engineerStages(input, reasons)];
     const { pipeline, sensitiveGate } = withSecurityGate(base, input);
     return {
       level: TaskLevel.TRIVIAL,
       pipeline,
       requiresHumanApproval: false,
       sensitiveGate,
+      testStrategyTriggers: testPlannerDecision(input).triggers,
       reasons,
     };
   }
@@ -257,6 +318,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
     pipeline: [AgentStage.HUMAN],
     requiresHumanApproval: true,
     sensitiveGate: Boolean(input.touchesSensitiveArea),
+    testStrategyTriggers: testPlannerDecision(input).triggers,
     reasons,
   };
 }

@@ -22,7 +22,7 @@ import { describe, expect, it } from "vitest";
 const ADAPTER_MODULES = ["claudeCodeAdapter.js", "codexAdapter.js", "mockAdapter.js"];
 
 /** Files allowed to name a concrete adapter. The composition root is the only production entry. */
-const ALLOWED_IMPORTERS = new Set(["cli.ts"]);
+const ALLOWED_IMPORTERS = new Set(["cli/composition/runtimeRegistry.ts"]);
 
 const SRC_ROOT = path.resolve(__dirname, "..");
 
@@ -51,7 +51,7 @@ describe("runtime port boundary", () => {
         const isSelf = base === mod.replace(".js", ".ts");
         if (!importsIt || isSelf) continue;
         if (base.endsWith(".test.ts")) continue; // tests may construct anything
-        if (ALLOWED_IMPORTERS.has(base)) continue;
+        if (ALLOWED_IMPORTERS.has(rel)) continue;
         violations.push(`${rel} imports ${mod}`);
       }
     }

@@ -82,8 +82,24 @@ describe("parseOpenCodeJsonl", () => {
   it("joins text parts in order and lifts tokens/cost from step_finish (spike shape)", () => {
     const parsed = parseOpenCodeJsonl(SPIKE_NDJSON);
     expect(parsed.text).toBe("SPIKE_OK");
-    expect(parsed.usage).toEqual({ inputTokens: 6019, outputTokens: 16, cachedInputTokens: 3, costUsd: 0 });
+    // T-V8-012: `cache.write` is real evidence in this spike shape (previously
+    // dropped) — a reported 0 is a fact ("nothing new was cached this turn"),
+    // not the same as the field being absent.
+    expect(parsed.usage).toEqual({ inputTokens: 6019, outputTokens: 16, cachedInputTokens: 3, cacheCreationInputTokens: 0, costUsd: 0 });
     expect(parsed.finishReason).toBe("stop");
+  });
+
+  it("T-V8-012 reports non-zero cache-creation tokens distinctly from cache-read", () => {
+    const ndjson = [
+      JSON.stringify({
+        type: "step_finish",
+        timestamp: 1,
+        part: { id: "p1", reason: "stop", type: "step-finish", tokens: { total: 100, input: 40, output: 10, reasoning: 0, cache: { write: 25, read: 15 } }, cost: 0.01 },
+      }),
+      "",
+    ].join("\n");
+    const parsed = parseOpenCodeJsonl(ndjson);
+    expect(parsed.usage).toEqual({ inputTokens: 40, outputTokens: 10, cachedInputTokens: 15, cacheCreationInputTokens: 25, costUsd: 0.01 });
   });
 
   it("never throws on garbage lines and keeps absent fields undefined, never zero", () => {
@@ -140,6 +156,32 @@ describe("OpenCodeAdapter", () => {
     const args = calls.find((c) => c.args.includes("run"))!.args;
     expect(args[args.indexOf("-m") + 1]).toBe("opencode/x-preview-f-free");
     expect(args[args.indexOf("--variant") + 1]).toBe("max");
+  });
+
+  it("T-V8-031 refuses unsupported explicit model and separate effort before spawn", async () => {
+    const root = projectWithBinding();
+    const { spawn, calls } = okSpawn();
+    const adapter = new OpenCodeAdapter({
+      projectRoot: root,
+      models: ["zai-coding-plan/glm-4.7#fast"],
+      spawnSync: spawn,
+    });
+
+    const badModel = await adapter.executeAgent(requestFor(root, {
+      model: "unknown/model#max",
+      modelExplicit: true,
+    }));
+    expect(badModel).toMatchObject({ status: "ERROR", exitCode: null });
+    expect(badModel.diagnostics.join("\n")).toContain("not in this workspace's configured OpenCode tier catalogue");
+
+    const badEffort = await adapter.executeAgent(requestFor(root, {
+      model: "zai-coding-plan/glm-4.7#fast",
+      modelExplicit: true,
+      effort: "high",
+    }));
+    expect(badEffort).toMatchObject({ status: "ERROR", exitCode: null });
+    expect(badEffort.diagnostics.join("\n")).toContain("would be ignored rather than observed");
+    expect(calls.some((call) => call.args.includes("run"))).toBe(false);
   });
 
   it("refuses to run when the binding is missing — silent default-agent fallback is worse than an error", async () => {

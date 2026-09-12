@@ -65,7 +65,7 @@ export enum RuntimeCapability {
   STRUCTURED_RESULT = "structured-result",
   /** That envelope reports what the run cost. Without it `RunOutcome.cost` is 0 for every task on this runtime, and the budget guard (cost/costControl.ts) has nothing to count. */
   COST_REPORTING = "cost-reporting",
-  /** An agent can put a question to a person mid-run. `business-analyst` interviews a human; a runtime without this cannot run that stage as designed. */
+  /** An agent can put a question to a person mid-run. BA needs this for incomplete intake, but not for complete confirmed-input normalization. */
   INTERACTIVE_PROMPTS = "interactive-prompts",
   /** More than one agent run at a time is safe against this runtime. Reserved for future file-level locking work; nothing schedules on it yet. */
   PARALLEL_EXECUTION = "parallel-execution",

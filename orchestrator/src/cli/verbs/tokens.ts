@@ -15,7 +15,7 @@ function printTokenTask(metric: TaskTokenMetrics): void {
   const budget = metric.contextBudget;
   console.log(
     `[orchestrator] ${metric.taskId}: input=${displayMetric(metric.inputTokens)} estimated-input=${displayMetric(metric.estimatedInputTokens)} output=${displayMetric(metric.outputTokens)} ` +
-      `cached=${displayMetric(metric.cachedTokens)} total=${displayMetric(metric.totalTokens)} effort=${metric.efforts.join(",")} stages=${metric.stageCount} retries=${metric.retryCount} retryWaste=${displayMetric(metric.retryWasteTokens)} ` +
+      `cached=${displayMetric(metric.cachedTokens)} cache-created=${displayMetric(metric.cacheCreationTokens)} total=${displayMetric(metric.totalTokens)} effort=${metric.efforts.join(",")} stages=${metric.stageCount} retries=${metric.retryCount} retryWaste=${displayMetric(metric.retryWasteTokens)} ` +
       `sessions=orchestrated:${metric.sessionKinds.orchestrated},interactive:${metric.sessionKinds.interactive},not-reported:${metric.sessionKinds.not_reported} ` +
       `always-on-instructions=${displayMetric(metric.instructionSurfaceBytes)} B`,
   );
@@ -34,7 +34,7 @@ function printTokenTask(metric: TaskTokenMetrics): void {
 
 export async function runTokensVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   if (rest.includes("--help")) {
-    console.log("usage: sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>] [--project-root <path>] [--state-db <path>]");
+    console.log("usage: sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session|category>] [--export-json <path>] [--baseline <path>] [--project-root <path>] [--state-db <path>]");
     return 0;
   }
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
@@ -44,7 +44,7 @@ export async function runTokensVerb(rest: string[], defaultProjectRoot: string):
   const since = sinceRaw === undefined ? undefined : Date.parse(sinceRaw);
   if (sinceRaw !== undefined && Number.isNaN(since)) throw new CliUsageError(`--since must be an ISO timestamp (got ${sinceRaw})`);
   const by = flagValue(rest, "--by") ?? "task";
-  if (by !== "task" && by !== "role" && by !== "stage" && by !== "session") throw new CliUsageError(`--by must be role, stage, or session (got ${by})`);
+  if (by !== "task" && by !== "role" && by !== "stage" && by !== "session" && by !== "category") throw new CliUsageError(`--by must be role, stage, session, or category (got ${by})`);
   const exportPath = flagValue(rest, "--export-json");
   const baselinePath = flagValue(rest, "--baseline");
   const { store, registry } = openStore(projectRoot, stateDb);
@@ -66,17 +66,28 @@ export async function runTokensVerb(rest: string[], defaultProjectRoot: string):
           `docs=${displayMetric(role.docChars)}/${displayMetric(role.docCharsBefore)} before-slice slicing-saved=${role.slicingSavedPct === null ? "not reported" : `${role.slicingSavedPct}%`} ` +
           `context-budget-warnings=${role.contextBudget.warningRuns}/${role.contextBudget.measuredRuns} overflow=${displayMetric(role.contextBudget.overflowChars)}`,
       );
-    } else {
+    } else if (by === "session") {
       for (const kind of ["orchestrated", "interactive", "not_reported"] as const) {
         const count = report.tasks.reduce((sum, metric) => sum + metric.sessionKinds[kind], 0);
         console.log(`[orchestrator] session ${kind === "not_reported" ? "not reported" : kind}: ${count} run(s)`);
       }
+    } else {
+      // T-V8-012: BA/SA/PM/DEV/QA/repair/orchestration — see `usageCategory`'s
+      // doc comment for exactly how a run is assigned one of these, distinct
+      // from the literal `AgentStage` `--by role` already reports.
+      for (const category of report.categories) {
+        console.log(
+          `[orchestrator] category ${category.category}: runs=${category.runCount} input=${displayMetric(category.inputTokens)} ` +
+            `output=${displayMetric(category.outputTokens)} cached=${displayMetric(category.cachedTokens)} cache-created=${displayMetric(category.cacheCreationTokens)} total=${displayMetric(category.totalTokens)}`,
+        );
+      }
     }
     const total = report.totals;
-    console.log(`[orchestrator] totals: input=${displayMetric(total.inputTokens)} estimated-input=${displayMetric(total.estimatedInputTokens)} output=${displayMetric(total.outputTokens)} cached=${displayMetric(total.cachedTokens)} total=${displayMetric(total.totalTokens)} effort=${total.efforts.join(",")} retries=${total.retryCount} retryWaste=${displayMetric(total.retryWasteTokens)}`);
+    console.log(`[orchestrator] totals: input=${displayMetric(total.inputTokens)} estimated-input=${displayMetric(total.estimatedInputTokens)} output=${displayMetric(total.outputTokens)} cached=${displayMetric(total.cachedTokens)} cache-created=${displayMetric(total.cacheCreationTokens)} total=${displayMetric(total.totalTokens)} effort=${total.efforts.join(",")} retries=${total.retryCount} retryWaste=${displayMetric(total.retryWasteTokens)}`);
     console.log(
       `[orchestrator] V3 rollups: total_token_per_completed_task=${displayMetric(total.total_token_per_completed_task)} ` +
-        `first_pass_success_rate=${displayRate(total.first_pass_success_rate)} fallback_rate=${displayRate(total.fallback_rate)}`,
+        `first_pass_success_rate=${displayRate(total.first_pass_success_rate)} fallback_rate=${displayRate(total.fallback_rate)} ` +
+        `orchestration_input_share=${displayRate(total.orchestration_input_share)}`,
     );
     const budget = configuredTokenBudget(projectRoot);
     console.log(`[orchestrator] configured post-hoc token budget: ${budget.toLocaleString()} vs actual input ${displayMetric(total.inputTokens)} (pre-spawn caps are not part of this control)`);

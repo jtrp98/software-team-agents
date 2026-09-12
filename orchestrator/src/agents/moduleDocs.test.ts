@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { deriveHandoff, listModules, moduleDocPath, readModuleDoc, parseQaReport, parseSecurityReport, resolveModule } from "./moduleDocs.js";
+import { deriveHandoff, listModules, moduleDocPath, readModuleDoc, parseQaReport, parseTaskVerdicts, parseSecurityReport, resolveModule } from "./moduleDocs.js";
 import { AgentStage } from "../types.js";
 
 describe("deriveHandoff (T-V3TOK-091)", () => {
@@ -56,6 +56,34 @@ describe("deriveHandoff (T-V3TOK-091)", () => {
     expect(derived.artifact.contract_refs).toEqual({ produces: ["orders/create"], consumes: ["auth/session"] });
   });
 
+  it("derives exact addressable SA claim identities instead of heading approximations", () => {
+    const hash = "a".repeat(64);
+    const revision = "b".repeat(40);
+    const evidence = (id: string, claim: string) =>
+      `Evidence ${id}: claim=${claim} | state=confirmed | path=src/orders.ts | symbol=orders | line=1 | revision=${revision} | basis=source | tool=rg-read | hash=${hash}`;
+    const design = [
+      "# Design",
+      "Design evidence format: 1",
+      "## DES-021 — Order export",
+      "Contract:OrderExport.v1 — response boundary.",
+      "DEC-021 — keep the route additive.",
+      evidence("EVD-021", "DES-021"),
+      evidence("EVD-022", "Contract:OrderExport.v1"),
+      evidence("EVD-023", "DEC-021"),
+      "Compatibility: additive-internal",
+      "Data/schema: unchanged",
+      "Migration/backfill: none",
+      "Security: none",
+      "Fallback: disable the additive route.",
+      "Material ambiguity: none",
+    ].join("\n");
+    const derived = deriveHandoff(AgentStage.SYSTEM_ANALYST, "sales", design, undefined, { taskId: "T-1" });
+    expect(derived.complete).toBe(true);
+    expect(derived.artifact.implements).toEqual(["DES-021"]);
+    expect(derived.artifact.contract_refs.produces).toEqual(["Contract:OrderExport.v1"]);
+    expect(derived.artifact.decision_refs).toEqual(["DEC-021"]);
+  });
+
   it("derives test-planner and UX/UI references without copied prose", () => {
     const tests = deriveHandoff(AgentStage.TEST_PLANNER, "sales", "# Test Plan\n\n## Coverage\n- TP-009 verifies REQ-001\n", undefined, { taskId: "T-1" });
     expect(tests.artifact.test_refs).toEqual(["TP-009"]);
@@ -70,6 +98,45 @@ describe("deriveHandoff (T-V3TOK-091)", () => {
     expect(result.notes.join(" ")).toContain("minimal handoff");
     expect(result.artifact).toMatchObject({ task_id: "T-1", module: "auth_login v2 (th)", phase: 3 });
     expect(result.artifact.implements).toEqual([]);
+  });
+});
+
+describe("T-V8-013 open_findings ids survive rewrite/archive, unlike positional OPEN-### numbering", () => {
+  function baWith(openQuestionsBody: string[], prefix: string[] = []): string {
+    return [
+      "# Requirement",
+      ...prefix,
+      "## Core Features",
+      "- REQ-001 create order",
+      "## Open Questions",
+      ...openQuestionsBody,
+    ].join("\n");
+  }
+
+  it("keeps the same finding id when unrelated content changes above the heading", () => {
+    const before = deriveHandoff(AgentStage.BUSINESS_ANALYST, "sales", baWith(["- Who owns refunds?"]), undefined, { taskId: "T-1" });
+    const after = deriveHandoff(AgentStage.BUSINESS_ANALYST, "sales", baWith(["- Who owns refunds?"], ["## New Section", "unrelated content inserted above"]), undefined, { taskId: "T-1" });
+    expect(before.artifact.open_findings[0].id).toBe(after.artifact.open_findings[0].id);
+  });
+
+  it("keeps the same finding id when reordered among other findings in the same section", () => {
+    const before = deriveHandoff(AgentStage.BUSINESS_ANALYST, "sales", baWith(["- Who owns refunds?", "- What is the SLA?"]), undefined, { taskId: "T-1" });
+    const after = deriveHandoff(AgentStage.BUSINESS_ANALYST, "sales", baWith(["- What is the SLA?", "- Who owns refunds?"]), undefined, { taskId: "T-1" });
+    const beforeIds = new Set(before.artifact.open_findings.map((f) => f.id));
+    const afterIds = new Set(after.artifact.open_findings.map((f) => f.id));
+    expect(afterIds).toEqual(beforeIds);
+  });
+
+  it("mints a different id when the finding's own text actually changes", () => {
+    const original = deriveHandoff(AgentStage.BUSINESS_ANALYST, "sales", baWith(["- Who owns refunds?"]), undefined, { taskId: "T-1" });
+    const reworded = deriveHandoff(AgentStage.BUSINESS_ANALYST, "sales", baWith(["- Who owns refunds after a chargeback?"]), undefined, { taskId: "T-1" });
+    expect(original.artifact.open_findings[0].id).not.toBe(reworded.artifact.open_findings[0].id);
+  });
+
+  it("no longer numbers findings by position — the same content in a different module still gets a stable, non-sequential id", () => {
+    const id = deriveHandoff(AgentStage.BUSINESS_ANALYST, "sales", baWith(["- Who owns refunds?"]), undefined, { taskId: "T-1" }).artifact.open_findings[0].id;
+    expect(id).toMatch(/^OPEN-[0-9a-f]{12}$/);
+    expect(id).not.toBe("OPEN-001");
   });
 });
 
@@ -156,6 +223,10 @@ describe("parseQaReport", () => {
       "- 42 passed, 0 failed",
       "- typecheck ✅ lint ✅ build ✅",
       "",
+      "## Per-Task Results",
+      "- BE-004 — ✅ Verified: routes match DES-011",
+      "- AC-007.2 — ✅ Verified: empty order returns zero total",
+      "",
       "## Unverified Behaviour — undeployed phases",
     ].join("\n");
     const { artifact, modeInferred } = parseQaReport("T-1", md);
@@ -164,6 +235,76 @@ describe("parseQaReport", () => {
     expect(modeInferred).toBe(false);
     expect(artifact.tests).toEqual({ passed: 42, failed: 0 });
     expect(artifact.hasAutomatedTests).toBe(true);
+    // The BE-004 line names DES-011 in its evidence, so that id is verdicted too.
+    expect(artifact.requirements).toEqual({ "BE-004": "PASS", "DES-011": "PASS", "AC-007.2": "PASS" });
+  });
+
+  // T-V8-014: a status without a per-id verdict is an assertion, not a verdict.
+  it("reads a PASS round that maps no id as FAIL rather than manufacturing a verdict", () => {
+    const md = [
+      "## Round 3 (FULL)",
+      "- checked backend routes against design.md ✅",
+      "- 42 passed, 0 failed",
+      "",
+      "## Unverified Behaviour — undeployed phases",
+    ].join("\n");
+    const { artifact } = parseQaReport("T-1", md);
+    expect(artifact.status).toBe("FAIL");
+    expect(artifact.requirements).toEqual({});
+  });
+
+  it("maps a Partial to FAIL — a Partial is not a pass", () => {
+    const md = [
+      "## Round 4 (FULL)",
+      "**Status:** ⚠️ Partial (FULL)",
+      "- 3 passed, 0 failed",
+      "",
+      "## Per-Task Results",
+      "- BE-004 — ✅ Verified",
+      "- AC-007.2 — ⚠️ Partial: rule inspected, no executable coverage",
+      "",
+      "## Unverified Behaviour",
+      "- AC-007.2 read only",
+    ].join("\n");
+    const { artifact } = parseQaReport("BE-004", md);
+    expect(artifact.status).toBe("FAIL");
+    expect(artifact.requirements).toEqual({ "BE-004": "PASS", "AC-007.2": "FAIL" });
+  });
+});
+
+describe("parseTaskVerdicts", () => {
+  it("reads only its own section, not markers from later sections", () => {
+    const md = [
+      "## Per-Task Results",
+      "- BE-004 — ✅ Verified",
+      "",
+      "## Issues Found",
+      "- AC-007.2 ❌ still broken in the follow-up phase",
+    ].join("\n");
+    expect(parseTaskVerdicts(md, "BE-004")).toEqual({ "BE-004": "PASS" });
+  });
+
+  it("does not file evidence prose like SHA-256 or TS-2322 as an acceptance criterion", () => {
+    const md = ["## Per-Task Results", "- BE-004 — ✅ Verified; SHA-256 abc, no TS-2322 remaining"].join("\n");
+    expect(parseTaskVerdicts(md, "BE-004")).toEqual({ "BE-004": "PASS" });
+  });
+
+  it("fails an id once, permanently — a later ✅ on the same id does not lift it", () => {
+    const md = [
+      "## Per-Task Results",
+      "- AC-007.2 — ❌ Failed: throws on empty order",
+      "- AC-007.2 — ✅ Verified: passes for nonempty orders",
+    ].join("\n");
+    expect(parseTaskVerdicts(md, "BE-004")).toEqual({ "AC-007.2": "FAIL" });
+  });
+
+  it("reads durable finding ids so an open finding's recheck is checkable", () => {
+    const md = ["## Per-Task Results", "- FIND-0123456789abcdef — ✅ Verified: fix confirmed"].join("\n");
+    expect(parseTaskVerdicts(md, "BE-004")).toEqual({ "FIND-0123456789abcdef": "PASS" });
+  });
+
+  it("maps nothing from a round that states no marked verdict", () => {
+    expect(parseTaskVerdicts("## Per-Task Results\n- BE-004 looks fine to me", "BE-004")).toEqual({});
   });
 
   it("reads a round with any ⚠️/❌ marker as FAIL even if some checks passed", () => {

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { RUNTIME_IDS, RUNTIME_SUPPORT, SUPPORT_LEVELS } from "./runtimeSupport.js";
+import { isUnattendedTargetWriteCertified, RUNTIME_IDS, RUNTIME_SUPPORT, SUPPORT_LEVELS } from "./runtimeSupport.js";
 import { antigravityCoverageWithHooks, codexCoverage, opencodeCoverageWithPlugin } from "../targetcli/guardSettings.js";
 
 /** This repo is its own fixture — the README table is the prose half of the claim. */
@@ -73,6 +73,17 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
     expect(RUNTIME_SUPPORT.codex.claim).toContain(codexCoverage().detail);
     expect(RUNTIME_SUPPORT.opencode.claim).toContain(opencodeCoverageWithPlugin().detail);
     expect(RUNTIME_SUPPORT.antigravity.claim).toContain(antigravityCoverageWithHooks().detail);
+  });
+
+  it("T-V8-031 certifies only the fully supported runtime for unattended Target writes", () => {
+    expect(isUnattendedTargetWriteCertified("claude-code")).toBe(true);
+    expect(isUnattendedTargetWriteCertified("codex")).toBe(false);
+    expect(isUnattendedTargetWriteCertified("opencode")).toBe(false);
+    expect(isUnattendedTargetWriteCertified("antigravity")).toBe(false);
+    expect(isUnattendedTargetWriteCertified("unregistered-runtime")).toBe(false);
+    for (const id of ["codex", "opencode", "antigravity"] as const) {
+      expect(RUNTIME_SUPPORT[id].claim).toMatch(/analysis\/proposal|Target-write stages stay refused/i);
+    }
   });
 
   /**

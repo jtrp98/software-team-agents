@@ -1,0 +1,33 @@
+[
+  {
+    "version": 1,
+    "id": "BE-004",
+    "phase": 1,
+    "title": "Preserve the order summary",
+    "objective": "Return the existing order summary for an empty order.",
+    "why": "Clients need a stable empty-order response.",
+    "owner": "backend-engineer",
+    "tier": "T4",
+    "dependsOn": [],
+    "traceability": [
+      "REQ-007",
+      "AC-007.2",
+      "DES-011"
+    ],
+    "produces": [
+      "Contract:OrderSummary.v2"
+    ],
+    "consumes": [],
+    "risk": [
+      "shared-contract"
+    ],
+    "humanGate": [],
+    "status": "pending",
+    "scopeAndConstraints": "Preserve the response contract while handling empty line items.",
+    "retrievalHints": "Hypothesis: The OrderSummary serializer and empty-order regression are likely boundaries; confirm symbols and paths against current source.\nQuery: Locate definitions and references for Contract:OrderSummary.v2 and the empty-order behavior.\nProvenance: DES-011, Contract:OrderSummary.v2",
+    "doNotModify": "Authentication, database schema and unrelated response fields.",
+    "acceptanceCriteria": "AC-007.2: An empty order returns the documented zero total without an exception.",
+    "validationAndEvidence": "Verify AC-007.2 with the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.",
+    "compatibility": "Preserve existing nonempty-order serialization. The patch can be removed independently."
+  }
+]

@@ -38,6 +38,12 @@
 # `failureClassifier.ts`'s REROUTE_CEILING = 2. The runtime budget was the one place still
 # saying 3.
 #
+# T-V8-015 finished that alignment: `low` and `medium` now get 2 as well. Before, an ordinary
+# finding's repair budget depended on how the failure was graded — three rounds if it was
+# non-blocking, two if it was blocking — which is the opposite of the intuition and impossible
+# to state as one rule. `MAX_RETRY = 3` remains in `retry/retryPolicy.ts` as defense in depth:
+# nothing may exceed it, and no severity policy may buy a round past it.
+#
 # `critical` is the severity that takes TASKS.md at its word, and it is the one where that is
 # right: `classifySecurityFailure` only reaches critical when a CRITICAL security finding is
 # open, and CLAUDE.md makes that a hard stop for a person in every mode.
@@ -54,23 +60,25 @@ version: 1
 severity:
   low:
     autonomous: true
-    max_retry: 3
+    max_retry: 2
     approval: false
     stop_pipeline: false
     why: >
-      A cosmetic or non-blocking problem. It gets the full global budget because retrying it
-      costs one agent run and asking a person costs their attention, which is the scarcer of
-      the two.
+      A cosmetic or non-blocking problem. Two automatic rounds, the same as every other
+      ordinary severity (T-V8-015). It previously had three — the full global budget — on the
+      reasoning that a retry costs less than a person's attention. That is still true, but it
+      made "how many repair rounds does an ordinary finding get" depend on how the failure
+      happened to be graded, which is exactly the inconsistency V8 set out to remove.
 
   medium:
     autonomous: true
-    max_retry: 3
+    max_retry: 2
     approval: false
     stop_pipeline: false
     why: >
       A real but non-blocking problem — what `failureClassifier.ts` assigns when open issues
-      exist and none of them is marked blocking. Same budget as low: nothing here is holding
-      up a deploy.
+      exist and none of them is marked blocking. Same two rounds as low and high: one ordinary
+      ceiling, one number, across code, this file, the prompts and the tests.
 
   high:
     autonomous: true

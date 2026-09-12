@@ -4,8 +4,8 @@ agent:
   role: backend-engineer
   description: Implements API and database code from design.md's contract and plan.md's tasks.
 input:
-  required: [plan, design, requirements, test-plan]
-  optional: [qa-report, backend-code]
+  required: [plan, design, requirements]
+  optional: [test-plan, qa-report, backend-code]
 output:
   required: [backend-code]
 constraints:

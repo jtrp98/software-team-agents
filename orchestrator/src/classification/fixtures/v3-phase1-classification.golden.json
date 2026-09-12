@@ -23,7 +23,6 @@
     "level": "MEDIUM",
     "pipeline": [
       "system-analyst",
-      "test-planner",
       "backend-engineer",
       "uxui-designer",
       "frontend-engineer",
@@ -37,7 +36,6 @@
     "pipeline": [
       "business-analyst",
       "system-analyst",
-      "test-planner",
       "backend-engineer",
       "uxui-designer",
       "frontend-engineer",
@@ -52,7 +50,6 @@
       "business-analyst",
       "system-analyst",
       "project-manager",
-      "test-planner",
       "backend-engineer",
       "uxui-designer",
       "frontend-engineer",
@@ -65,7 +62,6 @@
     "level": "LARGE_CRITICAL",
     "pipeline": [
       "system-analyst",
-      "test-planner",
       "backend-engineer",
       "uxui-designer",
       "frontend-engineer",

@@ -1,4 +1,4 @@
-import { spawn as nodeSpawn, spawnSync as nodeSpawnSync } from "node:child_process";
+import { spawn as nodeSpawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -30,7 +30,7 @@ import {
 } from "./roleWorkspace.js";
 import { configureKnowledgeRoot } from "../threeRepo/installation.js";
 import { formatResolvedCommand, resolveBundledStaCli } from "../runtime/npmCliResolver.js";
-import { environmentPrerequisites, runTargetInit } from "./initCommand.js";
+import { environmentPrerequisites, probeRuntime, runTargetInit, runtimeCommand } from "./initCommand.js";
 import { isTargetInitialized } from "./targetMeta.js";
 import { measureWorkspaceStatic, recordInteractiveSession } from "../observability/sessionRecord.js";
 import { CLAUDE_SETTINGS_PATH, guardCoverage, type GuardCoverage } from "./guardSettings.js";
@@ -137,14 +137,6 @@ async function offerKnowledgeBinding(options: RoleRunOptions): Promise<boolean> 
   if (!(await confirmKnowledgeBinding(candidate, options))) return false;
   configureKnowledgeRoot(candidate, options.installationConfigPath, roots.frameworkRoot);
   return true;
-}
-
-function defaultProbe(cmd: string): { available: boolean; detail?: string } {
-  const result = nodeSpawnSync(cmd, ["--version"], { encoding: "utf8", shell: process.platform === "win32", timeout: 15_000 });
-  if (result.error || result.status !== 0) {
-    return { available: false, detail: `"${cmd} --version" failed — install ${cmd} and make sure it is on PATH` };
-  }
-  return { available: true, detail: (result.stdout ?? "").trim().split("\n")[0] };
 }
 
 function defaultLaunch(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<number> {
@@ -462,7 +454,7 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
     }
   }
 
-  const probe = options.probe ?? defaultProbe;
+  const probe = options.probe ?? probeRuntime;
   for (const prerequisite of environmentPrerequisites(launchRuntime, probe)) {
     if (!prerequisite.ok) fail(prerequisite.name, `${prerequisite.detail} — ${prerequisite.fix}`);
     checks.push({ name: prerequisite.name, ok: true, detail: prerequisite.detail });
@@ -512,7 +504,7 @@ async function runRoleSession(role: WorkspaceRole, options: RoleRunOptions): Pro
     const sta = resolveBundledStaCli(ctx.frameworkRoot);
     const contextCommand = sta ? `${formatResolvedCommand(sta)} context` : undefined;
     return await launch(
-      ctx.runtime,
+      runtimeCommand(ctx.runtime),
       [],
       ctx.workspaceRoot,
       launchEnv(role, process.env, ctx.knowledge?.knowledgeRoot, ctx.target?.targetRoot, contextCommand),

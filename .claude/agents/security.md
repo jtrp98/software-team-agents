@@ -2,6 +2,7 @@
 name: security
 description: Use for an explicit security review of sensitive implemented work before acceptance or deployment. Audits code; never fixes it.
 tools: Read, Glob, Grep, Bash, AskUserQuestion, Write, Edit
+# sta:model-policy — model/effort generated from model-tiers.yaml
 model: opus
 effort: high
 version: 2

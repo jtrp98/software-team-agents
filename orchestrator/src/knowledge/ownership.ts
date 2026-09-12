@@ -14,7 +14,7 @@ import type { KnowledgeBase } from "./knowledgeBase.js";
  *      (`reviewSeparation.ts`), and a knowledge item is the same situation: an
  *      owner marking their own item `reviewed` records that nothing happened.
  *   2. Only a person approves. `approved` means downstream work may rely on it,
- *      and CLAUDE.md's five always-human points exist precisely because that
+ *      and CLAUDE.md's human-only gates exist precisely because that
  *      kind of commitment is not an agent's to make. An agent proposes; a
  *      person accepts.
  *

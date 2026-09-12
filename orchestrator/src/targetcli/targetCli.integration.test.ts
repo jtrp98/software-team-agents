@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { sha256Of } from "../packaging/templateManifest.js";
 import { runTargetCli } from "./cli.js";
-import { runTargetInit } from "./initCommand.js";
+import { runTargetInit, runtimeCommand } from "./initCommand.js";
 import { isInsideFrameworkRoot, resolveFrameworkRoot, resolveRoots } from "./roots.js";
 import { devPreflight, runBa, runDev, workspacePreflight } from "./devCommand.js";
 import { checkTargetManifest, loadTargetConfig, readTargetManifest, writeTargetConfig, writeTargetManifest, defaultTargetConfig } from "./targetMeta.js";
@@ -819,6 +819,11 @@ describe("software-team-agents — target-first end to end", () => {
     expect(fs.existsSync(path.join(plain, ".agents", "hooks", "sta-guard.js"))).toBe(true);
     // ... but nothing checks or reports it until the runtime is opted into.
     expect(checkBindings(plain).problems.join("\n")).not.toMatch(/hooks\.json/);
+  });
+
+  it("T-V8-031 maps the Antigravity runtime id to the installed agy executable", () => {
+    expect(runtimeCommand("antigravity")).toBe("agy");
+    expect(runtimeCommand("claude")).toBe("claude");
   });
 
 

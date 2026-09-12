@@ -3,6 +3,7 @@ import type { ClassificationResult } from "../classification/taskClassifier.js";
 import { forceBlock, forwardState, recoverTo, transition, type TaskMachine } from "../state/taskState.js";
 import { MAX_RETRY, initTaskRun, recordFailure, type TaskRun } from "../retry/retryPolicy.js";
 import { decideRecovery, type RecoveryAction } from "../retry/recoveryPolicy.js";
+import { routeRepair, type RepairRoute } from "../retry/repairRoute.js";
 import { policyFor } from "../escalation/escalationPolicy.js";
 import { routeFailure } from "./failure.js";
 import { checkGate, type GateContext } from "../gates/gatePolicy.js";
@@ -21,6 +22,7 @@ import {
   validateArtifact,
   type QaReportArtifact,
   type SecurityReportArtifact,
+  type ValidatableArtifactType,
 } from "../artifacts/schemas.js";
 import { selectContext, type ContextCategory, type ContextItem } from "../context/contextSelection.js";
 import { RunLog, type RunOutcome } from "../observability/runLog.js";
@@ -39,6 +41,12 @@ import { Environment } from "../environment/environment.js";
 import { type StructuredFailure } from "./failure.js";
 import { isAgentAssignedAt, stageStateOf } from "./taskStatus.js";
 import type { RuntimeTask } from "./runtimeTask.js";
+import {
+  assessBusinessInput,
+  businessGateReason,
+  BusinessInputEvidenceSchema,
+  type BusinessInputEvidence,
+} from "../gates/businessInput.js";
 
 export interface AgentExecutorRequest {
   stage: AgentStage;
@@ -52,16 +60,18 @@ export interface AgentExecutorRequest {
    * build the recheck plan instead of re-verifying from scratch.
    */
   qaRound?: number;
+  /** Bounded intake evidence, supplied only to the BA stage. */
+  businessInput?: BusinessInputEvidence;
 }
 
 export interface AgentExecutorResult {
   outcome: RunOutcome;
-  artifactType?: ArtifactType;
+  artifactType?: ValidatableArtifactType;
   artifact?: unknown;
   /** Runtime-state path of the exact packet used for this attempt. */
   packetPath?: string;
-  /** Evidence a human, not this agent, actually supplied (e.g. relayed approval) — rare; usually set via provideHumanApproval instead. */
-  gateEvidence?: Partial<GateContext>;
+  /** Relayed legacy gate flags. Confirmed BA intake is trusted task input and cannot be supplied by an executing agent. */
+  gateEvidence?: Partial<Omit<GateContext, "businessInput">>;
   /** Internal marker: post-Dev deterministic failure keeps the cursor on this Dev stage. */
   postDevVerificationFailed?: boolean;
   /**
@@ -97,7 +107,7 @@ export interface OrchestratorEventMap extends DomainEventMap {
   /** `inputs` is the artifact categories this stage is actually handed — the same slice `step()` passes to the executor. */
   AGENT_ASSIGNED: { taskId: string; stage: AgentStage; inputs: ContextCategory[] };
   /** `artifactType` is what the stage produced, or null for a stage whose work is only code on disk. */
-  AGENT_COMPLETED: { taskId: string; stage: AgentStage; outcome: RunOutcome; artifactType: ArtifactType | null; packetPath: string | null };
+  AGENT_COMPLETED: { taskId: string; stage: AgentStage; outcome: RunOutcome; artifactType: ValidatableArtifactType | null; packetPath: string | null };
   WAITING_FOR_HUMAN: { taskId: string; from: TaskState; to: TaskState; reason: string; approvalType: ApprovalType | null };
   TASK_BLOCKED: { taskId: string; reason: string };
   TASK_DEPLOYED: { taskId: string };
@@ -124,9 +134,11 @@ export interface OrchestratorOptions {
   targetBindings?: TargetBindings;
   /** Deterministic execution contract built by TaskRegistry before persistence. */
   runtimeTask?: RuntimeTask | null;
+  /** Validated business intake used to select confirmed-input versus interactive BA mode. */
+  businessInput?: BusinessInputEvidence;
 }
 
-function assertCanProduce(stage: AgentStage, artifactType: ArtifactType): void {
+function assertCanProduce(stage: AgentStage, artifactType: ValidatableArtifactType): void {
   if (!AGENT_REGISTRY[stage].outputs.includes(artifactType)) {
     throw new Error(`${stage} is not registered (item 9) to produce ${artifactType}`);
   }
@@ -201,6 +213,16 @@ export class Orchestrator {
   private stateBeforeFailure: TaskState = TaskState.CREATED;
   /** What the last failure resolved to. Exposed for the CLI and the run log; not persisted — it is derived, not state. */
   private lastRecovery: RecoveryAction | null = null;
+  /**
+   * The deterministic repair route for the most recent failure (T-V8-015).
+   * Process-local, exactly like `lastRecovery`: it is a derivation of the
+   * persisted `lastFailure`, so a resumed task recomputes it rather than
+   * reading a second stored copy that could drift from the failure it
+   * describes. `invalidates` is empty here because this class holds no task
+   * graph; the descendant set is computed by whoever owns the graph, from the
+   * same `invalidationSetFor`.
+   */
+  private lastRepairRoute: RepairRoute | null = null;
 
   constructor(taskId: string, classification: ClassificationResult, opts?: OrchestratorOptions) {
     const restore = opts?.restore;
@@ -235,7 +257,9 @@ export class Orchestrator {
       this.runLog = new RunLog(this.store.runsForTask(taskId));
     } else {
       this.run = initTaskRun(classification.pipeline, classification.requiresHumanApproval);
-      this.gateContext = {};
+      this.gateContext = opts?.businessInput
+        ? { businessInput: BusinessInputEvidenceSchema.parse(opts.businessInput) }
+        : {};
       this.artifactStore = {};
       this.pipelineCursor = 0;
       this.blockedReason = undefined;
@@ -258,6 +282,7 @@ export class Orchestrator {
           environment: this.taskEnvironment,
           targetBindings: opts?.targetBindings,
           runtimeTask: this.runtimeTask,
+          gateContext: this.gateContext,
         }),
       );
     }
@@ -304,6 +329,11 @@ export class Orchestrator {
   /** How the most recent failure was resolved, or null if none has happened in this process. */
   get recovery(): RecoveryAction | null {
     return this.lastRecovery;
+  }
+
+  /** The deterministic repair route for the most recent failure, or null if none has happened in this process. */
+  get repairRoute(): RepairRoute | null {
+    return this.lastRepairRoute;
   }
 
   /** The exact row this orchestrator would persist right now. */
@@ -375,7 +405,7 @@ export class Orchestrator {
 
   /**
    * The legacy entry point, kept working: it maps a gate field back to the
-   * approval type that feeds it. Callers that know which of the five decisions
+   * approval type that feeds it. Callers that know which decision
    * they are answering should use `decideApproval` instead — this cannot
    * express a rejection distinctly.
    */
@@ -394,6 +424,42 @@ export class Orchestrator {
       return;
     }
     this.decideApproval(type, value);
+  }
+
+  /**
+   * Replaces BA intake through the trusted host seam. This is the only way an
+   * exact human answer can discharge a material-business gate: approving the
+   * generic gate flag alone never manufactures the missing decision.
+   */
+  provideBusinessInput(
+    input: BusinessInputEvidence,
+    opts: { by?: string } = {},
+  ): void {
+    if (this.run.machine.current !== TaskState.REQUIREMENT) {
+      throw new Error(
+        `business input can only be replaced at REQUIREMENT; current state is ${this.run.machine.current}`,
+      );
+    }
+    const parsed = BusinessInputEvidenceSchema.parse(input);
+    const changed =
+      JSON.stringify(this.gateContext.businessInput) !== JSON.stringify(parsed);
+    this.gateContext = { ...this.gateContext, businessInput: parsed };
+    if (changed) {
+      const baIndex = this.pipeline.indexOf(AgentStage.BUSINESS_ANALYST);
+      if (baIndex !== -1) this.pipelineCursor = baIndex;
+    }
+    const pending = findApproval(this.approvals, ApprovalType.REQUIREMENT_INTERVIEW);
+    if (
+      assessBusinessInput(parsed).canNormalizeWithoutInterview &&
+      pending?.status === "pending"
+    ) {
+      this.decideApproval(ApprovalType.REQUIREMENT_INTERVIEW, true, {
+        by: opts.by ?? parsed.owner ?? undefined,
+        note: "resolved by updated confirmed-input evidence",
+      });
+      return;
+    }
+    this.persist();
   }
 
   /**
@@ -529,6 +595,47 @@ export class Orchestrator {
       }
 
       const stage = this.pipeline[this.pipelineCursor];
+      // A pre-classified material business question has no reason to spend a BA
+      // run before the authorized owner answers it. Park at REQUIREMENT with
+      // the exact question; once trusted evidence is updated, BA runs once to
+      // normalize that meaningful requirement version.
+      if (
+        current === TaskState.REQUIREMENT &&
+        stage === AgentStage.BUSINESS_ANALYST &&
+        this.gateContext.businessInput
+      ) {
+        const assessment = assessBusinessInput(this.gateContext.businessInput);
+        if (assessment.humanGates.length > 0) {
+          const next = forwardState(this.run.machine);
+          if (!next) {
+            this.blockedReason = "material business gate has no forward state";
+            return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
+          }
+          const reason = businessGateReason(assessment);
+          const existing = findApproval(this.approvals, ApprovalType.REQUIREMENT_INTERVIEW);
+          if (existing?.status === "rejected") {
+            this.blockedReason =
+              `${ApprovalType.REQUIREMENT_INTERVIEW} was rejected` +
+              `${existing.decidedBy ? ` by ${existing.decidedBy}` : ""}` +
+              `${existing.note ? `: ${existing.note}` : ""}`;
+            this.run = { ...this.run, machine: forceBlock(this.run.machine) };
+            return this.settle({ kind: "BLOCKED", reason: this.blockedReason });
+          }
+          this.openApproval({
+            type: ApprovalType.REQUIREMENT_INTERVIEW,
+            reason,
+            from: current,
+            to: next,
+          });
+          return this.settle({
+            kind: "WAITING_FOR_HUMAN",
+            from: current,
+            to: next,
+            reason,
+            approvalType: ApprovalType.REQUIREMENT_INTERVIEW,
+          });
+        }
+      }
       if (stage !== undefined && isAgentAssignedAt(stage, current, this.deployPrepared)) {
         return this.settle({ kind: "RUNNING", stage });
       }
@@ -649,6 +756,11 @@ export class Orchestrator {
       }
     }
     if (result.gateEvidence) {
+      if ("businessInput" in result.gateEvidence) {
+        throw new Error(
+          "businessInput is trusted task-creation evidence; an executing agent cannot supply or replace it",
+        );
+      }
       this.gateContext = { ...this.gateContext, ...result.gateEvidence };
     }
 
@@ -699,7 +811,13 @@ export class Orchestrator {
     const failureKind = stage === AgentStage.QA_ENGINEER ? "qa" : stage === AgentStage.SECURITY ? "security" : null;
     if (failureKind && result.outcome.result === "FAIL") {
       this.stateBeforeFailure = this.run.machine.current;
-      this.run = recordFailure(this.run, failureKind);
+      // An infrastructure outcome moves the state but not the defect budget
+      // (T-V8-015). The `requiresHumanStop` branch above already covered the
+      // UNAVAILABLE case; this covers an infrastructure failure reported
+      // without `requiresHuman`, which previously spent a retry round.
+      this.run = recordFailure(this.run, failureKind, {
+        countsAsDefect: result.failure?.category !== "infrastructure",
+      });
       this.applyFailureRoute(failureKind, result.failure);
     }
 
@@ -762,6 +880,23 @@ export class Orchestrator {
    * calls — it supplies facts, the orchestrator draws the conclusion.
    */
   private applyFailureRoute(failureKind: "qa" | "security", failure: StructuredFailure | undefined): void {
+    // Recorded alongside the recovery action, not instead of it: the action
+    // says which state the task moves to, the route says what the repair
+    // consists of, what it invalidates, and whether the round after it has to
+    // be FULL. Both are derived from the same failure, and both are audit
+    // records rather than instructions to any agent.
+    this.lastRepairRoute = failure
+      ? routeRepair({
+          finding: {
+            task_id: this.taskId,
+            category: failure.category,
+            owner: failure.owner,
+            retryable: failure.retryable,
+            requires_human: failure.requiresHuman,
+          },
+          pipeline: this.pipeline,
+        })
+      : null;
     const action = decideRecovery({
       failure,
       kind: failureKind,
@@ -784,8 +919,7 @@ export class Orchestrator {
         // Both stop the task, but a person still has to be told *what* they are
         // being asked about. Recording the approval gives the stop a type and a
         // reason in the ledger instead of only an opaque BLOCKED string — these
-        // are two of CLAUDE.md's five always-human points, and they were the two
-        // that left no trace of having been reached.
+        // risk-triggered gates previously left no trace of having been reached.
         this.openApproval({
           type: failureKind === "qa" ? ApprovalType.QA_FAILURE : ApprovalType.SECURITY_RISK,
           reason: action.reason,
@@ -898,7 +1032,17 @@ export class Orchestrator {
       assertPermission(stage, Permission.DEPLOY);
     }
     const start = now();
-    const result = await executor({ stage, taskId: this.taskId, context, deployPhase, qaRound });
+    const result = await executor({
+      stage,
+      taskId: this.taskId,
+      context,
+      deployPhase,
+      qaRound,
+      businessInput:
+        stage === AgentStage.BUSINESS_ANALYST
+          ? this.gateContext.businessInput
+          : undefined,
+    });
     const end = now();
 
     return this.reportCompletion(stage, result, { start, end });

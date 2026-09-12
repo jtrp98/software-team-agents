@@ -43,8 +43,8 @@ describe("APPROVAL_TYPE_OF_LANE (T103)", () => {
   });
 
   /**
-   * The one always-human point CLAUDE.md states most plainly — the
-   * requirement interview — must actually be reachable through this enum.
+   * The BA confirmation/interview identity must actually be reachable through
+   * this enum.
    */
   it("gives REQUIREMENT_INTERVIEW its first gate", () => {
     expect(Object.values(APPROVAL_TYPE_OF_LANE)).toContain(ApprovalType.REQUIREMENT_INTERVIEW);

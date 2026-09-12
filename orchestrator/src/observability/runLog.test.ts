@@ -21,6 +21,7 @@ describe("RunLog", () => {
       model: null,
       promptVersion: null,
       effort: null,
+      requested_effort: null,
       tokens: 22000,
       cost: 0.33,
       result: "FAIL",
@@ -29,6 +30,7 @@ describe("RunLog", () => {
       input_tokens: null,
       output_tokens: null,
       cache_read_tokens: null,
+      cache_creation_tokens: null,
       context_chars: null,
       estimated_input_tokens: null,
       runtime: null,
@@ -80,6 +82,7 @@ describe("RunLog", () => {
         input_tokens: 4000,
         output_tokens: 1000,
         cache_read_tokens: 2500,
+        cache_creation_tokens: 900,
         context_chars: 18000,
         estimated_input_tokens: 4500,
       },
@@ -88,8 +91,41 @@ describe("RunLog", () => {
     expect(record.input_tokens).toBe(4000);
     expect(record.output_tokens).toBe(1000);
     expect(record.cache_read_tokens).toBe(2500);
+    expect(record.cache_creation_tokens).toBe(900);
     expect(record.context_chars).toBe(18000);
     expect(record.estimated_input_tokens).toBe(4500);
+  });
+
+  it("T-V8-012 keeps cache-creation tokens null (not 0) when the runtime never reported one", () => {
+    const record = new RunLog().record({
+      task_id: "TASK-2",
+      agent: AgentStage.BACKEND_ENGINEER,
+      start_time: 0,
+      end_time: 10,
+      outcome: { tokens: 100, cost: 0, result: "PASS", input_tokens: 90, output_tokens: 10, cache_read_tokens: 5 },
+    });
+    expect(record.cache_creation_tokens).toBeNull();
+  });
+
+  it("T-V8-012 records requested effort separately from the observed one", () => {
+    const record = new RunLog().record({
+      task_id: "TASK-EFFORT",
+      agent: AgentStage.BACKEND_ENGINEER,
+      start_time: 0,
+      end_time: 1,
+      outcome: { tokens: 1, cost: 0, result: "PASS", requested_effort: "high", effort: "high" },
+    });
+    expect(record.requested_effort).toBe("high");
+    expect(record.effort).toBe("high");
+    const routed = new RunLog().record({
+      task_id: "TASK-EFFORT-2",
+      agent: AgentStage.BACKEND_ENGINEER,
+      start_time: 0,
+      end_time: 1,
+      outcome: { tokens: 1, cost: 0, result: "PASS", requested_effort: "high" },
+    });
+    expect(routed.requested_effort).toBe("high");
+    expect(routed.effort).toBeNull();
   });
 
   it("T-V3R-060 records QA effort independently from QA mode", () => {
@@ -265,8 +301,20 @@ describe("RunLog", () => {
       },
     });
     expect(log.summary("TASK-ROUTE")).toContain(
-      "effort=not reported basis=level-4-default fallback_count=1 fallback_reason=claude-code unavailable",
+      "effort=not reported → not reported basis=level-4-default fallback_count=1 fallback_reason=claude-code unavailable",
     );
+  });
+
+  it("T-V8-012 renders requested-effort to observed-effort in the same shape as runner/model", () => {
+    const log = new RunLog();
+    log.record({
+      task_id: "TASK-EFFORT-ROUTE",
+      agent: AgentStage.BACKEND_ENGINEER,
+      start_time: 0,
+      end_time: 1,
+      outcome: { tokens: 1, cost: 0, result: "PASS", requested_effort: "high", routing_basis: "level-2-task-tier" },
+    });
+    expect(log.summary("TASK-EFFORT-ROUTE")).toContain("effort=high → not reported basis=level-2-task-tier");
   });
 
   it("costSummary renders TASKS.md T27's own per-agent + total format", () => {

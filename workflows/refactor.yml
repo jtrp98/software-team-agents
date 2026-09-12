@@ -10,6 +10,8 @@ trigger:
 level: SMALL
 requires_human_approval: false
 steps:
+  - agent: test-planner
+    when: test_strategy_required
   - agent: backend-engineer
     when: touchesBackend
   - agent: frontend-engineer

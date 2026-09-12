@@ -14,6 +14,7 @@ import { ApiAdapter } from "./apiAdapter.js";
 import { NO_GUARDS, type RuntimeAdapter, type RuntimeAgentRequest, type RuntimeGuardReport, type RuntimeWorkRoot, type SpawnSync } from "./runtimeAdapter.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
+import { FIXTURE_REVISION, runtimeTaskFixture } from "./packetFixture.testSupport.js";
 
 /**
  * The runtime conformance suite: one mandatory-case matrix run
@@ -457,19 +458,21 @@ describe("T-V1-05 runtime conformance — one matrix, every runtime", () => {
       moduleName: () => "phase-0",
       guards: () => NO_GUARDS,
       sliceModuleDocs: false,
+      runtimeTask: () => runtimeTaskFixture(path.join(root, "knowledge"), { taskId: "T-V3R-001", targetRoot: path.join(root, "target"), allow: [] }),
+      packetBaseRevision: async () => FIXTURE_REVISION,
       threeRepoTask: () => ({
         task: { taskId: "T-V3R-001" } as never,
         roots: {
           bindingRoot: root,
-          knowledgeRoot: KNOWLEDGE_ROOT,
-          workRoots: [...WORK_ROOTS],
+          knowledgeRoot: path.join(root, "knowledge"),
+          workRoots: [{ targetId: "target", path: path.join(root, "target"), access: "write" }],
         },
       }),
     });
 
     const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-V3R-001", context: [] });
     expect(result.outcome.result).toBe("FAIL");
-    expect((result.outcome as { failure_reason?: string }).failure_reason).toMatch(/cannot enforce a pre-tool workspace guard/);
+    expect((result.outcome as { failure_reason?: string }).failure_reason).toMatch(/not certified for unattended Target writes|cannot enforce a pre-tool workspace guard/);
     expect(fallback.requests).toHaveLength(0);
     expect(unsafe.requests).toHaveLength(0);
   });

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ContextManager } from "../context/contextManager.js";
 import { AgentStage } from "../types.js";
-import { TOKEN_BENCHMARK_DOC_BYTES, createTokenBenchmarkFixture, createTraceableTokenBenchmarkFixture, renderTokenBenchmarkBaseline, runExecutionPacketPromptBenchmark, runLargeHandoffBenchmark, runTokenBenchmark } from "./tokenBenchmark.js";
+import { TOKEN_BENCHMARK_DOC_BYTES, createTokenBenchmarkFixture, createTraceableTokenBenchmarkFixture, renderTokenBenchmarkBaseline, runConditionalTestPlannerTokenComparison, runExecutionPacketPromptBenchmark, runLargeHandoffBenchmark, runTokenBenchmark } from "./tokenBenchmark.js";
 import { compareTokenBaselines } from "../qa/metrics.js";
 
 function frameworkFixture(): string {
@@ -40,6 +40,17 @@ describe("T-V3TOK-004 token benchmark", () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
+  it("T-V8-009 records the deterministic composition saved when an ordinary task skips test-planner", () => {
+    const root = frameworkFixture();
+    try {
+      const comparison = runConditionalTestPlannerTokenComparison(root);
+      expect(comparison).toEqual(runConditionalTestPlannerTokenComparison(root));
+      expect(comparison.savedModelCalls).toBe(1);
+      expect(comparison.savedInputTokens).toBeGreaterThan(0);
+      expect(comparison.savedDocumentBytes).toBeGreaterThan(0);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("P3B traceable fixture meets design and requirement targets without changing P0 file sizes", () => {
     const fixture = createTraceableTokenBenchmarkFixture();
     try {
@@ -69,7 +80,7 @@ describe("T-V3TOK-004 token benchmark", () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
-  it("T-V3R-020 keeps the ExecutionPacket prompt-character regression within 3%", () => {
+  it("T-V3R-020 keeps the complete packet within the existing prompt-character ceiling", () => {
     const root = frameworkFixture();
     try {
       const benchmark = runExecutionPacketPromptBenchmark(root);
@@ -80,7 +91,7 @@ describe("T-V3TOK-004 token benchmark", () => {
       );
 
       expect(benchmark).toEqual(repeat);
-      expect(benchmark.afterPromptCharacters).toBeGreaterThan(benchmark.beforePromptCharacters);
+      expect(benchmark.afterPromptCharacters).toBeGreaterThan(0);
       expect(delta.promptCharacterDeltaPct).not.toBeNull();
       expect(delta.promptCharacterDeltaPct!).toBeLessThanOrEqual(3);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }

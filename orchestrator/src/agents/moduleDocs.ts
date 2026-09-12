@@ -10,9 +10,11 @@ import {
 } from "../artifacts/schemas.js";
 import { AgentStage } from "../types.js";
 import { firstTable, sections } from "../docs/markdown.js";
-import { parsePlanTasks } from "../docs/planGraph.js";
-import { buildPlanGraph, type TaskNode } from "../graph/taskGraph.js";
+import { readWorkPlan, taskDesignRefs } from "../docs/planGraph.js";
+import { parseDesignEvidence } from "../docs/designEvidence.js";
+import { taskGraphFromPlan } from "../graph/taskGraph.js";
 import { extractIds } from "../traceability/traceability.js";
+import { contentHash } from "../artifacts/executionPacket.js";
 
 /**
  * Bridges the real pipeline's Markdown docs (`_docs/module/<name>/review.md`,
@@ -223,6 +225,20 @@ function minimalHandoff(stage: AgentStage, moduleName: string, opts: HandoffDeri
   };
 }
 
+/**
+ * T-V8-013 — a finding index entry's `id` must survive `review.md`/`design.md`
+ * rewrites and archive moves (policies/documentation.md's own archival
+ * discipline), so it cannot be the line's *position*: the same open question
+ * reworded elsewhere, or with an unrelated bullet added above it, would
+ * otherwise mint a new identity for an issue nobody resolved. Hashing the
+ * heading plus the bullet's own text keeps the id stable across everything
+ * except an edit to that exact finding — which is exactly when a new id is
+ * correct, because the finding itself changed.
+ */
+function openFindingId(filename: string, headingTitle: string, representativeText: string): string {
+  return `OPEN-${contentHash(`${filename}|${headingTitle}|${representativeText}`).slice(0, 12)}`;
+}
+
 function openFindings(
   filename: string,
   docText: string,
@@ -236,10 +252,14 @@ function openFindings(
     .map((line) => line.trim())
     .filter((line) => line !== "" && !/^(?:—|-|none\.?|n\/a|ไม่มี)$/i.test(line));
   if (lines.length === 0) return [];
-  const count = Math.min(16, Math.max(1, lines.filter((line) => /^[-*]|^\d+[.)]|^\|/.test(line)).length));
+  const bulletLines = lines.filter((line) => /^[-*]|^\d+[.)]|^\|/.test(line));
+  const count = Math.min(16, Math.max(1, bulletLines.length));
   const base = headingReference(filename, section.title);
   return Array.from({ length: count }, (_, index) => ({
-    id: `OPEN-${String(index + 1).padStart(3, "0")}`,
+    // One id per actual bullet line when there is one; a single collapsed
+    // pointer over the whole section's prose when the heading has none —
+    // same count/summary shape as before, only the id's derivation changed.
+    id: openFindingId(filename, section.title, bulletLines[index] ?? lines.join("\n")),
     owner,
     summary: `${base}:${index + 1}`,
   }));
@@ -313,32 +333,31 @@ export function deriveHandoff(
         return { artifact: capRecord(minimalHandoff(stage, moduleName, opts), notes), notes, complete: false };
       }
     } else if (stage === AgentStage.SYSTEM_ANALYST) {
-      record.implements = extractIds(docText, "DES");
-      const contracts = sections(docText, 2).filter((section) => /contract/i.test(section.title));
-      record.contract_refs.produces = contracts.map((section) => headingReference(source, section.title));
-      record.decision_refs = unique([...extractIds(docText, "ADR"), ...extractIds(docText, "RULE")]);
+      const addressable = parseDesignEvidence(docText);
+      if (addressable.mode === "addressable" && addressable.problems.length === 0) {
+        record.implements = addressable.claims.filter((id) => id.startsWith("DES-"));
+        record.contract_refs.produces = addressable.claims.filter((id) => id.startsWith("Contract:"));
+        record.decision_refs = addressable.claims.filter((id) => id.startsWith("DEC-"));
+      } else {
+        record.implements = extractIds(docText, "DES");
+        const contracts = sections(docText, 2).filter((section) => /contract/i.test(section.title));
+        record.contract_refs.produces = contracts.map((section) => headingReference(source, section.title));
+        record.decision_refs = unique([...extractIds(docText, "ADR"), ...extractIds(docText, "RULE")]);
+      }
       record.open_findings = openFindings(source, docText, /^Unresolved Open Questions?$/i, AgentStage.SYSTEM_ANALYST);
-      if (record.implements.length === 0 || contracts.length === 0) {
+      if (record.implements.length === 0 || record.contract_refs.produces.length === 0) {
         notes.push("design.md has no derivable DES ids or contract headings; emitted the minimal handoff");
         return { artifact: capRecord(minimalHandoff(stage, moduleName, opts), notes), notes, complete: false };
       }
     } else if (stage === AgentStage.PROJECT_MANAGER) {
-      const parsed = parsePlanTasks(planText ?? docText);
+      const parsed = readWorkPlan(planText ?? docText);
       if (parsed.problems.length > 0 || parsed.tasks.length === 0) {
         notes.push(`plan.md could not be derived cleanly (${parsed.problems.join("; ") || "no task rows"}); emitted the minimal handoff`);
         return { artifact: capRecord(minimalHandoff(stage, moduleName, opts), notes), notes, complete: false };
       }
       const selected = opts.phases?.length ? parsed.tasks.filter((task) => opts.phases!.includes(task.phase)) : parsed.tasks;
-      const nodes: TaskNode[] = parsed.tasks.map((task) => ({
-        id: task.id,
-        phase: task.phase,
-        agent: Object.values(AgentStage).includes(task.owner as AgentStage) ? task.owner as AgentStage : undefined,
-        dependsOn: task.dependsOn,
-        produces: task.produces,
-        consumes: task.consumes,
-      }));
-      const graph = buildPlanGraph(nodes);
-      record.implements = unique(selected.flatMap((task) => task.designRefs));
+      const graph = taskGraphFromPlan(parsed.tasks);
+      record.implements = unique(selected.flatMap(taskDesignRefs));
       record.contract_refs.produces = selected.flatMap((task) => graph.nodes.get(task.id)?.produces ?? []).map(compactReference);
       record.contract_refs.consumes = selected.flatMap((task) => graph.nodes.get(task.id)?.consumes ?? []).map(compactReference);
       const phases = unique(selected.map((task) => task.phase));
@@ -386,6 +405,69 @@ function bulletsUnder(markdown: string, heading: string): string[] {
     if (/^[-*]\s+/.test(trimmed)) out.push(trimmed.replace(/^[-*]\s+/, ""));
   }
   return out;
+}
+
+/**
+ * T-V8-014 - the ids a `## Per-Task Results` line may carry a verdict for.
+ *
+ * Deliberately closed rather than "any capitalized token with a hyphen": a
+ * greedy pattern picks up `SHA-256` and `TS-2322` out of evidence prose and
+ * files them as acceptance criteria, which turns the coverage check into
+ * noise. Trace ids and durable finding ids have exact grammars
+ * (`docs/planTask.ts`, `artifacts/finding.ts`); plan task ids follow
+ * `planGraph.ts`'s own `BE`/`FE` convention, and the round's own task id is
+ * always admissible whatever its prefix.
+ */
+const VERDICT_ID_RE = /\b(?:REQ-\d+|AC-\d+(?:\.\d+)?|DES-\d+|DEC-\d+|FIND-[0-9a-f]{16}|(?:BE|FE)-[A-Za-z0-9._-]+)\b/g;
+
+/**
+ * Reads the per-id verdicts out of a round.
+ *
+ * `qa-engineer.md` requires a `## Per-Task Results` section whose lines carry
+ * an id and one of ✅ Verified / ⚠️ Partial / ❌ Failed. Only ✅ maps to PASS:
+ * a Partial is not a pass, and `qa-engineer.md` already stops a Partial for a
+ * human. Nothing is inferred when a line carries no marker - an unmarked id
+ * simply is not a verdict, and leaving it out is what makes the gap visible
+ * to `checkQaVerdictCoverage` rather than silently covered.
+ */
+export function parseTaskVerdicts(round: string, taskId: string): Record<string, "PASS" | "FAIL"> {
+  const lines = round.split(/\r?\n/);
+  const heading = /^##+\s+Per-Task Results\b/i;
+  let start = -1;
+  for (let i = 0; i < lines.length; i++) if (heading.test(lines[i].trim())) start = i;
+  // Bounded to its own section, not "from the heading to the end of the
+  // document": `## Unverified Behaviour`, `## Issues Found` and the change log
+  // all carry ✅/❌ markers next to ids, and folding those into the verdict
+  // map would credit an id with a verdict the results section never gave it.
+  let body: string[];
+  if (start === -1) {
+    // No results section at all. Reading the whole round is better than
+    // reporting nothing for a document that did state its results under an
+    // older heading - and a round that states nothing still maps nothing.
+    body = lines;
+  } else {
+    const end = lines.findIndex((line, i) => i > start && /^##+\s/.test(line.trim()));
+    body = lines.slice(start + 1, end === -1 ? lines.length : end);
+  }
+
+  const verdicts: Record<string, "PASS" | "FAIL"> = {};
+  for (const rawLine of body) {
+    const line = rawLine.trim();
+    if (/^##+\s/.test(line)) continue;
+    const pass = line.includes("✅");
+    const fail = line.includes("❌") || line.includes("⚠");
+    if (!pass && !fail) continue;
+    const ids = new Set<string>(line.match(VERDICT_ID_RE) ?? []);
+    if (line.includes(taskId)) ids.add(taskId);
+    for (const id of ids) {
+      // A line carrying both markers fails every id it names: the safe reading
+      // of an ambiguous verdict is the one that does not close work. Same rule
+      // across lines - once an id has failed, a later ✅ does not lift it.
+      if (verdicts[id] === "FAIL") continue;
+      verdicts[id] = fail ? "FAIL" : "PASS";
+    }
+  }
+  return verdicts;
 }
 
 export interface ParsedQaReport {
@@ -450,11 +532,19 @@ export function parseQaReport(taskId: string, reviewMd: string): ParsedQaReport 
     evidence = [`parsed from review.md (task ${taskId}) — no bulleted evidence lines found in the current round`];
   }
 
+  const requirements = parseTaskVerdicts(round, taskId);
+
   const artifact: QaReportArtifact = {
     taskId,
-    status,
+    // A PASS that mapped no id at all cannot be represented: the artifact
+    // schema refuses it (T-V8-014's no-bare-PASS floor), and silently
+    // manufacturing a `{ [taskId]: "PASS" }` entry to satisfy the schema
+    // would be inventing the verdict the document failed to state. Reading it
+    // as FAIL is the same fail-closed rule this parser already applies to an
+    // unrecognizable status line.
+    status: status === "PASS" && Object.keys(requirements).length === 0 ? "FAIL" : status,
     mode,
-    requirements: {},
+    requirements,
     tests: { passed, failed },
     evidence,
     risks: [],

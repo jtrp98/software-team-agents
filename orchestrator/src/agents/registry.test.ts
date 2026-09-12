@@ -93,6 +93,9 @@ describe("agent capabilities (T12)", () => {
     expect(AGENT_REGISTRY[AgentStage.BUSINESS_ANALYST].capability.capabilities).toContain(
       Capability.REQUIREMENTS_INTERVIEW,
     );
+    expect(AGENT_REGISTRY[AgentStage.BUSINESS_ANALYST].capability.capabilities).toContain(
+      Capability.REQUIREMENTS_NORMALIZATION,
+    );
   });
 
   it("reports what the roster covers and what it does not", () => {

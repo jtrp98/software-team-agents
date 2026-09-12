@@ -1,11 +1,12 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { AgentStage } from "../types.js";
-import { TaskGraph, TaskGraphError, CircularDependencyError, UnknownTaskError, type TaskNode } from "../graph/taskGraph.js";
+import { taskGraphFromPlan, TaskGraphError, CircularDependencyError, UnknownTaskError, type PlanGraphTask } from "../graph/taskGraph.js";
 import { sections, firstTable, checkboxLines } from "./markdown.js";
 import { extractIds } from "../traceability/traceability.js";
 import { loadModelTiers, ModelTiersInvalidError, type ModelTiers } from "../runtime/modelTiers.js";
 import { detectWorkspaceKind } from "../targetcli/roleWorkspace.js";
+import { isCanonicalPlan, parseCanonicalPlan, type PlanTask } from "./planTask.js";
 
 /**
  * The plan.md task table as a machine-checkable graph.
@@ -30,14 +31,10 @@ import { detectWorkspaceKind } from "../targetcli/roleWorkspace.js";
  * runtime state — that remains the orchestrator's store's job; this
  * is the plan-side mirror a person or a driver reads before creating tasks.
  *
- * A run consults this mirror as an **advisory** and nothing more. `sta run` prints
- * {@link planReadinessAdvisory} when the task it was handed is behind an
- * unfinished dependency, and then runs it anyway. The authority model is the
- * reason for the restraint: PM owns the Work Graph, the orchestrator owns
- * runtime. A plan document is an LLM-authored artifact that can be stale or
- * simply not cover the task at hand, so letting it decide what may execute
- * would move a gate into the wrong layer. It tells the operator what the plan
- * believes; the store still decides what runs.
+ * Document readiness is a human view only, and after T-V8-029 that is all it
+ * is: planned execution reads the frozen ledger DAG (`RunLedger.readiness`),
+ * not this file, and there is no longer any export that prints a readiness
+ * warning and proceeds past an unmet edge.
  */
 
 export type PlanTaskStatus = "pending" | "in_progress" | "verified" | "blocked";
@@ -49,8 +46,8 @@ const VALID_OWNERS: readonly string[] = Object.values(AgentStage).filter((s) => 
 
 const TASK_ID_PATTERN = /\b(?:BE|FE)-[A-Za-z0-9._-]+\b/;
 const DESIGN_REF_PATTERN = /\bDES-\d+\b/g;
-const ANALYSIS_OWNERS = new Set(["business-analyst", "system-analyst", "project-manager", "test-planner"]);
 
+/** Legacy compatibility view only, retained until T-V8-029. New semantics live in PlanTask. */
 export interface PlanTaskRow {
   /** Plan-level id, e.g. `BE-004`. Unique within the plan — validated, not assumed. */
   id: string;
@@ -210,6 +207,26 @@ function rowsForPhase(phaseNumber: number, body: string, problems: string[]): Pl
 
 /** Parses every `## Phase N` task row out of a plan.md. Never throws — bad rows come back as problems. */
 export function parsePlanTasks(planMd: string): ParsedPlan {
+  return parseLegacyPlanTasks(planMd);
+}
+
+/** A rich task stays rich. The legacy row is explicitly distinguishable by absence of version. */
+export type WorkPlanTask = PlanTask | PlanTaskRow;
+export function readWorkPlan(planMd: string): { tasks: WorkPlanTask[]; problems: string[] } {
+  return isCanonicalPlan(planMd) ? parseCanonicalPlan(planMd) : parseLegacyPlanTasks(planMd);
+}
+export function taskDesignRefs(task: WorkPlanTask): string[] {
+  return "version" in task ? task.traceability.filter(id => id.startsWith("DES-")) : task.designRefs;
+}
+export function taskObjective(task: WorkPlanTask): string {
+  return "version" in task ? task.objective : task.description;
+}
+
+/** Explicit pre-v1 adapter. Never silently flatten a canonical task into a row. */
+export function parseLegacyPlanTasks(planMd: string): ParsedPlan {
+  if (isCanonicalPlan(planMd)) {
+    throw new Error("PlanTask format 1 requires parseCanonicalPlan; the legacy runtime reader cannot execute this contract. See docs/plan-task-v1.md (V8 migration window).");
+  }
   const tasks: PlanTaskRow[] = [];
   const problems: string[] = [];
   for (const section of sections(planMd, 2)) {
@@ -259,10 +276,6 @@ export function validatePlanTasks(
   for (const [phase, phaseTasks] of tasksByPhase) {
     const tier = phaseTasks[0]?.tier;
     if (!tier) continue;
-    if (phaseTasks.every((task) => ANALYSIS_OWNERS.has(task.owner.trim().toLowerCase()))) {
-      errors.push(`phase ${phase} casts ${tier}, but analysis phases must not carry a Tier`);
-      continue;
-    }
     if (tier === "T1") {
       errors.push(`phase ${phase} casts T1, but T1 is reserved and cannot be cast in the pipeline`);
       continue;
@@ -347,6 +360,11 @@ export function validatePlanTasks(
   let derived: Map<string, number> = new Map();
   try {
     derived = deriveWaves(tasks);
+    const graph = taskGraphFromPlan(tasks);
+    for (const edge of graph.edges.filter(edge => edge.kind !== "declared")) {
+      const from = byId.get(edge.from)!, to = byId.get(edge.to)!;
+      if (from.wave !== null && to.wave !== null && from.wave >= to.wave) errors.push(`task ${to.id}: authored wave ${to.wave} conflicts with ${edge.kind} dependency ${from.id} in wave ${from.wave}`);
+    }
   } catch (error) {
     if (error instanceof CircularDependencyError) {
       errors.push(`${error.message}`);
@@ -369,33 +387,28 @@ export function validatePlanTasks(
  * waits on strictly lower waves. Not runtime state — the orchestrator still
  * checks dependency status before dispatch.
  */
-export function deriveWaves(tasks: PlanTaskRow[]): Map<string, number> {
-  const nodes: TaskNode[] = tasks.map((t) => ({
-    id: t.id,
-    phase: t.phase,
-    dependsOn: t.dependsOn.filter((d) => d !== t.id),
-  }));
-  const graph = new TaskGraph(nodes);
+export function deriveWaves(tasks: readonly PlanGraphTask[]): Map<string, number> {
+  const graph = taskGraphFromPlan(tasks);
   const waves = new Map<string, number>();
   graph.parallelLayers().forEach((layer, i) => layer.forEach((n) => waves.set(n.id, i + 1)));
   return waves;
 }
 
-export interface PlanWaiting {
-  task: PlanTaskRow;
+export interface PlanWaiting<T = WorkPlanTask> {
+  task: T;
   /** Dependency ids not yet `verified`. */
   waitingOn: string[];
 }
 
-export interface PlanReadiness {
+export interface PlanReadiness<T = WorkPlanTask> {
   /** `pending`, every dependency `verified` — may start now, in document order. */
-  ready: PlanTaskRow[];
+  ready: T[];
   /** `in_progress` — started, not finished. */
-  started: PlanTaskRow[];
-  done: PlanTaskRow[];
+  started: T[];
+  done: T[];
   /** `blocked` rows, plus every pending row behind one — named so downstream stalls are visible, not silent. */
-  stalledByBlocked: PlanTaskRow[];
-  waiting: PlanWaiting[];
+  stalledByBlocked: T[];
+  waiting: PlanWaiting<T>[];
   /** Static waves over the whole plan (derived, 1-based). */
   waves: Map<string, number>;
 }
@@ -408,15 +421,17 @@ export interface PlanReadiness {
  * Pure function of the parsed rows: re-running after a retry/resume cannot
  * drift, because there is no stored readiness to drift from.
  */
-export function readinessOf(tasks: PlanTaskRow[]): PlanReadiness {
+export function readinessOf<T extends WorkPlanTask>(tasks: readonly T[]): PlanReadiness<T> {
+  const graph = taskGraphFromPlan(tasks);
   const verified = new Set(tasks.filter((t) => t.status === "verified").map((t) => t.id));
   const blockedIds = new Set(tasks.filter((t) => t.status === "blocked").map((t) => t.id));
+  const stalledIds = new Set([...blockedIds].flatMap(id => graph.descendantsOf(id)));
 
-  const ready: PlanTaskRow[] = [];
-  const started: PlanTaskRow[] = [];
-  const done: PlanTaskRow[] = [];
-  const stalledByBlocked: PlanTaskRow[] = [];
-  const waiting: PlanWaiting[] = [];
+  const ready: T[] = [];
+  const started: T[] = [];
+  const done: T[] = [];
+  const stalledByBlocked: T[] = [];
+  const waiting: PlanWaiting<T>[] = [];
 
   for (const task of tasks) {
     if (task.status === "verified") {
@@ -431,8 +446,8 @@ export function readinessOf(tasks: PlanTaskRow[]): PlanReadiness {
       started.push(task);
       continue;
     }
-    const unmet = task.dependsOn.filter((dep) => !verified.has(dep));
-    if (unmet.some((dep) => blockedIds.has(dep))) {
+    const unmet = graph.waitingOn(task.id, verified, blockedIds);
+    if (stalledIds.has(task.id)) {
       stalledByBlocked.push(task);
       continue;
     }
@@ -443,81 +458,8 @@ export function readinessOf(tasks: PlanTaskRow[]): PlanReadiness {
     ready.push(task);
   }
 
-  let waves: Map<string, number>;
-  try {
-    waves = deriveWaves(tasks);
-  } catch {
-    waves = new Map(); // an invalid graph still gets a readiness answer; validatePlanTasks reports why
-  }
+  const waves = deriveWaves(tasks);
   return { ready, started, done, stalledByBlocked, waiting, waves };
-}
-
-export interface PlanReadinessAdvisory {
-  taskId: string;
-  /** Why the plan does not consider this task startable, in one operator-readable line. */
-  reason: string;
-  /** Dependency ids the plan says are not `verified` yet. Empty when the row is blocked or already running. */
-  waitingOn: string[];
-}
-
-/**
- * What the plan document believes about one task, for `sta run` to print before
- * it starts.
- *
- * Returns `null` in every case where the plan has nothing useful to say — no
- * plan, an unparseable one, a task id the plan never mentions, or a row that is
- * ready. Silence matters as much as the warning: an ad-hoc task that was never
- * a plan row is normal, and warning on those would train the operator to ignore
- * the line that does matter.
- *
- * This is advice, never a gate. The caller prints it and proceeds; nothing here
- * returns a failure, sets an exit code, or touches the store — runtime readiness
- * stays the orchestrator's, per the authority model (PM = Work Graph,
- * Orchestrator = Runtime).
- */
-export function planReadinessAdvisory(planMd: string, taskId: string): PlanReadinessAdvisory | null {
-  let parsed: ParsedPlan;
-  try {
-    parsed = parsePlanTasks(planMd);
-  } catch {
-    return null;
-  }
-  if (!parsed.tasks.some((task) => task.id === taskId)) return null;
-
-  const readiness = readinessOf(parsed.tasks);
-  if (readiness.ready.some((task) => task.id === taskId)) return null;
-  if (readiness.done.some((task) => task.id === taskId)) {
-    return { taskId, reason: "plan.md already marks it verified", waitingOn: [] };
-  }
-  if (readiness.started.some((task) => task.id === taskId)) {
-    return { taskId, reason: "plan.md already marks it in_progress", waitingOn: [] };
-  }
-
-  const waiting = readiness.waiting.find((entry) => entry.task.id === taskId);
-  if (waiting) {
-    const statusOf = (id: string) => parsed.tasks.find((task) => task.id === id)?.status ?? "unknown";
-    return {
-      taskId,
-      reason: `plan.md says it waits on ${waiting.waitingOn.map((id) => `${id} (${statusOf(id)})`).join(", ")}`,
-      waitingOn: [...waiting.waitingOn],
-    };
-  }
-
-  const stalled = readiness.stalledByBlocked.find((task) => task.id === taskId);
-  if (stalled) {
-    const blocked = stalled.dependsOn.filter((dep) =>
-      parsed.tasks.some((task) => task.id === dep && task.status === "blocked"),
-    );
-    return {
-      taskId,
-      reason:
-        blocked.length > 0
-          ? `plan.md says it is behind blocked work: ${blocked.join(", ")}`
-          : "plan.md marks it blocked",
-      waitingOn: blocked,
-    };
-  }
-  return null;
 }
 
 export interface PlanGraphModuleResult {
@@ -542,7 +484,16 @@ export function checkPlanGraphForModule(
   const designPath = path.join(docsModuleDir, module, "design.md");
   const designMd = fs.existsSync(designPath) ? fs.readFileSync(designPath, "utf8") : undefined;
 
-  const { tasks, problems } = parsePlanTasks(fs.readFileSync(planPath, "utf8"));
+  const planMd = fs.readFileSync(planPath, "utf8");
+  if (isCanonicalPlan(planMd)) {
+    const requirementPath = path.join(docsModuleDir, module, "requirement.md");
+    const requirementMd = fs.existsSync(requirementPath) ? fs.readFileSync(requirementPath, "utf8") : "";
+    const canonical = parseCanonicalPlan(planMd, { requirementMd, designMd: designMd ?? "" });
+    return { module, ok: canonical.problems.length === 0, errors: canonical.problems,
+      notes: [`${module}/plan.md: ${canonical.tasks.length} canonical task(s), format 1; ${canonical.problems.length ? 0 : Math.max(0, ...deriveWaves(canonical.tasks).values())} wave(s)`] };
+  }
+  const { tasks, problems } = parseLegacyPlanTasks(planMd);
+  notes.push(`${module}/plan.md: explicit legacy table compatibility adapter; canonical conversion requires complete semantic fields (docs/plan-task-v1.md)`);
   const errors = [...problems];
   if (tasks.length === 0) {
     notes.push(`${module}/plan.md has no task rows under any ## Phase heading`);

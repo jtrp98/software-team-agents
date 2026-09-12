@@ -15,7 +15,11 @@ import { ApprovalType } from "../gates/approval.js";
 import { Orchestrator } from "../orchestrator/orchestrator.js";
 
 function task(taskId: string, overrides: Partial<PersistedTask> = {}): PersistedTask {
-  const classification = classifyTask({ isIncrementalFeature: true, touchesBackend: true });
+  const classification = classifyTask({
+    isIncrementalFeature: true,
+    touchesBackend: true,
+    testStrategyTriggers: ["cross-task"],
+  });
   return {
     ...newPersistedTask({
       taskId,

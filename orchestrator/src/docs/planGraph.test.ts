@@ -8,7 +8,6 @@ import {
   deriveWaves,
   readinessOf,
   checkPlanGraphs,
-  planReadinessAdvisory,
   type PlanTaskRow,
 } from "./planGraph.js";
 import { parseModelTiers } from "../runtime/modelTiers.js";
@@ -18,6 +17,8 @@ function row(over: Partial<PlanTaskRow> & { id: string }): PlanTaskRow {
     phase: 1,
     designRefs: ["DES-001"],
     dependsOn: [],
+    produces: [],
+    consumes: [],
     status: "pending",
     owner: "backend-engineer",
     wave: null,
@@ -203,9 +204,10 @@ describe("validatePlanTasks — T-PM10.1", () => {
       .toContain("T9, which is absent from model-tiers.yaml");
   });
 
-  it("T-V4-CAST-004 — refuses a tier on an analysis phase", () => {
+  it("T-V8-005 — permits a Tier on an analysis task as well as implementation/QA", () => {
     const check = validatePlanTasks([row({ id: "BE-001", owner: "project-manager", tier: "T2" })], { modelTiers: MODEL_TIERS });
-    expect(check.errors.join("\n")).toContain("analysis phases must not carry a Tier");
+    expect(check.errors).toEqual([]);
+    expect(check.ok).toBe(true);
   });
 
   it("rejects a duplicate task id, naming both phases", () => {
@@ -278,11 +280,10 @@ describe("validatePlanTasks — T-PM10.1", () => {
     expect(check.errors.join("\n")).toContain("cites DES-042, which design.md does not define");
   });
 
-  it("derives waves even when validation fails elsewhere", () => {
+  it("refuses executable waves when an owner is invalid", () => {
     const check = validatePlanTasks([row({ id: "BE-001", owner: "ghost" }), row({ id: "BE-002", dependsOn: ["BE-001"] })]);
     expect(check.ok).toBe(false);
-    expect(check.waves.get("BE-001")).toBe(1);
-    expect(check.waves.get("BE-002")).toBeGreaterThan(1);
+    expect(check.waves.size).toBe(0);
   });
 });
 
@@ -481,45 +482,5 @@ describe("checkPlanGraphs", () => {
     });
     const result = checkPlanGraphs(root);
     expect(result.ok).toBe(true);
-  });
-});
-
-describe("planReadinessAdvisory — T-V3TOK-111", () => {
-  const withStatus = (id: string, status: string): string =>
-    TABLE_PLAN.replace(new RegExp(`\\| ${id} ([^|]*)\\| pending \\|`), `| ${id} $1| ${status} |`);
-
-  it("says nothing about a task the plan considers ready", () => {
-    expect(planReadinessAdvisory(TABLE_PLAN, "BE-001")).toBeNull();
-  });
-
-  it("names the unfinished dependency and its status", () => {
-    const advisory = planReadinessAdvisory(TABLE_PLAN, "FE-001");
-    expect(advisory?.waitingOn).toEqual(["BE-001"]);
-    expect(advisory?.reason).toContain("BE-001 (pending)");
-  });
-
-  it("stops warning once the dependency is verified", () => {
-    expect(planReadinessAdvisory(withStatus("BE-001", "verified"), "FE-001")).toBeNull();
-  });
-
-  it("reports work sitting behind a blocked dependency", () => {
-    const advisory = planReadinessAdvisory(withStatus("BE-001", "blocked"), "FE-001");
-    expect(advisory?.reason).toContain("blocked work");
-    expect(advisory?.waitingOn).toEqual(["BE-001"]);
-  });
-
-  it("reports a row the plan already marks verified or in_progress", () => {
-    expect(planReadinessAdvisory(withStatus("BE-001", "verified"), "BE-001")?.reason).toContain("verified");
-    expect(planReadinessAdvisory(withStatus("BE-001", "in_progress"), "BE-001")?.reason).toContain("in_progress");
-  });
-
-  /** Ad-hoc work is the ordinary case; warning on it would train the operator to ignore the line. */
-  it("says nothing about a task id the plan never lists", () => {
-    expect(planReadinessAdvisory(TABLE_PLAN, "BE-999")).toBeNull();
-  });
-
-  it("says nothing rather than throwing on an unusable plan", () => {
-    expect(planReadinessAdvisory("", "BE-001")).toBeNull();
-    expect(planReadinessAdvisory("not a plan at all", "BE-001")).toBeNull();
   });
 });

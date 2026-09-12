@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import type { RunRecord } from "../observability/runLog.js";
-import { buildMetricsExport, compareBaselines, compareTokenBaselines, taskQaMetrics, taskTokenMetrics, tokenMetricsExport, type TokenMetricsExport } from "./metrics.js";
+import { buildMetricsExport, categoryMetrics, compareBaselines, compareTokenBaselines, taskQaMetrics, taskTokenMetrics, tokenMetricsExport, usageCategory, type TokenMetricsExport } from "./metrics.js";
 
 function run(partial: Partial<RunRecord> & { agent: AgentStage }): RunRecord {
   return {
@@ -285,5 +285,93 @@ describe("T-V3R-080 optimization rollups", () => {
     const historical = structuredClone(before) as TokenMetricsExport;
     delete (historical.totals as Partial<TokenMetricsExport["totals"]>).fallback_rate;
     expect(compareTokenBaselines(historical, after).fallbackRateDeltaPct).toBeNull();
+  });
+});
+
+describe("T-V8-012 cache-creation reconciliation", () => {
+  it("distinguishes cache-creation from cache-read tokens and keeps totalTokens unchanged", () => {
+    const metric = taskTokenMetrics([
+      run({ agent: AgentStage.BACKEND_ENGINEER, input_tokens: 100, output_tokens: 20, cache_read_tokens: 30, cache_creation_tokens: 45 }),
+    ]);
+    expect(metric.cachedTokens).toBe(30);
+    expect(metric.cacheCreationTokens).toBe(45);
+    // Reconciling cache tokens does not redefine this pre-existing field.
+    expect(metric.totalTokens).toBe(120);
+  });
+
+  it("reports cache-creation as null, not 0, when the runtime never sent one", () => {
+    const metric = taskTokenMetrics([run({ agent: AgentStage.BACKEND_ENGINEER, input_tokens: 10, output_tokens: 2, cache_creation_tokens: undefined })]);
+    expect(metric.cacheCreationTokens).toBeNull();
+  });
+
+  it("sums cache-creation across every run into tokenMetricsExport totals", () => {
+    const exported = tokenMetricsExport([
+      run({ task_id: "T1", agent: AgentStage.BACKEND_ENGINEER, cache_creation_tokens: 10 }),
+      run({ task_id: "T1", agent: AgentStage.QA_ENGINEER, cache_creation_tokens: 15 }),
+    ]);
+    expect(exported.totals.cacheCreationTokens).toBe(25);
+  });
+});
+
+describe("T-V8-012 usageCategory / categoryMetrics", () => {
+  it("maps BA/SA/PM/QA stages straight across", () => {
+    expect(usageCategory(run({ agent: AgentStage.BUSINESS_ANALYST }))).toBe("BA");
+    expect(usageCategory(run({ agent: AgentStage.SYSTEM_ANALYST }))).toBe("SA");
+    expect(usageCategory(run({ agent: AgentStage.PROJECT_MANAGER }))).toBe("PM");
+    expect(usageCategory(run({ agent: AgentStage.QA_ENGINEER }))).toBe("QA");
+    expect(usageCategory(run({ agent: AgentStage.SECURITY }))).toBe("QA");
+  });
+
+  it("folds every engineering/consultant stage into DEV", () => {
+    expect(usageCategory(run({ agent: AgentStage.BACKEND_ENGINEER }))).toBe("DEV");
+    expect(usageCategory(run({ agent: AgentStage.FRONTEND_ENGINEER }))).toBe("DEV");
+    expect(usageCategory(run({ agent: AgentStage.DEVOPS }))).toBe("DEV");
+  });
+
+  it("classifies a retried round as repair regardless of which role reran it", () => {
+    expect(usageCategory(run({ agent: AgentStage.BACKEND_ENGINEER, retry_count: 1 }))).toBe("repair");
+    expect(usageCategory(run({ agent: AgentStage.QA_ENGINEER, retry_count: 2 }))).toBe("repair");
+  });
+
+  it("classifies session/context bookkeeping rows as orchestration ahead of retry/role", () => {
+    expect(usageCategory(run({ agent: AgentStage.BACKEND_ENGINEER, task_id: "session:dev:2026-08-26T00:00:00.000Z" }))).toBe("orchestration");
+    expect(usageCategory(run({ agent: AgentStage.BACKEND_ENGINEER, task_id: "context:backend-engineer:2026-08-26T00:00:00.000Z", retry_count: 1 }))).toBe("orchestration");
+  });
+
+  it("aggregates one row per category actually present, omitting categories with no runs", () => {
+    const rows = categoryMetrics([
+      run({ task_id: "T1", agent: AgentStage.BUSINESS_ANALYST, input_tokens: 10, output_tokens: 5 }),
+      run({ task_id: "T1", agent: AgentStage.BACKEND_ENGINEER, input_tokens: 100, output_tokens: 20 }),
+      run({ task_id: "T1", agent: AgentStage.BACKEND_ENGINEER, retry_count: 1, input_tokens: 40, output_tokens: 10 }),
+      run({ task_id: "T1", agent: AgentStage.QA_ENGINEER, input_tokens: 30, output_tokens: 5 }),
+    ]);
+    expect(rows.map((r) => r.category)).toEqual(["BA", "DEV", "QA", "repair"]);
+    const dev = rows.find((r) => r.category === "DEV")!;
+    expect(dev.runCount).toBe(1);
+    expect(dev.totalTokens).toBe(120);
+    const repair = rows.find((r) => r.category === "repair")!;
+    expect(repair.runCount).toBe(1);
+    expect(repair.totalTokens).toBe(50);
+  });
+
+  it("flows categories through tokenMetricsExport", () => {
+    const exported = tokenMetricsExport([run({ task_id: "T1", agent: AgentStage.SYSTEM_ANALYST, input_tokens: 1, output_tokens: 1 })]);
+    expect(exported.categories).toEqual([{ category: "SA", runCount: 1, totalTokens: 2, inputTokens: 1, outputTokens: 1, cachedTokens: null, cacheCreationTokens: null }]);
+  });
+});
+
+describe("T-V8-012 orchestration input share", () => {
+  it("computes the base+safety share of measured context, averaged per run", () => {
+    const exported = tokenMetricsExport([
+      run({ agent: AgentStage.BACKEND_ENGINEER, context_chars: 100, context_base_chars: 20, context_safety_chars: 10 }),
+      run({ agent: AgentStage.QA_ENGINEER, context_chars: 200, context_base_chars: 20, context_safety_chars: 0 }),
+    ]);
+    // Run 1: (20+10)/100 = 0.30; run 2: (20+0)/200 = 0.10; average = 0.20.
+    expect(exported.totals.orchestration_input_share).toBeCloseTo(0.2);
+  });
+
+  it("is null when no run measured an authoritative context budget", () => {
+    const exported = tokenMetricsExport([run({ agent: AgentStage.BACKEND_ENGINEER })]);
+    expect(exported.totals.orchestration_input_share).toBeNull();
   });
 });

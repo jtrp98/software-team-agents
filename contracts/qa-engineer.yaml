@@ -4,9 +4,9 @@ agent:
   role: qa-engineer
   description: Verifies implemented code against requirement.md and design.md with evidence, and is the only role that marks a plan.md task done.
 input:
-  required: [requirements, design, plan, test-plan]
+  required: [requirements, design, plan]
   # A phase can be backend-only or frontend-only; requiring both would fail a legitimate phase.
-  optional: [backend-code, frontend-code, qa-evidence]
+  optional: [test-plan, backend-code, frontend-code, qa-evidence]
 output:
   required: [qa-report]
 constraints:

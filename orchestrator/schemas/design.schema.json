@@ -15,6 +15,7 @@
     "hasChangeLog"
   ],
   "properties": {
+    "designEvidenceValid": { "const": true, "description": "When Design evidence format 1 is present, stable DES/Contract/DEC claims, EVD provenance, risk decisions and evidence grammar are valid; legacy designs omit this during the migration window." },
     "hasFeasibilitySummary": { "const": true, "description": "## Feasibility Summary" },
     "hasFeatureFeasibility": { "const": true, "description": "## Feature-by-Feature Feasibility" },
     "hasDataModel": { "const": true, "description": "## Data Model — the confirmed Prisma schema, policies/architecture.md §7" },
