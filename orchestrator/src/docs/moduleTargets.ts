@@ -18,6 +18,8 @@ export interface ParsedModuleTargets {
   present: boolean;
   /** Declared ids, in document order, de-duplicated. */
   ids: string[];
+  /** Repeated ids, in first-duplicate order. Consumers may report them without changing the de-duplicated declaration contract. */
+  duplicates: string[];
   problems: string[];
 }
 
@@ -29,9 +31,10 @@ const TARGET_LINE = /^[-*]\s+([a-z][a-z0-9-]*)\s*(?:\(([^()]*)\))?\s*$/;
 
 export function parseModuleTargets(markdown: string): ParsedModuleTargets {
   const section = sectionMap(markdown).find((candidate) => candidate.heading === "Targets");
-  if (!section) return { present: false, ids: [], problems: [] };
+  if (!section) return { present: false, ids: [], duplicates: [], problems: [] };
 
   const ids: string[] = [];
+  const duplicates: string[] = [];
   const problems: string[] = [];
   const body = sectionText(markdown, section).split(/\r?\n/).slice(1); // drop the heading line
   for (const raw of body) {
@@ -45,7 +48,11 @@ export function parseModuleTargets(markdown: string): ParsedModuleTargets {
       continue;
     }
     const id = match[1];
-    if (!ids.includes(id)) ids.push(id);
+    if (ids.includes(id)) {
+      if (!duplicates.includes(id)) duplicates.push(id);
+    } else {
+      ids.push(id);
+    }
     if (match[2] !== undefined) {
       for (const role of match[2].split(",").map((part) => part.trim()).filter((part) => part !== "")) {
         if (!ENGINEER_ROLES.has(role)) {
@@ -54,7 +61,7 @@ export function parseModuleTargets(markdown: string): ParsedModuleTargets {
       }
     }
   }
-  return { present: true, ids, problems };
+  return { present: true, ids, duplicates, problems };
 }
 
 /** The declared Target ids of one `design.md`, in document order, de-duplicated; empty when the module declares none. */

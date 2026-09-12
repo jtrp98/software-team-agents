@@ -119,10 +119,35 @@ export const PersistedTaskSchema = z.object({
    * Defaults preserve historical rows; preflight rejects legacy code tasks
    * that have neither required binding.
    */
-  targetBindings: z.object({
-    frontend_target: z.string().min(1).nullable().default(null),
-    backend_target: z.string().min(1).nullable().default(null),
-  }).default({ frontend_target: null, backend_target: null }),
+  targetBindings: z
+    .union([
+      z.object({
+        targets: z.array(
+          z.object({
+            target_id: z.string().min(1),
+            role: z.enum([AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER]),
+          }),
+        ),
+      }),
+      z.object({
+        frontend_target: z.string().min(1).nullable().default(null),
+        backend_target: z.string().min(1).nullable().default(null),
+      }),
+    ])
+    .default({ targets: [] })
+    .transform((bindings) => {
+      if ("targets" in bindings) return bindings;
+      return {
+        targets: [
+          ...(bindings.backend_target
+            ? [{ target_id: bindings.backend_target, role: AgentStage.BACKEND_ENGINEER as const }]
+            : []),
+          ...(bindings.frontend_target
+            ? [{ target_id: bindings.frontend_target, role: AgentStage.FRONTEND_ENGINEER as const }]
+            : []),
+        ],
+      };
+    }),
 });
 export type PersistedTask = z.infer<typeof PersistedTaskSchema>;
 
@@ -268,6 +293,6 @@ export function newPersistedTask(params: {
     cancelReason: null,
     environment: params.environment ?? Environment.LOCAL,
     deployPrepared: false,
-    targetBindings: params.targetBindings ?? { frontend_target: null, backend_target: null },
+    targetBindings: params.targetBindings ?? { targets: [] },
   };
 }

@@ -1090,7 +1090,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
       runtimeTask: scoped.runtimeTask,
       taskId: "T-target",
       classification,
-      targetBindings: { frontend_target: null, backend_target: "api" },
+      targetBindings: { targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }] },
     } as never;
     const executor = createRuntimeExecutor({
       runtime,
@@ -1127,7 +1127,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
     const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const scoped = scopedFixture("T-target");
-    const task = { runtimeTask: scoped.runtimeTask, taskId: "T-target", classification, targetBindings: { frontend_target: null, backend_target: "api" } } as never;
+    const task = { runtimeTask: scoped.runtimeTask, taskId: "T-target", classification, targetBindings: { targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }] } } as never;
     const executor = createRuntimeExecutor({ runtime, projectRoot: tmpProject(), moduleName: () => "sales-crm", guards: () => NO_GUARDS,
       packetBaseRevision: async () => FIXTURE_REVISION,
       threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "write" }] } }), });
@@ -1141,7 +1141,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
     const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true, touchesFrontend: true });
     const scoped = scopedFixture("T-two");
-    const task = { runtimeTask: scoped.runtimeTask, taskId: "T-two", classification, targetBindings: { frontend_target: "web", backend_target: "api" } } as never;
+    const task = { runtimeTask: scoped.runtimeTask, taskId: "T-two", classification, targetBindings: { targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }, { target_id: "web", role: AgentStage.FRONTEND_ENGINEER }] } } as never;
     const otherTargetRoot = tmpProject();
     const workRoots = [
       { targetId: "api", path: scoped.targetRoot, access: "write" as const },

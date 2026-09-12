@@ -156,7 +156,7 @@ try {
     import(pathToFileURL(path.join(packageRoot, "orchestrator", "dist", "gates", "approval.js"))),
     import(pathToFileURL(path.join(packageRoot, "orchestrator", "dist", "threeRepo", "doctor.js"))),
     import(pathToFileURL(path.join(packageRoot, "orchestrator", "dist", "targetcli", "targetMeta.js"))),
-    import(pathToFileURL(path.join(installRoot, "node_modules", "better-sqlite3", "lib", "index.js"))),
+    import(pathToFileURL(path.join(packageRoot, "orchestrator", "dist", "store", "sqliteDatabase.js"))),
   ]);
   const Database = DatabaseModule.default;
 

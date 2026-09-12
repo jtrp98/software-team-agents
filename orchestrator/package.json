@@ -4,6 +4,9 @@
   "private": true,
   "description": "Automates the AgentClaude pipeline's opt-in autonomous mode by driving the real .claude/agents/*.md subagents via the claude CLI",
   "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
   "bin": {
     "agentclaude-orchestrate": "dist/cli.js"
   },
@@ -15,7 +18,6 @@
     "build:templates": "npm run build --silent && node dist/cli.js --build-templates templates --project-root .."
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^9.6.0",
     "@types/node": "^26.2.0",
     "typescript": "^5.5.4",
     "vitest": "^2.0.5"
@@ -23,7 +25,6 @@
   "dependencies": {
     "ajv": "^8.20.0",
     "ajv-formats": "^3.0.1",
-    "better-sqlite3": "12.11.1",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   }

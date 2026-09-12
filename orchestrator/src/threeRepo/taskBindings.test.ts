@@ -7,7 +7,7 @@ import { classifyTask } from "../classification/taskClassifier.js";
 import { initTaskMachine } from "../state/taskState.js";
 import { newPersistedTask } from "../store/taskStore.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
-import Database from "better-sqlite3";
+import Database from "../store/sqliteDatabase.js";
 import { assertBindingsImmutable, uniqueBoundTargetIds, validateNewTaskBindings, validatePersistedTaskBindings } from "./taskBindings.js";
 import { preflightThreeRepoTask } from "./preflight.js";
 import { figmaPatConfigured } from "./identities.js";
@@ -21,28 +21,34 @@ const registry: TargetRegistry = {
   ],
 };
 const both = () => classifyTask({ isClearBugFix: true, touchesBackend: true, touchesFrontend: true });
+const bindings = (backend: string | null, frontend: string | null) => ({
+  targets: [
+    ...(backend ? [{ target_id: backend, role: AgentStage.BACKEND_ENGINEER as const }] : []),
+    ...(frontend ? [{ target_id: frontend, role: AgentStage.FRONTEND_ENGINEER as const }] : []),
+  ],
+});
 function initRepository(directory: string): void {
   fs.mkdirSync(path.join(directory, ".git"), { recursive: true });
 }
 
 describe("Phase 2 task Target bindings", () => {
   it("requires the binding corresponding to each code classification, permits document-only nulls, and deduplicates one Target", () => {
-    expect(() => validateNewTaskBindings(both(), { frontend_target: "frontend", backend_target: null }, registry)).toThrow(/backend_target/);
-    expect(() => validateNewTaskBindings(classifyTask({ isTypoOrCopyOnly: true }), { frontend_target: null, backend_target: null }, registry)).not.toThrow();
-    expect(uniqueBoundTargetIds({ frontend_target: "backend", backend_target: "backend" })).toEqual(["backend"]);
+    expect(() => validateNewTaskBindings(both(), bindings(null, "frontend"), registry)).toThrow(/engineer roles/);
+    expect(() => validateNewTaskBindings(classifyTask({ isTypoOrCopyOnly: true }), bindings(null, null), registry)).not.toThrow();
+    expect(uniqueBoundTargetIds(bindings("backend", "backend"))).toEqual(["backend"]);
   });
 
   it("rejects retired/unknown creation bindings and immutable edits", () => {
     const retired: TargetRegistry = { ...registry, targets: [{ ...registry.targets[0], status: "retired" }, registry.targets[1]] };
-    expect(() => validateNewTaskBindings(classifyTask({ isClearBugFix: true, touchesBackend: true }), { frontend_target: null, backend_target: "backend" }, retired)).toThrow(/retired/);
-    expect(() => validateNewTaskBindings(classifyTask({ isClearBugFix: true, touchesBackend: true }), { frontend_target: null, backend_target: "missing" }, registry)).toThrow(/unknown/);
-    expect(() => assertBindingsImmutable({ frontend_target: null, backend_target: "backend" }, { frontend_target: "frontend", backend_target: "backend" })).toThrow(/immutable/);
+    expect(() => validateNewTaskBindings(classifyTask({ isClearBugFix: true, touchesBackend: true }), bindings("backend", null), retired)).toThrow(/retired/);
+    expect(() => validateNewTaskBindings(classifyTask({ isClearBugFix: true, touchesBackend: true }), bindings("missing", null), registry)).toThrow(/unknown/);
+    expect(() => assertBindingsImmutable(bindings("backend", null), bindings("backend", "frontend"))).toThrow(/immutable/);
   });
 
   it("blocks legacy code tasks but preserves historical rows via null defaults", () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const legacy = newPersistedTask({ taskId: "legacy", classification, machine: initTaskMachine(classification.pipeline, false), now: 1 });
-    expect(legacy.targetBindings).toEqual({ frontend_target: null, backend_target: null });
+    expect(legacy.targetBindings).toEqual({ targets: [] });
     expect(() => validatePersistedTaskBindings(legacy, registry)).toThrow(/legacy code task/);
   });
 
@@ -56,10 +62,10 @@ describe("Phase 2 task Target bindings", () => {
         classification,
         machine: initTaskMachine(classification.pipeline, false),
         now: 1,
-        targetBindings: { frontend_target: null, backend_target: "backend" },
+        targetBindings: bindings("backend", null),
       });
       store.createTask(task);
-      expect(store.loadTask("bound")?.targetBindings).toEqual({ frontend_target: null, backend_target: "backend" });
+      expect(store.loadTask("bound")?.targetBindings).toEqual(bindings("backend", null));
       expect(store.loadTask("missing") ?? null).toBeNull();
       store.close();
     } finally {
@@ -89,7 +95,7 @@ describe("Phase 2 task Target bindings", () => {
       raw.close();
 
       const loaded = store.loadTask("legacy-row");
-      expect(loaded?.targetBindings).toEqual({ frontend_target: null, backend_target: null });
+      expect(loaded?.targetBindings).toEqual({ targets: [] });
       expect(() => validatePersistedTaskBindings(loaded!, registry)).toThrow(/legacy code task/);
       store.close();
     } finally {
@@ -119,7 +125,7 @@ describe("Phase 2 preflight", () => {
       const config = path.join(root, "installation.yaml");
       fs.writeFileSync(config, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\n`);
       const classification = both();
-      const task = newPersistedTask({ taskId: "split", classification, machine: initTaskMachine(classification.pipeline, false), now: 1, targetBindings: { backend_target: "backend", frontend_target: "frontend" } });
+      const task = newPersistedTask({ taskId: "split", classification, machine: initTaskMachine(classification.pipeline, false), now: 1, targetBindings: bindings("backend", "frontend") });
       const opts = { frameworkRoot: framework, installationConfigPath: config };
 
       const forBackend = preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, opts);
@@ -139,6 +145,12 @@ describe("Phase 2 preflight", () => {
       expect(forQa.workRoots).toEqual([
         { targetId: "backend", path: backendRepo, access: "read" },
         { targetId: "frontend", path: frontendRepo, access: "read" },
+      ]);
+
+      const forDevops = preflightThreeRepoTask(task, AgentStage.DEVOPS, opts);
+      expect(forDevops.workRoots).toEqual([
+        { targetId: "backend", path: backendRepo, access: "write" },
+        { targetId: "frontend", path: frontendRepo, access: "write" },
       ]);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
@@ -169,7 +181,7 @@ describe("Phase 2 preflight", () => {
       const config = path.join(root, "installation.yaml");
       fs.writeFileSync(config, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\n`);
       const classification = both();
-      const task = newPersistedTask({ taskId: "two", classification, machine: initTaskMachine(classification.pipeline, false), now: 1, targetBindings: { backend_target: "backend", frontend_target: "frontend" } });
+      const task = newPersistedTask({ taskId: "two", classification, machine: initTaskMachine(classification.pipeline, false), now: 1, targetBindings: bindings("backend", "frontend") });
       let remoteCalls = 0;
       expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, { frameworkRoot: framework, installationConfigPath: config, verifyRemote: () => { remoteCalls++; } })).toThrow(/frontend.*no local path mapping/);
       expect(remoteCalls).toBe(0);
@@ -190,7 +202,7 @@ describe("Phase 2 preflight", () => {
       const config = path.join(root, "installation.yaml");
       fs.writeFileSync(config, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\n`);
       const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
-      const task = newPersistedTask({ taskId: "origin", classification, machine: initTaskMachine(classification.pipeline, false), now: 1, targetBindings: { backend_target: "backend", frontend_target: null } });
+      const task = newPersistedTask({ taskId: "origin", classification, machine: initTaskMachine(classification.pipeline, false), now: 1, targetBindings: bindings("backend", null) });
       expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, { frameworkRoot: framework, installationConfigPath: config })).not.toThrow();
       fs.writeFileSync(path.join(target, ".git", "config"), "[remote \"origin\"]\n\turl = https://github.com/acme/other.git\n");
       expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, { frameworkRoot: framework, installationConfigPath: config })).toThrow(/expected canonical remote_url/);
@@ -212,10 +224,10 @@ describe("Phase 2 preflight", () => {
       const base = { frameworkRoot: framework };
 
       const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
-      const engineerTask = newPersistedTask({ taskId: "eng", classification, machine: initTaskMachine(classification.pipeline, false), now: 1, targetBindings: { backend_target: "backend", frontend_target: null } });
+      const engineerTask = newPersistedTask({ taskId: "eng", classification, machine: initTaskMachine(classification.pipeline, false), now: 1, targetBindings: bindings("backend", null) });
 
       const uxuiClassification = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
-      const uxuiTask = newPersistedTask({ taskId: "ux", classification: uxuiClassification, machine: initTaskMachine(uxuiClassification.pipeline, false), now: 1, targetBindings: { backend_target: null, frontend_target: "frontend" } });
+      const uxuiTask = newPersistedTask({ taskId: "ux", classification: uxuiClassification, machine: initTaskMachine(uxuiClassification.pipeline, false), now: 1, targetBindings: bindings(null, "frontend") });
 
       // Undeclared → blocked, with the fix named; a stage without the gate runs as before.
       const noIdentitiesConfig = path.join(root, "installation.yaml");
@@ -259,7 +271,7 @@ describe("Phase 2 preflight", () => {
       expect(figmaPatConfigured({})).toBe(false);
 
       const classification = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
-      const task = newPersistedTask({ taskId: "ux", classification, machine: initTaskMachine(classification.pipeline, false), now: 1, targetBindings: { backend_target: null, frontend_target: "frontend" } });
+      const task = newPersistedTask({ taskId: "ux", classification, machine: initTaskMachine(classification.pipeline, false), now: 1, targetBindings: bindings(null, "frontend") });
       const result = preflightThreeRepoTask(task, AgentStage.UXUI_DESIGNER, { frameworkRoot: framework, installationConfigPath: config });
       expect(result.workRoots).toEqual([]);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }

@@ -24,7 +24,7 @@ import { DatabaseUnavailableError, SchemaVersionMismatchError, SqliteTaskStore }
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import Database from "better-sqlite3";
+import Database from "./store/sqliteDatabase.js";
 
 /**
  * Failure Simulation (T56) — TASKS.md names six scenarios and asks that the orchestrator's

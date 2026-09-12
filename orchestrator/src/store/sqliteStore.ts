@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import Database from "better-sqlite3";
+import SqliteDatabase from "./sqliteDatabase.js";
 import type { AgentStage } from "../types.js";
 import type { RunRecord } from "../observability/runLog.js";
 import type { ChangeSetFingerprint } from "../qa/changeSource.js";
@@ -183,7 +183,7 @@ export class SchemaVersionMismatchError extends Error {
 
 /**
  * "Database unavailable" as a named, actionable failure instead of whatever raw error
- * `better-sqlite3`/`fs` happened to throw reaching the terminal as a bare stack trace. This is
+ * `node:sqlite`/`fs` happened to throw reaching the terminal as a bare stack trace. This is
  * deliberately narrow: it only wraps *opening* the store (the constructor), not every query — a
  * query failing mid-run for its own reason (a real bug, a corrupt row) should still surface as
  * itself, not get relabelled "unavailable" and hidden behind a generic message.
@@ -302,7 +302,7 @@ function parseVerificationFingerprint(value: string | null): ChangeSetFingerprin
  * does not belong in a silent startup path, and this map having no entry for it
  * is what makes the store refuse to open instead.
  */
-const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
+const MIGRATIONS: Record<number, (db: SqliteDatabase) => void> = {
   2: (db) => {
     // `events` predates this column set; the DDL above only creates the columns on a fresh file.
     const existing = new Set((db.pragma("table_info(events)") as { name: string }[]).map((c) => c.name));
@@ -427,7 +427,7 @@ const MIGRATIONS: Record<number, (db: Database.Database) => void> = {
 };
 
 export class SqliteTaskStore implements TaskStore {
-  private readonly db: Database.Database;
+  private readonly db: SqliteDatabase;
   private readonly readOnly: boolean;
   private snapshotDir: string | undefined;
   private inTransaction = false;
@@ -451,9 +451,9 @@ export class SqliteTaskStore implements TaskStore {
         this.snapshotDir = fs.mkdtempSync(path.join(os.tmpdir(), "sta-state-snapshot-"));
         const snapshotFile = path.join(this.snapshotDir, "state.db");
         fs.copyFileSync(filePath, snapshotFile);
-        this.db = new Database(snapshotFile, { readonly: true, fileMustExist: true });
+        this.db = new SqliteDatabase(snapshotFile, { readonly: true, fileMustExist: true });
       } else {
-        this.db = new Database(filePath);
+        this.db = new SqliteDatabase(filePath);
       }
       if (this.readOnly) {
         const found = Number((this.db.pragma("user_version", { simple: true }) as number) ?? 0);
@@ -521,7 +521,7 @@ export class SqliteTaskStore implements TaskStore {
    *
    * This is what makes T-V8-017 atomic: the ledger tables live in this same
    * file, so registering a whole plan — every task row, every ledger row —
-   * either commits together or leaves nothing behind. better-sqlite3's
+   * either commits together or leaves nothing behind. The local `node:sqlite` wrapper's
    * `transaction()` rolls back on any throw, including one raised by
    * validation inside the callback, which is deliberately how a refusal
    * reaches "no registration state changed".
@@ -550,7 +550,7 @@ export class SqliteTaskStore implements TaskStore {
    * the only caller, and it exists so ledger and task writes share one
    * transaction instead of becoming two stores that can half-commit.
    */
-  ledgerDatabase(): Database.Database {
+  ledgerDatabase(): SqliteDatabase {
     return this.db;
   }
 
@@ -582,7 +582,7 @@ export class SqliteTaskStore implements TaskStore {
   listTasks(): PersistedTask[] {
     const rows = this.db
       .prepare("SELECT task_id, state FROM tasks ORDER BY created_at ASC, task_id ASC")
-      .all() as TaskRow[];
+      .all() as unknown as TaskRow[];
     return rows.map((r) => parsePersistedTask(r.task_id, JSON.parse(r.state)));
   }
 
@@ -650,12 +650,12 @@ export class SqliteTaskStore implements TaskStore {
   }
 
   runsForTask(taskId: string): RunRecord[] {
-    const rows = this.db.prepare("SELECT * FROM runs WHERE task_id = ? ORDER BY id ASC").all(taskId) as RunRow[];
+    const rows = this.db.prepare("SELECT * FROM runs WHERE task_id = ? ORDER BY id ASC").all(taskId) as unknown as RunRow[];
     return rows.map((r) => this.runRecordFromRow(r));
   }
 
   allRuns(): RunRecord[] {
-    const rows = this.db.prepare("SELECT * FROM runs ORDER BY id ASC").all() as RunRow[];
+    const rows = this.db.prepare("SELECT * FROM runs ORDER BY id ASC").all() as unknown as RunRow[];
     return rows.map((r) => this.runRecordFromRow(r));
   }
 
@@ -738,7 +738,7 @@ export class SqliteTaskStore implements TaskStore {
   }
 
   eventsForTask(taskId: string): PersistedEvent[] {
-    const rows = this.db.prepare("SELECT * FROM events WHERE task_id = ? ORDER BY id ASC").all(taskId) as EventRow[];
+    const rows = this.db.prepare("SELECT * FROM events WHERE task_id = ? ORDER BY id ASC").all(taskId) as unknown as EventRow[];
     return rows.map((r) =>
       PersistedEventSchema.parse({
         taskId: r.task_id,

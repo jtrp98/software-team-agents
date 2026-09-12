@@ -56,7 +56,7 @@ function makeThreeRepoFixture(): {
     classification,
     machine: initTaskMachine(classification.pipeline, false),
     now: 1,
-    targetBindings: { backend_target: "target", frontend_target: null },
+    targetBindings: { targets: [{ target_id: "target", role: AgentStage.BACKEND_ENGINEER }] },
   });
   return { root, framework, knowledge, target, task };
 }

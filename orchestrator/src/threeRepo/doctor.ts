@@ -16,6 +16,8 @@ import { defaultProjectRoot } from "../agents/agentContract.js";
 import { inspectGuardWiring } from "../targetcli/guardSettings.js";
 import { loadStaConfig } from "../packaging/staConfig.js";
 import { compareTemplateSnapshot } from "../packaging/templateBuilder.js";
+import { listModules } from "../agents/moduleDocs.js";
+import { resolveModuleTargets } from "./moduleTargetResolver.js";
 
 /**
  * `sta doctor` — read-only diagnostics for one machine's installation.
@@ -264,6 +266,25 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
     );
 
     checks.push(
+      check("Module Target references", "correct the module's design.md ## Targets section, targets.yaml, or .workflow/targets.local.yaml", () => {
+        const modules = listModules(knowledgeRootValue!);
+        if (modules.length === 0) return { status: "PASS", detail: "no modules to resolve" };
+        const resolutions = modules.map((moduleName) =>
+          resolveModuleTargets(moduleName, knowledgeRootValue!, { frameworkRoot: defaultProjectRoot() }),
+        );
+        const errors = resolutions.flatMap((resolution) =>
+          resolution.problems.filter((problem) => problem.severity === "error").map((problem) => problem.message),
+        );
+        const warnings = resolutions.flatMap((resolution) =>
+          resolution.problems.filter((problem) => problem.severity === "warning").map((problem) => problem.message),
+        );
+        if (errors.length > 0) return { status: "FAIL", detail: errors.join("; ") };
+        if (warnings.length > 0) return { status: "WARNING", detail: warnings.join("; ") };
+        return { status: "PASS", detail: `${modules.length} module(s) resolved; unscoped modules remain valid` };
+      }),
+    );
+
+    checks.push(
       check("Target type vs stack profile", "correct the Target's type in targets.yaml, or declare the missing permissions.<role> in the resolved stacks/<profile>/stack.yaml", () => {
         if (!registry) throw new Error("registry unavailable");
         const typed = registry.targets.filter((target): target is TargetEntry & { type: TargetType } => target.type !== undefined);
@@ -317,7 +338,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
       }),
     );
   } else {
-    for (const skipped of ["Knowledge root standalone", "Knowledge schema (items load cleanly)", "Target registry (targets.yaml)", "Local Target mappings (.workflow/targets.local.yaml)"]) {
+    for (const skipped of ["Knowledge root standalone", "Knowledge schema (items load cleanly)", "Target registry (targets.yaml)", "Local Target mappings (.workflow/targets.local.yaml)", "Module Target references"]) {
       checks.push({ name: skipped, status: "WARNING", detail: "skipped — no Knowledge root configured yet", fix: configureFix });
     }
   }

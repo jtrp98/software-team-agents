@@ -10,7 +10,7 @@ import { readWorkPlan } from "../../docs/planGraph.js";
 import { preflightThreeRepoTask } from "../../threeRepo/preflight.js";
 import { loadInstallationConfig } from "../../threeRepo/installation.js";
 import { loadTargetRegistry } from "../../threeRepo/targets.js";
-import { validateNewTaskBindings, type TargetBindings } from "../../threeRepo/taskBindings.js";
+import { hasTargetBindings, validateNewTaskBindings, type TargetBindings } from "../../threeRepo/taskBindings.js";
 import { resolveWorkflowId } from "../../workflow/workflowDefinition.js";
 import type { RuntimeTaskWorkRoot } from "../../orchestrator/runtimeTask.js";
 import { CliUsageError, type CliArgs } from "../../cli.js";
@@ -23,7 +23,7 @@ import { CliUsageError, type CliArgs } from "../../cli.js";
  * by their single workspace's contract.
  */
 export function contractRootForTask(projectRoot: string, bindings: TargetBindings): string {
-  return bindings.backend_target || bindings.frontend_target ? resolveFrameworkRoot() : projectRoot;
+  return hasTargetBindings(bindings) ? resolveFrameworkRoot() : projectRoot;
 }
 
 /** Optional phase-tier metadata is advisory input to routing, never a runtime gate. */
@@ -57,7 +57,7 @@ export function runtimeTaskWorkRoots(
   classification: ReturnType<typeof classifyTask>,
 ): RuntimeTaskWorkRoot[] {
   const stages = classification.pipeline.filter((stage) => stage !== AgentStage.HUMAN);
-  if (!args.targetBindings.frontend_target && !args.targetBindings.backend_target) {
+  if (!hasTargetBindings(args.targetBindings)) {
     return stages.map((stage) => ({ stage, targetId: "legacy-project", path: args.projectRoot }));
   }
 
@@ -125,7 +125,7 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string):
   // it, merely having configured an installation once flips every CLI test that
   // creates a legacy code task.
   const installationConfigPath = process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined;
-  if (args.targetBindings.frontend_target || args.targetBindings.backend_target) {
+  if (hasTargetBindings(args.targetBindings)) {
     const installation = loadInstallationConfig(installationConfigPath);
     validateNewTaskBindings(classification, args.targetBindings, loadTargetRegistry(installation.knowledge_root));
   } else if (isCodeTask) {

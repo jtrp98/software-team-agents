@@ -133,10 +133,20 @@
         "target_bindings": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["frontend_target", "backend_target"],
+          "required": ["targets"],
           "properties": {
-            "frontend_target": { "type": ["string", "null"] },
-            "backend_target": { "type": ["string", "null"] }
+            "targets": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["target_id", "role"],
+                "properties": {
+                  "target_id": { "type": "string", "minLength": 1 },
+                  "role": { "type": "string", "enum": ["backend-engineer", "frontend-engineer"] }
+                }
+              }
+            }
           }
         },
         "waiting_on": { "type": "array", "items": { "type": "string", "minLength": 1 } },

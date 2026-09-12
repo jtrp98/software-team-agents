@@ -52,6 +52,7 @@ import { readWorkPlan } from "./docs/planGraph.js";
 import { openTask } from "./cli/composition/taskIntake.js";
 import { composeProductionTaskExecutor } from "./cli/composition/taskExecutor.js";
 import type { CliDependencies } from "./cli/composition/runtimeRegistry.js";
+import { AgentStage } from "./types.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -320,7 +321,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let noDocumentGate = false;
   let tokenBudget: number | undefined;
   let version = false;
-  const targetBindings: TargetBindings = { frontend_target: null, backend_target: null };
+  const targetBindings: TargetBindings = { targets: [] };
   const classification: ClassificationInput = {};
 
   for (let i = 0; i < argv.length; i++) {
@@ -334,11 +335,15 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     } else if (arg === "--state-db") {
       stateDb = argv[++i];
     } else if (arg === "--frontend-target") {
-      targetBindings.frontend_target = argv[++i] ?? null;
-      if (!targetBindings.frontend_target) throw new CliUsageError("--frontend-target requires a Target id");
+      const targetId = argv[++i];
+      if (!targetId) throw new CliUsageError("--frontend-target requires a Target id");
+      targetBindings.targets = targetBindings.targets.filter((binding) => binding.role !== AgentStage.FRONTEND_ENGINEER);
+      targetBindings.targets.push({ target_id: targetId, role: AgentStage.FRONTEND_ENGINEER });
     } else if (arg === "--backend-target") {
-      targetBindings.backend_target = argv[++i] ?? null;
-      if (!targetBindings.backend_target) throw new CliUsageError("--backend-target requires a Target id");
+      const targetId = argv[++i];
+      if (!targetId) throw new CliUsageError("--backend-target requires a Target id");
+      targetBindings.targets = targetBindings.targets.filter((binding) => binding.role !== AgentStage.BACKEND_ENGINEER);
+      targetBindings.targets.push({ target_id: targetId, role: AgentStage.BACKEND_ENGINEER });
     } else if (arg === "--ad-hoc") {
       adHoc = true;
     } else if (arg === "--depends-on") {
@@ -498,7 +503,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   if (resume && dependsOn.length > 0) {
     throw new CliUsageError("--depends-on is set when a task is created and cannot be changed on --resume");
   }
-  if (resume && (targetBindings.frontend_target || targetBindings.backend_target)) {
+  if (resume && targetBindings.targets.length > 0) {
     throw new CliUsageError("Target bindings are immutable; --frontend-target/--backend-target cannot be used with --resume");
   }
   return {
@@ -842,7 +847,7 @@ if (isMain) {
         console.error(USAGE);
         process.exit(64);
       }
-      // A clean, actionable message instead of a raw better-sqlite3/fs stack trace — the
+      // A clean, actionable message instead of a raw node:sqlite/fs stack trace — the
       // same task id's resume/retry picks this back up once whatever made the file unavailable
       // clears, since DatabaseUnavailableError is only ever thrown before anything was written.
       if (e instanceof DatabaseUnavailableError) {

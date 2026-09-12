@@ -114,7 +114,7 @@ describe("parseArgs", () => {
       adHoc: false,
       stateDb: undefined,
       phases: [],
-      targetBindings: { frontend_target: null, backend_target: null },
+      targetBindings: { targets: [] },
       autonomy: undefined,
       runtime: undefined,
       model: undefined,
@@ -198,7 +198,7 @@ describe("parseArgs", () => {
 
   it("records explicit frontend/backend Target bindings and refuses changes on resume", () => {
     const args = parseArgs(["--task-id", "T-1", "--module", "m", "--backend", "--backend-target", "api"], "/repo");
-    expect(args.targetBindings).toEqual({ frontend_target: null, backend_target: "api" });
+    expect(args.targetBindings).toEqual({ targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }] });
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--resume", "--backend-target", "api"], "/repo")).toThrow(/immutable/);
   });
 
@@ -264,8 +264,8 @@ describe("T-V3R-032 production runtime composition", () => {
 
 describe("three-repo contract authority", () => {
   it("uses the Framework contract for a bound Target while preserving the legacy workspace contract", () => {
-    expect(contractRootForTask("C:/target", { backend_target: "rainybot", frontend_target: null })).toBe(resolveFrameworkRoot());
-    expect(contractRootForTask("C:/legacy", { backend_target: null, frontend_target: null })).toBe("C:/legacy");
+    expect(contractRootForTask("C:/target", { targets: [{ target_id: "rainybot", role: AgentStage.BACKEND_ENGINEER }] })).toBe(resolveFrameworkRoot());
+    expect(contractRootForTask("C:/legacy", { targets: [] })).toBe("C:/legacy");
   });
 });
 

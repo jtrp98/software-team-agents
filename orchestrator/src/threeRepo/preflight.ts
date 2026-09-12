@@ -27,8 +27,11 @@ function accessFor(
   targetId: string,
   task: Pick<PersistedTask, "targetBindings">,
 ): WorkspaceAccess {
-  if (stage === AgentStage.BACKEND_ENGINEER) return targetId === task.targetBindings.backend_target ? "write" : "read";
-  if (stage === AgentStage.FRONTEND_ENGINEER) return targetId === task.targetBindings.frontend_target ? "write" : "read";
+  if (stage === AgentStage.BACKEND_ENGINEER || stage === AgentStage.FRONTEND_ENGINEER) {
+    return task.targetBindings.targets.some((binding) => binding.role === stage && binding.target_id === targetId)
+      ? "write"
+      : "read";
+  }
   if (stage === AgentStage.DEVOPS) return "write";
   return "read";
 }

@@ -242,7 +242,7 @@ V5 flags ที่ `sta run` รับจริง:
 
 ## Installation
 
-Prerequisites: **Node.js ≥ 20**, **Git** + อย่างน้อยหนึ่ง runtime ที่จะใช้ — **Claude Code CLI** (default; login แล้ว) / **Codex CLI** / **OpenCode CLI ≥ 1.18** / **Antigravity CLI (agy)** (experimental) — ตรวจด้วย `node --version`, `claude --version`, `codex --version`, `opencode --version`, `agy --version`
+Prerequisites: **Node.js >= 24** (Node 24 LTS เป็น baseline), **Git** + อย่างน้อยหนึ่ง runtime ที่จะใช้ — **Claude Code CLI** (default; login แล้ว) / **Codex CLI** / **OpenCode CLI ≥ 1.18** / **Antigravity CLI (agy)** (experimental) — ตรวจด้วย `node --version`, `claude --version`, `codex --version`, `opencode --version`, `agy --version`
 
 **(T-V5-030) มี channel เดียวที่ใช้งานจริงวันนี้: linked checkout (`npm link`).** package นี้ยังไม่เคย publish
 เป็น registry artifact หรือ `.tgz` release จริงสักครั้ง — `npm run release` มีแค่ *สคริปต์* packing (มัน pack

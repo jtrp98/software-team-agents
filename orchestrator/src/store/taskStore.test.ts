@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import Database from "better-sqlite3";
+import Database from "./sqliteDatabase.js";
 import { describe, expect, it } from "vitest";
 import { AgentStage, TaskState } from "../types.js";
 import { classifyTask } from "../classification/taskClassifier.js";
@@ -700,7 +700,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
 
       const migrated = new SqliteTaskStore(file);
       try {
-        expect(migrated.loadTask("T-V4")!.targetBindings).toEqual({ frontend_target: null, backend_target: null });
+        expect(migrated.loadTask("T-V4")!.targetBindings).toEqual({ targets: [] });
       } finally { migrated.close(); }
     } finally { fs.rmSync(path.dirname(file), { recursive: true, force: true }); }
   });
@@ -744,7 +744,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       expect(status.kind).toBe("DEPLOYED");
       secondStore.close();
     } finally {
-      // better-sqlite3's WAL sidecar files can hold a Windows file handle open for a moment
+      // SQLite's WAL sidecar files can hold a Windows file handle open for a moment
       // after close() returns, under heavier write activity like this test's — the test's own
       // assertions above already ran; a leaked temp dir here is harmless, unlike a failed
       // assertion would be.
