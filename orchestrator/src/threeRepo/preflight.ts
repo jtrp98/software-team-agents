@@ -6,7 +6,12 @@ import { assertStandaloneFrameworkRoot, assertStandaloneKnowledgeRoot, loadInsta
 import { checkDeclaredIdentities } from "./identities.js";
 import { loadLocalTargetMapping, type ResolvedLocalTarget } from "./localTargets.js";
 import { loadTargetRegistry, targetById, type TargetRegistry } from "./targets.js";
-import { uniqueBoundTargetIds, validatePersistedTaskBindings } from "./taskBindings.js";
+import { resolveModuleTargets } from "./moduleTargetResolver.js";
+import {
+  uniqueBoundTargetIds,
+  validatePersistedTaskBindings,
+  type TaskBindingModuleScope,
+} from "./taskBindings.js";
 
 export type WorkspaceAccess = "read" | "write";
 export interface WorkRoot { targetId: string; path: string; access: WorkspaceAccess; }
@@ -84,11 +89,44 @@ export interface ThreeRepoPreflightOptions {
   frameworkRoot: string;
   installationConfigPath?: string;
   verifyRemote?: (targetId: string, targetPath: string, remoteUrl: string) => void;
+  /** Creation passes the already-resolved scope; resume derives it from durable plan_source. */
+  moduleScope?: TaskBindingModuleScope;
+  /** CLI resume supplies the selected module even when an ad-hoc task has no compiled RuntimeTask. */
+  moduleName?: string;
+  bindingWarning?: (message: string) => void;
+}
+
+function resolvedModuleScope(
+  moduleName: string,
+  knowledgeRoot: string,
+  frameworkRoot: string,
+): TaskBindingModuleScope {
+  const resolved = resolveModuleTargets(moduleName, knowledgeRoot, { frameworkRoot });
+  return {
+    module: resolved.module,
+    designPath: resolved.designPath,
+    declaredTargetIds: resolved.declaredTargetIds,
+  };
+}
+
+function persistedModuleScope(
+  task: Partial<Pick<PersistedTask, "runtimeTask">>,
+  knowledgeRoot: string,
+  frameworkRoot: string,
+): TaskBindingModuleScope | undefined {
+  const runtimeTask = task.runtimeTask;
+  if (!runtimeTask || !("version" in runtimeTask) || runtimeTask.version !== 2) return undefined;
+  const modulesRoot = path.join(path.resolve(knowledgeRoot), "_docs", "module");
+  const planPath = path.resolve(runtimeTask.plan_source);
+  const relative = path.relative(modulesRoot, planPath);
+  const parts = relative.split(path.sep);
+  if (parts.length !== 2 || parts[0] === ".." || path.isAbsolute(relative) || parts[1] !== "plan.md") return undefined;
+  return resolvedModuleScope(parts[0], knowledgeRoot, frameworkRoot);
 }
 
 /** Resolves every root before an adapter is started.  It never writes. */
 export function preflightThreeRepoTask(
-  task: Pick<PersistedTask, "taskId" | "classification" | "targetBindings">,
+  task: Pick<PersistedTask, "taskId" | "classification" | "targetBindings"> & Partial<Pick<PersistedTask, "runtimeTask">>,
   stage: AgentStage,
   opts: ThreeRepoPreflightOptions,
 ): ThreeRepoRequestRoots {
@@ -126,7 +164,15 @@ export function preflightThreeRepoTask(
   let registry: TargetRegistry;
   try {
     registry = loadTargetRegistry(knowledgeRoot);
-    validatePersistedTaskBindings(task, registry);
+    const result = validatePersistedTaskBindings(task, registry, {
+      moduleScope:
+        opts.moduleScope ??
+        (opts.moduleName
+          ? resolvedModuleScope(opts.moduleName, knowledgeRoot, opts.frameworkRoot)
+          : persistedModuleScope(task, knowledgeRoot, opts.frameworkRoot)),
+    });
+    const warn = opts.bindingWarning ?? ((message: string) => console.warn(`[orchestrator] WARNING: ${message}`));
+    for (const warning of result.warnings) warn(warning);
   } catch (error) {
     throw new TargetPreflightError(`task ${task.taskId} Target bindings are not usable: ${error instanceof Error ? error.message : String(error)}`);
   }

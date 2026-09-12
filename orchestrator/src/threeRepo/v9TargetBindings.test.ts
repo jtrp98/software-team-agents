@@ -14,6 +14,7 @@ import {
   assertBindingsImmutable,
   uniqueBoundTargetIds,
   validateNewTaskBindings,
+  validatePersistedTaskBindings,
   type TargetBindings,
 } from "./taskBindings.js";
 import type { TargetRegistry } from "./targets.js";
@@ -34,7 +35,7 @@ function initRepository(directory: string, remote?: string): void {
 }
 
 describe("T-V9-006 variable-arity Target bindings", () => {
-  it("accepts three Targets while comparing engineer roles biconditionally", () => {
+  it("round-trips three Target references while Q-3 refuses two distinct Targets on one role", () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true, touchesFrontend: true });
     const bindings = {
       targets: [
@@ -44,8 +45,20 @@ describe("T-V9-006 variable-arity Target bindings", () => {
       ],
     } satisfies TargetBindings;
 
-    expect(() => validateNewTaskBindings(classification, bindings, registry)).not.toThrow();
+    const persisted = PersistedTaskSchema.parse(
+      newPersistedTask({
+        taskId: "three-target-shape",
+        classification,
+        machine: initTaskMachine(classification.pipeline, false),
+        now: 1,
+        targetBindings: bindings,
+      }),
+    );
+    expect(persisted.targetBindings).toEqual(bindings);
     expect(uniqueBoundTargetIds(bindings)).toEqual(["api", "worker", "web"]);
+    expect(() => validateNewTaskBindings(classification, bindings, registry)).toThrow(
+      /backend-engineer.*api.*worker.*split into one task per Target, or bind them to different roles/,
+    );
     expect(() =>
       validateNewTaskBindings(classification, { targets: bindings.targets.slice(0, 2) }, registry),
     ).toThrow(/engineer roles/);
@@ -71,6 +84,10 @@ describe("T-V9-006 variable-arity Target bindings", () => {
         { target_id: "web", role: AgentStage.FRONTEND_ENGINEER },
       ],
     });
+    expect(validatePersistedTaskBindings(parsed, registry).warnings).toEqual([
+      expect.stringMatching(/Target "api" has no declared type.*schema v1 compatibility/),
+      expect.stringMatching(/Target "web" has no declared type.*schema v1 compatibility/),
+    ]);
 
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "v9-legacy-bindings-"));
     const file = path.join(root, "state.db");

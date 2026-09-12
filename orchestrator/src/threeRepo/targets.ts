@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv, { type ValidateFunction } from "ajv";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { AgentStage, TaskState } from "../types.js";
 
 export type TargetStatus = "active" | "retired";
 /** The repository's delivery role (V9 AD-1) — declared once on the Target, never derived from its stack. */
@@ -10,6 +11,23 @@ export type TargetType = "frontend" | "backend" | "fullstack";
 export interface TargetEntry { target_id: string; name: string; remote_url: string; status: TargetStatus; type?: TargetType; }
 export interface TargetRegistry { schema_version: 1; targets: TargetEntry[]; }
 export class TargetRegistryError extends Error {}
+
+export interface TargetTypeLifecycleTask {
+  taskId: string;
+  machine: { current: TaskState };
+  cancelled: boolean;
+  targetBindings: {
+    targets: Array<{
+      target_id: string;
+      role: AgentStage.BACKEND_ENGINEER | AgentStage.FRONTEND_ENGINEER;
+    }>;
+  };
+}
+
+export interface WriteTargetRegistryOptions {
+  /** Current durable task history; required only when a type change removes an admitted role. */
+  tasks?: readonly TargetTypeLifecycleTask[];
+}
 
 /** The engineer roles a Target type admits. Validation against bindings is T-V9-008's job; doctor reports the stack-profile side of this today. */
 export const TARGET_TYPE_ROLES: Readonly<Record<TargetType, readonly string[]>> = {
@@ -56,11 +74,15 @@ export function loadTargetRegistry(knowledgeRoot: string): TargetRegistry {
 
 /** The only registry writer used by administrative commands.  It reads the
  * previous registry first so an existing target's identity cannot be replaced. */
-export function writeTargetRegistry(knowledgeRoot: string, next: TargetRegistry): void {
+export function writeTargetRegistry(
+  knowledgeRoot: string,
+  next: TargetRegistry,
+  options: WriteTargetRegistryOptions = {},
+): void {
   const validate = validator();
   if (!validate(next)) throw new TargetRegistryError(`Target registry is invalid: ${formatSchemaErrors(validate)}`);
   const file = targetsPath(knowledgeRoot);
-  if (fs.existsSync(file)) assertTargetIdsImmutable(loadTargetRegistry(knowledgeRoot), next);
+  if (fs.existsSync(file)) assertTargetIdsImmutable(loadTargetRegistry(knowledgeRoot), next, options.tasks);
   for (const target of next.targets) {
     if (!target.name.trim() || !isCredentialFreeGitRemote(target.remote_url)) {
       throw new TargetRegistryError(`Target "${target.target_id}" has an invalid name or credential-bearing remote_url`);
@@ -86,7 +108,11 @@ export function assertTargetCanStartNewTask(registry: TargetRegistry, targetId: 
   return target;
 }
 
-export function assertTargetIdsImmutable(previous: TargetRegistry, next: TargetRegistry): void {
+export function assertTargetIdsImmutable(
+  previous: TargetRegistry,
+  next: TargetRegistry,
+  tasks?: readonly TargetTypeLifecycleTask[],
+): void {
   const afterById = new Map(next.targets.map((target) => [target.target_id, target]));
   for (const before of previous.targets) {
     const after = afterById.get(before.target_id);
@@ -99,5 +125,30 @@ export function assertTargetIdsImmutable(previous: TargetRegistry, next: TargetR
   for (const target of next.targets) {
     const before = previousByRemote.get(target.remote_url);
     if (before && before.target_id !== target.target_id) throw new TargetRegistryError(`Target remote "${target.remote_url}" changed immutable target_id from "${before.target_id}" to "${target.target_id}"`);
+  }
+
+  const effectiveRoles = (type: TargetType | undefined): ReadonlySet<string> =>
+    new Set(type === undefined ? TARGET_TYPE_ROLES.fullstack : TARGET_TYPE_ROLES[type]);
+  for (const before of previous.targets) {
+    const after = afterById.get(before.target_id)!;
+    const afterRoles = effectiveRoles(after.type);
+    const removedRoles = [...effectiveRoles(before.type)].filter((role) => !afterRoles.has(role));
+    if (removedRoles.length === 0) continue;
+    if (tasks === undefined) {
+      throw new TargetRegistryError(
+        `Target "${before.target_id}" cannot narrow type from "${before.type ?? "untyped"}" to "${after.type ?? "untyped"}" without current task history — load durable tasks and retry the registry write`,
+      );
+    }
+    for (const task of tasks) {
+      if (task.cancelled || task.machine.current === TaskState.DEPLOYED) continue;
+      const removedBinding = task.targetBindings.targets.find(
+        (binding) => binding.target_id === before.target_id && removedRoles.includes(binding.role),
+      );
+      if (removedBinding) {
+        throw new TargetRegistryError(
+          `Target "${before.target_id}" cannot narrow type from "${before.type ?? "untyped"}" to "${after.type ?? "untyped"}" while non-terminal task "${task.taskId}" binds removed role "${removedBinding.role}" — keep type "${before.type ?? "untyped"}" before running or resuming task ${task.taskId}`,
+        );
+      }
+    }
   }
 }

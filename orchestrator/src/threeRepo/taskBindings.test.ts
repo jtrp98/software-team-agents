@@ -4,9 +4,13 @@ import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import { classifyTask } from "../classification/taskClassifier.js";
+import { parseArgs } from "../cli.js";
+import { openTask } from "../cli/composition/taskIntake.js";
+import { TaskRegistry } from "../orchestrator/taskRegistry.js";
 import { initTaskMachine } from "../state/taskState.js";
-import { newPersistedTask } from "../store/taskStore.js";
+import { newPersistedTask, type PersistedTask } from "../store/taskStore.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
+import { defaultStateViewPath } from "../store/stateView.js";
 import Database from "../store/sqliteDatabase.js";
 import { assertBindingsImmutable, uniqueBoundTargetIds, validateNewTaskBindings, validatePersistedTaskBindings } from "./taskBindings.js";
 import { preflightThreeRepoTask } from "./preflight.js";
@@ -36,6 +40,139 @@ describe("Phase 2 task Target bindings", () => {
     expect(() => validateNewTaskBindings(both(), bindings(null, "frontend"), registry)).toThrow(/engineer roles/);
     expect(() => validateNewTaskBindings(classifyTask({ isTypoOrCopyOnly: true }), bindings(null, null), registry)).not.toThrow();
     expect(uniqueBoundTargetIds(bindings("backend", "backend"))).toEqual(["backend"]);
+  });
+
+  it("T-V9-008 applies type admission identically at creation and resume, while fullstack admits both roles", () => {
+    const typedRegistry: TargetRegistry = {
+      schema_version: 1,
+      targets: [
+        { target_id: "api", name: "API", remote_url: "https://github.com/acme/api.git", status: "active", type: "backend" },
+        { target_id: "web", name: "Web", remote_url: "https://github.com/acme/web.git", status: "active", type: "frontend" },
+        { target_id: "mvc", name: "MVC", remote_url: "https://github.com/acme/mvc.git", status: "active", type: "fullstack" },
+      ],
+    };
+    const frontend = classifyTask({ isClearBugFix: true, touchesFrontend: true });
+    const backend = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const fullstack = both();
+    const frontendOnApi = bindings(null, "api");
+    const backendOnWeb = bindings("web", null);
+    const bothOnMvc = bindings("mvc", "mvc");
+    const persisted = (taskId: string, classification: ReturnType<typeof classifyTask>, targetBindings: ReturnType<typeof bindings>) =>
+      newPersistedTask({ taskId, classification, machine: initTaskMachine(classification.pipeline, false), now: 1, targetBindings });
+
+    expect(() => validateNewTaskBindings(frontend, frontendOnApi, typedRegistry)).toThrow(/type "backend".*frontend-engineer.*bind it to an admitted role|type "backend".*frontend-engineer.*correct/);
+    expect(() => validatePersistedTaskBindings(persisted("resume-front", frontend, frontendOnApi), typedRegistry)).toThrow(/type "backend".*frontend-engineer/);
+    expect(() => validateNewTaskBindings(backend, backendOnWeb, typedRegistry)).toThrow(/type "frontend".*backend-engineer/);
+    expect(() => validatePersistedTaskBindings(persisted("resume-back", backend, backendOnWeb), typedRegistry)).toThrow(/type "frontend".*backend-engineer/);
+    expect(() => validateNewTaskBindings(fullstack, bothOnMvc, typedRegistry)).not.toThrow();
+    expect(() => validatePersistedTaskBindings(persisted("resume-mvc", fullstack, bothOnMvc), typedRegistry)).not.toThrow();
+  });
+
+  it("T-V9-008 refuses two Targets on one engineer role at creation and resume with the Q-3 fix", () => {
+    const typedRegistry: TargetRegistry = {
+      schema_version: 1,
+      targets: [
+        { target_id: "api", name: "API", remote_url: "https://github.com/acme/api.git", status: "active", type: "backend" },
+        { target_id: "worker", name: "Worker", remote_url: "https://github.com/acme/worker.git", status: "active", type: "backend" },
+      ],
+    };
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const targetBindings = {
+      targets: [
+        { target_id: "api", role: AgentStage.BACKEND_ENGINEER as const },
+        { target_id: "worker", role: AgentStage.BACKEND_ENGINEER as const },
+      ],
+    };
+    const persisted = newPersistedTask({
+      taskId: "same-role-resume",
+      classification,
+      machine: initTaskMachine(classification.pipeline, false),
+      now: 1,
+      targetBindings,
+    });
+    const expected = /backend-engineer.*api.*worker.*split into one task per Target, or bind them to different roles/;
+
+    expect(() => validateNewTaskBindings(classification, targetBindings, typedRegistry)).toThrow(expected);
+    expect(() => validatePersistedTaskBindings(persisted, typedRegistry)).toThrow(expected);
+  });
+
+  it("T-V9-008 returns the same explicit compatibility warnings at creation and resume", () => {
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const targetBindings = bindings("backend", null);
+    const moduleScope = { module: "legacy-module", designPath: "legacy-module/design.md", declaredTargetIds: [] };
+    const persisted = newPersistedTask({
+      taskId: "legacy-resume",
+      classification,
+      machine: initTaskMachine(classification.pipeline, false),
+      now: 1,
+      targetBindings,
+    });
+
+    const created = validateNewTaskBindings(classification, targetBindings, registry, { moduleScope });
+    const resumed = validatePersistedTaskBindings(persisted, registry, { moduleScope });
+    expect(created.warnings).toEqual(resumed.warnings);
+    expect(created.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/no declared type.*schema v1 compatibility/), expect.stringMatching(/declares no Targets.*unscoped/)]));
+  });
+
+  it("T-V9-008 enforces a declared module Target set on creation and resume", () => {
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const targetBindings = bindings("backend", null);
+    const persisted = newPersistedTask({
+      taskId: "scoped-resume",
+      classification,
+      machine: initTaskMachine(classification.pipeline, false),
+      now: 1,
+      targetBindings,
+    });
+    const moduleScope = { module: "sales", designPath: "sales/design.md", declaredTargetIds: ["frontend"] };
+
+    expect(() => validateNewTaskBindings(classification, targetBindings, registry, { moduleScope })).toThrow(/Target "backend".*outside module "sales".*## Targets/);
+    expect(() => validatePersistedTaskBindings(persisted, registry, { moduleScope })).toThrow(/Target "backend".*outside module "sales".*## Targets/);
+  });
+
+  it("T-V9-008 refuses type and module-scope errors before creating a durable task row", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "v9-binding-intake-"));
+    const knowledge = path.join(root, "knowledge");
+    const target = path.join(root, "target");
+    const config = path.join(root, "installation.yaml");
+    fs.mkdirSync(path.join(knowledge, "_docs", "module", "sales"), { recursive: true });
+    fs.mkdirSync(target, { recursive: true });
+    fs.writeFileSync(
+      path.join(knowledge, "targets.yaml"),
+      "schema_version: 1\ntargets:\n  - target_id: api\n    name: API\n    remote_url: https://github.com/acme/api.git\n    status: active\n    type: backend\n  - target_id: other\n    name: Other\n    remote_url: https://github.com/acme/other.git\n    status: active\n    type: backend\n",
+    );
+    fs.writeFileSync(path.join(knowledge, "_docs", "module", "sales", "design.md"), "# Design\n\n## Targets\n\n- api\n");
+    fs.writeFileSync(config, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\n`);
+    const previousConfig = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+    process.env.AGENTCLAUDE_INSTALLATION_CONFIG = config;
+    const store = new SqliteTaskStore(path.join(target, "state.db"));
+    const taskRegistry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(target) });
+    try {
+      const wrongType = parseArgs(["--task-id", "wrong-type", "--module", "sales", "--bug-fix", "--frontend", "--frontend-target", "api", "--project-root", target], target);
+      expect(() => openTask(taskRegistry, wrongType, "wrong-type")).toThrow(/type "backend"/);
+      expect(store.loadTask("wrong-type")).toBeNull();
+
+      const wrongScope = parseArgs(["--task-id", "wrong-scope", "--module", "sales", "--bug-fix", "--backend", "--backend-target", "other", "--project-root", target], target);
+      expect(() => openTask(taskRegistry, wrongScope, "wrong-scope")).toThrow(/outside module "sales"/);
+      expect(store.loadTask("wrong-scope")).toBeNull();
+
+      const sameRole = {
+        ...parseArgs(["--task-id", "same-role", "--module", "sales", "--bug-fix", "--backend", "--backend-target", "api", "--project-root", target], target),
+        targetBindings: {
+          targets: [
+            { target_id: "api", role: AgentStage.BACKEND_ENGINEER as const },
+            { target_id: "other", role: AgentStage.BACKEND_ENGINEER as const },
+          ],
+        },
+      };
+      expect(() => openTask(taskRegistry, sameRole, "same-role")).toThrow(/split into one task per Target, or bind them to different roles/);
+      expect(store.loadTask("same-role")).toBeNull();
+    } finally {
+      taskRegistry.close();
+      if (previousConfig === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+      else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = previousConfig;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("rejects retired/unknown creation bindings and immutable edits", () => {
@@ -109,6 +246,54 @@ describe("Phase 2 task Target bindings", () => {
 });
 
 describe("Phase 2 preflight", () => {
+  it("T-V9-008 derives module scope from persisted plan_source and keeps an unscoped legacy task resumable", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "v9-resume-module-scope-"));
+    try {
+      const framework = path.join(root, "framework");
+      const knowledge = path.join(root, "knowledge");
+      const target = path.join(root, "backend");
+      const moduleDir = path.join(knowledge, "_docs", "module", "sales");
+      initRepository(framework);
+      initRepository(knowledge);
+      initRepository(target);
+      fs.writeFileSync(path.join(target, ".git", "config"), "[remote \"origin\"]\n\turl = https://github.com/acme/backend.git\n");
+      fs.mkdirSync(path.join(knowledge, ".workflow"));
+      fs.mkdirSync(moduleDir, { recursive: true });
+      fs.writeFileSync(path.join(moduleDir, "design.md"), "# Design\n\n## Targets\n");
+      fs.writeFileSync(path.join(moduleDir, "plan.md"), "# Plan\n");
+      fs.writeFileSync(path.join(knowledge, "targets.yaml"), "schema_version: 1\ntargets:\n  - target_id: backend\n    name: Backend\n    remote_url: https://github.com/acme/backend.git\n    status: active\n    type: backend\n");
+      fs.writeFileSync(path.join(knowledge, ".workflow", "targets.local.yaml"), `schema_version: 1\ntargets:\n  backend:\n    path: ${JSON.stringify(target)}\n`);
+      const config = path.join(root, "installation.yaml");
+      fs.writeFileSync(config, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\n`);
+      const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+      const legacy = newPersistedTask({
+        taskId: "legacy-scoped",
+        classification,
+        machine: initTaskMachine(classification.pipeline, false),
+        now: 1,
+        targetBindings: bindings("backend", null),
+      });
+      const task = {
+        ...legacy,
+        runtimeTask: { version: 2, plan_source: path.join(moduleDir, "plan.md") } as unknown as PersistedTask["runtimeTask"],
+      };
+      const warnings: string[] = [];
+      const options = {
+        frameworkRoot: framework,
+        installationConfigPath: config,
+        bindingWarning: (message: string) => warnings.push(message),
+      };
+
+      expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, options)).not.toThrow();
+      expect(warnings).toEqual([expect.stringMatching(/module "sales" declares no Targets.*unscoped/)]);
+
+      fs.writeFileSync(path.join(moduleDir, "design.md"), "# Design\n\n## Targets\n\n- another-target\n");
+      expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, options)).toThrow(/Target "backend".*outside module "sales"/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("T-V1-16 two live Targets: each code stage writes its own and merely reads the other", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "three-repo-two-live-"));
     try {

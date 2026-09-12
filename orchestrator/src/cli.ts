@@ -796,7 +796,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string, depende
     }
 
     const orchestrator = openTask(registry, args, taskId);
-    for (const targetRoot of resolveQaWorkRoots(args.projectRoot, taskId, store)) {
+    for (const targetRoot of resolveQaWorkRoots(args.projectRoot, taskId, store, args.module)) {
       assertNoWorkspaceRunLock(args.projectRoot, targetRoot);
     }
 

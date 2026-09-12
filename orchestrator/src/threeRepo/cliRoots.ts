@@ -44,6 +44,7 @@ export function resolveWritableWorkRoots(
   taskId: string,
   store: TaskLookup,
   stage: AgentStage,
+  moduleName?: string,
 ): string[] {
   const configPath = installationConfigPath();
   try {
@@ -68,6 +69,7 @@ export function resolveWritableWorkRoots(
     roots3 = preflightThreeRepoTask(task, stage, {
       frameworkRoot: resolveFrameworkRoot(),
       installationConfigPath: configPath,
+      moduleName,
     });
   } catch (error) {
     throw new WritableWorkRootResolutionError(
@@ -100,8 +102,13 @@ export function resolveDocsRoot(projectRoot: string): string {
 }
 
 /** Thin wrapper naming the QA-side caller's intent — same resolver, same rules. */
-export function resolveQaWorkRoots(projectRoot: string, taskId: string, store: TaskLookup): string[] {
-  return resolveWritableWorkRoots(projectRoot, taskId, store, AgentStage.QA_ENGINEER);
+export function resolveQaWorkRoots(
+  projectRoot: string,
+  taskId: string,
+  store: TaskLookup,
+  moduleName?: string,
+): string[] {
+  return resolveWritableWorkRoots(projectRoot, taskId, store, AgentStage.QA_ENGINEER, moduleName);
 }
 
 /**
@@ -115,6 +122,7 @@ export function resolveQaWorkRoots(projectRoot: string, taskId: string, store: T
 export function resolveThreeRepoTaskLookup(
   projectRoot: string,
   store: TaskLookup,
+  moduleName?: string,
 ): ((taskId: string, stage: AgentStage) => { task: PersistedTask; roots: ThreeRepoRequestRoots }) | undefined {
   try {
     loadInstallationConfig(installationConfigPath());
@@ -126,6 +134,7 @@ export function resolveThreeRepoTaskLookup(
         roots: preflightThreeRepoTask(task, stage, {
           frameworkRoot: resolveFrameworkRoot(),
           installationConfigPath: installationConfigPath(),
+          moduleName,
         }),
       };
     };

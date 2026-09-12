@@ -114,14 +114,14 @@ export async function composeProductionTaskExecutor(
     taskRunLog: (id) => new RunLog(store.runsForTask(id)),
     autonomy: args.autonomy,
     stageRoots: loadStageRoots(args.projectRoot),
-    threeRepoTask: resolveThreeRepoTaskLookup(args.projectRoot, store),
+    threeRepoTask: resolveThreeRepoTaskLookup(args.projectRoot, store, args.module),
     enforceRoleWorkflow: fs.existsSync(path.join(args.projectRoot, "knowledge")),
     extraInstruction: `Environment: ${orchestrator.environment} — ${describeEnvironment(orchestrator.environment, args.projectRoot)}`,
     // T-V8-011 — feeds a real diff into task-specific retrieval when one
     // exists (a QA round, a repair attempt); a fresh DEV round simply has none yet.
     changedFiles: async (id) => {
       try {
-        const roots = resolveQaWorkRoots(args.projectRoot, id, store);
+        const roots = resolveQaWorkRoots(args.projectRoot, id, store, args.module);
         const results = await Promise.allSettled(roots.map((root) => gitChangedFiles(root)));
         return [...new Set(results.flatMap((result) => (result.status === "fulfilled" ? result.value : [])))];
       } catch {
@@ -130,9 +130,9 @@ export async function composeProductionTaskExecutor(
     },
   });
 
-  const qaRoots = resolveQaWorkRoots(args.projectRoot, taskId, store);
+  const qaRoots = resolveQaWorkRoots(args.projectRoot, taskId, store, args.module);
   const qaChangedFiles = async (): Promise<string[]> => {
-    const roots = resolveQaWorkRoots(args.projectRoot, taskId, store);
+    const roots = resolveQaWorkRoots(args.projectRoot, taskId, store, args.module);
     const results = await Promise.allSettled(roots.map((root) => gitChangedFiles(root)));
     return [...new Set(results.flatMap((result) => (result.status === "fulfilled" ? result.value : [])))];
   };
