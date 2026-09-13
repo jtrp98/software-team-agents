@@ -100,6 +100,23 @@ describe("AGY guard wrapper — allow is emitted on exactly one path", () => {
     expect(invoke(WRAPPER, root, writeCall(path.join(os.tmpdir(), "elsewhere.txt"))).allowed).toBe(false);
   });
 
+  it("T-V9-012 names a bound read-only Target", () => {
+    const root = workspace();
+    const writableTarget = workspace();
+    const readOnlyTarget = workspace();
+    const verdict = invoke(WRAPPER, root, writeCall(path.join(readOnlyTarget, "src", "foreign.ts")), {
+      AGENTCLAUDE_ROLE: "backend-engineer",
+      AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([writableTarget]),
+      AGENTCLAUDE_TARGET_WORK_ROOTS: JSON.stringify([
+        { targetId: "api", path: writableTarget, access: "write" },
+        { targetId: "web", path: readOnlyTarget, access: "read" },
+      ]),
+    });
+
+    expect(verdict.allowed).toBe(false);
+    expect(verdict.reason).toMatch(/Target "web".*bound read-only.*backend-engineer/);
+  });
+
   it("allows a tool it does not guard, rather than blocking unrelated work", () => {
     const root = workspace();
     const verdict = invoke(WRAPPER, root, JSON.stringify({ tool_name: "view_file", tool_info: { parameters: { TargetFile: ".git/config" } } }));

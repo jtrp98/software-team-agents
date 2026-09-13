@@ -84,6 +84,22 @@ function stackPathRules() {
   const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);
   return { write: list(parsed && parsed.write), deny: list(parsed && parsed.deny) };
 }
+function boundReadOnlyTarget(nodePath, target) {
+  let roots; try { roots = JSON.parse(process.env.AGENTCLAUDE_TARGET_WORK_ROOTS || '[]'); } catch { return null; }
+  if (!Array.isArray(roots)) return null;
+  const absolute = nodePath.resolve(target);
+  for (const candidate of roots) {
+    if (!candidate || typeof candidate !== 'object' || typeof candidate.targetId !== 'string' || typeof candidate.path !== 'string' || candidate.access !== 'read' || !nodePath.isAbsolute(candidate.path)) continue;
+    const root = nodePath.resolve(candidate.path);
+    const relative = nodePath.relative(root, absolute);
+    if (relative === '' || (!relative.startsWith('..' + nodePath.sep) && relative !== '..' && !nodePath.isAbsolute(relative))) return candidate.targetId;
+  }
+  return null;
+}
+function boundReadOnlyWhy(targetId) {
+  const role = process.env.AGENTCLAUDE_ROLE || 'current role';
+  return 'Blocked: Target "' + targetId + '" is bound read-only for this ' + role + ' invocation; writing to it is refused.';
+}
 function matchesGlob(pattern, target) {
   const clean = (p) => p.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
   const pat = clean(pattern);
@@ -145,6 +161,9 @@ export const StaGuards = async ({ project }) => {
   function checkOne(rawPath) {
     const { nodePath: np } = rootCache;
     const target = normalize(np, np.resolve(root, rawPath));
+
+    const readOnlyTarget = boundReadOnlyTarget(np, target);
+    if (readOnlyTarget !== null) return boundReadOnlyWhy(readOnlyTarget);
 
     if (isUnder(target, root)) return evaluateRules(rawPath, target);
     for (const workRoot of writableWorkRoots(np)) {

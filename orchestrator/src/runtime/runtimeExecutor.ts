@@ -2,7 +2,11 @@ import * as path from "node:path";
 import { AgentStage, TaskLevel } from "../types.js";
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { getAgent } from "../agents/registry.js";
-import { GUARD_STACK_RULES_ENV } from "../agents/pathPermissions.js";
+import {
+  GUARD_STACK_RULES_ENV,
+  GUARD_TARGET_WORK_ROOTS_ENV,
+  serializeGuardTargetWorkRoots,
+} from "../agents/pathPermissions.js";
 import { resolveStackPathRules } from "../profile/projectProfile.js";
 import { loadTargetConfig } from "../targetcli/targetMeta.js";
 import { resolveAgentEffort, resolveAgentModel, resolveAgentVersion } from "../agents/agentModel.js";
@@ -404,7 +408,24 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       if (!handoff.allowed) return failResult(handoff.reason ?? `cannot start ${role}: role workflow gate failed`);
     }
 
-    const workRoot = threeRepo?.roots.workRoots.find((root) => root.access === "write") ?? threeRepo?.roots.workRoots[0];
+    const stageWorkRoots = threeRepo?.roots.workRoots ?? [];
+    const stageWritableRoots = stageWorkRoots.filter((root) => root.access === "write");
+    if (threeRepo && (req.stage === AgentStage.BACKEND_ENGINEER || req.stage === AgentStage.FRONTEND_ENGINEER)) {
+      if (stageWritableRoots.length === 0) {
+        const readOnlyTargets = stageWorkRoots.map((root) => `"${root.targetId}"`).join(", ") || "none";
+        return failResult(
+          `cannot start ${role}: Target ${readOnlyTargets} is bound read-only for this ${role} invocation; ` +
+          "exactly one writable Target must be resolved before an engineer adapter can start",
+        );
+      }
+      if (stageWritableRoots.length > 1) {
+        return failResult(
+          `cannot start ${role}: Targets ${stageWritableRoots.map((root) => `"${root.targetId}"`).join(", ")} ` +
+          `would be writable in one ${role} invocation; split into one task per Target, or bind them to different roles`,
+        );
+      }
+    }
+    const workRoot = stageWritableRoots[0] ?? stageWorkRoots[0];
     let incomingHandoff;
     try {
       incomingHandoff = handoffFromContext(req.context);
@@ -464,7 +485,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           extra: opts.extraInstruction,
         });
         if (JSON.stringify([...packet.scope.allow].sort()) !== JSON.stringify([...new Set(guards.writeAllow)].sort())) throw new Error("packet scope differs from the enforced stage contract; recompile with current stage grants");
-        const expectedRoots = threeRepo ? threeRepo.roots.workRoots.filter(root => root.access === "write").map(root => path.resolve(root.path)) : [path.resolve(executionRoot)];
+        const expectedRoots = threeRepo ? stageWritableRoots.map(root => path.resolve(root.path)) : [path.resolve(executionRoot)];
         if (JSON.stringify(packet.scope.roots.map(root => path.resolve(root)).sort()) !== JSON.stringify(expectedRoots.sort())) throw new Error("packet work roots differ from effective stage guard roots; recompile");
         const preview = generatePromptPreview(packet, {
           current_revision: packet.identity.base_revision,
@@ -511,7 +532,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // that do not supply a registry retain the fixed-runtime compatibility
     // behaviour.
     const writableRootPaths = threeRepo
-      ? threeRepo.roots.workRoots.filter((root) => root.access === "write").map((root) => root.path)
+      ? stageWritableRoots.map((root) => root.path)
       : (opts.frozenAttempt?.guard_evidence.writable_roots ?? []);
     const hasTargetWrite = writableRootPaths.length > 0 || (opts.frozenAttempt?.guard_evidence.target_write ?? false);
     const requiresInteractivity = requiredCapabilitiesFor(
@@ -848,6 +869,9 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
             // them the canonical write roots resolved by preflight; never derive
             // scope from cwd or an agent-provided path.
             ...(hasTargetWrite ? { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify(writableRootPaths) } : {}),
+            // Read-only siblings never enter the write-root grant above. Their
+            // ids ride separately so a guard can name the Target it refuses.
+            ...(threeRepo ? { [GUARD_TARGET_WORK_ROOTS_ENV]: serializeGuardTargetWorkRoots(stageWorkRoots) } : {}),
             // The read-only Knowledge context, for prompts/hooks that need to
             // name where module documents actually live.
             ...(threeRepo?.roots.knowledgeRoot ? { AGENTCLAUDE_KNOWLEDGE_ROOT: threeRepo.roots.knowledgeRoot } : {}),

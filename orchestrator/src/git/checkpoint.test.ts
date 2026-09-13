@@ -14,6 +14,7 @@ import {
   checkpointMessages,
   CheckpointRefusal,
   checkpointTask,
+  assertCheckpointPaths,
   parsePorcelainStatus,
 } from "./checkpoint.js";
 import { defaultGitProcessRunner, GitCommandLayer, type GitProcessRunner } from "./commandLayer.js";
@@ -122,6 +123,15 @@ describe("checkpoint status parsing and messages", () => {
 });
 
 describe("checkpoint integration", () => {
+  it.each(["api", "web"])("T-V9-012 refuses a %s Target path outside that invocation's resolved writable root", (targetId) => {
+    const root = fixture();
+    try {
+      expect(() => assertCheckpointPaths(root, ["outside.txt"], [path.join(root, "src")])).toThrow(
+        /escaped the resolved writable roots/,
+      );
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("stages only status-derived paths, commits additions/deletions with trailers, and creates no tags", async () => {
     const root = fixture();
     const calls: string[][] = [];

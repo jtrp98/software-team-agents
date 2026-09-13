@@ -1001,6 +1001,31 @@ check(
   ALLOW,
 );
 
+withTempProject((writableTarget) => {
+  withTempProject((readOnlyTarget) => {
+    const targetEnv = withStackRules('backend-engineer', {
+      CLAUDE_PROJECT_DIR: writableTarget,
+      AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([writableTarget]),
+      AGENTCLAUDE_TARGET_WORK_ROOTS: JSON.stringify([
+        { targetId: 'api', path: writableTarget, access: 'write' },
+        { targetId: 'web', path: readOnlyTarget, access: 'read' },
+      ]),
+    });
+    const res = spawnSync(process.execPath, [path.join(HOOKS, 'block-path-permissions.js')], {
+      input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: path.join(readOnlyTarget, 'src', 'foreign.ts') } }),
+      encoding: 'utf8',
+      env: { ...process.env, AGENTCLAUDE_ROLE: 'backend-engineer', ...targetEnv },
+      cwd: writableTarget,
+      timeout: 60000,
+    });
+    check(
+      'T-V9-012 bound read-only Target -> blocked by the Claude guard and named in its message',
+      res.status === BLOCK && /Target "web".*bound read-only.*backend-engineer/.test(res.stderr) ? 0 : 1,
+      0,
+    );
+  });
+});
+
 // The two halves arrive together or not at all. Without the layout half, the
 // layout paths are in neither the write list nor the deny list, so the path
 // lands on deny-by-default: the missing-channel failure is stricter than

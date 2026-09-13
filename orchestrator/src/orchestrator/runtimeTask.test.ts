@@ -162,6 +162,49 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
     expect(JSON.stringify(runtimeTask.scope)).not.toContain("not-a-work-root");
   });
 
+  it("T-V9-012 carries stage, Target, root and allow rules for split and fullstack shapes", () => {
+    const { docsRoot, targetRoot: apiRoot } = fixture();
+    const webRoot = path.join(path.dirname(apiRoot), "web-target");
+    fs.mkdirSync(webRoot);
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true, touchesFrontend: true });
+
+    const split = buildRuntimeTask({
+      taskId: "T-SCOPE",
+      workflow: "bugfix",
+      classification,
+      projectRoot: defaultProjectRoot(),
+      docsRoot,
+      moduleName: "orders",
+      targetWorkRoots: [
+        { stage: AgentStage.BACKEND_ENGINEER, targetId: "api", path: apiRoot },
+        { stage: AgentStage.FRONTEND_ENGINEER, targetId: "web", path: webRoot },
+      ],
+    })!;
+    expect(split.scope.work_roots).toEqual([
+      expect.objectContaining({ stage: AgentStage.BACKEND_ENGINEER, target_id: "api", root: apiRoot, allow: expect.any(Array) }),
+      expect.objectContaining({ stage: AgentStage.FRONTEND_ENGINEER, target_id: "web", root: webRoot, allow: expect.any(Array) }),
+    ]);
+    expect(split.scope.work_roots.every((root) => root.allow.length > 0)).toBe(true);
+
+    const fullstack = buildRuntimeTask({
+      taskId: "T-SCOPE",
+      workflow: "bugfix",
+      classification,
+      projectRoot: defaultProjectRoot(),
+      docsRoot,
+      moduleName: "orders",
+      targetWorkRoots: [
+        { stage: AgentStage.BACKEND_ENGINEER, targetId: "mvc", path: apiRoot },
+        { stage: AgentStage.FRONTEND_ENGINEER, targetId: "mvc", path: apiRoot },
+      ],
+    })!;
+    expect(fullstack.scope.work_roots.map((root) => ({ stage: root.stage, target_id: root.target_id, root: root.root }))).toEqual([
+      { stage: AgentStage.BACKEND_ENGINEER, target_id: "mvc", root: apiRoot },
+      { stage: AgentStage.FRONTEND_ENGINEER, target_id: "mvc", root: apiRoot },
+    ]);
+    expect(new Set(fullstack.scope.work_roots.map((root) => root.root))).toEqual(new Set([apiRoot]));
+  });
+
   it("records deterministic unavailability reasons instead of inventing missing fields", () => {
     const runtimeTask = buildRuntimeTask({
       taskId: "T-ADHOC",

@@ -14,7 +14,7 @@ import { pathToFileURL } from "node:url";
 const pluginHref = pathToFileURL(path.resolve(import.meta.dirname, "../../../.opencode/plugin/sta-guards.js")).href;
 
 const roots: string[] = [];
-const envKeys = ["AGENTCLAUDE_ROLE", "AGENTCLAUDE_WRITABLE_WORK_ROOTS", "AGENTCLAUDE_KNOWLEDGE_ROOT"] as const;
+const envKeys = ["AGENTCLAUDE_ROLE", "AGENTCLAUDE_WRITABLE_WORK_ROOTS", "AGENTCLAUDE_TARGET_WORK_ROOTS", "AGENTCLAUDE_KNOWLEDGE_ROOT"] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -123,6 +123,29 @@ describe("sta-guards plugin (OpenCode)", () => {
     // An ungated sibling of the granted root stays blocked.
     await expect(guard("write", { filePath: path.join(targetRoot, "..", "sibling.txt") })).rejects.toThrow(
       /outside the workspace root|outside this role/,
+    );
+  });
+
+  it("T-V9-012 names a bound read-only Target and keeps an unbound Target outside the write scope", async () => {
+    const root = workspace();
+    const writableTarget = fs.mkdtempSync(path.join(os.tmpdir(), "sta-guards-writable-target-"));
+    const readOnlyTarget = fs.mkdtempSync(path.join(os.tmpdir(), "sta-guards-readonly-target-"));
+    const unboundTarget = fs.mkdtempSync(path.join(os.tmpdir(), "sta-guards-unbound-target-"));
+    roots.push(writableTarget, readOnlyTarget, unboundTarget);
+    process.env.AGENTCLAUDE_ROLE = "backend-engineer";
+    process.env.AGENTCLAUDE_WRITABLE_WORK_ROOTS = JSON.stringify([writableTarget]);
+    process.env.AGENTCLAUDE_TARGET_WORK_ROOTS = JSON.stringify([
+      { targetId: "api", path: writableTarget, access: "write" },
+      { targetId: "web", path: readOnlyTarget, access: "read" },
+    ]);
+    const guard = await hookFor(root);
+
+    await expect(guard("write", { filePath: path.join(writableTarget, "src", "owned.ts") })).resolves.toBeUndefined();
+    await expect(guard("write", { filePath: path.join(readOnlyTarget, "src", "foreign.ts") })).rejects.toThrow(
+      /Target "web".*bound read-only.*backend-engineer/,
+    );
+    await expect(guard("write", { filePath: path.join(unboundTarget, "src", "unbound.ts") })).rejects.toThrow(
+      /outside the workspace root/,
     );
   });
 

@@ -186,6 +186,28 @@ function globToRegExp(pattern: string): RegExp {
  */
 export const GUARD_STACK_RULES_ENV = "AGENTCLAUDE_STACK_PATH_RULES";
 
+/**
+ * Full Target access map for a single invocation. This is identification data
+ * for guard refusal messages, not a grant: only
+ * `AGENTCLAUDE_WRITABLE_WORK_ROOTS` can open a write root.
+ */
+export const GUARD_TARGET_WORK_ROOTS_ENV = "AGENTCLAUDE_TARGET_WORK_ROOTS";
+
+export interface GuardTargetWorkRoot {
+  readonly targetId: string;
+  readonly path: string;
+  readonly access: "read" | "write";
+}
+
+/** Canonical, minimal guard payload; callers must pass the preflight result unchanged. */
+export function serializeGuardTargetWorkRoots(roots: readonly GuardTargetWorkRoot[]): string {
+  return JSON.stringify(roots.map((root) => ({
+    targetId: root.targetId,
+    path: path.resolve(root.path),
+    access: root.access,
+  })));
+}
+
 /** Marker pair delimiting the generated block inside each hook. Whole lines, like every other Framework block. */
 export const GUARD_RULES_OPEN = "// sta:guard-rules-start";
 export const GUARD_RULES_CLOSE = "// sta:guard-rules-end";
@@ -225,6 +247,22 @@ const GUARD_RULE_FUNCTION_SOURCE: readonly string[] = [
   "  try { parsed = JSON.parse(process.env.AGENTCLAUDE_STACK_PATH_RULES || '{}'); } catch { return { write: [], deny: [] }; }",
   "  const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);",
   "  return { write: list(parsed && parsed.write), deny: list(parsed && parsed.deny) };",
+  "}",
+  "function boundReadOnlyTarget(nodePath, target) {",
+  `  let roots; try { roots = JSON.parse(process.env.${GUARD_TARGET_WORK_ROOTS_ENV} || '[]'); } catch { return null; }`,
+  "  if (!Array.isArray(roots)) return null;",
+  "  const absolute = nodePath.resolve(target);",
+  "  for (const candidate of roots) {",
+  "    if (!candidate || typeof candidate !== 'object' || typeof candidate.targetId !== 'string' || typeof candidate.path !== 'string' || candidate.access !== 'read' || !nodePath.isAbsolute(candidate.path)) continue;",
+  "    const root = nodePath.resolve(candidate.path);",
+  "    const relative = nodePath.relative(root, absolute);",
+  "    if (relative === '' || (!relative.startsWith('..' + nodePath.sep) && relative !== '..' && !nodePath.isAbsolute(relative))) return candidate.targetId;",
+  "  }",
+  "  return null;",
+  "}",
+  "function boundReadOnlyWhy(targetId) {",
+  "  const role = process.env.AGENTCLAUDE_ROLE || 'current role';",
+  "  return 'Blocked: Target \"' + targetId + '\" is bound read-only for this ' + role + ' invocation; writing to it is refused.';",
   "}",
   "function matchesGlob(pattern, target) {",
   "  const clean = (p) => p.replace(/\\\\/g, '/').replace(/^\\.\\//, '').replace(/^\\/+/, '');",
