@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://agentclaude.local/schemas/knowledge-item.schema.json",
+  "$id": "https://software-team-agents.local/schemas/knowledge-item.schema.json",
   "title": "Knowledge item (knowledge/<module>/<kind>/<ID>.yaml)",
   "description": "One fact the project knows about itself — a requirement, a business rule, a domain term, an architecture note, an API, a DB model, an ADR, a task, or a test (T61). Every kind shares one envelope so a query can cross kinds; only `payload` differs, discriminated on `kind`. One item per file: two people editing different items edit different files, so git merges them without a conflict. The file is the source of truth — nothing derives an index from it, because a stored derivation is a second source of truth waiting to disagree with the first.",
   "type": "object",
@@ -63,7 +63,7 @@
       "minLength": 1
     },
     "target_ids": {
-      "type": "array", "maxItems": 2, "uniqueItems": true,
+      "type": "array", "uniqueItems": true,
       "items": { "type": "string", "minLength": 1 }
     },
     "module": {
@@ -403,7 +403,6 @@
           "type": ["string", "null"],
           "minLength": 1
         }
-        ,"target_id": { "type": ["string", "null"], "minLength": 1 }
       }
     },
     "testPayload": {

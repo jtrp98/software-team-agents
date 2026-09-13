@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import { AgentStage } from "../types.js";
-import { firstTable, sections } from "./markdown.js";
 import { taskGraphFromPlan } from "../graph/taskGraph.js";
 import { designEvidenceForClaims, parseDesignEvidence } from "./designEvidence.js";
 
@@ -10,6 +9,7 @@ const taskId = z.string().regex(/^[A-Z][A-Z0-9]*-[A-Za-z0-9][A-Za-z0-9._-]*$/);
 const traceId = z.string().regex(/^(?:REQ-\d+|AC-\d+(?:\.\d+)?|DES-\d+|DEC-\d+)$/);
 const contractId = z.string().regex(/^Contract:[A-Za-z][A-Za-z0-9_.-]*\.v[1-9]\d*$/);
 const unique = <T extends z.ZodType>(item: T) => z.array(item).refine(xs => new Set(xs).size === xs.length, "duplicate entry");
+const targetId = z.string().regex(/^[a-z][a-z0-9-]*$/);
 
 /** Internal normalization only. plan.md is the authored authority; no JSON sidecar. */
 export const PlanTaskSchema = z.strictObject({
@@ -34,10 +34,11 @@ export const PlanTaskSchema = z.strictObject({
   acceptanceCriteria: text,
   validationAndEvidence: text,
   compatibility: text,
+  targets: unique(targetId).optional(),
 });
 export type PlanTask = z.infer<typeof PlanTaskSchema>;
 export const PLAN_TASK_FIELD_CONSUMERS: Record<keyof PlanTask, readonly string[]> = {
-  version: ["compiler", "migration"], id: ["compiler", "DAG", "run ledger"], phase: ["DAG", "context"],
+  version: ["compiler"], id: ["compiler", "DAG", "run ledger"], phase: ["DAG", "context"],
   title: ["DEV", "QA"], objective: ["DEV", "QA"], why: ["DEV", "QA"], owner: ["compiler", "runtime"],
   tier: ["route resolver"], dependsOn: ["DAG", "readiness", "run ledger"], traceability: ["compiler", "context", "DEV", "QA"],
   produces: ["DAG", "dependency handoff"], consumes: ["DAG", "dependency handoff"], risk: ["gate policy", "QA"],
@@ -45,6 +46,7 @@ export const PLAN_TASK_FIELD_CONSUMERS: Record<keyof PlanTask, readonly string[]
   retrievalHints: ["context resolver", "DEV", "QA"], doNotModify: ["compiler", "DEV", "QA"],
   acceptanceCriteria: ["compiler", "DEV", "QA"], validationAndEvidence: ["deterministic verifier", "DEV", "QA"],
   compatibility: ["DEV", "QA", "rollback"],
+  targets: ["plan validator", "compiler", "DEV", "QA"],
 };
 export interface PlanReferences { requirementMd: string; designMd: string }
 export interface CanonicalPlan { tasks: PlanTask[]; problems: string[] }
@@ -53,6 +55,7 @@ const fields = {
   "Objective": "objective", "Why": "why", "Owner": "owner", "Tier": "tier",
   "Depends on": "dependsOn", "Traceability": "traceability", "Produces": "produces",
   "Consumes": "consumes", "Risk": "risk", "Human gate": "humanGate", "Status": "status",
+  "Targets": "targets",
 } as const;
 const bodies = {
   "Scope and constraints": "scopeAndConstraints", "Retrieval hints": "retrievalHints",
@@ -60,11 +63,11 @@ const bodies = {
   "Required validation and expected evidence": "validationAndEvidence",
   "Rollback/compatibility notes": "compatibility",
 } as const;
-const listFields = new Set(["dependsOn", "traceability", "produces", "consumes", "risk", "humanGate"]);
+const listFields = new Set(["dependsOn", "traceability", "produces", "consumes", "risk", "humanGate", "targets"]);
 export const isCanonicalPlan = (md: string): boolean => /^\s*PlanTask\s+format\b|^#{1,6}\s+Task\b/im.test(md);
 const normalize = (s: string) => s.replace(/\r\n?/g, "\n").trim();
 
-/** Strict v1 grammar; unsupported legacy inputs are never promoted with invented intent. */
+/** Strict v1 grammar; unsupported inputs are never promoted with invented intent. */
 export function parseCanonicalPlan(markdown: string, refs?: PlanReferences): CanonicalPlan {
   const problems: string[] = [];
   const tasks: PlanTask[] = [];
@@ -72,7 +75,7 @@ export function parseCanonicalPlan(markdown: string, refs?: PlanReferences): Can
   const markers = lines.filter(l => l.startsWith("PlanTask format:"));
   if (markers.length !== 1 || markers[0] !== "PlanTask format: 1") {
     const ids = [...markdown.matchAll(/\b(?:BE|FE|SA|QA)-[A-Za-z0-9._-]+\b/g)].map(m => m[0]);
-    return { tasks: [], problems: [`plan/tasks ${[...new Set(ids)].join(", ") || "(unidentified)"}: expected exactly one 'PlanTask format: 1'; legacy tables require explicit migrateLegacyTaskTable or author missing fields using docs/plan-task-v1.md`] };
+    return { tasks: [], problems: [`plan/tasks ${[...new Set(ids)].join(", ") || "(unidentified)"}: expected exactly one 'PlanTask format: 1'; STA-owned plan.md accepts the current canonical format only`] };
   }
   let phase: number | undefined;
   let current: Record<string, unknown> | undefined;
@@ -238,46 +241,4 @@ export function renderCanonicalTasks(tasks: readonly PlanTask[]): string {
     lines.push("");
   }
   return lines.join("\n");
-}
-
-/** Opt-in lossless conversion of expanded legacy tables only; never supplies missing prose. */
-export function migrateLegacyTaskTable(markdown: string, refs?: PlanReferences): CanonicalPlan & { markdown?: string } {
-  if (isCanonicalPlan(markdown)) return {tasks:[],problems:["migration: already versioned; use parseCanonicalPlan"]};
-  const raw: PlanTask[] = [], problems: string[] = [];
-  let migrated = markdown;
-  const allowed = ["Task", ...Object.keys(fields), ...Object.keys(bodies)];
-  for (const section of sections(markdown, 2)) {
-    const phase = /^Phase ([1-9]\d*)\b/.exec(section.title);
-    if (!phase) continue;
-    const table = firstTable(section.body);
-    const tableBlocks = section.body.match(/(?:^\|.*\|\r?\n?)+/gm) ?? [];
-    if (tableBlocks.length !== 1 || section.body.replace(tableBlocks[0] ?? "", "").trim()) {
-      problems.push(`${section.title}: ambiguous table/prose/checkbox content; amend task sections explicitly using docs/plan-task-v1.md`);
-    }
-    const phaseStart = raw.length;
-    if (new Set(table.header).size !== table.header.length || table.header.some(h=>!allowed.includes(h))) problems.push(`${section.title}: duplicate/unknown legacy columns; author canonical sections explicitly`);
-    for (const row of table.rows) {
-      const values = Object.fromEntries(table.header.map((h,i)=>[h,row[i]]));
-      const id = /^([A-Z][A-Z0-9]*-[A-Za-z0-9._-]+) — (.+)$/.exec(values.Task ?? "");
-      const label = values.Task || section.title;
-      if (!id || row.length !== table.header.length) { problems.push(`task ${label}: ambiguous legacy identity/cells; use docs/plan-task-v1.md`); continue; }
-      const obj: Record<string,unknown> = {version:1,id:id[1],title:id[2],phase:Number(phase[1])};
-      for (const [label,key] of Object.entries({...fields,...bodies})) {
-        const value = values[label];
-        if (key === "tier" && !value) continue;
-        obj[key] = listFields.has(key) && value !== undefined ? (value === "none" ? [] : value.split(",").map(s=>s.trim())) : value;
-      }
-      const parsed = PlanTaskSchema.safeParse(obj);
-      if (parsed.success) raw.push(parsed.data);
-      else for (const issue of parsed.error.issues) problems.push(`task ${id[1]}: legacy ${issue.path.join(".")} missing/ambiguous; author it in plan.md using docs/plan-task-v1.md`);
-    }
-    const converted = renderCanonicalTasks(raw.slice(phaseStart));
-    const taskStart = converted.indexOf("### Task ");
-    if (taskStart >= 0 && tableBlocks.length === 1) migrated = migrated.replace(section.body, section.body.replace(tableBlocks[0], converted.slice(taskStart) + "\n"));
-  }
-  if (!raw.length && !problems.length) problems.push("legacy plan has no complete expanded table; author task sections using docs/plan-task-v1.md");
-  if (problems.length) return {tasks:[],problems};
-  const rendered = `PlanTask format: 1\n\n${migrated}`;
-  const checked = parseCanonicalPlan(rendered, refs);
-  return {...checked,...(checked.problems.length ? {} : {markdown:rendered})};
 }

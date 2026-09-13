@@ -96,7 +96,7 @@ function gitAvailable(): boolean {
 describe("historyOf", () => {
   let root: string;
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-history-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-history-"));
   });
   afterEach(() => {
     fs.rmSync(root, { recursive: true, force: true });

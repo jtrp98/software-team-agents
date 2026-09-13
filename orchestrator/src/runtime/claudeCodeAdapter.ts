@@ -25,7 +25,7 @@ export type { SpawnSync } from "./runtimeAdapter.js";
 
 /**
  * The `RuntimeAdapter` for Claude Code: the `spawnSync("claude", ...)` call,
- * its JSON envelope, and its `AGENTCLAUDE_ROLE` environment variable, behind
+ * its JSON envelope, and its `STA_ROLE` environment variable, behind
  * the seam `runtimeAdapter.ts` defines instead of welded to
  * `agents/registry.ts` and `orchestrator.ts` directly.
  *
@@ -424,7 +424,7 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         maxBuffer: 64 * 1024 * 1024,
         input: req.prompt,
         // The one way a PreToolUse hook can know which agent is writing.
-        env: { ...process.env, ...req.env, AGENTCLAUDE_ROLE: req.role },
+        env: { ...process.env, ...req.env, STA_ROLE: req.role },
       }));
     } catch (e) {
       // A spawn that throws outright — not one that returns with `.error` set —

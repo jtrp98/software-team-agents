@@ -11,6 +11,7 @@
 >   READY, slash command/skill หาย, Claude Design MCP, Knowledge layout เพี้ยน) →
 >   [`README.md` § Ownership, health และ troubleshooting](README.md#ownership-health-และ-troubleshooting)
 > - **ให้ AI ตั้งให้แทน** → [`prompt-setup.md`](prompt-setup.md)
+> - **ให้ AI รีเฟรช knowledge ตามโค้ดจริง** → [`prompt-update-knowledge.md`](prompt-update-knowledge.md)
 
 ไฟล์นี้เหลือไว้เป็น pointer เพราะ URL/ชื่อไฟล์อาจถูกอ้างจากที่อื่น (bookmark, chat history เก่า) —
 เนื้อหาไม่ maintain แยกจาก README อีกต่อไป.

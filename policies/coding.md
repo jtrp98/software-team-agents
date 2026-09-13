@@ -1,4 +1,4 @@
-# Policy — Coding discipline (§5c, §9, §12, §19, §20)
+# Policy — Coding discipline (§5c, §9, §12, §19, §20, §21)
 
 Rules about how an engineer produces and
 verifies code, and how any agent treats what it thinks it already knows.
@@ -52,3 +52,19 @@ An architectural decision escalates to `system-analyst`, not settled in the edit
 When the same call has been made by hand repeatedly, and the answer is mechanical — same inputs, same verdict, by a rule a script can state — promote it out of LLM judgment into a hook, a `.claude/scripts/` checker, a `--check-*` verb, or a `test-pyramid.yaml` row. All three conditions hold together: a repeated check with a shifting oracle is not promotable. Every promotion carries a recorded rationale and a test that exercises the checker (`policies/security.md` §5d — a guard that fails open has shipped here twice). Promotion removes a decision from judgment because the answer is mechanical; it never lowers what a round must verify because a mechanical check passed.
 
 Never promotable: UX quality, ambiguous requirements, unknown failure modes, first-pass exploratory investigation, and `## Unverified Behaviour` — QA's honest declaration that with no test suite it *read* a rule rather than *executed* it.
+
+---
+
+## 21. A comment earns its place by answering why, not what
+
+A comment earns its place when deleting it would leave a competent reader of this code, this repository and its documents unable to answer a question the code cannot answer itself. The obligation is symmetric: where a real why exists — a workaround, an external constraint, a business rule not derivable from the code, a deliberate deviation — a comment is **required**. An engineer that reduces comments to zero has not satisfied this rule.
+
+**Write these when present:** a business rule the code implements but does not state (with its `REQ-`/`DES-` id where one exists); a constraint imposed from outside this code (a consumer still depending on an older shape, a contract this service does not own); a workaround for an external system, named; a non-obvious performance decision and its cost; a security reason; a deliberate deviation from local convention; a trade-off with the rejected alternative; an ordering or concurrency invariant not visible at the call site.
+
+**Rejected:** restating the next line; narrating structure (`loop through items`, `set variable`, `call API`, `return result`, `check null`, `render component`); labelling a block with its own function's name; decorative separators.
+
+**Carve-outs, each with its own rule:** API documentation comments (XMLDoc, JSDoc, docstrings) on public or exported surfaces are allowed and untouched — this section governs their prose, not their existence; `TODO`/`FIXME` only with a why and a route (owner or task id); regex explanation allowed and encouraged; algorithm explanation allowed when it names the algorithm, invariant or complexity trade-off; generated code is out of scope and keeps its banner; test comments allowed when they name the scenario or invariant; commented-out code is forbidden outright; file or module headers allowed when they state a purpose or boundary.
+
+**Scope:** this governs comments an engineer writes in Target application code. It is not a licence to write framework-length rationale essays, and it does not apply retroactively to `orchestrator/src/**`, whose long design-rationale headers are a deliberate choice of this repository. It does not cover commit messages, PR descriptions, artifact notes, module documents, or handoff summaries.
+
+Enforced by review, not by any lint, hook or checker (§20 — no stable mechanical oracle exists).

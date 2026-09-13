@@ -267,32 +267,6 @@ export function ownerOfPath(relativePath: string): RepositoryOwner {
   return "framework";
 }
 
-/**
- * Whether the content at `relativePath` is authored by the Framework rather
- * than by a project. The adoption importer must refuse these paths
- * (`policies/**`, `.claude/agents/**`, `contracts/**`, `workflows/**`,
- * `stacks/**`, `layout.yaml` and siblings) instead of duplicating them into a
- * project's knowledge graph. Reuses the two classifications this module
- * already maintains rather than introducing a third list: `ownerOfPath`'s
- * default bucket (everything not explicitly Knowledge- or Target-owned is
- * Framework's own repository content) and `instructionPathClass`'s
- * `framework-managed` instruction surface (e.g. `.claude/agents/**`, which
- * `ownerOfPath` alone would call "target" because of the shared `.claude`
- * prefix).
- */
-export function isFrameworkAuthoredPath(relativePath: string): boolean {
-  let owner: RepositoryOwner;
-  try {
-    owner = ownerOfPath(relativePath);
-  } catch {
-    // Regenerable runtime state (packets/evidence/runs) is never Framework
-    // rulebook content — let the caller's own handling decide what to do.
-    return false;
-  }
-  if (owner === "framework") return true;
-  return instructionPathClass(relativePath)?.owner === "framework";
-}
-
 /** Framework install/upgrade manifests may contain only framework-owned paths.
  * Legacy project mode is deliberately opt-in because its bindings share names
  * with Target instructions. */

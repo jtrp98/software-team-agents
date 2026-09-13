@@ -28,7 +28,7 @@ what re-proves the mechanical half of every claim below before any tag.
   write `knowledge/_roles/**` or `.workflow/**` at all — denied to every role, tested in
   `aiBoundary.test.ts`.
 - Target owns real source code. Agents write only inside preflight-resolved writable work roots
-  (`AGENTCLAUDE_WRITABLE_WORK_ROOTS`); a runtime that cannot enforce a pre-tool guard is refused for
+  (`STA_WRITABLE_WORK_ROOTS`); a runtime that cannot enforce a pre-tool guard is refused for
   Target-write runs (`runtimeExecutor.test.ts`).
 
 **Runtimes — claims come from one record:** support levels are declared in
@@ -43,7 +43,7 @@ Windows packaged flow is the one release-gated.
 
 **CLI surface (stable through V1):** `sta` — `init --mode`, `configure knowledge-root|identity`,
 `doctor`, `runtimes`, `run`, `status/approve/resume/retry/pause/cancel/audit`, `roles …`,
-`upgrade/migrate/rollback/adopt/knowledge-migrate`, the `--check-*` gates.
+`upgrade/migrate/rollback`, `knowledge get|reconcile`, and the `--check-*` gates.
 `software-team-agents` — `init/sync/status/dev/ba`. Additive changes only; breaking renames are post-V1.
 
 **Role contracts:** eleven agents (`setup`, `business-analyst`, `system-analyst`, `project-manager`,

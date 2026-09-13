@@ -341,9 +341,8 @@ export function referencedKnowledgeIds(docsRoot: string, moduleName: string, tas
 /**
  * T-V8-011 — the retrieval query a stage's optional code-intelligence lookup
  * should use, built from the exact canonical task named by `taskId` rather
- * than the module name alone. Only a canonical (v1, `"version" in task`)
- * plan row carries retrieval-relevant fields; a legacy row or an
- * unresolvable plan/task falls back to the module name, safely and visibly,
+ * than the module name alone. An absent, invalid, or unresolvable current
+ * plan/task falls back to the module name, safely and visibly,
  * exactly like `referencedKnowledgeIds` above does for knowledge ids.
  */
 export function taskRetrievalQueryFor(
@@ -355,7 +354,7 @@ export function taskRetrievalQueryFor(
   try {
     const plan = taskId ? readModuleDoc(docsRoot, moduleName, "plan.md") : null;
     const task = plan === null ? undefined : readWorkPlan(plan).tasks.find(task => task.id === taskId);
-    if (task && "version" in task) return buildTaskRetrievalQuery(task, { moduleName, changedFiles: opts.changedFiles });
+    if (task) return buildTaskRetrievalQuery(task, { moduleName, changedFiles: opts.changedFiles });
   } catch {
     // Falls through to the safe module-name query below — same additive posture as referencedKnowledgeIds.
   }

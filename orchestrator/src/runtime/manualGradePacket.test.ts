@@ -104,7 +104,7 @@ describe("T-V8-004 manual-grade packet", () => {
     expect(() => readExecutionPacket(file)).toThrow(/audit-only/);
     const task = runtimeTaskFixture(dir);
     fs.writeFileSync(task.plan_source, "## Phase 1\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| T-PACKET — description | pending | backend-engineer | — |\n");
-    expect(() => buildRuntimeTask({ taskId: "T-PACKET", workflow: "bugfix", projectRoot: defaultProjectRoot(), docsRoot: dir, moduleName: "packet-fixture", classification: classifyTask({ isClearBugFix: true, touchesBackend: true }), taskText: "description" })).toThrow(/legacy plan.*migrateLegacyTaskTable/);
+    expect(() => buildRuntimeTask({ taskId: "T-PACKET", workflow: "bugfix", projectRoot: defaultProjectRoot(), docsRoot: dir, moduleName: "packet-fixture", classification: classifyTask({ isClearBugFix: true, touchesBackend: true }), taskText: "description" })).toThrow(/current canonical PlanTask format 1/);
     const source = fs.readFileSync(new URL("../orchestrator/runtimeTask.ts", import.meta.url), "utf8");
     expect(source).not.toMatch(/return \{ why: input\.taskId|why: input\.taskText|extractAcceptanceCriteria\(requirementMd\)/);
   });

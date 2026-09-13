@@ -4,7 +4,7 @@ import { AgentStage, TaskState } from "../../types.js";
 import type { Orchestrator, AgentExecutor } from "../../orchestrator/orchestrator.js";
 import { createRuntimeExecutor } from "../../runtime/runtimeExecutor.js";
 import { withQaOptimization, riskSignalsFromClassification } from "../../qa/optimized.js";
-import { gitChangedFiles } from "../../qa/changeSource.js";
+import { collectQaChangedFiles } from "../../qa/changeSource.js";
 import { combineProjectRunners, createProjectRunner } from "../../qa/projectRunner.js";
 import { createPostDevVerificationHook, withPostDevVerificationDisabled } from "../../qa/verificationHook.js";
 import { createDocumentVerificationHook, withDocumentVerificationDisabled } from "../../qa/documentVerificationHook.js";
@@ -36,7 +36,7 @@ import { runtimeRegistryFor, type CliDependencies } from "./runtimeRegistry.js";
 export interface TaskExecutorComposition {
   executor: AgentExecutor;
   verificationFor(taskId: string): DeterministicVerification | undefined;
-}
+}
 
 /** The single production executor composition used by both manual and bounded-wave task paths. */
 export async function composeProductionTaskExecutor(
@@ -114,32 +114,33 @@ export async function composeProductionTaskExecutor(
     taskRunLog: (id) => new RunLog(store.runsForTask(id)),
     autonomy: args.autonomy,
     stageRoots: loadStageRoots(args.projectRoot),
-    threeRepoTask: resolveThreeRepoTaskLookup(args.projectRoot, store),
+    threeRepoTask: resolveThreeRepoTaskLookup(args.projectRoot, store, args.module),
     enforceRoleWorkflow: fs.existsSync(path.join(args.projectRoot, "knowledge")),
     extraInstruction: `Environment: ${orchestrator.environment} — ${describeEnvironment(orchestrator.environment, args.projectRoot)}`,
     // T-V8-011 — feeds a real diff into task-specific retrieval when one
     // exists (a QA round, a repair attempt); a fresh DEV round simply has none yet.
     changedFiles: async (id) => {
       try {
-        const roots = resolveQaWorkRoots(args.projectRoot, id, store);
-        const results = await Promise.allSettled(roots.map((root) => gitChangedFiles(root)));
-        return [...new Set(results.flatMap((result) => (result.status === "fulfilled" ? result.value : [])))];
+        const roots = resolveQaWorkRoots(args.projectRoot, id, store, args.module);
+        const { files } = await collectQaChangedFiles(roots);
+        return files;
       } catch {
         return [];
       }
     },
   });
 
-  const qaRoots = resolveQaWorkRoots(args.projectRoot, taskId, store);
+  const qaRoots = resolveQaWorkRoots(args.projectRoot, taskId, store, args.module);
   const qaChangedFiles = async (): Promise<string[]> => {
-    const roots = resolveQaWorkRoots(args.projectRoot, taskId, store);
-    const results = await Promise.allSettled(roots.map((root) => gitChangedFiles(root)));
-    return [...new Set(results.flatMap((result) => (result.status === "fulfilled" ? result.value : [])))];
+    const roots = resolveQaWorkRoots(args.projectRoot, taskId, store, args.module);
+    const { files } = await collectQaChangedFiles(roots);
+    return files;
   };
   // Resolved once, before composition: the contract carries the real file
   // manifest, and `withQaOptimization`'s contract hook is synchronous because
   // a packet's identity must not depend on a call that can still be in flight.
-  const qaContractChangedFiles = await qaChangedFiles().catch(() => [] as string[]);
+  const qaDiscovery = await collectQaChangedFiles(qaRoots).catch(() => ({ files: [] as string[], failedTargets: [] as string[] }));
+  const qaContractChangedFiles = qaDiscovery.files;
   const qaInputs = await productionQaInputs({
     docsRoot: resolveDocsRoot(args.projectRoot),
     moduleName: args.module ?? "",
@@ -147,6 +148,7 @@ export async function composeProductionTaskExecutor(
     roots: qaRoots,
     projectRoot: args.projectRoot,
     changedFiles: qaContractChangedFiles,
+    unreadableTargets: qaDiscovery.failedTargets.length > 0 ? qaDiscovery.failedTargets : undefined,
   });
 
   const verificationHook = args.noDeterministicGate
@@ -154,10 +156,11 @@ export async function composeProductionTaskExecutor(
     : createPostDevVerificationHook({
         inner: runtimeExecutor,
         deterministicRunner: () => combineProjectRunners(qaRoots.map((root) => ({
-          root,
+          targetId: root.targetId,
+          root: root.path,
           runner: createProjectRunner({
-            root,
-            workspace: new LocalWorkspace({ root }),
+            root: root.path,
+            workspace: new LocalWorkspace({ root: root.path }),
             staticGatePath: path.join(args.projectRoot, ".claude", "scripts", "static-analysis-gate.js"),
           }),
         }))),
@@ -215,4 +218,4 @@ export async function composeProductionTaskExecutor(
       context: [],
     }),
   };
-}
+}

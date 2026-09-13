@@ -20,7 +20,7 @@ export interface GateContext {
   requirementApproved?: boolean;
   /** Structured intake evidence. Complete confirmed input discharges only the redundant interview. */
   businessInput?: BusinessInputEvidence;
-  /** Risk facts derived from design.md after SA completes; absent rows keep the legacy universal gate. */
+  /** Risk facts derived from design.md after SA completes. */
   designAssessment?: DesignGateAssessment;
   designApproved?: boolean;
   qaReport?: QaReportArtifact;
@@ -50,9 +50,6 @@ export interface GateResult {
 }
 
 export function designGateReason(assessment: DesignGateAssessment): string {
-  if (assessment.mode === "legacy") {
-    return "DESIGN_EVIDENCE_MIGRATION required — legacy design uses safe whole-section fallback and cannot feed unattended execution until Design evidence format 1 is authored";
-  }
   return `DESIGN_RISK_CONFIRMATION required — ${assessment.triggers.join(", ")}`;
 }
 
@@ -103,7 +100,7 @@ export function checkGate(from: TaskState, to: TaskState, ctx: GateContext): Gat
           allowed: false,
           reason: ctx.designAssessment
             ? designGateReason(ctx.designAssessment)
-            : "DESIGN_APPROVED required before development can start (legacy universal-gate compatibility)",
+            : "DESIGN_APPROVED required before development can start",
         };
   }
 

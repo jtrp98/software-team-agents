@@ -19,7 +19,6 @@ knowledge/
 ├── _conflicts/          ← CONF-*.yaml: a person's decision about two facts that contradict
 ├── _bootstrap/          ← STATE.yaml: how far first-time discovery got
 ├── _human-input/        ← what a person supplied that no file could be read for
-├── _adoption/           ← retired in V5 (ADR-024); reserved directory skipped by item walk for legacy workspaces
 └── _roles/              ← <module>/<lane>.yaml: where BA, SA and DEV each stand
 ```
 
@@ -142,16 +141,15 @@ reached. A lane simply being *behind* is a note, not a failure — being told is
 
 Schema v2 adds `target_ids` and `sources[].origin`. An empty `target_ids` array
 is global; otherwise retrieval includes the item only for a bound Target named
-in the array and reports how many items scope excluded. `origin.root` is the
+in the array (an item may name every Target a module spans) and reports how
+many items scope excluded. `origin.root` is the
 only current/desired axis: `target` is current implementation evidence,
 `knowledge` is desired requirement/contract evidence, and `external` is
 evidence that may be unhashable locally.
 
-Preview and apply the invariant-preserving migration with `sta knowledge
-migrate-v2 --dry-run` and `sta knowledge migrate-v2`. The first freshness sweep
-after migration is explicitly a baseline, not a finding. Brief index lines show
-the existing `freshnessOf()` verdict; changed/unavailable items also show its
-one-line reason, still within the 16,384-byte cap.
+Brief index lines show the existing `freshnessOf()` verdict;
+changed/unavailable items also show its one-line reason, still within the
+16,384-byte cap.
 
 Run `sta knowledge reconcile --target <id>` (add `--json` for a stable report)
 to recompute current/desired classifications without writing or persisting a

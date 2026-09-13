@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import Database from "better-sqlite3";
+import Database from "../store/sqliteDatabase.js";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";

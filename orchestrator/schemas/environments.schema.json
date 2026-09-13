@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://agentclaude.local/schemas/environments.schema.json",
+  "$id": "https://software-team-agents.local/schemas/environments.schema.json",
   "title": "Environment descriptions (environments.yaml)",
   "description": "Optional. Describes the local/dev/staging/production environments a task can target (T43), so every agent's prompt can say which one it's in instead of only devops finding out at deploy time. The four names are fixed — this file only adds description/requires_approval metadata for names an agent already knows about; it does not invent new environment names. Absence is not an error: every project has the four built-in generic descriptions even with no file at all.",
   "type": "object",

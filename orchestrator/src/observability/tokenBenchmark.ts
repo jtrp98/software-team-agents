@@ -102,7 +102,7 @@ export function createTokenBenchmarkFixture(root = fs.mkdtempSync(path.join(os.t
 
 /**
  * Same exact document sizes as the plain fixture, but with a complete
- * REQ → DES → phase graph. It also has an explicitly headed legacy appendix:
+ * REQ → DES → phase graph. It also has an explicitly headed unclassified appendix:
  * a naive slicer must keep that unknown section, and only a validated handoff
  * supplying the narrower task index may drop it — the fixture measures both
  * safety postures.
@@ -121,24 +121,64 @@ export function createTraceableTokenBenchmarkFixture(
   ].join("");
   const requirement = fixedMiddleDocument(requirementPrefix, requirementSuffix, TOKEN_BENCHMARK_DOC_BYTES.requirement, "q");
 
+  const evidenceSource = "export const tokenFixture = 'current';\n";
+  fs.mkdirSync(path.join(root, "src"), { recursive: true });
+  fs.writeFileSync(path.join(root, "src", "token-fixture.ts"), evidenceSource, "utf8");
+  const revision = "a".repeat(40);
+  const evidenceHash = contentHash(evidenceSource);
+  const designSection = (number: number, title: string, relation: string, fill = "") => {
+    const des = `DES-${String(number).padStart(3, "0")}`;
+    const dec = `DEC-${String(number).padStart(3, "0")}`;
+    const contract = `Contract:${title.replace(/\s+/g, "")}.v1`;
+    const first = (number - 1) * 3 + 1;
+    const evidence = (offset: number, claim: string) => `Evidence EVD-${String(first + offset).padStart(3, "0")}: claim=${claim} | state=confirmed | path=src/token-fixture.ts | symbol=tokenFixture | line=1 | revision=${revision} | basis=source | tool=benchmark-read | hash=${evidenceHash}`;
+    return [
+      `## ${des} — ${title}`, relation, `${contract} — benchmark boundary.`, `${dec} — retain the benchmark boundary.`,
+      evidence(0, des), evidence(1, contract), evidence(2, dec),
+      "Compatibility: unchanged", "Data/schema: unchanged", "Migration/backfill: none", "Security: none",
+      "Fallback: retain the benchmark implementation.", "Material ambiguity: none", fill,
+    ].join("\n");
+  };
   const designPrefix = [
-    "# Design\n\n## Feature-by-Feature Feasibility\nDES-001 covers REQ-001\nDES-002 covers REQ-002\nDES-003 covers REQ-003\n\n",
-    "## Import Contract — DES-001\n", "i".repeat(8_000), "\n\n",
+    "# Design\n\nDesign evidence format: 1\n\n## Feature-by-Feature Feasibility\nDES-001 covers REQ-001\nDES-002 covers REQ-002\nDES-003 covers REQ-003\n\n",
+    // Canonical evidence metadata adds 1,135 characters to the selected
+    // section; reduce synthetic filler by the same amount so the benchmark's
+    // pinned selected-design byte count remains comparable.
+    designSection(1, "Import Contract", "DES-001 covers REQ-001", "i".repeat(6_865)), "\n\n",
     "## Data Model\n", "d".repeat(5_000), "\n\n",
     `## Modules\n### ${moduleName}\nselected module\n### other-module\n`, "m".repeat(4_000), "\n\n",
     "## Risks & Dependencies\nPinned risks.\n\n## Open Questions\nNone.\n\n## Change Log\n- 2026-08-27\n\n",
-    "## Legacy Design Appendix\n", "l".repeat(5_000), "\n\n",
-    "## Reporting Contract — DES-002\n",
+    "## Unclassified Design Appendix\n", "u".repeat(5_000), "\n\n",
+    designSection(2, "Reporting Contract", "DES-002 covers REQ-002"), "\n",
   ].join("");
-  const design = fixedDocument(designPrefix, TOKEN_BENCHMARK_DOC_BYTES.design);
+  const designSuffix = `\n\n${designSection(3, "Archive Contract", "DES-003 covers REQ-003")}\n`;
+  const design = fixedMiddleDocument(designPrefix, designSuffix, TOKEN_BENCHMARK_DOC_BYTES.design, "r");
 
-  const planPrefix = [
-    "# Plan\n\n## Plan Summary\nPinned.\n\n",
-    "## Phase 1: Import\n| Task | Status | Owner | Depends on | Produces | Consumes |\n|---|---|---|---|---|---|\n| BE-001 (DES-001) — import | pending | backend-engineer | — | design.md#Import-Contract-%E2%80%94-DES-001 | — |\n\n",
-    "## Open Questions\nNone.\n\n",
-    "## Phase 2: Reporting\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-002 (DES-002) — report | pending | backend-engineer | BE-001 |\n| FE-003 (DES-003) — archive | pending | frontend-engineer | BE-002 |\n",
-  ].join("");
-  const plan = fixedDocument(planPrefix, TOKEN_BENCHMARK_DOC_BYTES.plan);
+  const benchmarkTask = (input: { id: string; phase: number; title: string; owner: AgentStage; dependsOn: string[]; req: string; des: string }) => PlanTaskSchema.parse({
+    version: 1, id: input.id, phase: input.phase, title: input.title,
+    objective: `Deliver ${input.title.toLowerCase()} for the selected benchmark task.`,
+    why: `The benchmark needs ${input.id} to remain independently selectable.`, owner: input.owner,
+    dependsOn: input.dependsOn, traceability: [input.req, "AC-001.1", input.des], produces: [], consumes: [],
+    risk: ["low"], humanGate: [], status: "pending",
+    scopeAndConstraints: `Limit ${input.id} to its selected benchmark boundary.`,
+    retrievalHints: `Hypothesis: The ${input.title.toLowerCase()} handler is the likely boundary; confirm it.\nQuery: Locate definitions and references for ${input.title.toLowerCase()}.\nProvenance: ${input.des}`,
+    doNotModify: `Unrelated behavior outside ${input.id}.`,
+    acceptanceCriteria: `AC-001.1: ${input.id} preserves its selected behavior.`,
+    validationAndEvidence: `Verify AC-001.1 for ${input.id} and record the command, exit code and result.`,
+    compatibility: `Preserve consumers outside ${input.id}.`,
+  });
+  const planPrefix = renderCanonicalTasks([
+    benchmarkTask({ id: "BE-001", phase: 1, title: "Import", owner: AgentStage.BACKEND_ENGINEER, dependsOn: [], req: "REQ-001", des: "DES-001" }),
+    benchmarkTask({ id: "BE-002", phase: 2, title: "Reporting", owner: AgentStage.BACKEND_ENGINEER, dependsOn: ["BE-001"], req: "REQ-002", des: "DES-002" }),
+    benchmarkTask({ id: "FE-003", phase: 2, title: "Archive", owner: AgentStage.FRONTEND_ENGINEER, dependsOn: ["BE-002"], req: "REQ-003", des: "DES-003" }),
+  ])
+    .replace("PlanTask format: 1\n\n", "PlanTask format: 1\n\n## Plan Summary\nPinned.\n\n")
+    .replace("## Phase 1\n", "## Phase 1: Import\n")
+    .replace("## Phase 2\n", "## Phase 2: Reporting\n");
+  // Place fixed-size padding inside the unselected phase, before the final
+  // always-read heading, so the benchmark measures phase slicing rather than
+  // accidentally pinning all padding as an open question.
+  const plan = fixedMiddleDocument(planPrefix, "\n## Unresolved Open Questions\nNone.\n", TOKEN_BENCHMARK_DOC_BYTES.plan);
   const docs: Record<string, string> = {
     "requirement.md": requirement,
     "design.md": design,

@@ -35,8 +35,8 @@ attempt. An identical repeat is idempotent; different content at the same attemp
 is refused. The reader validates the content hash and can compare expected
 revision, plan, config and compiler identity. Retention is unchanged. Legacy
 packets and RuntimeTasks remain readable for audit, but legacy packet execution
-is refused. Author missing canonical fields (or explicitly migrate a complete
-expanded table), then recompile in a new attempt. There is no in-place packet
+is refused. Author the missing canonical fields in the current plan, then
+recompile in a new attempt. There is no in-place packet
 upgrade or real-data migration.
 
 The ordinary two-repair stop appears in the packet; the existing global retry

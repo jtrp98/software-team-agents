@@ -68,13 +68,13 @@ function validator(): ValidateFunction {
 }
 
 export function defaultInstallationConfigPath(platform = process.platform, localAppData = process.env.LOCALAPPDATA, home = os.homedir()): string {
-  // Isolation channel for tests and packaged-E2E runs (`AGENTCLAUDE_INSTALLATION_CONFIG`,
+  // Isolation channel for tests and packaged-E2E runs (`STA_INSTALLATION_CONFIG`,
   // already honoured by cli.ts's explicit-config paths): when set, every reader —
   // including resolveRoots and the target CLI's default-path lookups — resolves
   // installation state from here instead of the machine's real binding. Without
   // this one hook, an E2E on a configured machine would silently read that
   // machine's real Knowledge root and cease to be deterministic.
-  const override = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+  const override = process.env.STA_INSTALLATION_CONFIG;
   if (override && override.length > 0) return path.resolve(override);
   if (platform === "win32") {
     if (!localAppData) throw new InstallationConfigError("LOCALAPPDATA is unavailable; cannot resolve installation config path");

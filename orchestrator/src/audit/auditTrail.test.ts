@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import Database from "better-sqlite3";
+import Database from "../store/sqliteDatabase.js";
 import {
   actorsIn,
   auditTrail,
@@ -39,7 +39,7 @@ function qaReport(status: "PASS" | "FAIL"): QaReportArtifact {
 
 const tempDirs: string[] = [];
 function tempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-audit-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sta-audit-"));
   tempDirs.push(dir);
   return dir;
 }

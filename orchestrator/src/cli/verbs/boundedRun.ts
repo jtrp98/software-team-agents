@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { AgentStage } from "../../types.js";
 import { flagValue } from "../support.js";
@@ -30,6 +31,22 @@ import { RUNTIME_IDS, type RuntimeId } from "../../runtime/runtimeSupport.js";
 import type { RuntimeAutonomy } from "../../runtime/runtimeAdapter.js";
 import { loadStaConfig, StaConfigMissingError } from "../../packaging/staConfig.js";
 import { contentHash, stableHash } from "../../artifacts/executionPacket.js";
+import { defaultInstallationConfigPath, loadInstallationConfig, type InstallationConfig } from "../../threeRepo/installation.js";
+import { loadTargetRegistry, TARGET_TYPE_ROLES, type TargetRegistry, TargetRegistryError } from "../../threeRepo/targets.js";
+import { loadLocalTargetMapping, type ResolvedLocalTarget } from "../../threeRepo/localTargets.js";
+import { resolveModuleTargets } from "../../threeRepo/moduleTargetResolver.js";
+import {
+  validateNewTaskBindings,
+  TaskBindingError,
+  type TargetBinding,
+  type TargetBindings,
+  type TargetBindingRole,
+  type TaskBindingModuleScope,
+} from "../../threeRepo/taskBindings.js";
+import { preflightThreeRepoTask, TargetPreflightError } from "../../threeRepo/preflight.js";
+import type { RuntimeTaskWorkRoot } from "../../orchestrator/runtimeTask.js";
+import { resolveFrameworkRoot } from "../../targetcli/roots.js";
+import { parseCanonicalPlan } from "../../docs/planTask.js";
 
 /**
  * T-V8-021 — the explicit bounded-run CLI.
@@ -75,6 +92,7 @@ export interface BoundedRunArgs {
   resumeRunId?: string;
   targetRoot?: string;
   targetId?: string;
+  targetIds?: string[];
   knowledgeRoot?: string;
   runBranch?: string;
   runtime?: RuntimeId;
@@ -85,7 +103,7 @@ export interface BoundedRunArgs {
 }
 
 export const BOUNDED_RUN_USAGE =
-  "sta bounded-run --module <name> (--all | --phase <n> | --task <id>[,<id>...]) [--until next-gate|qa|done] [--dry-run] [--autonomy edit|full] [--runtime <id>] [--model <name>] [--effort <name>] [--target-root <path>] [--target-id <id>] [--knowledge-root <path>] [--run-branch <name>] [--project-root <path>] [--state-db <path>] <classification override flags>\n" +
+  "sta bounded-run --module <name> (--all | --phase <n> | --task <id>[,<id>...]) [--until next-gate|qa|done] [--dry-run] [--autonomy edit|full] [--runtime <id>] [--model <name>] [--effort <name>] [--target-root <path>] [--target-id <id>...] [--knowledge-root <path>] [--run-branch <name>] [--project-root <path>] [--state-db <path>] <classification override flags>\n" +
   "sta bounded-run --resume <run-id> [--module <name>] [--until next-gate|qa|done] [--dry-run] [--autonomy edit|full] [--project-root <path>] [--state-db <path>]\n" +
   "  One initial command previews scope/order/gates/routes, then (without --dry-run) freezes and runs to the chosen boundary through DEV, deterministic verification and coherent QA/repair. Never waives a hard gate.\n" +
   `  classification override flags (optional; deterministic classifyTask() remains authority): ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
@@ -101,6 +119,7 @@ export function parseBoundedRunArgs(argv: string[], defaultProjectRoot: string):
   let resumeRunId: string | undefined;
   let targetRoot: string | undefined;
   let targetId: string | undefined;
+  const targetIds: string[] = [];
   let knowledgeRoot: string | undefined;
   let runBranch: string | undefined;
   let runtime: RuntimeId | undefined;
@@ -153,7 +172,10 @@ export function parseBoundedRunArgs(argv: string[], defaultProjectRoot: string):
     } else if (arg === "--target-root") {
       targetRoot = requireValue(arg, argv[++i]);
     } else if (arg === "--target-id") {
-      targetId = requireValue(arg, argv[++i]);
+      const val = requireValue(arg, argv[++i]);
+      if (!targetIds.includes(val)) {
+        targetIds.push(val);
+      }
     } else if (arg === "--knowledge-root") {
       knowledgeRoot = requireValue(arg, argv[++i]);
     } else if (arg === "--run-branch") {
@@ -193,8 +215,56 @@ export function parseBoundedRunArgs(argv: string[], defaultProjectRoot: string):
 
   return {
     projectRoot, stateDb, module: moduleName, scope, until, dryRun, resumeRunId,
-    targetRoot, targetId, knowledgeRoot, runBranch, runtime, model, effort, autonomy, classification,
+    targetRoot, targetId: targetIds.length === 1 ? targetIds[0] : undefined,
+    targetIds, knowledgeRoot, runBranch, runtime, model, effort, autonomy, classification,
   };
+}
+
+/** Pure mapping from candidate target IDs to role-scoped TargetBindings. */
+export function resolveTaskTargetBindings(
+  candidateTargetIds: readonly string[],
+  roles: readonly TargetBindingRole[],
+  registry: TargetRegistry,
+): TargetBindings {
+  if (roles.length === 0 || candidateTargetIds.length === 0) {
+    return { targets: [] };
+  }
+
+  if (candidateTargetIds.length === 1) {
+    const targetId = candidateTargetIds[0];
+    return {
+      targets: roles.map((role) => ({ target_id: targetId, role })),
+    };
+  }
+
+  const targets: TargetBinding[] = [];
+  for (const role of roles) {
+    const admitting = candidateTargetIds.filter((id) => {
+      const entry = registry.targets.find((t) => t.target_id === id);
+      if (!entry || entry.type === undefined) return true;
+      return TARGET_TYPE_ROLES[entry.type].includes(role);
+    });
+
+    if (admitting.length === 1) {
+      targets.push({ target_id: admitting[0], role });
+    } else {
+      const exactType = role === AgentStage.BACKEND_ENGINEER ? "backend" : "frontend";
+      const exactMatches = admitting.filter((id) => {
+        const entry = registry.targets.find((t) => t.target_id === id);
+        return entry?.type === exactType;
+      });
+      if (exactMatches.length === 1) {
+        targets.push({ target_id: exactMatches[0], role });
+      } else {
+        const toAdd = admitting.length > 0 ? admitting : candidateTargetIds;
+        for (const id of toAdd) {
+          targets.push({ target_id: id, role });
+        }
+      }
+    }
+  }
+
+  return { targets };
 }
 
 /** `parseCanonicalPlan`'s cross-reference validation needs both docs or neither — a lone one is not a usable reference set. */
@@ -268,17 +338,29 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
   const ledger = new SqliteRunLedger(store, { projectRoot: args.projectRoot });
   const runtimeRegistry: RuntimeRegistry = (dependencies.createRuntimeRegistry ?? createProductionRuntimeRegistry)(args.projectRoot);
   const defaultRuntimeId = args.runtime ?? DEFAULT_RUNTIME_ID;
+
+  const installationConfigPath = process.env.STA_INSTALLATION_CONFIG || undefined;
+  let installation: InstallationConfig | undefined;
+  try {
+    installation = loadInstallationConfig(installationConfigPath);
+  } catch (error) {
+    const resolvedConfigPath = installationConfigPath ?? defaultInstallationConfigPath();
+    if (fs.existsSync(resolvedConfigPath)) {
+      console.error(`[bounded-run] unusable installation config: ${error instanceof Error ? error.message : String(error)}`);
+      return 1;
+    }
+  }
+
   // Reassigned on --resume: a frozen run owns its Target, and re-deriving it
   // from flags is how a resume ends up writing into the wrong repository.
   let targetRoot = path.resolve(args.targetRoot ?? args.projectRoot);
-  let targetId = args.targetId ?? "legacy-project";
-  let knowledgeRoot = path.resolve(args.knowledgeRoot ?? args.projectRoot);
+  let targetId = args.targetId ?? (args.targetIds?.[0] ?? "legacy-project");
+  let knowledgeRoot = path.resolve(args.knowledgeRoot ?? (installation?.knowledge_root ?? args.projectRoot));
   const docsRoot = resolveContextDocsRoot(args.projectRoot);
-  // Contract/agent-registry authority: `resolveFrameworkRoot()` only applies to
-  // a three-repo, Target-bound task (`contractRootForTask`'s existing rule) —
-  // this command supports only the legacy/single-repo case today, where the
-  // project root itself is that authority.
-  const contractRoot = args.projectRoot;
+  // Contract/agent-registry authority: `resolveFrameworkRoot()` applies to
+  // a three-repo, Target-bound task (`contractRootForTask`'s rule);
+  // legacy single-repo runs use the project root itself.
+  const contractRoot = installation ? resolveFrameworkRoot() : args.projectRoot;
 
   try {
     let runId: string;
@@ -345,6 +427,8 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
       const requirementMd = readModuleDoc(docsRoot, moduleName, "requirement.md") ?? undefined;
       const designMd = readModuleDoc(docsRoot, moduleName, "design.md") ?? undefined;
       const references = referencesFrom(requirementMd, designMd);
+      const parsedPlan = parseCanonicalPlan(planMarkdown, references);
+      const planTasksById = new Map(parsedPlan.tasks.map((t) => [t.id, t]));
       // Merge the operator's explicit override onto the plan-derived defaults
       // — never a bare replacement, or every other derived field (owner-based
       // touchesBackend/touchesFrontend, isIncrementalFeature, ...) would just
@@ -366,6 +450,137 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
           return 4;
         }
         throw error;
+      }
+
+      const taskBindingsMap = new Map<string, TargetBindings>();
+      const taskWorkRootsMap = new Map<string, RuntimeTaskWorkRoot[]>();
+      const allRunTargetIds = new Set<string>();
+
+      if (installation) {
+        const frameworkRoot = resolveFrameworkRoot();
+        let targetRegistry: TargetRegistry;
+        let mapping: Map<string, ResolvedLocalTarget>;
+        try {
+          targetRegistry = loadTargetRegistry(knowledgeRoot);
+          mapping = new Map(loadLocalTargetMapping(knowledgeRoot, targetRegistry, frameworkRoot).map((e) => [e.target_id, e]));
+        } catch (error) {
+          console.error(`[bounded-run] refused: ${error instanceof Error ? error.message : String(error)}`);
+          return 1;
+        }
+
+        let moduleScope: TaskBindingModuleScope | undefined;
+        try {
+          const resolved = resolveModuleTargets(moduleName, knowledgeRoot, { frameworkRoot });
+          moduleScope = {
+            module: resolved.module,
+            designPath: resolved.designPath,
+            declaredTargetIds: resolved.declaredTargetIds,
+          };
+        } catch (error) {
+          console.error(`[bounded-run] refused: ${error instanceof Error ? error.message : String(error)}`);
+          return 1;
+        }
+
+        for (const tid of args.targetIds ?? []) {
+          allRunTargetIds.add(tid);
+        }
+        if (args.targetId) {
+          allRunTargetIds.add(args.targetId);
+        }
+
+        try {
+          for (const pTask of preview.tasks) {
+            const planTask = planTasksById.get(pTask.taskId);
+            if (!planTask) continue;
+            const candidateTargetIds = (planTask.targets && planTask.targets.length > 0)
+              ? planTask.targets
+              : (args.targetIds && args.targetIds.length > 0
+                  ? args.targetIds
+                  : (args.targetId ? [args.targetId] : []));
+
+            for (const tid of candidateTargetIds) {
+              allRunTargetIds.add(tid);
+            }
+
+            const roles = [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER].filter((role): role is TargetBindingRole =>
+              pTask.classification.pipeline.includes(role),
+            );
+
+            const targetBindings = resolveTaskTargetBindings(candidateTargetIds, roles, targetRegistry);
+            validateNewTaskBindings(pTask.classification, targetBindings, targetRegistry, { moduleScope });
+
+            const previewItem = { taskId: pTask.taskId, classification: pTask.classification, targetBindings };
+            const targetWorkRoots: RuntimeTaskWorkRoot[] = [];
+            const stages = pTask.classification.pipeline.filter((s) => s !== AgentStage.HUMAN);
+            for (const stage of stages) {
+              if (
+                ![
+                  AgentStage.BACKEND_ENGINEER,
+                  AgentStage.FRONTEND_ENGINEER,
+                  AgentStage.QA_ENGINEER,
+                  AgentStage.SECURITY,
+                  AgentStage.DEVOPS,
+                ].includes(stage)
+              ) {
+                continue;
+              }
+              const preflightRoots = preflightThreeRepoTask(previewItem, stage, {
+                frameworkRoot,
+                installationConfigPath,
+                moduleScope,
+                bindingWarning: () => {},
+              });
+              for (const root of preflightRoots.workRoots) {
+                if (stage === AgentStage.QA_ENGINEER || root.access === "write") {
+                  targetWorkRoots.push({ stage, targetId: root.targetId, path: root.path });
+                }
+              }
+            }
+            const dedupedRoots = targetWorkRoots.filter(
+              (item, idx, arr) => arr.findIndex((x) => x.stage === item.stage && x.targetId === item.targetId) === idx,
+            );
+            taskBindingsMap.set(pTask.taskId, targetBindings);
+            taskWorkRootsMap.set(pTask.taskId, dedupedRoots);
+          }
+        } catch (error) {
+          if (error instanceof TargetPreflightError || error instanceof TaskBindingError || error instanceof TargetRegistryError) {
+            console.error(`[bounded-run] refused: ${error.message}`);
+            return 1;
+          }
+          throw error;
+        }
+
+        if (allRunTargetIds.size > 1) {
+          if (args.targetRoot) {
+            targetRoot = path.resolve(args.targetRoot);
+            const matched = [...allRunTargetIds].find((id) => mapping.get(id) && sameRoot(mapping.get(id)!.path, targetRoot));
+            targetId = matched ?? args.targetId ?? args.targetIds?.[0] ?? [...allRunTargetIds][0];
+          } else if (args.targetIds && args.targetIds.length === 1 && allRunTargetIds.has(args.targetIds[0])) {
+            targetId = args.targetIds[0];
+            const local = mapping.get(targetId);
+            if (!local) {
+              console.error(`[bounded-run] refused: Target "${targetId}" has no local path mapping`);
+              return 1;
+            }
+            targetRoot = path.resolve(local.path);
+          } else {
+            console.error(
+              `[bounded-run] refused: run spans multiple Targets (${[...allRunTargetIds].sort().join(", ")}) — git-identity root must be named explicitly with --target-root`,
+            );
+            return 1;
+          }
+        } else if (allRunTargetIds.size === 1) {
+          const singleTargetId = [...allRunTargetIds][0];
+          targetId = singleTargetId;
+          if (args.targetRoot) {
+            targetRoot = path.resolve(args.targetRoot);
+          } else {
+            const local = mapping.get(singleTargetId);
+            if (local) {
+              targetRoot = path.resolve(local.path);
+            }
+          }
+        }
       }
 
       const git = new GitCommandLayer({ cwd: targetRoot });
@@ -402,15 +617,26 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
           designHash: designMd ? contentHash(designMd) : undefined,
           staVersion: cliVersion(),
           ...(classificationFor ? { classificationFor } : {}),
-          taskContextFor: (task) => ({
-            projectRoot: args.projectRoot,
-            docsRoot,
-            workflow: "bounded-run",
-            targetWorkRoots: [
-              { stage: task.owner as AgentStage, targetId, path: targetRoot },
-              { stage: AgentStage.QA_ENGINEER, targetId, path: targetRoot },
-            ],
-          }),
+          taskContextFor: (task) => {
+            if (installation) {
+              return {
+                projectRoot: args.projectRoot,
+                docsRoot,
+                workflow: "bounded-run",
+                targetBindings: taskBindingsMap.get(task.id),
+                targetWorkRoots: taskWorkRootsMap.get(task.id),
+              };
+            }
+            return {
+              projectRoot: args.projectRoot,
+              docsRoot,
+              workflow: "bounded-run",
+              targetWorkRoots: [
+                { stage: task.owner as AgentStage, targetId, path: targetRoot },
+                { stage: AgentStage.QA_ENGINEER, targetId, path: targetRoot },
+              ],
+            };
+          },
         });
       } catch (error) {
         if (error instanceof PlanRegistrationError) {

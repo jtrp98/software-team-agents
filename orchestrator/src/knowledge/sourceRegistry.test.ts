@@ -63,7 +63,7 @@ function requirement(id: string, sourceIds: Array<string | undefined>, locator =
 
 let root: string;
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-sources-"));
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-sources-"));
 });
 afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });

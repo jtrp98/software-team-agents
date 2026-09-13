@@ -18,6 +18,7 @@ import { assertStandaloneKnowledgeRoot, configureKnowledgeRoot, loadInstallation
 import { assertTargetCanStartNewTask, assertTargetIdsImmutable, loadTargetRegistry, writeTargetRegistry, type TargetRegistry } from "./targets.js";
 import { loadLocalTargetMapping } from "./localTargets.js";
 import { runCli } from "../cli.js";
+import { AgentStage, TaskState } from "../types.js";
 
 const roots: string[] = [];
 function tempRoot(): string { const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-three-repo-")); roots.push(root); return root; }
@@ -241,6 +242,60 @@ describe("Target registry", () => {
     const knowledge = tempRoot();
     write(path.join(knowledge, "targets.yaml"), registryYaml("  - target_id: Bad_Id\n    name: '   '\n    remote_url: https://github.com/a/x.git\n    status: paused\n"));
     expect(() => loadTargetRegistry(knowledge)).toThrow(/invalid/);
+  });
+
+  it("T-V9-003: loads a legacy four-field registry unchanged, with no type on the entry", () => {
+    const knowledge = tempRoot();
+    write(path.join(knowledge, "targets.yaml"), registryYaml("  - target_id: legacy\n    name: Legacy\n    remote_url: https://github.com/a/legacy.git\n    status: active\n"));
+    const registry = loadTargetRegistry(knowledge);
+    expect(registry.targets).toHaveLength(1);
+    expect(registry.targets[0].type).toBeUndefined();
+  });
+
+  it("T-V9-003: exposes a declared type on TargetEntry and round-trips it through the writer", () => {
+    const knowledge = tempRoot();
+    write(path.join(knowledge, "targets.yaml"), registryYaml("  - target_id: sales-web\n    name: Sales Web\n    remote_url: https://github.com/a/sales-web.git\n    status: active\n    type: frontend\n"));
+    const registry = loadTargetRegistry(knowledge);
+    expect(registry.targets[0].type).toBe("frontend");
+    writeTargetRegistry(knowledge, { ...registry, targets: [{ ...registry.targets[0], type: "fullstack" }] });
+    expect(loadTargetRegistry(knowledge).targets[0].type).toBe("fullstack");
+  });
+
+  it("T-V9-008 refuses unsafe type narrowing, permits terminal history, and always permits widening", () => {
+    const knowledge = tempRoot();
+    const fullstack: TargetRegistry = {
+      schema_version: 1,
+      targets: [{ target_id: "app", name: "App", remote_url: "https://github.com/a/app.git", status: "active", type: "fullstack" }],
+    };
+    writeTargetRegistry(knowledge, fullstack);
+    const activeFrontendTask = {
+      taskId: "T-active",
+      machine: { current: TaskState.IMPLEMENTATION },
+      cancelled: false,
+      targetBindings: { targets: [{ target_id: "app", role: AgentStage.FRONTEND_ENGINEER as const }] },
+    };
+    const backendOnly: TargetRegistry = {
+      ...fullstack,
+      targets: [{ ...fullstack.targets[0], type: "backend" }],
+    };
+
+    expect(() => writeTargetRegistry(knowledge, backendOnly, { tasks: [activeFrontendTask] })).toThrow(/Target "app".*non-terminal task "T-active".*frontend-engineer.*before running or resuming task T-active/);
+    expect(loadTargetRegistry(knowledge).targets[0].type).toBe("fullstack");
+
+    writeTargetRegistry(knowledge, backendOnly, {
+      tasks: [{ ...activeFrontendTask, machine: { current: TaskState.DEPLOYED } }],
+    });
+    expect(loadTargetRegistry(knowledge).targets[0].type).toBe("backend");
+
+    // Widening never needs task history because it cannot invalidate a role.
+    writeTargetRegistry(knowledge, fullstack);
+    expect(loadTargetRegistry(knowledge).targets[0].type).toBe("fullstack");
+  });
+
+  it("T-V9-003: refuses an unknown type at load, naming the allowed values", () => {
+    const knowledge = tempRoot();
+    write(path.join(knowledge, "targets.yaml"), registryYaml("  - target_id: api\n    name: API\n    remote_url: https://github.com/a/api.git\n    status: active\n    type: api\n"));
+    expect(() => loadTargetRegistry(knowledge)).toThrow(/type.*must be equal to one of the allowed values.*frontend, backend, fullstack/);
   });
 
   it("does not permit a known Target name to change its immutable identity", () => {

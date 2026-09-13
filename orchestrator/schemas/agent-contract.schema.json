@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://agentclaude.local/schemas/agent-contract.schema.json",
+  "$id": "https://software-team-agents.local/schemas/agent-contract.schema.json",
   "title": "Agent contract (contracts/<agent-name>.yaml)",
   "description": "The machine-readable declaration of one agent: what it must be given, what it must produce, what it may never do, and what it is allowed to touch. Before this existed those rules were spread across the agent's own prompt, CLAUDE.md and policies/*.md, where nothing could check them. The orchestrator's in-process registry is checked against these files, so the two can never drift apart silently.",
   "type": "object",

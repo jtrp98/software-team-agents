@@ -32,12 +32,10 @@ import { runReportVerb } from "./cli/verbs/report.js";
 import { runBoundedRunVerb, BOUNDED_RUN_USAGE } from "./cli/verbs/boundedRun.js";
 import { runProjectsVerb } from "./cli/verbs/projects.js";
 import { runInitVerb } from "./cli/verbs/init.js";
-import { runRetiredAdoptVerb } from "./cli/verbs/adopt.js";
 import { runConfigureVerb } from "./cli/verbs/configure.js";
 import { runUpgradeVerb } from "./cli/verbs/upgrade.js";
 import { runDoctorVerb } from "./cli/verbs/doctor.js";
 import { runMigrateVerb } from "./cli/verbs/migrate.js";
-import { runKnowledgeMigrateVerb } from "./cli/verbs/knowledgeMigrate.js";
 import { runRollbackVerb } from "./cli/verbs/rollback.js";
 import { runListBackupsVerb } from "./cli/verbs/listBackups.js";
 import { printListing } from "./cli/rendering/taskListing.js";
@@ -52,6 +50,7 @@ import { readWorkPlan } from "./docs/planGraph.js";
 import { openTask } from "./cli/composition/taskIntake.js";
 import { composeProductionTaskExecutor } from "./cli/composition/taskExecutor.js";
 import type { CliDependencies } from "./cli/composition/runtimeRegistry.js";
+import { AgentStage } from "./types.js";
 
 /**
  * Runnable bridge between this orchestrator and the real `.claude/agents/*.md`
@@ -218,7 +217,6 @@ export const USAGE =
   "  sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]   token/context composition across orchestrated and interactive runs\n" +
   "  sta context <role> [--module <name>] [--phase <n,n>] [--task <id>] [--packet] [--views] [--json] [--project-root <path>]   deterministic context, latest validated packet, or read-only generated checklist/prompt views\n" +
   "  sta knowledge get <id>[,<id>...] [--lane <ba|sa|uxui|dev>] [--json] [--project-root <path>]   retrieve only permitted knowledge fields (default lane: dev)\n" +
-  "  sta knowledge migrate-v2 [--dry-run] [--json] [--project-root <knowledge-root>]   add origin/target_ids without changing item meaning or lifecycle\n" +
   "  sta knowledge reconcile --target <id> [--json] [--project-root <knowledge-root>]   read-only current/desired evidence classifier\n" +
   "  sta policy [<area>] [<section>] [--json] [--project-root <path>]   read one policies/ section instead of the whole file; no args lists every area and section\n" +
   "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names\n" +
@@ -232,8 +230,6 @@ export const USAGE =
   `  ${BOUNDED_RUN_USAGE.split("\n").join("\n  ")}   explicit bounded run: intake/preview/freeze, then DEV -> verification -> checkpoint -> coherent QA/repair to a chosen boundary\n` +
   "  sta upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
   "  sta migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending\n" +
-  "  sta knowledge-migrate <dry-run|copy|verify|cutover> --source-root <path> --knowledge-root <path> [--now <ISO>] [--confirm I_CONFIRM_MIGRATION]   copy–verify–human-confirmed migration\n" +
-  "  sta adopt   retired in V5 (ADR-024) — the one-time legacy import has run; no replacement\n" +
   "  sta rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups`\n" +
   "  sta list-backups [--project-root <path>]   list this project's .sta/backups/ snapshots, oldest first\n" +
   "  sta roles [--module <name>] [--project-root <path>]   where BA, SA, UXUI and DEV each stand against knowledge/\n" +
@@ -320,7 +316,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let noDocumentGate = false;
   let tokenBudget: number | undefined;
   let version = false;
-  const targetBindings: TargetBindings = { frontend_target: null, backend_target: null };
+  const targetBindings: TargetBindings = { targets: [] };
   const classification: ClassificationInput = {};
 
   for (let i = 0; i < argv.length; i++) {
@@ -334,11 +330,15 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     } else if (arg === "--state-db") {
       stateDb = argv[++i];
     } else if (arg === "--frontend-target") {
-      targetBindings.frontend_target = argv[++i] ?? null;
-      if (!targetBindings.frontend_target) throw new CliUsageError("--frontend-target requires a Target id");
+      const targetId = argv[++i];
+      if (!targetId) throw new CliUsageError("--frontend-target requires a Target id");
+      targetBindings.targets = targetBindings.targets.filter((binding) => binding.role !== AgentStage.FRONTEND_ENGINEER);
+      targetBindings.targets.push({ target_id: targetId, role: AgentStage.FRONTEND_ENGINEER });
     } else if (arg === "--backend-target") {
-      targetBindings.backend_target = argv[++i] ?? null;
-      if (!targetBindings.backend_target) throw new CliUsageError("--backend-target requires a Target id");
+      const targetId = argv[++i];
+      if (!targetId) throw new CliUsageError("--backend-target requires a Target id");
+      targetBindings.targets = targetBindings.targets.filter((binding) => binding.role !== AgentStage.BACKEND_ENGINEER);
+      targetBindings.targets.push({ target_id: targetId, role: AgentStage.BACKEND_ENGINEER });
     } else if (arg === "--ad-hoc") {
       adHoc = true;
     } else if (arg === "--depends-on") {
@@ -498,7 +498,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   if (resume && dependsOn.length > 0) {
     throw new CliUsageError("--depends-on is set when a task is created and cannot be changed on --resume");
   }
-  if (resume && (targetBindings.frontend_target || targetBindings.backend_target)) {
+  if (resume && targetBindings.targets.length > 0) {
     throw new CliUsageError("Target bindings are immutable; --frontend-target/--backend-target cannot be used with --resume");
   }
   return {
@@ -610,11 +610,9 @@ const VERBS = [
   "policy",
   "upgrade",
   "migrate",
-  "knowledge-migrate",
   "rollback",
   "list-backups",
   "roles",
-  "adopt",
   "configure",
   "doctor",
   "runtimes",
@@ -677,16 +675,12 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string, d
       return runUpgradeVerb(rest, defaultProjectRoot);
     case "migrate":
       return runMigrateVerb(rest, defaultProjectRoot);
-    case "knowledge-migrate":
-      return runKnowledgeMigrateVerb(rest, defaultProjectRoot);
     case "rollback":
       return runRollbackVerb(rest, defaultProjectRoot);
     case "list-backups":
       return runListBackupsVerb(rest, defaultProjectRoot);
     case "roles":
       return runRolesVerb(rest, defaultProjectRoot);
-    case "adopt":
-      return runRetiredAdoptVerb();
     case "configure":
       return runConfigureVerb(rest, defaultProjectRoot);
     case "doctor":
@@ -791,8 +785,8 @@ export async function runCli(argv: string[], defaultProjectRoot: string, depende
     }
 
     const orchestrator = openTask(registry, args, taskId);
-    for (const targetRoot of resolveQaWorkRoots(args.projectRoot, taskId, store)) {
-      assertNoWorkspaceRunLock(args.projectRoot, targetRoot);
+    for (const targetRoot of resolveQaWorkRoots(args.projectRoot, taskId, store, args.module)) {
+      assertNoWorkspaceRunLock(args.projectRoot, targetRoot.path);
     }
 
     const composition = await composeProductionTaskExecutor(args, taskId, orchestrator, store, dependencies);
@@ -842,7 +836,7 @@ if (isMain) {
         console.error(USAGE);
         process.exit(64);
       }
-      // A clean, actionable message instead of a raw better-sqlite3/fs stack trace — the
+      // A clean, actionable message instead of a raw node:sqlite/fs stack trace — the
       // same task id's resume/retry picks this back up once whatever made the file unavailable
       // clears, since DatabaseUnavailableError is only ever thrown before anything was written.
       if (e instanceof DatabaseUnavailableError) {

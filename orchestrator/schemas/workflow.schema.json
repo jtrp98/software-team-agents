@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://agentclaude.local/schemas/workflow.schema.json",
+  "$id": "https://software-team-agents.local/schemas/workflow.schema.json",
   "title": "Workflow definition (workflows/<id>.yml)",
   "description": "Which agents run, in what order, for one kind of change. GENERATED (ADR-007): the classifier (orchestrator/src/classification/taskClassifier.ts) is the source of truth for behaviour and orchestrator/src/workflow/workflowCatalog.ts for the prose it does not model; scripts/regenerate-renderings.mjs writes these files and --check-workflows byte-checks them. Hand-editing one fails that check. The files remain real, shipped, per-project artifacts a person can read - only their authorship moved.",
   "type": "object",

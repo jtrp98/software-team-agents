@@ -46,7 +46,7 @@ async function settleAllStages(root: string, produced: KnowledgeItemOf<"architec
 
 let root: string;
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-knowledge-validation-"));
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-knowledge-validation-"));
 });
 afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });

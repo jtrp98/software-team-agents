@@ -51,7 +51,7 @@ import { resolveModule } from "../agents/moduleDocs.js";
  * idempotent and never touches non-managed content), stop on sync conflicts
  * rather than forcing, and enforce write policy through the launch itself:
  * the session gets exactly its own workspace as cwd and an explicitly empty
- * AGENTCLAUDE_WRITABLE_WORK_ROOTS, so cross-repository writes hit the
+ * STA_WRITABLE_WORK_ROOTS, so cross-repository writes hit the
  * block-outside-repo guard.
  */
 

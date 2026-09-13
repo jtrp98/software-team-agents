@@ -31,7 +31,6 @@ export type PlanRunScope =
 
 export type PlanRegistrationRefusalKind =
   | "invalid-plan"
-  | "legacy-plan"
   | "empty-scope"
   | "unknown-task"
   | "scope-not-closed"
@@ -81,7 +80,12 @@ export interface PlanRegistrationInput {
    * derives the half that *is* derivable and leaves the rest to the caller.
    */
   classificationFor?: (task: PlanTask) => ClassificationInput;
-  /** Task-creation context passed through to the registry, per task. */
+  /**
+   * Task-creation context passed through to the registry, per task.
+   * In V9 (T-V9-011), targetBindings is populated from the plan task's Targets:
+   * (falling back to --target-id when plan does not declare it) and targetWorkRoots
+   * is derived from preflightThreeRepoTask rather than literal scalars.
+   */
   taskContextFor: (task: PlanTask) => {
     projectRoot?: string;
     docsRoot?: string;
@@ -126,9 +130,8 @@ export interface ResolvedPlanTask {
 export function resolvePlanScope(input: PlanScopeResolutionInput): { order: string[]; planHash: string; byId: Map<string, PlanTask>; trace: string[] } {
   if (!isCanonicalPlan(input.planMarkdown)) {
     throw new PlanRegistrationError(
-      "legacy-plan",
-      `module ${input.module}: plan.md is not canonical PlanTask format 1; convert it explicitly with migrateLegacyTaskTable ` +
-        "(see docs/plan-task-v1.md) rather than having a bounded run reinterpret a legacy table",
+      "invalid-plan",
+      `module ${input.module}: plan.md is not current canonical PlanTask format 1`,
     );
   }
   const parsed = parseCanonicalPlan(input.planMarkdown, input.references);

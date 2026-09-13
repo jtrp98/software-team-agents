@@ -90,7 +90,7 @@ const refs = { requirementMd: REQUIREMENT, designMd: DESIGN };
 
 /** BE-004 from the shared fixture, plus a frontend task that consumes its contract. */
 function twoTaskPlan(): string {
-  const be = parseCanonicalPlan(canonicalFixture, { requirementMd: "REQ-007 AC-007.2", designMd: "DES-011 Contract:OrderSummary.v2" }).tasks[0]!;
+  const be = parseCanonicalPlan(canonicalFixture, refs).tasks[0]!;
   const fe: PlanTask = {
     ...be,
     id: "FE-010",
@@ -225,10 +225,10 @@ describe("T-V8-017 — every refusal leaves no registration state", () => {
     expect(store.listTasks()).toEqual([]);
   };
 
-  it("refuses a legacy table plan with a conversion path instead of reinterpreting it", () => {
-    const legacy = "# Plan\n\n## Phase 1\n\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-004 — Preserve | pending | backend-engineer | none |\n";
-    expect(() => register({ plan: legacy })).toThrow(PlanRegistrationError);
-    expect(() => register({ plan: legacy })).toThrow(/migrateLegacyTaskTable/);
+  it("refuses a noncanonical table plan instead of interpreting or converting it", () => {
+    const noncanonical = "# Plan\n\n## Phase 1\n\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-004 — Preserve | pending | backend-engineer | none |\n";
+    expect(() => register({ plan: noncanonical })).toThrow(PlanRegistrationError);
+    expect(() => register({ plan: noncanonical })).toThrow(/current canonical PlanTask format 1/);
     expectNothingRegistered();
   });
 
@@ -334,7 +334,7 @@ describe("T-V8-017 — derived classification and drift", () => {
     // A status-only edit is not semantic drift — that is the documented hash rule.
     expect(() => assertPlanUnchanged(run, planMarkdown.replace(/Status: pending/, "Status: in_progress"), refs)).not.toThrow();
     // A task vanishing from the plan is named, not silently ignored.
-    expect(() => assertPlanUnchanged(run, canonicalFixture, { requirementMd: "REQ-007 AC-007.2", designMd: "DES-011 Contract:OrderSummary.v2" })).toThrow(
+    expect(() => assertPlanUnchanged(run, canonicalFixture, refs)).toThrow(
       /FE-010 disappeared/,
     );
   });

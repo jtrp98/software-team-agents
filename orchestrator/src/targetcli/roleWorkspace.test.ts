@@ -1,4 +1,4 @@
-﻿import * as fs from "node:fs";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -302,28 +302,28 @@ describe("knowledge binding (T-ROLE-06/T-ROLE-08)", () => {
 describe("write-policy launch wiring (T-ROLE-12/13)", () => {
   it("grants zero cross-root writable roots regardless of inherited shell env", () => {
     for (const role of ["ba", "dev"] as const) {
-      const env = launchEnv(role, { AGENTCLAUDE_WRITABLE_WORK_ROOTS: '["D:\\somewhere-else"]', PATH: "keep" });
-      expect(env.AGENTCLAUDE_WRITABLE_WORK_ROOTS).toBe("[]");
+      const env = launchEnv(role, { STA_WRITABLE_WORK_ROOTS: '["D:\\somewhere-else"]', PATH: "keep" });
+      expect(env.STA_WRITABLE_WORK_ROOTS).toBe("[]");
       expect(env.PATH).toBe("keep");
     }
   });
 
-  it("T-WG7 — a DEV launch carries AGENTCLAUDE_KNOWLEDGE_ROOT; a BA launch without one does not", () => {
+  it("T-WG7 — a DEV launch carries STA_KNOWLEDGE_ROOT; a BA launch without one does not", () => {
     const dev = launchEnv("dev", {}, "C:\\kb");
-    expect(dev.AGENTCLAUDE_KNOWLEDGE_ROOT).toBe("C:\\kb");
-    expect(launchEnv("ba", {}).AGENTCLAUDE_KNOWLEDGE_ROOT).toBeUndefined();
+    expect(dev.STA_KNOWLEDGE_ROOT).toBe("C:\\kb");
+    expect(launchEnv("ba", {}).STA_KNOWLEDGE_ROOT).toBeUndefined();
   });
 
-  it("T-LV1 — a launch carries AGENTCLAUDE_TARGET_ROOT only when a Target binding resolved", () => {
+  it("T-LV1 — a launch carries STA_TARGET_ROOT only when a Target binding resolved", () => {
     const withTarget = launchEnv("ba", {}, undefined, "C:\\app");
-    expect(withTarget.AGENTCLAUDE_TARGET_ROOT).toBe("C:\\app");
-    expect(launchEnv("ba", {}).AGENTCLAUDE_TARGET_ROOT).toBeUndefined();
+    expect(withTarget.STA_TARGET_ROOT).toBe("C:\\app");
+    expect(launchEnv("ba", {}).STA_TARGET_ROOT).toBeUndefined();
   });
 
   it("T-V3TOK-042 — BA and DEV launches carry the resolved context command without changing other env", () => {
     for (const role of ["ba", "dev"] as const) {
       const env = launchEnv(role, { PATH: "keep" }, undefined, undefined, '"C:\\Program Files\\node.exe" C:\\sta\\cli.js context');
-      expect(env.AGENTCLAUDE_CONTEXT_CMD).toContain("cli.js context");
+      expect(env.STA_CONTEXT_CMD).toContain("cli.js context");
       expect(env.PATH).toBe("keep");
     }
   });

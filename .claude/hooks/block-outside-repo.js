@@ -97,7 +97,7 @@ function checkOne(rawPath) {
 /** Canonical Target roots come only from runtime preflight. Invalid input grants nothing. */
 function writableWorkRoots() {
   let roots;
-  try { roots = JSON.parse(process.env.AGENTCLAUDE_WRITABLE_WORK_ROOTS || '[]'); } catch { return []; }
+  try { roots = JSON.parse(process.env.STA_WRITABLE_WORK_ROOTS || '[]'); } catch { return []; }
   if (!Array.isArray(roots)) return [];
   return roots.filter((candidate) => typeof candidate === 'string' && path.isAbsolute(candidate)).map(normalize);
 }

@@ -24,12 +24,12 @@ import { canWritePath, pathRulesFor } from "./pathPermissions.js";
  * enumerates the whole fence:
  *   - workspace/cross-repo writes  → `.opencode/plugin/sta-guards.js` tests +
  *     `.claude/tests/run.js` (block-outside-repo), driven by
- *     `AGENTCLAUDE_WRITABLE_WORK_ROOTS`
+ *     `STA_WRITABLE_WORK_ROOTS`
  *   - state-changing git           → `.claude/tests/run.js` §1 (block-git.js),
  *     plus FORBIDDEN_COMMANDS asserted per role below
  *   - human sign-offs              → `roles/roleApproval.test.ts` (a signoff
  *     needs a named person) + the `knowledge/_roles/**` floor asserted below
- *   - run identity                 → the orchestrator sets `AGENTCLAUDE_ROLE`
+ *   - run identity                 → the orchestrator sets `STA_ROLE`
  *     on the child process; an agent cannot re-role itself mid-run because no
  *     decision function takes a role argument from agent-controlled content
  */

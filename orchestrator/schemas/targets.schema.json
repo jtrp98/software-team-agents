@@ -9,7 +9,8 @@
       "target_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
       "name": { "type": "string", "minLength": 1 },
       "remote_url": { "type": "string", "minLength": 1, "pattern": "^(?!.*://[^/\\s:@]+:[^/\\s@]+@)(?!.*[?&](token|access_token|password)=).+$" },
-      "status": { "enum": ["active", "retired"] }
+      "status": { "enum": ["active", "retired"] },
+      "type": { "enum": ["frontend", "backend", "fullstack"], "description": "The repository's delivery role, declared once on the Target (AD-1). Optional at schema_version: 1; required at v2 behind a propose-and-confirm migration." }
     } } }
   }
 }

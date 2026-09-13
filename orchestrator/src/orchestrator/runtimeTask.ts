@@ -190,7 +190,7 @@ export function buildRuntimeTask(input: RuntimeTaskBuildInput): RuntimeTaskV2 | 
   const docsRoot = input.docsRoot ?? input.projectRoot;
   const planMd = readModuleDoc(docsRoot, input.moduleName, "plan.md");
   if (planMd === null) return null;
-  if (!isCanonicalPlan(planMd)) throw new Error(`task ${input.taskId}: legacy plan cannot compile a manual-grade RuntimeTask; use migrateLegacyTaskTable for complete tables or author missing fields using docs/plan-task-v1.md`);
+  if (!isCanonicalPlan(planMd)) throw new Error(`task ${input.taskId}: plan.md is not current canonical PlanTask format 1`);
   const requirementMd = readModuleDoc(docsRoot, input.moduleName, "requirement.md") ?? "";
   const designMd = readModuleDoc(docsRoot, input.moduleName, "design.md") ?? "";
   const parsed = parseCanonicalPlan(planMd, { requirementMd, designMd });

@@ -10,6 +10,7 @@ import {
   GUARD_RULES_OPEN,
   GUARD_RULE_HOSTS,
   GUARD_STACK_RULES_ENV,
+  GUARD_TARGET_WORK_ROOTS_ENV,
   PathDeniedError,
   UNIVERSAL_DENY,
   WORKSPACE_BA_ARTIFACTS,
@@ -22,6 +23,7 @@ import {
   pathRulesFor,
   readWorkspaceRole,
   renderGuardRuleBlock,
+  serializeGuardTargetWorkRoots,
   toRepoRelative,
   workspaceDenyWhy,
 } from "./pathPermissions.js";
@@ -304,6 +306,8 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
     matchesGlob(pattern: string, target: string): boolean;
     readWorkspaceRole(nodeFs: unknown, nodePath: unknown, workspaceRoot: string): string | null;
     workspaceDenyWhy(role: string): string;
+    boundReadOnlyTarget(nodePath: typeof path, target: string): string | null;
+    boundReadOnlyWhy(targetId: string): string;
   }
 
   /** Executes the rendered block the way a hook host does, and hands back what it declared. */
@@ -313,7 +317,7 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
       .filter((line) => line !== GUARD_RULES_OPEN && line !== GUARD_RULES_CLOSE)
       .join("\n");
     return new Function(
-      `${body}\nreturn { UNIVERSAL_DENY, WORKSPACE_BA_ARTIFACTS, WORKSPACE_DEV_ARTIFACTS, matchesGlob, readWorkspaceRole, workspaceDenyWhy };`,
+      `${body}\nreturn { UNIVERSAL_DENY, WORKSPACE_BA_ARTIFACTS, WORKSPACE_DEV_ARTIFACTS, matchesGlob, readWorkspaceRole, workspaceDenyWhy, boundReadOnlyTarget, boundReadOnlyWhy };`,
     )() as GeneratedGuardRules;
   }
 
@@ -405,18 +409,18 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
 
   it("the generated deny explanation agrees with the TypeScript one", () => {
     const generated = evaluateBlock();
-    const saved = process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
+    const saved = process.env.STA_KNOWLEDGE_ROOT;
     try {
-      delete process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
+      delete process.env.STA_KNOWLEDGE_ROOT;
       expect(generated.workspaceDenyWhy("dev")).toBe(workspaceDenyWhy("dev"));
       expect(generated.workspaceDenyWhy("ba")).toBe(workspaceDenyWhy("ba"));
 
-      process.env.AGENTCLAUDE_KNOWLEDGE_ROOT = "C:/src/knowledge-schoolbright";
+      process.env.STA_KNOWLEDGE_ROOT = "C:/src/knowledge-schoolbright";
       expect(generated.workspaceDenyWhy("dev")).toBe(workspaceDenyWhy("dev"));
       expect(generated.workspaceDenyWhy("dev")).toContain("C:/src/knowledge-schoolbright");
     } finally {
-      if (saved === undefined) delete process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
-      else process.env.AGENTCLAUDE_KNOWLEDGE_ROOT = saved;
+      if (saved === undefined) delete process.env.STA_KNOWLEDGE_ROOT;
+      else process.env.STA_KNOWLEDGE_ROOT = saved;
     }
   });
 
@@ -445,6 +449,33 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
     } finally {
       if (saved === undefined) delete process.env[GUARD_STACK_RULES_ENV];
       else process.env[GUARD_STACK_RULES_ENV] = saved;
+    }
+  });
+
+  it("T-V9-012 renders one Target-access reader for every guard host without widening write roots", () => {
+    const generated = evaluateBlock();
+    const writable = path.resolve("fixture", "api");
+    const readOnly = path.resolve("fixture", "web");
+    const savedRole = process.env.STA_ROLE;
+    const savedRoots = process.env[GUARD_TARGET_WORK_ROOTS_ENV];
+    try {
+      process.env.STA_ROLE = "backend-engineer";
+      process.env[GUARD_TARGET_WORK_ROOTS_ENV] = serializeGuardTargetWorkRoots([
+        { targetId: "api", path: writable, access: "write" },
+        { targetId: "web", path: readOnly, access: "read" },
+      ]);
+      expect(generated.boundReadOnlyTarget(path, path.join(writable, "src", "owned.ts"))).toBeNull();
+      expect(generated.boundReadOnlyTarget(path, path.join(readOnly, "src", "foreign.ts"))).toBe("web");
+      expect(generated.boundReadOnlyWhy("web")).toMatch(/Target "web".*bound read-only.*backend-engineer/);
+      expect(JSON.parse(process.env[GUARD_TARGET_WORK_ROOTS_ENV]!)).toEqual([
+        { targetId: "api", path: writable, access: "write" },
+        { targetId: "web", path: readOnly, access: "read" },
+      ]);
+    } finally {
+      if (savedRole === undefined) delete process.env.STA_ROLE;
+      else process.env.STA_ROLE = savedRole;
+      if (savedRoots === undefined) delete process.env[GUARD_TARGET_WORK_ROOTS_ENV];
+      else process.env[GUARD_TARGET_WORK_ROOTS_ENV] = savedRoots;
     }
   });
 
@@ -479,6 +510,7 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
       expect(inspected.outside, rel).not.toMatch(/function\s+matchesGlob\s*\(/);
       expect(inspected.outside, rel).not.toMatch(/function\s+readWorkspaceRole\s*\(/);
       expect(inspected.outside, rel).not.toMatch(/function\s+workspaceDenyWhy\s*\(/);
+      expect(inspected.outside, rel).not.toMatch(/function\s+boundReadOnly(?:Target|Why)\s*\(/);
     }
   });
 

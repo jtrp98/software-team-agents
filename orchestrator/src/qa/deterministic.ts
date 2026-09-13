@@ -24,12 +24,22 @@ export const DETERMINISTIC_ORDER: readonly DeterministicCheckId[] = [
   "build",
 ];
 
+export interface DeterministicTargetResult {
+  targetId?: string;
+  root: string;
+  status: "PASS" | "FAIL";
+  durationMs: number;
+  outputSummary: string;
+}
+
 export interface DeterministicCheckResult {
   id: DeterministicCheckId;
   status: "PASS" | "FAIL";
   durationMs: number;
   /** Tail of the tool's own output — the evidence an engineer fixes from. */
   outputSummary: string;
+  /** Per-Target results when verification ran across multiple targets (T-V9-015). */
+  targetResults?: readonly DeterministicTargetResult[];
 }
 
 export interface DeterministicVerification {
@@ -148,17 +158,35 @@ export function renderDeterministicVerification(v: DeterministicVerification): s
     }
     return lines;
   }
-  const lines = [...selectionLines, ...v.ran.map(
-    (r) => `- ${r.id}: ${r.status} (${r.durationMs}ms)${r.outputSummary ? ` — ${firstLine(r.outputSummary)}` : ""}`,
-  )];
+  const lines = [...selectionLines];
+  for (const r of v.ran) {
+    if (r.targetResults && r.targetResults.length > 1) {
+      lines.push(`- ${r.id}: ${r.status} (${r.durationMs}ms)`);
+      for (const t of r.targetResults) {
+        const label = t.targetId ? `[${t.targetId}]` : `[${t.root}]`;
+        lines.push(`  - ${label} ${t.status} (${t.durationMs}ms)${t.outputSummary ? ` — ${firstLine(t.outputSummary)}` : ""}`);
+      }
+    } else {
+      lines.push(`- ${r.id}: ${r.status} (${r.durationMs}ms)${r.outputSummary ? ` — ${firstLine(r.outputSummary)}` : ""}`);
+    }
+  }
   for (const id of v.skipped) lines.push(`- ${id}: SKIPPED (not configured)`);
   for (const level of v.missingRequired.filter((level) => checkForLevel(level) === null)) {
     lines.push(`- ${level}: SKIPPED (no V3 runtime runner)`);
   }
   if (!v.passed) {
     const f = v.failures[0];
-    if (f) lines.push(`BLOCKED before LLM QA by deterministic check \`${f.id}\`:`, tail(f.outputSummary));
-    else lines.push(`BLOCKED by test-pyramid enforcement; missing required evidence: ${v.missingRequired.join(", ")}`);
+    if (f) {
+      const failedTargets = f.targetResults?.filter((t) => t.status === "FAIL");
+      if (failedTargets && failedTargets.length > 0) {
+        const names = failedTargets.map((t) => t.targetId ?? t.root).join(", ");
+        lines.push(`BLOCKED before LLM QA by deterministic check \`${f.id}\` in Target (${names}):`, tail(f.outputSummary));
+      } else {
+        lines.push(`BLOCKED before LLM QA by deterministic check \`${f.id}\`:`, tail(f.outputSummary));
+      }
+    } else {
+      lines.push(`BLOCKED by test-pyramid enforcement; missing required evidence: ${v.missingRequired.join(", ")}`);
+    }
   } else if (v.missingRequired.length > 0) {
     lines.push(`WARNING (warn-only): missing required evidence: ${v.missingRequired.join(", ")}`);
   }

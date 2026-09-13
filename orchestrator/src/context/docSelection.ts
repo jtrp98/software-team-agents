@@ -384,7 +384,7 @@ function sectionMatchesReference(markdown: string, section: Section, references:
   return references.some((reference) => {
     const needle = comparableReference(reference);
     if (needle !== "" && (heading === needle || heading.includes(needle) || needle.includes(heading))) return true;
-    const ids = [...reference.matchAll(/\b(?:REQ|DES|TP)-[A-Za-z0-9._-]+\b/gi)].map((match) => match[0]);
+    const ids = [...reference.matchAll(/\b(?:REQ|DES|DEC|TP)-[A-Za-z0-9._-]+\b|Contract:[A-Za-z][A-Za-z0-9_.-]*\.v[1-9]\d*/gi)].map((match) => match[0]);
     return ids.some((id) => new RegExp(`\\b${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i").test(text));
   });
 }

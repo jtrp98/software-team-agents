@@ -14,7 +14,7 @@
  *     → launch surface with the runtime binary absent
  *
  * Determinism on a configured machine: every child runs with
- * AGENTCLAUDE_INSTALLATION_CONFIG pointed inside the temp environment, so the
+ * STA_INSTALLATION_CONFIG pointed inside the temp environment, so the
  * machine's real installation.yaml is never consulted (see
  * `defaultInstallationConfigPath`). Paths deliberately contain spaces — the
  * quoting is part of what T-V1-07 asks this script to prove on Windows.
@@ -157,7 +157,7 @@ try {
   fs.writeFileSync(path.join(targetRepo, "src", "index.ts"), 'export const app = () => "hello";\n');
 
   const installationConfig = path.join(stage, "installation.yaml");
-  const baseEnv = { ...process.env, AGENTCLAUDE_INSTALLATION_CONFIG: installationConfig };
+  const baseEnv = { ...process.env, STA_INSTALLATION_CONFIG: installationConfig };
 
   // --- 3 · version consistency ----------------------------------------------
   for (const [label, bin] of [["sta", staBin], ["software-team-agents", targetBin]]) {
@@ -174,8 +174,7 @@ try {
   // --- 3b · root prompt files ship and are readable (T-V2R-14) ---------------
   for (const [file, marker] of [
     ["prompt-setup.md", "prompt-setup.md"],
-    ["prompt-update-knowledge.md", "# Compatibility pointer"],
-    ["prompt-reconcile-knowledge-layout.md", "# prompt-reconcile-knowledge-layout.md"],
+    ["prompt-update-knowledge.md", "prompt-update-knowledge.md"],
   ]) {
     const p = path.join(pkgDir, file);
     const shipped = fs.existsSync(p) && fs.readFileSync(p, "utf8").includes(marker);
@@ -183,7 +182,7 @@ try {
   }
 
   // --- 4 · missing Knowledge binding fails cleanly before configuration ------
-  const missingConfigEnv = { ...baseEnv, AGENTCLAUDE_INSTALLATION_CONFIG: path.join(stage, "does-not-exist.yaml") };
+  const missingConfigEnv = { ...baseEnv, STA_INSTALLATION_CONFIG: path.join(stage, "does-not-exist.yaml") };
   {
     const r = runBin(targetBin, ["dev"], { cwd: targetRepo, env: missingConfigEnv });
     expectCond(

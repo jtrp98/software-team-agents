@@ -36,7 +36,7 @@ import {
 /**
  * T-V8-016 — the canonical transactional ledger.
  *
- * It shares one `better-sqlite3` handle with the `SqliteTaskStore` it is built
+ * It shares one built-in `node:sqlite` handle with the `SqliteTaskStore` it is built
  * from, which is the whole point: a plan registration writes task rows and
  * ledger rows in one transaction, so "either the entire selected plan is
  * registered or no registration state changes" is enforced by the database

@@ -120,7 +120,7 @@ describe("CodexAdapter.executeAgent", () => {
     }
   });
 
-  it("sets AGENTCLAUDE_ROLE from the request, and does not drop env the caller supplied", async () => {
+  it("sets STA_ROLE from the request, and does not drop env the caller supplied", async () => {
     const projectRoot = tmpProject();
     writeRoleBinding(projectRoot, "qa-engineer");
     let capturedEnv: NodeJS.ProcessEnv | undefined;
@@ -134,7 +134,7 @@ describe("CodexAdapter.executeAgent", () => {
       baseRequest({ cwd: projectRoot, role: "qa-engineer", definitionPath: ".codex/agents/qa-engineer.toml", env: { FOO: "bar" } }),
     );
 
-    expect(capturedEnv?.AGENTCLAUDE_ROLE).toBe("qa-engineer");
+    expect(capturedEnv?.STA_ROLE).toBe("qa-engineer");
     expect(capturedEnv?.FOO).toBe("bar");
   });
 

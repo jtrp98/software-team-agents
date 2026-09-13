@@ -43,7 +43,7 @@ import { AgentStage } from "../types.js";
  *      nothing useful, and traverse() would return noise.
  */
 
-/** Legacy writers may still load v1; new Target evidence writers emit v2 explicitly. */
+/** Current single-repository writers emit v1; Target-aware writers emit v2 explicitly. */
 export const KNOWLEDGE_SCHEMA_VERSION = 1;
 
 export const KNOWLEDGE_KINDS = [
@@ -177,7 +177,6 @@ export interface TaskPayload {
   contract_version: number | null;
   /** PersistedTask.taskId — the join between this graph and the running state machine. */
   orchestrator_task_id: string | null;
-  target_id?: string | null;
 }
 
 export interface UxDesignPayload {
@@ -381,7 +380,6 @@ export function checkKnowledgeItem(data: unknown): string[] {
   }
   const targetIds = item.target_ids ?? [];
   if (item.schema_version >= 2 && item.target_ids === undefined) problems.push("schema v2 requires target_ids");
-  if (targetIds.length > 2) problems.push(`target_ids has ${targetIds.length} entries — V1 permits at most two`);
   if (new Set(targetIds).size !== targetIds.length) problems.push("target_ids contains duplicates");
   for (const source of item.sources) {
     if (item.schema_version >= 2 && !source.origin) problems.push(`source "${source.locator}" requires origin in schema v2`);

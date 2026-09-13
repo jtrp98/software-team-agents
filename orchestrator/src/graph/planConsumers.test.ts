@@ -80,15 +80,6 @@ describe("T-V8-003 full-field graph consumers", () => {
     }
   });
 
-  it("refuses ambiguous unannotated legacy ordering and preserves explicitly independent legacy tasks", () => {
-    const legacy = [
-      { id: "BE-1", owner: "backend-engineer", phase: 1, dependsOn: [] },
-      { id: "FE-1", owner: "frontend-engineer", phase: 1, dependsOn: [] },
-    ];
-    expect(() => taskGraphFromPlan(legacy)).toThrow(/ambiguous legacy ordering/);
-    expect(taskGraphFromPlan(legacy.map(t => ({ ...t, consumes: [] }))).parallelLayers()[0].map(t => t.id)).toEqual(["BE-1", "FE-1"]);
-  });
-
   it("QA impact and PM handoff consume canonical contract edges", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "v8-consumers-"));
     try {

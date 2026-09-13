@@ -99,7 +99,7 @@ function runStaticGateJson(projectRoot, env) {
 
 /** Makes a throwaway project root, runs fn(dir), always removes it afterwards. */
 function withTempProject(fn) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentclaude-selftest-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sta-selftest-'));
   try {
     return fn(dir);
   } finally {
@@ -278,7 +278,7 @@ for (const [name, input, expected] of gitCases) {
 const blockGitSource = fs.readFileSync(path.join(HOOKS, 'block-git.js'), 'utf8');
 const rejectedExecutionModeName = ['Auto', 'Runner', 'Mode'].join(' ');
 check('block-git has no persistent execution-mode branch', blockGitSource.includes(rejectedExecutionModeName) ? 1 : 0, 0);
-check('block-git has no environment-conditional git whitelist', /process\.env|AGENTCLAUDE_[A-Z_]*GIT/.test(blockGitSource) ? 1 : 0, 0);
+check('block-git has no environment-conditional git whitelist', /process\.env|STA_[A-Z_]*GIT/.test(blockGitSource) ? 1 : 0, 0);
 
 // ---------------------------------------------------------------------------
 // 2. block-outside-repo.js — `policies/security.md` §5a
@@ -290,8 +290,8 @@ withTempProject((tmp) => {
   const env = { CLAUDE_PROJECT_DIR: tmp };
   const outside = process.platform === 'win32' ? 'C:/Windows/Temp/evil.txt' : '/etc/evil.txt';
   const scratch = path.join(os.tmpdir(), 'claude', 'proj', 'sess', 'scratchpad', 'note.md');
-  const memory = path.join(os.homedir(), '.claude', 'projects', 'C--src-AgentClaude', 'memory', 'x.md');
-  const notMemory = path.join(os.homedir(), '.claude', 'projects', 'C--src-AgentClaude', 'transcript.jsonl');
+  const memory = path.join(os.homedir(), '.claude', 'projects', 'C--src-software-team-agents', 'memory', 'x.md');
+  const notMemory = path.join(os.homedir(), '.claude', 'projects', 'C--src-software-team-agents', 'transcript.jsonl');
 
   const cases = [
     ['absolute path outside the repo is blocked', { tool_name: 'Write', tool_input: { file_path: outside } }, BLOCK],
@@ -303,8 +303,8 @@ withTempProject((tmp) => {
     ['absolute path inside the repo is allowed', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'app/page.tsx') } }, ALLOW],
     ['the temp scratchpad is allowed (harness convention)', { tool_name: 'Write', tool_input: { file_path: scratch } }, ALLOW],
     ['the auto-memory store is allowed (harness convention)', { tool_name: 'Write', tool_input: { file_path: memory } }, ALLOW],
-    ['a canonical runtime-granted Target work root is allowed', { tool_name: 'Write', tool_input: { file_path: path.join(os.tmpdir(), 'target-work', 'src', 'x.ts') } }, ALLOW, { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([path.join(os.tmpdir(), 'target-work')]) }],
-    ['a sibling of a runtime-granted Target root remains blocked', { tool_name: 'Write', tool_input: { file_path: path.join(os.tmpdir(), 'target-other', 'x.ts') } }, BLOCK, { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([path.join(os.tmpdir(), 'target-work')]) }],
+    ['a canonical runtime-granted Target work root is allowed', { tool_name: 'Write', tool_input: { file_path: path.join(os.tmpdir(), 'target-work', 'src', 'x.ts') } }, ALLOW, { STA_WRITABLE_WORK_ROOTS: JSON.stringify([path.join(os.tmpdir(), 'target-work')]) }],
+    ['a sibling of a runtime-granted Target root remains blocked', { tool_name: 'Write', tool_input: { file_path: path.join(os.tmpdir(), 'target-other', 'x.ts') } }, BLOCK, { STA_WRITABLE_WORK_ROOTS: JSON.stringify([path.join(os.tmpdir(), 'target-work')]) }],
     ['Bash is out of scope for this guard', { tool_name: 'Bash', tool_input: { command: `echo hi > ${outside}` } }, ALLOW],
     ['an array of paths is checked element by element (one outside → blocked)', { tool_name: 'Write', tool_input: { file_path: ['_docs/module/m/plan.md', outside] } }, BLOCK],
     ['an array of paths all inside the repo is allowed', { tool_name: 'Write', tool_input: { file_path: ['_docs/module/m/plan.md', 'app/x.ts'] } }, ALLOW],
@@ -919,14 +919,14 @@ section('9. block-path-permissions.js -- per-agent write paths (T15)');
 /** Feeds the hook a write attempt, optionally as a named agent. */
 function runPathHook(tool, filePath, role, extraEnv) {
   const env = {};
-  if (role) env.AGENTCLAUDE_ROLE = role;
+  if (role) env.STA_ROLE = role;
   Object.assign(env, extraEnv || {});
   return runHook('block-path-permissions.js', { tool_name: tool, tool_input: { file_path: filePath } }, env);
 }
 
 /**
  * The layout half of an engineer's path rules, as the orchestrator
- * resolves it and hands it over beside AGENTCLAUDE_ROLE.
+ * resolves it and hands it over beside STA_ROLE.
  *
  * A contract now holds only the role boundary; where a stack puts code lives in
  * `stacks/<profile>/stack.yaml`, which this dependency-free hook cannot join to
@@ -948,7 +948,7 @@ function stackRulesEnvFor(role) {
 }
 
 function withStackRules(role, extraEnv) {
-  return Object.assign({ AGENTCLAUDE_STACK_PATH_RULES: JSON.stringify(stackRulesEnvFor(role)) }, extraEnv || {});
+  return Object.assign({ STA_STACK_PATH_RULES: JSON.stringify(stackRulesEnvFor(role)) }, extraEnv || {});
 }
 
 check(
@@ -1001,6 +1001,31 @@ check(
   ALLOW,
 );
 
+withTempProject((writableTarget) => {
+  withTempProject((readOnlyTarget) => {
+    const targetEnv = withStackRules('backend-engineer', {
+      CLAUDE_PROJECT_DIR: writableTarget,
+      STA_WRITABLE_WORK_ROOTS: JSON.stringify([writableTarget]),
+      STA_TARGET_WORK_ROOTS: JSON.stringify([
+        { targetId: 'api', path: writableTarget, access: 'write' },
+        { targetId: 'web', path: readOnlyTarget, access: 'read' },
+      ]),
+    });
+    const res = spawnSync(process.execPath, [path.join(HOOKS, 'block-path-permissions.js')], {
+      input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: path.join(readOnlyTarget, 'src', 'foreign.ts') } }),
+      encoding: 'utf8',
+      env: { ...process.env, STA_ROLE: 'backend-engineer', ...targetEnv },
+      cwd: writableTarget,
+      timeout: 60000,
+    });
+    check(
+      'T-V9-012 bound read-only Target -> blocked by the Claude guard and named in its message',
+      res.status === BLOCK && /Target "web".*bound read-only.*backend-engineer/.test(res.stderr) ? 0 : 1,
+      0,
+    );
+  });
+});
+
 // The two halves arrive together or not at all. Without the layout half, the
 // layout paths are in neither the write list nor the deny list, so the path
 // lands on deny-by-default: the missing-channel failure is stricter than
@@ -1013,13 +1038,13 @@ check(
 
 check(
   'a malformed stack layout channel is treated as absent, never as a grant',
-  runPathHook('Write', path.join(ROOT, 'server', 'routes', 'deal.ts'), 'backend-engineer', { AGENTCLAUDE_STACK_PATH_RULES: '{not json' }),
+  runPathHook('Write', path.join(ROOT, 'server', 'routes', 'deal.ts'), 'backend-engineer', { STA_STACK_PATH_RULES: '{not json' }),
   BLOCK,
 );
 
 check(
   'a stack layout channel claiming a non-array write set grants nothing',
-  runPathHook('Write', path.join(ROOT, 'server', 'routes', 'deal.ts'), 'backend-engineer', { AGENTCLAUDE_STACK_PATH_RULES: '{"write":"server/**"}' }),
+  runPathHook('Write', path.join(ROOT, 'server', 'routes', 'deal.ts'), 'backend-engineer', { STA_STACK_PATH_RULES: '{"write":"server/**"}' }),
   BLOCK,
 );
 
@@ -1061,15 +1086,15 @@ check(
   BLOCK,
 );
 
-const targetWorkRoot = path.join(os.tmpdir(), 'agentclaude-target-work');
+const targetWorkRoot = path.join(os.tmpdir(), 'sta-target-work');
 check(
   'backend-engineer may write only the runtime-granted canonical Target root',
-  runPathHook('Write', path.join(targetWorkRoot, 'src', 'route.ts'), 'backend-engineer', { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([targetWorkRoot]) }),
+  runPathHook('Write', path.join(targetWorkRoot, 'src', 'route.ts'), 'backend-engineer', { STA_WRITABLE_WORK_ROOTS: JSON.stringify([targetWorkRoot]) }),
   ALLOW,
 );
 check(
   'runtime-granted Target root still blocks .git writes',
-  runPathHook('Write', path.join(targetWorkRoot, '.git', 'config'), 'backend-engineer', { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([targetWorkRoot]) }),
+  runPathHook('Write', path.join(targetWorkRoot, '.git', 'config'), 'backend-engineer', { STA_WRITABLE_WORK_ROOTS: JSON.stringify([targetWorkRoot]) }),
   BLOCK,
 );
 
@@ -1124,7 +1149,7 @@ withTempProject((tmp) => {
   write(path.join(tmp, '.agent-team', 'config.yaml'), DEV_CONFIG);
   const env = { CLAUDE_PROJECT_DIR: tmp };
   check(
-    'role:dev workspace -> requirement.md blocked even interactively (no AGENTCLAUDE_ROLE)',
+    'role:dev workspace -> requirement.md blocked even interactively (no STA_ROLE)',
     runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env),
     BLOCK,
   );
@@ -1142,7 +1167,7 @@ withTempProject((tmp) => {
   check('  targets.yaml blocked', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'targets.yaml') } }, env), BLOCK);
   check('  knowledge-policy.yaml blocked', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'knowledge-policy.yaml') } }, env), BLOCK);
 
-  const kbEnv = { ...env, AGENTCLAUDE_KNOWLEDGE_ROOT: path.join(tmp, '..', 'knowledge-root-fixture') };
+  const kbEnv = { ...env, STA_KNOWLEDGE_ROOT: path.join(tmp, '..', 'knowledge-root-fixture') };
   const kbRes = spawnSync(process.execPath, [path.join(HOOKS, 'block-path-permissions.js')], {
     input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }),
     encoding: 'utf8',
@@ -1182,10 +1207,10 @@ withTempProject((tmp) => {
   );
 });
 
-// What the workspace role is, and what it is not. `AGENTCLAUDE_ROLE` names one
+// What the workspace role is, and what it is not. `STA_ROLE` names one
 // of the eleven agent contracts; `role:` in .agent-team/config.yaml says which
 // repository this checkout is. Nothing derives one from the other, so a session
-// with no AGENTCLAUDE_ROLE gets workspace boundaries and no per-agent boundary.
+// with no STA_ROLE gets workspace boundaries and no per-agent boundary.
 section('9c. T-V6-007 — the workspace role, read the same way everywhere');
 
 withTempProject((tmp) => {

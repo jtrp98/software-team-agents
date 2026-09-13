@@ -23,7 +23,7 @@ tier: T4
 
 กฎที่ validator บังคับ: `T1` ถูกปฏิเสธเพราะสงวนไว้สำหรับการเลือก model/effort โดยคนโดยตรง และค่าอื่น
 นอก `T2`–`T6` ถูกปฏิเสธ. PlanTask ไม่ถือ runtime, provider model หรือ fallback เพราะ camp เลือกตอนรัน
-ไม่ใช่ตอนวางแผน. ตาราง plan แบบเก่าอ่านได้ผ่าน compatibility adapter แต่ไม่ใช่ schema authority ใหม่
+ไม่ใช่ตอนวางแผน. ตัวตรวจและ runtime รับเฉพาะ canonical PlanTask ปัจจุบัน
 
 ## 2. ตรวจ plan ก่อนส่งต่อ
 

@@ -96,7 +96,7 @@ describe("Full pipeline integration", () => {
   }
 
   beforeEach(() => {
-    tmpDb = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-integration-")), "state.db");
+    tmpDb = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sta-integration-")), "state.db");
     openStores.length = 0;
   });
 

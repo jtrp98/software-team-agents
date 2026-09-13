@@ -24,6 +24,17 @@ scope เลือกได้อย่างใดอย่างหนึ่�
 preview กับการรันจริงเป็น computation เดียวกัน (ทั้งคู่เรียก `resolvePlanScope`/`previewPlanRegistration`
 บน byte เดียวกันของ `plan.md`) ไม่ใช่สองอันที่ "ควรจะตรงกัน"
 
+**Multi-Target run และ git-identity root:**
+`--target-id <id>` สามารถระบุซ้ำได้เมื่อ run ครอบคลุมหลาย Target หาก bounded run แตะมากกว่าหนึ่ง Target
+(ไม่ว่าจะระบุผ่าน `--target-id` หลายตัว หรือ task ใน scope มี binding ข้ามหลาย Target)
+ต้องระบุ **git-identity root** ชัดเจนด้วย `--target-root <path>` เพื่อกำหนด repository checkout
+ที่ run ledger จะผูก branch, base SHA และ checkpoint durability ไว้ หากไม่ระบุ คำสั่งจะ refuse
+(ไม่มีการเดาหรือ fallback ไปยัง Target แรกตาม AD-7):
+
+```powershell
+sta bounded-run --module <module> --phase <n> --target-id web-ui --target-id api-server --target-root ./packages/web-ui --until next-gate --autonomy edit
+```
+
 เมื่อ preview ถูกต้องและ gate ที่เห็นได้รับการจัดการแล้ว จึง freeze และรันจริง:
 
 ```powershell
@@ -42,7 +53,8 @@ sta bounded-run --module <module> --phase <n> --until next-gate --autonomy edit
 | `plan.md` เป็น canonical plan, scope ปิด, ไม่มี cycle, ไม่ drift | `orchestrator/planCompilation.ts` | แก้ plan แล้ว `--dry-run` ใหม่; refusal บอก kind และ task id ที่ขัดแย้ง |
 | ไม่มี human/approval gate ค้างของ task ที่จะรัน | `run/unattendedGate.ts` | resolve gate (`sta approve <task-id>`) หรือ unpause/uncancel แล้วรันใหม่ |
 | dependency ทุกตัว checkpoint/done แล้ว | `RunLedger.readiness()` บน frozen DAG | ปล่อยให้ upstream task เดินก่อน; plan Status cell ปลดล็อกให้ไม่ได้ |
-| runtime support level, guard capability, writable root เดียว | `ledger/attemptFreeze.ts` | แก้สาเหตุที่ refusal ระบุ; V8 ยอมรับเฉพาะ runtime ระดับ `supported` สำหรับการเขียน Target |
+| runtime support level, guard capability, writable root เดียวต่อ attempt | `ledger/attemptFreeze.ts` | แก้สาเหตุที่ refusal ระบุ; แต่ละ engineer invocation เขียนได้ Target เดียว (AD-7); multi-Target run ต้องระบุ git-identity root |
+| multi-Target run ระบุ git-identity root | `cli/verbs/boundedRun.ts` | เมื่อ run ครอบคลุมหลาย Target ต้องส่ง `--target-root` ชัดเจน เพื่อระบุ checkout ที่ผูกกับ branch/SHA และ ledger |
 | working tree สะอาดและอยู่ base/run branch ที่ frozen ไว้ | `git/guardedRun.ts` | ตรวจ diff และตัดสินใจกับงานค้างก่อน STA ไม่ลบหรือ restore ไฟล์ของคน |
 | deterministic gate รันได้จริงและผ่าน | `qa/verificationHook.ts` + controller | ทำตาม remediation ที่ refusal พิมพ์; ไม่มี suite = `unverified` ไม่ใช่ pass |
 | ไม่มี run อื่นที่ยังไม่จบบน Target เดียวกัน | `git/guardedRun.ts` | reconcile run เดิมก่อน หรือ resume มันด้วย `--resume <run-id>` |
@@ -68,9 +80,14 @@ git log --oneline --decorate <base>..<run_branch>
 sta bounded-run --resume <run-id> --module <module> --autonomy edit
 ```
 
-resume ใช้ Target root, knowledge root, base revision, plan hash และ task order ที่ **frozen ไว้ใน run**
+resume ใช้ Target root (git-identity root), knowledge root, base revision, plan hash และ task order ที่ **frozen ไว้ใน run**
 ไม่ใช่ค่าจาก flag ของการเรียกครั้งนี้ — flag ที่ขัดแย้งคือ refusal ไม่ใช่ override ถ้า `plan.md`,
 `requirement.md` หรือ `design.md` เปลี่ยนไป คำสั่งจะ refuse แทนการรัน frozen scope กับ input ที่ต่างออกไป
+
+ใน run ledger คอลัมน์ `target_id` และ `target_root` ถูกนิยามเป็น **git-identity root ของ run**
+(repository checkout ที่ branch, base SHA และ checkpoint commits ผูกติดอยู่)
+ส่วนการลงมือทำของแต่ละ task attempt ใน multi-Target run จะ resolve writable root และ guard stack rules
+แยกตาม Target ของตัวเองตาม task bindings (`targets: [{target_id, role}]`) โดยอัตโนมัติ
 
 `--resume` ของ `bounded-run` เป็น resume ระดับ **run**; `sta run --resume --task-id <id>` ยังเป็น resume
 ระดับ **task เดียว** ตามเดิม

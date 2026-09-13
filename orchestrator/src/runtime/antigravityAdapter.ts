@@ -189,7 +189,7 @@ export class AntigravityAdapter implements RuntimeAdapter {
         encoding: "utf8",
         timeout: timeoutMs,
         maxBuffer: 64 * 1024 * 1024,
-        env: { ...process.env, ...req.env, AGENTCLAUDE_ROLE: req.role },
+        env: { ...process.env, ...req.env, STA_ROLE: req.role },
       });
     } catch (e) {
       return fail("UNAVAILABLE", guards, [`failed to spawn \`${ANTIGRAVITY_BINARY}\`: ${String(e)}`]);
@@ -211,7 +211,7 @@ export class AntigravityAdapter implements RuntimeAdapter {
 
     if (req.workRoots && req.workRoots.length > 0) {
       diagnostics.push(
-        `${req.workRoots.length} work root(s) ride on AGENTCLAUDE_WRITABLE_WORK_ROOTS alone — no \`${ANTIGRAVITY_BINARY}\` hook dispatch has been observed to read it`,
+        `${req.workRoots.length} work root(s) ride on STA_WRITABLE_WORK_ROOTS alone — no \`${ANTIGRAVITY_BINARY}\` hook dispatch has been observed to read it`,
       );
     }
     if (envelope === null) {

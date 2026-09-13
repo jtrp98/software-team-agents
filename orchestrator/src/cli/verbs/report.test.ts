@@ -3,15 +3,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { parsePlanTasks } from "../../docs/planGraph.js";
+import { renderCanonicalTasks, type PlanTask } from "../../docs/planTask.js";
 import { generateHtmlReport, parseStatusMd, runReportVerb, type ReportData } from "./report.js";
 
-const AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+const STA_INSTALLATION_CONFIG_ORIGINAL = process.env.STA_INSTALLATION_CONFIG;
 beforeEach(() => {
-  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-report-test-no-installation.yaml");
+  process.env.STA_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-report-test-no-installation.yaml");
 });
 afterEach(() => {
-  if (AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-  else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL;
+  if (STA_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+  else process.env.STA_INSTALLATION_CONFIG = STA_INSTALLATION_CONFIG_ORIGINAL;
 });
 
 const SAMPLE_STATUS_MD = `# Project Status
@@ -46,6 +48,31 @@ Docs: requirement ✅ · design ✅ · plan ✅
 **Blocked on**: —
 `;
 
+function reportTask(id: string, title: string, status: PlanTask["status"], dependsOn: string[] = []): PlanTask {
+  return {
+    version: 1,
+    id,
+    phase: 1,
+    title,
+    objective: `${title} under the current contract.`,
+    why: "The current plan requires this work.",
+    owner: "backend-engineer",
+    dependsOn,
+    traceability: ["REQ-001", "AC-001.1", "DES-001"],
+    produces: [],
+    consumes: [],
+    risk: ["low"],
+    humanGate: [],
+    status,
+    scopeAndConstraints: "Keep the change within this module.",
+    retrievalHints: "Hypothesis: current source owns the behavior.\nQuery: locate the contract.\nProvenance: DES-001",
+    doNotModify: "Unrelated modules.",
+    acceptanceCriteria: "AC-001.1: the report renders the task.",
+    validationAndEvidence: "Verify AC-001.1 by rendering the report and asserting the task title.",
+    compatibility: "Current callers remain unchanged.",
+  };
+}
+
 function createFixtureGitRepo(): { dir: string; cleanup: () => void } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sta-report-test-"));
   spawnSync("git", ["init"], { cwd: dir });
@@ -65,7 +92,7 @@ function createFixtureGitRepo(): { dir: string; cleanup: () => void } {
   fs.writeFileSync(path.join(modDir, "requirement.md"), "# Requirement\n", "utf8");
   fs.writeFileSync(
     path.join(modDir, "plan.md"),
-    `# Plan\n\n## Phase 1\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-001 | verified | backend-engineer | — |\n`,
+    renderCanonicalTasks([reportTask("BE-001", "Set up schema", "verified")]),
     "utf8"
   );
   fs.writeFileSync(
@@ -131,28 +158,8 @@ describe("T-V6-018 — sta report verb", () => {
         moduleName: "test-mod",
         currentPhase: 1,
         tasks: [
-          {
-            id: "BE-001",
-            phase: 1,
-            description: "Set up schema",
-            status: "verified",
-            owner: "backend-engineer",
-            dependsOn: [],
-            wave: 1,
-            fromCheckbox: false,
-            designRefs: [],
-          },
-          {
-            id: "BE-002",
-            phase: 1,
-            description: "Implement API",
-            status: "in_progress",
-            owner: "backend-engineer",
-            dependsOn: ["BE-001"],
-            wave: 2,
-            fromCheckbox: false,
-            designRefs: [],
-          },
+          reportTask("BE-001", "Set up schema", "verified"),
+          reportTask("BE-002", "Implement API", "in_progress", ["BE-001"]),
         ],
         allPhases: [1, 2],
       },
@@ -301,6 +308,8 @@ describe("T-V6-018 — sta report verb", () => {
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     try {
+      const fixturePlan = fs.readFileSync(path.join(fixture.dir, "_docs", "module", "test-mod", "plan.md"), "utf8");
+      expect(parsePlanTasks(fixturePlan)).toMatchObject({ problems: [], tasks: [expect.objectContaining({ id: "BE-001" })] });
       const code = await runReportVerb(
         ["--output", outputPath, "--project-root", fixture.dir, "--module", "test-mod"],
         fixture.dir

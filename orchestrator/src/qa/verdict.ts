@@ -28,14 +28,25 @@ export interface QaVerdictCoverage {
   uncovered: string[];
   /** Ids the report verdicted that were not required — allowed (QA may verify more), reported for audit. */
   extra: string[];
+  /** Per-target verdict results when multi-target (T-V9-015). */
+  targetCoverage?: {
+    bound: string[];
+    passed: string[];
+    failed: string[];
+    uncovered: string[];
+  };
 }
 
 export interface CheckQaVerdictCoverageInput {
-  report: Pick<QaReportArtifact, "status" | "mode" | "requirements" | "unverifiedBehaviour">;
+  report: Pick<QaReportArtifact, "status" | "mode" | "requirements" | "unverifiedBehaviour"> & {
+    targets?: Record<string, "PASS" | "FAIL">;
+  };
   /** Ids from `requiredVerdictIds(contract)` — task, its ACs/DES, and every open finding. */
   required: readonly string[];
   /** The round's recorded mode decision, when one exists. */
   decision?: QaModeDecision;
+  /** Bound targets that were scoped for this task (T-V9-015). */
+  boundTargets?: readonly string[];
 }
 
 /** The exact wording a caller surfaces on rejection, so prompts and tests agree on one phrase. */
@@ -72,21 +83,93 @@ export function checkQaVerdictCoverage(input: CheckQaVerdictCoverageInput): QaVe
     }
   }
 
+  // Multi-Target validation (T-V9-015): task passes only if every bound Target passes
+  const boundTargets = input.boundTargets ? [...new Set(input.boundTargets)].sort() : [];
+  let targetCoverage: QaVerdictCoverage["targetCoverage"] | undefined;
+
+  if (boundTargets.length > 0) {
+    const reportTargets = report.targets ?? {};
+    const passedTargets: string[] = [];
+    const failedTargets: string[] = [];
+    const uncoveredTargets: string[] = [];
+    const isSingleTargetBaseline = boundTargets.length === 1 && Object.keys(reportTargets).length === 0;
+
+    for (const targetId of boundTargets) {
+      const v = reportTargets[targetId];
+      if (v === "PASS") {
+        passedTargets.push(targetId);
+      } else if (v === "FAIL") {
+        failedTargets.push(targetId);
+      } else if (isSingleTargetBaseline) {
+        // Single-Target report diff is unchanged in shape (byte-identical baseline).
+        // If the report does not use per-Target prefixes, overall task status applies to the solo target,
+        // unless unverifiedBehaviour specifically names it as unverified.
+        const namedInUnverified = report.unverifiedBehaviour.some((line) => line.includes(targetId));
+        if (namedInUnverified) {
+          uncoveredTargets.push(targetId);
+        } else if (report.status === "PASS") {
+          passedTargets.push(targetId);
+        } else {
+          failedTargets.push(targetId);
+        }
+      } else {
+        uncoveredTargets.push(targetId);
+      }
+    }
+
+    targetCoverage = {
+      bound: boundTargets,
+      passed: passedTargets,
+      failed: failedTargets,
+      uncovered: uncoveredTargets,
+    };
+
+    if (failedTargets.length > 0 && report.status === "PASS") {
+      problems.push(`PASS rejected: bound Target(s) failed verification: ${failedTargets.join(", ")}`);
+    }
+
+    if (uncoveredTargets.length > 0) {
+      const declaredGaps = new Set(
+        report.unverifiedBehaviour.flatMap((line) => uncoveredTargets.filter((id) => line.includes(id))),
+      );
+      const undeclaredGaps = uncoveredTargets.filter((id) => !declaredGaps.has(id));
+
+      if (undeclaredGaps.length > 0) {
+        problems.push(
+          `bound Target(s) produced no evidence and were not reported under ## Unverified Behaviour: ${undeclaredGaps.join(", ")}`,
+        );
+      }
+
+      // Even if declared in ## Unverified Behaviour, an unverified target cannot count as a pass
+      if (report.status === "PASS") {
+        problems.push(
+          `PASS does not cover ${uncoveredTargets.length} bound Target(s) without verification evidence: ${uncoveredTargets.join(", ")} — task verdict passes only if every bound Target passes`,
+        );
+      }
+    }
+  }
+
   // A FULL decision is only discharged by a FULL report — the pre-existing
   // rule, checked here too so a caller that never reaches the gate (a
   // rejection converted to FAIL before the transition) reports the same reason.
   const close = canCloseWith(input.decision, report.mode as QaMode);
   if (!close.allowed && report.status === "PASS") problems.push(close.reason!);
 
-  return { ok: problems.length === 0, problems, covered, uncovered, extra };
+  return { ok: problems.length === 0, problems, covered, uncovered, extra, targetCoverage };
 }
 
 /** One-line audit rendering for the run log and evidence records. */
 export function describeQaVerdictCoverage(coverage: QaVerdictCoverage): string {
+  const targetPart = coverage.targetCoverage
+    ? `; targets ${coverage.targetCoverage.passed.length}/${coverage.targetCoverage.bound.length} passed` +
+      (coverage.targetCoverage.failed.length > 0 ? ` (failed: ${coverage.targetCoverage.failed.join(", ")})` : "") +
+      (coverage.targetCoverage.uncovered.length > 0 ? ` (uncovered: ${coverage.targetCoverage.uncovered.join(", ")})` : "")
+    : "";
   return (
     `verdict coverage ${coverage.covered.length}/${coverage.covered.length + coverage.uncovered.length}` +
     (coverage.uncovered.length > 0 ? `; uncovered ${coverage.uncovered.join(", ")}` : "") +
     (coverage.extra.length > 0 ? `; extra ${coverage.extra.join(", ")}` : "") +
+    targetPart +
     (coverage.ok ? "" : `; PROBLEMS: ${coverage.problems.join(" | ")}`)
   );
 }

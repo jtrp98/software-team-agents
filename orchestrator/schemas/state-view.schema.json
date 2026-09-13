@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://agentclaude.local/schemas/state-view.schema.json",
+  "$id": "https://software-team-agents.local/schemas/state-view.schema.json",
   "title": "Orchestrator runtime state view (.workflow/state.yaml)",
   "description": "The published shape of the generated .workflow/state.yaml. The state database is the source of truth; this file is a view regenerated from it on every state change. The schema exists so other tools can read the view without reverse-engineering it, and so the generator is checked against its own published contract before it writes.",
   "type": "object",
@@ -133,10 +133,20 @@
         "target_bindings": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["frontend_target", "backend_target"],
+          "required": ["targets"],
           "properties": {
-            "frontend_target": { "type": ["string", "null"] },
-            "backend_target": { "type": ["string", "null"] }
+            "targets": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["target_id", "role"],
+                "properties": {
+                  "target_id": { "type": "string", "minLength": 1 },
+                  "role": { "type": "string", "enum": ["backend-engineer", "frontend-engineer"] }
+                }
+              }
+            }
           }
         },
         "waiting_on": { "type": "array", "items": { "type": "string", "minLength": 1 } },

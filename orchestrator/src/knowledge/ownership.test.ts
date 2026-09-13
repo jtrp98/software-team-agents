@@ -173,7 +173,7 @@ describe("deprecated knowledge something still relies on", () => {
 describe("ownership reaches --check-knowledge", () => {
   let root: string;
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-ownership-check-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-ownership-check-"));
   });
   afterEach(() => {
     fs.rmSync(root, { recursive: true, force: true });

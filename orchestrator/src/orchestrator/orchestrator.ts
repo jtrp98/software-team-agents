@@ -270,7 +270,7 @@ export class Orchestrator {
       this.cancelReason = null;
       this.taskEnvironment = opts?.environment ?? Environment.LOCAL;
       this.deployPrepared = false;
-      this.targetBindings = opts?.targetBindings ?? { frontend_target: null, backend_target: null };
+      this.targetBindings = opts?.targetBindings ?? { targets: [] };
       this.runLog = new RunLog();
       this.store.createTask(
         newPersistedTask({

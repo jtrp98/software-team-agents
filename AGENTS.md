@@ -11,7 +11,7 @@
 - Hard boundary: amend existing module docs section-by-section; never regenerate them.
 - Hard boundary: approvals/sign-offs are human acts; agents never forge them.
 - Hard boundary: dates and unclear business rules come from a person; never improvise them.
-- Context: run the command named by `AGENTCLAUDE_CONTEXT_CMD` with `<your-role> --module <name> --phase <n>`.
+- Context: run the command named by `STA_CONTEXT_CMD` with `<your-role> --module <name> --phase <n>`.
 - Everything else: read only the needed section with `sta policy <area> <section>`.
 <!-- /sta:bootstrap -->
 Full operating rules: see [CLAUDE.md](CLAUDE.md).

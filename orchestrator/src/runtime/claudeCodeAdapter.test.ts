@@ -322,7 +322,7 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
     expect(capturedCwd).toBe(backendRepo);
   });
 
-  it("sets AGENTCLAUDE_ROLE from the request, and does not drop env the caller supplied", async () => {
+  it("sets STA_ROLE from the request, and does not drop env the caller supplied", async () => {
     let capturedEnv: NodeJS.ProcessEnv | undefined;
     const spawnSync: SpawnSync = (_cmd, _args, options) => {
       capturedEnv = options.env;
@@ -332,7 +332,7 @@ describe("ClaudeCodeAdapter.executeAgent", () => {
 
     await adapter.executeAgent(baseRequest({ role: "qa-engineer", env: { FOO: "bar" } }));
 
-    expect(capturedEnv?.AGENTCLAUDE_ROLE).toBe("qa-engineer");
+    expect(capturedEnv?.STA_ROLE).toBe("qa-engineer");
     expect(capturedEnv?.FOO).toBe("bar");
   });
 
@@ -576,7 +576,7 @@ describe("ClaudeCodeAdapter — Windows npm-shim resolution", () => {
     expect(calls[1].cmd).toBe("node-resolved");
     expect(calls[1].args[0]).toBe("C:\\npm\\cli.js");
     expect(calls[1].args.slice(1)).toEqual(calls[0].args);
-    expect(capturedEnv?.AGENTCLAUDE_ROLE).toBe("qa-engineer");
+    expect(capturedEnv?.STA_ROLE).toBe("qa-engineer");
     expect(capturedEnv?.FOO).toBe("bar");
     expect(result.status).toBe("OK");
     expect(result.text).toBe("done via resolved");

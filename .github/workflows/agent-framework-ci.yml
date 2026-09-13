@@ -22,7 +22,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
 
       # No dependencies, no install step — the harness that guards the harness cannot
       # require one either. Section 0 inside it already checks every hook/script parses

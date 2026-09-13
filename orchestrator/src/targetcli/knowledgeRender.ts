@@ -102,7 +102,7 @@ export function renderBootstrapBlock(options: BootstrapRenderOptions): string {
     "- Hard boundary: amend existing module docs section-by-section; never regenerate them.",
     "- Hard boundary: approvals/sign-offs are human acts; agents never forge them.",
     "- Hard boundary: dates and unclear business rules come from a person; never improvise them.",
-    `- Context: execute this as an actual shell command — not just read the name — before browsing files for module context yourself: \`$AGENTCLAUDE_CONTEXT_CMD <agent-role> --module <name> --phase <n>\`, where \`<agent-role>\` is the agent doing the work (e.g. \`${agentRoleExample}\`), never \`${options.role}\`. If that variable is empty/unset this session was not launched via \`software-team-agents ${options.role}\`: say so, then run \`sta context\` directly — it resolves the Knowledge root from this installation's own binding. Never grep local files as a substitute.`,
+    `- Context: execute this as an actual shell command — not just read the name — before browsing files for module context yourself: \`$STA_CONTEXT_CMD <agent-role> --module <name> --phase <n>\`, where \`<agent-role>\` is the agent doing the work (e.g. \`${agentRoleExample}\`), never \`${options.role}\`. If that variable is empty/unset this session was not launched via \`software-team-agents ${options.role}\`: say so, then run \`sta context\` directly — it resolves the Knowledge root from this installation's own binding. Never grep local files as a substitute.`,
     "- Everything else: read only the needed section with `sta policy <area> <section>`.",
     BOOTSTRAP_CLOSE,
     "",

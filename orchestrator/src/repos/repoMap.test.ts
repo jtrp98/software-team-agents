@@ -1,13 +1,22 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import { RepoMapError, checkRepoMap, hasRepoMap, loadRepoMap, loadStageRoots, reposPath, stageRoots } from "./repoMap.js";
 
 function tmpDir(prefix = "orchestrator-repos-"): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
+
+const STA_INSTALLATION_CONFIG_ORIGINAL = process.env.STA_INSTALLATION_CONFIG;
+beforeEach(() => {
+  process.env.STA_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-repo-map-no-installation.yaml");
+});
+afterEach(() => {
+  if (STA_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+  else process.env.STA_INSTALLATION_CONFIG = STA_INSTALLATION_CONFIG_ORIGINAL;
+});
 
 describe("a project with no repos.yaml (T42 — most projects are one repo)", () => {
   it("hasRepoMap is false", () => {
@@ -119,5 +128,36 @@ describe("a broken repos.yaml", () => {
     const result = checkRepoMap(root);
     expect(result.ok).toBe(false);
     expect(result.problems.some((p) => p.includes('stage "devops"') && p.includes("both"))).toBe(true);
+  });
+});
+
+describe("checkRepoMap installation precedence notes (DRIFT-4 / T-V9-021)", () => {
+  it("emits precedence note when repos.yaml and an installation config both exist", () => {
+    const root = tmpDir();
+    const installDir = tmpDir();
+    const installPath = path.join(installDir, "installation.yaml");
+    fs.writeFileSync(installPath, "schema_version: 1\nknowledge_root: /dev/null\n", "utf8");
+
+    const backend = path.join(root, "backend");
+    fs.mkdirSync(backend, { recursive: true });
+    fs.writeFileSync(reposPath(root), "version: 1\nrepos:\n  - name: backend\n    root: ./backend\n    stages: [backend-engineer]\n", "utf8");
+
+    const result = checkRepoMap(root, { installationConfigPath: installPath });
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
+    expect(result.notes.some((n) => n.includes("Target binding wins") && n.includes("unreachable"))).toBe(true);
+  });
+
+  it("emits precedence note when no repos.yaml exists but an installation config is configured", () => {
+    const root = tmpDir();
+    const installDir = tmpDir();
+    const installPath = path.join(installDir, "installation.yaml");
+    fs.writeFileSync(installPath, "schema_version: 1\nknowledge_root: /dev/null\n", "utf8");
+
+    const result = checkRepoMap(root, { installationConfigPath: installPath });
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
+    expect(result.notes.some((n) => n.includes("the same repo"))).toBe(true);
+    expect(result.notes.some((n) => n.includes("Target binding wins") && n.includes("unreachable"))).toBe(true);
   });
 });

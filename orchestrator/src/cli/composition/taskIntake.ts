@@ -9,8 +9,14 @@ import { readModuleDoc } from "../../agents/moduleDocs.js";
 import { readWorkPlan } from "../../docs/planGraph.js";
 import { preflightThreeRepoTask } from "../../threeRepo/preflight.js";
 import { loadInstallationConfig } from "../../threeRepo/installation.js";
+import { resolveModuleTargets } from "../../threeRepo/moduleTargetResolver.js";
 import { loadTargetRegistry } from "../../threeRepo/targets.js";
-import { validateNewTaskBindings, type TargetBindings } from "../../threeRepo/taskBindings.js";
+import {
+  hasTargetBindings,
+  validateNewTaskBindings,
+  type TaskBindingModuleScope,
+  type TargetBindings,
+} from "../../threeRepo/taskBindings.js";
 import { resolveWorkflowId } from "../../workflow/workflowDefinition.js";
 import type { RuntimeTaskWorkRoot } from "../../orchestrator/runtimeTask.js";
 import { CliUsageError, type CliArgs } from "../../cli.js";
@@ -23,7 +29,7 @@ import { CliUsageError, type CliArgs } from "../../cli.js";
  * by their single workspace's contract.
  */
 export function contractRootForTask(projectRoot: string, bindings: TargetBindings): string {
-  return bindings.backend_target || bindings.frontend_target ? resolveFrameworkRoot() : projectRoot;
+  return hasTargetBindings(bindings) ? resolveFrameworkRoot() : projectRoot;
 }
 
 /** Optional phase-tier metadata is advisory input to routing, never a runtime gate. */
@@ -55,14 +61,16 @@ export function runtimeTaskWorkRoots(
   args: CliArgs,
   taskId: string,
   classification: ReturnType<typeof classifyTask>,
+  moduleScope?: TaskBindingModuleScope,
 ): RuntimeTaskWorkRoot[] {
   const stages = classification.pipeline.filter((stage) => stage !== AgentStage.HUMAN);
-  if (!args.targetBindings.frontend_target && !args.targetBindings.backend_target) {
+  if (!hasTargetBindings(args.targetBindings)) {
     return stages.map((stage) => ({ stage, targetId: "legacy-project", path: args.projectRoot }));
   }
 
   const preview = { taskId, classification, targetBindings: args.targetBindings };
-  const installationConfigPath = process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined;
+  const installationConfigPath =
+    process.env.STA_INSTALLATION_CONFIG || undefined;
   const roots: RuntimeTaskWorkRoot[] = [];
   for (const stage of stages) {
     // Knowledge-only stages deliberately have no Target work roots. UX identity
@@ -85,6 +93,10 @@ export function runtimeTaskWorkRoots(
       // its own "Framework root".
       frameworkRoot: resolveFrameworkRoot(),
       installationConfigPath,
+      moduleScope,
+      // openTask validated and logged this exact binding immediately before
+      // resolving roots; repeating each warning once per stage adds no signal.
+      bindingWarning: () => {},
     });
     for (const root of resolved.workRoots) {
       if (root.access === "write") roots.push({ stage, targetId: root.targetId, path: root.path });
@@ -120,21 +132,41 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string):
   // Do this before a durable row is written, so malformed/retired/unknown ids
   // leave no partial task history behind.
   const isCodeTask = classification.pipeline.some((stage) => stage === AgentStage.BACKEND_ENGINEER || stage === AgentStage.FRONTEND_ENGINEER);
-  // AGENTCLAUDE_INSTALLATION_CONFIG lets a test (or an unusual setup) point the
+  // `STA_INSTALLATION_CONFIG` lets a test (or an unusual setup) point the
   // mode check at a specific file instead of the machine's real one — without
   // it, merely having configured an installation once flips every CLI test that
   // creates a legacy code task.
-  const installationConfigPath = process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined;
-  if (args.targetBindings.frontend_target || args.targetBindings.backend_target) {
+  const installationConfigPath =
+    process.env.STA_INSTALLATION_CONFIG || undefined;
+  let moduleScope: TaskBindingModuleScope | undefined;
+  const validateInstalledBindings = (): void => {
     const installation = loadInstallationConfig(installationConfigPath);
-    validateNewTaskBindings(classification, args.targetBindings, loadTargetRegistry(installation.knowledge_root));
+    if (args.module) {
+      const resolved = resolveModuleTargets(args.module, installation.knowledge_root, {
+        frameworkRoot: resolveFrameworkRoot(),
+      });
+      moduleScope = {
+        module: resolved.module,
+        designPath: resolved.designPath,
+        declaredTargetIds: resolved.declaredTargetIds,
+      };
+    }
+    const result = validateNewTaskBindings(
+      classification,
+      args.targetBindings,
+      loadTargetRegistry(installation.knowledge_root),
+      { moduleScope },
+    );
+    for (const warning of result.warnings) console.warn(`[orchestrator] WARNING: ${warning}`);
+  };
+  if (hasTargetBindings(args.targetBindings)) {
+    validateInstalledBindings();
   } else if (isCodeTask) {
     // Legacy project-mode remains supported when no installation exists. Once
     // an installation has been configured, however, this is three-repo mode
     // and a code task without an explicit binding must never be persisted.
     try {
-      const installation = loadInstallationConfig(installationConfigPath);
-      validateNewTaskBindings(classification, args.targetBindings, loadTargetRegistry(installation.knowledge_root));
+      validateInstalledBindings();
     } catch (error) {
       if (!(error instanceof Error) || !error.message.startsWith("cannot read installation config")) throw error;
     }
@@ -160,7 +192,7 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string):
     projectRoot: resolveFrameworkRoot(),
     docsRoot,
     moduleName: args.module,
-    targetWorkRoots: runtimeTaskWorkRoots(args, taskId, classification),
+    targetWorkRoots: runtimeTaskWorkRoots(args, taskId, classification, moduleScope),
     changeAwareVerification: !args.noQaOptimization,
   });
   void created;

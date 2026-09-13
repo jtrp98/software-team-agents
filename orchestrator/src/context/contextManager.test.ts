@@ -19,17 +19,19 @@ import { ContextLeakageError } from "./contextSelection.js";
 import { renderSlicedDocs } from "../runtime/agentRunAssembly.js";
 import { sliceModuleDocsWithSavings } from "../runtime/agentRunAssembly.js";
 import { buildContextCommand } from "./contextCommand.js";
+import { fixtureTask } from "../runtime/packetFixture.testSupport.js";
+import { renderCanonicalTasks } from "../docs/planTask.js";
 
 // T-V6-006: `env: {}` (used below) now falls through to installation.yaml
-// when AGENTCLAUDE_KNOWLEDGE_ROOT is unset — isolate it from whatever is
+// when STA_KNOWLEDGE_ROOT is unset — isolate it from whatever is
 // real on the machine running this suite.
-const AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+const STA_INSTALLATION_CONFIG_ORIGINAL = process.env.STA_INSTALLATION_CONFIG;
 beforeEach(() => {
-  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-context-manager-test-no-installation.yaml");
+  process.env.STA_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-context-manager-test-no-installation.yaml");
 });
 afterEach(() => {
-  if (AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-  else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL;
+  if (STA_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+  else process.env.STA_INSTALLATION_CONFIG = STA_INSTALLATION_CONFIG_ORIGINAL;
 });
 
 function handoff(over: Partial<HandoffArtifact> = {}): HandoffArtifact {
@@ -113,45 +115,49 @@ const REVIEW = `# review — sales-crm
 ⚠️ response shape ไม่ตรง
 `;
 
-const TRACE_PLAN = `# plan — sales-crm
+const TRACE_PLAN = renderCanonicalTasks([
+  fixtureTask({ id: "BE-001", phase: 1, title: "Import", traceability: ["REQ-001", "AC-007.2", "DES-001"], retrievalHints: "Hypothesis: The import handler is the likely boundary; confirm it.\nQuery: Locate the import handler.\nProvenance: DES-001" }),
+  fixtureTask({ id: "BE-002", phase: 2, title: "Reporting", dependsOn: ["BE-001"], traceability: ["REQ-002", "AC-007.2", "DES-002"], retrievalHints: "Hypothesis: The reporting handler is the likely boundary; confirm it.\nQuery: Locate the reporting handler.\nProvenance: DES-002" }),
+  fixtureTask({ id: "FE-003", phase: 3, title: "Archive", owner: AgentStage.FRONTEND_ENGINEER, dependsOn: ["BE-002"], traceability: ["REQ-003", "AC-007.2", "DES-003"], retrievalHints: "Hypothesis: The archive UI is the likely boundary; confirm it.\nQuery: Locate the archive UI.\nProvenance: DES-003" }),
+]).replace("PlanTask format: 1\n\n", "PlanTask format: 1\n\n## Plan Summary\nสามเฟส\n\n") + "\n## Unresolved Open Questions\nไม่มี\n";
 
-## Plan Summary
-สามเฟส
-
-## Phase 1: Import
-| Task | Status | Owner | Depends on |
-|---|---|---|---|
-| BE-001 (DES-001) — import | pending | backend-engineer | — |
-
-## Phase 2: Reporting
-| Task | Status | Owner | Depends on |
-|---|---|---|---|
-| BE-002 (DES-002) — report | pending | backend-engineer | BE-001 |
-
-## Phase 3: Archive
-| Task | Status | Owner | Depends on |
-|---|---|---|---|
-| FE-003 (DES-003) — archive | pending | frontend-engineer | BE-002 |
-
-## Open Questions
-ไม่มี
-`;
+const TRACE_REVISION = "a".repeat(40);
+const TRACE_HASH = "b".repeat(64);
+function traceDesignSection(number: string, title: string, relation: string, body: string): string {
+  const start = (Number(number) - 1) * 3 + 1;
+  const evidence = (offset: number, claim: string) => `Evidence EVD-${String(start + offset).padStart(3, "0")}: claim=${claim} | state=confirmed | path=src/fixture.ts | symbol=fixture | line=1 | revision=${TRACE_REVISION} | basis=source | tool=fixture-read | hash=${TRACE_HASH}`;
+  return [
+    `## DES-${number} — ${title}`,
+    relation,
+    `Contract:${title.replace(/\s+/g, "")}.v1 — current fixture contract.`,
+    `DEC-${number} — retain the selected fixture boundary.`,
+    evidence(0, `DES-${number}`),
+    evidence(1, `Contract:${title.replace(/\s+/g, "")}.v1`),
+    evidence(2, `DEC-${number}`),
+    "Compatibility: unchanged",
+    "Data/schema: unchanged",
+    "Migration/backfill: none",
+    "Security: none",
+    "Fallback: restore the selected fixture behavior.",
+    "Material ambiguity: none",
+    body,
+  ].join("\n");
+}
 
 const TRACE_DESIGN = `# design — sales-crm
+
+Design evidence format: 1
 
 ## Feature-by-Feature Feasibility
 - DES-001 covers REQ-001 — import feasible
 - DES-002 covers REQ-002 — reporting feasible
 - DES-003 covers REQ-003 — archive feasible
 
-## Import Contract — DES-001
-${"i".repeat(2_000)}
+${traceDesignSection("001", "Import Contract", "DES-001 covers REQ-001", "i".repeat(2_000))}
 
-## Reporting Contract — DES-002
-${"r".repeat(6_000)}
+${traceDesignSection("002", "Reporting Contract", "DES-002 covers REQ-002", "r".repeat(6_000))}
 
-## Archive Contract — DES-003
-${"a".repeat(6_000)}
+${traceDesignSection("003", "Archive Contract", "DES-003 covers REQ-003", "a".repeat(6_000))}
 
 ## Data Model
 ${"d".repeat(2_000)}
@@ -163,7 +169,7 @@ selected module contract
 ${"b".repeat(2_000)}
 
 ## Risks & Dependencies
-ต้องรักษา backward compatibility
+ต้องรักษา contract ปัจจุบัน
 
 ## Open Questions
 ห้ามเปิด export จนกว่าจะยืนยัน
@@ -694,9 +700,9 @@ describe("T-V3TOK-050 traceability-backed design slicing", () => {
     const cm = new ContextManager({ projectRoot: tracedProject(), moduleName: "sales-crm" });
     const out = cm.read(AgentStage.BACKEND_ENGINEER, "design", [1])!;
     expect(out.fullDocument).toBe(false);
-    expect(out.text).toContain("Import Contract — DES-001");
-    expect(out.skipped).toEqual(expect.arrayContaining(["Reporting Contract — DES-002", "Archive Contract — DES-003"]));
-    expect(out.text).not.toContain("Reporting Contract — DES-002");
+    expect(out.text).toContain("DES-001 — Import Contract");
+    expect(out.skipped).toEqual(expect.arrayContaining(["DES-002 — Reporting Contract", "DES-003 — Archive Contract"]));
+    expect(out.text).not.toContain("DES-002 — Reporting Contract");
     expect(out.bytesAfter / out.bytesBefore).toBeLessThanOrEqual(0.45);
   });
 
@@ -788,10 +794,10 @@ describe("T-V3TOK-051 traceability-backed requirement slicing", () => {
     expect(noIds.reason).toContain("no REQ-NNN");
 
     fs.writeFileSync(path.join(root, "_docs", "module", "sales-crm", "requirement.md"), TRACE_REQUIREMENT, "utf8");
-    fs.writeFileSync(path.join(root, "_docs", "module", "sales-crm", "design.md"), TRACE_DESIGN.replace("DES-001 covers REQ-001", "DES-001 has no requirement"), "utf8");
+    fs.writeFileSync(path.join(root, "_docs", "module", "sales-crm", "plan.md"), TRACE_PLAN.replace("Traceability: REQ-001, AC-007.2, DES-001", "Traceability: AC-007.2, DES-001"), "utf8");
     const broken = new ContextManager({ projectRoot: root, moduleName: "sales-crm" }).read(AgentStage.BACKEND_ENGINEER, "requirement", [1])!;
     expect(broken.fullDocument).toBe(true);
-    expect(broken.reason).toContain("incomplete");
+    expect(broken.reason).toContain("not reliable");
   });
 });
 
@@ -815,14 +821,14 @@ describe("T-V3TOK-092 handoff-reference narrowing", () => {
     const normal = cm.forStage(AgentStage.BACKEND_ENGINEER, [1]);
     const refs = handoffReferencedSections(
       AgentStage.BACKEND_ENGINEER,
-      handoff({ contract_refs: { produces: ["design.md#Import-Contract-%E2%80%94-DES-001"], consumes: [] } }),
+      handoff({ contract_refs: { produces: ["design.md#DES-001-%E2%80%94-Import-Contract"], consumes: [] } }),
     );
     const narrowed = cm.forStage(AgentStage.BACKEND_ENGINEER, [1], undefined, refs);
     const normalDesign = normal.find((doc) => doc.doc === "design")!;
     const narrowedDesign = narrowed.find((doc) => doc.doc === "design")!;
     expect(normalDesign.text).toContain("Future Contract — DES-999");
     expect(narrowedDesign.text).not.toContain("Future Contract — DES-999");
-    expect(narrowedDesign.text).toContain("Import Contract — DES-001");
+    expect(narrowedDesign.text).toContain("DES-001 — Import Contract");
     expect(narrowedDesign.text).toContain("## Risks & Dependencies");
     expect(narrowedDesign.text).toContain("## Open Questions");
     expect(narrowedDesign.bytesAfter).toBeLessThan(normalDesign.bytesAfter);

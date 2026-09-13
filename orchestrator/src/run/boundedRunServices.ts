@@ -15,6 +15,7 @@ import type { AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import type { RuntimeGuards, RuntimeAutonomy } from "../runtime/runtimeAdapter.js";
 import type { RuntimeRegistry } from "../runtime/runtimeRegistry.js";
 import { resolveRuntimeRoute, type RuntimeRouteFlags } from "../runtime/runtimeRouting.js";
+import { loadModelTierPolicy } from "../runtime/modelTiers.js";
 import { detectRuntimeCapabilities } from "../runtime/runtimeCapabilityDetection.js";
 import { compileExecutionPacket } from "../runtime/agentRunAssembly.js";
 import { writeExecutionPacket, nextExecutionPacketAttempt } from "../state/runtimeArtifacts.js";
@@ -34,6 +35,8 @@ import { combineProjectRunners, createProjectRunner } from "../qa/projectRunner.
 import { LocalWorkspace } from "../runtime/localWorkspace.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { evaluateUnattendedGate, renderUnattendedGate } from "./unattendedGate.js";
+import { resolveQaWorkRoots, type QaWorkRoot } from "../threeRepo/cliRoots.js";
+import { collectQaChangedFiles } from "../qa/changeSource.js";
 
 /**
  * T-V8-021 — the real `BoundedRunServices` behind the bounded-run CLI.
@@ -129,6 +132,18 @@ function failureCategory(result: AgentExecutorResult): "quota" | "unavailable" |
   return "runtime";
 }
 
+function writableRootForStage(
+  runtimeTask: RuntimeTask | null | undefined,
+  stage: AgentStage,
+  fallbackRoot: string,
+): string {
+  if (runtimeTask && "version" in runtimeTask && runtimeTask.version === 2) {
+    const matching = runtimeTask.scope.work_roots.find((r) => r.stage === stage);
+    if (matching?.root) return matching.root;
+  }
+  return fallbackRoot;
+}
+
 export function createProductionBoundedRunServices(options: BoundedRunServiceOptions): BoundedRunServices {
   const now = options.now ?? Date.now;
 
@@ -176,9 +191,11 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
 
     const role = getAgent(task.owner).role;
     const targetWrite = task.owner === AgentStage.BACKEND_ENGINEER || task.owner === AgentStage.FRONTEND_ENGINEER;
-    const guards = options.guards(role, options.targetRoot);
+    const writableRoot = writableRootForStage(runtimeTask, task.owner, options.targetRoot);
+    const guards = options.guards(role, writableRoot);
 
     const availability = await options.registry.probeAll();
+    const modelPolicy = loadModelTierPolicy(options.runtimeStateRoot);
     const route = resolveRuntimeRoute({
       role,
       stage: task.owner,
@@ -189,6 +206,7 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
       classification: persisted?.classification,
       availability,
       hasTargetWrite: targetWrite,
+      modelPolicy,
     });
     if (route.error || !route.selected) {
       return { kind: "gate", reason: `no runtime route resolved for ${task.task_id}/${role}: ${route.error ?? "no candidate selected"}` };
@@ -206,9 +224,9 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
 
     let baseRevision: string;
     try {
-      baseRevision = await resolveTargetRevision(options.targetRoot);
+      baseRevision = await resolveTargetRevision(writableRoot);
     } catch (error) {
-      return { kind: "halt", reason: `cannot resolve base revision for ${options.targetRoot}: ${error instanceof Error ? error.message : String(error)}` };
+      return { kind: "halt", reason: `cannot resolve base revision for ${writableRoot}: ${error instanceof Error ? error.message : String(error)}` };
     }
 
     const attemptNumber = nextExecutionPacketAttempt(options.runtimeStateRoot, task.task_id, task.owner);
@@ -258,7 +276,7 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
         availability: availability[selected.runtime.id],
         capabilityReport,
         targetWrite,
-        writableRoots: targetWrite ? [options.targetRoot] : [],
+        writableRoots: targetWrite ? [writableRoot] : [],
         packetHash: packet.packet_hash,
         packetPath,
         startedAt: now(),
@@ -280,7 +298,8 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
     const attempt = prepared.attempt;
     const runtimeTask = options.store.loadTask(attempt.task_id)?.runtimeTask;
     const role = getAgent(attempt.stage).role;
-    const guards = options.guards(role, options.targetRoot);
+    const writableRoot = writableRootForStage(runtimeTask, attempt.stage, options.targetRoot);
+    const guards = options.guards(role, writableRoot);
 
     const runtimeExecutor = createRuntimeExecutor({
       runtime: requireDefaultRuntime(),
@@ -295,7 +314,7 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
         const t = options.ledger.readTask(attempt.run_id, id);
         return t ? dependencyEvidenceFor(options.ledger, attempt.run_id, t) : [];
       },
-      stageRoots: { [attempt.stage]: options.targetRoot },
+      stageRoots: { [attempt.stage]: writableRoot },
       frozenAttempt: attempt,
       frozenRoutingBasis: attempt.route_basis,
     });
@@ -331,7 +350,9 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
     if (!representativeTask) return { kind: "halt", reason: `checkpointed task ${representative} is missing from the task store` };
 
     const role = getAgent(AgentStage.QA_ENGINEER).role;
-    const guards = options.guards(role, options.targetRoot);
+    const writableRoot = writableRootForStage(representativeTask?.runtimeTask, AgentStage.QA_ENGINEER, options.targetRoot);
+    const guards = options.guards(role, writableRoot);
+    const modelPolicy = loadModelTierPolicy(options.runtimeStateRoot);
     const qaExecutor = createRuntimeExecutor({
       runtime: requireDefaultRuntime(),
       registry: options.registry,
@@ -340,21 +361,48 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
       guards: () => guards,
       autonomy: options.autonomy,
       classification: (id) => options.store.loadTask(id)?.classification,
-      stageRoots: { [AgentStage.QA_ENGINEER]: options.targetRoot },
+      stageRoots: { [AgentStage.QA_ENGINEER]: writableRoot },
+      modelPolicy,
     });
 
+    const runtimeTask = representativeTask?.runtimeTask;
+    let qaRoots: QaWorkRoot[] = [];
+    if (runtimeTask && "version" in runtimeTask && runtimeTask.version === 2 && runtimeTask.scope.work_roots && runtimeTask.scope.work_roots.length > 0) {
+      const qaStageRoots = runtimeTask.scope.work_roots.filter((r) => r.stage === AgentStage.QA_ENGINEER);
+      const candidates = qaStageRoots.length > 0 ? qaStageRoots : runtimeTask.scope.work_roots;
+      const seen = new Set<string>();
+      for (const r of candidates) {
+        const key = `${r.target_id ?? ""}::${r.root}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          qaRoots.push({ targetId: r.target_id, path: r.root });
+        }
+      }
+    }
+    if (qaRoots.length === 0) {
+      try {
+        qaRoots = resolveQaWorkRoots(options.projectRoot, representative, options.store, options.moduleName);
+      } catch {
+        qaRoots = [];
+      }
+    }
+    if (qaRoots.length === 0 || (qaRoots.length === 1 && !qaRoots[0]!.targetId && qaRoots[0]!.path === options.projectRoot && options.targetRoot !== options.projectRoot)) {
+      qaRoots = [{ path: options.targetRoot }];
+    }
+    const { files: qaChangedFiles, failedTargets } = await collectQaChangedFiles(qaRoots).catch(() => ({ files: [] as string[], failedTargets: [] as string[] }));
     const qaInputs = await productionQaInputs({
       docsRoot: options.docsRoot,
       moduleName: options.moduleName,
       taskId: representative,
-      roots: [options.targetRoot],
+      roots: qaRoots,
       projectRoot: options.projectRoot,
-      changedFiles: [],
+      changedFiles: qaChangedFiles,
+      unreadableTargets: failedTargets.length > 0 ? failedTargets : undefined,
     });
 
     const executor = withQaOptimization({
       inner: qaExecutor,
-      changedFiles: async () => [],
+      changedFiles: async () => qaChangedFiles,
       deterministicGate: "disabled",
       packageInputs: qaInputs.packageInputs,
       scopeInputs: qaInputs.scopeInputs,
@@ -402,8 +450,11 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
   }
 
   async function runAnalysisRepair(instruction: RepairInstruction): Promise<{ kind: "completed" } | { kind: "gate"; reason: string } | { kind: "halt"; reason: string }> {
+    const persisted = options.store.loadTask(instruction.taskId);
     const role = getAgent(instruction.owner).role;
-    const guards = options.guards(role, options.targetRoot);
+    const writableRoot = writableRootForStage(persisted?.runtimeTask, instruction.owner, options.targetRoot);
+    const guards = options.guards(role, writableRoot);
+    const modelPolicy = loadModelTierPolicy(options.runtimeStateRoot);
     const executor = createRuntimeExecutor({
       runtime: requireDefaultRuntime(),
       registry: options.registry,
@@ -412,8 +463,9 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
       guards: () => guards,
       autonomy: options.autonomy,
       classification: (id) => options.store.loadTask(id)?.classification,
-      stageRoots: { [instruction.owner]: options.targetRoot },
+      stageRoots: { [instruction.owner]: writableRoot },
       extraInstruction: `Repair requested by coherent QA: ${instruction.reason}`,
+      modelPolicy,
     });
     const result = await executor({ stage: instruction.owner, taskId: instruction.taskId, context: [] });
     if (result.outcome.result === "PASS") return { kind: "completed" };

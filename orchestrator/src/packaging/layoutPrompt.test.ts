@@ -9,20 +9,20 @@ function repoRoot(): string {
   return cursor;
 }
 
-describe("T-V3-14 layout reconciliation prompt compatibility", () => {
+describe("T-V9-023 / T-V9-024 prompt packaging and layout separation", () => {
   const root = repoRoot();
-  const renamed = fs.readFileSync(path.join(root, "prompt-reconcile-knowledge-layout.md"), "utf8");
-  const stub = fs.readFileSync(path.join(root, "prompt-update-knowledge.md"), "utf8");
-  it("keeps exactly the five layout buckets and the safety rails, with an evidence-command pointer only", () => {
-    expect([...renamed.matchAll(/^### Bucket [A-E] —/gm)].map((match) => match[0])).toHaveLength(5);
-    expect(renamed).toContain("## Safety rails — never, under this playbook");
-    expect(renamed).toMatch(/reconciles file layout/);
-    expect(renamed).toMatch(/does not read a Target/);
-    expect(renamed).toContain("sta knowledge reconcile --target <id>");
-  });
-  it("ships both names for the one-release compatibility window", () => {
-    expect(stub).toContain("prompt-reconcile-knowledge-layout.md");
+  it("does not ship a legacy document-layout converter", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as { files: string[] };
-    expect(pkg.files).toEqual(expect.arrayContaining(["prompt-update-knowledge.md", "prompt-reconcile-knowledge-layout.md"]));
+    expect(pkg.files).not.toContain("prompt-reconcile-knowledge-layout.md");
+    expect(fs.existsSync(path.join(root, "prompt-reconcile-knowledge-layout.md"))).toBe(false);
+  });
+
+  it("ships prompt-update-knowledge.md as a canonical knowledge refresh playbook, not a legacy converter pointer", () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as { files: string[] };
+    expect(pkg.files).toContain("prompt-update-knowledge.md");
+    expect(fs.existsSync(path.join(root, "prompt-update-knowledge.md"))).toBe(true);
+    const content = fs.readFileSync(path.join(root, "prompt-update-knowledge.md"), "utf8");
+    expect(content).not.toContain("# Compatibility pointer");
+    expect(content).toContain("# prompt-update-knowledge.md — AI-Assisted Knowledge Refresh Playbook");
   });
 });

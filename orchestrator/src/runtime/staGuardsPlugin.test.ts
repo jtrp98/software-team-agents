@@ -14,7 +14,7 @@ import { pathToFileURL } from "node:url";
 const pluginHref = pathToFileURL(path.resolve(import.meta.dirname, "../../../.opencode/plugin/sta-guards.js")).href;
 
 const roots: string[] = [];
-const envKeys = ["AGENTCLAUDE_ROLE", "AGENTCLAUDE_WRITABLE_WORK_ROOTS", "AGENTCLAUDE_KNOWLEDGE_ROOT"] as const;
+const envKeys = ["STA_ROLE", "STA_WRITABLE_WORK_ROOTS", "STA_TARGET_WORK_ROOTS", "STA_KNOWLEDGE_ROOT"] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
@@ -89,11 +89,11 @@ describe("sta-guards plugin (OpenCode)", () => {
     );
   });
 
-  it("enforces the role's contract write/deny lists when AGENTCLAUDE_ROLE is set", async () => {
+  it("enforces the role's contract write/deny lists when STA_ROLE is set", async () => {
     const root = workspace({
       "backend-engineer": 'schema_version: 1\npermissions:\n  capabilities:\n    - "write code"\n  paths:\n    write: ["src/**", "_docs/module/**/plan.md"]\n    deny: ["_docs/module/**/design.md"]\n',
     });
-    process.env.AGENTCLAUDE_ROLE = "backend-engineer";
+    process.env.STA_ROLE = "backend-engineer";
     const guard = await hookFor(root);
 
     await expect(guard("write", { filePath: path.join(root, "src", "x.ts") })).resolves.toBeUndefined();
@@ -114,7 +114,7 @@ describe("sta-guards plugin (OpenCode)", () => {
     const root = workspace();
     const targetRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sta-guards-target-"));
     roots.push(targetRoot);
-    process.env.AGENTCLAUDE_WRITABLE_WORK_ROOTS = JSON.stringify([targetRoot]);
+    process.env.STA_WRITABLE_WORK_ROOTS = JSON.stringify([targetRoot]);
     const guard = await hookFor(root);
 
     await expect(guard("write", { filePath: path.join(targetRoot, "src", "x.ts") })).resolves.toBeUndefined();
@@ -123,6 +123,29 @@ describe("sta-guards plugin (OpenCode)", () => {
     // An ungated sibling of the granted root stays blocked.
     await expect(guard("write", { filePath: path.join(targetRoot, "..", "sibling.txt") })).rejects.toThrow(
       /outside the workspace root|outside this role/,
+    );
+  });
+
+  it("T-V9-012 names a bound read-only Target and keeps an unbound Target outside the write scope", async () => {
+    const root = workspace();
+    const writableTarget = fs.mkdtempSync(path.join(os.tmpdir(), "sta-guards-writable-target-"));
+    const readOnlyTarget = fs.mkdtempSync(path.join(os.tmpdir(), "sta-guards-readonly-target-"));
+    const unboundTarget = fs.mkdtempSync(path.join(os.tmpdir(), "sta-guards-unbound-target-"));
+    roots.push(writableTarget, readOnlyTarget, unboundTarget);
+    process.env.STA_ROLE = "backend-engineer";
+    process.env.STA_WRITABLE_WORK_ROOTS = JSON.stringify([writableTarget]);
+    process.env.STA_TARGET_WORK_ROOTS = JSON.stringify([
+      { targetId: "api", path: writableTarget, access: "write" },
+      { targetId: "web", path: readOnlyTarget, access: "read" },
+    ]);
+    const guard = await hookFor(root);
+
+    await expect(guard("write", { filePath: path.join(writableTarget, "src", "owned.ts") })).resolves.toBeUndefined();
+    await expect(guard("write", { filePath: path.join(readOnlyTarget, "src", "foreign.ts") })).rejects.toThrow(
+      /Target "web".*bound read-only.*backend-engineer/,
+    );
+    await expect(guard("write", { filePath: path.join(unboundTarget, "src", "unbound.ts") })).rejects.toThrow(
+      /outside the workspace root/,
     );
   });
 
@@ -160,7 +183,7 @@ describe("sta-guards plugin — workspace-role tripwire (T-WG3)", () => {
 
   it("deny text names the resolved Knowledge root when the launch provides it (T-WG7 env)", async () => {
     const root = roleWorkspace("dev");
-    process.env.AGENTCLAUDE_KNOWLEDGE_ROOT = path.join(path.dirname(root), "kb-fixture");
+    process.env.STA_KNOWLEDGE_ROOT = path.join(path.dirname(root), "kb-fixture");
     const guard = await hookFor(root);
     const err = await guard("write", { filePath: path.join(root, "_docs", "module", "m", "requirement.md") }).catch((e) => e);
     expectBlocked(err, /kb-fixture/);

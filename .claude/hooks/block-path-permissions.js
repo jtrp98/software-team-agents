@@ -16,7 +16,7 @@
  * both hit this. `tool_name` and `tool_input` are all there is, so this hook cannot work out on
  * its own which of the eleven agents is about to write.
  *
- * So it takes identity from `AGENTCLAUDE_ROLE`, which the runtime executor and adapters set on
+ * So it takes identity from `STA_ROLE`, which the runtime executor and adapters set on
  * the child process before spawning an agent. When the orchestrator is
  * driving, the role is known and the agent's own rules apply. When a person is driving
  * interactively, there is no role and no way to derive one -- `role:` in
@@ -71,15 +71,31 @@ function readWorkspaceRole(nodeFs, nodePath, workspaceRoot) {
   return m ? m[1] : null;
 }
 function workspaceDenyWhy(role) {
-  const kb = process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
+  const kb = process.env.STA_KNOWLEDGE_ROOT;
   if (role === 'dev') return 'Requirements, designs, plans, test-plans, UX artifacts and registry files live in the Knowledge repository' + (kb ? ' (`' + kb + '`)' : '') + '. Run `software-team-agents ba` from the Knowledge workspace instead; this workspace (`role: dev` in .agent-team/config.yaml) owns app code plus review/security/deploy docs only.';
   return 'Contracts, workflows, stacks and pipeline policy are engineer payload for a Target checkout. Run engineering work with `software-team-agents dev` from a Target workspace; this workspace (`role: ba` in .agent-team/config.yaml) owns analysis docs and knowledge items only.';
 }
 function stackPathRules() {
   let parsed;
-  try { parsed = JSON.parse(process.env.AGENTCLAUDE_STACK_PATH_RULES || '{}'); } catch { return { write: [], deny: [] }; }
+  try { parsed = JSON.parse(process.env.STA_STACK_PATH_RULES || '{}'); } catch { return { write: [], deny: [] }; }
   const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);
   return { write: list(parsed && parsed.write), deny: list(parsed && parsed.deny) };
+}
+function boundReadOnlyTarget(nodePath, target) {
+  let roots; try { roots = JSON.parse(process.env.STA_TARGET_WORK_ROOTS || '[]'); } catch { return null; }
+  if (!Array.isArray(roots)) return null;
+  const absolute = nodePath.resolve(target);
+  for (const candidate of roots) {
+    if (!candidate || typeof candidate !== 'object' || typeof candidate.targetId !== 'string' || typeof candidate.path !== 'string' || candidate.access !== 'read' || !nodePath.isAbsolute(candidate.path)) continue;
+    const root = nodePath.resolve(candidate.path);
+    const relative = nodePath.relative(root, absolute);
+    if (relative === '' || (!relative.startsWith('..' + nodePath.sep) && relative !== '..' && !nodePath.isAbsolute(relative))) return candidate.targetId;
+  }
+  return null;
+}
+function boundReadOnlyWhy(targetId) {
+  const role = process.env.STA_ROLE || 'current role';
+  return 'Blocked: Target "' + targetId + '" is bound read-only for this ' + role + ' invocation; writing to it is refused.';
 }
 function matchesGlob(pattern, target) {
   const clean = (p) => p.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
@@ -129,6 +145,9 @@ function run(input) {
   const target = (input.tool_input && (input.tool_input.file_path || input.tool_input.notebook_path)) || '';
   if (!target) return null;
 
+  const readOnlyTarget = boundReadOnlyTarget(path, path.resolve(root, target));
+  if (readOnlyTarget !== null) return boundReadOnlyWhy(readOnlyTarget);
+
   // Three-repo runtime hands this hook only canonical write roots selected by
   // preflight. A Target path is outside the Framework contract's relative
   // globs, so evaluate the universal floor relative to that Target and allow
@@ -136,7 +155,7 @@ function run(input) {
   const workRelative = toWritableWorkRelative(target);
   if (workRelative !== null) {
     for (const pattern of UNIVERSAL_DENY) {
-      if (matchesGlob(pattern, workRelative)) return deny(workRelative, process.env.AGENTCLAUDE_ROLE || null, `no agent may write \`${pattern}\``);
+      if (matchesGlob(pattern, workRelative)) return deny(workRelative, process.env.STA_ROLE || null, `no agent may write \`${pattern}\``);
     }
     return null;
   }
@@ -151,11 +170,11 @@ function run(input) {
   }
 
   // Workspace-level rules — identity-independent, so
-  // they hold for interactive runs where no AGENTCLAUDE_ROLE is set. A `role:
+  // they hold for interactive runs where no STA_ROLE is set. A `role:
   // dev` workspace owns app code plus the engineer-written docs
   // (review/security/deploy); every analysis artifact and registry file
   // belongs to the Knowledge repository, named here from
-  // AGENTCLAUDE_KNOWLEDGE_ROOT when the launch provided it. A `role: ba`
+  // STA_KNOWLEDGE_ROOT when the launch provided it. A `role: ba`
   // workspace mirrors this for the engineer/pipeline payload.
   const wsRole = readWorkspaceRole(fs, path, root);
   if (wsRole === 'dev') {
@@ -168,7 +187,7 @@ function run(input) {
     }
   }
 
-  const role = process.env.AGENTCLAUDE_ROLE;
+  const role = process.env.STA_ROLE;
   if (!role) return null; // interactive run: the floor above is all this can honestly enforce
 
   const rules = readRules(role);
@@ -192,7 +211,7 @@ function run(input) {
 
 function toWritableWorkRelative(target) {
   let roots;
-  try { roots = JSON.parse(process.env.AGENTCLAUDE_WRITABLE_WORK_ROOTS || '[]'); } catch { return null; }
+  try { roots = JSON.parse(process.env.STA_WRITABLE_WORK_ROOTS || '[]'); } catch { return null; }
   if (!Array.isArray(roots)) return null;
   const abs = path.resolve(path.isAbsolute(target) ? target : path.resolve(root, target));
   for (const rawRoot of roots) {
@@ -231,7 +250,7 @@ function readRules(role) {
   // The contract holds the role boundary; where this stack puts code
   // comes from stacks/<profile>/stack.yaml, which no dependency-free reader here
   // can resolve. The orchestrator resolves it and hands it over on the same
-  // channel as AGENTCLAUDE_ROLE. Both halves arrive together or neither does,
+  // channel as STA_ROLE. Both halves arrive together or neither does,
   // so a missing channel over-restricts rather than letting a path through.
   const stack = stackPathRules();
   return { write: write.concat(stack.write), deny: (deny === null ? [] : deny).concat(stack.deny) };

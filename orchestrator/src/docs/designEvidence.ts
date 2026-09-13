@@ -36,10 +36,9 @@ export const DesignGateTriggerSchema = z.enum([
 export type DesignGateTrigger = z.infer<typeof DesignGateTriggerSchema>;
 
 export const DesignGateAssessmentSchema = z.strictObject({
-  mode: z.enum(["addressable", "legacy"]),
+  mode: z.literal("addressable"),
   triggers: z.array(DesignGateTriggerSchema),
   canProceedWithoutConfirmation: z.boolean(),
-  migrationRequired: z.boolean(),
   unresolvedClaims: z.array(claim),
   inferredClaims: z.array(claim),
 });
@@ -64,7 +63,7 @@ export interface AddressableDesignSection {
 }
 
 export interface ParsedDesignEvidence {
-  mode: "addressable" | "legacy";
+  mode: "addressable";
   claims: string[];
   evidence: DesignEvidenceRef[];
   sections: AddressableDesignSection[];
@@ -106,13 +105,9 @@ function sectionTriggers(decisions: DesignDecisions): DesignGateTrigger[] {
   return triggers;
 }
 
-/** Parses the compact design-evidence contract. Missing format stays an explicit legacy fallback. */
+/** Parses the current compact design-evidence contract. */
 export function parseDesignEvidence(markdown: string): ParsedDesignEvidence {
   const markers = markdown.replace(/\r\n?/g, "\n").split("\n").filter(line => line.startsWith("Design evidence format:"));
-  if (markers.length === 0) {
-    const gate = DesignGateAssessmentSchema.parse({ mode: "legacy", triggers: [], canProceedWithoutConfirmation: false, migrationRequired: true, unresolvedClaims: [], inferredClaims: [] });
-    return { mode: "legacy", claims: [], evidence: [], sections: [], gate, problems: [] };
-  }
   const problems: string[] = [];
   if (markers.length !== 1 || markers[0] !== marker) problems.push(`design: expected exactly one '${marker}'`);
   const parsedSections: AddressableDesignSection[] = [];
@@ -166,13 +161,12 @@ export function parseDesignEvidence(markdown: string): ParsedDesignEvidence {
   const triggers = [...new Set(parsedSections.flatMap(section => section.triggers))];
   const unresolvedClaims = [...new Set(allEvidence.filter(ref => ref.state === "unresolved").map(ref => ref.claim))];
   const inferredClaims = [...new Set(allEvidence.filter(ref => ref.state === "inferred").map(ref => ref.claim))];
-  const gate = DesignGateAssessmentSchema.parse({ mode: "addressable", triggers, canProceedWithoutConfirmation: triggers.length === 0, migrationRequired: false, unresolvedClaims, inferredClaims });
+  const gate = DesignGateAssessmentSchema.parse({ mode: "addressable", triggers, canProceedWithoutConfirmation: problems.length === 0 && triggers.length === 0, unresolvedClaims, inferredClaims });
   return { mode: "addressable", claims: allClaims, evidence: allEvidence, sections: parsedSections, gate, problems };
 }
 
-/** Returns only the evidence for exact task refs; legacy design cannot feed unattended execution. */
+/** Returns only the evidence for exact task refs. */
 export function designEvidenceForClaims(parsed: ParsedDesignEvidence, claims: readonly string[]): DesignEvidenceRef[] {
-  if (parsed.mode === "legacy") throw new Error("design evidence migration required: migrate to Design evidence format 1 before unattended execution");
   if (parsed.problems.length) throw new Error(`invalid design evidence: ${parsed.problems.join("; ")}`);
   const wanted = new Set(claims);
   for (const id of wanted) if (!parsed.claims.includes(id)) throw new Error(`design evidence has no addressable claim ${id}`);

@@ -168,24 +168,30 @@ describe("T-V3-09/T-V3-11 assembled retrieval", () => {
     };
   }
   it("excludes another Target, keeps globals, reports the count, and fails open by name when resolution fails", () => {
-    const knowledge = root("brief-k"); const targetA = root("brief-a"); const targetB = root("brief-b"); const unmapped = root("brief-unmapped");
+    const knowledge = root("brief-k"); const targetA = root("brief-a"); const targetB = root("brief-b"); const targetC = root("brief-c"); const unmapped = root("brief-unmapped");
     try {
       fs.writeFileSync(path.join(knowledge, "targets.yaml"), JSON.stringify({ schema_version: 1, targets: [
         { target_id: "node-app", name: "Node", remote_url: "https://example.com/node.git", status: "active" },
         { target_id: "dotnet-app", name: "Dotnet", remote_url: "https://example.com/dotnet.git", status: "active" },
+        { target_id: "shared-app", name: "Shared", remote_url: "https://example.com/shared.git", status: "active" },
       ] }));
       fs.mkdirSync(path.join(knowledge, ".workflow"), { recursive: true });
-      fs.writeFileSync(path.join(knowledge, ".workflow", "targets.local.yaml"), JSON.stringify({ schema_version: 1, targets: { "node-app": { path: targetA }, "dotnet-app": { path: targetB } } }));
+      fs.writeFileSync(path.join(knowledge, ".workflow", "targets.local.yaml"), JSON.stringify({ schema_version: 1, targets: { "node-app": { path: targetA }, "dotnet-app": { path: targetB }, "shared-app": { path: targetC } } }));
       fs.writeFileSync(path.join(knowledge, "global.md"), "global", "utf8");
       fs.writeFileSync(path.join(targetA, "fact.md"), "node", "utf8");
       fs.writeFileSync(path.join(targetB, "fact.md"), "dotnet", "utf8");
+      fs.writeFileSync(path.join(targetC, "fact.md"), "shared", "utf8");
       const source = (locator: string, origin: "knowledge" | "target", targetId: string | null, digestRoot: string) => [{ type: "file" as const, locator, captured_at: NOW, digest: digestOfSource(locator, digestRoot), origin: { root: origin, target_id: targetId } }];
       writeKnowledgeItem(req("REQ-GLOBAL", [], source("global.md", "knowledge", null, knowledge)), knowledge, { force: true });
       writeKnowledgeItem(req("REQ-NODE", ["node-app"], source("fact.md", "target", "node-app", targetA)), knowledge, { force: true });
       writeKnowledgeItem(req("REQ-DOTNET", ["dotnet-app"], source("fact.md", "target", "dotnet-app", targetB)), knowledge, { force: true });
+      writeKnowledgeItem(req("REQ-ALL3", ["node-app", "dotnet-app", "shared-app"], source("fact.md", "target", "node-app", targetA)), knowledge, { force: true });
+      writeKnowledgeItem(req("REQ-YZ", ["dotnet-app", "shared-app"], source("fact.md", "target", "dotnet-app", targetB)), knowledge, { force: true });
       const scoped = knowledgeBriefFor(AgentStage.BACKEND_ENGINEER, { projectRoot: targetA, knowledgeRoot: knowledge, targetRoot: targetA, moduleName: "sb-compass", now: NOW }).join("\n");
       expect(scoped).toContain("REQ-GLOBAL"); expect(scoped).toContain("REQ-NODE"); expect(scoped).not.toContain("REQ-DOTNET");
-      expect(scoped).toContain("Scope-excluded: 1");
+      expect(scoped).toContain("REQ-ALL3");
+      expect(scoped).not.toContain("REQ-YZ");
+      expect(scoped).toContain("Scope-excluded: 2");
       const fallback = knowledgeBriefFor(AgentStage.BACKEND_ENGINEER, { projectRoot: unmapped, knowledgeRoot: knowledge, targetRoot: unmapped, moduleName: "sb-compass", now: NOW }).join("\n");
       expect(fallback).toContain("legacy unscoped fallback"); expect(fallback).toContain("REQ-NODE"); expect(fallback).toContain("REQ-DOTNET");
       const noFreshness = knowledgeBriefFor(AgentStage.BACKEND_ENGINEER, { projectRoot: targetA, knowledgeRoot: knowledge, targetRoot: targetA, moduleName: "sb-compass", now: NOW, freshnessResolver: () => { throw new Error("fixture failure"); } }).join("\n");

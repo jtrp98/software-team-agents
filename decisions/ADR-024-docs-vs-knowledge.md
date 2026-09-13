@@ -94,11 +94,10 @@ summary in `T-V5-024` states, plus `F-13`'s own headline gap, each re-verified a
 code before being ruled on.
 
 **B1 — Incremental re-derivation on every `_docs` write. REJECTED.**
-Verified unmet: the only writers of `knowledge/<module>/**` are `sta adopt`
-(`orchestrator/src/adoption/adoptionRunner.ts`, a bulk one-shot) and the `uxui-designer`
-contract lane. `sta knowledge` offers `get`, `migrate-v2` and `reconcile` only
-(`orchestrator/src/cli/verbs/knowledge.ts:26`); no path re-derives an item when its source
-document changes. Meeting it means building a derivation service — new framework capability,
+Verified unmet: the framework has no automatic writer that re-derives
+`knowledge/<module>/**` when its source document changes. `sta knowledge` offers
+`get` and read-only `reconcile`; neither writes items. Meeting the condition means
+building a derivation service — new framework capability,
 excluded by `ADR-023`'s freeze and by V5's non-goals. Rejected.
 
 **B2 — Staleness fails rather than notes. Finding accepted; the fix REJECTED as a (b) gate.**

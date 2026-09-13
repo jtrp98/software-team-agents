@@ -106,6 +106,110 @@ describe("checkQaVerdictCoverage", () => {
     const coverage = checkQaVerdictCoverage({ report: report({ requirements: {} }), required: [] });
     expect(coverage.ok).toBe(true);
   });
+
+  describe("multi-target verdict aggregation (T-V9-015)", () => {
+    it("accepts a PASS when all bound Targets pass", () => {
+      const coverage = checkQaVerdictCoverage({
+        report: report({ targets: { api: "PASS", web: "PASS" } }),
+        required: REQUIRED,
+        boundTargets: ["api", "web"],
+      });
+      expect(coverage.ok).toBe(true);
+      expect(coverage.targetCoverage).toEqual({
+        bound: ["api", "web"],
+        passed: ["api", "web"],
+        failed: [],
+        uncovered: [],
+      });
+      expect(describeQaVerdictCoverage(coverage)).toContain("targets 2/2 passed");
+    });
+
+    it("accepts a single-Target PASS with baseline report shape without explicit targets dictionary", () => {
+      const coverage = checkQaVerdictCoverage({
+        report: report({ status: "PASS", targets: undefined }),
+        required: REQUIRED,
+        boundTargets: ["api"],
+      });
+      expect(coverage.ok).toBe(true);
+      expect(coverage.targetCoverage).toEqual({
+        bound: ["api"],
+        passed: ["api"],
+        failed: [],
+        uncovered: [],
+      });
+    });
+
+    it("flags single-Target baseline report as uncovered if named in unverifiedBehaviour", () => {
+      const coverage = checkQaVerdictCoverage({
+        report: report({
+          status: "PASS",
+          targets: undefined,
+          unverifiedBehaviour: ["api — no test suite executed"],
+        }),
+        required: REQUIRED,
+        boundTargets: ["api"],
+      });
+      expect(coverage.ok).toBe(false);
+      expect(coverage.problems.join(" ")).toContain("PASS does not cover 1 bound Target(s) without verification evidence: api");
+    });
+
+    it("rejects a PASS when one bound Target fails and names the failed Target", () => {
+      const coverage = checkQaVerdictCoverage({
+        report: report({ status: "PASS", targets: { api: "PASS", web: "FAIL" } }),
+        required: REQUIRED,
+        boundTargets: ["api", "web"],
+      });
+      expect(coverage.ok).toBe(false);
+      expect(coverage.problems.join(" ")).toContain("PASS rejected: bound Target(s) failed verification: web");
+      expect(describeQaVerdictCoverage(coverage)).toContain("failed: web");
+    });
+
+    it("rejects report when an unverified bound Target is completely undeclared", () => {
+      const coverage = checkQaVerdictCoverage({
+        report: report({ targets: { api: "PASS" } }),
+        required: REQUIRED,
+        boundTargets: ["api", "web"],
+      });
+      expect(coverage.ok).toBe(false);
+      expect(coverage.problems.join(" ")).toContain("bound Target(s) produced no evidence and were not reported under ## Unverified Behaviour: web");
+    });
+
+    it("rejects PASS when a bound Target has no evidence even if declared in unverifiedBehaviour", () => {
+      const coverage = checkQaVerdictCoverage({
+        report: report({
+          status: "PASS",
+          targets: { api: "PASS" },
+          unverifiedBehaviour: ["web — no verification evidence produced: target untouched"],
+        }),
+        required: REQUIRED,
+        boundTargets: ["api", "web"],
+      });
+      expect(coverage.ok).toBe(false);
+      expect(coverage.problems.join(" ")).toContain("PASS does not cover 1 bound Target(s) without verification evidence: web — task verdict passes only if every bound Target passes");
+    });
+
+    it("does not block a FAIL report when an unverified bound Target is declared in unverifiedBehaviour", () => {
+      const coverage = checkQaVerdictCoverage({
+        report: report({
+          status: "FAIL",
+          targets: { api: "FAIL" },
+          unverifiedBehaviour: ["web — no verification evidence produced: target untouched"],
+        }),
+        required: REQUIRED,
+        boundTargets: ["api", "web"],
+      });
+      expect(coverage.ok).toBe(true);
+      expect(coverage.targetCoverage?.uncovered).toEqual(["web"]);
+    });
+
+    it("QaReportArtifactSchema refuses PASS if any target in targets is FAIL", () => {
+      const parsed = QaReportArtifactSchema.safeParse(
+        report({ status: "PASS", targets: { api: "PASS", web: "FAIL" } }),
+      );
+      expect(parsed.success).toBe(false);
+      expect(JSON.stringify(parsed.error?.issues)).toContain("every target PASS");
+    });
+  });
 });
 
 describe("QaReportArtifactSchema no-bare-PASS floor", () => {

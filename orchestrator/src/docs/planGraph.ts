@@ -1,29 +1,33 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { AgentStage } from "../types.js";
-import { taskGraphFromPlan, TaskGraphError, CircularDependencyError, UnknownTaskError, type PlanGraphTask } from "../graph/taskGraph.js";
-import { sections, firstTable, checkboxLines } from "./markdown.js";
-import { extractIds } from "../traceability/traceability.js";
+import { taskGraphFromPlan, type PlanGraphTask } from "../graph/taskGraph.js";
 import { loadModelTiers, ModelTiersInvalidError, type ModelTiers } from "../runtime/modelTiers.js";
 import { detectWorkspaceKind } from "../targetcli/roleWorkspace.js";
 import { isCanonicalPlan, parseCanonicalPlan, type PlanTask } from "./planTask.js";
+import { readModuleTargets } from "./moduleTargets.js";
+import {
+  loadTargetRegistry,
+  TARGET_TYPE_ROLES,
+  targetById,
+  targetsPath,
+  TargetRegistryError,
+  type TargetRegistry,
+} from "../threeRepo/targets.js";
 
 /**
- * The plan.md task table as a machine-checkable graph.
+ * The canonical plan.md task sections as a machine-checkable graph.
  *
- * Parses every phase's task table into rows, then validates the graph
+ * Parses every canonical task section, then validates the graph
  * without an LLM — duplicate ids,
  * missing/self/duplicate dependencies, cycles, unknown owners, unknown
- * statuses, missing DES traceability, impossible authored wave ordering.
+ * statuses and missing DES traceability.
  * Every failure names its task id, because "somewhere in phase 3" is not
  * actionable.
  *
- * Waves are *derived* here, never persisted as truth: `waveOf` layers the
+ * Waves are *derived* here, never persisted as truth: `deriveWaves` layers the
  * graph the same way runtime scheduling would (declared dependencies plus
  * phase order — a later phase's work never starts before an earlier phase's,
- * which is `buildPlanGraph`'s reading). An authored `Wave` column is validated
- * against it, not trusted: PM writes grouping intent, the graph decides what
- * is actually ordered after what.
+ * which is the task graph's reading).
  *
  * Readiness is also derived, not read: `readinessOf` treats `verified` rows
  * (qa-engineer's mark, the only writer) as satisfied dependencies and answers
@@ -37,348 +41,48 @@ import { isCanonicalPlan, parseCanonicalPlan, type PlanTask } from "./planTask.j
  * warning and proceeds past an unmet edge.
  */
 
-export type PlanTaskStatus = "pending" | "in_progress" | "verified" | "blocked";
-
-const PLAN_STATUSES: readonly PlanTaskStatus[] = ["pending", "in_progress", "verified", "blocked"];
-
-/** Every role an Owner cell may name — exactly AgentStage minus HUMAN, kebab-case, the roster CLAUDE.md fixes. */
-const VALID_OWNERS: readonly string[] = Object.values(AgentStage).filter((s) => s !== AgentStage.HUMAN);
-
-const TASK_ID_PATTERN = /\b(?:BE|FE)-[A-Za-z0-9._-]+\b/;
-const DESIGN_REF_PATTERN = /\bDES-\d+\b/g;
-
-/** Legacy compatibility view only, retained until T-V8-029. New semantics live in PlanTask. */
-export interface PlanTaskRow {
-  /** Plan-level id, e.g. `BE-004`. Unique within the plan — validated, not assumed. */
-  id: string;
-  /** The `## Phase N` heading this row sits under. */
-  phase: number;
-  /** `DES-NNN` refs named in the Task cell — the traceability chain's task leg. */
-  designRefs: string[];
-  /** Declared dependencies from the `Depends on` cell, deduped, document order. */
-  dependsOn: string[];
-  status: PlanTaskStatus;
-  owner: string;
-  /** Authored wave from an optional `Wave` column; null when the plan carries none. */
-  wave: number | null;
-  /** Optional phase-level cast, inherited by every task in its phase. */
-  tier?: string;
-  description: string;
-  /** True when the row came from a legacy `- [ ]` line rather than a table. */
-  fromCheckbox: boolean;
-  /** Explicit contract columns from the authoritative task table; undefined means the plan did not make the claim. */
-  produces?: string[];
-  consumes?: string[];
-}
+export type WorkPlanTask = PlanTask;
 
 export interface ParsedPlan {
-  tasks: PlanTaskRow[];
-  /** Rows skipped before they could become a task — each becomes a validation problem below. */
+  tasks: PlanTask[];
   problems: string[];
 }
-
-/** `BE-004 (DES-002) — POST /orders`, or a legacy `BE-004 — POST /orders`. Same reading as legacyPlan.ts. */
-function parseTaskCell(cell: string): { id: string | null; description: string; designRefs: string[] } {
-  const idMatch = TASK_ID_PATTERN.exec(cell);
-  const designRefs = [...new Set([...cell.matchAll(DESIGN_REF_PATTERN)].map((m) => m[0]))];
-  const description = cell
-    .replace(TASK_ID_PATTERN, "")
-    .replace(/\((?:\s*DES-\d+\s*,?)+\)/g, "")
-    .replace(/^\s*[—:.-]\s*/, "")
-    .trim();
-  return { id: idMatch ? idMatch[0] : null, description, designRefs };
-}
-
-function normaliseStatus(raw: string): PlanTaskStatus | null {
-  const value = raw.trim().toLowerCase().replace(/[\s-]+/g, "_");
-  return (PLAN_STATUSES as readonly string[]).includes(value) ? (value as PlanTaskStatus) : null;
-}
-
-function dependsOf(cell: string | undefined): string[] {
-  const text = (cell ?? "").trim();
-  if (text === "" || text === "—" || text === "-") return [];
-  return [...new Set([...text.matchAll(/\b(?:BE|FE)-[A-Za-z0-9._-]+\b/g)].map((m) => m[0]))];
-}
-
-function waveOf(cell: string | undefined): number | null | "invalid" {
-  const text = (cell ?? "").trim();
-  if (text === "" || text === "—" || text === "-") return null;
-  const value = Number(text);
-  return Number.isInteger(value) && value >= 1 ? value : "invalid";
-}
-
-function contractsOf(cell: string | undefined): string[] | undefined {
-  if (cell === undefined) return undefined;
-  const text = cell.trim();
-  if (text === "" || text === "—" || text === "-") return [];
-  return [...new Set(text.split(/\s*(?:,|;|<br\s*\/?>)\s*/i).map((value) => value.replace(/^`|`$/g, "").trim()).filter(Boolean))];
-}
-
-function tierOf(cell: string | undefined): string | undefined {
-  const text = (cell ?? "").trim();
-  return text === "" || text === "—" || text === "-" ? undefined : text;
-}
-
-function rowsForPhase(phaseNumber: number, body: string, problems: string[]): PlanTaskRow[] {
-  const rows: PlanTaskRow[] = [];
-  const push = (
-    taskCell: string,
-    statusCell: string,
-    ownerCell: string,
-    dependsCell: string,
-    waveCell: string | undefined,
-    producesCell: string | undefined,
-    consumesCell: string | undefined,
-    phaseTier: string | undefined,
-    fromCheckbox: boolean,
-  ): void => {
-    const parsed = parseTaskCell(taskCell);
-    if (!parsed.id) {
-      problems.push(`phase ${phaseNumber}: row "${taskCell.slice(0, 60)}" has no BE-/FE- id — an id is the identity a dependency points at`);
-      return;
-    }
-    const status = normaliseStatus(statusCell);
-    const wave = waveOf(waveCell);
-    rows.push({
-      id: parsed.id,
-      phase: phaseNumber,
-      designRefs: parsed.designRefs,
-      dependsOn: dependsOf(dependsCell),
-      status: status ?? "pending",
-      owner: ownerCell.trim(),
-      wave: wave === "invalid" ? null : wave,
-      ...(phaseTier === undefined ? {} : { tier: phaseTier }),
-      description: parsed.description || parsed.id,
-      fromCheckbox,
-      produces: contractsOf(producesCell),
-      consumes: contractsOf(consumesCell),
-    });
-    if (status === null) {
-      problems.push(`task ${parsed.id}: Status "${statusCell.trim()}" is not one of ${PLAN_STATUSES.join(", ")}`);
-    }
-    if (wave === "invalid") {
-      problems.push(`task ${parsed.id}: Wave "${(waveCell ?? "").trim()}" is not a positive integer`);
-    }
-  };
-
-  const table = firstTable(body);
-  if (table.rows.length > 0) {
-    const column = (name: string, fallback: number): number => {
-      const found = table.header.findIndex((heading) => heading.trim().toLowerCase() === name);
-      return found === -1 ? fallback : found;
-    };
-    const task = column("task", 0);
-    const status = column("status", 1);
-    const owner = column("owner", 2);
-    const depends = column("depends on", 3);
-    const wave = table.header.findIndex((heading) => heading.trim().toLowerCase() === "wave");
-    const produces = table.header.findIndex((heading) => heading.trim().toLowerCase() === "produces");
-    const consumes = table.header.findIndex((heading) => heading.trim().toLowerCase() === "consumes");
-    const tier = table.header.findIndex((heading) => heading.trim().toLowerCase() === "tier");
-    const tierCells = tier === -1 ? [] : table.rows.map((cells) => tierOf(cells[tier]));
-    const authoredTiers = tierCells.filter((value): value is string => value !== undefined);
-    if (authoredTiers.length > 1) {
-      problems.push(`phase ${phaseNumber}: Tier must be recorded once per phase, not repeated per task`);
-    }
-    const phaseTier = authoredTiers[0];
-    for (const cells of table.rows) {
-      push(
-        cells[task] ?? "",
-        cells[status] ?? "",
-        cells[owner] ?? "",
-        cells[depends] ?? "",
-        wave === -1 ? undefined : cells[wave],
-        produces === -1 ? undefined : cells[produces],
-        consumes === -1 ? undefined : cells[consumes],
-        phaseTier,
-        false,
-      );
-    }
-    return rows;
-  }
-
-  // Legacy checkbox shape. Still parsed so --check-plan says something
-  // useful about an unmigrated plan instead of silently passing it.
-  for (const line of checkboxLines(body)) {
-    push(line.text, "", "", "", undefined, undefined, undefined, undefined, true);
-  }
-  return rows;
-}
-
-/** Parses every `## Phase N` task row out of a plan.md. Never throws — bad rows come back as problems. */
+/** Parses only the current canonical PlanTask format. */
 export function parsePlanTasks(planMd: string): ParsedPlan {
-  return parseLegacyPlanTasks(planMd);
+  return parseCanonicalPlan(planMd);
 }
 
-/** A rich task stays rich. The legacy row is explicitly distinguishable by absence of version. */
-export type WorkPlanTask = PlanTask | PlanTaskRow;
-export function readWorkPlan(planMd: string): { tasks: WorkPlanTask[]; problems: string[] } {
-  return isCanonicalPlan(planMd) ? parseCanonicalPlan(planMd) : parseLegacyPlanTasks(planMd);
+export function readWorkPlan(planMd: string): ParsedPlan {
+  return parseCanonicalPlan(planMd);
 }
+
 export function taskDesignRefs(task: WorkPlanTask): string[] {
-  return "version" in task ? task.traceability.filter(id => id.startsWith("DES-")) : task.designRefs;
+  return task.traceability.filter((id) => id.startsWith("DES-"));
 }
+
 export function taskObjective(task: WorkPlanTask): string {
-  return "version" in task ? task.objective : task.description;
+  return task.objective;
 }
 
-/** Explicit pre-v1 adapter. Never silently flatten a canonical task into a row. */
-export function parseLegacyPlanTasks(planMd: string): ParsedPlan {
-  if (isCanonicalPlan(planMd)) {
-    throw new Error("PlanTask format 1 requires parseCanonicalPlan; the legacy runtime reader cannot execute this contract. See docs/plan-task-v1.md (V8 migration window).");
-  }
-  const tasks: PlanTaskRow[] = [];
-  const problems: string[] = [];
-  for (const section of sections(planMd, 2)) {
-    const match = /^Phase\s+(\d+)\b/i.exec(section.title);
-    if (!match) continue;
-    tasks.push(...rowsForPhase(Number(match[1]), section.body, problems));
-  }
-  return { tasks, problems };
-}
-
-export interface PlanGraphCheck {
-  ok: boolean;
-  /** One message per finding, each naming the task (or phase) it is about. */
-  errors: string[];
-  /** Derived execution waves — present even when validation fails, as far as the graph allowed. */
-  waves: Map<string, number>;
-}
-
-/**
- * Validates the parsed rows as a dependency graph. Deterministic by
- * construction — no LLM, fixed check order, one error per finding.
- */
-export function validatePlanTasks(
-  tasks: PlanTaskRow[],
-  opts: { designMd?: string; modelTiers?: ModelTiers | null; isKnowledgeWorkspace?: boolean } = {},
-): PlanGraphCheck {
+function validateConfiguredTiers(
+  tasks: readonly PlanTask[],
+  modelTiers: ModelTiers | null,
+  isKnowledgeWorkspace: boolean,
+): string[] {
   const errors: string[] = [];
-
-  const byId = new Map<string, PlanTaskRow>();
   for (const task of tasks) {
-    const existing = byId.get(task.id);
-    if (existing) {
+    if (!task.tier) continue;
+    if (modelTiers === null) {
       errors.push(
-        `duplicate task id "${task.id}" (phases ${existing.phase} and ${task.phase}) — an id has to identify one task`,
+        isKnowledgeWorkspace
+          ? `task ${task.id} casts ${task.tier}, but model-tiers.yaml is missing from this Knowledge workspace's synced payload — resync with \`software-team-agents ba\` to restore it`
+          : `task ${task.id} casts ${task.tier}, but model-tiers.yaml is not configured`,
       );
-      continue;
-    }
-    byId.set(task.id, task);
-  }
-
-  const tasksByPhase = new Map<number, PlanTaskRow[]>();
-  for (const task of tasks) {
-    const phaseTasks = tasksByPhase.get(task.phase) ?? [];
-    phaseTasks.push(task);
-    tasksByPhase.set(task.phase, phaseTasks);
-  }
-  for (const [phase, phaseTasks] of tasksByPhase) {
-    const tier = phaseTasks[0]?.tier;
-    if (!tier) continue;
-    if (tier === "T1") {
-      errors.push(`phase ${phase} casts T1, but T1 is reserved and cannot be cast in the pipeline`);
-      continue;
-    }
-    if (opts.modelTiers === null || opts.modelTiers === undefined) {
-      errors.push(
-        opts.isKnowledgeWorkspace
-          ? `phase ${phase} casts ${tier}, but model-tiers.yaml is missing from this Knowledge workspace's synced payload — resync with \`software-team-agents ba\` to restore it`
-          : `phase ${phase} casts ${tier}, but model-tiers.yaml is not configured`,
-      );
-      continue;
-    }
-    if (!(tier in opts.modelTiers)) {
-      errors.push(`phase ${phase} casts ${tier}, which is absent from model-tiers.yaml`);
+    } else if (!(task.tier in modelTiers)) {
+      errors.push(`task ${task.id} casts ${task.tier}, which is absent from model-tiers.yaml`);
     }
   }
-
-  for (const task of tasks) {
-    const ownerValue = task.owner.trim().toLowerCase();
-    if (!ownerValue) {
-      errors.push(
-        `task ${task.id} has an empty Owner cell — a row nobody owns cannot be dispatched; expected one of ${VALID_OWNERS.join(", ")}`,
-      );
-    } else if (!VALID_OWNERS.includes(ownerValue)) {
-      errors.push(
-        `task ${task.id}: Owner "${task.owner}" is not a role this pipeline has — expected one of ${VALID_OWNERS.join(", ")}`,
-      );
-    }
-    if (task.designRefs.length === 0) {
-      errors.push(`task ${task.id} names no DES-NNN — a task implementing nothing identifiable is the gap the traceability chain exists to catch`);
-    }
-    const seenDeps = new Set<string>();
-    for (const dep of task.dependsOn) {
-      if (dep === task.id) {
-        errors.push(`task ${task.id} depends on itself — nothing else can run first, so it can never run`);
-        continue;
-      }
-      if (seenDeps.has(dep)) {
-        errors.push(`task ${task.id} declares its dependency on ${dep} more than once`);
-        continue;
-      }
-      seenDeps.add(dep);
-      if (!byId.has(dep)) {
-        errors.push(`task ${task.id} depends on ${dep}, which is not a task in this plan — a dependency on a task that does not exist can never be satisfied`);
-      }
-    }
-  }
-
-  if (opts.designMd !== undefined) {
-    const knownDesign = new Set(extractIds(opts.designMd, "DES"));
-    for (const task of tasks) {
-      for (const des of task.designRefs) {
-        if (!knownDesign.has(des)) {
-          errors.push(`task ${task.id} cites ${des}, which design.md does not define — a traceability reference into nothing cannot be resolved`);
-        }
-      }
-    }
-  }
-
-  // Authored waves are only comparable when the whole plan commits to them —
-  // half-authored is neither legacy (none) nor migrated (all), so it is its own finding.
-  const withWave = tasks.filter((t) => t.wave !== null);
-  const waves = new Map<string, number>();
-  if (withWave.length > 0 && withWave.length < tasks.length) {
-    errors.push(
-      `${withWave.length} of ${tasks.length} tasks carry a Wave value — author the column for every task or drop it entirely; a half-derived wave is neither legacy nor current`,
-    );
-  }
-  if (withWave.length === tasks.length && tasks.length > 0) {
-    for (const task of tasks) {
-      for (const dep of task.dependsOn) {
-        const depWave = byId.get(dep)?.wave ?? null;
-        if (depWave !== null && task.wave !== null && depWave >= task.wave) {
-          errors.push(
-            `task ${task.id} is wave ${task.wave} but depends on ${dep} in wave ${depWave} — a task's wave must be strictly greater than every dependency's`,
-          );
-        }
-      }
-    }
-  }
-
-  let derived: Map<string, number> = new Map();
-  try {
-    derived = deriveWaves(tasks);
-    const graph = taskGraphFromPlan(tasks);
-    for (const edge of graph.edges.filter(edge => edge.kind !== "declared")) {
-      const from = byId.get(edge.from)!, to = byId.get(edge.to)!;
-      if (from.wave !== null && to.wave !== null && from.wave >= to.wave) errors.push(`task ${to.id}: authored wave ${to.wave} conflicts with ${edge.kind} dependency ${from.id} in wave ${from.wave}`);
-    }
-  } catch (error) {
-    if (error instanceof CircularDependencyError) {
-      errors.push(`${error.message}`);
-    } else if (error instanceof UnknownTaskError) {
-      // Already reported per-row above; the graph-level echo adds nothing.
-    } else if (error instanceof TaskGraphError) {
-      errors.push(error.message);
-    } else {
-      throw error;
-    }
-  }
-  for (const [id, wave] of derived) waves.set(id, wave);
-
-  return { ok: errors.length === 0, errors, waves };
+  return errors;
 }
 
 /**
@@ -469,12 +173,99 @@ export interface PlanGraphModuleResult {
   notes: string[];
 }
 
+/** Loads `targets.yaml` for Target checks; `null` when it is not reachable from this workspace. */
+export type PlanTargetRegistryLoader = () => TargetRegistry | null;
+
+/**
+ * The engineer roles a Target's `type` admits — the only owners a type can
+ * validate. Other owners carrying `Targets:` are still checked for resolution,
+ * retirement and module scope; AD-4 keeps their stages derived from the work,
+ * never from the Target type.
+ */
+const ENGINEER_TARGET_OWNERS: ReadonlySet<string> = new Set(["frontend-engineer", "backend-engineer"]);
+
+export interface PlanTaskTargetCheckResult {
+  errors: string[];
+  notes: string[];
+}
+
+/**
+ * Validates every canonical task's authored `Targets:` against the registry the
+ * T-V9-007 resolver reads — each id must resolve in `targets.yaml`, be active,
+ * sit inside the module's declared `## Targets` set (T-V9-004's parser), and
+ * have a `type` that admits the task's `Owner` (the `TARGET_TYPE_ROLES` table
+ * T-V9-008's binding validation uses, so plan and runtime give one answer).
+ * Every error names the task id, the Target id and the fix.
+ *
+ * `Targets:` is optional: a plan whose tasks declare none engages nothing here,
+ * and a workspace where `targets.yaml` is unreachable skips the checks with a
+ * note — the same failure-tolerant reading `loadModelTiers` uses for its
+ * missing table. A registry that exists but is invalid still fails the check:
+ * skipping on a broken registry would hide exactly the fact a plan author needs.
+ */
+export function validatePlanTaskTargets(
+  tasks: readonly PlanTask[],
+  context: { module: string; designMd: string | null; projectRoot: string; loadRegistry: PlanTargetRegistryLoader },
+): PlanTaskTargetCheckResult {
+  const result: PlanTaskTargetCheckResult = { errors: [], notes: [] };
+  const declaring = tasks.filter((task) => (task.targets?.length ?? 0) > 0);
+  if (declaring.length === 0) return result;
+
+  const registry = context.loadRegistry();
+  if (registry === null) {
+    result.notes.push(
+      `targets.yaml is not reachable from ${targetsPath(context.projectRoot)} — Target checks on ${declaring.length} task(s) declaring Targets: are skipped; run --check-plan where the registry lives (the Knowledge workspace) to validate them`,
+    );
+    return result;
+  }
+
+  const declared = context.designMd === null ? [] : readModuleTargets(context.designMd);
+  const designPath = path.join(context.projectRoot, "_docs", "module", context.module, "design.md");
+  if (declared.length === 0) {
+    result.notes.push(
+      `module "${context.module}" declares no Targets in ${designPath}; module-scope validation of Targets: is exempt and the module remains unscoped`,
+    );
+  }
+  const declaredSet = new Set(declared);
+
+  for (const task of declaring) {
+    for (const targetId of task.targets!) {
+      let entry;
+      try {
+        entry = targetById(registry, targetId);
+      } catch {
+        result.errors.push(
+          `task ${task.id}: Target "${targetId}" is not present in ${targetsPath(context.projectRoot)} — add "${targetId}" to targets.yaml or remove it from this task's Targets:`,
+        );
+        continue;
+      }
+      if (entry.status === "retired") {
+        result.errors.push(
+          `task ${task.id}: Target "${targetId}" is retired — reactivate it in targets.yaml before planning work against it, or remove it from this task's Targets:`,
+        );
+      }
+      if (declared.length > 0 && !declaredSet.has(targetId)) {
+        result.errors.push(
+          `task ${task.id}: Target "${targetId}" is outside module "${context.module}" declared ## Targets (${declared.join(", ")}) — add "${targetId}" to ${designPath} ## Targets, or bind the task to a declared Target`,
+        );
+      }
+      if (entry.type !== undefined && ENGINEER_TARGET_OWNERS.has(task.owner) && !TARGET_TYPE_ROLES[entry.type].includes(task.owner)) {
+        result.errors.push(
+          `task ${task.id}: Owner "${task.owner}" is not admitted by Target "${targetId}" type "${entry.type}" (${TARGET_TYPE_ROLES[entry.type].join(", ")}) — change the task's Owner to an admitted role, or correct the Target type in targets.yaml if the repository scope is wrong`,
+        );
+      }
+    }
+  }
+  return result;
+}
+
 /** Validates one module's plan.md (and its design.md DES refs, when design.md exists). */
 export function checkPlanGraphForModule(
   docsModuleDir: string,
   module: string,
   modelTiers: ModelTiers | null = null,
   isKnowledgeWorkspace = false,
+  targetRegistryLoader: PlanTargetRegistryLoader | null = null,
 ): PlanGraphModuleResult {
   const planPath = path.join(docsModuleDir, module, "plan.md");
   const notes: string[] = [];
@@ -489,21 +280,27 @@ export function checkPlanGraphForModule(
     const requirementPath = path.join(docsModuleDir, module, "requirement.md");
     const requirementMd = fs.existsSync(requirementPath) ? fs.readFileSync(requirementPath, "utf8") : "";
     const canonical = parseCanonicalPlan(planMd, { requirementMd, designMd: designMd ?? "" });
-    return { module, ok: canonical.problems.length === 0, errors: canonical.problems,
-      notes: [`${module}/plan.md: ${canonical.tasks.length} canonical task(s), format 1; ${canonical.problems.length ? 0 : Math.max(0, ...deriveWaves(canonical.tasks).values())} wave(s)`] };
+    const projectRoot = path.join(docsModuleDir, "..", "..");
+    const loadRegistry = targetRegistryLoader ?? (() => (fs.existsSync(targetsPath(projectRoot)) ? loadTargetRegistry(projectRoot) : null));
+    const targetCheck = canonical.problems.length === 0
+      ? validatePlanTaskTargets(canonical.tasks, { module, designMd: designMd ?? null, projectRoot, loadRegistry })
+      : { errors: [], notes: [] };
+    const tierErrors = validateConfiguredTiers(canonical.tasks, modelTiers, isKnowledgeWorkspace);
+    return { module,
+      ok: canonical.problems.length === 0 && targetCheck.errors.length === 0 && tierErrors.length === 0,
+      errors: [...canonical.problems, ...targetCheck.errors, ...tierErrors],
+      notes: [
+        `${module}/plan.md: ${canonical.tasks.length} canonical task(s), format 1; ${canonical.problems.length ? 0 : Math.max(0, ...deriveWaves(canonical.tasks).values())} wave(s)`,
+        ...targetCheck.notes,
+      ] };
   }
-  const { tasks, problems } = parseLegacyPlanTasks(planMd);
-  notes.push(`${module}/plan.md: explicit legacy table compatibility adapter; canonical conversion requires complete semantic fields (docs/plan-task-v1.md)`);
-  const errors = [...problems];
-  if (tasks.length === 0) {
-    notes.push(`${module}/plan.md has no task rows under any ## Phase heading`);
-  }
-  const check = validatePlanTasks(tasks, { designMd, modelTiers, isKnowledgeWorkspace });
-  errors.push(...check.errors);
-
-  const widest = Math.max(0, ...[...check.waves.values()]);
-  notes.push(`${module}/plan.md: ${tasks.length} task(s), ${widest} wave(s)`);
-  return { module, ok: errors.length === 0, errors, notes };
+  const noncanonical = parseCanonicalPlan(planMd);
+  return {
+    module,
+    ok: false,
+    errors: noncanonical.problems,
+    notes: [`${module}/plan.md: not current canonical PlanTask format 1`],
+  };
 }
 
 export interface PlanGraphCheckResult {
@@ -549,10 +346,29 @@ export function checkPlanGraphs(projectRoot: string, moduleName?: string): PlanG
   }
 
   const isKnowledgeWorkspace = detectWorkspaceKind(projectRoot) === "knowledge";
+  // Loaded at most once per check, and only when a canonical task actually
+  // declares Targets: — a missing registry is the tolerated skip-with-note
+  // case (see validatePlanTaskTargets); a present-but-invalid one fails the
+  // check the same way an invalid model-tiers.yaml does.
+  let targetRegistry: TargetRegistry | null | undefined;
+  const loadRegistry: PlanTargetRegistryLoader = () => {
+    if (targetRegistry === undefined) {
+      targetRegistry = fs.existsSync(targetsPath(projectRoot)) ? loadTargetRegistry(projectRoot) : null;
+    }
+    return targetRegistry;
+  };
   const problems: string[] = [];
   const notes: string[] = [];
   for (const module of modules) {
-    const result = checkPlanGraphForModule(docsModuleDir, module, modelTiers, isKnowledgeWorkspace);
+    let result: PlanGraphModuleResult;
+    try {
+      result = checkPlanGraphForModule(docsModuleDir, module, modelTiers, isKnowledgeWorkspace, loadRegistry);
+    } catch (error) {
+      if (error instanceof TargetRegistryError) {
+        return { ok: false, problems: [error.message], notes };
+      }
+      throw error;
+    }
     notes.push(...result.notes);
     problems.push(...result.errors.map((e) => `${module}/plan.md: ${e}`));
   }

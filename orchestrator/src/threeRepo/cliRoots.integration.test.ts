@@ -9,7 +9,7 @@ import { AgentStage } from "../types.js";
 import { resolveQaWorkRoots } from "./cliRoots.js";
 import { resolveWritableWorkRoots } from "./cliRoots.js";
 
-const INSTALLATION_CONFIG_ENV = "AGENTCLAUDE_INSTALLATION_CONFIG";
+const INSTALLATION_CONFIG_ENV = "STA_INSTALLATION_CONFIG";
 const originalInstallationConfig = process.env[INSTALLATION_CONFIG_ENV];
 
 function initialiseRepository(root: string): void {
@@ -56,7 +56,7 @@ function makeThreeRepoFixture(): {
     classification,
     machine: initTaskMachine(classification.pipeline, false),
     now: 1,
-    targetBindings: { backend_target: "target", frontend_target: null },
+    targetBindings: { targets: [{ target_id: "target", role: AgentStage.BACKEND_ENGINEER }] },
   });
   return { root, framework, knowledge, target, task };
 }
@@ -74,7 +74,7 @@ describe("resolveWritableWorkRoots — real three-repo installation", () => {
         resolveQaWorkRoots(fixture.framework, fixture.task.taskId, {
           loadTask: () => fixture.task,
         }),
-      ).toEqual([fixture.target]);
+      ).toEqual([{ targetId: "target", path: fixture.target }]);
     } finally {
       fs.rmSync(fixture.root, { recursive: true, force: true });
     }
@@ -96,7 +96,7 @@ describe("resolveWritableWorkRoots — real three-repo installation", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-cli-roots-legacy-"));
     process.env[INSTALLATION_CONFIG_ENV] = path.join(root, "missing-installation.yaml");
     try {
-      expect(resolveWritableWorkRoots(root, "T-legacy", { loadTask: () => null }, AgentStage.QA_ENGINEER)).toEqual([root]);
+      expect(resolveWritableWorkRoots(root, "T-legacy", { loadTask: () => null }, AgentStage.QA_ENGINEER)).toEqual([{ path: root }]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

@@ -43,7 +43,7 @@ describe("resolveSource — v2 source origins (T143/T149)", () => {
     if (r.state === "resolved") expect(r.path).toContain(path.join("_docs", "a.md"));
   });
 
-  it("defaults to the knowledge origin when an item carries none (v1 compatibility)", () => {
+  it("defaults to the Knowledge root for the current single-repository v1 shape", () => {
     const { knowledgeRoot } = sandbox();
     expect(resolveSource(source("_docs/a.md"), knowledgeRoot).state).toBe("resolved");
   });

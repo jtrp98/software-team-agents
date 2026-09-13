@@ -5,6 +5,7 @@ import Ajv, { type ValidateFunction } from "ajv";
 import { parse as parseYaml } from "yaml";
 import { AgentStage } from "../types.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
+import { defaultInstallationConfigPath } from "../threeRepo/installation.js";
 
 /**
  * Reads `repos.yaml` — an optional file naming the separate git repos a
@@ -128,12 +129,32 @@ export interface RepoMapCheckResult {
  * root a real directory, and no stage claimed by two repos at once (that
  * would make "where does this stage's code land" ambiguous).
  */
-export function checkRepoMap(projectRoot: string = defaultProjectRoot()): RepoMapCheckResult {
+export function checkRepoMap(
+  projectRoot: string = defaultProjectRoot(),
+  options?: { installationConfigPath?: string },
+): RepoMapCheckResult {
+  const notes: string[] = [];
+  let installationExists = false;
+  try {
+    const configPath = options?.installationConfigPath ?? defaultInstallationConfigPath();
+    installationExists = fs.existsSync(configPath);
+  } catch {
+    installationExists = false;
+  }
+
+  // DRIFT-4: Surface Target binding precedence when an installation config is active.
+  const precedenceNote =
+    "an installation is configured; `repos.yaml` stage routes are unreachable for backend-engineer/frontend-engineer/qa-engineer/security/devops — the Target binding wins.";
+
   if (!hasRepoMap(projectRoot)) {
+    notes.push("no repos.yaml — every stage writes into the project root, the same repo.");
+    if (installationExists) {
+      notes.push(precedenceNote);
+    }
     return {
       ok: true,
       problems: [],
-      notes: ["no repos.yaml — every stage writes into the project root, the same repo."],
+      notes,
     };
   }
 
@@ -166,5 +187,9 @@ export function checkRepoMap(projectRoot: string = defaultProjectRoot()): RepoMa
     }
   }
 
-  return { ok: problems.length === 0, problems, notes: [] };
+  if (installationExists) {
+    notes.push(precedenceNote);
+  }
+
+  return { ok: problems.length === 0, problems, notes };
 }

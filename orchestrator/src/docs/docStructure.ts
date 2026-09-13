@@ -7,6 +7,7 @@ import { structuralFallbackReason } from "../context/docSelection.js";
 import { extractIds } from "../traceability/traceability.js";
 import { isCanonicalPlan, parseCanonicalPlan } from "./planTask.js";
 import { parseDesignEvidence } from "./designEvidence.js";
+import { parseModuleTargets } from "./moduleTargets.js";
 
 /**
  * A schema per module document type (`requirement.md`, `design.md`, `plan.md`,
@@ -53,8 +54,13 @@ function count(markdown: string, pattern: RegExp): number {
  * design.md's schema-known `##` headings, keyed by the schema property each one
  * satisfies. `extractStructure` and `checkDesignContractSections` below both read this
  * one map (presence vs. exclusion) so they can't name the headings differently; the
- * assertion right after it fails loudly if this map and the schema's `required` list
- * ever disagree.
+ * assertion right after it fails loudly if this map plus the computed evidence
+ * property and the schema's `required` list ever disagree.
+ *
+ * `hasTargets` is deliberately NOT in this map (V9 T-V9-004): it is an optional
+ * schema property, and putting it here would trip the drift guard below. It is
+ * computed outside; unlike required `designEvidenceValid`, it remains optional.
+ * See `DESIGN_TARGETS_HEADING` for the exclusion `checkDesignContractSections` needs.
  */
 const DESIGN_HEADING_PATTERN: Record<string, RegExp> = {
   hasFeasibilitySummary: /^##\s+Feasibility Summary/im,
@@ -66,9 +72,12 @@ const DESIGN_HEADING_PATTERN: Record<string, RegExp> = {
   hasChangeLog: /^##\s+Change Log/im,
 };
 
+/** The optional, schema-known heading that carries no DES-NNN and is not required. */
+const DESIGN_TARGETS_HEADING = /^##\s+Targets\s*$/im;
+
 {
   const required = JSON.parse(fs.readFileSync(schemaFile("design"), "utf8")).required as string[];
-  const known = Object.keys(DESIGN_HEADING_PATTERN);
+  const known = [...Object.keys(DESIGN_HEADING_PATTERN), "designEvidenceValid"];
   const missing = required.filter((key) => !known.includes(key));
   const extra = known.filter((key) => !required.includes(key));
   if (missing.length > 0 || extra.length > 0) {
@@ -98,7 +107,9 @@ export function extractStructure(docType: DocType, markdown: string): Record<str
       const out: Record<string, unknown> = {};
       for (const [key, pattern] of Object.entries(DESIGN_HEADING_PATTERN)) out[key] = has(markdown, pattern);
       const evidence = parseDesignEvidence(markdown);
-      if (evidence.mode === "addressable") out.designEvidenceValid = evidence.problems.length === 0;
+      out.designEvidenceValid = evidence.problems.length === 0;
+      // Outside the map on purpose — this property is optional; see DESIGN_HEADING_PATTERN's note.
+      if (has(markdown, DESIGN_TARGETS_HEADING)) out.hasTargets = true;
       return out;
     }
     case "plan":
@@ -147,10 +158,17 @@ export interface DocStructureResult {
 export function checkOneDoc(docType: DocType, markdown: string, label: string): DocStructureResult {
   const structure = extractStructure(docType, markdown);
   const validate = validator(docType);
-  if (validate(structure)) return { ok: true, problems: [] };
+  // `## Targets` grammar problems live outside the structural summary (a present
+  // section is hasTargets: true whether or not its lines parse), so they gate the
+  // early return themselves — a malformed declaration is never a silent pass.
+  const moduleTargets = docType === "design" ? parseModuleTargets(markdown) : undefined;
+  if (validate(structure) && (moduleTargets?.problems.length ?? 0) === 0) return { ok: true, problems: [] };
   const problems = (validate.errors ?? []).map((e) => `${label}: ${e.instancePath || "(root)"} ${e.message ?? "is invalid"}`);
   if (docType === "plan" && isCanonicalPlan(markdown)) problems.push(...parseCanonicalPlan(markdown).problems.map(p=>`${label}: ${p}`));
-  if (docType === "design") problems.push(...parseDesignEvidence(markdown).problems.map(problem => `${label}: ${problem}`));
+  if (docType === "design") {
+    problems.push(...parseDesignEvidence(markdown).problems.map(problem => `${label}: ${problem}`));
+    problems.push(...(moduleTargets?.problems ?? []).map(problem => `${label}: ${problem}`));
+  }
   return { ok: false, problems };
 }
 
@@ -158,12 +176,16 @@ export function checkOneDoc(docType: DocType, markdown: string, label: string): 
  * Every `##` section outside `DESIGN_HEADING_PATTERN`'s schema-known headings must carry
  * at least one `DES-NNN` somewhere in its text — heading or body, placement is an
  * editorial choice. A document with no contract sections passes trivially.
+ * The optional `## Targets` declaration is schema-known but ids-only, so it is
+ * exempt like the seven required headings.
  */
 export function checkDesignContractSections(markdown: string, label: string): DocStructureResult {
   const problems: string[] = [];
   for (const section of sectionMap(markdown)) {
     const headingLine = `## ${section.heading}`;
-    const isSchemaKnown = Object.values(DESIGN_HEADING_PATTERN).some((pattern) => pattern.test(headingLine));
+    const isSchemaKnown =
+      Object.values(DESIGN_HEADING_PATTERN).some((pattern) => pattern.test(headingLine)) ||
+      DESIGN_TARGETS_HEADING.test(headingLine);
     if (isSchemaKnown) continue;
     if (extractIds(sectionText(markdown, section), "DES").length === 0) {
       problems.push(
@@ -265,7 +287,10 @@ export function checkDocSize(projectRoot: string, moduleName?: string): DocStruc
 }
 
 /**
- * Checks every module's documents that exist. A document that doesn't exist yet (a
+ * Checks every module's documents that exist. Scope is strictly STA-owned current
+ * canonical documents under `_docs/module/<name>/` (requirement, design, plan, test-plan, review).
+ * Optional project reference material and legacy documents are read-only evidence and outside
+ * its validation scope (AD-14, CR-9). A document that doesn't exist yet (a
  * module mid-way through the pipeline, before `design.md` or `plan.md` was written) is
  * skipped, not flagged — this validates structure, not project progress.
  */
@@ -304,8 +329,6 @@ export function checkDocStructure(projectRoot: string): DocStructureCheckResult 
       // Report-only: knowledge-ci.yml's structure-check step already runs with
       // continue-on-error, so a problem here doesn't block CI yet.
       if (docType === "design") {
-        const evidence = parseDesignEvidence(markdown);
-        if (evidence.mode === "legacy") notes.push(`${name}/design.md: safe whole-section compatibility fallback only — migrate to Design evidence format 1 before unattended execution`);
         const contract = checkDesignContractSections(markdown, `${name}/${DOC_FILENAMES[docType]}`);
         problems.push(...contract.problems);
       }

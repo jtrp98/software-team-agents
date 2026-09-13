@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://agentclaude.local/schemas/review.schema.json",
+  "$id": "https://software-team-agents.local/schemas/review.schema.json",
   "title": "review.md structural summary (T53)",
   "description": "Validates the structural summary orchestrator/src/docs/docStructure.ts extracts from a review.md — presence of the sections .claude/agents/qa-engineer.md's Output template requires, plus at least one Review Outcome (T51 reads its `**Status:**` line to generate status.md).",
   "type": "object",

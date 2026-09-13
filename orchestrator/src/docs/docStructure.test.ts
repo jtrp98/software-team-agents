@@ -12,6 +12,7 @@ import {
   SECTION_SIZE_CEILING_BYTES,
   DOCUMENT_SIZE_CEILING_BYTES,
 } from "./docStructure.js";
+import { parseModuleTargets, readModuleTargets } from "./moduleTargets.js";
 
 const REQUIREMENT_OK = `
 # Sales CRM — Requirements
@@ -47,6 +48,8 @@ x
 const DESIGN_OK = `
 # Design
 
+Design evidence format: 1
+
 ## Feasibility Summary
 x
 
@@ -57,6 +60,19 @@ x
 \`\`\`prisma
 model User {}
 \`\`\`
+
+## DES-001 — Current design
+Contract:Sales.v1 — current sales contract.
+DEC-001 — keep the current module boundary.
+Evidence EVD-001: claim=DES-001 | state=confirmed | path=src/sales.ts | symbol=sales | line=1 | revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | basis=source | tool=rg | hash=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+Evidence EVD-002: claim=Contract:Sales.v1 | state=confirmed | path=src/sales.ts | symbol=sales | line=1 | revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | basis=source | tool=rg | hash=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+Evidence EVD-003: claim=DEC-001 | state=confirmed | path=src/sales.ts | symbol=sales | line=1 | revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | basis=source | tool=rg | hash=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+Compatibility: unchanged
+Data/schema: unchanged
+Migration/backfill: none
+Security: none
+Fallback: restore the current implementation.
+Material ambiguity: none
 
 ## Modules
 x
@@ -215,6 +231,64 @@ describe("design.md Change Log after an archive move (T-V6-003, policy-only — 
   });
 });
 
+describe("design.md ## Targets (T-V9-004)", () => {
+  const DESIGN_WITH_TARGETS = DESIGN_OK.replace(
+    "## Data Model",
+    "## Targets\n- sales-web (frontend-engineer)\n- sales-api\n- sales-web\n\n## Data Model",
+  );
+
+  it("marks hasTargets only when the section is present — computed outside DESIGN_HEADING_PATTERN, so the drift guard tolerates the optional property", () => {
+    expect(extractStructure("design", DESIGN_WITH_TARGETS).hasTargets).toBe(true);
+    expect("hasTargets" in extractStructure("design", DESIGN_OK)).toBe(false);
+  });
+
+  it("passes a design.md that declares Targets, and one that declares none", () => {
+    expect(checkOneDoc("design", DESIGN_WITH_TARGETS, "m/design.md").ok).toBe(true);
+    expect(checkOneDoc("design", DESIGN_OK, "m/design.md").ok).toBe(true);
+  });
+
+  it("readModuleTargets returns the declared ids in document order, de-duplicated; empty when the module declares none", () => {
+    expect(readModuleTargets(DESIGN_WITH_TARGETS)).toEqual(["sales-web", "sales-api"]);
+    expect(readModuleTargets(DESIGN_OK)).toEqual([]);
+  });
+
+  it("never flags ## Targets for carrying no DES-NNN id", () => {
+    const result = checkDesignContractSections(DESIGN_WITH_TARGETS, "m/design.md");
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
+  });
+
+  it("reports a malformed section instead of silently dropping it", () => {
+    const malformed = DESIGN_OK.replace(
+      "## Data Model",
+      [
+        "## Targets",
+        "- Sales_Web",
+        "- sales-api because the module needs it",
+        "- sales-web (qa-engineer)",
+        "",
+        "## Data Model",
+      ].join("\n"),
+    );
+    const parsed = parseModuleTargets(malformed);
+    expect(parsed.present).toBe(true);
+    // The third line's id parses; only its role annotation is invalid.
+    expect(parsed.ids).toEqual(["sales-web"]);
+    expect(parsed.problems).toHaveLength(3);
+    const result = checkOneDoc("design", malformed, "m/design.md");
+    expect(result.ok).toBe(false);
+    expect(result.problems.some((p) => p.includes("m/design.md") && p.includes("Sales_Web"))).toBe(true);
+    expect(result.problems.some((p) => p.includes("no rationale"))).toBe(true);
+    expect(result.problems.some((p) => p.includes("qa-engineer"))).toBe(true);
+  });
+
+  it("treats a look-alike heading (## Targets and more prose) as a contract section, not the declaration", () => {
+    const lookalike = DESIGN_OK.replace("## Data Model", "## Targets and rollout stages\nno DES id\n\n## Data Model");
+    expect(parseModuleTargets(lookalike).present).toBe(false);
+    expect(checkDesignContractSections(lookalike, "m/design.md").ok).toBe(false);
+  });
+});
+
 describe("checkDesignContractSections (T-V6-002)", () => {
   it("passes a design.md with no contract sections at all — trivially, not flagged", () => {
     const result = checkDesignContractSections(DESIGN_OK, "m/design.md");
@@ -261,6 +335,19 @@ describe("checkDocStructure", () => {
     const result = checkDocStructure(tmp);
     expect(result.ok).toBe(true);
     expect(result.notes.length).toBeGreaterThan(0);
+  });
+
+  it("ignores and does not modify optional reference documents outside STA-owned paths (T-V9-023)", () => {
+    const reference = path.join(tmp, "docs", "project-reference.md");
+    fs.mkdirSync(path.dirname(reference), { recursive: true });
+    const before = "# Project Reference\n\nArbitrary non-STA structure.\n";
+    fs.writeFileSync(reference, before, "utf8");
+
+    const result = checkDocStructure(tmp);
+
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
+    expect(fs.readFileSync(reference, "utf8")).toBe(before);
   });
 
   it("passes when every doc present is well-formed", () => {
@@ -322,15 +409,14 @@ describe("checkDocStructure", () => {
     expect(result.problems.some((p) => p.includes("crm/design.md") && p.includes("Subject Score Aggregation Rules"))).toBe(true);
   });
 
-  it("keeps well-formed legacy design readable while noting the unattended migration boundary", () => {
+  it("refuses a noncanonical design inside the STA-owned document tree", () => {
     const dir = path.join(tmp, "_docs", "module", "crm");
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "requirement.md"), REQUIREMENT_OK);
-    fs.writeFileSync(path.join(dir, "design.md"), DESIGN_OK);
+    fs.writeFileSync(path.join(dir, "design.md"), DESIGN_OK.replace("Design evidence format: 1\n\n", ""));
     const result = checkDocStructure(tmp);
-    expect(result.notes).toEqual([
-      "crm/design.md: safe whole-section compatibility fallback only — migrate to Design evidence format 1 before unattended execution",
-    ]);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join("\n")).toContain("Design evidence format: 1");
   });
 });
 

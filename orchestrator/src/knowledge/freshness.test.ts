@@ -41,7 +41,7 @@ describe("parseLocator", () => {
 describe("digestOfSource", () => {
   let root: string;
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-fresh-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-fresh-"));
     fs.writeFileSync(path.join(root, "doc.md"), "one\ntwo\nthree\nfour\n", "utf8");
   });
   afterEach(() => {
@@ -111,7 +111,7 @@ describe("freshnessOf — age", () => {
 describe("freshnessOf — the material underneath", () => {
   let root: string;
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-fresh2-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-fresh2-"));
     fs.writeFileSync(path.join(root, "doc.md"), "original\n", "utf8");
   });
   afterEach(() => {

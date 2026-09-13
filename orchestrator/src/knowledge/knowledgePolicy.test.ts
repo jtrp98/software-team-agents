@@ -29,7 +29,7 @@ const ordinary = makeItem("domain", "DOM-001", { term: "Shift", definition: "one
 
 let root: string;
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-policy-"));
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-policy-"));
 });
 afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });

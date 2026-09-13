@@ -7,7 +7,7 @@ policies/
 ├── README.md            this index
 ├── agent-boundaries.md  §6, §6a, §8
 ├── architecture.md      §7, §14, §15
-├── coding.md            §5c, §9, §12, §19, §20
+├── coding.md            §5c, §9, §12, §19, §20, §21
 ├── communication.md     §13
 ├── data.md              §16
 ├── documentation.md     §0, §1, §2, §3, §4, §5b, §10, §11, §12

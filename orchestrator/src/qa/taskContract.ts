@@ -79,8 +79,10 @@ export interface QaTaskContract {
   packet?: QaPacketIdentity;
   dependencyOutputs: QaDependencyOutput[];
   blastRadius: QaBlastRadius;
-  /** The real changed-file manifest for this round. Empty means the caller could not say — itself a finding. */
+  /** Real changed-file manifest for this round. Empty means the caller could not say — itself a finding. */
   fileManifest: string[];
+  /** Bound targets for this task, if multi-target (T-V9-015). */
+  boundTargets: string[];
   /** Durable findings still open against this task (OPEN/FIX_CLAIMED). */
   openFindings: Finding[];
   /** Findings already closed (VERIFIED/ACCEPTED) — history, not work. */
@@ -201,6 +203,9 @@ export function buildQaTaskContract(input: BuildQaTaskContractInput): QaTaskCont
     dependencyOutputs: dependencyOutputsOf(task, input.graph, input.packet),
     blastRadius: blastRadiusOf(task, input.graph),
     fileManifest: [...new Set((input.changedFiles ?? []).map((file) => file.replaceAll("\\", "/")))].sort(),
+    boundTargets: task.targets && task.targets.length > 0
+      ? [...new Set(task.targets)].sort()
+      : [],
     openFindings: findings.filter((finding) => OPEN_STATES.has(finding.status)),
     closedFindings: findings.filter((finding) => !OPEN_STATES.has(finding.status)),
   };
@@ -256,6 +261,9 @@ export function renderQaTaskContract(contract: QaTaskContract): string[] {
   const lines: string[] = [
     `## Task contract ${contract.taskId} — ${contract.title}`,
     `- phase ${contract.phase}; owner ${contract.owner}`,
+    ...(contract.boundTargets && contract.boundTargets.length > 0
+      ? [`- bound targets: ${contract.boundTargets.join(", ")}`]
+      : []),
     `- traceability: REQ ${list(contract.requirementIds)}; AC ${list(contract.acceptanceIds)}; DES ${list(contract.designIds)}`,
     `- contracts: produces ${list(contract.produces)}; consumes ${list(contract.consumes)}`,
     `- risk: ${list(contract.risk)}; human gates: ${list(contract.humanGate)}`,
@@ -323,5 +331,10 @@ export function renderQaTaskContract(contract: QaTaskContract): string[] {
     required.map((id) => `\`${id}\``).join(", "),
     "A PASS that maps no id, or leaves one of these unmapped, is rejected — it is not a verdict, it is an assertion.",
   );
+  if (contract.boundTargets && contract.boundTargets.length > 0) {
+    lines.push(
+      `Every bound target (${contract.boundTargets.join(", ")}) must be verified and pass. Report any unverified target under \`## Unverified Behaviour\`.`,
+    );
+  }
   return lines;
 }

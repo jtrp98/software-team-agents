@@ -9,7 +9,7 @@ const NOW = "2026-08-20T09:00:00Z";
 
 let root: string;
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-bootstrap-"));
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-bootstrap-"));
 });
 afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });

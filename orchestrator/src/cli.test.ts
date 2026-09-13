@@ -28,16 +28,16 @@ import type { RuntimeAdapter, RuntimeAgentRequest } from "./runtime/runtimeAdapt
 import { RuntimeCapability } from "./runtime/runtimeCapabilities.js";
 
 // T-V6-006: resolveContextDocsRoot now falls back to installation.yaml when
-// AGENTCLAUDE_KNOWLEDGE_ROOT is unset, so every fixture in this file that
+// STA_KNOWLEDGE_ROOT is unset, so every fixture in this file that
 // relies on the plain projectRoot fallback must not see whatever
 // installation config (if any) is real on the machine running the suite.
-const AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+const STA_INSTALLATION_CONFIG_ORIGINAL = process.env.STA_INSTALLATION_CONFIG;
 beforeEach(() => {
-  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-cli-test-no-installation.yaml");
+  process.env.STA_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-cli-test-no-installation.yaml");
 });
 afterEach(() => {
-  if (AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-  else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL;
+  if (STA_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+  else process.env.STA_INSTALLATION_CONFIG = STA_INSTALLATION_CONFIG_ORIGINAL;
 });
 
 describe("T-V5-013 live upgrade alias", () => {
@@ -56,22 +56,17 @@ describe("T-V5-013 live upgrade alias", () => {
   });
 });
 
-describe("T-V5-041 retired adopt verb", () => {
-  it("errors naming ADR-024 rather than reporting an unknown verb", async () => {
-    const err = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    try {
-      await expect(runCli(["adopt", "status"], defaultProjectRoot())).resolves.toBe(1);
-      const output = err.mock.calls.flat().join("\n");
-      expect(output).toContain("adopt is retired");
-      expect(output).toContain("ADR-024-docs-vs-knowledge.md");
-    } finally {
-      err.mockRestore();
-    }
+describe("T-V9-023 obsolete documentation and knowledge conversion CLI removal", () => {
+  it("does not advertise retired import or migration actions", () => {
+    expect(USAGE).not.toContain("sta adopt");
+    expect(USAGE).not.toContain("sta knowledge migrate-v2");
+    expect(USAGE).not.toContain("sta knowledge-migrate");
   });
 
-  it("keeps the verb in USAGE so the retirement is discoverable", () => {
-    expect(USAGE).toContain("sta adopt");
-    expect(USAGE).toContain("retired in V5");
+  it("rejects removed knowledge migration actions at dispatch", async () => {
+    await expect(runCli(["knowledge", "migrate-v2"], defaultProjectRoot())).rejects.toThrow(/expected sub-command get or reconcile/);
+    await expect(runCli(["knowledge-migrate"], defaultProjectRoot())).rejects.toThrow(CliUsageError);
+    await expect(runCli(["adopt"], defaultProjectRoot())).rejects.toThrow(CliUsageError);
   });
 });
 
@@ -114,7 +109,7 @@ describe("parseArgs", () => {
       adHoc: false,
       stateDb: undefined,
       phases: [],
-      targetBindings: { frontend_target: null, backend_target: null },
+      targetBindings: { targets: [] },
       autonomy: undefined,
       runtime: undefined,
       model: undefined,
@@ -198,7 +193,7 @@ describe("parseArgs", () => {
 
   it("records explicit frontend/backend Target bindings and refuses changes on resume", () => {
     const args = parseArgs(["--task-id", "T-1", "--module", "m", "--backend", "--backend-target", "api"], "/repo");
-    expect(args.targetBindings).toEqual({ frontend_target: null, backend_target: "api" });
+    expect(args.targetBindings).toEqual({ targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }] });
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--resume", "--backend-target", "api"], "/repo")).toThrow(/immutable/);
   });
 
@@ -264,8 +259,8 @@ describe("T-V3R-032 production runtime composition", () => {
 
 describe("three-repo contract authority", () => {
   it("uses the Framework contract for a bound Target while preserving the legacy workspace contract", () => {
-    expect(contractRootForTask("C:/target", { backend_target: "rainybot", frontend_target: null })).toBe(resolveFrameworkRoot());
-    expect(contractRootForTask("C:/legacy", { backend_target: null, frontend_target: null })).toBe("C:/legacy");
+    expect(contractRootForTask("C:/target", { targets: [{ target_id: "rainybot", role: AgentStage.BACKEND_ENGINEER }] })).toBe(resolveFrameworkRoot());
+    expect(contractRootForTask("C:/legacy", { targets: [] })).toBe("C:/legacy");
   });
 });
 
@@ -285,12 +280,18 @@ describe("productionQaInputs (T-V3TOK-062)", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-qa-inputs-"));
     try {
       const docs = path.join(root, "_docs", "module", "sales");
-      fs.mkdirSync(docs, { recursive: true });
-      fs.writeFileSync(path.join(docs, "plan.md"), "## Phase 1\n\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-001 (DES-002) — import invoices | pending | backend-engineer | — |\n");
-      fs.writeFileSync(path.join(docs, "design.md"), "# Design\n\n## Risks & Dependencies\n\n- external API\n");
+      const task = fixtureTask({
+        id: "BE-001",
+        title: "Import invoices",
+        objective: "Import invoices through the selected current contract.",
+        traceability: ["REQ-007", "AC-007.2", "DES-002"],
+        retrievalHints: "Hypothesis: the invoice importer is the boundary; confirm it against current source.\nQuery: locate the invoice import contract.\nProvenance: DES-002",
+      });
+      writePacketPlan(root, [task], "sales");
+      fs.appendFileSync(path.join(docs, "design.md"), "\n## Risks & Dependencies\n\n- external API\n");
       const inputs = await productionQaInputs({ docsRoot: root, moduleName: "sales", taskId: "BE-001", roots: [root] });
       const pkg = inputs.packageInputs();
-      expect(pkg.taskIntent).toContain("import invoices");
+      expect(pkg.taskIntent).toContain("Import invoices");
       expect(pkg.acceptanceCriteria).toContain("design.md#DES-002");
       expect(pkg.knownRisks).toEqual(["design.md#Risks-&-Dependencies"]);
       expect(pkg.diffSummary).not.toContain("(none supplied)");
@@ -803,8 +804,8 @@ describe("T35 concurrency lock, wired into the CLI", () => {
     // A code task with no bindings is legal only in legacy (unconfigured) mode.
     // This test must not depend on whether THIS machine has an installation
     // configured, so point the mode check at a path that cannot exist.
-    const prevConfig = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-    process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(dir, "no-installation.yaml");
+    const prevConfig = process.env.STA_INSTALLATION_CONFIG;
+    process.env.STA_INSTALLATION_CONFIG = path.join(dir, "no-installation.yaml");
     // No lock pre-held this time — run will fail quickly (no `claude` on PATH in CI), but the
     // lock must still be released rather than leaking, or every future call would return 4 forever.
     try {
@@ -812,8 +813,8 @@ describe("T35 concurrency lock, wired into the CLI", () => {
       const code = await runCli(["status", "T-1", "--project-root", dir], dir);
       expect(code).toBe(0); // status never touches the lock, but this also proves the store isn't wedged
     } finally {
-      if (prevConfig === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-      else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = prevConfig;
+      if (prevConfig === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+      else process.env.STA_INSTALLATION_CONFIG = prevConfig;
       // Windows can hold a just-used temp dir for a moment (AV/indexer), turning
       // cleanup into EPERM and an otherwise-green suite red on timing alone.
       // One short retry; if it still fails, leave the tmpdir — force:true has
@@ -1477,31 +1478,12 @@ describe("runCli --check-knowledge (T61)", () => {
 });
 
 describe("runCli --check-plan (T-PM1.3)", () => {
-  const PLAN_OK = [
-    "# Plan",
-    "",
-    "## Phase 1: Orders",
-    "",
-    "| Task | Status | Owner | Depends on |",
-    "|---|---|---|---|",
-    "| BE-001 (DES-001) — order CRUD | pending | backend-engineer | — |",
-    "",
-    "## Sequencing Notes",
-    "—",
-    "",
-    "## Unresolved Open Questions",
-    "—",
-    "",
-    "## Change Log",
-    "2026-08-26: created.",
-    "",
-  ].join("\n");
+  const planTask = () => fixtureTask({ id: "BE-001", title: "Order CRUD", tier: undefined });
 
   it("passes a well-formed plan", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-cp-"));
     try {
-      fs.mkdirSync(path.join(dir, "_docs", "module", "sales"), { recursive: true });
-      fs.writeFileSync(path.join(dir, "_docs", "module", "sales", "plan.md"), PLAN_OK, "utf8");
+      writePacketPlan(dir, [planTask()], "sales");
       expect(await runCli(["--check-plan"], dir)).toBe(0);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -1511,12 +1493,7 @@ describe("runCli --check-plan (T-PM1.3)", () => {
   it("exits non-zero when a dependency names a task that does not exist", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-cp-"));
     try {
-      fs.mkdirSync(path.join(dir, "_docs", "module", "sales"), { recursive: true });
-      fs.writeFileSync(
-        path.join(dir, "_docs", "module", "sales", "plan.md"),
-        PLAN_OK.replace("| — |", "| BE-999 |"),
-        "utf8",
-      );
+      writePacketPlan(dir, [{ ...planTask(), dependsOn: ["BE-999"] }], "sales");
       expect(await runCli(["--check-plan"], dir)).toBe(1);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });

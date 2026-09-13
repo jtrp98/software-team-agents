@@ -10,12 +10,11 @@
 > and a shell.
 >
 > **Human-facing counterpart:** [`README.md` § Getting Started](README.md#getting-started) is the
-> same onboarding flow written for a person to follow by hand; its
-> [§ Ownership, health and troubleshooting](README.md#ownership-health-และ-troubleshooting) section
-> (including the exact incident this playbook's Phase-0 detectors exist to
-> catch — see "requirement/design หลุดไปออกใน Target" there) covers recovery. Point a
-> user who wants to do this themselves at README instead of this one
-> (`TEAM_SETUP_V1.md` is now a pointer to the same place).
+> manual onboarding guide; [§ Ownership, health and troubleshooting](README.md#ownership-health-และ-troubleshooting)
+> covers recovery (`TEAM_SETUP_V1.md` is now a pointer to the same place).
+>
+> **Knowledge refresh counterpart:** [`prompt-update-knowledge.md`](prompt-update-knowledge.md)
+> incrementally refreshes and reconciles canonical knowledge against evolving codebase reality.
 
 ---
 
@@ -71,9 +70,9 @@ Then, guided by what status reports:
 | Local path mappings | read `<knowledgeRoot>/.workflow/targets.local.yaml` if present |
 | Sync status of the current workspace | `status --json` → `syncState`, `syncedVersion`, `conflictCount`, `managedFileCount` |
 | Runtime readiness | `status --json` → `claude.ready`, `codex.ready`, `opencode.ready`, `antigravity.ready` (OpenCode needs bindings **and** `.opencode/plugin/sta-guards.js` — its headless default posture is allow-all, so a missing plugin means unguarded, not just incomplete) |
-| Knowledge root bound but never initialized | `status --json` → `knowledgeBoundButUninitialized` (the bound root's path, or absent) — a machine-wide binding resolves, yet `<knowledgeRoot>/.agent-team/config.yaml` is absent, so BA-workspace prompts exist nowhere on this machine yet; `status`'s plain-text output prints the same fact as a `WARNING:` line with the exact fix command |
-| Roster drift in a workspace | `status --json` → `rosterDriftPaths` (array of paths; empty = none) — agent-prompt files under `.claude/agents/` / `.codex/agents/` / `.opencode/agent/` whose names belong to the *other* workspace role's roster (analysis prompts in a DEV workspace, engineer/reviewer prompts in a BA one); never legitimate regardless of how they got there |
-| Module docs stranded in a Target | `sta --check-workspace --project-root <path>` (the Framework's top-level CLI, not `software-team-agents`) — flags every file under a `role: dev` workspace's `_docs/module/**` plus a `## Modules` table in its `_docs/status.md`, each with the Knowledge-repo destination path |
+| Knowledge root bound but never initialized | `status --json` → `knowledgeBoundButUninitialized` (the bound root's path, or absent) — machine binding resolves but `<knowledgeRoot>/.agent-team/config.yaml` is absent; status prints `WARNING:` line with fix command |
+| Roster drift in a workspace | `status --json` → `rosterDriftPaths` (array of paths; empty = none) — agent-prompt files under `.claude/agents/`, `.codex/agents/`, `.opencode/agent/` belonging to the other role's roster (analysis in DEV, engineer in BA); never legitimate |
+| Module docs stranded in a Target | `sta --check-workspace --project-root <path>` (the Framework's top-level CLI, not `software-team-agents`) — flags files under `role: dev` `_docs/module/**` and `## Modules` in `_docs/status.md` with Knowledge destination paths |
 
 If `status` fails because the current directory is not a Git repository, that is
 fine — you are likely standing outside any workspace. Note it and continue to
@@ -83,24 +82,16 @@ Present a one-screen summary of what you found, then show the menu.
 
 ### Installing the CLI, if it is missing
 
-From a Framework checkout, one command — no packing, no tarball:
-
+From a Framework checkout:
 ```bash
 cd <framework-checkout>
 npm --prefix orchestrator run build
 npm link
 ```
-
-`npm link` points the global `software-team-agents` / `sta` binaries at the
-checkout itself, so a later `npm run build` there takes effect immediately with
-nothing to reinstall. Verify with `software-team-agents --version`.
-
-Only when installing from a released package (no checkout on the machine) is the
-tarball path right: `npm i -g software-team-agents-<v>.tgz`.
-
-Do not run `npm run release` just to get the CLI installed — it runs the full
-typecheck + 2000-test suite and packs a tarball, which is a release gate, not a
-setup step.
+`npm link` points global `software-team-agents` / `sta` binaries at the checkout.
+Verify with `software-team-agents --version`. From a released package without checkout:
+`npm i -g software-team-agents-<v>.tgz`. Do not run `npm run release` to install —
+it runs the full test suite and packs a tarball.
 
 ---
 
@@ -142,13 +133,28 @@ already said):
   REQUIRED`, sync `UP_TO_DATE`, Claude/Codex/OpenCode READY.
 - **UX/UI consultant.** The BA workspace materializes five prompts —
   `business-analyst`, `system-analyst`, `project-manager`, `test-planner` and
-  `uxui-designer` (the design-source consultant; it writes only draft `UX-*`
-  items plus `_docs/module/<name>/uxui/**`). If the user will run it against
-  Figma or Claude Design, also configure the identity gate once per machine:
-  `sta configure identity --figma-email <email> --claude-email <email>` (both
-  accounts must be the same address; emails only — the Figma token itself stays
-  in the environment as `FIGMA_PAT`, never in any config file). Without these,
-  `uxui-designer` runs are blocked fail-closed by preflight.
+  `uxui-designer` (writes draft `UX-*` items plus `_docs/module/<name>/uxui/**`).
+  For Figma/Claude Design MCP, configure identity once:
+  `sta configure identity --figma-email <email> --claude-email <email>` (matching
+  emails; `FIGMA_PAT` stays in environment). Without these, `uxui-designer` fails closed.
+- **Capturing canonical knowledge for an existing project.** When bootstrapping
+  knowledge from an existing codebase across Targets:
+  1. Inspect reality: code, runtime behaviour, configs, API/DB contracts,
+     maintained docs, existing knowledge, and optional reference docs.
+  2. **Source Priority on conflict (AD-12):** (1) Current code & runtime behaviour;
+     (2) Config, API, DB schemas, contracts; (3) Canonical STA knowledge;
+     (4) Maintained docs; (5) Optional reference docs. Current implementation wins
+     unless evidence explicitly marks an approved future/planned requirement.
+  3. Derive canonical entities: modules (`_docs/module/<name>/`), Target IDs,
+     paths, and declared `type` (`frontend` | `backend` | `fullstack`) in `targets.yaml`,
+     responsibilities, dependencies, and scopes (module-wide `target_ids: []`,
+     Target-specific `target_ids: [target_id, ...]`). Supports 3+ Targets.
+  4. Write canonical output only: `knowledge/<module>/<kind>/<ID>.yaml` and
+     `_docs/module/<name>/design.md` `## Targets`.
+  5. **Read-only evidence rule (CR-6, AD-11):** Reference docs remain untouched —
+     never move, rename, rewrite, normalize, convert or validate them; never run
+     migration commands or compatibility frameworks.
+  6. For ongoing incremental updates, use [`prompt-update-knowledge.md`](prompt-update-knowledge.md).
 - Tell the user their working command: `cd <knowledge> && software-team-agents ba`
   (add `--runtime opencode` or `--runtime codex` to choose a different runtime).
 
@@ -180,7 +186,7 @@ already said):
   sync `UP_TO_DATE`, runtimes READY.
 - **The bootstrap's `Context:` line is a shell command, not a reference.** The
   synced `AGENTS.md`/`CLAUDE.md` tells the runtime to execute
-  `$AGENTCLAUDE_CONTEXT_CMD <agent-role> --module <name> --phase <n>` with the
+  `$STA_CONTEXT_CMD <agent-role> --module <name> --phase <n>` with the
   worker role (`backend-engineer`, …), never workspace role `dev`/`ba`. If a
   runtime skips it, run it and paste the result. Desktop sessions without
   launcher env are supported (`T-V6-006`):
@@ -191,17 +197,15 @@ already said):
   `devops`). The BA-workspace prompts — including `uxui-designer` — are deliberately
   absent, and the engineering agents' contracts additionally deny writing
   requirement/design/test-plan docs, the module's `uxui/` folder, or anything
-  under `knowledge/` from this workspace (in V6, desktop sessions derive
-  `role: dev` from `.agent-team/config.yaml` so guards enforce this even without
-  env, `T-V6-007`). If the user asks for requirements or UX work "here", route them to
-  the BA flow above instead of working around the block.
+  under `knowledge/` from this workspace (`T-V6-007`). If the user asks for
+  requirements or UX work "here", route them to the BA flow above instead of working around the block.
 - **Roster drift & stranded docs.** Before declaring DEV ready, check the two
   Phase 0 rows: other-workspace-role prompt files present here, and local `_docs/module/**`
   content. Roster drift is fixed by plain `sync`; if it reports conflicts, show
-  them verbatim and wait for the user's explicit "force". Stranded docs are
-  migrated, never deleted: propose copying `_docs/module/<name>/` into the
-  Knowledge root (`<knowledgeRoot>/_docs/module/<name>/`, merging any status
-  tables), then removing the Target-side copy only after explicit confirmation.
+  them verbatim and wait for the user's explicit "force". Treat Target-side
+  documents as read-only project references: report their exact paths, do not
+  copy, rewrite, move or delete them, and route current canonical document work
+  to the owning analysis role in the Knowledge workspace.
 - **Runtime choice.** Default is Claude Code; `--runtime opencode` and
   `--runtime codex` launch the other supported runtimes from the same workspace.
   Model/effort are the runtime's own configuration (e.g. OpenCode's
@@ -234,11 +238,11 @@ already said):
 **Goal:** one more Target registered without disturbing anything else.
 
 1. Read `targets.yaml` in the Knowledge root first — existing targets stay untouched.
-2. Ask for: Target name/id, local path, remote URL.
+2. Ask for: Target name/id, local path, remote URL, optional type (`frontend` | `backend` | `fullstack`).
 3. Validate the new path like DEV does; additionally check the local checkout's
    git remote matches the given URL (report a mismatch, don't "fix" it silently).
-4. Propose the exact YAML block to append to `targets.yaml` **and** the matching
-   `.workflow/targets.local.yaml` mapping; apply only after the user confirms.
+4. Propose the exact YAML block to append to `targets.yaml` (including optional type)
+   **and** the matching `.workflow/targets.local.yaml` mapping; apply only after the user confirms.
 5. In the new Target repo: `init` (+ binding config) as in the DEV flow.
 6. Verify all previously registered Targets still resolve, then `status`.
 
@@ -246,14 +250,11 @@ already said):
 
 **Goal:** refresh an existing setup after a Framework upgrade or a move.
 
-- Re-run Phase 0 everywhere relevant (each workspace found in Phase 0).
-- For each workspace whose `syncState` is OUTDATED: run `software-team-agents sync`.
-  A sync that adds a newly supported runtime's files (e.g. `.opencode/**`) is
-  add-only and conflict-free by design. If conflicts are reported, show them
-  verbatim with the CLI's recovery advice and stop — force only on explicit
-  request.
-- If `syncState` is INCOMPATIBLE (major jump): explain the implication, and let
-  the user decide whether to `sync --force` now or wait.
+- Re-run Phase 0 for each workspace.
+- For workspaces where `syncState` is OUTDATED: run `software-team-agents sync`.
+  If conflicts are reported, show them verbatim with recovery advice and stop —
+  force only on explicit request.
+- If `syncState` is INCOMPATIBLE (major jump): explain and let user decide whether to `sync --force`.
 - If paths moved: jump to Repair.
 
 ## Flow: Inspect Setup
@@ -272,15 +273,15 @@ Common breakages, minimal fixes — canonical identities never change implicitly
 
 | Symptom | Fix |
 |---|---|
-| Requirements/design docs found inside a Target (`_docs/module/**`) | an analysis role wrote into the wrong workspace; migrate to `<knowledgeRoot>/_docs/module/<name>/` (merge status tables), remove the Target-side copy only on explicit confirmation, and find how workspace-role routing failed before continuing |
-| BA-workspace prompts present in a DEV workspace (or engineer prompts in a BA one) | roster drift — plain `software-team-agents sync`; escalate to `sync --force` only on the user's explicit word |
-| BA/UXUI prompts unavailable anywhere despite a bound Knowledge root | the Knowledge repo was never initialized — run the BA flow's bound-but-uninitialized step |
-| Knowledge/Target moved on disk | update `knowledge.path` in the workspace config, or the mapping entry in `.workflow/targets.local.yaml` (show the diff first); identity in `targets.yaml` stays |
-| Missing local mapping | add just that mapping block to `.workflow/targets.local.yaml` |
+| Requirements/design docs found inside a Target (`_docs/module/**`) | report exact paths as read-only project references; do not copy, rewrite, move or delete them; route canonical doc work to owning analysis role in Knowledge workspace |
+| BA-workspace prompts present in a DEV workspace (or engineer prompts in a BA one) | roster drift — plain `software-team-agents sync`; escalate to `sync --force` only on user's explicit word |
+| BA/UXUI prompts unavailable anywhere despite a bound Knowledge root | Knowledge repo never initialized — run BA flow's bound-but-uninitialized step |
+| Knowledge/Target moved on disk | update `knowledge.path` in config or entry in `.workflow/targets.local.yaml` (show diff first); identity in `targets.yaml` stays |
+| Missing local mapping | add mapping block to `.workflow/targets.local.yaml` |
 | Stale sync (`OUTDATED`) | plain `software-team-agents sync` |
-| Remote mismatch vs `targets.yaml` | report both URLs, change nothing until the user decides which side is wrong |
+| Remote mismatch vs `targets.yaml` | report both URLs, change nothing until user decides which side is wrong |
 | Config half-lost (manifest without config) | re-run `init` in that workspace |
-| Knowledge repo's own doc tree doesn't match canonical shape (legacy folders, stray files, unrecognized `knowledge/**` subtrees) | binding/sync is a separate concern from this — hand off to `prompt-reconcile-knowledge-layout.md` |
+| Knowledge repo's STA-owned doc tree doesn't match current canonical shape | report failing checker and exact STA-owned paths; do not convert project reference docs or create compatibility layout |
 
 After any repair: `status` again and confirm the specific symptom is gone.
 
@@ -299,10 +300,9 @@ After any repair: `status` again and confirm the specific symptom is gone.
 
 `software-team-agents sync` preserves project-owned configuration: it merges
 missing Framework guard registrations into `.claude/settings.json` and injects
-only the delimited `sta:bootstrap` block into project-owned root instructions,
-backing up before each write. If sync reports a blocking conflict, leave the
-file untouched and follow the named recovery path (repair it, claim the path in
-`overrides`, or use an explicitly confirmed backed-up force operation).
+only delimited `sta:bootstrap` into project-owned root instructions, backing up
+first. On blocking conflicts, leave untouched and follow named recovery advice
+(repair, claim in `overrides`, or confirmed backed-up force).
 
 ## Safety rails — never, under this playbook
 
@@ -311,6 +311,8 @@ file untouched and follow the named recovery path (repair it, claim the path in
 - never run `sync --force` unprompted; never write into another role's workspace
 - never invent config fields; unknown keys in existing configs are preserved
 - never bypass the CLI by generating managed files by hand
+- never modify, move, rename, convert, or validate optional reference documents (read-only evidence)
+- never run removed migration commands or rely on compatibility frameworks
 - **never run a state-changing git command without showing it first and getting
   explicit confirmation.** This playbook is otherwise entirely git-free — every
   other step goes through the official CLI (Operating principle #2). `git clone`
@@ -338,10 +340,8 @@ Warnings  : <anything worth watching, else "none">
 
 ## Notes for framework developers and future modes
 
-- Running from a development checkout works identically: the CLI resolves the
-  Framework from its own location (`resolveFrameworkRoot`), so dogfooding needs
-  no special casing — but the checkout itself must never become a workspace.
-- The setup contract above deliberately depends only on the installed CLI's
-  surface (`init/sync/status/--json`) and standard files — a future
-  `software-team-agents setup` command or an installed `.tgz` distribution can
+- Running from a dev checkout works identically (`resolveFrameworkRoot`), but
+  the checkout itself must never become a workspace.
+- The setup contract depends only on the installed CLI's surface
+  (`init/sync/status/--json`) and standard files — future commands or distributions
   adopt the same model without changing this playbook.

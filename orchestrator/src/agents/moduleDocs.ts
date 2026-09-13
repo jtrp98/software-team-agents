@@ -470,6 +470,49 @@ export function parseTaskVerdicts(round: string, taskId: string): Record<string,
   return verdicts;
 }
 
+/**
+ * Reads per-Target verdicts from review.md (T-V9-015).
+ * Uses existing review.md conventions:
+ * - Bullet lines naming a target: `- Target api: ✅ Verified`, `- [web]: ❌ Failed`, etc.
+ * - Status line trailers: `**Status:** ✅ Verified (FULL) — targets: api (PASS), web (PASS)`
+ */
+export function parseTargetVerdicts(round: string): Record<string, "PASS" | "FAIL"> {
+  const verdicts: Record<string, "PASS" | "FAIL"> = {};
+  const lines = round.split(/\r?\n/);
+
+  const statusTrailerMatch = round.match(/\*\*Status:\*\*.*?[—-]\s*targets?:\s*([^\n]+)/i);
+  if (statusTrailerMatch) {
+    const parts = statusTrailerMatch[1].split(/[,;]/);
+    for (const part of parts) {
+      const match = part.trim().match(/^\[?([a-zA-Z0-9_-]+)\]?\s*[:\s(]\s*(PASS|FAIL|✅|❌|⚠️)/i);
+      if (match) {
+        const targetId = match[1];
+        const val = /PASS|✅/i.test(match[2]) ? "PASS" : "FAIL";
+        verdicts[targetId] = val;
+      }
+    }
+  }
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (/^##+\s/.test(line)) continue;
+    const targetLineMatch = line.match(/^[-*]\s*(?:Target\s+\[?([a-zA-Z0-9_-]+)\]?|\[([a-zA-Z0-9_-]+)\])\s*[:—–-]?\s*(✅\s*Verified|⚠️\s*Partial|❌\s*Failed|PASS|FAIL|✅|❌|⚠️)/i);
+    if (targetLineMatch) {
+      const targetId = targetLineMatch[1] || targetLineMatch[2];
+      if (/^(REQ|AC|DES|DEC|FIND|BE|FE|lint|typecheck|unit|build)$/i.test(targetId)) continue;
+      const marker = targetLineMatch[3];
+      const isPass = marker.includes("✅") || /^PASS$/i.test(marker);
+      const isFail = marker.includes("❌") || marker.includes("⚠") || /^FAIL$/i.test(marker);
+      if (isPass || isFail) {
+        if (verdicts[targetId] === "FAIL") continue;
+        verdicts[targetId] = isFail ? "FAIL" : "PASS";
+      }
+    }
+  }
+
+  return verdicts;
+}
+
 export interface ParsedQaReport {
   artifact: QaReportArtifact;
   /** True when the mode marker `(FULL)`/`(TARGETED)` could not be found — defaulted to TARGETED (fails closed on deploy gate) rather than guessed. */
@@ -533,6 +576,13 @@ export function parseQaReport(taskId: string, reviewMd: string): ParsedQaReport 
   }
 
   const requirements = parseTaskVerdicts(round, taskId);
+  const targetVerdicts = parseTargetVerdicts(round);
+  const hasTargetFail = Object.values(targetVerdicts).some((v) => v === "FAIL");
+
+  let resolvedStatus = status === "PASS" && Object.keys(requirements).length === 0 ? "FAIL" : status;
+  if (hasTargetFail && resolvedStatus === "PASS") {
+    resolvedStatus = "FAIL";
+  }
 
   const artifact: QaReportArtifact = {
     taskId,
@@ -542,9 +592,10 @@ export function parseQaReport(taskId: string, reviewMd: string): ParsedQaReport 
     // would be inventing the verdict the document failed to state. Reading it
     // as FAIL is the same fail-closed rule this parser already applies to an
     // unrecognizable status line.
-    status: status === "PASS" && Object.keys(requirements).length === 0 ? "FAIL" : status,
+    status: resolvedStatus,
     mode,
     requirements,
+    targets: Object.keys(targetVerdicts).length > 0 ? targetVerdicts : undefined,
     tests: { passed, failed },
     evidence,
     risks: [],

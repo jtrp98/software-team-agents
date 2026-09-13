@@ -1,6 +1,5 @@
 import { AgentStage } from "../types.js";
 import { readWorkPlan, taskDesignRefs } from "../docs/planGraph.js";
-import { buildTraceChain } from "../traceability/traceability.js";
 import type { DocKind } from "./contextManager.js";
 import type { DesignSectionVerdict } from "./docSelection.js";
 
@@ -55,35 +54,11 @@ export function traceabilityScopeFor(
 
   const selectedDesignRefs = new Set(selectedTasks.flatMap(taskDesignRefs));
   const plannedDesignRefs = new Set(parsed.tasks.flatMap(taskDesignRefs));
-  if (selectedTasks.every(task => "version" in task)) {
-    return {
-      usableForDesign: true, usableForRequirement: true, reason: "canonical task trace references",
-      selectedTaskIds: new Set(selectedTasks.map(t => t.id)), selectedDesignRefs, plannedDesignRefs,
-      relevantRequirementIds: new Set(selectedTasks.flatMap(t => t.traceability.filter(id => id.startsWith("REQ-")))),
-      plannedRequirementIds: new Set(parsed.tasks.flatMap(t => "version" in t ? t.traceability.filter(id => id.startsWith("REQ-")) : [])),
-    };
-  }
-  const chain = buildTraceChain({ requirementMd, designMd, planMd });
-  const relevantRequirementIds = new Set(
-    chain
-      .filter((entry) => entry.design.some((id) => selectedDesignRefs.has(id)))
-      .map((entry) => entry.requirement),
-  );
-  const plannedRequirementIds = new Set(chain.filter((entry) => entry.tasks.length > 0).map((entry) => entry.requirement));
-  const everySelectedDesignMapsToRequirement = [...selectedDesignRefs].every((id) =>
-    chain.some((entry) => entry.design.includes(id)),
-  );
   return {
-    usableForDesign: true,
-    usableForRequirement: everySelectedDesignMapsToRequirement && relevantRequirementIds.size > 0,
-    reason: everySelectedDesignMapsToRequirement
-      ? "traceability relationships resolved"
-      : "a selected DES-NNN has no same-line REQ-NNN relationship in design.md",
-    selectedTaskIds: new Set(selectedTasks.map((task) => task.id)),
-    selectedDesignRefs,
-    plannedDesignRefs,
-    relevantRequirementIds,
-    plannedRequirementIds,
+    usableForDesign: true, usableForRequirement: true, reason: "canonical task trace references",
+    selectedTaskIds: new Set(selectedTasks.map(t => t.id)), selectedDesignRefs, plannedDesignRefs,
+    relevantRequirementIds: new Set(selectedTasks.flatMap(t => t.traceability.filter(id => id.startsWith("REQ-")))),
+    plannedRequirementIds: new Set(parsed.tasks.flatMap(t => t.traceability.filter(id => id.startsWith("REQ-")))),
   };
 }
 

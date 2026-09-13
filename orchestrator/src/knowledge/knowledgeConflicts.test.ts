@@ -171,7 +171,7 @@ describe("detectConflicts", () => {
 describe("resolutions on disk", () => {
   let root: string;
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-conflicts-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-conflicts-"));
   });
   afterEach(() => {
     fs.rmSync(root, { recursive: true, force: true });
@@ -258,7 +258,7 @@ describe("describeConflict", () => {
 describe("checkKnowledge with conflicts", () => {
   let root: string;
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-conflicts-check-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-conflicts-check-"));
   });
   afterEach(() => {
     fs.rmSync(root, { recursive: true, force: true });

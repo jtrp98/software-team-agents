@@ -25,7 +25,7 @@ vi.mock("../targetcli/roots.js", () => ({
 }));
 
 const { resolveWritableWorkRoots, resolveDocsRoot, resolveThreeRepoTaskLookup } = await import("./cliRoots.js");
-const originalInstallationConfig = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+const originalInstallationConfig = process.env.STA_INSTALLATION_CONFIG;
 
 const PR = "/project/root";
 const workRoots = (rs: ThreeRepoRequestRoots["workRoots"]): ThreeRepoRequestRoots => ({
@@ -37,12 +37,12 @@ const workRoots = (rs: ThreeRepoRequestRoots["workRoots"]): ThreeRepoRequestRoot
 beforeEach(() => {
   loadInstallationConfig.mockReset();
   preflightThreeRepoTask.mockReset();
-  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = "__sta_cli_roots_missing_installation__.yaml";
+  process.env.STA_INSTALLATION_CONFIG = "__sta_cli_roots_missing_installation__.yaml";
 });
 
 afterEach(() => {
-  if (originalInstallationConfig === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-  else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = originalInstallationConfig;
+  if (originalInstallationConfig === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+  else process.env.STA_INSTALLATION_CONFIG = originalInstallationConfig;
 });
 
 describe("resolveWritableWorkRoots", () => {
@@ -50,7 +50,7 @@ describe("resolveWritableWorkRoots", () => {
     loadInstallationConfig.mockImplementation(() => {
       throw new Error("cannot read installation config");
     });
-    expect(resolveWritableWorkRoots(PR, "T-1", { loadTask: () => null }, AgentStage.QA_ENGINEER)).toEqual([PR]);
+    expect(resolveWritableWorkRoots(PR, "T-1", { loadTask: () => null }, AgentStage.QA_ENGINEER)).toEqual([{ path: PR }]);
   });
 
   it("installation config present, but the task is not in the store → refuses", () => {
@@ -69,7 +69,11 @@ describe("resolveWritableWorkRoots", () => {
         { targetId: "c", path: "/repo/c", access: "read" },
       ]),
     );
-    expect(resolveWritableWorkRoots(PR, "T-1", { loadTask: () => ({}) as never }, AgentStage.QA_ENGINEER)).toEqual(["/repo/a", "/repo/b", "/repo/c"]);
+    expect(resolveWritableWorkRoots(PR, "T-1", { loadTask: () => ({}) as never }, AgentStage.QA_ENGINEER)).toEqual([
+      { targetId: "a", path: "/repo/a" },
+      { targetId: "b", path: "/repo/b" },
+      { targetId: "c", path: "/repo/c" },
+    ]);
   });
 
   it("installation config present but no Target roots resolved → refuses", () => {
@@ -87,7 +91,7 @@ describe("resolveWritableWorkRoots", () => {
   });
 
   it("uses the real Framework root rather than the caller's Target workspace", () => {
-    process.env.AGENTCLAUDE_INSTALLATION_CONFIG = "/somewhere/installation.yaml";
+    process.env.STA_INSTALLATION_CONFIG = "/somewhere/installation.yaml";
     loadInstallationConfig.mockReturnValue({ knowledge_root: "/kn" });
     preflightThreeRepoTask.mockReturnValue(workRoots([{ targetId: "a", path: "/repo/a", access: "write" }]));
     resolveWritableWorkRoots(PR, "T-9", { loadTask: () => ({}) as never }, AgentStage.QA_ENGINEER);
@@ -154,7 +158,7 @@ describe("all five production call sites share the same resolvers", () => {
   function oldDocsRoot(projectRoot: string): string {
     let out = projectRoot;
     try {
-      const installation = loadInstallationConfig(process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined) as {
+      const installation = loadInstallationConfig(process.env.STA_INSTALLATION_CONFIG || undefined) as {
         knowledge_root?: string;
       };
       if (installation.knowledge_root) out = installation.knowledge_root;
@@ -171,9 +175,9 @@ describe("all five production call sites share the same resolvers", () => {
     const task = {};
     const store = { loadTask: () => task as never };
     // Three writable-root sites: qaRoots and both changedFiles closures.
-    expect(resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER)).toEqual([PR]);
-    expect(resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER)).toEqual([PR]);
-    expect(resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER)).toEqual([PR]);
+    expect(resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER)).toEqual([{ path: PR }]);
+    expect(resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER)).toEqual([{ path: PR }]);
+    expect(resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER)).toEqual([{ path: PR }]);
     // two docs-root sites (qaDocsRoot + previousRound closure)
     expect(resolveDocsRoot(PR)).toBe(PR);
     expect(resolveDocsRoot(PR)).toBe(oldDocsRoot(PR));
@@ -193,7 +197,10 @@ describe("all five production call sites share the same resolvers", () => {
     const a = resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER);
     const b = resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER);
     const c = resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER);
-    expect(a).toEqual(["/t/be", "/t/fe"]);
+    expect(a).toEqual([
+      { targetId: "be", path: "/t/be" },
+      { targetId: "fe", path: "/t/fe" },
+    ]);
     expect(a).toEqual(b);
     expect(a).toEqual(c);
 

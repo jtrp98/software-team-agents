@@ -1,13 +1,13 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://agentclaude.local/schemas/plan.schema.json",
+  "$id": "https://software-team-agents.local/schemas/plan.schema.json",
   "title": "plan.md structural summary (T53)",
   "description": "Validates the structural summary orchestrator/src/docs/docStructure.ts extracts from a plan.md — presence of the sections .claude/agents/project-manager.md's Output template requires, plus a real phase count (T52's task table lives under each `## Phase N` heading).",
   "type": "object",
   "additionalProperties": false,
   "required": ["hasPlanSummary", "hasSequencingNotes", "hasOpenQuestions", "hasChangeLog", "phaseCount"],
   "properties": {
-    "canonicalTasksValid": { "const": true, "description": "When PlanTask format 1 is present, every complete semantic task must pass PlanTaskSchema, exact AC/provenance checks, design-triggered gate checks, and graph validation; legacy summaries omit this property during the explicit migration window." },
+    "canonicalTasksValid": { "const": true, "description": "When PlanTask format 1 is present, every complete semantic task must pass PlanTaskSchema, exact AC/provenance checks, design-triggered gate checks, and graph validation." },
     "hasPlanSummary": { "const": true, "description": "## Plan Summary" },
     "hasSequencingNotes": { "const": true, "description": "## Sequencing Notes" },
     "hasOpenQuestions": { "const": true, "description": "## Unresolved Open Questions" },
