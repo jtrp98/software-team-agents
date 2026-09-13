@@ -7,8 +7,8 @@ import { sectionMap, sectionText } from "../context/sections.js";
  * `## Feature-by-Feature Feasibility`, so any prose here is a grammar problem,
  * never a tolerated extra.
  *
- * The section is optional during the migration window (same precedent as
- * `designEvidenceValid`): a module that declares none is unscoped, not invalid.
+ * The section is optional in the current contract: a module that declares none
+ * is unscoped, not invalid.
  * Resolving these ids against `targets.yaml` is a later task's job — this
  * module only reads the declaration.
  */

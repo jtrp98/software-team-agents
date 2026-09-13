@@ -209,7 +209,7 @@ function register(fixture: Fixture) {
   const result = compileAndRegisterPlan({
     registry, store, ledger,
     planMarkdown,
-    references: { requirementMd: "REQ-007 AC-007.2", designMd: "DES-011 Contract:OrderSummary.v2" },
+    references: { requirementMd, designMd },
     scope: { kind: "all" },
     runId, module: "orders", boundary: "done",
     targetId: "target", targetRoot, knowledgeRoot: root,

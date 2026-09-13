@@ -232,18 +232,11 @@ describe("referencedKnowledgeIds", () => {
   it("uses only the authoritative plan task row's design references", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-knowledge-refs-"));
     try {
-      const dir = path.join(root, "_docs", "module", "sales");
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(path.join(dir, "plan.md"), [
-        "# Plan",
-        "",
-        "## Phase 1: Sales",
-        "",
-        "| Task | Status | Owner | Depends on |",
-        "|---|---|---|---|",
-        "| BE-001 (DES-010, DES-011) — implement | pending | backend-engineer | — |",
-        "",
-      ].join("\n"));
+      writePacketPlan(root, [fixtureTask({
+        id: "BE-001",
+        traceability: ["REQ-010", "AC-007.2", "DES-010", "DES-011"],
+        retrievalHints: "Hypothesis: The sales handler is the likely boundary; confirm it.\nQuery: Locate the sales handler.\nProvenance: DES-010, DES-011",
+      })], "sales");
       expect(referencedKnowledgeIds(root, "sales", "BE-001")).toEqual(["DES-010", "DES-011"]);
       expect(referencedKnowledgeIds(root, "sales", "BE-999")).toEqual([]);
     } finally {

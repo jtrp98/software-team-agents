@@ -5,14 +5,31 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 import { z } from "zod";
-import { PlanTaskSchema, parseCanonicalPlan, planTaskHash, renderCanonicalTasks, migrateLegacyTaskTable, type PlanTask } from "./planTask.js";
-import { parseLegacyPlanTasks, checkPlanGraphForModule } from "./planGraph.js";
+import { PlanTaskSchema, parseCanonicalPlan, planTaskHash, renderCanonicalTasks, type PlanTask } from "./planTask.js";
+import { checkPlanGraphForModule, readWorkPlan } from "./planGraph.js";
 import { checkOneDoc } from "./docStructure.js";
 import { assertRuntimeTaskFresh } from "../orchestrator/runtimeTask.js";
 import { runtimeTaskFixture } from "../runtime/packetFixture.testSupport.js";
 
 const fixture = fs.readFileSync(fileURLToPath(new URL("./fixtures/canonical-plan.md",import.meta.url)),"utf8");
-const refs = {requirementMd:"REQ-007 AC-007.2",designMd:"DES-011 Contract:OrderSummary.v2"};
+const refs = {
+  requirementMd: "REQ-007 AC-007.2",
+  designMd: [
+    "Design evidence format: 1",
+    "## DES-011 — Order summary response",
+    "Contract:OrderSummary.v2 — current order summary contract.",
+    "DEC-011 — retain the serializer boundary.",
+    "Evidence EVD-011: claim=DES-011 | state=confirmed | path=src/orders.ts | symbol=orderSummary | line=1 | revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | basis=source | tool=rg | hash=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "Evidence EVD-012: claim=Contract:OrderSummary.v2 | state=confirmed | path=src/orders.ts | symbol=orderSummary | line=1 | revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | basis=source | tool=rg | hash=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "Evidence EVD-013: claim=DEC-011 | state=confirmed | path=src/orders.ts | symbol=orderSummary | line=1 | revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | basis=source | tool=rg | hash=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "Compatibility: unchanged",
+    "Data/schema: unchanged",
+    "Migration/backfill: none",
+    "Security: none",
+    "Fallback: retain the current serializer.",
+    "Material ambiguity: none",
+  ].join("\n"),
+};
 const parsed = () => parseCanonicalPlan(fixture, refs);
 const task = () => parsed().tasks[0];
 
@@ -51,7 +68,7 @@ describe("canonical PlanTask v1",()=>{
     expect(parseCanonicalPlan(renderCanonicalTasks([{...task(),dependsOn:["FE-005"]},{...second,produces:[]}]),refs).problems.join(" ")).toContain("circular dependency");
     expect(parseCanonicalPlan(fixture.replace("### Task BE-004", "| Task | Status |\n\n### Task BE-004"),refs).problems.join(" ")).toContain("unexpected phase content");
     expect(parseCanonicalPlan(fixture + "\n## Task BE-009 — malformed\n",refs).problems.join(" ")).toContain("unknown plan heading");
-    expect(()=>parseLegacyPlanTasks(fixture.replace("PlanTask format: 1","plantask format : 1"))).toThrow(/legacy runtime/);
+    expect(readWorkPlan(fixture.replace("PlanTask format: 1","plantask format : 1")).problems.join(" ")).toContain("PlanTask format: 1");
   });
   it("ignores fake task headings in fenced semantic content; fails unclosed fences",()=>{
     const t={...task(),retrievalHints:`${task().retrievalHints}\n\`\`\`text\n### Task BE-900 — example\nOwner: nobody\n\`\`\``};
@@ -74,21 +91,23 @@ describe("canonical PlanTask v1",()=>{
   });
   it("module --check-plan uses canonical references; missing documents fail",()=>{
     const root=fs.mkdtempSync(path.join(os.tmpdir(),"v8-plan-check-"));
-    try {const dir=path.join(root,"example");fs.mkdirSync(dir);fs.writeFileSync(path.join(dir,"plan.md"),fixture);fs.writeFileSync(path.join(dir,"requirement.md"),refs.requirementMd);fs.writeFileSync(path.join(dir,"design.md"),refs.designMd);expect(checkPlanGraphForModule(root,"example").ok).toBe(true);fs.writeFileSync(path.join(dir,"requirement.md"),"");expect(checkPlanGraphForModule(root,"example").ok).toBe(false);} finally{fs.rmSync(root,{recursive:true,force:true});}
+    try {const dir=path.join(root,"example");fs.mkdirSync(dir);fs.writeFileSync(path.join(dir,"plan.md"),fixture.replace("Tier: T4\n",""));fs.writeFileSync(path.join(dir,"requirement.md"),refs.requirementMd);fs.writeFileSync(path.join(dir,"design.md"),refs.designMd);expect(checkPlanGraphForModule(root,"example").ok).toBe(true);fs.writeFileSync(path.join(dir,"requirement.md"),"");expect(checkPlanGraphForModule(root,"example").ok).toBe(false);} finally{fs.rmSync(root,{recursive:true,force:true});}
   });
 });
 
-describe("explicit migration window",()=>{
+describe("current canonical PlanTask boundary",()=>{
   const thin="# Plan\n\n## Phase 1\n\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-004 — Preserve order summary | pending | backend-engineer | none |\n";
-  it("old rows remain readable, never silently canonical",()=>{expect(parseLegacyPlanTasks(thin).tasks[0].id).toBe("BE-004");expect(parseCanonicalPlan(thin).problems.join(" ")).toContain("BE-004");expect(migrateLegacyTaskTable(thin).problems.join(" ")).toContain("objective");expect(()=>parseLegacyPlanTasks(fixture)).toThrow(/legacy runtime reader/);});
-  it("refuses unsupported version, checkbox-only and ambiguous table",()=>{expect(parseCanonicalPlan(fixture.replace("format: 1","format: 99")).problems.length).toBeGreaterThan(0);expect(migrateLegacyTaskTable("## Phase 1\n- [ ] BE-004").problems.length).toBeGreaterThan(0);expect(migrateLegacyTaskTable(thin.replace("BE-004 —","BE-004 (DES-011) —")).problems.join(" ")).toContain("ambiguous");});
-  it("losslessly converts a fully specified expanded table, with no inferred prose",()=>{
-    const t={...task(),retrievalHints:task().retrievalHints.replace(/\n/g,"; ")};const cols=["Task","Objective","Why","Owner","Tier","Depends on","Traceability","Produces","Consumes","Risk","Human gate","Status","Scope and constraints","Retrieval hints","Do not modify","Acceptance criteria","Required validation and expected evidence","Rollback/compatibility notes"];
-    const cells=[`${t.id} — ${t.title}`,t.objective,t.why,t.owner,t.tier!,"none",t.traceability.join(", "),t.produces.join(", "),"none",t.risk.join(", "),"none",t.status,t.scopeAndConstraints,t.retrievalHints,t.doNotModify,t.acceptanceCriteria,t.validationAndEvidence,t.compatibility];
-    const md=`# Plan\n\n## Plan Summary\nPreserve this authored strategy.\n\n## Phase 1\n\n| ${cols.join(" | ")} |\n| ${cols.map(()=>"---").join(" | ")} |\n| ${cells.join(" | ")} |\n\n## Change Log\nPreserve this authored history.\n`;
-    const result=migrateLegacyTaskTable(md,refs);expect(result.problems).toEqual([]);expect(result.tasks).toEqual([t]);expect(parseCanonicalPlan(result.markdown!,refs).tasks).toEqual([t]);
-    expect(result.markdown).toContain("Preserve this authored strategy.");expect(result.markdown).toContain("Preserve this authored history.");
-    expect(migrateLegacyTaskTable(md.replace("| Objective |","| Owner |"),refs).problems.join(" ")).toContain("duplicate/unknown");
+  it("refuses noncanonical tables without parsing or converting them",()=>{
+    const read = readWorkPlan(thin);
+    expect(read.tasks).toEqual([]);
+    expect(read.problems.join(" ")).toContain("PlanTask format: 1");
+    const root=fs.mkdtempSync(path.join(os.tmpdir(),"v9-plan-boundary-"));
+    try {
+      const dir=path.join(root,"example");fs.mkdirSync(dir);fs.writeFileSync(path.join(dir,"plan.md"),thin);
+      const checked=checkPlanGraphForModule(root,"example");
+      expect(checked.ok).toBe(false);
+      expect(checked.errors.join(" ")).toContain("PlanTask format: 1");
+    } finally { fs.rmSync(root,{recursive:true,force:true}); }
   });
 });
 
@@ -226,4 +245,3 @@ describe("PlanTask optional Targets: field (T-V9-005)", () => {
     expect(r.tasks[0].targets).toEqual(["non-existent-target-999"]);
   });
 });
-

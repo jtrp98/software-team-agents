@@ -64,7 +64,7 @@ export async function productionQaInputs(opts: {
 }) {
   const planMd = readModuleDoc(opts.docsRoot, opts.moduleName, "plan.md") ?? "";
   const designMd = readModuleDoc(opts.docsRoot, opts.moduleName, "design.md") ?? "";
-  const parsed = readWorkPlan(planMd);
+  const parsed = planMd ? readWorkPlan(planMd) : { tasks: [], problems: [] };
   if (parsed.problems.length) throw new Error(`invalid QA plan: ${parsed.problems.join("; ")}`);
   const task = parsed.tasks.find((row) => row.id === opts.taskId);
   let graph: ReturnType<typeof taskGraphFromPlan> | undefined;
@@ -86,12 +86,11 @@ export async function productionQaInputs(opts: {
     }
   }));
 
-  // The exact contract is only constructible from a canonical PlanTask: a
-  // legacy row has no authored acceptance text, no `produces`/`consumes` and
-  // no traceability split, so there is nothing to bind QA to that would not
-  // be invented here. Those rounds keep the pre-T-V8-014 pointer package.
+  // The exact contract is constructible only when this task is present in the
+  // current canonical plan. Ad-hoc work has no plan row and retains the bounded
+  // pointer package below without inventing task semantics.
   const contract: QaTaskContract | undefined =
-    task && "version" in task
+    task
       ? buildQaTaskContract({
           task,
           graph,

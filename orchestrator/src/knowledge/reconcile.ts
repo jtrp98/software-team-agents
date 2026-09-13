@@ -87,7 +87,7 @@ export function classifyReconciliationItem(
 ): Pick<ReconciledItem, "verdict" | "route_to" | "reason"> {
   if (conflict) return { verdict: "conflict", route_to: "human", reason: conflict };
   if (item.schema_version < 2 || item.sources.some((source) => !source.origin)) {
-    return { verdict: "unknown", route_to: "human", reason: "schema v2 origin evidence is missing; migrate before reconciling" };
+    return { verdict: "unknown", route_to: "human", reason: "schema v2 origin evidence is missing; author current origin evidence before reconciling" };
   }
   const unusable = evidence.filter((entry) => ["missing", "unhashable", "external", "invalid", "unmapped"].includes(entry.digest_state));
   const targetEvidence = evidence.filter((entry) => entry.origin?.root === "target");

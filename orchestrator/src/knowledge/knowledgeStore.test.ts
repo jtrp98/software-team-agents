@@ -194,13 +194,12 @@ describe("loadKnowledge", () => {
     expect(result.items.map((i) => i.id).sort()).toEqual(["REQ-003", "REQ-004"]);
   });
 
-  it("T-V5-041: a leftover _adoption/ directory is still skipped after the subsystem was removed", () => {
+  it("T-V9-023: retired adoption bookkeeping is no longer a reserved knowledge surface", () => {
     writeKnowledgeItem(requirement("REQ-003"), root);
     writeRaw("_adoption/STATE.yaml", "schema_version: 1\nstatus: adopted\nstages: []\n");
     writeRaw("_adoption/backup/knowledge/sales-crm/requirement/REQ-003.yaml", "id: [unclosed\n");
     const result = loadKnowledge(root);
-    expect(result.problems).toEqual([]);
-    expect(result.items.map((i) => i.id)).toEqual(["REQ-003"]);
+    expect(result.problems.join("\n")).toContain("_adoption");
   });
 
   it("names the file when the YAML will not parse", () => {

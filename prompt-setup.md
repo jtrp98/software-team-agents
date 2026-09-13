@@ -198,10 +198,10 @@ already said):
 - **Roster drift & stranded docs.** Before declaring DEV ready, check the two
   Phase 0 rows: other-workspace-role prompt files present here, and local `_docs/module/**`
   content. Roster drift is fixed by plain `sync`; if it reports conflicts, show
-  them verbatim and wait for the user's explicit "force". Stranded docs are
-  migrated, never deleted: propose copying `_docs/module/<name>/` into the
-  Knowledge root (`<knowledgeRoot>/_docs/module/<name>/`, merging any status
-  tables), then removing the Target-side copy only after explicit confirmation.
+  them verbatim and wait for the user's explicit "force". Treat Target-side
+  documents as read-only project references: report their exact paths, do not
+  copy, rewrite, move or delete them, and route current canonical document work
+  to the owning analysis role in the Knowledge workspace.
 - **Runtime choice.** Default is Claude Code; `--runtime opencode` and
   `--runtime codex` launch the other supported runtimes from the same workspace.
   Model/effort are the runtime's own configuration (e.g. OpenCode's
@@ -272,7 +272,7 @@ Common breakages, minimal fixes — canonical identities never change implicitly
 
 | Symptom | Fix |
 |---|---|
-| Requirements/design docs found inside a Target (`_docs/module/**`) | an analysis role wrote into the wrong workspace; migrate to `<knowledgeRoot>/_docs/module/<name>/` (merge status tables), remove the Target-side copy only on explicit confirmation, and find how workspace-role routing failed before continuing |
+| Requirements/design docs found inside a Target (`_docs/module/**`) | report the exact paths as read-only project references; do not copy, rewrite, move or delete them; route current canonical document work to the owning analysis role and find how workspace-role routing failed before continuing |
 | BA-workspace prompts present in a DEV workspace (or engineer prompts in a BA one) | roster drift — plain `software-team-agents sync`; escalate to `sync --force` only on the user's explicit word |
 | BA/UXUI prompts unavailable anywhere despite a bound Knowledge root | the Knowledge repo was never initialized — run the BA flow's bound-but-uninitialized step |
 | Knowledge/Target moved on disk | update `knowledge.path` in the workspace config, or the mapping entry in `.workflow/targets.local.yaml` (show the diff first); identity in `targets.yaml` stays |
@@ -280,7 +280,7 @@ Common breakages, minimal fixes — canonical identities never change implicitly
 | Stale sync (`OUTDATED`) | plain `software-team-agents sync` |
 | Remote mismatch vs `targets.yaml` | report both URLs, change nothing until the user decides which side is wrong |
 | Config half-lost (manifest without config) | re-run `init` in that workspace |
-| Knowledge repo's own doc tree doesn't match canonical shape (legacy folders, stray files, unrecognized `knowledge/**` subtrees) | binding/sync is a separate concern from this — hand off to `prompt-reconcile-knowledge-layout.md` |
+| Knowledge repo's STA-owned doc tree doesn't match the current canonical shape | report the failing checker and exact STA-owned paths; do not convert project reference documents or create a compatibility layout |
 
 After any repair: `status` again and confirm the specific symptom is gone.
 

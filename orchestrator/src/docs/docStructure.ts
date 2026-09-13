@@ -54,13 +54,13 @@ function count(markdown: string, pattern: RegExp): number {
  * design.md's schema-known `##` headings, keyed by the schema property each one
  * satisfies. `extractStructure` and `checkDesignContractSections` below both read this
  * one map (presence vs. exclusion) so they can't name the headings differently; the
- * assertion right after it fails loudly if this map and the schema's `required` list
- * ever disagree.
+ * assertion right after it fails loudly if this map plus the computed evidence
+ * property and the schema's `required` list ever disagree.
  *
  * `hasTargets` is deliberately NOT in this map (V9 T-V9-004): it is an optional
  * schema property, and putting it here would trip the drift guard below. It is
- * computed outside, exactly like `designEvidenceValid` — see
- * `DESIGN_TARGETS_HEADING` for the exclusion `checkDesignContractSections` needs.
+ * computed outside; unlike required `designEvidenceValid`, it remains optional.
+ * See `DESIGN_TARGETS_HEADING` for the exclusion `checkDesignContractSections` needs.
  */
 const DESIGN_HEADING_PATTERN: Record<string, RegExp> = {
   hasFeasibilitySummary: /^##\s+Feasibility Summary/im,
@@ -77,7 +77,7 @@ const DESIGN_TARGETS_HEADING = /^##\s+Targets\s*$/im;
 
 {
   const required = JSON.parse(fs.readFileSync(schemaFile("design"), "utf8")).required as string[];
-  const known = Object.keys(DESIGN_HEADING_PATTERN);
+  const known = [...Object.keys(DESIGN_HEADING_PATTERN), "designEvidenceValid"];
   const missing = required.filter((key) => !known.includes(key));
   const extra = known.filter((key) => !required.includes(key));
   if (missing.length > 0 || extra.length > 0) {
@@ -107,8 +107,8 @@ export function extractStructure(docType: DocType, markdown: string): Record<str
       const out: Record<string, unknown> = {};
       for (const [key, pattern] of Object.entries(DESIGN_HEADING_PATTERN)) out[key] = has(markdown, pattern);
       const evidence = parseDesignEvidence(markdown);
-      if (evidence.mode === "addressable") out.designEvidenceValid = evidence.problems.length === 0;
-      // Outside the map on purpose — optional like designEvidenceValid; see DESIGN_HEADING_PATTERN's note.
+      out.designEvidenceValid = evidence.problems.length === 0;
+      // Outside the map on purpose — this property is optional; see DESIGN_HEADING_PATTERN's note.
       if (has(markdown, DESIGN_TARGETS_HEADING)) out.hasTargets = true;
       return out;
     }
@@ -326,8 +326,6 @@ export function checkDocStructure(projectRoot: string): DocStructureCheckResult 
       // Report-only: knowledge-ci.yml's structure-check step already runs with
       // continue-on-error, so a problem here doesn't block CI yet.
       if (docType === "design") {
-        const evidence = parseDesignEvidence(markdown);
-        if (evidence.mode === "legacy") notes.push(`${name}/design.md: safe whole-section compatibility fallback only — migrate to Design evidence format 1 before unattended execution`);
         const contract = checkDesignContractSections(markdown, `${name}/${DOC_FILENAMES[docType]}`);
         problems.push(...contract.problems);
       }

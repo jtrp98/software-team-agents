@@ -3,290 +3,31 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  parsePlanTasks,
-  validatePlanTasks,
   deriveWaves,
   readinessOf,
   checkPlanGraphs,
-  type PlanTaskRow,
 } from "./planGraph.js";
-import { parseModelTiers } from "../runtime/modelTiers.js";
 import { renderCanonicalTasks, type PlanTask } from "./planTask.js";
 
-function row(over: Partial<PlanTaskRow> & { id: string }): PlanTaskRow {
+function row(over: Partial<PlanTask> & { id: string }): PlanTask {
   return {
-    phase: 1,
-    designRefs: ["DES-001"],
-    dependsOn: [],
-    produces: [],
-    consumes: [],
-    status: "pending",
-    owner: "backend-engineer",
-    wave: null,
-    description: over.id,
-    fromCheckbox: false,
-    ...over,
+    version: 1, phase: 1, title: over.id,
+    objective: `Implement ${over.id} against the current contract.`,
+    why: `The current plan requires ${over.id} to complete its phase.`,
+    owner: "backend-engineer", dependsOn: [], traceability: ["REQ-001", "AC-001.1", "DES-001"], produces: [], consumes: [], risk: ["low"], humanGate: [], status: "pending",
+    scopeAndConstraints: "Keep the change within the selected task and current module.",
+    retrievalHints: "Hypothesis: current source owns the behavior.\nQuery: find the selected contract.\nProvenance: DES-001",
+    doNotModify: "Unrelated modules and contracts.", acceptanceCriteria: "AC-001.1: the selected behavior remains deterministic.",
+    validationAndEvidence: "Verify AC-001.1 with the focused suite and record its exit code.", compatibility: "Current callers remain unchanged and the patch reverts independently.", ...over,
   };
 }
 
-const TABLE_PLAN = `# Plan
-
-## Plan Summary
-Two phases.
-
-## Phase 1: Orders
-
-| Task | Status | Owner | Depends on |
-|---|---|---|---|
-| BE-001 (DES-001) — order CRUD | pending | backend-engineer | — |
-| FE-001 (DES-001) — order form | pending | frontend-engineer | BE-001 |
-
-## Phase 2: Billing
-
-| Task | Status | Owner | Depends on |
-|---|---|---|---|
-| BE-002 (DES-002) — billing API | pending | backend-engineer | BE-001 |
-
-## Sequencing Notes
-Phase 2 reads Phase 1's models.
-
-## Unresolved Open Questions
-—
-
-## Change Log
-2026-08-26: created.
-`;
-
-const TIERED_PHASE = `## Phase 1: Orders
-
-| Task | Status | Owner | Depends on | Tier |
-|---|---|---|---|---|
-| BE-001 (DES-001) — order API | pending | backend-engineer | — | T4 |
-| FE-001 (DES-001) — order form | pending | frontend-engineer | BE-001 | — |
-`;
-
-const MODEL_TIERS = parseModelTiers(`tiers:
-  T1:
-    reserved: true
-    camps:
-      anthropic: { model: a, effort: a, notes: a }
-      openai: { model: a, effort: a, notes: a }
-      google: { model: a, effort: a, notes: a }
-      zai: { model: a, effort: a, notes: a }
-  T2:
-    camps:
-      anthropic: { model: a, effort: a, notes: a }
-      openai: { model: a, effort: a, notes: a }
-      google: { model: a, effort: a, notes: a }
-      zai: { model: a, effort: a, notes: a }
-  T3:
-    camps:
-      anthropic: { model: a, effort: a, notes: a }
-      openai: { model: a, effort: a, notes: a }
-      google: { model: a, effort: a, notes: a }
-      zai: { model: a, effort: a, notes: a }
-  T4:
-    camps:
-      anthropic: { model: a, effort: a, notes: a }
-      openai: { model: a, effort: a, notes: a }
-      google: { model: a, effort: a, notes: a }
-      zai: { model: a, effort: a, notes: a }
-  T5:
-    camps:
-      anthropic: { model: a, effort: a, notes: a }
-      openai: { model: a, effort: a, notes: a }
-      google: { model: a, effort: a, notes: a }
-      zai: { model: a, effort: a, notes: a }
-  T6:
-    camps:
-      anthropic: { model: a, effort: a, notes: a }
-      openai: { model: a, effort: a, notes: a }
-      google: { model: a, effort: a, notes: a }
-      zai: { model: a, effort: a, notes: a }
-`);
-
-describe("parsePlanTasks", () => {
-  it("parses ids, DES refs, owners, statuses and dependencies from every phase table", () => {
-    const { tasks, problems } = parsePlanTasks(TABLE_PLAN);
-    expect(problems).toEqual([]);
-    expect(tasks.map((t) => t.id)).toEqual(["BE-001", "FE-001", "BE-002"]);
-    expect(tasks[0].designRefs).toEqual(["DES-001"]);
-    expect(tasks[1].dependsOn).toEqual(["BE-001"]);
-    expect(tasks[1].owner).toBe("frontend-engineer");
-    expect(tasks.every((t) => t.status === "pending")).toBe(true);
-    expect(tasks[0].phase).toBe(1);
-    expect(tasks[2].phase).toBe(2);
-  });
-
-  it("still parses a legacy checkbox plan, which then fails loudly instead of silently passing", () => {
-    const legacy = "## Phase 1: x\n\n- [ ] BE-001 (DES-001) — old shape\n";
-    const { tasks } = parsePlanTasks(legacy);
-    expect(tasks).toHaveLength(1);
-    expect(tasks[0].id).toBe("BE-001");
-    expect(tasks[0].fromCheckbox).toBe(true);
-    // No Status/Owner cells ever existed in this shape — the check names the row
-    // rather than waving an unmigrated plan through (`sta adopt plan` migrates it).
-    const check = validatePlanTasks(tasks);
-    expect(check.ok).toBe(false);
-    expect(check.errors.join("\n")).toContain("BE-001");
-  });
-
-  it("reports a row with no BE-/FE- id instead of dropping it silently", () => {
-    const { problems } = parsePlanTasks(
-      "## Phase 1: x\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| tidy the CSS | pending | frontend-engineer | — |\n",
-    );
-    expect(problems.join("\n")).toContain("no BE-/FE- id");
-  });
-
-  it("T-V7-031 rejects a malicious ../../etc task id before it can enter a bounded wave", () => {
-    const parsed = parsePlanTasks(
-      "## Phase 1: x\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| ../../etc (DES-001) — escape | pending | backend-engineer | — |\n",
-    );
-    expect(parsed.tasks).toEqual([]);
-    expect(parsed.problems.join("\n")).toContain("has no BE-/FE- id");
-  });
-
-  it("retains explicit Produces/Consumes columns for the existing task graph", () => {
-    const { tasks, problems } = parsePlanTasks(
-      "## Phase 1: x\n| Task | Status | Owner | Depends on | Produces | Consumes |\n|---|---|---|---|---|---|\n| BE-001 (DES-001) — API | pending | backend-engineer | — | orders/create, orders/read | auth/session |\n",
-    );
-    expect(problems).toEqual([]);
-    expect(tasks[0].produces).toEqual(["orders/create", "orders/read"]);
-    expect(tasks[0].consumes).toEqual(["auth/session"]);
-  });
-
-  it("T-V4-CAST-004 — inherits one Tier cell across every task in the phase", () => {
-    const { tasks, problems } = parsePlanTasks(TIERED_PHASE);
-    expect(problems).toEqual([]);
-    expect(tasks.map((task) => task.tier)).toEqual(["T4", "T4"]);
-  });
-
-  it("T-V4-CAST-004 — refuses a Tier copied into more than one task row", () => {
-    const { problems } = parsePlanTasks(TIERED_PHASE.replace("| BE-001 | — |", "| BE-001 | T4 |"));
-    expect(problems.join("\n")).toContain("once per phase, not repeated per task");
-  });
-
-  it("T-V4-CAST-004 — keeps a pre-existing plan fixture byte-identical when no Tier column exists", () => {
-    expect(JSON.stringify(parsePlanTasks(TABLE_PLAN))).toBe(
-      '{"tasks":[{"id":"BE-001","phase":1,"designRefs":["DES-001"],"dependsOn":[],"status":"pending","owner":"backend-engineer","wave":null,"description":"order CRUD","fromCheckbox":false},{"id":"FE-001","phase":1,"designRefs":["DES-001"],"dependsOn":["BE-001"],"status":"pending","owner":"frontend-engineer","wave":null,"description":"order form","fromCheckbox":false},{"id":"BE-002","phase":2,"designRefs":["DES-002"],"dependsOn":["BE-001"],"status":"pending","owner":"backend-engineer","wave":null,"description":"billing API","fromCheckbox":false}],"problems":[]}',
-    );
-  });
-});
-
-describe("validatePlanTasks — T-PM10.1", () => {
-  it("accepts a valid DAG", () => {
-    const check = validatePlanTasks([
-      row({ id: "BE-001" }),
-      row({ id: "BE-002" }),
-      row({ id: "FE-001", owner: "frontend-engineer", dependsOn: ["BE-001"] }),
-    ]);
-    expect(check.errors).toEqual([]);
-    expect(check.ok).toBe(true);
-  });
-
-  it("T-V4-CAST-004 — accepts a configured T2 through T6 cast without inspecting camps or model names", () => {
-    const check = validatePlanTasks([row({ id: "BE-001", tier: "T4" })], { modelTiers: MODEL_TIERS });
-    expect(check.ok).toBe(true);
-  });
-
-  it("T-V6-005 — a missing model-tiers.yaml reads as a Knowledge-workspace packaging fault, not user misconfiguration, when isKnowledgeWorkspace is set", () => {
-    const plain = validatePlanTasks([row({ id: "BE-001", tier: "T4" })]);
-    expect(plain.errors.join("\n")).toContain("model-tiers.yaml is not configured");
-
-    const inKnowledge = validatePlanTasks([row({ id: "BE-001", tier: "T4" })], { isKnowledgeWorkspace: true });
-    expect(inKnowledge.errors.join("\n")).toContain("missing from this Knowledge workspace's synced payload");
-    expect(inKnowledge.errors.join("\n")).toContain("software-team-agents ba");
-  });
-
-  it("T-V4-CAST-004 — refuses reserved T1 and a tier absent from the table", () => {
-    expect(validatePlanTasks([row({ id: "BE-001", tier: "T1" })], { modelTiers: MODEL_TIERS }).errors.join("\n"))
-      .toContain("T1 is reserved");
-    expect(validatePlanTasks([row({ id: "BE-001", tier: "T9" })], { modelTiers: MODEL_TIERS }).errors.join("\n"))
-      .toContain("T9, which is absent from model-tiers.yaml");
-  });
-
-  it("T-V8-005 — permits a Tier on an analysis task as well as implementation/QA", () => {
-    const check = validatePlanTasks([row({ id: "BE-001", owner: "project-manager", tier: "T2" })], { modelTiers: MODEL_TIERS });
-    expect(check.errors).toEqual([]);
-    expect(check.ok).toBe(true);
-  });
-
-  it("rejects a duplicate task id, naming both phases", () => {
-    const check = validatePlanTasks([row({ id: "BE-001", phase: 1 }), row({ id: "BE-001", phase: 2 })]);
-    expect(check.ok).toBe(false);
-    expect(check.errors.join("\n")).toContain('duplicate task id "BE-001"');
-    expect(check.errors.join("\n")).toContain("phases 1 and 2");
-  });
-
-  it("rejects a dependency on a task that does not exist", () => {
-    const check = validatePlanTasks([row({ id: "BE-001", dependsOn: ["BE-999"] })]);
-    expect(check.errors.join("\n")).toContain("depends on BE-999, which is not a task in this plan");
-  });
-
-  it("rejects a cycle with the actual path", () => {
-    const check = validatePlanTasks([
-      row({ id: "BE-001", dependsOn: ["BE-002"] }),
-      row({ id: "BE-002", dependsOn: ["BE-003"] }),
-      row({ id: "BE-003", dependsOn: ["BE-001"] }),
-    ]);
-    expect(check.ok).toBe(false);
-    expect(check.errors.join("\n")).toContain("circular dependency");
-    expect(check.errors.join("\n")).toContain("BE-001");
-  });
-
-  it("rejects a self dependency as its own finding, not just a degenerate cycle", () => {
-    const check = validatePlanTasks([row({ id: "BE-001", dependsOn: ["BE-001"] })]);
-    expect(check.errors.join("\n")).toContain("depends on itself");
-  });
-
-  it("rejects declaring the same dependency twice", () => {
-    const check = validatePlanTasks([row({ id: "BE-002", dependsOn: ["BE-001"] }), row({ id: "BE-001" }), { ...row({ id: "FE-001", owner: "frontend-engineer" }), dependsOn: ["BE-001", "BE-001"] }]);
-    expect(check.errors.join("\n")).toContain("more than once");
-  });
-
-  it("rejects an owner that is not a role in the roster", () => {
-    const check = validatePlanTasks([row({ id: "BE-001", owner: "dev-person" })]);
-    expect(check.errors.join("\n")).toContain('Owner "dev-person"');
-  });
-
-  it("rejects an invalid status value, naming the offending text", () => {
-    const { problems } = parsePlanTasks(
-      "## Phase 1: x\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-001 (DES-001) — a | almost done | backend-engineer | — |\n",
-    );
-    expect(problems.join("\n")).toContain('"almost done"');
-  });
-
-  it("rejects an authored wave that does not strictly increase along dependencies", () => {
-    const check = validatePlanTasks([
-      { ...row({ id: "BE-001" }), wave: 2 },
-      { ...row({ id: "FE-001", owner: "frontend-engineer", dependsOn: ["BE-001"] }), wave: 2 },
-    ]);
-    expect(check.errors.join("\n")).toContain("must be strictly greater than every dependency's");
-  });
-
-  it("rejects a half-authored Wave column — neither legacy nor migrated", () => {
-    const check = validatePlanTasks([row({ id: "BE-001" }), { ...row({ id: "FE-001", owner: "frontend-engineer" }), wave: 3 }]);
-    expect(check.errors.join("\n")).toContain("author the column for every task or drop it entirely");
-  });
-
-  it("rejects a task with no DES traceability", () => {
-    const check = validatePlanTasks([{ ...row({ id: "BE-001" }), designRefs: [] }]);
-    expect(check.errors.join("\n")).toContain("names no DES-NNN");
-  });
-
-  it("rejects a DES ref design.md does not define", () => {
-    const check = validatePlanTasks([row({ id: "BE-001", designRefs: ["DES-042"] })], {
-      designMd: "## Feature-by-Feature Feasibility\nDES-001 — covers REQ-001: fine.\n",
-    });
-    expect(check.errors.join("\n")).toContain("cites DES-042, which design.md does not define");
-  });
-
-  it("refuses executable waves when an owner is invalid", () => {
-    const check = validatePlanTasks([row({ id: "BE-001", owner: "ghost" }), row({ id: "BE-002", dependsOn: ["BE-001"] })]);
-    expect(check.ok).toBe(false);
-    expect(check.waves.size).toBe(0);
-  });
-});
+const REQ_MD_CURRENT = "REQ-001\nAC-001.1\n";
+const REVISION = "a".repeat(40);
+const HASH = "b".repeat(64);
+const DESIGN_MD_CURRENT = ["Design evidence format: 1", "", "## DES-001 — Current behavior", "Contract:OrderSummary.v1 — current response contract.", "DEC-001 — retain the current boundary.", `Evidence EVD-001: claim=DES-001 | state=confirmed | path=src/current.ts | symbol=current | line=1 | revision=${REVISION} | basis=source | tool=rg | hash=${HASH}`, `Evidence EVD-002: claim=Contract:OrderSummary.v1 | state=confirmed | path=src/current.ts | symbol=current | line=1 | revision=${REVISION} | basis=source | tool=rg | hash=${HASH}`, `Evidence EVD-003: claim=DEC-001 | state=confirmed | path=src/current.ts | symbol=current | line=1 | revision=${REVISION} | basis=source | tool=rg | hash=${HASH}`, "Compatibility: unchanged", "Data/schema: unchanged", "Migration/backfill: none", "Security: none", "Fallback: restore the current implementation.", "Material ambiguity: none", "", "## DES-002 — Billing behavior", "Contract:Billing.v1 — current billing contract.", "DEC-002 — retain the billing boundary.", `Evidence EVD-004: claim=DES-002 | state=confirmed | path=src/billing.ts | symbol=billing | line=1 | revision=${REVISION} | basis=source | tool=rg | hash=${HASH}`, `Evidence EVD-005: claim=Contract:Billing.v1 | state=confirmed | path=src/billing.ts | symbol=billing | line=1 | revision=${REVISION} | basis=source | tool=rg | hash=${HASH}`, `Evidence EVD-006: claim=DEC-002 | state=confirmed | path=src/billing.ts | symbol=billing | line=1 | revision=${REVISION} | basis=source | tool=rg | hash=${HASH}`, "Compatibility: unchanged", "Data/schema: unchanged", "Migration/backfill: none", "Security: none", "Fallback: restore the current billing implementation.", "Material ambiguity: none", ""].join("\n");
+const CURRENT_PLAN = renderCanonicalTasks([row({ id: "BE-001" }), row({ id: "FE-001", owner: "frontend-engineer", dependsOn: ["BE-001"] }), row({ id: "BE-002", phase: 2, dependsOn: ["BE-001"], traceability: ["REQ-001", "AC-001.1", "DES-002"], retrievalHints: "Hypothesis: current source owns the behavior.\nQuery: find the selected contract.\nProvenance: DES-002" })]);
+const TIERED_PLAN = renderCanonicalTasks([row({ id: "BE-001", tier: "T4" })]);
 
 describe("deriveWaves — T-PM1.2", () => {
   it("puts independent tasks of one phase in wave 1 together", () => {
@@ -387,33 +128,36 @@ describe("checkPlanGraphs", () => {
   }
 
   it("passes a well-formed plan and reports its wave count", () => {
-    const root = project({ "_docs/module/sales/plan.md": TABLE_PLAN });
+    const root = project({ "_docs/module/sales/requirement.md": REQ_MD_CURRENT, "_docs/module/sales/design.md": DESIGN_MD_CURRENT, "_docs/module/sales/plan.md": CURRENT_PLAN });
     const result = checkPlanGraphs(root);
     expect(result.ok).toBe(true);
-    expect(result.notes.join("\n")).toContain("sales/plan.md: 3 task(s), 3 wave(s)");
+    expect(result.notes.join("\n")).toContain("sales/plan.md: 3 canonical task(s), format 1; 3 wave(s)");
   });
 
   it("fails a plan whose dependency points nowhere, naming module, task and target", () => {
     const root = project({
-      "_docs/module/sales/plan.md": TABLE_PLAN.replace("| BE-002 (DES-002) — billing API | pending | backend-engineer | BE-001 |", "| BE-002 (DES-002) — billing API | pending | backend-engineer | BE-777 |"),
+      "_docs/module/sales/requirement.md": REQ_MD_CURRENT,
+      "_docs/module/sales/design.md": DESIGN_MD_CURRENT,
+      "_docs/module/sales/plan.md": CURRENT_PLAN.replace("Depends on: BE-001", "Depends on: BE-777"),
     });
     const result = checkPlanGraphs(root);
     expect(result.ok).toBe(false);
-    expect(result.problems.join("\n")).toMatch(/sales\/plan\.md: task BE-002 depends on BE-777/);
+    expect(result.problems.join("\n")).toMatch(/sales\/plan\.md: task FE-001: self\/unknown dependency BE-777/);
   });
 
   it("cross-checks DES refs against the sibling design.md when one exists", () => {
     const root = project({
-      "_docs/module/sales/design.md": "## Feature-by-Feature Feasibility\nDES-001 — covers REQ-001.\n",
-      "_docs/module/sales/plan.md": TABLE_PLAN,
+      "_docs/module/sales/requirement.md": REQ_MD_CURRENT,
+      "_docs/module/sales/design.md": DESIGN_MD_CURRENT.replace(/\n## DES-002[\s\S]*/, "\n"),
+      "_docs/module/sales/plan.md": CURRENT_PLAN,
     });
     const result = checkPlanGraphs(root);
     expect(result.ok).toBe(false);
-    expect(result.problems.join("\n")).toContain("cites DES-002, which design.md does not define");
+    expect(result.problems.join("\n")).toContain("task BE-002: unknown trace reference DES-002");
   });
 
   it("scopes to --module <name> and rejects an unknown one", () => {
-    const root = project({ "_docs/module/a/plan.md": TABLE_PLAN });
+    const root = project({ "_docs/module/a/requirement.md": REQ_MD_CURRENT, "_docs/module/a/design.md": DESIGN_MD_CURRENT, "_docs/module/a/plan.md": CURRENT_PLAN });
     expect(checkPlanGraphs(root, "a").ok).toBe(true);
     const unknown = checkPlanGraphs(root, "zzz");
     expect(unknown.ok).toBe(false);
@@ -467,7 +211,9 @@ describe("checkPlanGraphs", () => {
   it("T-V6-005 — a Knowledge workspace missing model-tiers.yaml reports the packaging-fault wording, not the generic one", () => {
     const root = project({
       "targets.yaml": "schema_version: 1\ntargets: []\n",
-      "_docs/module/sales/plan.md": TIERED_PHASE,
+      "_docs/module/sales/requirement.md": REQ_MD_CURRENT,
+      "_docs/module/sales/design.md": DESIGN_MD_CURRENT,
+      "_docs/module/sales/plan.md": TIERED_PLAN,
     });
     const result = checkPlanGraphs(root);
     expect(result.ok).toBe(false);
@@ -478,7 +224,9 @@ describe("checkPlanGraphs", () => {
   it("T-V6-005 — [ACCEPTANCE] a plan casting a Tier passes once model-tiers.yaml is synced into the Knowledge workspace", () => {
     const root = project({
       "targets.yaml": "schema_version: 1\ntargets: []\n",
-      "_docs/module/sales/plan.md": TIERED_PHASE,
+      "_docs/module/sales/requirement.md": REQ_MD_CURRENT,
+      "_docs/module/sales/design.md": DESIGN_MD_CURRENT,
+      "_docs/module/sales/plan.md": TIERED_PLAN,
       "model-tiers.yaml": MODEL_TIERS_YAML,
     });
     const result = checkPlanGraphs(root);
@@ -511,14 +259,7 @@ targets:
 `;
 
   const REQ_MD = "REQ-001\nAC-001.1\n";
-  const DESIGN_MD = `## Feature-by-Feature Feasibility
-DES-001 — covers REQ-001: order summary contract.
-Contract:OrderSummary.v1 — response shape.
-
-## Targets
-- sales-api
-- sales-web
-`;
+  const DESIGN_MD = `${DESIGN_MD_CURRENT}\n## Targets\n- sales-api\n- sales-web\n`;
 
   const CANONICAL_TASK: PlanTask = {
     version: 1,
@@ -608,11 +349,6 @@ Contract:OrderSummary.v1 — response shape.
   });
 
   it("T-V9-009 — a task with no Targets: is unaffected, even where targets.yaml is unreachable", () => {
-    const root = project({ "_docs/module/sales/plan.md": TABLE_PLAN });
-    const legacy = checkPlanGraphs(root);
-    expect(legacy.ok).toBe(true);
-    expect(legacy.notes.join("\n")).not.toContain("targets.yaml");
-
     const canonical = checkPlanGraphs(
       project({
         "_docs/module/sales/requirement.md": REQ_MD,

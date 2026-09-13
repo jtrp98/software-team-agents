@@ -43,7 +43,7 @@ import { AgentStage } from "../types.js";
  *      nothing useful, and traverse() would return noise.
  */
 
-/** Legacy writers may still load v1; new Target evidence writers emit v2 explicitly. */
+/** Current single-repository writers emit v1; Target-aware writers emit v2 explicitly. */
 export const KNOWLEDGE_SCHEMA_VERSION = 1;
 
 export const KNOWLEDGE_KINDS = [
@@ -177,7 +177,6 @@ export interface TaskPayload {
   contract_version: number | null;
   /** PersistedTask.taskId — the join between this graph and the running state machine. */
   orchestrator_task_id: string | null;
-  target_id?: string | null;
 }
 
 export interface UxDesignPayload {

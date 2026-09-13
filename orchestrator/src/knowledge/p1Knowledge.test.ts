@@ -6,7 +6,6 @@ import { AgentStage } from "../types.js";
 import type { KnowledgeItem } from "./knowledgeModel.js";
 import { KnowledgeBase, checkKnowledge } from "./knowledgeBase.js";
 import { writeKnowledgeItem } from "./knowledgeStore.js";
-import { migrateKnowledgeSchemaV2 } from "./schemaV2Migration.js";
 import { RECONCILIATION_VERDICTS, classifyReconciliationItem, reconcileKnowledge, type ReconciliationEvidence } from "./reconcile.js";
 import { digestOfSource } from "./sourceDigest.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
@@ -27,37 +26,6 @@ function requirement(id: string, extra: Partial<KnowledgeItem> = {}): KnowledgeI
     ...extra,
   } as KnowledgeItem;
 }
-
-describe("T-V3-08 schema v2 migration", () => {
-  it("dry-runs per item, preserves protected fields, backs up, and is idempotent", () => {
-    const root = tmp("schema-v2");
-    write(root, "targets.yaml", JSON.stringify({ schema_version: 1, targets: [] }));
-    writeKnowledgeItem(requirement("REQ-1"), root, { force: true });
-    expect(checkKnowledge(root).ok).toBe(true);
-    const before = fs.readFileSync(path.join(root, "knowledge/m/requirement/REQ-1.yaml"), "utf8");
-    const preview = migrateKnowledgeSchemaV2({ knowledgeRoot: root, dryRun: true, now: NOW });
-    expect(preview.changed).toBe(1);
-    expect(preview.items[0]?.changes).toEqual(["schema_version", "target_ids", "origin"]);
-    expect(fs.readFileSync(path.join(root, "knowledge/m/requirement/REQ-1.yaml"), "utf8")).toBe(before);
-    const applied = migrateKnowledgeSchemaV2({ knowledgeRoot: root, dryRun: false, now: NOW });
-    const item = new KnowledgeBase([requirement("REQ-X")]); // proves v1 construction remains accepted
-    expect(item.items[0]?.schema_version).toBe(1);
-    const migrated = JSON.parse(JSON.stringify((awaitImportYaml(fs.readFileSync(path.join(root, "knowledge/m/requirement/REQ-1.yaml"), "utf8"))))) as any;
-    expect({ body: migrated.body, payload: migrated.payload, status: migrated.status, owner: migrated.owner, version: migrated.version }).toEqual({
-      body: "keep body", payload: requirement("REQ-1").payload, status: "approved", owner: AgentStage.BUSINESS_ANALYST, version: 7,
-    });
-    expect(migrated.schema_version).toBe(2);
-    expect(migrated.target_ids).toEqual([]);
-    expect(migrated.sources[0].origin).toEqual({ root: "knowledge", target_id: null });
-    expect(applied.backup_manifest).toBeTruthy();
-    expect(applied.first_freshness_sweep).toBe("baseline-not-a-finding");
-    expect(checkKnowledge(root).ok).toBe(true);
-    expect(migrateKnowledgeSchemaV2({ knowledgeRoot: root, dryRun: false, now: NOW }).changed).toBe(0);
-  });
-});
-
-// yaml.parse is loaded synchronously through the package already used by production.
-import { parse as awaitImportYaml } from "yaml";
 
 describe("T-V3-09 target-scoped KnowledgeQuery", () => {
   it("keeps globals and the current Target while counting exclusion at the shared query seam", () => {

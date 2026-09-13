@@ -4,6 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { deriveHandoff, listModules, moduleDocPath, readModuleDoc, parseQaReport, parseTaskVerdicts, parseTargetVerdicts, parseSecurityReport, resolveModule } from "./moduleDocs.js";
 import { AgentStage } from "../types.js";
+import { fixtureTask } from "../runtime/packetFixture.testSupport.js";
+import { renderCanonicalTasks } from "../docs/planTask.js";
 
 describe("deriveHandoff (T-V3TOK-091)", () => {
   it("derives BA and SA references from their authoritative documents", () => {
@@ -38,22 +40,15 @@ describe("deriveHandoff (T-V3TOK-091)", () => {
   });
 
   it("derives PM contract references through the parsed plan and plan graph", () => {
-    const plan = [
-      "# Plan",
-      "## Phase 1: Orders",
-      "| Task | Status | Owner | Depends on | Produces | Consumes |",
-      "|---|---|---|---|---|---|",
-      "| BE-001 (DES-010) — API | pending | backend-engineer | — | orders/create | auth/session |",
-      "## Phase 2: UI",
-      "| Task | Status | Owner | Depends on | Produces | Consumes |",
-      "|---|---|---|---|---|---|",
-      "| FE-001 (DES-011) — form | pending | frontend-engineer | BE-001 | — | orders/create |",
-    ].join("\n");
+    const plan = renderCanonicalTasks([
+      fixtureTask({ id: "BE-001", phase: 1, title: "API", traceability: ["REQ-001", "AC-007.2", "DES-010"], produces: ["Contract:OrdersCreate.v1"], consumes: ["Contract:AuthSession.v1"], retrievalHints: "Hypothesis: The API is the likely boundary; confirm it.\nQuery: Locate the order API.\nProvenance: DES-010" }),
+      fixtureTask({ id: "FE-001", phase: 2, title: "Form", owner: AgentStage.FRONTEND_ENGINEER, dependsOn: ["BE-001"], traceability: ["REQ-002", "AC-007.2", "DES-011"], produces: [], consumes: ["Contract:OrdersCreate.v1"], retrievalHints: "Hypothesis: The form is the likely boundary; confirm it.\nQuery: Locate the order form.\nProvenance: DES-011" }),
+    ]);
     const derived = deriveHandoff(AgentStage.PROJECT_MANAGER, "sales", plan, plan, { taskId: "T-1", phases: [1] });
     expect(derived.complete).toBe(true);
     expect(derived.artifact.phase).toBe(1);
     expect(derived.artifact.implements).toEqual(["DES-010"]);
-    expect(derived.artifact.contract_refs).toEqual({ produces: ["orders/create"], consumes: ["auth/session"] });
+    expect(derived.artifact.contract_refs).toEqual({ produces: ["Contract:OrdersCreate.v1"], consumes: ["Contract:AuthSession.v1"] });
   });
 
   it("derives exact addressable SA claim identities instead of heading approximations", () => {

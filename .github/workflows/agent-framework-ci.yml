@@ -46,11 +46,6 @@ jobs:
         working-directory: orchestrator
         run: npm test
 
-      # Installs the packed distributable into a clean fixture. This catches a
-      # missing native prebuild for the supported Node runtime before release.
-      - name: Test packaged migrations on Node 24
-        run: npm run test:migrations
-
       # One step per checker so a failure names exactly which repo-consistency check broke,
       # instead of one opaque "checks" step covering all of them.
       - name: Check contracts/*.yaml against the agent registry

@@ -245,7 +245,7 @@ describe("knowledge item schema v2 — target association (T141/T148)", () => {
     expect(problems).toContain("schema v2 requires target_ids");
   });
 
-  it("still accepts a v1 item without target_ids — the envelope generation is opt-in per item", () => {
+  it("accepts a current single-repository v1 item without target_ids", () => {
     expect(checkKnowledgeItem(item("requirement"))).toEqual([]);
   });
 
@@ -291,7 +291,7 @@ describe("knowledge item schema v2 — target association (T141/T148)", () => {
     expect(problems.join(" ")).toMatch(/non-target origin/);
   });
 
-  it("keeps the legacy task payload optional while target_ids owns routing", () => {
+  it("rejects the retired task payload target_id because target_ids owns routing", () => {
     expect(checkKnowledgeItem(item("task", { schema_version: 2, target_ids: ["backend"], sources: v2Sources }))).toEqual([]);
     expect(checkKnowledgeItem(
       item("task", {
@@ -300,7 +300,7 @@ describe("knowledge item schema v2 — target association (T141/T148)", () => {
         sources: v2Sources,
         payload: { ...(PAYLOADS.task as Record<string, unknown>), target_id: "backend" },
       }),
-    )).toEqual([]);
+    ).join("\n")).toContain("target_id");
   });
 
   it("a v2 document-only task (tag null) needs no payload.target_id", () => {

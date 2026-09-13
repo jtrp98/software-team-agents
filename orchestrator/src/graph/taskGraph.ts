@@ -54,14 +54,14 @@ export interface TaskNode {
   description?: string;
 }
 
-/** The graph projection shared by canonical tasks and the explicit legacy adapter. */
+/** The graph projection supplied by current canonical tasks. */
 export interface PlanGraphTask {
   id: string;
   owner: string;
   phase: number;
   dependsOn: readonly string[];
-  produces?: readonly string[];
-  consumes?: readonly string[];
+  produces: readonly string[];
+  consumes: readonly string[];
 }
 
 /** The only plan-to-node constructor. No semantic edge may be dropped by a caller. */
@@ -71,11 +71,7 @@ export function taskGraphFromPlan(tasks: readonly PlanGraphTask[]): TaskGraph {
     if (!Object.values(AgentStage).includes(task.owner as AgentStage) || task.owner === AgentStage.HUMAN) {
       throw new TaskGraphError(`task ${task.id}: unknown owner ${task.owner}`);
     }
-    if (task.owner === AgentStage.FRONTEND_ENGINEER && task.produces === undefined && task.consumes === undefined) {
-      const ambiguous = tasks.filter(t => t.owner === AgentStage.BACKEND_ENGINEER && t.phase === task.phase && !task.dependsOn.includes(t.id));
-      if (ambiguous.length) throw new TaskGraphError(`task ${task.id}: ambiguous legacy ordering with ${ambiguous.map(t => t.id).join(", ")}; explicitly declare dependencies or produces/consumes (empty means independent)`);
-    }
-    for (const contract of task.produces ?? []) {
+    for (const contract of task.produces) {
       const prior = producers.get(contract);
       if (prior && prior !== task.id) throw new TaskGraphError(`task ${task.id}: ambiguous producer of ${contract} (also ${prior}); clarify the plan before execution`);
       producers.set(contract, task.id);
@@ -84,8 +80,8 @@ export function taskGraphFromPlan(tasks: readonly PlanGraphTask[]): TaskGraph {
   return buildPlanGraph(tasks.map(task => ({
     id: task.id, agent: task.owner as AgentStage, phase: task.phase,
     dependsOn: [...task.dependsOn],
-    ...(task.produces === undefined ? {} : { produces: [...task.produces] }),
-    ...(task.consumes === undefined ? {} : { consumes: [...task.consumes] }),
+    produces: [...task.produces],
+    consumes: [...task.consumes],
   })));
 }
 

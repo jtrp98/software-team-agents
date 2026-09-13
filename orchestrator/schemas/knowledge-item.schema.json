@@ -403,7 +403,6 @@
           "type": ["string", "null"],
           "minLength": 1
         }
-        ,"target_id": { "type": ["string", "null"], "minLength": 1 }
       }
     },
     "testPayload": {

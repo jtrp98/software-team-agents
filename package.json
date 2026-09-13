@@ -14,9 +14,7 @@
     "orchestrator/dist",
     "orchestrator/schemas",
     "templates",
-    "prompt-setup.md",
-    "prompt-update-knowledge.md",
-    "prompt-reconcile-knowledge-layout.md"
+    "prompt-setup.md"
   ],
   "scripts": {
     "build": "npm --prefix orchestrator run build:templates",
@@ -25,7 +23,6 @@
     "test": "npm --prefix orchestrator run test",
     "release": "npm run typecheck && npm test && npm run build && node scripts/pack-release.mjs",
     "release:check": "node scripts/release-gate.mjs",
-    "test:migrations": "node scripts/migration-fixtures.mjs",
     "e2e:packaged": "node scripts/packaged-e2e.mjs",
     "prepack": "npm run build",
     "test:v3-gates": "node scripts/v3-gate.mjs all",

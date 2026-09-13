@@ -8,7 +8,7 @@ Every semantic field has a downstream consumer, which is why none is decorative:
 
 | Fields | Primary consumers |
 |---|---|
-| Version, ID, owner | compiler, runtime, migration |
+| Version, ID, owner | compiler, runtime |
 | Phase, dependencies, produces, consumes | DAG, readiness, run ledger, dependency handoff |
 | Title, objective, why | DEV and QA task comprehension |
 | Traceability | context selection, compiler, DEV, QA |

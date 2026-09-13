@@ -19,12 +19,8 @@ import {
  * while the bootstrap state still said `ready` and still named the person who
  * had validated it.
  *
- * The rule is needed in more than one place, including a dry run whose entire
- * job is to say what an apply *would* do. A dry run with its own copy of this
- * decision could disagree with the apply it is previewing. So the decision
- * lives here once, `classifyLanding` answers it without writing anything, and
- * `applyLanding` is the only thing that writes. A preview and an apply cannot
- * drift, because they are the same function called twice.
+ * The decision lives here once: `classifyLanding` answers it without writing
+ * anything, and `applyLanding` is the only operation that writes.
  *
  * THE RULE, BY WHAT IS ALREADY ON DISK
  *
@@ -132,10 +128,8 @@ export function emptyLanded(): LandedItems {
 
 /**
  * Classify + apply + sort into buckets, the combination a writer with nothing
- * else to do wants. The decision is returned, so a caller that needs to act on
- * the path — adoption takes a backup before overwriting anything, for rollback
- * — reads it from there rather than this module growing a callback for a
- * concern it should not know about.
+ * else to do wants. The decision is returned so callers can report the exact
+ * path without this module growing workflow-specific callbacks.
  */
 export function landItem(
   item: KnowledgeItem,

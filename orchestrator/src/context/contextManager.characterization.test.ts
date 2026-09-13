@@ -43,17 +43,17 @@ const DESIGN = {
   bytesBefore: 67_000,
   bytesAfter: 13_287,
   savedPct: 80,
-  kept: ["Feature-by-Feature Feasibility", "Import Contract — DES-001", "Modules", "Risks & Dependencies", "Open Questions", "Legacy Design Appendix"],
-  skipped: ["Data Model", "Modules > other-module", "Change Log", "Reporting Contract — DES-002"],
-  unknownSections: ["Legacy Design Appendix"],
+  kept: ["Feature-by-Feature Feasibility", "DES-001 — Import Contract", "Modules", "Risks & Dependencies", "Open Questions", "Unclassified Design Appendix"],
+  skipped: ["Data Model", "Modules > other-module", "Change Log", "DES-002 — Reporting Contract", "DES-003 — Archive Contract"],
+  unknownSections: ["Unclassified Design Appendix"],
 };
 const DESIGN_WITH_DATA_MODEL = {
   bytesBefore: 67_000,
   bytesAfter: 18_304,
   savedPct: 73,
-  kept: ["Feature-by-Feature Feasibility", "Import Contract — DES-001", "Data Model", "Modules", "Risks & Dependencies", "Open Questions", "Legacy Design Appendix"],
-  skipped: ["Modules > other-module", "Change Log", "Reporting Contract — DES-002"],
-  unknownSections: ["Legacy Design Appendix"],
+  kept: ["Feature-by-Feature Feasibility", "DES-001 — Import Contract", "Data Model", "Modules", "Risks & Dependencies", "Open Questions", "Unclassified Design Appendix"],
+  skipped: ["Modules > other-module", "Change Log", "DES-002 — Reporting Contract", "DES-003 — Archive Contract"],
+  unknownSections: ["Unclassified Design Appendix"],
 };
 const REQUIREMENT = {
   bytesBefore: 12_000,
@@ -73,9 +73,9 @@ const REQUIREMENT_IN_FULL = {
 };
 const PLAN = {
   bytesBefore: 17_000,
-  bytesAfter: 280,
-  savedPct: 98,
-  kept: ["Plan Summary", "Phase 1: Import", "Open Questions"],
+  bytesAfter: 987,
+  savedPct: 94,
+  kept: ["Plan Summary", "Phase 1: Import", "Unresolved Open Questions"],
   skipped: ["Phase 2: Reporting"],
   unknownSections: [],
 };
@@ -87,7 +87,7 @@ const DESIGN_IN_FULL = {
   bytesBefore: 67_000,
   bytesAfter: 67_000,
   savedPct: 0,
-  kept: ["Feature-by-Feature Feasibility", "Import Contract — DES-001", "Data Model", "Modules", "Risks & Dependencies", "Open Questions", "Change Log", "Legacy Design Appendix", "Reporting Contract — DES-002"],
+  kept: ["Feature-by-Feature Feasibility", "DES-001 — Import Contract", "Data Model", "Modules", "Risks & Dependencies", "Open Questions", "Change Log", "Unclassified Design Appendix", "DES-002 — Reporting Contract", "DES-003 — Archive Contract"],
   skipped: [],
   unknownSections: [],
 };
@@ -133,13 +133,13 @@ const CHARACTERIZATION: Record<string, unknown> = {
   "business-analyst:aggregate": { bytesBefore: 82_400, bytesAfter: 28_689, savedPct: 65 },
   "system-analyst:aggregate": { bytesBefore: 82_400, bytesAfter: 82_402, savedPct: -0 },
   "project-manager:aggregate": { bytesBefore: 79_000, bytesAfter: 18_621, savedPct: 76 },
-  "test-planner:aggregate": { bytesBefore: 96_000, bytesAfter: 13_884, savedPct: 86 },
+  "test-planner:aggregate": { bytesBefore: 96_000, bytesAfter: 14_591, savedPct: 85 },
   "uxui-designer:aggregate": { bytesBefore: 79_000, bytesAfter: 13_604, savedPct: 83 },
-  "backend-engineer:aggregate": { bytesBefore: 100_600, bytesAfter: 18_486, savedPct: 82 },
-  "frontend-engineer:aggregate": { bytesBefore: 100_600, bytesAfter: 18_486, savedPct: 82 },
-  "qa-engineer:aggregate": { bytesBefore: 100_600, bytesAfter: 23_503, savedPct: 77 },
+  "backend-engineer:aggregate": { bytesBefore: 100_600, bytesAfter: 19_193, savedPct: 81 },
+  "frontend-engineer:aggregate": { bytesBefore: 100_600, bytesAfter: 19_193, savedPct: 81 },
+  "qa-engineer:aggregate": { bytesBefore: 100_600, bytesAfter: 24_210, savedPct: 76 },
   "security:aggregate": { bytesBefore: 82_400, bytesAfter: 17_006, savedPct: 79 },
-  "devops:aggregate": { bytesBefore: 88_424, bytesAfter: 17_993, savedPct: 80 },
+  "devops:aggregate": { bytesBefore: 88_424, bytesAfter: 18_700, savedPct: 79 },
 };
 
 describe("T-V4-CTX-001 ContextManager characterization", () => {

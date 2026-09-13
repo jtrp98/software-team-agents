@@ -37,7 +37,7 @@ describe("checkGate", () => {
   it("allows an addressable low-risk additive internal design without a ceremonial approval", () => {
     const designAssessment = DesignGateAssessmentSchema.parse({
       mode: "addressable", triggers: [], canProceedWithoutConfirmation: true,
-      migrationRequired: false, unresolvedClaims: [], inferredClaims: [],
+      unresolvedClaims: [], inferredClaims: [],
     });
     expect(checkGate(TaskState.DESIGN, TaskState.PLAN, { designAssessment })).toEqual({ allowed: true });
   });
@@ -47,7 +47,7 @@ describe("checkGate", () => {
     (trigger) => {
       const designAssessment = DesignGateAssessmentSchema.parse({
         mode: "addressable", triggers: [trigger], canProceedWithoutConfirmation: false,
-        migrationRequired: false, unresolvedClaims: [], inferredClaims: [],
+        unresolvedClaims: [], inferredClaims: [],
       });
       const blocked = checkGate(TaskState.DESIGN, TaskState.PLAN, { designAssessment });
       expect(blocked.allowed).toBe(false);

@@ -378,9 +378,6 @@ export function checkKnowledge(projectRoot: string = defaultProjectRoot()): Know
       const known = new Set(registry.targets.map((target) => target.target_id));
       for (const item of items) {
         for (const targetId of item.target_ids ?? []) if (!known.has(targetId)) v2Problems.push(`${qualifiedKnowledgeId(item)}: unknown target_id "${targetId}"`);
-        if (item.kind === "task" && item.payload.tag !== null && item.payload.target_id !== null && item.payload.target_id !== undefined && !known.has(item.payload.target_id)) {
-          v2Problems.push(`${qualifiedKnowledgeId(item)}: task payload.target_id "${item.payload.target_id}" is not in targets.yaml`);
-        }
       }
     } catch (error) {
       v2Problems.push(`schema v2 knowledge requires valid targets.yaml: ${error instanceof Error ? error.message : String(error)}`);

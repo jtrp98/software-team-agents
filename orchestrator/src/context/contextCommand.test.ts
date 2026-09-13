@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import { sliceModuleDocsWithSavings } from "../runtime/agentRunAssembly.js";
 import { buildContextCommand, ContextCommandError, contextCommandJson, renderContextCommand } from "./contextCommand.js";
+import { fixtureTask } from "../runtime/packetFixture.testSupport.js";
+import { renderCanonicalTasks } from "../docs/planTask.js";
 
 // T-V6-006: `env: {}` below means "no STA_KNOWLEDGE_ROOT", which now
 // falls through to installation.yaml — isolate it from whatever is real on
@@ -28,9 +30,12 @@ function rootWith(modules: Record<string, Partial<Record<"requirement.md" | "des
   return root;
 }
 
-const PLAN = "# Plan\n\n## Plan Summary\nall\n\n## Phase 1: First\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-001 (DES-001) — first | pending | backend-engineer | — |\n\n## Phase 2: Second\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-002 (DES-002) — second | pending | backend-engineer | — |\n\n## Open Questions\nnone\n";
-const DESIGN = "# Design\n\n## Feature-by-Feature Feasibility\nDES-001 REQ-001 yes\nDES-002 REQ-002 yes\n\n## Contract\nvalue\n\n## Risks & Dependencies\nnone\n\n## Open Questions\nnone\n";
-const REQUIREMENT = "# Requirement\n\n## Core Features\nREQ-001 first\nREQ-002 second\n\n## Scope\nMVP\n\n## References\nsource\n\n## Open Questions\nnone\n";
+const PLAN = renderCanonicalTasks([
+  fixtureTask({ id: "BE-001", phase: 1, title: "First", traceability: ["REQ-001", "AC-007.2", "DES-001"], retrievalHints: "Hypothesis: The first handler is the likely boundary; confirm it.\nQuery: Locate the first handler.\nProvenance: DES-001" }),
+  fixtureTask({ id: "BE-002", phase: 2, title: "Second", traceability: ["REQ-002", "AC-007.2", "DES-002"], retrievalHints: "Hypothesis: The second handler is the likely boundary; confirm it.\nQuery: Locate the second handler.\nProvenance: DES-002" }),
+]);
+const DESIGN = "# Design\n\nDesign evidence format: 1\n\n## Feature-by-Feature Feasibility\nDES-001 REQ-001 yes\nDES-002 REQ-002 yes\n\n## DES-001 — First contract\nvalue\n\n## DES-002 — Second contract\nvalue\n\n## Risks & Dependencies\nnone\n\n## Open Questions\nnone\n";
+const REQUIREMENT = "# Requirement\n\n## Core Features\nREQ-001 first\nREQ-002 second\nAC-007.2 accepted\n\n## Scope\nMVP\n\n## References\nsource\n\n## Open Questions\nnone\n";
 
 describe("sta context command (T-V3TOK-040/041/043)", () => {
   it("uses the same byte-identical document rendering path as sta run", async () => {

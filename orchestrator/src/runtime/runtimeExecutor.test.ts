@@ -1,4 +1,5 @@
-import { runtimeTaskFixture, FIXTURE_REVISION } from "./packetFixture.testSupport.js";
+import { runtimeTaskFixture, FIXTURE_REVISION, fixtureTask } from "./packetFixture.testSupport.js";
+import { renderCanonicalTasks } from "../docs/planTask.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -813,8 +814,8 @@ describe("document verdicts read back through the workspace (T108)", () => {
     const runtime = new MockRuntimeAdapter({
       files: {
         "_docs/module/sales-crm/requirement.md": "# Requirement\n\n## Core Features\nREQ-001\n",
-        "_docs/module/sales-crm/design.md": "# Design\n\n## Orders Contract — DES-001\nrule\n",
-        "_docs/module/sales-crm/plan.md": "# Plan\n\n## Phase 1: x\n| Task | Status | Owner | Depends on |\n|---|---|---|---|\n| BE-001 (DES-001) — x | pending | backend-engineer | — |\n",
+        "_docs/module/sales-crm/design.md": addressableDesign(),
+        "_docs/module/sales-crm/plan.md": renderCanonicalTasks([fixtureTask({ id: "BE-001", traceability: ["REQ-001", "AC-007.2", "DES-001"], retrievalHints: "Hypothesis: The order boundary is likely relevant; confirm it.\nQuery: Locate the order boundary.\nProvenance: DES-001" })]),
         "_docs/module/sales-crm/test-plan.md": "# Test plan\n\n## Coverage\nTP-001\n",
         "_docs/module/sales-crm/uxui/design.md": "# UX\n\n## Draft\nUX-001\n",
       },
@@ -838,14 +839,14 @@ describe("document verdicts read back through the workspace (T108)", () => {
     expect(engineer.outcome.result).toBe("PASS");
   });
 
-  it("logs a derivation note but keeps a doc-stage run passing when optional references are absent", async () => {
+  it("rejects a system-analyst document that omits the current design evidence contract", async () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const runtime = new MockRuntimeAdapter({ files: { "_docs/module/sales-crm/design.md": "# Design only\n" } });
       const result = await executorFor(runtime)({ stage: AgentStage.SYSTEM_ANALYST, taskId: "T-1", context: [] });
-      expect(result.outcome.result).toBe("PASS");
-      expect(result.artifactType).toBe(ArtifactType.HANDOFF);
-      expect(error).toHaveBeenCalledWith(expect.stringContaining("HANDOFF NOTE"));
+      expect(result.outcome.result).toBe("FAIL");
+      expect(result.artifactType).toBeUndefined();
+      expect(result.outcome.failure_reason).toContain("invalid addressable design evidence");
     } finally {
       error.mockRestore();
     }

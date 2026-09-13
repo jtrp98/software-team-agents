@@ -3,18 +3,6 @@ export async function runKnowledgeVerb(rest: string[], defaultProjectRoot: strin
   const args = positionalArgs(rest);
   const subcommand = args[0];
   const projectRoot = path.resolve(flagValue(rest, "--project-root") ?? defaultProjectRoot);
-  if (subcommand === "migrate-v2") {
-    if (args.length > 1) throw new CliUsageError("knowledge migrate-v2: no positional arguments are accepted");
-    const report = migrateKnowledgeSchemaV2({ knowledgeRoot: projectRoot, dryRun: rest.includes("--dry-run"), now: flagValue(rest, "--now") ?? new Date().toISOString() });
-    if (rest.includes("--json")) console.log(JSON.stringify(report, null, 2));
-    else {
-      console.log(`[orchestrator] knowledge schema v2 ${report.dry_run ? "dry-run" : "migration"}: ${report.changed}/${report.scanned} item(s) would change${report.dry_run ? "" : "; changes written"}.`);
-      for (const item of report.items) console.log(`  ${item.path}: ${item.changes.join(", ")} target_ids=[${item.target_ids.join(",")}]`);
-      console.log(`[orchestrator] ${report.note}`);
-      if (report.backup_manifest) console.log(`[orchestrator] reversible backup manifest: ${report.backup_manifest}`);
-    }
-    return 0;
-  }
   if (subcommand === "reconcile") {
     if (args.length > 1) throw new CliUsageError("knowledge reconcile: no positional arguments are accepted");
     const targetId = flagValue(rest, "--target");
@@ -23,7 +11,7 @@ export async function runKnowledgeVerb(rest: string[], defaultProjectRoot: strin
     console.log(rest.includes("--json") ? JSON.stringify(report, null, 2) : renderReconciliationReport(report));
     return 0;
   }
-  if (subcommand !== "get") throw new CliUsageError("knowledge: expected sub-command get, migrate-v2, or reconcile");
+  if (subcommand !== "get") throw new CliUsageError("knowledge: expected sub-command get or reconcile");
   const ids = (args[1] ?? "").split(",").map((id) => id.trim()).filter((id) => id !== "");
   if (ids.length === 0) throw new CliUsageError("knowledge get: an item id is required");
   if (args.length > 2) throw new CliUsageError("knowledge get: ids must be one comma-separated argument");
@@ -44,7 +32,6 @@ import * as path from "node:path";
 import { CliUsageError } from "../../cli.js";
 import { KnowledgeContext } from "../../knowledge/knowledgeContext.js";
 import { renderKnowledgeRetrieval } from "../../knowledge/retrievalRender.js";
-import { migrateKnowledgeSchemaV2 } from "../../knowledge/schemaV2Migration.js";
 import { reconcileKnowledge, renderReconciliationReport } from "../../knowledge/reconcile.js";
 import { laneGet } from "../../roles/laneContext.js";
 import { isRoleLane, type RoleLane } from "../../roles/roleLane.js";

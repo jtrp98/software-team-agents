@@ -60,7 +60,7 @@ describe("T-V8-007 addressable design evidence", () => {
     expect(parsed.problems).toEqual([]);
     expect(parsed.mode).toBe("addressable");
     expect(parsed.claims).toEqual(["DES-011", "Contract:OrderSummary.v2", "DEC-011"]);
-    expect(parsed.gate).toMatchObject({ triggers: [], canProceedWithoutConfirmation: true, migrationRequired: false });
+    expect(parsed.gate).toMatchObject({ triggers: [], canProceedWithoutConfirmation: true });
     expect(designEvidenceForClaims(parsed, ["DES-011", "Contract:OrderSummary.v2", "DEC-011"]).map(ref => ref.id)).toEqual([
       "EVD-011", "EVD-012", "EVD-013",
     ]);
@@ -101,11 +101,11 @@ describe("T-V8-007 addressable design evidence", () => {
     expect(parsed.gate.canProceedWithoutConfirmation).toBe(false);
   });
 
-  it("keeps a legacy design readable only as a migration-required fallback", () => {
+  it("refuses a design that omits the current evidence format marker", () => {
     const parsed = parseDesignEvidence("# Design\n\n## DES-011 — Existing section\nLegacy prose.\n");
-    expect(parsed.mode).toBe("legacy");
-    expect(parsed.problems).toEqual([]);
-    expect(parsed.gate.migrationRequired).toBe(true);
-    expect(() => designEvidenceForClaims(parsed, ["DES-011"])).toThrow(/migrate.*before unattended execution/i);
+    expect(parsed.mode).toBe("addressable");
+    expect(parsed.problems.join("\n")).toContain("Design evidence format: 1");
+    expect(parsed.gate.canProceedWithoutConfirmation).toBe(false);
+    expect(() => designEvidenceForClaims(parsed, ["DES-011"])).toThrow(/invalid design evidence/i);
   });
 });

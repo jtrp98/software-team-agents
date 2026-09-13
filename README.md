@@ -238,8 +238,6 @@ V5 flags ที่ `sta run` รับจริง:
 
 **หลักการที่ playbook บังคับตัวเอง:** inspect ก่อนถาม (ถามเฉพาะที่ตรวจไม่ได้) · ใช้คำสั่งทางการเท่านั้น (`init | sync | status`, `sta configure knowledge-root`) ไม่แก้ `.agent-team/` ด้วยมือ · safe by default — ไม่ลบอะไร, ไม่ `sync --force` จนกว่าคนจะพูดคำว่า "force" ต่อ step นั้น, ไม่แตะ Framework checkout · state-changing git (`git clone` / `git init` ตอน bootstrap Target ใหม่) ต้องโชว์คำสั่งก่อนและรอ confirm · จบด้วย Final Report + คำสั่งที่ผู้ใช้รันต่อได้
 
-> `prompt-update-knowledge.md` **ไม่เกี่ยวกับ setup** — เป็นชื่อเดิมของ `prompt-reconcile-knowledge-layout.md` (จัด layout ไฟล์ใน Knowledge repo) เหลือเป็น pointer หนึ่ง release แล้วลบ ดูหัวข้อ [จัด Knowledge repo ที่โครงสร้างเพี้ยน](#จัด-knowledge-repo-ที่โครงสร้างเพี้ยน--playbook-prompt-reconcile-knowledge-layoutmd)
-
 ## Installation
 
 Prerequisites: **Node.js >= 24** (Node 24 LTS เป็น baseline), **Git** + อย่างน้อยหนึ่ง runtime ที่จะใช้ — **Claude Code CLI** (default; login แล้ว) / **Codex CLI** / **OpenCode CLI ≥ 1.18** / **Antigravity CLI (agy)** (experimental) — ตรวจด้วย `node --version`, `claude --version`, `codex --version`, `opencode --version`, `agy --version`
@@ -512,29 +510,7 @@ Knowledge ไม่ใช่ "AI memory" — เป็นข้อมูลร�
 - **Status**: `draft → reviewed → approved → deprecated` — approve ได้เฉพาะคน (`sta roles approve`)
 - **Role/Target-based context** — `knowledge-policy.yaml` กำหนด field ที่แต่ละ role เห็น; `target_ids: []` เป็น global และรายการที่ scoped จะเข้า context เฉพาะ Target ปัจจุบัน พร้อมจำนวนที่ถูก exclude/fallback เมื่อ resolve Target ไม่ได้
 - **Freshness + reconciliation** — brief แสดง verdict จาก `freshnessOf()` ภายใต้เพดาน 16,384 B; `sta knowledge reconcile --target <id>` คำนวณรายงาน current/desired แบบ read-only ทุกครั้งและไม่บันทึก verdict
-- Reserved directories: `_sources/ _conflicts/ _bootstrap/ _human-input/ _adoption/ _roles/`
-
-### จัด Knowledge repo ที่โครงสร้างเพี้ยน — playbook `prompt-reconcile-knowledge-layout.md`
-
-ใช้เมื่อมี Knowledge repo **อยู่แล้ว** แต่ layout ไฟล์บนดิสก์ไม่ตรง canonical — มันมีมาก่อน Framework, โดนเครื่องมืออื่นแก้, หรือโตแบบ organic ก่อนมีกฎ module-folder (เช่น มี `_docs/<team-prefix>/module/**` ขนานกับ `_docs/module/**`, requirement dump แบบ `_docs/requirement/<domain>/**`, ไฟล์หลงใต้ `_docs/module/` ที่ไม่อยู่ในโฟลเดอร์ module ใด)
-
-```
-# ชี้ assistant (Claude Code / Codex / OpenCode) ไปที่ root ของ Knowledge repo แล้วสั่ง:
-"อ่าน prompt-reconcile-knowledge-layout.md แล้ว reconcile โครงสร้าง repo นี้"
-```
-
-ผลลัพธ์: assistant ทำ inventory ทั้ง repo → จำแนกทุก path ที่ไม่ตรง canonical ลง 6 bucket (parallel tree / pre-module reference / stray files / out-of-framework / unrecognized `knowledge/**` / **right place แต่ format เก่า**) → รัน `sta --check-doc-structure` + `--check-plan` + `--check-knowledge` ต่อโมดูลเพื่อทำตาราง conformance (`plan.md` checkbox เก่า = `0 tasks / 0 waves` ไม่ผ่าน) → เสนอย้าย/route ทีละรายการพร้อม `mv`/`Edit` ที่จะรัน แล้วทำเฉพาะที่ยืนยัน · **ไม่ลบไฟล์ ไม่ bulk-move ไม่ regenerate doc** — doc ที่ format เก่าถูก route กลับไปให้ agent เจ้าของ reformat เอง
-
-ขอบเขต — playbook นี้จัดแต่ layout ไฟล์ ไม่แตะเรื่องอื่น:
-
-| อาการ | ใช้ |
-|---|---|
-| โครงสร้างโฟลเดอร์/ไฟล์ใน Knowledge repo ไม่ตรง canonical | `prompt-reconcile-knowledge-layout.md` |
-| binding / sync / workspace ไม่ได้ register | `prompt-setup.md` (Inspect/Repair) — รันก่อน ถ้า `sta doctor` / `--check-workspace` แดง |
-| หลักฐาน current/desired เทียบ Target จริง (implementation drift) | `sta knowledge reconcile --target <id>` |
-| import legacy `.claude/` `docs/` `planning/` เข้า Knowledge ครั้งแรก | **ถอดออกใน V5** (`ADR-024`) — one-time import รันไปแล้ว ไม่มีคำสั่งแทน |
-
-> `prompt-update-knowledge.md` เป็นชื่อเดิมของ playbook นี้ — เหลือไว้เป็น pointer หนึ่ง release แล้วลบ
+- Reserved directories: `_sources/ _conflicts/ _bootstrap/ _human-input/ _roles/`
 
 ## Design sources & identities (uxui-designer)
 
@@ -628,7 +604,7 @@ Regenerate mirror ใน Framework repo เอง: `npm --prefix orchestrator ru
   - `INCOMPATIBLE` — **major ต่าง** → ต้อง `sync --force` (cross-major jump ต้องตัดสินใจเอง ไม่ happen เงียบ ๆ) และ `dev/ba` preflight จะ fail ทันที
 - **Current workspace upgrade flow**: ติดตั้ง `.tgz` ใหม่ → `software-team-agents status` → `software-team-agents sync` ต่อ BA/DEV workspace; locally modified managed files block จนกว่าจะ resolve หรือยืนยัน `--force` (backup ก่อนเขียน)
 - **Legacy install (`.sta/`)**: `sta init`/`sta upgrade --mode legacy-project` error พร้อมชี้ให้รัน `software-team-agents init` ซึ่งแปลง workspace `.sta/`-only ไปเป็น `.agent-team/` โดยไม่เสียเนื้อหา แล้วตามด้วย `software-team-agents sync` · `sta migrate` สำหรับ breaking manifest schema change · `sta rollback [--backup <name>]`
-- **Knowledge item schema**: opt-in migration `1 → 2` เพิ่ม `origin` + `target_ids` ผ่าน `sta knowledge migrate-v2 --dry-run` แล้ว `sta knowledge migrate-v2`; ไม่เปลี่ยน body/payload/status/owner/version และรายงาน freshness sweep แรกเป็น baseline. คำสั่ง legacy `sta knowledge-migrate <dry-run|copy|verify|cutover>` ยังเป็น Three-Repo copy/cutover flow และ cutover ต้อง `--confirm I_CONFIRM_MIGRATION`
+- **Knowledge item schema v2**: `origin` ระบุแหล่ง current/desired evidence และ `target_ids: []` หมายถึง global; `--check-knowledge` ตรวจ shape, Target existence และ relation invariants ของรายการปัจจุบัน
 - **ยังไม่มี**: publish ขึ้น npm registry, auto-update, lockfile/resolution ข้าม repo — distribution ผ่าน `.tgz` เท่านั้น
 
 ## Configuration Reference
@@ -843,10 +819,6 @@ entries): 16 `framework-managed`, 2 `project-owned-with-framework-block` (`CLAUD
    --transport http claude-design https://api.anthropic.com/v1/design/mcp`, login ด้วย `/design-login`,
    ตรวจ identity gate ตรง (`sta configure identity --claude-email <email>`); ไม่ผ่าน → ใช้ Path A/B
    (handoff/export files) แทนได้เสมอ.
-10. **Knowledge repo เดิมมีโครงสร้างไม่ตรง canonical shape** — คนละเรื่องกับ binding/sync (#1–4); ใช้
-    [`prompt-reconcile-knowledge-layout.md`](prompt-reconcile-knowledge-layout.md) ให้ AI สแกน/เสนอทางแก้
-    ทีละรายการ ไม่มีการลบ/ย้ายโดยไม่ถามก่อน.
-
 หลังแก้อาการไหน — รัน `software-team-agents status` ซ้ำ ยืนยันว่าอาการนั้นหายไปจริง.
 
 ## Development / Contributing

@@ -110,7 +110,7 @@ export interface EvidencePackageInput {
    * T-V8-014 — the exact task contract this round verifies against: authored
    * acceptance text, traceability, attempt/packet identity, dependency
    * outputs, graph blast radius, real file manifest, and open findings.
-   * Optional so an interactive or legacy-plan round still produces a package;
+   * Optional so an ad-hoc interactive round without a registered plan task still produces a package;
    * when absent the pointer-based `taskIntent`/`acceptanceCriteria` fields
    * below are all a round has, which is exactly the thin input this field
    * replaces.

@@ -31,7 +31,6 @@ export type PlanRunScope =
 
 export type PlanRegistrationRefusalKind =
   | "invalid-plan"
-  | "legacy-plan"
   | "empty-scope"
   | "unknown-task"
   | "scope-not-closed"
@@ -131,9 +130,8 @@ export interface ResolvedPlanTask {
 export function resolvePlanScope(input: PlanScopeResolutionInput): { order: string[]; planHash: string; byId: Map<string, PlanTask>; trace: string[] } {
   if (!isCanonicalPlan(input.planMarkdown)) {
     throw new PlanRegistrationError(
-      "legacy-plan",
-      `module ${input.module}: plan.md is not canonical PlanTask format 1; convert it explicitly with migrateLegacyTaskTable ` +
-        "(see docs/plan-task-v1.md) rather than having a bounded run reinterpret a legacy table",
+      "invalid-plan",
+      `module ${input.module}: plan.md is not current canonical PlanTask format 1`,
     );
   }
   const parsed = parseCanonicalPlan(input.planMarkdown, input.references);

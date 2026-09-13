@@ -81,8 +81,8 @@ export interface QaOptimizationOptions {
    * T-V8-014 - the exact task contract this round verifies against. When
    * supplied it becomes the package's standard of proof, its declared risk
    * contributes FULL signals, and the returned report's verdict coverage is
-   * enforced. Absent keeps the pre-T-V8-014 pointer-based package: weaker,
-   * but unchanged, so an interactive or legacy-plan round still runs.
+   * enforced. Absent keeps the pointer-based package for an ad-hoc interactive
+   * round that has no registered plan task.
    */
   taskContract?: (req: AgentExecutorRequest) => QaTaskContract | undefined;
   /** Recorded on the QA run so the explicit deterministic escape hatch is auditable. */

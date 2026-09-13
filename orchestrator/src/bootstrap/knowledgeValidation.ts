@@ -45,10 +45,8 @@ export interface ValidationSummary {
 /**
  * Walks one item through the review path with a person as the actor.
  *
- * Exported because adoption needs the identical step: its per-stage
- * checkpoint is a person looking at what a stage produced, which is what
- * `approved` means. A second implementation of "take this to approved" would be
- * a second opinion about a transition matrix that exists to have exactly one.
+ * Exported so bootstrap callers share one implementation of "take this to
+ * approved" and cannot disagree about the transition matrix.
  */
 export function advanceToApproved(item: KnowledgeItem, now: string, projectRoot: string): KnowledgeItem {
   let current = item;

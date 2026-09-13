@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { sectionMap } from "../../context/sections.js";
-import { parsePlanTasks, type PlanTaskRow } from "../../docs/planGraph.js";
+import { parsePlanTasks } from "../../docs/planGraph.js";
+import type { PlanTask } from "../../docs/planTask.js";
 import { parseOpenIssues, type OpenIssueRow } from "../../orchestrator/failureClassifier.js";
 import { readModuleDoc, resolveModule, listModules } from "../../agents/moduleDocs.js";
 import { resolveContextDocsRoot } from "../../targetcli/roots.js";
@@ -36,7 +37,7 @@ export interface StatusReportData {
 export interface PlanReportData {
   moduleName: string;
   currentPhase: number;
-  tasks: PlanTaskRow[];
+  tasks: PlanTask[];
   allPhases: number[];
   absent?: boolean;
 }
@@ -484,7 +485,7 @@ export function generateHtmlReport(report: ReportData): string {
                     (t) => `<tr>
                   <td>${t.status === "verified" ? "✅" : "⬜"}</td>
                   <td><code>${escapeHtml(t.id)}</code></td>
-                  <td>${escapeHtml(t.description)}</td>
+                  <td>${escapeHtml(t.title)}</td>
                   <td><span class="badge ${statusBadgeClass(t.status)}">${escapeHtml(t.status)}</span></td>
                   <td>${escapeHtml(t.owner)}</td>
                   <td>${t.dependsOn.length > 0 ? t.dependsOn.map(escapeHtml).join(", ") : "—"}</td>
@@ -686,7 +687,7 @@ export async function runReportVerb(rest: string[], defaultProjectRoot: string):
 
   // 2. Read plan.md
   let planAbsent = true;
-  let planTasks: PlanTaskRow[] = [];
+  let planTasks: PlanTask[] = [];
   let planPhases: number[] = [];
   let currentPhase = 1;
 

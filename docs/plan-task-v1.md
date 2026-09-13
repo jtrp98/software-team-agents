@@ -56,8 +56,8 @@ task interpretation. A consumed external contract requires design.md.
 phase for validation, waves, readiness, QA impact, handoff and registration.
 Declared edges take diagnostic precedence over contract edges, then phase edges.
 Runtime readiness requires ledger/checkpoint completion; a verified Status cell
-alone cannot unlock a planned dependency. Unannotated legacy FE/BE ordering that
-would be ambiguous is refused; explicit empty contract lists mean independent.
+alone cannot unlock a planned dependency. Undeclared FE/BE ordering that would
+be ambiguous is refused; explicit empty contract lists mean independent.
 
 ## Targets and task splitting
 
@@ -74,16 +74,16 @@ name two Targets for the same engineer role.
 `--check-plan` validates each named id against `targets.yaml`: the id must
 exist, be active, sit inside the module's declared `design.md` `## Targets` set,
 and — when the owner is an engineer role — the Target's declared `type` must
-admit that owner. An untyped Target passes under schema v1 compatibility,
-mirroring binding validation. A task carrying no `Targets:` is unchecked, and
-the checks skip with a note in a workspace where `targets.yaml` is unreachable.
-The checks run on canonical task sections; a legacy table carries no `Targets:`
-field. The engineer role is never derived from the Target type.
+admit that owner. An untyped Target passes because `Target.type` is optional in
+the current schema v1 contract, mirroring binding validation. A task carrying no
+`Targets:` is unchecked, and the checks skip with a note in a workspace where
+`targets.yaml` is unreachable. The checks run on canonical task sections. The
+engineer role is never derived from the Target type.
 
 ## Downstream consumers
 
 Every field is executable input, not formatting. Version and identity feed the
-compiler/migration; phase, dependencies, produces and consumes feed the DAG,
+compiler; phase, dependencies, produces and consumes feed the DAG,
 readiness and handoff; owner feeds runtime; Tier is a per-task recommendation to
 the central route resolver; Targets feeds `--check-plan` Target validation
 (registry existence, active status, module `## Targets` scope,
@@ -100,27 +100,13 @@ Status. Version, ID, phase, title, every semantic field, optional Tier and list
 order all affect SHA-256. Field-boundary whitespace and CRLF normalize during
 parsing; internal Markdown content remains significant. A status-only edit
 leaves the hash unchanged. A hash is not a QA verdict or human approval.
-The old wave journal's `planHash` retains its legacy status-inclusive meaning
-until its migration task; these are explicitly different versioned contracts.
 
-## Compatibility and migration matrix
+## Unsupported input
 
-| Input | Explicit behavior | Conversion |
-|---|---|---|
-| v1 sections | Strict canonical checker/parser | No conversion |
-| Existing thin table | `parseLegacyPlanTasks` preserves old behavior during the window; `--check-plan` reports compatibility use | Refuse automatic semantic promotion; PM authors missing objective/why/trace/scope/evidence using the template |
-| Expanded table with every exact v1 field and body as a column, Task cell `ID — title` | `migrateLegacyTaskTable` validates and returns a lossless task-section conversion | Opt-in only; no filesystem writes, no invented prose |
-| Missing fields, ambiguous ID/cells, duplicate/unknown columns, checkbox-only plan | Actionable refusal naming task/field where identifiable | Amend the relevant task sections manually; preserve all other authored sections |
-| Unsupported format, mixed tables and task sections | Refuse, never guess | Correct the declared format using the v1 example |
-
-The old `parsePlanTasks` export is a compatibility alias to the explicit legacy
-reader. It refuses v1 instead of flattening rich contracts. `readWorkPlan` returns
-the complete canonical object or an explicitly recognized legacy row. Planned
-execution requires canonical semantics and an immutable v2 packet; a thin table
-can still be inspected but cannot silently become an executable description.
-An unknown plan task requires `--ad-hoc`; a known task cannot use that flag to
-bypass dependencies. Ad-hoc selection does not waive packet semantic requirements.
-T-V8-029 retains ownership of retiring the legacy reader and wave lifecycle.
-No authored module document is automatically rewritten. A rollback must retain
-new canonical plans and v2 packets for audit and use a compatible reader; never
-resume them through an older thin-task compiler. See [ExecutionPacket v2](execution-packet-v2.md).
+Missing fields, ambiguous IDs, duplicate or unknown labels, checkbox/table task
+authorities, mixed formats, and unsupported format markers are refused. Amend the
+relevant canonical task sections using the v1 example; STA does not interpret,
+convert, or rewrite another document shape. An unknown plan task requires
+`--ad-hoc`; a known task cannot use that flag to bypass dependencies. Ad-hoc
+selection does not waive packet semantic requirements. A rollback retains
+canonical plans and v2 packets for audit. See [ExecutionPacket v2](execution-packet-v2.md).

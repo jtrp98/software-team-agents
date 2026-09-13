@@ -48,6 +48,8 @@ x
 const DESIGN_OK = `
 # Design
 
+Design evidence format: 1
+
 ## Feasibility Summary
 x
 
@@ -58,6 +60,19 @@ x
 \`\`\`prisma
 model User {}
 \`\`\`
+
+## DES-001 — Current design
+Contract:Sales.v1 — current sales contract.
+DEC-001 — keep the current module boundary.
+Evidence EVD-001: claim=DES-001 | state=confirmed | path=src/sales.ts | symbol=sales | line=1 | revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | basis=source | tool=rg | hash=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+Evidence EVD-002: claim=Contract:Sales.v1 | state=confirmed | path=src/sales.ts | symbol=sales | line=1 | revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | basis=source | tool=rg | hash=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+Evidence EVD-003: claim=DEC-001 | state=confirmed | path=src/sales.ts | symbol=sales | line=1 | revision=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa | basis=source | tool=rg | hash=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+Compatibility: unchanged
+Data/schema: unchanged
+Migration/backfill: none
+Security: none
+Fallback: restore the current implementation.
+Material ambiguity: none
 
 ## Modules
 x
@@ -322,6 +337,19 @@ describe("checkDocStructure", () => {
     expect(result.notes.length).toBeGreaterThan(0);
   });
 
+  it("ignores and does not modify optional reference documents outside STA-owned paths (T-V9-023)", () => {
+    const reference = path.join(tmp, "docs", "project-reference.md");
+    fs.mkdirSync(path.dirname(reference), { recursive: true });
+    const before = "# Project Reference\n\nArbitrary non-STA structure.\n";
+    fs.writeFileSync(reference, before, "utf8");
+
+    const result = checkDocStructure(tmp);
+
+    expect(result.ok).toBe(true);
+    expect(result.problems).toEqual([]);
+    expect(fs.readFileSync(reference, "utf8")).toBe(before);
+  });
+
   it("passes when every doc present is well-formed", () => {
     const dir = path.join(tmp, "_docs", "module", "crm");
     fs.mkdirSync(dir, { recursive: true });
@@ -381,15 +409,14 @@ describe("checkDocStructure", () => {
     expect(result.problems.some((p) => p.includes("crm/design.md") && p.includes("Subject Score Aggregation Rules"))).toBe(true);
   });
 
-  it("keeps well-formed legacy design readable while noting the unattended migration boundary", () => {
+  it("refuses a noncanonical design inside the STA-owned document tree", () => {
     const dir = path.join(tmp, "_docs", "module", "crm");
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "requirement.md"), REQUIREMENT_OK);
-    fs.writeFileSync(path.join(dir, "design.md"), DESIGN_OK);
+    fs.writeFileSync(path.join(dir, "design.md"), DESIGN_OK.replace("Design evidence format: 1\n\n", ""));
     const result = checkDocStructure(tmp);
-    expect(result.notes).toEqual([
-      "crm/design.md: safe whole-section compatibility fallback only — migrate to Design evidence format 1 before unattended execution",
-    ]);
+    expect(result.ok).toBe(false);
+    expect(result.problems.join("\n")).toContain("Design evidence format: 1");
   });
 });
 

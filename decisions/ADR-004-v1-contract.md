@@ -43,7 +43,7 @@ Windows packaged flow is the one release-gated.
 
 **CLI surface (stable through V1):** `sta` — `init --mode`, `configure knowledge-root|identity`,
 `doctor`, `runtimes`, `run`, `status/approve/resume/retry/pause/cancel/audit`, `roles …`,
-`upgrade/migrate/rollback/adopt/knowledge-migrate`, the `--check-*` gates.
+`upgrade/migrate/rollback`, `knowledge get|reconcile`, and the `--check-*` gates.
 `software-team-agents` — `init/sync/status/dev/ba`. Additive changes only; breaking renames are post-V1.
 
 **Role contracts:** eleven agents (`setup`, `business-analyst`, `system-analyst`, `project-manager`,
