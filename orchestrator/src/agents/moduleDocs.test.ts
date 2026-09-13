@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { deriveHandoff, listModules, moduleDocPath, readModuleDoc, parseQaReport, parseTaskVerdicts, parseSecurityReport, resolveModule } from "./moduleDocs.js";
+import { deriveHandoff, listModules, moduleDocPath, readModuleDoc, parseQaReport, parseTaskVerdicts, parseTargetVerdicts, parseSecurityReport, resolveModule } from "./moduleDocs.js";
 import { AgentStage } from "../types.js";
 
 describe("deriveHandoff (T-V3TOK-091)", () => {
@@ -269,6 +269,100 @@ describe("parseQaReport", () => {
     const { artifact } = parseQaReport("BE-004", md);
     expect(artifact.status).toBe("FAIL");
     expect(artifact.requirements).toEqual({ "BE-004": "PASS", "AC-007.2": "FAIL" });
+  });
+
+  it("parses two-Target report where one Target fails as FAIL and identifies both targets (T-V9-015)", () => {
+    const md = [
+      "## Round 1 (FULL)",
+      "- Target api: ✅ Verified (typecheck ✅, lint ✅)",
+      "- Target web: ❌ Failed (typecheck ❌, lint ✅)",
+      "- 10 passed, 2 failed",
+      "",
+      "## Per-Task Results",
+      "- BE-004 — ✅ Verified",
+      "",
+      "## Review Outcome — Phase 1",
+      "**Status:** ❌ Failed (FULL)",
+      "",
+      "## Unverified Behaviour",
+      "- none",
+    ].join("\n");
+    const { artifact } = parseQaReport("BE-004", md);
+    expect(artifact.status).toBe("FAIL");
+    expect(artifact.targets).toEqual({ api: "PASS", web: "FAIL" });
+  });
+
+  it("parses two-Target report where both Targets pass as PASS and identifies both targets (T-V9-015)", () => {
+    const md = [
+      "## Round 1 (FULL)",
+      "- Target api: ✅ Verified (typecheck ✅, lint ✅)",
+      "- Target web: ✅ Verified (typecheck ✅, lint ✅)",
+      "- 12 passed, 0 failed",
+      "",
+      "## Per-Task Results",
+      "- BE-004 — ✅ Verified",
+      "",
+      "## Review Outcome — Phase 1",
+      "**Status:** ✅ Verified (FULL)",
+      "",
+      "## Unverified Behaviour",
+      "- none",
+    ].join("\n");
+    const { artifact } = parseQaReport("BE-004", md);
+    expect(artifact.status).toBe("PASS");
+    expect(artifact.targets).toEqual({ api: "PASS", web: "PASS" });
+  });
+
+  it("keeps single-target report unchanged with targets undefined (T-V9-015)", () => {
+    const md = [
+      "## Round 1 (FULL)",
+      "- typecheck ✅ lint ✅",
+      "- 5 passed, 0 failed",
+      "",
+      "## Per-Task Results",
+      "- BE-004 — ✅ Verified",
+      "",
+      "## Review Outcome — Phase 1",
+      "**Status:** ✅ Verified (FULL)",
+      "",
+      "## Unverified Behaviour",
+      "- none",
+    ].join("\n");
+    const { artifact } = parseQaReport("BE-004", md);
+    expect(artifact.status).toBe("PASS");
+    expect(artifact.targets).toBeUndefined();
+  });
+});
+
+describe("parseTargetVerdicts (T-V9-015)", () => {
+  it("reads bullet lines with Target prefix or bracketed id", () => {
+    const md = [
+      "## Verification Summary (current round)",
+      "- Target sales-api: ✅ Verified",
+      "- [sales-web] ❌ Failed: compilation error",
+    ].join("\n");
+    expect(parseTargetVerdicts(md)).toEqual({
+      "sales-api": "PASS",
+      "sales-web": "FAIL",
+    });
+  });
+
+  it("reads status line trailer", () => {
+    const md = "**Status:** ✅ Verified (FULL) — targets: api (PASS), web (PASS)";
+    expect(parseTargetVerdicts(md)).toEqual({
+      api: "PASS",
+      web: "PASS",
+    });
+  });
+
+  it("fails a target permanently if a line marks fail", () => {
+    const md = [
+      "- Target web: ❌ Failed: lint error",
+      "- Target web: ✅ Verified: typecheck ok",
+    ].join("\n");
+    expect(parseTargetVerdicts(md)).toEqual({
+      web: "FAIL",
+    });
   });
 });
 

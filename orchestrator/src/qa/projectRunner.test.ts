@@ -127,6 +127,10 @@ describe("combineProjectRunners (T-V9-014 / R-2)", () => {
     expect(result?.status).toBe("PASS");
     expect(result?.durationMs).toBe(340);
     expect(result?.outputSummary).toBe("[api: /path/to/api] api typecheck ok\n[web: /path/to/web] web typecheck ok");
+    expect(result?.targetResults).toEqual([
+      { targetId: "api", root: "/path/to/api", status: "PASS", durationMs: 120, outputSummary: "api typecheck ok" },
+      { targetId: "web", root: "/path/to/web", status: "PASS", durationMs: 340, outputSummary: "web typecheck ok" },
+    ]);
   });
 
   it("uses root as label when targetId is not specified", async () => {
@@ -174,6 +178,10 @@ describe("combineProjectRunners (T-V9-014 / R-2)", () => {
     const result = await combined("build");
     expect(result?.status).toBe("FAIL");
     expect(result?.outputSummary).toContain("web compile error");
+    expect(result?.targetResults).toEqual([
+      { targetId: "api", root: "/path/to/api", status: "PASS", durationMs: 100, outputSummary: "api pass" },
+      { targetId: "web", root: "/path/to/web", status: "FAIL", durationMs: 200, outputSummary: "web compile error" },
+    ]);
   });
 
   it("returns null if all runners return null", async () => {

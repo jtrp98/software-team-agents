@@ -204,13 +204,16 @@ export const QaReportArtifactSchema = z
     hasAutomatedTests: z.boolean(),
     // Rules QA could only read, not execute, because no test suite covers them.
     unverifiedBehaviour: z.array(z.string()),
+    // T-V9-015: Optional per-Target verdicts for multi-Target tasks.
+    targets: z.record(z.string(), z.enum(["PASS", "FAIL"])).optional(),
   })
   .refine(
     (report) => {
       const allReqsPass = Object.values(report.requirements).every((r) => r === "PASS");
-      return report.status !== "PASS" || (allReqsPass && report.tests.failed === 0);
+      const allTargetsPass = !report.targets || Object.values(report.targets).every((r) => r === "PASS");
+      return report.status !== "PASS" || (allReqsPass && allTargetsPass && report.tests.failed === 0);
     },
-    { message: "status PASS requires every requirement PASS and zero failed tests" },
+    { message: "status PASS requires every requirement PASS, every target PASS, and zero failed tests" },
   )
   // T-V8-014: no bare PASS. `Object.values({}).every(...)` is vacuously true,
   // so the refine above accepted a PASS that named no requirement at all - a

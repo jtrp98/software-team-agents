@@ -291,6 +291,72 @@ describe("no-suite behaviour stays explicit Unverified Behaviour", () => {
     expect(report.unverifiedBehaviour.join(" ")).toContain("AC-007.2");
     expect(report.unverifiedBehaviour.join(" ")).toContain("DES-011");
   });
+
+  describe("multi-target QA contract and aggregation (T-V9-015)", () => {
+    const multiTargetPlanTask: PlanTask = {
+      ...PLAN_TASK,
+      targets: ["api", "web"],
+    };
+
+    it("produces a task-level FAIL naming the failed Target when one Target fails", async () => {
+      const execute = withQaOptimization({
+        inner: reportingExecutor(
+          qaReport({
+            status: "FAIL",
+            targets: { api: "PASS", web: "FAIL" },
+            requirements: { "BE-004": "FAIL" },
+            tests: { passed: 5, failed: 1 },
+          }),
+        ),
+        changedFiles: () => ["api:src/orders.ts", "web:src/App.tsx"],
+        taskContract: () => buildQaTaskContract({ task: multiTargetPlanTask, graph: GRAPH }),
+      });
+
+      const result = await execute(req());
+      expect(result.outcome.result).toBe("FAIL");
+      expect(result.failure?.reason).toContain("bound Target(s) failed verification: web");
+    });
+
+    it("produces a PASS naming both targets when both pass", async () => {
+      const execute = withQaOptimization({
+        inner: reportingExecutor(
+          qaReport({
+            status: "PASS",
+            targets: { api: "PASS", web: "PASS" },
+            requirements: { "BE-004": "PASS", "AC-007.2": "PASS", "DES-011": "PASS" },
+            tests: { passed: 10, failed: 0 },
+          }),
+        ),
+        changedFiles: () => ["api:src/orders.ts", "web:src/App.tsx"],
+        taskContract: () => buildQaTaskContract({ task: multiTargetPlanTask, graph: GRAPH }),
+      });
+
+      const result = await execute(req());
+      expect(result.outcome.result).toBe("PASS");
+      const report = result.artifact as QaReportArtifact;
+      expect(report.status).toBe("PASS");
+      expect(report.targets).toEqual({ api: "PASS", web: "PASS" });
+    });
+
+    it("reports a bound Target with no evidence as a gap and does not count as a pass", async () => {
+      const execute = withQaOptimization({
+        inner: reportingExecutor(
+          qaReport({
+            status: "PASS",
+            targets: { api: "PASS" },
+            requirements: { "BE-004": "PASS", "AC-007.2": "PASS", "DES-011": "PASS" },
+            unverifiedBehaviour: ["web — no changes or evidence produced for this target"],
+          }),
+        ),
+        changedFiles: () => ["api:src/orders.ts"],
+        taskContract: () => buildQaTaskContract({ task: multiTargetPlanTask, graph: GRAPH }),
+      });
+
+      const result = await execute(req());
+      expect(result.outcome.result).toBe("FAIL");
+      expect(result.failure?.reason).toContain("PASS does not cover 1 bound Target(s) without verification evidence: web");
+    });
+  });
 });
 
 describe("the gate's defense-in-depth copy", () => {

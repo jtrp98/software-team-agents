@@ -108,4 +108,92 @@ describe("renderDeterministicVerification", () => {
     expect(text).toContain("verification selection: change-scope; task types: ui-component");
     expect(text).toContain("selection reason: bounded scope resolved every changed file");
   });
+
+  it("renders per-target deterministic results when verification ran across multiple targets (T-V9-015)", () => {
+    const v: Parameters<typeof renderDeterministicVerification>[0] = {
+      required: ["lint", "typecheck"],
+      ran: [
+        {
+          id: "typecheck",
+          status: "PASS",
+          durationMs: 25,
+          outputSummary: "[api: /t/api] ok\n[web: /t/web] ok",
+          targetResults: [
+            { targetId: "api", root: "/t/api", status: "PASS", durationMs: 12, outputSummary: "api ok" },
+            { targetId: "web", root: "/t/web", status: "PASS", durationMs: 13, outputSummary: "web ok" },
+          ],
+        },
+      ],
+      failures: [],
+      skipped: [],
+      missingRequired: [],
+      status: "passed",
+      enforcement: "warn",
+      passed: true,
+    };
+    const lines = renderDeterministicVerification(v);
+    expect(lines).toContain("- typecheck: PASS (25ms)");
+    expect(lines).toContain("  - [api] PASS (12ms) — api ok");
+    expect(lines).toContain("  - [web] PASS (13ms) — web ok");
+  });
+
+  it("names the failing Target when deterministic verification fails in a multi-target task (T-V9-015)", () => {
+    const v: Parameters<typeof renderDeterministicVerification>[0] = {
+      required: ["typecheck"],
+      ran: [
+        {
+          id: "typecheck",
+          status: "FAIL",
+          durationMs: 20,
+          outputSummary: "[api: /t/api] ok\n[web: /t/web] error TS2322 in src/app.tsx",
+          targetResults: [
+            { targetId: "api", root: "/t/api", status: "PASS", durationMs: 10, outputSummary: "api ok" },
+            { targetId: "web", root: "/t/web", status: "FAIL", durationMs: 10, outputSummary: "error TS2322 in src/app.tsx" },
+          ],
+        },
+      ],
+      failures: [
+        {
+          id: "typecheck",
+          status: "FAIL",
+          durationMs: 20,
+          outputSummary: "[api: /t/api] ok\n[web: /t/web] error TS2322 in src/app.tsx",
+          targetResults: [
+            { targetId: "api", root: "/t/api", status: "PASS", durationMs: 10, outputSummary: "api ok" },
+            { targetId: "web", root: "/t/web", status: "FAIL", durationMs: 10, outputSummary: "error TS2322 in src/app.tsx" },
+          ],
+        },
+      ],
+      skipped: [],
+      missingRequired: [],
+      status: "failed",
+      enforcement: "warn",
+      passed: false,
+    };
+    const text = renderDeterministicVerification(v).join("\n");
+    expect(text).toContain("BLOCKED before LLM QA by deterministic check `typecheck` in Target (web):");
+    expect(text).toContain("error TS2322 in src/app.tsx");
+  });
+
+  it("preserves byte-identical rendering shape for solo tasks (T-V9-015)", () => {
+    const v: Parameters<typeof renderDeterministicVerification>[0] = {
+      required: ["lint"],
+      ran: [
+        {
+          id: "lint",
+          status: "PASS",
+          durationMs: 10,
+          outputSummary: "lint ok",
+        },
+      ],
+      failures: [],
+      skipped: [],
+      missingRequired: [],
+      status: "passed",
+      enforcement: "warn",
+      passed: true,
+    };
+    const lines = renderDeterministicVerification(v);
+    expect(lines).toEqual(["- lint: PASS (10ms) — lint ok"]);
+  });
 });

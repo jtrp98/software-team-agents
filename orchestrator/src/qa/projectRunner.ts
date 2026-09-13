@@ -185,6 +185,13 @@ export function combineProjectRunners(runners: readonly ProjectRunnerEntry[]): D
       status: failed.length === 0 ? "PASS" : "FAIL",
       durationMs: Math.max(...ran.map((entry) => entry.result.durationMs)),
       outputSummary: ran.map(({ targetId, root, result }) => `[${targetId ? `${targetId}: ${root}` : root}] ${result.outputSummary}`).join("\n"),
+      targetResults: ran.map(({ targetId, root, result }) => ({
+        targetId,
+        root,
+        status: result.status,
+        durationMs: result.durationMs,
+        outputSummary: result.outputSummary,
+      })),
     };
   };
 }

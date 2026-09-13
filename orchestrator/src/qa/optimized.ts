@@ -191,6 +191,9 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
         status: "PASS",
         mode: decision.mode,
         requirements: { [req.taskId]: "PASS" },
+        ...(contract && contract.boundTargets && contract.boundTargets.length > 0
+          ? { targets: Object.fromEntries(contract.boundTargets.map((t) => [t, "PASS"])) }
+          : {}),
         tests: { passed: deterministic.ran.length, failed: deterministic.failures.length },
         evidence: renderDeterministicVerification(deterministic),
         risks: [],
@@ -251,8 +254,35 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
     // its own existing path.
     if (enriched.artifactType !== ArtifactType.QA_REPORT || !enriched.artifact) return enriched;
 
-    const coverage = checkQaVerdictCoverage({ report: enriched.artifact as QaReportArtifact, required, decision });
-    if (coverage.ok) return enriched;
+    const coverage = checkQaVerdictCoverage({
+      report: enriched.artifact as QaReportArtifact,
+      required,
+      decision,
+      boundTargets: contract.boundTargets,
+    });
+    if (coverage.ok) {
+      const qaArt = enriched.artifact as QaReportArtifact;
+      if (qaArt.status === "FAIL" && qaArt.targets) {
+        const failedTargets = Object.entries(qaArt.targets).filter(([, s]) => s === "FAIL").map(([t]) => t);
+        if (failedTargets.length > 0) {
+          enriched.outcome = {
+            ...enriched.outcome,
+            result: "FAIL",
+            failure_reason: `QA verification failed for bound Target(s): ${failedTargets.join(", ")}`,
+          };
+          enriched.failure = enriched.failure ?? {
+            category: "test",
+            owner: AgentStage.BACKEND_ENGINEER,
+            severity: "medium",
+            retryable: true,
+            reason: `bound Target(s) failed verification: ${failedTargets.join(", ")}`,
+            affected: [req.taskId],
+            requiresHuman: false,
+          };
+        }
+      }
+      return enriched;
+    }
 
     // Fail-closed, and deliberately without the artifact: an under-covered
     // PASS must not reach the gate as a passing qa-report at all, because the
