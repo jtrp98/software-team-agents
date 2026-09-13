@@ -735,7 +735,7 @@ describe("Antigravity guard binding (T-V6-012)", () => {
       "write_to_file",
     ]);
     for (const entry of managed.PreToolUse) {
-      expect(entry.hooks).toEqual([{ type: "command", command: "node .agents/hooks/sta-guard.js", timeout: 10 }]);
+      expect(entry.hooks).toEqual([{ type: "command", command: "node hooks/sta-guard.js", timeout: 10 }]);
     }
   });
 

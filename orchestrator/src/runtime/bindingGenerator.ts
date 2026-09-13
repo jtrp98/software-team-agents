@@ -299,7 +299,7 @@ export function renderAgyManagedHooks(): { PreToolUse: AgyHookRegistration[] } {
   return {
     PreToolUse: AGY_GUARDED_TOOLS.map((tool) => ({
       matcher: tool,
-      hooks: [{ type: "command" as const, command: `node ${AGY_GUARD_WRAPPER_PATH}`, timeout: 10 }],
+      hooks: [{ type: "command" as const, command: `node ${path.posix.relative(path.posix.dirname(AGY_HOOKS_PATH), AGY_GUARD_WRAPPER_PATH)}`, timeout: 10 }],
     })),
   };
 }

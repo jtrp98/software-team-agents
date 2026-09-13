@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .agents/hooks/sta-guard.js",
+            "command": "node hooks/sta-guard.js",
             "timeout": 10
           }
         ]
@@ -16,7 +16,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .agents/hooks/sta-guard.js",
+            "command": "node hooks/sta-guard.js",
             "timeout": 10
           }
         ]
@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .agents/hooks/sta-guard.js",
+            "command": "node hooks/sta-guard.js",
             "timeout": 10
           }
         ]
@@ -36,7 +36,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .agents/hooks/sta-guard.js",
+            "command": "node hooks/sta-guard.js",
             "timeout": 10
           }
         ]
@@ -46,7 +46,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node .agents/hooks/sta-guard.js",
+            "command": "node hooks/sta-guard.js",
             "timeout": 10
           }
         ]
