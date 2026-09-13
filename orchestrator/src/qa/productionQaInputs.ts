@@ -1,7 +1,7 @@
 import { AgentStage } from "../types.js";
 import { readModuleDoc } from "../agents/moduleDocs.js";
 import { parseOpenIssues } from "../orchestrator/failureClassifier.js";
-import { gitDiffSummary } from "./changeSource.js";
+import { gitDiffSummary, type QaWorkRoot } from "./changeSource.js";
 import { buildQaTaskContract, type QaTaskContract } from "./taskContract.js";
 import type { QaFindingRecord } from "./evidence.js";
 import { taskGraphFromPlan } from "../graph/taskGraph.js";
@@ -49,7 +49,7 @@ export async function productionQaInputs(opts: {
   docsRoot: string;
   moduleName: string;
   taskId: string;
-  roots: readonly string[];
+  roots: readonly (string | QaWorkRoot)[];
   /**
    * T-V8-014 - the Framework root holding this task's runtime artifacts.
    * Optional: without it the contract still carries the authored acceptance
@@ -59,6 +59,8 @@ export async function productionQaInputs(opts: {
   projectRoot?: string;
   /** This round's real changed-file manifest, resolved by the caller that owns the Target roots. */
   changedFiles?: readonly string[];
+  /** Targets whose changed files failed to read — causes scope to be unbounded and reported. */
+  unreadableTargets?: readonly string[];
 }) {
   const planMd = readModuleDoc(opts.docsRoot, opts.moduleName, "plan.md") ?? "";
   const designMd = readModuleDoc(opts.docsRoot, opts.moduleName, "design.md") ?? "";
@@ -74,11 +76,13 @@ export async function productionQaInputs(opts: {
       affectedPhases = [...new Set([task.phase, ...affectedTaskIds.map((id) => graph!.nodes.get(id)?.phase).filter((phase): phase is number => phase !== undefined)])].sort((a, b) => a - b);
   }
   const riskRef = /^##\s+Risks\s*&\s*Dependencies\s*$/im.test(designMd) ? ["design.md#Risks-&-Dependencies"] : [];
-  const diffParts = await Promise.all(opts.roots.map(async (root) => {
+  const diffParts = await Promise.all(opts.roots.map(async (entry) => {
+    const rootPath = typeof entry === "string" ? entry : entry.path;
+    const targetLabel = typeof entry === "object" && entry.targetId ? `${entry.targetId}: ${rootPath}` : rootPath;
     try {
-      return `[${root}]\n${await gitDiffSummary(root)}`;
+      return `[${targetLabel}]\n${await gitDiffSummary(rootPath)}`;
     } catch {
-      return `[${root}] No git diff stat available; inspect the scoped files directly.`;
+      return `[${targetLabel}] No git diff stat available; inspect the scoped files directly.`;
     }
   }));
 
@@ -107,7 +111,11 @@ export async function productionQaInputs(opts: {
       diffSummary: diffParts.length > 0 ? diffParts.join("\n") : "No writable Target root was resolved; inspect the scoped files directly.",
       knownRisks: riskRef,
     }),
-    scopeInputs: () => ({ affectedTaskIds, affectedPhases }),
+    scopeInputs: () => ({
+      affectedTaskIds,
+      affectedPhases,
+      ...(opts.unreadableTargets ? { unreadableTargets: opts.unreadableTargets } : {}),
+    }),
     taskContract: () => contract,
   };
 }

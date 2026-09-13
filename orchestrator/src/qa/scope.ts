@@ -35,6 +35,8 @@ export interface QaScopeInput {
   affectedPhases?: readonly number[];
   /** Budget on changed+impacted files before the scope is declared unbounded. */
   maxFiles?: number;
+  /** Targets whose changed files could not be inspected. */
+  unreadableTargets?: readonly string[];
 }
 
 export interface QaScope {
@@ -49,6 +51,8 @@ export interface QaScope {
   bounded: boolean;
   /** Set only when `bounded` is false; names why mode selection must escalate. */
   unboundedReason?: string;
+  /** Targets whose changed files could not be inspected. */
+  unreadableTargets?: string[];
 }
 
 export const DEFAULT_QA_SCOPE_MAX_FILES = 50;
@@ -68,6 +72,20 @@ function intersects(a: ReadonlySet<string>, files: readonly string[]): boolean {
 export function buildQaScope(input: QaScopeInput): QaScope {
   const maxFiles = input.maxFiles ?? DEFAULT_QA_SCOPE_MAX_FILES;
   const changedFiles = uniqueSorted(input.changedFiles);
+
+  if (input.unreadableTargets && input.unreadableTargets.length > 0) {
+    return {
+      taskId: input.taskId,
+      changedFiles,
+      impactedFiles: [],
+      knowledgeRefs: [],
+      affectedTaskIds: [...new Set(input.affectedTaskIds ?? [])],
+      affectedPhases: [...new Set(input.affectedPhases ?? [])].sort((a, b) => a - b),
+      bounded: false,
+      unboundedReason: `failed to inspect changed files in Target(s): ${input.unreadableTargets.join(", ")} — treat as full-surface verification`,
+      unreadableTargets: [...input.unreadableTargets],
+    };
+  }
 
   if (changedFiles.length === 0) {
     return {
@@ -128,6 +146,9 @@ export function buildQaScope(input: QaScopeInput): QaScope {
 export function renderQaScope(scope: QaScope): string[] {
   const lines: string[] = ["QA scope (change-aware — verify these, not the whole project):"];
   lines.push(`- changed files (${scope.changedFiles.length}): ${scope.changedFiles.join(", ")}`);
+  if (scope.unreadableTargets && scope.unreadableTargets.length > 0) {
+    lines.push(`- unreadable targets: ${scope.unreadableTargets.join(", ")}`);
+  }
   if (scope.impactedFiles.length > 0) {
     lines.push(`- impacted dependents (${scope.impactedFiles.length}): ${scope.impactedFiles.join(", ")}`);
   }

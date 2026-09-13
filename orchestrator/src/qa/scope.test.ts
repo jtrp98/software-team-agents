@@ -17,6 +17,17 @@ describe("buildQaScope", () => {
     expect(scope.unboundedReason).toMatch(/no changed-file list/);
   });
 
+  it("marks scope unbounded when unreadable targets are present", () => {
+    const scope = buildQaScope({
+      taskId: "T1",
+      changedFiles: ["src/a.ts"],
+      unreadableTargets: ["broken-target"],
+    });
+    expect(scope.bounded).toBe(false);
+    expect(scope.unreadableTargets).toEqual(["broken-target"]);
+    expect(scope.unboundedReason).toContain("failed to inspect changed files in Target(s): broken-target");
+  });
+
   it("walks transitive dependents breadth-first without looping on cycles", () => {
     const scope = buildQaScope({
       taskId: "T1",
@@ -102,6 +113,19 @@ describe("renderQaScope", () => {
 
   it("marks an unbounded scope explicitly", () => {
     const text = renderQaScope(buildQaScope({ taskId: "T1", changedFiles: [] })).join("\n");
+    expect(text).toContain("SCOPE NOT BOUNDED");
+  });
+
+  it("renders unreadable targets notice when present", () => {
+    const lines = renderQaScope(
+      buildQaScope({
+        taskId: "T1",
+        changedFiles: ["src/a.ts"],
+        unreadableTargets: ["broken-target"],
+      }),
+    );
+    const text = lines.join("\n");
+    expect(text).toContain("- unreadable targets: broken-target");
     expect(text).toContain("SCOPE NOT BOUNDED");
   });
 });

@@ -35,6 +35,8 @@ import { combineProjectRunners, createProjectRunner } from "../qa/projectRunner.
 import { LocalWorkspace } from "../runtime/localWorkspace.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { evaluateUnattendedGate, renderUnattendedGate } from "./unattendedGate.js";
+import { resolveQaWorkRoots, type QaWorkRoot } from "../threeRepo/cliRoots.js";
+import { collectQaChangedFiles } from "../qa/changeSource.js";
 
 /**
  * T-V8-021 — the real `BoundedRunServices` behind the bounded-run CLI.
@@ -363,18 +365,44 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
       modelPolicy,
     });
 
+    const runtimeTask = representativeTask?.runtimeTask;
+    let qaRoots: QaWorkRoot[] = [];
+    if (runtimeTask && "version" in runtimeTask && runtimeTask.version === 2 && runtimeTask.scope.work_roots && runtimeTask.scope.work_roots.length > 0) {
+      const qaStageRoots = runtimeTask.scope.work_roots.filter((r) => r.stage === AgentStage.QA_ENGINEER);
+      const candidates = qaStageRoots.length > 0 ? qaStageRoots : runtimeTask.scope.work_roots;
+      const seen = new Set<string>();
+      for (const r of candidates) {
+        const key = `${r.target_id ?? ""}::${r.root}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          qaRoots.push({ targetId: r.target_id, path: r.root });
+        }
+      }
+    }
+    if (qaRoots.length === 0) {
+      try {
+        qaRoots = resolveQaWorkRoots(options.projectRoot, representative, options.store, options.moduleName);
+      } catch {
+        qaRoots = [];
+      }
+    }
+    if (qaRoots.length === 0 || (qaRoots.length === 1 && !qaRoots[0]!.targetId && qaRoots[0]!.path === options.projectRoot && options.targetRoot !== options.projectRoot)) {
+      qaRoots = [{ path: options.targetRoot }];
+    }
+    const { files: qaChangedFiles, failedTargets } = await collectQaChangedFiles(qaRoots).catch(() => ({ files: [] as string[], failedTargets: [] as string[] }));
     const qaInputs = await productionQaInputs({
       docsRoot: options.docsRoot,
       moduleName: options.moduleName,
       taskId: representative,
-      roots: [options.targetRoot],
+      roots: qaRoots,
       projectRoot: options.projectRoot,
-      changedFiles: [],
+      changedFiles: qaChangedFiles,
+      unreadableTargets: failedTargets.length > 0 ? failedTargets : undefined,
     });
 
     const executor = withQaOptimization({
       inner: qaExecutor,
-      changedFiles: async () => [],
+      changedFiles: async () => qaChangedFiles,
       deterministicGate: "disabled",
       packageInputs: qaInputs.packageInputs,
       scopeInputs: qaInputs.scopeInputs,

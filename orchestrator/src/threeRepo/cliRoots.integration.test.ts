@@ -74,7 +74,7 @@ describe("resolveWritableWorkRoots — real three-repo installation", () => {
         resolveQaWorkRoots(fixture.framework, fixture.task.taskId, {
           loadTask: () => fixture.task,
         }),
-      ).toEqual([fixture.target]);
+      ).toEqual([{ targetId: "target", path: fixture.target }]);
     } finally {
       fs.rmSync(fixture.root, { recursive: true, force: true });
     }
@@ -96,7 +96,7 @@ describe("resolveWritableWorkRoots — real three-repo installation", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-cli-roots-legacy-"));
     process.env[INSTALLATION_CONFIG_ENV] = path.join(root, "missing-installation.yaml");
     try {
-      expect(resolveWritableWorkRoots(root, "T-legacy", { loadTask: () => null }, AgentStage.QA_ENGINEER)).toEqual([root]);
+      expect(resolveWritableWorkRoots(root, "T-legacy", { loadTask: () => null }, AgentStage.QA_ENGINEER)).toEqual([{ path: root }]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

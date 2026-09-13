@@ -50,7 +50,7 @@ describe("resolveWritableWorkRoots", () => {
     loadInstallationConfig.mockImplementation(() => {
       throw new Error("cannot read installation config");
     });
-    expect(resolveWritableWorkRoots(PR, "T-1", { loadTask: () => null }, AgentStage.QA_ENGINEER)).toEqual([PR]);
+    expect(resolveWritableWorkRoots(PR, "T-1", { loadTask: () => null }, AgentStage.QA_ENGINEER)).toEqual([{ path: PR }]);
   });
 
   it("installation config present, but the task is not in the store → refuses", () => {
@@ -69,7 +69,11 @@ describe("resolveWritableWorkRoots", () => {
         { targetId: "c", path: "/repo/c", access: "read" },
       ]),
     );
-    expect(resolveWritableWorkRoots(PR, "T-1", { loadTask: () => ({}) as never }, AgentStage.QA_ENGINEER)).toEqual(["/repo/a", "/repo/b", "/repo/c"]);
+    expect(resolveWritableWorkRoots(PR, "T-1", { loadTask: () => ({}) as never }, AgentStage.QA_ENGINEER)).toEqual([
+      { targetId: "a", path: "/repo/a" },
+      { targetId: "b", path: "/repo/b" },
+      { targetId: "c", path: "/repo/c" },
+    ]);
   });
 
   it("installation config present but no Target roots resolved → refuses", () => {
@@ -171,9 +175,9 @@ describe("all five production call sites share the same resolvers", () => {
     const task = {};
     const store = { loadTask: () => task as never };
     // Three writable-root sites: qaRoots and both changedFiles closures.
-    expect(resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER)).toEqual([PR]);
-    expect(resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER)).toEqual([PR]);
-    expect(resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER)).toEqual([PR]);
+    expect(resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER)).toEqual([{ path: PR }]);
+    expect(resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER)).toEqual([{ path: PR }]);
+    expect(resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER)).toEqual([{ path: PR }]);
     // two docs-root sites (qaDocsRoot + previousRound closure)
     expect(resolveDocsRoot(PR)).toBe(PR);
     expect(resolveDocsRoot(PR)).toBe(oldDocsRoot(PR));
@@ -193,7 +197,10 @@ describe("all five production call sites share the same resolvers", () => {
     const a = resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER);
     const b = resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER);
     const c = resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER);
-    expect(a).toEqual(["/t/be", "/t/fe"]);
+    expect(a).toEqual([
+      { targetId: "be", path: "/t/be" },
+      { targetId: "fe", path: "/t/fe" },
+    ]);
     expect(a).toEqual(b);
     expect(a).toEqual(c);
 

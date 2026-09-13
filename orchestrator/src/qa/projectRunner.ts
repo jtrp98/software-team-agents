@@ -167,18 +167,24 @@ export function createProjectRunner(opts: ProjectRunnerOptions): DeterministicRu
   };
 }
 
+export interface ProjectRunnerEntry {
+  targetId?: string;
+  root: string;
+  runner: DeterministicRunner;
+}
+
 /** Runs each configured Target root without weakening a multi-Target QA gate. */
-export function combineProjectRunners(runners: readonly { root: string; runner: DeterministicRunner }[]): DeterministicRunner {
+export function combineProjectRunners(runners: readonly ProjectRunnerEntry[]): DeterministicRunner {
   return async (id) => {
-    const results = await Promise.all(runners.map(async ({ root, runner }) => ({ root, result: await runner(id) })));
-    const ran = results.filter((entry): entry is { root: string; result: DeterministicCheckResult } => entry.result !== null);
+    const results = await Promise.all(runners.map(async ({ targetId, root, runner }) => ({ targetId, root, result: await runner(id) })));
+    const ran = results.filter((entry): entry is { targetId: string | undefined; root: string; result: DeterministicCheckResult } => entry.result !== null);
     if (ran.length === 0) return null;
     const failed = ran.filter((entry) => entry.result.status === "FAIL");
     return {
       id,
       status: failed.length === 0 ? "PASS" : "FAIL",
       durationMs: Math.max(...ran.map((entry) => entry.result.durationMs)),
-      outputSummary: ran.map(({ root, result }) => `[${root}] ${result.outputSummary}`).join("\n"),
+      outputSummary: ran.map(({ targetId, root, result }) => `[${targetId ? `${targetId}: ${root}` : root}] ${result.outputSummary}`).join("\n"),
     };
   };
 }

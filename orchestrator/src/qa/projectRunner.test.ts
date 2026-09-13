@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createProjectRunner } from "./projectRunner.js";
+import { combineProjectRunners, createProjectRunner } from "./projectRunner.js";
 import type { RuntimeWorkspace } from "../runtime/runtimeAdapter.js";
 
 function workspace(opts: { packageJson?: string; configYaml?: string; gate?: { stdout: string; exitCode: number | null }; fallback?: { exitCode: number | null; stdout?: string; stderr?: string } } = {}): RuntimeWorkspace & { calls: Array<{ command: string; args: readonly string[]; cwd?: string }> } {
@@ -94,5 +94,103 @@ overrides: []
     const result = await runner("lint");
     expect(result).toMatchObject({ status: "FAIL" });
     expect(result?.outputSummary).toMatch(/dotnet.*every verification command was skipped/);
+  });
+});
+
+describe("combineProjectRunners (T-V9-014 / R-2)", () => {
+  it("prefixes targetId and root into outputSummary and aggregates results", async () => {
+    const combined = combineProjectRunners([
+      {
+        targetId: "api",
+        root: "/path/to/api",
+        runner: async (id) => ({
+          id,
+          status: "PASS",
+          durationMs: 120,
+          outputSummary: "api typecheck ok",
+        }),
+      },
+      {
+        targetId: "web",
+        root: "/path/to/web",
+        runner: async (id) => ({
+          id,
+          status: "PASS",
+          durationMs: 340,
+          outputSummary: "web typecheck ok",
+        }),
+      },
+    ]);
+
+    const result = await combined("typecheck");
+    expect(result).not.toBeNull();
+    expect(result?.status).toBe("PASS");
+    expect(result?.durationMs).toBe(340);
+    expect(result?.outputSummary).toBe("[api: /path/to/api] api typecheck ok\n[web: /path/to/web] web typecheck ok");
+  });
+
+  it("uses root as label when targetId is not specified", async () => {
+    const combined = combineProjectRunners([
+      {
+        root: "/single/repo",
+        runner: async (id) => ({
+          id,
+          status: "PASS",
+          durationMs: 50,
+          outputSummary: "single check ok",
+        }),
+      },
+    ]);
+
+    const result = await combined("unit-tests");
+    expect(result?.status).toBe("PASS");
+    expect(result?.outputSummary).toBe("[/single/repo] single check ok");
+  });
+
+  it("fails the gate if any runner fails", async () => {
+    const combined = combineProjectRunners([
+      {
+        targetId: "api",
+        root: "/path/to/api",
+        runner: async (id) => ({
+          id,
+          status: "PASS",
+          durationMs: 100,
+          outputSummary: "api pass",
+        }),
+      },
+      {
+        targetId: "web",
+        root: "/path/to/web",
+        runner: async (id) => ({
+          id,
+          status: "FAIL",
+          durationMs: 200,
+          outputSummary: "web compile error",
+        }),
+      },
+    ]);
+
+    const result = await combined("build");
+    expect(result?.status).toBe("FAIL");
+    expect(result?.outputSummary).toContain("web compile error");
+  });
+
+  it("returns null if all runners return null", async () => {
+    const combined = combineProjectRunners([
+      {
+        targetId: "api",
+        root: "/path/to/api",
+        runner: async () => null,
+      },
+      {
+        targetId: "web",
+        root: "/path/to/web",
+        runner: async () => null,
+      },
+    ]);
+
+    const result = await combined("integration-tests");
+    expect(result).toBeNull();
   });
 });

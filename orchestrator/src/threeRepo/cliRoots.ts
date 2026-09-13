@@ -28,11 +28,16 @@ const installationConfigPath = (): string | undefined =>
 
 export class WritableWorkRootResolutionError extends Error {}
 
+export interface QaWorkRoot {
+  targetId?: string;
+  path: string;
+}
+
 /**
  * The writable work roots a QA-side stage operates on.
  *
- * - three-repo mode → every Target bound to the task, deduped
- * - single-repo / legacy project with no installation config → `[projectRoot]`
+ * - three-repo mode → every Target bound to the task, deduped by (targetId, path)
+ * - single-repo / legacy project with no installation config → `[{ path: projectRoot }]`
  * - detectable three-repo mode with an unusable task/Target binding → throws
  *
  * QA deliberately has read access to each Target. These are nevertheless the
@@ -45,13 +50,13 @@ export function resolveWritableWorkRoots(
   store: TaskLookup,
   stage: AgentStage,
   moduleName?: string,
-): string[] {
+): QaWorkRoot[] {
   const configPath = installationConfigPath();
   try {
     loadInstallationConfig(configPath);
   } catch (error) {
     const resolvedConfigPath = configPath ?? defaultInstallationConfigPath();
-    if (!fs.existsSync(resolvedConfigPath)) return [projectRoot];
+    if (!fs.existsSync(resolvedConfigPath)) return [{ path: projectRoot }];
     throw new WritableWorkRootResolutionError(
       `task ${taskId} cannot resolve its Target binding because the installation config is unusable: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -76,7 +81,16 @@ export function resolveWritableWorkRoots(
       `task ${taskId} cannot resolve its Target binding: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  const targetRoots = [...new Set(roots3.workRoots.map((root) => root.path))];
+  // Deduplicate without dropping targetId (R-2).
+  const seen = new Set<string>();
+  const targetRoots: QaWorkRoot[] = [];
+  for (const root of roots3.workRoots) {
+    const key = `${root.targetId}::${root.path}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      targetRoots.push({ targetId: root.targetId, path: root.path });
+    }
+  }
   if (targetRoots.length === 0) {
     throw new WritableWorkRootResolutionError(
       `task ${taskId} has no resolvable Target work root; its Target binding is missing`,
@@ -107,7 +121,7 @@ export function resolveQaWorkRoots(
   taskId: string,
   store: TaskLookup,
   moduleName?: string,
-): string[] {
+): QaWorkRoot[] {
   return resolveWritableWorkRoots(projectRoot, taskId, store, AgentStage.QA_ENGINEER, moduleName);
 }
 

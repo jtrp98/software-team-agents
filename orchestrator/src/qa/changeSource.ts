@@ -26,6 +26,51 @@ export async function gitChangedFiles(cwd: string): Promise<string[]> {
     .filter((s) => s.length > 0);
 }
 
+export interface QaWorkRoot {
+  readonly targetId?: string;
+  readonly path: string;
+}
+
+export interface QaChangedFilesResult {
+  readonly files: string[];
+  readonly failedTargets: string[];
+}
+
+/**
+ * Collects changed files across QA work roots.
+ * When multiple targets exist, paths are namespaced by targetId to prevent collisions (R-2).
+ * For a single target (solo task), relative paths remain unprefixed so scope and fingerprints
+ * stay byte-identical to baseline.
+ */
+export async function collectQaChangedFiles(
+  roots: readonly QaWorkRoot[],
+): Promise<QaChangedFilesResult> {
+  const isMultiTarget = roots.length > 1;
+  const files: string[] = [];
+  const failedTargets: string[] = [];
+
+  for (const root of roots) {
+    try {
+      const changed = await gitChangedFiles(root.path);
+      for (const file of changed) {
+        const key = isMultiTarget && root.targetId ? `${root.targetId}:${file}` : file;
+        files.push(key);
+      }
+    } catch (error) {
+      const targetName = root.targetId ?? root.path;
+      failedTargets.push(targetName);
+      console.error(
+        `[orchestrator] QA changed-file discovery failed for Target "${targetName}": ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  return {
+    files: [...new Set(files)].sort(),
+    failedTargets,
+  };
+}
+
 /**
  * A verdict binds to the source snapshot, never to an adapter, session, or
  * runtime id. The file list still comes solely from gitChangedFiles above;
@@ -50,10 +95,23 @@ async function contentFingerprint(cwd: string, relativePath: string): Promise<st
   }
 }
 
-/** Capture the changed-source state at a QA or security verdict. */
-export async function captureChangeSetFingerprint(cwd: string): Promise<ChangeSetFingerprint> {
-  const files = [...new Set(await gitChangedFiles(cwd))].sort();
-  const entries = await Promise.all(files.map(async (file) => [file, await contentFingerprint(cwd, file)] as const));
+/** Capture the changed-source state at a QA or security verdict across one or more Targets. */
+export async function captureChangeSetFingerprint(
+  target: string | readonly QaWorkRoot[],
+): Promise<ChangeSetFingerprint> {
+  const roots: readonly QaWorkRoot[] = typeof target === "string" ? [{ path: target }] : target;
+  const isMultiTarget = roots.length > 1;
+  const entries: Array<readonly [string, string]> = [];
+
+  for (const root of roots) {
+    const files = [...new Set(await gitChangedFiles(root.path))].sort();
+    for (const file of files) {
+      const key = isMultiTarget && root.targetId ? `${root.targetId}:${file}` : file;
+      const hash = await contentFingerprint(root.path, file);
+      entries.push([key, hash] as const);
+    }
+  }
+
   return { files: Object.fromEntries(entries) };
 }
 
@@ -63,11 +121,11 @@ export async function captureChangeSetFingerprint(cwd: string): Promise<ChangeSe
  * switching camp/runtime without writes leaves the verdict valid.
  */
 export async function verifyChangeSetFingerprint(
-  cwd: string,
+  target: string | readonly QaWorkRoot[],
   fingerprint: ChangeSetFingerprint | null | undefined,
 ): Promise<ChangeSetVerification> {
   if (!fingerprint) return { legacy: true, unverifiedFiles: [] };
-  const current = await captureChangeSetFingerprint(cwd);
+  const current = await captureChangeSetFingerprint(target);
   const paths = new Set([...Object.keys(fingerprint.files), ...Object.keys(current.files)]);
   return {
     legacy: false,
