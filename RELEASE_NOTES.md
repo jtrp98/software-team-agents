@@ -1,14 +1,47 @@
 # Release Notes
 
-## Unreleased — vendor-neutral naming migration
+## software-team-agents 3.0.0 — V9 (release date pending)
 
-**Bucket: Major; final version requires human confirmation.** Runtime environment contracts now use
-the vendor-neutral `STA_*` namespace exclusively. The private development package is now
-`@software-team-agents/orchestrator`, its direct binary is `sta-orchestrate`, and JSON Schema ids use
-`https://software-team-agents.local/`. Existing installations must reinstall the Framework package
-and run `software-team-agents sync` before launching another session so every generated binding and
-guard host receives the same contract. No compatibility alias is retained: mixed old/new payloads
-must fail validation rather than silently weakening a guard.
+> The user requested the V9 release close after its validation and evidence follow-up completed.
+> The version rule below mechanically maps the confirmed Major bucket from `2.0.1` to `3.0.0`.
+> Root `package.json` and `package-lock.json` carry `3.0.0`; the private development package
+> `@software-team-agents/orchestrator` remains independently versioned at `0.3.0`. **No release date
+> is set** — dates come from a person.
+
+**Bucket: Major (`2.0.1 → 3.0.0`).** Runtime environment contracts now use the vendor-neutral
+`STA_*` namespace exclusively. Existing installations must reinstall the Framework package and run
+`software-team-agents sync` before launching another session so every generated binding and guard
+host receives the same contract. No compatibility alias is retained: mixed old/new payloads must
+fail validation rather than silently weakening a guard.
+
+### Breaking changes and required operator action
+
+- The private development package is now `@software-team-agents/orchestrator`, its direct binary is
+  `sta-orchestrate`, and JSON Schema ids use `https://software-team-agents.local/`.
+- Modules may declare multiple Targets in `design.md ## Targets`; tasks persist the explicit
+  `targets: [{target_id, role}]` binding list. Target type is declared once in `targets.yaml` as the
+  optional `frontend | backend | fullstack` field.
+- Each engineer invocation writes exactly one bound Target. Other bound Targets are read-only and
+  an unbound Target is refused. QA verifies and reports every bound Target, including partial
+  landings and missing evidence.
+- Obsolete framework-managed document/knowledge conversion surfaces are removed. Setup and refresh
+  build incremental canonical knowledge from current project state while optional reference
+  documents remain read-only evidence.
+
+### Preserved boundaries
+
+- The core `BA → SA → PM → DEV → QA` workflow is unchanged.
+- Fullstack MVC continues to use the existing stack-profile role split; no subtype or plural
+  execution-root mechanism was added.
+- The WHY-only policy applies to source comments through review, not a comment classifier or lint
+  rule.
+- `repos.schema.json` remains supported, below explicit Target bindings in precedence.
+
+### Release status
+
+**RELEASABLE.** After the version bump, `npm run release:check` passed all 31 steps. The packaged
+artifact E2E passed all 23 steps; both shipped binaries reported `3.0.0`, and the shipped manifest
+matched the package version. The annotated `v3.0.0` tag remains a human Git operation.
 
 ---
 
