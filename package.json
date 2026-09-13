@@ -14,7 +14,8 @@
     "orchestrator/dist",
     "orchestrator/schemas",
     "templates",
-    "prompt-setup.md"
+    "prompt-setup.md",
+    "prompt-update-knowledge.md"
   ],
   "scripts": {
     "build": "npm --prefix orchestrator run build:templates",

@@ -9,13 +9,20 @@ function repoRoot(): string {
   return cursor;
 }
 
-describe("T-V9-023 obsolete layout-conversion prompt removal", () => {
+describe("T-V9-023 / T-V9-024 prompt packaging and layout separation", () => {
   const root = repoRoot();
-  it("does not ship a legacy document-layout converter or its compatibility pointer", () => {
+  it("does not ship a legacy document-layout converter", () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as { files: string[] };
     expect(pkg.files).not.toContain("prompt-reconcile-knowledge-layout.md");
-    expect(pkg.files).not.toContain("prompt-update-knowledge.md");
     expect(fs.existsSync(path.join(root, "prompt-reconcile-knowledge-layout.md"))).toBe(false);
-    expect(fs.existsSync(path.join(root, "prompt-update-knowledge.md"))).toBe(false);
+  });
+
+  it("ships prompt-update-knowledge.md as a canonical knowledge refresh playbook, not a legacy converter pointer", () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as { files: string[] };
+    expect(pkg.files).toContain("prompt-update-knowledge.md");
+    expect(fs.existsSync(path.join(root, "prompt-update-knowledge.md"))).toBe(true);
+    const content = fs.readFileSync(path.join(root, "prompt-update-knowledge.md"), "utf8");
+    expect(content).not.toContain("# Compatibility pointer");
+    expect(content).toContain("# prompt-update-knowledge.md — AI-Assisted Knowledge Refresh Playbook");
   });
 });

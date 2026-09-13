@@ -16,6 +16,7 @@ Process/workflow layer + orchestrator CLI สำหรับทีมซอฟ�
 
 > **ให้ AI ตั้งให้?** ชี้ assistant (Claude Code / Codex / OpenCode / Antigravity) ไปที่ [`prompt-setup.md`](prompt-setup.md) —
 > playbook เดียวกันในรูปแบบที่ agent รันเอง (ดูหัวข้อ [Setup playbooks](#setup-playbooks-prompt-setupmd)).
+> สำหรับการรีเฟรช/ปรับปรุง knowledge ตาม codebase จริง ให้ใช้ [`prompt-update-knowledge.md`](prompt-update-knowledge.md).
 
 ---
 
@@ -220,9 +221,12 @@ V5 flags ที่ `sta run` รับจริง:
 
 ## Setup playbooks (`prompt-setup.md`)
 
-`prompt-setup.md` คือ playbook สำหรับ **AI coding assistant** (Claude Code / Codex / OpenCode หรือ agent ใด ๆ ที่อ่านไฟล์ + รัน shell ได้) ให้ตั้ง / ซ่อม / ตรวจ software-team-agents บนเครื่องหนึ่งเครื่องต่อ role เดียว — runtime-agnostic, สมมติแค่ file access + shell คู่ขนานกับ [`## Getting Started`](#getting-started) ด้านบน (คนเดินเอง) และ [`## Ownership, health และ troubleshooting`](#ownership-health-และ-troubleshooting) (Troubleshooting; `TEAM_SETUP_V1.md` ตัวเดิมเหลือเป็น pointer มาที่นี่แล้ว — T-V5-029)
+`prompt-setup.md` และ `prompt-update-knowledge.md` คือ playbook สำหรับ **AI coding assistant** (Claude Code / Codex / OpenCode / Antigravity หรือ agent ใด ๆ ที่อ่านไฟล์ + รัน shell ได้) — runtime-agnostic, สมมติแค่ file access + shell:
 
-**วิธีใช้:** ให้ assistant อ่านไฟล์นี้ — paste เนื้อหาเข้า session หรือสั่ง "อ่าน `prompt-setup.md` แล้วตั้งให้ที"
+- **`prompt-setup.md`** — ใช้ตั้ง / ซ่อม / ตรวจ workspace บนเครื่องหนึ่งเครื่องต่อ role เดียว คู่ขนานกับ [`## Getting Started`](#getting-started) ด้านบน (คนเดินเอง) และ capture canonical STA knowledge ครั้งแรกจาก reality ของโปรเจกต์ (`TEAM_SETUP_V1.md` ตัวเดิมเหลือเป็น pointer มาที่นี่แล้ว — T-V5-029)
+- **`prompt-update-knowledge.md`** — ใช้รีเฟรชและ reconcile canonical knowledge ใน Knowledge repo แบบ incremental ให้ตรงกับสภาพโค้ดจริงใน Target repo โดยใช้ลำดับความสำคัญ (source priority): code > config/contracts > canonical knowledge > maintained docs > reference docs พร้อมทั้งรักษา explicit approved future intent และไม่แตะ reference docs
+
+**วิธีใช้:** ให้ assistant อ่านไฟล์ที่ต้องการ — paste เนื้อหาเข้า session หรือสั่ง "อ่าน `prompt-setup.md` แล้วตั้งให้ที" หรือ "อ่าน `prompt-update-knowledge.md` แล้วรีเฟรช knowledge ให้ที"
 
 **สิ่งที่มันทำ:** Phase 0 inspect แบบ read-only (`software-team-agents status --json`, `--version`, `sta --check-workspace`) → สรุปสิ่งที่เจอ → ให้เลือก 1 ใน 7 flow:
 
@@ -758,6 +762,7 @@ section นี้) บวกตารางเดียว:
 | 8 | sync ทำอะไร, ปลอดภัยแค่ไหน | [## Ownership model](#ownership-model), Troubleshooting #4 ด้านล่าง |
 | 9 | พังแล้วแก้ยังไง (10 อาการที่พบจริง) | Troubleshooting ด้านล่าง |
 | 10 | ให้ AI ตั้งให้แทนได้ไหม | [## Setup playbooks](#setup-playbooks-prompt-setupmd) (`prompt-setup.md`) |
+| 11 | ให้ AI รีเฟรช knowledge ตามโค้ดจริง | [## Setup playbooks](#setup-playbooks-prompt-setupmd) (`prompt-update-knowledge.md`) |
 
 ### Health check
 

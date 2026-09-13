@@ -104,4 +104,75 @@ describe("prompt-setup.md — AI-assisted setup entry point", () => {
     expect(prompt).toContain("Stack     : <resolved profile");
     expect(Buffer.byteLength(prompt, "utf8")).toBeLessThan(23_171);
   });
+
+  it("T-V9-024 — prompt-setup creates canonical knowledge from reality with multi-Target scope and source priority", () => {
+    // Inspects reality without doc migration
+    expect(prompt).toMatch(/Capturing canonical knowledge for an existing project/);
+    expect(prompt).toMatch(/Inspect reality.*code.*runtime behaviour.*configs.*contracts/s);
+    // 5-level source priority
+    expect(prompt).toMatch(/Source Priority on conflict/);
+    expect(prompt).toMatch(/Current code & runtime behaviour/);
+    expect(prompt).toMatch(/Config, API, DB schemas, contracts/);
+    expect(prompt).toMatch(/Canonical STA knowledge/);
+    expect(prompt).toMatch(/Maintained docs/);
+    expect(prompt).toMatch(/Optional reference docs/);
+    // Derives multi-target scopes and types
+    expect(prompt).toMatch(/declared `type` \(`frontend` \| `backend` \| `fullstack`\)/);
+    expect(prompt).toMatch(/module-wide `target_ids: \[\]`.*Target-specific `target_ids: \[target_id, \.\.\.\]`/s);
+    // Reference docs remain untouched (read-only evidence)
+    expect(prompt).toMatch(/Read-only evidence rule/);
+    expect(prompt).toMatch(/Reference docs remain untouched/);
+    expect(prompt).toMatch(/never modify, move, rename, convert, or validate optional reference documents/);
+    expect(prompt).toMatch(/never run removed migration commands or rely on compatibility frameworks/);
+    // Points to prompt-update-knowledge.md for ongoing incremental updates
+    expect(prompt).toContain("prompt-update-knowledge.md");
+  });
+
+  it("T-V9-024 — prompt-update-knowledge.md incrementally reconciles canonical knowledge, preserving future intent", () => {
+    const updatePromptPath = path.join(root, "prompt-update-knowledge.md");
+    expect(fs.existsSync(updatePromptPath)).toBe(true);
+    const updatePrompt = fs.readFileSync(updatePromptPath, "utf8");
+
+    // Ships in package.json
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as { files?: string[] };
+    expect(pkg.files ?? []).toContain("prompt-update-knowledge.md");
+
+    // Runtime-agnostic
+    expect(updatePrompt).toContain("Claude Code");
+    expect(updatePrompt).toContain("Codex");
+    expect(updatePrompt).not.toMatch(/claude -p --agent/);
+
+    // Incremental diff and affected items update
+    expect(updatePrompt).toMatch(/Incremental updates where practical/);
+    expect(updatePrompt).toMatch(/Update .*only affected sections and items.*/i);
+
+    // Retains valid business intent and explicit future requirements
+    expect(updatePrompt).toMatch(/Current State vs Desired \/ Planned State/);
+    expect(updatePrompt).toMatch(/Absence from code is .*?not.*? evidence that an explicitly approved future\s+requirement should be deleted/is);
+    expect(updatePrompt).toMatch(/Retain valid business intent/);
+
+    // Removes stale statements presented as current state
+    expect(updatePrompt).toMatch(/Remove stale statements presented as current state/);
+
+    // Source priority on conflict (AD-12)
+    expect(updatePrompt).toMatch(/Source Priority on Conflict/);
+    expect(updatePrompt).toMatch(/Current source code and actual runtime behaviour/);
+    expect(updatePrompt).toMatch(/Current configuration, API, database schemas, and contracts/);
+    expect(updatePrompt).toMatch(/Current canonical STA knowledge/);
+    expect(updatePrompt).toMatch(/Maintained current documentation/);
+    expect(updatePrompt).toMatch(/Optional legacy \/ reference documentation/);
+    expect(updatePrompt).toMatch(/Current implementation wins over stale documentation/);
+
+    // Reference docs are read-only evidence
+    expect(updatePrompt).toMatch(/Reference documents are read-only evidence/);
+    expect(updatePrompt).toMatch(/Never modify, move, rename, rewrite, normalize, convert, or validate/);
+    expect(updatePrompt).toMatch(/Do not instruct the model to run legacy migration commands/);
+
+    // Multi-Target representation
+    expect(updatePrompt).toMatch(/Multi-Target knowledge representation/);
+    expect(updatePrompt).toMatch(/Supports 3 or more Targets cleanly/);
+    expect(updatePrompt).toMatch(/frontend.*backend.*fullstack/);
+    expect(updatePrompt).toMatch(/target_ids: \[\]/);
+    expect(updatePrompt).toMatch(/target_ids: \["target-id", \.\.\.\]/);
+  });
 });
