@@ -287,7 +287,10 @@ export function checkDocSize(projectRoot: string, moduleName?: string): DocStruc
 }
 
 /**
- * Checks every module's documents that exist. A document that doesn't exist yet (a
+ * Checks every module's documents that exist. Scope is strictly STA-owned current
+ * canonical documents under `_docs/module/<name>/` (requirement, design, plan, test-plan, review).
+ * Optional project reference material and legacy documents are read-only evidence and outside
+ * its validation scope (AD-14, CR-9). A document that doesn't exist yet (a
  * module mid-way through the pipeline, before `design.md` or `plan.md` was written) is
  * skipped, not flagged — this validates structure, not project progress.
  */

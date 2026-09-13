@@ -74,6 +74,12 @@ When it's genuinely ambiguous, ask the user — and record the reason in `requir
 | `security.md` | `security` | findings, accepted risks |
 | `deploy.md` | `devops` | environments, deploy/migration runbook, history |
 
+### Canonical documents vs project reference material
+
+Only documents under `_docs/module/<name>/` (`requirement.md`, `design.md`, `plan.md`, `test-plan.md`, `review.md`, etc.) are STA-owned canonical documents. `--check-doc-structure` validates only these STA-owned current canonical documents against framework schemas.
+
+External project documents and legacy documentation are **optional read-only evidence only** (CR-6, AD-11, AD-14). STA does not own, migrate, convert, reformat, or validate them, and they are never subject to `--check-doc-structure` or framework document validators. Current canonical STA knowledge is created and incrementally refreshed from project reality by `prompt-setup.md` and `prompt-update-knowledge.md` without any legacy documentation conversion machinery.
+
 ---
 
 ## 2. Keeping `_docs/status.md` current
