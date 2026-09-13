@@ -34,21 +34,21 @@ function sha256(text: string): string {
 
 const roots: string[] = [];
 
-// `resolveContextDocsRoot` reads `AGENTCLAUDE_KNOWLEDGE_ROOT`/an installation
+// `resolveContextDocsRoot` reads `STA_KNOWLEDGE_ROOT`/an installation
 // config before falling back to `projectRoot` — a fixture must not inherit
 // whatever real three-repo installation happens to be configured on the
 // machine running this suite (`cli.test.ts` pins the same two vars).
-const KNOWLEDGE_ROOT_ORIGINAL = process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
-const INSTALLATION_CONFIG_ORIGINAL = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+const KNOWLEDGE_ROOT_ORIGINAL = process.env.STA_KNOWLEDGE_ROOT;
+const INSTALLATION_CONFIG_ORIGINAL = process.env.STA_INSTALLATION_CONFIG;
 beforeEach(() => {
-  delete process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
-  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-boundedrun-test-no-installation.yaml");
+  delete process.env.STA_KNOWLEDGE_ROOT;
+  process.env.STA_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-boundedrun-test-no-installation.yaml");
 });
 afterEach(async () => {
-  if (KNOWLEDGE_ROOT_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
-  else process.env.AGENTCLAUDE_KNOWLEDGE_ROOT = KNOWLEDGE_ROOT_ORIGINAL;
-  if (INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-  else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = INSTALLATION_CONFIG_ORIGINAL;
+  if (KNOWLEDGE_ROOT_ORIGINAL === undefined) delete process.env.STA_KNOWLEDGE_ROOT;
+  else process.env.STA_KNOWLEDGE_ROOT = KNOWLEDGE_ROOT_ORIGINAL;
+  if (INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+  else process.env.STA_INSTALLATION_CONFIG = INSTALLATION_CONFIG_ORIGINAL;
   await Promise.all(
     roots.splice(0).map((root) =>
       fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }),
@@ -441,7 +441,7 @@ function threeRepoBoundedRunProject(
     installationConfig,
     `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledgeRoot)}\n`,
   );
-  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = installationConfig;
+  process.env.STA_INSTALLATION_CONFIG = installationConfig;
 
   const requirement = "# Requirement\n\n- REQ-007: Order summary responses stay stable when no line item exists.\n- AC-007.2: Zero-total responses for orders with no line items must stay serializable.\n";
   const design = `# Design

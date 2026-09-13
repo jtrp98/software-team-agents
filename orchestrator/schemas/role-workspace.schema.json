@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://agentclaude.local/schemas/role-workspace.schema.json",
+  "$id": "https://software-team-agents.local/schemas/role-workspace.schema.json",
   "title": "Role workspace (knowledge/_roles/<module>/<lane>.yaml)",
   "description": "One lane's place in the shared knowledge base (T99/T103). A lane is BA, SA or DEV — the three columns of V1.5's diagram — and this file holds only the two things that are lane-local and cannot be derived: the watermark of what the person in that lane has acknowledged, and that person's sign-off on the lane's own output. Everything else a caller might want (what the lane is working on, what changed under it, whether it is waiting on somebody) is computed from knowledge/ every time it is asked, because a stored copy of a derivation is a second source of truth waiting to disagree with the first — and, for a notification list specifically, one that keeps escalating things somebody already fixed (T66's lesson).",
   "type": "object",

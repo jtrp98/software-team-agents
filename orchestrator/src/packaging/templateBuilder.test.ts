@@ -20,7 +20,7 @@ function fixtureRepo(): string {
     ".claude/tests/run.js": "// self-test, never templated\n",
     "contracts/business-analyst.yaml": "write: []\n",
     "layout.yaml": "version: 1\n",
-    "orchestrator/package.json": JSON.stringify({ name: "@agentclaude/orchestrator", version: "0.1.0" }),
+    "orchestrator/package.json": JSON.stringify({ name: "@software-team-agents/orchestrator", version: "0.1.0" }),
     "orchestrator/src/cli.ts": "// framework source, never templated\n",
     "_docs/module/sales/requirement.md": "# req, never templated\n",
     "README.md": "# repo readme, never templated\n",

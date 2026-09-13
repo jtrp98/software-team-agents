@@ -68,7 +68,7 @@ function decide(over: Partial<Parameters<typeof decideRecovery>[0]> = {}) {
 
 const tempDirs: string[] = [];
 function tempProject(policy: unknown): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-escalation-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sta-escalation-"));
   tempDirs.push(dir);
   if (policy !== undefined) {
     fs.writeFileSync(escalationPolicyPath(dir), JSON.stringify(policy), "utf8"); // JSON is valid YAML

@@ -28,16 +28,16 @@ import type { RuntimeAdapter, RuntimeAgentRequest } from "./runtime/runtimeAdapt
 import { RuntimeCapability } from "./runtime/runtimeCapabilities.js";
 
 // T-V6-006: resolveContextDocsRoot now falls back to installation.yaml when
-// AGENTCLAUDE_KNOWLEDGE_ROOT is unset, so every fixture in this file that
+// STA_KNOWLEDGE_ROOT is unset, so every fixture in this file that
 // relies on the plain projectRoot fallback must not see whatever
 // installation config (if any) is real on the machine running the suite.
-const AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+const STA_INSTALLATION_CONFIG_ORIGINAL = process.env.STA_INSTALLATION_CONFIG;
 beforeEach(() => {
-  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-cli-test-no-installation.yaml");
+  process.env.STA_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-cli-test-no-installation.yaml");
 });
 afterEach(() => {
-  if (AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-  else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL;
+  if (STA_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+  else process.env.STA_INSTALLATION_CONFIG = STA_INSTALLATION_CONFIG_ORIGINAL;
 });
 
 describe("T-V5-013 live upgrade alias", () => {
@@ -803,8 +803,8 @@ describe("T35 concurrency lock, wired into the CLI", () => {
     // A code task with no bindings is legal only in legacy (unconfigured) mode.
     // This test must not depend on whether THIS machine has an installation
     // configured, so point the mode check at a path that cannot exist.
-    const prevConfig = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-    process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(dir, "no-installation.yaml");
+    const prevConfig = process.env.STA_INSTALLATION_CONFIG;
+    process.env.STA_INSTALLATION_CONFIG = path.join(dir, "no-installation.yaml");
     // No lock pre-held this time — run will fail quickly (no `claude` on PATH in CI), but the
     // lock must still be released rather than leaking, or every future call would return 4 forever.
     try {
@@ -812,8 +812,8 @@ describe("T35 concurrency lock, wired into the CLI", () => {
       const code = await runCli(["status", "T-1", "--project-root", dir], dir);
       expect(code).toBe(0); // status never touches the lock, but this also proves the store isn't wedged
     } finally {
-      if (prevConfig === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-      else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = prevConfig;
+      if (prevConfig === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+      else process.env.STA_INSTALLATION_CONFIG = prevConfig;
       // Windows can hold a just-used temp dir for a moment (AV/indexer), turning
       // cleanup into EPERM and an otherwise-green suite red on timing alone.
       // One short retry; if it still fails, leave the tmpdir — force:true has

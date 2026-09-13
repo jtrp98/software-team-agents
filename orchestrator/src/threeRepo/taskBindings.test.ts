@@ -143,8 +143,8 @@ describe("Phase 2 task Target bindings", () => {
     );
     fs.writeFileSync(path.join(knowledge, "_docs", "module", "sales", "design.md"), "# Design\n\n## Targets\n\n- api\n");
     fs.writeFileSync(config, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\n`);
-    const previousConfig = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-    process.env.AGENTCLAUDE_INSTALLATION_CONFIG = config;
+    const previousConfig = process.env.STA_INSTALLATION_CONFIG;
+    process.env.STA_INSTALLATION_CONFIG = config;
     const store = new SqliteTaskStore(path.join(target, "state.db"));
     const taskRegistry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(target) });
     try {
@@ -169,8 +169,8 @@ describe("Phase 2 task Target bindings", () => {
       expect(store.loadTask("same-role")).toBeNull();
     } finally {
       taskRegistry.close();
-      if (previousConfig === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-      else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = previousConfig;
+      if (previousConfig === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+      else process.env.STA_INSTALLATION_CONFIG = previousConfig;
       fs.rmSync(root, { recursive: true, force: true });
     }
   });

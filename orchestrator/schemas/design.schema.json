@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://agentclaude.local/schemas/design.schema.json",
+  "$id": "https://software-team-agents.local/schemas/design.schema.json",
   "title": "design.md structural summary (T53)",
   "description": "Validates the structural summary orchestrator/src/docs/docStructure.ts extracts from a design.md — presence of the sections .claude/agents/system-analyst.md's Output template requires. Contract sections are named per-feature and can't be enumerated here, so they're not checked by this schema.",
   "type": "object",

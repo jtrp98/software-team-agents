@@ -194,7 +194,7 @@ describe("rollbackSta", () => {
 /** Only used by the `.agent-team`-facing tests. */
 function fixtureTemplatesDir(version: string, files: Record<string, string>): string {
   const source = tmpDir("sta-rollback-source-");
-  writeFiles(source, { ...files, "orchestrator/package.json": JSON.stringify({ name: "@agentclaude/orchestrator", version }) });
+  writeFiles(source, { ...files, "orchestrator/package.json": JSON.stringify({ name: "@software-team-agents/orchestrator", version }) });
   const templatesDir = path.join(source, "templates");
   buildTemplates(source, templatesDir, "2026-08-20T09:00:00Z");
   return templatesDir;

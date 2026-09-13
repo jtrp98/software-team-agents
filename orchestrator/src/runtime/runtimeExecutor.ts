@@ -183,7 +183,7 @@ export interface RuntimeExecutorOptions {
  */
 /**
  * The stack layout globs a guard hook cannot resolve for itself, packed for
- * the environment channel that already carries `AGENTCLAUDE_ROLE`.
+ * the environment channel that already carries `STA_ROLE`.
  *
  * Returns nothing at all for a role no stack profile scopes, so a non-engineer
  * stage's environment is unchanged. `read` is deliberately not sent: reading is
@@ -863,18 +863,18 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           // told which agent it is guarding. An adapter may add its own variables
           // on top; the contract says it must not drop these.
           env: {
-            AGENTCLAUDE_ROLE: role,
+            STA_ROLE: role,
           ...guardStackRules,
             // Guard hooks receive only tool paths, not this task's binding. Give
             // them the canonical write roots resolved by preflight; never derive
             // scope from cwd or an agent-provided path.
-            ...(hasTargetWrite ? { AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify(writableRootPaths) } : {}),
+            ...(hasTargetWrite ? { STA_WRITABLE_WORK_ROOTS: JSON.stringify(writableRootPaths) } : {}),
             // Read-only siblings never enter the write-root grant above. Their
             // ids ride separately so a guard can name the Target it refuses.
             ...(threeRepo ? { [GUARD_TARGET_WORK_ROOTS_ENV]: serializeGuardTargetWorkRoots(stageWorkRoots) } : {}),
             // The read-only Knowledge context, for prompts/hooks that need to
             // name where module documents actually live.
-            ...(threeRepo?.roots.knowledgeRoot ? { AGENTCLAUDE_KNOWLEDGE_ROOT: threeRepo.roots.knowledgeRoot } : {}),
+            ...(threeRepo?.roots.knowledgeRoot ? { STA_KNOWLEDGE_ROOT: threeRepo.roots.knowledgeRoot } : {}),
           },
           timeoutMs: opts.timeoutMs,
         });

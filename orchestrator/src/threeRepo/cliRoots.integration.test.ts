@@ -9,7 +9,7 @@ import { AgentStage } from "../types.js";
 import { resolveQaWorkRoots } from "./cliRoots.js";
 import { resolveWritableWorkRoots } from "./cliRoots.js";
 
-const INSTALLATION_CONFIG_ENV = "AGENTCLAUDE_INSTALLATION_CONFIG";
+const INSTALLATION_CONFIG_ENV = "STA_INSTALLATION_CONFIG";
 const originalInstallationConfig = process.env[INSTALLATION_CONFIG_ENV];
 
 function initialiseRepository(root: string): void {

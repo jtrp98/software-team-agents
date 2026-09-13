@@ -636,9 +636,9 @@ describe("software-team-agents — target-first end to end", () => {
       },
     });
     expect(launchedCwd.toLowerCase()).toBe(fs.realpathSync.native(target).toLowerCase());
-    expect(launchedEnv?.AGENTCLAUDE_WRITABLE_WORK_ROOTS).toBe("[]");
-    expect(launchedEnv?.AGENTCLAUDE_CONTEXT_CMD).toContain("orchestrator");
-    expect(launchedEnv?.AGENTCLAUDE_CONTEXT_CMD).toContain("context");
+    expect(launchedEnv?.STA_WRITABLE_WORK_ROOTS).toBe("[]");
+    expect(launchedEnv?.STA_CONTEXT_CMD).toContain("orchestrator");
+    expect(launchedEnv?.STA_CONTEXT_CMD).toContain("context");
     expect(launchedArgs).toEqual([]);
     expect(exitCode).toBe(7);
     const telemetry = new SqliteTaskStore(defaultStateDbPath(target));
@@ -1132,8 +1132,8 @@ describe("role workspace architecture (T-ROLE)", () => {
     });
     expect(exitCode).toBe(0);
     expect(launchedCwd.toLowerCase()).toBe(fs.realpathSync.native(knowledge).toLowerCase());
-    expect(launchedEnv?.AGENTCLAUDE_WRITABLE_WORK_ROOTS).toBe("[]");
-    expect(launchedEnv?.AGENTCLAUDE_CONTEXT_CMD).toContain("context");
+    expect(launchedEnv?.STA_WRITABLE_WORK_ROOTS).toBe("[]");
+    expect(launchedEnv?.STA_CONTEXT_CMD).toContain("context");
     expect(launchedArgs).toEqual([]);
   });
 

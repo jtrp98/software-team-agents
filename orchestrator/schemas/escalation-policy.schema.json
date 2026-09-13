@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://agentclaude.local/schemas/escalation-policy.schema.json",
+  "$id": "https://software-team-agents.local/schemas/escalation-policy.schema.json",
   "title": "Human escalation policy (escalation-policy.yaml)",
   "description": "What a failure's severity is allowed to do without a person (T40). Severity has been carried in every StructuredFailure since T06 and read by nothing; this is what gives it a consequence. The runtime authority is DEFAULT_ESCALATION_POLICY in orchestrator/src/escalation/escalationPolicy.ts — a policy that had to be read off disk to decide a retry would fail closed at the worst moment — and --check-escalation-policy fails when the two disagree.",
   "type": "object",

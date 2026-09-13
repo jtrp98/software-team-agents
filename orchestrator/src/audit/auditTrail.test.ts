@@ -39,7 +39,7 @@ function qaReport(status: "PASS" | "FAIL"): QaReportArtifact {
 
 const tempDirs: string[] = [];
 function tempDir(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-audit-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sta-audit-"));
   tempDirs.push(dir);
   return dir;
 }

@@ -66,9 +66,9 @@ const WORK_ROOTS: readonly RuntimeWorkRoot[] = [{ targetId: "target-a", path: TA
 // Exactly what `runtimeExecutor.ts` puts in `req.env` for a Target-write run —
 // this suite mirrors the production caller, never an invented request shape.
 const EXECUTOR_ENV = {
-  AGENTCLAUDE_ROLE: ROLE,
-  AGENTCLAUDE_KNOWLEDGE_ROOT: KNOWLEDGE_ROOT,
-  AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([TARGET_ROOT]),
+  STA_ROLE: ROLE,
+  STA_KNOWLEDGE_ROOT: KNOWLEDGE_ROOT,
+  STA_WRITABLE_WORK_ROOTS: JSON.stringify([TARGET_ROOT]),
 };
 
 /** The mandatory case list, in report order — this suite's contract with itself. */
@@ -312,13 +312,13 @@ async function runConformance(impl: Implementation): Promise<ConformanceRow[]> {
     { caseId: "context-injection", verdict: surface.includes(PROMPT) || calls.some((c) => c.input === PROMPT) ? "PASS" : "FAIL" },
     {
       caseId: "knowledge-binding",
-      verdict: env.AGENTCLAUDE_KNOWLEDGE_ROOT === KNOWLEDGE_ROOT ? "PASS" : "FAIL",
+      verdict: env.STA_KNOWLEDGE_ROOT === KNOWLEDGE_ROOT ? "PASS" : "FAIL",
       detail: "caller env reaches the child process undropped",
     },
     {
       caseId: "target-binding",
-      verdict: surface.includes(TARGET_ROOT) || (env.AGENTCLAUDE_WRITABLE_WORK_ROOTS ?? "").includes(TARGET_ROOT) ? "PASS" : "FAIL",
-      detail: impl.id === "codex" ? "OS-enforced --add-dir sandbox grant" : "AGENTCLAUDE_WRITABLE_WORK_ROOTS carried to the pre-tool guard",
+      verdict: surface.includes(TARGET_ROOT) || (env.STA_WRITABLE_WORK_ROOTS ?? "").includes(TARGET_ROOT) ? "PASS" : "FAIL",
+      detail: impl.id === "codex" ? "OS-enforced --add-dir sandbox grant" : "STA_WRITABLE_WORK_ROOTS carried to the pre-tool guard",
     },
     { caseId: "allowed-write-guard", verdict: guardVerdict(), detail: guards.reason ?? "write scope active for this run" },
     {
@@ -502,8 +502,8 @@ describe("T-V1-05 runtime conformance — one matrix, every runtime", () => {
         env: EXECUTOR_ENV,
       });
       const observed = adapter === mock ? mock.requests.at(-1)?.env : callsByRuntime.get(adapter.id)?.at(-1)?.env;
-      expect(observed?.AGENTCLAUDE_ROLE, adapter.id).toBe(EXECUTOR_ENV.AGENTCLAUDE_ROLE);
-      expect(observed?.AGENTCLAUDE_WRITABLE_WORK_ROOTS, adapter.id).toBe(EXECUTOR_ENV.AGENTCLAUDE_WRITABLE_WORK_ROOTS);
+      expect(observed?.STA_ROLE, adapter.id).toBe(EXECUTOR_ENV.STA_ROLE);
+      expect(observed?.STA_WRITABLE_WORK_ROOTS, adapter.id).toBe(EXECUTOR_ENV.STA_WRITABLE_WORK_ROOTS);
     }
     expect(registry.ids()).toEqual(["claude-code", "codex", "opencode", "antigravity", "paid-api", "mock"]);
   });

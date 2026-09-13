@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://agentclaude.local/schemas/bootstrap-state.schema.json",
+  "$id": "https://software-team-agents.local/schemas/bootstrap-state.schema.json",
   "title": "Project bootstrap state (knowledge/_bootstrap/STATE.yaml)",
   "description": "T73 — the one file that tracks whether a project has gone through Discovery (T74-T79) and Human Validation (T80) yet. One file per project (or per module, when `module` is set), because bootstrap runs once, not once per knowledge item. Committed, like the rest of `knowledge/`: whether a project is Ready is a fact the whole team needs, not a local run detail.",
   "type": "object",

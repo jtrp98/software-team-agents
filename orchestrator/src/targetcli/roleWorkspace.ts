@@ -1,4 +1,4 @@
-﻿import * as fs from "node:fs";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
 import { loadLocalTargetMapping, LocalTargetMappingError, type ResolvedLocalTarget } from "../threeRepo/localTargets.js";
@@ -391,18 +391,18 @@ function resolveTargetById(targetId: string, options: { knowledgeRoot: string; f
 /**
  * Environment for launching a role's runtime session. The guards
  * (.claude/hooks/block-outside-repo.js) allow writes under the session root
- * plus AGENTCLAUDE_WRITABLE_WORK_ROOTS — so the policy is enforced by giving
+ * plus STA_WRITABLE_WORK_ROOTS — so the policy is enforced by giving
  * each launch exactly its own workspace and an EXPLICITLY EMPTY extra-roots
  * list (never inherited from the user's shell):
  *
  *   BA  → writable: knowledgeRoot only. Target/Framework writes fail closed.
  *   DEV → writable: targetRoot only. Knowledge/Framework writes fail closed.
  *
- * A DEV session also receives AGENTCLAUDE_KNOWLEDGE_ROOT so prompts, hooks
+ * A DEV session also receives STA_KNOWLEDGE_ROOT so prompts, hooks
  * and generated includes can name the read-only Knowledge context without
  * hard-coding machine-specific paths.
  *
- * Symmetrically, a BA session receives AGENTCLAUDE_TARGET_ROOT whenever a
+ * Symmetrically, a BA session receives STA_TARGET_ROOT whenever a
  * Target binding resolved, so `system-analyst` can name a real Target to read
  * from without hard-coding a machine-specific path. Never set when no binding
  * resolved — BA must keep working exactly as before.
@@ -421,9 +421,9 @@ export function launchEnv(
   void role;
   return {
     ...existingEnv,
-    AGENTCLAUDE_WRITABLE_WORK_ROOTS: "[]",
-    ...(knowledgeRoot ? { AGENTCLAUDE_KNOWLEDGE_ROOT: knowledgeRoot } : {}),
-    ...(targetRoot ? { AGENTCLAUDE_TARGET_ROOT: targetRoot } : {}),
-    ...(contextCommand ? { AGENTCLAUDE_CONTEXT_CMD: contextCommand } : {}),
+    STA_WRITABLE_WORK_ROOTS: "[]",
+    ...(knowledgeRoot ? { STA_KNOWLEDGE_ROOT: knowledgeRoot } : {}),
+    ...(targetRoot ? { STA_TARGET_ROOT: targetRoot } : {}),
+    ...(contextCommand ? { STA_CONTEXT_CMD: contextCommand } : {}),
   };
 }

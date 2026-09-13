@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://agentclaude.local/schemas/test-pyramid.schema.json",
+  "$id": "https://software-team-agents.local/schemas/test-pyramid.schema.json",
   "title": "Test pyramid policy (test-pyramid.yaml)",
   "description": "Which test levels (unit/integration/api/e2e) a kind of task requires, by default, before qa-engineer or test-planner decides the same thing again from scratch every time (T21). This is a floor, not a plan: test-planner still writes the specific case per REQ-NNN, but the level(s) it picks for a task of this type may never be a strict subset of what's declared required here without saying why in test-plan.md's Unresolved Open Questions.",
   "type": "object",

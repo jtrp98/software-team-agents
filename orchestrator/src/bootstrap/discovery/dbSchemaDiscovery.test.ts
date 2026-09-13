@@ -40,7 +40,7 @@ function dbSchemaOf(result: DiscoveryResult, id: string): KnowledgeItemOf<"db-sc
 
 let root: string;
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-db-discovery-"));
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-db-discovery-"));
 });
 afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });

@@ -339,7 +339,7 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
   const runtimeRegistry: RuntimeRegistry = (dependencies.createRuntimeRegistry ?? createProductionRuntimeRegistry)(args.projectRoot);
   const defaultRuntimeId = args.runtime ?? DEFAULT_RUNTIME_ID;
 
-  const installationConfigPath = process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined;
+  const installationConfigPath = process.env.STA_INSTALLATION_CONFIG || undefined;
   let installation: InstallationConfig | undefined;
   try {
     installation = loadInstallationConfig(installationConfigPath);

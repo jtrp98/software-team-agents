@@ -54,7 +54,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const root = process.env.AGENTCLAUDE_WORKSPACE_ROOT || (process.cwd().replace(/\\/g, "/").endsWith("/.agents") ? path.resolve(process.cwd(), "..") : process.cwd());
+const root = process.env.STA_WORKSPACE_ROOT || (process.cwd().replace(/\\/g, "/").endsWith("/.agents") ? path.resolve(process.cwd(), "..") : process.cwd());
 
 /** Tools that carry a destination path. `run_command` is out of scope — see the header. */
 const PATH_TOOLS = new Set([
@@ -79,18 +79,18 @@ function readWorkspaceRole(nodeFs, nodePath, workspaceRoot) {
   return m ? m[1] : null;
 }
 function workspaceDenyWhy(role) {
-  const kb = process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
+  const kb = process.env.STA_KNOWLEDGE_ROOT;
   if (role === 'dev') return 'Requirements, designs, plans, test-plans, UX artifacts and registry files live in the Knowledge repository' + (kb ? ' (`' + kb + '`)' : '') + '. Run `software-team-agents ba` from the Knowledge workspace instead; this workspace (`role: dev` in .agent-team/config.yaml) owns app code plus review/security/deploy docs only.';
   return 'Contracts, workflows, stacks and pipeline policy are engineer payload for a Target checkout. Run engineering work with `software-team-agents dev` from a Target workspace; this workspace (`role: ba` in .agent-team/config.yaml) owns analysis docs and knowledge items only.';
 }
 function stackPathRules() {
   let parsed;
-  try { parsed = JSON.parse(process.env.AGENTCLAUDE_STACK_PATH_RULES || '{}'); } catch { return { write: [], deny: [] }; }
+  try { parsed = JSON.parse(process.env.STA_STACK_PATH_RULES || '{}'); } catch { return { write: [], deny: [] }; }
   const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);
   return { write: list(parsed && parsed.write), deny: list(parsed && parsed.deny) };
 }
 function boundReadOnlyTarget(nodePath, target) {
-  let roots; try { roots = JSON.parse(process.env.AGENTCLAUDE_TARGET_WORK_ROOTS || '[]'); } catch { return null; }
+  let roots; try { roots = JSON.parse(process.env.STA_TARGET_WORK_ROOTS || '[]'); } catch { return null; }
   if (!Array.isArray(roots)) return null;
   const absolute = nodePath.resolve(target);
   for (const candidate of roots) {
@@ -102,7 +102,7 @@ function boundReadOnlyTarget(nodePath, target) {
   return null;
 }
 function boundReadOnlyWhy(targetId) {
-  const role = process.env.AGENTCLAUDE_ROLE || 'current role';
+  const role = process.env.STA_ROLE || 'current role';
   return 'Blocked: Target "' + targetId + '" is bound read-only for this ' + role + ' invocation; writing to it is refused.';
 }
 function matchesGlob(pattern, target) {
@@ -217,7 +217,7 @@ function checkOne(rawPath, input) {
   const workRelative = toWritableWorkRelative(rawPath);
   if (workRelative !== null) {
     for (const pattern of UNIVERSAL_DENY) {
-      if (matchesGlob(pattern, workRelative)) return denyMessage(workRelative, process.env.AGENTCLAUDE_ROLE || null, `no agent may write \`${pattern}\``);
+      if (matchesGlob(pattern, workRelative)) return denyMessage(workRelative, process.env.STA_ROLE || null, `no agent may write \`${pattern}\``);
     }
     return null;
   }
@@ -240,7 +240,7 @@ function checkOne(rawPath, input) {
     }
   }
 
-  const role = process.env.AGENTCLAUDE_ROLE;
+  const role = process.env.STA_ROLE;
   if (!role) return null; // interactive run: the floor above is all this can honestly enforce
 
   const rules = readRules(role);
@@ -262,7 +262,7 @@ function checkOne(rawPath, input) {
 
 function toWritableWorkRelative(target) {
   let roots;
-  try { roots = JSON.parse(process.env.AGENTCLAUDE_WRITABLE_WORK_ROOTS || '[]'); } catch { return null; }
+  try { roots = JSON.parse(process.env.STA_WRITABLE_WORK_ROOTS || '[]'); } catch { return null; }
   if (!Array.isArray(roots)) return null;
   const abs = path.resolve(path.isAbsolute(target) ? target : path.resolve(root, target));
   for (const rawRoot of roots) {

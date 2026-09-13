@@ -183,7 +183,7 @@ describe("structural guards — the reason R03/R12 may shrink in CLAUDE.md", () 
   });
 
   it("does not mistake a word containing Agent for the tool", () => {
-    const root = fixture({ agents: { "setup.md": agentFile("Read, Write", "This is the AgentClaude pipeline; agents hand off in writing.\n") } });
+    const root = fixture({ agents: { "setup.md": agentFile("Read, Write", "This is the software-team-agents pipeline; agents hand off in writing.\n") } });
     expect(checkPromptBudget(root).ok).toBe(true);
   });
 });

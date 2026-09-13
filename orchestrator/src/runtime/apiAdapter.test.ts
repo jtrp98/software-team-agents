@@ -31,7 +31,7 @@ function request(root: string): RuntimeAgentRequest {
     model: "paid-model",
     autonomy: "read-only",
     guards: { writeAllow: ["src/**"], writeDeny: [".git/**"], forbidCommands: ["git"], exitChecks: ["code-green"] },
-    env: { AGENTCLAUDE_ROLE: "backend-engineer", AGENTCLAUDE_WRITABLE_WORK_ROOTS: "[]" },
+    env: { STA_ROLE: "backend-engineer", STA_WRITABLE_WORK_ROOTS: "[]" },
   };
 }
 

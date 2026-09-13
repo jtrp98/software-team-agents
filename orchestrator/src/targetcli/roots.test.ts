@@ -7,11 +7,11 @@ import { resolveContextDocsRoot } from "./roots.js";
 /**
  * T-V6-006: `resolveContextDocsRoot` must resolve the Knowledge root even
  * from a desktop session, which never runs through `software-team-agents
- * ba|dev` and so never has `AGENTCLAUDE_KNOWLEDGE_ROOT`. Precedence:
+ * ba|dev` and so never has `STA_KNOWLEDGE_ROOT`. Precedence:
  * env > installation.yaml > projectRoot. Isolation channel per
  * `installation.test.ts`: never read this machine's real binding.
  */
-const ENV_KEY = "AGENTCLAUDE_INSTALLATION_CONFIG";
+const ENV_KEY = "STA_INSTALLATION_CONFIG";
 const originalConfigEnv = process.env[ENV_KEY];
 
 const roots: string[] = [];
@@ -40,7 +40,7 @@ describe("resolveContextDocsRoot — env > installation.yaml > projectRoot", () 
     const configuredKnowledge = tmpDir("configured-knowledge");
     const envKnowledge = tmpDir("env-knowledge");
     writeInstallationConfig(tmpDir("cfg"), configuredKnowledge);
-    expect(resolveContextDocsRoot(projectRoot, { AGENTCLAUDE_KNOWLEDGE_ROOT: envKnowledge })).toBe(
+    expect(resolveContextDocsRoot(projectRoot, { STA_KNOWLEDGE_ROOT: envKnowledge })).toBe(
       path.resolve(envKnowledge),
     );
   });
@@ -72,7 +72,7 @@ describe("resolveContextDocsRoot — env > installation.yaml > projectRoot", () 
     const projectRoot = tmpDir("project");
     const envKnowledge = tmpDir("env-knowledge");
     delete process.env[ENV_KEY];
-    expect(resolveContextDocsRoot(projectRoot, { AGENTCLAUDE_KNOWLEDGE_ROOT: envKnowledge })).toBe(
+    expect(resolveContextDocsRoot(projectRoot, { STA_KNOWLEDGE_ROOT: envKnowledge })).toBe(
       path.resolve(envKnowledge),
     );
   });

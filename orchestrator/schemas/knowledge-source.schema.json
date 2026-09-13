@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://agentclaude.local/schemas/knowledge-source.schema.json",
+  "$id": "https://software-team-agents.local/schemas/knowledge-source.schema.json",
   "title": "Raw source record (knowledge/_sources/<SRC-id>.yaml)",
   "description": "One piece of raw material this project has ingested — a file that was read, a database that was introspected, an API spec, a person who was interviewed (T62). Deliberately a different record from a knowledge item: a source is what was there, an item is what somebody concluded from it. Collapsing the two loses the ability to answer 'we read this file, and derived nothing from it yet' — which is the normal state during discovery (V1.2/V1.3), not an error.",
   "type": "object",

@@ -28,7 +28,7 @@ what re-proves the mechanical half of every claim below before any tag.
   write `knowledge/_roles/**` or `.workflow/**` at all — denied to every role, tested in
   `aiBoundary.test.ts`.
 - Target owns real source code. Agents write only inside preflight-resolved writable work roots
-  (`AGENTCLAUDE_WRITABLE_WORK_ROOTS`); a runtime that cannot enforce a pre-tool guard is refused for
+  (`STA_WRITABLE_WORK_ROOTS`); a runtime that cannot enforce a pre-tool guard is refused for
   Target-write runs (`runtimeExecutor.test.ts`).
 
 **Runtimes — claims come from one record:** support levels are declared in

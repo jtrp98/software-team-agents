@@ -48,7 +48,7 @@ function stubStage(id: DiscoveryStage["id"], items: KnowledgeItemOf<"requirement
 
 let root: string;
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-bootstrap-run-"));
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-bootstrap-run-"));
 });
 afterEach(() => {
   fs.rmSync(root, { recursive: true, force: true });

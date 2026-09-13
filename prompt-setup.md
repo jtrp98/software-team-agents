@@ -180,7 +180,7 @@ already said):
   sync `UP_TO_DATE`, runtimes READY.
 - **The bootstrap's `Context:` line is a shell command, not a reference.** The
   synced `AGENTS.md`/`CLAUDE.md` tells the runtime to execute
-  `$AGENTCLAUDE_CONTEXT_CMD <agent-role> --module <name> --phase <n>` with the
+  `$STA_CONTEXT_CMD <agent-role> --module <name> --phase <n>` with the
   worker role (`backend-engineer`, …), never workspace role `dev`/`ba`. If a
   runtime skips it, run it and paste the result. Desktop sessions without
   launcher env are supported (`T-V6-006`):

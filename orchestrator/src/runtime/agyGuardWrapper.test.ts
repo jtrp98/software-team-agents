@@ -49,7 +49,7 @@ function invoke(script: string, root: string, payload: string, env: Record<strin
     input: payload,
     encoding: "utf8",
     cwd: root,
-    env: { ...process.env, AGENTCLAUDE_WORKSPACE_ROOT: root, AGENTCLAUDE_ROLE: "", ...env },
+    env: { ...process.env, STA_WORKSPACE_ROOT: root, STA_ROLE: "", ...env },
   });
   const stdout = proc.stdout ?? "";
   let reason: string | undefined;
@@ -71,13 +71,13 @@ const QA_CONTRACT = 'permissions:\n  write: ["review.md", "review/**"]\n  deny: 
 describe("AGY guard wrapper — allow is emitted on exactly one path", () => {
   it("allows a write the role's contract grants", () => {
     const root = workspace({ role: "dev", contracts: { "qa-engineer": QA_CONTRACT } });
-    const verdict = invoke(WRAPPER, root, writeCall("review.md"), { AGENTCLAUDE_ROLE: "qa-engineer" });
+    const verdict = invoke(WRAPPER, root, writeCall("review.md"), { STA_ROLE: "qa-engineer" });
     expect(verdict.allowed).toBe(true);
   });
 
   it("denies a write outside the role's contract", () => {
     const root = workspace({ role: "dev", contracts: { "qa-engineer": QA_CONTRACT } });
-    const verdict = invoke(WRAPPER, root, writeCall("server/index.ts"), { AGENTCLAUDE_ROLE: "qa-engineer" });
+    const verdict = invoke(WRAPPER, root, writeCall("server/index.ts"), { STA_ROLE: "qa-engineer" });
     expect(verdict.allowed).toBe(false);
     expect(verdict.reason).toMatch(/outside this role's declared paths/);
   });
@@ -105,9 +105,9 @@ describe("AGY guard wrapper — allow is emitted on exactly one path", () => {
     const writableTarget = workspace();
     const readOnlyTarget = workspace();
     const verdict = invoke(WRAPPER, root, writeCall(path.join(readOnlyTarget, "src", "foreign.ts")), {
-      AGENTCLAUDE_ROLE: "backend-engineer",
-      AGENTCLAUDE_WRITABLE_WORK_ROOTS: JSON.stringify([writableTarget]),
-      AGENTCLAUDE_TARGET_WORK_ROOTS: JSON.stringify([
+      STA_ROLE: "backend-engineer",
+      STA_WRITABLE_WORK_ROOTS: JSON.stringify([writableTarget]),
+      STA_TARGET_WORK_ROOTS: JSON.stringify([
         { targetId: "api", path: writableTarget, access: "write" },
         { targetId: "web", path: readOnlyTarget, access: "read" },
       ]),
@@ -160,7 +160,7 @@ describe("AGY guard wrapper — every non-allow path withholds the payload", () 
     );
     fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "commonjs" }), "utf8");
 
-    const verdict = invoke(broken, root, writeCall("review.md"), { AGENTCLAUDE_ROLE: "qa-engineer" });
+    const verdict = invoke(broken, root, writeCall("review.md"), { STA_ROLE: "qa-engineer" });
     expect(verdict.allowed).toBe(false);
     expect(verdict.stdout).not.toContain('"allow"');
   });

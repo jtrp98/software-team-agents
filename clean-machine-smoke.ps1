@@ -9,7 +9,7 @@ $env:USERPROFILE  = Join-Path $iso "Home"
 New-Item -ItemType Directory -Path $env:LOCALAPPDATA, $env:USERPROFILE -Force | Out-Null
 
 Write-Host "== [1] npm pack framework =="
-Set-Location C:\src\AgentClaude\software-team-agents
+Set-Location -LiteralPath $PSScriptRoot
 $pack = npm pack --silent 2>$null | Select-Object -Last 1
 $tgz = Join-Path (Get-Location) $pack
 Write-Host "tgz: $tgz"

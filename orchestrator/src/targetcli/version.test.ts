@@ -13,7 +13,7 @@ function fixtureRepo(pkgVersion: string, marker: string): string {
   roots.push(root);
   const files: Record<string, string> = {
     "CLAUDE.md": `# rules ${marker}\n`,
-    "orchestrator/package.json": JSON.stringify({ name: "@agentclaude/orchestrator", version: "0.1.0" }),
+    "orchestrator/package.json": JSON.stringify({ name: "@software-team-agents/orchestrator", version: "0.1.0" }),
   };
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "software-team-agents", version: pkgVersion }));
   for (const [rel, body] of Object.entries(files)) {

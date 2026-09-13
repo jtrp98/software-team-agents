@@ -79,7 +79,7 @@ describe("validateInstallation", () => {
     writeFiles(source, {
       "CLAUDE.md": "# rules\n",
       "layout.yaml": "version: 1\n",
-      "orchestrator/package.json": JSON.stringify({ name: "@agentclaude/orchestrator", version: "0.1.0" }),
+      "orchestrator/package.json": JSON.stringify({ name: "@software-team-agents/orchestrator", version: "0.1.0" }),
     });
     const templatesDir = path.join(source, "templates");
     buildTemplates(source, templatesDir, "2026-08-20T09:00:00Z");

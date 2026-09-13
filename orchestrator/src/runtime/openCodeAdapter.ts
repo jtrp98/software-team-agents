@@ -219,7 +219,7 @@ export class OpenCodeAdapter implements RuntimeAdapter {
         encoding: "utf8",
         timeout: req.timeoutMs ?? this.defaultTimeoutMs,
         maxBuffer: 64 * 1024 * 1024,
-        env: { ...process.env, ...req.env, AGENTCLAUDE_ROLE: req.role },
+        env: { ...process.env, ...req.env, STA_ROLE: req.role },
       }));
     } catch (e) {
       return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards, diagnostics: [`failed to spawn \`opencode\`: ${String(e)}`] };
@@ -250,7 +250,7 @@ export class OpenCodeAdapter implements RuntimeAdapter {
     const diagnostics: string[] = [];
     if (req.workRoots && req.workRoots.length > 0) {
       diagnostics.push(
-        `${req.workRoots.length} work root(s) ride on AGENTCLAUDE_WRITABLE_WORK_ROOTS + the sta-guards plugin — opencode run exposes no OS-level per-directory sandbox grant`,
+        `${req.workRoots.length} work root(s) ride on STA_WRITABLE_WORK_ROOTS + the sta-guards plugin — opencode run exposes no OS-level per-directory sandbox grant`,
       );
     }
     // Provider/auth failures are the runtime being unusable, not the task failing.

@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://agentclaude.local/schemas/repo-layout.schema.json",
+  "$id": "https://software-team-agents.local/schemas/repo-layout.schema.json",
   "title": "Repo layout (layout.yaml)",
   "description": "Declares which concept owns which directory, so that 'where does this file go?' has one answer a program can check rather than one answer per person who last added a file. Each concept answers exactly one question; a file belongs to the concept whose question it answers. Validated and cross-checked against the real filesystem by orchestrator/src/layout/repoLayout.ts.",
   "type": "object",

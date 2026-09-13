@@ -347,7 +347,7 @@ software-team-agents dev       # preflight (Knowledge required!) → launch จ�
 | Write ที่อื่น | Framework/Target = DENY | Framework/Knowledge = DENY |
 | Knowledge-side artifacts (`_docs/module/*/requirement\|design\|test-plan.md`, `uxui/**`, `knowledge/**`) | ✅ เขียนได้ | **DENY ที่ hook** — ต้องรันจาก Knowledge workspace |
 
-Write policy บังคับจริงผ่าน interactive launch: session ได้ writable root เดียวคือ Role Workspace ของตัวเอง (cwd + `AGENTCLAUDE_WRITABLE_WORK_ROOTS=[]`) — cross-repo writes hit `block-outside-repo` guard (fail-closed) DEV ไม่มี Knowledge binding = preflight fail พร้อมวิธีแก้ทันที. สำหรับ orchestrated V3 run executor ใส่เฉพาะ canonical Target write roots ที่ three-repo preflight resolve แล้ว
+Write policy บังคับจริงผ่าน interactive launch: session ได้ writable root เดียวคือ Role Workspace ของตัวเอง (cwd + `STA_WRITABLE_WORK_ROOTS=[]`) — cross-repo writes hit `block-outside-repo` guard (fail-closed) DEV ไม่มี Knowledge binding = preflight fail พร้อมวิธีแก้ทันที. สำหรับ orchestrated V3 run executor ใส่เฉพาะ canonical Target write roots ที่ three-repo preflight resolve แล้ว
 
 DEV bind Knowledge ได้ 2 ทาง — repo-relative (commit ไปกับ Target):
 
@@ -571,7 +571,7 @@ sta configure identity --figma-email <email> --claude-email <email>
 | `block-git.js` | PreToolUse (Bash/Write/Edit) | state-changing git ถูก block (read-only ผ่าน) |
 | `block-outside-repo.js` | PreToolUse | ทุก write resolve อยู่ใน writable roots เท่านั้น |
 | `block-doc-rewrite.js` | PreToolUse (Write) | doc ที่มีอยู่ต้อง amend ไม่ regenerate |
-| `block-path-permissions.js` | PreToolUse | เขียนได้เฉพาะ path ที่ `contracts/<role>.yaml` ให้ (role อ่านจาก `AGENTCLAUDE_ROLE`) + **workspace rule**: workspace `role: dev` block การเขียน requirement/design/test-plan/uxui/knowledge แม้ไม่มี role env — ต้องรันจาก Knowledge workspace |
+| `block-path-permissions.js` | PreToolUse | เขียนได้เฉพาะ path ที่ `contracts/<role>.yaml` ให้ (role อ่านจาก `STA_ROLE`) + **workspace rule**: workspace `role: dev` block การเขียน requirement/design/test-plan/uxui/knowledge แม้ไม่มี role env — ต้องรันจาก Knowledge workspace |
 | `require-green-before-stop.js` | Stop/SubagentStop | engineer ส่งงานต่อไม่ได้ถ้า typecheck/lint แดง |
 | `block-secret-leak.js` | Stop/SubagentStop | ไฟล์ที่ run แก้ห้ามมี hardcoded secret (`.env.example` รวมด้วย) |
 
@@ -645,7 +645,12 @@ Regenerate mirror ใน Framework repo เอง: `npm --prefix orchestrator ru
 | `project.yaml` | Framework repo | `current` (stack ที่ agents สร้างได้จริง) vs `target` (stack อนาคต — checked ต่างมาตรฐาน) |
 | `layout.yaml`, `escalation-policy.yaml`, `test-pyramid.yaml` | Framework repo (+ synced ไป DEV workspace) | directory ownership / recovery policy / test levels |
 
-Environment variables ที่ runtime ใช้: `AGENTCLAUDE_ROLE` (role ปัจจุบันสำหรับ path permissions), `AGENTCLAUDE_WRITABLE_WORK_ROOTS` (JSON array — interactive `dev|ba` ตั้ง `[]`; orchestrated Target-write stage ได้เฉพาะ canonical roots จาก three-repo preflight), และ `AGENTCLAUDE_KNOWLEDGE_ROOT` (read-only Knowledge context เมื่อ resolve ได้)
+Environment variables ที่ runtime ใช้: `STA_ROLE` (role ปัจจุบันสำหรับ path permissions), `STA_WRITABLE_WORK_ROOTS` (JSON array — interactive `dev|ba` ตั้ง `[]`; orchestrated Target-write stage ได้เฉพาะ canonical roots จาก three-repo preflight), และ `STA_KNOWLEDGE_ROOT` (read-only Knowledge context เมื่อ resolve ได้)
+
+Runtime protocol ใช้ namespace `STA_*` เท่านั้นเพื่อไม่ผูก Framework เข้ากับ runtime ใด runtime
+หนึ่ง การเปลี่ยน namespace นี้เป็น breaking change: หลังอัปเกรด Framework ต้องรัน
+`software-team-agents sync` ให้ launchers, hooks และ generated bindings ทุก runtime รับ contract
+ชุดเดียวกันก่อนเริ่ม session ใหม่
 
 Config ทั้งหมดเป็น optional; config ที่มีเพียง `schema_version: 1` ยัง parse และ resolve เป็น default runner (`claude-code`) + frontmatter model — และ config ที่ไม่มี `routing.order` ทำงานเหมือนเดิมทุกประการ. ตัวอย่างที่ตั้ง per-role route, support opt-in และ fallback order (หมายเหตุ: `execution.mode`/`allow_handoff`/`routing.strategy`/`model_routing` โหลดได้แต่ไม่มีผล จึงไม่อยู่ในตัวอย่างนี้):
 

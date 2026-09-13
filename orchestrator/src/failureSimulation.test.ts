@@ -184,7 +184,7 @@ describe("Failure Simulation (T56)", () => {
   });
 
   it("scenario: invalid schema — a state.db from a newer/incompatible schema version refuses to open, rather than silently misreading it (see also taskStore.test.ts)", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-failsim-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sta-failsim-"));
     try {
       const dbPath = path.join(dir, "state.db");
       const store = new SqliteTaskStore(dbPath);
@@ -210,7 +210,7 @@ describe("Failure Simulation (T56)", () => {
   });
 
   it("scenario: missing file — an agent reading a module doc that was never written gets null, not a thrown exception (see also moduleDocs.test.ts)", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-failsim-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sta-failsim-"));
     try {
       expect(readModuleDoc(dir, "nonexistent-module", "design.md")).toBeNull();
     } finally {
@@ -219,7 +219,7 @@ describe("Failure Simulation (T56)", () => {
   });
 
   it("scenario: database unavailable — a path the process cannot open fails as a typed, actionable error (see also taskStore.test.ts)", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-failsim-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sta-failsim-"));
     try {
       // A plain file sits where a directory needs to go — mkdirSync can never create it, the
       // same shape a permissions problem or a vanished mount point would produce.

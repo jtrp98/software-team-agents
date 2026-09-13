@@ -9,7 +9,7 @@ import { defaultInstallationConfigPath } from "./installation.js";
  * stopped being honoured there, an E2E on a configured machine would silently
  * read that machine's real Knowledge root.
  */
-const ENV_KEY = "AGENTCLAUDE_INSTALLATION_CONFIG";
+const ENV_KEY = "STA_INSTALLATION_CONFIG";
 const original = process.env[ENV_KEY];
 
 afterEach(() => {
@@ -17,7 +17,7 @@ afterEach(() => {
   else process.env[ENV_KEY] = original;
 });
 
-describe("defaultInstallationConfigPath — the AGENTCLAUDE_INSTALLATION_CONFIG override", () => {
+describe("defaultInstallationConfigPath — the STA_INSTALLATION_CONFIG override", () => {
   it("resolves the override, absolute, ahead of every platform default", () => {
     process.env[ENV_KEY] = "some/installation.yaml";
     expect(defaultInstallationConfigPath()).toBe(path.resolve("some/installation.yaml"));

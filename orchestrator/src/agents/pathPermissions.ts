@@ -86,7 +86,7 @@ export const readWorkspaceRole = resolveWorkspaceRole;
 /** The why-text for a workspace-role deny, naming the Knowledge root when the launch supplied one. */
 export function workspaceDenyWhy(role: "ba" | "dev", knowledgeRoot?: string): string {
   if (role === "dev") {
-    const kb = knowledgeRoot || process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
+    const kb = knowledgeRoot || process.env.STA_KNOWLEDGE_ROOT;
     return (
       "Requirements, designs, plans, test-plans, UX artifacts and registry files live in the Knowledge repository" +
       (kb ? ` (\`${kb}\`)` : "") +
@@ -176,7 +176,7 @@ function globToRegExp(pattern: string): RegExp {
  * `stacks/<profile>/stack.yaml`, and hooks here take no YAML parser by
  * agreement. So the orchestrator — which already resolves them, and is the only
  * layer that knows which agent it invoked — hands them over beside
- * `AGENTCLAUDE_ROLE`, exactly as `AGENTCLAUDE_WRITABLE_WORK_ROOTS` hands over
+ * `STA_ROLE`, exactly as `STA_WRITABLE_WORK_ROOTS` hands over
  * the canonical write roots preflight resolved.
  *
  * Absent or malformed, both halves drop out together: the layout paths leave
@@ -184,14 +184,14 @@ function globToRegExp(pattern: string): RegExp {
  * deny-by-default rather than slipping through. The failure mode is stricter
  * than intended, never looser.
  */
-export const GUARD_STACK_RULES_ENV = "AGENTCLAUDE_STACK_PATH_RULES";
+export const GUARD_STACK_RULES_ENV = "STA_STACK_PATH_RULES";
 
 /**
  * Full Target access map for a single invocation. This is identification data
  * for guard refusal messages, not a grant: only
- * `AGENTCLAUDE_WRITABLE_WORK_ROOTS` can open a write root.
+ * `STA_WRITABLE_WORK_ROOTS` can open a write root.
  */
-export const GUARD_TARGET_WORK_ROOTS_ENV = "AGENTCLAUDE_TARGET_WORK_ROOTS";
+export const GUARD_TARGET_WORK_ROOTS_ENV = "STA_TARGET_WORK_ROOTS";
 
 export interface GuardTargetWorkRoot {
   readonly targetId: string;
@@ -238,13 +238,13 @@ const GUARD_RULE_FUNCTION_SOURCE: readonly string[] = [
   "  return m ? m[1] : null;",
   "}",
   "function workspaceDenyWhy(role) {",
-  "  const kb = process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;",
+  "  const kb = process.env.STA_KNOWLEDGE_ROOT;",
   "  if (role === 'dev') return 'Requirements, designs, plans, test-plans, UX artifacts and registry files live in the Knowledge repository' + (kb ? ' (`' + kb + '`)' : '') + '. Run `software-team-agents ba` from the Knowledge workspace instead; this workspace (`role: dev` in .agent-team/config.yaml) owns app code plus review/security/deploy docs only.';",
   "  return 'Contracts, workflows, stacks and pipeline policy are engineer payload for a Target checkout. Run engineering work with `software-team-agents dev` from a Target workspace; this workspace (`role: ba` in .agent-team/config.yaml) owns analysis docs and knowledge items only.';",
   "}",
   "function stackPathRules() {",
   "  let parsed;",
-  "  try { parsed = JSON.parse(process.env.AGENTCLAUDE_STACK_PATH_RULES || '{}'); } catch { return { write: [], deny: [] }; }",
+  "  try { parsed = JSON.parse(process.env.STA_STACK_PATH_RULES || '{}'); } catch { return { write: [], deny: [] }; }",
   "  const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);",
   "  return { write: list(parsed && parsed.write), deny: list(parsed && parsed.deny) };",
   "}",
@@ -261,7 +261,7 @@ const GUARD_RULE_FUNCTION_SOURCE: readonly string[] = [
   "  return null;",
   "}",
   "function boundReadOnlyWhy(targetId) {",
-  "  const role = process.env.AGENTCLAUDE_ROLE || 'current role';",
+  "  const role = process.env.STA_ROLE || 'current role';",
   "  return 'Blocked: Target \"' + targetId + '\" is bound read-only for this ' + role + ' invocation; writing to it is refused.';",
   "}",
   "function matchesGlob(pattern, target) {",

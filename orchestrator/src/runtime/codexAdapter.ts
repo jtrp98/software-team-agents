@@ -384,7 +384,7 @@ export class CodexAdapter implements RuntimeAdapter {
         maxBuffer: 64 * 1024 * 1024,
         // Same channel as `claudeCodeAdapter.ts` — set unconditionally since it
         // costs nothing if the runtime never asks a guard to read it.
-        env: { ...process.env, ...req.env, AGENTCLAUDE_ROLE: req.role },
+        env: { ...process.env, ...req.env, STA_ROLE: req.role },
       });
     } catch (e) {
       return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards, diagnostics: [`failed to spawn \`codex\`: ${String(e)}`] };

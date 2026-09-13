@@ -6,16 +6,16 @@ import { AgentStage } from "../types.js";
 import { sliceModuleDocsWithSavings } from "../runtime/agentRunAssembly.js";
 import { buildContextCommand, ContextCommandError, contextCommandJson, renderContextCommand } from "./contextCommand.js";
 
-// T-V6-006: `env: {}` below means "no AGENTCLAUDE_KNOWLEDGE_ROOT", which now
+// T-V6-006: `env: {}` below means "no STA_KNOWLEDGE_ROOT", which now
 // falls through to installation.yaml — isolate it from whatever is real on
 // the machine running this suite, exactly like installation.test.ts does.
-const AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+const STA_INSTALLATION_CONFIG_ORIGINAL = process.env.STA_INSTALLATION_CONFIG;
 beforeEach(() => {
-  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-context-command-test-no-installation.yaml");
+  process.env.STA_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-context-command-test-no-installation.yaml");
 });
 afterEach(() => {
-  if (AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-  else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL;
+  if (STA_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+  else process.env.STA_INSTALLATION_CONFIG = STA_INSTALLATION_CONFIG_ORIGINAL;
 });
 
 function rootWith(modules: Record<string, Partial<Record<"requirement.md" | "design.md" | "plan.md", string>>>): string {
@@ -57,7 +57,7 @@ describe("sta context command (T-V3TOK-040/041/043)", () => {
     const knowledge = rootWith({ right: { "design.md": DESIGN } });
     const result = await buildContextCommand({
       role: "backend-engineer", moduleHint: "right", projectRoot: target,
-      env: { AGENTCLAUDE_KNOWLEDGE_ROOT: knowledge },
+      env: { STA_KNOWLEDGE_ROOT: knowledge },
     });
     expect(result.docsRoot).toBe(path.resolve(knowledge));
     expect(result.module).toBe("right");

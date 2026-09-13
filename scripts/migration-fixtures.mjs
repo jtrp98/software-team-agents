@@ -59,7 +59,7 @@ function assertFixture(condition, message, detail = "") {
 function fixtureEnv(root) {
   return {
     ...process.env,
-    AGENTCLAUDE_INSTALLATION_CONFIG: path.join(root, "Sandboxed Installation Config", "installation.yaml"),
+    STA_INSTALLATION_CONFIG: path.join(root, "Sandboxed Installation Config", "installation.yaml"),
   };
 }
 
@@ -275,7 +275,7 @@ try {
     const initKnowledge = runBin(staBin, ["init", "--mode", "three-repo", "--project-root", knowledge], { env });
     assertFixture(initKnowledge.status === 0, "fresh Knowledge init failed", initKnowledge.out);
     const bind = runBin(staBin, ["configure", "knowledge-root", knowledge], { cwd: packageRoot, env });
-    assertFixture(bind.status === 0 && fs.existsSync(env.AGENTCLAUDE_INSTALLATION_CONFIG), "fresh bind failed", bind.out);
+    assertFixture(bind.status === 0 && fs.existsSync(env.STA_INSTALLATION_CONFIG), "fresh bind failed", bind.out);
     const initTarget = runBin(targetBin, ["init"], { cwd: target, env });
     assertFixture(initTarget.status === 0, "fresh Target init failed", initTarget.out);
     const sync = runBin(targetBin, ["sync"], { cwd: target, env });
@@ -313,7 +313,7 @@ try {
     fs.writeFileSync(path.join(project, ".sta", "config.yaml"), "schema_version: 1\n", "utf8");
     const doctor = await runDoctor({
       projectRoot: project,
-      installationConfigPath: env.AGENTCLAUDE_INSTALLATION_CONFIG,
+      installationConfigPath: env.STA_INSTALLATION_CONFIG,
       templatesDir: path.join(packageRoot, "templates"),
       probe: async () => ({ available: true, version: "fixture" }),
       capabilities: async () => ({ runtimeId: "claude-code", verified: [], unverified: [], missingRequired: [], fallbacks: [] }),

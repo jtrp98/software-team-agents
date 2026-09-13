@@ -43,9 +43,9 @@ export interface Roots {
  */
 export function resolveContextDocsRoot(
   projectRoot: string,
-  env: { AGENTCLAUDE_KNOWLEDGE_ROOT?: string | undefined } = process.env,
+  env: { STA_KNOWLEDGE_ROOT?: string | undefined } = process.env,
 ): string {
-  const knowledgeRoot = env.AGENTCLAUDE_KNOWLEDGE_ROOT?.trim();
+  const knowledgeRoot = env.STA_KNOWLEDGE_ROOT?.trim();
   if (knowledgeRoot) return path.resolve(knowledgeRoot);
   try {
     const configured = loadInstallationConfig(defaultInstallationConfigPath()).knowledge_root;
@@ -62,7 +62,7 @@ export function resolveContextDocsRoot(
  *
  * This is the *workspace* role — which repository this checkout is, `ba` or
  * `dev`. It is not an agent's role, and nothing derived from it can stand in
- * for one: a guard hook carries no subagent identity, so `AGENTCLAUDE_ROLE` and
+ * for one: a guard hook carries no subagent identity, so `STA_ROLE` and
  * the per-agent contract boundary it selects stay an orchestrated-run concern.
  *
  * Read on its own rather than through `loadTargetConfig`, so a config this CLI

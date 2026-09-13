@@ -409,18 +409,18 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
 
   it("the generated deny explanation agrees with the TypeScript one", () => {
     const generated = evaluateBlock();
-    const saved = process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
+    const saved = process.env.STA_KNOWLEDGE_ROOT;
     try {
-      delete process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
+      delete process.env.STA_KNOWLEDGE_ROOT;
       expect(generated.workspaceDenyWhy("dev")).toBe(workspaceDenyWhy("dev"));
       expect(generated.workspaceDenyWhy("ba")).toBe(workspaceDenyWhy("ba"));
 
-      process.env.AGENTCLAUDE_KNOWLEDGE_ROOT = "C:/src/knowledge-schoolbright";
+      process.env.STA_KNOWLEDGE_ROOT = "C:/src/knowledge-schoolbright";
       expect(generated.workspaceDenyWhy("dev")).toBe(workspaceDenyWhy("dev"));
       expect(generated.workspaceDenyWhy("dev")).toContain("C:/src/knowledge-schoolbright");
     } finally {
-      if (saved === undefined) delete process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
-      else process.env.AGENTCLAUDE_KNOWLEDGE_ROOT = saved;
+      if (saved === undefined) delete process.env.STA_KNOWLEDGE_ROOT;
+      else process.env.STA_KNOWLEDGE_ROOT = saved;
     }
   });
 
@@ -456,10 +456,10 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
     const generated = evaluateBlock();
     const writable = path.resolve("fixture", "api");
     const readOnly = path.resolve("fixture", "web");
-    const savedRole = process.env.AGENTCLAUDE_ROLE;
+    const savedRole = process.env.STA_ROLE;
     const savedRoots = process.env[GUARD_TARGET_WORK_ROOTS_ENV];
     try {
-      process.env.AGENTCLAUDE_ROLE = "backend-engineer";
+      process.env.STA_ROLE = "backend-engineer";
       process.env[GUARD_TARGET_WORK_ROOTS_ENV] = serializeGuardTargetWorkRoots([
         { targetId: "api", path: writable, access: "write" },
         { targetId: "web", path: readOnly, access: "read" },
@@ -472,8 +472,8 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
         { targetId: "web", path: readOnly, access: "read" },
       ]);
     } finally {
-      if (savedRole === undefined) delete process.env.AGENTCLAUDE_ROLE;
-      else process.env.AGENTCLAUDE_ROLE = savedRole;
+      if (savedRole === undefined) delete process.env.STA_ROLE;
+      else process.env.STA_ROLE = savedRole;
       if (savedRoots === undefined) delete process.env[GUARD_TARGET_WORK_ROOTS_ENV];
       else process.env[GUARD_TARGET_WORK_ROOTS_ENV] = savedRoots;
     }

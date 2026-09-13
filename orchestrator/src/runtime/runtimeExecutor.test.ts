@@ -22,15 +22,15 @@ import { latestExecutionPacketPath, readExecutionPacket } from "../state/runtime
 import type { ModelTierPolicy } from "./modelTiers.js";
 
 // T-V6-006: `env: {}` (used below) now falls through to installation.yaml
-// when AGENTCLAUDE_KNOWLEDGE_ROOT is unset — isolate it from whatever is
+// when STA_KNOWLEDGE_ROOT is unset — isolate it from whatever is
 // real on the machine running this suite.
-const AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+const STA_INSTALLATION_CONFIG_ORIGINAL = process.env.STA_INSTALLATION_CONFIG;
 beforeEach(() => {
-  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-runtime-executor-test-no-installation.yaml");
+  process.env.STA_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-runtime-executor-test-no-installation.yaml");
 });
 afterEach(() => {
-  if (AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-  else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL;
+  if (STA_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+  else process.env.STA_INSTALLATION_CONFIG = STA_INSTALLATION_CONFIG_ORIGINAL;
 });
 
 /**
@@ -367,7 +367,7 @@ describe("createRuntimeExecutor — what reaches the adapter (T108)", () => {
 
     await executor({ stage: AgentStage.QA_ENGINEER, taskId: "T-1", context: [] });
 
-    expect(runtime.requests[0].env?.AGENTCLAUDE_ROLE).toBe("qa-engineer");
+    expect(runtime.requests[0].env?.STA_ROLE).toBe("qa-engineer");
   });
 
   it("defaults to `propose` autonomy — automating handoffs is not the same as removing confirmations", async () => {
@@ -1134,7 +1134,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
     await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-target", context: [] });
     expect(runtime.requests[0]).toMatchObject({ cwd: scoped.targetRoot, bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "write" }] });
     // T-WG7 — the Knowledge root rides on the env so hooks/prompts can name it.
-    expect(runtime.requests[0]!.env).toMatchObject({ AGENTCLAUDE_ROLE: "backend-engineer", AGENTCLAUDE_KNOWLEDGE_ROOT: scoped.knowledgeRoot });
+    expect(runtime.requests[0]!.env).toMatchObject({ STA_ROLE: "backend-engineer", STA_KNOWLEDGE_ROOT: scoped.knowledgeRoot });
   });
 
   it("T-V1-16 two-Target isolation: the guard env carries only the write-access root, never the read-only sibling", async () => {
@@ -1156,10 +1156,10 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
       threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, workRoots } }),
     });
     await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-two", context: [] });
-    const writable = JSON.parse(runtime.requests[0]!.env!.AGENTCLAUDE_WRITABLE_WORK_ROOTS!);
+    const writable = JSON.parse(runtime.requests[0]!.env!.STA_WRITABLE_WORK_ROOTS!);
     expect(writable).toEqual([scoped.targetRoot]);
     expect(JSON.stringify(writable)).not.toContain(otherTargetRoot);
-    expect(JSON.parse(runtime.requests[0]!.env!.AGENTCLAUDE_TARGET_WORK_ROOTS!)).toEqual([
+    expect(JSON.parse(runtime.requests[0]!.env!.STA_TARGET_WORK_ROOTS!)).toEqual([
       { targetId: "api", path: scoped.targetRoot, access: "write" },
       { targetId: "web", path: otherTargetRoot, access: "read" },
     ]);
@@ -1255,7 +1255,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
         const request = runtime.requests.at(-1)!;
         const expectedRoot = stage === AgentStage.BACKEND_ENGINEER ? scoped.targetRoot : frontendRoot;
         expect(request.cwd).toBe(expectedRoot);
-        expect(JSON.parse(request.env!.AGENTCLAUDE_WRITABLE_WORK_ROOTS!)).toEqual([expectedRoot]);
+        expect(JSON.parse(request.env!.STA_WRITABLE_WORK_ROOTS!)).toEqual([expectedRoot]);
         expect(readExecutionPacket(path.resolve(scoped.bindingRoot, result.packetPath!)).scope.roots).toEqual([expectedRoot]);
       }
     }

@@ -1,5 +1,17 @@
 # Release Notes
 
+## Unreleased — vendor-neutral naming migration
+
+**Bucket: Major; final version requires human confirmation.** Runtime environment contracts now use
+the vendor-neutral `STA_*` namespace exclusively. The private development package is now
+`@software-team-agents/orchestrator`, its direct binary is `sta-orchestrate`, and JSON Schema ids use
+`https://software-team-agents.local/`. Existing installations must reinstall the Framework package
+and run `software-team-agents sync` before launching another session so every generated binding and
+guard host receives the same contract. No compatibility alias is retained: mixed old/new payloads
+must fail validation rather than silently weakening a guard.
+
+---
+
 ## Version numbering rule — `package.json` (root), the number `software-team-agents --version` reports
 
 Not automated (this repo has no conventional-commit discipline, so a bumper would guess the bucket
@@ -191,7 +203,7 @@ None. V6 is backward-compatible with 1.0.0.
 ### Desktop and environment independence
 
 - **Knowledge root resolution without launcher environment variables** (`T-V6-006`).
-  `resolveContextDocsRoot` falls back to `loadInstallationConfig().knowledge_root` when `AGENTCLAUDE_KNOWLEDGE_ROOT` is unset. Desktop sessions (such as Claude Code desktop or interactive IDEs) can now assemble context and run `sta context` without launcher-injected environment variables. Missing or unconfigured installation files degrade gracefully to `projectRoot`.
+  `resolveContextDocsRoot` falls back to `loadInstallationConfig().knowledge_root` when `STA_KNOWLEDGE_ROOT` is unset. Desktop sessions (such as Claude Code desktop or interactive IDEs) can now assemble context and run `sta context` without launcher-injected environment variables. Missing or unconfigured installation files degrade gracefully to `projectRoot`.
 - **`model-tiers.yaml` synced to BA workspaces** (`T-V6-005`).
   `model-tiers.yaml` is now distributed to Knowledge workspaces during `sta sync`, allowing `project-manager` to validate task `Tier` annotations without schema errors.
 

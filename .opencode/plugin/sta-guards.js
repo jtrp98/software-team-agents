@@ -29,10 +29,10 @@
  *
  * IDENTITY AND ENVIRONMENT
  *
- * Same channel as the Claude-side hooks: `AGENTCLAUDE_ROLE` (set by the
+ * Same channel as the Claude-side hooks: `STA_ROLE` (set by the
  * orchestrator per stage) selects whose contract applies; without it only the
  * universal floor holds — an interactive run has no role to check against.
- * `AGENTCLAUDE_WRITABLE_WORK_ROOTS` (JSON array of absolute paths) grants the
+ * `STA_WRITABLE_WORK_ROOTS` (JSON array of absolute paths) grants the
  * canonical Target roots in three-repo mode; invalid input grants nothing.
  *
  * WHERE THE RULES COME FROM
@@ -74,18 +74,18 @@ function readWorkspaceRole(nodeFs, nodePath, workspaceRoot) {
   return m ? m[1] : null;
 }
 function workspaceDenyWhy(role) {
-  const kb = process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
+  const kb = process.env.STA_KNOWLEDGE_ROOT;
   if (role === 'dev') return 'Requirements, designs, plans, test-plans, UX artifacts and registry files live in the Knowledge repository' + (kb ? ' (`' + kb + '`)' : '') + '. Run `software-team-agents ba` from the Knowledge workspace instead; this workspace (`role: dev` in .agent-team/config.yaml) owns app code plus review/security/deploy docs only.';
   return 'Contracts, workflows, stacks and pipeline policy are engineer payload for a Target checkout. Run engineering work with `software-team-agents dev` from a Target workspace; this workspace (`role: ba` in .agent-team/config.yaml) owns analysis docs and knowledge items only.';
 }
 function stackPathRules() {
   let parsed;
-  try { parsed = JSON.parse(process.env.AGENTCLAUDE_STACK_PATH_RULES || '{}'); } catch { return { write: [], deny: [] }; }
+  try { parsed = JSON.parse(process.env.STA_STACK_PATH_RULES || '{}'); } catch { return { write: [], deny: [] }; }
   const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);
   return { write: list(parsed && parsed.write), deny: list(parsed && parsed.deny) };
 }
 function boundReadOnlyTarget(nodePath, target) {
-  let roots; try { roots = JSON.parse(process.env.AGENTCLAUDE_TARGET_WORK_ROOTS || '[]'); } catch { return null; }
+  let roots; try { roots = JSON.parse(process.env.STA_TARGET_WORK_ROOTS || '[]'); } catch { return null; }
   if (!Array.isArray(roots)) return null;
   const absolute = nodePath.resolve(target);
   for (const candidate of roots) {
@@ -97,7 +97,7 @@ function boundReadOnlyTarget(nodePath, target) {
   return null;
 }
 function boundReadOnlyWhy(targetId) {
-  const role = process.env.AGENTCLAUDE_ROLE || 'current role';
+  const role = process.env.STA_ROLE || 'current role';
   return 'Blocked: Target "' + targetId + '" is bound read-only for this ' + role + ' invocation; writing to it is refused.';
 }
 function matchesGlob(pattern, target) {
@@ -185,7 +185,7 @@ export const StaGuards = async ({ project }) => {
 
     for (const pattern of UNIVERSAL_DENY) {
       if (matchesGlob(pattern, rel)) {
-        return denyMessage(rel, process.env.AGENTCLAUDE_ROLE || null, `no agent may write \`${pattern}\``);
+        return denyMessage(rel, process.env.STA_ROLE || null, `no agent may write \`${pattern}\``);
       }
     }
 
@@ -206,7 +206,7 @@ export const StaGuards = async ({ project }) => {
       }
     }
 
-    const role = process.env.AGENTCLAUDE_ROLE;
+    const role = process.env.STA_ROLE;
     if (!role) return null; // interactive run: the floor above is all this can honestly enforce
 
     const rules = readRules(nodeFs, nodePath, root, role);
@@ -232,7 +232,7 @@ export const StaGuards = async ({ project }) => {
   function writableWorkRoots(np) {
     let roots;
     try {
-      roots = JSON.parse(process.env.AGENTCLAUDE_WRITABLE_WORK_ROOTS || "[]");
+      roots = JSON.parse(process.env.STA_WRITABLE_WORK_ROOTS || "[]");
     } catch {
       return [];
     }
@@ -243,7 +243,7 @@ export const StaGuards = async ({ project }) => {
   function toWritableWorkRelative(np, target) {
     let roots;
     try {
-      roots = JSON.parse(process.env.AGENTCLAUDE_WRITABLE_WORK_ROOTS || "[]");
+      roots = JSON.parse(process.env.STA_WRITABLE_WORK_ROOTS || "[]");
     } catch {
       return null;
     }
@@ -292,7 +292,7 @@ function readRules(nodeFs, nodePath, root, role) {
   const deny = readList(text, "deny");
   if (write === null) return null; // not the shape this reader understands — fail open
   // Contract = role boundary, stack profile = layout. The layout half arrives
-  // from the orchestrator on the AGENTCLAUDE_ROLE channel, because no
+  // from the orchestrator on the STA_ROLE channel, because no
   // dependency-free reader here can join .agent-team/config.yaml to stacks/.
   const stack = stackPathRules();
   return { write: write.concat(stack.write), deny: (deny === null ? [] : deny).concat(stack.deny) };

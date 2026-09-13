@@ -7,13 +7,13 @@ import { parseArgs } from "../../cli.js";
 import { AgentStage } from "../../types.js";
 import { runtimeTaskWorkRoots } from "./taskIntake.js";
 
-const originalInstallation = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+const originalInstallation = process.env.STA_INSTALLATION_CONFIG;
 const roots: string[] = [];
 
 afterEach(() => {
   while (roots.length > 0) fs.rmSync(roots.pop()!, { recursive: true, force: true });
-  if (originalInstallation === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-  else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = originalInstallation;
+  if (originalInstallation === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+  else process.env.STA_INSTALLATION_CONFIG = originalInstallation;
 });
 
 function repository(root: string, remote?: string): void {
@@ -64,7 +64,7 @@ function fixture(): { knowledge: string; api: string; web: string; mvc: string }
   );
   const installation = path.join(root, "installation.yaml");
   fs.writeFileSync(installation, `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\n`, "utf8");
-  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = installation;
+  process.env.STA_INSTALLATION_CONFIG = installation;
   return { knowledge, api, web, mvc };
 }
 

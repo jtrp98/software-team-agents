@@ -22,9 +22,9 @@ import { resolveFrameworkRoot } from "../targetcli/roots.js";
 /** The one bit of task state these resolvers read — a `SqliteTaskStore` satisfies it. */
 export type TaskLookup = { loadTask(taskId: string): PersistedTask | null };
 
-/** `process.env.AGENTCLAUDE_INSTALLATION_CONFIG`, normalised to `undefined` when unset/empty. */
+/** `process.env.STA_INSTALLATION_CONFIG`, normalised to `undefined` when unset/empty. */
 const installationConfigPath = (): string | undefined =>
-  process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined;
+  process.env.STA_INSTALLATION_CONFIG || undefined;
 
 export class WritableWorkRootResolutionError extends Error {}
 

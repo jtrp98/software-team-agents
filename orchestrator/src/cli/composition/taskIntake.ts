@@ -69,7 +69,8 @@ export function runtimeTaskWorkRoots(
   }
 
   const preview = { taskId, classification, targetBindings: args.targetBindings };
-  const installationConfigPath = process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined;
+  const installationConfigPath =
+    process.env.STA_INSTALLATION_CONFIG || undefined;
   const roots: RuntimeTaskWorkRoot[] = [];
   for (const stage of stages) {
     // Knowledge-only stages deliberately have no Target work roots. UX identity
@@ -131,11 +132,12 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string):
   // Do this before a durable row is written, so malformed/retired/unknown ids
   // leave no partial task history behind.
   const isCodeTask = classification.pipeline.some((stage) => stage === AgentStage.BACKEND_ENGINEER || stage === AgentStage.FRONTEND_ENGINEER);
-  // AGENTCLAUDE_INSTALLATION_CONFIG lets a test (or an unusual setup) point the
+  // `STA_INSTALLATION_CONFIG` lets a test (or an unusual setup) point the
   // mode check at a specific file instead of the machine's real one — without
   // it, merely having configured an installation once flips every CLI test that
   // creates a legacy code task.
-  const installationConfigPath = process.env.AGENTCLAUDE_INSTALLATION_CONFIG || undefined;
+  const installationConfigPath =
+    process.env.STA_INSTALLATION_CONFIG || undefined;
   let moduleScope: TaskBindingModuleScope | undefined;
   const validateInstalledBindings = (): void => {
     const installation = loadInstallationConfig(installationConfigPath);

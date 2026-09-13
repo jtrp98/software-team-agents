@@ -43,17 +43,17 @@ afterAll(() => {
   fs.writeFileSync(out, JSON.stringify(document, null, 2) + "\n");
 });
 
-const KNOWLEDGE_ROOT_ORIGINAL = process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
-const INSTALLATION_CONFIG_ORIGINAL = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+const KNOWLEDGE_ROOT_ORIGINAL = process.env.STA_KNOWLEDGE_ROOT;
+const INSTALLATION_CONFIG_ORIGINAL = process.env.STA_INSTALLATION_CONFIG;
 beforeEach(() => {
-  delete process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
-  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-boundedrun-recovery-no-installation.yaml");
+  delete process.env.STA_KNOWLEDGE_ROOT;
+  process.env.STA_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-boundedrun-recovery-no-installation.yaml");
 });
 afterEach(() => {
-  if (KNOWLEDGE_ROOT_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_KNOWLEDGE_ROOT;
-  else process.env.AGENTCLAUDE_KNOWLEDGE_ROOT = KNOWLEDGE_ROOT_ORIGINAL;
-  if (INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-  else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = INSTALLATION_CONFIG_ORIGINAL;
+  if (KNOWLEDGE_ROOT_ORIGINAL === undefined) delete process.env.STA_KNOWLEDGE_ROOT;
+  else process.env.STA_KNOWLEDGE_ROOT = KNOWLEDGE_ROOT_ORIGINAL;
+  if (INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+  else process.env.STA_INSTALLATION_CONFIG = INSTALLATION_CONFIG_ORIGINAL;
   for (const root of roots.splice(0)) {
     // A disposable Target left on its run branch can still be held briefly by
     // Windows after the last git child exits; the fixture is temp-only, so an

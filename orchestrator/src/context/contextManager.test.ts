@@ -21,15 +21,15 @@ import { sliceModuleDocsWithSavings } from "../runtime/agentRunAssembly.js";
 import { buildContextCommand } from "./contextCommand.js";
 
 // T-V6-006: `env: {}` (used below) now falls through to installation.yaml
-// when AGENTCLAUDE_KNOWLEDGE_ROOT is unset — isolate it from whatever is
+// when STA_KNOWLEDGE_ROOT is unset — isolate it from whatever is
 // real on the machine running this suite.
-const AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL = process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
+const STA_INSTALLATION_CONFIG_ORIGINAL = process.env.STA_INSTALLATION_CONFIG;
 beforeEach(() => {
-  process.env.AGENTCLAUDE_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-context-manager-test-no-installation.yaml");
+  process.env.STA_INSTALLATION_CONFIG = path.join(os.tmpdir(), "sta-context-manager-test-no-installation.yaml");
 });
 afterEach(() => {
-  if (AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.AGENTCLAUDE_INSTALLATION_CONFIG;
-  else process.env.AGENTCLAUDE_INSTALLATION_CONFIG = AGENTCLAUDE_INSTALLATION_CONFIG_ORIGINAL;
+  if (STA_INSTALLATION_CONFIG_ORIGINAL === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+  else process.env.STA_INSTALLATION_CONFIG = STA_INSTALLATION_CONFIG_ORIGINAL;
 });
 
 function handoff(over: Partial<HandoffArtifact> = {}): HandoffArtifact {

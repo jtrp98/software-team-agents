@@ -49,7 +49,7 @@ function requirement(
 let root: string;
 
 beforeEach(() => {
-  root = fs.mkdtempSync(path.join(os.tmpdir(), "agentclaude-knowledge-"));
+  root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-knowledge-"));
 });
 
 afterEach(() => {

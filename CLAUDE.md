@@ -11,11 +11,11 @@
 - Hard boundary: amend existing module docs section-by-section; never regenerate them.
 - Hard boundary: approvals/sign-offs are human acts; agents never forge them.
 - Hard boundary: dates and unclear business rules come from a person; never improvise them.
-- Context: run the command named by `AGENTCLAUDE_CONTEXT_CMD` with `<your-role> --module <name> --phase <n>`.
+- Context: run the command named by `STA_CONTEXT_CMD` with `<your-role> --module <name> --phase <n>`.
 - Everything else: read only the needed section with `sta policy <area> <section>`.
 <!-- /sta:bootstrap -->
 
-# AgentClaude — Agent Pipeline
+# software-team-agents — Agent Pipeline
 
 Eleven agents, each owning one artifact. No agent invokes the next — none holds the `Agent` tool.
 Rationale: `docs/`. Shared conventions live in `policies/` — read the section you need with
@@ -70,7 +70,7 @@ those paths read-only, writes app code plus `review.md`/`security.md`/`deploy.md
 unconditionally — so its verdict lands in `review.md` plus a `## Knowledge sync — three-repo mode` table
 naming each task id and new Status, which a BA-workspace session then applies to `plan.md` (**T-LV3**: a relay
 of a decision already made, never a second review). In single-repo mode none of this applies and
-`qa-engineer` edits the Status cell directly. `AGENTCLAUDE_KNOWLEDGE_ROOT` and `AGENTCLAUDE_TARGET_ROOT`
+`qa-engineer` edits the Status cell directly. `STA_KNOWLEDGE_ROOT` and `STA_TARGET_ROOT`
 are read-only in both directions; no write channel opens either way.
 
 ## Runtime entry points
