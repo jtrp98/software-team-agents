@@ -249,11 +249,12 @@ describe("knowledge item schema v2 — target association (T141/T148)", () => {
     expect(checkKnowledgeItem(item("requirement"))).toEqual([]);
   });
 
-  it("rejects more than two target_ids (V1 permits at most two)", () => {
-    const problems = checkKnowledgeItem(
-      item("requirement", { schema_version: 2, target_ids: ["frontend", "backend", "shared"], sources: v2Sources }),
-    );
-    expect(problems.some((p) => p.includes("target_ids"))).toBe(true);
+  it("accepts three or more target_ids — a module may scope an item to every Target it spans", () => {
+    expect(
+      checkKnowledgeItem(
+        item("requirement", { schema_version: 2, target_ids: ["frontend", "backend", "shared"], sources: v2Sources }),
+      ),
+    ).toEqual([]);
   });
 
   it("rejects duplicate target_ids", () => {

@@ -63,7 +63,7 @@
       "minLength": 1
     },
     "target_ids": {
-      "type": "array", "maxItems": 2, "uniqueItems": true,
+      "type": "array", "uniqueItems": true,
       "items": { "type": "string", "minLength": 1 }
     },
     "module": {

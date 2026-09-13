@@ -142,7 +142,8 @@ reached. A lane simply being *behind* is a note, not a failure — being told is
 
 Schema v2 adds `target_ids` and `sources[].origin`. An empty `target_ids` array
 is global; otherwise retrieval includes the item only for a bound Target named
-in the array and reports how many items scope excluded. `origin.root` is the
+in the array (an item may name every Target a module spans) and reports how
+many items scope excluded. `origin.root` is the
 only current/desired axis: `target` is current implementation evidence,
 `knowledge` is desired requirement/contract evidence, and `external` is
 evidence that may be unhashable locally.
