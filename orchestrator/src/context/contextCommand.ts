@@ -3,6 +3,7 @@ import { AGENT_REGISTRY } from "../agents/registry.js";
 import { readModuleDoc, resolveModule } from "../agents/moduleDocs.js";
 import { readWorkPlan } from "../docs/planGraph.js";
 import { resolveContextDocsRoot } from "../targetcli/roots.js";
+import { loadTargetConfig } from "../targetcli/targetMeta.js";
 import { assembleStageContext, type StageContextAssembly } from "../runtime/agentRunAssembly.js";
 import type { ExecutionPacket } from "../artifacts/schemas.js";
 
@@ -119,6 +120,10 @@ export async function buildContextCommand(input: ContextCommandInput): Promise<C
     phases: phase.phases.length > 0 ? phase.phases : undefined,
     taskId: input.taskId,
     targetRoot: env.STA_TARGET_ROOT ?? (docsRoot !== input.projectRoot ? input.projectRoot : undefined),
+    // Same identity `sta run`/`sta bounded-run` resolve for this workspace (workRoot.targetId in
+    // runtimeExecutor.ts) — without it codeIntelContext always falls back to "missing-inputs" and
+    // `sta context` can never show Graphify evidence, even with the feature fully configured.
+    targetId: env.STA_TARGET_ID ?? loadTargetConfig(input.projectRoot)?.target_id,
   });
   return {
     role: input.role,

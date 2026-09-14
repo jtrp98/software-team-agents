@@ -23,4 +23,8 @@ describe("selected task reference boundaries", () => {
     expect(selectTaskReference(doc, "AC-012.1", "requirement.md").text).toBe("1. (AC-012.1) First criterion holds.");
     expect(selectTaskReference(doc, "AC-012.2", "requirement.md").text).toBe("2. (AC-012.2) Second criterion holds.");
   });
+  it("ignores a markerless prose/blockquote line that merely mentions the ID, and a table row citing it", () => {
+    const doc = "| **DES-015** *(note)* | REQ-012 | recap only |\n\n> **DES-015** — traceability id\n\n  DES-015 (Subject Score Aggregation Rules) noted in changelog\n\n## DES-015 — Subject Score Aggregation Rules\nDetails.\n## Next\nSECRET\n";
+    expect(selectTaskReference(doc, "DES-015", "design.md").text).toBe("## DES-015 — Subject Score Aggregation Rules\nDetails.");
+  });
 });
