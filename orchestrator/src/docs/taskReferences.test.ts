@@ -14,4 +14,13 @@ describe("selected task reference boundaries", () => {
   it("refuses fuzzy mentions, duplicate declarations and empty definitions", () => {
     for (const doc of ["See REQ-001 for details.", "- REQ-001: first\n## REQ-001: second", "## REQ-001\n"]) expect(() => selectTaskReference(doc, "REQ-001", "requirement.md")).toThrow(/exactly one|no semantic text/);
   });
+  it("treats a summary-table row citing an already-headed ID as a reference, not a second declaration", () => {
+    const doc = "## REQ-012 — Orders\nDetails.\n\n## Scope Overview\n| REQ-012 | done |\n| REQ-013 | todo |\n";
+    expect(selectTaskReference(doc, "REQ-012", "requirement.md").text).toBe("## REQ-012 — Orders\nDetails.");
+  });
+  it("finds a numbered-list acceptance criterion whose ID is wrapped in parens", () => {
+    const doc = "1. (AC-012.1) First criterion holds.\n2. (AC-012.2) Second criterion holds.\n";
+    expect(selectTaskReference(doc, "AC-012.1", "requirement.md").text).toBe("1. (AC-012.1) First criterion holds.");
+    expect(selectTaskReference(doc, "AC-012.2", "requirement.md").text).toBe("2. (AC-012.2) Second criterion holds.");
+  });
 });
