@@ -4,9 +4,17 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CliUsageError, runCli } from "../../cli.js";
 import { parseBoundedRunArgs, BOUNDED_RUN_USAGE } from "./boundedRun.js";
+import { createProductionBoundedRunServices } from "../../run/boundedRunServices.js";
+
+// T-V10 TASK-005/006 — the acceptance seam is the factory call itself: parse
+// output alone cannot prove the flags survive the trip to the services.
+vi.mock("../../run/boundedRunServices.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../run/boundedRunServices.js")>();
+  return { ...actual, createProductionBoundedRunServices: vi.fn(actual.createProductionBoundedRunServices) };
+});
 import { RuntimeRegistry } from "../../runtime/runtimeRegistry.js";
 import { MockRuntimeAdapter, okResult } from "../../runtime/mockAdapter.js";
 import { RuntimeCapability } from "../../runtime/runtimeCapabilities.js";
@@ -80,7 +88,13 @@ describe("parseBoundedRunArgs", () => {
   it("--resume refuses scope and classification flags — those belong to the frozen run, not to resuming it", () => {
     expect(() => parseBoundedRunArgs(["--resume", "01ABC", "--all"], "/repo")).toThrow(/--all\/--phase\/--task do not apply/);
     expect(() => parseBoundedRunArgs(["--resume", "01ABC", "--bug-fix"], "/repo")).toThrow(/classification flags do not apply/);
-    expect(parseBoundedRunArgs(["--resume", "01ABC"], "/repo").resumeRunId).toBe("01ABC");
+  });
+
+  it("T-V10 TASK-007 — --resume states autonomy like the first run: the ledger freezes no autonomy to inherit", () => {
+    expect(() => parseBoundedRunArgs(["--resume", "01ABC"], "/repo")).toThrow(/--resume 01ABC also needs --autonomy edit or --autonomy full/);
+    expect(() => parseBoundedRunArgs(["--resume", "01ABC", "--autonomy", "propose"], "/repo")).toThrow(/--autonomy edit or --autonomy full/);
+    expect(parseBoundedRunArgs(["--resume", "01ABC", "--autonomy", "full"], "/repo").autonomy).toBe("full");
+    expect(parseBoundedRunArgs(["--resume", "01ABC", "--dry-run"], "/repo").resumeRunId).toBe("01ABC");
   });
 
   it("--task splits and trims a comma list; an empty one refuses", () => {
@@ -824,4 +838,120 @@ describe("T-V9-011 sta bounded-run Target binding reconciliation", () => {
     expect(logs.some((l) => l.includes("target root=") && l.includes("id=api"))).toBe(true);
     expect(fs.existsSync(path.join(root, "state.db"))).toBe(false);
   });
+});
+
+describe("T-V10 bounded-run autonomy/routing plumbing (TASK-005, TASK-006)", () => {
+  beforeEach(() => {
+    vi.mocked(createProductionBoundedRunServices).mockClear();
+  });
+
+  it("TASK-005 — `--autonomy edit` reaches the service factory and the adapter request, not just the parser", async () => {
+    const { root, targetRoot } = project(roots, git);
+    const adapter = completingAdapter(targetRoot);
+    const logs: string[] = [];
+    const spy = console.log;
+    console.log = (line: string) => logs.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit"],
+        root,
+        { createRuntimeRegistry: () => new RuntimeRegistry([adapter]) },
+      );
+    } finally {
+      console.log = spy;
+    }
+    expect(code, logs.join("\n")).toBe(0);
+    const options = vi.mocked(createProductionBoundedRunServices).mock.calls.at(-1)![0];
+    expect(options.autonomy).toBe("edit");
+    expect(adapter.requests[0]?.autonomy).toBe("edit");
+  }, 30_000);
+
+  it("TASK-005 — a --dry-run still needs no autonomy and never composes the services at all", async () => {
+    const { root, targetRoot } = project(roots, git);
+    const logs: string[] = [];
+    const spy = console.log;
+    console.log = (line: string) => logs.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--dry-run"],
+        root,
+        { createRuntimeRegistry: () => new RuntimeRegistry([completingAdapter(targetRoot)]) },
+      );
+    } finally {
+      console.log = spy;
+    }
+    expect(code).toBe(0);
+    expect(vi.mocked(createProductionBoundedRunServices).mock.calls).toHaveLength(0);
+  });
+
+  it("TASK-006 — `--model`/`--effort` reach the factory as routingFlags, and an explicit model stays fail-closed at the freeze gate", async () => {
+    const { root, targetRoot } = project(roots, git);
+    const adapter = completingAdapter(targetRoot);
+    const logs: string[] = [];
+    const spy = console.log;
+    console.log = (line: string) => logs.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit", "--model", "not-declared", "--effort", "high"],
+        root,
+        { createRuntimeRegistry: () => new RuntimeRegistry([adapter]) },
+      );
+    } finally {
+      console.log = spy;
+    }
+    const options = vi.mocked(createProductionBoundedRunServices).mock.calls.at(-1)![0];
+    expect(options.routingFlags).toEqual({ model: "not-declared", effort: "high" });
+    // attemptFreeze's shipped boundary: a route naming an explicit model may not
+    // start unless the runtime's model-selection is verified — the flag cannot
+    // silently carry the run to that model (T-V10 TASK-006 "policy wins").
+    expect(code).toBe(4);
+    expect(logs.join("\n")).toContain("GATE");
+    expect(logs.join("\n")).toContain("no verified model-selection capability");
+    expect(adapter.requests).toEqual([]);
+
+    const store = new SqliteTaskStore(defaultStateDbPath(root));
+    const ledger = new SqliteRunLedger(store, { projectRoot: root });
+    try {
+      const run = ledger.listRuns()[0]!;
+      expect(ledger.attemptsForTask(run.run_id, "BE-004")).toHaveLength(0);
+    } finally {
+      ledger.close();
+    }
+  }, 30_000);
+
+  it("TASK-006 — `--effort` rides the flag lane end-to-end into the attempt's frozen requested route", async () => {
+    const { root, targetRoot } = project(roots, git);
+    const adapter = completingAdapter(targetRoot);
+    const logs: string[] = [];
+    const spy = console.log;
+    console.log = (line: string) => logs.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit", "--effort", "high"],
+        root,
+        { createRuntimeRegistry: () => new RuntimeRegistry([adapter]) },
+      );
+    } finally {
+      console.log = spy;
+    }
+    expect(code, logs.join("\n")).toBe(0);
+    const options = vi.mocked(createProductionBoundedRunServices).mock.calls.at(-1)![0];
+    expect(options.routingFlags).toEqual({ model: undefined, effort: "high" });
+
+    const store = new SqliteTaskStore(defaultStateDbPath(root));
+    const ledger = new SqliteRunLedger(store, { projectRoot: root });
+    try {
+      const run = ledger.listRuns()[0]!;
+      const attempts = ledger.attemptsForTask(run.run_id, "BE-004");
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]!.requested).toEqual({ runtime: "claude-code", model: null, effort: "high" });
+      expect(attempts[0]!.route_basis).toBe("level-1");
+    } finally {
+      ledger.close();
+    }
+  }, 30_000);
 });

@@ -205,6 +205,11 @@ export function parseBoundedRunArgs(argv: string[], defaultProjectRoot: string):
   if (resumeRunId) {
     if (scope) throw new CliUsageError("bounded-run: --resume continues an already-frozen scope; --all/--phase/--task do not apply");
     if (Object.keys(classification).length > 0) throw new CliUsageError("bounded-run: --resume continues an already-frozen classification; classification flags do not apply");
+    // The ledger freezes no autonomy fact (LedgerRunSchema has no such field),
+    // so a resume cannot inherit it — it must be stated like the first run.
+    if (!dryRun && autonomy !== "edit" && autonomy !== "full") {
+      throw new CliUsageError(`bounded-run: --resume ${resumeRunId} also needs --autonomy edit or --autonomy full for an unattended continuation (a dry run does not)`);
+    }
   } else {
     if (!moduleName) throw new CliUsageError(`bounded-run: --module is required\n${BOUNDED_RUN_USAGE}`);
     if (!scope) throw new CliUsageError(`bounded-run: exactly one of --all, --phase <n>, --task <id,...> is required\n${BOUNDED_RUN_USAGE}`);
@@ -652,9 +657,13 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
       ledger, store, registry: runtimeRegistry,
       projectRoot: contractRoot, targetRoot, runtimeStateRoot: args.projectRoot,
       defaultRuntimeId,
+      // `--runtime` stays in `defaultRuntimeId` (its shipped bounded-run meaning);
+      // only model/effort ride the flag lane that reaches resolveRuntimeRoute.
+      routingFlags: args.model || args.effort ? { model: args.model, effort: args.effort } : undefined,
       moduleName: args.module ?? ledger.readRun(runId)!.module,
       docsRoot,
       guards: contractGuardResolver(contractRoot),
+      autonomy: args.autonomy,
       adapterVersion: cliVersion(),
     });
     const controller = new BoundedRunController({ ledger, runId, runtimeStateRoot: args.projectRoot, services });

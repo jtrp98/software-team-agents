@@ -163,7 +163,7 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
     expect(git(targetRoot, "rev-list", "--count", "HEAD")).toBe("1");
 
     const resumed = await cli(
-      ["bounded-run", "--resume", afterHalt.runId, "--module", "orders", "--project-root", root],
+      ["bounded-run", "--resume", afterHalt.runId, "--module", "orders", "--project-root", root, "--autonomy", "edit"],
       root,
       new RuntimeRegistry([flakyAdapter(targetRoot, false)]),
     );
@@ -237,7 +237,7 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
     const original = fs.readFileSync(planPath, "utf8");
     fs.writeFileSync(planPath, original.replace("Objective: Return the existing order summary for an empty order.", "Objective: Rewrite the order summary contract from scratch."));
 
-    const refused = await cli(["bounded-run", "--resume", runId, "--module", "orders", "--project-root", root], root, new RuntimeRegistry([flakyAdapter(targetRoot, false)]));
+    const refused = await cli(["bounded-run", "--resume", runId, "--module", "orders", "--project-root", root, "--autonomy", "edit"], root, new RuntimeRegistry([flakyAdapter(targetRoot, false)]));
     expect(refused.code).toBe(1);
     expect(refused.out.join("\n")).toMatch(/plan_hash drifted|recompile explicitly/);
     expect(inspect(root, (ledger) => ledger.checkpointsForRun(runId).length)).toBe(0);
@@ -245,7 +245,7 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
 
     // Control: restoring the exact plan bytes lets the identical resume run.
     fs.writeFileSync(planPath, original);
-    const resumed = await cli(["bounded-run", "--resume", runId, "--module", "orders", "--project-root", root], root, new RuntimeRegistry([flakyAdapter(targetRoot, false)]));
+    const resumed = await cli(["bounded-run", "--resume", runId, "--module", "orders", "--project-root", root, "--autonomy", "edit"], root, new RuntimeRegistry([flakyAdapter(targetRoot, false)]));
     expect(resumed.code, resumed.out.join("\n")).toBe(0);
     expect(inspect(root, (ledger) => ledger.readRun(runId)?.status)).toBe("COMPLETED");
     TRANSCRIPTS.e02_stale_plan_refusal = [...refused.out, "--- plan restored ---", ...resumed.out];
@@ -264,7 +264,7 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
     const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), "v8-boundedrun-elsewhere-"));
     roots.push(elsewhere);
     const repointed = await cli(
-      ["bounded-run", "--resume", runId, "--module", "orders", "--project-root", root, "--target-root", elsewhere],
+      ["bounded-run", "--resume", runId, "--module", "orders", "--project-root", root, "--target-root", elsewhere, "--autonomy", "edit"],
       root,
       new RuntimeRegistry([flakyAdapter(targetRoot, false)]),
     );
@@ -278,7 +278,7 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
     // Target and completes, which is the only reason the refusal above is
     // a refusal rather than a missing feature.
     const resumed = await cli(
-      ["bounded-run", "--resume", runId, "--module", "orders", "--project-root", root],
+      ["bounded-run", "--resume", runId, "--module", "orders", "--project-root", root, "--autonomy", "edit"],
       root,
       new RuntimeRegistry([flakyAdapter(targetRoot, false)]),
     );
