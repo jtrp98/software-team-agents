@@ -42,23 +42,29 @@ export interface RuntimeSupport {
   claim: string;
 }
 
+// V10 (TASK-004) collapses the workspace lanes, so sessions launch from the Knowledge root and
+// Target-path guard coverage becomes the enforcement question for every runtime. Each
+// non-certified claim pins "V10 does not change this status" — runtimeSupport.test.ts fails if
+// that declaration is dropped, so a lane change cannot quietly read as a certification change.
 export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
   "claude-code": {
     level: "supported",
     claim:
-      "headless pipeline, hooks/guards and exit checks verified end to end; the default runtime for `sta run` and interactive launches, and the only V8 runtime certified for unattended Target writes",
+      "headless pipeline, hooks/guards and exit checks verified end to end; the default runtime for `sta run` and interactive launches, and the only runtime certified for unattended Target writes — V10's workspace-lane collapse does not move this boundary, because certification is keyed to the support level, never to which workspace a session launches from",
   },
   codex: {
     level: "preview",
     claim:
       `interactive sessions via \`--runtime codex\` work and bindings generate completely; the headless adapter has never been verified against a real install — UAT covers Claude Code only. ` +
-      `Guard coverage: ${codexCoverage().detail} — a launch requires --allow-unguarded-runtime (T-V5-008). Analysis/proposal only; unattended Target writes are refused`,
+      `Guard coverage: ${codexCoverage().detail} — a launch requires --allow-unguarded-runtime (T-V5-008). Analysis/proposal only; unattended Target writes are refused. ` +
+      `V10 does not change this status: the sandbox/approval mapping stays an untested assumption, and a session launched from the Knowledge workspace still ships no codex hook wiring, so Target-path guard coverage does not improve`,
   },
   opencode: {
     level: "experimental",
     claim:
       `spike-proven on 1.18.21 (probe, headless run, guards report); exit checks have no in-band enforcement (\`GUARD GAP\` + QA round cover it) and other versions' tool arg-shapes are unverified. ` +
-      `Guard coverage (once synced): ${opencodeCoverageWithPlugin().detail}. Analysis/proposal only in V8; partial guards do not certify unattended Target writes`,
+      `Guard coverage (once synced): ${opencodeCoverageWithPlugin().detail}. Analysis/proposal only; partial guards do not certify unattended Target writes. ` +
+      `V10 does not change this status: a session launched from the Knowledge workspace inherits the same partial coverage on Target paths`,
   },
   antigravity: {
     level: "experimental",
@@ -66,7 +72,8 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
       `verified end to end on a real agy 1.1.27/Windows 11 install: probe, headless \`-p\`, JSON envelope, token usage, and one full adapter round-trip returning OK with real usage. ` +
       `No named-agent store and no cost figure in the envelope, so roles are folded into the prompt and cost is never reported. ` +
       `The PreToolUse deny path is confirmed real (deny blocks; a hook that cannot load also blocks) but fires only from the machine-global hooks file, so the workspace binding enforces nothing and Target-write stages stay refused rather than run unguarded. ` +
-      `Guard coverage (once synced): ${antigravityCoverageWithHooks().detail}`,
+      `Guard coverage (once synced): ${antigravityCoverageWithHooks().detail}. ` +
+      `V10 does not change this status: collapsing the workspace lanes gives agy no workspace hook it can actually read`,
   },
 };
 

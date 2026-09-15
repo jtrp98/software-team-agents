@@ -86,6 +86,21 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
     }
   });
 
+  // V10's lane collapse launches sessions from the Knowledge root. The certification
+  // boundary must answer from the support level alone — nothing lane-shaped — or the
+  // collapse could change who may write Targets without anyone earning it.
+  it("T-V10 (TASK-004) the workspace-lane collapse does not move the unattended certification boundary", () => {
+    for (const id of RUNTIME_IDS) {
+      expect(isUnattendedTargetWriteCertified(id), id).toBe(id === "claude-code");
+    }
+  });
+
+  it("T-V10 (TASK-004) every non-certified runtime declares that V10 leaves its status unchanged", () => {
+    for (const id of ["codex", "opencode", "antigravity"] as const) {
+      expect(RUNTIME_SUPPORT[id].claim, `${id} must pin its V10 status`).toContain("V10 does not change this status");
+    }
+  });
+
   /**
    * README's runtime table must state exactly this record's level per runtime —
    * one status everywhere. A row naming its runtime but not its level (or
