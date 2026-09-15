@@ -4,6 +4,7 @@ import { readModuleDoc, resolveModule } from "../agents/moduleDocs.js";
 import { readWorkPlan } from "../docs/planGraph.js";
 import { resolveContextDocsRoot } from "../targetcli/roots.js";
 import { loadTargetConfig } from "../targetcli/targetMeta.js";
+import { resolveTargetBinding } from "../targetcli/roleWorkspace.js";
 import { assembleStageContext, type StageContextAssembly } from "../runtime/agentRunAssembly.js";
 import type { ExecutionPacket } from "../artifacts/schemas.js";
 
@@ -112,6 +113,42 @@ export async function buildContextCommand(input: ContextCommandInput): Promise<C
   }
 
   const phase = phasesFor(docsRoot, resolved.module, input.phases, input.taskId);
+  const targetConfig = loadTargetConfig(input.projectRoot);
+  // Resolve targetRoot + targetId TOGETHER, from the workspace's OWN recorded role — without
+  // both, codeIntelContext always falls back to "missing-inputs" and `sta context` can never
+  // show Graphify evidence, even with the feature fully configured (this silently broke it
+  // before). `docsRoot !== projectRoot` alone cannot tell DEV from BA: the global installation
+  // config resolves the SAME Knowledge docsRoot from either workspace, so it is only ever "equal"
+  // when standing directly inside the Knowledge checkout itself.
+  let resolvedTargetRoot: string | undefined;
+  let resolvedTargetId: string | undefined;
+  if (targetConfig?.role === "ba") {
+    // Knowledge (BA) workspace: projectRoot IS the Knowledge root, not a Target checkout — the
+    // bound Target's local path+id must come from the same read-only binding
+    // `software-team-agents dev` uses (targets.yaml + .workflow/targets.local.yaml), keyed by
+    // `target.target_id` (NOT the top-level `target_id`, which is the Knowledge repo's own
+    // identity, not a Target).
+    try {
+      const binding = resolveTargetBinding({ knowledgeRoot: input.projectRoot, configTargetId: targetConfig.target?.target_id });
+      if (binding?.via === "local-mapping") {
+        resolvedTargetRoot = binding.targetRoot;
+        resolvedTargetId = binding.targetId;
+      }
+    } catch {
+      // No usable binding (unregistered/unmapped Target) — degrade to no code-intel, same as today.
+    }
+  } else if (targetConfig?.role === "dev") {
+    // DEV workspace: projectRoot itself is the one Target it was initialized for.
+    resolvedTargetRoot = input.projectRoot;
+    resolvedTargetId = targetConfig.target_id;
+  } else {
+    // No recorded workspace role — a pre-role config, or no `.agent-team/` at all (legacy
+    // single-repo). Keep the exact original heuristic here for byte-identical parity with
+    // `sta run`'s own resolution (T-V3TOK-052 property 8): `targetId` has no source in this
+    // case, so code-intel keeps degrading to "missing-inputs", same as before this fix.
+    resolvedTargetRoot = docsRoot !== input.projectRoot ? input.projectRoot : undefined;
+    resolvedTargetId = targetConfig?.target_id;
+  }
   const context = await assembleStageContext(stage, {
     projectRoot: input.projectRoot,
     docsRoot,
@@ -119,11 +156,8 @@ export async function buildContextCommand(input: ContextCommandInput): Promise<C
     moduleName: resolved.module,
     phases: phase.phases.length > 0 ? phase.phases : undefined,
     taskId: input.taskId,
-    targetRoot: env.STA_TARGET_ROOT ?? (docsRoot !== input.projectRoot ? input.projectRoot : undefined),
-    // Same identity `sta run`/`sta bounded-run` resolve for this workspace (workRoot.targetId in
-    // runtimeExecutor.ts) — without it codeIntelContext always falls back to "missing-inputs" and
-    // `sta context` can never show Graphify evidence, even with the feature fully configured.
-    targetId: env.STA_TARGET_ID ?? loadTargetConfig(input.projectRoot)?.target_id,
+    targetRoot: env.STA_TARGET_ROOT ?? resolvedTargetRoot,
+    targetId: env.STA_TARGET_ID ?? resolvedTargetId,
   });
   return {
     role: input.role,
