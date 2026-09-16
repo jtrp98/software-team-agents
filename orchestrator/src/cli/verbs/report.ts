@@ -49,6 +49,29 @@ export interface ReviewReportData {
   openIssues: OpenIssueRow[];
 }
 
+export interface TargetDiffSummaryRow {
+  target_root: string;
+  changed_file_count: number;
+  changed_files: string[];
+}
+
+/**
+ * Groups already-observed bounded-run checkpoints by target root (TASK-013).
+ * Read-only reporting derived from `RunObservation`; it introduces no new
+ * pass/fail condition and does not touch review.md.
+ */
+export function summarizeChangedByTarget(runs: readonly RunObservation[]): TargetDiffSummaryRow[] {
+  const byRoot = new Map<string, Set<string>>();
+  for (const run of runs) {
+    const files = byRoot.get(run.target_root) ?? new Set<string>();
+    for (const task of run.tasks) for (const file of task.changed_files) files.add(file);
+    byRoot.set(run.target_root, files);
+  }
+  return [...byRoot.entries()]
+    .map(([target_root, files]) => ({ target_root, changed_file_count: files.size, changed_files: [...files].sort() }))
+    .sort((a, b) => a.target_root.localeCompare(b.target_root));
+}
+
 export interface ReportData {
   projectName: string;
   generatedAt: string;
@@ -609,6 +632,24 @@ export function generateHtmlReport(report: ReportData): string {
         <h2>5. Bounded Runs</h2>
         <span class="badge badge-gray">${report.runs.length} RUN(S)</span>
       </div>
+      ${(() => {
+        const diffByTarget = summarizeChangedByTarget(report.runs!);
+        if (diffByTarget.length === 0) return "";
+        return `<div style="margin-bottom: 16px;">
+          <h3 style="font-size: 14px; font-weight: 600; margin-bottom: 8px;">Diff summary by target</h3>
+          <table>
+            <thead><tr><th>Target root</th><th>Changed files</th></tr></thead>
+            <tbody>
+              ${diffByTarget.map((row) => `<tr>
+                <td><code>${escapeHtml(row.target_root)}</code></td>
+                <td>${row.changed_file_count === 0
+                  ? "—"
+                  : `<details><summary style="cursor: pointer;">${row.changed_file_count} file(s)</summary><div class="file-list">${row.changed_files.map((f) => `<div class="file-item">${escapeHtml(f)}</div>`).join("")}</div></details>`}</td>
+              </tr>`).join("")}
+            </tbody>
+          </table>
+        </div>`;
+      })()}
       ${report.runs.length === 0
         ? '<div class="card-notice">No bounded-run artifacts found.</div>'
         : report.runs.map((run) => `<div class="card" style="margin-bottom: 16px;">
