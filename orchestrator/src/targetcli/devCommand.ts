@@ -14,7 +14,6 @@ import {
 import { blockingConflicts, devDerivedContent, pendingSyncEntries, planSync, projectOwnedPaths, runTargetSync } from "./syncEngine.js";
 import { sameMajor } from "./version.js";
 import {
-  assetsForRole,
   KnowledgeBindingError,
   launchEnv,
   resolveKnowledgeBinding,
@@ -312,7 +311,6 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
       targetRoot: roots.targetRoot,
       templatesDir,
       config,
-      include: assetsForRole(role),
       installationConfigPath: options.installationConfigPath,
     });
     const plan = planSync({
@@ -320,7 +318,6 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
       templatesDir,
       manifest,
       config,
-      include: assetsForRole(role),
       role,
       derivedContent: derived?.content,
     });
@@ -340,7 +337,7 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
       if (options.autoSync === false) {
         fail("Managed files", `managed assets are outdated (${named}${remainder}) — run software-team-agents sync, or drop --no-auto-sync`);
       }
-      const result = runTargetSync({ targetRoot: roots.targetRoot, templatesDir, manifest, config, include: assetsForRole(role), role, installationConfigPath: options.installationConfigPath, now: options.now ?? new Date().toISOString() });
+      const result = runTargetSync({ targetRoot: roots.targetRoot, templatesDir, manifest, config, role, installationConfigPath: options.installationConfigPath, now: options.now ?? new Date().toISOString() });
       const changed = result.performed.filter((entry) => entry.action !== "unchanged" && entry.action !== "override");
       const changedNames = changed.slice(0, 10).map((entry) => `${entry.action}: ${entry.path}`).join(", ");
       const changedRemainder = changed.length > 10 ? `, ... ${changed.length - 10} more` : "";
@@ -499,7 +496,7 @@ async function runRoleSession(role: WorkspaceRole, options: RoleRunOptions): Pro
   const startedAt = Date.now();
   // Measure before the runtime starts: an interactive session may edit its own
   // project instructions, but telemetry must describe the bytes it launched with.
-  const measurement = measureWorkspaceStatic(ctx.workspaceRoot, role, ctx.runtime);
+  const measurement = measureWorkspaceStatic(ctx.workspaceRoot, ctx.runtime);
   try {
     const sta = resolveBundledStaCli(ctx.frameworkRoot);
     const contextCommand = sta ? `${formatResolvedCommand(sta)} context` : undefined;

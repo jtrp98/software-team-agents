@@ -14,7 +14,6 @@ import {
 } from "./targetMeta.js";
 import { devDerivedContent, pendingSyncEntries, planSync, type SyncPlanEntry } from "./syncEngine.js";
 import {
-  assetsForRole,
   detectWorkspaceKind,
   hasKnowledgeMarkers,
   resolveKnowledgeBinding,
@@ -254,7 +253,6 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
         templatesDir,
         manifest,
         config,
-        include: role ? assetsForRole(role) : undefined,
         role,
         // A dev workspace's CLAUDE.md is judged against its rendered bytes,
         // so a healthy rendered workspace reports zero conflicts.
@@ -262,7 +260,6 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
           targetRoot: roots.targetRoot,
           templatesDir,
           config,
-          include: role ? assetsForRole(role) : undefined,
           installationConfigPath: options.installationConfigPath,
         })?.content,
       });

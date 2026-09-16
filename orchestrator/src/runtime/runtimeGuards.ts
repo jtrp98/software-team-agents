@@ -1,10 +1,9 @@
 import {
   UNIVERSAL_DENY,
   WORKSPACE_BA_ARTIFACTS,
-  WORKSPACE_DEV_ARTIFACTS,
+  FRAMEWORK_PAYLOAD_ARTIFACTS,
   deniesKnowledgeArtifacts,
   pathRulesFor,
-  readWorkspaceRole,
   targetPathRules,
 } from "../agents/pathPermissions.js";
 import { ALL_EXIT_CHECKS, type RuntimeGuards } from "./runtimeAdapter.js";
@@ -68,23 +67,16 @@ export function contractGuards(
   } catch (e) {
     throw new GuardResolutionError(role, e);
   }
-  const wsRole = readWorkspaceRole(projectRoot);
-  const workspaceDeny =
-    wsRole === "dev"
-      ? WORKSPACE_BA_ARTIFACTS
-      : wsRole === "ba"
-        ? WORKSPACE_DEV_ARTIFACTS
-        : [];
   // Which repository a stage was launched from decides nothing here: an
   // implementation stage may not write a Knowledge artifact, and after the lane
   // collapse there is no workspace role left to carry that ban (V10 TASK-012).
   const knowledgeDeny = deniesKnowledgeArtifacts(role) ? WORKSPACE_BA_ARTIFACTS : [];
   return {
     writeAllow: rules.write,
-    // The role's own deny list plus the floor and workspace-role deny rules.
+    // The role's own deny list plus the floor and the Framework-payload ban.
     // Concatenated rather than replaced: the floor holds whatever a contract
     // says, which is the whole reason it is called a floor.
-    writeDeny: [...new Set([...UNIVERSAL_DENY, ...workspaceDeny, ...knowledgeDeny, ...rules.deny])],
+    writeDeny: [...new Set([...UNIVERSAL_DENY, ...FRAMEWORK_PAYLOAD_ARTIFACTS, ...knowledgeDeny, ...rules.deny])],
     forbidCommands: FORBIDDEN_COMMANDS,
     exitChecks: ALL_EXIT_CHECKS,
   };

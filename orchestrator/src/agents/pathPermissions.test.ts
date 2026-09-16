@@ -14,19 +14,18 @@ import {
   PathDeniedError,
   UNIVERSAL_DENY,
   WORKSPACE_BA_ARTIFACTS,
-  WORKSPACE_DEV_ARTIFACTS,
+  FRAMEWORK_PAYLOAD_ARTIFACTS,
   assertCanWrite,
   canWritePath,
   checkPathRules,
   contractPathRules,
+  frameworkPayloadDenyWhy,
   matchesGlob,
   pathRulesFor,
-  readWorkspaceRole,
   renderGuardRuleBlock,
   serializeGuardTargetWorkRoots,
   targetPathRules,
   toRepoRelative,
-  workspaceDenyWhy,
 } from "./pathPermissions.js";
 
 describe("matchesGlob", () => {
@@ -230,52 +229,28 @@ describe("checkPathRules", () => {
   });
 });
 
-describe("T-V5-019 — workspace-role artifact rules", () => {
+describe("V10 TASK-021 — the Framework payload is denied per stage, not per workspace role", () => {
   const permissive = { write: ["**"], deny: [], read: ["**"] };
 
-  it("DEV-role workspace denies _docs/module/*/requirement.md and knowledge/** through the TypeScript path", () => {
-    const docDecision = canWritePath(permissive, "_docs/module/crm/requirement.md", { workspaceRole: "dev" });
-    expect(docDecision.allowed).toBe(false);
-    if (!docDecision.allowed) {
-      expect(docDecision.rule).toBe("workspace-deny");
-      expect(docDecision.reason).toContain("Knowledge repository");
+  it("refuses Framework payload whatever the workspace records, and names no `ba`/`dev` command", () => {
+    for (const rel of ["contracts/backend-engineer.yaml", "workflows/bugfix.yml", "stacks/node/stack.yaml", "layout.yaml", "test-pyramid.yaml", "escalation-policy.yaml"]) {
+      const decision = canWritePath(permissive, rel);
+      expect(decision.allowed).toBe(false);
+      if (!decision.allowed) {
+        expect(decision.rule).toBe("framework-deny");
+        expect(decision.reason).toContain("Framework payload");
+        expect(decision.reason).not.toMatch(/software-team-agents (ba|dev)/);
+      }
     }
-
-    const kbDecision = canWritePath(permissive, "knowledge/sales/requirement/REQ-1.yaml", { workspaceRole: "dev" });
-    expect(kbDecision.allowed).toBe(false);
-    if (!kbDecision.allowed) {
-      expect(kbDecision.rule).toBe("workspace-deny");
-    }
-
-    // App code and engineer-owned docs remain allowed in dev
-    expect(canWritePath(permissive, "src/index.ts", { workspaceRole: "dev" }).allowed).toBe(true);
-    expect(canWritePath(permissive, "_docs/module/crm/review.md", { workspaceRole: "dev" }).allowed).toBe(true);
   });
 
-  it("BA-role workspace denies contracts/** and workflows/**", () => {
-    const contractDecision = canWritePath(permissive, "contracts/backend-engineer.yaml", { workspaceRole: "ba" });
-    expect(contractDecision.allowed).toBe(false);
-    if (!contractDecision.allowed) {
-      expect(contractDecision.rule).toBe("workspace-deny");
-      expect(contractDecision.reason).toContain("Target checkout");
-    }
-
-    const workflowDecision = canWritePath(permissive, "workflows/bugfix.yml", { workspaceRole: "ba" });
-    expect(workflowDecision.allowed).toBe(false);
-    if (!workflowDecision.allowed) {
-      expect(workflowDecision.rule).toBe("workspace-deny");
-    }
-
-    // Knowledge docs remain allowed in BA
-    expect(canWritePath(permissive, "_docs/module/crm/requirement.md", { workspaceRole: "ba" }).allowed).toBe(true);
-    expect(canWritePath(permissive, "knowledge/sales/requirement/REQ-1.yaml", { workspaceRole: "ba" }).allowed).toBe(true);
-  });
-
-  it("no recorded role → both rule sets inactive (legacy workspace unaffected)", () => {
-    expect(canWritePath(permissive, "_docs/module/crm/requirement.md", { workspaceRole: null }).allowed).toBe(true);
-    expect(canWritePath(permissive, "contracts/backend-engineer.yaml", { workspaceRole: null }).allowed).toBe(true);
+  it("leaves Knowledge documents to the contract that owns them — the old `role: dev` blanket ban is gone", () => {
+    // The ban that replaced it is stage-bound and lives in `contractGuards`
+    // (V10 TASK-012); this layer no longer knows which repository it is in.
     expect(canWritePath(permissive, "_docs/module/crm/requirement.md").allowed).toBe(true);
-    expect(canWritePath(permissive, "contracts/backend-engineer.yaml").allowed).toBe(true);
+    expect(canWritePath(permissive, "knowledge/sales/requirement/REQ-1.yaml").allowed).toBe(true);
+    expect(canWritePath(permissive, "src/index.ts").allowed).toBe(true);
+    expect(canWritePath(permissive, "_docs/module/crm/review.md").allowed).toBe(true);
   });
 
   it("TypeScript artifact lists match .claude/hooks/block-path-permissions.js and .opencode/plugin/sta-guards.js exactly", () => {
@@ -283,13 +258,17 @@ describe("T-V5-019 — workspace-role artifact rules", () => {
     const claudeHook = fs.readFileSync(path.join(root, ".claude", "hooks", "block-path-permissions.js"), "utf8");
     const opencodePlugin = fs.readFileSync(path.join(root, ".opencode", "plugin", "sta-guards.js"), "utf8");
 
-    for (const baPattern of WORKSPACE_BA_ARTIFACTS) {
-      expect(claudeHook).toContain(baPattern);
-      expect(opencodePlugin).toContain(baPattern);
+    for (const pattern of [...WORKSPACE_BA_ARTIFACTS, ...FRAMEWORK_PAYLOAD_ARTIFACTS]) {
+      expect(claudeHook).toContain(pattern);
+      expect(opencodePlugin).toContain(pattern);
     }
-    for (const devPattern of WORKSPACE_DEV_ARTIFACTS) {
-      expect(claudeHook).toContain(devPattern);
-      expect(opencodePlugin).toContain(devPattern);
+  });
+
+  it("no guard host still names the removed `ba`/`dev` commands in a denial", () => {
+    const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+    for (const rel of [".claude/hooks/block-path-permissions.js", ".codex/hooks/block-path-permissions.js", ".opencode/plugin/sta-guards.js", ".agents/hooks/sta-guard.js"]) {
+      const text = fs.readFileSync(path.join(root, ...rel.split("/")), "utf8");
+      expect(text).not.toMatch(/software-team-agents (ba|dev)/);
     }
   });
 });
@@ -303,10 +282,10 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
   interface GeneratedGuardRules {
     UNIVERSAL_DENY: string[];
     WORKSPACE_BA_ARTIFACTS: string[];
-    WORKSPACE_DEV_ARTIFACTS: string[];
+    FRAMEWORK_PAYLOAD_ARTIFACTS: string[];
     matchesGlob(pattern: string, target: string): boolean;
-    readWorkspaceRole(nodeFs: unknown, nodePath: unknown, workspaceRoot: string): string | null;
-    workspaceDenyWhy(role: string): string;
+    frameworkPayloadDenial(relative: string): string | null;
+    frameworkPayloadDenyWhy(pattern: string): string;
     boundReadOnlyTarget(nodePath: typeof path, target: string): string | null;
     boundReadOnlyWhy(targetId: string): string;
   }
@@ -318,7 +297,7 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
       .filter((line) => line !== GUARD_RULES_OPEN && line !== GUARD_RULES_CLOSE)
       .join("\n");
     return new Function(
-      `${body}\nreturn { UNIVERSAL_DENY, WORKSPACE_BA_ARTIFACTS, WORKSPACE_DEV_ARTIFACTS, matchesGlob, readWorkspaceRole, workspaceDenyWhy, boundReadOnlyTarget, boundReadOnlyWhy };`,
+      `${body}\nreturn { UNIVERSAL_DENY, WORKSPACE_BA_ARTIFACTS, FRAMEWORK_PAYLOAD_ARTIFACTS, matchesGlob, frameworkPayloadDenial, frameworkPayloadDenyWhy, boundReadOnlyTarget, boundReadOnlyWhy };`,
     )() as GeneratedGuardRules;
   }
 
@@ -326,7 +305,7 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
     const generated = evaluateBlock();
     expect(generated.UNIVERSAL_DENY).toEqual([...UNIVERSAL_DENY]);
     expect(generated.WORKSPACE_BA_ARTIFACTS).toEqual([...WORKSPACE_BA_ARTIFACTS]);
-    expect(generated.WORKSPACE_DEV_ARTIFACTS).toEqual([...WORKSPACE_DEV_ARTIFACTS]);
+    expect(generated.FRAMEWORK_PAYLOAD_ARTIFACTS).toEqual([...FRAMEWORK_PAYLOAD_ARTIFACTS]);
   });
 
   /**
@@ -339,7 +318,7 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
     const patterns = [
       ...UNIVERSAL_DENY,
       ...WORKSPACE_BA_ARTIFACTS,
-      ...WORKSPACE_DEV_ARTIFACTS,
+      ...FRAMEWORK_PAYLOAD_ARTIFACTS,
       "server/**",
       "next.config.*",
       "a/**",
@@ -387,41 +366,30 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
     }
   });
 
-  it("the generated role reader agrees with the TypeScript one", () => {
+  it("the generated Framework-payload denial agrees with the TypeScript one, and fires only for a named stage", () => {
     const generated = evaluateBlock();
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sta-guard-block-"));
+    const saved = process.env.STA_ROLE;
     try {
-      expect(generated.readWorkspaceRole(fs, path, tmp)).toBe(readWorkspaceRole(tmp));
+      delete process.env.STA_ROLE;
+      // No stage named: the per-stage layer cannot fire, exactly as the
+      // per-agent contract layer cannot.
+      expect(generated.frameworkPayloadDenial("contracts/backend-engineer.yaml")).toBeNull();
 
-      fs.mkdirSync(path.join(tmp, ".agent-team"), { recursive: true });
-      for (const role of ["ba", "dev"] as const) {
-        fs.writeFileSync(path.join(tmp, ".agent-team", "config.yaml"), `schema_version: 1\nrole: ${role}\n`, "utf8");
-        expect(generated.readWorkspaceRole(fs, path, tmp)).toBe(role);
-        expect(generated.readWorkspaceRole(fs, path, tmp)).toBe(readWorkspaceRole(tmp));
+      process.env.STA_ROLE = "backend-engineer";
+      for (const pattern of FRAMEWORK_PAYLOAD_ARTIFACTS) {
+        const sample = pattern.replace("/**", "/sample.yaml");
+        expect(generated.frameworkPayloadDenial(sample), sample).toBe(frameworkPayloadDenyWhy(pattern));
       }
+      expect(generated.frameworkPayloadDenial("src/index.ts")).toBeNull();
+      expect(generated.frameworkPayloadDenial("_docs/module/m/design.md")).toBeNull();
 
-      fs.writeFileSync(path.join(tmp, ".agent-team", "config.yaml"), "schema_version: 1\n", "utf8");
-      expect(generated.readWorkspaceRole(fs, path, tmp)).toBeNull();
-      expect(readWorkspaceRole(tmp)).toBeNull();
+      // The workspace-role deny this replaced pointed at `software-team-agents
+      // ba|dev`, commands V10 removes.
+      expect(generated.frameworkPayloadDenyWhy("contracts/**")).toBe(frameworkPayloadDenyWhy("contracts/**"));
+      expect(generated.frameworkPayloadDenyWhy("contracts/**")).not.toMatch(/software-team-agents (ba|dev)/);
     } finally {
-      fs.rmSync(tmp, { recursive: true, force: true });
-    }
-  });
-
-  it("the generated deny explanation agrees with the TypeScript one", () => {
-    const generated = evaluateBlock();
-    const saved = process.env.STA_KNOWLEDGE_ROOT;
-    try {
-      delete process.env.STA_KNOWLEDGE_ROOT;
-      expect(generated.workspaceDenyWhy("dev")).toBe(workspaceDenyWhy("dev"));
-      expect(generated.workspaceDenyWhy("ba")).toBe(workspaceDenyWhy("ba"));
-
-      process.env.STA_KNOWLEDGE_ROOT = "C:/src/knowledge-schoolbright";
-      expect(generated.workspaceDenyWhy("dev")).toBe(workspaceDenyWhy("dev"));
-      expect(generated.workspaceDenyWhy("dev")).toContain("C:/src/knowledge-schoolbright");
-    } finally {
-      if (saved === undefined) delete process.env.STA_KNOWLEDGE_ROOT;
-      else process.env.STA_KNOWLEDGE_ROOT = saved;
+      if (saved === undefined) delete process.env.STA_ROLE;
+      else process.env.STA_ROLE = saved;
     }
   });
 
@@ -507,10 +475,11 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
       expect(inspected.state, rel).toBe("valid");
       if (inspected.state !== "valid") continue;
       expect(inspected.outside, rel).not.toMatch(/const\s+UNIVERSAL_DENY\s*=/);
-      expect(inspected.outside, rel).not.toMatch(/const\s+WORKSPACE_(?:BA|DEV)_ARTIFACTS\s*=/);
+      expect(inspected.outside, rel).not.toMatch(/const\s+WORKSPACE_BA_ARTIFACTS\s*=/);
+      expect(inspected.outside, rel).not.toMatch(/const\s+FRAMEWORK_PAYLOAD_ARTIFACTS\s*=/);
       expect(inspected.outside, rel).not.toMatch(/function\s+matchesGlob\s*\(/);
-      expect(inspected.outside, rel).not.toMatch(/function\s+readWorkspaceRole\s*\(/);
-      expect(inspected.outside, rel).not.toMatch(/function\s+workspaceDenyWhy\s*\(/);
+      expect(inspected.outside, rel).not.toMatch(/function\s+frameworkPayloadDenial\s*\(/);
+      expect(inspected.outside, rel).not.toMatch(/function\s+frameworkPayloadDenyWhy\s*\(/);
       expect(inspected.outside, rel).not.toMatch(/function\s+boundReadOnly(?:Target|Why)\s*\(/);
     }
   });
@@ -518,7 +487,7 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
   it("keeps every rule renderable as a single-quoted JavaScript literal", () => {
     // A quote, backslash or newline in a rule would generate a broken guard.
     // The renderer throws on one; this keeps the current lists honest too.
-    for (const rule of [...UNIVERSAL_DENY, ...WORKSPACE_BA_ARTIFACTS, ...WORKSPACE_DEV_ARTIFACTS]) {
+    for (const rule of [...UNIVERSAL_DENY, ...WORKSPACE_BA_ARTIFACTS, ...FRAMEWORK_PAYLOAD_ARTIFACTS]) {
       expect(rule, rule).not.toMatch(/['\\\r\n]/);
     }
     expect(() => renderGuardRuleBlock()).not.toThrow();

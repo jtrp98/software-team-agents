@@ -157,44 +157,55 @@ describe("sta-guards plugin (OpenCode)", () => {
   });
 });
 
-describe("sta-guards plugin — workspace-role tripwire (T-WG3)", () => {
+describe("sta-guards plugin — Framework payload is stage-bound (V10 TASK-021)", () => {
   function roleWorkspace(role: "ba" | "dev"): string {
     const root = workspace();
     fs.mkdirSync(path.join(root, ".agent-team"), { recursive: true });
     fs.writeFileSync(
       path.join(root, ".agent-team", "config.yaml"),
-      `schema_version: 1\ntarget_id: t\nregistered_at: 2026-08-24T00:00:00Z\noverrides: []\nrole: ${role}\n`,
+      `schema_version: 1
+target_id: t
+registered_at: 2026-08-24T00:00:00Z
+overrides: []
+role: ${role}
+`,
       "utf8",
     );
     return root;
   }
 
-  it("dev workspace blocks analysis artifacts and registry files, interactively included", async () => {
-    const root = roleWorkspace("dev");
-    const guard = await hookFor(root);
-    await expect(guard("write", { filePath: path.join(root, "_docs", "module", "m", "plan.md") })).rejects.toThrow(/Knowledge repository/);
-    await expect(guard("write", { filePath: path.join(root, "_docs", "status.md") })).rejects.toThrow(/Knowledge repository/);
-    await expect(guard("write", { filePath: path.join(root, "decisions", "DR-001.yaml") })).rejects.toThrow(/Knowledge repository/);
-    await expect(guard("write", { filePath: path.join(root, "targets.yaml") })).rejects.toThrow(/Knowledge repository/);
-    // Engineer-owned docs and app code remain writable in a dev workspace.
-    await expect(guard("write", { filePath: path.join(root, "_docs", "module", "m", "review.md") })).resolves.toBeUndefined();
-    await expect(guard("write", { filePath: path.join(root, "src", "a.ts") })).resolves.toBeUndefined();
+  it("refuses Framework payload to a named stage, whatever the workspace recorded", async () => {
+    for (const role of ["ba", "dev"] as const) {
+      const root = roleWorkspace(role);
+      process.env.STA_ROLE = "backend-engineer";
+      const guard = await hookFor(root);
+      await expect(guard("write", { filePath: path.join(root, "contracts", "backend-engineer.yaml") })).rejects.toThrow(/Framework payload/);
+      await expect(guard("write", { filePath: path.join(root, "workflows", "feature.yml") })).rejects.toThrow(/Framework payload/);
+      await expect(guard("write", { filePath: path.join(root, "src", "a.ts") })).resolves.toBeUndefined();
+    }
   });
 
-  it("deny text names the resolved Knowledge root when the launch provides it (T-WG7 env)", async () => {
-    const root = roleWorkspace("dev");
-    process.env.STA_KNOWLEDGE_ROOT = path.join(path.dirname(root), "kb-fixture");
-    const guard = await hookFor(root);
-    const err = await guard("write", { filePath: path.join(root, "_docs", "module", "m", "requirement.md") }).catch((e) => e);
-    expectBlocked(err, /kb-fixture/);
+  it("stops keying anything off the recorded role: both roles answer identically", async () => {
+    for (const role of ["ba", "dev"] as const) {
+      const root = roleWorkspace(role);
+      delete process.env.STA_ROLE;
+      const guard = await hookFor(root);
+      // The Knowledge ban that used to live here is stage-bound now (TASK-012).
+      await expect(guard("write", { filePath: path.join(root, "_docs", "module", "m", "plan.md") })).resolves.toBeUndefined();
+      await expect(guard("write", { filePath: path.join(root, "_docs", "status.md") })).resolves.toBeUndefined();
+      await expect(guard("write", { filePath: path.join(root, "targets.yaml") })).resolves.toBeUndefined();
+      await expect(guard("write", { filePath: path.join(root, "_docs", "module", "m", "review.md") })).resolves.toBeUndefined();
+      await expect(guard("write", { filePath: path.join(root, "src", "a.ts") })).resolves.toBeUndefined();
+    }
   });
 
-  it("ba workspace mirrors the rule for engineer/pipeline payload", async () => {
+  it("names no removed `ba`/`dev` command in a denial", async () => {
     const root = roleWorkspace("ba");
+    process.env.STA_ROLE = "backend-engineer";
     const guard = await hookFor(root);
-    await expect(guard("write", { filePath: path.join(root, "contracts", "backend-engineer.yaml") })).rejects.toThrow(/Target checkout/);
-    await expect(guard("write", { filePath: path.join(root, "workflows", "feature.yml") })).rejects.toThrow(/Target checkout/);
-    await expect(guard("edit", { file_path: "_docs/module/m/design.md" })).resolves.toBeUndefined();
+    const err = await guard("write", { filePath: path.join(root, "contracts", "backend-engineer.yaml") }).catch((e) => e);
+    expectBlocked(err, /Framework payload/);
+    expect(String((err as Error).message)).not.toMatch(/software-team-agents (ba|dev)/);
   });
 
   it("without .agent-team/config.yaml nothing changes (legacy workspaces)", async () => {

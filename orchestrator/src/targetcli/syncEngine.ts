@@ -30,7 +30,7 @@ import {
 } from "./targetMeta.js";
 import { CLAUDE_SETTINGS_PATH, mergeFrameworkGuards } from "./guardSettings.js";
 import { AGY_HOOKS_PATH, mergeAgyHooks } from "../runtime/bindingGenerator.js";
-import { BA_WORKSPACE_AGENTS, resolveTargetBinding, runtimesForWorkspace, type WorkspaceRole, type WorkspaceRuntime } from "./roleWorkspace.js";
+import { resolveTargetBinding, runtimesForWorkspace, type WorkspaceRole, type WorkspaceRuntime } from "./roleWorkspace.js";
 import { missingInstructionConsequence } from "../threeRepo/ownership.js";
 import { planTargetProfile } from "./targetProfile.js";
 import { renderStackDigest, STACK_DIGEST_RELATIVE_PATH } from "../profile/stackDigest.js";
@@ -432,59 +432,22 @@ function planStaleFrameworkBlocks(
   return planned;
 }
 
-/** Where each runtime's agent-prompt rendering lives, keyed by its file extension. */
-const AGENT_PROMPT_DIRS: readonly { dir: string; ext: string }[] = [
-  { dir: ".claude/agents", ext: ".md" },
-  { dir: ".codex/agents", ext: ".toml" },
-  { dir: ".opencode/agent", ext: ".md" },
-];
-
 /**
- * Roster drift: an agent-prompt file physically present in a role-declared
- * workspace whose name belongs to the OTHER workspace role. This is distinct
- * from an ordinary foreign file: `planPayloadFiles`/`planStaleFiles` only ever
- * look at paths the CURRENT role's filtered manifest knows about
- * (`effectiveTemplateManifest`) or that this Target's own history tracked — a
- * hand-copied prompt that was never either is invisible to both, which is how
- * stray cross-role prompts have survived undetected before. A name that isn't
- * a known agent at all (unrelated stray file) is deliberately left alone here
- * — the existing foreign-file policy already covers it.
+ * Roster drift: an agent-prompt file in a workspace whose name belongs to the
+ * OTHER workspace role — a hand-copied prompt neither the filtered manifest nor
+ * this Target's history knew about, so neither `planPayloadFiles` nor
+ * `planStaleFiles` could see it.
+ *
+ * There is no other role left (V10 TASK-020/021): one payload ships every
+ * prompt, so an agent-named file in a workspace is payload, not a stray. The
+ * remaining cases keep their existing owners — a template that stops shipping a
+ * role is stale removal, and a name that is not an agent at all was never this
+ * mechanism's business. Kept as an empty result rather than deleted so removing
+ * the call sites stays one reviewable change (V10 TASK-022).
  */
-export function detectRosterDrift(options: { targetRoot: string; templatesDir: string; role: WorkspaceRole }): SyncConflict[] {
-  const fullManifest = readTemplateManifest(options.templatesDir);
-  const allAgentNames = new Set(
-    fullManifest.files
-      .filter((f) => f.path.startsWith(".claude/agents/") && f.path.endsWith(".md"))
-      .map((f) => path.basename(f.path, ".md")),
-  );
-  const baAgents = new Set(BA_WORKSPACE_AGENTS);
-  // dev: only a BA-workspace name is drift. ba: any known engineer/reviewer name is
-  // drift — everything the full roster knows about that isn't assigned to BA workspaces.
-  const foreignNames = options.role === "dev" ? baAgents : new Set([...allAgentNames].filter((n) => !baAgents.has(n)));
-
-  const conflicts: SyncConflict[] = [];
-  for (const spec of AGENT_PROMPT_DIRS) {
-    const dirAbs = path.join(options.targetRoot, spec.dir);
-    let entries: string[];
-    try {
-      entries = fs.readdirSync(dirAbs);
-    } catch {
-      continue;
-    }
-    for (const name of entries) {
-      if (!name.endsWith(spec.ext)) continue;
-      const base = path.basename(name, spec.ext);
-      if (!foreignNames.has(base)) continue;
-      conflicts.push({
-        path: path.posix.join(spec.dir, name),
-        kind: "roster-drift",
-        detail:
-          `agent prompt "${base}" belongs to the ${options.role === "dev" ? "BA" : "engineer/reviewer"} workspace role, ` +
-          `not this workspace's role (${options.role}) — never legitimate here regardless of how it arrived`,
-      });
-    }
-  }
-  return conflicts;
+export function detectRosterDrift(options: { targetRoot: string; templatesDir: string }): SyncConflict[] {
+  void options;
+  return [];
 }
 
 function overrideSet(config: TargetConfig | undefined, targetRoot?: string, candidatePaths: readonly string[] = []): Set<string> {
@@ -548,9 +511,7 @@ export interface PlanSyncOptions {
   /** Existing manifest; absent = first sync (everything is either new or untracked). */
   manifest?: TargetManifest;
   config?: TargetConfig;
-  /** Role asset profile: only matching payload paths are planned, tracked, and cleaned. Absent = full payload. */
-  include?: (relPath: string) => boolean;
-  /** When supplied, plan also flags any on-disk agent-prompt file belonging to the other workspace role (see `detectRosterDrift`). Absent = no roster-drift scan (legacy/no-role workspaces keep prior behaviour exactly). */
+  /** Recorded workspace role. Kept so old configs round-trip; it decides nothing here (V10 TASK-021). */
   role?: WorkspaceRole;
   /**
    * Final bytes sync writes at otherwise-shipped paths (the DEV workspace's
@@ -575,11 +536,9 @@ function isProvableStaleAgentsDuplicate(targetRoot: string): boolean {
   return aOutside === cOutside;
 }
 
-/** The payload this sync actually manages, after the role profile filter. */
+/** The payload this sync manages: the whole template manifest, one profile for every workspace (V10 TASK-020). */
 function effectiveTemplateManifest(options: PlanSyncOptions): TemplateManifest {
-  const manifest = readTemplateManifest(options.templatesDir);
-  if (!options.include) return manifest;
-  return { ...manifest, files: manifest.files.filter((f) => options.include!(f.path)) };
+  return readTemplateManifest(options.templatesDir);
 }
 
 /** Pure planner: reads both sides, writes nothing. */
@@ -598,9 +557,7 @@ export function planSync(options: PlanSyncOptions): SyncPlan {
   ];
 
   const conflicts = planned.map((p) => p.conflict).filter((c): c is SyncConflict => c !== undefined);
-  if (options.role) {
-    conflicts.push(...detectRosterDrift({ targetRoot: options.targetRoot, templatesDir: options.templatesDir, role: options.role }));
-  }
+  conflicts.push(...detectRosterDrift({ targetRoot: options.targetRoot, templatesDir: options.templatesDir }));
 
   return {
     entries: planned.map((p) => p.entry).filter((e): e is SyncPlanEntry => e !== undefined),
@@ -627,7 +584,6 @@ export function devDerivedContent(options: {
   targetRoot: string;
   templatesDir: string;
   config?: TargetConfig;
-  include?: (relPath: string) => boolean;
   installationConfigPath?: string;
 }): { content: Map<string, string>; boundRoot?: string } | undefined {
   const config = options.config;
@@ -647,7 +603,7 @@ export function devDerivedContent(options: {
     }
   }
   const manifest = readTemplateManifest(options.templatesDir);
-  const files = options.include ? manifest.files.filter((f) => options.include!(f.path)) : manifest.files;
+  const files = manifest.files;
   const content = new Map<string, string>();
   if (files.some((f) => f.path === CLAUDE_MD_PATH)) {
     const base = fs.readFileSync(path.join(options.templatesDir, CLAUDE_MD_PATH), "utf8");
@@ -711,7 +667,6 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     targetRoot: options.targetRoot,
     templatesDir: options.templatesDir,
     config,
-    include: options.include,
     installationConfigPath: options.installationConfigPath,
   });
   const derivedContent = derived?.content;

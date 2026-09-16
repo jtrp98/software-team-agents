@@ -5,7 +5,7 @@ import { RunLog, type RunRecord } from "./runLog.js";
 import type { TaskStore } from "../store/taskStore.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { defaultStateDbPath } from "../store/stateView.js";
-import { assetsForRole, type WorkspaceRole } from "../targetcli/roleWorkspace.js";
+import type { WorkspaceRole } from "../targetcli/roleWorkspace.js";
 import { estimateInputTokens } from "../context/contextBudget.js";
 import type { ContextComposition } from "../context/contextCommand.js";
 
@@ -87,8 +87,10 @@ function commandDescriptionChars(root: string, include: (relPath: string) => boo
  * when followed" are different observability facts, even though the current
  * run-record schema stores their truthful combined footprint in static_chars.
  */
-export function measureWorkspaceStatic(workspaceRoot: string, role: WorkspaceRole, runtime = "claude"): WorkspaceStaticMeasurement {
-  const include = assetsForRole(role);
+export function measureWorkspaceStatic(workspaceRoot: string, runtime = "claude"): WorkspaceStaticMeasurement {
+  // One payload profile since V10 TASK-020, so what is on disk is what the
+  // workspace was given — nothing to filter the measurement by.
+  const include = (_rel: string) => true;
   const autoLoaded = autoLoadedInstructionFiles(workspaceRoot, runtime);
   return {
     always_loaded_chars: autoLoaded.reduce((total, file) => total + fileChars(file), 0),
@@ -119,7 +121,7 @@ export function recordInteractiveSession(params: {
   store?: TaskStore;
 }): void {
   try {
-    const measurement = params.measurement ?? measureWorkspaceStatic(params.workspaceRoot, params.role, params.runtime);
+    const measurement = params.measurement ?? measureWorkspaceStatic(params.workspaceRoot, params.runtime);
     const taskId = `session:${params.role}:${new Date(params.startedAt).toISOString()}`;
     // stdio:"inherit" makes real usage inaccessible here. input/output stay
     // null (not zero); the legacy combined `tokens` column remains 0 solely

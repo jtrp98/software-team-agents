@@ -9,7 +9,7 @@ import { TargetSyncConflictError, runTargetSync } from "./syncEngine.js";
 import { readTargetManifest, isTargetInitialized, loadTargetConfig, TargetNotInitializedError } from "./targetMeta.js";
 import { installedFrameworkVersion } from "./version.js";
 import { runBa, runDev, type RuntimeName } from "./devCommand.js";
-import { assetsForRole, type WorkspaceRole } from "./roleWorkspace.js";
+import type { WorkspaceRole } from "./roleWorkspace.js";
 
 /**
  * The Target-first, role-aware entry point: `software-team-agents init|sync|status|dev|ba`,
@@ -211,7 +211,6 @@ export async function runTargetCli(
             templatesDir,
             manifest,
             config,
-            include: config?.role ? assetsForRole(config.role) : undefined,
             role: config?.role,
             installationConfigPath: options.installationConfigPath,
             now: new Date().toISOString(),

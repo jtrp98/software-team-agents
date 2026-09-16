@@ -66,18 +66,20 @@ const PATH_ARG_KEYS = ["file_path", "filePath", "notebook_path", "notebookPath",
 // `node scripts/regenerate-renderings.mjs` rewrites it. No require, no import: CJS and ESM both.
 const UNIVERSAL_DENY = ['.git/**', 'node_modules/**', '.workflow/**', 'dist/**', 'knowledge/_roles/**'];
 const WORKSPACE_BA_ARTIFACTS = ['_docs/module/*/requirement.md', '_docs/module/*/design.md', '_docs/module/*/design-archive.md', '_docs/module/*/test-plan.md', '_docs/module/*/plan.md', '_docs/module/*/uxui/**', '_docs/status.md', 'knowledge/**', 'decisions/**', 'targets.yaml', 'knowledge-policy.yaml'];
-const WORKSPACE_DEV_ARTIFACTS = ['contracts/**', 'workflows/**', 'stacks/**', 'layout.yaml', 'test-pyramid.yaml', 'escalation-policy.yaml'];
+const FRAMEWORK_PAYLOAD_ARTIFACTS = ['contracts/**', 'workflows/**', 'stacks/**', 'layout.yaml', 'test-pyramid.yaml', 'escalation-policy.yaml'];
 const KNOWLEDGE_DENIED_ROLES = ['backend-engineer', 'frontend-engineer', 'devops'];
-function readWorkspaceRole(nodeFs, nodePath, workspaceRoot) {
-  let text;
-  try { text = nodeFs.readFileSync(nodePath.join(workspaceRoot, '.agent-team', 'config.yaml'), 'utf8'); } catch { return null; }
-  const m = /^role:[ \t]*(ba|dev)[ \t]*$/m.exec(text);
-  return m ? m[1] : null;
+function frameworkPayloadDenial(relative) {
+  // Bound to the stage, not to the checkout: one workspace carries both the
+  // Framework payload and the Knowledge documents, so where a write lands
+  // says nothing about whether it is allowed.
+  if (!process.env.STA_ROLE) return null;
+  for (const pattern of FRAMEWORK_PAYLOAD_ARTIFACTS) {
+    if (matchesGlob(pattern, relative)) return frameworkPayloadDenyWhy(pattern);
+  }
+  return null;
 }
-function workspaceDenyWhy(role) {
-  const kb = process.env.STA_KNOWLEDGE_ROOT;
-  if (role === 'dev') return 'Requirements, designs, plans, test-plans, UX artifacts and registry files live in the Knowledge repository' + (kb ? ' (`' + kb + '`)' : '') + '. Run `software-team-agents ba` from the Knowledge workspace instead; this workspace (`role: dev` in .agent-team/config.yaml) owns app code plus review/security/deploy docs only.';
-  return 'Contracts, workflows, stacks and pipeline policy are engineer payload for a Target checkout. Run engineering work with `software-team-agents dev` from a Target workspace; this workspace (`role: ba` in .agent-team/config.yaml) owns analysis docs and knowledge items only.';
+function frameworkPayloadDenyWhy(pattern) {
+  return '`' + pattern + '` is Framework payload — `sta sync` materialises it and a person edits it. No agent contract grants it, so no stage may write it; change it in the Framework repository and sync.';
 }
 function stackPathRules() {
   let parsed;
@@ -212,22 +214,10 @@ export const StaGuards = async ({ project }) => {
       }
     }
 
-    // Workspace-level rule — identity-independent, so it holds for
-    // interactive sessions too. Mirrors block-path-permissions.js.
-    const wsRole = readWorkspaceRole(nodeFs, nodePath, root);
-    if (wsRole === "dev") {
-      for (const pattern of WORKSPACE_BA_ARTIFACTS) {
-        if (matchesGlob(pattern, rel)) {
-          return denyMessage(rel, null, workspaceDenyWhy("dev"));
-        }
-      }
-    } else if (wsRole === "ba") {
-      for (const pattern of WORKSPACE_DEV_ARTIFACTS) {
-        if (matchesGlob(pattern, rel)) {
-          return denyMessage(rel, null, workspaceDenyWhy("ba"));
-        }
-      }
-    }
+    // Framework payload — per stage, not per checkout. Mirrors
+    // block-path-permissions.js.
+    const frameworkWhy = frameworkPayloadDenial(rel);
+    if (frameworkWhy !== null) return denyMessage(rel, process.env.STA_ROLE, frameworkWhy);
 
     const role = process.env.STA_ROLE;
     if (!role) return null; // interactive run: the floor above is all this can honestly enforce

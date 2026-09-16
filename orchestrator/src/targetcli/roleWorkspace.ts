@@ -4,7 +4,6 @@ import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeR
 import { loadLocalTargetMapping, LocalTargetMappingError, type ResolvedLocalTarget } from "../threeRepo/localTargets.js";
 import { loadTargetRegistry, targetById, TargetRegistryError } from "../threeRepo/targets.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
-import type { TemplateManifest } from "../packaging/templateManifest.js";
 import { resolveWorkspaceRole } from "./roots.js";
 import type { TargetConfig, TargetManifest } from "./targetMeta.js";
 
@@ -63,67 +62,17 @@ export const BA_WORKSPACE_AGENTS: readonly string[] = [
 ];
 
 /**
- * Role-aware managed-asset profiles over the template payload.
+ * One managed payload, not two.
  *
- * Both roles get hooks + settings (the guards travel with every workspace),
- * skills (.claude/scripts), shared instructions, policies, CLAUDE.md, and its
- * rendered AGENTS.md pointer. They differ in agent roster and in
- * orchestrator-only payload (contracts, workflows, stacks,
- * layout/test-pyramid/escalation YAML) that only a DEV/Target workspace needs
- * because only there does the pipeline drive engineers.
+ * The split profiles existed to keep a Target checkout from carrying BA
+ * prompts and a Knowledge checkout from carrying engineer payload. With a
+ * single workspace both live in the same repository, and the BA profile's
+ * omission of `contracts/` was the worst of it: the guard hook reads
+ * `contracts/<role>.yaml` from the workspace root and fails open when it
+ * cannot (V10 D7), so the profile that dropped them disabled the per-role
+ * layer silently. Nothing filters the manifest now — `runTargetSync` takes no
+ * `include` and materialises every managed file.
  */
-export function assetsForRole(role: WorkspaceRole): (relPath: string) => boolean {
-  const baAgents = new Set(BA_WORKSPACE_AGENTS);
-  if (role === "dev") {
-    // T-UX13: a Target workspace carries no BA-workspace prompts. A session opened
-    // inside the app repo then cannot pick `business-analyst` and write
-    // requirements into the Target — the wrong-repo failure this split exists
-    // to prevent at the source, not just to detect afterwards.
-    return (relPath) => {
-      if (relPath.startsWith(".claude/agents/") && relPath.endsWith(".md")) {
-        return !baAgents.has(path.basename(relPath, ".md"));
-      }
-      // The Knowledge document/plan checkers are BA-workspace CI — a Target
-      // has no `_docs/**` of its own for them to run against.
-      if (relPath === ".github/workflows/knowledge-ci.yml") return false;
-      return true;
-    };
-  }
-  return (relPath) => {
-    if (relPath === "CLAUDE.md" || relPath === "AGENTS.md") return true;
-    if (relPath.startsWith(".claude/agents/")) {
-      if (!relPath.endsWith(".md")) return false;
-      return baAgents.has(path.basename(relPath, ".md"));
-    }
-    if (relPath.startsWith(".claude/hooks/") || relPath.startsWith(".claude/scripts/") || relPath.startsWith(".claude/shared/")) return true;
-    if (relPath === ".claude/settings.json") return true;
-    // OpenCode guards travel with every workspace, like the Claude hooks do:
-    // the plugin is authored payload; `.opencode/agent/` files are derived at
-    // sync time and never ship in the template payload at all.
-    if (relPath.startsWith(".opencode/plugin/")) return true;
-    // Antigravity's guard binding travels the same way, for the same reason.
-    if (relPath.startsWith(".agents/hooks/") || relPath === ".agents/hooks.json") return true;
-    if (relPath.startsWith("policies/")) return true;
-    // Only the BA/Knowledge side validates its own documents.
-    if (relPath === ".github/workflows/knowledge-ci.yml") return true;
-    // project-manager runs only here, and `sta --check-plan` (which its
-    // prompt requires before handoff) needs this file to validate a cast Tier.
-    if (relPath === "model-tiers.yaml") return true;
-    if (relPath.startsWith(".claude/commands/")) {
-      if (relPath === ".claude/commands/verify.md") return false;
-      return true;
-    }
-    // contracts/, workflows/, stacks/, layout.yaml, escalation-policy.yaml,
-    // test-pyramid.yaml — engineer-pipeline payload, not BA tooling.
-    return false;
-  };
-}
-
-/** The effective payload for a role: a copy of the manifest with excluded files removed. Stale detection then cleans anything a profile drop leaves behind. */
-export function filterManifestForRole(manifest: TemplateManifest, role: WorkspaceRole): TemplateManifest {
-  const include = assetsForRole(role);
-  return { ...manifest, files: manifest.files.filter((f) => include(f.path)) };
-}
 
 // --- repository kind detection -----------------------------------------------
 

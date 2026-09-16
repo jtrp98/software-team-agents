@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { resolveRoots } from "./roots.js";
-import { detectWorkspaceKind, assetsForRole, type WorkspaceRole, type WorkspaceKind } from "./roleWorkspace.js";
+import { detectWorkspaceKind, type WorkspaceRole, type WorkspaceKind } from "./roleWorkspace.js";
 import type { WorkspaceRuntime } from "./roleWorkspace.js";
 import {
   defaultTargetConfig,
@@ -150,7 +150,6 @@ export function runTargetInit(options: TargetInitOptions): TargetInitResult {
   const sync = runTargetSync({
     targetRoot: roots.targetRoot,
     templatesDir,
-    include: assetsForRole(role),
     role,
     manifest: previousManifest,
     config,

@@ -4,16 +4,13 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  assetsForRole,
   detectWorkspaceKind,
-  filterManifestForRole,
   KnowledgeBindingError,
   launchEnv,
   resolveKnowledgeBinding,
   resolveTargetBinding,
   TargetBindingError,
 } from "./roleWorkspace.js";
-import type { TemplateManifest } from "../packaging/templateManifest.js";
 import { loadTargetConfig, removedTargetPath, removedTargetPathProblem } from "./targetMeta.js";
 
 const roots: string[] = [];
@@ -150,74 +147,33 @@ describe("workspace kind detection (T-ROLE-16)", () => {
   });
 });
 
-describe("role asset profiles (T-ROLE-09/10/11)", () => {
-  it("BA carries BA-workspace agents + guards + policies, never engineer payload", () => {
-    const include = assetsForRole("ba");
-    expect(include(".claude/agents/business-analyst.md")).toBe(true);
-    expect(include(".claude/agents/system-analyst.md")).toBe(true);
-    expect(include(".claude/agents/project-manager.md")).toBe(true);
-    expect(include(".claude/agents/test-planner.md")).toBe(true);
-    expect(include(".claude/hooks/block-git.js")).toBe(true);
-    expect(include(".claude/settings.json")).toBe(true);
-    expect(include(".claude/scripts/check-doc-structure.js")).toBe(true);
-    expect(include(".opencode/plugin/sta-guards.js")).toBe(true);
-    expect(include("policies/documentation.md")).toBe(true);
-    expect(include("CLAUDE.md")).toBe(true);
-    // The document/plan checkers are CI and are BA-workspace payload only.
-    expect(include(".github/workflows/knowledge-ci.yml")).toBe(true);
-    // T-V6-005: project-manager runs only in the BA workspace, and its
-    // required `sta --check-plan` needs this file to validate a cast Tier.
-    expect(include("model-tiers.yaml")).toBe(true);
-    expect(include(".claude/commands/next.md")).toBe(true);
-    expect(include(".claude/commands/status.md")).toBe(true);
-    expect(include(".claude/commands/_shared/guardrails.md")).toBe(true);
-    expect(include(".claude/commands/verify.md")).toBe(false);
+describe("V10 TASK-020 — one managed payload, no role profile", () => {
+  // The repo's own snapshot; `npm run build` refreshes it.
+  const templatesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "templates");
+  const manifestPaths = (): string[] =>
+    (JSON.parse(fs.readFileSync(path.join(templatesRoot, "manifest.json"), "utf8")) as { files: { path: string }[] }).files.map((f) => f.path);
 
-    expect(include(".claude/agents/backend-engineer.md")).toBe(false);
-    expect(include(".claude/agents/frontend-engineer.md")).toBe(false);
-    // Derived renderings never ship in the payload, whatever the workspace role.
-    expect(include(".opencode/agent/backend-engineer.md")).toBe(false);
-    expect(include("contracts/backend.yaml")).toBe(false);
-    expect(include("workflows/bugfix.yml")).toBe(false);
-    expect(include("stacks/node/stack.yaml")).toBe(false);
-    expect(include("layout.yaml")).toBe(false);
+  it("ships the engineer pipeline payload and the BA prompts from the same manifest", () => {
+    const paths = new Set(manifestPaths());
+    // D7: without these the hook's readRules() finds no contract and fails open.
+    for (const agent of ["backend-engineer", "frontend-engineer", "qa-engineer", "devops", "security", "business-analyst", "system-analyst", "project-manager", "test-planner", "uxui-designer", "setup"]) {
+      expect(paths.has(`contracts/${agent}.yaml`)).toBe(true);
+      expect(paths.has(`.claude/agents/${agent}.md`)).toBe(true);
+    }
+    for (const p of ["layout.yaml", "test-pyramid.yaml", "escalation-policy.yaml", "model-tiers.yaml", ".github/workflows/knowledge-ci.yml", ".claude/settings.json", ".claude/commands/verify.md", ".claude/commands/next.md", "CLAUDE.md", "AGENTS.md"]) {
+      expect(paths.has(p)).toBe(true);
+    }
+    expect([...paths].some((p) => p.startsWith("workflows/"))).toBe(true);
+    expect([...paths].some((p) => p.startsWith("stacks/"))).toBe(true);
+    expect([...paths].some((p) => p.startsWith("policies/"))).toBe(true);
+    expect([...paths].some((p) => p.startsWith(".claude/hooks/"))).toBe(true);
   });
 
-  it("DEV carries the full roster and pipeline payload, but not the Knowledge document CI", () => {
-    const include = assetsForRole("dev");
-    expect(include(".claude/agents/backend-engineer.md")).toBe(true);
-    expect(include("contracts/backend.yaml")).toBe(true);
-    expect(include("workflows/bugfix.yml")).toBe(true);
-    expect(include("test-pyramid.yaml")).toBe(true);
-    // A Target has no `_docs/**` of its own for these checks to run against.
-    expect(include(".github/workflows/knowledge-ci.yml")).toBe(false);
-    expect(include(".claude/commands/next.md")).toBe(true);
-    expect(include(".claude/commands/status.md")).toBe(true);
-    expect(include(".claude/commands/verify.md")).toBe(true);
-    expect(include(".claude/commands/changed.md")).toBe(true);
-  });
-});
-
-describe("T-V6-005 — model-tiers.yaml reaches the BA workspace (regression: role filter dropping a validator's required file)", () => {
-  function manifestOf(paths: string[]): TemplateManifest {
-    return {
-      schema_version: 1,
-      framework_version: "test",
-      generated_at: "2026-09-06T00:00:00Z",
-      files: paths.map((p) => ({ path: p, sha256: "0".repeat(64), size_bytes: 0 })),
-    };
-  }
-
-  it("filterManifestForRole(manifest, 'ba') includes model-tiers.yaml", () => {
-    const manifest = manifestOf(["model-tiers.yaml", "CLAUDE.md", "contracts/backend.yaml"]);
-    const filtered = filterManifestForRole(manifest, "ba");
-    expect(filtered.files.map((f) => f.path)).toContain("model-tiers.yaml");
-  });
-
-  it("filterManifestForRole(manifest, 'dev') also includes it — DEV carries the full pipeline payload", () => {
-    const manifest = manifestOf(["model-tiers.yaml", "contracts/backend.yaml"]);
-    const filtered = filterManifestForRole(manifest, "dev");
-    expect(filtered.files.map((f) => f.path)).toContain("model-tiers.yaml");
+  it("carries no derived rendering — those are produced at sync time, never shipped", () => {
+    for (const p of manifestPaths()) {
+      expect(p.startsWith(".opencode/agent/")).toBe(false);
+      expect(p.startsWith(".codex/agents/")).toBe(false);
+    }
   });
 });
 
@@ -469,18 +425,18 @@ describe("target binding by id (T-V5-017 — one Target-location mechanism)", ()
   });
 });
 
-describe("T-WG5 — the confirm-workspace checkpoint ships to both workspace roles' synced payload", () => {
+describe("T-WG5 — the confirm-workspace checkpoint ships in the synced payload", () => {
   // repo root's own templates/ snapshot; run `npm run build:templates` first
   // if it's stale — see CLAUDE.md's guardrail against patching templates/
   // directly instead of its sources.
   const templatesRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "templates");
 
-  it("policies/documentation.md's §0 checkpoint is included in both the BA and DEV asset profiles", () => {
-    for (const role of ["ba", "dev"] as const) {
-      const include = assetsForRole(role);
-      expect(include("policies/documentation.md")).toBe(true);
-      expect(include("CLAUDE.md")).toBe(true);
-    }
+  it("policies/documentation.md's §0 checkpoint is in the one managed payload", () => {
+    const paths = new Set(
+      (JSON.parse(fs.readFileSync(path.join(templatesRoot, "manifest.json"), "utf8")) as { files: { path: string }[] }).files.map((f) => f.path),
+    );
+    expect(paths.has("policies/documentation.md")).toBe(true);
+    expect(paths.has("CLAUDE.md")).toBe(true);
   });
 
   it("the checkpoint text is actually present in the synced source files (not just referenced)", () => {

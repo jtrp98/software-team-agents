@@ -915,7 +915,7 @@ describe("role workspace architecture (T-ROLE)", () => {
     { relPath: "workflows/bugfix.yml", content: "workflow: bugfix\n" },
   ];
 
-  it("BA clone model: init+sync in the Knowledge repo materialize only BA assets; no Target exists anywhere (T-ROLE-22/23)", async () => {
+  it("BA clone model: init+sync in the Knowledge repo materialize the one payload; no Target exists anywhere (T-ROLE-22/23)", async () => {
     const knowledge = makeKnowledgeRepo();
     const knowledgeBefore = JSON.stringify([...dirHash(knowledge).entries()].sort());
     const fw = fakeFramework("1.0.0", FW_V1_FILES);
@@ -925,14 +925,16 @@ describe("role workspace architecture (T-ROLE)", () => {
     expect(initRun.code).toBe(0);
     expect(initRun.out).toMatch(/BA/);
 
-    // Workspace-role profile: BA agents land; engineer agents and pipeline payload do not.
+    // V10 TASK-020: one payload. `contracts/` in particular has to land — the
+    // guard hook reads `contracts/<role>.yaml` from the workspace root and
+    // fails open when it cannot (D7).
     expect(fs.existsSync(path.join(knowledge, ".claude", "agents", "business-analyst.md"))).toBe(true);
     expect(fs.existsSync(path.join(knowledge, ".claude", "agents", "system-analyst.md"))).toBe(true);
     expect(fs.existsSync(path.join(knowledge, ".claude", "hooks", "block-git.js"))).toBe(true);
     expect(fs.existsSync(path.join(knowledge, "policies", "coding.md"))).toBe(true);
-    expect(fs.existsSync(path.join(knowledge, ".claude", "agents", "backend-engineer.md"))).toBe(false);
-    expect(fs.existsSync(path.join(knowledge, "contracts"))).toBe(false);
-    expect(fs.existsSync(path.join(knowledge, "workflows"))).toBe(false);
+    expect(fs.existsSync(path.join(knowledge, ".claude", "agents", "backend-engineer.md"))).toBe(true);
+    expect(fs.readFileSync(path.join(knowledge, "contracts", "backend-engineer.yaml"), "utf8")).toContain("backend-engineer");
+    expect(fs.existsSync(path.join(knowledge, "workflows", "bugfix.yml"))).toBe(true);
     // Claude is the sole default runtime; no other binding family is
     // materialised until the workspace explicitly opts in.
     expect(fs.existsSync(path.join(knowledge, ".codex", "agents", "business-analyst.toml"))).toBe(false);
@@ -1802,63 +1804,42 @@ describe("role workspace architecture (T-ROLE)", () => {
     });
   });
 
-  describe("T-WG2 — roster-drift detection", () => {
-    it("a hand-copied BA prompt (all 3 runtimes) in a dev workspace is flagged, never silently absorbed", async () => {
+  describe("T-WG2 — roster drift after the lane collapse (V10 TASK-020/021)", () => {
+    it("an agent prompt from the payload is payload, not drift — there is no other role to belong to", async () => {
       const target = makeTarget();
       const fw = fakeFramework("1.0.0", FW_V1_FILES);
       expect((await capture(() => runTargetCli(["init", "--role", "dev"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
 
-      // Hand-copy business-analyst prompts into all three runtime renderings —
-      // never part of the dev role's profile (assetsForRole excludes them),
-      // never tracked by this Target's manifest.
-      write(target, ".claude/agents/business-analyst.md", AGENT_MD("business-analyst"));
-      write(target, ".codex/agents/business-analyst.toml", 'name = "business-analyst"\n');
-      write(target, ".opencode/agent/business-analyst.md", AGENT_MD("business-analyst"));
+      // `business-analyst` now ships to every workspace, so sync materialises
+      // it and tracks it in the manifest instead of flagging a hand-copy.
+      expect(fs.existsSync(path.join(target, ".claude", "agents", "business-analyst.md"))).toBe(true);
 
       const status = JSON.parse(
         (await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out,
       ) as { rosterDriftPaths: string[]; conflictCount: number };
-      expect(new Set(status.rosterDriftPaths)).toEqual(
-        new Set([".claude/agents/business-analyst.md", ".codex/agents/business-analyst.toml", ".opencode/agent/business-analyst.md"]),
-      );
-      expect(status.conflictCount).toBeGreaterThanOrEqual(3);
+      expect(status.rosterDriftPaths).toEqual([]);
+      expect(status.conflictCount).toBe(0);
 
       const rendered = (await capture(() => runTargetCli(["status"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out;
-      expect(rendered).toMatch(/WARNING: roster drift/);
-      expect(rendered).toContain(".claude/agents/business-analyst.md");
-      expect(rendered).toContain("sync --force");
+      expect(rendered).not.toMatch(/WARNING: roster drift/);
 
-      // Plain `sync` (no --force) reports it as a conflict — same treatment as
-      // an edited-managed file — and writes nothing.
+      // Plain `sync` stays clean and writes nothing away.
       const syncRun = await capture(() => runTargetCli(["sync"], target, fw, { installationConfigPath: NO_INSTALLATION }));
-      expect(syncRun.code).toBe(2);
-      expect(syncRun.err).toMatch(/business-analyst/);
+      expect(syncRun.code).toBe(0);
       expect(fs.existsSync(path.join(target, ".claude", "agents", "business-analyst.md"))).toBe(true);
-
-      // `sync --force` backs up and removes the drifted prompts.
-      const forced = await capture(() => runTargetCli(["sync", "--force"], target, fw, { installationConfigPath: NO_INSTALLATION }));
-      expect(forced.code).toBe(0);
-      expect(fs.existsSync(path.join(target, ".claude", "agents", "business-analyst.md"))).toBe(false);
-      expect(fs.existsSync(path.join(target, ".codex", "agents", "business-analyst.toml"))).toBe(false);
-      expect(fs.existsSync(path.join(target, ".opencode", "agent", "business-analyst.md"))).toBe(false);
-
-      const after = JSON.parse(
-        (await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out,
-      ) as { rosterDriftPaths: string[] };
-      expect(after.rosterDriftPaths).toEqual([]);
     });
 
-    it("an engineer prompt hand-copied into a BA (Knowledge) workspace is flagged the same way", async () => {
+    it("an engineer prompt in a Knowledge workspace is payload too — the mirror case answers the same", async () => {
       const knowledge = makeKnowledgeRepo();
       const fw = fakeFramework("1.0.0", FW_V1_FILES);
       expect((await capture(() => runTargetCli(["init", "--role", "ba"], knowledge, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
 
-      write(knowledge, ".claude/agents/backend-engineer.md", AGENT_MD("backend-engineer"));
+      expect(fs.existsSync(path.join(knowledge, ".claude", "agents", "backend-engineer.md"))).toBe(true);
 
       const status = JSON.parse(
         (await capture(() => runTargetCli(["status", "--json"], knowledge, fw, { installationConfigPath: NO_INSTALLATION }))).out,
       ) as { rosterDriftPaths: string[] };
-      expect(status.rosterDriftPaths).toEqual([".claude/agents/backend-engineer.md"]);
+      expect(status.rosterDriftPaths).toEqual([]);
     });
 
     it("a foreign file whose name does not match any known agent is still left alone (existing policy, unchanged)", async () => {

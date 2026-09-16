@@ -1137,74 +1137,81 @@ check(
 })();
 
 // ---------------------------------------------------------------------------
-// 9b. Target-workspace deny of Knowledge-side artifacts
+// 9b. The Framework payload, denied per stage rather than per workspace role
 // ---------------------------------------------------------------------------
 
-section('9b. T-UX13 — role: dev workspace blocks BA artifacts, whatever the session identity');
+section('9b. V10 TASK-021 — Framework payload is denied by stage; the recorded workspace role decides nothing');
 
 const DEV_CONFIG = 'schema_version: 1\ntarget_id: t\nregistered_at: 2026-08-24T00:00:00Z\noverrides: []\nrole: dev\n';
 const BA_CONFIG = 'schema_version: 1\ntarget_id: t\nregistered_at: 2026-08-24T00:00:00Z\noverrides: []\nrole: ba\n';
 
+const FRAMEWORK_PAYLOAD_CASES = [
+  ['contracts/backend-engineer.yaml', ['contracts', 'backend-engineer.yaml']],
+  ['workflows/feature.yml', ['workflows', 'feature.yml']],
+  ['stacks/node/stack.yaml', ['stacks', 'node', 'stack.yaml']],
+  ['layout.yaml', ['layout.yaml']],
+  ['test-pyramid.yaml', ['test-pyramid.yaml']],
+  ['escalation-policy.yaml', ['escalation-policy.yaml']],
+];
+
 withTempProject((tmp) => {
   write(path.join(tmp, '.agent-team', 'config.yaml'), DEV_CONFIG);
-  const env = { CLAUDE_PROJECT_DIR: tmp };
-  check(
-    'role:dev workspace -> requirement.md blocked even interactively (no STA_ROLE)',
-    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env),
-    BLOCK,
-  );
-  check('  design.md blocked too', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'design.md') } }, env), BLOCK);
-  check('  uxui/ artifacts blocked', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'uxui', 'design.md') } }, env), BLOCK);
-  check('  knowledge items blocked', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'knowledge', 'm', 'ux-design', 'UX-001.yaml') } }, env), BLOCK);
-  check('  engineer-owned review.md still allowed', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'review.md') } }, env), ALLOW);
-  check('  engineer-owned security.md still allowed', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'security.md') } }, env), ALLOW);
-  check('  app source still allowed', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'src', 'app.ts') } }, env), ALLOW);
 
-  // The extended Knowledge-side set, plus the root-naming deny text.
-  check('  plan.md blocked (Knowledge-side now)', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'plan.md') } }, env), BLOCK);
-  check('  _docs/status.md blocked', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'status.md') } }, env), BLOCK);
-  check('  decisions blocked', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'decisions', 'DR-001.yaml') } }, env), BLOCK);
-  check('  targets.yaml blocked', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'targets.yaml') } }, env), BLOCK);
-  check('  knowledge-policy.yaml blocked', runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'knowledge-policy.yaml') } }, env), BLOCK);
+  // The replacement rule: a named stage may not write Framework payload,
+  // whatever the checkout records. `sta sync` writes those files; a person edits them.
+  for (const [label, segments] of FRAMEWORK_PAYLOAD_CASES) {
+    check(`backend-engineer -> ${label} blocked (Framework payload)`,
+      runPathHook('Write', path.join(tmp, ...segments), 'backend-engineer', { CLAUDE_PROJECT_DIR: tmp }), BLOCK);
+    check(`  system-analyst -> ${label} blocked too — the ban is not engineer-only`,
+      runPathHook('Write', path.join(tmp, ...segments), 'system-analyst', { CLAUDE_PROJECT_DIR: tmp }), BLOCK);
+  }
 
-  const kbEnv = { ...env, STA_KNOWLEDGE_ROOT: path.join(tmp, '..', 'knowledge-root-fixture') };
-  const kbRes = spawnSync(process.execPath, [path.join(HOOKS, 'block-path-permissions.js')], {
-    input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }),
+  // The deny text must not send anyone to a command V10 removes.
+  const payloadRes = spawnSync(process.execPath, [path.join(HOOKS, 'block-path-permissions.js')], {
+    input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'contracts', 'backend-engineer.yaml') } }),
     encoding: 'utf8',
-    env: { ...process.env, ...kbEnv },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: tmp, STA_ROLE: 'backend-engineer' },
     cwd: tmp,
     timeout: 60000,
   });
-  check('  deny text names the resolved Knowledge root when the launch provides it', kbRes.status === BLOCK && kbRes.stderr.includes('knowledge-root-fixture') ? 0 : 1, 0);
+  check('  the denial explains Framework payload and names no `ba`/`dev` command',
+    payloadRes.status === BLOCK && payloadRes.stderr.includes('Framework payload') && !/software-team-agents (ba|dev)/.test(payloadRes.stderr) ? 0 : 1, 0);
 
-  write(path.join(tmp, '.agent-team', 'config.yaml'), BA_CONFIG);
-  check(
-    'role:ba workspace -> requirement.md allowed (the rule is dev-only)',
-    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env),
-    ALLOW,
-  );
-  check(
-    'role:ba workspace -> contracts blocked (T-WG3 mirror)',
-    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'contracts', 'backend-engineer.yaml') } }, env),
-    BLOCK,
-  );
-  check(
-    'role:ba workspace -> workflows blocked (T-WG3 mirror)',
-    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'workflows', 'feature.yml') } }, env),
-    BLOCK,
-  );
-  check(
-    'role:ba workspace -> requirement doc edits stay allowed',
-    runHook('block-path-permissions.js', { tool_name: 'Edit', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'design.md') } }, env),
-    ALLOW,
-  );
+  // The same rule inside a granted Target work root, where the floor branch
+  // used to return early and let everything else through.
+  const workRoot = path.join(tmp, 'target');
+  check('  the ban reaches a granted Target work root too',
+    runPathHook('Write', path.join(workRoot, 'contracts', 'backend-engineer.yaml'), 'backend-engineer',
+      { CLAUDE_PROJECT_DIR: tmp, STA_WRITABLE_WORK_ROOTS: JSON.stringify([workRoot]) }), BLOCK);
+  check('  Target source in that same root stays allowed',
+    runPathHook('Write', path.join(workRoot, 'src', 'route.ts'), 'backend-engineer',
+      { CLAUDE_PROJECT_DIR: tmp, STA_WRITABLE_WORK_ROOTS: JSON.stringify([workRoot]) }), ALLOW);
+
+  // What the recorded role no longer does. Knowledge artifacts are banned by
+  // stage (9b-2), not by which repository the session was opened in — one
+  // workspace now holds the payload and the documents together.
+  const env = { CLAUDE_PROJECT_DIR: tmp };
+  for (const [label, config] of [['role: dev', DEV_CONFIG], ['role: ba', BA_CONFIG]]) {
+    write(path.join(tmp, '.agent-team', 'config.yaml'), config);
+    check(`${label} -> requirement.md allowed interactively (no STA_ROLE, no per-agent rule reachable)`,
+      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env), ALLOW);
+    check(`  ${label} -> design.md likewise`,
+      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'design.md') } }, env), ALLOW);
+    check(`  ${label} -> engineer-owned review.md allowed`,
+      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'review.md') } }, env), ALLOW);
+    check(`  ${label} -> app source allowed`,
+      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'src', 'app.ts') } }, env), ALLOW);
+    check(`  ${label} -> backend-engineer still refused the Framework payload`,
+      runPathHook('Write', path.join(tmp, 'contracts', 'backend-engineer.yaml'), 'backend-engineer', env), BLOCK);
+    check(`  ${label} -> the floor still holds`,
+      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'knowledge', '_roles', 'ba', 'seen.yaml') } }, env), BLOCK);
+  }
 
   fs.rmSync(path.join(tmp, '.agent-team'), { recursive: true, force: true });
-  check(
-    'no .agent-team/config.yaml -> legacy behaviour, requirement.md allowed',
-    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env),
-    ALLOW,
-  );
+  check('no .agent-team/config.yaml -> identical answers, nothing was keyed off it',
+    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env), ALLOW);
+  check('  and the payload ban does not need it either',
+    runPathHook('Write', path.join(tmp, 'contracts', 'backend-engineer.yaml'), 'backend-engineer', env), BLOCK);
 });
 
 // V10 TASK-012 — the Knowledge ban used to be a workspace-role rule, so it
@@ -1249,33 +1256,34 @@ withTempProject((tmp) => {
     ALLOW);
 });
 
-// What the workspace role is, and what it is not. `STA_ROLE` names one
-// of the eleven agent contracts; `role:` in .agent-team/config.yaml says which
-// repository this checkout is. Nothing derives one from the other, so a session
-// with no STA_ROLE gets workspace boundaries and no per-agent boundary.
-section('9c. T-V6-007 — the workspace role, read the same way everywhere');
+// A workspace written by an older `init` still records `role: ba` or `role:
+// dev`. Keeping the field rather than rejecting the config is only worth
+// anything if it opens without error and changes no answer (V10 TASK-021).
+section('9c. V10 TASK-021 — a legacy recorded role opens fine and changes no answer');
 
 withTempProject((tmp) => {
   const env = { CLAUDE_PROJECT_DIR: tmp };
   const attempt = (rel) =>
     runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, ...rel.split('/')) } }, env);
+  const asEngineer = (rel) => runPathHook('Write', path.join(tmp, ...rel.split('/')), 'backend-engineer', env);
 
-  write(path.join(tmp, '.agent-team', 'config.yaml'), 'schema_version: 1\ntarget_id: t\nrole: dev\ntarget:\n  target_id: other\n');
-  check('a top-level role: is read even with a nested block below it', attempt('_docs/module/m/plan.md'), BLOCK);
-
-  // `role:` under another key belongs to that key. Reading it as the
-  // workspace's own would silently apply the wrong repository's whole policy.
-  write(path.join(tmp, '.agent-team', 'config.yaml'), 'schema_version: 1\ntarget:\n  role: ba\n');
-  check('a role: nested under another key is not the workspace role', attempt('contracts/backend-engineer.yaml'), ALLOW);
-
-  write(path.join(tmp, '.agent-team', 'config.yaml'), 'schema_version: 1\nrole:\ndev\n');
-  check('a role: with no value on its line is not a role declaration', attempt('_docs/module/m/plan.md'), ALLOW);
-
-  // The per-agent contract boundary is orchestrated-only: the hook is a
-  // separate process with no subagent identity, so an interactive session
-  // cannot supply one and this file pins that rather than implying otherwise.
-  write(path.join(tmp, '.agent-team', 'config.yaml'), BA_CONFIG);
-  check('interactive ba workspace: plan.md allowed, no per-agent rule reachable', attempt('_docs/module/m/plan.md'), ALLOW);
+  const configs = [
+    ['no config at all', null],
+    ['role: dev', DEV_CONFIG],
+    ['role: ba', BA_CONFIG],
+    ['role: dev with a nested block below it', 'schema_version: 1\ntarget_id: t\nrole: dev\ntarget:\n  target_id: other\n'],
+    ['role: nested under another key', 'schema_version: 1\ntarget:\n  role: ba\n'],
+    ['role: with no value on its line', 'schema_version: 1\nrole:\ndev\n'],
+    ['an unparseable config', 'schema_version: [1\nrole: dev\n'],
+  ];
+  for (const [label, config] of configs) {
+    if (config === null) fs.rmSync(path.join(tmp, '.agent-team'), { recursive: true, force: true });
+    else write(path.join(tmp, '.agent-team', 'config.yaml'), config);
+    check(`${label} -> plan.md allowed interactively`, attempt('_docs/module/m/plan.md'), ALLOW);
+    check(`  ${label} -> contracts allowed interactively (no stage named)`, attempt('contracts/backend-engineer.yaml'), ALLOW);
+    check(`  ${label} -> contracts refused for a named stage`, asEngineer('contracts/backend-engineer.yaml'), BLOCK);
+    check(`  ${label} -> the floor still holds`, attempt('node_modules/pkg/index.js'), BLOCK);
+  }
 });
 
 // Run against ROOT, the one place `contracts/` exists: the hook resolves them
