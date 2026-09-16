@@ -222,8 +222,11 @@ export function validatePlanTaskTargets(
   const declared = context.designMd === null ? [] : readModuleTargets(context.designMd);
   const designPath = path.join(context.projectRoot, "_docs", "module", context.module, "design.md");
   if (declared.length === 0) {
-    result.notes.push(
-      `module "${context.module}" declares no Targets in ${designPath}; module-scope validation of Targets: is exempt and the module remains unscoped`,
+    // Reached only because some task declares `Targets:`. Keeping this a note
+    // let a plan bind Targets the module never scoped, and runtime binding
+    // validation would be the first thing to say so (V10 TASK-011).
+    result.errors.push(
+      `module "${context.module}" declares no Targets in ${designPath}, but ${declaring.length} task(s) declare Targets: — add a "## Targets" section listing every Target id those tasks use, or remove Targets: from them`,
     );
   }
   const declaredSet = new Set(declared);

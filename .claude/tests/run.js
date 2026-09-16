@@ -1207,6 +1207,48 @@ withTempProject((tmp) => {
   );
 });
 
+// V10 TASK-012 — the Knowledge ban used to be a workspace-role rule, so it
+// stopped at the workspace boundary. These cases put the Knowledge root inside
+// a granted Target work root, where the work-root branch allows everything the
+// floor lets through, and pin that the ban still lands.
+section('9b-2. V10 TASK-012 — engineer/devops never write Knowledge, wherever it sits');
+
+withTempProject((tmp) => {
+  const workRoot = path.join(tmp, 'target');
+  const knowledgeRoot = path.join(workRoot, 'knowledge-repo');
+  const grant = {
+    CLAUDE_PROJECT_DIR: tmp,
+    STA_WRITABLE_WORK_ROOTS: JSON.stringify([workRoot]),
+    STA_KNOWLEDGE_ROOT: knowledgeRoot,
+  };
+  const attempt = (role, rel) =>
+    runPathHook('Write', path.join(knowledgeRoot, ...rel.split('/')), role, grant);
+
+  for (const role of ['backend-engineer', 'frontend-engineer', 'devops']) {
+    check(`${role} -> design.md in the Knowledge root blocked`, attempt(role, '_docs/module/m/design.md'), BLOCK);
+    check(`${role} -> knowledge item blocked`, attempt(role, 'knowledge/m/ux-design/UX-001.yaml'), BLOCK);
+    check(`${role} -> plan.md blocked`, attempt(role, '_docs/module/m/plan.md'), BLOCK);
+  }
+  check('devops -> its own deploy.md stays writable', attempt('devops', '_docs/module/m/deploy.md'), ALLOW);
+  check('backend-engineer -> Target source outside the Knowledge root still allowed',
+    runPathHook('Write', path.join(workRoot, 'src', 'route.ts'), 'backend-engineer', grant), ALLOW);
+  check('system-analyst -> design.md in the Knowledge root allowed (it owns it)',
+    attempt('system-analyst', '_docs/module/m/design.md'), ALLOW);
+  check('qa-engineer -> plan.md in the Knowledge root allowed (TASK-028 path)',
+    attempt('qa-engineer', '_docs/module/m/plan.md'), ALLOW);
+  // The floor is evaluated against the granted root, so it reaches
+  // `knowledge/_roles/**` when that root is the Knowledge repository itself —
+  // a person's acknowledgement, denied to every role including its owner.
+  check('every role -> knowledge/_roles is the universal floor, not this rule',
+    runPathHook('Write', path.join(knowledgeRoot, 'knowledge', '_roles', 'ba', 'seen.yaml'), 'system-analyst',
+      { CLAUDE_PROJECT_DIR: tmp, STA_WRITABLE_WORK_ROOTS: JSON.stringify([knowledgeRoot]), STA_KNOWLEDGE_ROOT: knowledgeRoot }),
+    BLOCK);
+  check('no STA_KNOWLEDGE_ROOT -> the rule cannot fire, and the floor is all that is left',
+    runPathHook('Write', path.join(knowledgeRoot, '_docs', 'module', 'm', 'design.md'), 'backend-engineer',
+      { CLAUDE_PROJECT_DIR: tmp, STA_WRITABLE_WORK_ROOTS: JSON.stringify([workRoot]) }),
+    ALLOW);
+});
+
 // What the workspace role is, and what it is not. `STA_ROLE` names one
 // of the eleven agent contracts; `role:` in .agent-team/config.yaml says which
 // repository this checkout is. Nothing derives one from the other, so a session

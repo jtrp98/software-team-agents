@@ -97,7 +97,7 @@ describe("Phase 2 task Target bindings", () => {
   it("T-V9-008 returns the same explicit compatibility warnings at creation and resume", () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const targetBindings = bindings("backend", null);
-    const moduleScope = { module: "legacy-module", designPath: "legacy-module/design.md", declaredTargetIds: [] };
+    const moduleScope = { module: "legacy-module", designPath: "legacy-module/design.md", declaredTargetIds: ["backend"] };
     const persisted = newPersistedTask({
       taskId: "legacy-resume",
       classification,
@@ -109,7 +109,45 @@ describe("Phase 2 task Target bindings", () => {
     const created = validateNewTaskBindings(classification, targetBindings, registry, { moduleScope });
     const resumed = validatePersistedTaskBindings(persisted, registry, { moduleScope });
     expect(created.warnings).toEqual(resumed.warnings);
-    expect(created.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/no declared type.*schema v1 compatibility/), expect.stringMatching(/declares no Targets.*unscoped/)]));
+    expect(created.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/no declared type.*schema v1 compatibility/)]));
+  });
+
+  it("V10 TASK-011 refuses a Target binding in a module that declares no ## Targets, naming the design.md to fix", () => {
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const targetBindings = bindings("backend", null);
+    const persisted = newPersistedTask({
+      taskId: "unscoped-resume",
+      classification,
+      machine: initTaskMachine(classification.pipeline, false),
+      now: 1,
+      targetBindings,
+    });
+    const moduleScope = { module: "sales", designPath: "knowledge/_docs/module/sales/design.md", declaredTargetIds: [] };
+
+    expect(() => validateNewTaskBindings(classification, targetBindings, registry, { moduleScope })).toThrow(
+      /module "sales" declares no Targets[\s\S]*binding\(s\) backend[\s\S]*"## Targets"[\s\S]*knowledge\/_docs\/module\/sales\/design\.md/,
+    );
+    expect(() => validatePersistedTaskBindings(persisted, registry, { moduleScope })).toThrow(
+      /module "sales" declares no Targets[\s\S]*knowledge\/_docs\/module\/sales\/design\.md/,
+    );
+  });
+
+  it("V10 TASK-011 leaves a task that binds no Target alone: a document-only module still needs no ## Targets", () => {
+    const classification = classifyTask({ isTypoOrCopyOnly: true });
+    const targetBindings = bindings(null, null);
+    const persisted = newPersistedTask({
+      taskId: "doc-only-resume",
+      classification,
+      machine: initTaskMachine(classification.pipeline, false),
+      now: 1,
+      targetBindings,
+    });
+    const moduleScope = { module: "policy", designPath: "policy/design.md", declaredTargetIds: [] };
+
+    const created = validateNewTaskBindings(classification, targetBindings, registry, { moduleScope });
+    const resumed = validatePersistedTaskBindings(persisted, registry, { moduleScope });
+    expect(created.warnings).toEqual(resumed.warnings);
+    expect(created.warnings).toEqual([expect.stringMatching(/declares no Targets.*binds none either/)]);
   });
 
   it("T-V9-008 enforces a declared module Target set on creation and resume", () => {
@@ -246,7 +284,7 @@ describe("Phase 2 task Target bindings", () => {
 });
 
 describe("Phase 2 preflight", () => {
-  it("T-V9-008 derives module scope from persisted plan_source and keeps an unscoped legacy task resumable", () => {
+  it("T-V9-008 derives module scope from persisted plan_source; V10 TASK-011 refuses an unscoped bound task on resume", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "v9-resume-module-scope-"));
     try {
       const framework = path.join(root, "framework");
@@ -284,8 +322,12 @@ describe("Phase 2 preflight", () => {
         bindingWarning: (message: string) => warnings.push(message),
       };
 
-      expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, options)).not.toThrow();
-      expect(warnings).toEqual([expect.stringMatching(/module "sales" declares no Targets.*unscoped/)]);
+      // V10 TASK-011: resume applies the same rule as creation — a bound Target
+      // with no module declaration to sit inside is refused, not warned about.
+      expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, options)).toThrow(
+        /module "sales" declares no Targets[\s\S]*design\.md/,
+      );
+      expect(warnings).toEqual([]);
 
       fs.writeFileSync(path.join(moduleDir, "design.md"), "# Design\n\n## Targets\n\n- another-target\n");
       expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, options)).toThrow(/Target "backend".*outside module "sales"/);

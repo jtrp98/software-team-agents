@@ -76,6 +76,24 @@ export const WORKSPACE_DEV_ARTIFACTS: readonly string[] = [
 ];
 
 /**
+ * Stages whose write scope is a Target checkout and which may therefore never
+ * write a Knowledge artifact, whatever workspace the invocation was launched
+ * from (V10 confirmations 7 and 15). The analysis roles are absent on purpose:
+ * BA/SA/PM/test-planner/uxui/QA own artifacts in `WORKSPACE_BA_ARTIFACTS`, and
+ * a ban that reached them would put the pipeline at odds with itself.
+ */
+export const KNOWLEDGE_DENIED_ROLES: readonly string[] = [
+  AgentStage.BACKEND_ENGINEER,
+  AgentStage.FRONTEND_ENGINEER,
+  AgentStage.DEVOPS,
+];
+
+/** Whether this stage carries the Knowledge deny unconditionally, rather than through a workspace role. */
+export function deniesKnowledgeArtifacts(agent: AgentStage | string): boolean {
+  return KNOWLEDGE_DENIED_ROLES.includes(String(agent));
+}
+
+/**
  * Re-export of the one workspace-role reader (`targetcli/roots.ts`), kept under
  * this name because the guard rules are declared here and the rendered hook
  * block must apply the identical rule. Null when absent/unreadable -- the rule
@@ -264,6 +282,23 @@ const GUARD_RULE_FUNCTION_SOURCE: readonly string[] = [
   "  const role = process.env.STA_ROLE || 'current role';",
   "  return 'Blocked: Target \"' + targetId + '\" is bound read-only for this ' + role + ' invocation; writing to it is refused.';",
   "}",
+  "function knowledgeArtifactDenial(nodePath, target) {",
+  "  // The Knowledge root can sit inside a granted work root, so this runs off",
+  "  // the root the runtime named rather than off the workspace-relative path.",
+  "  const role = process.env.STA_ROLE;",
+  "  if (!role || !KNOWLEDGE_DENIED_ROLES.includes(role)) return null;",
+  "  const kb = process.env.STA_KNOWLEDGE_ROOT;",
+  "  if (!kb) return null;",
+  "  const rel = nodePath.relative(nodePath.resolve(kb), nodePath.resolve(target)).replace(/\\\\/g, '/');",
+  "  if (rel === '' || rel.startsWith('../') || nodePath.isAbsolute(rel)) return null;",
+  "  for (const pattern of WORKSPACE_BA_ARTIFACTS) {",
+  "    if (matchesGlob(pattern, rel)) return { rel: rel, why: knowledgeDenyWhy(role, pattern, kb) };",
+  "  }",
+  "  return null;",
+  "}",
+  "function knowledgeDenyWhy(role, pattern, knowledgeRoot) {",
+  "  return '`' + role + '` implements what the Knowledge repository (`' + knowledgeRoot + '`) already decided, so it may not write `' + pattern + '` there — that artifact is written by the role that owns it, never by an implementation stage.';",
+  "}",
   "function matchesGlob(pattern, target) {",
   "  const clean = (p) => p.replace(/\\\\/g, '/').replace(/^\\.\\//, '').replace(/^\\/+/, '');",
   "  const pat = clean(pattern);",
@@ -300,6 +335,7 @@ export function renderGuardRuleBlock(): string {
     list("UNIVERSAL_DENY", UNIVERSAL_DENY),
     list("WORKSPACE_BA_ARTIFACTS", WORKSPACE_BA_ARTIFACTS),
     list("WORKSPACE_DEV_ARTIFACTS", WORKSPACE_DEV_ARTIFACTS),
+    list("KNOWLEDGE_DENIED_ROLES", KNOWLEDGE_DENIED_ROLES),
     ...GUARD_RULE_FUNCTION_SOURCE,
     GUARD_RULES_CLOSE,
     "",

@@ -2,6 +2,7 @@ import {
   UNIVERSAL_DENY,
   WORKSPACE_BA_ARTIFACTS,
   WORKSPACE_DEV_ARTIFACTS,
+  deniesKnowledgeArtifacts,
   pathRulesFor,
   readWorkspaceRole,
   targetPathRules,
@@ -74,12 +75,16 @@ export function contractGuards(
       : wsRole === "ba"
         ? WORKSPACE_DEV_ARTIFACTS
         : [];
+  // Which repository a stage was launched from decides nothing here: an
+  // implementation stage may not write a Knowledge artifact, and after the lane
+  // collapse there is no workspace role left to carry that ban (V10 TASK-012).
+  const knowledgeDeny = deniesKnowledgeArtifacts(role) ? WORKSPACE_BA_ARTIFACTS : [];
   return {
     writeAllow: rules.write,
     // The role's own deny list plus the floor and workspace-role deny rules.
     // Concatenated rather than replaced: the floor holds whatever a contract
     // says, which is the whole reason it is called a floor.
-    writeDeny: [...UNIVERSAL_DENY, ...workspaceDeny, ...rules.deny],
+    writeDeny: [...new Set([...UNIVERSAL_DENY, ...workspaceDeny, ...knowledgeDeny, ...rules.deny])],
     forbidCommands: FORBIDDEN_COMMANDS,
     exitChecks: ALL_EXIT_CHECKS,
   };

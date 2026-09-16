@@ -101,8 +101,17 @@ function validateBindingPolicy(
   const moduleScope = options.moduleScope;
   if (moduleScope !== undefined) {
     if (moduleScope.declaredTargetIds.length === 0) {
+      // An undeclared module cannot bound anything, so exempting it would make
+      // every Target the task names in-scope by default — the opposite of the
+      // upper bound this check exists to be (V10 D6). A task that binds no
+      // Target needs no declaration, and still does not get one demanded.
+      if (hasTargetBindings(bindings)) {
+        throw new TaskBindingError(
+          `module "${moduleScope.module}" declares no Targets, so Target binding(s) ${uniqueBoundTargetIds(bindings).join(", ")} have no module scope to sit inside — add a "## Targets" section listing them to ${moduleScope.designPath}, or unbind the task`,
+        );
+      }
       warnings.push(
-        `module "${moduleScope.module}" declares no Targets in ${moduleScope.designPath}; module-scope validation is exempt and the module remains unscoped`,
+        `module "${moduleScope.module}" declares no Targets in ${moduleScope.designPath}; this task binds none either, so module-scope validation has nothing to bound`,
       );
     } else {
       const declared = new Set(moduleScope.declaredTargetIds);

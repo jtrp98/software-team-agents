@@ -64,6 +64,7 @@ const root = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 const UNIVERSAL_DENY = ['.git/**', 'node_modules/**', '.workflow/**', 'dist/**', 'knowledge/_roles/**'];
 const WORKSPACE_BA_ARTIFACTS = ['_docs/module/*/requirement.md', '_docs/module/*/design.md', '_docs/module/*/design-archive.md', '_docs/module/*/test-plan.md', '_docs/module/*/plan.md', '_docs/module/*/uxui/**', '_docs/status.md', 'knowledge/**', 'decisions/**', 'targets.yaml', 'knowledge-policy.yaml'];
 const WORKSPACE_DEV_ARTIFACTS = ['contracts/**', 'workflows/**', 'stacks/**', 'layout.yaml', 'test-pyramid.yaml', 'escalation-policy.yaml'];
+const KNOWLEDGE_DENIED_ROLES = ['backend-engineer', 'frontend-engineer', 'devops'];
 function readWorkspaceRole(nodeFs, nodePath, workspaceRoot) {
   let text;
   try { text = nodeFs.readFileSync(nodePath.join(workspaceRoot, '.agent-team', 'config.yaml'), 'utf8'); } catch { return null; }
@@ -96,6 +97,23 @@ function boundReadOnlyTarget(nodePath, target) {
 function boundReadOnlyWhy(targetId) {
   const role = process.env.STA_ROLE || 'current role';
   return 'Blocked: Target "' + targetId + '" is bound read-only for this ' + role + ' invocation; writing to it is refused.';
+}
+function knowledgeArtifactDenial(nodePath, target) {
+  // The Knowledge root can sit inside a granted work root, so this runs off
+  // the root the runtime named rather than off the workspace-relative path.
+  const role = process.env.STA_ROLE;
+  if (!role || !KNOWLEDGE_DENIED_ROLES.includes(role)) return null;
+  const kb = process.env.STA_KNOWLEDGE_ROOT;
+  if (!kb) return null;
+  const rel = nodePath.relative(nodePath.resolve(kb), nodePath.resolve(target)).replace(/\\/g, '/');
+  if (rel === '' || rel.startsWith('../') || nodePath.isAbsolute(rel)) return null;
+  for (const pattern of WORKSPACE_BA_ARTIFACTS) {
+    if (matchesGlob(pattern, rel)) return { rel: rel, why: knowledgeDenyWhy(role, pattern, kb) };
+  }
+  return null;
+}
+function knowledgeDenyWhy(role, pattern, knowledgeRoot) {
+  return '`' + role + '` implements what the Knowledge repository (`' + knowledgeRoot + '`) already decided, so it may not write `' + pattern + '` there — that artifact is written by the role that owns it, never by an implementation stage.';
 }
 function matchesGlob(pattern, target) {
   const clean = (p) => p.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
@@ -147,6 +165,11 @@ function run(input) {
 
   const readOnlyTarget = boundReadOnlyTarget(path, path.resolve(root, target));
   if (readOnlyTarget !== null) return boundReadOnlyWhy(readOnlyTarget);
+
+  // Ahead of the work-root branch below, which allows anything the floor lets
+  // through: a Knowledge root may itself sit inside a granted work root.
+  const knowledgeDenial = knowledgeArtifactDenial(path, path.resolve(root, target));
+  if (knowledgeDenial !== null) return deny(knowledgeDenial.rel, process.env.STA_ROLE, knowledgeDenial.why);
 
   // Three-repo runtime hands this hook only canonical write roots selected by
   // preflight. A Target path is outside the Framework contract's relative
