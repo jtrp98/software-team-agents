@@ -5,6 +5,7 @@ import { flagValue } from "../support.js";
 import { openStore } from "../support.js";
 import { CliUsageError, cliVersion } from "../../cli.js";
 import { createProductionRuntimeRegistry, type CliDependencies } from "../composition/runtimeRegistry.js";
+import { askCodeIntelConsentAtRunStart } from "../composition/runStartConsent.js";
 import { FLAG_TO_CLASSIFICATION, type BooleanClassificationKey } from "../../classification/classificationFlags.js";
 import type { ClassificationInput } from "../../classification/taskClassifier.js";
 import {
@@ -366,6 +367,9 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
   // a three-repo, Target-bound task (`contractRootForTask`'s rule);
   // legacy single-repo runs use the project root itself.
   const contractRoot = installation ? resolveFrameworkRoot() : args.projectRoot;
+  // V10 TASK-015 — Targets whose index freshness the run start will ask
+  // about (ADR-006 Option A); filled in by whichever branch resolves the run.
+  const codeIntelConsentTargets: { targetId: string; path: string }[] = [];
 
   try {
     let runId: string;
@@ -422,6 +426,9 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
           `blocked=${readiness.blocked.join(",") || "none"} settled=${readiness.settled.join(",") || "none"}`,
       );
       if (args.dryRun) return 0;
+      // The frozen run's own Target is what every ledger artifact answers to;
+      // tasks bound to further Targets were consented for when the run started.
+      codeIntelConsentTargets.push({ targetId: run.target_id, path: run.target_root });
     } else {
       const moduleName = args.module!;
       const planMarkdown = readModuleDoc(docsRoot, moduleName, "plan.md");
@@ -651,7 +658,17 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
         throw error;
       }
       console.log(`[bounded-run] froze run ${registered.run.run_id}: ${registered.trace.join(" | ")}`);
+      const byConsentTarget = new Map<string, string>();
+      for (const roots of taskWorkRootsMap.values()) {
+        for (const root of roots) byConsentTarget.set(root.targetId, root.path);
+      }
+      if (byConsentTarget.size === 0 && targetRoot) byConsentTarget.set(targetId, targetRoot);
+      codeIntelConsentTargets.push(...[...byConsentTarget].map(([consentTargetId, consentPath]) => ({ targetId: consentTargetId, path: consentPath })));
     }
+
+    // V10 TASK-015 — ask-before-indexing at run start (ADR-006 Option A);
+    // headless stdin never asks, and the hook itself never blocks the run.
+    await askCodeIntelConsentAtRunStart(codeIntelConsentTargets, { interactive: process.stdin.isTTY === true });
 
     const services = createProductionBoundedRunServices({
       ledger, store, registry: runtimeRegistry,

@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parsePlanTasks } from "../../docs/planGraph.js";
 import { renderCanonicalTasks, type PlanTask } from "../../docs/planTask.js";
-import { generateHtmlReport, parseStatusMd, runReportVerb, summarizeChangedByTarget, type ReportData } from "./report.js";
+import { generateHtmlReport, parseStatusMd, runReportVerb, summarizeChangedByTarget, summarizeCodeIntel, type ReportData } from "./report.js";
 
 const STA_INSTALLATION_CONFIG_ORIGINAL = process.env.STA_INSTALLATION_CONFIG;
 beforeEach(() => {
@@ -334,6 +334,78 @@ describe("T-V6-018 — sta report verb", () => {
     expect(html).toContain("1 file(s)");
     expect(html).toContain("server/a.ts");
     expect(html).toContain("web/app.tsx");
+  });
+
+  it("V10 TASK-018 summarizes code-intel activity per run from the audit trail and run records", () => {
+    const mockReportBase: ReportData = {
+      projectName: "my-mock-project",
+      generatedAt: "2026-09-06T12:00:00.000Z",
+      overallStatus: "green",
+      status: { absent: true },
+      plan: { moduleName: "test-mod", currentPhase: 1, tasks: [], allPhases: [], absent: true },
+      review: { moduleName: "test-mod", absent: true, openIssues: [] },
+      changed: {
+        projectRoot: "C:\\mock\\root",
+        isGit: true,
+        changedFiles: [],
+        gate: { ok: true, status: "passed", results: [] },
+        disclaimer: "Deterministic gate notice",
+      },
+    };
+    const store = {
+      listTasks: () => [{ taskId: "BE-001" }, { taskId: "BE-002" }, { taskId: "BE-003" }],
+      eventsForTask: (taskId: string) =>
+        taskId === "BE-001"
+          ? [
+              { taskId, at: 1, type: "CODE_INTELLIGENCE_QUERY", payload: {}, actor: null, reason: null, input: null, output: null, decision: null },
+              { taskId, at: 2, type: "CODE_INTELLIGENCE_HIT", payload: { count: 4 }, actor: null, reason: null, input: null, output: null, decision: null },
+              { taskId, at: 3, type: "CODE_INTELLIGENCE_STALE", payload: {}, actor: null, reason: null, input: null, output: null, decision: null },
+              { taskId, at: 4, type: "CODE_INTELLIGENCE_FALLBACK", payload: { reason: "stale" }, actor: null, reason: null, input: null, output: null, decision: null },
+            ]
+          : taskId === "BE-002"
+            ? [{ taskId, at: 5, type: "CODE_INTELLIGENCE_FALLBACK", payload: { reason: "missing-index" }, actor: null, reason: null, input: null, output: null, decision: null }]
+            : [],
+      runsForTask: (taskId: string) =>
+        taskId === "BE-001"
+          ? [
+              { code_intel_chars: 4210 },
+              { code_intel_chars: 8123 },
+            ]
+          : taskId === "BE-002"
+            ? [{ code_intel_chars: 0 }]
+            : [],
+    };
+    // A minimal store stub — summarizeCodeIntel reads only these three members.
+    const summaries = summarizeCodeIntel(store as unknown as Parameters<typeof summarizeCodeIntel>[0]);
+    expect(summaries).toEqual([
+      expect.objectContaining({
+        task_id: "BE-001",
+        events: { CODE_INTELLIGENCE_QUERY: 1, CODE_INTELLIGENCE_HIT: 1, CODE_INTELLIGENCE_STALE: 1, CODE_INTELLIGENCE_FALLBACK: 1 },
+        last_fallback_reason: "stale",
+        attempts_with_evidence: 2,
+        total_attempts: 2,
+        last_code_intel_chars: 8123,
+      }),
+      expect.objectContaining({
+        task_id: "BE-002",
+        last_fallback_reason: "missing-index",
+        attempts_with_evidence: 0,
+        total_attempts: 1,
+        last_code_intel_chars: 0,
+      }),
+    ]);
+    // A task with zero code-intel activity stays out of the summary — it would be noise, not evidence.
+    expect(summaries.map((summary) => summary.task_id)).not.toContain("BE-003");
+
+    const html = generateHtmlReport({ ...mockReportBase, codeIntel: summaries });
+    expect(html).toContain("Code Intelligence (audit-trail summary)");
+    expect(html).toContain("BE-001");
+    expect(html).toContain("2/2 attempt(s)");
+    expect(html).toContain("Last fallback reason");
+    expect(html).toContain("<code>stale</code>");
+    expect(html).toContain("never a QA pass condition");
+    // No section at all when no state database existed.
+    expect(generateHtmlReport({ ...mockReportBase, codeIntel: undefined })).not.toContain("Code Intelligence");
   });
 
   it("handles missing review.md and plan.md gracefully with stated absences", () => {

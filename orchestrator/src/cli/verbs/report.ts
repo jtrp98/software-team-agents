@@ -6,6 +6,9 @@ import type { PlanTask } from "../../docs/planTask.js";
 import { parseOpenIssues, type OpenIssueRow } from "../../orchestrator/failureClassifier.js";
 import { readModuleDoc, resolveModule, listModules } from "../../agents/moduleDocs.js";
 import { resolveContextDocsRoot } from "../../targetcli/roots.js";
+import type { TaskStore } from "../../store/taskStore.js";
+import { defaultStateDbPath } from "../../store/stateView.js";
+import { SqliteTaskStore } from "../../store/sqliteStore.js";
 import { listOrphanRunBranches, observeRuns, renderMergeAdvisory, type OrphanRunBranch, type RunObservation } from "../../run/observability.js";
 import { getChangedSummary, type ChangedSummary } from "./changed.js";
 import { flagValue } from "../support.js";
@@ -56,6 +59,54 @@ export interface TargetDiffSummaryRow {
 }
 
 /**
+ * V10 TASK-018 — code-intel per-run summary, read off the audit trail and the
+ * run records (metadata only: counts, reasons, char totals). Read-only
+ * reporting: it is never a QA pass condition and adds nothing to review.md
+ * (user confirmation 9 — evidence of use is recorded, not enforced).
+ */
+export interface CodeIntelTaskSummary {
+  task_id: string;
+  /** CODE_INTELLIGENCE_* audit event counts by event type. */
+  events: Record<string, number>;
+  /** The most recent CODE_INTELLIGENCE_FALLBACK reason, when one was recorded. */
+  last_fallback_reason?: string;
+  /** Stage attempts whose prompt carried code-intel evidence (chars > 0), out of all measured attempts. */
+  attempts_with_evidence: number;
+  total_attempts: number;
+  /** The most recent attempt's prompt code-intel bytes; null when never measured. */
+  last_code_intel_chars: number | null;
+}
+
+export function summarizeCodeIntel(
+  store: Pick<TaskStore, "listTasks" | "eventsForTask" | "runsForTask">,
+): CodeIntelTaskSummary[] {
+  const summaries: CodeIntelTaskSummary[] = [];
+  for (const task of store.listTasks()) {
+    const events = store.eventsForTask(task.taskId).filter((event) => event.type.startsWith("CODE_INTELLIGENCE_"));
+    const runs = store.runsForTask(task.taskId);
+    if (events.length === 0 && runs.length === 0) continue;
+    const counts: Record<string, number> = {};
+    let lastFallbackReason: string | undefined;
+    for (const event of events) {
+      counts[event.type] = (counts[event.type] ?? 0) + 1;
+      if (event.type === "CODE_INTELLIGENCE_FALLBACK" && typeof event.payload.reason === "string") {
+        lastFallbackReason = event.payload.reason;
+      }
+    }
+    const measured = runs.filter((run) => run.code_intel_chars !== null);
+    summaries.push({
+      task_id: task.taskId,
+      events: counts,
+      ...(lastFallbackReason ? { last_fallback_reason: lastFallbackReason } : {}),
+      attempts_with_evidence: measured.filter((run) => (run.code_intel_chars ?? 0) > 0).length,
+      total_attempts: measured.length,
+      last_code_intel_chars: measured.at(-1)?.code_intel_chars ?? null,
+    });
+  }
+  return summaries.sort((a, b) => a.task_id.localeCompare(b.task_id));
+}
+
+/**
  * Groups already-observed bounded-run checkpoints by target root (TASK-013).
  * Read-only reporting derived from `RunObservation`; it introduces no new
  * pass/fail condition and does not touch review.md.
@@ -86,6 +137,8 @@ export interface ReportData {
   changed: ChangedSummary;
   runs?: RunObservation[];
   orphanRunBranches?: OrphanRunBranch[];
+  /** V10 TASK-018 — undefined when no state database exists; [] when it has nothing recorded. */
+  codeIntel?: CodeIntelTaskSummary[];
 }
 
 function escapeHtml(text: string): string {
@@ -679,6 +732,28 @@ export function generateHtmlReport(report: ReportData): string {
         : `<div class="card-notice"><strong>Orphan run branches — listed only, never removed:</strong><br>${(report.orphanRunBranches ?? []).map((entry) => `<code>${escapeHtml(entry.branch)}</code> (${escapeHtml(entry.target_root)})`).join("<br>")}</div>`}
     </section>`}
 
+    ${report.codeIntel === undefined ? "" : `<section class="block">
+      <div class="block-header">
+        <h2>6. Code Intelligence (audit-trail summary)</h2>
+        <span class="badge badge-gray">${report.codeIntel.length} TASK(S)</span>
+      </div>
+      <div class="card-notice"><small class="meta-line">Metadata from the audit trail and run records only. Evidence of use is a record, never a QA pass condition — nothing here writes to review.md.</small></div>
+      ${report.codeIntel.length === 0
+        ? '<div class="card-notice">No code-intel activity recorded yet (feature default-on since V10; evidence appears after stages query the provider).</div>'
+        : `<table>
+            <thead><tr><th>Task</th><th>Prompt evidence</th><th>Last code-intel chars</th><th>Audit events</th><th>Last fallback reason</th></tr></thead>
+            <tbody>
+              ${report.codeIntel.map((summary) => `<tr>
+                <td><code>${escapeHtml(summary.task_id)}</code></td>
+                <td>${summary.attempts_with_evidence}/${summary.total_attempts} attempt(s)</td>
+                <td>${summary.last_code_intel_chars === null ? "—" : escapeHtml(String(summary.last_code_intel_chars))}</td>
+                <td>${Object.keys(summary.events).length === 0 ? "—" : Object.entries(summary.events).map(([type, count]) => `${escapeHtml(type.replace(/^CODE_INTELLIGENCE_/, ""))}×${count}`).join(", ")}</td>
+                <td>${summary.last_fallback_reason ? `<code>${escapeHtml(summary.last_fallback_reason)}</code>` : "—"}</td>
+              </tr>`).join("")}
+            </tbody>
+          </table>`}
+    </section>`}
+
     <footer>
       Generated by <code>sta report</code> &bull; Self-contained offline dashboard &bull; Zero external requests
     </footer>
@@ -775,6 +850,22 @@ export async function runReportVerb(rest: string[], defaultProjectRoot: string):
   const runs = await observeRuns(projectRoot);
   const orphanRunBranches = await listOrphanRunBranches(projectRoot, runs);
 
+  // 4b. Code-intel per-run summary (V10 TASK-018) — read-only; a missing or
+  // unreadable state database simply means no section, never a failed report.
+  let codeIntel: CodeIntelTaskSummary[] | undefined;
+  const stateDbPath = defaultStateDbPath(projectRoot);
+  if (fs.existsSync(stateDbPath)) {
+    let store: SqliteTaskStore | undefined;
+    try {
+      store = new SqliteTaskStore(stateDbPath);
+      codeIntel = summarizeCodeIntel(store);
+    } catch {
+      codeIntel = undefined;
+    } finally {
+      store?.close();
+    }
+  }
+
   // Overall status derivation
   let overallStatus: "green" | "yellow" | "red" = "green";
   if (changed.gate.status === "failed" || openIssues.some((i) => i.blocking)) {
@@ -808,6 +899,7 @@ export async function runReportVerb(rest: string[], defaultProjectRoot: string):
     changed,
     runs,
     orphanRunBranches,
+    codeIntel,
   };
 
   const html = generateHtmlReport(report);

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import { sliceModuleDocsWithSavings } from "../runtime/agentRunAssembly.js";
-import { buildContextCommand, ContextCommandError, contextCommandJson, renderContextCommand } from "./contextCommand.js";
+import { buildContextCommand, ContextCommandError, contextCommandJson, describeCodeIntelFallback, renderContextCommand } from "./contextCommand.js";
 import { fixtureTask } from "../runtime/packetFixture.testSupport.js";
 import { renderCanonicalTasks } from "../docs/planTask.js";
 
@@ -118,5 +118,58 @@ describe("sta context command (T-V3TOK-040/041/043)", () => {
     expect(contextCommandJson(unknown)).toMatchObject({
       composition: { fallback_documents: expect.arrayContaining([expect.objectContaining({ doc: "plan" })]) },
     });
+  });
+});
+
+describe("code-intel fallback visibility — V10 TASK-018", () => {
+  it("keeps the three human-distinct cases distinct: off / index needs attention / nothing usable", () => {
+    const off = describeCodeIntelFallback("disabled");
+    const index = describeCodeIntelFallback("stale");
+    const empty = describeCodeIntelFallback("empty-result");
+    expect(off).toContain("switched off on this machine");
+    expect(index).toContain("index needs attention");
+    expect(index).toContain("reindex-code-intel.mjs");
+    expect(empty).toContain("nothing usable surfaced");
+    expect(new Set([off, index, empty]).size).toBe(3);
+    expect(describeCodeIntelFallback(null)).toBeNull();
+    // Reasons outside the named three still surface verbatim instead of collapsing into one of them.
+    expect(describeCodeIntelFallback("timeout")).toContain("timeout");
+  });
+
+  it("surfaces the fallback reason in both render modes when code-intel is switched off", async () => {
+    const root = rootWith({ sales: { "requirement.md": REQUIREMENT, "design.md": DESIGN, "plan.md": PLAN } });
+    const result = await buildContextCommand({
+      role: "backend-engineer", moduleHint: "sales", projectRoot: root,
+      env: { STA_CODE_INTEL: "off" },
+    });
+    expect(result.composition.code_intel_fallback_reason).toBe("disabled");
+    const rendered = renderContextCommand(result);
+    expect(rendered).toContain("code_intel_fallback: switched off on this machine");
+    expect(contextCommandJson(result)).toMatchObject({ composition: { code_intel_fallback_reason: "disabled" } });
+  });
+
+  it("reports no fallback line when code-intel answered", () => {
+    const rendered = renderContextCommand({
+      role: "backend-engineer",
+      stage: AgentStage.BACKEND_ENGINEER,
+      module: "sales",
+      projectRoot: "C:/proj",
+      docsRoot: "C:/proj",
+      phases: [],
+      phaseResolution: "none",
+      context: {
+        docs: [], knowledge: [], codeIntel: ["", "evidence"], codeIntelFallbackReason: null,
+        retrievalQuery: { source: "task", reason: "task T-1", description: "d" },
+        selected: [], directFileReads: 0, savings: { bytesBefore: 10, bytesAfter: 8, savedPct: 20 },
+      } as never,
+      composition: {
+        doc_chars: 0, doc_chars_before: 10, doc_selected_chars: 8, knowledge_chars: 0,
+        code_intel_chars: 8, code_intel_fallback_reason: null, saved_pct: 20,
+        fallback_to_full_documents: 0, fallback_documents: [], direct_file_reads: 0,
+        retrieval_query_source: "task", retrieval_query_reason: "task T-1",
+      },
+    });
+    expect(rendered).not.toContain("code_intel_fallback:");
+    expect(rendered).toContain("code_intel=8 chars");
   });
 });

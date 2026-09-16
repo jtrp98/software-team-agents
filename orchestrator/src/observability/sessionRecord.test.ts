@@ -46,6 +46,7 @@ describe("recordContextComposition (T-V5-037)", () => {
     doc_selected_chars: 300,
     knowledge_chars: 50,
     code_intel_chars: 0,
+    code_intel_fallback_reason: null,
     saved_pct: 40,
     fallback_to_full_documents: 0,
     fallback_documents: [],

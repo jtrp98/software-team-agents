@@ -23,6 +23,8 @@ export interface ContextComposition {
   doc_selected_chars: number;
   knowledge_chars: number;
   code_intel_chars: number;
+  /** V10 TASK-018 — why code-intel answered nothing; null when it answered (or had no reason to give). */
+  code_intel_fallback_reason: string | null;
   saved_pct: number;
   fallback_to_full_documents: number;
   fallback_documents: { doc: string; reason: string }[];
@@ -30,6 +32,30 @@ export interface ContextComposition {
   /** T-V8-011 — provenance for the retrieval query codeIntel was actually queried with. */
   retrieval_query_source: "task" | "module-fallback";
   retrieval_query_reason: string;
+}
+
+/**
+ * The three human-distinct "why is code-intel silent" cases (V10 TASK-018):
+ * switched off on this machine / index needs a rebuild (with the command) /
+ * it answered and there was nothing to surface. Any other reason is still
+ * shown verbatim — the point is that a person never has to guess which of
+ * the three actions (flip the switch, reindex, accept the miss) applies.
+ */
+export function describeCodeIntelFallback(reason: string | null): string | null {
+  if (!reason) return null;
+  switch (reason) {
+    case "disabled":
+      return "switched off on this machine (STA_CODE_INTEL=off|false|0; unset it for the default-on behaviour)";
+    case "stale":
+    case "missing-index":
+    case "index-error":
+      return `index needs attention (${reason}) — build/refresh it with: node scripts/reindex-code-intel.mjs <target-id> <target-root>`;
+    case "empty-result":
+    case "no-allowed-candidates":
+      return `answered but nothing usable surfaced for this task (${reason})`;
+    default:
+      return `unavailable this run (${reason})`;
+  }
 }
 
 export interface ContextCommandResult {
@@ -158,6 +184,7 @@ export async function buildContextCommand(input: ContextCommandInput): Promise<C
     taskId: input.taskId,
     targetRoot: env.STA_TARGET_ROOT ?? resolvedTargetRoot,
     targetId: env.STA_TARGET_ID ?? resolvedTargetId,
+    env,
   });
   return {
     role: input.role,
@@ -175,6 +202,7 @@ export async function buildContextCommand(input: ContextCommandInput): Promise<C
       doc_selected_chars: context.savings.bytesAfter,
       knowledge_chars: sourceChars(context.knowledge),
       code_intel_chars: sourceChars(context.codeIntel),
+      code_intel_fallback_reason: context.codeIntelFallbackReason,
       saved_pct: context.savings.savedPct,
       fallback_to_full_documents: context.selected.filter((doc) => doc.fullDocument).length,
       fallback_documents: context.selected
@@ -198,12 +226,14 @@ export function renderContextCommand(result: ContextCommandResult): string {
       (entry) => `    - unknown: "${entry.heading}" — ${entry.reason}`,
     );
   });
+  const codeIntelFallback = describeCodeIntelFallback(c.code_intel_fallback_reason);
   const report = [
     "",
     "Context composition:",
     `- role=${result.role} module=${result.module} phases=${scope} phase_source=${result.phaseResolution}`,
     `- docs=${c.doc_chars} chars rendered; selected=${c.doc_selected_chars}/${c.doc_chars_before} source chars; slicing_saved=${c.saved_pct}%`,
     `- knowledge=${c.knowledge_chars} chars; code_intel=${c.code_intel_chars} chars; direct_file_reads=${c.direct_file_reads}; fallback_to_full=${c.fallback_to_full_documents}`,
+    ...(codeIntelFallback ? [`- code_intel_fallback: ${codeIntelFallback}`] : []),
     `- retrieval_query: source=${c.retrieval_query_source} — ${c.retrieval_query_reason}`,
     ...c.fallback_documents.map((f) => `  - fallback: ${f.doc} — ${f.reason}`),
     ...fallbackUnknownLines,

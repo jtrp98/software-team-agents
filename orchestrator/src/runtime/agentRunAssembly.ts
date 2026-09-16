@@ -23,7 +23,7 @@ import {
 } from "../context/contextManager.js";
 import { ContextLeakageError, type ContextItem } from "../context/contextSelection.js";
 import { classifyQaFailure, classifySecurityFailure } from "../orchestrator/failureClassifier.js";
-import { codeIntelSlices } from "./codeIntelAssembly.js";
+import { codeIntelContext } from "./codeIntelAssembly.js";
 import { knowledgeBriefFor } from "./knowledgeBriefAssembly.js";
 import { assertContextComposition, emptyContextBudgetComposition, type ContextBudgetComposition } from "../context/contextBudget.js";
 import { renderBusinessInputEvidence } from "../gates/businessInput.js";
@@ -313,6 +313,8 @@ export interface StageContextOptions extends SliceOptions {
   knowledgeRoot?: string;
   targetRoot?: string;
   targetId?: string;
+  /** Env governing the optional code-intel feature; absent → the real process env. */
+  env?: Record<string, string | undefined>;
 }
 
 export interface StageContextAssembly extends SlicedModuleDocs {
@@ -320,6 +322,8 @@ export interface StageContextAssembly extends SlicedModuleDocs {
   codeIntel: string[];
   /** T-V8-011 — the retrieval query codeIntel was actually queried with, for `sta context` evidence/provenance. */
   retrievalQuery: TaskRetrievalQuery;
+  /** V10 TASK-018 — why code-intel answered nothing (`null` when it answered, or the answer carried no reason). */
+  codeIntelFallbackReason: string | null;
 }
 
 /**
@@ -384,19 +388,22 @@ export async function assembleStageContext(stage: AgentStage, opts: StageContext
   });
   const retrievalQuery = taskRetrievalQueryFor(opts.docsRoot, opts.moduleName, opts.taskId);
   let codeIntel: string[] = [];
+  let codeIntelFallbackReason: string | null = null;
   try {
-    codeIntel = await codeIntelSlices({
+    const result = await codeIntelContext({
       stage,
       taskId: opts.taskId,
       moduleName: opts.moduleName,
       targetRoot: opts.targetRoot,
       targetId: opts.targetId,
       query: retrievalQuery,
-    });
+    }, { ...(opts.env ? { env: opts.env } : {}) });
+    codeIntel = result.slices;
+    codeIntelFallbackReason = result.fallbackReason ?? null;
   } catch {
     codeIntel = [];
   }
-  return { ...sliced, knowledge, codeIntel, retrievalQuery };
+  return { ...sliced, knowledge, codeIntel, retrievalQuery, codeIntelFallbackReason };
 }
 
 export interface PromptComposition {
