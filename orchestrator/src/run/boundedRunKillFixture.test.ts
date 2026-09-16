@@ -85,7 +85,7 @@ describe.skipIf(!enabled)("real process-kill bounded-run fixture", () => {
         ledger.freezeAttempt(attempt);
         return {
           kind: "attempt", attempt, taskDescription: `execute ${task.task_id}`,
-          allowedPathGlobs: ["src/**"], secretScanner: () => ({ ok: true, problems: [] }),
+          allowedPathGlobs: ["src/**"], deniedPathGlobs: [], secretScanner: () => ({ ok: true, problems: [] }),
         };
       },
       executeAttempt: async (prepared: PreparedTargetAttempt) => {

@@ -4,6 +4,7 @@ import {
   WORKSPACE_DEV_ARTIFACTS,
   pathRulesFor,
   readWorkspaceRole,
+  targetPathRules,
 } from "../agents/pathPermissions.js";
 import { ALL_EXIT_CHECKS, type RuntimeGuards } from "./runtimeAdapter.js";
 
@@ -24,6 +25,14 @@ import { ALL_EXIT_CHECKS, type RuntimeGuards } from "./runtimeAdapter.js";
 /** Commands no run may issue. `git` by name: read-only subcommands are allowed through by the guard's own logic, which is why this is a command name and not a pattern. */
 export const FORBIDDEN_COMMANDS: readonly string[] = ["git"];
 
+/** Which side of the three-repo split a stage's write scope comes from. */
+export interface GuardScope {
+  /** The stage writes a bound Target checkout, so the Target is the scope. */
+  targetSide?: boolean;
+}
+
+export type GuardResolver = (role: string, layoutRoot?: string, scope?: GuardScope) => RuntimeGuards;
+
 export class GuardResolutionError extends Error {
   constructor(role: string, cause: unknown) {
     super(
@@ -43,10 +52,18 @@ export class GuardResolutionError extends Error {
  * between them is worse than one that stops. Callers that genuinely want no
  * guards say so with `NO_GUARDS`.
  */
-export function contractGuards(role: string, projectRoot: string, layoutRoot: string = projectRoot): RuntimeGuards {
+export function contractGuards(
+  role: string,
+  projectRoot: string,
+  layoutRoot: string = projectRoot,
+  scope?: GuardScope,
+): RuntimeGuards {
   let rules;
   try {
-    rules = pathRulesFor(role, projectRoot, layoutRoot);
+    // A stage writing a bound Target is scoped by Target, not by stack layout
+    // (V10 TASK-010); every other stage still works inside Knowledge, where the
+    // role contract is the boundary.
+    rules = scope?.targetSide ? targetPathRules(role, projectRoot) : pathRulesFor(role, projectRoot, layoutRoot);
   } catch (e) {
     throw new GuardResolutionError(role, e);
   }
@@ -69,6 +86,6 @@ export function contractGuards(role: string, projectRoot: string, layoutRoot: st
 }
 
 /** `contractGuards` curried per role, the shape `createRuntimeExecutor` wants. */
-export function contractGuardResolver(projectRoot: string): (role: string, layoutRoot?: string) => RuntimeGuards {
-  return (role, layoutRoot) => contractGuards(role, projectRoot, layoutRoot);
+export function contractGuardResolver(projectRoot: string): GuardResolver {
+  return (role, layoutRoot, scope) => contractGuards(role, projectRoot, layoutRoot, scope);
 }

@@ -50,6 +50,8 @@ export interface CheckpointInput {
   readonly taskDescription: string;
   /** Exact current-stage write contract carried by the immutable packet. */
   readonly allowedPathGlobs?: readonly string[];
+  /** The same packet's deny half. Required once `allow` can be Target-wide, or the deny list would only ever be advice. */
+  readonly deniedPathGlobs?: readonly string[];
   /** Identity of the immutable packet executed by this attempt. */
   readonly packetHash?: string;
   readonly secretScanner?: SecretScanner;
@@ -80,9 +82,21 @@ export function isDependencyControlPath(relativePath: string): boolean {
     || /\.(?:csproj|fsproj|vbproj)$/u.test(basename);
 }
 
-export function assertTaskContractPaths(changedPaths: readonly string[], allowedPathGlobs: readonly string[]): void {
+export function assertTaskContractPaths(
+  changedPaths: readonly string[],
+  allowedPathGlobs: readonly string[],
+  deniedPathGlobs: readonly string[] = [],
+): void {
   if (allowedPathGlobs.length === 0) {
     throw new CheckpointRefusal("TASK_CONTRACT_VIOLATION", "The immutable task packet contains no writable path; no checkpoint may be staged.");
+  }
+  // Deny outranks allow, the same order `canWritePath` applies. A Target-wide
+  // allow covers a Knowledge artifact that happens to sit in the checkout, so
+  // this is the only layer left that can refuse one.
+  for (const changed of changedPaths) {
+    const normalized = changed.replace(/\\/g, "/");
+    const denied = deniedPathGlobs.find((glob) => matchesGlob(glob.replace(/\\/g, "/"), normalized));
+    if (denied) throw new CheckpointRefusal("DENIED_PATH", `Changed path matches the packet deny rule ${denied}: ${changed}`);
   }
   const outside = changedPaths.filter((changed) => {
     const normalized = changed.replace(/\\/g, "/");
@@ -239,7 +253,7 @@ export async function checkpointTask(input: CheckpointInput): Promise<Checkpoint
   }
 
   const safePaths = assertCheckpointPaths(input.git.cwd, changedPaths, input.writableRoots);
-  if (input.allowedPathGlobs !== undefined) assertTaskContractPaths(safePaths, input.allowedPathGlobs);
+  if (input.allowedPathGlobs !== undefined) assertTaskContractPaths(safePaths, input.allowedPathGlobs, input.deniedPathGlobs);
   const dependencyChanges = safePaths.filter(isDependencyControlPath);
   if (dependencyChanges.length > 0) {
     throw new CheckpointRefusal(

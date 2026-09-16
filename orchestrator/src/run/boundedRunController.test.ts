@@ -119,7 +119,7 @@ function services(
       attempts.set(task.task_id, number);
       return {
         kind: "attempt", attempt: freeze(f, task, number), taskDescription: `execute ${task.task_id}`,
-        allowedPathGlobs: ["src/**"], secretScanner: () => ({ ok: true, problems: [] }),
+        allowedPathGlobs: ["src/**"], deniedPathGlobs: [], secretScanner: () => ({ ok: true, problems: [] }),
       };
     }),
     executeAttempt: options.execution ?? (async (prepared: PreparedTargetAttempt) => {

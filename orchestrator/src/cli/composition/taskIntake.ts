@@ -99,7 +99,7 @@ export function runtimeTaskWorkRoots(
       bindingWarning: () => {},
     });
     for (const root of resolved.workRoots) {
-      if (root.access === "write") roots.push({ stage, targetId: root.targetId, path: root.path });
+      if (root.access === "write") roots.push({ stage, targetId: root.targetId, path: root.path, access: root.access });
     }
   }
   return roots;

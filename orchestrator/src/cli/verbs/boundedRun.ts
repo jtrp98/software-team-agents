@@ -537,7 +537,7 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
               });
               for (const root of preflightRoots.workRoots) {
                 if (stage === AgentStage.QA_ENGINEER || root.access === "write") {
-                  targetWorkRoots.push({ stage, targetId: root.targetId, path: root.path });
+                  targetWorkRoots.push({ stage, targetId: root.targetId, path: root.path, access: root.access });
                 }
               }
             }

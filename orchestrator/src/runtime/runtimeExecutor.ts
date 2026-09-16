@@ -32,6 +32,7 @@ import type {
   RuntimeAutonomy,
   RuntimeGuards,
 } from "./runtimeAdapter.js";
+import type { GuardResolver } from "./runtimeGuards.js";
 import type { RuntimeRegistry } from "./runtimeRegistry.js";
 import {
   requiredCapabilitiesFor,
@@ -46,7 +47,7 @@ import type { ClassificationResult } from "../classification/taskClassifier.js";
 import type { QaRiskSignals } from "../qa/mode.js";
 import { checkRoleExecutionGate } from "../roles/roleExecutionGate.js";
 import type { PersistedTask } from "../store/taskStore.js";
-import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
+import { stageWritesBoundTarget, type RuntimeTask } from "../orchestrator/runtimeTask.js";
 import type { ThreeRepoRequestRoots } from "../threeRepo/preflight.js";
 import { deriveHandoff } from "../agents/moduleDocs.js";
 import { parseDesignEvidence } from "../docs/designEvidence.js";
@@ -90,7 +91,7 @@ export interface RuntimeExecutorOptions {
    * for the real thing, or `() => NO_GUARDS` in a test that is explicitly not
    * testing guards.
    */
-  guards: (role: string, layoutRoot?: string) => RuntimeGuards;
+  guards: GuardResolver;
   /** How much autonomy each run gets. Defaults to `propose` — the orchestrator automates handoffs between the pipeline's confirmation points, it does not remove them. */
   autonomy?: RuntimeAutonomy;
   /**
@@ -459,7 +460,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     const executionRoot = workRoot?.path ?? threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot;
     let guards: RuntimeGuards;
     try {
-      guards = opts.guards(role, executionRoot);
+      guards = opts.guards(role, executionRoot, { targetSide: stageWritesBoundTarget(runtimeTask, req.stage) });
     } catch (e) {
       // The current role contract is the authority packet scope narrows. A run
       // with no resolved contract must not compile a packet or start an adapter.

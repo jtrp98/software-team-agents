@@ -77,8 +77,8 @@ describe("runtimeTaskWorkRoots — T-V9-012 admitted binding shapes", () => {
     );
     const split = runtimeTaskWorkRoots(splitArgs, "T-split", classifyTask(splitArgs.classification));
     expect(split.filter((root) => root.stage === AgentStage.BACKEND_ENGINEER || root.stage === AgentStage.FRONTEND_ENGINEER)).toEqual([
-      { stage: AgentStage.BACKEND_ENGINEER, targetId: "api", path: api },
-      { stage: AgentStage.FRONTEND_ENGINEER, targetId: "web", path: web },
+      { stage: AgentStage.BACKEND_ENGINEER, targetId: "api", path: api, access: "write" },
+      { stage: AgentStage.FRONTEND_ENGINEER, targetId: "web", path: web, access: "write" },
     ]);
 
     const fullstackArgs = parseArgs(
@@ -88,8 +88,8 @@ describe("runtimeTaskWorkRoots — T-V9-012 admitted binding shapes", () => {
     const fullstack = runtimeTaskWorkRoots(fullstackArgs, "T-fullstack", classifyTask(fullstackArgs.classification));
     const engineerRoots = fullstack.filter((root) => root.stage === AgentStage.BACKEND_ENGINEER || root.stage === AgentStage.FRONTEND_ENGINEER);
     expect(engineerRoots).toEqual([
-      { stage: AgentStage.BACKEND_ENGINEER, targetId: "mvc", path: mvc },
-      { stage: AgentStage.FRONTEND_ENGINEER, targetId: "mvc", path: mvc },
+      { stage: AgentStage.BACKEND_ENGINEER, targetId: "mvc", path: mvc, access: "write" },
+      { stage: AgentStage.FRONTEND_ENGINEER, targetId: "mvc", path: mvc, access: "write" },
     ]);
     expect(new Set(engineerRoots.map((root) => root.path))).toEqual(new Set([mvc]));
   });

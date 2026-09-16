@@ -12,7 +12,8 @@ import type {
 } from "./boundedRunController.js";
 import { getAgent } from "../agents/registry.js";
 import type { AgentExecutorResult } from "../orchestrator/orchestrator.js";
-import type { RuntimeGuards, RuntimeAutonomy } from "../runtime/runtimeAdapter.js";
+import type { RuntimeAutonomy } from "../runtime/runtimeAdapter.js";
+import type { GuardResolver } from "../runtime/runtimeGuards.js";
 import type { RuntimeRegistry } from "../runtime/runtimeRegistry.js";
 import { resolveRuntimeRoute, type RuntimeRouteFlags } from "../runtime/runtimeRouting.js";
 import { loadModelTierPolicy } from "../runtime/modelTiers.js";
@@ -33,7 +34,7 @@ import { productionQaInputs } from "../qa/productionQaInputs.js";
 import type { SecretScanner } from "../git/checkpoint.js";
 import { combineProjectRunners, createProjectRunner } from "../qa/projectRunner.js";
 import { LocalWorkspace } from "../runtime/localWorkspace.js";
-import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
+import { stageWritesBoundTarget, type RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { evaluateUnattendedGate, renderUnattendedGate } from "./unattendedGate.js";
 import { resolveQaWorkRoots, type QaWorkRoot } from "../threeRepo/cliRoots.js";
 import { collectQaChangedFiles } from "../qa/changeSource.js";
@@ -81,7 +82,7 @@ export interface BoundedRunServiceOptions {
   routingFlags?: RuntimeRouteFlags;
   moduleName: string;
   docsRoot: string;
-  guards: (role: string, layoutRoot?: string) => RuntimeGuards;
+  guards: GuardResolver;
   autonomy?: RuntimeAutonomy;
   adapterVersion: string;
   graph?: TaskGraph;
@@ -192,7 +193,7 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
     const role = getAgent(task.owner).role;
     const targetWrite = task.owner === AgentStage.BACKEND_ENGINEER || task.owner === AgentStage.FRONTEND_ENGINEER;
     const writableRoot = writableRootForStage(runtimeTask, task.owner, options.targetRoot);
-    const guards = options.guards(role, writableRoot);
+    const guards = options.guards(role, writableRoot, { targetSide: stageWritesBoundTarget(runtimeTask, task.owner) });
 
     const availability = await options.registry.probeAll();
     const modelPolicy = loadModelTierPolicy(options.runtimeStateRoot);
@@ -290,6 +291,7 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
       attempt: frozen,
       taskDescription: taskDescriptionFor(task.task_id, runtimeTask),
       allowedPathGlobs: packet.scope.allow,
+      deniedPathGlobs: packet.scope.deny,
       secretScanner: options.secretScanner,
     };
   }
@@ -299,7 +301,7 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
     const runtimeTask = options.store.loadTask(attempt.task_id)?.runtimeTask;
     const role = getAgent(attempt.stage).role;
     const writableRoot = writableRootForStage(runtimeTask, attempt.stage, options.targetRoot);
-    const guards = options.guards(role, writableRoot);
+    const guards = options.guards(role, writableRoot, { targetSide: stageWritesBoundTarget(runtimeTask, attempt.stage) });
 
     const runtimeExecutor = createRuntimeExecutor({
       runtime: requireDefaultRuntime(),

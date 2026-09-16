@@ -24,6 +24,7 @@ import {
   readWorkspaceRole,
   renderGuardRuleBlock,
   serializeGuardTargetWorkRoots,
+  targetPathRules,
   toRepoRelative,
   workspaceDenyWhy,
 } from "./pathPermissions.js";
@@ -690,5 +691,42 @@ describe("T-V5-023 — stack-shaped path permissions live in the stack profile",
     // question from the engineer write boundary and this check must not fail them.
     expect(contractPathRules("qa-engineer", workspace).read).toContain("app/**");
     expect(checkPathRules(workspace).ok).toBe(true);
+  });
+});
+
+describe("V10 TASK-010 — target-side write rules", () => {
+  const FRAMEWORK_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+
+  it("grants the whole Target instead of the role×stack allowlist", () => {
+    const rules = targetPathRules(AgentStage.BACKEND_ENGINEER, FRAMEWORK_ROOT);
+    expect(rules.write).toEqual(["**"]);
+    expect(canWritePath(rules, "infra/main.tf").allowed).toBe(true);
+    expect(canWritePath(rules, "ClassOnlineWeb/Views/Home/Index.cshtml").allowed).toBe(true);
+    // The role×stack rules would have refused both of these.
+    expect(canWritePath(pathRulesFor(AgentStage.BACKEND_ENGINEER, FRAMEWORK_ROOT), "infra/main.tf").allowed).toBe(false);
+  });
+
+  it("still refuses Knowledge artifacts and framework payload", () => {
+    const rules = targetPathRules(AgentStage.BACKEND_ENGINEER, FRAMEWORK_ROOT);
+    for (const relPath of ["knowledge/anything.md", "decisions/ADR-999.md", "_docs/module/m/design.md", "targets.yaml"]) {
+      const decision = canWritePath(rules, relPath);
+      expect(decision.allowed, relPath).toBe(false);
+      expect(decision.allowed === false && decision.rule, relPath).toBe("agent-deny");
+    }
+    expect(canWritePath(rules, "contracts/backend-engineer.yaml").allowed).toBe(false);
+    expect(canWritePath(rules, ".claude/hooks/block-path-permissions.js").allowed).toBe(false);
+  });
+
+  it("still refuses the universal floor", () => {
+    const rules = targetPathRules(AgentStage.FRONTEND_ENGINEER, FRAMEWORK_ROOT);
+    for (const relPath of UNIVERSAL_DENY.map((glob) => glob.replace("/**", "/probe.txt"))) {
+      const decision = canWritePath(rules, relPath);
+      expect(decision.allowed, relPath).toBe(false);
+      expect(decision.allowed === false && decision.rule, relPath).toBe("universal-deny");
+    }
+  });
+
+  it("does not add an allow list to the rendered hook guard block", () => {
+    expect(renderGuardRuleBlock()).not.toContain("TARGET_WIDE_WRITE");
   });
 });

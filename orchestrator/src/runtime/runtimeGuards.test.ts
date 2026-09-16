@@ -66,6 +66,28 @@ describe("contractGuards — one declaration of what a role may write (T108)", (
     expect(() => contractGuards("no-such-role", REPO_ROOT)).toThrow(/must not proceed with an unknown write scope/);
   });
 
+  /**
+   * V10 TASK-010 — the Target side of the split. The role contract still answers
+   * the Knowledge-side question; inside a bound Target the Target is the scope.
+   */
+  it("scopes a target-side stage to the whole Target, keeping the floor and the Knowledge deny", () => {
+    const guards = contractGuards("backend-engineer", REPO_ROOT, REPO_ROOT, { targetSide: true });
+    expect(guards.writeAllow).toEqual(["**"]);
+    expect(guards.writeAllow.length).toBeGreaterThan(0);
+    for (const denied of UNIVERSAL_DENY) expect(guards.writeDeny).toContain(denied);
+    expect(guards.writeDeny).toContain("knowledge/**");
+    expect(guards.writeDeny).toContain("_docs/module/*/design.md");
+    expect(guards.writeDeny).toContain("contracts/**");
+    // The stack layout half is what this collapses; it must not come back.
+    expect(guards.writeDeny).not.toContain("components/**");
+  });
+
+  it("leaves the knowledge-side guard set untouched when no Target is written", () => {
+    const knowledge = contractGuards("backend-engineer", REPO_ROOT, REPO_ROOT);
+    expect(knowledge.writeAllow).not.toContain("**");
+    expect(knowledge.writeAllow).toContain("server/**");
+  });
+
   it("the resolver form curries the project root for the executor", () => {
     const resolve = contractGuardResolver(REPO_ROOT);
     expect(resolve("qa-engineer").writeAllow).toEqual(contractGuards("qa-engineer", REPO_ROOT).writeAllow);

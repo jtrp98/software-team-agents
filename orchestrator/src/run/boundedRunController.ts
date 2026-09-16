@@ -24,6 +24,7 @@ export interface PreparedTargetAttempt {
   attempt: LedgerAttempt;
   taskDescription: string;
   allowedPathGlobs: readonly string[];
+  deniedPathGlobs: readonly string[];
   secretScanner?: SecretScanner;
 }
 
@@ -216,6 +217,7 @@ export class BoundedRunController {
         runVerification: async () => execution.verification,
         taskDescription: prepared.taskDescription,
         allowedPathGlobs: prepared.allowedPathGlobs,
+        deniedPathGlobs: prepared.deniedPathGlobs,
         secretScanner: prepared.secretScanner,
         usage: execution.usage,
       });
