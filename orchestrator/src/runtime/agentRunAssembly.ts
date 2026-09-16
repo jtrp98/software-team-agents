@@ -523,6 +523,8 @@ export interface CompileExecutionPacketInput {
   config?: unknown;
   dependencyEvidence?: readonly DependencyEvidence[];
   retrievalCandidates?: PacketFields["retrieval_candidates"];
+  /** Rendered code-intelligence evidence block, from the same `codeIntelContext` call that produced `retrievalCandidates` (TASK-017: one query, not two). */
+  codeIntelEvidence?: string;
   extra?: string;
   /** Legacy context input is deliberately not rendered; v2 selects exact records. */
   sources?: Omit<PromptSources, "task">;
@@ -581,6 +583,7 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
     stop_conditions: task.stop_conditions,
     expansion_pointers: [task.plan_source + "#" + task.task_id, ...task.selected_traces.map(ref => ref.source)],
     stage_instructions: stageInstructions,
+    code_intel_evidence: input.codeIntelEvidence ?? "",
     verification_context: input.req.context.filter(item => item.source === "qa-evidence"),
     identity: {
       task_hash: planTaskHash({ ...task.contract, status: "pending" }), plan_hash: task.plan_hash,

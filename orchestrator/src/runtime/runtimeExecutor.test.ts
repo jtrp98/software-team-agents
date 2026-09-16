@@ -21,6 +21,7 @@ import { auditTrail } from "../audit/auditTrail.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { latestExecutionPacketPath, readExecutionPacket } from "../state/runtimeArtifacts.js";
 import type { ModelTierPolicy } from "./modelTiers.js";
+import { SOURCE_OF_TRUTH_SENTENCE } from "../codeintel/resolver.js";
 
 // T-V6-006: `env: {}` (used below) now falls through to installation.yaml
 // when STA_KNOWLEDGE_ROOT is unset — isolate it from whatever is
@@ -301,6 +302,46 @@ describe("createRuntimeExecutor — what reaches the adapter (T108)", () => {
     const persisted = readExecutionPacket(latestExecutionPacketPath(root, "T-PACKET", AgentStage.BACKEND_ENGINEER)!);
     expect(persisted.retrieval_candidates).toEqual([]);
     expect(result.outcome.result).toBe("PASS");
+  });
+
+  it("TASK-017: a v2 packet gets the rendered code-intel evidence block (not just retrieval_candidates), from a single codeIntelContext call", async () => {
+    const root = tmpProject();
+    const runtime = new MockRuntimeAdapter();
+    const runtimeTask = runtimeTaskFixture(root);
+    let callCount = 0;
+    const evidenceBlock = "## Code intelligence evidence — target `t1` (DISCOVERY ONLY)\n\nGraphify discovers → Source confirms → Compiler checks → Tests verify.\n1. [extracted] src/evidence.ts:L1 — fixtureEvidence";
+    const executor = createRuntimeExecutor({
+      runtime,
+      projectRoot: root,
+      moduleName: () => "sales-crm",
+      guards: () => ({ ...NO_GUARDS, writeAllow: ["server/**"] }),
+      runtimeTask: () => runtimeTask,
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      sliceModuleDocs: false,
+      codeIntelContext: async (input) => {
+        callCount += 1;
+        return {
+          slices: ["", evidenceBlock],
+          used: true,
+          queryReason: input.query?.reason ?? "",
+          candidates: [{ location: { file: "src/evidence.ts", line: 1 }, symbol: "fixtureEvidence", provenance: "extracted", score: 1 }],
+        };
+      },
+    });
+
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-PACKET", context: [] });
+    const persisted = readExecutionPacket(latestExecutionPacketPath(root, "T-PACKET", AgentStage.BACKEND_ENGINEER)!);
+
+    expect(callCount).toBe(1);
+    expect(result.outcome.result).toBe("PASS");
+    expect(persisted.retrieval_candidates.length).toBeGreaterThan(0);
+    expect(persisted.code_intel_evidence).toBe(evidenceBlock);
+    expect(persisted.text).toContain("Code intelligence evidence");
+    expect(persisted.text).toContain(SOURCE_OF_TRUTH_SENTENCE);
+    // The persisted prompt is the exact bytes handed to the runtime — the
+    // evidence block travelled through compilation, not a post-hoc string
+    // concatenation onto an already-hashed packet.
+    expect(runtime.requests[0].prompt).toBe(persisted.text);
   });
 
   it("passes the guard set through untouched, so the adapter can wire it into its own binding", async () => {

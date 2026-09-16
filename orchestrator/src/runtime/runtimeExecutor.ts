@@ -327,14 +327,20 @@ const NO_FALLBACK_HOPS = 0;
  * `compileExecutionPacket` always saw `retrievalCandidates: undefined` here —
  * so PM's authored `Query:` retrieval hint never reached an actual lookup.
  *
+ * TASK-017 — the SAME `codeIntelContext` call also feeds the rendered
+ * evidence block (source spans + the source-of-truth guardrail) into the
+ * packet, so a v2 task gets the evidence text a v1/legacy task always got via
+ * `assembleStageContext`'s `codeIntel` slice. One query serves both; nothing
+ * here calls `codeIntelContext` a second time.
+ *
  * Additive by design, same posture as every other optional enrichment in this
  * file: OFF by default (`STA_CODE_INTEL`), and any missing input or failure
- * answers `[]` rather than blocking packet compilation. A v1/legacy
- * RuntimeTask has no `contract` to query from, so it answers `[]` too — the
+ * answers `{}` rather than blocking packet compilation. A v1/legacy
+ * RuntimeTask has no `contract` to query from, so it answers `{}` too — the
  * legacy compatibility path already refuses to reach this branch at all
  * (`RuntimeTaskV2Schema.safeParse` inside `compileExecutionPacket`).
  */
-async function packetRetrievalCandidates(
+async function packetCodeIntel(
   opts: RuntimeExecutorOptions,
   req: AgentExecutorRequest,
   runtimeTask: RuntimeTask,
@@ -342,18 +348,21 @@ async function packetRetrievalCandidates(
   targetRoot: string,
   targetId: string | undefined,
   baseRevision: string,
-): Promise<ReturnType<typeof retrievalCandidatesForPacket> | undefined> {
-  if (!("version" in runtimeTask) || runtimeTask.version !== 2) return undefined;
+): Promise<{ retrievalCandidates?: ReturnType<typeof retrievalCandidatesForPacket>; evidenceBlock?: string }> {
+  if (!("version" in runtimeTask) || runtimeTask.version !== 2) return {};
   try {
     const changedFiles = await opts.changedFiles?.(req.taskId).catch(() => []) ?? [];
     const query = buildTaskRetrievalQuery(runtimeTask.contract, { moduleName, changedFiles });
     const codeIntel = opts.codeIntelContext ?? defaultCodeIntelContext;
     const result = await codeIntel({ stage: req.stage, taskId: req.taskId, moduleName, targetRoot, targetId, query, revision: baseRevision });
-    if (result.candidates.length === 0) return undefined;
-    return retrievalCandidatesForPacket(result.candidates, targetRoot, baseRevision);
+    if (result.candidates.length === 0) return {};
+    return {
+      retrievalCandidates: retrievalCandidatesForPacket(result.candidates, targetRoot, baseRevision),
+      evidenceBlock: result.used ? result.slices[1] : undefined,
+    };
   } catch {
     // Discovery enrichment must never block packet compilation.
-    return undefined;
+    return {};
   }
 }
 
@@ -472,6 +481,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       try {
         const runtimeStateRoot = threeRepo?.roots.bindingRoot ?? opts.projectRoot;
         const baseRevision = await (opts.packetBaseRevision ?? resolveTargetRevision)(executionRoot);
+        const codeIntel = await packetCodeIntel(opts, req, runtimeTask, moduleName, executionRoot, workRoot?.targetId, baseRevision);
         const packet = compileExecutionPacket({
           req,
           role,
@@ -481,7 +491,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           baseRevision,
           config: { target: loadTargetConfig(executionRoot), guardStackRules: resolveGuardStackRules(role, executionRoot) },
           dependencyEvidence: opts.dependencyEvidence?.(req.taskId),
-          retrievalCandidates: await packetRetrievalCandidates(opts, req, runtimeTask, moduleName, executionRoot, workRoot?.targetId, baseRevision),
+          retrievalCandidates: codeIntel.retrievalCandidates,
+          codeIntelEvidence: codeIntel.evidenceBlock,
           extra: opts.extraInstruction,
         });
         if (JSON.stringify([...packet.scope.allow].sort()) !== JSON.stringify([...new Set(guards.writeAllow)].sort())) throw new Error("packet scope differs from the enforced stage contract; recompile with current stage grants");

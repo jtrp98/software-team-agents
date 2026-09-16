@@ -21,9 +21,12 @@ import {
  * through here first — the resolver calls `assertQueryAllowed` before any
  * provider operation, and the provider itself re-checks in `getStatus`.
  *
- * POLICY (fixed): fresh → query · stale → refresh-or-fallback (refreshing is a
- * human's explicit decision — the orchestrator never builds on its own) ·
- * missing/error → fallback. Build is opt-in, never automatic.
+ * POLICY (fixed): fresh → query · stale → refresh-or-fallback (refreshing
+ * happens only with a human's per-run/per-revision consent — ask-before-
+ * indexing, ADR-006 Option A: the orchestrator may ask and then build, but
+ * never builds without that consent, and an unattended run with no consent
+ * record never blocks on it) · missing/error → fallback. Build is opt-in,
+ * never automatic without that consent.
  */
 
 export interface GraphMetadata {

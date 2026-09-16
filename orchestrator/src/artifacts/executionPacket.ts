@@ -64,6 +64,8 @@ export const PacketFieldsSchema = z.strictObject({
   stop_conditions: z.array(text).min(1),
   expansion_pointers: z.array(text).min(1),
   stage_instructions: z.string(),
+  /** Rendered code-intelligence evidence block (`resolver.ts`'s `renderEvidenceBlock`), guardrail sentences included verbatim. Empty when code-intel did not hit. */
+  code_intel_evidence: z.string().default(""),
   // Only bounded verification evidence is a supplement; authored planning prose
   // is selected above, never appended again as whole source documents.
   verification_context: z.array(z.strictObject({ source: z.literal("qa-evidence"), content: text })),
@@ -101,6 +103,10 @@ export function renderPacketSections(packet: PacketFields): string[] {
     section("Stop conditions", list(packet.stop_conditions)),
     section("Expansion pointers", list(packet.expansion_pointers)),
     ...(packet.stage_instructions ? [section("Stage instructions", packet.stage_instructions)] : []),
+    // Already a self-contained markdown block with its own heading and
+    // source-of-truth guardrail (`resolver.ts`'s `renderEvidenceBlock`) — not
+    // wrapped in another `section()` heading.
+    ...(packet.code_intel_evidence ? [packet.code_intel_evidence] : []),
     ...packet.verification_context.map(c => section("Verification evidence", c.content)),
   ];
 }

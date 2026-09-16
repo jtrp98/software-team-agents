@@ -22,6 +22,7 @@ import {
   SOURCE_OF_TRUTH_SENTENCE,
 } from "./resolver.js";
 import { GraphifyProvider } from "./graphifyProvider.js";
+import { createFallbackChainProvider } from "./fallbackChainProvider.js";
 
 const TARGET = { targetId: "t1", rootPath: "/repo", revision: "a".repeat(40) };
 
@@ -402,6 +403,46 @@ describe("T-GR13 — telemetry via the audit trail", () => {
       { role: AgentStage.QA_ENGINEER, operation: "getImpact", target: TARGET, symbol: "x", taskId: "T-42" },
     );
     expect(events.map((e) => e.type)).toContain(CODE_INTEL_EVENTS.STALE);
+  });
+});
+
+describe("TASK-016 — stale/error in a fallback chain must not be worse than no graph at all", () => {
+  it("stale first provider + fresh native in chain → native candidates, stale graph never queried, fallbackReason says stale, STALE telemetry still emits", async () => {
+    const { events, store } = recorder();
+    let staleGraphQueried = false;
+    const staleGraph = fakeProvider({
+      getStatus: async () => ({ status: "stale" as const, targetRevision: TARGET.revision, indexedRevision: "old", indexedAt: null }),
+      getImpact: async () => { staleGraphQueried = true; return [candidate("src/graph.ts", 1)]; },
+    });
+    const native = fakeProvider({
+      getImpact: async () => [candidate("src/native.ts", 5, 1, "inferred")],
+    });
+    const chain = createFallbackChainProvider([staleGraph as never, native as never]);
+
+    const result = await resolveCodeContext(
+      { enabled: true, provider: chain, store },
+      { role: AgentStage.QA_ENGINEER, operation: "getImpact", target: TARGET, symbol: "x", taskId: "T-16" },
+    );
+
+    expect(staleGraphQueried).toBe(false);
+    expect(result.used).toBe(true);
+    expect(result.fallbackReason).toBe("stale");
+    expect(result.candidates).toEqual([expect.objectContaining({ location: { file: "src/native.ts", line: 5 }, provenance: "inferred" })]);
+    expect(events.map((e) => e.type)).toContain(CODE_INTEL_EVENTS.STALE);
+  });
+
+  it("missing first provider still falls through to native as before (no regression)", async () => {
+    const chain = createFallbackChainProvider([
+      fakeProvider({ getStatus: async () => ({ status: "missing" as const, targetRevision: TARGET.revision, indexedRevision: null, indexedAt: null }) }) as never,
+      fakeProvider({ getImpact: async () => [candidate("src/native.ts", 5, 1, "inferred")] }) as never,
+    ]);
+    const result = await resolveCodeContext(
+      { enabled: true, provider: chain },
+      { role: AgentStage.QA_ENGINEER, operation: "getImpact", target: TARGET, symbol: "x" },
+    );
+    expect(result.used).toBe(true);
+    expect(result.fallbackReason).toBeUndefined();
+    expect(result.candidates).toEqual([expect.objectContaining({ location: { file: "src/native.ts", line: 5 } })]);
   });
 });
 

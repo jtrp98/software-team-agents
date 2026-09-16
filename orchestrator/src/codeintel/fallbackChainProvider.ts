@@ -6,14 +6,22 @@ import { CodeIntelligenceProvider, ProviderStatus, TargetRef } from "./provider.
  * dealing with exactly one provider (Architecture Principle 9/11: one
  * selection, frozen for the request — never a silent mid-attempt reroute).
  *
- * SELECTION RULE: ask each provider's `getStatus` in order; the first whose
- * status is not `missing` wins the WHOLE request — every operation call for
- * that request goes to that one provider. `stale`/`error` are NOT treated as
- * "try the next one": a stale graph is deliberately a hard stop
- * (`freshness.ts`'s documented policy — refreshing is a human's decision), not
- * an invitation to silently swap in a different evidence source. Only
- * "no usable graph exists at all" (`missing`, or the provider throwing while
- * asked) falls through.
+ * SELECTION RULE: ask each provider's `getStatus` in order. A NON-LAST
+ * provider reporting `stale`, `error`, or `missing` (or throwing) is skipped
+ * in favor of the next one — a stale/broken graph must never leave a machine
+ * worse off than one with no graph provider installed at all (D4). The graph
+ * itself is still never queried while stale/error: skipping happens at
+ * `getStatus` time, before any operation call reaches that provider, so
+ * `freshness.ts`'s "stale is a hard stop" policy is untouched — only WHICH
+ * provider answers changes, not whether a stale index gets read. The winning
+ * provider's status carries `fallenThrough` when a stale/error provider was
+ * skipped to reach it, so the resolver can still emit the original
+ * stale/error telemetry and mark its result as a fallback (never a silent
+ * swap dressed up as an ordinary fresh hit).
+ *
+ * The LAST provider's status is always terminal (nothing left to fall
+ * through to): its `stale`/`error`/`missing` verdict is returned as-is, and
+ * the caller's existing fallback handling applies.
  *
  * The list MUST end with a provider that never reports `missing` (in
  * practice: `NativeSearchProvider`), or a fully-missing chain still answers
@@ -28,7 +36,10 @@ export function createFallbackChainProvider(providers: CodeIntelligenceProvider[
 
   const select = async (target: TargetRef): Promise<{ provider: CodeIntelligenceProvider; status: ProviderStatus }> => {
     let last: ProviderStatus | null = null;
-    for (const provider of providers) {
+    let skipped: { status: "stale" | "error"; indexedRevision: string | null } | null = null;
+    for (let i = 0; i < providers.length; i++) {
+      const provider = providers[i];
+      const isLast = i === providers.length - 1;
       let status: ProviderStatus;
       try {
         status = await provider.getStatus(target);
@@ -36,7 +47,12 @@ export function createFallbackChainProvider(providers: CodeIntelligenceProvider[
         continue;
       }
       last = status;
-      if (status.status !== "missing") return { provider, status };
+      if (status.status === "missing") continue;
+      if ((status.status === "stale" || status.status === "error") && !isLast) {
+        if (!skipped) skipped = { status: status.status, indexedRevision: status.indexedRevision };
+        continue;
+      }
+      return { provider, status: skipped ? { ...status, fallenThrough: skipped } : status };
     }
     // Every provider reported missing (or threw): hand back the last provider
     // and its `missing` verdict so the caller's own missing-index fallback runs.

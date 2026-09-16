@@ -167,6 +167,22 @@ export async function resolveCodeContext(
     return fallback(emit, req, "index-error");
   }
 
+  // A fallback chain (`fallbackChainProvider.ts`) skipped a stale/error
+  // provider to reach this `fresh` one. The graph was never queried — only
+  // the winning provider is — but the original reason still gets audited and
+  // travels into the eventual result so a stale-graph run is never
+  // indistinguishable from an ordinary fresh hit (no silent swap).
+  const fellThroughReason: FallbackReason | undefined = status.fallenThrough
+    ? status.fallenThrough.status === "stale" ? "stale" : "index-error"
+    : undefined;
+  if (status.fallenThrough) {
+    emit(status.fallenThrough.status === "stale" ? CODE_INTEL_EVENTS.STALE : CODE_INTEL_EVENTS.ERROR, {
+      operation: req.operation,
+      indexed_revision: status.fallenThrough.indexedRevision,
+      fell_through_to: "next-provider",
+    });
+  }
+
   emit(CODE_INTEL_EVENTS.QUERY, { operation: req.operation, target_id: req.target.targetId });
 
   let candidates: CodeCandidate[];
@@ -216,6 +232,7 @@ export async function resolveCodeContext(
   emit(CODE_INTEL_EVENTS.HIT, { operation: req.operation, candidates: verified.length });
   return {
     used: true,
+    fallbackReason: fellThroughReason,
     candidates: verified,
     evidenceBlock,
   };
