@@ -416,16 +416,15 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         const readOnlyTargets = stageWorkRoots.map((root) => `"${root.targetId}"`).join(", ") || "none";
         return failResult(
           `cannot start ${role}: Target ${readOnlyTargets} is bound read-only for this ${role} invocation; ` +
-          "exactly one writable Target must be resolved before an engineer adapter can start",
-        );
-      }
-      if (stageWritableRoots.length > 1) {
-        return failResult(
-          `cannot start ${role}: Targets ${stageWritableRoots.map((root) => `"${root.targetId}"`).join(", ")} ` +
-          `would be writable in one ${role} invocation; split into one task per Target, or bind them to different roles`,
+          "at least one writable Target must be resolved before an engineer adapter can start",
         );
       }
     }
+    // Every writable root is in scope, but a process has one cwd and an attempt
+    // has one git identity, so the primary root alone selects the working
+    // directory, the stack config, the base revision and the code-intel index.
+    // The commit boundary keeps its own single-root rule where it is decided:
+    // `freezeAttempt`/`assertTargetAttempt`, refused before an adapter starts.
     const workRoot = stageWritableRoots[0] ?? stageWorkRoots[0];
     let incomingHandoff;
     try {

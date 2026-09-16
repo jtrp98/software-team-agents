@@ -53,7 +53,8 @@ sta bounded-run --module <module> --phase <n> --until next-gate --autonomy edit
 | `plan.md` เป็น canonical plan, scope ปิด, ไม่มี cycle, ไม่ drift | `orchestrator/planCompilation.ts` | แก้ plan แล้ว `--dry-run` ใหม่; refusal บอก kind และ task id ที่ขัดแย้ง |
 | ไม่มี human/approval gate ค้างของ task ที่จะรัน | `run/unattendedGate.ts` | resolve gate (`sta approve <task-id>`) หรือ unpause/uncancel แล้วรันใหม่ |
 | dependency ทุกตัว checkpoint/done แล้ว | `RunLedger.readiness()` บน frozen DAG | ปล่อยให้ upstream task เดินก่อน; plan Status cell ปลดล็อกให้ไม่ได้ |
-| runtime support level, guard capability, writable root เดียวต่อ attempt | `ledger/attemptFreeze.ts` | แก้สาเหตุที่ refusal ระบุ; แต่ละ engineer invocation เขียนได้ Target เดียว (AD-7); multi-Target run ต้องระบุ git-identity root |
+| runtime support level, guard capability, writable root เดียวต่อ attempt | `ledger/attemptFreeze.ts` | แก้สาเหตุที่ refusal ระบุ; multi-Target run ต้องระบุ git-identity root |
+| bounded-run attempt ผูก Target เดียว | `run/boundedRunServices.ts` | engineer เข้าถึงทุก Target ที่ task ผูก (V10 TASK-008) แต่ checkpoint จะ commit ได้ Target เดียวต่อ attempt — ถ้า stage resolve writable Target มากกว่าหนึ่ง คำสั่ง gate ก่อน adapter จะเริ่มเขียน ให้แยก task ต่อ Target |
 | multi-Target run ระบุ git-identity root | `cli/verbs/boundedRun.ts` | เมื่อ run ครอบคลุมหลาย Target ต้องส่ง `--target-root` ชัดเจน เพื่อระบุ checkout ที่ผูกกับ branch/SHA และ ledger |
 | working tree สะอาดและอยู่ base/run branch ที่ frozen ไว้ | `git/guardedRun.ts` | ตรวจ diff และตัดสินใจกับงานค้างก่อน STA ไม่ลบหรือ restore ไฟล์ของคน |
 | deterministic gate รันได้จริงและผ่าน | `qa/verificationHook.ts` + controller | ทำตาม remediation ที่ refusal พิมพ์; ไม่มี suite = `unverified` ไม่ใช่ pass |

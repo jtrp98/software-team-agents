@@ -69,7 +69,7 @@ function fixture(): { knowledge: string; api: string; web: string; mvc: string }
 }
 
 describe("runtimeTaskWorkRoots — T-V9-012 admitted binding shapes", () => {
-  it("resolves one writable Target per engineer stage and de-duplicates a fullstack Target physically", () => {
+  it("V10 TASK-008: every engineer stage resolves every bound Target as writable; a fullstack Target still de-duplicates physically", () => {
     const { api, web, mvc } = fixture();
     const splitArgs = parseArgs(
       ["--task-id", "T-split", "--module", "orders", "--bug-fix", "--backend", "--frontend", "--backend-target", "api", "--frontend-target", "web"],
@@ -78,6 +78,8 @@ describe("runtimeTaskWorkRoots — T-V9-012 admitted binding shapes", () => {
     const split = runtimeTaskWorkRoots(splitArgs, "T-split", classifyTask(splitArgs.classification));
     expect(split.filter((root) => root.stage === AgentStage.BACKEND_ENGINEER || root.stage === AgentStage.FRONTEND_ENGINEER)).toEqual([
       { stage: AgentStage.BACKEND_ENGINEER, targetId: "api", path: api, access: "write" },
+      { stage: AgentStage.BACKEND_ENGINEER, targetId: "web", path: web, access: "write" },
+      { stage: AgentStage.FRONTEND_ENGINEER, targetId: "api", path: api, access: "write" },
       { stage: AgentStage.FRONTEND_ENGINEER, targetId: "web", path: web, access: "write" },
     ]);
 

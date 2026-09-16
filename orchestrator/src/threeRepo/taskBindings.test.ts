@@ -68,7 +68,7 @@ describe("Phase 2 task Target bindings", () => {
     expect(() => validatePersistedTaskBindings(persisted("resume-mvc", fullstack, bothOnMvc), typedRegistry)).not.toThrow();
   });
 
-  it("T-V9-008 refuses two Targets on one engineer role at creation and resume with the Q-3 fix", () => {
+  it("V10 TASK-009 admits two Targets on one engineer role at creation and resume (V9 Q-3 rule retired)", () => {
     const typedRegistry: TargetRegistry = {
       schema_version: 1,
       targets: [
@@ -90,10 +90,8 @@ describe("Phase 2 task Target bindings", () => {
       now: 1,
       targetBindings,
     });
-    const expected = /backend-engineer.*api.*worker.*split into one task per Target, or bind them to different roles/;
-
-    expect(() => validateNewTaskBindings(classification, targetBindings, typedRegistry)).toThrow(expected);
-    expect(() => validatePersistedTaskBindings(persisted, typedRegistry)).toThrow(expected);
+    expect(() => validateNewTaskBindings(classification, targetBindings, typedRegistry)).not.toThrow();
+    expect(() => validatePersistedTaskBindings(persisted, typedRegistry)).not.toThrow();
   });
 
   it("T-V9-008 returns the same explicit compatibility warnings at creation and resume", () => {
@@ -156,7 +154,9 @@ describe("Phase 2 task Target bindings", () => {
       expect(() => openTask(taskRegistry, wrongScope, "wrong-scope")).toThrow(/outside module "sales"/);
       expect(store.loadTask("wrong-scope")).toBeNull();
 
-      const sameRole = {
+      // V10 TASK-009: two Targets on one engineer role are admitted; the
+      // module's declared `## Targets` remains the refusal that stands.
+      const sameRoleOutsideModule = {
         ...parseArgs(["--task-id", "same-role", "--module", "sales", "--bug-fix", "--backend", "--backend-target", "api", "--project-root", target], target),
         targetBindings: {
           targets: [
@@ -165,7 +165,7 @@ describe("Phase 2 task Target bindings", () => {
           ],
         },
       };
-      expect(() => openTask(taskRegistry, sameRole, "same-role")).toThrow(/split into one task per Target, or bind them to different roles/);
+      expect(() => openTask(taskRegistry, sameRoleOutsideModule, "same-role")).toThrow(/outside module "sales"/);
       expect(store.loadTask("same-role")).toBeNull();
     } finally {
       taskRegistry.close();
@@ -294,7 +294,7 @@ describe("Phase 2 preflight", () => {
     }
   });
 
-  it("T-V1-16 two live Targets: each code stage writes its own and merely reads the other", () => {
+  it("V10 TASK-008 two live Targets: every code stage writes every Target the task binds; QA/security read them all", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "three-repo-two-live-"));
     try {
       const framework = path.join(root, "framework");
@@ -316,18 +316,24 @@ describe("Phase 2 preflight", () => {
       const forBackend = preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, opts);
       expect(forBackend.workRoots).toEqual([
         { targetId: "backend", path: backendRepo, access: "write" },
-        { targetId: "frontend", path: frontendRepo, access: "read" },
+        { targetId: "frontend", path: frontendRepo, access: "write" },
       ]);
 
       const forFrontend = preflightThreeRepoTask(task, AgentStage.FRONTEND_ENGINEER, opts);
       expect(forFrontend.workRoots).toEqual([
-        { targetId: "backend", path: backendRepo, access: "read" },
+        { targetId: "backend", path: backendRepo, access: "write" },
         { targetId: "frontend", path: frontendRepo, access: "write" },
       ]);
 
       // QA verifies both, owns neither.
       const forQa = preflightThreeRepoTask(task, AgentStage.QA_ENGINEER, opts);
       expect(forQa.workRoots).toEqual([
+        { targetId: "backend", path: backendRepo, access: "read" },
+        { targetId: "frontend", path: frontendRepo, access: "read" },
+      ]);
+
+      const forSecurity = preflightThreeRepoTask(task, AgentStage.SECURITY, opts);
+      expect(forSecurity.workRoots).toEqual([
         { targetId: "backend", path: backendRepo, access: "read" },
         { targetId: "frontend", path: frontendRepo, access: "read" },
       ]);

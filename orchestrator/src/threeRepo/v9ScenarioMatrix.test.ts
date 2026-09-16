@@ -157,7 +157,7 @@ describe("V9 Scenario Matrix Coverage (T-V9-020)", () => {
   });
 
   describe("Task scope & Q-3 refusal scenarios", () => {
-    it("Q-3 refusal: refuses two distinct Targets on one engineer role", () => {
+    it("V10 TASK-009: admits two distinct Targets on one engineer role (V9 Q-3 refusal retired)", () => {
       const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
       const bindings: TargetBindings = {
         targets: [
@@ -165,9 +165,7 @@ describe("V9 Scenario Matrix Coverage (T-V9-020)", () => {
           { target_id: "untyped-service", role: AgentStage.BACKEND_ENGINEER },
         ],
       };
-      expect(() => validateNewTaskBindings(classification, bindings, registry)).toThrow(
-        /backend-engineer.*api-server.*untyped-service.*split into one task per Target/,
-      );
+      expect(() => validateNewTaskBindings(classification, bindings, registry)).not.toThrow();
     });
 
     it("fullstack MVC Target admits both engineer roles cleanly", () => {

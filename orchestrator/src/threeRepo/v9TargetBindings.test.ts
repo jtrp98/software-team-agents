@@ -35,7 +35,7 @@ function initRepository(directory: string, remote?: string): void {
 }
 
 describe("T-V9-006 variable-arity Target bindings", () => {
-  it("round-trips three Target references while Q-3 refuses two distinct Targets on one role", () => {
+  it("round-trips three Target references; V10 TASK-009 admits two distinct Targets on one role", () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true, touchesFrontend: true });
     const bindings = {
       targets: [
@@ -56,9 +56,7 @@ describe("T-V9-006 variable-arity Target bindings", () => {
     );
     expect(persisted.targetBindings).toEqual(bindings);
     expect(uniqueBoundTargetIds(bindings)).toEqual(["api", "worker", "web"]);
-    expect(() => validateNewTaskBindings(classification, bindings, registry)).toThrow(
-      /backend-engineer.*api.*worker.*split into one task per Target, or bind them to different roles/,
-    );
+    expect(() => validateNewTaskBindings(classification, bindings, registry)).not.toThrow();
     expect(() =>
       validateNewTaskBindings(classification, { targets: bindings.targets.slice(0, 2) }, registry),
     ).toThrow(/engineer roles/);
