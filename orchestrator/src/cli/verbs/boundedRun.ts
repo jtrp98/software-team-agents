@@ -25,7 +25,7 @@ import { contractGuardResolver } from "../../runtime/runtimeGuards.js";
 import { GitCommandLayer } from "../../git/commandLayer.js";
 import { inspectRepositoryPreflight } from "../../git/preflight.js";
 import { createRunId } from "../../run/journal.js";
-import { BoundedRunController, type ControllerExitKind } from "../../run/boundedRunController.js";
+import { BoundedRunController, type AwaitingHumanTask, type ControllerExitKind } from "../../run/boundedRunController.js";
 import { createProductionBoundedRunServices } from "../../run/boundedRunServices.js";
 import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "../../runtime/runtimeRegistry.js";
 import { RUNTIME_IDS, type RuntimeId } from "../../runtime/runtimeSupport.js";
@@ -286,6 +286,21 @@ function configHashFor(projectRoot: string): string {
     if (error instanceof StaConfigMissingError) return stableHash({ config: "absent" });
     throw error;
   }
+}
+
+/** Cut long gate reasons rather than letting one bury the task ids the reader is scanning for. */
+const AWAITING_HUMAN_REASON_LIMIT = 140;
+
+/** T-V10-031 — one line per task still waiting on a person, each with the command that clears it. */
+export function renderAwaitingHuman(awaiting: readonly AwaitingHumanTask[]): string[] {
+  if (awaiting.length === 0) return [];
+  const lines = [`[bounded-run] awaiting a human decision (${awaiting.length}):`];
+  for (const item of awaiting) {
+    const reason = item.reason.replace(/\s+/g, " ").trim();
+    const short = reason.length > AWAITING_HUMAN_REASON_LIMIT ? `${reason.slice(0, AWAITING_HUMAN_REASON_LIMIT - 1)}…` : reason;
+    lines.push(`[bounded-run]   ${item.taskId}: ${short} — \`sta approve ${item.taskId}\``);
+  }
+  return lines;
 }
 
 function exitCodeFor(kind: ControllerExitKind): number {
@@ -689,6 +704,7 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
     const controller = new BoundedRunController({ ledger, runId, runtimeStateRoot: knowledgeRoot, services });
     const result = await controller.run();
     console.log(`[bounded-run] ${result.kind}: ${result.reason} (attempts=${result.launchedAttempts}, qa_rounds=${result.qaRounds})`);
+    for (const line of renderAwaitingHuman(result.awaitingHuman)) console.log(line);
     if (result.kind === "GATE" || result.kind === "HALTED") {
       console.log(`[bounded-run] next: resolve the gate, then \`sta bounded-run --resume ${result.runId} --module ${args.module ?? ledger.readRun(runId)!.module}\`, or \`sta status\`/\`sta report\` for the wider picture.`);
     }
