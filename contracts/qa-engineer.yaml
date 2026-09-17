@@ -29,8 +29,8 @@ constraints:
 permissions:
   capabilities: [read, test, write_docs]
   # Owns review.md, and is the only role that may edit a plan.md task's Status cell (V10 TASK-028:
-  # the plan lives in the one Knowledge repo and QA writes its Status cells directly — the T-LV3
-  # relay is retired). The Status-cell bound is enforced by qa-engineer.md plus QA review, not by
+  # the plan lives in the one Knowledge repo and QA writes its Status cells directly — the old
+  # relay protocol is retired). The Status-cell bound is enforced by qa-engineer.md plus QA review, not by
   # this glob: a path grant cannot see cell boundaries. It writes no application code at all: a
   # verifier that fixes what it finds is no longer verifying.
   read: [".claude/agents/backend-engineer.md", ".claude/agents/frontend-engineer.md", ".claude/scripts/**", ".claude/shared/**", "policies/**", "CLAUDE.md", "_docs/module/**", "_docs/status-archive.md", "_docs/status.md", "app/**", "components/**", "package.json", "prisma/**", "server/**", "src/**"]

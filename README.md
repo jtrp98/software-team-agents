@@ -47,17 +47,18 @@ $ software-team-agents --version
 linked checkout ทำให้ content เปลี่ยนได้ทุก commit โดย version string ไม่ขยับ.
 
 ```bash
-# 2. Knowledge repo — clone ครั้งเดียวต่อเครื่อง ทุก role อ่านได้ (BA เขียน, DEV read-only)
+# 2. Knowledge repo — clone ครั้งเดียวต่อเครื่อง — ทุก role ทำงานจาก workspace เดียวนี้
 git clone <your-knowledge-repo-url> <path>
 
-# 3. Init workspace ของคุณ — cd เข้า Knowledge repo (BA) หรือ product repo (DEV) แล้วรัน
-cd <knowledge-repo-or-target-repo>
+# 3. Init workspace — cd เข้า Knowledge repo แล้วรัน
+cd <knowledge-repo>
 software-team-agents init
 software-team-agents status
 ```
 
-`status` real output จาก validation pair ของ cycle นี้ (BA workspace, `schoolbright-knowledge`) —
-role detect ถูก, sync state ตรงกับ working tree จริง ไม่ใช่ string ที่ค้าง:
+`status` real output จาก validation pair ของ cycle นี้ (Knowledge workspace, `schoolbright-knowledge`) —
+sync state ตรงกับ working tree จริง ไม่ใช่ string ที่ค้าง (แถว `Workspace role` เป็น legacy label ที่
+`status` ยังอ่านจาก config เดิม — V10 แล้วค่านี้ไม่ตัดสินอะไร):
 
 ```text
 $ software-team-agents status
@@ -308,14 +309,14 @@ npm run build:templates  # snapshot templates/ + manifest.json
 
 | command | ทำอะไร |
 |---|---|
-| `init` | detect ชนิด workspace (Knowledge markers → BA, app-source markers → DEV); สำหรับ DEV จะ resolve Target stack จากหลักฐานใน repo; จากนั้นบันทึก identity + role + profile ใน `.agent-team/config.yaml` แล้ว sync assets — idempotent, รันซ้ำได้ |
+| `init` | detect ชนิด workspace (Knowledge markers → BA, app-source markers → DEV — label เท่านั้น ไม่มีผลตัดสินใด ๆ แล้ว, V10 TASK-021); สำหรับ DEV จะ resolve Target stack จากหลักฐานใน repo; จากนั้นบันทึก identity + role + profile ใน `.agent-team/config.yaml` แล้ว sync assets — idempotent, รันซ้ำได้ |
 | `sync` | อัปเดต Framework-managed files ตาม installed version — ไฟล์ที่โดนแก้เอง**ไม่ถูก overwrite เงียบ ๆ** (report + recovery advice; `--force` = overwrite พร้อม backup) |
 | `status` | role, roots (Target/Framework/Knowledge), installed vs synced version, sync state, conflicts, Claude/Codex/OpenCode/Antigravity readiness (`--json` machine-readable) |
 | `open` | preflight → launch runtime (`claude` default, `codex`/`opencode`/`antigravity` เมื่อ `--runtime`) จาก Knowledge workspace — binding เป็น context เท่านั้น ไม่เคย required (V10 TASK-026: `ba`/`dev` ถูกตัด — พิมพ์แล้ว CLI บอกคำสั่งแทนที่ ไม่ทำงาน) |
 
 options ร่วม: `--target-root <path>` · `--role <name>` (retired — accepted and ignored, V10 TASK-026) · `--stack <name>` (init/sync: เมื่อ Target stack ambiguous หรือ unresolved) · `--force` · `--confirm-agents-pointer` (sync เท่านั้น) · `--no-auto-sync` (open) · `--runtime <claude|codex|opencode|antigravity>` (open) · `--json` (status)
 
-สำหรับ DEV, Harness ตรวจ project/lock files ที่ root และลึกลงไปหนึ่งระดับโดยไม่ตาม symlink แล้ว resolve
+สำหรับ workspace ที่ init อยู่ใน Target checkout, Harness ตรวจ project/lock files ที่ root และลึกลงไปหนึ่งระดับโดยไม่ตาม symlink แล้ว resolve
 profile ที่ ship อยู่ (`node`/`frontend`, `dotnet`, `python`, `java`) พร้อม package manager, commands,
 source roots และ schema paths. Script ที่ Target ประกาศเองชนะ profile defaults. ถ้าพบหลาย stack families หรือ
 ไม่พบ profile ที่รองรับ `init` จะเขียน **nothing** และพิมพ์หลักฐานพร้อมคำสั่งแก้
@@ -342,10 +343,13 @@ software-team-agents open      # preflight → launch runtime จาก Knowledg
 
 Write policy บังคับจริงผ่าน interactive launch: session ได้ writable root เดียวคือ workspace ตัวเอง (cwd + `STA_WRITABLE_WORK_ROOTS=[]`) — cross-repo writes hit `block-outside-repo` guard (fail-closed). สำหรับ orchestrated run executor ใส่เฉพาะ canonical Target write roots ที่ three-repo preflight resolve แล้ว
 
-DEV bind Knowledge ได้ 2 ทาง — repo-relative (commit ไปกับ Target):
+การ bind ของ V10 อยู่ฝั่ง Knowledge workspace เสมอ — `targets.yaml` (registry) + `.workflow/targets.local.yaml`
+(mapping ต่อเครื่อง) ตามหัวข้อ [Multi-Target](#multi-target-และ-multi-machine) ด้านล่าง ส่วน `knowledge.path`
+ใน `.agent-team/config.yaml` ของ Target checkout เป็น legacy config ที่ยังอ่านได้ (round-trip) แต่ไม่ใช่วิธี
+ผูกใหม่ใด ๆ ใน V10:
 
 ```yaml
-# .agent-team/config.yaml (ไฟล์เดียวใน .agent-team/ ที่คน edit ได้)
+# .agent-team/config.yaml ใน Target checkout (legacy — อ่านได้ ไม่ตัดสินอะไร)
 schema_version: 1
 target_id: my-product
 role: dev
@@ -354,7 +358,8 @@ knowledge:
 overrides: []                   # path ที่ประกาศที่นี่ sync จะไม่แตะอีก
 ```
 
-หรือ machine-wide ผ่าน installation binding (ดูหัวข้อ V1): `sta configure knowledge-root <path>`
+Machine-wide Knowledge binding (`sta configure knowledge-root <path>`) ยังใช้ได้เหมือนเดิมสำหรับ
+`sta context`/`doctor` เมื่ออยู่นอก workspace
 
 ### Workspace guardrails
 
@@ -363,7 +368,7 @@ overrides: []                   # path ที่ประกาศที่น�
 | WARNING | ตรวจอะไร | แก้ |
 |---|---|---|
 | Knowledge root bound but never initialized | `installation.yaml` ผูก Knowledge root ที่มี marker ครบ แต่ไม่เคยมี `.agent-team/config.yaml` ที่นั่น — payload ไม่มีอยู่เลยทั้งเครื่อง | `cd <knowledgeRoot> && software-team-agents init` (`status` พิมพ์คำสั่งนี้ตรงๆ) |
-| Misplaced module docs (`--check-workspace`) | `_docs/module/**` หรือ Modules table ใน `_docs/status.md` อยู่ใน workspace `role: dev` — ที่ถูกคือ Knowledge repo เท่านั้น | copy ไป `<knowledgeRoot>\_docs\module\<name>\`, merge status row, ลบของเดิม |
+| Misplaced module docs (`--check-workspace`) | `_docs/module/**` หรือ Modules table ใน `_docs/status.md` อยู่ใน Target checkout (ตัว scan ยังคัดจาก legacy `role: dev` config) — ที่ถูกคือ Knowledge repo เท่านั้น | copy ไป `<knowledgeRoot>\_docs\module\<name>\`, merge status row, ลบของเดิม |
 
 ทั้งสองรายการนี้เป็น warning ไม่ block การทำงาน — จุดประสงค์คือให้คน (หรือ AI ที่ทำงานแทนคน) เห็นก่อนเขียนไฟล์ผิดที่ ไม่ใช่หลังจากนั้น
 
@@ -541,7 +546,7 @@ sta configure identity --figma-email <email> --claude-email <email>
 | `block-git.js` | PreToolUse (Bash/Write/Edit) | state-changing git ถูก block (read-only ผ่าน) |
 | `block-outside-repo.js` | PreToolUse | ทุก write resolve อยู่ใน writable roots เท่านั้น |
 | `block-doc-rewrite.js` | PreToolUse (Write) | doc ที่มีอยู่ต้อง amend ไม่ regenerate |
-| `block-path-permissions.js` | PreToolUse | เขียนได้เฉพาะ path ที่ `contracts/<role>.yaml` ให้ (role อ่านจาก `STA_ROLE`) + **workspace rule**: workspace `role: dev` block การเขียน requirement/design/test-plan/uxui/knowledge แม้ไม่มี role env — ต้องรันจาก Knowledge workspace |
+| `block-path-permissions.js` | PreToolUse | เขียนได้เฉพาะ path ที่ `contracts/<role>.yaml` ให้ (role อ่านจาก `STA_ROLE`) + **Framework payload deny**: `contracts/**`, `workflows/**`, `stacks/**`, `layout.yaml`, `test-pyramid.yaml`, `escalation-policy.yaml` ถูก block เมื่อ `STA_ROLE` ถูกตั้ง — เปลี่ยนที่ Framework repo แล้ว sync; knowledge artifacts (requirement/design/test-plan/plan/`knowledge/**` ฯลฯ) ถูก deny ต่อ stage engineer/frontend/backend/devops (V10 TASK-012/021 — ไม่มี workspace-role rule แล้ว) |
 | `require-green-before-stop.js` | Stop/SubagentStop | engineer ส่งงานต่อไม่ได้ถ้า typecheck/lint แดง |
 | `block-secret-leak.js` | Stop/SubagentStop | ไฟล์ที่ run แก้ห้ามมี hardcoded secret (`.env.example` รวมด้วย) |
 
@@ -549,7 +554,7 @@ sta configure identity --figma-email <email> --claude-email <email>
 - **Installed ≠ registered** — hook script ที่มีอยู่บน disk ยังไม่แปลว่า effective `.claude/settings.json` เรียกมัน. `software-team-agents status`/`software-team-agents status --json` แสดง `hooksRegistered/hooksInstalled`; `sta doctor` ตรวจ surface เดียวกันแบบ read-only.
 - **`Guards wired` เป็น launch gate** — preflight ของ `software-team-agents open` เทียบ Framework registrations ที่ติดตั้งกับ effective settings; ขาดแม้หนึ่งรายการ = FAIL พร้อม `software-team-agents sync`. ถ้า `.claude/settings.json` อยู่ใน `overrides`, gate รายงาน explicit user choice แทนการนับเป็น pass จาก wiring ที่ไม่มี.
 - **ฝั่ง OpenCode** — git deny เป็น declarative `permission.bash` globs ใน binding เอง (specificity wins); outside-root/contract path guards มาจาก `sta-guards.js` plugin (auto-load, throw = deny) · doc-rewrite/secret-leak/exit checks **ยังไม่ enforce in-band** → adapter รายงาน unenforced + executor ตะโกน `GUARD GAP` ให้ QA round เป็นตัวครอบ
-- **Validation flags** — `sta --check-*` 20 ตัว (registry เดียวใน `orchestrator/src/cli/checkers.ts`): `contracts, layout, prompt-budget, workflows, bindings, profile, decisions, test-pyramid, review-separation, escalation-policy, workspace, repos, environments, doc-structure, doc-size, plan, knowledge, installation, roles, git-ownership`. `--check-git-ownership` เพิ่มใน V7 — ตรวจว่า git mutation อยู่ใน `orchestrator/src/git/` เท่านั้นและไม่มี subcommand ต้องห้าม. `sta doctor` เป็น verb แยก (read-only diagnostics) ไม่นับในชุดนี้. `--check-plan [--module <name>]` ตรวจตาราง task ของทุก `plan.md` เป็น dependency graph แบบ deterministic (duplicate id / dangling·self·duplicate dependency / cycle / owner·status ผิด / DES traceability / wave ordering). `--check-workspace` ตรวจสองเรื่องที่ไม่เกี่ยวกัน: `workspace.yaml` (multi-project grouping) และ misplaced-docs scan — `role: dev` workspace ที่มี `_docs/module/**` หรือ Modules table ใน `status.md` โดนรายงานพร้อม hint ปลายทางใน Knowledge repo
+- **Validation flags** — `sta --check-*` 20 ตัว (registry เดียวใน `orchestrator/src/cli/checkers.ts`): `contracts, layout, prompt-budget, workflows, bindings, profile, decisions, test-pyramid, review-separation, escalation-policy, workspace, repos, environments, doc-structure, doc-size, plan, knowledge, installation, roles, git-ownership`. `--check-git-ownership` เพิ่มใน V7 — ตรวจว่า git mutation อยู่ใน `orchestrator/src/git/` เท่านั้นและไม่มี subcommand ต้องห้าม. `sta doctor` เป็น verb แยก (read-only diagnostics) ไม่นับในชุดนี้. `--check-plan [--module <name>]` ตรวจตาราง task ของทุก `plan.md` เป็น dependency graph แบบ deterministic (duplicate id / dangling·self·duplicate dependency / cycle / owner·status ผิด / DES traceability / wave ordering). `--check-workspace` ตรวจสองเรื่องที่ไม่เกี่ยวกัน: `workspace.yaml` (multi-project grouping) และ misplaced-docs scan — Target checkout (legacy `role: dev` config) ที่มี `_docs/module/**` หรือ Modules table ใน `status.md` โดนรายงานพร้อม hint ปลายทางใน Knowledge repo
 - **doctor** — `sta doctor --project-root <path>` รวม 9 checks แบบ read-only (installation, knowledge binding/schema, targets registry, local mappings, runtime adapter, state store, guard wiring) exit 1 เมื่อมี FAIL พร้อม "Fix:" ทุกข้อ
 - **Audit trail** — `sta audit <task-id>`
 
@@ -567,9 +572,9 @@ mapping ครบทุก role อยู่ที่ [`planning/v2/claude-comma
 - **Workflow commands (V6)**:
   - `/next` — ตอบ *"ทำอะไรต่อ"* โดย resolve module + phase จาก `_docs/status.md` และระบุ role + คำสั่งที่ต้องรัน
   - `/status` — ตอบ *"สถานะอยู่ที่ไหน"* แสดง matrix ทุก module, phase state และ blocker จาก `_docs/status.md`
-  - `/verify` — ตรวจ deterministic pre-check (`sta changed`) แล้วเรียก `qa-engineer` เฉพาะเมื่อ green (มีเฉพาะ DEV workspace; BA ไม่ได้รับคำสั่งนี้)
+  - `/verify` — ตรวจ deterministic pre-check (`sta changed`) แล้วเรียก `qa-engineer` เฉพาะเมื่อ green (workspace เดียวของ V10 ได้ครบทั้ง 4 คำสั่ง)
   - `/changed` — ตอบ *"agent เพิ่งแก้อะไรไป และ green ไหม"* แสดง change set (`git diff`/`ls-files`) และผล deterministic analysis gate
-- **Role workspace distribution**: BA workspace ได้รับ `/next`, `/status`, `/changed` (ไม่รวม `/verify` เพราะ BA ไม่ verify โค้ด); DEV workspace ได้รับครบทั้ง 4 คำสั่ง
+- **Command distribution**: workspace เดียวของ V10 ได้ครบทั้ง 4 คำสั่ง — payload ชุดเดียวหลังยุบ lane (V10 TASK-020), ไม่มีการแบ่งชุดคำสั่งตามชนิด workspace อีกต่อไป
 - **เป็น prompt เท่านั้น** — ไม่แก้ runtime/hook; agent ที่ถูกสั่งผ่าน command ยังโดน guards เดิมทุกตัว
 - **Guardrails รวมไฟล์เดียว** — `@_shared/guardrails.md` ถูก import จากทุก command (บังคับ output format, cap, cite file:line, ask-first)
 - **Ship ไป target project** ผ่าน `software-team-agents init`/`sync` (TEMPLATE_SOURCES มี `.claude/commands` เป็น concept `command` ใน layout.yaml)
@@ -613,9 +618,9 @@ Regenerate mirror ใน Framework repo เอง: `npm --prefix orchestrator ru
 | `.workflow/targets.local.yaml` | Knowledge root (local) | map `target_id → path` |
 | `knowledge-policy.yaml` | Knowledge root | field visibility ต่อ role + freshness thresholds |
 | `project.yaml` | Framework repo | `current` (stack ที่ agents สร้างได้จริง) vs `target` (stack อนาคต — checked ต่างมาตรฐาน) |
-| `layout.yaml`, `escalation-policy.yaml`, `test-pyramid.yaml` | Framework repo (+ synced ไป DEV workspace) | directory ownership / recovery policy / test levels |
+| `layout.yaml`, `escalation-policy.yaml`, `test-pyramid.yaml` | Framework repo (+ sync ไปกับ payload ชุดเดียวของ workspace) | directory ownership / recovery policy / test levels |
 
-Environment variables ที่ runtime ใช้: `STA_ROLE` (role ปัจจุบันสำหรับ path permissions), `STA_WRITABLE_WORK_ROOTS` (JSON array — interactive `open` ตั้ง `[]`; orchestrated Target-write stage ได้เฉพาะ canonical roots จาก three-repo preflight), และ `STA_KNOWLEDGE_ROOT` (read-only Knowledge context เมื่อ resolve ได้)
+Environment variables ที่ runtime ใช้: `STA_ROLE` (role ปัจจุบันสำหรับ path permissions), `STA_WRITABLE_WORK_ROOTS` (JSON array ของ path — interactive `open` ตั้ง `[]`; orchestrated Target-write stage ได้เฉพาะ canonical roots ของ task จาก three-repo preflight), `STA_TARGET_WORK_ROOTS` (JSON array `[{targetId, path, access}]` — แผนที่ access ของทุก Target ที่ invocation เห็น เพื่อให้ guard ระบุชื่อ Target ในข้อความ refusal; ตัวมันเอง**ไม่ใช่**การให้สิทธิ์เขียน — write grant มาจาก `STA_WRITABLE_WORK_ROOTS` เท่านั้น), และ `STA_KNOWLEDGE_ROOT` (read-only Knowledge context เมื่อ resolve ได้)
 
 Runtime protocol ใช้ namespace `STA_*` เท่านั้นเพื่อไม่ผูก Framework เข้ากับ runtime ใด runtime
 หนึ่ง การเปลี่ยน namespace นี้เป็น breaking change: หลังอัปเกรด Framework ต้องรัน
@@ -771,7 +776,7 @@ Derive ได้จาก `status`'s **Instruction surface** list ตรงๆ (
 | **Authored, untouched** | `project-owned-untouched` | `CLAUDE.local.md`, nested `AGENTS.md`, `.opencode/package.json` | sync detect/report แต่ไม่แก้ — ของ project 100% |
 | **Machine-local** (ไม่ sync, ไม่ commit) | *(ไม่อยู่ใน instruction surface — เป็น domain แยก)* | `.workflow/**` (state.db, packets, evidence, runs), `.agent-team/backups/**`, `%LOCALAPPDATA%\software-team-agents\installation.yaml` | `init` เขียน managed `.gitignore` block ให้เอง; ลบได้อิสระ — regenerate ได้เสมอ |
 
-Real ตัวอย่างจาก validation pair ของ cycle นี้ (`schoolbright-knowledge` BA workspace, 22 instruction-surface
+Real ตัวอย่างจาก validation pair ของ cycle นี้ (`schoolbright-knowledge` Knowledge workspace, 22 instruction-surface
 entries): 16 `framework-managed`, 2 `project-owned-with-framework-block` (`CLAUDE.md`/`AGENTS.md`), 1
 `project-owned-merged` (`.claude/settings.json`), 3 `project-owned-untouched` — วัดจริงด้วย
 `software-team-agents status` ในรอบเขียนเอกสารนี้.

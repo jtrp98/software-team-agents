@@ -441,11 +441,11 @@ describe("T-WG5 — the confirm-workspace checkpoint ships in the synced payload
 
   it("the checkpoint text is actually present in the synced source files (not just referenced)", () => {
     const docPolicy = fs.readFileSync(path.join(templatesRoot, "policies", "documentation.md"), "utf8");
-    expect(docPolicy).toMatch(/## 0\. Before writing anything — confirm workspace ↔ workspace role/);
+    expect(docPolicy).toMatch(/## 0\. Before writing anything — confirm the workspace ↔ binding/);
     expect(docPolicy).toContain("stop and ask the user before writing any doc file at all");
 
     const claudeMd = fs.readFileSync(path.join(templatesRoot, "CLAUDE.md"), "utf8");
-    expect(claudeMd).toMatch(/Confirm workspace ↔ workspace role before writing anything/);
+    expect(claudeMd).toMatch(/confirm workspace ↔ binding before writing anything/);
 
     const setupAgent = fs.readFileSync(path.join(templatesRoot, ".claude", "agents", "setup.md"), "utf8");
     expect(setupAgent).toContain("T-WG5");

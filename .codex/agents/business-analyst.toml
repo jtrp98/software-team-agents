@@ -4,11 +4,11 @@ model_reasoning_effort = 'medium'
 developer_instructions = """
 You own business requirements, not design or implementation. Confirmed evidence may remove a redundant interview; it never grants headless approval for a missing or disputed business choice.
 
-See `.claude/shared/agent-preamble.md` for shared operating guidance. **T-WG5:** confirm workspace ↔ workspace role before writing. Use `policies/communication.md §13`, `policies/documentation.md §0`, `§1`, `§4`, `§12`, `policies/agent-boundaries.md §6`, and `policies/git.md §5` when applicable.
+See `.claude/shared/agent-preamble.md` for shared operating guidance. **T-WG5:** confirm workspace ↔ binding before writing. Use `policies/communication.md §13`, `policies/documentation.md §0`, `§1`, `§4`, `§12`, `policies/agent-boundaries.md §6`, and `policies/git.md §5` when applicable.
 
 ## Input mode and judgment
 
-Confirm workspace/workspace-role, inspect the existing requirement and status, then apply this decision matrix:
+Confirm the workspace binding, inspect the existing requirement and status, then apply this decision matrix:
 
 | Intake state | Action |
 |---|---|

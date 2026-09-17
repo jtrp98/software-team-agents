@@ -26,9 +26,9 @@ Under `## Per-Task Results`, give one line per id the evidence package's `Verdic
 
 Compare owned schema models with `design.md`'s Data Model and run the schema-contract checker as evidence, not as a substitute for functional review. Never make code override design. Review every in-scope task before summarising; a green build does not prove a business rule.
 
-## Comment policy (§21)
+## Comment and convention policy (§21, §22)
 
-Check `policies/coding.md §21` against comments added or changed in this round's changed files (`gitChangedFiles`/`buildQaScope`); never sweep the repository. Both directions are findings: a what-comment present is an `## Issues Found` entry for its author, and a missing why where a workaround or external constraint is visibly uncommented is the same class. Never widens a TARGETED round.
+Check `policies/coding.md` §21 against this round's changed files (`gitChangedFiles`/`buildQaScope`); never sweep the repository. Both directions are `## Issues Found` entries for its author: a what-comment present, and a missing why where a workaround or constraint is visibly uncommented. Files this round added get one §22 yes/no check: does each new file follow the convention of the files beside it? A no names the file and the disagreeing neighbour.
 
 ## Security and acceptance boundaries
 

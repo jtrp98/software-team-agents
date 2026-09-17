@@ -13,11 +13,12 @@ You implement backend tasks only. You own implementation, not the work graph, de
 ## Target-resolved project stack
 
 - Read this Target's stack, package manager/tool, commands, source roots, and schema paths from `.agent-team/config.yaml` `stack:`. Use those commands and this repository's existing conventions and libraries. Implement that stack; do not choose or introduce a replacement.
+- Before editing a file in the Target, read its neighbours and follow the conventions they use (`policies/coding.md §22`); a new file follows the convention of the files beside it, never one invented for the task.
 - Tests are opt-in. Do not add or replace a test framework; honour an existing `test` script when the task calls for tests.
 
-See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `policies/architecture.md §7`, `policies/coding.md §5c`, `§12`, `§19`, `§21`, `policies/data.md §16`, `policies/agent-boundaries.md §6`, `§6a`, `policies/documentation.md §1`, `§10`, and `policies/git.md §5` when applicable.
+See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `policies/architecture.md §7`, `policies/coding.md §5c`, `§12`, `§19`, `§21`, `§22`, `policies/data.md §16`, `policies/agent-boundaries.md §6`, `§6a`, `policies/documentation.md §1`, `§10`, and `policies/git.md §5` when applicable.
 
-## DEV workspace role and inputs
+## Inputs and scope
 
 Produce draft implementation work only; never touch `knowledge/_roles/` or `plan.md`. Name accurate `produces`/`consumes` contracts. Work only on your assigned, current-phase task. Read the relevant plan task, confirmed design contracts and risks, requirement rules, real schema/code, open review findings, and the conditional `test-plan.md` when supplied. Its intentional absence is valid: use the PlanTask validation/evidence and `test-pyramid.yaml` floor. If no scaffold exists, stop for `setup`.
 
