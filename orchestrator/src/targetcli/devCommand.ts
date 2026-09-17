@@ -20,7 +20,6 @@ import {
   resolveSessionTargetWorkRoots,
   TargetBindingError,
   WORKSPACE_ROLE_LABEL,
-  ROLE_WORKSPACE_KIND,
   detectWorkspaceKind,
   type KnowledgeBinding,
   type WorkspaceRole,
@@ -42,13 +41,15 @@ import { resolveModule } from "../agents/moduleDocs.js";
  * the invoking workspace. Since the lane collapse the workspace IS the
  * Knowledge root, so the preflight decides from what the session actually
  * uses — the Target mapping it binds and the selected runtime's guard
- * coverage — never from the recorded role. The role survives only in the
- * init/role match, which keeps a workspace's recorded identity honest until
- * the single entry command retires it.
+ * coverage — never from the recorded role. With `software-team-agents open`
+ * (V10 TASK-026) there is no lane input left at all: the role is only the
+ * workspace's own recorded identity, read back from its config to label the
+ * launch and keep sync rendering consistent with what the workspace already
+ * carries. A recorded role admits nothing and refuses nothing.
  *
- * Both flows auto-initialize an unambiguous workspace on first run (init is
- * idempotent and never touches non-managed content), stop on sync conflicts
- * rather than forcing, and enforce write policy through the launch itself:
+ * The session auto-initializes an unambiguous workspace on first run (init is
+ * idempotent and never touches non-managed content), stops on sync conflicts
+ * rather than forcing, and enforces write policy through the launch itself:
  * the session gets exactly its own workspace as cwd and an explicitly empty
  * STA_WRITABLE_WORK_ROOTS, so cross-repository writes hit the
  * block-outside-repo guard.
@@ -142,24 +143,29 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
       return fail("Workspace", e instanceof Error ? e.message : String(e));
     }
   })();
-  const expectedKind = ROLE_WORKSPACE_KIND[role];
   checks.push({ name: "Workspace", ok: true, detail: roots.targetRoot });
 
   const config = loadTargetConfig(roots.targetRoot);
   const initialized = isTargetInitialized(roots.targetRoot);
 
-  // Role/workspace agreement. An uninitialized workspace initializes here —
-  // init is safe by construction — but only when its markers agree with the
-  // command; anything else is told how to say what it wants explicitly.
+  // Workspace admission. An uninitialized workspace initializes here — init
+  // is safe by construction — but only when its markers say it is a Knowledge
+  // workspace (or say nothing at all): a session's cwd is the Knowledge
+  // workspace, so an application checkout is told where sessions live instead
+  // of being materialized. An already-initialized workspace opens whatever it
+  // recorded — the recorded role decides nothing anymore (V10 TASK-026).
   if (!initialized) {
     const kind = detectWorkspaceKind(roots.targetRoot);
     if (kind === "ambiguous") {
-      fail(`${WORKSPACE_ROLE_LABEL[role]} workspace`, "repository is ambiguous (Knowledge and application markers both present) — run software-team-agents init --role <ba|dev> explicitly");
-    }
-    if (kind !== expectedKind && kind !== "unrecognized") {
       fail(
         `${WORKSPACE_ROLE_LABEL[role]} workspace`,
-        `this repository looks like a ${kind === "knowledge" ? "Knowledge" : "Target"} repository — run \`software-team-agents init --role ${kind === "knowledge" ? "ba" : "dev"}\` there instead`,
+        'repository is ambiguous (Knowledge and application markers both present) — record which it is by setting "role: ba" or "role: dev" in .agent-team/config.yaml, then re-run',
+      );
+    }
+    if (kind === "target") {
+      fail(
+        `${WORKSPACE_ROLE_LABEL[role]} workspace`,
+        "this repository looks like a Target checkout — sessions open from the Knowledge workspace (`software-team-agents open` there); bind this checkout through .workflow/targets.local.yaml instead of initializing it",
       );
     }
     runTargetInit({ targetRoot: roots.targetRoot, templatesDir: options.templatesDir, now: options.now ?? new Date().toISOString(), role });
@@ -167,12 +173,6 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
   } else {
     if (!config) {
       fail("Initialization", ".agent-team/config.yaml is missing although manifest.json exists — restore it or delete .agent-team and re-init");
-    }
-    if (config && config.role && config.role !== role) {
-      fail(
-        `${WORKSPACE_ROLE_LABEL[role]} workspace`,
-        `this workspace is registered as ${WORKSPACE_ROLE_LABEL[config.role as WorkspaceRole]} — use software-team-agents ${config.role}, or re-init with --role ${role} if that was wrong`,
-      );
     }
     checks.push({ name: "Initialization", ok: true });
   }
@@ -433,14 +433,32 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
   return { checks, role, workspaceRoot: roots.targetRoot, frameworkRoot: roots.frameworkRoot, templatesDir, knowledge, target, targetWorkRoots, runtime: launchRuntime, guards: coverage };
 }
 
-/** DEV-only aliases kept for the original callers/tests. */
+/** Kept as the test seam for role-independence: the role passed here is the workspace's recorded identity, never a lane input. */
 export const devPreflight = (options: RoleRunOptions = {}): WorkspaceContext => workspacePreflight("dev", options);
 
 export type DevOptions = RoleRunOptions;
 
 /**
- * Full flow for a role: preflight → launch. Resolves to the launched runtime's
- * exit code; a preflight failure resolves to 1 without launching anything.
+ * The workspace's own recorded role, for the single entry command. It labels
+ * the launch and keeps sync rendering consistent with what the workspace
+ * already carries; it never decides admission (V10 TASK-026). An uninitialized
+ * workspace has no recording yet, so the auto-init default applies.
+ */
+function recordedSessionRole(options: RoleRunOptions): WorkspaceRole {
+  try {
+    const recorded = loadTargetConfig(resolveRoots({ targetRoot: options.targetRoot }).targetRoot)?.role;
+    if (recorded === "ba" || recorded === "dev") return recorded;
+  } catch {
+    // Preflight reports the Workspace problem itself; the default keeps the
+    // failure message shaped like every other launch.
+  }
+  return "ba";
+}
+
+/**
+ * Full flow for the one session kind: preflight → launch. Resolves to the
+ * launched runtime's exit code; a preflight failure resolves to 1 without
+ * launching anything.
  */
 async function runRoleSession(role: WorkspaceRole, options: RoleRunOptions): Promise<number> {
   let ctx: WorkspaceContext;
@@ -485,5 +503,5 @@ async function runRoleSession(role: WorkspaceRole, options: RoleRunOptions): Pro
   }
 }
 
-export const runDev = (options: RoleRunOptions = {}): Promise<number> => runRoleSession("dev", options);
-export const runBa = (options: RoleRunOptions = {}): Promise<number> => runRoleSession("ba", options);
+/** The single session entry (V10 TASK-026): `software-team-agents open`. */
+export const runSession = (options: RoleRunOptions = {}): Promise<number> => runRoleSession(recordedSessionRole(options), options);

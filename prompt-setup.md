@@ -154,7 +154,7 @@ already said):
      never move, rename, rewrite, normalize, convert or validate them; never run
      migration commands or compatibility frameworks.
   6. For ongoing incremental updates, use [`prompt-update-knowledge.md`](prompt-update-knowledge.md).
-- Tell the user their working command: `cd <knowledge> && software-team-agents ba`
+- Tell the user their working command: `cd <knowledge> && software-team-agents open`
   (add `--runtime opencode` or `--runtime codex` to choose a different runtime).
 
 ## Flow: DEV
@@ -207,7 +207,7 @@ already said):
   `--runtime codex` launch the other supported runtimes from the same workspace.
   Model/effort are the runtime's own configuration (e.g. OpenCode's
   `opencode.json` `model` key) — never baked into bindings.
-- Working command: `cd <target> && software-team-agents dev`.
+- Working command: `cd <knowledge> && software-team-agents open`.
 
 ## Flow: QA
 
@@ -228,7 +228,7 @@ already said):
 - Then follow the DEV steps (Target + Knowledge binding + init/sync/status) —
   including Target-resolution cases 2/3 (clone or `git init` a Target that
   doesn't exist here yet) and their confirmation requirement, unchanged for QA.
-- Working command: `cd <target> && software-team-agents dev --runtime claude`.
+- Working command: `cd <knowledge> && software-team-agents open --runtime claude`.
 
 ## Flow: Add Target
 

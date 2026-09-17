@@ -33,7 +33,7 @@ Rationale: `docs/`. Shared conventions live in `policies/` — read the section 
 | `uxui-designer` | UX/UI analysis (read-only consultant; drafts only, a person signs off) | `requirement`, `design`, `knowledge/_sources/design/<module>/`, Figma/Claude Design via MCP | `_docs/module/*/uxui/**`, `knowledge/*/ux-design/**` (`UX-*` drafts) |
 | `backend-engineer` | API/DB code | `plan`, `design`, `requirement`, `test-plan`, `review` | app code |
 | `frontend-engineer` | UI code | same, plus the module's signed UX artifact | app code |
-| `qa-engineer` | verification | all docs + `schema.prisma` + real code | `review.md`, `review/phase-N.md`, `plan.md` Status cells (single-repo only), add-only 🔒 gates |
+| `qa-engineer` | verification | all docs + `schema.prisma` + real code | `review.md`, `review/phase-N.md`, `plan.md` Status cells, add-only 🔒 gates |
 | `security` | security audit | `requirement`, `design`, `review`, `schema.prisma`, real code | `security.md` |
 | `devops` | deploy, CI, migrations | `status`, `review`, `security`, `plan`, `design`, `schema.prisma`, stack files | `deploy.md`, infra files |
 
@@ -47,7 +47,7 @@ Authority: **PM = Work Graph · Graphify = Code Graph · Orchestrator = Runtime*
 - **Dates come from the user.** No agent can reliably know today's date, so any agent writing a dated entry asks first and reuses that answer for the session.
 - **Verify against real state, not memory.** A recalled fact from an earlier turn or summary is a hypothesis, not a fact — read the actual current file/schema/code before acting on it. If it disagrees, the file/code wins and the stale belief is corrected on the spot. `policies/coding.md` §12 has the full rule.
 - **Handoff messages are concise.** The chat message an agent ends with — status updates and the "here's what's ready, here's who's next" handoff — leads with the result, not a restated plan or step-by-step narration; explain reasoning only where the next reader must decide something from it. This governs the chat message, not the documents themselves. `policies/documentation.md` §12 has the full rule.
-- **Nothing reaches a FULL QA round without the full deterministic sweep — enforced differently by path.** Orchestrated (`sta run`): the orchestrator executes the sweep itself before `qa-engineer` is even invoked and hands QA the real structured result; `deterministic_gate: enabled` in the run log means a result was actually produced, never merely requested, and a workspace with no resolvable stack commands reports `unverified`, never a silent pass. Interactive (`ba`/`dev`, no orchestrator): this bullet is the only mechanism there is — `qa-engineer` must run `node .claude/scripts/static-analysis-gate.js` itself before verifying. Don't read the enforcement from one path and assume it holds in the other.
+- **Nothing reaches a FULL QA round without the full deterministic sweep — enforced differently by path.** Orchestrated (`sta run`): the orchestrator executes the sweep itself before `qa-engineer` is even invoked and hands QA the real structured result; `deterministic_gate: enabled` in the run log means a result was actually produced, never merely requested, and a workspace with no resolvable stack commands reports `unverified`, never a silent pass. Interactive (`software-team-agents open`, no orchestrator): this bullet is the only mechanism there is — `qa-engineer` must run `node .claude/scripts/static-analysis-gate.js` itself before verifying. Don't read the enforcement from one path and assume it holds in the other.
 - **No test suite means nothing ever executes the logic.** Tests are opt-in and default to none, so `qa-engineer` verifies by reading code plus `typecheck`/`lint`/`build` — which cannot tell a right answer from a wrong one. When there's no suite, QA lists the specific rules it could only read under `## Unverified Behaviour — undeployed phases`, and `devops` puts that list in front of the user before deploying.
 - **An unsourced number is an assumption, in writing.** `business-analyst` has no web access by design; external facts come from the user and land in `requirement.md`'s `## References` table with their source. Anything used as a fact without a row there is written `(สมมติฐาน — ยังไม่ยืนยัน)`, and `system-analyst` must resolve it with the user before designing around it instead of promoting it to fact by using it.
 - **`review.md` stays small.** It holds `Open Issues — all phases`, the current verify round, and `Unverified Behaviour` for phases that haven't deployed; `qa-engineer` moves closed rounds verbatim into `review/phase-N.md`. The first and third sections outlive their round on purpose — a later stage reads them after the round that produced them stopped being current, so they are never archived. Every engineer/`security`/`devops` run reads `review.md` in full, so closed-phase detail left in it taxes the whole pipeline. Nobody opens an archive file at normal startup.
@@ -64,20 +64,18 @@ Who owns which file is the Roles table's Writes column. `design.md`, `review.md`
 have an archive companion; nobody opens one at normal startup.
 
 **Three-repo mode.** Every `_docs/module/<name>/**` and `knowledge/**` path is a *Knowledge-repository*
-location, written only from the Knowledge workspace (`software-team-agents ba`). A module may reference
+location, written only from the Knowledge workspace (`software-team-agents open`). A module may reference
 multiple Targets (`design.md` `## Targets`); a task may span multiple Targets (`targets: [{target_id, role}]`).
-Each DEV invocation writes to one Target (`STA_TARGET_ROOT`); other bound Targets are read-only
-(`STA_BOUND_TARGET_ROOTS`). A DEV workspace reads Knowledge read-only, writes app code plus
-`review.md`/`security.md`/`deploy.md`, and carries no local `_docs/`. `qa-engineer` evaluates every bound Target;
-it cannot write `plan.md` in DEV — `role: dev` denies it unconditionally — so verdicts land in `review.md` plus a
-`## Knowledge sync — three-repo mode` table naming each task id and new Status, which a BA session then applies
-to `plan.md` (**T-LV3**: a relay of a decision already made, never a second review). In single-repo mode none of
-this applies and `qa-engineer` edits Status directly. Non-active Target and Knowledge roots remain read-only.
+Each orchestrated stage writes to one Target (`STA_TARGET_ROOT`); other bound Targets are read-only
+(`STA_TARGET_WORK_ROOTS`). Engineer/QA stages write app code plus `review.md`/`security.md`/`deploy.md` in the
+bound Target, and `qa-engineer` evaluates every bound Target and updates `plan.md` Status cells directly —
+no relay stage, and always the single review of record. Non-active Target and Knowledge roots remain read-only.
 
 ## Runtime entry points
 
 `sta run --task-id <id> --module <name> …` orchestrated pipeline (`sta status`/`approve`/`retry`) ·
-`software-team-agents ba|dev` interactive workspace roles · `sta policy [<area>] [<section>]` one policy section ·
+`software-team-agents open` the interactive session, from the Knowledge workspace ·
+`sta policy [<area>] [<section>]` one policy section ·
 `sta tokens` context composition per run · `sta --check-prompt-budget` this file's budget.
 
 **Stack** (Target-resolved): `.agent-team/config.yaml` `stack:` declares the Target profile, package manager/tool,

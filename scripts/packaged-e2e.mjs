@@ -182,19 +182,19 @@ try {
     expectCond(`shipped payload contains readable ${file}`, shipped, p);
   }
 
-  // --- 4 · missing Knowledge binding no longer refuses (V10 TASK-027) --------
-  // The preflight is per session: the workspace is the Knowledge root, so a
-  // session without a binding opens. The first hard failure left on this path
-  // is the runtime probe — PATH is stripped so that failure is deterministic
-  // and nothing launches.
+  // --- 4 · no Knowledge binding needed: the workspace IS the Knowledge root (V10 TASK-027/026)
+  // The preflight is per session: a session opened with the single entry
+  // command from its own Knowledge workspace needs no binding. The first hard
+  // failure left on this path is the runtime probe — PATH is stripped so that
+  // failure is deterministic and nothing launches.
   const missingConfigEnv = { ...baseEnv, STA_INSTALLATION_CONFIG: path.join(stage, "does-not-exist.yaml") };
   {
     const nodeDir = path.dirname(process.execPath);
     const pathSep = process.platform === "win32" ? ";" : ":";
     const stripped = { ...missingConfigEnv, PATH: [nodeDir, process.platform === "win32" ? "C:\\Windows\\System32" : "/usr/bin:/bin"].join(pathSep) };
-    const r = runBin(targetBin, ["dev"], { cwd: targetRepo, env: stripped, timeoutMs: 180_000 });
+    const r = runBin(targetBin, ["open"], { cwd: knowledgeRepo, env: stripped, timeoutMs: 180_000 });
     expectCond(
-      "dev without any Knowledge binding reaches the runtime probe instead of refusing on Knowledge",
+      "open without any Knowledge binding reaches the runtime probe instead of refusing on Knowledge",
       r.status !== 0 && /[Rr]untime \(claude\)/.test(r.out),
       r.out.slice(-800),
     );
@@ -264,14 +264,33 @@ try {
   // --- 10 · invalid workspace -------------------------------------------------
   {
     // Has the standalone-repo marker but neither Knowledge nor app-source
-    // markers, so role *detection* is what must refuse — with the disambiguation hint.
+    // markers, so role *detection* is what must refuse — with guidance that
+    // does not name the retired --role flag (V10 TASK-026).
     const nowhere = path.join(stage, "Not A Workspace");
     fs.mkdirSync(path.join(nowhere, ".git"), { recursive: true });
     const r = runBin(targetBin, ["init"], { cwd: nowhere, env: baseEnv });
     expectCond(
-      "init in a marker-less directory refuses and says how to disambiguate",
-      r.status !== 0 && /--role ba|--role dev/i.test(r.out),
+      "init in a marker-less directory refuses and points at the Knowledge workspace",
+      r.status !== 0 && /neither Knowledge markers/i.test(r.out),
       r.out.slice(0, 400),
+    );
+  }
+
+  // --- 10b · retired two-lane names are caught, not aliased (V10 TASK-026) ----
+  {
+    for (const retired of ["ba", "dev"]) {
+      const r = runBin(targetBin, [retired], { cwd: knowledgeRepo, env: baseEnv });
+      expectCond(
+        `${retired} exits non-zero naming the replacement command`,
+        r.status === 64 && r.out.includes(`'${retired}' was retired in V10`) && r.out.includes("software-team-agents open"),
+        r.out.slice(0, 400),
+      );
+    }
+    const warned = runBin(targetBin, ["init", "--role", "ba"], { cwd: knowledgeRepo, env: baseEnv });
+    expectCond(
+      "--role is accepted and ignored with a warning",
+      warned.status === 0 && /--role is retired and ignored/i.test(warned.out),
+      warned.out.slice(0, 400),
     );
   }
 
@@ -285,9 +304,9 @@ try {
     const strippedEnv = { ...baseEnv, PATH: [nodeDir, process.platform === "win32" ? "C:\\Windows\\System32" : "/usr/bin:/bin"].join(pathSep) };
     const absent = spawnSync("claude --version", { shell: true, env: strippedEnv, encoding: "utf8" });
     expectCond("guard: `claude` is genuinely unreachable under the stripped PATH", absent.status !== 0, `status ${absent.status}`);
-    const r = runBin(targetBin, ["dev"], { cwd: targetRepo, env: strippedEnv, timeoutMs: 180_000 });
+    const r = runBin(targetBin, ["open"], { cwd: knowledgeRepo, env: strippedEnv, timeoutMs: 180_000 });
     expectCond(
-      "dev with the runtime binary absent fails closed naming the runtime",
+      "open with the runtime binary absent fails closed naming the runtime",
       r.status !== 0 && /[Rr]untime \(claude\)/.test(r.out),
       r.out.slice(-800),
     );

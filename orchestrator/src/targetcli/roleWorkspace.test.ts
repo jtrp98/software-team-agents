@@ -454,17 +454,21 @@ describe("T-WG5 — the confirm-workspace checkpoint ships in the synced payload
     expect(baAgent).toContain("T-WG5");
   });
 
-  it("T-LV3 — qa-engineer's chosen sync mechanism (review.md -> BA-workspace sync) is documented, not aspirational", () => {
+  it("V10 TASK-028 — the T-LV3 relay is retired: QA writes plan.md Status cells directly, no Knowledge-sync lane remains", () => {
     const qaAgent = fs.readFileSync(path.join(templatesRoot, ".claude", "agents", "qa-engineer.md"), "utf8");
-    expect(qaAgent).toContain("Knowledge / Target / three-repo mode");
-    expect(qaAgent).toContain("Knowledge sync");
-    expect(qaAgent).toMatch(/role: dev/);
+    expect(qaAgent).not.toContain("Knowledge sync");
+    expect(qaAgent).not.toMatch(/role: dev/);
+    // The Status-cell bound survives the unblocking, in the prompt itself now
+    // that no hook layer denies the file.
+    expect(qaAgent).toMatch(/only those Status cells/);
 
     const contract = fs.readFileSync(path.join(templatesRoot, "..", "contracts", "qa-engineer.yaml"), "utf8");
-    expect(contract).toMatch(/T-LV3/);
+    expect(contract).toMatch(/_docs\/module\/\*\/plan\.md/);
+    expect(contract).toMatch(/V10 TASK-028/);
 
     const claudeMd = fs.readFileSync(path.join(templatesRoot, "CLAUDE.md"), "utf8");
-    expect(claudeMd).toMatch(/T-LV3/);
+    expect(claudeMd).not.toMatch(/T-LV3/);
+    expect(claudeMd).toContain("updates `plan.md` Status cells directly");
   });
 
   it("TEAM_SETUP_V1.md exists and every reference to it resolves (no broken canonical link)", () => {

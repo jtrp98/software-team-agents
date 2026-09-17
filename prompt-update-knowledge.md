@@ -147,5 +147,5 @@ Apply minimal, targeted changes to canonical files:
    Preserved items: <n> unchanged, <m> explicit future requirements
    Stale removed  : <summary of removed stale current-state assertions>
    Reference docs : untouched (read-only evidence)
-   Next           : cd <knowledge> && software-team-agents ba
+   Next           : cd <knowledge> && software-team-agents open
    ```

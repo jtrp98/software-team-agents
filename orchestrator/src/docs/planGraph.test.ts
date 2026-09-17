@@ -218,7 +218,7 @@ describe("checkPlanGraphs", () => {
     const result = checkPlanGraphs(root);
     expect(result.ok).toBe(false);
     expect(result.problems.join("\n")).toContain("missing from this Knowledge workspace's synced payload");
-    expect(result.problems.join("\n")).toContain("software-team-agents ba");
+    expect(result.problems.join("\n")).toContain("software-team-agents sync");
   });
 
   it("T-V6-005 — [ACCEPTANCE] a plan casting a Tier passes once model-tiers.yaml is synced into the Knowledge workspace", () => {

@@ -82,7 +82,7 @@ export interface TargetStatus {
   hooksRegistered: number;
   /**
    * installation.yaml binds a Knowledge root (marker-complete) that was never
-   * `init --role ba`'d there: every command past binding validation succeeds,
+   * initialized there: every command past binding validation succeeds,
    * so nothing else notices the BA-workspace prompts don't exist anywhere on
    * the machine. Set to the bound root's path when this applies; absent
    * otherwise (unbound, or bound and initialized).
@@ -479,7 +479,7 @@ export function renderStatus(status: TargetStatus): string {
     lines.push(
       `WARNING: Knowledge root bound in installation.yaml (${status.knowledgeBoundButUninitialized}) has no .agent-team/config.yaml — the BA workspace role is not usable anywhere on this machine yet.`,
     );
-    lines.push(`  fix: cd "${status.knowledgeBoundButUninitialized}" && software-team-agents init --role ba`);
+    lines.push(`  fix: cd "${status.knowledgeBoundButUninitialized}" && software-team-agents init`);
   }
   lines.push(`Claude: ${status.claude.ready ? "READY" : "NOT READY"} — ${status.claude.detail}`);
   lines.push(`Codex: ${status.codex.ready ? "READY" : "NOT READY"} — ${status.codex.detail}`);

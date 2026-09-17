@@ -151,7 +151,7 @@ export async function buildContextCommand(input: ContextCommandInput): Promise<C
   if (targetConfig?.role === "ba") {
     // Knowledge (BA) workspace: projectRoot IS the Knowledge root, not a Target checkout — the
     // bound Target's local path+id must come from the same read-only binding
-    // `software-team-agents dev` uses (targets.yaml + .workflow/targets.local.yaml), keyed by
+    // `software-team-agents open` uses (targets.yaml + .workflow/targets.local.yaml), keyed by
     // `target.target_id` (NOT the top-level `target_id`, which is the Knowledge repo's own
     // identity, not a Target).
     try {

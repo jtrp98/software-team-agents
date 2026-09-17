@@ -35,7 +35,7 @@ export interface Roots {
  * three-root model so callers don't invent conflicting precedence rules.
  *
  * Precedence: `env > installation.yaml > projectRoot`. The env var is what a
- * launcher session (`software-team-agents ba|dev`) sets; the installation-config
+ * launcher session (`software-team-agents open`) sets; the installation-config
  * fallback is what makes a desktop session — which never goes through the
  * launcher and so never has it — usable instead of failing on the first turn.
  * A missing or invalid `installation.yaml` degrades to today's `projectRoot`

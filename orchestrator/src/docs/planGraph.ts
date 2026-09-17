@@ -75,7 +75,7 @@ function validateConfiguredTiers(
     if (modelTiers === null) {
       errors.push(
         isKnowledgeWorkspace
-          ? `task ${task.id} casts ${task.tier}, but model-tiers.yaml is missing from this Knowledge workspace's synced payload — resync with \`software-team-agents ba\` to restore it`
+          ? `task ${task.id} casts ${task.tier}, but model-tiers.yaml is missing from this Knowledge workspace's synced payload — resync with \`software-team-agents sync\` to restore it`
           : `task ${task.id} casts ${task.tier}, but model-tiers.yaml is not configured`,
       );
     } else if (!(task.tier in modelTiers)) {
