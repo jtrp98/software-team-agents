@@ -1822,7 +1822,7 @@ describe("role workspace architecture (T-ROLE)", () => {
       expect(status.knowledgeBoundButUninitialized?.toLowerCase()).toBe(knowledgeCanonical.toLowerCase());
 
       const rendered = (await capture(() => runTargetCli(["status"], target, fw, { installationConfigPath: configPath }))).out;
-      expect(rendered).toMatch(/WARNING.*BA workspace role is not usable/);
+      expect(rendered).toMatch(/WARNING.*workspace payload does not exist anywhere on this machine yet/);
       expect(rendered).toContain("software-team-agents init");
 
       // V10 TASK-027 — the role-keyed preflight note is gone with the forced

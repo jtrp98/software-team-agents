@@ -10,6 +10,7 @@ import type { KnowledgeItem, SourceType } from "./knowledgeModel.js";
 import { knowledgeDir } from "./knowledgeStore.js";
 import { digestOfSource, parseLocator } from "./sourceDigest.js";
 import { resolveSource } from "./sourceResolver.js";
+import { renameSyncRetrying } from "../concurrency/atomicRename.js";
 
 /**
  * The raw-source registry — `knowledge/_sources/<SRC-id>.yaml`.
@@ -199,7 +200,7 @@ export function writeSourceRecord(record: SourceRecord, projectRoot: string = de
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.tmp-${process.pid}`;
   fs.writeFileSync(tmp, renderSourceRecord(record), "utf8");
-  fs.renameSync(tmp, filePath);
+  renameSyncRetrying(tmp, filePath);
   return filePath;
 }
 

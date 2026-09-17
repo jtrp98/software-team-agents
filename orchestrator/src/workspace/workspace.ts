@@ -5,6 +5,7 @@ import Ajv, { type ValidateFunction } from "ajv";
 import { parse as parseYaml } from "yaml";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { loadTargetConfig } from "../targetcli/targetMeta.js";
+import { detectWorkspaceKind } from "../targetcli/roleWorkspace.js";
 
 /**
  * Reads `workspace.yaml` — an optional file naming other project roots this
@@ -123,29 +124,32 @@ function listFilesRecursive(dir: string): string[] {
 }
 
 /**
- * Misplaced-docs scanner: a `role: dev` Target carries no `_docs/` of
+ * Misplaced-docs scanner: a Target checkout carries no `_docs/` of
  * its own by design (module docs live in the Knowledge repo). A
  * `_docs/module/**` file or a `## Modules` table in `_docs/status.md` sitting
- * in a DEV workspace is discovered and reported. `role` absent (legacy-project /
- * this Framework repo itself) or `role: ba` (whose workspace IS the Knowledge
- * repo — `_docs/` is exactly where it belongs) never trigger this: those are
- * not the case this check exists to catch, and flagging them would fail-open the guard.
+ * in a Target checkout is discovered and reported. Keyed on what the workspace
+ * IS (`detectWorkspaceKind`, which honors a legacy recorded role) rather than
+ * the role alone — a role never decides anything post-V10, and a roleless
+ * checkout with app markers is exactly the case this check exists to catch.
+ * Knowledge workspaces (`_docs/` is exactly where it belongs) and
+ * unrecognized roots never trigger this: flagging them would fail-open the guard.
  */
 function checkMisplacedDocs(projectRoot: string): string[] {
-  let role: string | undefined;
+  let isTargetWorkspace: boolean;
   try {
-    role = loadTargetConfig(projectRoot)?.role;
+    isTargetWorkspace =
+      detectWorkspaceKind(projectRoot) === "target" || loadTargetConfig(projectRoot)?.role === "dev";
   } catch {
     return []; // an unreadable/missing config is not this check's problem to report
   }
-  if (role !== "dev") return [];
+  if (!isTargetWorkspace) return [];
 
   const problems: string[] = [];
   const moduleDir = path.join(projectRoot, "_docs", "module");
   if (fs.existsSync(moduleDir) && fs.statSync(moduleDir).isDirectory()) {
     for (const rel of listFilesRecursive(moduleDir)) {
       problems.push(
-        `_docs/module/${rel} — module docs belong in the Knowledge repo, not this Target (role: dev). ` +
+        `_docs/module/${rel} — module docs belong in the Knowledge repo, not this Target checkout. ` +
           `Move it to <knowledgeRoot>\\_docs\\module\\${rel}, merge any status.md row, then remove it here.`,
       );
     }
@@ -155,7 +159,7 @@ function checkMisplacedDocs(projectRoot: string): string[] {
     const content = fs.readFileSync(statusPath, "utf8");
     if (/^##\s*Modules\b/im.test(content)) {
       problems.push(
-        "_docs/status.md has a \"## Modules\" table — that belongs to the Knowledge repo's status.md, not this Target's (role: dev).",
+        "_docs/status.md has a \"## Modules\" table — that belongs to the Knowledge repo's status.md, not this Target checkout's.",
       );
     }
   }

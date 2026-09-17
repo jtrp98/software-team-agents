@@ -178,4 +178,24 @@ describe("T-WG4 — misplaced-docs scanner (role: dev carries no _docs/ of its o
     expect(result.ok).toBe(true);
     expect(result.problems).toEqual([]);
   });
+
+  it("V10 — a roleless app-marker checkout with stranded _docs content is flagged (the trigger follows what the workspace IS, not a role)", () => {
+    const root = tmpDir();
+    write(root, "package.json", `{ "name": "app", "version": "1.0.0" }\n`);
+    write(root, "_docs/module/sb-compass/requirement.md", "# Sales Compass requirement\n");
+
+    const result = checkWorkspace(root);
+    expect(result.ok).toBe(false);
+    expect(result.problems.some((p) => p.includes("_docs/module/sb-compass/requirement.md") && p.includes("Knowledge repo"))).toBe(true);
+  });
+
+  it("V10 — the scanner messages no longer name a workspace role", () => {
+    const root = tmpDir();
+    withRole(root, "dev");
+    write(root, "_docs/module/sb-compass/requirement.md", "# Sales Compass requirement\n");
+
+    const result = checkWorkspace(root);
+    expect(result.ok).toBe(false);
+    expect(result.problems.every((p) => !p.includes("role: dev"))).toBe(true);
+  });
 });

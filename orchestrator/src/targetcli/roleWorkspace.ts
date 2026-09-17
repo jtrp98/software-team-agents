@@ -168,6 +168,20 @@ export function detectWorkspaceKind(dir: string): WorkspaceKind {
   return "unrecognized";
 }
 
+/** What a workspace IS — the Knowledge workspace or a Target checkout — for display and
+ * resolution branches that used to key on the recorded role. Markers classify an
+ * uninitialized checkout; a legacy recorded role classifies an old one the markers
+ * cannot place. It identifies the checkout; it never grants writes. */
+export type WorkspaceShape = "knowledge" | "target" | "other";
+
+export function workspaceShapeOf(kind: WorkspaceKind, recordedRole: WorkspaceRole | undefined): WorkspaceShape {
+  if (kind === "knowledge") return "knowledge";
+  if (kind === "target") return "target";
+  if (recordedRole === "ba") return "knowledge";
+  if (recordedRole === "dev") return "target";
+  return "other";
+}
+
 // --- Knowledge binding -------------------------------------------------------
 
 export interface KnowledgeBinding {

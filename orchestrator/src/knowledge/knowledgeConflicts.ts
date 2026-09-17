@@ -9,6 +9,7 @@ import { defaultProjectRoot } from "../agents/agentContract.js";
 import type { KnowledgeItem } from "./knowledgeModel.js";
 import type { KnowledgeBase } from "./knowledgeBase.js";
 import { knowledgeDir } from "./knowledgeStore.js";
+import { renameSyncRetrying } from "../concurrency/atomicRename.js";
 
 /**
  * Conflict detection and resolution.
@@ -280,7 +281,7 @@ export function writeResolution(resolution: ConflictResolution, projectRoot: str
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.tmp-${process.pid}`;
   fs.writeFileSync(tmp, renderResolution(resolution), "utf8");
-  fs.renameSync(tmp, filePath);
+  renameSyncRetrying(tmp, filePath);
   return filePath;
 }
 

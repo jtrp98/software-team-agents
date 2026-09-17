@@ -539,8 +539,9 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
           return { status: "WARNING", detail: error instanceof Error ? error.message : String(error) };
         }
         const kind = detectWorkspaceKind(projectRoot);
-        const isDevTarget = config?.role === "dev" || (config?.role === undefined && kind === "target");
-        if (!isDevTarget) return { status: "PASS", detail: "n/a — this is not a DEV Target workspace" };
+        // `detectWorkspaceKind` already honors a legacy recorded role, so the
+        // kind alone classifies the checkout — the role decides nothing here.
+        if (kind !== "target") return { status: "PASS", detail: "n/a — this is not a Target workspace" };
         if (!config?.stack) return { status: "WARNING", detail: "Target stack is unresolved; no profile is cached" };
         if (targetStackWasHumanEdited(config.stack)) {
           return {

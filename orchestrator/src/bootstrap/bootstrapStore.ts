@@ -4,6 +4,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { knowledgeDir } from "../knowledge/knowledgeStore.js";
 import { checkBootstrapState, type BootstrapState } from "./bootstrapModel.js";
+import { renameSyncRetrying } from "../concurrency/atomicRename.js";
 
 /**
  * Read/write for `knowledge/_bootstrap/STATE.yaml`.
@@ -76,6 +77,6 @@ export function writeBootstrapState(state: BootstrapState, projectRoot: string =
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.tmp-${process.pid}`;
   fs.writeFileSync(tmp, render(state), "utf8");
-  fs.renameSync(tmp, filePath);
+  renameSyncRetrying(tmp, filePath);
   return filePath;
 }

@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { defaultProjectRoot } from "../agents/agentContract.js";
+import { renameSyncRetrying } from "../concurrency/atomicRename.js";
 import {
   type KnowledgeItem,
   KnowledgeItemError,
@@ -316,6 +317,6 @@ export function writeKnowledgeItem(
   // mid-write leaves the previous version intact rather than a truncated one.
   const tmp = `${filePath}.tmp-${process.pid}`;
   fs.writeFileSync(tmp, renderKnowledgeItem(item), "utf8");
-  fs.renameSync(tmp, filePath);
+  renameSyncRetrying(tmp, filePath);
   return filePath;
 }

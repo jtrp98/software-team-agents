@@ -26,11 +26,9 @@ const prompt = fs.readFileSync(path.join(root, "prompt-setup.md"), "utf8");
 
 const REQUIRED_SECTIONS = [
   "Phase 0 — Initial inspection",
-  "Role menu",
-  "Flow: BA",
-  "Flow: DEV",
-  "Flow: QA",
-  "Flow: Add Target",
+  "Setup menu",
+  "Flow: Set up the Knowledge workspace",
+  "Flow: Register a Target",
   "Flow: Update Setup",
   "Flow: Inspect Setup",
   "Flow: Repair",
@@ -43,11 +41,15 @@ describe("prompt-setup.md — AI-assisted setup entry point", () => {
     expect(fs.existsSync(path.join(root, "prompt-setup.md"))).toBe(true);
   });
 
-  it("covers every role and mode of the setup checklist", () => {
+  it("covers every flow of the V10 setup checklist — one workspace, no role lanes", () => {
     for (const section of REQUIRED_SECTIONS) {
       expect(prompt).toContain(section);
     }
-    expect(prompt).toMatch(/BA works in|works in the Knowledge repository/);
+    expect(prompt).toMatch(/the one workspace V10 works from/);
+    // The retired per-role flows must not come back through a partial edit.
+    expect(prompt).not.toMatch(/^## Flow: (BA|DEV|QA|Add Target)$/m);
+    expect(prompt).not.toMatch(/Workspace role: BA/);
+    expect(prompt).not.toContain("init --role");
   });
 
   it("routes all mutations through the official CLI surface — never duplicated logic", () => {
@@ -77,7 +79,7 @@ describe("prompt-setup.md — AI-assisted setup entry point", () => {
     expect(pkg.files ?? []).toContain("prompt-setup.md");
   });
 
-  it("T-LV4 — Flow: DEV bootstraps a Target that doesn't exist locally yet, with confirmation before any git mutation", () => {
+  it("T-LV4 — Flow: Register a Target bootstraps a Target that doesn't exist locally yet, with confirmation before any git mutation", () => {
     // All three Target shapes: already checked out, remote-but-not-cloned, and
     // a genuinely new project with no remote at all.
     expect(prompt).toMatch(/Already exists/);
@@ -89,8 +91,10 @@ describe("prompt-setup.md — AI-assisted setup entry point", () => {
     // playbook's first (and only) state-changing git command.
     expect(prompt).toMatch(/never run a state-changing git command without showing it first/);
     expect(prompt).toMatch(/wait for the user's explicit confirmation|wait for the same explicit confirmation/);
-    // The new-project branch routes to `setup`, not to this playbook, for scaffolding.
-    expect(prompt).toMatch(/`setup` agent has to run/);
+    // A registered Target stays a plain checkout — scaffolding routes to the
+    // `setup` agent through an orchestrated stage, never this playbook.
+    expect(prompt).toMatch(/`setup` agent's job, through an orchestrated stage/);
+    expect(prompt).toMatch(/no STA payload is installed in a Target/);
   });
 
   it("T-V3-13 — reads the Harness profile, asks only on ambiguity, and delegates managed merges to sync", () => {

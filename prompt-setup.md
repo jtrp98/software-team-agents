@@ -31,7 +31,7 @@
    inside the Framework checkout. Existing config is preserved; changes are
    minimal field updates, never wholesale rewrites. The one place this playbook
    runs a state-changing git command at all — bootstrapping a Target that
-   doesn't exist locally yet, Flow: DEV's Target-resolution cases 2/3 — always
+   doesn't exist locally yet, Register-a-Target cases 2/3 — always
    shows the exact command first and waits for explicit confirmation (Safety
    rails below).
 4. **Short, actionable interactions.** One question at a time, each with the
@@ -53,9 +53,9 @@ Run these read-only checks from the current directory. Collect facts silently;
 do not bother the user with anything that resolves cleanly.
 
 ```bash
-software-team-agents status --json        # roots, role, versions, sync state, readiness
+software-team-agents status --json        # workspace, roots, versions, sync state, readiness
 software-team-agents --version            # installed Framework version
-sta --check-workspace --project-root .    # misplaced module docs, when this is a role: dev workspace
+sta --check-workspace --project-root .    # misplaced module docs, when this is a Target checkout
 ```
 
 Then, guided by what status reports:
@@ -63,7 +63,7 @@ Then, guided by what status reports:
 | Fact | How to detect |
 |---|---|
 | Framework root + version | `status --json` → `frameworkRoot`, `frameworkVersion`; missing ⇒ the CLI is not installed — install it (see below), then continue rather than stopping |
-| Current directory's workspace kind & role | `status --json` → `workspaceKind`, `role`; also read `.agent-team/config.yaml` if present (`role`, `knowledge.path`, `overrides`) |
+| Current directory's workspace kind | `status --json` → `workspaceKind`; also read `.agent-team/config.yaml` if present (`knowledge.path`, `overrides` — a `role` key there is a legacy record and decides nothing) |
 | Target stack profile | `status --json` → `stack` (`profile`, `package_manager`, `commands`, `schema_paths`, `source_roots`, `fingerprint`). Report this Harness result; do not detect the stack yourself. If absent or the Harness reports ambiguity/unresolved evidence, show that evidence and ask the user to confirm one `--stack <name>` choice before rerunning `init`/`sync`. Ask no stack question when `stack` is resolved. |
 | Knowledge root (machine-wide) | `status --json` → `knowledgeRoot` / `knowledgeBinding` (via installation binding) |
 | Registered Targets | read `<knowledgeRoot>/targets.yaml` when a Knowledge root resolved |
@@ -71,11 +71,11 @@ Then, guided by what status reports:
 | Sync status of the current workspace | `status --json` → `syncState`, `syncedVersion`, `conflictCount`, `managedFileCount` |
 | Runtime readiness | `status --json` → `claude.ready`, `codex.ready`, `opencode.ready`, `antigravity.ready` (OpenCode needs bindings **and** `.opencode/plugin/sta-guards.js` — its headless default posture is allow-all, so a missing plugin means unguarded, not just incomplete) |
 | Knowledge root bound but never initialized | `status --json` → `knowledgeBoundButUninitialized` (the bound root's path, or absent) — machine binding resolves but `<knowledgeRoot>/.agent-team/config.yaml` is absent; status prints `WARNING:` line with fix command |
-| Module docs stranded in a Target | `sta --check-workspace --project-root <path>` (the Framework's top-level CLI, not `software-team-agents`) — flags files under `role: dev` `_docs/module/**` and `## Modules` in `_docs/status.md` with Knowledge destination paths |
+| Module docs stranded in a Target | `sta --check-workspace --project-root <path>` (the Framework's top-level CLI, not `software-team-agents`) — flags `_docs/module/**` files and `## Modules` in `_docs/status.md` inside a Target checkout with Knowledge destination paths |
 
 If `status` fails because the current directory is not a Git repository, that is
 fine — you are likely standing outside any workspace. Note it and continue to
-the role menu; the chosen flow will ask where to work.
+the setup menu; the chosen flow will ask where to work.
 
 Present a one-screen summary of what you found, then show the menu.
 
@@ -94,24 +94,27 @@ it runs the full test suite and packs a tarball.
 
 ---
 
-## Role menu
+## Setup menu
 
 Ask which one applies (**this is the one question always asked**, unless the user
 already said):
 
-1. **BA** — analysis workspace role; works in the Knowledge repository
-2. **DEV** — engineering workspace role; works in a Target repository
-3. **QA** — quality-verification flow; derives its needs from the official workflow definitions
-4. **Add Target** — register an additional Target in an existing setup
-5. **Update Setup** — re-inspect and refresh an existing setup (Framework moved/updated)
-6. **Inspect Setup** — full read-only report; change nothing
-7. **Repair Setup** — something broke (moved repos, stale sync, remote mismatch)
+1. **Set up the Knowledge workspace** — the one workspace V10 works from; every
+   role's prompts ship in the single payload, so analysis, engineering and QA
+   all work from here
+2. **Register a Target** — add a Target to `targets.yaml` + `.workflow/targets.local.yaml`,
+   cloning or creating its checkout when needed
+3. **Update Setup** — re-inspect and refresh an existing setup (Framework moved/updated)
+4. **Inspect Setup** — full read-only report; change nothing
+5. **Repair Setup** — something broke (moved repos, stale sync, remote mismatch)
 
 ---
 
-## Flow: BA
+## Flow: Set up the Knowledge workspace
 
-**Goal:** BA ready with Framework + Knowledge only. A Target never comes up.
+**Goal:** the Knowledge workspace ready — Framework payload synced, ready to open a
+session with `software-team-agents open`. A Target never blocks this; Targets are
+registered (flow 2) and stay plain checkouts.
 
 - If no Knowledge path was detected: ask for it. Validate before accepting:
   - path exists, is a standalone Git repository (`.git` present)
@@ -120,20 +123,21 @@ already said):
     one unless the user explicitly asks for a fresh Knowledge repo.
 - **Bound-but-uninitialized Knowledge root.** If Phase 0 found a machine-wide
   binding whose repository has no `.agent-team/config.yaml`, surface that first
-  and offer to materialize it now ("Knowledge root found at X but never set up
-  for BA work — initialize? [Y/n]"): `cd <root> && software-team-agents init
-  --role ba` then `sync`. Until this runs, BA/UXUI prompts do not exist anywhere
-  on the machine.
+  and offer to materialize it now ("Knowledge root found at X but never set up —
+  initialize? [Y/n]"): `cd <root> && software-team-agents init` then `sync`.
+  Until this runs, no STA prompts exist anywhere on the machine.
 - `cd <knowledge>` then run `software-team-agents init`
-  (auto-detects the BA workspace) followed by `software-team-agents sync`.
+  (detects the Knowledge workspace) followed by `software-team-agents sync`.
 - Optionally offer: "Bind this machine's default Knowledge root too?" →
   `sta configure knowledge-root <path>` (affects other flows on this machine).
-- Verify with `software-team-agents status`: expect Workspace role `BA`, `Target: NOT
-  REQUIRED`, sync `UP_TO_DATE`, Claude/Codex/OpenCode READY.
-- **UX/UI consultant.** The BA workspace materializes five prompts —
-  `business-analyst`, `system-analyst`, `project-manager`, `test-planner` and
-  `uxui-designer` (writes draft `UX-*` items plus `_docs/module/<name>/uxui/**`).
-  For Figma/Claude Design MCP, configure identity once:
+- Verify with `software-team-agents status`: expect `Workspace: Knowledge`, sync
+  `UP_TO_DATE`, Claude/Codex/OpenCode READY.
+- **One payload, every role.** The synced workspace materializes all eleven
+  prompts — analysis roles, engineers, `qa-engineer`, `security`, `devops` and
+  `uxui-designer` — plus contracts, workflows, stacks, hooks and policies
+  (V10 TASK-020). There is no per-role payload split to choose. Targets are
+  read-only from the session; writing one goes through an orchestrated stage.
+- **UX/UI consultant.** For Figma/Claude Design MCP, configure identity once:
   `sta configure identity --figma-email <email> --claude-email <email>` (matching
   emails; `FIGMA_PAT` stays in environment). Without these, `uxui-designer` fails closed.
 - **Capturing canonical knowledge for an existing project.** When bootstrapping
@@ -157,91 +161,26 @@ already said):
 - Tell the user their working command: `cd <knowledge> && software-team-agents open`
   (add `--runtime opencode` or `--runtime codex` to choose a different runtime).
 
-## Flow: DEV
-
-**Goal:** DEV ready in the Target; Knowledge bound as read context.
-
-- **Resolve the Target — three shapes; tell them apart before touching anything, and never guess which one applies:**
-  1. **Already exists.** The current directory is an application repo, or the user points at an existing local path. Validate: exists, standalone Git repo, has application markers (package.json, pyproject.toml, pom.xml, *.sln, …). This is the common case — proceed as below.
-  2. **Has a remote, not cloned to this machine yet.** Ask for the remote URL and the local path to clone it to. Show the exact command — `git clone <url> <path>` — before running it, and wait for the user's explicit confirmation (Safety rails below: this is the first state-changing git command anywhere in this playbook, and it is never auto-run). Once cloned, validate exactly as case 1.
-  3. **Nothing yet — a genuinely new project, no remote either.** Agree the target path with the user, show `git init <path>` before running it, and wait for the same explicit confirmation as case 2. A freshly-`git init`'d directory has no application markers yet, so it resolves as `unrecognized`, not `target` — `software-team-agents init --role dev` still accepts it there with an explicit `--role dev`. There is no real scaffolding yet, though: tell the user plainly that the `setup` agent has to run from this workspace right after `sync` finishes, before any feature work — that agent is what actually creates `package.json`, `app/`, `prisma/schema.prisma`, `.env`, not this playbook.
-- Resolve Knowledge: reuse any valid binding (`config.knowledge.path` or the
-  machine-wide one). Only if none: ask for the Knowledge repo path and validate
-  as in the BA flow.
-- Write the binding into `.agent-team/config.yaml` (`knowledge:` → relative or
-  absolute path), or run `sta configure knowledge-root` if the user wants it
-  machine-wide. Show exactly what you are about to write before writing.
-- In the Target: `software-team-agents init` then `software-team-agents sync`.
-  Detection normally resolves an app repo (case 1/2 above) on its own; pass
-  `--role dev` explicitly for case 3's fresh `git init` (no app markers yet, so
-  detection reports `unrecognized`, not ambiguous) or when it actually reports
-  ambiguity (a repo carrying real Knowledge markers — `knowledge/`,
-  `targets.yaml`, `knowledge-policy.yaml` — alongside app source).
-- Report the Harness-resolved `status --json` `stack` profile. Do not inspect
-  dependencies to perform a second AI stack detection. If the Harness stopped
-  on ambiguous or unresolved evidence, ask the user to confirm one profile and
-  rerun with `--stack <name>`; otherwise ask nothing about the stack.
-- Verify: Workspace role `DEV`, Knowledge line present via `workspace-config`/`installation`,
-  sync `UP_TO_DATE`, runtimes READY.
-- **The bootstrap's `Context:` line is a shell command, not a reference.** The
-  synced `AGENTS.md`/`CLAUDE.md` tells the runtime to execute
-  `$STA_CONTEXT_CMD <agent-role> --module <name> --phase <n>` with the
-  worker role (`backend-engineer`, …), never workspace role `dev`/`ba`. If a
-  runtime skips it, run it and paste the result. Desktop sessions without
-  launcher env are supported (`T-V6-006`):
-  Knowledge root resolves from `installation.yaml` and role from
-  `.agent-team/config.yaml` (`T-V6-007`), so `sta context` runs directly.
-- **No analysis prompts here, by design.** A DEV/Target workspace carries only
-  the engineer roster (`backend/frontend-engineer`, `qa-engineer`, `security`,
-  `devops`). The BA-workspace prompts — including `uxui-designer` — are deliberately
-  absent, and the engineering agents' contracts additionally deny writing
-  requirement/design/test-plan docs, the module's `uxui/` folder, or anything
-  under `knowledge/` from this workspace (`T-V6-007`). If the user asks for
-  requirements or UX work "here", route them to the BA flow above instead of working around the block.
-- **Stranded docs.** Before declaring DEV ready, check the Phase 0 row for local
-  `_docs/module/**` content. Treat Target-side
-  documents as read-only project references: report their exact paths, do not
-  copy, rewrite, move or delete them, and route current canonical document work
-  to the owning analysis role in the Knowledge workspace.
-- **Runtime choice.** Default is Claude Code; `--runtime opencode` and
-  `--runtime codex` launch the other supported runtimes from the same workspace.
-  Model/effort are the runtime's own configuration (e.g. OpenCode's
-  `opencode.json` `model` key) — never baked into bindings.
-- Working command: `cd <knowledge> && software-team-agents open`.
-
-## Flow: QA
-
-**Goal:** same shape as DEV, but requirements are derived, not assumed.
-
-- Read the official sources of truth before asking anything (location depends on
-  install shape — check both, use whichever exists):
-  - workflows: `<frameworkRoot>/workflows/*.yml` in a dev checkout, or
-    `<frameworkRoot>/templates/workflows/*.yml` when installed from a package —
-    which stages participate per change type
-  - contract: `<frameworkRoot>/contracts/qa-engineer.yaml` (dev checkout) or
-    `<frameworkRoot>/templates/contracts/qa-engineer.yaml` (installed) — QA's
-    declared read/write scope
-- From those, derive what QA needs on this machine (typically: Knowledge for
-  review context + a writable Target checkout to verify against) and state the
-  derivation out loud: "workflows X and Y put qa-engineer after engineers, and
-  its contract writes review docs — so it needs …".
-- Then follow the DEV steps (Target + Knowledge binding + init/sync/status) —
-  including Target-resolution cases 2/3 (clone or `git init` a Target that
-  doesn't exist here yet) and their confirmation requirement, unchanged for QA.
-- Working command: `cd <knowledge> && software-team-agents open --runtime claude`.
-
-## Flow: Add Target
+## Flow: Register a Target
 
 **Goal:** one more Target registered without disturbing anything else.
 
+- **Resolve the Target checkout — three shapes; tell them apart before touching
+  anything, and never guess which one applies:**
+  1. **Already exists.** The current directory is an application repo, or the user points at an existing local path. Validate: exists, standalone Git repo, has application markers (package.json, pyproject.toml, pom.xml, *.sln, …). This is the common case — proceed as below.
+  2. **Has a remote, not cloned to this machine yet.** Ask for the remote URL and the local path to clone it to. Show the exact command — `git clone <url> <path>` — before running it, and wait for the user's explicit confirmation (Safety rails below: this is the first state-changing git command anywhere in this playbook, and it is never auto-run). Once cloned, validate exactly as case 1.
+  3. **Nothing yet — a genuinely new project, no remote either.** Agree the target path with the user, show `git init <path>` before running it, and wait for the same explicit confirmation as case 2. The Target is registered as an identity here; its code arrives when the project actually starts — scaffolding is the `setup` agent's job, through an orchestrated stage, never this playbook.
+- Registration never writes inside the Target checkout: a Target stays a plain
+  checkout (V10 — no STA payload is installed in a Target; TASK-020/029. A legacy
+  payload left from before V10 is removed by `software-team-agents cleanup --yes`,
+  a person's decision, not this playbook's).
 1. Read `targets.yaml` in the Knowledge root first — existing targets stay untouched.
 2. Ask for: Target name/id, local path, remote URL, optional type (`frontend` | `backend` | `fullstack`).
-3. Validate the new path like DEV does; additionally check the local checkout's
+3. Validate the new path like case 1 above; additionally check the local checkout's
    git remote matches the given URL (report a mismatch, don't "fix" it silently).
 4. Propose the exact YAML block to append to `targets.yaml` (including optional type)
    **and** the matching `.workflow/targets.local.yaml` mapping; apply only after the user confirms.
-5. In the new Target repo: `init` (+ binding config) as in the DEV flow.
-6. Verify all previously registered Targets still resolve, then `status`.
+5. Verify all previously registered Targets still resolve, then `status`.
 
 ## Flow: Update Setup
 
@@ -260,8 +199,9 @@ Read-only variant of everything above. Run every check, touch nothing — not ev
 `.agent-team/` regeneration. Produce the Final Report plus a Warnings section
 (missing bindings, outdated syncs, unregistered-but-present repos, remote mismatches).
 
-Note: Desktop sessions without launcher env are supported: Knowledge root resolves from
-`installation.yaml` (`T-V6-006`) and role from `.agent-team/config.yaml` (`T-V6-007`).
+Note: Desktop sessions without launcher env are supported: the Knowledge root resolves from
+`installation.yaml` (`T-V6-006`), so `sta context` runs directly. A `role` key in
+`.agent-team/config.yaml` (`T-V6-007`) is a legacy record that decides nothing.
 Do not treat missing launcher env as a failure.
 
 ## Flow: Repair
@@ -271,7 +211,7 @@ Common breakages, minimal fixes — canonical identities never change implicitly
 | Symptom | Fix |
 |---|---|
 | Requirements/design docs found inside a Target (`_docs/module/**`) | report exact paths as read-only project references; do not copy, rewrite, move or delete them; route canonical doc work to owning analysis role in Knowledge workspace |
-| BA/UXUI prompts unavailable anywhere despite a bound Knowledge root | Knowledge repo never initialized — run BA flow's bound-but-uninitialized step |
+| No STA prompts anywhere despite a bound Knowledge root | Knowledge repo never initialized — run the Set-up-the-Knowledge-workspace flow's bound-but-uninitialized step |
 | Knowledge/Target moved on disk | update `knowledge.path` in config or entry in `.workflow/targets.local.yaml` (show diff first); identity in `targets.yaml` stays |
 | Missing local mapping | add mapping block to `.workflow/targets.local.yaml` |
 | Stale sync (`OUTDATED`) | plain `software-team-agents sync` |
@@ -285,8 +225,8 @@ After any repair: `status` again and confirm the specific symptom is gone.
 
 ## Validation rules for any user-supplied path
 
-- exists and readable; writable iff this role writes there (BA→Knowledge yes,
-  DEV→Target yes, everything else no)
+- exists and readable; the Knowledge workspace is the only workspace this playbook
+  creates or writes — Target checkouts are registered, never written
 - standalone Git repository (reject linked worktrees)
 - not inside the Framework checkout
 - not already claimed by another configured workspace (duplicate detection)
@@ -304,7 +244,8 @@ first. On blocking conflicts, leave untouched and follow named recovery advice
 
 - never delete a Target, Knowledge content, project source, or `.agent-team/`
 - never edit Framework source/templates to make a setup work
-- never run `sync --force` unprompted; never write into another role's workspace
+- never run `sync --force` unprompted; never write into a Target checkout (registration
+  touches `targets.yaml` + `.workflow/targets.local.yaml` only)
 - never invent config fields; unknown keys in existing configs are preserved
 - never bypass the CLI by generating managed files by hand
 - never modify, move, rename, convert, or validate optional reference documents (read-only evidence)
@@ -312,7 +253,7 @@ first. On blocking conflicts, leave untouched and follow named recovery advice
 - **never run a state-changing git command without showing it first and getting
   explicit confirmation.** This playbook is otherwise entirely git-free — every
   other step goes through the official CLI (Operating principle #2). `git clone`
-  and `git init`, introduced by Flow: DEV's Target-resolution cases 2 and 3, are
+  and `git init`, introduced by Register-a-Target cases 2 and 3, are
   the one exception, and the bar for them is the same either way: show the exact
   command, wait for the user to say yes to *that* command, never assume a
   "use my defaults" answer earlier in the conversation covers it too.
@@ -320,7 +261,7 @@ first. On blocking conflicts, leave untouched and follow named recovery advice
 ## Final report template
 
 ```text
-Setup complete — <role>
+Setup complete — <workspace kind>
 Framework : <frameworkVersion> at <frameworkRoot>
 Workspace : <workspace path> (<kind>)
 Knowledge : <path or "not required">
