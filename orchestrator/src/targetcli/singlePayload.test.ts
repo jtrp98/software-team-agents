@@ -40,6 +40,19 @@ function knowledgeWorkspace(): string {
   return root;
 }
 
+/** A Target-shaped workspace: `dev` sync resolves a stack profile from real project files. */
+function targetWorkspace(): string {
+  const root = tmpRoot("tgt");
+  fs.mkdirSync(path.join(root, ".git"));
+  fs.mkdirSync(path.join(root, "src"));
+  fs.writeFileSync(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "fixture", version: "0.0.0", dependencies: { next: "15.0.0", react: "19.0.0" } }, null, 2),
+    "utf8",
+  );
+  return root;
+}
+
 /** A templates dir carrying only `keep`-matching files — the shape a pre-V10 BA workspace was synced from. */
 function narrowedTemplates(keep: (relPath: string) => boolean): string {
   const dir = tmpRoot("fw");
@@ -160,5 +173,36 @@ describe("V10 TASK-020 — the one payload reaches a workspace", () => {
     expect(sha256Of(fs.readFileSync(path.join(ws, "contracts", "backend-engineer.yaml"), "utf8"))).toBe(
       readTemplateManifest(REAL_TEMPLATES).files.find((f) => f.path === "contracts/backend-engineer.yaml")!.sha256,
     );
+  });
+});
+
+describe("V10 TASK-022 — one roster, so every role's renderings land in any workspace", () => {
+  // Three runtimes render the same roster from the same prompts. The old
+  // per-role asset filter made the count depend on which command opened the
+  // workspace, which is exactly what roster drift then reported as a conflict.
+  const RENDERINGS: readonly [dir: string, suffix: string][] = [
+    [".claude/agents", ".md"],
+    [".codex/agents", ".toml"],
+    [".opencode/agent", ".md"],
+  ];
+
+  const rosterOf = (root: string, dir: string, suffix: string): string[] =>
+    fs.readdirSync(path.join(root, ...dir.split("/")))
+      .filter((name) => name.endsWith(suffix))
+      .map((name) => path.basename(name, suffix))
+      .sort();
+
+  it("materialises the full roster for every runtime, whichever role the workspace records", () => {
+    const expected = rosterOf(REAL_TEMPLATES, ".claude/agents", ".md");
+    expect(expected.length).toBe(11);
+
+    for (const [role, ws] of [["ba", knowledgeWorkspace()], ["dev", targetWorkspace()]] as const) {
+      // `dev` sync renders a stack profile; name it so the fixture does not
+      // depend on profile detection, which is not what this test is about.
+      runTargetSync({ targetRoot: ws, templatesDir: REAL_TEMPLATES, role, now: "2026-09-17T00:00:00Z", explicitStack: role === "dev" ? "node" : undefined });
+      for (const [dir, suffix] of RENDERINGS) {
+        expect(rosterOf(ws, dir, suffix), `${role} -> ${dir}`).toEqual(expected);
+      }
+    }
   });
 });

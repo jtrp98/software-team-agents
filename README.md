@@ -372,10 +372,9 @@ overrides: []                   # path ที่ประกาศที่น�
 | WARNING | ตรวจอะไร | แก้ |
 |---|---|---|
 | Knowledge root bound but never initialized | `installation.yaml` ผูก Knowledge root ที่มี marker ครบ แต่ไม่เคยมี `.agent-team/config.yaml` ที่นั่น — BA-workspace prompt ไม่มีอยู่เลยทั้งเครื่อง | `cd <knowledgeRoot> && software-team-agents init --role ba` (`status` พิมพ์คำสั่งนี้ตรงๆ) |
-| Roster drift | agent prompt ที่ชื่อเป็นของอีก workspace role (เช่น `business-analyst.md` ใน workspace `role: dev`) — ไม่มีทาง legitimate ไม่ว่าจะมาจากไหน | `software-team-agents sync --force` (backup ก่อนลบ; `sync` เฉยๆ report conflict ไม่ overwrite เงียบๆ) |
 | Misplaced module docs (`--check-workspace`) | `_docs/module/**` หรือ Modules table ใน `_docs/status.md` อยู่ใน workspace `role: dev` — ที่ถูกคือ Knowledge repo เท่านั้น | copy ไป `<knowledgeRoot>\_docs\module\<name>\`, merge status row, ลบของเดิม |
 
-ทั้งสามรายการนี้เป็น warning ไม่ block การทำงาน — จุดประสงค์คือให้คน (หรือ AI ที่ทำงานแทนคน) เห็นก่อนเขียนไฟล์ผิดที่ ไม่ใช่หลังจากนั้น
+ทั้งสองรายการนี้เป็น warning ไม่ block การทำงาน — จุดประสงค์คือให้คน (หรือ AI ที่ทำงานแทนคน) เห็นก่อนเขียนไฟล์ผิดที่ ไม่ใช่หลังจากนั้น
 
 ### Ownership model
 
@@ -800,27 +799,25 @@ entries): 16 `framework-managed`, 2 `project-owned-with-framework-block` (`CLAUD
    --json` → `knowledgeBoundButUninitialized`; `sta --check-workspace --project-root <target-repo>`
    ชี้ทุกไฟล์ที่หลงพร้อมปลายทางที่ถูก. แก้: `cd <knowledge-root> && software-team-agents init --role ba`
    (ปิด root cause) แล้ว copy ไฟล์ไป Knowledge, merge `## Modules` row, ลบของเดิมจาก Target.
-2. **`status` เตือน roster drift** — agent prompt ของอีก workspace role ปนอยู่. แก้:
-   `software-team-agents sync --force` (backup ก่อนเสมอ); `sync` เฉยๆ ปฏิเสธและ report conflict แทนเขียนทับ.
-3. **`dev` ปฏิเสธ launch ด้วย "no Knowledge repository bound"** — ถ้ามี Knowledge repo เป็น sibling
+2. **`dev` ปฏิเสธ launch ด้วย "no Knowledge repository bound"** — ถ้ามี Knowledge repo เป็น sibling
    directory บนเครื่องเดียวกัน `dev` จะ**เสนอ bind ให้เอง** แบบ interactive; ตอบ `y` ก็เสร็จ ไม่ต้อง
    รู้จัก `installation.yaml` มาก่อน. ไม่ interactive (headless) หรือไม่มี sibling ที่ใช้ได้ — ยัง fail-closed:
    ตั้ง `knowledge.path` ใน `.agent-team/config.yaml` เอง หรือ `sta configure knowledge-root <path>`
    (machine-wide).
-4. **`status`/`sync` รายงาน conflict บนไฟล์ framework จัดการ** — อ่าน `detail`/recovery line ตรงๆ: 3 แบบ —
+3. **`status`/`sync` รายงาน conflict บนไฟล์ framework จัดการ** — อ่าน `detail`/recovery line ตรงๆ: 3 แบบ —
    `user-modified` (revert หรือ claim เป็น `overrides`/`--force`), `stale-modified` (ไฟล์ถูกถอดจาก template
-   แล้วแต่ยังมีการแก้ค้าง — ย้ายออกเอง), `roster-drift` (ดู #2).
-5. **`Claude`/`Codex`/`OpenCode`/`Antigravity` = NOT READY** — `software-team-agents sync` แล้ว `status` ซ้ำ ข้อความบอกไฟล์
+   แล้วแต่ยังมีการแก้ค้าง — ย้ายออกเอง), `untracked-file` (ไฟล์ของโปรเจกต์เองอยู่บน path ที่ framework จะเขียน — ย้าย/rename เอง).
+4. **`Claude`/`Codex`/`OpenCode`/`Antigravity` = NOT READY** — `software-team-agents sync` แล้ว `status` ซ้ำ ข้อความบอกไฟล์
    ที่ขาดตรงๆ. **`Codex: NOT READY` เป็นค่า default ที่ตั้งใจ** — Codex ไม่มี guard
    mechanism เลย เปิดใช้แบบตั้งใจด้วย `--allow-unguarded-runtime` เท่านั้น ไม่ใช่ bug ที่ต้อง "แก้ให้ READY".
-6. **พิมพ์ `/xxx` แล้วไม่เจอ (slash command หาย)** — `software-team-agents sync` (ship ผ่าน templates เหมือน
+5. **พิมพ์ `/xxx` แล้วไม่เจอ (slash command หาย)** — `software-team-agents sync` (ship ผ่าน templates เหมือน
    `.claude/agents/`) แล้ว restart session (Claude Code โหลด command list ตอนเริ่ม).
-7. **`$xxx` ไม่เจอใน Codex (skills mirror หาย)** — `software-team-agents sync` (generate จาก
+6. **`$xxx` ไม่เจอใน Codex (skills mirror หาย)** — `software-team-agents sync` (generate จาก
    `.claude/commands/**` ใหม่เสมอ, ไม่ต้อง restart — Codex reload เอง); ยังไม่เห็น → `sta --check-bindings`.
-8. **`/xxx` ใน OpenCode ไม่เจอ (commands mirror หาย)** — `software-team-agents sync`; แก้เนื้อหาที่ source
+7. **`/xxx` ใน OpenCode ไม่เจอ (commands mirror หาย)** — `software-team-agents sync`; แก้เนื้อหาที่ source
    เดียวเสมอคือ `.claude/commands/<name>.md` ห้าม hand-edit `.opencode/commands/**` (`--check-bindings`
    จับ byte-diff ได้).
-9. **Claude Design MCP ไม่ connect (uxui-designer)** — เพิ่ม server ครั้งเดียว: `claude mcp add --scope user
+8. **Claude Design MCP ไม่ connect (uxui-designer)** — เพิ่ม server ครั้งเดียว: `claude mcp add --scope user
    --transport http claude-design https://api.anthropic.com/v1/design/mcp`, login ด้วย `/design-login`,
    ตรวจ identity gate ตรง (`sta configure identity --claude-email <email>`); ไม่ผ่าน → ใช้ Path A/B
    (handoff/export files) แทนได้เสมอ.

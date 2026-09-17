@@ -71,7 +71,6 @@ Then, guided by what status reports:
 | Sync status of the current workspace | `status --json` → `syncState`, `syncedVersion`, `conflictCount`, `managedFileCount` |
 | Runtime readiness | `status --json` → `claude.ready`, `codex.ready`, `opencode.ready`, `antigravity.ready` (OpenCode needs bindings **and** `.opencode/plugin/sta-guards.js` — its headless default posture is allow-all, so a missing plugin means unguarded, not just incomplete) |
 | Knowledge root bound but never initialized | `status --json` → `knowledgeBoundButUninitialized` (the bound root's path, or absent) — machine binding resolves but `<knowledgeRoot>/.agent-team/config.yaml` is absent; status prints `WARNING:` line with fix command |
-| Roster drift in a workspace | `status --json` → `rosterDriftPaths` (array of paths; empty = none) — agent-prompt files under `.claude/agents/`, `.codex/agents/`, `.opencode/agent/` belonging to the other role's roster (analysis in DEV, engineer in BA); never legitimate |
 | Module docs stranded in a Target | `sta --check-workspace --project-root <path>` (the Framework's top-level CLI, not `software-team-agents`) — flags files under `role: dev` `_docs/module/**` and `## Modules` in `_docs/status.md` with Knowledge destination paths |
 
 If `status` fails because the current directory is not a Git repository, that is
@@ -199,10 +198,8 @@ already said):
   requirement/design/test-plan docs, the module's `uxui/` folder, or anything
   under `knowledge/` from this workspace (`T-V6-007`). If the user asks for
   requirements or UX work "here", route them to the BA flow above instead of working around the block.
-- **Roster drift & stranded docs.** Before declaring DEV ready, check the two
-  Phase 0 rows: other-workspace-role prompt files present here, and local `_docs/module/**`
-  content. Roster drift is fixed by plain `sync`; if it reports conflicts, show
-  them verbatim and wait for the user's explicit "force". Treat Target-side
+- **Stranded docs.** Before declaring DEV ready, check the Phase 0 row for local
+  `_docs/module/**` content. Treat Target-side
   documents as read-only project references: report their exact paths, do not
   copy, rewrite, move or delete them, and route current canonical document work
   to the owning analysis role in the Knowledge workspace.
@@ -274,7 +271,6 @@ Common breakages, minimal fixes — canonical identities never change implicitly
 | Symptom | Fix |
 |---|---|
 | Requirements/design docs found inside a Target (`_docs/module/**`) | report exact paths as read-only project references; do not copy, rewrite, move or delete them; route canonical doc work to owning analysis role in Knowledge workspace |
-| BA-workspace prompts present in a DEV workspace (or engineer prompts in a BA one) | roster drift — plain `software-team-agents sync`; escalate to `sync --force` only on user's explicit word |
 | BA/UXUI prompts unavailable anywhere despite a bound Knowledge root | Knowledge repo never initialized — run BA flow's bound-but-uninitialized step |
 | Knowledge/Target moved on disk | update `knowledge.path` in config or entry in `.workflow/targets.local.yaml` (show diff first); identity in `targets.yaml` stays |
 | Missing local mapping | add mapping block to `.workflow/targets.local.yaml` |

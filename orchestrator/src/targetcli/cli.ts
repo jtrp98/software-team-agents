@@ -241,8 +241,6 @@ export async function runTargetCli(
                     ? "    recovery: fix/merge .claude/settings.json manually, claim it in .agent-team/config.yaml overrides, or re-run with --force (backup first)"
                   : conflict.kind === "malformed-framework-block"
                     ? `    recovery: restore ${conflict.path} from .agent-team/backups or repair its Framework marker pair; --force will not guess`
-                  : conflict.kind === "roster-drift"
-                    ? "    recovery: re-run with --force to remove it (backed up first) — it belongs to another workspace role and does not belong here"
                     : "    recovery: move/rename your file aside, then re-run software-team-agents sync",
               );
             }

@@ -18,6 +18,7 @@ import {
   launchEnv,
   resolveKnowledgeBinding,
   resolveTargetBinding,
+  resolveSessionTargetWorkRoots,
   hasKnowledgeMarkers,
   TargetBindingError,
   WORKSPACE_ROLE_LABEL,
@@ -27,6 +28,7 @@ import {
   type WorkspaceRole,
   type TargetBinding,
 } from "./roleWorkspace.js";
+import type { GuardTargetWorkRoot } from "../agents/pathPermissions.js";
 import { configureKnowledgeRoot } from "../threeRepo/installation.js";
 import { formatResolvedCommand, resolveBundledStaCli } from "../runtime/npmCliResolver.js";
 import { environmentPrerequisites, probeRuntime, runTargetInit, runtimeCommand } from "./initCommand.js";
@@ -159,6 +161,8 @@ export interface WorkspaceContext {
   knowledge?: KnowledgeBinding;
   /** Resolved for BA when `target.target_id` is set and resolves; always optional, never blocks a BA session. */
   target?: TargetBinding;
+  /** Every Target this machine maps, read-only, for the session's guard channel (V10 TASK-023). Empty when none map. */
+  targetWorkRoots: GuardTargetWorkRoot[];
   runtime: RuntimeName;
   /** The guard verdict this launch was allowed under, for the launch record. */
   guards: GuardCoverage;
@@ -457,7 +461,22 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
     checks.push({ name: prerequisite.name, ok: true, detail: prerequisite.detail });
   }
 
-  return { checks, role, workspaceRoot: roots.targetRoot, frameworkRoot: roots.frameworkRoot, templatesDir, knowledge: devKnowledge, target: baTarget, runtime: launchRuntime, guards: coverage };
+  // The mapping lives in the Knowledge root whichever side this session runs
+  // on: its own root for BA, the bound one for DEV.
+  const targetWorkRoots = resolveSessionTargetWorkRoots({
+    knowledgeRoot: devKnowledge?.knowledgeRoot ?? roots.targetRoot,
+    workspaceRoot: roots.targetRoot,
+    frameworkRoot: roots.frameworkRoot,
+  });
+  if (targetWorkRoots.length > 0) {
+    checks.push({
+      name: "Targets (read-only)",
+      ok: true,
+      detail: `${targetWorkRoots.map((entry) => entry.targetId).join(", ")} — readable from this session; writing one is refused, run the stage instead`,
+    });
+  }
+
+  return { checks, role, workspaceRoot: roots.targetRoot, frameworkRoot: roots.frameworkRoot, templatesDir, knowledge: devKnowledge, target: baTarget, targetWorkRoots, runtime: launchRuntime, guards: coverage };
 }
 
 /** DEV-only aliases kept for the original callers/tests. */
@@ -504,7 +523,7 @@ async function runRoleSession(role: WorkspaceRole, options: RoleRunOptions): Pro
       runtimeCommand(ctx.runtime),
       [],
       ctx.workspaceRoot,
-      launchEnv(role, process.env, ctx.knowledge?.knowledgeRoot, ctx.target?.targetRoot, contextCommand),
+      launchEnv(role, process.env, ctx.knowledge?.knowledgeRoot, ctx.target?.targetRoot, contextCommand, ctx.targetWorkRoots),
     );
   } finally {
     const record = options.recordSession ?? recordInteractiveSession;

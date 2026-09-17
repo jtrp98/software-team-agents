@@ -81,12 +81,9 @@ export interface SyncConflict {
    * user-modified: a tracked file was edited locally; untracked-file: the
    * Target already owns this path; stale-modified: a dropped file carries
    * edits; malformed-framework-block: marker corruption that no force mode may
-   * guess at; unmergeable-settings: project JSON cannot be safely merged;
-   * roster-drift: an agent-prompt file on disk whose name belongs to the
-   * OTHER workspace role — never legitimate here regardless of how it got
-   * there, so it is never treated as an ordinary foreign file.
+   * guess at; unmergeable-settings: project JSON cannot be safely merged.
    */
-  kind: "user-modified" | "untracked-file" | "stale-modified" | "roster-drift" | "malformed-framework-block" | "unmergeable-settings";
+  kind: "user-modified" | "untracked-file" | "stale-modified" | "malformed-framework-block" | "unmergeable-settings";
   detail: string;
 }
 
@@ -432,24 +429,6 @@ function planStaleFrameworkBlocks(
   return planned;
 }
 
-/**
- * Roster drift: an agent-prompt file in a workspace whose name belongs to the
- * OTHER workspace role — a hand-copied prompt neither the filtered manifest nor
- * this Target's history knew about, so neither `planPayloadFiles` nor
- * `planStaleFiles` could see it.
- *
- * There is no other role left (V10 TASK-020/021): one payload ships every
- * prompt, so an agent-named file in a workspace is payload, not a stray. The
- * remaining cases keep their existing owners — a template that stops shipping a
- * role is stale removal, and a name that is not an agent at all was never this
- * mechanism's business. Kept as an empty result rather than deleted so removing
- * the call sites stays one reviewable change (V10 TASK-022).
- */
-export function detectRosterDrift(options: { targetRoot: string; templatesDir: string }): SyncConflict[] {
-  void options;
-  return [];
-}
-
 function overrideSet(config: TargetConfig | undefined, targetRoot?: string, candidatePaths: readonly string[] = []): Set<string> {
   const overrides = new Set((config?.overrides ?? []).map((rel) => rel.replaceAll("\\", "/")));
   if (targetRoot) {
@@ -557,7 +536,6 @@ export function planSync(options: PlanSyncOptions): SyncPlan {
   ];
 
   const conflicts = planned.map((p) => p.conflict).filter((c): c is SyncConflict => c !== undefined);
-  conflicts.push(...detectRosterDrift({ targetRoot: options.targetRoot, templatesDir: options.templatesDir }));
 
   return {
     entries: planned.map((p) => p.entry).filter((e): e is SyncPlanEntry => e !== undefined),
@@ -1100,20 +1078,6 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     } else {
       performed.push({ action: "unchanged", path: relPath });
       managedEntries.push(entry);
-    }
-  }
-
-  // Roster drift has no template source to sync from (the file was never this
-  // role's to receive), so --force removes it outright, backed up first like
-  // any other forced conflict. Without --force it already stopped the run
-  // above via blockingConflicts.
-  if (options.force) {
-    for (const conflict of plan.conflicts.filter((c) => c.kind === "roster-drift")) {
-      const abs = path.join(options.targetRoot, conflict.path);
-      if (!fs.existsSync(abs)) continue;
-      backup(conflict.path);
-      fs.rmSync(abs);
-      performed.push({ action: "remove-stale", path: conflict.path, note: "roster drift — agent prompt from another workspace role" });
     }
   }
 

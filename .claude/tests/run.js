@@ -1295,6 +1295,71 @@ check(
   BLOCK,
 );
 
+// A session whose root is the Knowledge repository writes into a Target that
+// is somewhere else entirely, so every such path takes the work-root branch
+// rather than the repo-relative one. These cases pin what that branch enforces:
+// the universal floor against the Target's own root, the Knowledge ban, and the
+// read-only Target refusal — and that nothing puts a role×stack allowlist back
+// in, which Phase 2 replaced with module/Target scope (V10 TASK-024).
+section('9d. V10 TASK-024 — launched from Knowledge, writing a Target: what the guard still enforces');
+
+withTempProject((knowledge) => {
+  const target = path.join(knowledge, '..', path.basename(knowledge) + '-target');
+  const readOnly = path.join(knowledge, '..', path.basename(knowledge) + '-readonly');
+  fs.mkdirSync(target, { recursive: true });
+  fs.mkdirSync(readOnly, { recursive: true });
+  try {
+    const grant = {
+      CLAUDE_PROJECT_DIR: knowledge,
+      STA_WRITABLE_WORK_ROOTS: JSON.stringify([target]),
+      STA_KNOWLEDGE_ROOT: knowledge,
+      STA_TARGET_WORK_ROOTS: JSON.stringify([
+        { targetId: 'api', path: target, access: 'write' },
+        { targetId: 'web', path: readOnly, access: 'read' },
+      ]),
+    };
+
+    // 1. A path inside the granted Target.
+    check('engineer -> <target>/src/x.ts allowed from a Knowledge root',
+      runPathHook('Write', path.join(target, 'src', 'x.ts'), 'backend-engineer', grant), ALLOW);
+    check('  the floor is evaluated against the Target, not the session root',
+      runPathHook('Write', path.join(target, '.git', 'config'), 'backend-engineer', grant), BLOCK);
+    check('  and Framework payload stays refused there too',
+      runPathHook('Write', path.join(target, 'contracts', 'backend-engineer.yaml'), 'backend-engineer', grant), BLOCK);
+    // Phase 2 moved scope to module/Target; a path outside this role's contract
+    // globs must NOT be refused here, or the allowlist is back by accident.
+    check('  a path no contract glob covers is still allowed — no role x stack allowlist in a Target',
+      runPathHook('Write', path.join(target, 'whatever', 'unlisted.txt'), 'backend-engineer', grant), ALLOW);
+
+    // 2. A path inside the Knowledge root the session was launched from.
+    check('engineer -> <knowledge>/_docs/module/m/design.md refused',
+      runPathHook('Write', path.join(knowledge, '_docs', 'module', 'm', 'design.md'), 'backend-engineer', grant), BLOCK);
+    check('  system-analyst writes the same file — the ban is per stage, not per repository',
+      runPathHook('Write', path.join(knowledge, '_docs', 'module', 'm', 'design.md'), 'system-analyst', grant), ALLOW);
+
+    // 3. A Target bound read-only, and a path in neither repository.
+    const refused = spawnSync(process.execPath, [path.join(HOOKS, 'block-path-permissions.js')], {
+      input: JSON.stringify({ tool_name: 'Write', tool_input: { file_path: path.join(readOnly, 'src', 'x.ts') } }),
+      encoding: 'utf8',
+      env: { ...process.env, ...grant, STA_ROLE: 'backend-engineer' },
+      cwd: knowledge,
+      timeout: 60000,
+    });
+    check('a read-only Target is refused by name, not by path',
+      refused.status === BLOCK && refused.stderr.includes('Target "web"') ? 0 : 1, 0);
+    check('  an interactive session (no STA_ROLE) gets the same refusal — TASK-023 read-only decision',
+      runPathHook('Write', path.join(readOnly, 'src', 'x.ts'), undefined, grant), BLOCK);
+    check('a path in neither repository is left to block-outside-repo.js',
+      runPathHook('Write', path.join(knowledge, '..', 'elsewhere', 'stray.txt'), 'backend-engineer', grant), ALLOW);
+    check('  and block-outside-repo.js does refuse it',
+      runHook('block-outside-repo.js', { tool_name: 'Write', tool_input: { file_path: path.join(knowledge, '..', 'elsewhere', 'stray.txt') } },
+        { CLAUDE_PROJECT_DIR: knowledge, STA_WRITABLE_WORK_ROOTS: JSON.stringify([target]) }), BLOCK);
+  } finally {
+    fs.rmSync(target, { recursive: true, force: true });
+    fs.rmSync(readOnly, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // 10. generate-status.js — status.md computed from the real docs, not hand-written
 // ---------------------------------------------------------------------------

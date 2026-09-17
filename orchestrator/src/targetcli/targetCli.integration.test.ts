@@ -1804,7 +1804,9 @@ describe("role workspace architecture (T-ROLE)", () => {
     });
   });
 
-  describe("T-WG2 — roster drift after the lane collapse (V10 TASK-020/021)", () => {
+  const HAND_WRITTEN_PROMPT = "# hand-written, not ours\n";
+
+  describe("T-WG2 — roster drift is gone; foreign files keep their own policy (V10 TASK-020/021/022)", () => {
     it("an agent prompt from the payload is payload, not drift — there is no other role to belong to", async () => {
       const target = makeTarget();
       const fw = fakeFramework("1.0.0", FW_V1_FILES);
@@ -1816,8 +1818,10 @@ describe("role workspace architecture (T-ROLE)", () => {
 
       const status = JSON.parse(
         (await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out,
-      ) as { rosterDriftPaths: string[]; conflictCount: number };
-      expect(status.rosterDriftPaths).toEqual([]);
+      ) as { rosterDriftPaths?: string[]; conflictCount: number };
+      // The field itself is gone (TASK-022): a value that can only ever be
+      // empty reads as a check that still runs.
+      expect(status.rosterDriftPaths).toBeUndefined();
       expect(status.conflictCount).toBe(0);
 
       const rendered = (await capture(() => runTargetCli(["status"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out;
@@ -1838,8 +1842,9 @@ describe("role workspace architecture (T-ROLE)", () => {
 
       const status = JSON.parse(
         (await capture(() => runTargetCli(["status", "--json"], knowledge, fw, { installationConfigPath: NO_INSTALLATION }))).out,
-      ) as { rosterDriftPaths: string[] };
-      expect(status.rosterDriftPaths).toEqual([]);
+      ) as { rosterDriftPaths?: string[]; conflictCount: number };
+      expect(status.rosterDriftPaths).toBeUndefined();
+      expect(status.conflictCount).toBe(0);
     });
 
     it("a foreign file whose name does not match any known agent is still left alone (existing policy, unchanged)", async () => {
@@ -1851,14 +1856,30 @@ describe("role workspace architecture (T-ROLE)", () => {
 
       const status = JSON.parse(
         (await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out,
-      ) as { rosterDriftPaths: string[]; conflictCount: number };
-      expect(status.rosterDriftPaths).toEqual([]);
+      ) as { rosterDriftPaths?: string[]; conflictCount: number };
+      expect(status.rosterDriftPaths).toBeUndefined();
       expect(status.conflictCount).toBe(0);
 
       // Plain sync does not touch it, and reports no conflict for it either.
       const syncRun = await capture(() => runTargetCli(["sync"], target, fw, { installationConfigPath: NO_INSTALLATION }));
       expect(syncRun.code).toBe(0);
       expect(fs.existsSync(path.join(target, ".claude", "agents", "my-personal-notes.md"))).toBe(true);
+    });
+
+    it("a foreign file sitting on a path the Framework wants is still reported by the untracked-file policy", async () => {
+      const target = makeTarget();
+      const fw = fakeFramework("1.0.0", FW_V1_FILES);
+
+      // Written before init, so the Framework has never tracked it: the
+      // mechanism TASK-022 had to leave intact.
+      write(target, ".claude/agents/business-analyst.md", HAND_WRITTEN_PROMPT);
+      expect((await capture(() => runTargetCli(["init", "--role", "dev"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
+
+      const status = JSON.parse(
+        (await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out,
+      ) as { projectOwnedPaths: string[] };
+      expect(status.projectOwnedPaths).toContain(".claude/agents/business-analyst.md");
+      expect(fs.readFileSync(path.join(target, ".claude", "agents", "business-analyst.md"), "utf8")).toBe(HAND_WRITTEN_PROMPT);
     });
   });
 });

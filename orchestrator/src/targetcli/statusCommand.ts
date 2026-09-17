@@ -77,8 +77,6 @@ export interface TargetStatus {
   projectOwnedPaths: string[];
   /** Complete read-only inventory of instructions that can affect this workspace. */
   instructionSurface: InstructionSurfaceEntry[];
-  /** Agent-prompt files on disk belonging to the other workspace role. Never legitimate; sync --force removes them. */
-  rosterDriftPaths: string[];
   managedFileCount: number;
   hooksInstalled: number;
   hooksRegistered: number;
@@ -231,7 +229,6 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
   let syncedVersion: string | undefined;
   let conflictCount = 0;
   let projectOwnedPaths: string[] = [];
-  let rosterDriftPaths: string[] = [];
   let managedFileCount = 0;
   let syncState: SyncState = "NOT_INITIALIZED";
   let syncChanges: SyncPlanEntry[] = [];
@@ -271,7 +268,6 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
       const conflicts = plan.conflicts;
       conflictCount = conflicts.length;
       projectOwnedPaths = conflicts.filter((c) => c.kind === "untracked-file").map((c) => c.path);
-      rosterDriftPaths = conflicts.filter((c) => c.kind === "roster-drift").map((c) => c.path);
     } catch {
       // An unreadable payload must not make status crash. Preserve the
       // compatibility stop, but never claim freshness without a readable plan.
@@ -369,7 +365,6 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
       targetRoot: roots.targetRoot,
       frameworkPaths: initialized ? frameworkInstructionPaths : undefined,
     }),
-    rosterDriftPaths,
     managedFileCount,
     hooksInstalled: guardWiring.hooksInstalled,
     hooksRegistered: guardWiring.hooksRegistered,
@@ -479,11 +474,6 @@ export function renderStatus(status: TargetStatus): string {
   if (nestedInstructions.length > 0) {
     lines.push(`WARNING: nested instructions may shadow or contradict the root bootstrap (${nestedInstructions.length}):`);
     for (const entry of nestedInstructions) lines.push(`  ${entry.path} — project-owned and read-only; review its effective scope`);
-  }
-  if (status.rosterDriftPaths.length > 0) {
-    lines.push(`WARNING: roster drift — agent prompt(s) from another workspace role found here (${status.rosterDriftPaths.length}):`);
-    for (const p of status.rosterDriftPaths) lines.push(`    ${p}`);
-    lines.push("    → run `software-team-agents sync --force` to remove them (backed up first)");
   }
   if (status.knowledgeBoundButUninitialized) {
     lines.push(
