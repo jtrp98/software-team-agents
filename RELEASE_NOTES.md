@@ -1,5 +1,104 @@
 # Release Notes
 
+## software-team-agents 4.0.0 — V10 (2026-09-17)
+
+> Written by the V10 close round (TASK-033). **The release date (2026-09-17) and the version
+> number (4.0.0) were confirmed by the person on 2026-09-17**, answering the close round's
+> questions — the Major bucket is the mechanical result of the version rule at the bottom of this
+> file applied to the user-confirmed breaking changes below. Root `package.json` and
+> `package-lock.json` carry `4.0.0` (bumped in this close); `templates/manifest.json` is
+> re-stamped `4.0.0` by `npm run build`. Nothing is tagged — the annotated `v4.0.0` tag remains a
+> human Git operation. The private development package `@software-team-agents/orchestrator`
+> remains independently versioned at `0.3.0`.
+
+**Bucket: Major (`3.0.0 → 4.0.0`, confirmed).** V10 collapses the
+two-lane (`ba`/`dev`) workspace layout into a single Knowledge workspace, moves the write-scope
+boundary from role to module, turns Graphify on by default, and makes bounded-run autonomy work
+for the first time. Existing installations must migrate in the order given under **Migration
+order** below. Per the user's standing decision there is **no compatibility alias and no
+deprecation period** for the retired commands.
+
+### Breaking changes and required operator action
+
+1. **`software-team-agents ba` and `software-team-agents dev` are retired, permanently.** One
+   command opens the one workspace kind: `software-team-agents open` — the session always
+   launches from the Knowledge root. The retired names exit `64` with the replacement command in
+   the message; they are not aliases. `--role ba|dev` is retired too: accepted, warned, ignored.
+   An old `.agent-team/config.yaml` that still records `role: ba|dev` reads without error and no
+   longer decides anything. (TASK-026, TASK-021)
+2. **Framework payload no longer syncs into Targets.** A Target is a plain code checkout; the
+   full payload (agents, hooks, contracts, workflows, stacks, policies, derived renderings)
+   materialises once, in the Knowledge workspace. A Target that still carries synced payload from
+   an older version must be cleaned with `software-team-agents cleanup` — `--dry-run` first,
+   files moved to `.agent-team/backups/<ts>-cleanup/`, reversible with `sta rollback`, never
+   touches user-claimed files. (TASK-020, TASK-029)
+3. **`.workflow/` runtime state moved to the Knowledge root.** New runs write `state.db`, packets
+   and evidence under `<knowledge-root>/.workflow/`. Run records left inside a Target stay
+   readable read-only (`sta status --project-root <target>`); nothing migrates automatically.
+   (TASK-025)
+4. **A module whose tasks bind Targets must declare `## Targets` in `design.md`.** A Target
+   binding inside a module that declares none is now a `TaskBindingError` — at creation and on
+   resume — and `sta --check-plan` reports it before any run starts. Document-only modules that
+   bind no Target remain exempt. (TASK-011)
+5. **Graphify code-intelligence is ON by default.** No env var is needed; `STA_CODE_INTEL=off`
+   (or `false`/`0`) turns it off. With no index the chain falls back to native search, and a
+   stale index now falls through to native search as well (with provenance and a visible fallback
+   reason) instead of yielding less than having Graphify uninstalled. Before building or
+   refreshing an index the run asks the person once per target + revision (ask-before-indexing is
+   unchanged); an unattended run with no consent record never stops. (TASK-014, TASK-015,
+   TASK-016, TASK-019)
+6. **bounded-run autonomy flags work for the first time.** `--autonomy edit|full` now reaches the
+   runtime permission mode (it was parsed and dropped before, so a headless run died at its first
+   write); `--model`/`--effort` are forwarded as routing flags (an explicit model stays
+   fail-closed at the freeze gate); `--resume` demands the same `--autonomy` as the first run
+   instead of silently downgrading to `propose`. Related behaviour change: a gate encountered
+   mid-run blocks its own task and the run continues with the remaining ready tasks, ending with
+   one awaiting-human line per gated task (`sta approve <task-id>`). The two-round automatic
+   repair ceiling and `MAX_RETRY = 3` are unchanged. (TASK-005, TASK-006, TASK-007, TASK-030,
+   TASK-031)
+
+### Runtime status — declared, not changed
+
+Unattended Target writes are certified for **claude-code only**. That was true before V10 and is
+pinned by tests to stay true: `codex` remains `preview`, `opencode` and `antigravity` remain
+`experimental`, and each non-certified claim states "V10 does not change this status". Interactive
+sessions get Target paths **read-only**; Target writes go through orchestrated stages.
+`sta runtimes` and the README runtime table agree with
+`orchestrator/src/runtime/runtimeSupport.ts`. (TASK-004)
+
+### Migration order (existing installations)
+
+1. **Clean every legacy Target that carries synced payload** — `software-team-agents cleanup
+   --dry-run`, review the plan, then run it with `--yes`. Reversible via `sta list-backups` /
+   `sta rollback`; payload files already committed stay in the Target's git history (ignore is
+   not untrack — the command reports this itself).
+2. **Open the single workspace** — `software-team-agents open` from the Knowledge workspace
+   (`sta sync` first when upgrading a two-lane layout, so the full payload — `contracts/`
+   included — materialises there).
+3. **Check every module declares `## Targets`** — `sta --check-plan`; fix any module whose tasks
+   bind undeclared Targets before launching a run.
+
+### Also worth knowing (non-breaking)
+
+- `software-team-agents status` no longer prints a `Workspace role:` line; text output is
+  shape-based (`Workspace: Knowledge` / `Workspace: Target`) and `--json` keeps the `role` field
+  for legacy configs.
+- The generated bootstrap states that Target instructions never outrank the `sta` rules, with
+  state-changing git as the enforced worked example.
+- Engineers read each Target's own conventions before editing (`policies/coding.md` §22) and QA
+  checks new files against their neighbours — no per-Target linter exists, by design.
+
+### Release status
+
+**RELEASABLE — date and version confirmed by the person (2026-09-17, 4.0.0).** The release gate
+passed all 31 steps twice: once on the draft (`3.0.0`) and again after the version bump
+(`4.0.0` — both shipped binaries report `4.0.0`, and the shipped manifest matches the package
+version). The annotated `v4.0.0` tag remains a human Git operation. Commands and exit codes are
+recorded in `planning/v10/evidence/round-17.md`; the V10 close-out summary is
+`planning/v10/evidence/close.md`.
+
+---
+
 ## software-team-agents 3.0.0 — V9 (release date pending)
 
 > The user requested the V9 release close after its validation and evidence follow-up completed.
