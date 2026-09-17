@@ -7,9 +7,10 @@
 > questions — the Major bucket is the mechanical result of the version rule at the bottom of this
 > file applied to the user-confirmed breaking changes below. Root `package.json` and
 > `package-lock.json` carry `4.0.0` (bumped in this close); `templates/manifest.json` is
-> re-stamped `4.0.0` by `npm run build`. Nothing is tagged — the annotated `v4.0.0` tag remains a
-> human Git operation. The private development package `@software-team-agents/orchestrator`
-> remains independently versioned at `0.3.0`.
+> re-stamped `4.0.0` by `npm run build`. The annotated `v4.0.0` tag was created on 2026-09-17 at
+> the person's request — pushing/publishing it remains a separate human decision. The private
+> development package `@software-team-agents/orchestrator` remains independently versioned at
+> `0.3.0`.
 
 **Bucket: Major (`3.0.0 → 4.0.0`, confirmed).** V10 collapses the
 two-lane (`ba`/`dev`) workspace layout into a single Knowledge workspace, moves the write-scope
@@ -93,7 +94,8 @@ sessions get Target paths **read-only**; Target writes go through orchestrated s
 **RELEASABLE — date and version confirmed by the person (2026-09-17, 4.0.0).** The release gate
 passed all 31 steps twice: once on the draft (`3.0.0`) and again after the version bump
 (`4.0.0` — both shipped binaries report `4.0.0`, and the shipped manifest matches the package
-version). The annotated `v4.0.0` tag remains a human Git operation. Commands and exit codes are
+version). The annotated `v4.0.0` tag was created on 2026-09-17 at the person's request; pushing
+or publishing it remains a separate human decision. Commands and exit codes are
 recorded in `planning/v10/evidence/round-17.md`; the V10 close-out summary is
 `planning/v10/evidence/close.md`.
 
