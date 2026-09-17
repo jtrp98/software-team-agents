@@ -36,6 +36,10 @@ function taskPathSegment(taskId: string): string {
 /**
  * Resolves all runtime-state homes for one task without creating them. Writers
  * create the selected directory lazily only when an artifact actually exists.
+ *
+ * The root argument is the runtime-state root, which V10 TASK-025 fixes to the
+ * Knowledge root for three-repo runs; legacy single-repo runs keep their own
+ * project root.
  */
 export function runtimeArtifactPaths(projectRoot: string, taskId: string): RuntimeArtifactPaths {
   const workflowRoot = path.resolve(projectRoot, ".workflow");

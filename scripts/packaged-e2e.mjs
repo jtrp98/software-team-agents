@@ -10,7 +10,8 @@
  *     → --version (both CLIs) → configure knowledge-root
  *     → init (detected) → repeated init → status → sync no-change
  *     → modified managed file → conflict → force sync + backup
- *     → invalid workspace → missing Knowledge binding
+ *     → invalid workspace → session without a Knowledge binding reaches the
+ *       runtime probe (V10 TASK-027)
  *     → launch surface with the runtime binary absent
  *
  * Determinism on a configured machine: every child runs with
@@ -181,14 +182,21 @@ try {
     expectCond(`shipped payload contains readable ${file}`, shipped, p);
   }
 
-  // --- 4 · missing Knowledge binding fails cleanly before configuration ------
+  // --- 4 · missing Knowledge binding no longer refuses (V10 TASK-027) --------
+  // The preflight is per session: the workspace is the Knowledge root, so a
+  // session without a binding opens. The first hard failure left on this path
+  // is the runtime probe — PATH is stripped so that failure is deterministic
+  // and nothing launches.
   const missingConfigEnv = { ...baseEnv, STA_INSTALLATION_CONFIG: path.join(stage, "does-not-exist.yaml") };
   {
-    const r = runBin(targetBin, ["dev"], { cwd: targetRepo, env: missingConfigEnv });
+    const nodeDir = path.dirname(process.execPath);
+    const pathSep = process.platform === "win32" ? ";" : ":";
+    const stripped = { ...missingConfigEnv, PATH: [nodeDir, process.platform === "win32" ? "C:\\Windows\\System32" : "/usr/bin:/bin"].join(pathSep) };
+    const r = runBin(targetBin, ["dev"], { cwd: targetRepo, env: stripped, timeoutMs: 180_000 });
     expectCond(
-      "dev without any Knowledge binding refuses with an actionable message",
-      r.status !== 0 && /knowledge/i.test(r.out),
-      r.out.slice(0, 600),
+      "dev without any Knowledge binding reaches the runtime probe instead of refusing on Knowledge",
+      r.status !== 0 && /[Rr]untime \(claude\)/.test(r.out),
+      r.out.slice(-800),
     );
   }
 

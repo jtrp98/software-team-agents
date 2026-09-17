@@ -840,6 +840,38 @@ describe("T-V9-011 sta bounded-run Target binding reconciliation", () => {
   });
 });
 
+describe("V10 TASK-025 — runtime state has one home: the Knowledge root", () => {
+  it("a three-repo run persists every packet under the Knowledge root, and the invoking cwd gains none", async () => {
+    const { root, knowledgeRoot, targetApi } = threeRepoBoundedRunProject(roots, git);
+    const adapter = completingAdapter(targetApi);
+    const logs: string[] = [];
+    const spy = console.log;
+    console.log = (line: string) => logs.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
+        root,
+        { createRuntimeRegistry: () => new RuntimeRegistry([adapter]) },
+      );
+    } finally {
+      console.log = spy;
+    }
+    expect(code, logs.join("\n")).toBe(0);
+    expect(logs.some((l) => l.includes("COMPLETED"))).toBe(true);
+
+    // The prepare-time packet and the per-stage executor packet all land in
+    // the Knowledge root's .workflow — the executor's (attempt 2) used to
+    // follow the Framework contract root instead.
+    const packets = path.join(knowledgeRoot, ".workflow", "packets", "BE-004");
+    const written = fs.readdirSync(packets).sort();
+    expect(written).toContain("backend-engineer-1.json");
+    expect(written).toContain("backend-engineer-2.json");
+    // The cwd the run was commanded from gains no packet storage at all.
+    expect(fs.existsSync(path.join(root, ".workflow", "packets"))).toBe(false);
+  }, 30_000);
+});
+
 describe("T-V10 bounded-run autonomy/routing plumbing (TASK-005, TASK-006)", () => {
   beforeEach(() => {
     vi.mocked(createProductionBoundedRunServices).mockClear();

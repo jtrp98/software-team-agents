@@ -44,4 +44,47 @@ describe("T-V8-029 — sta status labels legacy wave-run records", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("V10 TASK-025 — a Target's pre-move run records stay readable read-only once new state lands at the Knowledge root", async () => {
+    // The Target keeps the layout an older run left behind; the Knowledge root
+    // is where a V10 run would write today. `--project-root <target>` is the
+    // legacy read: same reader, pointed at the old home, mutating nothing.
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), "sta-status-legacy-target-"));
+    const knowledge = fs.mkdtempSync(path.join(os.tmpdir(), "sta-status-legacy-knowledge-"));
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const runId = "01J00000000000000000000066";
+      const manifest: RunManifest = {
+        run_id: runId, created_at: "2026-09-10T00:00:00.000Z", target_root: target, target_id: "target",
+        knowledge_root: target, module: "orders", wave: 3, plan_hash: "hash", task_order: ["BE-1"],
+        base_branch: "main", base_sha: "b".repeat(40), run_branch: `sta/run/orders/${runId}`,
+        runtime_id: "claude-code", tier: "T2", model: "opus", max_tasks: 1, sta_version: "1.1.0",
+      };
+      writeLegacyWaveRun(target, manifest);
+      appendLegacyWaveRecord(target, runId, { ts: "2026-09-10T00:00:00.000Z", kind: "RUN_STARTED" });
+      appendLegacyWaveRecord(target, runId, { ts: "2026-09-10T00:00:00.500Z", kind: "RUN_ISOLATED" });
+      appendLegacyWaveRecord(target, runId, { ts: "2026-09-10T00:00:01.000Z", kind: "TASK_READY", task_id: "BE-1" });
+      appendLegacyWaveRecord(target, runId, { ts: "2026-09-10T00:00:02.000Z", kind: "RUN_HALTED", reason: "gate" });
+      const manifestBefore = fs.readFileSync(path.join(target, ".workflow", "wave-runs", runId, "manifest.json"), "utf8");
+      const journalBefore = fs.readFileSync(path.join(target, ".workflow", "wave-runs", runId, "journal.jsonl"), "utf8");
+
+      expect(await runStatusVerb(["--project-root", target], target)).toBe(0);
+      const output = log.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(output).toContain(`legacy wave run ${runId}: HALTED module=orders wave=3`);
+
+      // Read-only: the legacy bytes are exactly what the old writer left.
+      expect(fs.readFileSync(path.join(target, ".workflow", "wave-runs", runId, "manifest.json"), "utf8")).toBe(manifestBefore);
+      expect(fs.readFileSync(path.join(target, ".workflow", "wave-runs", runId, "journal.jsonl"), "utf8")).toBe(journalBefore);
+
+      // No automatic migration: the Knowledge root's own view shows none of it.
+      log.mockClear();
+      expect(await runStatusVerb(["--project-root", knowledge], knowledge)).toBe(0);
+      const fromKnowledge = log.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(fromKnowledge).not.toContain(runId);
+    } finally {
+      log.mockRestore();
+      fs.rmSync(target, { recursive: true, force: true });
+      fs.rmSync(knowledge, { recursive: true, force: true });
+    }
+  });
 });

@@ -1579,7 +1579,7 @@ describe("role workspace architecture (T-ROLE)", () => {
     expect(ambiguousRun.err).toMatch(/--role ba or --role dev/);
   });
 
-  it("DEV three-repo model: Knowledge required fail-closed, then read context while implementation lands in Target (T-ROLE-24/25)", async () => {
+  it("V10 TASK-027 — a session opens without a Knowledge binding, and a bound one stays read context", async () => {
     const target = makeTarget();
     const knowledge = makeKnowledgeRepo();
     write(knowledge, "_docs/module/sales/requirement.md", "# Sales requirement: implement X\n");
@@ -1588,15 +1588,14 @@ describe("role workspace architecture (T-ROLE)", () => {
     const fwBefore = JSON.stringify([...dirHash(fw).entries()].sort());
     const templatesDir = path.join(fw, "templates");
 
-    // No knowledge binding yet → DEV preflight fails closed with actionable advice.
-    try {
-      devPreflight({ targetRoot: target, templatesDir, installationConfigPath: NO_INSTALLATION, probe: () => ({ available: true }) });
-      throw new Error("expected preflight failure");
-    } catch (e) {
-      expect((e as Error).message).toMatch(/Knowledge/);
-    }
+    // No knowledge binding anywhere → the session still opens (V10 TASK-027:
+    // the preflight is per session, and the session's workspace is the
+    // Knowledge root itself — a binding is context, never a gate).
+    const unbound = devPreflight({ targetRoot: target, templatesDir, installationConfigPath: NO_INSTALLATION, probe: () => ({ available: true }) });
+    expect(unbound.knowledge).toBeUndefined();
 
-    // Bind the sibling Knowledge repo via the workspace config.
+    // Bind the sibling Knowledge repo via the workspace config: it still
+    // resolves, and still rides the launch as read context.
     const config = defaultTargetConfig(path.basename(target), "2026-01-01T00:00:00Z", "dev");
     config.knowledge = { path: knowledge };
     writeTargetConfig(target, config);
@@ -1606,17 +1605,20 @@ describe("role workspace architecture (T-ROLE)", () => {
 
     // DEV launches from Target...
     let launchedCwd = "";
+    let launchedEnv: NodeJS.ProcessEnv | undefined;
     await runDev({
       targetRoot: target,
       templatesDir,
       installationConfigPath: NO_INSTALLATION,
       probe: () => ({ available: true }),
-      launch: (_cmd, _args, cwd) => {
+      launch: (_cmd, _args, cwd, env) => {
         launchedCwd = cwd;
+        launchedEnv = env;
         return Promise.resolve(0);
       },
     });
     expect(launchedCwd.toLowerCase()).toBe(fs.realpathSync.native(target).toLowerCase());
+    expect(launchedEnv?.STA_KNOWLEDGE_ROOT?.toLowerCase()).toBe(fs.realpathSync.native(knowledge).toLowerCase());
 
     // ...reads the requirement from Knowledge...
     const requirementPath = path.join(ctx.knowledge!.knowledgeRoot, "_docs", "module", "sales", "requirement.md");
@@ -1631,7 +1633,7 @@ describe("role workspace architecture (T-ROLE)", () => {
     expect(JSON.stringify([...dirHash(fw).entries()].sort())).toBe(fwBefore);
   });
 
-  it("T-V5-009: DEV offers an explicit sibling Knowledge binding, while headless runs remain fail-closed", async () => {
+  it("V10 TASK-027 — a session without any binding launches and installation state stays untouched", async () => {
     const siblings = tmpRoot("knowledge-binding-siblings");
     const target = path.join(siblings, "app");
     const knowledge = path.join(siblings, "knowledge");
@@ -1642,33 +1644,23 @@ describe("role workspace architecture (T-ROLE)", () => {
     fs.mkdirSync(path.join(knowledge, "knowledge"));
     write(knowledge, "targets.yaml", "schema_version: 1\ntargets: []\n");
     const fw = fakeFramework("1.0.0", FW_V1_FILES);
-    const acceptedPath = path.join(siblings, "accepted-installation.yaml");
-    const initialized = await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: acceptedPath }));
+    const installationPath = path.join(siblings, "sibling-installation.yaml");
+    const initialized = await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: installationPath }));
     expect(initialized.code, initialized.err).toBe(0);
 
+    // The binding offer existed to satisfy the removed per-role requirement;
+    // with it gone, a headless session opens and nothing is recorded behind
+    // the user's back.
     let launched = false;
     await expect(runDev({
       targetRoot: target,
       templatesDir: path.join(fw, "templates"),
-      installationConfigPath: acceptedPath,
+      installationConfigPath: installationPath,
       probe: () => ({ available: true }),
-      confirmKnowledgeBinding: async (candidate) => candidate === knowledge,
       launch: () => { launched = true; return Promise.resolve(0); },
     })).resolves.toBe(0);
     expect(launched).toBe(true);
-    expect(configureKnowledgeRoot).toBeTypeOf("function");
-    expect(fs.readFileSync(acceptedPath, "utf8")).toContain(knowledge);
-
-    const headlessPath = path.join(siblings, "headless-installation.yaml");
-    fs.rmSync(acceptedPath);
-    await expect(runDev({
-      targetRoot: target,
-      templatesDir: path.join(fw, "templates"),
-      installationConfigPath: headlessPath,
-      probe: () => ({ available: true }),
-      launch: () => Promise.resolve(0),
-    })).resolves.toBe(1);
-    expect(fs.existsSync(headlessPath)).toBe(false);
+    expect(fs.existsSync(installationPath)).toBe(false);
   });
 
   it("T-V5-010: init reports the shared runtime prerequisite without refusing initialization", () => {
@@ -1763,7 +1755,7 @@ describe("role workspace architecture (T-ROLE)", () => {
       expect(rendered).not.toMatch(/WARNING/);
     });
 
-    it("bound-but-uninit: installation.yaml binds a marker-complete Knowledge root that was never `init --role ba`'d — WARNING with the fix command, from both BA and DEV status, plus a DEV preflight note", async () => {
+    it("bound-but-uninit: installation.yaml binds a marker-complete Knowledge root that was never `init --role ba`'d — WARNING with the fix command, from both BA and DEV status", async () => {
       const base = tmpRoot("wg1-uninit");
       const configPath = path.join(base, "installation.yaml");
       const knowledge = makeKnowledgeRepo(); // markers present, never `init`'d
@@ -1794,13 +1786,12 @@ describe("role workspace architecture (T-ROLE)", () => {
       expect(rendered).toMatch(/WARNING.*BA workspace role is not usable/);
       expect(rendered).toContain("software-team-agents init --role ba");
 
-      // DEV preflight: a non-blocking note, not a failure — DEV still reads
-      // Knowledge fine on markers alone.
+      // V10 TASK-027 — the role-keyed preflight note is gone with the forced
+      // dependency: the binding resolves as context and the session opens.
       const templatesDir = path.join(fw, "templates");
       const ctx = devPreflight({ targetRoot: target, templatesDir, installationConfigPath: configPath, probe: () => ({ available: true }) });
-      const note = ctx.checks.find((c) => c.name === "Knowledge (BA workspace role)");
-      expect(note?.ok).toBe(true);
-      expect(note?.detail).toMatch(/software-team-agents init --role ba/);
+      expect(ctx.checks.find((c) => c.name === "Knowledge (BA workspace role)")).toBeUndefined();
+      expect(ctx.knowledge?.knowledgeRoot.toLowerCase()).toBe(knowledgeCanonical.toLowerCase());
     });
   });
 

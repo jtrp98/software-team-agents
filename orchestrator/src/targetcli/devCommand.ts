@@ -1,7 +1,6 @@
 import { spawn as nodeSpawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { createInterface } from "node:readline/promises";
 import { readTemplateManifest } from "../packaging/templateManifest.js";
 import { resolveRoots } from "./roots.js";
 import {
@@ -19,7 +18,6 @@ import {
   resolveKnowledgeBinding,
   resolveTargetBinding,
   resolveSessionTargetWorkRoots,
-  hasKnowledgeMarkers,
   TargetBindingError,
   WORKSPACE_ROLE_LABEL,
   ROLE_WORKSPACE_KIND,
@@ -28,8 +26,9 @@ import {
   type WorkspaceRole,
   type TargetBinding,
 } from "./roleWorkspace.js";
+import { loadLocalTargetMapping, LocalTargetMappingError, localTargetsPath } from "../threeRepo/localTargets.js";
+import { loadTargetRegistry, type TargetRegistry } from "../threeRepo/targets.js";
 import type { GuardTargetWorkRoot } from "../agents/pathPermissions.js";
-import { configureKnowledgeRoot } from "../threeRepo/installation.js";
 import { formatResolvedCommand, resolveBundledStaCli } from "../runtime/npmCliResolver.js";
 import { environmentPrerequisites, probeRuntime, runTargetInit, runtimeCommand } from "./initCommand.js";
 import { isTargetInitialized } from "./targetMeta.js";
@@ -39,14 +38,13 @@ import { checkDocSize } from "../docs/docStructure.js";
 import { resolveModule } from "../agents/moduleDocs.js";
 
 /**
- * Role-aware execution: preflight, then hand over to the real agent runtime
- * FROM the Role Workspace.
- *
- *   ba  → cwd = knowledgeRoot. Framework ✓, Knowledge ✓ writable, tooling
- *         synced, Target never required.
- *   dev → cwd = targetRoot. Everything above plus a REQUIRED, validated
- *         Knowledge binding — a DEV session without project knowledge fails
- *         closed with recovery instructions.
+ * Session launch: preflight, then hand over to the real agent runtime from
+ * the invoking workspace. Since the lane collapse the workspace IS the
+ * Knowledge root, so the preflight decides from what the session actually
+ * uses — the Target mapping it binds and the selected runtime's guard
+ * coverage — never from the recorded role. The role survives only in the
+ * init/role match, which keeps a workspace's recorded identity honest until
+ * the single entry command retires it.
  *
  * Both flows auto-initialize an unambiguous workspace on first run (init is
  * idempotent and never touches non-managed content), stop on sync conflicts
@@ -79,10 +77,6 @@ export interface RoleRunOptions {
   now?: string;
   /** Overrides where the machine-wide installation binding is read from (tests; unusual setups). */
   installationConfigPath?: string;
-  /** An explicit candidate is offered, never silently recorded. */
-  knowledgeRoot?: string;
-  /** Test/UI seam for the one interactive confirmation. */
-  confirmKnowledgeBinding?: (candidate: string) => Promise<boolean>;
   /** Test seams. */
   probe?: (cmd: string) => { available: boolean; detail?: string };
   launch?: (cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<number>;
@@ -97,47 +91,6 @@ export class PreflightError extends Error {
   ) {
     super(`${failed.name}: ${failed.detail ?? "failed"}`);
   }
-}
-
-function siblingKnowledgeRoot(targetRoot: string): string | undefined {
-  const parent = path.dirname(targetRoot);
-  try {
-    return fs.readdirSync(parent, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => path.join(parent, entry.name))
-      .find((candidate) => candidate !== targetRoot && hasKnowledgeMarkers(candidate));
-  } catch {
-    return undefined;
-  }
-}
-
-async function confirmKnowledgeBinding(candidate: string, options: RoleRunOptions): Promise<boolean> {
-  if (options.confirmKnowledgeBinding) return options.confirmKnowledgeBinding(candidate);
-  // Headless executions preserve the existing fail-closed behaviour: no prompt
-  // and, critically, no write to installation-local state.
-  if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
-  const readline = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    return /^(y|yes)$/i.test((await readline.question(`[software-team-agents] Use sibling Knowledge repository "${candidate}" on this machine? [y/N] `)).trim());
-  } finally {
-    readline.close();
-  }
-}
-
-async function offerKnowledgeBinding(options: RoleRunOptions): Promise<boolean> {
-  const roots = resolveRoots({ targetRoot: options.targetRoot });
-  const config = loadTargetConfig(roots.targetRoot);
-  if (config?.knowledge?.path) return false; // workspace binding always wins
-  try {
-    if (resolveKnowledgeBinding({ targetRoot: roots.targetRoot, installationConfigPath: options.installationConfigPath })) return false;
-  } catch {
-    return false; // invalid existing state must be repaired explicitly, never replaced
-  }
-  const candidate = options.knowledgeRoot ?? siblingKnowledgeRoot(roots.targetRoot);
-  if (!candidate || !hasKnowledgeMarkers(candidate)) return false;
-  if (!(await confirmKnowledgeBinding(candidate, options))) return false;
-  configureKnowledgeRoot(candidate, options.installationConfigPath, roots.frameworkRoot);
-  return true;
 }
 
 function defaultLaunch(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<number> {
@@ -157,9 +110,9 @@ export interface WorkspaceContext {
   workspaceRoot: string;
   frameworkRoot: string;
   templatesDir: string;
-  /** Resolved for DEV (required); also reported for BA when a machine-wide binding exists (informational only). */
+  /** Resolved when a Knowledge binding exists — context only, never required: the session runs from the Knowledge workspace itself. */
   knowledge?: KnowledgeBinding;
-  /** Resolved for BA when `target.target_id` is set and resolves; always optional, never blocks a BA session. */
+  /** Resolved when the workspace config names a `target_id` that resolves; informational, never blocks a session. */
   target?: TargetBinding;
   /** Every Target this machine maps, read-only, for the session's guard channel (V10 TASK-023). Empty when none map. */
   targetWorkRoots: GuardTargetWorkRoot[];
@@ -354,105 +307,106 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
     fail("Managed files", e instanceof Error ? e.message : String(e));
   }
 
-  // Role dependencies.
-  /** Set exactly when role === "dev" and the binding resolved — the required-dependency result. */
-  let devKnowledge: KnowledgeBinding | undefined;
-  /** Set exactly when role === "ba" and a Target binding resolved; always optional. */
-  let baTarget: TargetBinding | undefined;
-  if (role === "dev") {
-    const resolved: KnowledgeBinding | undefined = (() => {
-      try {
-        return resolveKnowledgeBinding({
-          targetRoot: roots.targetRoot,
-          configKnowledgePath: config?.knowledge?.path,
-          installationConfigPath: options.installationConfigPath,
-        });
-      } catch (e) {
-        if (e instanceof KnowledgeBindingError) fail("Knowledge", e.message);
-        throw e;
-      }
-    })();
-    if (!resolved) {
-      fail(
-        "Knowledge",
-        "no Knowledge repository bound to this Target — set knowledge.path in .agent-team/config.yaml (e.g. ../project-knowledge) or run `sta configure knowledge-root <path>` once on this machine",
-      );
-    }
-    devKnowledge = resolved;
-    checks.push({ name: "Knowledge", ok: true, detail: `${resolved.knowledgeRoot} (via ${resolved.via})` });
-    // A valid, marker-complete binding still leaves the BA workspace role
-    // entirely unusable if nobody ever ran `init --role ba` there. DEV reads
-    // Knowledge fine either way (it only needs the markers), so this is a
-    // note, not a failing check.
-    if (!isTargetInitialized(resolved.knowledgeRoot)) {
-      checks.push({
-        name: "Knowledge (BA workspace role)",
-        ok: true,
-        detail: `bound but not initialized as a BA workspace — the BA workspace role is unusable on this machine until: cd "${resolved.knowledgeRoot}" && software-team-agents init --role ba`,
-      });
-    }
-    checks.push({ name: "Target writable", ok: true, detail: roots.targetRoot });
-  } else {
-    // BA: Target optional (T-ROLE-07) — a machine-wide binding may exist and is
-    // reported informationally, never required, and never blocks the session.
-    try {
-      resolveKnowledgeBinding({ targetRoot: roots.targetRoot, installationConfigPath: options.installationConfigPath });
-    } catch {
-      // informational only — never blocks a BA session
-    }
-    // An optional Target binding lets BA read the real app repo (schema.prisma,
-    // code) without ever requiring it. Any problem is reported as a
-    // non-blocking check, like the "Knowledge (BA workspace role)" note above —
-    // it is never a reason to fail preflight.
-    try {
-      const resolved = resolveTargetBinding({
-        knowledgeRoot: roots.targetRoot,
-        configTargetId: config?.target?.target_id,
-        frameworkRoot: roots.frameworkRoot,
-      });
-      if (resolved) {
-        baTarget = resolved;
-        checks.push({
-          name: "Target (BA workspace role)",
-          ok: true,
-          detail: `${resolved.targetRoot} (via ${resolved.via}, read-only)`,
-        });
-      }
-      // The removed committed path is stripped by the schema, so say so here
-      // too: without it a workspace that still sets it only sees its Target
-      // quietly missing. Non-blocking, like every check in this block — a BA
-      // Target binding is optional by design.
-      const legacy = removedTargetPath(roots.targetRoot);
-      if (legacy !== undefined) {
-        checks.push({ name: "Target (BA workspace role)", ok: true, detail: removedTargetPathProblem(legacy) });
-      }
-    } catch (e) {
-      if (e instanceof TargetBindingError) {
-        checks.push({ name: "Target (BA workspace role)", ok: true, detail: e.message });
-      } else {
-        throw e;
-      }
-    }
+  // Session dependencies — one path for every session (V10 TASK-027): the
+  // workspace is the Knowledge root, so what must hold is that the Target
+  // mapping it owns resolves on this machine, not that a role-labeled binding
+  // exists. A Knowledge binding is context (where STA_KNOWLEDGE_ROOT points
+  // when the session itself is not the bound root), never a requirement.
+  let knowledge: KnowledgeBinding | undefined;
+  let target: TargetBinding | undefined;
+  try {
+    knowledge = resolveKnowledgeBinding({
+      targetRoot: roots.targetRoot,
+      configKnowledgePath: config?.knowledge?.path,
+      installationConfigPath: options.installationConfigPath,
+    });
+  } catch (e) {
+    if (!(e instanceof KnowledgeBindingError)) throw e;
+    checks.push({
+      name: "Knowledge",
+      ok: true,
+      detail: `${e.message} — advisory only; this session runs from its own Knowledge workspace, which needs no binding`,
+    });
+  }
+  if (knowledge) {
+    checks.push({ name: "Knowledge", ok: true, detail: `${knowledge.knowledgeRoot} (via ${knowledge.via})` });
+  }
 
-    // The same `--check-doc-size` ceiling as a non-blocking note: a BA is
-    // never stopped by document growth, only told about it, since blocking
-    // here would stand in the way of the very work needed to fix it (the CI
-    // wiring that does block lives in the BA workflow).
-    // Scoped to the one module `resolveModule` can resolve with no hint, the
-    // same "never guess among candidates" rule `sta context` already applies —
-    // an ambiguous or empty workspace measures nothing rather than the whole
-    // repository, so preflight stays fast.
-    const moduleResolution = resolveModule(roots.targetRoot);
-    if (moduleResolution.status === "one") {
-      const sizeResult = checkDocSize(roots.targetRoot, moduleResolution.module);
-      checks.push({
-        name: "Document size",
-        ok: true,
-        detail: sizeResult.problems.length === 0
-          ? `${moduleResolution.module}: every document and section is inside its byte ceiling`
-          : `${moduleResolution.module}: ${sizeResult.problems.length} over ceiling — ${sizeResult.problems.join("; ")}`,
-      });
+  // The Knowledge root the session reads its mapping from: the workspace
+  // itself, unless a resolved binding names another root (a session whose cwd
+  // is not yet the Knowledge workspace).
+  const knowledgeHome = knowledge?.knowledgeRoot ?? roots.targetRoot;
+
+  // The required dependency: a mapping file that exists must describe Targets
+  // this machine can actually use — existing path, standalone repo, no
+  // overlap, all owned by `loadLocalTargetMapping`. No mapping file is the
+  // ordinary no-Target session and opens fine.
+  if (fs.existsSync(localTargetsPath(knowledgeHome))) {
+    let registry: TargetRegistry;
+    try {
+      registry = loadTargetRegistry(knowledgeHome);
+    } catch (e) {
+      fail("Targets", `${e instanceof Error ? e.message : String(e)} — fix targets.yaml in ${knowledgeHome} before opening a session`);
     }
+    try {
+      const sessionTargets = loadLocalTargetMapping(knowledgeHome, registry, roots.frameworkRoot);
+      const ids = sessionTargets.map((entry) => entry.target_id).join(", ");
+      checks.push({ name: "Targets", ok: true, detail: ids.length > 0 ? `${ids} resolve on this machine` : "the mapping declares no Target" });
+    } catch (e) {
+      if (e instanceof LocalTargetMappingError) {
+        fail("Targets", `${e.message} — fix ${localTargetsPath(knowledgeHome)} before opening a session`);
+      }
+      throw e;
+    }
+  }
+
+  // An optional Target binding via the workspace config stays informational:
+  // it lets a session read the real app repo without ever requiring it. Any
+  // problem is reported as a non-blocking check — it is never a reason to
+  // fail preflight.
+  try {
+    const resolved = resolveTargetBinding({
+      knowledgeRoot: knowledgeHome,
+      configTargetId: config?.target?.target_id,
+      frameworkRoot: roots.frameworkRoot,
+    });
+    if (resolved) {
+      target = resolved;
+      checks.push({ name: "Target", ok: true, detail: `${resolved.targetRoot} (via ${resolved.via}, read-only)` });
+    }
+    // The removed committed path is stripped by the schema, so say so here
+    // too: without it a workspace that still sets it only sees its Target
+    // quietly missing. Non-blocking, like every check in this block.
+    const legacy = removedTargetPath(roots.targetRoot);
+    if (legacy !== undefined) {
+      checks.push({ name: "Target", ok: true, detail: removedTargetPathProblem(legacy) });
+    }
+  } catch (e) {
+    if (e instanceof TargetBindingError) {
+      checks.push({ name: "Target", ok: true, detail: e.message });
+    } else {
+      throw e;
+    }
+  }
+
+  // The same `--check-doc-size` ceiling as a non-blocking note: a session is
+  // never stopped by document growth, only told about it, since blocking
+  // here would stand in the way of the very work needed to fix it (the CI
+  // wiring that does block lives in the BA workflow).
+  // Scoped to the one module `resolveModule` can resolve with no hint, the
+  // same "never guess among candidates" rule `sta context` already applies —
+  // an ambiguous or empty workspace measures nothing rather than the whole
+  // repository, so preflight stays fast.
+  const moduleResolution = resolveModule(roots.targetRoot);
+  if (moduleResolution.status === "one") {
+    const sizeResult = checkDocSize(roots.targetRoot, moduleResolution.module);
+    checks.push({
+      name: "Document size",
+      ok: true,
+      detail: sizeResult.problems.length === 0
+        ? `${moduleResolution.module}: every document and section is inside its byte ceiling`
+        : `${moduleResolution.module}: ${sizeResult.problems.length} over ceiling — ${sizeResult.problems.join("; ")}`,
+    });
   }
 
   const probe = options.probe ?? probeRuntime;
@@ -461,10 +415,10 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
     checks.push({ name: prerequisite.name, ok: true, detail: prerequisite.detail });
   }
 
-  // The mapping lives in the Knowledge root whichever side this session runs
-  // on: its own root for BA, the bound one for DEV.
+  // The mapping lives in the Knowledge root: the workspace's own, or the bound
+  // one when this session's cwd is not yet the Knowledge workspace.
   const targetWorkRoots = resolveSessionTargetWorkRoots({
-    knowledgeRoot: devKnowledge?.knowledgeRoot ?? roots.targetRoot,
+    knowledgeRoot: knowledgeHome,
     workspaceRoot: roots.targetRoot,
     frameworkRoot: roots.frameworkRoot,
   });
@@ -476,7 +430,7 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
     });
   }
 
-  return { checks, role, workspaceRoot: roots.targetRoot, frameworkRoot: roots.frameworkRoot, templatesDir, knowledge: devKnowledge, target: baTarget, targetWorkRoots, runtime: launchRuntime, guards: coverage };
+  return { checks, role, workspaceRoot: roots.targetRoot, frameworkRoot: roots.frameworkRoot, templatesDir, knowledge, target, targetWorkRoots, runtime: launchRuntime, guards: coverage };
 }
 
 /** DEV-only aliases kept for the original callers/tests. */
@@ -491,12 +445,7 @@ export type DevOptions = RoleRunOptions;
 async function runRoleSession(role: WorkspaceRole, options: RoleRunOptions): Promise<number> {
   let ctx: WorkspaceContext;
   try {
-    try {
-      ctx = workspacePreflight(role, options);
-    } catch (error) {
-      if (role !== "dev" || !(error instanceof PreflightError) || error.failed.name !== "Knowledge" || !(await offerKnowledgeBinding(options))) throw error;
-      ctx = workspacePreflight(role, options);
-    }
+    ctx = workspacePreflight(role, options);
   } catch (e) {
     if (e instanceof PreflightError) {
       console.error("[software-team-agents] preflight failed:");

@@ -80,6 +80,13 @@ export interface RuntimeExecutorOptions {
   runtime: RuntimeAdapter;
   /** Root of the target project — where the role definitions and `_docs/` live. */
   projectRoot: string;
+  /**
+   * The runtime-state home for packet persistence when no per-task three-repo
+   * roots resolve one (V10 TASK-025: the Knowledge root). Callers whose
+   * `projectRoot` is something else — bounded-run's contract root, for one —
+   * name the state root explicitly here.
+   */
+  runtimeStateRoot?: string;
   /** Resolves a task to the `_docs/module/<name>/` folder its docs live under. */
   moduleName: (taskId: string) => string;
   /**
@@ -479,7 +486,9 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     let promptParts: PromptPartsResult;
     if (runtimeTask) {
       try {
-        const runtimeStateRoot = threeRepo?.roots.bindingRoot ?? opts.projectRoot;
+        // V10 TASK-025 — the Knowledge root is the one runtime-state home; the
+        // Framework binding root only ever hosted contracts, never packets.
+        const runtimeStateRoot = threeRepo?.roots.knowledgeRoot ?? opts.runtimeStateRoot ?? opts.projectRoot;
         const baseRevision = await (opts.packetBaseRevision ?? resolveTargetRevision)(executionRoot);
         const codeIntel = await packetCodeIntel(opts, req, runtimeTask, moduleName, executionRoot, workRoot?.targetId, baseRevision);
         const packet = compileExecutionPacket({
@@ -511,8 +520,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         const persisted = writeExecutionPacket({
           projectRoot: runtimeStateRoot,
           packet,
+          // The state home is the Knowledge root itself now, so only the
+          // Targets stay forbidden — every resolved one, primary or not.
           forbiddenRoots: threeRepo
-            ? [threeRepo.roots.knowledgeRoot, ...threeRepo.roots.workRoots.map((root) => root.path)]
+            ? threeRepo.roots.workRoots.map((root) => root.path)
             : [],
           maxRunsPerTask: opts.packetRetention,
         });

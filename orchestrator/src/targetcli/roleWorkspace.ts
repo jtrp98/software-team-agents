@@ -16,7 +16,9 @@ import type { TargetConfig, TargetManifest } from "./targetMeta.js";
  * A role decides WHERE execution happens and WHAT the Framework syncs there:
  *
  *   BA  workspace = knowledgeRoot   (Target never required)
- *   DEV workspace = targetRoot      (Knowledge required as read context)
+ *   DEV workspace = targetRoot      (Knowledge binding is read context,
+ *                                    resolved per session — never forced:
+ *                                    V10 TASK-027)
  *
  * The Framework stays the only sync source in both directions — Framework →
  * Knowledge and Framework → Target, never Knowledge ⇄ Target: requirements

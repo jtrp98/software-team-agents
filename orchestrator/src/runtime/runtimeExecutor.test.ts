@@ -1298,7 +1298,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
         const expectedRoot = stage === AgentStage.BACKEND_ENGINEER ? scoped.targetRoot : frontendRoot;
         expect(request.cwd).toBe(expectedRoot);
         expect(JSON.parse(request.env!.STA_WRITABLE_WORK_ROOTS!)).toEqual([expectedRoot]);
-        expect(readExecutionPacket(path.resolve(scoped.bindingRoot, result.packetPath!)).scope.roots).toEqual([expectedRoot]);
+        expect(readExecutionPacket(path.resolve(scoped.knowledgeRoot, result.packetPath!)).scope.roots).toEqual([expectedRoot]);
       }
     }
   });
@@ -1338,26 +1338,29 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-plural-write", context: [] });
 
     expect(result.outcome.result).toBe("PASS");
-    const packet = readExecutionPacket(path.resolve(scoped.bindingRoot, result.packetPath!));
+    // V10 TASK-025 — the packet persists under the Knowledge root, never the
+    // Framework binding root.
+    const packet = readExecutionPacket(path.resolve(scoped.knowledgeRoot, result.packetPath!));
     expect([...packet.scope.roots].sort()).toEqual([scoped.targetRoot, second].sort());
     expect(JSON.parse(runtime.requests[0]!.env!.STA_WRITABLE_WORK_ROOTS!).sort()).toEqual([scoped.targetRoot, second].sort());
     // The primary root alone selects the cwd; the second is writable, not the
     // working directory.
     expect(runtime.requests[0]!.cwd).toBe(scoped.targetRoot);
     // The packet must not be persisted into any Target the task can write.
-    expect(path.resolve(scoped.bindingRoot, result.packetPath!).startsWith(scoped.targetRoot)).toBe(false);
-    expect(path.resolve(scoped.bindingRoot, result.packetPath!).startsWith(second)).toBe(false);
+    expect(path.resolve(scoped.knowledgeRoot, result.packetPath!).startsWith(scoped.targetRoot)).toBe(false);
+    expect(path.resolve(scoped.knowledgeRoot, result.packetPath!).startsWith(second)).toBe(false);
   });
 
   it("V10 TASK-009 keeps the packet out of every bound Target, not only the primary one", async () => {
     const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const scoped = scopedFixture("T-forbidden-second");
-    // The second Target physically contains the Local Runtime State root, so
-    // only a `forbiddenRoots` list that covers the non-primary roots catches it.
+    // V10 TASK-025 — the runtime-state root is the Knowledge root, so the
+    // hostile shape is that root physically sitting inside a Target; only a
+    // `forbiddenRoots` list covering the non-primary roots catches it.
     const second = tmpProject();
-    const stateInsideSecond = path.join(second, "framework");
-    fs.mkdirSync(stateInsideSecond, { recursive: true });
+    const knowledgeInsideSecond = path.join(second, "knowledge");
+    fs.mkdirSync(knowledgeInsideSecond, { recursive: true });
     scoped.runtimeTask.scope.work_roots = [
       { stage: AgentStage.BACKEND_ENGINEER, target_id: "api", root: scoped.targetRoot, access: "write", allow: [] },
       { stage: AgentStage.BACKEND_ENGINEER, target_id: "worker", root: second, access: "write", allow: [] },
@@ -1377,8 +1380,8 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
       threeRepoTask: () => ({
         task,
         roots: {
-          bindingRoot: stateInsideSecond,
-          knowledgeRoot: scoped.knowledgeRoot,
+          bindingRoot: scoped.bindingRoot,
+          knowledgeRoot: knowledgeInsideSecond,
           workRoots: [
             { targetId: "api", path: scoped.targetRoot, access: "write" },
             { targetId: "worker", path: second, access: "write" },

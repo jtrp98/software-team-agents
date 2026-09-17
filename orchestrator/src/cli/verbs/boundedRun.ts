@@ -672,7 +672,10 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
 
     const services = createProductionBoundedRunServices({
       ledger, store, registry: runtimeRegistry,
-      projectRoot: contractRoot, targetRoot, runtimeStateRoot: args.projectRoot,
+      projectRoot: contractRoot, targetRoot,
+      // V10 TASK-025 — runtime state has one home, the Knowledge root, so
+      // packets/locks never land in whatever cwd the run was commanded from.
+      runtimeStateRoot: knowledgeRoot,
       defaultRuntimeId,
       // `--runtime` stays in `defaultRuntimeId` (its shipped bounded-run meaning);
       // only model/effort ride the flag lane that reaches resolveRuntimeRoute.
@@ -683,7 +686,7 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
       autonomy: args.autonomy,
       adapterVersion: cliVersion(),
     });
-    const controller = new BoundedRunController({ ledger, runId, runtimeStateRoot: args.projectRoot, services });
+    const controller = new BoundedRunController({ ledger, runId, runtimeStateRoot: knowledgeRoot, services });
     const result = await controller.run();
     console.log(`[bounded-run] ${result.kind}: ${result.reason} (attempts=${result.launchedAttempts}, qa_rounds=${result.qaRounds})`);
     if (result.kind === "GATE" || result.kind === "HALTED") {
