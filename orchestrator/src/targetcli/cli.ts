@@ -8,17 +8,26 @@ import { gatherStatus, renderStatus } from "./statusCommand.js";
 import { TargetSyncConflictError, runTargetSync } from "./syncEngine.js";
 import { readTargetManifest, isTargetInitialized, loadTargetConfig, TargetNotInitializedError } from "./targetMeta.js";
 import { installedFrameworkVersion } from "./version.js";
-import { runBa, runDev, type RuntimeName } from "./devCommand.js";
-import { assetsForRole, type WorkspaceRole } from "./roleWorkspace.js";
+import { runSession, type RuntimeName } from "./devCommand.js";
+import { applyCleanup, CleanupUnmanagedWorkspaceError, planCleanup, renderCleanupPlan, reportCleanupResult } from "./cleanupCommand.js";
 
 /**
- * The Target-first, role-aware entry point: `software-team-agents init|sync|status|dev|ba`,
+ * The single-workspace entry point: `software-team-agents init|sync|status|open`,
  * always executed against the repository the user's shell is standing in
  * (process.cwd(), or --target-root). Nothing here requires — or even accepts —
  * cd-ing into the Framework repo; that repo resolves itself from this file's
- * installed location. `dev` runs a DEV session from a Target; `ba` runs a BA
- * session from the Knowledge repo.
+ * installed location. `open` runs the one interactive session kind, from the
+ * Knowledge workspace the shell stands in. The retired two-lane names `ba` and
+ * `dev` are caught and answered with this command — they are not aliases and
+ * they do not run (V10 TASK-026, no deprecation period).
  */
+
+/** A retired two-lane command name, caught so the error can name its replacement. */
+export class RetiredCommandError extends Error {
+  constructor(readonly retired: string) {
+    super(`'${retired}' was retired in V10 — the two-lane (ba/dev) workspace layout is gone; open your session with: software-team-agents open`);
+  }
+}
 
 export const TARGET_USAGE =
   "usage: software-team-agents <command> [options]\n" +
@@ -27,29 +36,34 @@ export const TARGET_USAGE =
   "  init      detect this workspace and initialize Framework metadata + managed assets\n" +
   "  sync      bring Framework-managed files up to the installed Framework version\n" +
   "  status    show role, workspace, roots, versions, sync state, readiness\n" +
-  "  dev       preflight, then launch an agent runtime from this Target (DEV)\n" +
-  "  ba        preflight, then launch an agent runtime from this Knowledge repo (BA; Target never required)\n" +
+  "  open      preflight, then launch an agent runtime from this Knowledge workspace\n" +
+  "  cleanup   move this workspace's Framework payload into a backup and un-manage it (V10):\n" +
+  "            manifest-tracked files only, overrides kept, reversible via sta rollback\n" +
   "\n" +
   "options:\n" +
   "  --target-root <path>   operate on <path> instead of the current directory\n" +
-  "  --role <ba|dev>        init: say what this workspace is when markers are ambiguous\n" +
+  "  --role <name>          retired: accepted and ignored — nothing keys off a recorded\n" +
+  "                         role anymore (old configs still open untouched)\n" +
   "  --stack <name>         init/sync: explicitly resolve ambiguous Target stack evidence\n" +
   "  --force                sync/init: overwrite locally-modified managed files (backed up first)\n" +
   "  --confirm-agents-pointer sync: reduce a provable CLAUDE.md duplicate to the generated AGENTS.md pointer (backed up)\n" +
-  "  --no-auto-sync         dev/ba: refuse to run when managed assets are outdated\n" +
-  "  --runtime <name>       dev/ba: claude (default), codex, opencode or antigravity — guard coverage\n" +
+  "  --no-auto-sync         open: refuse to run when managed assets are outdated\n" +
+  "  --runtime <name>       open: claude (default), codex, opencode or antigravity — guard coverage\n" +
   "                         differs per runtime (claude: enforced, opencode: partial, codex and\n" +
   "                         antigravity: unguarded); run\n" +
   "                         `sta runtimes` for the coverage detail behind each verdict\n" +
-  "  --allow-unguarded-runtime  dev/ba: deliberately launch a runtime that enforces no guard\n" +
+  "  --allow-unguarded-runtime  open: deliberately launch a runtime that enforces no guard\n" +
+  "  --dry-run              cleanup: print the plan and touch nothing\n" +
+  "  --yes                  cleanup: the human confirmation — move the payload for real\n" +
   "  --json                 status: machine-readable output\n" +
   "  -h, --help             show this help\n" +
   "  --version              show the installed Framework version\n";
 
 export interface TargetCliArgs {
-  command?: "init" | "sync" | "status" | "dev" | "ba";
+  command?: "init" | "sync" | "status" | "open" | "cleanup";
   targetRoot?: string;
-  role?: WorkspaceRole;
+  /** `--role` value, accepted for command-line compatibility and ignored (V10 TASK-026). */
+  retiredRole?: string;
   stack?: string;
   force: boolean;
   confirmAgentsPointer: boolean;
@@ -58,6 +72,10 @@ export interface TargetCliArgs {
   runtimeSelections: RuntimeName[];
   /** Explicit acceptance of a runtime that enforces no guard. */
   allowUnguardedRuntime: boolean;
+  /** cleanup: plan only, no mutation. */
+  dryRun: boolean;
+  /** cleanup: the explicit human confirmation that the payload may move. */
+  yes: boolean;
   json: boolean;
   help: boolean;
   version: boolean;
@@ -65,26 +83,32 @@ export interface TargetCliArgs {
 
 /** Pure argv parser — no console/exit, directly testable. */
 export function parseTargetArgs(argv: string[]): TargetCliArgs {
-  const args: TargetCliArgs = { force: false, confirmAgentsPointer: false, autoSync: true, runtime: "claude", runtimeSelections: [], allowUnguardedRuntime: false, json: false, help: false, version: false };
+  const args: TargetCliArgs = { force: false, confirmAgentsPointer: false, autoSync: true, runtime: "claude", runtimeSelections: [], allowUnguardedRuntime: false, dryRun: false, yes: false, json: false, help: false, version: false };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     switch (arg) {
       case "init":
       case "sync":
       case "status":
-      case "dev":
-      case "ba":
+      case "open":
+      case "cleanup":
         if (args.command) throw new Error(`only one command may be given (got both ${args.command} and ${arg})`);
         args.command = arg;
         break;
+      case "dev":
+      case "ba":
+        // Caught, not an alias: the answer names the one entry command (V10 TASK-026).
+        throw new RetiredCommandError(arg);
       case "--target-root":
         args.targetRoot = argv[++i];
         if (!args.targetRoot) throw new Error("--target-root requires a path");
         break;
       case "--role": {
-        const value = argv[++i] as WorkspaceRole | undefined;
-        if (value !== "ba" && value !== "dev") throw new Error(`--role must be ba or dev (got ${value ?? "nothing"})`);
-        args.role = value;
+        // Accepted and ignored: nothing keys off a recorded role anymore
+        // (V10 TASK-021 kept old configs readable; V10 TASK-026 retires the flag).
+        const value = argv[++i];
+        if (!value) throw new Error("--role requires a value");
+        args.retiredRole = value;
         break;
       }
       case "--stack":
@@ -111,6 +135,12 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
       }
       case "--allow-unguarded-runtime":
         args.allowUnguardedRuntime = true;
+        break;
+      case "--dry-run":
+        args.dryRun = true;
+        break;
+      case "--yes":
+        args.yes = true;
         break;
       case "--json":
         args.json = true;
@@ -144,7 +174,21 @@ export async function runTargetCli(
   frameworkRootFrom?: string,
   options: { installationConfigPath?: string } = {},
 ): Promise<number> {
-  const args = parseTargetArgs(argv);
+  let args: TargetCliArgs;
+  try {
+    args = parseTargetArgs(argv);
+  } catch (e) {
+    if (e instanceof RetiredCommandError) {
+      console.error(`[software-team-agents] ${e.message}`);
+      return 64;
+    }
+    throw e;
+  }
+  if (args.retiredRole) {
+    console.error(
+      `[software-team-agents] WARNING: --role is retired and ignored (got --role ${args.retiredRole}) — a workspace records what its markers and config say; nothing keys off a recorded role anymore`,
+    );
+  }
   if (args.help || (!args.command && !args.version)) {
     console.log(TARGET_USAGE);
     return args.help ? 0 : 1;
@@ -175,7 +219,6 @@ export async function runTargetCli(
           templatesDir: path.join(frameworkRoot, "templates"),
           now: new Date().toISOString(),
           force: args.force,
-          role: args.role,
           stack: args.stack,
           runtimes: args.runtimeSelections,
           installationConfigPath: options.installationConfigPath,
@@ -211,7 +254,6 @@ export async function runTargetCli(
             templatesDir,
             manifest,
             config,
-            include: config?.role ? assetsForRole(config.role) : undefined,
             role: config?.role,
             installationConfigPath: options.installationConfigPath,
             now: new Date().toISOString(),
@@ -242,8 +284,6 @@ export async function runTargetCli(
                     ? "    recovery: fix/merge .claude/settings.json manually, claim it in .agent-team/config.yaml overrides, or re-run with --force (backup first)"
                   : conflict.kind === "malformed-framework-block"
                     ? `    recovery: restore ${conflict.path} from .agent-team/backups or repair its Framework marker pair; --force will not guess`
-                  : conflict.kind === "roster-drift"
-                    ? "    recovery: re-run with --force to remove it (backed up first) — it belongs to another workspace role and does not belong here"
                     : "    recovery: move/rename your file aside, then re-run software-team-agents sync",
               );
             }
@@ -260,8 +300,8 @@ export async function runTargetCli(
         return 0;
       }
 
-      case "dev": {
-        return await runDev({
+      case "open": {
+        return await runSession({
           targetRoot: targetRootArg,
           templatesDir: path.join(frameworkRoot, "templates"),
           runtime: args.runtime,
@@ -271,15 +311,41 @@ export async function runTargetCli(
         });
       }
 
-      case "ba": {
-        return await runBa({
-          targetRoot: targetRootArg,
-          templatesDir: path.join(frameworkRoot, "templates"),
-          runtime: args.runtime,
-          autoSync: args.autoSync,
-          allowUnguardedRuntime: args.allowUnguardedRuntime,
-          installationConfigPath: options.installationConfigPath,
-        });
+      case "cleanup": {
+        // Destructive by design, so the shape is: plan always prints, an
+        // explicit human `--yes` is what moves anything, and --dry-run is the
+        // same plan with a no-mutation verdict.
+        let plan;
+        try {
+          plan = planCleanup({ targetRoot: targetRootArg });
+        } catch (e) {
+          if (e instanceof CleanupUnmanagedWorkspaceError) {
+            console.log(`[software-team-agents] ${e.message}`);
+            return 0;
+          }
+          throw e;
+        }
+        const render = renderCleanupPlan(plan);
+        if (render.movedCount === 0 && !plan.gitignoreBlock) {
+          console.log(`[software-team-agents] nothing to clean up in ${targetRootArg} (no tracked payload on disk)`);
+          return 0;
+        }
+        console.log(`[software-team-agents] cleanup plan for ${targetRootArg}:`);
+        for (const line of render.lines) console.log(line);
+        if (args.dryRun) {
+          console.log("[software-team-agents] dry run — nothing was touched.");
+          return 0;
+        }
+        if (!args.yes) {
+          console.error(
+            `[software-team-agents] cleanup is destructive: ${render.movedCount} payload file(s) would move into .agent-team/backups. ` +
+              "Re-run with --yes (a person's confirmation) to perform it, or --dry-run to inspect without deciding.",
+          );
+          return 64;
+        }
+        const result = applyCleanup(plan, new Date().toISOString());
+        reportCleanupResult(result, loadTargetConfig(targetRootArg));
+        return 0;
       }
 
       default:

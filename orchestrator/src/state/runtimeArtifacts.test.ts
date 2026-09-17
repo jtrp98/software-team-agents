@@ -128,24 +128,27 @@ describe("T-V3R-021 execution packet persistence", () => {
     expect(latestExecutionPacketPath(framework, "T-PACKET", AgentStage.BACKEND_ENGINEER)).toBe(written.path);
   });
 
-  it("refuses Knowledge or Target ownership before creating packet storage", () => {
+  it("V10 TASK-025 — the Knowledge root is the one runtime-state home; a Target never is", () => {
     const knowledge = tempRoot();
     const target = tempRoot();
     const knowledgePacket = runtimeArtifactPaths(knowledge, "T-PACKET").packets;
     const targetPacket = runtimeArtifactPaths(target, "T-PACKET").packets;
 
-    expect(() => writeExecutionPacket({ projectRoot: knowledge, packet: packet(), forbiddenRoots: [knowledge, target] })).toThrow(/Local Runtime State/);
-    expect(() => writeExecutionPacket({ projectRoot: target, packet: packet(), forbiddenRoots: [knowledge, target] })).toThrow(/Local Runtime State/);
-    expect(fs.existsSync(knowledgePacket)).toBe(false);
+    // The new home: packet storage inside the Knowledge root succeeds and is
+    // still refused for every Target root, forbidden list or not.
+    const written = writeExecutionPacket({ projectRoot: knowledge, packet: packet(), forbiddenRoots: [target] });
+    expect(written.path).toBe(path.join(knowledge, ".workflow", "packets", "T-PACKET", "backend-engineer-1.json"));
+    expect(() => writeExecutionPacket({ projectRoot: target, packet: packet(), forbiddenRoots: [target] })).toThrow(/Local Runtime State/);
     expect(fs.existsSync(targetPacket)).toBe(false);
+    expect(fs.existsSync(knowledgePacket)).toBe(true);
   });
 
   it("uses physical paths so a .workflow junction cannot redirect packets into a Target", () => {
-    const framework = tempRoot();
+    const knowledge = tempRoot();
     const target = tempRoot();
-    fs.symlinkSync(target, path.join(framework, ".workflow"), "junction");
+    fs.symlinkSync(target, path.join(knowledge, ".workflow"), "junction");
 
-    expect(() => writeExecutionPacket({ projectRoot: framework, packet: packet(), forbiddenRoots: [target] })).toThrow(/escapes Local Runtime State root|resolves inside/);
+    expect(() => writeExecutionPacket({ projectRoot: knowledge, packet: packet(), forbiddenRoots: [target] })).toThrow(/escapes Local Runtime State root|resolves inside/);
     expect(fs.readdirSync(target)).toEqual([]);
   });
 

@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { resolveRoots } from "./roots.js";
-import { detectWorkspaceKind, assetsForRole, type WorkspaceRole, type WorkspaceKind } from "./roleWorkspace.js";
+import { detectWorkspaceKind, type WorkspaceRole, type WorkspaceKind } from "./roleWorkspace.js";
 import type { WorkspaceRuntime } from "./roleWorkspace.js";
 import {
   defaultTargetConfig,
@@ -14,14 +14,15 @@ import { runTargetSync, type SyncResult } from "./syncEngine.js";
 import { planTargetProfile } from "./targetProfile.js";
 
 /**
- * `software-team-agents init`, run from inside a Role Workspace (a Target repo
- * for DEV, the Knowledge repo for BA).
+ * `software-team-agents init`, run from inside a workspace.
  *
  * Detects what kind of repository it is standing in when no role is recorded
- * yet (Knowledge markers → ba; app-source markers → dev; both/neither → an
- * explicit --role is required), records identity + role in
- * `.agent-team/config.yaml`, and materializes the role's managed-asset profile
- * through the safe sync engine.
+ * yet (Knowledge markers → ba; app-source markers → dev; both/neither →
+ * refused with guidance — a hand-set config.yaml role disambiguates), records
+ * identity + role in `.agent-team/config.yaml`, and materializes the single
+ * managed payload through the safe sync engine. The recorded role decides
+ * nothing about write scope or admission (V10 TASK-021/026); the CLI's --role
+ * flag is accepted-and-ignored.
  *
  * Idempotent by construction: re-running re-runs sync (which only ever writes
  * what the manifest proves pristine), and config.yaml is written once and then
@@ -106,7 +107,10 @@ export function runTargetInit(options: TargetInitOptions): TargetInitResult {
   const existingConfig = loadTargetConfig(roots.targetRoot);
   const createdConfig = existingConfig === undefined;
 
-  // Role resolution order: explicit flag > recorded config > marker detection.
+  // Role resolution order: recorded config > marker detection. The CLI's
+  // --role flag is retired (accepted and ignored — V10 TASK-026); the recorded
+  // role only labels identity, so a hand-set value in config.yaml remains the
+  // one way to disambiguate markers.
   let role: WorkspaceRole | undefined = options.role;
   let roleVia: TargetInitResult["roleVia"] = role ? "flag" : "config";
   if (!role) role = existingConfig?.role as WorkspaceRole | undefined;
@@ -121,8 +125,8 @@ export function runTargetInit(options: TargetInitOptions): TargetInitResult {
     } else {
       throw new AmbiguousWorkspaceError(
         detectedKind === "ambiguous"
-          ? `"${roots.targetRoot}" looks like both a Knowledge repo and an application repository — say which one this workspace is with --role ba or --role dev`
-          : `"${roots.targetRoot}" has neither Knowledge markers (knowledge/, targets.yaml) nor application-source markers (package.json, ...) — say what this workspace is with --role ba or --role dev`,
+          ? `"${roots.targetRoot}" looks like both a Knowledge workspace and an application repository — record which it is by setting "role: ba" or "role: dev" in .agent-team/config.yaml, then re-run init`
+          : `"${roots.targetRoot}" has neither Knowledge markers (knowledge/, targets.yaml) nor application-source markers (package.json, ...) — init materialises the Framework payload into a workspace; point --target-root at your Knowledge workspace`,
       );
     }
   }
@@ -150,7 +154,6 @@ export function runTargetInit(options: TargetInitOptions): TargetInitResult {
   const sync = runTargetSync({
     targetRoot: roots.targetRoot,
     templatesDir,
-    include: assetsForRole(role),
     role,
     manifest: previousManifest,
     config,

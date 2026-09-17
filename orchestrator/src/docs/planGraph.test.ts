@@ -218,7 +218,7 @@ describe("checkPlanGraphs", () => {
     const result = checkPlanGraphs(root);
     expect(result.ok).toBe(false);
     expect(result.problems.join("\n")).toContain("missing from this Knowledge workspace's synced payload");
-    expect(result.problems.join("\n")).toContain("software-team-agents ba");
+    expect(result.problems.join("\n")).toContain("software-team-agents sync");
   });
 
   it("T-V6-005 — [ACCEPTANCE] a plan casting a Tier passes once model-tiers.yaml is synced into the Knowledge workspace", () => {
@@ -393,14 +393,25 @@ targets:
     expect(result.ok).toBe(true);
   });
 
-  it("T-V9-009 — a module declaring no Targets is exempt, and the exemption is logged", () => {
+  it("V10 TASK-011 — a module declaring no Targets fails the check when its tasks bind one, before any run starts", () => {
     const result = checkPlanGraphs(
       targetProject(canonicalPlanFile(["sales-api"]), {
         "_docs/module/sales/design.md": DESIGN_MD.replace("## Targets\n- sales-api\n- sales-web\n", ""),
       }),
     );
+    expect(result.ok).toBe(false);
+    expect(result.problems.join("\n")).toContain('module "sales" declares no Targets');
+    expect(result.problems.join("\n")).toContain("1 task(s) declare Targets:");
+    expect(result.problems.join("\n")).toContain("## Targets");
+  });
+
+  it("V10 TASK-011 — a module declaring no Targets whose tasks bind none is untouched", () => {
+    const result = checkPlanGraphs(
+      targetProject(canonicalPlanFile(), {
+        "_docs/module/sales/design.md": DESIGN_MD.replace("## Targets\n- sales-api\n- sales-web\n", ""),
+      }),
+    );
     expect(result.ok).toBe(true);
-    expect(result.notes.join("\n")).toContain('module "sales" declares no Targets');
-    expect(result.notes.join("\n")).toContain("remains unscoped");
+    expect(result.problems.join("\n")).not.toContain("declares no Targets");
   });
 });

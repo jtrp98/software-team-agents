@@ -78,16 +78,25 @@ reasons, at most a few file paths; never file contents or secrets.
 
 ## Setup / enable / disable
 
-Nothing to install beyond `uv tool install graphifyy@<version>` on machines that opt in, plus
-one explicit index build per target revision (human-initiated; ask-before-indexing is a hard
-rule because indexing is heavy on low-RAM machines). Enabling is per-machine, env vars:
-`STA_CODE_INTEL=on`, optionally `STA_CODE_INTEL_PIN=<version>` and `STA_CODE_INTEL_BIN=<path>`
-(for machines where uv's tool bin dir is not on the spawning process's PATH); the run prompt
-then gains the evidence block for allowed roles via `runtime/codeIntelAssembly.ts` — additive
-by design, so any failure leaves the prompt byte-identical. Disabling is absence of the
-variables; a checkout that is not a git repository resolves no revision and answers empty.
-Rollout sequence: OFF → experimental opt-in → benchmark → SA/DEV/QA opt-in → default-on only
-if metrics hold.
+Nothing to install beyond `uv tool install graphifyy@<version>` on machines that opt in. At the
+start of a run, if the target's index is `missing` or `stale`, the run asks a human once —
+naming the target id, the indexed revision, and the current revision — whether to build/refresh
+it now (ask-before-indexing is unchanged in spirit: the tool still never indexes without being
+asked; the ask now happens automatically at run start instead of requiring a person to invoke
+`scripts/reindex-code-intel.mjs` out of band). The answer is recorded per `targetId + revision`
+so a later unattended run on the same revision does not ask again; an unattended run with no
+recorded consent never blocks — it proceeds on fallback (`policies/security.md`'s "never a
+dependency of a stage" rule). Once an index is `fresh` for the task's target revision, the
+default is now **ON** (Option A, 2026-09-16): the run queries it automatically via
+`runtime/codeIntelAssembly.ts`, no per-machine opt-in required — additive by design, so any
+failure leaves the prompt byte-identical. `STA_CODE_INTEL=off` still forces the feature off per
+machine regardless of freshness or consent; `STA_CODE_INTEL_PIN` and `STA_CODE_INTEL_BIN` are
+unchanged. Disabling is that override, a stale/missing/error status with no consent yet given,
+or a checkout that is not a git repository (no revision resolves, so the feature answers empty)
+— every one of these leaves the prompt byte-identical to a pipeline without this feature.
+Rollout sequence: OFF → experimental opt-in → benchmark → SA/DEV/QA opt-in → default-ON when
+fresh, consent-gated build/refresh when not (Option A, confirmed 2026-09-16) → wider rollout
+only if metrics continue to hold.
 
 ## Troubleshooting / fallback behaviour
 

@@ -6,7 +6,7 @@ binding ของ tier → model/effort ต่อ camp — อยู่ที่
 คนเป็นเจ้าของ คู่มือนี้ไม่เขียน provider/model catalog ซ้ำ
 
 **เส้นแบ่งที่ต้องเข้าใจก่อน:** tier ทำงานเฉพาะเส้นทาง orchestrated (`sta run`) เท่านั้น
-เซสชัน interactive (`software-team-agents dev`) ไม่มี orchestrator จึงไม่มี tier — ที่นั่นตั้ง effort
+เซสชัน interactive (`software-team-agents open`) ไม่มี orchestrator จึงไม่มี tier — ที่นั่นตั้ง effort
 ด้วยคำสั่งในเซสชันเอง (§4)
 
 ## 1. Cast Tier ใน canonical PlanTask — ฝั่ง BA/Knowledge workspace
@@ -71,11 +71,11 @@ resume จึงไม่เปลี่ยนตาม policy ใหม่เ�
 
 ## 4. ตั้ง effort ในเซสชัน interactive
 
-`software-team-agents dev` เรียก runtime ด้วย args ว่างเปล่า และปฏิเสธ flag ที่มันไม่รู้จัก จึง
-**สั่ง effort จากบรรทัดนี้ไม่ได้** — `software-team-agents dev --effort high` เป็น error:
+`software-team-agents open` เรียก runtime ด้วย args ว่างเปล่า และปฏิเสธ flag ที่มันไม่รู้จัก จึง
+**สั่ง effort จากบรรทัดนี้ไม่ได้** — `software-team-agents open --effort high` เป็น error:
 
 ```powershell
-software-team-agents dev
+software-team-agents open
 ```
 
 แล้วตั้งในเซสชัน (ระดับ: `low`, `medium`, `high`, `xhigh`, `max`):

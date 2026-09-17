@@ -14,7 +14,7 @@ Guide verification for module phase implementation:
 2. Role and workspace verification rail:
 - This command is a shortcut to invoke or prepare verification; it does NOT perform QA verification itself.
 - QA verification is owned by `qa-engineer` comparing code against requirements and design contract.
-- QA verification must run in the DEV workspace (Target repository), never in a BA workspace (Knowledge repository).
+- QA verification reads the real code in the bound Target, so run it where that Target is checked out and readable.
 
 3. Instruct next step:
 - Run `sta context qa-engineer --module <module> --phase <phase>`.

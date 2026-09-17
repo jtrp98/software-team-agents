@@ -6,7 +6,7 @@ it taxes every future run, and what language it's written in.
 
 ---
 
-## 0. Before writing anything — confirm workspace ↔ workspace role
+## 0. Before writing anything — confirm the workspace ↔ binding
 
 **Every analysis/doc-writing run's first action is `software-team-agents status`, before touching
 `§1`'s module-folder resolution.** This isn't optional context-gathering — it's the checkpoint
@@ -16,13 +16,13 @@ workspace corrupts workspace boundaries if nothing checks first.
 
 Read `status`'s output and confirm two things with the user before writing:
 
-1. **This workspace's role matches the work.** BA-workspace work (`business-analyst`,
-   `system-analyst`, `project-manager`, `test-planner`, `uxui-designer`) writes only from a
-   `role: ba` workspace (the Knowledge repo). If `status` reports `role: dev` or no role at all,
-   stop and ask — don't write a module doc into a Target.
+1. **This session runs from the Knowledge workspace.** Module documents live only in the
+   Knowledge repo, and the interactive session opens there (`software-team-agents open` from the
+   Knowledge workspace). If the current directory is a Target checkout or anything other than
+   that workspace, stop and ask — don't write a module doc into a Target.
 2. **If `status` prints `WARNING: Knowledge root bound in installation.yaml ... has no
    .agent-team/config.yaml`** (a Knowledge root is bound but nobody ever ran
-   `init --role ba` there), **stop and ask the user before writing any doc file at all**, even
+   `init` there), **stop and ask the user before writing any doc file at all**, even
    into a folder that already exists. Writing into an uninitialized Knowledge workspace is exactly
    how the incident happened: the binding looked valid, so nothing else caught it.
 

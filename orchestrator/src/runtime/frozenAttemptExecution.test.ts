@@ -122,6 +122,28 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
     expect(runtime.requests).toHaveLength(0);
   });
 
+  // V10 (TASK-004): agy reads hooks only from the machine-global hooks file, so the lane
+  // collapse — sessions launching from the Knowledge workspace — must not open a Target-write
+  // path for it. The refusal keys on the runtime's certification, never on the lane.
+  it("T-V10 (TASK-004) refuses an antigravity Target-write attempt the same way", async () => {
+    const runtime = new MockRuntimeAdapter({ id: "antigravity", models: ["glm-4.7"], respond: () => okResult() });
+    const result = await createRuntimeExecutor({
+      runtime,
+      projectRoot: tmpProject(),
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+      registry: new RuntimeRegistry([runtime]),
+      frozenAttempt: frozen({
+        requested: { runtime: "antigravity", model: "glm-4.7", effort: "high" },
+        observed: { runtime: "antigravity", model: "glm-4.7", effort: "high" },
+        guard_evidence: { target_write: true, pre_tool_guard: true, writable_roots: ["C:/target"] },
+      }),
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain('runtime "antigravity" is not certified for unattended Target writes');
+    expect(runtime.requests).toHaveLength(0);
+  });
+
   it("sends the ledger's model even when it is not this executor's own default, and conformance agrees", async () => {
     const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"], respond: () => okResult() });
     const result = await createRuntimeExecutor({

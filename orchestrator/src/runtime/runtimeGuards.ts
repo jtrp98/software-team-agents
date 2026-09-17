@@ -1,9 +1,10 @@
 import {
   UNIVERSAL_DENY,
   WORKSPACE_BA_ARTIFACTS,
-  WORKSPACE_DEV_ARTIFACTS,
+  FRAMEWORK_PAYLOAD_ARTIFACTS,
+  deniesKnowledgeArtifacts,
   pathRulesFor,
-  readWorkspaceRole,
+  targetPathRules,
 } from "../agents/pathPermissions.js";
 import { ALL_EXIT_CHECKS, type RuntimeGuards } from "./runtimeAdapter.js";
 
@@ -24,6 +25,14 @@ import { ALL_EXIT_CHECKS, type RuntimeGuards } from "./runtimeAdapter.js";
 /** Commands no run may issue. `git` by name: read-only subcommands are allowed through by the guard's own logic, which is why this is a command name and not a pattern. */
 export const FORBIDDEN_COMMANDS: readonly string[] = ["git"];
 
+/** Which side of the three-repo split a stage's write scope comes from. */
+export interface GuardScope {
+  /** The stage writes a bound Target checkout, so the Target is the scope. */
+  targetSide?: boolean;
+}
+
+export type GuardResolver = (role: string, layoutRoot?: string, scope?: GuardScope) => RuntimeGuards;
+
 export class GuardResolutionError extends Error {
   constructor(role: string, cause: unknown) {
     super(
@@ -43,32 +52,37 @@ export class GuardResolutionError extends Error {
  * between them is worse than one that stops. Callers that genuinely want no
  * guards say so with `NO_GUARDS`.
  */
-export function contractGuards(role: string, projectRoot: string, layoutRoot: string = projectRoot): RuntimeGuards {
+export function contractGuards(
+  role: string,
+  projectRoot: string,
+  layoutRoot: string = projectRoot,
+  scope?: GuardScope,
+): RuntimeGuards {
   let rules;
   try {
-    rules = pathRulesFor(role, projectRoot, layoutRoot);
+    // A stage writing a bound Target is scoped by Target, not by stack layout
+    // (V10 TASK-010); every other stage still works inside Knowledge, where the
+    // role contract is the boundary.
+    rules = scope?.targetSide ? targetPathRules(role, projectRoot) : pathRulesFor(role, projectRoot, layoutRoot);
   } catch (e) {
     throw new GuardResolutionError(role, e);
   }
-  const wsRole = readWorkspaceRole(projectRoot);
-  const workspaceDeny =
-    wsRole === "dev"
-      ? WORKSPACE_BA_ARTIFACTS
-      : wsRole === "ba"
-        ? WORKSPACE_DEV_ARTIFACTS
-        : [];
+  // Which repository a stage was launched from decides nothing here: an
+  // implementation stage may not write a Knowledge artifact, and after the lane
+  // collapse there is no workspace role left to carry that ban (V10 TASK-012).
+  const knowledgeDeny = deniesKnowledgeArtifacts(role) ? WORKSPACE_BA_ARTIFACTS : [];
   return {
     writeAllow: rules.write,
-    // The role's own deny list plus the floor and workspace-role deny rules.
+    // The role's own deny list plus the floor and the Framework-payload ban.
     // Concatenated rather than replaced: the floor holds whatever a contract
     // says, which is the whole reason it is called a floor.
-    writeDeny: [...UNIVERSAL_DENY, ...workspaceDeny, ...rules.deny],
+    writeDeny: [...new Set([...UNIVERSAL_DENY, ...FRAMEWORK_PAYLOAD_ARTIFACTS, ...knowledgeDeny, ...rules.deny])],
     forbidCommands: FORBIDDEN_COMMANDS,
     exitChecks: ALL_EXIT_CHECKS,
   };
 }
 
 /** `contractGuards` curried per role, the shape `createRuntimeExecutor` wants. */
-export function contractGuardResolver(projectRoot: string): (role: string, layoutRoot?: string) => RuntimeGuards {
-  return (role, layoutRoot) => contractGuards(role, projectRoot, layoutRoot);
+export function contractGuardResolver(projectRoot: string): GuardResolver {
+  return (role, layoutRoot, scope) => contractGuards(role, projectRoot, layoutRoot, scope);
 }

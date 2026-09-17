@@ -164,6 +164,41 @@ describe("checkpoint integration", () => {
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
+  it("V10 TASK-013 groups a single writable root's changed paths under that root, unchanged rejection rules", async () => {
+    const root = fixture();
+    try {
+      fs.writeFileSync(path.join(root, "src", "new.txt"), "new\n");
+      fs.rmSync(path.join(root, "src", "base.txt"));
+      const result = await checkpointTask(input(root));
+      const expectedRoot = fs.realpathSync.native(path.join(root, "src"));
+      expect(result.changedPathsByRoot).toHaveLength(1);
+      expect(result.changedPathsByRoot[0]!.root).toBe(expectedRoot);
+      expect([...result.changedPathsByRoot[0]!.paths].sort()).toEqual([...result.changedPaths].sort());
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("V10 TASK-013 splits changed paths across two writable roots without altering which paths are allowed", async () => {
+    const root = fixture();
+    try {
+      fs.mkdirSync(path.join(root, "extra"));
+      fs.writeFileSync(path.join(root, "extra", "seed.txt"), "seed\n");
+      run(root, ["add", "--", "extra/seed.txt"]);
+      run(root, ["commit", "-m", "seed extra", "--"]);
+      fs.writeFileSync(path.join(root, "src", "new.txt"), "new\n");
+      fs.writeFileSync(path.join(root, "extra", "new.txt"), "new\n");
+      const result = await checkpointTask(input(root, {
+        writableRoots: [path.join(root, "src"), path.join(root, "extra")],
+      }));
+      const srcRoot = fs.realpathSync.native(path.join(root, "src"));
+      const extraRoot = fs.realpathSync.native(path.join(root, "extra"));
+      const byRoot = new Map(result.changedPathsByRoot.map((entry) => [entry.root, entry.paths]));
+      expect(byRoot.get(srcRoot)).toEqual(["src/new.txt"]);
+      expect(byRoot.get(extraRoot)).toEqual(["extra/new.txt"]);
+      // Grouping is a read-only summary: the flat, ungrouped list stays authoritative and identical.
+      expect(result.changedPathsByRoot.flatMap((entry) => [...entry.paths]).sort()).toEqual([...result.changedPaths].sort());
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("T-V7-031 keeps hostile checkpoint text inside two single Git -m arguments", async () => {
     const root = fixture();
     const calls: string[][] = [];

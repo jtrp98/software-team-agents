@@ -5,7 +5,7 @@ Section numbers (`§1`…`§12`, `§5a`–`§5d`) are unchanged — only which f
 
 | Section(s) | Now lives in |
 |---|---|
-| §0 (confirm workspace ↔ workspace role before writing) | `policies/documentation.md` |
+| §0 (confirm the workspace ↔ binding before writing) | `policies/documentation.md` |
 | §1, §2, §3, §4, §5b, §10, §11 | `policies/documentation.md` |
 | §5 | `policies/git.md` |
 | §5a, §5c-1, §5d | `policies/security.md` |

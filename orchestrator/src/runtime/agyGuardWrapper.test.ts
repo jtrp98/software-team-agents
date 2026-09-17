@@ -88,11 +88,15 @@ describe("AGY guard wrapper — allow is emitted on exactly one path", () => {
     expect(invoke(WRAPPER, root, writeCall("node_modules/x/index.js")).allowed).toBe(false);
   });
 
-  it("denies a BA artifact from a dev workspace, identity-independent", () => {
+  it("denies Framework payload to a named stage, and no longer reads the workspace's recorded role", () => {
     const root = workspace({ role: "dev" });
-    const verdict = invoke(WRAPPER, root, writeCall("_docs/module/billing/design.md"));
+    const verdict = invoke(WRAPPER, root, writeCall("contracts/backend-engineer.yaml"), { STA_ROLE: "backend-engineer" });
     expect(verdict.allowed).toBe(false);
-    expect(verdict.reason).toMatch(/Knowledge repository/);
+    expect(verdict.reason).toMatch(/Framework payload/);
+
+    // V10 TASK-021: the same workspace no longer refuses a Knowledge artifact
+    // for being `role: dev` — that ban is stage-bound now (TASK-012).
+    expect(invoke(WRAPPER, root, writeCall("_docs/module/billing/design.md")).allowed).toBe(true);
   });
 
   it("denies a write that resolves outside the workspace root", () => {

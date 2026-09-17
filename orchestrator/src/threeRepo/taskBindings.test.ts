@@ -68,7 +68,7 @@ describe("Phase 2 task Target bindings", () => {
     expect(() => validatePersistedTaskBindings(persisted("resume-mvc", fullstack, bothOnMvc), typedRegistry)).not.toThrow();
   });
 
-  it("T-V9-008 refuses two Targets on one engineer role at creation and resume with the Q-3 fix", () => {
+  it("V10 TASK-009 admits two Targets on one engineer role at creation and resume (V9 Q-3 rule retired)", () => {
     const typedRegistry: TargetRegistry = {
       schema_version: 1,
       targets: [
@@ -90,16 +90,14 @@ describe("Phase 2 task Target bindings", () => {
       now: 1,
       targetBindings,
     });
-    const expected = /backend-engineer.*api.*worker.*split into one task per Target, or bind them to different roles/;
-
-    expect(() => validateNewTaskBindings(classification, targetBindings, typedRegistry)).toThrow(expected);
-    expect(() => validatePersistedTaskBindings(persisted, typedRegistry)).toThrow(expected);
+    expect(() => validateNewTaskBindings(classification, targetBindings, typedRegistry)).not.toThrow();
+    expect(() => validatePersistedTaskBindings(persisted, typedRegistry)).not.toThrow();
   });
 
   it("T-V9-008 returns the same explicit compatibility warnings at creation and resume", () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const targetBindings = bindings("backend", null);
-    const moduleScope = { module: "legacy-module", designPath: "legacy-module/design.md", declaredTargetIds: [] };
+    const moduleScope = { module: "legacy-module", designPath: "legacy-module/design.md", declaredTargetIds: ["backend"] };
     const persisted = newPersistedTask({
       taskId: "legacy-resume",
       classification,
@@ -111,7 +109,45 @@ describe("Phase 2 task Target bindings", () => {
     const created = validateNewTaskBindings(classification, targetBindings, registry, { moduleScope });
     const resumed = validatePersistedTaskBindings(persisted, registry, { moduleScope });
     expect(created.warnings).toEqual(resumed.warnings);
-    expect(created.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/no declared type.*schema v1 compatibility/), expect.stringMatching(/declares no Targets.*unscoped/)]));
+    expect(created.warnings).toEqual(expect.arrayContaining([expect.stringMatching(/no declared type.*schema v1 compatibility/)]));
+  });
+
+  it("V10 TASK-011 refuses a Target binding in a module that declares no ## Targets, naming the design.md to fix", () => {
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const targetBindings = bindings("backend", null);
+    const persisted = newPersistedTask({
+      taskId: "unscoped-resume",
+      classification,
+      machine: initTaskMachine(classification.pipeline, false),
+      now: 1,
+      targetBindings,
+    });
+    const moduleScope = { module: "sales", designPath: "knowledge/_docs/module/sales/design.md", declaredTargetIds: [] };
+
+    expect(() => validateNewTaskBindings(classification, targetBindings, registry, { moduleScope })).toThrow(
+      /module "sales" declares no Targets[\s\S]*binding\(s\) backend[\s\S]*"## Targets"[\s\S]*knowledge\/_docs\/module\/sales\/design\.md/,
+    );
+    expect(() => validatePersistedTaskBindings(persisted, registry, { moduleScope })).toThrow(
+      /module "sales" declares no Targets[\s\S]*knowledge\/_docs\/module\/sales\/design\.md/,
+    );
+  });
+
+  it("V10 TASK-011 leaves a task that binds no Target alone: a document-only module still needs no ## Targets", () => {
+    const classification = classifyTask({ isTypoOrCopyOnly: true });
+    const targetBindings = bindings(null, null);
+    const persisted = newPersistedTask({
+      taskId: "doc-only-resume",
+      classification,
+      machine: initTaskMachine(classification.pipeline, false),
+      now: 1,
+      targetBindings,
+    });
+    const moduleScope = { module: "policy", designPath: "policy/design.md", declaredTargetIds: [] };
+
+    const created = validateNewTaskBindings(classification, targetBindings, registry, { moduleScope });
+    const resumed = validatePersistedTaskBindings(persisted, registry, { moduleScope });
+    expect(created.warnings).toEqual(resumed.warnings);
+    expect(created.warnings).toEqual([expect.stringMatching(/declares no Targets.*binds none either/)]);
   });
 
   it("T-V9-008 enforces a declared module Target set on creation and resume", () => {
@@ -156,7 +192,9 @@ describe("Phase 2 task Target bindings", () => {
       expect(() => openTask(taskRegistry, wrongScope, "wrong-scope")).toThrow(/outside module "sales"/);
       expect(store.loadTask("wrong-scope")).toBeNull();
 
-      const sameRole = {
+      // V10 TASK-009: two Targets on one engineer role are admitted; the
+      // module's declared `## Targets` remains the refusal that stands.
+      const sameRoleOutsideModule = {
         ...parseArgs(["--task-id", "same-role", "--module", "sales", "--bug-fix", "--backend", "--backend-target", "api", "--project-root", target], target),
         targetBindings: {
           targets: [
@@ -165,7 +203,7 @@ describe("Phase 2 task Target bindings", () => {
           ],
         },
       };
-      expect(() => openTask(taskRegistry, sameRole, "same-role")).toThrow(/split into one task per Target, or bind them to different roles/);
+      expect(() => openTask(taskRegistry, sameRoleOutsideModule, "same-role")).toThrow(/outside module "sales"/);
       expect(store.loadTask("same-role")).toBeNull();
     } finally {
       taskRegistry.close();
@@ -246,7 +284,7 @@ describe("Phase 2 task Target bindings", () => {
 });
 
 describe("Phase 2 preflight", () => {
-  it("T-V9-008 derives module scope from persisted plan_source and keeps an unscoped legacy task resumable", () => {
+  it("T-V9-008 derives module scope from persisted plan_source; V10 TASK-011 refuses an unscoped bound task on resume", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "v9-resume-module-scope-"));
     try {
       const framework = path.join(root, "framework");
@@ -284,8 +322,12 @@ describe("Phase 2 preflight", () => {
         bindingWarning: (message: string) => warnings.push(message),
       };
 
-      expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, options)).not.toThrow();
-      expect(warnings).toEqual([expect.stringMatching(/module "sales" declares no Targets.*unscoped/)]);
+      // V10 TASK-011: resume applies the same rule as creation — a bound Target
+      // with no module declaration to sit inside is refused, not warned about.
+      expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, options)).toThrow(
+        /module "sales" declares no Targets[\s\S]*design\.md/,
+      );
+      expect(warnings).toEqual([]);
 
       fs.writeFileSync(path.join(moduleDir, "design.md"), "# Design\n\n## Targets\n\n- another-target\n");
       expect(() => preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, options)).toThrow(/Target "backend".*outside module "sales"/);
@@ -294,7 +336,7 @@ describe("Phase 2 preflight", () => {
     }
   });
 
-  it("T-V1-16 two live Targets: each code stage writes its own and merely reads the other", () => {
+  it("V10 TASK-008 two live Targets: every code stage writes every Target the task binds; QA/security read them all", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "three-repo-two-live-"));
     try {
       const framework = path.join(root, "framework");
@@ -316,18 +358,24 @@ describe("Phase 2 preflight", () => {
       const forBackend = preflightThreeRepoTask(task, AgentStage.BACKEND_ENGINEER, opts);
       expect(forBackend.workRoots).toEqual([
         { targetId: "backend", path: backendRepo, access: "write" },
-        { targetId: "frontend", path: frontendRepo, access: "read" },
+        { targetId: "frontend", path: frontendRepo, access: "write" },
       ]);
 
       const forFrontend = preflightThreeRepoTask(task, AgentStage.FRONTEND_ENGINEER, opts);
       expect(forFrontend.workRoots).toEqual([
-        { targetId: "backend", path: backendRepo, access: "read" },
+        { targetId: "backend", path: backendRepo, access: "write" },
         { targetId: "frontend", path: frontendRepo, access: "write" },
       ]);
 
       // QA verifies both, owns neither.
       const forQa = preflightThreeRepoTask(task, AgentStage.QA_ENGINEER, opts);
       expect(forQa.workRoots).toEqual([
+        { targetId: "backend", path: backendRepo, access: "read" },
+        { targetId: "frontend", path: frontendRepo, access: "read" },
+      ]);
+
+      const forSecurity = preflightThreeRepoTask(task, AgentStage.SECURITY, opts);
+      expect(forSecurity.workRoots).toEqual([
         { targetId: "backend", path: backendRepo, access: "read" },
         { targetId: "frontend", path: frontendRepo, access: "read" },
       ]);

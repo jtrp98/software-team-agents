@@ -17,12 +17,12 @@
  * its own which of the eleven agents is about to write.
  *
  * So it takes identity from `STA_ROLE`, which the runtime executor and adapters set on
- * the child process before spawning an agent. When the orchestrator is
- * driving, the role is known and the agent's own rules apply. When a person is driving
- * interactively, there is no role and no way to derive one -- `role:` in
- * .agent-team/config.yaml says which repository this checkout is, never which agent is typing --
- * so the per-agent layer is skipped and two identity-independent layers remain: the
- * UNIVERSAL_DENY floor, and the workspace boundary below, which needs no environment at all.
+ * the child process before spawning an agent. When the orchestrator is driving, the role is
+ * known and the agent's own rules apply. When a person is driving interactively, there is no
+ * role and no way to derive one, so what remains is the UNIVERSAL_DENY floor, which needs no
+ * environment at all. `role:` in .agent-team/config.yaml used to carry a second boundary here;
+ * it said which repository the checkout was, and V10 leaves one workspace holding both the
+ * Framework payload and the Knowledge documents, so it no longer separates anything.
  *
  * That split is the honest design, not a compromise waiting to be fixed. A guard that enforced
  * nothing without an env var would be one forgotten export away from useless; a guard that
@@ -63,17 +63,20 @@ const root = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 // `node scripts/regenerate-renderings.mjs` rewrites it. No require, no import: CJS and ESM both.
 const UNIVERSAL_DENY = ['.git/**', 'node_modules/**', '.workflow/**', 'dist/**', 'knowledge/_roles/**'];
 const WORKSPACE_BA_ARTIFACTS = ['_docs/module/*/requirement.md', '_docs/module/*/design.md', '_docs/module/*/design-archive.md', '_docs/module/*/test-plan.md', '_docs/module/*/plan.md', '_docs/module/*/uxui/**', '_docs/status.md', 'knowledge/**', 'decisions/**', 'targets.yaml', 'knowledge-policy.yaml'];
-const WORKSPACE_DEV_ARTIFACTS = ['contracts/**', 'workflows/**', 'stacks/**', 'layout.yaml', 'test-pyramid.yaml', 'escalation-policy.yaml'];
-function readWorkspaceRole(nodeFs, nodePath, workspaceRoot) {
-  let text;
-  try { text = nodeFs.readFileSync(nodePath.join(workspaceRoot, '.agent-team', 'config.yaml'), 'utf8'); } catch { return null; }
-  const m = /^role:[ \t]*(ba|dev)[ \t]*$/m.exec(text);
-  return m ? m[1] : null;
+const FRAMEWORK_PAYLOAD_ARTIFACTS = ['contracts/**', 'workflows/**', 'stacks/**', 'layout.yaml', 'test-pyramid.yaml', 'escalation-policy.yaml'];
+const KNOWLEDGE_DENIED_ROLES = ['backend-engineer', 'frontend-engineer', 'devops'];
+function frameworkPayloadDenial(relative) {
+  // Bound to the stage, not to the checkout: one workspace carries both the
+  // Framework payload and the Knowledge documents, so where a write lands
+  // says nothing about whether it is allowed.
+  if (!process.env.STA_ROLE) return null;
+  for (const pattern of FRAMEWORK_PAYLOAD_ARTIFACTS) {
+    if (matchesGlob(pattern, relative)) return frameworkPayloadDenyWhy(pattern);
+  }
+  return null;
 }
-function workspaceDenyWhy(role) {
-  const kb = process.env.STA_KNOWLEDGE_ROOT;
-  if (role === 'dev') return 'Requirements, designs, plans, test-plans, UX artifacts and registry files live in the Knowledge repository' + (kb ? ' (`' + kb + '`)' : '') + '. Run `software-team-agents ba` from the Knowledge workspace instead; this workspace (`role: dev` in .agent-team/config.yaml) owns app code plus review/security/deploy docs only.';
-  return 'Contracts, workflows, stacks and pipeline policy are engineer payload for a Target checkout. Run engineering work with `software-team-agents dev` from a Target workspace; this workspace (`role: ba` in .agent-team/config.yaml) owns analysis docs and knowledge items only.';
+function frameworkPayloadDenyWhy(pattern) {
+  return '`' + pattern + '` is Framework payload — `sta sync` materialises it and a person edits it. No agent contract grants it, so no stage may write it; change it in the Framework repository and sync.';
 }
 function stackPathRules() {
   let parsed;
@@ -96,6 +99,23 @@ function boundReadOnlyTarget(nodePath, target) {
 function boundReadOnlyWhy(targetId) {
   const role = process.env.STA_ROLE || 'current role';
   return 'Blocked: Target "' + targetId + '" is bound read-only for this ' + role + ' invocation; writing to it is refused.';
+}
+function knowledgeArtifactDenial(nodePath, target) {
+  // The Knowledge root can sit inside a granted work root, so this runs off
+  // the root the runtime named rather than off the workspace-relative path.
+  const role = process.env.STA_ROLE;
+  if (!role || !KNOWLEDGE_DENIED_ROLES.includes(role)) return null;
+  const kb = process.env.STA_KNOWLEDGE_ROOT;
+  if (!kb) return null;
+  const rel = nodePath.relative(nodePath.resolve(kb), nodePath.resolve(target)).replace(/\\/g, '/');
+  if (rel === '' || rel.startsWith('../') || nodePath.isAbsolute(rel)) return null;
+  for (const pattern of WORKSPACE_BA_ARTIFACTS) {
+    if (matchesGlob(pattern, rel)) return { rel: rel, why: knowledgeDenyWhy(role, pattern, kb) };
+  }
+  return null;
+}
+function knowledgeDenyWhy(role, pattern, knowledgeRoot) {
+  return '`' + role + '` implements what the Knowledge repository (`' + knowledgeRoot + '`) already decided, so it may not write `' + pattern + '` there — that artifact is written by the role that owns it, never by an implementation stage.';
 }
 function matchesGlob(pattern, target) {
   const clean = (p) => p.replace(/\\/g, '/').replace(/^\.\//, '').replace(/^\/+/, '');
@@ -148,6 +168,11 @@ function run(input) {
   const readOnlyTarget = boundReadOnlyTarget(path, path.resolve(root, target));
   if (readOnlyTarget !== null) return boundReadOnlyWhy(readOnlyTarget);
 
+  // Ahead of the work-root branch below, which allows anything the floor lets
+  // through: a Knowledge root may itself sit inside a granted work root.
+  const knowledgeDenial = knowledgeArtifactDenial(path, path.resolve(root, target));
+  if (knowledgeDenial !== null) return deny(knowledgeDenial.rel, process.env.STA_ROLE, knowledgeDenial.why);
+
   // Three-repo runtime hands this hook only canonical write roots selected by
   // preflight. A Target path is outside the Framework contract's relative
   // globs, so evaluate the universal floor relative to that Target and allow
@@ -157,6 +182,8 @@ function run(input) {
     for (const pattern of UNIVERSAL_DENY) {
       if (matchesGlob(pattern, workRelative)) return deny(workRelative, process.env.STA_ROLE || null, `no agent may write \`${pattern}\``);
     }
+    const workFrameworkWhy = frameworkPayloadDenial(workRelative);
+    if (workFrameworkWhy !== null) return deny(workRelative, process.env.STA_ROLE, workFrameworkWhy);
     return null;
   }
 
@@ -169,23 +196,12 @@ function run(input) {
     }
   }
 
-  // Workspace-level rules — identity-independent, so
-  // they hold for interactive runs where no STA_ROLE is set. A `role:
-  // dev` workspace owns app code plus the engineer-written docs
-  // (review/security/deploy); every analysis artifact and registry file
-  // belongs to the Knowledge repository, named here from
-  // STA_KNOWLEDGE_ROOT when the launch provided it. A `role: ba`
-  // workspace mirrors this for the engineer/pipeline payload.
-  const wsRole = readWorkspaceRole(fs, path, root);
-  if (wsRole === 'dev') {
-    for (const pattern of WORKSPACE_BA_ARTIFACTS) {
-      if (matchesGlob(pattern, rel)) return deny(rel, null, workspaceDenyWhy('dev'));
-    }
-  } else if (wsRole === 'ba') {
-    for (const pattern of WORKSPACE_DEV_ARTIFACTS) {
-      if (matchesGlob(pattern, rel)) return deny(rel, null, workspaceDenyWhy('ba'));
-    }
-  }
+  // Framework payload — `sta sync` materialises it and a person edits it. The
+  // rule used to key off `role:` in .agent-team/config.yaml, which said which
+  // repository this checkout was; one workspace now carries the payload and the
+  // Knowledge documents together, so the stage is the only thing left to key on.
+  const frameworkWhy = frameworkPayloadDenial(rel);
+  if (frameworkWhy !== null) return deny(rel, process.env.STA_ROLE, frameworkWhy);
 
   const role = process.env.STA_ROLE;
   if (!role) return null; // interactive run: the floor above is all this can honestly enforce

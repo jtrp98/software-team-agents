@@ -18,8 +18,9 @@ import {
 } from "./codeIntelAssembly.js";
 
 /**
- * Wiring contract: OFF (the default) is byte-identical to a pipeline without
- * the feature; every failure mode collapses to `[]`; ON appends the evidence
+ * Wiring contract: OFF (the explicit `STA_CODE_INTEL=off|false|0` override) is
+ * byte-identical to a pipeline without the feature; every failure mode
+ * collapses to `[]`; ON (the default, ADR-006 Option A) appends the evidence
  * block carrying the source-verification directive.
  */
 
@@ -45,20 +46,31 @@ function fakeProvider(status: "fresh" | "stale" | "missing" = "fresh"): CodeInte
   };
 }
 
-describe("codeIntelEnabled", () => {
-  it("is OFF unless explicitly turned on", () => {
-    expect(codeIntelEnabled({})).toBe(false);
-    expect(codeIntelEnabled({ [CODE_INTEL_ENV]: "off" })).toBe(false);
+describe("codeIntelEnabled — V10 TASK-014", () => {
+  it("is ON unless explicitly turned off (no env → ON)", () => {
+    expect(codeIntelEnabled({})).toBe(true);
+    expect(codeIntelEnabled({ [CODE_INTEL_ENV]: "" })).toBe(true);
     expect(codeIntelEnabled({ [CODE_INTEL_ENV]: "on" })).toBe(true);
     expect(codeIntelEnabled({ [CODE_INTEL_ENV]: "ON" })).toBe(true);
+    expect(codeIntelEnabled({ [CODE_INTEL_ENV]: "true" })).toBe(true);
+    expect(codeIntelEnabled({ [CODE_INTEL_ENV]: "1" })).toBe(true);
+  });
+
+  it("reads explicit, human-readable off values", () => {
+    expect(codeIntelEnabled({ [CODE_INTEL_ENV]: "off" })).toBe(false);
+    expect(codeIntelEnabled({ [CODE_INTEL_ENV]: "OFF" })).toBe(false);
+    expect(codeIntelEnabled({ [CODE_INTEL_ENV]: "false" })).toBe(false);
+    expect(codeIntelEnabled({ [CODE_INTEL_ENV]: "FALSE" })).toBe(false);
+    expect(codeIntelEnabled({ [CODE_INTEL_ENV]: "0" })).toBe(false);
+    expect(codeIntelEnabled({ [CODE_INTEL_ENV]: " off " })).toBe(false);
   });
 });
 
 describe("codeIntelSlices", () => {
-  it("OFF by default — provider never constructed, prompt stays as before", async () => {
+  it("env off → provider never constructed, prompt stays byte-identical to a pipeline without the feature", async () => {
     let built = false;
     const slices = await codeIntelSlices(INPUT, {
-      env: {},
+      env: { [CODE_INTEL_ENV]: "off" },
       providerFactory: () => {
         built = true;
         return fakeProvider();
@@ -236,8 +248,34 @@ describe("codeIntelContext — T-V8-011 task-first query construction", () => {
   });
 
   it("disabled/missing-input reasons are still visible even without a query", async () => {
-    expect((await codeIntelContext(INPUT, { env: {} })).fallbackReason).toBe("disabled");
+    expect((await codeIntelContext(INPUT, { env: { [CODE_INTEL_ENV]: "off" } })).fallbackReason).toBe("disabled");
     expect((await codeIntelContext({ ...INPUT, moduleName: undefined }, { enabled: true })).fallbackReason).toBe("missing-inputs");
+  });
+
+  it("V10 TASK-014: with no env at all the feature is ON, so a machine without Graphify gets NativeSearch candidates, not silence", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sta-default-on-native-"));
+    const file = path.join(dir, "src", "crm-case-dashboard.ts");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, 'export const dashboard = "crm case dashboard";\n');
+
+    const result = await codeIntelContext(
+      // Unique targetId — the shared `sb-web-helper` fixture id has a real
+      // Graphify cache on machines that ran the T-V8-024 spike, which would
+      // make this test depend on machine-local cache state instead of the
+      // fixture it controls.
+      { ...INPUT, targetId: "sta-default-on-test-target", targetRoot: dir },
+      {
+        // No `enabled`, no `STA_CODE_INTEL` — the V10 default-ON path itself.
+        env: {},
+        resolveRevision: async () => "sandbox-r1",
+        providerFactory: () => undefined as unknown as CodeIntelligenceProvider,
+      },
+    );
+
+    expect(result.used).toBe(true);
+    expect(result.fallbackReason).toBeUndefined();
+    expect(result.candidates[0].location.file).toBe("src/crm-case-dashboard.ts");
+    expect(result.candidates[0].provenance).toBe("inferred");
   });
 });
 

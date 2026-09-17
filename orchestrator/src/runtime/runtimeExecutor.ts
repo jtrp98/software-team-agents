@@ -32,6 +32,7 @@ import type {
   RuntimeAutonomy,
   RuntimeGuards,
 } from "./runtimeAdapter.js";
+import type { GuardResolver } from "./runtimeGuards.js";
 import type { RuntimeRegistry } from "./runtimeRegistry.js";
 import {
   requiredCapabilitiesFor,
@@ -46,7 +47,7 @@ import type { ClassificationResult } from "../classification/taskClassifier.js";
 import type { QaRiskSignals } from "../qa/mode.js";
 import { checkRoleExecutionGate } from "../roles/roleExecutionGate.js";
 import type { PersistedTask } from "../store/taskStore.js";
-import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
+import { stageWritesBoundTarget, type RuntimeTask } from "../orchestrator/runtimeTask.js";
 import type { ThreeRepoRequestRoots } from "../threeRepo/preflight.js";
 import { deriveHandoff } from "../agents/moduleDocs.js";
 import { parseDesignEvidence } from "../docs/designEvidence.js";
@@ -79,6 +80,13 @@ export interface RuntimeExecutorOptions {
   runtime: RuntimeAdapter;
   /** Root of the target project — where the role definitions and `_docs/` live. */
   projectRoot: string;
+  /**
+   * The runtime-state home for packet persistence when no per-task three-repo
+   * roots resolve one (V10 TASK-025: the Knowledge root). Callers whose
+   * `projectRoot` is something else — bounded-run's contract root, for one —
+   * name the state root explicitly here.
+   */
+  runtimeStateRoot?: string;
   /** Resolves a task to the `_docs/module/<name>/` folder its docs live under. */
   moduleName: (taskId: string) => string;
   /**
@@ -90,7 +98,7 @@ export interface RuntimeExecutorOptions {
    * for the real thing, or `() => NO_GUARDS` in a test that is explicitly not
    * testing guards.
    */
-  guards: (role: string, layoutRoot?: string) => RuntimeGuards;
+  guards: GuardResolver;
   /** How much autonomy each run gets. Defaults to `propose` — the orchestrator automates handoffs between the pipeline's confirmation points, it does not remove them. */
   autonomy?: RuntimeAutonomy;
   /**
@@ -326,14 +334,20 @@ const NO_FALLBACK_HOPS = 0;
  * `compileExecutionPacket` always saw `retrievalCandidates: undefined` here —
  * so PM's authored `Query:` retrieval hint never reached an actual lookup.
  *
+ * TASK-017 — the SAME `codeIntelContext` call also feeds the rendered
+ * evidence block (source spans + the source-of-truth guardrail) into the
+ * packet, so a v2 task gets the evidence text a v1/legacy task always got via
+ * `assembleStageContext`'s `codeIntel` slice. One query serves both; nothing
+ * here calls `codeIntelContext` a second time.
+ *
  * Additive by design, same posture as every other optional enrichment in this
  * file: OFF by default (`STA_CODE_INTEL`), and any missing input or failure
- * answers `[]` rather than blocking packet compilation. A v1/legacy
- * RuntimeTask has no `contract` to query from, so it answers `[]` too — the
+ * answers `{}` rather than blocking packet compilation. A v1/legacy
+ * RuntimeTask has no `contract` to query from, so it answers `{}` too — the
  * legacy compatibility path already refuses to reach this branch at all
  * (`RuntimeTaskV2Schema.safeParse` inside `compileExecutionPacket`).
  */
-async function packetRetrievalCandidates(
+async function packetCodeIntel(
   opts: RuntimeExecutorOptions,
   req: AgentExecutorRequest,
   runtimeTask: RuntimeTask,
@@ -341,18 +355,21 @@ async function packetRetrievalCandidates(
   targetRoot: string,
   targetId: string | undefined,
   baseRevision: string,
-): Promise<ReturnType<typeof retrievalCandidatesForPacket> | undefined> {
-  if (!("version" in runtimeTask) || runtimeTask.version !== 2) return undefined;
+): Promise<{ retrievalCandidates?: ReturnType<typeof retrievalCandidatesForPacket>; evidenceBlock?: string }> {
+  if (!("version" in runtimeTask) || runtimeTask.version !== 2) return {};
   try {
     const changedFiles = await opts.changedFiles?.(req.taskId).catch(() => []) ?? [];
     const query = buildTaskRetrievalQuery(runtimeTask.contract, { moduleName, changedFiles });
     const codeIntel = opts.codeIntelContext ?? defaultCodeIntelContext;
     const result = await codeIntel({ stage: req.stage, taskId: req.taskId, moduleName, targetRoot, targetId, query, revision: baseRevision });
-    if (result.candidates.length === 0) return undefined;
-    return retrievalCandidatesForPacket(result.candidates, targetRoot, baseRevision);
+    if (result.candidates.length === 0) return {};
+    return {
+      retrievalCandidates: retrievalCandidatesForPacket(result.candidates, targetRoot, baseRevision),
+      evidenceBlock: result.used ? result.slices[1] : undefined,
+    };
   } catch {
     // Discovery enrichment must never block packet compilation.
-    return undefined;
+    return {};
   }
 }
 
@@ -415,16 +432,15 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         const readOnlyTargets = stageWorkRoots.map((root) => `"${root.targetId}"`).join(", ") || "none";
         return failResult(
           `cannot start ${role}: Target ${readOnlyTargets} is bound read-only for this ${role} invocation; ` +
-          "exactly one writable Target must be resolved before an engineer adapter can start",
-        );
-      }
-      if (stageWritableRoots.length > 1) {
-        return failResult(
-          `cannot start ${role}: Targets ${stageWritableRoots.map((root) => `"${root.targetId}"`).join(", ")} ` +
-          `would be writable in one ${role} invocation; split into one task per Target, or bind them to different roles`,
+          "at least one writable Target must be resolved before an engineer adapter can start",
         );
       }
     }
+    // Every writable root is in scope, but a process has one cwd and an attempt
+    // has one git identity, so the primary root alone selects the working
+    // directory, the stack config, the base revision and the code-intel index.
+    // The commit boundary keeps its own single-root rule where it is decided:
+    // `freezeAttempt`/`assertTargetAttempt`, refused before an adapter starts.
     const workRoot = stageWritableRoots[0] ?? stageWorkRoots[0];
     let incomingHandoff;
     try {
@@ -459,7 +475,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     const executionRoot = workRoot?.path ?? threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot;
     let guards: RuntimeGuards;
     try {
-      guards = opts.guards(role, executionRoot);
+      guards = opts.guards(role, executionRoot, { targetSide: stageWritesBoundTarget(runtimeTask, req.stage) });
     } catch (e) {
       // The current role contract is the authority packet scope narrows. A run
       // with no resolved contract must not compile a packet or start an adapter.
@@ -470,8 +486,11 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     let promptParts: PromptPartsResult;
     if (runtimeTask) {
       try {
-        const runtimeStateRoot = threeRepo?.roots.bindingRoot ?? opts.projectRoot;
+        // V10 TASK-025 — the Knowledge root is the one runtime-state home; the
+        // Framework binding root only ever hosted contracts, never packets.
+        const runtimeStateRoot = threeRepo?.roots.knowledgeRoot ?? opts.runtimeStateRoot ?? opts.projectRoot;
         const baseRevision = await (opts.packetBaseRevision ?? resolveTargetRevision)(executionRoot);
+        const codeIntel = await packetCodeIntel(opts, req, runtimeTask, moduleName, executionRoot, workRoot?.targetId, baseRevision);
         const packet = compileExecutionPacket({
           req,
           role,
@@ -481,7 +500,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           baseRevision,
           config: { target: loadTargetConfig(executionRoot), guardStackRules: resolveGuardStackRules(role, executionRoot) },
           dependencyEvidence: opts.dependencyEvidence?.(req.taskId),
-          retrievalCandidates: await packetRetrievalCandidates(opts, req, runtimeTask, moduleName, executionRoot, workRoot?.targetId, baseRevision),
+          retrievalCandidates: codeIntel.retrievalCandidates,
+          codeIntelEvidence: codeIntel.evidenceBlock,
           extra: opts.extraInstruction,
         });
         if (JSON.stringify([...packet.scope.allow].sort()) !== JSON.stringify([...new Set(guards.writeAllow)].sort())) throw new Error("packet scope differs from the enforced stage contract; recompile with current stage grants");
@@ -500,8 +520,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         const persisted = writeExecutionPacket({
           projectRoot: runtimeStateRoot,
           packet,
+          // The state home is the Knowledge root itself now, so only the
+          // Targets stay forbidden — every resolved one, primary or not.
           forbiddenRoots: threeRepo
-            ? [threeRepo.roots.knowledgeRoot, ...threeRepo.roots.workRoots.map((root) => root.path)]
+            ? threeRepo.roots.workRoots.map((root) => root.path)
             : [],
           maxRunsPerTask: opts.packetRetention,
         });

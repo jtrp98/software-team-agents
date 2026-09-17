@@ -226,8 +226,8 @@ describe("T-V5-008 — guard coverage is a launch requirement", () => {
     const originalLog = console.log;
     console.log = (...parts: unknown[]) => logged.push(parts.map(String).join(" "));
     try {
-      const { runDev } = await import("./devCommand.js");
-      await runDev({
+      const { runSession } = await import("./devCommand.js");
+      await runSession({
         targetRoot: target,
         templatesDir,
         runtime: "codex",

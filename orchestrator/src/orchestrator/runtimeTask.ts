@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { z } from "zod";
-import { pathRulesFor } from "../agents/pathPermissions.js";
+import { pathRulesFor, targetPathRules } from "../agents/pathPermissions.js";
 import {
   moduleDocPath,
   readModuleDoc,
@@ -32,6 +32,12 @@ const RuntimeTaskScopeRootSchema = z.object({
   stage: z.enum(AgentStage),
   target_id: z.string().min(1),
   root: z.string().min(1),
+  /**
+   * Absent on every task frozen before V10 TASK-010, and read as such: a task
+   * keeps the scope it was compiled with rather than being widened in place by
+   * a later release.
+   */
+  access: z.enum(["read", "write"]).optional(),
   allow: z.array(
     z.object({
       contract_glob: z.string().min(1),
@@ -97,6 +103,22 @@ export interface RuntimeTaskWorkRoot {
   stage: AgentStage;
   targetId: string;
   path: string;
+  /**
+   * Set only where a three-repo preflight resolved this root from the task's own
+   * Target bindings. Left unset by the legacy and `--target-root` paths, whose
+   * single-repo status is still an open human decision (V10 D3).
+   */
+  access?: "read" | "write";
+}
+
+/**
+ * Whether this stage writes a bound Target checkout — the axis V10 TASK-010
+ * scopes on. Read from the frozen task so the guard set and the packet's
+ * `scope.allow` cannot reach different answers for the same attempt.
+ */
+export function stageWritesBoundTarget(task: RuntimeTask | null | undefined, stage: AgentStage): boolean {
+  if (!task || !("version" in task) || task.version !== 2) return false;
+  return task.scope.work_roots.some((root) => root.stage === stage && root.access === "write");
 }
 
 export interface RuntimeTaskBuildInput {
@@ -220,7 +242,9 @@ export function buildRuntimeTask(input: RuntimeTaskBuildInput): RuntimeTaskV2 | 
     dependencies: { task_ids: graph.dependenciesOf(task.id), outputs: graph.dependencyOutputsOf(task.id).map(d => ({ task_id: d.taskId, produces: d.produces, edges: d.edges.map(e => e.kind) })) },
     scope: { status: workRoots.length ? "resolved" : "unavailable", reason: workRoots.length ? null : "no stage work root was resolved", work_roots: workRoots.map(root => ({
       stage: root.stage, target_id: root.targetId, root: path.resolve(root.path),
-      allow: pathRulesFor(root.stage, input.projectRoot, root.path).write.map(glob => ({ contract_glob: glob, effective_glob: path.resolve(root.path, ...glob.split("/")) })),
+      ...(root.access ? { access: root.access } : {}),
+      allow: (root.access === "write" ? targetPathRules(root.stage, input.projectRoot) : pathRulesFor(root.stage, input.projectRoot, root.path))
+        .write.map(glob => ({ contract_glob: glob, effective_glob: path.resolve(root.path, ...glob.split("/")) })),
     })) },
     required_verification: verification,
     stop_conditions: [...stopConditions(input), ...task.humanGate.map(gate => `STOP for the existing ${gate} human gate; this packet is not approval`)],

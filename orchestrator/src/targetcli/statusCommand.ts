@@ -14,13 +14,12 @@ import {
 } from "./targetMeta.js";
 import { devDerivedContent, pendingSyncEntries, planSync, type SyncPlanEntry } from "./syncEngine.js";
 import {
-  assetsForRole,
   detectWorkspaceKind,
   hasKnowledgeMarkers,
   resolveKnowledgeBinding,
   resolveTargetBinding,
   TargetBindingError,
-  WORKSPACE_ROLE_LABEL,
+  workspaceShapeOf,
   type KnowledgeBinding,
   type WorkspaceRole,
   type TargetBinding,
@@ -34,9 +33,9 @@ import { effectiveExecutionConfig, inertConfigKeys, loadStaConfig, type StaConfi
 
 /**
  * `software-team-agents status`: the whole architecture in one read-only
- * screen, in the language of the role whose workspace it is run from. A BA
- * sees their Knowledge workspace with Target marked NOT REQUIRED; a DEV sees
- * Target plus a validated Knowledge binding.
+ * screen, in the language of the workspace it is run from. The Knowledge
+ * workspace sees itself with Targets marked optional/read-only; a Target
+ * checkout sees its resolved stack plus its Knowledge context.
  */
 
 export interface RuntimeReadiness {
@@ -78,14 +77,12 @@ export interface TargetStatus {
   projectOwnedPaths: string[];
   /** Complete read-only inventory of instructions that can affect this workspace. */
   instructionSurface: InstructionSurfaceEntry[];
-  /** Agent-prompt files on disk belonging to the other workspace role. Never legitimate; sync --force removes them. */
-  rosterDriftPaths: string[];
   managedFileCount: number;
   hooksInstalled: number;
   hooksRegistered: number;
   /**
    * installation.yaml binds a Knowledge root (marker-complete) that was never
-   * `init --role ba`'d there: every command past binding validation succeeds,
+   * initialized there: every command past binding validation succeeds,
    * so nothing else notices the BA-workspace prompts don't exist anywhere on
    * the machine. Set to the bound root's path when this applies; absent
    * otherwise (unbound, or bound and initialized).
@@ -228,11 +225,13 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
   const role: WorkspaceRole | undefined =
     config?.role ??
     (kind === "knowledge" ? "ba" : kind === "target" ? "dev" : undefined);
+  // What the workspace IS drives what status resolves and shows; the recorded
+  // role stays a data field for --json readers, never a display key.
+  const shape = workspaceShapeOf(kind, config?.role);
 
   let syncedVersion: string | undefined;
   let conflictCount = 0;
   let projectOwnedPaths: string[] = [];
-  let rosterDriftPaths: string[] = [];
   let managedFileCount = 0;
   let syncState: SyncState = "NOT_INITIALIZED";
   let syncChanges: SyncPlanEntry[] = [];
@@ -254,7 +253,6 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
         templatesDir,
         manifest,
         config,
-        include: role ? assetsForRole(role) : undefined,
         role,
         // A dev workspace's CLAUDE.md is judged against its rendered bytes,
         // so a healthy rendered workspace reports zero conflicts.
@@ -262,7 +260,6 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
           targetRoot: roots.targetRoot,
           templatesDir,
           config,
-          include: role ? assetsForRole(role) : undefined,
           installationConfigPath: options.installationConfigPath,
         })?.content,
       });
@@ -274,7 +271,6 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
       const conflicts = plan.conflicts;
       conflictCount = conflicts.length;
       projectOwnedPaths = conflicts.filter((c) => c.kind === "untracked-file").map((c) => c.path);
-      rosterDriftPaths = conflicts.filter((c) => c.kind === "roster-drift").map((c) => c.path);
     } catch {
       // An unreadable payload must not make status crash. Preserve the
       // compatibility stop, but never claim freshness without a readable plan.
@@ -287,10 +283,11 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     frameworkInstructionPaths.add(CLAUDE_SETTINGS_PATH);
   }
 
-  // Knowledge picture depends on the role: required-and-validated for DEV,
-  // informational for BA.
+  // Knowledge picture depends on the workspace shape: a Target checkout reads
+  // its Knowledge context from config/installation; the Knowledge workspace
+  // IS the Knowledge root.
   let knowledgeBinding: KnowledgeBinding | undefined;
-  if (role === "dev") {
+  if (shape === "target") {
     try {
       knowledgeBinding = resolveKnowledgeBinding({
         targetRoot: roots.targetRoot,
@@ -300,21 +297,21 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     } catch (e) {
       knowledgeBinding = { knowledgeRoot: e instanceof Error ? e.message : String(e), via: "invalid" };
     }
-  } else if (role === "ba") {
+  } else if (shape === "knowledge") {
     try {
       knowledgeBinding = resolveKnowledgeBinding({ targetRoot: roots.targetRoot, installationConfigPath: options.installationConfigPath });
     } catch {
       knowledgeBinding = undefined;
     }
-    // For BA the workspace itself IS the Knowledge root.
+    // The Knowledge workspace itself IS the Knowledge root.
     knowledgeBinding = knowledgeBinding ?? { knowledgeRoot: roots.targetRoot, via: "workspace" };
   }
 
-  // BA-workspace-only, optional Target binding. Any resolution problem is
+  // Knowledge-workspace-only, optional Target binding. Any resolution problem is
   // reported as "invalid" rather than thrown: status must never crash because
   // a Target binding is unset or wrong.
   let targetBinding: TargetBinding | undefined;
-  if (role === "ba") {
+  if (shape === "knowledge") {
     try {
       targetBinding = resolveTargetBinding({
         knowledgeRoot: roots.targetRoot,
@@ -327,10 +324,10 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     }
   }
 
-  // Checked unconditionally (every status run, BA or DEV) against the
-  // machine-wide installation binding, independent of this workspace's own
-  // role: the whole point is to catch a Knowledge root nobody has ever
-  // initialized, which is invisible from every other check here.
+  // Checked unconditionally (every status run, either workspace shape) against
+  // the machine-wide installation binding, independent of this workspace: the
+  // whole point is to catch a Knowledge root nobody has ever initialized,
+  // which is invisible from every other check here.
   let knowledgeBoundButUninitialized: string | undefined;
   try {
     const installed = loadInstallationConfig(options.installationConfigPath ?? defaultInstallationConfigPath());
@@ -372,7 +369,6 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
       targetRoot: roots.targetRoot,
       frameworkPaths: initialized ? frameworkInstructionPaths : undefined,
     }),
-    rosterDriftPaths,
     managedFileCount,
     hooksInstalled: guardWiring.hooksInstalled,
     hooksRegistered: guardWiring.hooksRegistered,
@@ -389,20 +385,20 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
 
 export function renderStatus(status: TargetStatus): string {
   const lines: string[] = [];
-  if (status.role) {
-    lines.push(`Workspace role: ${WORKSPACE_ROLE_LABEL[status.role]} (${status.role})`);
-    lines.push(`Workspace: ${status.role === "ba" ? "Knowledge" : "Target"}`);
+  const shape = workspaceShapeOf(status.workspaceKind, status.role);
+  if (shape !== "other") {
+    lines.push(`Workspace: ${shape === "knowledge" ? "Knowledge" : "Target"}`);
   }
-  lines.push(status.role === "ba" ? "Knowledge:" : "Target:");
+  lines.push(shape === "knowledge" ? "Knowledge:" : "Target:");
   lines.push(`  ${status.targetRoot}${status.targetId ? ` (id: ${status.targetId})` : ""}`);
-  if (status.role === "ba") {
+  if (shape === "knowledge") {
     if (status.targetBinding && status.targetBinding.via !== "invalid") {
       lines.push("Target (optional, read-only):");
       lines.push(`  ${status.targetBinding.targetRoot} (via ${status.targetBinding.via})`);
     } else if (status.targetBinding && status.targetBinding.via === "invalid") {
-      lines.push(`Target: NOT REQUIRED (optional; not needed for BA work) — configured target binding is invalid: ${status.targetBinding.targetRoot}`);
+      lines.push(`Target: NOT REQUIRED (optional — module documents live in this workspace) — configured target binding is invalid: ${status.targetBinding.targetRoot}`);
     } else {
-      lines.push("Target: NOT REQUIRED (optional; not needed for BA work)");
+      lines.push("Target: NOT REQUIRED (optional — module documents live in this workspace)");
     }
     // A leftover committed target.path is a problem with a named fix, not a
     // silent no-binding. Printed whether or not a target_id also resolved, so
@@ -420,9 +416,9 @@ export function renderStatus(status: TargetStatus): string {
   lines.push(`  ${status.frameworkRoot}`);
   lines.push(`  installed version: ${status.frameworkVersion}`);
   lines.push(`V3 config: ${status.v3Configuration.detail}`);
-  if (status.role === "dev") {
+  if (shape === "target") {
     if (!status.knowledgeBinding) {
-      lines.push("Knowledge: NOT BOUND — required for DEV (set knowledge.path in .agent-team/config.yaml)");
+      lines.push("Knowledge: NOT BOUND (set knowledge.path in .agent-team/config.yaml, or `sta configure knowledge-root <path>` machine-wide)");
     } else if (status.knowledgeBinding.via === "invalid") {
       lines.push(`Knowledge: INVALID — ${status.knowledgeBinding.knowledgeRoot}`);
     } else {
@@ -445,7 +441,7 @@ export function renderStatus(status: TargetStatus): string {
     lines.push("  installed and synced Framework versions differ in major — review the changelog before re-syncing (sync --force)");
   }
   if (status.syncedVersion !== undefined) lines.push(`  synced Framework version: ${status.syncedVersion}`);
-  if (status.role === "dev") {
+  if (shape === "target") {
     if (status.stack) {
       lines.push(`  Target stack: ${status.stack.profile} (${status.stack.package_manager}; ${status.stack.fingerprint})`);
       if (status.stackProfileMismatch) lines.push(`  WARNING: ${status.stackProfileMismatch}`);
@@ -483,21 +479,16 @@ export function renderStatus(status: TargetStatus): string {
     lines.push(`WARNING: nested instructions may shadow or contradict the root bootstrap (${nestedInstructions.length}):`);
     for (const entry of nestedInstructions) lines.push(`  ${entry.path} — project-owned and read-only; review its effective scope`);
   }
-  if (status.rosterDriftPaths.length > 0) {
-    lines.push(`WARNING: roster drift — agent prompt(s) from another workspace role found here (${status.rosterDriftPaths.length}):`);
-    for (const p of status.rosterDriftPaths) lines.push(`    ${p}`);
-    lines.push("    → run `software-team-agents sync --force` to remove them (backed up first)");
-  }
   if (status.knowledgeBoundButUninitialized) {
     lines.push(
-      `WARNING: Knowledge root bound in installation.yaml (${status.knowledgeBoundButUninitialized}) has no .agent-team/config.yaml — the BA workspace role is not usable anywhere on this machine yet.`,
+      `WARNING: Knowledge root bound in installation.yaml (${status.knowledgeBoundButUninitialized}) has no .agent-team/config.yaml — the workspace payload does not exist anywhere on this machine yet.`,
     );
-    lines.push(`  fix: cd "${status.knowledgeBoundButUninitialized}" && software-team-agents init --role ba`);
+    lines.push(`  fix: cd "${status.knowledgeBoundButUninitialized}" && software-team-agents init`);
   }
   lines.push(`Claude: ${status.claude.ready ? "READY" : "NOT READY"} — ${status.claude.detail}`);
   lines.push(`Codex: ${status.codex.ready ? "READY" : "NOT READY"} — ${status.codex.detail}`);
   lines.push(`OpenCode: ${status.opencode.ready ? "READY" : "NOT READY"} — ${status.opencode.detail}`);
   lines.push(`Antigravity: ${status.antigravity.ready ? "READY" : "NOT READY"} — ${status.antigravity.detail}`);
-  if (status.role !== "ba" && status.knowledgeRoot) lines.push(`Installation Knowledge root: ${status.knowledgeRoot}`);
+  if (workspaceShapeOf(status.workspaceKind, status.role) !== "knowledge" && status.knowledgeRoot) lines.push(`Installation Knowledge root: ${status.knowledgeRoot}`);
   return lines.join("\n");
 }

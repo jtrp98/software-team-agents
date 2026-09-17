@@ -41,7 +41,7 @@ export function writePacketPlan(root: string, tasks: PlanTask[], moduleName = "p
   fs.writeFileSync(path.join(dir, "design.md"), ["# Design", "", "Design evidence format: 1", "", ...designSections, "", "## Modules", "fixture"].join("\n"));
 }
 
-export function runtimeTaskFixture(root: string, opts: { taskId?: string; stage?: AgentStage; allow?: string[]; targetRoot?: string; overrides?: Partial<PlanTask>; input?: Partial<RuntimeTaskBuildInput> } = {}) {
+export function runtimeTaskFixture(root: string, opts: { taskId?: string; stage?: AgentStage; allow?: string[]; access?: "read" | "write"; targetRoot?: string; overrides?: Partial<PlanTask>; input?: Partial<RuntimeTaskBuildInput> } = {}) {
   fs.mkdirSync(opts.targetRoot ?? root, { recursive: true });
   const task = fixtureTask({ id: opts.taskId ?? "T-PACKET", ...opts.overrides });
   const stage = opts.stage ?? AgentStage.BACKEND_ENGINEER;
@@ -55,7 +55,7 @@ export function runtimeTaskFixture(root: string, opts: { taskId?: string; stage?
   })!;
   if (!runtimeTask) throw new Error("fixture did not compile");
   const targetRoot = opts.targetRoot ?? root;
-  runtimeTask.scope.work_roots = [{ stage, target_id: "fixture", root: targetRoot, allow: (opts.allow ?? ["server/**"]).map(glob => ({ contract_glob: glob, effective_glob: path.resolve(targetRoot, ...glob.split("/")) })) }];
+  runtimeTask.scope.work_roots = [{ stage, target_id: "fixture", root: targetRoot, ...(opts.access ? { access: opts.access } : {}), allow: (opts.allow ?? ["server/**"]).map(glob => ({ contract_glob: glob, effective_glob: path.resolve(targetRoot, ...glob.split("/")) })) }];
   return runtimeTask;
 }
 

@@ -118,11 +118,21 @@ export interface GeneratedPromptPreview {
   source_map: PromptSourceMapEntry[];
 }
 
+/**
+ * The code-intel evidence section is not one of `renderPacketSections`'s own
+ * `section(title, body)` calls — it is `code_intel_evidence` verbatim, whose
+ * own heading (`resolver.ts`'s `renderEvidenceBlock`) names the target id and
+ * so is never a fixed string. Matched by prefix instead of an exact
+ * `PACKET_SECTION_SOURCES` key.
+ */
+const CODE_INTEL_EVIDENCE_HEADING_PREFIX = "Code intelligence evidence — target ";
+
 function promptSourceMap(packet: ExecutionPacket): PromptSourceMapEntry[] {
   let byteStart = 0;
   return renderPacketSections(packet).map((rendered, index) => {
     const section = /^## ([^\n]+)/.exec(rendered)?.[1] ?? "";
-    const packetFields = PACKET_SECTION_SOURCES[section];
+    const packetFields = PACKET_SECTION_SOURCES[section]
+      ?? (section.startsWith(CODE_INTEL_EVIDENCE_HEADING_PREFIX) ? ["code_intel_evidence"] : undefined);
     if (!packetFields) throw new Error(`generated prompt section has no packet-field source mapping: ${section || "(untitled)"}`);
     if (index > 0) byteStart += Buffer.byteLength("\n\n");
     const entry = { section, packet_fields: packetFields, byte_start: byteStart, byte_length: Buffer.byteLength(rendered) };

@@ -5,6 +5,7 @@ import { flagValue } from "../support.js";
 import { openStore } from "../support.js";
 import { CliUsageError, cliVersion } from "../../cli.js";
 import { createProductionRuntimeRegistry, type CliDependencies } from "../composition/runtimeRegistry.js";
+import { askCodeIntelConsentAtRunStart } from "../composition/runStartConsent.js";
 import { FLAG_TO_CLASSIFICATION, type BooleanClassificationKey } from "../../classification/classificationFlags.js";
 import type { ClassificationInput } from "../../classification/taskClassifier.js";
 import {
@@ -24,7 +25,7 @@ import { contractGuardResolver } from "../../runtime/runtimeGuards.js";
 import { GitCommandLayer } from "../../git/commandLayer.js";
 import { inspectRepositoryPreflight } from "../../git/preflight.js";
 import { createRunId } from "../../run/journal.js";
-import { BoundedRunController, type ControllerExitKind } from "../../run/boundedRunController.js";
+import { BoundedRunController, type AwaitingHumanTask, type ControllerExitKind } from "../../run/boundedRunController.js";
 import { createProductionBoundedRunServices } from "../../run/boundedRunServices.js";
 import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "../../runtime/runtimeRegistry.js";
 import { RUNTIME_IDS, type RuntimeId } from "../../runtime/runtimeSupport.js";
@@ -205,6 +206,11 @@ export function parseBoundedRunArgs(argv: string[], defaultProjectRoot: string):
   if (resumeRunId) {
     if (scope) throw new CliUsageError("bounded-run: --resume continues an already-frozen scope; --all/--phase/--task do not apply");
     if (Object.keys(classification).length > 0) throw new CliUsageError("bounded-run: --resume continues an already-frozen classification; classification flags do not apply");
+    // The ledger freezes no autonomy fact (LedgerRunSchema has no such field),
+    // so a resume cannot inherit it — it must be stated like the first run.
+    if (!dryRun && autonomy !== "edit" && autonomy !== "full") {
+      throw new CliUsageError(`bounded-run: --resume ${resumeRunId} also needs --autonomy edit or --autonomy full for an unattended continuation (a dry run does not)`);
+    }
   } else {
     if (!moduleName) throw new CliUsageError(`bounded-run: --module is required\n${BOUNDED_RUN_USAGE}`);
     if (!scope) throw new CliUsageError(`bounded-run: exactly one of --all, --phase <n>, --task <id,...> is required\n${BOUNDED_RUN_USAGE}`);
@@ -280,6 +286,21 @@ function configHashFor(projectRoot: string): string {
     if (error instanceof StaConfigMissingError) return stableHash({ config: "absent" });
     throw error;
   }
+}
+
+/** Cut long gate reasons rather than letting one bury the task ids the reader is scanning for. */
+const AWAITING_HUMAN_REASON_LIMIT = 140;
+
+/** T-V10-031 — one line per task still waiting on a person, each with the command that clears it. */
+export function renderAwaitingHuman(awaiting: readonly AwaitingHumanTask[]): string[] {
+  if (awaiting.length === 0) return [];
+  const lines = [`[bounded-run] awaiting a human decision (${awaiting.length}):`];
+  for (const item of awaiting) {
+    const reason = item.reason.replace(/\s+/g, " ").trim();
+    const short = reason.length > AWAITING_HUMAN_REASON_LIMIT ? `${reason.slice(0, AWAITING_HUMAN_REASON_LIMIT - 1)}…` : reason;
+    lines.push(`[bounded-run]   ${item.taskId}: ${short} — \`sta approve ${item.taskId}\``);
+  }
+  return lines;
 }
 
 function exitCodeFor(kind: ControllerExitKind): number {
@@ -361,6 +382,9 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
   // a three-repo, Target-bound task (`contractRootForTask`'s rule);
   // legacy single-repo runs use the project root itself.
   const contractRoot = installation ? resolveFrameworkRoot() : args.projectRoot;
+  // V10 TASK-015 — Targets whose index freshness the run start will ask
+  // about (ADR-006 Option A); filled in by whichever branch resolves the run.
+  const codeIntelConsentTargets: { targetId: string; path: string }[] = [];
 
   try {
     let runId: string;
@@ -417,6 +441,9 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
           `blocked=${readiness.blocked.join(",") || "none"} settled=${readiness.settled.join(",") || "none"}`,
       );
       if (args.dryRun) return 0;
+      // The frozen run's own Target is what every ledger artifact answers to;
+      // tasks bound to further Targets were consented for when the run started.
+      codeIntelConsentTargets.push({ targetId: run.target_id, path: run.target_root });
     } else {
       const moduleName = args.module!;
       const planMarkdown = readModuleDoc(docsRoot, moduleName, "plan.md");
@@ -532,7 +559,7 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
               });
               for (const root of preflightRoots.workRoots) {
                 if (stage === AgentStage.QA_ENGINEER || root.access === "write") {
-                  targetWorkRoots.push({ stage, targetId: root.targetId, path: root.path });
+                  targetWorkRoots.push({ stage, targetId: root.targetId, path: root.path, access: root.access });
                 }
               }
             }
@@ -646,20 +673,38 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
         throw error;
       }
       console.log(`[bounded-run] froze run ${registered.run.run_id}: ${registered.trace.join(" | ")}`);
+      const byConsentTarget = new Map<string, string>();
+      for (const roots of taskWorkRootsMap.values()) {
+        for (const root of roots) byConsentTarget.set(root.targetId, root.path);
+      }
+      if (byConsentTarget.size === 0 && targetRoot) byConsentTarget.set(targetId, targetRoot);
+      codeIntelConsentTargets.push(...[...byConsentTarget].map(([consentTargetId, consentPath]) => ({ targetId: consentTargetId, path: consentPath })));
     }
+
+    // V10 TASK-015 — ask-before-indexing at run start (ADR-006 Option A);
+    // headless stdin never asks, and the hook itself never blocks the run.
+    await askCodeIntelConsentAtRunStart(codeIntelConsentTargets, { interactive: process.stdin.isTTY === true });
 
     const services = createProductionBoundedRunServices({
       ledger, store, registry: runtimeRegistry,
-      projectRoot: contractRoot, targetRoot, runtimeStateRoot: args.projectRoot,
+      projectRoot: contractRoot, targetRoot,
+      // V10 TASK-025 — runtime state has one home, the Knowledge root, so
+      // packets/locks never land in whatever cwd the run was commanded from.
+      runtimeStateRoot: knowledgeRoot,
       defaultRuntimeId,
+      // `--runtime` stays in `defaultRuntimeId` (its shipped bounded-run meaning);
+      // only model/effort ride the flag lane that reaches resolveRuntimeRoute.
+      routingFlags: args.model || args.effort ? { model: args.model, effort: args.effort } : undefined,
       moduleName: args.module ?? ledger.readRun(runId)!.module,
       docsRoot,
       guards: contractGuardResolver(contractRoot),
+      autonomy: args.autonomy,
       adapterVersion: cliVersion(),
     });
-    const controller = new BoundedRunController({ ledger, runId, runtimeStateRoot: args.projectRoot, services });
+    const controller = new BoundedRunController({ ledger, runId, runtimeStateRoot: knowledgeRoot, services });
     const result = await controller.run();
     console.log(`[bounded-run] ${result.kind}: ${result.reason} (attempts=${result.launchedAttempts}, qa_rounds=${result.qaRounds})`);
+    for (const line of renderAwaitingHuman(result.awaitingHuman)) console.log(line);
     if (result.kind === "GATE" || result.kind === "HALTED") {
       console.log(`[bounded-run] next: resolve the gate, then \`sta bounded-run --resume ${result.runId} --module ${args.module ?? ledger.readRun(runId)!.module}\`, or \`sta status\`/\`sta report\` for the wider picture.`);
     }

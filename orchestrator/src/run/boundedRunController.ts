@@ -10,12 +10,19 @@ export const MAX_AUTOMATIC_REPAIR_ROUNDS = 2;
 
 export type ControllerExitKind = "COMPLETED" | "GATE" | "HALTED" | "INTERRUPTED" | "REFUSED";
 
+export interface AwaitingHumanTask {
+  taskId: string;
+  reason: string;
+}
+
 export interface ControllerResult {
   kind: ControllerExitKind;
   runId: string;
   reason: string;
   launchedAttempts: number;
   qaRounds: number;
+  /** T-V10-031 — every task this run blocked on a human, not just the one that ended it. */
+  awaitingHuman: readonly AwaitingHumanTask[];
 }
 
 export interface PreparedTargetAttempt {
@@ -24,6 +31,7 @@ export interface PreparedTargetAttempt {
   attempt: LedgerAttempt;
   taskDescription: string;
   allowedPathGlobs: readonly string[];
+  deniedPathGlobs: readonly string[];
   secretScanner?: SecretScanner;
 }
 
@@ -92,6 +100,7 @@ export class BoundedRunController {
   private launchedAttempts = 0;
   private qaRounds = 0;
   private repairForTask = new Map<string, RepairInstruction>();
+  private awaitingHuman: AwaitingHumanTask[] = [];
 
   constructor(private readonly options: BoundedRunControllerOptions) {
     this.ledger = options.ledger;
@@ -117,6 +126,10 @@ export class BoundedRunController {
         if (taskResult) return taskResult;
 
         const readiness = this.ledger.readiness(run.run_id);
+        // T-V10-030 — a gate raised during this run is decided here, after the
+        // ready set drained, so the unrelated branches still ran. A task that
+        // was already BLOCKED when the run started is the case below.
+        if (this.awaitingHuman.length > 0) return this.gate(run, this.awaitingHumanReason());
         if (readiness.blocked.length > 0) return this.gate(run, `blocked task(s): ${readiness.blocked.join(", ")}`);
         if (readiness.waiting.length > 0) {
           return this.halt(run, `fixed DAG has no ready task; waiting: ${readiness.waiting.map((item) => `${item.task_id}<-${item.waiting_on.join(",")}`).join("; ")}`);
@@ -181,8 +194,12 @@ export class BoundedRunController {
         repair: this.repairForTask.get(taskId) ?? null,
       });
       if (prepared.kind === "gate") {
+        // T-V10-030 — BLOCKED removes this task and (via `waitingOn`) its
+        // descendants from every later readiness query, so continuing the loop
+        // terminates on its own; a halt class below still stops everything.
         this.ledger.setTaskStatus(run.run_id, taskId, "BLOCKED", { reason: prepared.reason });
-        return this.gate(run, prepared.reason);
+        this.awaitingHuman.push({ taskId, reason: prepared.reason });
+        continue;
       }
       if (prepared.kind === "halt") return this.halt(run, prepared.reason);
       const frozen = this.ledger.readAttempt(prepared.attempt.attempt_id);
@@ -216,6 +233,7 @@ export class BoundedRunController {
         runVerification: async () => execution.verification,
         taskDescription: prepared.taskDescription,
         allowedPathGlobs: prepared.allowedPathGlobs,
+        deniedPathGlobs: prepared.deniedPathGlobs,
         secretScanner: prepared.secretScanner,
         usage: execution.usage,
       });
@@ -281,6 +299,12 @@ export class BoundedRunController {
     }
   }
 
+  /** One gate keeps its own words; several are named by task so the run reason stays one line. */
+  private awaitingHumanReason(): string {
+    if (this.awaitingHuman.length === 1) return this.awaitingHuman[0]!.reason;
+    return `${this.awaitingHuman.length} tasks await a human decision: ${this.awaitingHuman.map((item) => item.taskId).join(", ")}`;
+  }
+
   private gate(run: LedgerRun, reason: string): ControllerResult {
     const current = this.ledger.readRun(run.run_id);
     if (current && ["REGISTERED", "RUNNING", "HALTED"].includes(current.status)) {
@@ -300,6 +324,10 @@ export class BoundedRunController {
   }
 
   private result(kind: ControllerExitKind, reason: string): ControllerResult {
-    return { kind, runId: this.options.runId, reason, launchedAttempts: this.launchedAttempts, qaRounds: this.qaRounds };
+    return {
+      kind, runId: this.options.runId, reason,
+      launchedAttempts: this.launchedAttempts, qaRounds: this.qaRounds,
+      awaitingHuman: [...this.awaitingHuman],
+    };
   }
 }

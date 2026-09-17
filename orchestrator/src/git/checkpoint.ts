@@ -50,14 +50,23 @@ export interface CheckpointInput {
   readonly taskDescription: string;
   /** Exact current-stage write contract carried by the immutable packet. */
   readonly allowedPathGlobs?: readonly string[];
+  /** The same packet's deny half. Required once `allow` can be Target-wide, or the deny list would only ever be advice. */
+  readonly deniedPathGlobs?: readonly string[];
   /** Identity of the immutable packet executed by this attempt. */
   readonly packetHash?: string;
   readonly secretScanner?: SecretScanner;
 }
 
+/** One writable root and the subset of this attempt's changed paths that fall under it. Audit-only grouping (TASK-013): it never changes which paths were allowed — assertCheckpointPaths/assertTaskContractPaths already decided that. */
+export interface ChangedPathsByRoot {
+  readonly root: string;
+  readonly paths: readonly string[];
+}
+
 export interface CheckpointResult {
   readonly sha: string;
   readonly changedPaths: readonly string[];
+  readonly changedPathsByRoot: readonly ChangedPathsByRoot[];
   readonly verification: DeterministicVerification;
   readonly gpgSigningBypassed: boolean;
 }
@@ -80,9 +89,21 @@ export function isDependencyControlPath(relativePath: string): boolean {
     || /\.(?:csproj|fsproj|vbproj)$/u.test(basename);
 }
 
-export function assertTaskContractPaths(changedPaths: readonly string[], allowedPathGlobs: readonly string[]): void {
+export function assertTaskContractPaths(
+  changedPaths: readonly string[],
+  allowedPathGlobs: readonly string[],
+  deniedPathGlobs: readonly string[] = [],
+): void {
   if (allowedPathGlobs.length === 0) {
     throw new CheckpointRefusal("TASK_CONTRACT_VIOLATION", "The immutable task packet contains no writable path; no checkpoint may be staged.");
+  }
+  // Deny outranks allow, the same order `canWritePath` applies. A Target-wide
+  // allow covers a Knowledge artifact that happens to sit in the checkout, so
+  // this is the only layer left that can refuse one.
+  for (const changed of changedPaths) {
+    const normalized = changed.replace(/\\/g, "/");
+    const denied = deniedPathGlobs.find((glob) => matchesGlob(glob.replace(/\\/g, "/"), normalized));
+    if (denied) throw new CheckpointRefusal("DENIED_PATH", `Changed path matches the packet deny rule ${denied}: ${changed}`);
   }
   const outside = changedPaths.filter((changed) => {
     const normalized = changed.replace(/\\/g, "/");
@@ -154,6 +175,32 @@ export function assertCheckpointPaths(
     if (denied) throw new CheckpointRefusal("DENIED_PATH", `Changed path matches the universal deny rule ${denied}: ${relativePath}`);
     return (path.relative(repo, absolute) || ".").replace(/\\/g, "/");
   });
+}
+
+/**
+ * Groups already-validated changed paths by the writable root each falls
+ * under. Called only after `assertCheckpointPaths` has passed the same paths
+ * against the same roots, so every path is guaranteed to match exactly one;
+ * a miss is treated as the same class of guard failure that function raises.
+ */
+export function groupChangedPathsByRoot(
+  repositoryRoot: string,
+  changedPaths: readonly string[],
+  writableRoots: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): ChangedPathsByRoot[] {
+  const repo = fs.realpathSync.native(path.resolve(repositoryRoot));
+  const roots = canonicalRoots(writableRoots);
+  const buckets = new Map<string, string[]>(roots.map((root) => [root, []]));
+  for (const relativePath of changedPaths) {
+    const absolute = canonicalProspectivePath(path.join(repo, relativePath));
+    const root = roots.find((candidate) => isPathWithinRoot(absolute, candidate, platform));
+    if (root === undefined) {
+      throw new CheckpointRefusal("GUARD_FAILURE", `Changed path escaped the resolved writable roots: ${relativePath}. The runtime write guard did not hold.`);
+    }
+    buckets.get(root)!.push(relativePath);
+  }
+  return roots.map((root) => ({ root, paths: buckets.get(root) ?? [] }));
 }
 
 function oneLine(value: string): string {
@@ -239,7 +286,7 @@ export async function checkpointTask(input: CheckpointInput): Promise<Checkpoint
   }
 
   const safePaths = assertCheckpointPaths(input.git.cwd, changedPaths, input.writableRoots);
-  if (input.allowedPathGlobs !== undefined) assertTaskContractPaths(safePaths, input.allowedPathGlobs);
+  if (input.allowedPathGlobs !== undefined) assertTaskContractPaths(safePaths, input.allowedPathGlobs, input.deniedPathGlobs);
   const dependencyChanges = safePaths.filter(isDependencyControlPath);
   if (dependencyChanges.length > 0) {
     throw new CheckpointRefusal(
@@ -281,5 +328,6 @@ export async function checkpointTask(input: CheckpointInput): Promise<Checkpoint
   const messages = checkpointMessages({ ...input, verification });
   const committed = await input.git.commit(messages);
   const sha = (await input.git.revParseHead()).stdout.trim();
-  return { sha, changedPaths: safePaths, verification, gpgSigningBypassed: committed.gpgSigningBypassed };
+  const changedPathsByRoot = groupChangedPathsByRoot(input.git.cwd, safePaths, input.writableRoots);
+  return { sha, changedPaths: safePaths, changedPathsByRoot, verification, gpgSigningBypassed: committed.gpgSigningBypassed };
 }

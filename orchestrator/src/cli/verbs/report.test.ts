@@ -5,7 +5,7 @@ import { spawnSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parsePlanTasks } from "../../docs/planGraph.js";
 import { renderCanonicalTasks, type PlanTask } from "../../docs/planTask.js";
-import { generateHtmlReport, parseStatusMd, runReportVerb, type ReportData } from "./report.js";
+import { generateHtmlReport, parseStatusMd, runReportVerb, summarizeChangedByTarget, summarizeCodeIntel, type ReportData } from "./report.js";
 
 const STA_INSTALLATION_CONFIG_ORIGINAL = process.env.STA_INSTALLATION_CONFIG;
 beforeEach(() => {
@@ -258,6 +258,154 @@ describe("T-V6-018 — sta report verb", () => {
     expect(html).not.toMatch(/<script\b[^>]*src=/i);
     expect(html).not.toMatch(/<link\b[^>]*rel=["']?stylesheet["']?/i);
     expect(html).not.toMatch(/@import\s+url/i);
+  });
+
+  it("V10 TASK-013 groups a report's bounded-run diffs by target root", () => {
+    const runs: ReportData["runs"] = [
+      {
+        run_id: "01J00000000000000000000063",
+        target_root: "C:\\mock\\target-api",
+        module: "test-mod",
+        wave: 1,
+        state: "WAVE_COMPLETE",
+        base_branch: "main",
+        base_sha: "a".repeat(40),
+        run_branch: "sta/run/test-mod/01J00000000000000000000063",
+        task_order: ["BE-001", "BE-002"],
+        runtime_id: "claude-code",
+        tier: "T2",
+        model: "opus",
+        tasks: [
+          { task_id: "BE-001", status: "CHECKPOINTED", changed_files: ["server/a.ts", "server/b.ts"] },
+          { task_id: "BE-002", status: "CHECKPOINTED", changed_files: ["server/b.ts"] },
+        ],
+        next_required_human_action: "Review checkpoints with qa-engineer; only a human may declare MERGE_READY.",
+        merge_advisory: { kind: "none", reason: "not-reviewable" },
+        disclaimer: "Deterministic gate only — CHECKPOINTED is a durability fact, not a QA verdict.",
+      },
+      {
+        run_id: "01J00000000000000000000064",
+        target_root: "C:\\mock\\target-web",
+        module: "test-mod",
+        wave: 1,
+        state: "WAVE_COMPLETE",
+        base_branch: "main",
+        base_sha: "a".repeat(40),
+        run_branch: "sta/run/test-mod/01J00000000000000000000064",
+        task_order: ["FE-001"],
+        runtime_id: "claude-code",
+        tier: "T2",
+        model: "opus",
+        tasks: [{ task_id: "FE-001", status: "CHECKPOINTED", changed_files: ["web/app.tsx"] }],
+        next_required_human_action: "Review checkpoints with qa-engineer; only a human may declare MERGE_READY.",
+        merge_advisory: { kind: "none", reason: "not-reviewable" },
+        disclaimer: "Deterministic gate only — CHECKPOINTED is a durability fact, not a QA verdict.",
+      },
+    ];
+
+    const summary = summarizeChangedByTarget(runs);
+    expect(summary).toEqual([
+      { target_root: "C:\\mock\\target-api", changed_file_count: 2, changed_files: ["server/a.ts", "server/b.ts"] },
+      { target_root: "C:\\mock\\target-web", changed_file_count: 1, changed_files: ["web/app.tsx"] },
+    ]);
+
+    const mockReport: ReportData = {
+      projectName: "my-mock-project",
+      generatedAt: "2026-09-06T12:00:00.000Z",
+      overallStatus: "green",
+      status: { absent: true },
+      plan: { moduleName: "test-mod", currentPhase: 1, tasks: [], allPhases: [], absent: true },
+      review: { moduleName: "test-mod", absent: true, openIssues: [] },
+      changed: {
+        projectRoot: "C:\\mock\\root",
+        isGit: true,
+        changedFiles: [],
+        gate: { ok: true, status: "passed", results: [] },
+        disclaimer: "Deterministic gate notice",
+      },
+      runs,
+    };
+
+    const html = generateHtmlReport(mockReport);
+    expect(html).toContain("Diff summary by target");
+    expect(html).toContain("C:\\mock\\target-api");
+    expect(html).toContain("C:\\mock\\target-web");
+    expect(html).toContain("2 file(s)");
+    expect(html).toContain("1 file(s)");
+    expect(html).toContain("server/a.ts");
+    expect(html).toContain("web/app.tsx");
+  });
+
+  it("V10 TASK-018 summarizes code-intel activity per run from the audit trail and run records", () => {
+    const mockReportBase: ReportData = {
+      projectName: "my-mock-project",
+      generatedAt: "2026-09-06T12:00:00.000Z",
+      overallStatus: "green",
+      status: { absent: true },
+      plan: { moduleName: "test-mod", currentPhase: 1, tasks: [], allPhases: [], absent: true },
+      review: { moduleName: "test-mod", absent: true, openIssues: [] },
+      changed: {
+        projectRoot: "C:\\mock\\root",
+        isGit: true,
+        changedFiles: [],
+        gate: { ok: true, status: "passed", results: [] },
+        disclaimer: "Deterministic gate notice",
+      },
+    };
+    const store = {
+      listTasks: () => [{ taskId: "BE-001" }, { taskId: "BE-002" }, { taskId: "BE-003" }],
+      eventsForTask: (taskId: string) =>
+        taskId === "BE-001"
+          ? [
+              { taskId, at: 1, type: "CODE_INTELLIGENCE_QUERY", payload: {}, actor: null, reason: null, input: null, output: null, decision: null },
+              { taskId, at: 2, type: "CODE_INTELLIGENCE_HIT", payload: { count: 4 }, actor: null, reason: null, input: null, output: null, decision: null },
+              { taskId, at: 3, type: "CODE_INTELLIGENCE_STALE", payload: {}, actor: null, reason: null, input: null, output: null, decision: null },
+              { taskId, at: 4, type: "CODE_INTELLIGENCE_FALLBACK", payload: { reason: "stale" }, actor: null, reason: null, input: null, output: null, decision: null },
+            ]
+          : taskId === "BE-002"
+            ? [{ taskId, at: 5, type: "CODE_INTELLIGENCE_FALLBACK", payload: { reason: "missing-index" }, actor: null, reason: null, input: null, output: null, decision: null }]
+            : [],
+      runsForTask: (taskId: string) =>
+        taskId === "BE-001"
+          ? [
+              { code_intel_chars: 4210 },
+              { code_intel_chars: 8123 },
+            ]
+          : taskId === "BE-002"
+            ? [{ code_intel_chars: 0 }]
+            : [],
+    };
+    // A minimal store stub — summarizeCodeIntel reads only these three members.
+    const summaries = summarizeCodeIntel(store as unknown as Parameters<typeof summarizeCodeIntel>[0]);
+    expect(summaries).toEqual([
+      expect.objectContaining({
+        task_id: "BE-001",
+        events: { CODE_INTELLIGENCE_QUERY: 1, CODE_INTELLIGENCE_HIT: 1, CODE_INTELLIGENCE_STALE: 1, CODE_INTELLIGENCE_FALLBACK: 1 },
+        last_fallback_reason: "stale",
+        attempts_with_evidence: 2,
+        total_attempts: 2,
+        last_code_intel_chars: 8123,
+      }),
+      expect.objectContaining({
+        task_id: "BE-002",
+        last_fallback_reason: "missing-index",
+        attempts_with_evidence: 0,
+        total_attempts: 1,
+        last_code_intel_chars: 0,
+      }),
+    ]);
+    // A task with zero code-intel activity stays out of the summary — it would be noise, not evidence.
+    expect(summaries.map((summary) => summary.task_id)).not.toContain("BE-003");
+
+    const html = generateHtmlReport({ ...mockReportBase, codeIntel: summaries });
+    expect(html).toContain("Code Intelligence (audit-trail summary)");
+    expect(html).toContain("BE-001");
+    expect(html).toContain("2/2 attempt(s)");
+    expect(html).toContain("Last fallback reason");
+    expect(html).toContain("<code>stale</code>");
+    expect(html).toContain("never a QA pass condition");
+    // No section at all when no state database existed.
+    expect(generateHtmlReport({ ...mockReportBase, codeIntel: undefined })).not.toContain("Code Intelligence");
   });
 
   it("handles missing review.md and plan.md gracefully with stated absences", () => {

@@ -38,6 +38,7 @@ export interface GuardedCheckpointInput {
   runVerification: () => Promise<DeterministicVerification>;
   taskDescription: string;
   allowedPathGlobs: readonly string[];
+  deniedPathGlobs?: readonly string[];
   secretScanner?: SecretScanner;
   usage?: LedgerAttempt["usage"];
 }
@@ -225,6 +226,7 @@ export class GuardedRunSession {
         packetHash: current.packet_hash,
         taskDescription: input.taskDescription,
         allowedPathGlobs: input.allowedPathGlobs,
+        deniedPathGlobs: input.deniedPathGlobs,
         secretScanner: input.secretScanner,
       });
     } catch (error) {

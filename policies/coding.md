@@ -1,4 +1,4 @@
-# Policy — Coding discipline (§5c, §9, §12, §19, §20, §21)
+# Policy — Coding discipline (§5c, §9, §12, §19, §20, §21, §22)
 
 Rules about how an engineer produces and
 verifies code, and how any agent treats what it thinks it already knows.
@@ -68,3 +68,11 @@ A comment earns its place when deleting it would leave a competent reader of thi
 **Scope:** this governs comments an engineer writes in Target application code. It is not a licence to write framework-length rationale essays, and it does not apply retroactively to `orchestrator/src/**`, whose long design-rationale headers are a deliberate choice of this repository. It does not cover commit messages, PR descriptions, artifact notes, module documents, or handoff summaries.
 
 Enforced by review, not by any lint, hook or checker (§20 — no stable mechanical oracle exists).
+
+---
+
+## 22. The Target's own conventions win — read the neighbours before editing
+
+Every Target repository already has conventions — naming, file layout, error shapes, test placement, import style — whether or not anyone wrote them down. Before editing a file in a Target, read its neighbours and follow the conventions they use; a new file follows the convention of the files beside it, not one invented for the task. This is compatibility, not taste: the user's requirement is that an agent's work be indistinguishable from the Target's own code, and a per-Target linter does not exist (§20 — no stable oracle to promote), so the check lives in engineer habit and QA review.
+
+A deliberate departure from the surrounding convention needs the same treatment §21 gives a deviation: it must carry its why. `qa-engineer` verifies it as a yes/no item — a new file whose convention disagrees with its neighbours is an `## Issues Found` entry. Enforced by prompt and review, not by any lint, hook or checker.

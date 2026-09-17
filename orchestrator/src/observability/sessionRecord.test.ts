@@ -8,7 +8,7 @@ import { measureWorkspaceStatic, recordContextComposition, recordInteractiveSess
 import type { ContextComposition } from "../context/contextCommand.js";
 
 describe("interactive session observability (T-V3TOK-002)", () => {
-  it("keeps always-loaded and role-reachable static bytes distinct, then records their exact footprint", () => {
+  it("keeps always-loaded and reachable static bytes distinct, then records their exact footprint", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-session-record-"));
     try {
       fs.mkdirSync(path.join(root, "policies"), { recursive: true });
@@ -20,11 +20,13 @@ describe("interactive session observability (T-V3TOK-002)", () => {
       fs.writeFileSync(path.join(root, ".claude", "agents", "business-analyst.md"), "a".repeat(40));
       fs.mkdirSync(path.join(root, ".claude", "commands"), { recursive: true });
       fs.writeFileSync(path.join(root, ".claude", "commands", "example.md"), "---\ndescription: command text\n---\nbody", "utf8");
-      const measured = measureWorkspaceStatic(root, "dev");
-      expect(measured).toEqual({ always_loaded_chars: 11, instruction_surface_bytes: 13, reachable_static_chars: 62 });
+      // V10 TASK-020: one payload, so the BA prompt on disk counts too — the
+      // old `dev` profile filtered it out of its own workspace's measurement.
+      const measured = measureWorkspaceStatic(root);
+      expect(measured).toEqual({ always_loaded_chars: 11, instruction_surface_bytes: 13, reachable_static_chars: 102 });
       const store = new MemoryTaskStore();
       recordInteractiveSession({ workspaceRoot: root, role: "dev", runtime: "claude", startedAt: 1, endedAt: 2, store });
-      expect(store.allRuns()[0]).toMatchObject({ task_id: "session:dev:1970-01-01T00:00:00.001Z", session_kind: "interactive", static_chars: 73, instruction_surface_bytes: 13, input_tokens: null, output_tokens: null });
+      expect(store.allRuns()[0]).toMatchObject({ task_id: "session:dev:1970-01-01T00:00:00.001Z", session_kind: "interactive", static_chars: 113, instruction_surface_bytes: 13, input_tokens: null, output_tokens: null });
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 
@@ -33,8 +35,8 @@ describe("interactive session observability (T-V3TOK-002)", () => {
     try {
       fs.writeFileSync(path.join(root, "CLAUDE.md"), "claude");
       fs.writeFileSync(path.join(root, "AGENTS.md"), "codex-ก");
-      expect(measureWorkspaceStatic(root, "dev", "claude").instruction_surface_bytes).toBe(fs.statSync(path.join(root, "CLAUDE.md")).size);
-      expect(measureWorkspaceStatic(root, "dev", "codex").instruction_surface_bytes).toBe(fs.statSync(path.join(root, "AGENTS.md")).size);
+      expect(measureWorkspaceStatic(root, "claude").instruction_surface_bytes).toBe(fs.statSync(path.join(root, "CLAUDE.md")).size);
+      expect(measureWorkspaceStatic(root, "codex").instruction_surface_bytes).toBe(fs.statSync(path.join(root, "AGENTS.md")).size);
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
   });
 });
@@ -46,6 +48,7 @@ describe("recordContextComposition (T-V5-037)", () => {
     doc_selected_chars: 300,
     knowledge_chars: 50,
     code_intel_chars: 0,
+    code_intel_fallback_reason: null,
     saved_pct: 40,
     fallback_to_full_documents: 0,
     fallback_documents: [],

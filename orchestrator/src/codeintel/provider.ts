@@ -74,6 +74,15 @@ export interface ProviderStatus {
   indexedRevision: string | null;
   /** ISO timestamp of the indexing run, when known. */
   indexedAt: string | null;
+  /**
+   * Set only by `createFallbackChainProvider` when it skipped a non-last
+   * provider's `stale`/`error` status to reach this one — never set by a
+   * single provider. Lets the resolver keep emitting the original stale/error
+   * telemetry and tag its result as a fallback even though the chain's own
+   * status now reads `fresh`, so a graph-stale run is never indistinguishable
+   * from a plain fresh one (no silent swap).
+   */
+  fallenThrough?: { status: "stale" | "error"; indexedRevision: string | null };
 }
 
 /** Identifies both the registered target and where its checkout lives now. */

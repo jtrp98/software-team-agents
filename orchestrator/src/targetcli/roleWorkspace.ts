@@ -4,7 +4,7 @@ import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeR
 import { loadLocalTargetMapping, LocalTargetMappingError, type ResolvedLocalTarget } from "../threeRepo/localTargets.js";
 import { loadTargetRegistry, targetById, TargetRegistryError } from "../threeRepo/targets.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
-import type { TemplateManifest } from "../packaging/templateManifest.js";
+import { GUARD_TARGET_WORK_ROOTS_ENV, serializeGuardTargetWorkRoots, type GuardTargetWorkRoot } from "../agents/pathPermissions.js";
 import { resolveWorkspaceRole } from "./roots.js";
 import type { TargetConfig, TargetManifest } from "./targetMeta.js";
 
@@ -16,7 +16,9 @@ import type { TargetConfig, TargetManifest } from "./targetMeta.js";
  * A role decides WHERE execution happens and WHAT the Framework syncs there:
  *
  *   BA  workspace = knowledgeRoot   (Target never required)
- *   DEV workspace = targetRoot      (Knowledge required as read context)
+ *   DEV workspace = targetRoot      (Knowledge binding is read context,
+ *                                    resolved per session — never forced:
+ *                                    V10 TASK-027)
  *
  * The Framework stays the only sync source in both directions — Framework →
  * Knowledge and Framework → Target, never Knowledge ⇄ Target: requirements
@@ -50,80 +52,18 @@ export const ROLE_WORKSPACE_KIND: Record<WorkspaceRole, "knowledge" | "target"> 
   dev: "target",
 };
 
-/** Which agent prompts a role's workspace materializes. The Knowledge side carries the analysis roles (incl. uxui-designer, whose outputs are knowledge/_docs only); the Target side carries engineers + reviewers. */
-export const BA_WORKSPACE_AGENTS: readonly string[] = [
-  "business-analyst",
-  "system-analyst",
-  "project-manager",
-  "test-planner",
-  // The UX/UI consultant is a knowledge-side role — its outputs are draft
-  // UX-* items under knowledge/ plus _docs/module/<m>/uxui/**, never app
-  // source — so its prompt belongs beside the other Knowledge-workspace roles.
-  "uxui-designer",
-];
-
 /**
- * Role-aware managed-asset profiles over the template payload.
+ * One managed payload, not two.
  *
- * Both roles get hooks + settings (the guards travel with every workspace),
- * skills (.claude/scripts), shared instructions, policies, CLAUDE.md, and its
- * rendered AGENTS.md pointer. They differ in agent roster and in
- * orchestrator-only payload (contracts, workflows, stacks,
- * layout/test-pyramid/escalation YAML) that only a DEV/Target workspace needs
- * because only there does the pipeline drive engineers.
+ * The split profiles existed to keep a Target checkout from carrying BA
+ * prompts and a Knowledge checkout from carrying engineer payload. With a
+ * single workspace both live in the same repository, and the BA profile's
+ * omission of `contracts/` was the worst of it: the guard hook reads
+ * `contracts/<role>.yaml` from the workspace root and fails open when it
+ * cannot (V10 D7), so the profile that dropped them disabled the per-role
+ * layer silently. Nothing filters the manifest now — `runTargetSync` takes no
+ * `include` and materialises every managed file.
  */
-export function assetsForRole(role: WorkspaceRole): (relPath: string) => boolean {
-  const baAgents = new Set(BA_WORKSPACE_AGENTS);
-  if (role === "dev") {
-    // T-UX13: a Target workspace carries no BA-workspace prompts. A session opened
-    // inside the app repo then cannot pick `business-analyst` and write
-    // requirements into the Target — the wrong-repo failure this split exists
-    // to prevent at the source, not just to detect afterwards.
-    return (relPath) => {
-      if (relPath.startsWith(".claude/agents/") && relPath.endsWith(".md")) {
-        return !baAgents.has(path.basename(relPath, ".md"));
-      }
-      // The Knowledge document/plan checkers are BA-workspace CI — a Target
-      // has no `_docs/**` of its own for them to run against.
-      if (relPath === ".github/workflows/knowledge-ci.yml") return false;
-      return true;
-    };
-  }
-  return (relPath) => {
-    if (relPath === "CLAUDE.md" || relPath === "AGENTS.md") return true;
-    if (relPath.startsWith(".claude/agents/")) {
-      if (!relPath.endsWith(".md")) return false;
-      return baAgents.has(path.basename(relPath, ".md"));
-    }
-    if (relPath.startsWith(".claude/hooks/") || relPath.startsWith(".claude/scripts/") || relPath.startsWith(".claude/shared/")) return true;
-    if (relPath === ".claude/settings.json") return true;
-    // OpenCode guards travel with every workspace, like the Claude hooks do:
-    // the plugin is authored payload; `.opencode/agent/` files are derived at
-    // sync time and never ship in the template payload at all.
-    if (relPath.startsWith(".opencode/plugin/")) return true;
-    // Antigravity's guard binding travels the same way, for the same reason.
-    if (relPath.startsWith(".agents/hooks/") || relPath === ".agents/hooks.json") return true;
-    if (relPath.startsWith("policies/")) return true;
-    // Only the BA/Knowledge side validates its own documents.
-    if (relPath === ".github/workflows/knowledge-ci.yml") return true;
-    // project-manager runs only here, and `sta --check-plan` (which its
-    // prompt requires before handoff) needs this file to validate a cast Tier.
-    if (relPath === "model-tiers.yaml") return true;
-    if (relPath.startsWith(".claude/commands/")) {
-      if (relPath === ".claude/commands/verify.md") return false;
-      return true;
-    }
-    // contracts/, workflows/, stacks/, layout.yaml, escalation-policy.yaml,
-    // test-pyramid.yaml — engineer-pipeline payload, not BA tooling.
-    return false;
-  };
-}
-
-/** The effective payload for a role: a copy of the manifest with excluded files removed. Stale detection then cleans anything a profile drop leaves behind. */
-export function filterManifestForRole(manifest: TemplateManifest, role: WorkspaceRole): TemplateManifest {
-  const include = assetsForRole(role);
-  return { ...manifest, files: manifest.files.filter((f) => include(f.path)) };
-}
 
 // --- repository kind detection -----------------------------------------------
 
@@ -226,6 +166,20 @@ export function detectWorkspaceKind(dir: string): WorkspaceKind {
   if (knowledge) return "knowledge";
   if (appSource) return "target";
   return "unrecognized";
+}
+
+/** What a workspace IS — the Knowledge workspace or a Target checkout — for display and
+ * resolution branches that used to key on the recorded role. Markers classify an
+ * uninitialized checkout; a legacy recorded role classifies an old one the markers
+ * cannot place. It identifies the checkout; it never grants writes. */
+export type WorkspaceShape = "knowledge" | "target" | "other";
+
+export function workspaceShapeOf(kind: WorkspaceKind, recordedRole: WorkspaceRole | undefined): WorkspaceShape {
+  if (kind === "knowledge") return "knowledge";
+  if (kind === "target") return "target";
+  if (recordedRole === "ba") return "knowledge";
+  if (recordedRole === "dev") return "target";
+  return "other";
 }
 
 // --- Knowledge binding -------------------------------------------------------
@@ -386,26 +340,70 @@ function resolveTargetById(targetId: string, options: { knowledgeRoot: string; f
   return { targetRoot: entry.path, via: "local-mapping", targetId };
 }
 
+/**
+ * Every Target this machine maps, as read-only guard identification for one
+ * interactive session (V10 TASK-023).
+ *
+ * `access: "read"` for all of them is the recorded answer to the write-scope
+ * question, not a default: a person types in an interactive session, so it
+ * carries no `STA_ROLE`, and a guard with no role skips every per-role layer
+ * it has. Granting write there would leave a Target defended by the universal
+ * floor alone. Writing a Target stays the orchestrated path's job, where a
+ * stage is named and `packet.scope.allow` bounds it.
+ *
+ * The session's own workspace is excluded: it is writable through the session
+ * root, and listing it here would refuse every write the session exists to make.
+ *
+ * Returns [] when no mapping resolves — an unmapped machine is the normal case
+ * for a workspace that never bound a Target, never an error.
+ */
+export function resolveSessionTargetWorkRoots(options: {
+  knowledgeRoot: string;
+  workspaceRoot: string;
+  frameworkRoot?: string;
+}): GuardTargetWorkRoot[] {
+  let mapping: ResolvedLocalTarget[];
+  try {
+    const registry = loadTargetRegistry(options.knowledgeRoot);
+    mapping = loadLocalTargetMapping(options.knowledgeRoot, registry, options.frameworkRoot ?? defaultProjectRoot());
+  } catch {
+    return [];
+  }
+  const own = canonicalOrResolved(options.workspaceRoot);
+  return mapping
+    .filter((entry) => canonicalOrResolved(entry.path) !== own)
+    .map((entry) => ({ targetId: entry.target_id, path: entry.path, access: "read" as const }));
+}
+
+function canonicalOrResolved(candidate: string): string {
+  try {
+    return fs.realpathSync.native(path.resolve(candidate));
+  } catch {
+    return path.resolve(candidate);
+  }
+}
+
 // --- write policy wiring -----------------------------------------------------
 
 /**
- * Environment for launching a role's runtime session. The guards
- * (.claude/hooks/block-outside-repo.js) allow writes under the session root
- * plus STA_WRITABLE_WORK_ROOTS — so the policy is enforced by giving
- * each launch exactly its own workspace and an EXPLICITLY EMPTY extra-roots
- * list (never inherited from the user's shell):
+ * Environment for launching an interactive runtime session.
  *
- *   BA  → writable: knowledgeRoot only. Target/Framework writes fail closed.
- *   DEV → writable: targetRoot only. Knowledge/Framework writes fail closed.
+ * One workspace now carries the whole payload, so what a session may write is
+ * no longer a property of which command opened it. The rule is the session
+ * root and nothing else: STA_WRITABLE_WORK_ROOTS stays an EXPLICITLY EMPTY
+ * list — never inherited from the user's shell — and every other repository on
+ * the machine is read-only from here.
  *
- * A DEV session also receives STA_KNOWLEDGE_ROOT so prompts, hooks
- * and generated includes can name the read-only Knowledge context without
- * hard-coding machine-specific paths.
+ * Bound Targets ride on STA_TARGET_WORK_ROOTS in the same shape the
+ * orchestrated path uses, all `access: "read"`. That channel is identification,
+ * not a grant: it is what lets the guard refuse a Target write by name instead
+ * of by path (V10 TASK-023/024). Writing a Target belongs to an orchestrated
+ * stage, which arrives with a role and a bounded packet scope; an interactive
+ * session has neither.
  *
- * Symmetrically, a BA session receives STA_TARGET_ROOT whenever a
- * Target binding resolved, so `system-analyst` can name a real Target to read
- * from without hard-coding a machine-specific path. Never set when no binding
- * resolved — BA must keep working exactly as before.
+ * STA_KNOWLEDGE_ROOT and STA_TARGET_ROOT name the read-only context a prompt
+ * or hook may need, so nothing has to hard-code a machine-specific path. Both
+ * stay absent when nothing resolved.
  */
 export function launchEnv(
   role: WorkspaceRole,
@@ -413,15 +411,15 @@ export function launchEnv(
   knowledgeRoot?: string,
   targetRoot?: string,
   contextCommand?: string,
+  targetWorkRoots: readonly GuardTargetWorkRoot[] = [],
 ): NodeJS.ProcessEnv {
-  // `role` is part of the signature so call sites state whose policy they
-  // launch under, even though both roles currently enforce the same shape —
-  // own workspace writable, zero cross-root grants — via cwd plus this
-  // explicit empty list.
+  // `role` is part of the signature so call sites state which command opened
+  // the session; it no longer decides anything about write scope.
   void role;
   return {
     ...existingEnv,
     STA_WRITABLE_WORK_ROOTS: "[]",
+    ...(targetWorkRoots.length > 0 ? { [GUARD_TARGET_WORK_ROOTS_ENV]: serializeGuardTargetWorkRoots(targetWorkRoots) } : {}),
     ...(knowledgeRoot ? { STA_KNOWLEDGE_ROOT: knowledgeRoot } : {}),
     ...(targetRoot ? { STA_TARGET_ROOT: targetRoot } : {}),
     ...(contextCommand ? { STA_CONTEXT_CMD: contextCommand } : {}),

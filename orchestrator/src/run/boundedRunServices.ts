@@ -12,7 +12,8 @@ import type {
 } from "./boundedRunController.js";
 import { getAgent } from "../agents/registry.js";
 import type { AgentExecutorResult } from "../orchestrator/orchestrator.js";
-import type { RuntimeGuards, RuntimeAutonomy } from "../runtime/runtimeAdapter.js";
+import type { RuntimeAutonomy } from "../runtime/runtimeAdapter.js";
+import type { GuardResolver } from "../runtime/runtimeGuards.js";
 import type { RuntimeRegistry } from "../runtime/runtimeRegistry.js";
 import { resolveRuntimeRoute, type RuntimeRouteFlags } from "../runtime/runtimeRouting.js";
 import { loadModelTierPolicy } from "../runtime/modelTiers.js";
@@ -33,7 +34,7 @@ import { productionQaInputs } from "../qa/productionQaInputs.js";
 import type { SecretScanner } from "../git/checkpoint.js";
 import { combineProjectRunners, createProjectRunner } from "../qa/projectRunner.js";
 import { LocalWorkspace } from "../runtime/localWorkspace.js";
-import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
+import { stageWritesBoundTarget, type RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { evaluateUnattendedGate, renderUnattendedGate } from "./unattendedGate.js";
 import { resolveQaWorkRoots, type QaWorkRoot } from "../threeRepo/cliRoots.js";
 import { collectQaChangedFiles } from "../qa/changeSource.js";
@@ -81,7 +82,7 @@ export interface BoundedRunServiceOptions {
   routingFlags?: RuntimeRouteFlags;
   moduleName: string;
   docsRoot: string;
-  guards: (role: string, layoutRoot?: string) => RuntimeGuards;
+  guards: GuardResolver;
   autonomy?: RuntimeAutonomy;
   adapterVersion: string;
   graph?: TaskGraph;
@@ -144,6 +145,32 @@ function writableRootForStage(
   return fallbackRoot;
 }
 
+/**
+ * A bounded run commits through one `GuardedRunSession` bound to `run.target_root`,
+ * and `freezeAttempt`/`assertTargetAttempt` admit exactly one writable root per
+ * attempt. A task may now bind several writable Targets, so this refusal is what
+ * stops an agent writing into a Target the checkpoint could never commit — it is
+ * raised before any route probe, packet or adapter, and names the split the
+ * operator has to make.
+ */
+function writableRootsForStage(
+  runtimeTask: RuntimeTask | null | undefined,
+  stage: AgentStage,
+): readonly string[] {
+  if (!runtimeTask || !("version" in runtimeTask) || runtimeTask.version !== 2) return [];
+  // `access` is unset on the legacy/`--target-root` path, where the stage's
+  // root is its write target by construction; only an explicit "read" excludes.
+  // Deduplicated by resolved path: a fullstack Target reached through two
+  // bindings is still one repository, hence still one commit.
+  return [
+    ...new Set(
+      runtimeTask.scope.work_roots
+        .filter((r) => r.stage === stage && r.access !== "read")
+        .map((r) => path.resolve(r.root)),
+    ),
+  ];
+}
+
 export function createProductionBoundedRunServices(options: BoundedRunServiceOptions): BoundedRunServices {
   const now = options.now ?? Date.now;
 
@@ -192,7 +219,17 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
     const role = getAgent(task.owner).role;
     const targetWrite = task.owner === AgentStage.BACKEND_ENGINEER || task.owner === AgentStage.FRONTEND_ENGINEER;
     const writableRoot = writableRootForStage(runtimeTask, task.owner, options.targetRoot);
-    const guards = options.guards(role, writableRoot);
+    const checkpointableRoots = writableRootsForStage(runtimeTask, task.owner);
+    if (targetWrite && checkpointableRoots.length > 1) {
+      return {
+        kind: "gate",
+        reason:
+          `task ${task.task_id} resolves ${checkpointableRoots.length} writable Targets for ${role} ` +
+          `(${checkpointableRoots.join(", ")}), but a bounded-run checkpoint commits one Target per attempt. ` +
+          "Split the task into one task per Target so each write can be committed.",
+      };
+    }
+    const guards = options.guards(role, writableRoot, { targetSide: stageWritesBoundTarget(runtimeTask, task.owner) });
 
     const availability = await options.registry.probeAll();
     const modelPolicy = loadModelTierPolicy(options.runtimeStateRoot);
@@ -290,6 +327,7 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
       attempt: frozen,
       taskDescription: taskDescriptionFor(task.task_id, runtimeTask),
       allowedPathGlobs: packet.scope.allow,
+      deniedPathGlobs: packet.scope.deny,
       secretScanner: options.secretScanner,
     };
   }
@@ -299,12 +337,13 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
     const runtimeTask = options.store.loadTask(attempt.task_id)?.runtimeTask;
     const role = getAgent(attempt.stage).role;
     const writableRoot = writableRootForStage(runtimeTask, attempt.stage, options.targetRoot);
-    const guards = options.guards(role, writableRoot);
+    const guards = options.guards(role, writableRoot, { targetSide: stageWritesBoundTarget(runtimeTask, attempt.stage) });
 
     const runtimeExecutor = createRuntimeExecutor({
       runtime: requireDefaultRuntime(),
       registry: options.registry,
       projectRoot: options.projectRoot,
+      runtimeStateRoot: options.runtimeStateRoot,
       moduleName: () => options.moduleName,
       guards: () => guards,
       autonomy: options.autonomy,
@@ -357,6 +396,7 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
       runtime: requireDefaultRuntime(),
       registry: options.registry,
       projectRoot: options.projectRoot,
+      runtimeStateRoot: options.runtimeStateRoot,
       moduleName: () => options.moduleName,
       guards: () => guards,
       autonomy: options.autonomy,
@@ -459,6 +499,7 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
       runtime: requireDefaultRuntime(),
       registry: options.registry,
       projectRoot: options.projectRoot,
+      runtimeStateRoot: options.runtimeStateRoot,
       moduleName: () => options.moduleName,
       guards: () => guards,
       autonomy: options.autonomy,

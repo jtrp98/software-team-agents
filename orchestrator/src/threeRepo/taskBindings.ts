@@ -68,6 +68,11 @@ function sameSet<T>(left: ReadonlySet<T>, right: ReadonlySet<T>): boolean {
  * Type and module checks are deliberately shared by creation and resume. A
  * compatibility exemption that existed on only one path would either admit a
  * bad new task or strand an already-running one after restart.
+ *
+ * One engineer role may hold several Targets: the module's declared `## Targets`
+ * is the scope bound, not the role. The commit boundary keeps its own arity
+ * limit at `freezeAttempt`/`assertTargetAttempt`, where a git identity actually
+ * matters.
  */
 function validateBindingPolicy(
   bindings: TargetBindings,
@@ -76,15 +81,6 @@ function validateBindingPolicy(
 ): TaskBindingValidationResult {
   const warnings: string[] = [];
   const targets = new Map(uniqueBoundTargetIds(bindings).map((targetId) => [targetId, targetById(registry, targetId)]));
-
-  for (const role of [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER] as const) {
-    const targetIds = [...new Set(bindings.targets.filter((binding) => binding.role === role).map((binding) => binding.target_id))];
-    if (targetIds.length > 1) {
-      throw new TaskBindingError(
-        `role "${role}" is bound to more than one Target (${targetIds.map((targetId) => `"${targetId}"`).join(", ")}) — split into one task per Target, or bind them to different roles`,
-      );
-    }
-  }
 
   for (const [targetId, target] of targets) {
     if (target.type === undefined) {
@@ -105,8 +101,17 @@ function validateBindingPolicy(
   const moduleScope = options.moduleScope;
   if (moduleScope !== undefined) {
     if (moduleScope.declaredTargetIds.length === 0) {
+      // An undeclared module cannot bound anything, so exempting it would make
+      // every Target the task names in-scope by default — the opposite of the
+      // upper bound this check exists to be (V10 D6). A task that binds no
+      // Target needs no declaration, and still does not get one demanded.
+      if (hasTargetBindings(bindings)) {
+        throw new TaskBindingError(
+          `module "${moduleScope.module}" declares no Targets, so Target binding(s) ${uniqueBoundTargetIds(bindings).join(", ")} have no module scope to sit inside — add a "## Targets" section listing them to ${moduleScope.designPath}, or unbind the task`,
+        );
+      }
       warnings.push(
-        `module "${moduleScope.module}" declares no Targets in ${moduleScope.designPath}; module-scope validation is exempt and the module remains unscoped`,
+        `module "${moduleScope.module}" declares no Targets in ${moduleScope.designPath}; this task binds none either, so module-scope validation has nothing to bound`,
       );
     } else {
       const declared = new Set(moduleScope.declaredTargetIds);

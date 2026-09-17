@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { UNIVERSAL_DENY } from "../agents/pathPermissions.js";
+import { UNIVERSAL_DENY, WORKSPACE_BA_ARTIFACTS } from "../agents/pathPermissions.js";
 import { FORBIDDEN_COMMANDS, GuardResolutionError, contractGuardResolver, contractGuards } from "./runtimeGuards.js";
 
 /** This repo is its own target project — `contracts/*.yaml` at the root are the real thing, not fixtures. */
@@ -64,6 +64,57 @@ describe("contractGuards — one declaration of what a role may write (T108)", (
   it("throws rather than guessing when a role has no contract", () => {
     expect(() => contractGuards("no-such-role", REPO_ROOT)).toThrow(GuardResolutionError);
     expect(() => contractGuards("no-such-role", REPO_ROOT)).toThrow(/must not proceed with an unknown write scope/);
+  });
+
+  /**
+   * V10 TASK-010 — the Target side of the split. The role contract still answers
+   * the Knowledge-side question; inside a bound Target the Target is the scope.
+   */
+  it("scopes a target-side stage to the whole Target, keeping the floor and the Knowledge deny", () => {
+    const guards = contractGuards("backend-engineer", REPO_ROOT, REPO_ROOT, { targetSide: true });
+    expect(guards.writeAllow).toEqual(["**"]);
+    expect(guards.writeAllow.length).toBeGreaterThan(0);
+    for (const denied of UNIVERSAL_DENY) expect(guards.writeDeny).toContain(denied);
+    expect(guards.writeDeny).toContain("knowledge/**");
+    expect(guards.writeDeny).toContain("_docs/module/*/design.md");
+    expect(guards.writeDeny).toContain("contracts/**");
+    // The stack layout half is what this collapses; it must not come back.
+    expect(guards.writeDeny).not.toContain("components/**");
+  });
+
+  it("leaves the knowledge-side guard set untouched when no Target is written", () => {
+    const knowledge = contractGuards("backend-engineer", REPO_ROOT, REPO_ROOT);
+    expect(knowledge.writeAllow).not.toContain("**");
+    expect(knowledge.writeAllow).toContain("server/**");
+  });
+
+  /**
+   * V10 TASK-012 — the ban used to be the `role: dev` workspace boundary, which
+   * the lane collapse removes. These roles carry it themselves now, and the
+   * analysis roles must not inherit it: the pipeline would be at odds with
+   * itself if the owner of an artifact could not write it.
+   */
+  it.each(["backend-engineer", "frontend-engineer", "devops"])(
+    "denies %s every Knowledge artifact with no writable Target and no workspace role in play",
+    (role) => {
+      const guards = contractGuards(role, REPO_ROOT);
+      for (const denied of WORKSPACE_BA_ARTIFACTS) expect(guards.writeDeny).toContain(denied);
+      expect(guards.writeDeny).toContain("knowledge/**");
+      expect(guards.writeDeny).toContain("knowledge/_roles/**");
+    },
+  );
+
+  it.each([
+    ["system-analyst", "_docs/module/*/design.md"],
+    ["qa-engineer", "_docs/module/*/plan.md"],
+    ["business-analyst", "_docs/module/*/requirement.md"],
+    ["project-manager", "_docs/module/*/plan.md"],
+  ])("leaves %s free to write the artifact it owns (%s)", (role, artifact) => {
+    const guards = contractGuards(role, REPO_ROOT);
+    expect(guards.writeDeny).not.toContain(artifact);
+    expect(guards.writeAllow).toContain(artifact);
+    // The universal floor still holds for every role, denied list or not.
+    expect(guards.writeDeny).toContain("knowledge/_roles/**");
   });
 
   it("the resolver form curries the project root for the executor", () => {

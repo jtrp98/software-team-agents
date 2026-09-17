@@ -21,6 +21,7 @@ import { auditTrail } from "../audit/auditTrail.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { latestExecutionPacketPath, readExecutionPacket } from "../state/runtimeArtifacts.js";
 import type { ModelTierPolicy } from "./modelTiers.js";
+import { SOURCE_OF_TRUTH_SENTENCE } from "../codeintel/resolver.js";
 
 // T-V6-006: `env: {}` (used below) now falls through to installation.yaml
 // when STA_KNOWLEDGE_ROOT is unset — isolate it from whatever is
@@ -301,6 +302,46 @@ describe("createRuntimeExecutor — what reaches the adapter (T108)", () => {
     const persisted = readExecutionPacket(latestExecutionPacketPath(root, "T-PACKET", AgentStage.BACKEND_ENGINEER)!);
     expect(persisted.retrieval_candidates).toEqual([]);
     expect(result.outcome.result).toBe("PASS");
+  });
+
+  it("TASK-017: a v2 packet gets the rendered code-intel evidence block (not just retrieval_candidates), from a single codeIntelContext call", async () => {
+    const root = tmpProject();
+    const runtime = new MockRuntimeAdapter();
+    const runtimeTask = runtimeTaskFixture(root);
+    let callCount = 0;
+    const evidenceBlock = "## Code intelligence evidence — target `t1` (DISCOVERY ONLY)\n\nGraphify discovers → Source confirms → Compiler checks → Tests verify.\n1. [extracted] src/evidence.ts:L1 — fixtureEvidence";
+    const executor = createRuntimeExecutor({
+      runtime,
+      projectRoot: root,
+      moduleName: () => "sales-crm",
+      guards: () => ({ ...NO_GUARDS, writeAllow: ["server/**"] }),
+      runtimeTask: () => runtimeTask,
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      sliceModuleDocs: false,
+      codeIntelContext: async (input) => {
+        callCount += 1;
+        return {
+          slices: ["", evidenceBlock],
+          used: true,
+          queryReason: input.query?.reason ?? "",
+          candidates: [{ location: { file: "src/evidence.ts", line: 1 }, symbol: "fixtureEvidence", provenance: "extracted", score: 1 }],
+        };
+      },
+    });
+
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-PACKET", context: [] });
+    const persisted = readExecutionPacket(latestExecutionPacketPath(root, "T-PACKET", AgentStage.BACKEND_ENGINEER)!);
+
+    expect(callCount).toBe(1);
+    expect(result.outcome.result).toBe("PASS");
+    expect(persisted.retrieval_candidates.length).toBeGreaterThan(0);
+    expect(persisted.code_intel_evidence).toBe(evidenceBlock);
+    expect(persisted.text).toContain("Code intelligence evidence");
+    expect(persisted.text).toContain(SOURCE_OF_TRUTH_SENTENCE);
+    // The persisted prompt is the exact bytes handed to the runtime — the
+    // evidence block travelled through compilation, not a post-hoc string
+    // concatenation onto an already-hashed packet.
+    expect(runtime.requests[0].prompt).toBe(persisted.text);
   });
 
   it("passes the guard set through untouched, so the adapter can wire it into its own binding", async () => {
@@ -1257,22 +1298,32 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
         const expectedRoot = stage === AgentStage.BACKEND_ENGINEER ? scoped.targetRoot : frontendRoot;
         expect(request.cwd).toBe(expectedRoot);
         expect(JSON.parse(request.env!.STA_WRITABLE_WORK_ROOTS!)).toEqual([expectedRoot]);
-        expect(readExecutionPacket(path.resolve(scoped.bindingRoot, result.packetPath!)).scope.roots).toEqual([expectedRoot]);
+        expect(readExecutionPacket(path.resolve(scoped.knowledgeRoot, result.packetPath!)).scope.roots).toEqual([expectedRoot]);
       }
     }
   });
 
-  it("T-V9-012 refuses more than one writable Target in an engineer invocation", async () => {
-    const runtime = new MockRuntimeAdapter({ id: "claude-code" });
+  it("V10 TASK-009 admits more than one writable Target in an engineer invocation and scopes the packet to all of them", async () => {
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const scoped = scopedFixture("T-plural-write");
     const second = tmpProject();
-    const task = { runtimeTask: scoped.runtimeTask, taskId: "T-plural-write", classification, targetBindings: { targets: [] } } as never;
+    scoped.runtimeTask.scope.work_roots = [
+      { stage: AgentStage.BACKEND_ENGINEER, target_id: "api", root: scoped.targetRoot, access: "write", allow: [] },
+      { stage: AgentStage.BACKEND_ENGINEER, target_id: "worker", root: second, access: "write", allow: [] },
+    ];
+    const task = {
+      runtimeTask: scoped.runtimeTask,
+      taskId: "T-plural-write",
+      classification,
+      targetBindings: { targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }, { target_id: "worker", role: AgentStage.BACKEND_ENGINEER }] },
+    } as never;
     const result = await createRuntimeExecutor({
       runtime,
       projectRoot: tmpProject(),
       moduleName: () => "sales-crm",
       guards: () => NO_GUARDS,
+      packetBaseRevision: async () => FIXTURE_REVISION,
       threeRepoTask: () => ({
         task,
         roots: {
@@ -1286,8 +1337,87 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
       }),
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-plural-write", context: [] });
 
+    expect(result.outcome.result).toBe("PASS");
+    // V10 TASK-025 — the packet persists under the Knowledge root, never the
+    // Framework binding root.
+    const packet = readExecutionPacket(path.resolve(scoped.knowledgeRoot, result.packetPath!));
+    expect([...packet.scope.roots].sort()).toEqual([scoped.targetRoot, second].sort());
+    expect(JSON.parse(runtime.requests[0]!.env!.STA_WRITABLE_WORK_ROOTS!).sort()).toEqual([scoped.targetRoot, second].sort());
+    // The primary root alone selects the cwd; the second is writable, not the
+    // working directory.
+    expect(runtime.requests[0]!.cwd).toBe(scoped.targetRoot);
+    // The packet must not be persisted into any Target the task can write.
+    expect(path.resolve(scoped.knowledgeRoot, result.packetPath!).startsWith(scoped.targetRoot)).toBe(false);
+    expect(path.resolve(scoped.knowledgeRoot, result.packetPath!).startsWith(second)).toBe(false);
+  });
+
+  it("V10 TASK-009 keeps the packet out of every bound Target, not only the primary one", async () => {
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const scoped = scopedFixture("T-forbidden-second");
+    // V10 TASK-025 — the runtime-state root is the Knowledge root, so the
+    // hostile shape is that root physically sitting inside a Target; only a
+    // `forbiddenRoots` list covering the non-primary roots catches it.
+    const second = tmpProject();
+    const knowledgeInsideSecond = path.join(second, "knowledge");
+    fs.mkdirSync(knowledgeInsideSecond, { recursive: true });
+    scoped.runtimeTask.scope.work_roots = [
+      { stage: AgentStage.BACKEND_ENGINEER, target_id: "api", root: scoped.targetRoot, access: "write", allow: [] },
+      { stage: AgentStage.BACKEND_ENGINEER, target_id: "worker", root: second, access: "write", allow: [] },
+    ];
+    const task = {
+      runtimeTask: scoped.runtimeTask,
+      taskId: "T-forbidden-second",
+      classification,
+      targetBindings: { targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }, { target_id: "worker", role: AgentStage.BACKEND_ENGINEER }] },
+    } as never;
+    const result = await createRuntimeExecutor({
+      runtime,
+      projectRoot: tmpProject(),
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      threeRepoTask: () => ({
+        task,
+        roots: {
+          bindingRoot: scoped.bindingRoot,
+          knowledgeRoot: knowledgeInsideSecond,
+          workRoots: [
+            { targetId: "api", path: scoped.targetRoot, access: "write" },
+            { targetId: "worker", path: second, access: "write" },
+          ],
+        },
+      }),
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-forbidden-second", context: [] });
+
     expect(result.outcome.result).toBe("FAIL");
-    expect(result.outcome.failure_reason).toMatch(/Targets "api", "worker".*one backend-engineer invocation/);
+    expect(result.outcome.failure_reason).toMatch(/execution packet storage must remain Local Runtime State/);
+    expect(runtime.requests).toHaveLength(0);
+  });
+
+  it("V10 TASK-009 still refuses an engineer invocation with no writable Target at all", async () => {
+    const runtime = new MockRuntimeAdapter({ id: "claude-code" });
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const scoped = scopedFixture("T-no-write");
+    const task = { runtimeTask: scoped.runtimeTask, taskId: "T-no-write", classification, targetBindings: { targets: [] } } as never;
+    const result = await createRuntimeExecutor({
+      runtime,
+      projectRoot: tmpProject(),
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+      threeRepoTask: () => ({
+        task,
+        roots: {
+          bindingRoot: scoped.bindingRoot,
+          knowledgeRoot: scoped.knowledgeRoot,
+          workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "read" }],
+        },
+      }),
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-no-write", context: [] });
+
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toMatch(/Target "api" is bound read-only for this backend-engineer invocation/);
+    expect(result.outcome.failure_reason).toMatch(/at least one writable Target must be resolved/);
     expect(runtime.requests).toHaveLength(0);
   });
 });

@@ -6,7 +6,7 @@ import { sha256Of } from "../packaging/templateManifest.js";
 import { runTargetCli } from "./cli.js";
 import { runTargetInit, runtimeCommand } from "./initCommand.js";
 import { isInsideFrameworkRoot, resolveFrameworkRoot, resolveRoots } from "./roots.js";
-import { devPreflight, runBa, runDev, workspacePreflight } from "./devCommand.js";
+import { devPreflight, runSession, workspacePreflight } from "./devCommand.js";
 import { checkTargetManifest, loadTargetConfig, readTargetManifest, writeTargetConfig, writeTargetManifest, defaultTargetConfig } from "./targetMeta.js";
 import { configureKnowledgeRoot } from "../threeRepo/installation.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
@@ -602,7 +602,7 @@ describe("software-team-agents — target-first end to end", () => {
     expect(fs.readFileSync(path.join(target, "src", "example.ts"), "utf8")).toContain("app logic");
   });
 
-  it("dev: preflight fails closed on conflicts and missing runtime, then launches FROM the Target with policy env", async () => {
+  it("open: preflight fails closed on conflicts and missing runtime, then launches with policy env", async () => {
     const target = makeTarget();
     const fw = fakeFramework("3.1.0", [
       { relPath: "CLAUDE.md", content: "# Framework launch instructions ก\n" },
@@ -611,10 +611,18 @@ describe("software-team-agents — target-first end to end", () => {
     ]);
     const templatesDir = path.join(fw, "templates");
 
-    // Uninitialized + unambiguous app repo → auto-initializes as DEV, then proceeds.
-    // A DEV session needs a Knowledge binding even on first run — bind a sibling repo.
+    // V10 TASK-026: a launch never materializes an application checkout — it
+    // refuses with the pointer to the Knowledge workspace instead.
+    const checkout = await capture(() => runTargetCli(["open"], target, fw, { installationConfigPath: NO_INSTALLATION }));
+    expect(checkout.code).toBe(1);
+    expect(checkout.err).toMatch(/Target checkout/);
+
+    // A dev-registered workspace (human ran init here before) opens: the
+    // recorded role labels the launch and refuses nothing. It binds a sibling
+    // Knowledge repo as read context.
+    expect((await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
     const knowledge = makeKnowledgeRepo();
-    const cfg = defaultTargetConfig(path.basename(target), "2026-01-01T00:00:00Z", "dev");
+    const cfg = loadTargetConfig(target)!;
     cfg.knowledge = { path: knowledge };
     writeTargetConfig(target, cfg);
 
@@ -622,7 +630,7 @@ describe("software-team-agents — target-first end to end", () => {
     let launchedEnv: NodeJS.ProcessEnv | undefined;
     let launchedArgs: string[] | undefined;
     let launchedInstructionBytes = 0;
-    const exitCode = await runDev({
+    const exitCode = await runSession({
       targetRoot: target,
       templatesDir,
       installationConfigPath: NO_INSTALLATION,
@@ -915,7 +923,7 @@ describe("role workspace architecture (T-ROLE)", () => {
     { relPath: "workflows/bugfix.yml", content: "workflow: bugfix\n" },
   ];
 
-  it("BA clone model: init+sync in the Knowledge repo materialize only BA assets; no Target exists anywhere (T-ROLE-22/23)", async () => {
+  it("BA clone model: init+sync in the Knowledge repo materialize the one payload; no Target exists anywhere (T-ROLE-22/23)", async () => {
     const knowledge = makeKnowledgeRepo();
     const knowledgeBefore = JSON.stringify([...dirHash(knowledge).entries()].sort());
     const fw = fakeFramework("1.0.0", FW_V1_FILES);
@@ -925,14 +933,16 @@ describe("role workspace architecture (T-ROLE)", () => {
     expect(initRun.code).toBe(0);
     expect(initRun.out).toMatch(/BA/);
 
-    // Workspace-role profile: BA agents land; engineer agents and pipeline payload do not.
+    // V10 TASK-020: one payload. `contracts/` in particular has to land — the
+    // guard hook reads `contracts/<role>.yaml` from the workspace root and
+    // fails open when it cannot (D7).
     expect(fs.existsSync(path.join(knowledge, ".claude", "agents", "business-analyst.md"))).toBe(true);
     expect(fs.existsSync(path.join(knowledge, ".claude", "agents", "system-analyst.md"))).toBe(true);
     expect(fs.existsSync(path.join(knowledge, ".claude", "hooks", "block-git.js"))).toBe(true);
     expect(fs.existsSync(path.join(knowledge, "policies", "coding.md"))).toBe(true);
-    expect(fs.existsSync(path.join(knowledge, ".claude", "agents", "backend-engineer.md"))).toBe(false);
-    expect(fs.existsSync(path.join(knowledge, "contracts"))).toBe(false);
-    expect(fs.existsSync(path.join(knowledge, "workflows"))).toBe(false);
+    expect(fs.existsSync(path.join(knowledge, ".claude", "agents", "backend-engineer.md"))).toBe(true);
+    expect(fs.readFileSync(path.join(knowledge, "contracts", "backend-engineer.yaml"), "utf8")).toContain("backend-engineer");
+    expect(fs.existsSync(path.join(knowledge, "workflows", "bugfix.yml"))).toBe(true);
     // Claude is the sole default runtime; no other binding family is
     // materialised until the workspace explicitly opts in.
     expect(fs.existsSync(path.join(knowledge, ".codex", "agents", "business-analyst.toml"))).toBe(false);
@@ -1109,7 +1119,7 @@ describe("role workspace architecture (T-ROLE)", () => {
     for (const relativePath of expectedPaths) expect(managed?.detail).toContain(relativePath);
   });
 
-  it("ba command: preflight passes without any Target checkout and launches from Knowledge (T-ROLE-03/19)", async () => {
+  it("open: preflight passes without any Target checkout and launches from Knowledge (T-ROLE-03/19; V10 TASK-026)", async () => {
     const knowledge = makeKnowledgeRepo();
     const fw = fakeFramework("1.0.0", FW_V1_FILES);
 
@@ -1118,7 +1128,7 @@ describe("role workspace architecture (T-ROLE)", () => {
     let launchedCwd = "";
     let launchedEnv: NodeJS.ProcessEnv | undefined;
     let launchedArgs: string[] | undefined;
-    const exitCode = await runBa({
+    const exitCode = await runSession({
       targetRoot: knowledge,
       templatesDir: path.join(fw, "templates"),
       installationConfigPath: NO_INSTALLATION,
@@ -1443,8 +1453,8 @@ describe("role workspace architecture (T-ROLE)", () => {
 
     const unknown = tmpRoot("unknown-stack");
     fs.mkdirSync(path.join(unknown, ".git"));
-    write(unknown, "README.md", "no project evidence\n");
-    const unresolved = await capture(() => runTargetCli(["init", "--role", "dev"], unknown, fw, { installationConfigPath: NO_INSTALLATION }));
+    write(unknown, "package.json", '{"name":"unknown-stack"}\n');
+    const unresolved = await capture(() => runTargetCli(["init"], unknown, fw, { installationConfigPath: NO_INSTALLATION }));
     expect(unresolved.code).toBe(1);
     expect(unresolved.err).toMatch(/could not be resolved.*--stack/i);
     expect(fs.existsSync(path.join(unknown, ".agent-team"))).toBe(false);
@@ -1542,7 +1552,7 @@ describe("role workspace architecture (T-ROLE)", () => {
     const errorSpy = console.error;
     console.error = () => {};
     try {
-      await expect(runBa({
+      await expect(runSession({
         targetRoot: knowledge,
         templatesDir: path.join(fw, "templates"),
         installationConfigPath: NO_INSTALLATION,
@@ -1553,31 +1563,45 @@ describe("role workspace architecture (T-ROLE)", () => {
     } finally { console.error = errorSpy; }
   });
 
-  it("ba refuses an application repository — that is what --role is for, explicitly (T-ROLE-16)", async () => {
+  it("V10 TASK-026 — retired ba/dev names are caught with a pointer to open, and never run (T-ROLE-16)", async () => {
     const target = makeTarget(); // app markers, no knowledge markers
     const fw = fakeFramework("1.0.0", FW_V1_FILES);
 
-    // `ba` in an app repo tells the user where they are.
-    const wrongRun = await capture(() => runTargetCli(["ba"], target, fw));
-    expect(wrongRun.code).toBe(1);
-    expect(wrongRun.err).toMatch(/Target repository|--role/);
+    // The retired names are not aliases: they exit non-zero naming `open`.
+    for (const retired of ["ba", "dev"]) {
+      const retiredRun = await capture(() => runTargetCli([retired], target, fw));
+      expect(retiredRun.code).toBe(64);
+      expect(retiredRun.err).toContain(`'${retired}' was retired in V10`);
+      expect(retiredRun.err).toContain("software-team-agents open");
+    }
 
-    // Explicit --role overrides detection at init time.
-    const explicit = await capture(() => runTargetCli(["init", "--role", "dev"], target, fw));
-    expect(explicit.code).toBe(0);
+    // An uninitialized application repository is a Target checkout, not a
+    // session workspace: `open` refuses and says where sessions live.
+    const openRun = await capture(() => runTargetCli(["open"], target, fw));
+    expect(openRun.code).toBe(1);
+    expect(openRun.err).toMatch(/Target checkout/);
+    expect(openRun.err).toMatch(/targets\.local\.yaml/);
+
+    // `--role` is accepted and ignored — with a warning, and detection records.
+    const warned = await capture(() => runTargetCli(["init", "--role", "dev"], target, fw));
+    expect(warned.code).toBe(0);
+    expect(warned.err).toMatch(/--role is retired and ignored/);
     expect(fs.existsSync(path.join(target, ".agent-team", "config.yaml"))).toBe(true);
 
-    // An ambiguous repository requires the flag outright.
+    // An ambiguous repository refuses to guess; a hand-set config role remains
+    // the one disambiguator now that the flag is gone.
     const both = tmpRoot("both");
     fs.mkdirSync(path.join(both, ".git"));
     fs.mkdirSync(path.join(both, "knowledge"));
     write(both, "package.json", "{}");
     const ambiguousRun = await capture(() => runTargetCli(["init"], both, fw));
     expect(ambiguousRun.code).toBe(1);
-    expect(ambiguousRun.err).toMatch(/--role ba or --role dev/);
+    expect(ambiguousRun.err).toMatch(/both a Knowledge workspace and an application repository/);
+    expect(ambiguousRun.err).toMatch(/role: ba" or "role: dev/);
+    expect(fs.existsSync(path.join(both, ".agent-team"))).toBe(false);
   });
 
-  it("DEV three-repo model: Knowledge required fail-closed, then read context while implementation lands in Target (T-ROLE-24/25)", async () => {
+  it("V10 TASK-027 — a session opens without a Knowledge binding, and a bound one stays read context", async () => {
     const target = makeTarget();
     const knowledge = makeKnowledgeRepo();
     write(knowledge, "_docs/module/sales/requirement.md", "# Sales requirement: implement X\n");
@@ -1586,15 +1610,19 @@ describe("role workspace architecture (T-ROLE)", () => {
     const fwBefore = JSON.stringify([...dirHash(fw).entries()].sort());
     const templatesDir = path.join(fw, "templates");
 
-    // No knowledge binding yet → DEV preflight fails closed with actionable advice.
-    try {
-      devPreflight({ targetRoot: target, templatesDir, installationConfigPath: NO_INSTALLATION, probe: () => ({ available: true }) });
-      throw new Error("expected preflight failure");
-    } catch (e) {
-      expect((e as Error).message).toMatch(/Knowledge/);
-    }
+    // Initialize like a user would first: a launch refuses to materialize an
+    // application checkout (V10 TASK-026), so this workspace's config exists
+    // before the first session.
+    expect((await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
 
-    // Bind the sibling Knowledge repo via the workspace config.
+    // No knowledge binding anywhere → the session still opens (V10 TASK-027:
+    // the preflight is per session, and the session's workspace is the
+    // Knowledge root itself — a binding is context, never a gate).
+    const unbound = devPreflight({ targetRoot: target, templatesDir, installationConfigPath: NO_INSTALLATION, probe: () => ({ available: true }) });
+    expect(unbound.knowledge).toBeUndefined();
+
+    // Bind the sibling Knowledge repo via the workspace config: it still
+    // resolves, and still rides the launch as read context.
     const config = defaultTargetConfig(path.basename(target), "2026-01-01T00:00:00Z", "dev");
     config.knowledge = { path: knowledge };
     writeTargetConfig(target, config);
@@ -1604,17 +1632,20 @@ describe("role workspace architecture (T-ROLE)", () => {
 
     // DEV launches from Target...
     let launchedCwd = "";
-    await runDev({
+    let launchedEnv: NodeJS.ProcessEnv | undefined;
+    await runSession({
       targetRoot: target,
       templatesDir,
       installationConfigPath: NO_INSTALLATION,
       probe: () => ({ available: true }),
-      launch: (_cmd, _args, cwd) => {
+      launch: (_cmd, _args, cwd, env) => {
         launchedCwd = cwd;
+        launchedEnv = env;
         return Promise.resolve(0);
       },
     });
     expect(launchedCwd.toLowerCase()).toBe(fs.realpathSync.native(target).toLowerCase());
+    expect(launchedEnv?.STA_KNOWLEDGE_ROOT?.toLowerCase()).toBe(fs.realpathSync.native(knowledge).toLowerCase());
 
     // ...reads the requirement from Knowledge...
     const requirementPath = path.join(ctx.knowledge!.knowledgeRoot, "_docs", "module", "sales", "requirement.md");
@@ -1629,7 +1660,7 @@ describe("role workspace architecture (T-ROLE)", () => {
     expect(JSON.stringify([...dirHash(fw).entries()].sort())).toBe(fwBefore);
   });
 
-  it("T-V5-009: DEV offers an explicit sibling Knowledge binding, while headless runs remain fail-closed", async () => {
+  it("V10 TASK-027 — a session without any binding launches and installation state stays untouched", async () => {
     const siblings = tmpRoot("knowledge-binding-siblings");
     const target = path.join(siblings, "app");
     const knowledge = path.join(siblings, "knowledge");
@@ -1640,33 +1671,23 @@ describe("role workspace architecture (T-ROLE)", () => {
     fs.mkdirSync(path.join(knowledge, "knowledge"));
     write(knowledge, "targets.yaml", "schema_version: 1\ntargets: []\n");
     const fw = fakeFramework("1.0.0", FW_V1_FILES);
-    const acceptedPath = path.join(siblings, "accepted-installation.yaml");
-    const initialized = await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: acceptedPath }));
+    const installationPath = path.join(siblings, "sibling-installation.yaml");
+    const initialized = await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: installationPath }));
     expect(initialized.code, initialized.err).toBe(0);
 
+    // The binding offer existed to satisfy the removed per-role requirement;
+    // with it gone, a headless session opens and nothing is recorded behind
+    // the user's back.
     let launched = false;
-    await expect(runDev({
+    await expect(runSession({
       targetRoot: target,
       templatesDir: path.join(fw, "templates"),
-      installationConfigPath: acceptedPath,
+      installationConfigPath: installationPath,
       probe: () => ({ available: true }),
-      confirmKnowledgeBinding: async (candidate) => candidate === knowledge,
       launch: () => { launched = true; return Promise.resolve(0); },
     })).resolves.toBe(0);
     expect(launched).toBe(true);
-    expect(configureKnowledgeRoot).toBeTypeOf("function");
-    expect(fs.readFileSync(acceptedPath, "utf8")).toContain(knowledge);
-
-    const headlessPath = path.join(siblings, "headless-installation.yaml");
-    fs.rmSync(acceptedPath);
-    await expect(runDev({
-      targetRoot: target,
-      templatesDir: path.join(fw, "templates"),
-      installationConfigPath: headlessPath,
-      probe: () => ({ available: true }),
-      launch: () => Promise.resolve(0),
-    })).resolves.toBe(1);
-    expect(fs.existsSync(headlessPath)).toBe(false);
+    expect(fs.existsSync(installationPath)).toBe(false);
   });
 
   it("T-V5-010: init reports the shared runtime prerequisite without refusing initialization", () => {
@@ -1685,14 +1706,26 @@ describe("role workspace architecture (T-ROLE)", () => {
     expect(fs.existsSync(path.join(target, ".agent-team", "manifest.json"))).toBe(true);
   });
 
-  it("workspaces registered under one role refuse the other command (write-policy clarity)", async () => {
+  it("V10 TASK-026 — the recorded role never refuses a session: both registrations open identically", async () => {
     const knowledge = makeKnowledgeRepo();
     const fw = fakeFramework("1.0.0", FW_V1_FILES);
     expect((await capture(() => runTargetCli(["init"], knowledge, fw))).code).toBe(0);
+    const templatesDir = path.join(fw, "templates");
+    const openSeam = {
+      templatesDir,
+      installationConfigPath: NO_INSTALLATION,
+      probe: () => ({ available: true }),
+      launch: () => Promise.resolve(0),
+    };
 
-    const wrongRole = await capture(() => runTargetCli(["dev"], knowledge, fw));
-    expect(wrongRole.code).toBe(1);
-    expect(wrongRole.err).toMatch(/registered as BA|software-team-agents ba/);
+    // A BA-registered workspace opens via the single entry command...
+    await expect(runSession({ targetRoot: knowledge, ...openSeam })).resolves.toBe(0);
+
+    // ...and a DEV-registered workspace opens just the same: the recorded role
+    // labels the launch, it admits and refuses nothing (V10 TASK-021 closure).
+    const target = makeTarget();
+    expect((await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
+    await expect(runSession({ targetRoot: target, ...openSeam })).resolves.toBe(0);
   });
 
   it("Framework upgrade reaches each workspace independently — no simultaneous sync required (T-ROLE-26)", async () => {
@@ -1740,7 +1773,7 @@ describe("role workspace architecture (T-ROLE)", () => {
       expect(rendered).not.toMatch(/WARNING/);
     });
 
-    it("initialized: installation.yaml binds a Knowledge root that IS init --role ba'd — status stays silent", async () => {
+    it("initialized: installation.yaml binds a Knowledge root that IS initialized — status stays silent", async () => {
       const base = tmpRoot("wg1-init");
       const configPath = path.join(base, "installation.yaml");
       const knowledge = makeKnowledgeRepo();
@@ -1750,7 +1783,7 @@ describe("role workspace architecture (T-ROLE)", () => {
       configureKnowledgeRoot(knowledge, configPath, fw);
 
       const target = makeTarget();
-      expect((await capture(() => runTargetCli(["init", "--role", "dev"], target, fw, { installationConfigPath: configPath }))).code).toBe(0);
+      expect((await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: configPath }))).code).toBe(0);
 
       const status = JSON.parse(
         (await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: configPath }))).out,
@@ -1761,7 +1794,7 @@ describe("role workspace architecture (T-ROLE)", () => {
       expect(rendered).not.toMatch(/WARNING/);
     });
 
-    it("bound-but-uninit: installation.yaml binds a marker-complete Knowledge root that was never `init --role ba`'d — WARNING with the fix command, from both BA and DEV status, plus a DEV preflight note", async () => {
+    it("bound-but-uninit: installation.yaml binds a marker-complete Knowledge root that was never initialized — WARNING with the fix command, from both BA and DEV status", async () => {
       const base = tmpRoot("wg1-uninit");
       const configPath = path.join(base, "installation.yaml");
       const knowledge = makeKnowledgeRepo(); // markers present, never `init`'d
@@ -1789,76 +1822,59 @@ describe("role workspace architecture (T-ROLE)", () => {
       expect(status.knowledgeBoundButUninitialized?.toLowerCase()).toBe(knowledgeCanonical.toLowerCase());
 
       const rendered = (await capture(() => runTargetCli(["status"], target, fw, { installationConfigPath: configPath }))).out;
-      expect(rendered).toMatch(/WARNING.*BA workspace role is not usable/);
-      expect(rendered).toContain("software-team-agents init --role ba");
+      expect(rendered).toMatch(/WARNING.*workspace payload does not exist anywhere on this machine yet/);
+      expect(rendered).toContain("software-team-agents init");
 
-      // DEV preflight: a non-blocking note, not a failure — DEV still reads
-      // Knowledge fine on markers alone.
+      // V10 TASK-027 — the role-keyed preflight note is gone with the forced
+      // dependency: the binding resolves as context and the session opens.
       const templatesDir = path.join(fw, "templates");
       const ctx = devPreflight({ targetRoot: target, templatesDir, installationConfigPath: configPath, probe: () => ({ available: true }) });
-      const note = ctx.checks.find((c) => c.name === "Knowledge (BA workspace role)");
-      expect(note?.ok).toBe(true);
-      expect(note?.detail).toMatch(/software-team-agents init --role ba/);
+      expect(ctx.checks.find((c) => c.name === "Knowledge (BA workspace role)")).toBeUndefined();
+      expect(ctx.knowledge?.knowledgeRoot.toLowerCase()).toBe(knowledgeCanonical.toLowerCase());
     });
   });
 
-  describe("T-WG2 — roster-drift detection", () => {
-    it("a hand-copied BA prompt (all 3 runtimes) in a dev workspace is flagged, never silently absorbed", async () => {
+  const HAND_WRITTEN_PROMPT = "# hand-written, not ours\n";
+
+  describe("T-WG2 — roster drift is gone; foreign files keep their own policy (V10 TASK-020/021/022)", () => {
+    it("an agent prompt from the payload is payload, not drift — there is no other role to belong to", async () => {
       const target = makeTarget();
       const fw = fakeFramework("1.0.0", FW_V1_FILES);
       expect((await capture(() => runTargetCli(["init", "--role", "dev"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
 
-      // Hand-copy business-analyst prompts into all three runtime renderings —
-      // never part of the dev role's profile (assetsForRole excludes them),
-      // never tracked by this Target's manifest.
-      write(target, ".claude/agents/business-analyst.md", AGENT_MD("business-analyst"));
-      write(target, ".codex/agents/business-analyst.toml", 'name = "business-analyst"\n');
-      write(target, ".opencode/agent/business-analyst.md", AGENT_MD("business-analyst"));
+      // `business-analyst` now ships to every workspace, so sync materialises
+      // it and tracks it in the manifest instead of flagging a hand-copy.
+      expect(fs.existsSync(path.join(target, ".claude", "agents", "business-analyst.md"))).toBe(true);
 
       const status = JSON.parse(
         (await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out,
-      ) as { rosterDriftPaths: string[]; conflictCount: number };
-      expect(new Set(status.rosterDriftPaths)).toEqual(
-        new Set([".claude/agents/business-analyst.md", ".codex/agents/business-analyst.toml", ".opencode/agent/business-analyst.md"]),
-      );
-      expect(status.conflictCount).toBeGreaterThanOrEqual(3);
+      ) as { rosterDriftPaths?: string[]; conflictCount: number };
+      // The field itself is gone (TASK-022): a value that can only ever be
+      // empty reads as a check that still runs.
+      expect(status.rosterDriftPaths).toBeUndefined();
+      expect(status.conflictCount).toBe(0);
 
       const rendered = (await capture(() => runTargetCli(["status"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out;
-      expect(rendered).toMatch(/WARNING: roster drift/);
-      expect(rendered).toContain(".claude/agents/business-analyst.md");
-      expect(rendered).toContain("sync --force");
+      expect(rendered).not.toMatch(/WARNING: roster drift/);
 
-      // Plain `sync` (no --force) reports it as a conflict — same treatment as
-      // an edited-managed file — and writes nothing.
+      // Plain `sync` stays clean and writes nothing away.
       const syncRun = await capture(() => runTargetCli(["sync"], target, fw, { installationConfigPath: NO_INSTALLATION }));
-      expect(syncRun.code).toBe(2);
-      expect(syncRun.err).toMatch(/business-analyst/);
+      expect(syncRun.code).toBe(0);
       expect(fs.existsSync(path.join(target, ".claude", "agents", "business-analyst.md"))).toBe(true);
-
-      // `sync --force` backs up and removes the drifted prompts.
-      const forced = await capture(() => runTargetCli(["sync", "--force"], target, fw, { installationConfigPath: NO_INSTALLATION }));
-      expect(forced.code).toBe(0);
-      expect(fs.existsSync(path.join(target, ".claude", "agents", "business-analyst.md"))).toBe(false);
-      expect(fs.existsSync(path.join(target, ".codex", "agents", "business-analyst.toml"))).toBe(false);
-      expect(fs.existsSync(path.join(target, ".opencode", "agent", "business-analyst.md"))).toBe(false);
-
-      const after = JSON.parse(
-        (await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out,
-      ) as { rosterDriftPaths: string[] };
-      expect(after.rosterDriftPaths).toEqual([]);
     });
 
-    it("an engineer prompt hand-copied into a BA (Knowledge) workspace is flagged the same way", async () => {
+    it("an engineer prompt in a Knowledge workspace is payload too — the mirror case answers the same", async () => {
       const knowledge = makeKnowledgeRepo();
       const fw = fakeFramework("1.0.0", FW_V1_FILES);
       expect((await capture(() => runTargetCli(["init", "--role", "ba"], knowledge, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
 
-      write(knowledge, ".claude/agents/backend-engineer.md", AGENT_MD("backend-engineer"));
+      expect(fs.existsSync(path.join(knowledge, ".claude", "agents", "backend-engineer.md"))).toBe(true);
 
       const status = JSON.parse(
         (await capture(() => runTargetCli(["status", "--json"], knowledge, fw, { installationConfigPath: NO_INSTALLATION }))).out,
-      ) as { rosterDriftPaths: string[] };
-      expect(status.rosterDriftPaths).toEqual([".claude/agents/backend-engineer.md"]);
+      ) as { rosterDriftPaths?: string[]; conflictCount: number };
+      expect(status.rosterDriftPaths).toBeUndefined();
+      expect(status.conflictCount).toBe(0);
     });
 
     it("a foreign file whose name does not match any known agent is still left alone (existing policy, unchanged)", async () => {
@@ -1870,14 +1886,30 @@ describe("role workspace architecture (T-ROLE)", () => {
 
       const status = JSON.parse(
         (await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out,
-      ) as { rosterDriftPaths: string[]; conflictCount: number };
-      expect(status.rosterDriftPaths).toEqual([]);
+      ) as { rosterDriftPaths?: string[]; conflictCount: number };
+      expect(status.rosterDriftPaths).toBeUndefined();
       expect(status.conflictCount).toBe(0);
 
       // Plain sync does not touch it, and reports no conflict for it either.
       const syncRun = await capture(() => runTargetCli(["sync"], target, fw, { installationConfigPath: NO_INSTALLATION }));
       expect(syncRun.code).toBe(0);
       expect(fs.existsSync(path.join(target, ".claude", "agents", "my-personal-notes.md"))).toBe(true);
+    });
+
+    it("a foreign file sitting on a path the Framework wants is still reported by the untracked-file policy", async () => {
+      const target = makeTarget();
+      const fw = fakeFramework("1.0.0", FW_V1_FILES);
+
+      // Written before init, so the Framework has never tracked it: the
+      // mechanism TASK-022 had to leave intact.
+      write(target, ".claude/agents/business-analyst.md", HAND_WRITTEN_PROMPT);
+      expect((await capture(() => runTargetCli(["init", "--role", "dev"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
+
+      const status = JSON.parse(
+        (await capture(() => runTargetCli(["status", "--json"], target, fw, { installationConfigPath: NO_INSTALLATION }))).out,
+      ) as { projectOwnedPaths: string[] };
+      expect(status.projectOwnedPaths).toContain(".claude/agents/business-analyst.md");
+      expect(fs.readFileSync(path.join(target, ".claude", "agents", "business-analyst.md"), "utf8")).toBe(HAND_WRITTEN_PROMPT);
     });
   });
 });

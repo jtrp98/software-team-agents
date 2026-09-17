@@ -4,9 +4,17 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CliUsageError, runCli } from "../../cli.js";
-import { parseBoundedRunArgs, BOUNDED_RUN_USAGE } from "./boundedRun.js";
+import { parseBoundedRunArgs, renderAwaitingHuman, BOUNDED_RUN_USAGE } from "./boundedRun.js";
+import { createProductionBoundedRunServices } from "../../run/boundedRunServices.js";
+
+// T-V10 TASK-005/006 — the acceptance seam is the factory call itself: parse
+// output alone cannot prove the flags survive the trip to the services.
+vi.mock("../../run/boundedRunServices.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../run/boundedRunServices.js")>();
+  return { ...actual, createProductionBoundedRunServices: vi.fn(actual.createProductionBoundedRunServices) };
+});
 import { RuntimeRegistry } from "../../runtime/runtimeRegistry.js";
 import { MockRuntimeAdapter, okResult } from "../../runtime/mockAdapter.js";
 import { RuntimeCapability } from "../../runtime/runtimeCapabilities.js";
@@ -80,7 +88,13 @@ describe("parseBoundedRunArgs", () => {
   it("--resume refuses scope and classification flags — those belong to the frozen run, not to resuming it", () => {
     expect(() => parseBoundedRunArgs(["--resume", "01ABC", "--all"], "/repo")).toThrow(/--all\/--phase\/--task do not apply/);
     expect(() => parseBoundedRunArgs(["--resume", "01ABC", "--bug-fix"], "/repo")).toThrow(/classification flags do not apply/);
-    expect(parseBoundedRunArgs(["--resume", "01ABC"], "/repo").resumeRunId).toBe("01ABC");
+  });
+
+  it("T-V10 TASK-007 — --resume states autonomy like the first run: the ledger freezes no autonomy to inherit", () => {
+    expect(() => parseBoundedRunArgs(["--resume", "01ABC"], "/repo")).toThrow(/--resume 01ABC also needs --autonomy edit or --autonomy full/);
+    expect(() => parseBoundedRunArgs(["--resume", "01ABC", "--autonomy", "propose"], "/repo")).toThrow(/--autonomy edit or --autonomy full/);
+    expect(parseBoundedRunArgs(["--resume", "01ABC", "--autonomy", "full"], "/repo").autonomy).toBe("full");
+    expect(parseBoundedRunArgs(["--resume", "01ABC", "--dry-run"], "/repo").resumeRunId).toBe("01ABC");
   });
 
   it("--task splits and trims a comma list; an empty one refuses", () => {
@@ -294,6 +308,10 @@ describe("sta bounded-run (CLI)", () => {
     // Nothing launched, so nothing could have written the Target.
     expect(adapter.requests).toEqual([]);
     expect(gatedOutput).toContain("(attempts=0, qa_rounds=0)");
+    // V10 TASK-031 — the closing lines name the task and the command that clears it,
+    // not just the one reason that ended the run.
+    expect(gatedOutput).toContain("[bounded-run] awaiting a human decision (1):");
+    expect(gatedOutput).toMatch(/\[bounded-run] {3}BE-\d+: .+ — `sta approve BE-\d+`/);
     expect(git(targetRoot, "branch", "--list", "sta/run/*")).toBe("");
 
     // The gate is durable, not just printed: a resume reports the recorded
@@ -318,6 +336,21 @@ describe("sta bounded-run (CLI)", () => {
     expect(resumeOutput).toContain("blocked=BE-004");
     expect(adapter.requests).toEqual([]);
 
+    // V10 TASK-031 — `sta status` reads the same ledger, so the blocked task and
+    // its gate reason are visible without knowing the run id.
+    const statusLogs: string[] = [];
+    const statusSpy = console.log;
+    console.log = (line: string) => statusLogs.push(line);
+    try {
+      expect(await runCli(["status", "--project-root", root], root)).toBe(0);
+    } finally {
+      console.log = statusSpy;
+    }
+    const statusOutput = statusLogs.join("\n");
+    expect(statusOutput).toContain(`bounded run ${runId} (AWAITING_HUMAN) module=orders: 1 task(s) awaiting a human decision`);
+    expect(statusOutput).toContain("BE-004: ");
+    expect(statusOutput).toContain("not eligible for unattended execution");
+    expect(statusOutput).toContain("unblock with `sta approve BE-004`");
   }, 30_000);
 
   it("--resume reports current readiness without mutating state under --dry-run", async () => {
@@ -823,5 +856,185 @@ describe("T-V9-011 sta bounded-run Target binding reconciliation", () => {
     expect(logs.some((l) => l.includes("tasks=1"))).toBe(true);
     expect(logs.some((l) => l.includes("target root=") && l.includes("id=api"))).toBe(true);
     expect(fs.existsSync(path.join(root, "state.db"))).toBe(false);
+  });
+});
+
+describe("V10 TASK-025 — runtime state has one home: the Knowledge root", () => {
+  it("a three-repo run persists every packet under the Knowledge root, and the invoking cwd gains none", async () => {
+    const { root, knowledgeRoot, targetApi } = threeRepoBoundedRunProject(roots, git);
+    const adapter = completingAdapter(targetApi);
+    const logs: string[] = [];
+    const spy = console.log;
+    console.log = (line: string) => logs.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
+        root,
+        { createRuntimeRegistry: () => new RuntimeRegistry([adapter]) },
+      );
+    } finally {
+      console.log = spy;
+    }
+    expect(code, logs.join("\n")).toBe(0);
+    expect(logs.some((l) => l.includes("COMPLETED"))).toBe(true);
+
+    // The prepare-time packet and the per-stage executor packet all land in
+    // the Knowledge root's .workflow — the executor's (attempt 2) used to
+    // follow the Framework contract root instead.
+    const packets = path.join(knowledgeRoot, ".workflow", "packets", "BE-004");
+    const written = fs.readdirSync(packets).sort();
+    expect(written).toContain("backend-engineer-1.json");
+    expect(written).toContain("backend-engineer-2.json");
+    // The cwd the run was commanded from gains no packet storage at all.
+    expect(fs.existsSync(path.join(root, ".workflow", "packets"))).toBe(false);
+  }, 30_000);
+});
+
+describe("T-V10 bounded-run autonomy/routing plumbing (TASK-005, TASK-006)", () => {
+  beforeEach(() => {
+    vi.mocked(createProductionBoundedRunServices).mockClear();
+  });
+
+  it("TASK-005 — `--autonomy edit` reaches the service factory and the adapter request, not just the parser", async () => {
+    const { root, targetRoot } = project(roots, git);
+    const adapter = completingAdapter(targetRoot);
+    const logs: string[] = [];
+    const spy = console.log;
+    console.log = (line: string) => logs.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit"],
+        root,
+        { createRuntimeRegistry: () => new RuntimeRegistry([adapter]) },
+      );
+    } finally {
+      console.log = spy;
+    }
+    expect(code, logs.join("\n")).toBe(0);
+    const options = vi.mocked(createProductionBoundedRunServices).mock.calls.at(-1)![0];
+    expect(options.autonomy).toBe("edit");
+    expect(adapter.requests[0]?.autonomy).toBe("edit");
+  }, 30_000);
+
+  it("TASK-005 — a --dry-run still needs no autonomy and never composes the services at all", async () => {
+    const { root, targetRoot } = project(roots, git);
+    const logs: string[] = [];
+    const spy = console.log;
+    console.log = (line: string) => logs.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--dry-run"],
+        root,
+        { createRuntimeRegistry: () => new RuntimeRegistry([completingAdapter(targetRoot)]) },
+      );
+    } finally {
+      console.log = spy;
+    }
+    expect(code).toBe(0);
+    expect(vi.mocked(createProductionBoundedRunServices).mock.calls).toHaveLength(0);
+  });
+
+  it("TASK-006 — `--model`/`--effort` reach the factory as routingFlags, and an explicit model stays fail-closed at the freeze gate", async () => {
+    const { root, targetRoot } = project(roots, git);
+    const adapter = completingAdapter(targetRoot);
+    const logs: string[] = [];
+    const spy = console.log;
+    console.log = (line: string) => logs.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit", "--model", "not-declared", "--effort", "high"],
+        root,
+        { createRuntimeRegistry: () => new RuntimeRegistry([adapter]) },
+      );
+    } finally {
+      console.log = spy;
+    }
+    const options = vi.mocked(createProductionBoundedRunServices).mock.calls.at(-1)![0];
+    expect(options.routingFlags).toEqual({ model: "not-declared", effort: "high" });
+    // attemptFreeze's shipped boundary: a route naming an explicit model may not
+    // start unless the runtime's model-selection is verified — the flag cannot
+    // silently carry the run to that model (T-V10 TASK-006 "policy wins").
+    expect(code).toBe(4);
+    expect(logs.join("\n")).toContain("GATE");
+    expect(logs.join("\n")).toContain("no verified model-selection capability");
+    expect(adapter.requests).toEqual([]);
+
+    const store = new SqliteTaskStore(defaultStateDbPath(root));
+    const ledger = new SqliteRunLedger(store, { projectRoot: root });
+    try {
+      const run = ledger.listRuns()[0]!;
+      expect(ledger.attemptsForTask(run.run_id, "BE-004")).toHaveLength(0);
+    } finally {
+      ledger.close();
+    }
+  }, 30_000);
+
+  it("TASK-006 — `--effort` rides the flag lane end-to-end into the attempt's frozen requested route", async () => {
+    const { root, targetRoot } = project(roots, git);
+    const adapter = completingAdapter(targetRoot);
+    const logs: string[] = [];
+    const spy = console.log;
+    console.log = (line: string) => logs.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit", "--effort", "high"],
+        root,
+        { createRuntimeRegistry: () => new RuntimeRegistry([adapter]) },
+      );
+    } finally {
+      console.log = spy;
+    }
+    expect(code, logs.join("\n")).toBe(0);
+    const options = vi.mocked(createProductionBoundedRunServices).mock.calls.at(-1)![0];
+    expect(options.routingFlags).toEqual({ model: undefined, effort: "high" });
+
+    const store = new SqliteTaskStore(defaultStateDbPath(root));
+    const ledger = new SqliteRunLedger(store, { projectRoot: root });
+    try {
+      const run = ledger.listRuns()[0]!;
+      const attempts = ledger.attemptsForTask(run.run_id, "BE-004");
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]!.requested).toEqual({ runtime: "claude-code", model: null, effort: "high" });
+      expect(attempts[0]!.route_basis).toBe("level-1");
+    } finally {
+      ledger.close();
+    }
+  }, 30_000);
+});
+
+/**
+ * V10 TASK-031 — the closing summary is the only place a run with several
+ * gates reports all of them; `ControllerResult.reason` carries one line.
+ */
+describe("V10 TASK-031 — awaiting-human summary", () => {
+  it("prints one line per gated task with the command that clears it", () => {
+    const lines = renderAwaitingHuman([
+      { taskId: "BE-001", reason: "schema confirmation required" },
+      { taskId: "BE-002", reason: "no runtime route resolved for BE-002/backend-engineer" },
+      { taskId: "FE-001", reason: "UX sign-off is missing" },
+    ]);
+    expect(lines).toEqual([
+      "[bounded-run] awaiting a human decision (3):",
+      "[bounded-run]   BE-001: schema confirmation required — `sta approve BE-001`",
+      "[bounded-run]   BE-002: no runtime route resolved for BE-002/backend-engineer — `sta approve BE-002`",
+      "[bounded-run]   FE-001: UX sign-off is missing — `sta approve FE-001`",
+    ]);
+  });
+
+  it("adds nothing when no task is waiting on a person", () => {
+    expect(renderAwaitingHuman([])).toEqual([]);
+  });
+
+  it("keeps one gate's line readable by folding newlines and capping the reason", () => {
+    const [, line] = renderAwaitingHuman([{ taskId: "BE-001", reason: `head\n${"x".repeat(400)}` }]);
+    expect(line!.startsWith("[bounded-run]   BE-001: head x")).toBe(true);
+    expect(line).toContain("…");
+    expect(line).toContain("`sta approve BE-001`");
+    expect(line!.length).toBeLessThan(200);
   });
 });

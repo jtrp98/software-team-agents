@@ -17,6 +17,7 @@ import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
 import { contractGuardResolver } from "../runtime/runtimeGuards.js";
 import { BoundedRunController } from "./boundedRunController.js";
 import { createProductionBoundedRunServices } from "./boundedRunServices.js";
+import type { RuntimeTaskWorkRoot } from "../orchestrator/runtimeTask.js";
 
 /**
  * T-V8-021 — the production `BoundedRunServices` against a real registered
@@ -195,7 +196,7 @@ Undated canonical fixture; no human sign-off is implied.
   return { root, targetRoot };
 }
 
-function register(fixture: Fixture) {
+function register(fixture: Fixture, extraWorkRoots: readonly RuntimeTaskWorkRoot[] = []) {
   const { root, targetRoot } = fixture;
   const store = new SqliteTaskStore(path.join(root, "state.db"));
   const ledger = new SqliteRunLedger(store, { projectRoot: root });
@@ -223,6 +224,7 @@ function register(fixture: Fixture) {
       targetWorkRoots: [
         { stage: AgentStage.BACKEND_ENGINEER, targetId: "target", path: targetRoot },
         { stage: AgentStage.QA_ENGINEER, targetId: "target", path: targetRoot },
+        ...extraWorkRoots,
       ],
     }),
   });
@@ -341,4 +343,74 @@ describe("T-V8-021 — production BoundedRunServices against a real registered t
     expect(result.reason).toMatch(/no runtime route resolved/);
     expect(ledger.readRun(run.run_id)?.status).toBe("AWAITING_HUMAN");
   });
+
+  /**
+   * V10 TASK-009 decision: widening an engineer's write scope stops at the
+   * commit boundary. One `GuardedRunSession` per run holds one Git repository
+   * and `freezeAttempt`/`assertTargetAttempt` admit one writable root per
+   * attempt, so a second writable Target is refused here — before any adapter
+   * runs — rather than after an agent has written work no checkpoint can commit.
+   */
+  it("TASK-009 checkpoint decision — one Target per attempt: gates a second writable Target before the adapter writes anything it could not commit", async () => {
+    const fixture = project();
+    const second = fs.mkdtempSync(path.join(os.tmpdir(), "v10-second-target-"));
+    roots.push(second);
+    const { root, targetRoot, ledger, store, run } = register(fixture, [
+      { stage: AgentStage.BACKEND_ENGINEER, targetId: "second", path: second, access: "write" },
+    ]);
+    const adapter = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
+    const services = createProductionBoundedRunServices({
+      ledger, store, registry: new RuntimeRegistry([adapter]),
+      projectRoot: root, targetRoot, runtimeStateRoot: root,
+      defaultRuntimeId: "claude-code",
+      moduleName: "orders", docsRoot: root,
+      guards: contractGuardResolver(root),
+      adapterVersion: "test@1",
+      secretScanner: () => ({ ok: true, problems: [] }),
+    });
+    const controller = new BoundedRunController({ ledger, runId: run.run_id, runtimeStateRoot: root, services });
+    const result = await controller.run();
+
+    expect(result.kind).toBe("GATE");
+    expect(result.reason).toMatch(/resolves 2 writable Targets for backend-engineer/);
+    expect(result.reason).toMatch(/commits one Target per attempt/);
+    expect(adapter.requests).toHaveLength(0);
+    expect(ledger.checkpointsForRun(run.run_id)).toHaveLength(0);
+    expect(ledger.attemptsForTask(run.run_id, "BE-004")).toHaveLength(0);
+  }, 30_000);
+
+  it("TASK-009 regression — a single writable Target still prepares, so the widened scope changes nothing for a one-Target task", async () => {
+    const fixture = project();
+    const { root, targetRoot, ledger, store, run } = register(fixture, [
+      { stage: AgentStage.BACKEND_ENGINEER, targetId: "target", path: fixture.targetRoot, access: "write" },
+    ]);
+    const adapter = new MockRuntimeAdapter({
+      id: "claude-code",
+      models: ["sonnet"],
+      respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }),
+      files: {
+        ".mock/guards.json": JSON.stringify({
+          hooks: {
+            PreToolUse: [{ hooks: [{ command: "node .claude/hooks/block-path-permissions.js" }] }],
+            Stop: [{ hooks: [{ command: "node .claude/hooks/require-green-before-stop.js" }] }],
+          },
+        }),
+      },
+    });
+    const services = createProductionBoundedRunServices({
+      ledger, store, registry: new RuntimeRegistry([adapter]),
+      projectRoot: root, targetRoot, runtimeStateRoot: root,
+      defaultRuntimeId: "claude-code",
+      moduleName: "orders", docsRoot: root,
+      guards: contractGuardResolver(root),
+      adapterVersion: "test@1",
+      secretScanner: () => ({ ok: true, problems: [] }),
+    });
+    const controller = new BoundedRunController({ ledger, runId: run.run_id, runtimeStateRoot: root, services });
+    const result = await controller.run();
+
+    expect(result.reason ?? "").not.toMatch(/writable Targets/);
+    expect(adapter.requests.length).toBeGreaterThan(0);
+    expect(ledger.attemptsForTask(run.run_id, "BE-004")[0]!.guard_evidence.writable_roots).toEqual([targetRoot]);
+  }, 30_000);
 });

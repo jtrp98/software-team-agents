@@ -255,6 +255,7 @@ interface ScenarioOptions {
   prepare?: BoundedRunServices["prepareTask"];
   analysisRepair?: BoundedRunServices["runAnalysisRepair"];
   allowedPathGlobs?: readonly string[];
+  deniedPathGlobs?: readonly string[];
   writeFile?: (prepared: PreparedTargetAttempt) => void;
   onQa?: (round: number) => void;
   secretScanner?: PreparedTargetAttempt["secretScanner"];
@@ -280,6 +281,7 @@ function harness(f: Fixture, options: ScenarioOptions = {}): Harness {
         attempt: freeze(ledger, f, task),
         taskDescription: `execute ${task.task_id}`,
         allowedPathGlobs: options.allowedPathGlobs ?? ["src/**"],
+        deniedPathGlobs: options.deniedPathGlobs ?? [],
         secretScanner: options.secretScanner ?? (() => ({ ok: true, problems: [] })),
       };
     }),

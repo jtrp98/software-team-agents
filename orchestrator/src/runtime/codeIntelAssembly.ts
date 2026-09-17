@@ -20,9 +20,11 @@ import { contentHash } from "../artifacts/executionPacket.js";
  * without this module. Context enrichment is an optimization; the run
  * proceeding is the requirement.
  *
- * OFF is the default and reads one env var: `STA_CODE_INTEL=on`. There is no
- * settings-file surface and no hook — enabling is a per-machine decision,
- * which is also why discovery scopes itself to the task's bound target root.
+ * ON is the default (ADR-006 Option A): a feature that only exists when
+ * someone remembers an env var never runs. The env var survives as the
+ * explicit per-machine override — `off`/`false`/`0` switches the whole
+ * feature off; there is no settings-file surface and no hook, which is also
+ * why discovery scopes itself to the task's bound target root.
  */
 
 export const CODE_INTEL_ENV = "STA_CODE_INTEL";
@@ -30,8 +32,11 @@ export const CODE_INTEL_PIN_ENV = "STA_CODE_INTEL_PIN";
 /** Binary name/path override — needed where uv's tool bin dir is not on the spawning process's PATH. */
 export const CODE_INTEL_BIN_ENV = "STA_CODE_INTEL_BIN";
 
+/** The only values that switch the feature off; everything else — including unset — is ON. */
+const CODE_INTEL_OFF_VALUES = new Set(["off", "false", "0"]);
+
 export function codeIntelEnabled(env: Record<string, string | undefined> = process.env): boolean {
-  return ["on", "true", "1"].includes((env[CODE_INTEL_ENV] ?? "").trim().toLowerCase());
+  return !CODE_INTEL_OFF_VALUES.has((env[CODE_INTEL_ENV] ?? "").trim().toLowerCase());
 }
 
 /** Env → adapter config for the default construction path. Pure, so tests pin it without spawning anything. */
@@ -113,9 +118,10 @@ export async function codeIntelContext(input: CodeIntelSliceInput, deps: CodeInt
     // the always-available, no-install, no-index baseline — so "no graph
     // provider exists" still completes the task with bounded, current-source
     // evidence instead of nothing. This is not a D-V8-04 vendor selection:
-    // Graphify stays exactly as opt-in as before (`STA_CODE_INTEL=on`), and
-    // the chain degrades to `NativeSearchProvider` alone the moment Graphify
-    // is absent, which is every machine that has not installed it.
+    // a graph provider is consulted only when its index is fresh, and
+    // `STA_CODE_INTEL=off` still forces the whole feature off; absent
+    // Graphify degrades the chain to `NativeSearchProvider` alone, which is
+    // every machine that has not installed it.
     provider =
       built ??
       createFallbackChainProvider([

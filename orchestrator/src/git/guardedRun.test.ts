@@ -110,7 +110,9 @@ describe("T-V8-019 — guarded one-writer RunLedger checkpoint boundary", () => 
     expect(git(f.target, "branch", "--show-current")).toBe("main");
   });
 
-  it("creates one run branch, enforces one writer, stages exact task paths and records packet identity", async () => {
+  // Real git work on every step; 5s (vitest's default) is tight for this on a
+  // loaded Windows box — the test flaked at 4999ms twice under parallel suites.
+  it("creates one run branch, enforces one writer, stages exact task paths and records packet identity", { timeout: 30_000 }, async () => {
     const f = seed({ tasks: [{ id: "BE-1" }, { id: "BE-2" }] });
     const a = attempt(f);
     const session = await GuardedRunSession.open({ ledger: f.ledger, runId: f.run.run_id, runtimeStateRoot: f.state, firstAttempt: a });

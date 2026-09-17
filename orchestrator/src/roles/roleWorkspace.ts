@@ -11,6 +11,7 @@ import { knowledgeDir } from "../knowledge/knowledgeStore.js";
 import { type StaleReference, staleReferences } from "../knowledge/knowledgeHistory.js";
 import type { KnowledgeItem } from "../knowledge/knowledgeModel.js";
 import { LANE_LABEL, type RoleLane, ROLE_LANES, isRoleLane, laneOf } from "./roleLane.js";
+import { renameSyncRetrying } from "../concurrency/atomicRename.js";
 
 /**
  * The role workspace — where one lane stands in the shared knowledge base, so
@@ -273,7 +274,7 @@ export function writeRoleWorkspace(workspace: RoleWorkspace, projectRoot: string
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.tmp-${process.pid}`;
   fs.writeFileSync(tmp, renderRoleWorkspace(workspace), "utf8");
-  fs.renameSync(tmp, filePath);
+  renameSyncRetrying(tmp, filePath);
   return filePath;
 }
 

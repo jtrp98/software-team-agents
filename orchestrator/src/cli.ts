@@ -49,6 +49,7 @@ import { type TargetBindings } from "./threeRepo/taskBindings.js";
 import { readWorkPlan } from "./docs/planGraph.js";
 import { openTask } from "./cli/composition/taskIntake.js";
 import { composeProductionTaskExecutor } from "./cli/composition/taskExecutor.js";
+import { askCodeIntelConsentAtRunStart } from "./cli/composition/runStartConsent.js";
 import type { CliDependencies } from "./cli/composition/runtimeRegistry.js";
 import { AgentStage } from "./types.js";
 
@@ -788,6 +789,14 @@ export async function runCli(argv: string[], defaultProjectRoot: string, depende
     for (const targetRoot of resolveQaWorkRoots(args.projectRoot, taskId, store, args.module)) {
       assertNoWorkspaceRunLock(args.projectRoot, targetRoot.path);
     }
+
+    // V10 TASK-015 — ask-before-indexing at run start (ADR-006 Option A);
+    // headless stdin never asks, and the hook itself never blocks the run.
+    await askCodeIntelConsentAtRunStart(
+      resolveQaWorkRoots(args.projectRoot, taskId, store, args.module).flatMap((root) =>
+        root.targetId ? [{ targetId: root.targetId, path: root.path }] : []),
+      { interactive: process.stdin.isTTY === true },
+    );
 
     const composition = await composeProductionTaskExecutor(args, taskId, orchestrator, store, dependencies);
 

@@ -68,16 +68,34 @@ describe("createFallbackChainProvider", () => {
     await expect(chain.getStatus(TARGET)).resolves.toEqual(expect.objectContaining({ status: "fresh" }));
   });
 
-  it("does NOT fall through on stale — a stale graph is a hard stop, not a reason to swap evidence sources", async () => {
-    const chain = createFallbackChainProvider([providerWithStatus("stale"), providerWithStatus("fresh", [NATIVE_CANDIDATE])]);
+  it("TASK-016: falls through to the next provider on stale — a stale graph must not leave the machine worse off than no graph at all", async () => {
+    let staleQueried = false;
+    const stale: CodeIntelligenceProvider = {
+      ...providerWithStatus("stale"),
+      findRelevantCode: async () => { staleQueried = true; return [CANDIDATE]; },
+    };
+    const chain = createFallbackChainProvider([stale, providerWithStatus("fresh", [NATIVE_CANDIDATE])]);
     const status = await chain.getStatus(TARGET);
-    expect(status.status).toBe("stale");
+    expect(status.status).toBe("fresh");
+    expect(status.fallenThrough).toEqual({ status: "stale", indexedRevision: "r1" });
+    await expect(chain.findRelevantCode({ target: TARGET, description: "d" })).resolves.toEqual([NATIVE_CANDIDATE]);
+    expect(staleQueried).toBe(false);
   });
 
-  it("does NOT fall through on error", async () => {
+  it("TASK-016: falls through to the next provider on error, same as stale", async () => {
     const chain = createFallbackChainProvider([providerWithStatus("error"), providerWithStatus("fresh", [NATIVE_CANDIDATE])]);
     const status = await chain.getStatus(TARGET);
-    expect(status.status).toBe("error");
+    expect(status.status).toBe("fresh");
+    expect(status.fallenThrough).toEqual({ status: "error", indexedRevision: "r1" });
+    await expect(chain.findRelevantCode({ target: TARGET, description: "d" })).resolves.toEqual([NATIVE_CANDIDATE]);
+  });
+
+  it("stale/error on the LAST provider is still a hard stop — nothing left to fall through to", async () => {
+    const staleOnly = createFallbackChainProvider([providerWithStatus("missing"), providerWithStatus("stale")]);
+    expect((await staleOnly.getStatus(TARGET)).status).toBe("stale");
+
+    const errorOnly = createFallbackChainProvider([providerWithStatus("missing"), providerWithStatus("error")]);
+    expect((await errorOnly.getStatus(TARGET)).status).toBe("error");
   });
 
   it("reports missing only when every provider in the chain is missing", async () => {

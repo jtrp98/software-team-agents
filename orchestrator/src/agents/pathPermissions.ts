@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { STACK_SCOPED_ROLES, resolveStackPathRules } from "../profile/projectProfile.js";
-import { resolveWorkspaceRole } from "../targetcli/roots.js";
 import { loadTargetConfig } from "../targetcli/targetMeta.js";
 import { AgentStage } from "../types.js";
 import { defaultProjectRoot, loadAgentContract } from "./agentContract.js";
@@ -65,8 +64,14 @@ export const WORKSPACE_BA_ARTIFACTS: readonly string[] = [
   "knowledge-policy.yaml",
 ];
 
-/** Mirror image of WORKSPACE_BA_ARTIFACTS: engineer/pipeline payload that belongs to a Target checkout, never a BA workspace. */
-export const WORKSPACE_DEV_ARTIFACTS: readonly string[] = [
+/**
+ * Framework payload: the files `sta sync` materialises and a person edits, that
+ * no agent contract grants. It used to be denied only in a `role: ba`
+ * workspace, which stopped meaning anything once one workspace carried both
+ * this and `_docs/**` (V10 TASK-021) — so it is denied per stage now, to every
+ * stage, rather than per repository.
+ */
+export const FRAMEWORK_PAYLOAD_ARTIFACTS: readonly string[] = [
   "contracts/**",
   "workflows/**",
   "stacks/**",
@@ -76,28 +81,28 @@ export const WORKSPACE_DEV_ARTIFACTS: readonly string[] = [
 ];
 
 /**
- * Re-export of the one workspace-role reader (`targetcli/roots.ts`), kept under
- * this name because the guard rules are declared here and the rendered hook
- * block must apply the identical rule. Null when absent/unreadable -- the rule
- * then stays inactive, exactly like any legacy workspace.
+ * Stages whose write scope is a Target checkout and which may therefore never
+ * write a Knowledge artifact, whatever workspace the invocation was launched
+ * from (V10 confirmations 7 and 15). The analysis roles are absent on purpose:
+ * BA/SA/PM/test-planner/uxui/QA own artifacts in `WORKSPACE_BA_ARTIFACTS`, and
+ * a ban that reached them would put the pipeline at odds with itself.
  */
-export const readWorkspaceRole = resolveWorkspaceRole;
+export const KNOWLEDGE_DENIED_ROLES: readonly string[] = [
+  AgentStage.BACKEND_ENGINEER,
+  AgentStage.FRONTEND_ENGINEER,
+  AgentStage.DEVOPS,
+];
 
-/** The why-text for a workspace-role deny, naming the Knowledge root when the launch supplied one. */
-export function workspaceDenyWhy(role: "ba" | "dev", knowledgeRoot?: string): string {
-  if (role === "dev") {
-    const kb = knowledgeRoot || process.env.STA_KNOWLEDGE_ROOT;
-    return (
-      "Requirements, designs, plans, test-plans, UX artifacts and registry files live in the Knowledge repository" +
-      (kb ? ` (\`${kb}\`)` : "") +
-      ". Run `software-team-agents ba` from the Knowledge workspace instead; this workspace " +
-      "(`role: dev` in .agent-team/config.yaml) owns app code plus review/security/deploy docs only."
-    );
-  }
+/** Whether this stage carries the Knowledge deny unconditionally, rather than through a workspace role. */
+export function deniesKnowledgeArtifacts(agent: AgentStage | string): boolean {
+  return KNOWLEDGE_DENIED_ROLES.includes(String(agent));
+}
+
+/** The why-text for a framework-payload deny. Names no command: the rule is about who is writing, not which checkout they are in. */
+export function frameworkPayloadDenyWhy(pattern: string): string {
   return (
-    "Contracts, workflows, stacks and pipeline policy are engineer payload for a Target checkout. " +
-    "Run engineering work with `software-team-agents dev` from a Target workspace; this workspace " +
-    "(`role: ba` in .agent-team/config.yaml) owns analysis docs and knowledge items only."
+    `\`${pattern}\` is Framework payload — \`sta sync\` materialises it and a person edits it. ` +
+    "No agent contract grants it, so no stage may write it; change it in the Framework repository and sync."
   );
 }
 
@@ -231,16 +236,18 @@ export const GUARD_RULE_HOSTS: readonly GuardRuleHost[] = [
  * here, next to the rules it applies — not in three hook files.
  */
 const GUARD_RULE_FUNCTION_SOURCE: readonly string[] = [
-  "function readWorkspaceRole(nodeFs, nodePath, workspaceRoot) {",
-  "  let text;",
-  "  try { text = nodeFs.readFileSync(nodePath.join(workspaceRoot, '.agent-team', 'config.yaml'), 'utf8'); } catch { return null; }",
-  "  const m = /^role:[ \\t]*(ba|dev)[ \\t]*$/m.exec(text);",
-  "  return m ? m[1] : null;",
+  "function frameworkPayloadDenial(relative) {",
+  "  // Bound to the stage, not to the checkout: one workspace carries both the",
+  "  // Framework payload and the Knowledge documents, so where a write lands",
+  "  // says nothing about whether it is allowed.",
+  "  if (!process.env.STA_ROLE) return null;",
+  "  for (const pattern of FRAMEWORK_PAYLOAD_ARTIFACTS) {",
+  "    if (matchesGlob(pattern, relative)) return frameworkPayloadDenyWhy(pattern);",
+  "  }",
+  "  return null;",
   "}",
-  "function workspaceDenyWhy(role) {",
-  "  const kb = process.env.STA_KNOWLEDGE_ROOT;",
-  "  if (role === 'dev') return 'Requirements, designs, plans, test-plans, UX artifacts and registry files live in the Knowledge repository' + (kb ? ' (`' + kb + '`)' : '') + '. Run `software-team-agents ba` from the Knowledge workspace instead; this workspace (`role: dev` in .agent-team/config.yaml) owns app code plus review/security/deploy docs only.';",
-  "  return 'Contracts, workflows, stacks and pipeline policy are engineer payload for a Target checkout. Run engineering work with `software-team-agents dev` from a Target workspace; this workspace (`role: ba` in .agent-team/config.yaml) owns analysis docs and knowledge items only.';",
+  "function frameworkPayloadDenyWhy(pattern) {",
+  "  return '`' + pattern + '` is Framework payload — `sta sync` materialises it and a person edits it. No agent contract grants it, so no stage may write it; change it in the Framework repository and sync.';",
   "}",
   "function stackPathRules() {",
   "  let parsed;",
@@ -263,6 +270,23 @@ const GUARD_RULE_FUNCTION_SOURCE: readonly string[] = [
   "function boundReadOnlyWhy(targetId) {",
   "  const role = process.env.STA_ROLE || 'current role';",
   "  return 'Blocked: Target \"' + targetId + '\" is bound read-only for this ' + role + ' invocation; writing to it is refused.';",
+  "}",
+  "function knowledgeArtifactDenial(nodePath, target) {",
+  "  // The Knowledge root can sit inside a granted work root, so this runs off",
+  "  // the root the runtime named rather than off the workspace-relative path.",
+  "  const role = process.env.STA_ROLE;",
+  "  if (!role || !KNOWLEDGE_DENIED_ROLES.includes(role)) return null;",
+  "  const kb = process.env.STA_KNOWLEDGE_ROOT;",
+  "  if (!kb) return null;",
+  "  const rel = nodePath.relative(nodePath.resolve(kb), nodePath.resolve(target)).replace(/\\\\/g, '/');",
+  "  if (rel === '' || rel.startsWith('../') || nodePath.isAbsolute(rel)) return null;",
+  "  for (const pattern of WORKSPACE_BA_ARTIFACTS) {",
+  "    if (matchesGlob(pattern, rel)) return { rel: rel, why: knowledgeDenyWhy(role, pattern, kb) };",
+  "  }",
+  "  return null;",
+  "}",
+  "function knowledgeDenyWhy(role, pattern, knowledgeRoot) {",
+  "  return '`' + role + '` implements what the Knowledge repository (`' + knowledgeRoot + '`) already decided, so it may not write `' + pattern + '` there — that artifact is written by the role that owns it, never by an implementation stage.';",
   "}",
   "function matchesGlob(pattern, target) {",
   "  const clean = (p) => p.replace(/\\\\/g, '/').replace(/^\\.\\//, '').replace(/^\\/+/, '');",
@@ -299,7 +323,8 @@ export function renderGuardRuleBlock(): string {
     "// `node scripts/regenerate-renderings.mjs` rewrites it. No require, no import: CJS and ESM both.",
     list("UNIVERSAL_DENY", UNIVERSAL_DENY),
     list("WORKSPACE_BA_ARTIFACTS", WORKSPACE_BA_ARTIFACTS),
-    list("WORKSPACE_DEV_ARTIFACTS", WORKSPACE_DEV_ARTIFACTS),
+    list("FRAMEWORK_PAYLOAD_ARTIFACTS", FRAMEWORK_PAYLOAD_ARTIFACTS),
+    list("KNOWLEDGE_DENIED_ROLES", KNOWLEDGE_DENIED_ROLES),
     ...GUARD_RULE_FUNCTION_SOURCE,
     GUARD_RULES_CLOSE,
     "",
@@ -361,41 +386,59 @@ export function pathRulesFor(agent: AgentStage | string, projectRoot: string = d
   };
 }
 
+/**
+ * Everything in a bound Target checkout.
+ *
+ * Role×stack globs answer "which directory does this role own", which is a
+ * Knowledge-repository question. Inside a Target the only boundary that matters
+ * is which Target, and an allowlist cannot express that — V10 D1: the real
+ * enforcer is `packet.scope.allow` at checkpoint, and it refused paths the
+ * task's own module legitimately owned.
+ */
+export const TARGET_WIDE_WRITE: readonly string[] = ["**"];
+
+/**
+ * Write rules for a Target work root a stage writes, as opposed to the
+ * Knowledge-side rules `pathRulesFor` returns.
+ *
+ * Widening the allow list moves the whole weight of the boundary onto deny, so
+ * both halves that still have to hold are kept: Knowledge-owned artifacts stay
+ * denied wherever a checkout happens to carry a copy of one, and the role's own
+ * contract deny keeps framework payload (`contracts/**`, `.claude/**`) out of
+ * engineer hands. `UNIVERSAL_DENY` is layered on by `contractGuards`, as with
+ * every other rule set here.
+ */
+export function targetPathRules(agent: AgentStage | string, projectRoot: string = defaultProjectRoot()): PathRules {
+  const contract = contractPathRules(agent, projectRoot);
+  return {
+    write: [...TARGET_WIDE_WRITE],
+    deny: [...new Set([...WORKSPACE_BA_ARTIFACTS, ...contract.deny])],
+    read: contract.read,
+  };
+}
+
 export type WriteDecision =
   | { allowed: true }
-  | { allowed: false; reason: string; rule: "universal-deny" | "workspace-deny" | "agent-deny" | "not-allowed" };
+  | { allowed: false; reason: string; rule: "universal-deny" | "framework-deny" | "agent-deny" | "not-allowed" };
 
 /**
  * Decides whether an agent may write a repo-relative path.
  *
  * Order is deliberate and not interchangeable: universal denies outrank
- * everything, workspace-role denies enforce repository boundaries,
- * an agent's own deny outranks its allow, and anything the allow
- * list does not cover is refused. Allow-by-default would mean a new directory
- * is writable by every agent the moment it appears, which is the opposite of an
- * ownership model.
+ * everything, the Framework payload is off limits to every stage, an agent's
+ * own deny outranks its allow, and anything the allow list does not cover is
+ * refused. Allow-by-default would mean a new directory is writable by every
+ * agent the moment it appears, which is the opposite of an ownership model.
  */
-export function canWritePath(
-  rules: PathRules,
-  relPath: string,
-  options?: { workspaceRole?: "ba" | "dev" | null; knowledgeRoot?: string },
-): WriteDecision {
+export function canWritePath(rules: PathRules, relPath: string): WriteDecision {
   for (const pattern of UNIVERSAL_DENY) {
     if (matchesGlob(pattern, relPath)) {
       return { allowed: false, rule: "universal-deny", reason: `no agent may write ${pattern}` };
     }
   }
-  if (options?.workspaceRole === "dev") {
-    for (const pattern of WORKSPACE_BA_ARTIFACTS) {
-      if (matchesGlob(pattern, relPath)) {
-        return { allowed: false, rule: "workspace-deny", reason: workspaceDenyWhy("dev", options?.knowledgeRoot) };
-      }
-    }
-  } else if (options?.workspaceRole === "ba") {
-    for (const pattern of WORKSPACE_DEV_ARTIFACTS) {
-      if (matchesGlob(pattern, relPath)) {
-        return { allowed: false, rule: "workspace-deny", reason: workspaceDenyWhy("ba", options?.knowledgeRoot) };
-      }
+  for (const pattern of FRAMEWORK_PAYLOAD_ARTIFACTS) {
+    if (matchesGlob(pattern, relPath)) {
+      return { allowed: false, rule: "framework-deny", reason: frameworkPayloadDenyWhy(pattern) };
     }
   }
   for (const pattern of rules.deny) {
@@ -431,13 +474,8 @@ export function assertCanWrite(
   agent: AgentStage | string,
   relPath: string,
   projectRoot: string = defaultProjectRoot(),
-  options?: { workspaceRole?: "ba" | "dev" | null; knowledgeRoot?: string },
 ): void {
-  const wsRole = options?.workspaceRole !== undefined ? options.workspaceRole : readWorkspaceRole(projectRoot);
-  const decision = canWritePath(pathRulesFor(agent, projectRoot), relPath, {
-    workspaceRole: wsRole,
-    knowledgeRoot: options?.knowledgeRoot,
-  });
+  const decision = canWritePath(pathRulesFor(agent, projectRoot), relPath);
   if (!decision.allowed) throw new PathDeniedError(agent, relPath, decision);
 }
 

@@ -119,7 +119,7 @@ function services(
       attempts.set(task.task_id, number);
       return {
         kind: "attempt", attempt: freeze(f, task, number), taskDescription: `execute ${task.task_id}`,
-        allowedPathGlobs: ["src/**"], secretScanner: () => ({ ok: true, problems: [] }),
+        allowedPathGlobs: ["src/**"], deniedPathGlobs: [], secretScanner: () => ({ ok: true, problems: [] }),
       };
     }),
     executeAttempt: options.execution ?? (async (prepared: PreparedTargetAttempt) => {
@@ -231,5 +231,159 @@ describe("T-V8-020 — one sequential bounded controller", () => {
     expect(result).toMatchObject({ kind: "HALTED", launchedAttempts: 1, qaRounds: 0 });
     expect(result.reason).toContain("Deterministic verification was skipped");
     expect(f.ledger.checkpointsForRun(f.run.run_id)).toEqual([]);
+  }, 30_000);
+});
+
+/**
+ * V10 TASK-030/031 — a gate is a task-level fact. Before this, the first gated
+ * task returned `this.gate(...)` from `runReadyTasks`, so an unrelated ready
+ * branch never ran and the run reported one reason for the whole DAG.
+ */
+describe("V10 TASK-030 — continue-on-gate", () => {
+  function gatingPrepare(f: ReturnType<typeof seed>, gated: Record<string, string>): BoundedRunServices["prepareTask"] {
+    const attempts = new Map<string, number>();
+    return async (task) => {
+      const gate = gated[task.task_id];
+      if (gate) return { kind: "gate" as const, reason: gate };
+      const number = (attempts.get(task.task_id) ?? 0) + 1;
+      attempts.set(task.task_id, number);
+      return {
+        kind: "attempt" as const, attempt: freeze(f, task, number), taskDescription: `execute ${task.task_id}`,
+        allowedPathGlobs: ["src/**"], deniedPathGlobs: [], secretScanner: () => ({ ok: true, problems: [] }),
+      };
+    };
+  }
+
+  it("blocks the gated task, runs the independent branch to completion, and still exits GATE", async () => {
+    const f = seed({ tasks: [{ id: "BE-1" }, { id: "BE-2" }, { id: "BE-3", dependsOn: ["BE-1"] }] });
+    const svc = services(f, { prepare: gatingPrepare(f, { "BE-1": "schema confirmation required" }) });
+    const result = await new BoundedRunController({ ledger: f.ledger, runId: f.run.run_id, runtimeStateRoot: f.state, services: svc }).run();
+
+    expect(result).toMatchObject({ kind: "GATE", reason: "schema confirmation required", qaRounds: 0 });
+    expect(svc.launches).toEqual(["BE-2:1"]);
+    expect(result.awaitingHuman).toEqual([{ taskId: "BE-1", reason: "schema confirmation required" }]);
+    const byId = new Map(f.ledger.readTasks(f.run.run_id).map((task) => [task.task_id, task.status]));
+    expect(byId.get("BE-1")).toBe("BLOCKED");
+    expect(byId.get("BE-2")).toBe("CHECKPOINTED");
+    // A descendant of the gated task is never prepared, let alone launched.
+    expect(byId.get("BE-3")).toBe("PLANNED");
+    expect(f.ledger.checkpointsForRun(f.run.run_id).map((item) => item.task_id)).toEqual(["BE-2"]);
+    expect(f.ledger.readRun(f.run.run_id)?.status).toBe("AWAITING_HUMAN");
+  }, 30_000);
+
+  it("terminates when the ready set drains instead of re-offering a task it just blocked", async () => {
+    const f = seed({ tasks: [{ id: "BE-1" }, { id: "BE-2" }, { id: "BE-3" }] });
+    const prepare = vi.fn(gatingPrepare(f, { "BE-1": "gate one", "BE-2": "gate two", "BE-3": "gate three" }));
+    const svc = services(f, { prepare });
+    const result = await new BoundedRunController({ ledger: f.ledger, runId: f.run.run_id, runtimeStateRoot: f.state, services: svc }).run();
+
+    expect(result.kind).toBe("GATE");
+    // Three calls, not a loop: `readiness()` drops each task the moment it is BLOCKED.
+    expect(prepare).toHaveBeenCalledTimes(3);
+    expect(result.awaitingHuman).toEqual([
+      { taskId: "BE-1", reason: "gate one" },
+      { taskId: "BE-2", reason: "gate two" },
+      { taskId: "BE-3", reason: "gate three" },
+    ]);
+    expect(result.reason).toBe("3 tasks await a human decision: BE-1, BE-2, BE-3");
+    expect(svc.launches).toEqual([]);
+  }, 30_000);
+
+  it("keeps a task that was already BLOCKED before the run distinct from a gate raised during it", async () => {
+    const f = seed({ tasks: [{ id: "BE-1" }, { id: "BE-2" }] });
+    f.ledger.setTaskStatus(f.run.run_id, "BE-1", "BLOCKED", { reason: "blocked before this run started" });
+    const svc = services(f);
+    const result = await new BoundedRunController({ ledger: f.ledger, runId: f.run.run_id, runtimeStateRoot: f.state, services: svc }).run();
+
+    expect(result).toMatchObject({ kind: "GATE", reason: "blocked task(s): BE-1" });
+    expect(result.awaitingHuman).toEqual([]);
+    expect(svc.launches).toEqual(["BE-2:1"]);
+  }, 30_000);
+
+  it.each([
+    { name: "interrupted", execution: async () => ({ kind: "interrupted" as const, reason: "SIGINT" }), expected: "INTERRUPTED" },
+    { name: "halt", execution: async () => ({ kind: "halt" as const, category: "runtime" as const, reason: "runtime died" }), expected: "HALTED" },
+  ])("stops the whole run on $name even with another ready task waiting", async ({ execution, expected }) => {
+    const f = seed({ tasks: [{ id: "BE-1" }, { id: "BE-2" }] });
+    const svc = services(f, { execution });
+    const result = await new BoundedRunController({ ledger: f.ledger, runId: f.run.run_id, runtimeStateRoot: f.state, services: svc }).run();
+
+    expect(result).toMatchObject({ kind: expected, launchedAttempts: 1, qaRounds: 0 });
+    expect(f.ledger.readTask(f.run.run_id, "BE-2")?.status).toBe("PLANNED");
+    expect(f.ledger.checkpointsForRun(f.run.run_id)).toEqual([]);
+  }, 30_000);
+
+  it("stops the whole run on a prepare halt even with another ready task waiting", async () => {
+    const f = seed({ tasks: [{ id: "BE-1" }, { id: "BE-2" }] });
+    const svc = services(f, { prepare: async () => ({ kind: "halt" as const, reason: "no canonical RuntimeTask" }) });
+    const result = await new BoundedRunController({ ledger: f.ledger, runId: f.run.run_id, runtimeStateRoot: f.state, services: svc }).run();
+
+    expect(result).toMatchObject({ kind: "HALTED", reason: "no canonical RuntimeTask", launchedAttempts: 0 });
+    expect(f.ledger.readTask(f.run.run_id, "BE-2")?.status).toBe("PLANNED");
+  }, 30_000);
+
+  it("stops the whole run on a DENIED_PATH checkpoint refusal even with another ready task waiting", async () => {
+    const f = seed({ tasks: [{ id: "BE-1" }, { id: "BE-2" }] });
+    const attempts = new Map<string, number>();
+    const svc = services(f, {
+      prepare: async (task) => {
+        const number = (attempts.get(task.task_id) ?? 0) + 1;
+        attempts.set(task.task_id, number);
+        return {
+          kind: "attempt" as const, attempt: freeze(f, task, number), taskDescription: `execute ${task.task_id}`,
+          allowedPathGlobs: ["src/**"], deniedPathGlobs: ["src/secret.txt"], secretScanner: () => ({ ok: true, problems: [] }),
+        };
+      },
+      execution: async () => {
+        fs.writeFileSync(path.join(f.target, "src", "secret.txt"), "leaked\n");
+        return { kind: "completed" as const, adapter: { status: "OK" as const, exitCode: 0 }, verification: passed };
+      },
+    });
+    const result = await new BoundedRunController({ ledger: f.ledger, runId: f.run.run_id, runtimeStateRoot: f.state, services: svc }).run();
+
+    expect(result.kind).toBe("HALTED");
+    expect(result.reason).toContain("src/secret.txt");
+    expect(f.ledger.readTask(f.run.run_id, "BE-2")?.status).toBe("PLANNED");
+    expect(f.ledger.checkpointsForRun(f.run.run_id)).toEqual([]);
+  }, 30_000);
+
+  it("never has two tasks in flight while continuing past a gate", async () => {
+    const f = seed({ tasks: [{ id: "BE-1" }, { id: "BE-2" }, { id: "BE-3" }, { id: "BE-4" }] });
+    const inFlightSamples: number[] = [];
+    const base = services(f, { prepare: gatingPrepare(f, { "BE-2": "gate in the middle" }) });
+    const svc: BoundedRunServices & { launches: string[] } = {
+      ...base,
+      executeAttempt: async (prepared) => {
+        inFlightSamples.push(f.ledger.readTasks(f.run.run_id).filter((task) => ["RUNNING", "VERIFYING"].includes(task.status)).length);
+        return base.executeAttempt(prepared);
+      },
+    };
+    const result = await new BoundedRunController({ ledger: f.ledger, runId: f.run.run_id, runtimeStateRoot: f.state, services: svc }).run();
+
+    expect(result.kind).toBe("GATE");
+    expect(base.launches).toEqual(["BE-1:1", "BE-3:1", "BE-4:1"]);
+    expect(inFlightSamples).toEqual([1, 1, 1]);
+    expect(f.ledger.readTasks(f.run.run_id).filter((task) => task.status === "VERIFYING")).toEqual([]);
+  }, 30_000);
+
+  it("leaves the run-level QA gate and the two-round repair ceiling untouched", async () => {
+    expect(MAX_AUTOMATIC_REPAIR_ROUNDS).toBe(2);
+    const repair = { taskId: "BE-1", owner: AgentStage.BACKEND_ENGINEER, reason: "still failing", findingIds: ["F-1"], invalidates: [] as string[], requiresHuman: false };
+    const f = seed({ boundary: "done" });
+    const svc = services(f, { qa: () => ({ kind: "repair", evidence: "F-1", repair }) });
+    const result = await new BoundedRunController({ ledger: f.ledger, runId: f.run.run_id, runtimeStateRoot: f.state, services: svc }).run();
+
+    expect(result).toMatchObject({ kind: "GATE", launchedAttempts: 3, qaRounds: 3 });
+    expect(result.reason).toContain("ordinary automatic repair limit (2) reached");
+    // A run-level QA gate is not a per-task gate and must not be listed as one.
+    expect(result.awaitingHuman).toEqual([]);
+  }, 30_000);
+
+  it("adds no awaiting-human entry to a run that never gates", async () => {
+    const f = seed({ tasks: [{ id: "BE-1" }, { id: "BE-2" }] });
+    const svc = services(f);
+    const result = await new BoundedRunController({ ledger: f.ledger, runId: f.run.run_id, runtimeStateRoot: f.state, services: svc }).run();
+
+    expect(result).toMatchObject({ kind: "COMPLETED", awaitingHuman: [] });
   }, 30_000);
 });

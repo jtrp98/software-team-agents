@@ -69,7 +69,7 @@ function fixture(): { knowledge: string; api: string; web: string; mvc: string }
 }
 
 describe("runtimeTaskWorkRoots — T-V9-012 admitted binding shapes", () => {
-  it("resolves one writable Target per engineer stage and de-duplicates a fullstack Target physically", () => {
+  it("V10 TASK-008: every engineer stage resolves every bound Target as writable; a fullstack Target still de-duplicates physically", () => {
     const { api, web, mvc } = fixture();
     const splitArgs = parseArgs(
       ["--task-id", "T-split", "--module", "orders", "--bug-fix", "--backend", "--frontend", "--backend-target", "api", "--frontend-target", "web"],
@@ -77,8 +77,10 @@ describe("runtimeTaskWorkRoots — T-V9-012 admitted binding shapes", () => {
     );
     const split = runtimeTaskWorkRoots(splitArgs, "T-split", classifyTask(splitArgs.classification));
     expect(split.filter((root) => root.stage === AgentStage.BACKEND_ENGINEER || root.stage === AgentStage.FRONTEND_ENGINEER)).toEqual([
-      { stage: AgentStage.BACKEND_ENGINEER, targetId: "api", path: api },
-      { stage: AgentStage.FRONTEND_ENGINEER, targetId: "web", path: web },
+      { stage: AgentStage.BACKEND_ENGINEER, targetId: "api", path: api, access: "write" },
+      { stage: AgentStage.BACKEND_ENGINEER, targetId: "web", path: web, access: "write" },
+      { stage: AgentStage.FRONTEND_ENGINEER, targetId: "api", path: api, access: "write" },
+      { stage: AgentStage.FRONTEND_ENGINEER, targetId: "web", path: web, access: "write" },
     ]);
 
     const fullstackArgs = parseArgs(
@@ -88,8 +90,8 @@ describe("runtimeTaskWorkRoots — T-V9-012 admitted binding shapes", () => {
     const fullstack = runtimeTaskWorkRoots(fullstackArgs, "T-fullstack", classifyTask(fullstackArgs.classification));
     const engineerRoots = fullstack.filter((root) => root.stage === AgentStage.BACKEND_ENGINEER || root.stage === AgentStage.FRONTEND_ENGINEER);
     expect(engineerRoots).toEqual([
-      { stage: AgentStage.BACKEND_ENGINEER, targetId: "mvc", path: mvc },
-      { stage: AgentStage.FRONTEND_ENGINEER, targetId: "mvc", path: mvc },
+      { stage: AgentStage.BACKEND_ENGINEER, targetId: "mvc", path: mvc, access: "write" },
+      { stage: AgentStage.FRONTEND_ENGINEER, targetId: "mvc", path: mvc, access: "write" },
     ]);
     expect(new Set(engineerRoots.map((root) => root.path))).toEqual(new Set([mvc]));
   });
