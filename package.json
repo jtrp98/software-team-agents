@@ -20,6 +20,8 @@
   "scripts": {
     "build": "npm --prefix orchestrator run build:templates",
     "build:templates": "npm run build",
+    "docs:sync": "node scripts/sync-readme.mjs",
+    "docs:check": "node scripts/sync-readme.mjs --check",
     "typecheck": "npm --prefix orchestrator run typecheck",
     "test": "npm --prefix orchestrator run test",
     "release": "npm run typecheck && npm test && npm run build && node scripts/pack-release.mjs",

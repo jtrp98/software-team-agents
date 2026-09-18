@@ -4,11 +4,15 @@ import { describe, expect, it } from "vitest";
 import { isUnattendedTargetWriteCertified, RUNTIME_IDS, RUNTIME_SUPPORT, SUPPORT_LEVELS } from "./runtimeSupport.js";
 import { antigravityCoverageWithHooks, codexCoverage, opencodeCoverageWithPlugin } from "../targetcli/guardSettings.js";
 
-/** This repo is its own fixture — the README table is the prose half of the claim. */
+/**
+ * The runtime table's canonical home is docs/runtimes.md — README links to it
+ * instead of carrying a volatile matrix. This repo is its own fixture: that
+ * table is the prose half of the claim.
+ */
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
-const readme = fs.readFileSync(path.join(REPO_ROOT, "README.md"), "utf8");
+const runtimeDoc = fs.readFileSync(path.join(REPO_ROOT, "docs", "runtimes.md"), "utf8");
 
-/** How each runtime id is spelled in the README table's first column. */
+/** How each runtime id is spelled in the runtime table's first column. */
 const DISPLAY_NAME: Record<(typeof RUNTIME_IDS)[number], string> = {
   "claude-code": "Claude Code",
   codex: "Codex",
@@ -23,8 +27,8 @@ const LEVEL_WORD = {
   unsupported: "Unsupported",
 } as const;
 
-function readmeRow(id: keyof typeof RUNTIME_SUPPORT): string | undefined {
-  return readme
+function runtimeDocRow(id: keyof typeof RUNTIME_SUPPORT): string | undefined {
+  return runtimeDoc
     .split("\n")
     .filter((l) => l.trim().startsWith("|"))
     .find((l) => l.includes(`**${DISPLAY_NAME[id]}**`));
@@ -102,15 +106,16 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
   });
 
   /**
-   * README's runtime table must state exactly this record's level per runtime —
+   * The shipped runtime table (docs/runtimes.md — README links, never carries
+   * the matrix) must state exactly this record's level per runtime —
    * one status everywhere. A row naming its runtime but not its level (or
    * naming a stronger one) fails here rather than misleading a user.
    */
-  it("agrees with the shipped README's runtime table, word for word", () => {
+  it("agrees with the shipped runtime table (docs/runtimes.md), word for word", () => {
     const rank = Object.fromEntries(SUPPORT_LEVELS.map((l, i) => [l, i]));
     for (const id of RUNTIME_IDS) {
-      const row = readmeRow(id);
-      expect(row, `a README table row naming ${DISPLAY_NAME[id]}`).toBeDefined();
+      const row = runtimeDocRow(id);
+      expect(row, `a runtime table row naming ${DISPLAY_NAME[id]}`).toBeDefined();
       expect(row!, id).toContain(LEVEL_WORD[RUNTIME_SUPPORT[id].level]);
       // No row may claim any level stronger than its own.
       for (const level of SUPPORT_LEVELS) {

@@ -105,6 +105,37 @@ Documentation may exist outside `/docs`.
 
 Find all of it.
 
+## Canonical ownership in THIS repository
+
+This repository is `software-team-agents` — a framework with its own documentation model. Each topic
+has exactly one canonical owner; update the owner, and link or summarize elsewhere — never
+duplicate:
+
+| Topic | Canonical owner |
+|---|---|
+| Front door / orientation / Quick Start | `README.md` (Quick Start body is GENERATED — see §4) |
+| Install / upgrade / uninstall / first run | `docs/getting-started.md` |
+| Workspace model / binding / write boundaries | `docs/workspaces.md` |
+| CLI reference (both `software-team-agents` and `sta`) | `docs/cli.md` |
+| Runtime support / guard coverage / routing | `docs/runtimes.md` (truth: `orchestrator/src/runtime/runtimeSupport.ts` + `sta runtimes`) |
+| Pipeline / workflows / approval gates | `docs/pipeline.md` |
+| Guards | `docs/guards.md` |
+| Architecture / configuration reference / versioning | `docs/architecture.md` |
+| Troubleshooting | `docs/troubleshooting.md` |
+| Knowledge model | `knowledge/README.md` — summarize and link; NEVER create a second Knowledge spec under `docs/` |
+| Bounded run, tier/effort, PlanTask, packets, design evidence | existing specialized `docs/*.md` |
+| Navigation hub | `docs/README.md` — links only, no content duplication |
+| AI playbooks | root `prompt-*.md` — AI-facing, never pasted into human docs |
+
+Boundaries that must survive every edit:
+
+- `_docs/` is Knowledge-side (module requirements/designs/plans); Framework human docs live in
+  `docs/` — do not merge, rename, or cross-wire the two.
+- Do not create competing tables for machine-readable truth (`model-tiers.yaml`, `workflows/*.yml`,
+  `layout.yaml`, `contracts/*.yaml`, runtime support) — derive/validate against them.
+- Keep internal ticket/finding identifiers (`T-V*`, `TASK-*`, P3 findings) out of user-facing prose;
+  provenance belongs in decisions/, release notes, and tests.
+
 ---
 
 # 3. Treat Code as Source of Truth
@@ -160,41 +191,33 @@ Never preserve incorrect documentation merely because it looks intentional.
 
 # 4. Update README
 
-Ensure the main README accurately explains the current repository.
-
-Where relevant, it should cover:
-
-* What the system is
-* What problem it solves
-* Current architecture
-* Main capabilities
-* Repository structure
-* Technology stack
-* Prerequisites
-* Installation
-* Configuration
-* Environment variables
-* Database setup
-* Running locally
-* Build
-* Testing
-* Development workflow
-* Deployment
-* Troubleshooting
-* Links to deeper documentation
-
-Do not make README unnecessarily huge.
-
-Prefer:
+The README is the front door, not the manual:
 
 ```text
-README → orientation + getting started
-docs/* → detailed documentation
+README   → understand STA + shortest successful setup + navigation
+docs/*   → detailed canonical documentation (see the ownership table in §2)
 ```
 
-The README should help a new developer understand:
+A new reader must be able to answer: What is software-team-agents? Why does it exist? What are
+Framework / Knowledge / Target / Runtime State? How do `software-team-agents` and `sta` differ?
+What do I install? How do I start? Where do I read more?
 
-> What is this, how does it work at a high level, and how do I run it?
+README must NOT become: installation manual, complete CLI reference, runtime compatibility matrix,
+routing specification, guard implementation table, workflow reference, troubleshooting manual, or
+architecture specification — those live in their canonical `docs/*` owner and README links there.
+
+The Quick Start body in README is a **generated excerpt** of `docs/getting-started.md`:
+
+```text
+source:   <!-- readme:quick-start:start --> ... <!-- readme:quick-start:end -->
+target:   <!-- generated: docs/getting-started.md#quick-start --> ... <!-- generated:end -->
+sync:     npm run docs:sync      (regenerate)
+verify:   npm run docs:check     (exit 1 when stale — wired into CI)
+```
+
+Never hand-edit the generated block in README — edit the marked section in
+`docs/getting-started.md` and run `npm run docs:sync`. If an audit changes setup steps, change them
+in the source document first, then sync.
 
 ---
 

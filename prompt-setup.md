@@ -9,9 +9,9 @@
 > and set me up"). The playbook is runtime-agnostic: it only assumes file access
 > and a shell.
 >
-> **Human-facing counterpart:** [`README.md` § Getting Started](README.md#getting-started) is the
-> manual onboarding guide; [§ Ownership, health and troubleshooting](README.md#ownership-health-และ-troubleshooting)
-> covers recovery (`TEAM_SETUP_V1.md` is now a pointer to the same place).
+> **Human-facing counterpart:** [`docs/getting-started.md`](docs/getting-started.md) is the
+> manual onboarding guide; [`docs/troubleshooting.md`](docs/troubleshooting.md)
+> covers recovery.
 >
 > **Knowledge refresh counterpart:** [`prompt-update-knowledge.md`](prompt-update-knowledge.md)
 > incrementally refreshes and reconciles canonical knowledge against evolving codebase reality.

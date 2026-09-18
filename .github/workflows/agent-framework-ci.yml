@@ -30,6 +30,9 @@ jobs:
       - name: Self-test — hooks and scripts (.claude/tests/run.js)
         run: node .claude/tests/run.js
 
+      - name: Check README generated blocks are fresh (npm run docs:check)
+        run: node scripts/sync-readme.mjs --check
+
       - name: Install orchestrator dependencies
         working-directory: orchestrator
         run: npm ci

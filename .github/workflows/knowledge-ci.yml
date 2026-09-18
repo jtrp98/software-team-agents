@@ -31,7 +31,7 @@ jobs:
             echo "found=true" >> "$GITHUB_OUTPUT"
           else
             echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::sta is not installed on this runner — install the framework's .tgz globally (see README's Getting Started) to enable these checks. Skipping, not failing."
+            echo "::warning::sta is not installed on this runner — install the framework's .tgz globally (see the framework README's Quick Start / docs/getting-started.md) to enable these checks. Skipping, not failing."
           fi
 
       # Report-only for now (T-V5-027): a repository's existing failures are triaged before this

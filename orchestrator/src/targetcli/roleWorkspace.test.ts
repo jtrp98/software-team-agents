@@ -470,15 +470,4 @@ describe("T-WG5 — the confirm-workspace checkpoint ships in the synced payload
     expect(claudeMd).not.toMatch(/T-LV3/);
     expect(claudeMd).toContain("updates `plan.md` Status cells directly");
   });
-
-  it("TEAM_SETUP_V1.md exists and every reference to it resolves (no broken canonical link)", () => {
-    const repoRoot = path.resolve(templatesRoot, "..");
-    expect(fs.existsSync(path.join(repoRoot, "TEAM_SETUP_V1.md"))).toBe(true);
-    for (const referencing of ["AGENTS.md", "CLAUDE.md"]) {
-      const content = fs.readFileSync(path.join(repoRoot, referencing), "utf8");
-      if (content.includes("TEAM_SETUP_V1.md")) {
-        expect(fs.existsSync(path.join(repoRoot, "TEAM_SETUP_V1.md"))).toBe(true);
-      }
-    }
-  });
 });
