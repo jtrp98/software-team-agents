@@ -9,7 +9,7 @@
 
 ## Read this first
 
-`policies/*.md` is the authoritative source for the rules every agent shares: module-folder resolution, the `_docs/status.md` index, dates, amend discipline, version control, handoffs, the design-as-contract rule, and where the stack is defined — split by area: `coding.md`, `git.md`, `architecture.md`, `documentation.md`, `security.md`, `agent-boundaries.md`. The agent files deliberately don't repeat those rules — they point at those files, so changing a rule means editing one place, not ten. (`.claude/shared/conventions.md` is now a short redirect to the table above — see `policies/README.md`.)
+`policies/*.md` is the authoritative source for the rules every agent shares: module-folder resolution, the `_docs/status.md` index, dates, amend discipline, version control, handoffs, the design-as-contract rule, and where the stack is defined — split by area: `coding.md`, `git.md`, `architecture.md`, `documentation.md`, `security.md`, `agent-boundaries.md`, `standards.md` (the external-standards baseline each role reads its own section of). The agent files deliberately don't repeat those rules — they point at those files, so changing a rule means editing one place, not ten. (`.claude/shared/conventions.md` is now a short redirect to the table above — see `policies/README.md`.)
 
 `orchestrator/` (a separate Node/TypeScript package, `npm install`/`npm test` inside it) automates the opt-in autonomous mode described above — its runtime adapter spawns `claude -p --agent <role>`, so it still runs the exact `.claude/agents/<role>.md` files this document defines, and it still stops at the same five human-approval points via its own gate/retry logic. It never invokes an agent by holding the `Agent` tool itself, and it never edits `.claude/` or `_docs/` directly. Run it as `node orchestrator/dist/cli.js <command>` (`sta` when installed from the npm package); every command is listed in its usage output, and team setup is documented in `README.md` (§ Getting Started & § Installation).
 
@@ -144,7 +144,7 @@ _docs/
 ```
 layout.yaml                      ← which concept owns which directory (checked by --check-layout)
 contracts/*.yaml                 ← the machine-readable half of each agent
-policies/                        ← policies per area: coding, git, architecture, documentation, security, agent-boundaries
+policies/                        ← policies per area: coding, git, architecture, documentation, security, agent-boundaries, standards
 workflows/                       ← one YAML per kind of change (11 files, generated from taskClassifier.ts + workflowCatalog.ts, byte-checked by --check-workflows — ADR-007)
 ```
 

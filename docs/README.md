@@ -23,6 +23,9 @@
 
 - คำสั่งทั้งสอง surface → [`cli.md`](cli.md) — `software-team-agents` (workspace) + `sta` (pipeline)
 - Pipeline / workflow / gates → [`pipeline.md`](pipeline.md)
+- มาตรฐาน external ที่ agent แต่ละ role ทำงานเข้า → `policies/standards.md` §1–§10 — อ่านเป็น
+  section ด้วย `sta policy standards <role>`; registry แม่ = `STANDARDS_MATRIX.md`
+  (maintainer-facing — ไม่ ship ลง payload)
 - Runtime support + routing → [`runtimes.md`](runtimes.md)
 - Guards + การวินิจฉัย → [`guards.md`](guards.md)
 - แก้ปัญหา → [`troubleshooting.md`](troubleshooting.md)
