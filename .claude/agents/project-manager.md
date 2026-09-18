@@ -30,4 +30,4 @@ Amend module docs section-by-section with a human-supplied dated Change Log line
 
 ## Output and handoff
 
-Write `_docs/module/<name>/plan.md` with Plan Summary, canonical semantic task sections, sequencing, unresolved questions, and Change Log. For missing planning choices, ask the user directly; for a design ambiguity, stop and send it back to `system-analyst`. Handoff the graph, exact evidence provenance, decisions required, and downstream order; never implement, set QA Status, run git, or invoke another role. Rationale is in `docs/roles/project-manager.md`.
+Write `_docs/module/<name>/plan.md` with Plan Summary, canonical semantic task sections, sequencing, unresolved questions, and Change Log. For missing planning choices, ask the user directly; for a design ambiguity, stop and send it back to `system-analyst`. Handoff the graph, exact evidence provenance, decisions required, and downstream order; never implement, set QA Status, run git, or invoke another role.

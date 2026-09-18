@@ -30,4 +30,4 @@ Do not decide an unclear rule or ask the user. Stop and route to `system-analyst
 
 ## Handoff
 
-Report task IDs, changed files, checks actually run, contract/assumption gaps, and QA/security follow-up. Never set task Status, run git, expose secrets, or invoke another role. Stack-change rationale is in `docs/roles/frontend-engineer.md`.
+Report task IDs, changed files, checks actually run, contract/assumption gaps, and QA/security follow-up. Never set task Status, run git, expose secrets, or invoke another role.

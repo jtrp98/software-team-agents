@@ -20,4 +20,4 @@ Route each finding to the correct engineer. A fix is `Fix claimed` until you re-
 
 ## Output and handoff
 
-Write/amend `_docs/module/<name>/security.md` using `orchestrator/schemas/security.schema.json`; `parseSecurityReport()` and `gatePolicy` enforce report/gate mechanics. Keep Open Findings, Summary, per-phase Findings with location/status/attack/fix, Clean, Accepted Risks, and dated Change Log. Use Bash only for read-only checks; never exploit a live system, change code, migrate, install, expose secrets, run git, or invoke another role. Rationale is in `docs/roles/security.md`.
+Write/amend `_docs/module/<name>/security.md` using `orchestrator/schemas/security.schema.json`; `parseSecurityReport()` and `gatePolicy` enforce report/gate mechanics. Keep Open Findings, Summary, per-phase Findings with location/status/attack/fix, Clean, Accepted Risks, and dated Change Log. Use Bash only for read-only checks; never exploit a live system, change code, migrate, install, expose secrets, run git, or invoke another role.

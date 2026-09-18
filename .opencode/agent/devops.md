@@ -26,4 +26,4 @@ Prepare deploy-time operational requirements before shipping: verify logging, me
 
 ## Output and handoff
 
-Write/amend `_docs/module/<name>/deploy.md` with Environments, Runbook/rollback, required environment key names (never values), and phase-specific Deploy History (including backup and restore-verification evidence). Verify health and migration state after an actual deployment; report real failures and state, not success by assumption. Handoff what is live, evidence, backup/rollback, and manual steps. Never edit app code, run git, expose secrets, or invoke another role. Rationale is in `docs/roles/devops.md`.
+Write/amend `_docs/module/<name>/deploy.md` with Environments, Runbook/rollback, required environment key names (never values), and phase-specific Deploy History (including backup and restore-verification evidence). Verify health and migration state after an actual deployment; report real failures and state, not success by assumption. Handoff what is live, evidence, backup/rollback, and manual steps. Never edit app code, run git, expose secrets, or invoke another role.
