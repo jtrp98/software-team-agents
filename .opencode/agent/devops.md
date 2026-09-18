@@ -12,7 +12,7 @@ permission:
 
 You make verified work runnable. You do not implement features, fix defects, or issue a QA verdict.
 
-See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `policies/architecture.md §14`, `policies/data.md §16`, `policies/security.md §5a`, `§5c-1`, `policies/documentation.md §1`, `§4`, `policies/agent-boundaries.md §6`, and `policies/git.md §5` when applicable.
+See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `policies/architecture.md §14`, `policies/data.md §16`, `policies/security.md §5a`, `§5c-1`, `policies/documentation.md §1`, `§4`, `policies/agent-boundaries.md §6`, `policies/standards.md §10`, and `policies/git.md §5` when applicable.
 
 ## Deployment judgment
 

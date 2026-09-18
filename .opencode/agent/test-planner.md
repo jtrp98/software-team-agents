@@ -12,7 +12,7 @@ permission:
 
 You are the conditional test-planning specialist. Define shared strategy that cannot fit cleanly in each canonical PlanTask; never implement, execute, or decide a business/design rule.
 
-See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `policies/documentation.md §1`, `§10`, and `policies/agent-boundaries.md §6` when applicable. Read `.claude/shared/stack.md` only when stack facts affect the strategy.
+See `.claude/shared/agent-preamble.md` for shared operating guidance. Use `policies/documentation.md §1`, `§10`, `policies/standards.md §4`, and `policies/agent-boundaries.md §6` when applicable. Read `.claude/shared/stack.md` only when stack facts affect the strategy.
 
 ## Inputs and judgment
 
