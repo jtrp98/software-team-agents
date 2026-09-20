@@ -174,18 +174,32 @@ export function designEvidenceForClaims(parsed: ParsedDesignEvidence, claims: re
 }
 
 /** Verifies immutable provenance against the current Target without changing either source or design. */
-export function verifyDesignEvidence(refs: readonly DesignEvidenceRef[], input: { targetRoot: string; currentRevision: string; allowContentStableRevision?: boolean }): string[] {
+export function verifyDesignEvidence(refs: readonly DesignEvidenceRef[], input: { targetRoot: string; knowledgeRoot?: string; currentRevision: string; allowContentStableRevision?: boolean }): string[] {
   const problems: string[] = [];
-  const root = path.resolve(input.targetRoot);
+  const targetRoot = path.resolve(input.targetRoot);
+  const knowledgeRoot = input.knowledgeRoot === undefined ? undefined : path.resolve(input.knowledgeRoot);
   for (const ref of refs) {
-    const file = path.resolve(root, ...ref.path.replace(/\\/g, "/").split("/"));
-    if (file !== root && !file.startsWith(root + path.sep)) { problems.push(`${ref.id}: path escapes Target root`); continue; }
+    let hostRoot = targetRoot;
+    let file = path.resolve(hostRoot, ...ref.path.replace(/\\/g, "/").split("/"));
+    // Three-repo workspaces: evidence rows may point at Knowledge documents (`_docs/...`)
+    // that never exist under a Target root — verify those against the Knowledge root.
+    if (!fs.existsSync(file) && knowledgeRoot !== undefined) {
+      const knowledgeFile = path.resolve(knowledgeRoot, ...ref.path.replace(/\\/g, "/").split("/"));
+      if (fs.existsSync(knowledgeFile)) { hostRoot = knowledgeRoot; file = knowledgeFile; }
+    }
+    if (file !== hostRoot && !file.startsWith(hostRoot + path.sep)) { problems.push(`${ref.id}: path escapes Target root`); continue; }
     let text: string;
     try { text = fs.readFileSync(file, "utf8"); }
     catch { problems.push(`${ref.id}: evidence path is unreadable: ${ref.path}`); continue; }
     const actualHash = createHash("sha256").update(text).digest("hex");
     if (actualHash !== ref.hash) problems.push(`${ref.id}: content hash drift for ${ref.path}`);
-    if (ref.revision !== input.currentRevision && !(input.allowContentStableRevision && actualHash === ref.hash)) {
+    // Knowledge-hosted evidence tolerates a stale revision when the content hash still
+    // matches: the Knowledge repo legitimately moves with document amends while the
+    // evidence source text stays identical, so the content hash is the staleness anchor.
+    const contentStable = actualHash === ref.hash;
+    if (ref.revision !== input.currentRevision
+      && !(input.allowContentStableRevision && contentStable)
+      && !(knowledgeRoot !== undefined && hostRoot === knowledgeRoot && contentStable)) {
       problems.push(`${ref.id}: stale revision ${ref.revision}; current revision is ${input.currentRevision}`);
     }
     const lines = text.replace(/\r\n?/g, "\n").split("\n");

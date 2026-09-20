@@ -88,6 +88,25 @@ describe("T-V8-007 addressable design evidence", () => {
     expect(drift).toContain("symbol orderSummary");
   });
 
+  it("verifies knowledge-hosted evidence against the knowledge root, tolerating its repo movement when content is stable", () => {
+    // A Target without the evidence file — the real three-repo shape for `_docs/**` rows.
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), "design-evidence-target-"));
+    roots.push(target);
+    const knowledge = sourceFixture(); // same relative path + content, but under the knowledge repo
+    const parsed = parseDesignEvidence(design().markdown);
+    // The file exists only under the knowledge root — verified there; a stale revision is
+    // tolerated because the content hash (the staleness anchor) still matches.
+    expect(verifyDesignEvidence(parsed.evidence, {
+      targetRoot: target, knowledgeRoot: knowledge.root, currentRevision: "b".repeat(40),
+    })).toEqual([]);
+    // Content drift on the knowledge side stays a hard failure.
+    fs.writeFileSync(path.join(knowledge.root, knowledge.rel), "export const drifted = true;\n");
+    const drift = verifyDesignEvidence(parsed.evidence, {
+      targetRoot: target, knowledgeRoot: knowledge.root, currentRevision: REVISION,
+    }).join("\n");
+    expect(drift).toContain("content hash drift");
+  });
+
   it.each([
     [{ schema: "additive" }, "schema"],
     [{ migration: "required" }, "migration"],
