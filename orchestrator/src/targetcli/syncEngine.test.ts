@@ -457,7 +457,7 @@ describe("BA-workspace Target rendering (T-WG7 / T-V5-042)", () => {
     return { knowledge, app };
   }
 
-  it("renders the bound Target root from target_id, through the local mapping", () => {
+  it("leaves the bound Target unnamed in the bootstrap — the binding is runtime data (DR §7)", () => {
     const { knowledge, app } = baWorkspaceWithTarget();
     writeTargetConfig(knowledge, { ...defaultTargetConfig("kb", "2026-01-01T00:00:00Z", "ba"), target: { target_id: "app" } });
 
@@ -469,10 +469,11 @@ describe("BA-workspace Target rendering (T-WG7 / T-V5-042)", () => {
 
     const claude = fs.readFileSync(path.join(knowledge, "CLAUDE.md"), "utf8");
     expect(claude).toContain("Target root (optional, read-only)");
-    expect(claude).toContain(fs.realpathSync.native(app));
+    expect(claude).toContain("never baked into this file");
+    expect(claude).not.toContain(fs.realpathSync.native(app));
   });
 
-  it("renders UNBOUND when no target_id is set — including for a config still carrying only the removed target.path", () => {
+  it("renders the root-neutral bound line when no target_id is set — including for a config still carrying only the removed target.path", () => {
     const { knowledge } = baWorkspaceWithTarget();
     writeTargetConfig(knowledge, defaultTargetConfig("kb", "2026-01-01T00:00:00Z", "ba"));
     // Append the removed field the way an un-migrated workspace still has it.
@@ -488,12 +489,12 @@ describe("BA-workspace Target rendering (T-WG7 / T-V5-042)", () => {
     const claude = fs.readFileSync(path.join(knowledge, "CLAUDE.md"), "utf8");
     // The stale committed path never reaches the rendered instruction surface.
     expect(claude).not.toContain("C:\\src\\somewhere\\app");
-    expect(claude).toContain("UNBOUND");
+    expect(claude).toContain("never baked into this file");
   });
 });
 
 describe("DEV-workspace Knowledge rendering (T-WG7)", () => {
-  it("renders CLAUDE.md with the banner and writes the include for a dev workspace", () => {
+  it("renders a root-neutral CLAUDE.md and the include for a dev workspace (DR §7)", () => {
     const target = gitTarget();
     writeTargetConfig(target, defaultTargetConfig("app", "2026-01-01T00:00:00Z", "dev"));
     const knowledge = knowledgeRootFixture();
@@ -507,10 +508,13 @@ describe("DEV-workspace Knowledge rendering (T-WG7)", () => {
 
     const claude = fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8");
     expect(claude.startsWith("<!-- sta:bootstrap -->")).toBe(true);
-    expect(claude).toContain(knowledge);
+    // Root-neutral: the binding is runtime data, never baked bytes.
+    expect(claude).not.toContain(knowledge);
+    expect(claude).toContain("never baked into this file");
     expect(claude).toContain("Read `_docs/status.md` first."); // body preserved under the banner
     const include = fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8");
-    expect(include).toContain(`KNOWLEDGE_ROOT=${knowledge}`);
+    expect(include).not.toContain(knowledge);
+    expect(include).toContain("STA_KNOWLEDGE_ROOT");
     const paths = readTargetManifest(target).files.map((f) => f.path);
     expect(paths).toContain("CLAUDE.md");
     expect(paths).toContain(".claude/shared/knowledge-root.md");
@@ -530,18 +534,48 @@ describe("DEV-workspace Knowledge rendering (T-WG7)", () => {
     expect(second.skippedConflicts).toEqual([]);
   });
 
-  it("re-renders when the binding moves and reports updates, not conflicts", () => {
+  it("two sessions selecting different named roots render byte-identical derived content — no disk race (DR §8.4)", () => {
     const target = gitTarget();
     writeTargetConfig(target, defaultTargetConfig("app", "now", "dev"));
     const templatesDir = makeTemplatesDir("1.0.0", DEV_V1);
-    runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-01T00:00:00Z", installationConfigPath: installationConfigFixture(knowledgeRootFixture()) });
+    const rootA = knowledgeRootFixture();
+    const rootB = knowledgeRootFixture();
 
-    const moved = knowledgeRootFixture();
-    const result = runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-02T00:00:00Z", installationConfigPath: installationConfigFixture(moved) });
+    runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-01T00:00:00Z", installationConfigPath: installationConfigFixture(rootA) });
+    const bytesAfterA = {
+      claude: fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8"),
+      include: fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8"),
+    };
+    const resultAfterB = runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-02T00:00:00Z", installationConfigPath: installationConfigFixture(rootB) });
+    const bytesAfterB = {
+      claude: fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8"),
+      include: fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8"),
+    };
 
-    expect(result.skippedConflicts).toEqual([]);
-    expect(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8")).toContain(moved);
-    expect(fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8")).toContain(moved);
+    expect(bytesAfterB.claude).toBe(bytesAfterA.claude);
+    expect(bytesAfterB.include).toBe(bytesAfterA.include);
+    // Identical bytes mean the second session's sync rewrites nothing.
+    expect(resultAfterB.performed.filter((p) => p.action !== "unchanged")).toEqual([]);
+    expect(bytesAfterA.include).not.toContain(rootA);
+    expect(bytesAfterB.include).not.toContain(rootB);
+  });
+
+  it("re-syncs a V10 managed file that embedded the binding path into root-neutral bytes (DR §8.4)", () => {
+    const target = gitTarget();
+    writeTargetConfig(target, defaultTargetConfig("app", "now", "dev"));
+    const knowledge = knowledgeRootFixture();
+    const templatesDir = makeTemplatesDir("1.0.0", DEV_V1);
+    // The V10 shape: the include named the bound root as a baked assignment.
+    const includeDir = path.join(target, ".claude", "shared");
+    fs.mkdirSync(includeDir, { recursive: true });
+    fs.writeFileSync(path.join(includeDir, "knowledge-root.md"), `# Knowledge root (generated — do not edit)\n\nKNOWLEDGE_ROOT=C:\\src\\old-root\n`, "utf8");
+
+    const result = runTargetSync({ targetRoot: target, templatesDir, now: "2026-01-01T00:00:00Z", installationConfigPath: installationConfigFixture(knowledge) });
+
+    const include = fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8");
+    expect(include).not.toContain("KNOWLEDGE_ROOT=");
+    expect(include).not.toContain("C:\\src\\old-root");
+    expect(result.performed.some((p) => p.path === ".claude/shared/knowledge-root.md" && p.action === "update")).toBe(true);
   });
 
   it("renders the BA bootstrap over a byte-identical template body and writes no Knowledge include", () => {
@@ -571,7 +605,7 @@ describe("DEV-workspace Knowledge rendering (T-WG7)", () => {
     expect(result.skippedConflicts.map((c) => c.path)).not.toContain("CLAUDE.md");
     expect(readTargetManifest(target).files.map((f) => f.path)).not.toContain("CLAUDE.md");
     expect(readTargetManifest(target).framework_blocks?.map((block) => block.path)).toContain("CLAUDE.md");
-    expect(fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8")).toContain("KNOWLEDGE_ROOT=");
+    expect(fs.readFileSync(path.join(target, ".claude", "shared", "knowledge-root.md"), "utf8")).toContain("STA_KNOWLEDGE_ROOT");
   });
 });
 

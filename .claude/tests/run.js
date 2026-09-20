@@ -1256,6 +1256,44 @@ withTempProject((tmp) => {
     ALLOW);
 });
 
+// V11 TASK-020 — the launch contract's selection marker reaches the guard.
+// STA_KNOWLEDGE_ROOT_NAME is set if and only if a launcher resolved one named
+// root, and always beside STA_KNOWLEDGE_ROOT. A managed invocation missing the
+// path denies before the permission decision (DR §6/§8.4); an unbound shell —
+// no marker — keeps the legacy rules of 9b-2 unchanged.
+section('9b-3. V11 TASK-020 — a managed Knowledge session refuses writes on an incomplete selection');
+
+withTempProject((tmp) => {
+  const workRoot = path.join(tmp, 'target');
+  const knowledgeRoot = path.join(workRoot, 'knowledge-repo');
+  const grant = { CLAUDE_PROJECT_DIR: tmp, STA_WRITABLE_WORK_ROOTS: JSON.stringify([workRoot]) };
+  const managed = (over) => Object.assign({}, grant, over);
+
+  check('managed session, selection complete -> design.md in the selected root blocked',
+    runPathHook('Write', path.join(knowledgeRoot, '_docs', 'module', 'm', 'design.md'), 'backend-engineer',
+      managed({ STA_KNOWLEDGE_ROOT: knowledgeRoot, STA_KNOWLEDGE_ROOT_NAME: 'work' })),
+    BLOCK);
+  check('managed session, selection complete -> Target source outside the selected root still allowed',
+    runPathHook('Write', path.join(workRoot, 'src', 'route.ts'), 'backend-engineer',
+      managed({ STA_KNOWLEDGE_ROOT: knowledgeRoot, STA_KNOWLEDGE_ROOT_NAME: 'work' })),
+    ALLOW);
+  check('managed session, name without path -> denied before the permission decision, even a plain Target source',
+    runPathHook('Write', path.join(workRoot, 'src', 'route.ts'), 'backend-engineer',
+      managed({ STA_KNOWLEDGE_ROOT_NAME: 'work' })),
+    BLOCK);
+  check('managed session, empty-string path counts as missing -> denied',
+    runPathHook('Write', path.join(workRoot, 'src', 'route.ts'), 'backend-engineer',
+      managed({ STA_KNOWLEDGE_ROOT: '', STA_KNOWLEDGE_ROOT_NAME: 'work' })),
+    BLOCK);
+  check('unbound shell, no marker at all -> the legacy fail-open is unchanged',
+    runPathHook('Write', path.join(knowledgeRoot, '_docs', 'module', 'm', 'design.md'), 'backend-engineer', grant),
+    ALLOW);
+  check('path without a name (legacy single-repo contract) -> the old path-scoped rule, unchanged',
+    runPathHook('Write', path.join(workRoot, 'src', 'route.ts'), 'backend-engineer',
+      managed({ STA_KNOWLEDGE_ROOT: knowledgeRoot })),
+    ALLOW);
+});
+
 // A workspace written by an older `init` still records `role: ba` or `role:
 // dev`. Keeping the field rather than rejecting the config is only worth
 // anything if it opens without error and changes no answer (V10 TASK-021).

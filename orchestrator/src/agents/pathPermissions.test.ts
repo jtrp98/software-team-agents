@@ -288,6 +288,8 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
     frameworkPayloadDenyWhy(pattern: string): string;
     boundReadOnlyTarget(nodePath: typeof path, target: string): string | null;
     boundReadOnlyWhy(targetId: string): string;
+    knowledgeArtifactDenial(nodePath: typeof path, target: string): { rel: string; why: string } | null;
+    knowledgeSelectionIncompleteWhy(rootName: string): string;
   }
 
   /** Executes the rendered block the way a hook host does, and hands back what it declared. */
@@ -297,7 +299,7 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
       .filter((line) => line !== GUARD_RULES_OPEN && line !== GUARD_RULES_CLOSE)
       .join("\n");
     return new Function(
-      `${body}\nreturn { UNIVERSAL_DENY, WORKSPACE_BA_ARTIFACTS, FRAMEWORK_PAYLOAD_ARTIFACTS, matchesGlob, frameworkPayloadDenial, frameworkPayloadDenyWhy, boundReadOnlyTarget, boundReadOnlyWhy };`,
+      `${body}\nreturn { UNIVERSAL_DENY, WORKSPACE_BA_ARTIFACTS, FRAMEWORK_PAYLOAD_ARTIFACTS, matchesGlob, frameworkPayloadDenial, frameworkPayloadDenyWhy, boundReadOnlyTarget, boundReadOnlyWhy, knowledgeArtifactDenial, knowledgeSelectionIncompleteWhy };`,
     )() as GeneratedGuardRules;
   }
 
@@ -491,6 +493,97 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
       expect(rule, rule).not.toMatch(/['\\\r\n]/);
     }
     expect(() => renderGuardRuleBlock()).not.toThrow();
+  });
+});
+
+describe("V11 TASK-020 — the managed-session selection marker in the knowledge denial (DR §6, §8.4)", () => {
+  const kbFixture = path.resolve("fixture", "knowledge-root");
+  const saved: Record<string, string | undefined> = {};
+  const GUARDED_ENV = ["STA_ROLE", "STA_KNOWLEDGE_ROOT", "STA_KNOWLEDGE_ROOT_NAME"] as const;
+
+  /** Executes the rendered block the way a hook host does (same recipe as the T-V5-020 suite above). */
+  function evaluateBlock(): {
+    knowledgeArtifactDenial(nodePath: typeof path, target: string): { rel: string; why: string } | null;
+    knowledgeSelectionIncompleteWhy(rootName: string): string;
+  } {
+    const body = renderGuardRuleBlock()
+      .split("\n")
+      .filter((line) => line !== GUARD_RULES_OPEN && line !== GUARD_RULES_CLOSE)
+      .join("\n");
+    return new Function(`${body}\nreturn { knowledgeArtifactDenial, knowledgeSelectionIncompleteWhy };`)();
+  }
+
+  function withGuardEnv(env: Partial<Record<(typeof GUARDED_ENV)[number], string | undefined>>, run: (generated: ReturnType<typeof evaluateBlock>) => void): void {
+    for (const key of GUARDED_ENV) saved[key] = process.env[key];
+    try {
+      for (const key of GUARDED_ENV) {
+        if (env[key] === undefined) delete process.env[key];
+        else process.env[key] = env[key];
+      }
+      run(evaluateBlock());
+    } finally {
+      for (const key of GUARDED_ENV) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    }
+  }
+
+  it("a managed invocation with the selection env complete denies Knowledge artifacts off the selected canonical path", () => {
+    withGuardEnv({ STA_ROLE: "backend-engineer", STA_KNOWLEDGE_ROOT: kbFixture, STA_KNOWLEDGE_ROOT_NAME: "work" }, (generated) => {
+      const denial = generated.knowledgeArtifactDenial(path, path.join(kbFixture, "_docs", "module", "crm", "design.md"));
+      expect(denial).not.toBeNull();
+      expect(denial!.rel).toBe("_docs/module/crm/design.md");
+      expect(denial!.why).toContain(kbFixture);
+      // A Target source outside the selected root still reaches the permission decision.
+      expect(generated.knowledgeArtifactDenial(path, path.resolve("fixture", "target", "src", "app.ts"))).toBeNull();
+    });
+  });
+
+  it("a managed invocation whose selection env is half-set denies before any permission decision", () => {
+    // The launcher sets name + path as one unit; a name without a path means the
+    // launch contract broke, and no write can be attributed to a Knowledge root.
+    withGuardEnv({ STA_ROLE: "backend-engineer", STA_KNOWLEDGE_ROOT_NAME: "work" }, (generated) => {
+      for (const target of [path.resolve("fixture", "target", "src", "app.ts"), path.join(kbFixture, "knowledge", "x.yaml"), path.join(kbFixture, "_docs", "status.md")]) {
+        const denial = generated.knowledgeArtifactDenial(path, target);
+        expect(denial, target).not.toBeNull();
+        expect(denial!.why).toContain("work");
+        expect(denial!.why).toContain("STA_KNOWLEDGE_ROOT");
+      }
+      expect(generated.knowledgeSelectionIncompleteWhy("work")).toMatch(/one session = one root/);
+    });
+  });
+
+  it("an empty-string path counts as missing for a managed invocation", () => {
+    withGuardEnv({ STA_ROLE: "backend-engineer", STA_KNOWLEDGE_ROOT: "", STA_KNOWLEDGE_ROOT_NAME: "work" }, (generated) => {
+      expect(generated.knowledgeArtifactDenial(path, path.resolve("src", "app.ts"))).not.toBeNull();
+    });
+  });
+
+  it("an unbound invocation (no marker) keeps the legacy rules — the fail-open and the path-only denial", () => {
+    withGuardEnv({ STA_ROLE: "backend-engineer" }, (generated) => {
+      // No name, no path: the V10 fail-open single-repo mode run.js pins.
+      expect(generated.knowledgeArtifactDenial(path, path.join(kbFixture, "_docs", "module", "m", "design.md"))).toBeNull();
+      // Path without a name is the legacy contract: the old rule, unchanged.
+      process.env.STA_KNOWLEDGE_ROOT = kbFixture;
+      const denial = generated.knowledgeArtifactDenial(path, path.join(kbFixture, "_docs", "module", "m", "design.md"));
+      expect(denial).not.toBeNull();
+      expect(denial!.rel).toBe("_docs/module/m/design.md");
+      expect(generated.knowledgeArtifactDenial(path, path.resolve("fixture", "target", "src", "app.ts"))).toBeNull();
+    });
+  });
+
+  it("a role outside the knowledge-denied set is never touched by this rule", () => {
+    withGuardEnv({ STA_ROLE: "system-analyst", STA_KNOWLEDGE_ROOT_NAME: "work" }, (generated) => {
+      expect(generated.knowledgeArtifactDenial(path, path.resolve("src", "app.ts"))).toBeNull();
+    });
+  });
+
+  it("the hook resolves no default and reads no installation config (TOCTOU)", () => {
+    const block = renderGuardRuleBlock();
+    expect(block).not.toContain("STA_INSTALLATION_CONFIG");
+    expect(block).not.toContain("knowledge_roots");
+    expect(block).not.toContain("installation.yaml");
   });
 });
 

@@ -590,7 +590,9 @@ export function devDerivedContent(options: {
   const content = new Map<string, string>();
   if (files.some((f) => f.path === CLAUDE_MD_PATH)) {
     const base = fs.readFileSync(path.join(options.templatesDir, CLAUDE_MD_PATH), "utf8");
-    content.set(CLAUDE_MD_PATH, renderWorkspaceClaude(base, { role: config.role, workspaceRoot: options.targetRoot, boundRoot }));
+    // Root-neutral bootstrap (DR §7): the resolved binding is not rendered —
+    // identical bytes for every named root, so concurrent sessions don't race.
+    content.set(CLAUDE_MD_PATH, renderWorkspaceClaude(base, { role: config.role, workspaceRoot: options.targetRoot }));
   }
   if (files.some((f) => f.path === AGENTS_MD_PATH) && content.has(CLAUDE_MD_PATH)) {
     content.set(AGENTS_MD_PATH, renderAgentsPointer(content.get(CLAUDE_MD_PATH)!));
@@ -600,8 +602,9 @@ export function devDerivedContent(options: {
   }
   if (config.role === "dev" && boundRoot) {
     // In the map so planStaleFiles treats it as regenerated (never stale) and
-    // a role flip later cleans it up through the ordinary stale path.
-    content.set(KNOWLEDGE_ROOT_INCLUDE_PATH, renderKnowledgeInclude(boundRoot));
+    // a role flip later cleans it up through the ordinary stale path. The
+    // presence gate stays binding-resolved, but the bytes are root-neutral.
+    content.set(KNOWLEDGE_ROOT_INCLUDE_PATH, renderKnowledgeInclude());
   }
   return content.size > 0 ? { content, boundRoot } : undefined;
 }
