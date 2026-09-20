@@ -32,7 +32,7 @@ tiers:
         effort: native
         notes: Maximum reasoning; reserved and never cast in the pipeline.
       zai:
-        model: zai-coding-plan/glm-5.2#max
+        model: zai-coding-plan/glm-5.3#max
         effort: native
         notes: Maximum reasoning; reserved and never cast in the pipeline.
   T2:
@@ -50,7 +50,7 @@ tiers:
         effort: native
         notes: Planning and security grade.
       zai:
-        model: zai-coding-plan/glm-5.2#high
+        model: zai-coding-plan/glm-5.3#high
         effort: native
         notes: Planning and security grade.
   T3:
@@ -68,7 +68,7 @@ tiers:
         effort: native
         notes: Analysis grade and risky implementation or QA verification.
       zai:
-        model: zai-coding-plan/glm-5.2#high
+        model: zai-coding-plan/glm-5.3#high
         effort: native
         notes: Analysis grade and risky implementation or QA verification.
   T4:
@@ -86,7 +86,7 @@ tiers:
         effort: native
         notes: Hard or risky implementation across a contract or several modules.
       zai:
-        model: zai-coding-plan/glm-4.7
+        model: zai-coding-plan/glm-5.3-flash#max
         effort: native
         notes: Hard or risky implementation across a contract or several modules.
   T5:
@@ -104,7 +104,7 @@ tiers:
         effort: native
         notes: Light implementation work.
       zai:
-        model: zai-coding-plan/glm-4.7#fast
+        model: zai-coding-plan/glm-5.3-flash#high
         effort: native
         notes: Light implementation work.
   T6:
@@ -122,6 +122,6 @@ tiers:
         effort: native
         notes: Fast mechanical work such as setup, typos, and lint fixes.
       zai:
-        model: zai-coding-plan/glm-4.7#fast
+        model: zai-coding-plan/glm-5.3-flash#low
         effort: native
         notes: Fast mechanical work such as setup, typos, and lint fixes.

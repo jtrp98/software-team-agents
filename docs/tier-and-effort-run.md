@@ -99,5 +99,5 @@ software-team-agents open
 | `native` | หมายถึง reasoning ถูกเลือกโดยชื่อรุ่นหรือ variant ของ runtime นั้นเอง; adapter จะไม่ส่งค่านี้เป็น Claude/Codex effort | อย่าใช้ `native` กับ camp ที่ต้องรับ effort แยกต่างหาก |
 | camp `openai` | Codex adapter ส่ง model ที่เลือกด้วย `--model` และส่ง effort ด้วย `--config model_reasoning_effort=...`; catalog ถูกอ่านจาก `model-tiers.yaml` ตอนสร้าง production registry | ใช้เฉพาะ effort `low`/`medium`/`high`/`xhigh`/`max` |
 | camp `google` | Antigravity ใช้ชื่อ Gemini แบบเต็มที่มี suffix เช่น `gemini-3.8-flash-high`; suffix เลือกระดับ reasoning เอง | หลัง login ให้รัน `agy models` แล้วแก้ table หาก account ไม่มีชื่อรุ่นนั้น |
-| camp `zai` | OpenCode ต้องมี provider/model/variant จริง เช่น `zai-coding-plan/glm-4.7#fast`; `fast` ไม่ได้ถูกสร้างให้อัตโนมัติ | ตรวจ `/models` และตั้งค่า provider ของ OpenCode/Z.AI ให้ตรงก่อน run จริง |
+| camp `zai` | OpenCode ต้องมี provider/model/variant จริง เช่น `zai-coding-plan/glm-5.3#high`; variant ต้องเป็นของรุ่นนั้นจริง (ปัจจุบัน `glm-5.3` และ `glm-5.3-flash` มี `low`/`high`/`max` ส่วนความเร็วเลือกด้วยชื่อรุ่น `-flash`/`-highspeed` ไม่ใช่ variant `#fast` แบบรุ่นเก่า) | ตรวจ `/models` และตั้งค่า provider ของ OpenCode/Z.AI ให้ตรงก่อน run จริง |
 | `T2` vs `T3` และ `T4` vs `T5` บน Claude Code | ต่างกันจริงแล้วที่ effort (`opus high` vs `opus medium`, `sonnet high` vs `sonnet medium`) | — |
