@@ -5,6 +5,7 @@ import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { validateInstallation } from "../packaging/installValidation.js";
 import { assertStandaloneKnowledgeRoot, defaultInstallationConfigPath, loadInstallationConfig } from "./installation.js";
 import { resolveInstallationRoot } from "./rootSelector.js";
+import { auditTargetOwnershipAcrossRoots } from "./ownershipAudit.js";
 import { loadLocalTargetMapping } from "./localTargets.js";
 import { loadTargetRegistry, TARGET_TYPE_ROLES, type TargetEntry, type TargetType } from "./targets.js";
 import { loadStackProfile } from "../profile/projectProfile.js";
@@ -350,6 +351,18 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
       checks.push({ name: skipped, status: "WARNING", detail: "skipped — no Knowledge root configured yet", fix: configureFix });
     }
   }
+
+  // Installation-wide (DT §4): unlike the selected-root checks above, this
+  // reads every configured root's registry and local mapping — the R05
+  // hand-switch state lived entirely in the roots the selected-root checks
+  // never look at. Placement keeps checks independent: this FAILs alongside
+  // them, never instead of them.
+  checks.push(
+    check("Target ownership across configured roots", "resolve the duplicate through the human-gated ownership transfer before running either Target", () => {
+      const audit = auditTargetOwnershipAcrossRoots({ installationConfigPath: options.installationConfigPath });
+      return { status: audit.status, detail: audit.detail };
+    }),
+  );
 
   checks.push(
     await (async (): Promise<DoctorCheck> => {

@@ -217,7 +217,13 @@ export function loadInstallationConfig(configPath = defaultInstallationConfigPat
   return config;
 }
 
-export function configureKnowledgeRoot(knowledgeRoot: string, configPath = defaultInstallationConfigPath(), frameworkRoot?: string): InstallationConfig {
+/** Everything a Knowledge-root write must prove about the *path and the
+ * config location* before any file is touched: the root is a standalone Git
+ * checkout, it does not overlap the Framework, and the config file itself
+ * stays installation-local (never inside a Knowledge, Target or Framework
+ * repository). Shared by the v1 compat writer and the v2 named-root writer so
+ * both entry points refuse identically. */
+function assertConfigurableKnowledgePath(knowledgeRoot: string, configPath: string, frameworkRoot?: string): string {
   const canonical = assertStandaloneKnowledgeRoot(knowledgeRoot);
   if (frameworkRoot) {
     // Two legitimate shapes for the Framework root:
@@ -256,10 +262,147 @@ export function configureKnowledgeRoot(knowledgeRoot: string, configPath = defau
     const parent = path.dirname(cursor);
     if (parent === cursor) break;
   }
+  return canonical;
+}
+
+/** The only way a v2 config reaches disk (DR §2.4): `knowledge_root` is
+ * computed from `default_root` — never carried independently — and the result
+ * must pass the same schema and semantic invariants a later load applies. */
+function persistV2InstallationConfig(next: Omit<InstallationConfigV2, "knowledge_root">, configPath: string): InstallationConfigV2 {
+  const knowledge_root = next.knowledge_roots[next.default_root];
+  const v2: InstallationConfigV2 = { ...next, knowledge_root };
+  const validate = validator();
+  if (!validate(v2)) throw new InstallationConfigError(`installation config write is invalid: ${formatSchemaErrors(validate)}`);
+  assertInstallationInvariants(v2);
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, stringifyYaml(v2, { sortMapEntries: false }), "utf8");
+  return v2;
+}
+
+function sortedRootNames(config: InstallationConfig): string {
+  return Object.keys(normalizeKnowledgeRoots(config).roots).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).join(", ");
+}
+
+/** Loads the existing installation state for a writer, or `undefined` when no
+ * file exists yet. A file that exists but cannot be loaded stops the write:
+ * a configure run must never silently replace installation state it could not
+ * even read. */
+function loadExistingInstallationConfigForWrite(configPath: string): InstallationConfig | undefined {
+  if (!fs.existsSync(configPath)) return undefined;
+  return loadInstallationConfig(configPath);
+}
+
+export function configureKnowledgeRoot(knowledgeRoot: string, configPath = defaultInstallationConfigPath(), frameworkRoot?: string): InstallationConfig {
+  const canonical = assertConfigurableKnowledgePath(knowledgeRoot, configPath, frameworkRoot);
+  const existing = loadExistingInstallationConfigForWrite(configPath);
+  if (existing?.schema_version === 2) {
+    throw new InstallationConfigError(
+      `installation config ${configPath} is schema v2 with named roots (${sortedRootNames(existing)}) — ` +
+        "pass --root <name> to add or update one named entry; a pathless write would replace the whole map",
+    );
+  }
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   const config: InstallationConfig = { schema_version: 1, knowledge_root: canonical };
   fs.writeFileSync(configPath, stringifyYaml(config, { sortMapEntries: false }), "utf8");
   return config;
+}
+
+/** Options of the v2 named-root writer (DR §2.4). */
+export interface ConfigureNamedKnowledgeRootOptions {
+  /** `--root <name>` — the entry this write adds or updates. */
+  rootName: string;
+  /** `--default` — make the named entry the default root. */
+  makeDefault?: boolean;
+  configPath?: string;
+  frameworkRoot?: string;
+}
+
+/** Adds or updates exactly one named Knowledge root entry (DR §2.4). The
+ * first named operation on a v1 file migrates it to v2: the same physical
+ * root takes the given name as the first entry and the default; a new path
+ * keeps the original root under the name `default` (still the default unless
+ * `makeDefault`). On a v2 file the named entry is added or repointed and
+ * `knowledge_root` follows `default_root`. Canonical paths stay unique across
+ * names, and no target move or root removal ever happens here. */
+export function configureNamedKnowledgeRoot(knowledgeRoot: string, options: ConfigureNamedKnowledgeRootOptions): InstallationConfig {
+  const rootName = options.rootName;
+  if (!KNOWLEDGE_ROOT_NAME_PATTERN.test(rootName)) {
+    throw new InstallationConfigError(`knowledge root name "${rootName}" must match ${KNOWLEDGE_ROOT_NAME_PATTERN.source}`);
+  }
+  const configPath = options.configPath ?? defaultInstallationConfigPath();
+  const canonical = assertConfigurableKnowledgePath(knowledgeRoot, configPath, options.frameworkRoot);
+  const existing = loadExistingInstallationConfigForWrite(configPath);
+
+  let defaultRoot: string;
+  let roots: Record<string, string>;
+  if (!existing || existing.schema_version === 1) {
+    if (existing && canonicalPathForComparison(existing.knowledge_root) !== canonicalPathForComparison(canonical)) {
+      if (rootName === "default") {
+        throw new InstallationConfigError(
+          `cannot name a different path "default": the existing v1 root ${existing.knowledge_root} keeps the name "default" through migration — ` +
+            "configure its own path to rename it, or choose another name for the new root",
+        );
+      }
+      // v1 + a new path: the original root survives migration as `default`
+      roots = { default: existing.knowledge_root, [rootName]: canonical };
+      defaultRoot = options.makeDefault ? rootName : "default";
+    } else {
+      // v1 + the same physical root (or no file): the given name becomes the
+      // first entry and the default — nothing else exists to keep it
+      roots = { [rootName]: canonical };
+      defaultRoot = rootName;
+    }
+  } else {
+    const currentPath = existing.knowledge_roots[rootName];
+    if (currentPath === undefined) {
+      for (const name of Object.keys(existing.knowledge_roots)) {
+        if (canonicalPathForComparison(existing.knowledge_roots[name] as string) === canonicalPathForComparison(canonical)) {
+          throw new InstallationConfigError(
+            `knowledge root path ${canonical} is already registered as "${name}" — a canonical path is registered under exactly one name`,
+          );
+        }
+      }
+    }
+    roots = { ...existing.knowledge_roots, [rootName]: canonical };
+    defaultRoot = options.makeDefault ? rootName : existing.default_root;
+  }
+  return persistV2InstallationConfig(
+    { schema_version: 2, default_root: defaultRoot, knowledge_roots: roots, identities: existing?.identities },
+    configPath,
+  );
+}
+
+/** `sta configure default-root --root <name>` (DR §2.4): switches the default
+ * on a v2 installation without re-taking a path; `knowledge_root` follows.
+ * Naming the current default is a no-op that never rewrites the file. A v1
+ * file has exactly one root and it is already the default — the name
+ * `default` answers without touching the v1 file, anything else is unknown. */
+export function configureDefaultRoot(rootName: string, configPath = defaultInstallationConfigPath()): InstallationConfig {
+  if (!KNOWLEDGE_ROOT_NAME_PATTERN.test(rootName)) {
+    throw new InstallationConfigError(`knowledge root name "${rootName}" must match ${KNOWLEDGE_ROOT_NAME_PATTERN.source}`);
+  }
+  const config = loadExistingInstallationConfigForWrite(configPath);
+  if (!config) {
+    throw new InstallationConfigError(`no installation config at ${configPath} yet — run \`sta configure knowledge-root <path>\` first`);
+  }
+  const normalized = normalizeKnowledgeRoots(config);
+  if (normalized.roots[rootName] === undefined) {
+    throw new InstallationConfigError(
+      `unknown Knowledge root "${rootName}"; available roots: ${sortedRootNames(config)}` +
+        (config.schema_version === 2 ? `; default: ${normalized.defaultRoot}` : ""),
+    );
+  }
+  if (config.schema_version === 1) return config;
+  if (rootName === config.default_root) return config;
+  return persistV2InstallationConfig(
+    {
+      schema_version: 2,
+      default_root: rootName,
+      knowledge_roots: { ...config.knowledge_roots },
+      identities: config.identities,
+    },
+    configPath,
+  );
 }
 
 /**

@@ -7,6 +7,7 @@ import { loadTargetConfig } from "../targetcli/targetMeta.js";
 import { detectWorkspaceKind, resolveTargetBinding, workspaceShapeOf } from "../targetcli/roleWorkspace.js";
 import { assembleStageContext, type StageContextAssembly } from "../runtime/agentRunAssembly.js";
 import type { ExecutionPacket } from "../artifacts/schemas.js";
+import { summarizeKnowledgeSelection, type KnowledgeSelectionSummary } from "../threeRepo/rootSelector.js";
 
 export interface ContextCommandInput {
   role: string;
@@ -66,6 +67,8 @@ export interface ContextCommandResult {
   module: string;
   projectRoot: string;
   docsRoot: string;
+  /** DR §7.4 — the Knowledge-root selection this read resolved through: name, canonical path, source and the default (read-only). Absent when no installation config exists and no launch env applies. */
+  knowledgeSelection?: KnowledgeSelectionSummary;
   taskId?: string;
   phases: number[];
   phaseResolution: "explicit" | "task" | "none" | "task-not-found";
@@ -125,6 +128,22 @@ export async function buildContextCommand(input: ContextCommandInput): Promise<C
   const stage = stageForRole(input.role);
   const env = input.env ?? process.env;
   const docsRoot = resolveContextDocsRoot(input.projectRoot, env, input.rootName);
+  // DR §7.4: the selection line names the very resolution the docs read just
+  // used (env → installation → legacy), so what the command reads is what it
+  // names. Display-only: a broken installation file surfaces through the docs
+  // resolution above (which reads the same file without an env root), so the
+  // summary only needs to stay out of the way — it degrades to absent rather
+  // than turning a readable session into a crashed one.
+  const knowledgeSelection = (() => {
+    try {
+      return summarizeKnowledgeSelection({
+        requestedName: input.rootName,
+        env: { STA_KNOWLEDGE_ROOT: env.STA_KNOWLEDGE_ROOT, STA_KNOWLEDGE_ROOT_NAME: env.STA_KNOWLEDGE_ROOT_NAME },
+      });
+    } catch {
+      return undefined;
+    }
+  })();
   const resolved = resolveModule(docsRoot, input.moduleHint);
   if (resolved.status === "many") {
     throw new ContextCommandError(
@@ -198,6 +217,7 @@ export async function buildContextCommand(input: ContextCommandInput): Promise<C
     module: resolved.module,
     projectRoot: input.projectRoot,
     docsRoot,
+    knowledgeSelection,
     taskId: input.taskId,
     phases: phase.phases,
     phaseResolution: phase.resolution,
@@ -233,10 +253,19 @@ export function renderContextCommand(result: ContextCommandResult): string {
     );
   });
   const codeIntelFallback = describeCodeIntelFallback(c.code_intel_fallback_reason);
+  const selection = result.knowledgeSelection;
+  const knowledgeRootLine =
+    selection === undefined
+      ? []
+      : [
+          `- knowledge_root: ${selection.name ?? "(unnamed launch env)"} → ${selection.path}` +
+            ` (source=${selection.source}${selection.defaultRootName !== undefined ? `; default: ${selection.defaultRootName}` : ""}; read-only)`,
+        ];
   const report = [
     "",
     "Context composition:",
     `- role=${result.role} module=${result.module} phases=${scope} phase_source=${result.phaseResolution}`,
+    ...knowledgeRootLine,
     `- docs=${c.doc_chars} chars rendered; selected=${c.doc_selected_chars}/${c.doc_chars_before} source chars; slicing_saved=${c.saved_pct}%`,
     `- knowledge=${c.knowledge_chars} chars; code_intel=${c.code_intel_chars} chars; direct_file_reads=${c.direct_file_reads}; fallback_to_full=${c.fallback_to_full_documents}`,
     ...(codeIntelFallback ? [`- code_intel_fallback: ${codeIntelFallback}`] : []),
@@ -262,6 +291,14 @@ export function contextCommandJson(result: ContextCommandResult): object {
     task_id: result.taskId ?? null,
     phases: result.phases,
     phase_resolution: result.phaseResolution,
+    knowledge_root: result.knowledgeSelection
+      ? {
+          selected_root_name: result.knowledgeSelection.name ?? null,
+          canonical_path: result.knowledgeSelection.path,
+          selection_source: result.knowledgeSelection.source,
+          default_root_name: result.knowledgeSelection.defaultRootName ?? null,
+        }
+      : undefined,
     composition: result.composition,
     savings_by_document: result.context.selected.map((doc) => ({
       doc: doc.doc,

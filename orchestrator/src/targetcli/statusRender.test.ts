@@ -77,3 +77,32 @@ describe("V10 — status text keys on what the workspace IS, never the recorded 
     expect(text).toContain("Target:");
   });
 });
+
+describe("V11 TASK-025 — status names the session's Knowledge-root selection (DR §7.4)", () => {
+  it("prints selected name, canonical path, source and the default — and never claims to change the default", () => {
+    const text = renderStatus(
+      status({
+        workspaceKind: "target" as WorkspaceKind,
+        role: "dev",
+        knowledgeSelection: { name: "work", path: "C:/src/work-root", source: "default", defaultRootName: "work", defaultPath: "C:/src/work-root" },
+      }),
+    );
+    expect(text).toContain(`Knowledge root: "work" → C:/src/work-root (selected via default; default: work — status never re-selects)`);
+    expect(text).toContain("status never re-selects");
+  });
+
+  it("keeps the line out of a legacy status with no installation selection", () => {
+    const text = renderStatus(status({ workspaceKind: "target" as WorkspaceKind, role: "dev" }));
+    expect(text).not.toContain("Knowledge root: \"");
+    expect(text).not.toContain("selected via");
+  });
+
+  it("shows the flagged selection in a Knowledge workspace too — same line, both shapes", () => {
+    const text = renderStatus(
+      status({
+        knowledgeSelection: { name: "other", path: "D:/kf/other", source: "flag", defaultRootName: "work", defaultPath: "C:/src/work-root" },
+      }),
+    );
+    expect(text).toContain(`Knowledge root: "other" → D:/kf/other (selected via flag; default: work — status never re-selects)`);
+  });
+});

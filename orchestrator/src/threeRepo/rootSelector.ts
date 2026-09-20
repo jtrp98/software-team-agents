@@ -132,6 +132,57 @@ export function resolveSelectedKnowledgeRootOrLegacy(projectRoot: string, reques
   return resolveInstallationRoot(config, requestedName).path;
 }
 
+/** DR §7.4 — the selection summary dynamic surfaces (`status`, `sta context`)
+ * display: which root this invocation points at, where it canonically lives,
+ * where the selection came from, and the installation default it did **not**
+ * change. The name is absent only for a legacy launch env (`STA_KNOWLEDGE_ROOT`
+ * without `STA_KNOWLEDGE_ROOT_NAME`) — one is never invented from a path. */
+export interface KnowledgeSelectionSummary {
+  name?: string;
+  /** Canonical absolute path of the selected root. */
+  path: string;
+  source: SelectedKnowledgeRoot["source"] | "launch-env";
+  defaultRootName?: string;
+  defaultPath?: string;
+}
+
+/** Builds the DR §7.4 selection summary, or `undefined` when there is no
+ * installation config at all (a legacy single-repo machine has no selection
+ * to name). A launch env (`STA_KNOWLEDGE_ROOT`) wins over the installation,
+ * mirroring `resolveContextDocsRoot`; the default still comes from the
+ * installation when it exists. A file that exists but cannot be loaded
+ * throws — the caller's own resolution path throws identically, so display
+ * and read never disagree. */
+export function summarizeKnowledgeSelection(options: {
+  requestedName?: string;
+  installationConfigPath?: string;
+  env?: { STA_KNOWLEDGE_ROOT?: string | undefined; STA_KNOWLEDGE_ROOT_NAME?: string | undefined };
+}): KnowledgeSelectionSummary | undefined {
+  const envRoot = options.env?.STA_KNOWLEDGE_ROOT?.trim();
+  const configPath = options.installationConfigPath ?? defaultInstallationConfigPath();
+  let installation: InstallationConfig | undefined;
+  if (fs.existsSync(configPath)) installation = loadInstallationConfig(configPath);
+  if (envRoot) {
+    const name = options.env?.STA_KNOWLEDGE_ROOT_NAME?.trim() || undefined;
+    return {
+      name,
+      path: path.resolve(envRoot),
+      source: "launch-env",
+      defaultRootName: installation ? (installation.schema_version === 2 ? installation.default_root : "default") : undefined,
+      defaultPath: installation ? path.resolve(installation.knowledge_root) : undefined,
+    };
+  }
+  if (!installation) return undefined;
+  const selected = resolveInstallationRoot(installation, options.requestedName);
+  return {
+    name: selected.name,
+    path: selected.path,
+    source: selected.source,
+    defaultRootName: installation.schema_version === 2 ? installation.default_root : "default",
+    defaultPath: path.resolve(installation.knowledge_root),
+  };
+}
+
 /** DR §5 invariant 5 — a task frozen at intake resumes on its frozen root.
  * The frozen name is re-resolved through the installation (never the fresh
  * default), the canonical path must still match, and an explicit `--root` is
