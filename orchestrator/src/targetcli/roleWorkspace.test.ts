@@ -268,6 +268,32 @@ describe("knowledge binding (T-ROLE-06/T-ROLE-08)", () => {
     expect(binding?.knowledgeRoot).toBe(fs.realpathSync.native(k));
   });
 
+  it("V11 TASK-019 — a binding from the installation carries the selected root name beside the path", () => {
+    const workspace = tmpRoot("ws6b");
+    const k = knowledgeRepo();
+    const configPath = path.join(tmpRoot("cfg-named"), "installation.yaml");
+    fs.writeFileSync(
+      configPath,
+      `schema_version: 2\nknowledge_root: ${JSON.stringify(k)}\ndefault_root: work\nknowledge_roots:\n  work: ${JSON.stringify(k)}\n`,
+      "utf8",
+    );
+    const binding = resolveKnowledgeBinding({
+      targetRoot: workspace,
+      installationConfigPath: configPath,
+      requestedRootName: "work",
+    });
+    expect(binding?.via).toBe("installation");
+    expect(binding?.rootName).toBe("work");
+    expect(binding?.knowledgeRoot).toBe(fs.realpathSync.native(k));
+    // Legacy mode has no root name to carry — the path rides alone.
+    const legacy = resolveKnowledgeBinding({
+      targetRoot: tmpRoot("ws6c"),
+      configKnowledgePath: k,
+      installationConfigPath: path.join(tmpRoot("ws6c"), "no-such-installation.yaml"),
+    });
+    expect(legacy?.rootName).toBeUndefined();
+  });
+
   it("a committed knowledge.path that no longer matches the selected root is refused with a migration message (DR §3 rule 7)", () => {
     const workspace = tmpRoot("ws7");
     const boundRoot = knowledgeRepo();
@@ -306,9 +332,38 @@ describe("write-policy launch wiring (T-ROLE-12/13)", () => {
   });
 
   it("T-WG7 — a DEV launch carries STA_KNOWLEDGE_ROOT; a BA launch without one does not", () => {
-    const dev = launchEnv("dev", {}, "C:\\kb");
+    const dev = launchEnv("dev", {}, "C:\\kb", undefined, undefined, [], "work");
     expect(dev.STA_KNOWLEDGE_ROOT).toBe("C:\\kb");
     expect(launchEnv("ba", {}).STA_KNOWLEDGE_ROOT).toBeUndefined();
+  });
+
+  it("V11 TASK-019 — a managed launch carries the root name beside the path, as one selection", () => {
+    const dev = launchEnv("dev", { PATH: "keep" }, "C:\\kb", undefined, undefined, [], "work");
+    expect(dev.STA_KNOWLEDGE_ROOT).toBe("C:\\kb");
+    expect(dev.STA_KNOWLEDGE_ROOT_NAME).toBe("work");
+    expect(dev.PATH).toBe("keep");
+    const unbound = launchEnv("dev", {});
+    expect(unbound.STA_KNOWLEDGE_ROOT).toBeUndefined();
+    expect(unbound.STA_KNOWLEDGE_ROOT_NAME).toBeUndefined();
+  });
+
+  it("V11 TASK-019 — a legacy binding still launches path-only; a managed marker without a path refuses the launch", () => {
+    // V10 compat (dual-reader): a binding resolved without an installation
+    // has no root name to carry — the path rides alone and the session stays
+    // unmanaged for the guards.
+    const legacy = launchEnv("dev", {}, "C:\\kb");
+    expect(legacy.STA_KNOWLEDGE_ROOT).toBe("C:\\kb");
+    expect(legacy.STA_KNOWLEDGE_ROOT_NAME).toBeUndefined();
+    expect(() => launchEnv("dev", {}, undefined, undefined, undefined, [], "work")).toThrow(/incomplete Knowledge-root selection/);
+  });
+
+  it("V11 TASK-019 — the launcher owns the selection: stale shell values never reach the child", () => {
+    const stale = launchEnv("ba", { STA_KNOWLEDGE_ROOT: "C:\\stale-root", STA_KNOWLEDGE_ROOT_NAME: "stale" });
+    expect(stale.STA_KNOWLEDGE_ROOT).toBeUndefined();
+    expect(stale.STA_KNOWLEDGE_ROOT_NAME).toBeUndefined();
+    const replaced = launchEnv("dev", { STA_KNOWLEDGE_ROOT: "C:\\stale-root", STA_KNOWLEDGE_ROOT_NAME: "stale" }, "C:\\kb", undefined, undefined, [], "work");
+    expect(replaced.STA_KNOWLEDGE_ROOT).toBe("C:\\kb");
+    expect(replaced.STA_KNOWLEDGE_ROOT_NAME).toBe("work");
   });
 
   it("T-LV1 — a launch carries STA_TARGET_ROOT only when a Target binding resolved", () => {

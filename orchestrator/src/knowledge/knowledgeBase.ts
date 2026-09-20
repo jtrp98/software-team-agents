@@ -16,7 +16,7 @@ import { checkKnowledgePolicyFile } from "./knowledgePolicy.js";
 import { checkOwnership, deprecatedStillDependedOn } from "./ownership.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { readBootstrapState } from "../bootstrap/bootstrapStore.js";
-import { loadTargetRegistry } from "../threeRepo/targets.js";
+import { isReleasedTombstone, loadTargetRegistry, normalizeTargetRegistry } from "../threeRepo/targets.js";
 
 /**
  * The single entry point every agent asks the project knowledge through.
@@ -372,12 +372,24 @@ export function checkKnowledge(projectRoot: string = defaultProjectRoot()): Know
   const kb = new KnowledgeBase(items, problems);
   const base = kb.check();
   const v2Problems: string[] = [];
+  // DT §5.1 — items scoped only to released tombstones are historical archive:
+  // reported as a count in the notes, never as `unknown target_id`.
+  let historicalNote: string | undefined;
   if (items.some((item) => item.schema_version >= 2)) {
     try {
-      const registry = loadTargetRegistry(projectRoot);
+      const registry = normalizeTargetRegistry(loadTargetRegistry(projectRoot));
       const known = new Set(registry.targets.map((target) => target.target_id));
+      const released = new Set(registry.targets.filter(isReleasedTombstone).map((target) => target.target_id));
+      const historical: string[] = [];
       for (const item of items) {
-        for (const targetId of item.target_ids ?? []) if (!known.has(targetId)) v2Problems.push(`${qualifiedKnowledgeId(item)}: unknown target_id "${targetId}"`);
+        const targetIds = item.target_ids ?? [];
+        if (targetIds.length > 0 && targetIds.every((targetId) => released.has(targetId))) historical.push(qualifiedKnowledgeId(item));
+        for (const targetId of targetIds) if (!known.has(targetId)) v2Problems.push(`${qualifiedKnowledgeId(item)}: unknown target_id "${targetId}"`);
+      }
+      if (historical.length > 0) {
+        historicalNote =
+          `${historical.length} historical archived knowledge item(s) reference only released Target tombstone(s) — ` +
+          `kept for audit, excluded from brief/reconcile: ${historical.join(", ")}`;
       }
     } catch (error) {
       v2Problems.push(`schema v2 knowledge requires valid targets.yaml: ${error instanceof Error ? error.message : String(error)}`);
@@ -428,6 +440,7 @@ export function checkKnowledge(projectRoot: string = defaultProjectRoot()): Know
   allProblems.push(...bootstrapProblems);
 
   const notes: string[] = [...policy.notes];
+  if (historicalNote) notes.push(historicalNote);
   // A note, not a problem: keeping a deprecated item *because* something still
   // cites it is the intended state. This is the list of citations to re-point
   // before it can go, which is only useful if somebody can see it.

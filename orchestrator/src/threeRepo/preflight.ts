@@ -13,7 +13,7 @@ import { resolveInstallationRoot, type SelectedKnowledgeRoot } from "./rootSelec
 import { checkDeclaredIdentities } from "./identities.js";
 import { loadLocalTargetMapping, loadRemoteHostAliases, type ResolvedLocalTarget } from "./localTargets.js";
 import { canonicalRepositoryCoordinate, assertCanonicalRepositoryCoordinate, type RemoteHostAliases } from "./repositoryIdentity.js";
-import { loadTargetRegistry, normalizeTargetRegistry, targetById, type TargetRegistry } from "./targets.js";
+import { loadTargetRegistry, normalizeTargetRegistry, isReleasedTombstone, targetById, type TargetRegistry } from "./targets.js";
 import { resolveModuleTargets } from "./moduleTargetResolver.js";
 import {
   uniqueBoundTargetIds,
@@ -26,6 +26,10 @@ export interface WorkRoot { targetId: string; path: string; access: WorkspaceAcc
 export interface ThreeRepoRequestRoots {
   bindingRoot: string;
   knowledgeRoot: string;
+  /** DR §5 env/launch: the selected root's name travels beside its canonical
+   * path so a child process can name the root it guards and never re-resolve
+   * a default of its own. */
+  knowledgeRootName: string;
   workRoots: WorkRoot[];
 }
 
@@ -330,9 +334,9 @@ export function preflightThreeRepoTask(
   }
   // Knowledge-only lanes deliberately stop here: a BA/SA/UXUI task does not
   // acquire a Target merely because another phase of the same task has one.
-  if (!needsCode(stage)) return { bindingRoot, knowledgeRoot, workRoots: [] };
+  if (!needsCode(stage)) return { bindingRoot, knowledgeRoot, knowledgeRootName: selectedRoot.name, workRoots: [] };
 
-  if (targetIds.length === 0) return { bindingRoot, knowledgeRoot, workRoots: [] };
+  if (targetIds.length === 0) return { bindingRoot, knowledgeRoot, knowledgeRootName: selectedRoot.name, workRoots: [] };
   let mapping: Map<string, ResolvedLocalTarget>;
   try {
     mapping = mappingById(loadLocalTargetMapping(knowledgeRoot, registry, bindingRoot));
@@ -343,6 +347,13 @@ export function preflightThreeRepoTask(
   const candidates: { targetId: string; targetPath: string; remoteUrl: string }[] = [];
   for (const targetId of targetIds) {
     const target = targetById(registry, targetId);
+    // A released tombstone refuses both a new run and a resume (DT §5.1): the
+    // transfer moved ownership, so this root must not execute against it.
+    if (isReleasedTombstone(target)) {
+      throw new TargetPreflightError(
+        `task ${task.taskId} binds Target "${targetId}", a released tombstone in this root — its ownership moved through the human-gated transfer; bind the Target in its owning root`,
+      );
+    }
     if (target.status === "retired") throw new TargetPreflightError(`Target "${targetId}" is retired — reactivate it before running or resuming task ${task.taskId}`);
     const local = mapping.get(targetId);
     if (!local) throw new TargetPreflightError(`Target "${targetId}" has no local path mapping — add it to ${path.join(knowledgeRoot, ".workflow", "targets.local.yaml")}`);
@@ -353,5 +364,5 @@ export function preflightThreeRepoTask(
   // Target is misconfigured.
   for (const candidate of candidates) (opts.verifyRemote ?? assertRemoteIdentity)(candidate.targetId, candidate.targetPath, candidate.remoteUrl, knowledgeRoot);
   const workRoots = candidates.map((candidate) => ({ targetId: candidate.targetId, path: candidate.targetPath, access: accessFor(stage, candidate.targetId, task) }));
-  return { bindingRoot, knowledgeRoot, workRoots };
+  return { bindingRoot, knowledgeRoot, knowledgeRootName: selectedRoot.name, workRoots };
 }

@@ -415,6 +415,12 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       } catch (e) {
         return failResult(`cannot start ${role}: three-repo preflight failed: ${String(e)}`);
       }
+      // DR §5 env/launch: an installed run whose selection came back
+      // incomplete never reaches an adapter — the child would otherwise guard
+      // against a root it cannot name.
+      if (threeRepo.roots.knowledgeRoot && !threeRepo.roots.knowledgeRootName) {
+        return failResult(`cannot start ${role}: Knowledge root selection is incomplete (path without root name) — refusing to launch`);
+      }
     }
 
     if (opts.enforceRoleWorkflow) {
@@ -895,8 +901,12 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
             // ids ride separately so a guard can name the Target it refuses.
             ...(threeRepo ? { [GUARD_TARGET_WORK_ROOTS_ENV]: serializeGuardTargetWorkRoots(stageWorkRoots) } : {}),
             // The read-only Knowledge context, for prompts/hooks that need to
-            // name where module documents actually live.
-            ...(threeRepo?.roots.knowledgeRoot ? { STA_KNOWLEDGE_ROOT: threeRepo.roots.knowledgeRoot } : {}),
+            // name where module documents actually live. Path and name are one
+            // selection (DR §6): the child never re-resolves a default, and a
+            // name-bearing env is what marks a managed invocation for the guard.
+            ...(threeRepo?.roots.knowledgeRoot
+              ? { STA_KNOWLEDGE_ROOT: threeRepo.roots.knowledgeRoot, STA_KNOWLEDGE_ROOT_NAME: threeRepo.roots.knowledgeRootName }
+              : {}),
           },
           timeoutMs: opts.timeoutMs,
         });

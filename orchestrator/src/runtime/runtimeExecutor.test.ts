@@ -1144,7 +1144,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
       guards: () => NO_GUARDS,
       registry: new RuntimeRegistry([runtime]),
       packetBaseRevision: async () => FIXTURE_REVISION,
-      threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "write" }] } }),
+      threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, knowledgeRootName: "default", workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "write" }] } }),
     });
     const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-target", context: [] });
     expect(result.outcome.result).toBe("FAIL");
@@ -1175,11 +1175,59 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
     const task = { runtimeTask: scoped.runtimeTask, taskId: "T-target", classification, targetBindings: { targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }] } } as never;
     const executor = createRuntimeExecutor({ runtime, projectRoot: tmpProject(), moduleName: () => "sales-crm", guards: () => NO_GUARDS,
       packetBaseRevision: async () => FIXTURE_REVISION,
-      threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "write" }] } }), });
+      threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, knowledgeRootName: "default", workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "write" }] } }), });
     await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-target", context: [] });
     expect(runtime.requests[0]).toMatchObject({ cwd: scoped.targetRoot, bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "write" }] });
     // T-WG7 — the Knowledge root rides on the env so hooks/prompts can name it.
     expect(runtime.requests[0]!.env).toMatchObject({ STA_ROLE: "backend-engineer", STA_KNOWLEDGE_ROOT: scoped.knowledgeRoot });
+  });
+
+  it("V11 TASK-019 — a stage's env carries the selected root name beside the path (DR §5 env/launch)", async () => {
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const scoped = scopedFixture("T-root-name");
+    const task = { runtimeTask: scoped.runtimeTask, taskId: "T-root-name", classification, targetBindings: { targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }] } } as never;
+    const executor = createRuntimeExecutor({ runtime, projectRoot: tmpProject(), moduleName: () => "sales-crm", guards: () => NO_GUARDS,
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, knowledgeRootName: "work", workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "write" }] } }), });
+    await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-root-name", context: [] });
+    expect(runtime.requests[0]!.env).toMatchObject({ STA_KNOWLEDGE_ROOT: scoped.knowledgeRoot, STA_KNOWLEDGE_ROOT_NAME: "work" });
+  });
+
+  it("V11 TASK-019 — an installed run whose selection came back incomplete refuses to launch (fail-closed)", async () => {
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const scoped = scopedFixture("T-half-selection");
+    const task = { runtimeTask: scoped.runtimeTask, taskId: "T-half-selection", classification, targetBindings: { targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }] } } as never;
+    const executor = createRuntimeExecutor({ runtime, projectRoot: tmpProject(), moduleName: () => "sales-crm", guards: () => NO_GUARDS,
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, knowledgeRootName: undefined as unknown as string, workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "write" }] } }), });
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-half-selection", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toMatch(/Knowledge root selection is incomplete/);
+    expect(runtime.requests).toHaveLength(0);
+  });
+
+  it("V11 TASK-019 — two sessions on different roots get their own env pair and never each other's (DR §8.3)", async () => {
+    const selections = [
+      { name: "personal", knowledgeRoot: tmpProject() },
+      { name: "work", knowledgeRoot: tmpProject() },
+    ];
+    const pairs: { path?: string; name?: string }[] = [];
+    for (const selected of selections) {
+      const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
+      const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+      const scoped = scopedFixture(`T-isolation-${selected.name}`);
+      const task = { runtimeTask: scoped.runtimeTask, taskId: `T-isolation-${selected.name}`, classification, targetBindings: { targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }] } } as never;
+      const executor = createRuntimeExecutor({ runtime, projectRoot: tmpProject(), moduleName: () => "sales-crm", guards: () => NO_GUARDS,
+        packetBaseRevision: async () => FIXTURE_REVISION,
+        threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: selected.knowledgeRoot, knowledgeRootName: selected.name, workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "write" }] } }), });
+      await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: `T-isolation-${selected.name}`, context: [] });
+      expect(runtime.requests[0]!.env).toMatchObject({ STA_KNOWLEDGE_ROOT: selected.knowledgeRoot, STA_KNOWLEDGE_ROOT_NAME: selected.name });
+      pairs.push({ path: runtime.requests[0]!.env?.STA_KNOWLEDGE_ROOT, name: runtime.requests[0]!.env?.STA_KNOWLEDGE_ROOT_NAME });
+    }
+    expect(pairs[0]!.path).not.toBe(pairs[1]!.path);
+    expect(pairs[0]!.name).not.toBe(pairs[1]!.name);
   });
 
   it("T-V1-16 two-Target isolation: the guard env carries only the write-access root, never the read-only sibling", async () => {
@@ -1198,7 +1246,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
       moduleName: () => "sales-crm",
       guards: () => NO_GUARDS,
       packetBaseRevision: async () => FIXTURE_REVISION,
-      threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, workRoots } }),
+      threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, knowledgeRootName: "default", workRoots } }),
     });
     await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-two", context: [] });
     const writable = JSON.parse(runtime.requests[0]!.env!.STA_WRITABLE_WORK_ROOTS!);
@@ -1240,6 +1288,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
         roots: {
           bindingRoot: scoped.bindingRoot,
           knowledgeRoot: scoped.knowledgeRoot,
+          knowledgeRootName: "default",
           workRoots: [{ targetId: "web", path: scoped.targetRoot, access: "read" }],
         },
       }),
@@ -1290,7 +1339,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
         packetBaseRevision: async () => FIXTURE_REVISION,
         threeRepoTask: (_taskId, stage) => ({
           task,
-          roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, workRoots: rootsFor(stage) },
+          roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot, knowledgeRootName: "default", workRoots: rootsFor(stage) },
         }),
       });
 
@@ -1332,6 +1381,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
         roots: {
           bindingRoot: scoped.bindingRoot,
           knowledgeRoot: scoped.knowledgeRoot,
+          knowledgeRootName: "default",
           workRoots: [
             { targetId: "api", path: scoped.targetRoot, access: "write" },
             { targetId: "worker", path: second, access: "write" },
@@ -1385,6 +1435,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
         roots: {
           bindingRoot: scoped.bindingRoot,
           knowledgeRoot: knowledgeInsideSecond,
+          knowledgeRootName: "default",
           workRoots: [
             { targetId: "api", path: scoped.targetRoot, access: "write" },
             { targetId: "worker", path: second, access: "write" },
@@ -1413,6 +1464,7 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
         roots: {
           bindingRoot: scoped.bindingRoot,
           knowledgeRoot: scoped.knowledgeRoot,
+          knowledgeRootName: "default",
           workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "read" }],
         },
       }),

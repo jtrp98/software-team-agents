@@ -213,8 +213,20 @@ export function targetById(registry: TargetRegistry, targetId: string): TargetEn
   return target;
 }
 
+/** DT §5.1: a released tombstone is a finished transfer's record, not a usable
+ * Target. Its knowledge items stay as historical archive; nothing may bind,
+ * declare, run or reconcile against it here. */
+export function isReleasedTombstone(target: Pick<TargetEntry, "ownership_state">): boolean {
+  return target.ownership_state === "released";
+}
+
 export function assertTargetCanStartNewTask(registry: TargetRegistry, targetId: string): TargetEntry {
   const target = targetById(registry, targetId);
+  if (isReleasedTombstone(target)) {
+    throw new TargetRegistryError(
+      `Target "${targetId}" is a released tombstone in this root — its ownership moved through the human-gated transfer; bind the Target in its owning root`,
+    );
+  }
   if (target.status === "retired") throw new TargetRegistryError(`Target "${targetId}" is retired and cannot be used for a new task`);
   return target;
 }

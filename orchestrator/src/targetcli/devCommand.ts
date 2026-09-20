@@ -494,7 +494,7 @@ async function runRoleSession(role: WorkspaceRole, options: RoleRunOptions): Pro
       runtimeCommand(ctx.runtime),
       [],
       ctx.workspaceRoot,
-      launchEnv(role, process.env, ctx.knowledge?.knowledgeRoot, ctx.target?.targetRoot, contextCommand, ctx.targetWorkRoots),
+      launchEnv(role, process.env, ctx.knowledge?.knowledgeRoot, ctx.target?.targetRoot, contextCommand, ctx.targetWorkRoots, ctx.knowledge?.rootName),
     );
   } finally {
     const record = options.recordSession ?? recordInteractiveSession;

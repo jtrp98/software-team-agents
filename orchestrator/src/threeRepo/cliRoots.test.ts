@@ -45,6 +45,7 @@ const PR = "/project/root";
 const workRoots = (rs: ThreeRepoRequestRoots["workRoots"]): ThreeRepoRequestRoots => ({
   bindingRoot: "/fw",
   knowledgeRoot: "/kn",
+  knowledgeRootName: "default",
   workRoots: rs,
 });
 

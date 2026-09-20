@@ -1695,6 +1695,41 @@ describe("role workspace architecture (T-ROLE)", () => {
     expect(fs.existsSync(installationPath)).toBe(false);
   });
 
+  it("V11 TASK-019 — two sessions on different named roots launch with their own Knowledge env pair (DR §8.3)", async () => {
+    const base = tmpRoot("two-root-launch");
+    const personal = makeKnowledgeRepo();
+    const work = makeKnowledgeRepo();
+    const installationPath = path.join(base, "installation.yaml");
+    write(
+      base,
+      "installation.yaml",
+      `schema_version: 2\nknowledge_root: ${JSON.stringify(personal)}\ndefault_root: personal\nknowledge_roots:\n  personal: ${JSON.stringify(personal)}\n  work: ${JSON.stringify(work)}\n`,
+    );
+    const target = makeTarget();
+    const fw = fakeFramework("1.0.0", FW_V1_FILES);
+    expect((await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: installationPath }))).code).toBe(0);
+
+    const launches: { rootName?: string; env?: NodeJS.ProcessEnv }[] = [];
+    for (const rootName of ["personal", "work"] as const) {
+      let env: NodeJS.ProcessEnv | undefined;
+      const code = await runSession({
+        targetRoot: target,
+        templatesDir: path.join(fw, "templates"),
+        installationConfigPath: installationPath,
+        rootName,
+        probe: () => ({ available: true }),
+        launch: (_cmd, _args, _cwd, launched) => { env = launched; return Promise.resolve(0); },
+      });
+      expect(code, rootName).toBe(0);
+      launches.push({ rootName, env });
+    }
+    expect(launches[0]!.env?.STA_KNOWLEDGE_ROOT?.toLowerCase()).toBe(fs.realpathSync.native(personal).toLowerCase());
+    expect(launches[0]!.env?.STA_KNOWLEDGE_ROOT_NAME).toBe("personal");
+    expect(launches[1]!.env?.STA_KNOWLEDGE_ROOT?.toLowerCase()).toBe(fs.realpathSync.native(work).toLowerCase());
+    expect(launches[1]!.env?.STA_KNOWLEDGE_ROOT_NAME).toBe("work");
+    expect(launches[0]!.env?.STA_KNOWLEDGE_ROOT).not.toBe(launches[1]!.env?.STA_KNOWLEDGE_ROOT);
+  });
+
   it("T-V5-010: init reports the shared runtime prerequisite without refusing initialization", () => {
     const target = makeTarget();
     const fw = fakeFramework("1.0.0", FW_V1_FILES);
