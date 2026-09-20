@@ -17,7 +17,10 @@
  * Determinism on a configured machine: every child runs with
  * STA_INSTALLATION_CONFIG pointed inside the temp environment, so the
  * machine's real installation.yaml is never consulted (see
- * `defaultInstallationConfigPath`). Paths deliberately contain spaces — the
+ * `defaultInstallationConfigPath`). STA_TEST_HARNESS=1 rides along as the
+ * explicit harness contract that lets the children accept that override (the
+ * internal test/E2E channel of DR §9, package B — undeclared production
+ * invocations refuse it). Paths deliberately contain spaces — the
  * quoting is part of what T-V1-07 asks this script to prove on Windows.
  *
  * The full launch of a real agent against real credentials is T-V1-15's
@@ -158,7 +161,9 @@ try {
   fs.writeFileSync(path.join(targetRepo, "src", "index.ts"), 'export const app = () => "hello";\n');
 
   const installationConfig = path.join(stage, "installation.yaml");
-  const baseEnv = { ...process.env, STA_INSTALLATION_CONFIG: installationConfig };
+  // STA_TEST_HARNESS is the explicit packaged-E2E contract (DR §9, package B):
+  // the child CLI refuses an undeclared STA_INSTALLATION_CONFIG override.
+  const baseEnv = { ...process.env, STA_INSTALLATION_CONFIG: installationConfig, STA_TEST_HARNESS: "1" };
 
   // --- 3 · version consistency ----------------------------------------------
   for (const [label, bin] of [["sta", staBin], ["software-team-agents", targetBin]]) {

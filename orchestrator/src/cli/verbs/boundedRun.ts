@@ -32,7 +32,7 @@ import { RUNTIME_IDS, type RuntimeId } from "../../runtime/runtimeSupport.js";
 import type { RuntimeAutonomy } from "../../runtime/runtimeAdapter.js";
 import { loadStaConfig, StaConfigMissingError } from "../../packaging/staConfig.js";
 import { contentHash, stableHash } from "../../artifacts/executionPacket.js";
-import { defaultInstallationConfigPath, loadInstallationConfig, type InstallationConfig } from "../../threeRepo/installation.js";
+import { defaultInstallationConfigPath, installationConfigOverride, loadInstallationConfig, type InstallationConfig } from "../../threeRepo/installation.js";
 import { loadTargetRegistry, TARGET_TYPE_ROLES, type TargetRegistry, TargetRegistryError } from "../../threeRepo/targets.js";
 import { loadLocalTargetMapping, type ResolvedLocalTarget } from "../../threeRepo/localTargets.js";
 import { resolveModuleTargets } from "../../threeRepo/moduleTargetResolver.js";
@@ -360,7 +360,7 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
   const runtimeRegistry: RuntimeRegistry = (dependencies.createRuntimeRegistry ?? createProductionRuntimeRegistry)(args.projectRoot);
   const defaultRuntimeId = args.runtime ?? DEFAULT_RUNTIME_ID;
 
-  const installationConfigPath = process.env.STA_INSTALLATION_CONFIG || undefined;
+  const installationConfigPath = installationConfigOverride();
   let installation: InstallationConfig | undefined;
   try {
     installation = loadInstallationConfig(installationConfigPath);

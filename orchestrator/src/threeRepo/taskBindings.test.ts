@@ -16,6 +16,9 @@ import { assertBindingsImmutable, uniqueBoundTargetIds, validateNewTaskBindings,
 import { preflightThreeRepoTask } from "./preflight.js";
 import { figmaPatConfigured } from "./identities.js";
 import type { TargetRegistry } from "./targets.js";
+import { declareInstallationConfigOverrideChannelForTest } from "./installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 const registry: TargetRegistry = {
   schema_version: 1,

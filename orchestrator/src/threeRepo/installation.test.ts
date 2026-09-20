@@ -1,13 +1,16 @@
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { defaultInstallationConfigPath } from "./installation.js";
+import { declareInstallationConfigOverrideChannelForTest, defaultInstallationConfigPath } from "./installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 /**
  * The installation-config default path is what every unconfigured caller
  * resolves state through (`resolveRoots`, the target CLI, status). Its one
- * env override is the isolation channel packaged E2E runs depend on — if it
- * stopped being honoured there, an E2E on a configured machine would silently
- * read that machine's real Knowledge root.
+ * env override is the internal test/E2E channel packaged E2E runs depend on
+ * (DR §9, package B) — this suite declares the channel explicitly, because a
+ * production invocation finding the env set without a harness contract is
+ * refused rather than silently reading another installation.
  */
 const ENV_KEY = "STA_INSTALLATION_CONFIG";
 const original = process.env[ENV_KEY];

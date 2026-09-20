@@ -15,16 +15,16 @@ import * as fs from "node:fs";
 import { AgentStage } from "../types.js";
 import type { PersistedTask } from "../store/taskStore.js";
 import type { ThreeRepoRequestRoots } from "./preflight.js";
-import { defaultInstallationConfigPath, loadInstallationConfig } from "./installation.js";
+import { defaultInstallationConfigPath, installationConfigOverride, loadInstallationConfig } from "./installation.js";
 import { preflightThreeRepoTask } from "./preflight.js";
 import { resolveFrameworkRoot } from "../targetcli/roots.js";
 
 /** The one bit of task state these resolvers read — a `SqliteTaskStore` satisfies it. */
 export type TaskLookup = { loadTask(taskId: string): PersistedTask | null };
 
-/** `process.env.STA_INSTALLATION_CONFIG`, normalised to `undefined` when unset/empty. */
-const installationConfigPath = (): string | undefined =>
-  process.env.STA_INSTALLATION_CONFIG || undefined;
+/** The `STA_INSTALLATION_CONFIG` override, refused outside a declared test/E2E
+ * harness and normalized to `undefined` when unset/empty. */
+const installationConfigPath = (): string | undefined => installationConfigOverride();
 
 export class WritableWorkRootResolutionError extends Error {}
 

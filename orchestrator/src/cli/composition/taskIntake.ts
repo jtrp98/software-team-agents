@@ -8,7 +8,7 @@ import { resolveContextDocsRoot, resolveFrameworkRoot } from "../../targetcli/ro
 import { readModuleDoc } from "../../agents/moduleDocs.js";
 import { readWorkPlan } from "../../docs/planGraph.js";
 import { preflightThreeRepoTask } from "../../threeRepo/preflight.js";
-import { loadInstallationConfig } from "../../threeRepo/installation.js";
+import { installationConfigOverride, loadInstallationConfig } from "../../threeRepo/installation.js";
 import { resolveModuleTargets } from "../../threeRepo/moduleTargetResolver.js";
 import { loadTargetRegistry } from "../../threeRepo/targets.js";
 import {
@@ -30,7 +30,7 @@ import { CliUsageError, type CliArgs } from "../../cli.js";
  */
 export function contractRootForTask(projectRoot: string, bindings: TargetBindings): string {
   return hasTargetBindings(bindings) ? resolveFrameworkRoot() : projectRoot;
-}
+}
 
 /** Optional phase-tier metadata is advisory input to routing, never a runtime gate. */
 export function plannedTier(args: CliArgs, taskId: string): string | undefined {
@@ -41,7 +41,7 @@ export function plannedTier(args: CliArgs, taskId: string): string | undefined {
   } catch {
     return undefined;
   }
-}
+}
 
 /** Never called without a terminal: CI/headless execution must not read stdin. */
 export function promptForCamp(defaultRuntimeId: RuntimeId): RuntimeId {
@@ -50,7 +50,7 @@ export function promptForCamp(defaultRuntimeId: RuntimeId): RuntimeId {
   const read = fs.readSync(0, input, 0, input.length, null);
   const selected = input.toString("utf8", 0, read).trim();
   return (RUNTIME_IDS as readonly string[]).includes(selected) ? selected as RuntimeId : defaultRuntimeId;
-}
+}
 
 /**
  * Resolves the Target side of `contract globs ∩ Target work roots` before
@@ -69,8 +69,7 @@ export function runtimeTaskWorkRoots(
   }
 
   const preview = { taskId, classification, targetBindings: args.targetBindings };
-  const installationConfigPath =
-    process.env.STA_INSTALLATION_CONFIG || undefined;
+  const installationConfigPath = installationConfigOverride();
   const roots: RuntimeTaskWorkRoot[] = [];
   for (const stage of stages) {
     // Knowledge-only stages deliberately have no Target work roots. UX identity
@@ -103,7 +102,7 @@ export function runtimeTaskWorkRoots(
     }
   }
   return roots;
-}
+}
 
 /**
  * Resolves the orchestrator to drive: resumes the stored task with --resume,
@@ -132,12 +131,11 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string):
   // Do this before a durable row is written, so malformed/retired/unknown ids
   // leave no partial task history behind.
   const isCodeTask = classification.pipeline.some((stage) => stage === AgentStage.BACKEND_ENGINEER || stage === AgentStage.FRONTEND_ENGINEER);
-  // `STA_INSTALLATION_CONFIG` lets a test (or an unusual setup) point the
-  // mode check at a specific file instead of the machine's real one — without
-  // it, merely having configured an installation once flips every CLI test that
-  // creates a legacy code task.
-  const installationConfigPath =
-    process.env.STA_INSTALLATION_CONFIG || undefined;
+  // The installation override is the test/E2E channel (DR §9B): a declared
+  // harness points the mode check at a specific file, and an undeclared
+  // production invocation is refused by `installationConfigOverride` instead
+  // of silently reading the machine's real installation.
+  const installationConfigPath = installationConfigOverride();
   let moduleScope: TaskBindingModuleScope | undefined;
   const validateInstalledBindings = (): void => {
     const installation = loadInstallationConfig(installationConfigPath);
@@ -197,4 +195,4 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string):
   });
   void created;
   return registry.open(taskId);
-}
+}

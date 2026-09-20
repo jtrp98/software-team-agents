@@ -3,6 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveContextDocsRoot } from "./roots.js";
+import { declareInstallationConfigOverrideChannelForTest } from "../threeRepo/installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 /**
  * T-V6-006: `resolveContextDocsRoot` must resolve the Knowledge root even

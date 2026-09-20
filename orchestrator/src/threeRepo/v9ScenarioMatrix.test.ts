@@ -16,6 +16,9 @@ import type { TargetRegistry } from "./targets.js";
 import { parseModuleTargets } from "../docs/moduleTargets.js";
 import { detectTargetProfileEvidence } from "../targetcli/targetProfile.js";
 import { resolveWritableWorkRoots } from "./cliRoots.js";
+import { declareInstallationConfigOverrideChannelForTest } from "./installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 function tmpDir(prefix = "v9-scenario-"): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));

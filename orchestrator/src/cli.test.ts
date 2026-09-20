@@ -26,6 +26,9 @@ import { RuntimeRegistry } from "./runtime/runtimeRegistry.js";
 import { LocalWorkspace } from "./runtime/localWorkspace.js";
 import type { RuntimeAdapter, RuntimeAgentRequest } from "./runtime/runtimeAdapter.js";
 import { RuntimeCapability } from "./runtime/runtimeCapabilities.js";
+import { declareInstallationConfigOverrideChannelForTest } from "./threeRepo/installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 // T-V6-006: resolveContextDocsRoot now falls back to installation.yaml when
 // STA_KNOWLEDGE_ROOT is unset, so every fixture in this file that

@@ -132,6 +132,9 @@ describe("parseBoundedRunArgs", () => {
 });
 
 import { boundedRunProject as project } from "./boundedRunFixture.testSupport.js";
+import { declareInstallationConfigOverrideChannelForTest } from "../../threeRepo/installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 export function completingAdapter(targetRoot: string): MockRuntimeAdapter {
   let self: MockRuntimeAdapter;

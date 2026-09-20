@@ -1,11 +1,11 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
-  "additionalProperties": false,
-  "required": ["schema_version", "knowledge_root"],
-  "properties": {
-    "schema_version": { "const": 1 },
-    "knowledge_root": { "type": "string", "minLength": 1 },
+  "oneOf": [
+    { "$ref": "#/definitions/installationV1" },
+    { "$ref": "#/definitions/installationV2" }
+  ],
+  "definitions": {
     "identities": {
       "description": "Declared human identities binding external design accounts together (T-UX3). Emails only — a token/PAT must never be written here; it lives in the environment or the runtime's credential store.",
       "type": "object",
@@ -14,6 +14,32 @@
       "properties": {
         "figma_email": { "type": "string", "minLength": 3, "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$" },
         "claude_email": { "type": "string", "minLength": 3, "pattern": "^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$" }
+      }
+    },
+    "installationV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "knowledge_root"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "knowledge_root": { "type": "string", "minLength": 1 },
+        "identities": { "$ref": "#/definitions/identities" }
+      }
+    },
+    "installationV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "knowledge_root", "default_root", "knowledge_roots"],
+      "properties": {
+        "schema_version": { "const": 2 },
+        "knowledge_root": { "type": "string", "minLength": 1 },
+        "default_root": { "type": "string", "minLength": 1 },
+        "knowledge_roots": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "type": "string", "minLength": 1 }
+        },
+        "identities": { "$ref": "#/definitions/identities" }
       }
     }
   }

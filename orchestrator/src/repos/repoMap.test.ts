@@ -4,6 +4,9 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import { RepoMapError, checkRepoMap, hasRepoMap, loadRepoMap, loadStageRoots, reposPath, stageRoots } from "./repoMap.js";
+import { declareInstallationConfigOverrideChannelForTest } from "../threeRepo/installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 function tmpDir(prefix = "orchestrator-repos-"): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));

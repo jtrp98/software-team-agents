@@ -10,11 +10,35 @@ export interface InstallationIdentities {
   claude_email: string;
 }
 
-export interface InstallationConfig {
+export interface InstallationConfigV1 {
   schema_version: 1;
   knowledge_root: string;
   /** Declared design-account identities. Optional: installs that never run the UX/UI stage need none. */
   identities?: InstallationIdentities;
+}
+
+export interface InstallationConfigV2 {
+  schema_version: 2;
+  /** Compatibility alias of the default root — never an independent selector (DR §2.3). */
+  knowledge_root: string;
+  default_root: string;
+  knowledge_roots: Record<string, string>;
+  identities?: InstallationIdentities;
+}
+
+export type InstallationConfig = InstallationConfigV1 | InstallationConfigV2;
+
+/** A root name is a machine-local label (DR §2.1): lowercase CLI-safe slug,
+ * deterministic across YAML, Windows paths and shell quoting. */
+export const KNOWLEDGE_ROOT_NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
+
+/** The loader's normalized view of the named roots: exactly one default and
+ * one path per name, semantic invariants already enforced. */
+export interface NormalizedKnowledgeRoots {
+  defaultRoot: string;
+  roots: Readonly<Record<string, string>>;
+  /** Which on-disk schema the view came from; a v1 file is never rewritten to v2 at read time. */
+  schemaVersion: 1 | 2;
 }
 
 export class InstallationConfigError extends Error {}
@@ -67,20 +91,114 @@ function validator(): ValidateFunction {
   return compiled;
 }
 
-export function defaultInstallationConfigPath(platform = process.platform, localAppData = process.env.LOCALAPPDATA, home = os.homedir()): string {
-  // Isolation channel for tests and packaged-E2E runs (`STA_INSTALLATION_CONFIG`,
-  // already honoured by cli.ts's explicit-config paths): when set, every reader —
-  // including resolveRoots and the target CLI's default-path lookups — resolves
-  // installation state from here instead of the machine's real binding. Without
-  // this one hook, an E2E on a configured machine would silently read that
-  // machine's real Knowledge root and cease to be deterministic.
-  const override = process.env.STA_INSTALLATION_CONFIG;
-  if (override && override.length > 0) return path.resolve(override);
+/** Ajv's additionalProperties message does not name the offending key; the
+ * name is what makes an unknown-property reject diagnosable. */
+function formatSchemaErrors(validate: ValidateFunction): string {
+  return (validate.errors ?? [])
+    .map((e) => {
+      const extra = (e.params as { additionalProperty?: string } | undefined)?.additionalProperty;
+      return `${e.instancePath || "(root)"} ${e.message}${extra ? ` (${extra})` : ""}`;
+    })
+    .join("; ");
+}
+
+const TEST_HARNESS_ENV = "STA_TEST_HARNESS";
+let overrideChannelDeclaredForTest = false;
+
+/** Declares the `STA_INSTALLATION_CONFIG` override channel for the calling
+ * test harness (DR §9, package B). A production invocation that finds the env
+ * set without this declaration or the packaged-E2E marker is refused instead
+ * of silently reading another installation. */
+export function declareInstallationConfigOverrideChannelForTest(): void {
+  overrideChannelDeclaredForTest = true;
+}
+
+export function resetInstallationConfigOverrideChannelForTest(): void {
+  overrideChannelDeclaredForTest = false;
+}
+
+function canonicalInstallationConfigPath(platform = process.platform, localAppData = process.env.LOCALAPPDATA, home = os.homedir()): string {
   if (platform === "win32") {
     if (!localAppData) throw new InstallationConfigError("LOCALAPPDATA is unavailable; cannot resolve installation config path");
     return path.join(localAppData, "software-team-agents", "installation.yaml");
   }
   return path.join(home, ".config", "software-team-agents", "installation.yaml");
+}
+
+/** The one reader of the `STA_INSTALLATION_CONFIG` override, shared by every
+ * caller that resolves installation state. Undefined when unset; refused
+ * fail-closed when set outside a declared test/E2E harness — the channel is
+ * deterministic isolation, not a security boundary, so the refusal exists to
+ * stop an accidental second installation model, not an attacker. */
+export function installationConfigOverride(): string | undefined {
+  const override = process.env.STA_INSTALLATION_CONFIG;
+  if (!override || override.length === 0) return undefined;
+  if (!overrideChannelDeclaredForTest && process.env[TEST_HARNESS_ENV] !== "1") {
+    let canonical: string;
+    try {
+      canonical = canonicalInstallationConfigPath();
+    } catch {
+      canonical = "the platform's canonical installation config path";
+    }
+    throw new InstallationConfigError(
+      `refusing the STA_INSTALLATION_CONFIG override "${path.resolve(override)}": this env var is an internal test/E2E channel, not a production setting — use the canonical installation config at ${canonical}`,
+    );
+  }
+  return path.resolve(override);
+}
+
+export function defaultInstallationConfigPath(platform = process.platform, localAppData = process.env.LOCALAPPDATA, home = os.homedir()): string {
+  const override = installationConfigOverride();
+  if (override) return override;
+  return canonicalInstallationConfigPath(platform, localAppData, home);
+}
+
+/** Case-folded on Windows because NTFS compares paths case-insensitively by
+ * default — an exact-match alias check there would reject the same physical
+ * root aliased under a different case (DR §2.3). Pure string work: no fs
+ * access, so the invariants hold identically in tests and in production. */
+function canonicalPathForComparison(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+/** Enforces what draft-07 cannot express across properties (DR §2.3): the
+ * default exists, `knowledge_root` aliases it, names honor the slug contract,
+ * and no canonical path is registered under two names. */
+function assertInstallationInvariants(config: InstallationConfig): void {
+  if (config.schema_version !== 2) return;
+  const names = Object.keys(config.knowledge_roots);
+  for (const name of names) {
+    if (!KNOWLEDGE_ROOT_NAME_PATTERN.test(name)) {
+      throw new InstallationConfigError(`installation config is invalid: knowledge root name "${name}" must match ${KNOWLEDGE_ROOT_NAME_PATTERN.source}`);
+    }
+  }
+  const defaultPath = config.knowledge_roots[config.default_root];
+  if (defaultPath === undefined) {
+    throw new InstallationConfigError(`installation config is invalid: default_root "${config.default_root}" is not a knowledge_roots entry (${names.join(", ")})`);
+  }
+  if (canonicalPathForComparison(config.knowledge_root) !== canonicalPathForComparison(defaultPath)) {
+    throw new InstallationConfigError(`installation config is invalid: knowledge_root is the compatibility alias of the default root "${config.default_root}" (${defaultPath}), not an independent selector`);
+  }
+  const byPath = new Map<string, string>();
+  for (const name of names) {
+    const key = canonicalPathForComparison(config.knowledge_roots[name] as string);
+    const owner = byPath.get(key);
+    if (owner !== undefined) {
+      throw new InstallationConfigError(`installation config is invalid: knowledge roots "${owner}" and "${name}" point at the same path (${config.knowledge_roots[name] as string})`);
+    }
+    byPath.set(key, name);
+  }
+}
+
+/** Normalizes a loaded config to its named-root view (DR §2.2). A v1 file
+ * becomes a synthetic `default` root in memory only — writing v2 happens at
+ * the first named-root operation, never at read time. */
+export function normalizeKnowledgeRoots(config: InstallationConfig): NormalizedKnowledgeRoots {
+  if (config.schema_version === 1) {
+    return { defaultRoot: "default", roots: { default: config.knowledge_root }, schemaVersion: 1 };
+  }
+  return { defaultRoot: config.default_root, roots: { ...config.knowledge_roots }, schemaVersion: 2 };
 }
 
 export function loadInstallationConfig(configPath = defaultInstallationConfigPath()): InstallationConfig {
@@ -91,8 +209,10 @@ export function loadInstallationConfig(configPath = defaultInstallationConfigPat
     throw new InstallationConfigError(`cannot read installation config ${configPath}: ${error instanceof Error ? error.message : String(error)}`);
   }
   const validate = validator();
-  if (!validate(parsed)) throw new InstallationConfigError(`installation config is invalid: ${(validate.errors ?? []).map((e) => `${e.instancePath || "(root)"} ${e.message}`).join("; ")}`);
-  return parsed as InstallationConfig;
+  if (!validate(parsed)) throw new InstallationConfigError(`installation config is invalid: ${formatSchemaErrors(validate)}`);
+  const config = parsed as InstallationConfig;
+  assertInstallationInvariants(config);
+  return config;
 }
 
 export function configureKnowledgeRoot(knowledgeRoot: string, configPath = defaultInstallationConfigPath(), frameworkRoot?: string): InstallationConfig {
@@ -190,7 +310,7 @@ export function configureIdentities(
   const validate = validator();
   if (!validate(next)) {
     throw new InstallationConfigError(
-      `identities are invalid: ${(validate.errors ?? []).map((e) => `${e.instancePath || "(root)"} ${e.message}`).join("; ")}`,
+      `identities are invalid: ${formatSchemaErrors(validate)}`,
     );
   }
 

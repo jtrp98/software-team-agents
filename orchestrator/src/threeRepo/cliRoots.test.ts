@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentStage } from "../types.js";
 import type { ThreeRepoRequestRoots } from "./preflight.js";
+import { declareInstallationConfigOverrideChannelForTest } from "./installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 /**
  * The extracted three-repo resolvers, tested directly.
@@ -14,7 +17,9 @@ const loadInstallationConfig = vi.fn();
 const preflightThreeRepoTask = vi.fn();
 
 vi.mock("./installation.js", () => ({
+  declareInstallationConfigOverrideChannelForTest: () => {},
   defaultInstallationConfigPath: () => "__sta_cli_roots_missing_installation__.yaml",
+  installationConfigOverride: () => process.env.STA_INSTALLATION_CONFIG || undefined,
   loadInstallationConfig: (...a: unknown[]) => loadInstallationConfig(...a),
 }));
 vi.mock("./preflight.js", () => ({

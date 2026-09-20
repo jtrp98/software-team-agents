@@ -22,6 +22,9 @@ import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { latestExecutionPacketPath, readExecutionPacket } from "../state/runtimeArtifacts.js";
 import type { ModelTierPolicy } from "./modelTiers.js";
 import { SOURCE_OF_TRUTH_SENTENCE } from "../codeintel/resolver.js";
+import { declareInstallationConfigOverrideChannelForTest } from "../threeRepo/installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 // T-V6-006: `env: {}` (used below) now falls through to installation.yaml
 // when STA_KNOWLEDGE_ROOT is unset — isolate it from whatever is
