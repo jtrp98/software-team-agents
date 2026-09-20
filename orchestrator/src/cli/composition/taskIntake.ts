@@ -8,8 +8,15 @@ import { resolveContextDocsRoot, resolveFrameworkRoot } from "../../targetcli/ro
 import { readModuleDoc } from "../../agents/moduleDocs.js";
 import { readWorkPlan } from "../../docs/planGraph.js";
 import { preflightThreeRepoTask } from "../../threeRepo/preflight.js";
-import { installationConfigOverride, loadInstallationConfig } from "../../threeRepo/installation.js";
-import { resolveInstallationRoot } from "../../threeRepo/rootSelector.js";
+import {
+  defaultInstallationConfigPath,
+  installationConfigOverride,
+  loadInstallationConfig,
+  InstallationConfigError,
+} from "../../threeRepo/installation.js";
+import { assertRootMatchesFrozenIdentity, resolveInstallationRoot } from "../../threeRepo/rootSelector.js";
+import type { KnowledgeRootIdentity } from "../../store/taskStore.js";
+import type { TaskLookup } from "../../threeRepo/cliRoots.js";
 import { resolveModuleTargets } from "../../threeRepo/moduleTargetResolver.js";
 import { loadTargetRegistry } from "../../threeRepo/targets.js";
 import {
@@ -112,10 +119,13 @@ export function runtimeTaskWorkRoots(
  * task id from scratch would re-pay for every stage that already ran, so it
  * has to be asked for explicitly.
  */
-export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orchestrator {
+export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string, store: TaskLookup): Orchestrator {
   const exists = registry.has(taskId);
   if (args.resume) {
     if (!exists) throw new CliUsageError(`--resume: task ${taskId} is not in this store`);
+    // DR §5 invariant 5: a resume continues on the root frozen at intake; an
+    // explicit --root is a drift assertion against it, never a re-selection.
+    assertRootMatchesFrozenIdentity(store.loadTask(taskId)?.knowledgeRoot, args.rootName, installationConfigOverride());
     const orchestrator = registry.open(taskId);
     console.log(
       `[orchestrator] resumed task ${taskId} at ${orchestrator.machine.current} ` +
@@ -138,6 +148,20 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string):
   // production invocation is refused by `installationConfigOverride` instead
   // of silently reading the machine's real installation.
   const installationConfigPath = installationConfigOverride();
+  // DR §5: a task freezes its Knowledge-root identity at intake — resumes,
+  // later stages and drift assertions answer to this record, not to whatever
+  // the installation's default says by then. A missing installation file is
+  // the legacy single-repo mode with nothing to freeze; a file that exists
+  // but cannot be read must not pass for legacy (DR §3 rule 6).
+  let frozenKnowledgeRoot: KnowledgeRootIdentity | null = null;
+  try {
+    const installation = loadInstallationConfig(installationConfigPath);
+    const selected = resolveInstallationRoot(installation, args.rootName);
+    frozenKnowledgeRoot = { name: selected.name, path: selected.path };
+  } catch (error) {
+    const resolvedConfigPath = installationConfigPath ?? defaultInstallationConfigPath();
+    if (!(error instanceof InstallationConfigError && !fs.existsSync(resolvedConfigPath))) throw error;
+  }
   let moduleScope: TaskBindingModuleScope | undefined;
   const validateInstalledBindings = (): void => {
     const installation = loadInstallationConfig(installationConfigPath);
@@ -197,6 +221,7 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string):
     moduleName: args.module,
     targetWorkRoots: runtimeTaskWorkRoots(args, taskId, classification, moduleScope),
     changeAwareVerification: !args.noQaOptimization,
+    knowledgeRoot: frozenKnowledgeRoot,
   });
   void created;
   return registry.open(taskId);

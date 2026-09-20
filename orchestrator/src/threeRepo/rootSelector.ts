@@ -9,6 +9,7 @@ import {
   InstallationConfigError,
   type InstallationConfig,
 } from "./installation.js";
+import type { KnowledgeRootIdentity } from "../store/taskStore.js";
 
 /**
  * The central Knowledge-root selector (DR §3). Every command resolves its
@@ -129,4 +130,47 @@ export function resolveSelectedKnowledgeRootOrLegacy(projectRoot: string, reques
     throw error;
   }
   return resolveInstallationRoot(config, requestedName).path;
+}
+
+/** DR §5 invariant 5 — a task frozen at intake resumes on its frozen root.
+ * The frozen name is re-resolved through the installation (never the fresh
+ * default), the canonical path must still match, and an explicit `--root` is
+ * a drift assertion that must name the very same identity. A frozen task
+ * whose installation file vanished refuses fail-closed: without it, no
+ * selection can be verified at all. `frozen == null` (legacy task, no
+ * installation at intake) is untouched. */
+export function assertRootMatchesFrozenIdentity(
+  frozen: KnowledgeRootIdentity | null | undefined,
+  requestedName: string | undefined,
+  configPath?: string,
+): void {
+  if (!frozen) return;
+  let config: InstallationConfig;
+  try {
+    config = loadInstallationConfig(configPath);
+  } catch (error) {
+    throw new KnowledgeRootSelectionError(
+      `the task is frozen to Knowledge root "${frozen.name}" (${frozen.path}) but the installation config cannot confirm it: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  let frozenSelected: SelectedKnowledgeRoot;
+  try {
+    frozenSelected = resolveInstallationRoot(config, frozen.name);
+  } catch (error) {
+    throw new KnowledgeRootSelectionError(
+      `the task is frozen to Knowledge root "${frozen.name}" (${frozen.path}) but the installation config cannot confirm it: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (canonicalPathForComparison(frozenSelected.path) !== canonicalPathForComparison(frozen.path)) {
+    throw new KnowledgeRootSelectionError(
+      `Knowledge root drift: the task is frozen to root "${frozen.name}" (${frozen.path}) but that name now resolves to ${frozenSelected.path} — a frozen task never re-selects; start a new task for another root`,
+    );
+  }
+  if (requestedName === undefined || requestedName === frozen.name) return;
+  const requested = resolveInstallationRoot(config, requestedName);
+  if (canonicalPathForComparison(requested.path) !== canonicalPathForComparison(frozen.path)) {
+    throw new KnowledgeRootSelectionError(
+      `Knowledge root drift: the task is frozen to root "${frozen.name}" (${frozen.path}) but --root ${requestedName} resolves to "${requested.name}" (${requested.path}) — --root on a resume is an assertion, never a re-selection; start a new task for another root`,
+    );
+  }
 }

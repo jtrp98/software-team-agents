@@ -62,7 +62,7 @@ afterEach(async () => {
       fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }),
     ),
   );
-}, 30_000); // [amended R10] the three-repo fixtures hold ~6 tmp roots each; Windows rm needs more than the 10s default
+}, 90_000); // [amend R11] same cleanup hook as the R10 amendment (10s -> 30s -> 90s): Windows rm EPERM/EBUSY retries on freshly written fixture .git objects can exceed 30s under antivirus/load; product code holds no handles here (bisected: fails identically with the pre-R11 preflight)
 
 
 describe("parseBoundedRunArgs", () => {

@@ -796,15 +796,18 @@ export async function runCli(argv: string[], defaultProjectRoot: string, depende
       console.log(`[orchestrator] task ${taskId} was paused — resuming clears the pause and continues.`);
     }
 
-    const orchestrator = openTask(registry, args, taskId);
-    for (const targetRoot of resolveQaWorkRoots(args.projectRoot, taskId, store, args.module)) {
+    const orchestrator = openTask(registry, args, taskId, store);
+    // DR §5: the run-start checks answer to the frozen root too, not to a
+    // fresh default read — the frozen row exists right after intake.
+    const runRootName = args.rootName ?? store.loadTask(taskId)?.knowledgeRoot?.name;
+    for (const targetRoot of resolveQaWorkRoots(args.projectRoot, taskId, store, args.module, runRootName)) {
       assertNoWorkspaceRunLock(args.projectRoot, targetRoot.path);
     }
 
     // V10 TASK-015 — ask-before-indexing at run start (ADR-006 Option A);
     // headless stdin never asks, and the hook itself never blocks the run.
     await askCodeIntelConsentAtRunStart(
-      resolveQaWorkRoots(args.projectRoot, taskId, store, args.module).flatMap((root) =>
+      resolveQaWorkRoots(args.projectRoot, taskId, store, args.module, runRootName).flatMap((root) =>
         root.targetId ? [{ targetId: root.targetId, path: root.path }] : []),
       { interactive: process.stdin.isTTY === true },
     );

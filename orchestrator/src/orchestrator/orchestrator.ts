@@ -35,7 +35,7 @@ import { verdictEventFor, type DomainEventMap } from "../events/domainEvents.js"
 import { describeEvent } from "../audit/auditTrail.js";
 import { assertIndependentVerdict } from "../review/reviewSeparation.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";
-import { TaskNotFoundError, newPersistedTask, type PersistedTask, type TaskStore } from "../store/taskStore.js";
+import { TaskNotFoundError, newPersistedTask, type KnowledgeRootIdentity, type PersistedTask, type TaskStore } from "../store/taskStore.js";
 import type { TargetBindings } from "../threeRepo/taskBindings.js";
 import { Environment } from "../environment/environment.js";
 import { type StructuredFailure } from "./failure.js";
@@ -132,6 +132,8 @@ export interface OrchestratorOptions {
   environment?: Environment;
   /** Immutable Target identity captured on task creation. */
   targetBindings?: TargetBindings;
+  /** Knowledge-root identity frozen at intake (DR §5); null when no installation file existed. */
+  knowledgeRoot?: KnowledgeRootIdentity | null;
   /** Deterministic execution contract built by TaskRegistry before persistence. */
   runtimeTask?: RuntimeTask | null;
   /** Validated business intake used to select confirmed-input versus interactive BA mode. */
@@ -209,6 +211,13 @@ export class Orchestrator {
   /** True once devops's "prepare" run has completed at READY_TO_DEPLOY. See `isAgentAssignedAt` in taskStatus.ts for what this distinguishes and why. */
   private deployPrepared: boolean;
   private readonly targetBindings: TargetBindings;
+  /**
+   * The Knowledge-root identity frozen at intake (DR §5). Not state the state
+   * machine reads — like `targetBindings`, it is carried so `snapshot()`
+   * echoes back what was loaded instead of silently dropping the freeze the
+   * next time the row is saved.
+   */
+  private readonly knowledgeRoot: KnowledgeRootIdentity | null;
   /** The state the task was in when the current failure arrived, captured before retryPolicy moves it. */
   private stateBeforeFailure: TaskState = TaskState.CREATED;
   /** What the last failure resolved to. Exposed for the CLI and the run log; not persisted — it is derived, not state. */
@@ -251,6 +260,7 @@ export class Orchestrator {
       this.taskEnvironment = restore.environment;
       this.deployPrepared = restore.deployPrepared;
       this.targetBindings = restore.targetBindings;
+      this.knowledgeRoot = restore.knowledgeRoot ?? null;
       // Seeded from the store so budget accounting counts what the
       // earlier process already spent — a resumed task must not get a fresh
       // token allowance just because it restarted.
@@ -271,6 +281,7 @@ export class Orchestrator {
       this.taskEnvironment = opts?.environment ?? Environment.LOCAL;
       this.deployPrepared = false;
       this.targetBindings = opts?.targetBindings ?? { targets: [] };
+      this.knowledgeRoot = opts?.knowledgeRoot ?? null;
       this.runLog = new RunLog();
       this.store.createTask(
         newPersistedTask({
@@ -283,6 +294,7 @@ export class Orchestrator {
           targetBindings: opts?.targetBindings,
           runtimeTask: this.runtimeTask,
           gateContext: this.gateContext,
+          knowledgeRoot: this.knowledgeRoot,
         }),
       );
     }
@@ -359,6 +371,7 @@ export class Orchestrator {
       environment: this.taskEnvironment,
       deployPrepared: this.deployPrepared,
       targetBindings: this.targetBindings,
+      knowledgeRoot: this.knowledgeRoot,
     };
   }
 
