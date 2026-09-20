@@ -549,6 +549,8 @@ export interface ApplySyncOptions extends PlanSyncOptions {
   force?: boolean;
   /** Machine-wide installation.yaml override (tests); defaults to the real one when resolving a dev workspace's Knowledge binding. */
   installationConfigPath?: string;
+  /** Named Knowledge root (DR §4 `--root`) for the DEV-workspace binding resolution. */
+  rootName?: string;
   /** Explicit resolution for an ambiguous/unrecognized Target profile. */
   explicitStack?: string;
 }
@@ -563,6 +565,8 @@ export function devDerivedContent(options: {
   templatesDir: string;
   config?: TargetConfig;
   installationConfigPath?: string;
+  /** Named Knowledge root (DR §4 `--root`) for the DEV-workspace binding resolution. */
+  rootName?: string;
 }): { content: Map<string, string>; boundRoot?: string } | undefined {
   const config = options.config;
   if (!config?.role) return undefined;
@@ -572,6 +576,7 @@ export function devDerivedContent(options: {
       targetRoot: options.targetRoot,
       config,
       installationConfigPath: options.installationConfigPath,
+      requestedRootName: options.rootName,
     });
   } else {
     try {
@@ -646,6 +651,7 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     templatesDir: options.templatesDir,
     config,
     installationConfigPath: options.installationConfigPath,
+    rootName: options.rootName,
   });
   const derivedContent = derived?.content;
   const plan = planSync({ ...options, manifest, config, derivedContent });

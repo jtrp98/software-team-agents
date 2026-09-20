@@ -156,8 +156,10 @@ export function defaultInstallationConfigPath(platform = process.platform, local
 /** Case-folded on Windows because NTFS compares paths case-insensitively by
  * default — an exact-match alias check there would reject the same physical
  * root aliased under a different case (DR §2.3). Pure string work: no fs
- * access, so the invariants hold identically in tests and in production. */
-function canonicalPathForComparison(value: string): string {
+ * access, so the invariants hold identically in tests and in production.
+ * Shared so path assertions (`--knowledge-root`, registry paths) compare the
+ * way the loader's invariants do. */
+export function canonicalPathForComparison(value: string): string {
   const resolved = path.resolve(value);
   return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }

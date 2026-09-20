@@ -78,6 +78,8 @@ export interface RoleRunOptions {
   now?: string;
   /** Overrides where the machine-wide installation binding is read from (tests; unusual setups). */
   installationConfigPath?: string;
+  /** Named Knowledge root (DR §4 `--root`) the session binds and launches with. */
+  rootName?: string;
   /** Test seams. */
   probe?: (cmd: string) => { available: boolean; detail?: string };
   launch?: (cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<number>;
@@ -269,6 +271,7 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
       templatesDir,
       config,
       installationConfigPath: options.installationConfigPath,
+      rootName: options.rootName,
     });
     const plan = planSync({
       targetRoot: roots.targetRoot,
@@ -294,7 +297,7 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
       if (options.autoSync === false) {
         fail("Managed files", `managed assets are outdated (${named}${remainder}) — run software-team-agents sync, or drop --no-auto-sync`);
       }
-      const result = runTargetSync({ targetRoot: roots.targetRoot, templatesDir, manifest, config, role, installationConfigPath: options.installationConfigPath, now: options.now ?? new Date().toISOString() });
+      const result = runTargetSync({ targetRoot: roots.targetRoot, templatesDir, manifest, config, role, installationConfigPath: options.installationConfigPath, rootName: options.rootName, now: options.now ?? new Date().toISOString() });
       const changed = result.performed.filter((entry) => entry.action !== "unchanged" && entry.action !== "override");
       const changedNames = changed.slice(0, 10).map((entry) => `${entry.action}: ${entry.path}`).join(", ");
       const changedRemainder = changed.length > 10 ? `, ... ${changed.length - 10} more` : "";
@@ -319,6 +322,7 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
       targetRoot: roots.targetRoot,
       configKnowledgePath: config?.knowledge?.path,
       installationConfigPath: options.installationConfigPath,
+      requestedRootName: options.rootName,
     });
   } catch (e) {
     if (!(e instanceof KnowledgeBindingError)) throw e;

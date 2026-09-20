@@ -267,7 +267,10 @@ describe("Target registry", () => {
       schema_version: 1,
       targets: [{ target_id: "app", name: "App", remote_url: "https://github.com/a/app.git", status: "active", type: "fullstack" }],
     };
-    writeTargetRegistry(knowledge, fullstack);
+    // [amended R10 — knowingly] the seed registration now needs the register
+    // context (DT §3.1 step 6 ownership guard); the narrowing/widening writes
+    // below stay ownership-neutral and remain direct.
+    writeTargetRegistry(knowledge, fullstack, { ownership: { channel: "register-flow", operation: "addition" } });
     const activeFrontendTask = {
       taskId: "T-active",
       machine: { current: TaskState.IMPLEMENTATION },
@@ -311,9 +314,12 @@ describe("Target registry", () => {
   it("enforces immutable ids on the registry writer", () => {
     const knowledge = tempRoot();
     const old: TargetRegistry = { schema_version: 1, targets: [{ target_id: "old", name: "Old", remote_url: "https://github.com/a/x.git", status: "active" }] };
-    writeTargetRegistry(knowledge, old);
+    // [amended R10 — knowingly] seeds go through the register context (DT
+    // §3.1 step 6); the id-swap write carries it too, so the assertion lands
+    // on immutability rather than on the ownership guard.
+    writeTargetRegistry(knowledge, old, { ownership: { channel: "register-flow", operation: "addition" } });
     const changed: TargetRegistry = { schema_version: 1, targets: [{ target_id: "new", name: "New", remote_url: "https://github.com/a/x.git", status: "active" }] };
-    expect(() => writeTargetRegistry(knowledge, changed)).toThrow(/immutable/);
+    expect(() => writeTargetRegistry(knowledge, changed, { ownership: { channel: "register-flow", operation: "addition" } })).toThrow(/immutable/);
   });
   it("requires soft-retire rather than deleting or replacing a registered Target remote", () => {
     const previous: TargetRegistry = { schema_version: 1, targets: [{ target_id: "one", name: "One", remote_url: "https://github.com/a/one.git", status: "active" }] };

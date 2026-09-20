@@ -15,6 +15,8 @@ export interface ContextCommandInput {
   taskId?: string;
   projectRoot: string;
   env?: NodeJS.ProcessEnv;
+  /** `--root <name>` — the named Knowledge root this read resolves through (DR §4). */
+  rootName?: string;
 }
 
 export interface ContextComposition {
@@ -122,7 +124,7 @@ function phasesFor(
 export async function buildContextCommand(input: ContextCommandInput): Promise<ContextCommandResult> {
   const stage = stageForRole(input.role);
   const env = input.env ?? process.env;
-  const docsRoot = resolveContextDocsRoot(input.projectRoot, env);
+  const docsRoot = resolveContextDocsRoot(input.projectRoot, env, input.rootName);
   const resolved = resolveModule(docsRoot, input.moduleHint);
   if (resolved.status === "many") {
     throw new ContextCommandError(

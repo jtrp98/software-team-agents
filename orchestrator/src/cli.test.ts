@@ -136,6 +136,14 @@ describe("parseArgs", () => {
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--autonomy"], "/repo")).toThrow(CliUsageError);
   });
 
+  it("parses --root <name> and refuses duplicates or a missing value (DR §4)", () => {
+    const args = parseArgs(["--task-id", "T-1", "--module", "m", "--root", "work"], "/repo");
+    expect(args.rootName).toBe("work");
+    expect(parseArgs(["--task-id", "T-1", "--module", "m"], "/repo").rootName).toBeUndefined();
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--root", "a", "--root", "b"], "/repo")).toThrow(CliUsageError);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--root"], "/repo")).toThrow(CliUsageError);
+  });
+
   it("parses --runtime and rejects runtimes no adapter implements (T-OC5)", () => {
     const explicit = parseArgs(["--task-id", "T-1", "--module", "m", "--runtime", "opencode"], "/repo");
     expect(explicit.runtime).toBe("opencode");
@@ -252,7 +260,7 @@ describe("T-V3R-032 production runtime composition", () => {
     const registry = createProductionRuntimeRegistry(defaultProjectRoot());
     expect(registry.ids()).toEqual(["claude-code", "codex", "opencode", "antigravity"]);
     expect([...registry.get("codex").models]).toContain("gpt-6-astra");
-    expect([...registry.get("opencode").models]).toContain("zai-coding-plan/glm-5.2#max");
+    expect([...registry.get("opencode").models]).toContain("zai-coding-plan/glm-5.3#max");
     expect([...registry.get("antigravity").models]).toContain("gemini-3.8-flash-high");
     const source = fs.readFileSync(path.join(defaultProjectRoot(), "orchestrator", "src", "cli", "composition", "taskExecutor.ts"), "utf8");
     expect(source).toContain("registry: runtimeRegistry");

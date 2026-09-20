@@ -4,13 +4,43 @@ import { fileURLToPath } from "node:url";
 import Ajv, { type ValidateFunction } from "ajv";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { AgentStage, TaskState } from "../types.js";
+import { assertCanonicalRepositoryCoordinate, canonicalRepositoryCoordinate } from "./repositoryIdentity.js";
 
 export type TargetStatus = "active" | "retired";
 /** The repository's delivery role (V9 AD-1) — declared once on the Target, never derived from its stack. */
 export type TargetType = "frontend" | "backend" | "fullstack";
-export interface TargetEntry { target_id: string; name: string; remote_url: string; status: TargetStatus; type?: TargetType; }
-export interface TargetRegistry { schema_version: 1; targets: TargetEntry[]; }
+/** The cross-root ownership claim (DT §2.4). `retired` still owns; only an
+ * explicit `released` tombstone — written through the human-gated transfer —
+ * gives the coordinate up. */
+export type TargetOwnershipState = "owned" | "released";
+export interface TargetEntry {
+  target_id: string; name: string; remote_url: string; status: TargetStatus; type?: TargetType;
+  /** v2 only (schema): canonical coordinates this Target answered to in the past. */
+  repository_aliases?: string[];
+  /** v2 only (schema): the ownership claim; a v1 file reads as `owned`. */
+  ownership_state?: TargetOwnershipState;
+}
+export interface TargetRegistry { schema_version: 1 | 2; targets: TargetEntry[]; }
 export class TargetRegistryError extends Error {}
+
+/** The loader's normalized view of a registry (DT §2.4 dual-reader): a v1 file
+ * reads as every entry `owned` with no alias history, in memory only — the
+ * file is never rewritten at read time. */
+export interface NormalizedTargetRegistry {
+  schemaVersion: 1 | 2;
+  targets: Array<TargetEntry & { repository_aliases: string[]; ownership_state: TargetOwnershipState }>;
+}
+
+export function normalizeTargetRegistry(registry: TargetRegistry): NormalizedTargetRegistry {
+  return {
+    schemaVersion: registry.schema_version,
+    targets: registry.targets.map((entry) => ({
+      ...entry,
+      repository_aliases: entry.repository_aliases ?? [],
+      ownership_state: entry.ownership_state ?? "owned",
+    })),
+  };
+}
 
 export interface TargetTypeLifecycleTask {
   taskId: string;
@@ -27,6 +57,11 @@ export interface TargetTypeLifecycleTask {
 export interface WriteTargetRegistryOptions {
   /** Current durable task history; required only when a type change removes an admitted role. */
   tasks?: readonly TargetTypeLifecycleTask[];
+  /** The administrative register context (DT §3.1 step 6). Writes that add or
+   * change ownership — a new target_id, a reactivation, an ownership-state or
+   * alias-history change — are refused without it, so the raw writer cannot
+   * become a bypass around the six-step register flow. */
+  ownership?: { channel: "register-flow"; operation: string };
 }
 
 /** The engineer roles a Target type admits. Validation against bindings is T-V9-008's job; doctor reports the stack-profile side of this today. */
@@ -69,11 +104,58 @@ export function loadTargetRegistry(knowledgeRoot: string): TargetRegistry {
       throw new TargetRegistryError(`Target "${target.target_id}" remote_url must be a credential-free Git remote URL`);
     }
   }
+  assertRegistryV2Invariants(registry);
   return registry;
 }
 
-/** The only registry writer used by administrative commands.  It reads the
- * previous registry first so an existing target's identity cannot be replaced. */
+/** v2-only invariants (DT §2.4/§5.1) a JSON Schema cannot express: aliases are
+ * canonical coordinates (never raw remotes or SSH aliases) that do not
+ * duplicate their own remote or another entry's claim, and a released
+ * tombstone must be retired (`active+released` is invalid). Released entries
+ * claim nothing — that is exactly what being a tombstone means. */
+function assertRegistryV2Invariants(registry: TargetRegistry): void {
+  if (registry.schema_version !== 2) return;
+  const claimed = new Map<string, string>();
+  for (const target of registry.targets) {
+    for (const alias of target.repository_aliases ?? []) {
+      try {
+        assertCanonicalRepositoryCoordinate(alias);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message.slice(error.message.indexOf(": ") + 2) : String(error);
+        throw new TargetRegistryError(`Target "${target.target_id}" repository_aliases entry "${alias}" is not a canonical repository coordinate: ${reason}`);
+      }
+    }
+    if (target.ownership_state === "released" && target.status !== "retired") {
+      throw new TargetRegistryError(`Target "${target.target_id}" has status active+released, which is invalid — a released tombstone is retired (DT §5.1)`);
+    }
+    if (target.ownership_state === "released") continue;
+    const ownCoordinates: string[] = [];
+    try {
+      ownCoordinates.push(canonicalRepositoryCoordinate(target.remote_url));
+    } catch {
+      // An alias-form remote whose host has no machine-local mapping cannot be
+      // canonicalized by a pure loader; the register flow refuses it
+      // fail-closed with the machine's mapping available.
+    }
+    for (const alias of target.repository_aliases ?? []) {
+      if (ownCoordinates[0] === alias) {
+        throw new TargetRegistryError(`Target "${target.target_id}" repository_aliases entry "${alias}" duplicates its own remote_url coordinate`);
+      }
+      ownCoordinates.push(alias);
+    }
+    for (const coordinate of ownCoordinates) {
+      const owner = claimed.get(coordinate);
+      if (owner !== undefined) {
+        throw new TargetRegistryError(`Target registry coordinates "${owner}" and "${target.target_id}" collide on "${coordinate}"`);
+      }
+      claimed.set(coordinate, target.target_id);
+    }
+  }
+}
+
+/** The only registry writer used by administrative commands. It reads the
+ * previous registry first so an existing target's identity cannot be replaced,
+ * and ownership-affecting writes are only accepted from the register flow. */
 export function writeTargetRegistry(
   knowledgeRoot: string,
   next: TargetRegistry,
@@ -82,7 +164,10 @@ export function writeTargetRegistry(
   const validate = validator();
   if (!validate(next)) throw new TargetRegistryError(`Target registry is invalid: ${formatSchemaErrors(validate)}`);
   const file = targetsPath(knowledgeRoot);
-  if (fs.existsSync(file)) assertTargetIdsImmutable(loadTargetRegistry(knowledgeRoot), next, options.tasks);
+  const previous = fs.existsSync(file) ? loadTargetRegistry(knowledgeRoot) : undefined;
+  assertOwnershipWriteIsAuthorized(previous, next, options);
+  if (previous) assertTargetIdsImmutable(previous, next, options.tasks);
+  assertRegistryV2Invariants(next);
   for (const target of next.targets) {
     if (!target.name.trim() || !isCredentialFreeGitRemote(target.remote_url)) {
       throw new TargetRegistryError(`Target "${target.target_id}" has an invalid name or credential-bearing remote_url`);
@@ -94,6 +179,32 @@ export function writeTargetRegistry(
 function isCredentialFreeGitRemote(value: string): boolean {
   if (/^(https?|ssh):\/\/[^/\s@]+@/i.test(value) || /[?&](token|access_token|password)=/i.test(value)) return false;
   return /^(https?:\/\/[^\s/]+\/[^\s]+|ssh:\/\/[^\s]+|git@[^\s:]+:[^\s]+)$/i.test(value);
+}
+
+/** DT §3.1 step 6: the raw writer must not become an ownership bypass. */
+function assertOwnershipWriteIsAuthorized(
+  previous: TargetRegistry | undefined,
+  next: TargetRegistry,
+  options: WriteTargetRegistryOptions,
+): void {
+  const authorized = options.ownership?.channel === "register-flow";
+  const ownershipAffecting = ((): { reason: string } | undefined => {
+    if (!previous) return next.targets.length > 0 ? { reason: "a first write that registers ownership" } : undefined;
+    const previousById = new Map(previous.targets.map((target) => [target.target_id, target]));
+    for (const target of next.targets) {
+      const before = previousById.get(target.target_id);
+      if (!before) return { reason: `the addition of Target "${target.target_id}"` };
+      if (before.status === "retired" && target.status === "active") return { reason: `the reactivation of Target "${target.target_id}"` };
+      if ((before.ownership_state ?? "owned") !== (target.ownership_state ?? "owned")) return { reason: `the ownership-state change of Target "${target.target_id}"` };
+      if (JSON.stringify(before.repository_aliases ?? []) !== JSON.stringify(target.repository_aliases ?? [])) return { reason: `the alias-history change of Target "${target.target_id}"` };
+    }
+    return undefined;
+  })();
+  if (ownershipAffecting && !authorized) {
+    throw new TargetRegistryError(
+      `Target registry write refused (${ownershipAffecting.reason}): adding or changing Target ownership requires the administrative register flow (DT §3.1) — direct writer calls must not become an ownership bypass`,
+    );
+  }
 }
 
 export function targetById(registry: TargetRegistry, targetId: string): TargetEntry {

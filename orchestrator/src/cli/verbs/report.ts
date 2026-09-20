@@ -6,6 +6,7 @@ import type { PlanTask } from "../../docs/planTask.js";
 import { parseOpenIssues, type OpenIssueRow } from "../../orchestrator/failureClassifier.js";
 import { readModuleDoc, resolveModule, listModules } from "../../agents/moduleDocs.js";
 import { resolveContextDocsRoot } from "../../targetcli/roots.js";
+import { extractRootSelectorFlag } from "../../threeRepo/rootSelector.js";
 import type { TaskStore } from "../../store/taskStore.js";
 import { defaultStateDbPath } from "../../store/stateView.js";
 import { SqliteTaskStore } from "../../store/sqliteStore.js";
@@ -769,7 +770,7 @@ export async function runReportVerb(rest: string[], defaultProjectRoot: string):
   const outputArg = flagValue(rest, "--output");
   const outputPath = outputArg ? path.resolve(projectRoot, outputArg) : path.join(projectRoot, ".workflow", "report.html");
 
-  const docsRoot = resolveContextDocsRoot(projectRoot);
+  const docsRoot = resolveContextDocsRoot(projectRoot, process.env, extractRootSelectorFlag(rest).requestedName);
 
   // 1. Read status.md
   const statusPath = path.join(docsRoot, "_docs", "status.md");

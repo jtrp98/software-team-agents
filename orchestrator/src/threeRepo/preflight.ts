@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import { AgentStage } from "../types.js";
 import type { PersistedTask } from "../store/taskStore.js";
 import { assertStandaloneFrameworkRoot, assertStandaloneKnowledgeRoot, loadInstallationConfig } from "./installation.js";
+import { resolveInstallationRoot } from "./rootSelector.js";
 import { checkDeclaredIdentities } from "./identities.js";
 import { loadLocalTargetMapping, type ResolvedLocalTarget } from "./localTargets.js";
 import { loadTargetRegistry, targetById, type TargetRegistry } from "./targets.js";
@@ -91,6 +92,8 @@ function assertRemoteIdentity(targetId: string, targetPath: string, remoteUrl: s
 export interface ThreeRepoPreflightOptions {
   frameworkRoot: string;
   installationConfigPath?: string;
+  /** DR §3: the command's `--root <name>`; absent = the installation's default. */
+  knowledgeRootName?: string;
   verifyRemote?: (targetId: string, targetPath: string, remoteUrl: string) => void;
   /** Creation passes the already-resolved scope; resume derives it from durable plan_source. */
   moduleScope?: TaskBindingModuleScope;
@@ -147,7 +150,9 @@ export function preflightThreeRepoTask(
   }
   let knowledgeRoot: string;
   try {
-    knowledgeRoot = assertStandaloneKnowledgeRoot(installation.knowledge_root);
+    // The installation file names every root; the command's `--root` (or the
+    // default) picks exactly one here, before any registry/module read.
+    knowledgeRoot = assertStandaloneKnowledgeRoot(resolveInstallationRoot(installation, opts.knowledgeRootName).path);
   } catch (error) {
     throw new TargetPreflightError(`Knowledge root is not usable before starting ${task.taskId}: ${error instanceof Error ? error.message : String(error)}`);
   }

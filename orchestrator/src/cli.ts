@@ -163,6 +163,8 @@ export interface CliArgs {
   noDocumentGate: boolean;
   /** Post-hoc task token budget. */
   tokenBudget?: number;
+  /** `--root <name>` — the named Knowledge root this run reads from (DR §4). */
+  rootName?: string;
 }
 
 export type { BooleanClassificationKey };
@@ -317,6 +319,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let noDocumentGate = false;
   let tokenBudget: number | undefined;
   let version = false;
+  let rootName: string | undefined;
   const targetBindings: TargetBindings = { targets: [] };
   const classification: ClassificationInput = {};
 
@@ -461,6 +464,13 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       tokenBudget = value;
     } else if (arg === "--version") {
       version = true;
+    } else if (arg === "--root") {
+      // The named Knowledge root (DR §4). Parse-level refusals only; the
+      // name itself resolves (or fails) through the central selector.
+      const value = argv[++i];
+      if (value === undefined || value.startsWith("--")) throw new CliUsageError("--root requires a root name");
+      if (rootName !== undefined) throw new CliUsageError("--root may be given at most once");
+      rootName = value;
     } else if (arg in FLAG_TO_CLASSIFICATION) {
       classification[FLAG_TO_CLASSIFICATION[arg]] = true;
     } else {
@@ -545,6 +555,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     noDeterministicGate,
     noDocumentGate,
     tokenBudget,
+    rootName,
     version,
   };
 }
@@ -736,7 +747,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string, depende
   const registry = new TaskRegistry({
     store,
     planTasks: () => {
-      const md = args.module ? readModuleDoc(resolveContextDocsRoot(args.projectRoot), args.module, "plan.md") : null;
+      const md = args.module ? readModuleDoc(resolveContextDocsRoot(args.projectRoot, process.env, args.rootName), args.module, "plan.md") : null;
       if (md === null) return null;
       const plan = readWorkPlan(md);
       if (plan.problems.length) throw new CliUsageError(`invalid plan: ${plan.problems.join("; ")}`);

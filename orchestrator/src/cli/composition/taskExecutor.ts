@@ -114,14 +114,14 @@ export async function composeProductionTaskExecutor(
     taskRunLog: (id) => new RunLog(store.runsForTask(id)),
     autonomy: args.autonomy,
     stageRoots: loadStageRoots(args.projectRoot),
-    threeRepoTask: resolveThreeRepoTaskLookup(args.projectRoot, store, args.module),
+    threeRepoTask: resolveThreeRepoTaskLookup(args.projectRoot, store, args.module, args.rootName),
     enforceRoleWorkflow: fs.existsSync(path.join(args.projectRoot, "knowledge")),
     extraInstruction: `Environment: ${orchestrator.environment} — ${describeEnvironment(orchestrator.environment, args.projectRoot)}`,
     // T-V8-011 — feeds a real diff into task-specific retrieval when one
     // exists (a QA round, a repair attempt); a fresh DEV round simply has none yet.
     changedFiles: async (id) => {
       try {
-        const roots = resolveQaWorkRoots(args.projectRoot, id, store, args.module);
+        const roots = resolveQaWorkRoots(args.projectRoot, id, store, args.module, args.rootName);
         const { files } = await collectQaChangedFiles(roots);
         return files;
       } catch {
@@ -130,9 +130,9 @@ export async function composeProductionTaskExecutor(
     },
   });
 
-  const qaRoots = resolveQaWorkRoots(args.projectRoot, taskId, store, args.module);
+  const qaRoots = resolveQaWorkRoots(args.projectRoot, taskId, store, args.module, args.rootName);
   const qaChangedFiles = async (): Promise<string[]> => {
-    const roots = resolveQaWorkRoots(args.projectRoot, taskId, store, args.module);
+    const roots = resolveQaWorkRoots(args.projectRoot, taskId, store, args.module, args.rootName);
     const { files } = await collectQaChangedFiles(roots);
     return files;
   };
@@ -142,7 +142,7 @@ export async function composeProductionTaskExecutor(
   const qaDiscovery = await collectQaChangedFiles(qaRoots).catch(() => ({ files: [] as string[], failedTargets: [] as string[] }));
   const qaContractChangedFiles = qaDiscovery.files;
   const qaInputs = await productionQaInputs({
-    docsRoot: resolveDocsRoot(args.projectRoot),
+    docsRoot: resolveDocsRoot(args.projectRoot, args.rootName),
     moduleName: args.module ?? "",
     taskId,
     roots: qaRoots,
@@ -207,7 +207,7 @@ export async function composeProductionTaskExecutor(
           ...orchestrator.repairRoute ? repairQaSignals(orchestrator.repairRoute) : {},
         }),
         taskLevel: () => orchestrator.classification.level,
-        previousRound: () => previousRoundFromDocs(resolveDocsRoot(args.projectRoot), args.module ?? "", taskId),
+        previousRound: () => previousRoundFromDocs(resolveDocsRoot(args.projectRoot, args.rootName), args.module ?? "", taskId),
       });
 
   return {

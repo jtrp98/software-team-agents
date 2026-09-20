@@ -70,6 +70,46 @@ function rawUrlPath(trimmed: string): string {
   return authorityEnd === -1 ? "" : rest.slice(authorityEnd);
 }
 
+/** Validates that `value` is already a canonical repository coordinate —
+ * the output form of {@link canonicalRepositoryCoordinate}: a lowercase dotted
+ * host with optional non-default port, a `/`, and a lowercase repository path.
+ * Registry `repository_aliases` entries (DT §2.4) must be this form, not raw
+ * remotes and never SSH host aliases, so ownership comparisons stay
+ * deterministic across machines. */
+export function assertCanonicalRepositoryCoordinate(value: string): string {
+  const refuse = (reason: string): never => {
+    throw new RepositoryCoordinateError(`"${value}" is not a canonical repository coordinate: ${reason}`);
+  };
+  if (!value.trim()) refuse("it is empty");
+  if (value !== value.trim()) refuse("it has leading or trailing whitespace");
+  if (/[A-Z]/.test(value)) refuse("the coordinate form is lowercase");
+  if (value.includes("://")) refuse("it carries a scheme");
+  if (value.includes("@")) refuse("it carries a user or credential part");
+  if (/[?#]/.test(value)) refuse("it carries a query or fragment");
+  if (value.includes(BACKSLASH_MARKER)) refuse("it uses a backslash separator");
+  const slash = value.indexOf("/");
+  if (slash <= 0 || slash === value.length - 1) refuse("the form is host[:port]/path");
+  const hostPort = value.slice(0, slash);
+  const repoPath = value.slice(slash + 1);
+  if (hostPort.includes("/")) refuse("the host part contains a slash");
+  const portMatch = /^([a-z0-9.-]+)(?::(\d+))?$/.exec(hostPort);
+  const host = portMatch?.[1];
+  if (!host || !host.includes(".")) refuse(`the host part "${hostPort}" is not a canonical dotted host`);
+
+  const port = portMatch?.[2];
+  if (port !== undefined) {
+    if (port === "80" || port === "443" || port === "22") refuse(`default port ${port} must be omitted`);
+    if (port.startsWith("0")) refuse(`port "${port}" is not canonical`);
+  }
+  const segments = repoPath.split("/");
+  if (segments.some((segment) => segment === "." || segment === "..")) refuse("the path contains a dot segment");
+  if (segments.some((segment) => segment.length === 0)) refuse("the path contains an empty segment");
+  if (segments[segments.length - 1]!.toLowerCase() === ".git") refuse("the path ends at a bare .git entry");
+  return value;
+}
+
+const BACKSLASH_MARKER = String.fromCharCode(92);
+
 export function canonicalRepositoryCoordinate(remoteUrl: string, machineAliases?: RemoteHostAliases): string {
   const trimmed = remoteUrl.trim();
   if (!trimmed) refuse(remoteUrl, "the remote is empty");

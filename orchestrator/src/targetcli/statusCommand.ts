@@ -26,6 +26,7 @@ import {
 } from "./roleWorkspace.js";
 import { classifySyncState, type SyncState } from "./version.js";
 import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
+import { resolveInstallationRoot } from "../threeRepo/rootSelector.js";
 import { detectInstructionSurface, isNestedInstruction, type InstructionSurfaceEntry } from "../threeRepo/ownership.js";
 import { targetStackWasHumanEdited } from "./targetProfile.js";
 import { CLAUDE_SETTINGS_PATH, guardCoverage, guardCoverageIsPositive, inspectGuardWiring, type GuardCoverage } from "./guardSettings.js";
@@ -195,7 +196,7 @@ export function antigravityReadiness(targetRoot: string, coverage: GuardCoverage
   return { ready: false, detail: `${md} agent source(s) available; ${coverage.detail}` };
 }
 
-export function gatherStatus(options: { targetRoot?: string; templatesDir?: string; installationConfigPath?: string } = {}): TargetStatus {
+export function gatherStatus(options: { targetRoot?: string; templatesDir?: string; installationConfigPath?: string; rootName?: string } = {}): TargetStatus {
   const roots = resolveRoots({ targetRoot: options.targetRoot });
   const templatesDir = options.templatesDir ?? path.join(roots.frameworkRoot, "templates");
   // The payload's own manifest decides what "installed" means — an explicit
@@ -293,13 +294,14 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
         targetRoot: roots.targetRoot,
         configKnowledgePath: config?.knowledge?.path,
         installationConfigPath: options.installationConfigPath,
+        requestedRootName: options.rootName,
       });
     } catch (e) {
       knowledgeBinding = { knowledgeRoot: e instanceof Error ? e.message : String(e), via: "invalid" };
     }
   } else if (shape === "knowledge") {
     try {
-      knowledgeBinding = resolveKnowledgeBinding({ targetRoot: roots.targetRoot, installationConfigPath: options.installationConfigPath });
+      knowledgeBinding = resolveKnowledgeBinding({ targetRoot: roots.targetRoot, installationConfigPath: options.installationConfigPath, requestedRootName: options.rootName });
     } catch {
       knowledgeBinding = undefined;
     }
@@ -331,8 +333,13 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
   let knowledgeBoundButUninitialized: string | undefined;
   try {
     const installed = loadInstallationConfig(options.installationConfigPath ?? defaultInstallationConfigPath());
-    if (installed.knowledge_root && hasKnowledgeMarkers(installed.knowledge_root) && !isTargetInitialized(installed.knowledge_root)) {
-      knowledgeBoundButUninitialized = installed.knowledge_root;
+    // With `--root`, the report follows the command's selection, not the
+    // installation default (statusCommand reads; DR §4).
+    const boundRoot = options.rootName
+      ? resolveInstallationRoot(installed, options.rootName).path
+      : installed.knowledge_root;
+    if (boundRoot && hasKnowledgeMarkers(boundRoot) && !isTargetInitialized(boundRoot)) {
+      knowledgeBoundButUninitialized = boundRoot;
     }
   } catch {
     // No installation config, or unreadable — nothing to warn about.

@@ -32,7 +32,8 @@ import { RUNTIME_IDS, type RuntimeId } from "../../runtime/runtimeSupport.js";
 import type { RuntimeAutonomy } from "../../runtime/runtimeAdapter.js";
 import { loadStaConfig, StaConfigMissingError } from "../../packaging/staConfig.js";
 import { contentHash, stableHash } from "../../artifacts/executionPacket.js";
-import { defaultInstallationConfigPath, installationConfigOverride, loadInstallationConfig, type InstallationConfig } from "../../threeRepo/installation.js";
+import { defaultInstallationConfigPath, installationConfigOverride, loadInstallationConfig, KNOWLEDGE_ROOT_NAME_PATTERN, type InstallationConfig } from "../../threeRepo/installation.js";
+import { matchInstalledKnowledgeRootPath, resolveInstallationRoot } from "../../threeRepo/rootSelector.js";
 import { loadTargetRegistry, TARGET_TYPE_ROLES, type TargetRegistry, TargetRegistryError } from "../../threeRepo/targets.js";
 import { loadLocalTargetMapping, type ResolvedLocalTarget } from "../../threeRepo/localTargets.js";
 import { resolveModuleTargets } from "../../threeRepo/moduleTargetResolver.js";
@@ -95,6 +96,8 @@ export interface BoundedRunArgs {
   targetId?: string;
   targetIds?: string[];
   knowledgeRoot?: string;
+  /** `--root <name>` — the named Knowledge root selector (DR §4). */
+  rootName?: string;
   runBranch?: string;
   runtime?: RuntimeId;
   model?: string;
@@ -122,6 +125,7 @@ export function parseBoundedRunArgs(argv: string[], defaultProjectRoot: string):
   let targetId: string | undefined;
   const targetIds: string[] = [];
   let knowledgeRoot: string | undefined;
+  let rootName: string | undefined;
   let runBranch: string | undefined;
   let runtime: RuntimeId | undefined;
   let model: string | undefined;
@@ -179,6 +183,13 @@ export function parseBoundedRunArgs(argv: string[], defaultProjectRoot: string):
       }
     } else if (arg === "--knowledge-root") {
       knowledgeRoot = requireValue(arg, argv[++i]);
+    } else if (arg === "--root") {
+      const value = requireValue(arg, argv[++i]);
+      if (rootName !== undefined) throw new CliUsageError("bounded-run: --root may be given at most once");
+      if (!KNOWLEDGE_ROOT_NAME_PATTERN.test(value)) {
+        throw new CliUsageError(`bounded-run: invalid root name "${value}": must match ${KNOWLEDGE_ROOT_NAME_PATTERN.source}`);
+      }
+      rootName = value;
     } else if (arg === "--run-branch") {
       runBranch = requireValue(arg, argv[++i]);
     } else if (arg === "--runtime") {
@@ -218,11 +229,14 @@ export function parseBoundedRunArgs(argv: string[], defaultProjectRoot: string):
       throw new CliUsageError("bounded-run: an unattended run needs --autonomy edit or --autonomy full (a dry run does not)");
     }
   }
+  if (rootName !== undefined && knowledgeRoot !== undefined) {
+    throw new CliUsageError("bounded-run: --root and --knowledge-root are mutually exclusive; --knowledge-root is a deprecated compatibility channel");
+  }
 
   return {
     projectRoot, stateDb, module: moduleName, scope, until, dryRun, resumeRunId,
     targetRoot, targetId: targetIds.length === 1 ? targetIds[0] : undefined,
-    targetIds, knowledgeRoot, runBranch, runtime, model, effort, autonomy, classification,
+    targetIds, knowledgeRoot, rootName, runBranch, runtime, model, effort, autonomy, classification,
   };
 }
 
@@ -376,8 +390,32 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
   // from flags is how a resume ends up writing into the wrong repository.
   let targetRoot = path.resolve(args.targetRoot ?? args.projectRoot);
   let targetId = args.targetId ?? (args.targetIds?.[0] ?? "legacy-project");
-  let knowledgeRoot = path.resolve(args.knowledgeRoot ?? (installation?.knowledge_root ?? args.projectRoot));
-  const docsRoot = resolveContextDocsRoot(args.projectRoot);
+  // DR §4: `--root <name>` is the selector; `--knowledge-root <path>` survives
+  // one migration window as a compatibility channel whose path must
+  // canonical-match exactly one registered root; no flag = the installation's
+  // default (or the legacy project root when no installation file exists).
+  let knowledgeRoot: string;
+  try {
+    if (args.knowledgeRoot) {
+      if (!installation) {
+        console.error(`[bounded-run] --knowledge-root "${args.knowledgeRoot}" does not match any registered Knowledge root: no installation config is readable at ${installationConfigPath ?? defaultInstallationConfigPath()}`);
+        return 1;
+      }
+      knowledgeRoot = matchInstalledKnowledgeRootPath(installation, args.knowledgeRoot);
+    } else if (args.rootName) {
+      if (!installation) {
+        console.error(`[bounded-run] --root ${args.rootName} cannot be resolved: no installation config is readable at ${installationConfigPath ?? defaultInstallationConfigPath()}`);
+        return 1;
+      }
+      knowledgeRoot = resolveInstallationRoot(installation, args.rootName).path;
+    } else {
+      knowledgeRoot = installation ? resolveInstallationRoot(installation).path : path.resolve(args.projectRoot);
+    }
+  } catch (error) {
+    console.error(`[bounded-run] ${error instanceof Error ? error.message : String(error)}`);
+    return 1;
+  }
+  const docsRoot = resolveContextDocsRoot(args.projectRoot, process.env, args.rootName);
   // Contract/agent-registry authority: `resolveFrameworkRoot()` applies to
   // a three-repo, Target-bound task (`contractRootForTask`'s rule);
   // legacy single-repo runs use the project root itself.
@@ -403,11 +441,24 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
       // `sta bounded-run --resume <id> --module m` point at the project root
       // instead. An explicit flag that disagrees is a refusal, not an
       // override, because the alternative is writing into another repository.
+      // `--root` on a resume is a drift assertion against the frozen run's
+      // Knowledge root (DR §3 rule 5) — it never re-selects.
+      let rootNameDrift: string | null = null;
+      if (args.rootName) {
+        let selectedPath: string | undefined;
+        try {
+          selectedPath = installation ? resolveInstallationRoot(installation, args.rootName).path : undefined;
+        } catch { /* reported as drift below */ }
+        if (!selectedPath || !sameRoot(selectedPath, run.knowledge_root)) {
+          rootNameDrift = `--root ${args.rootName} != frozen ${run.knowledge_root}`;
+        }
+      }
       const rootDrift = [
         args.targetRoot && !sameRoot(args.targetRoot, run.target_root)
           ? `--target-root ${path.resolve(args.targetRoot)} != frozen ${run.target_root}` : null,
         args.knowledgeRoot && !sameRoot(args.knowledgeRoot, run.knowledge_root)
           ? `--knowledge-root ${path.resolve(args.knowledgeRoot)} != frozen ${run.knowledge_root}` : null,
+        rootNameDrift,
         args.targetId && args.targetId !== run.target_id
           ? `--target-id ${args.targetId} != frozen ${run.target_id}` : null,
       ].filter((item): item is string => item !== null);

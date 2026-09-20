@@ -253,6 +253,47 @@ describe("knowledge binding (T-ROLE-06/T-ROLE-08)", () => {
     });
     expect(binding).toBeUndefined();
   });
+
+  it("a committed knowledge.path that matches the selected root passes as a compatibility assertion (DR §3 rule 7)", () => {
+    const workspace = tmpRoot("ws6");
+    const k = knowledgeRepo();
+    const configPath = path.join(tmpRoot("cfg"), "installation.yaml");
+    fs.writeFileSync(configPath, `schema_version: 1\nknowledge_root: ${JSON.stringify(k)}\n`, "utf8");
+    const binding = resolveKnowledgeBinding({
+      targetRoot: workspace,
+      configKnowledgePath: k,
+      installationConfigPath: configPath,
+    });
+    expect(binding?.via).toBe("workspace-config");
+    expect(binding?.knowledgeRoot).toBe(fs.realpathSync.native(k));
+  });
+
+  it("a committed knowledge.path that no longer matches the selected root is refused with a migration message (DR §3 rule 7)", () => {
+    const workspace = tmpRoot("ws7");
+    const boundRoot = knowledgeRepo();
+    const otherRoot = knowledgeRepo();
+    const configPath = path.join(tmpRoot("cfg"), "installation.yaml");
+    fs.writeFileSync(configPath, `schema_version: 1\nknowledge_root: ${JSON.stringify(boundRoot)}\n`, "utf8");
+    expect(() =>
+      resolveKnowledgeBinding({
+        targetRoot: workspace,
+        configKnowledgePath: otherRoot,
+        installationConfigPath: configPath,
+      }),
+    ).toThrow(/compatibility assertion since named Knowledge roots/);
+  });
+
+  it("an installation file that exists but cannot be loaded throws instead of reading as no-binding (A8, DR §3 rule 6)", () => {
+    const workspace = tmpRoot("ws8");
+    const configPath = path.join(tmpRoot("cfg-broken"), "installation.yaml");
+    fs.writeFileSync(configPath, "schema_version: 1\nknowledge_root: 123\n", "utf8");
+    expect(() =>
+      resolveKnowledgeBinding({
+        targetRoot: workspace,
+        installationConfigPath: configPath,
+      }),
+    ).toThrow(/installation config is invalid/);
+  });
 });
 
 describe("write-policy launch wiring (T-ROLE-12/13)", () => {

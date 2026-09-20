@@ -3,6 +3,7 @@ import { DEFAULT_RUNTIME_ID } from "../../runtime/runtimeRegistry.js";
 import { detectRuntimeCapabilities } from "../../runtime/runtimeCapabilityDetection.js";
 import { exitCodeFor, runDoctor } from "../../threeRepo/doctor.js";
 import { flagValue } from "../support.js";
+import { extractRootSelectorFlag } from "../../threeRepo/rootSelector.js";
 
 /** `doctor` — aggregate read-only diagnostics; never mutates, exits non-zero only on FAIL. */
 export async function runDoctorVerb(rest: string[]): Promise<number> {
@@ -16,6 +17,7 @@ export async function runDoctorVerb(rest: string[]): Promise<number> {
     const runtimeRegistry = createProductionRuntimeRegistry(resolvedProjectRoot);
     const claude = runtimeRegistry.get(DEFAULT_RUNTIME_ID);
     const report = await runDoctor({
+      knowledgeRootName: extractRootSelectorFlag(rest).requestedName,
       projectRoot: projectRoot ?? undefined,
       probe: () => runtimeRegistry.probe(DEFAULT_RUNTIME_ID),
       capabilities: async () => {

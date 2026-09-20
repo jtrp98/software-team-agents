@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
+import { defaultInstallationConfigPath, loadInstallationConfig, canonicalPathForComparison } from "../threeRepo/installation.js";
+import { resolveInstallationRoot } from "../threeRepo/rootSelector.js";
 import { loadLocalTargetMapping, LocalTargetMappingError, type ResolvedLocalTarget } from "../threeRepo/localTargets.js";
 import { loadTargetRegistry, targetById, TargetRegistryError } from "../threeRepo/targets.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
@@ -204,16 +205,35 @@ function isSameOrNested(a: string, b: string): boolean {
 }
 
 /**
- * Resolves the Knowledge root a DEV workspace depends on:
- * `.agent-team/config.yaml` `knowledge.path` first (repo-relative binding,
- * committed with the target), then the machine-wide installation binding.
- * Fails closed with actionable recovery when nothing valid resolves.
+ * Resolves the Knowledge root a DEV workspace depends on.
+ *
+ * Since named roots (DR §3 rule 7) the legacy `.agent-team/config.yaml`
+ * `knowledge.path` is a *compatibility assertion*, not a selector: the root
+ * still comes from the installation's selected root, and a workspace-committed
+ * path that no longer matches it is a drift the command refuses with a
+ * migration message — the two files disagreeing about which Knowledge
+ * repository is in play is exactly the "wrote into the wrong repo" failure
+ * this framework exists to prevent.
+ *
+ * An installation file that exists but cannot be loaded throws (the old
+ * "callers decide whether that is fatal" fallback let a broken installation
+ * read as no Knowledge at all); only a *missing* installation file leaves the
+ * legacy binding standing.
  */
 export function resolveKnowledgeBinding(options: {
   targetRoot: string;
   configKnowledgePath?: string;
   installationConfigPath?: string;
+  requestedRootName?: string;
 }): KnowledgeBinding | undefined {
+  const installationPath = options.installationConfigPath ?? defaultInstallationConfigPath();
+  const installation = fs.existsSync(installationPath)
+    ? loadInstallationConfig(installationPath)
+    : undefined;
+  const selected = installation
+    ? resolveInstallationRoot(installation, options.requestedRootName)
+    : undefined;
+
   if (options.configKnowledgePath) {
     const raw = options.configKnowledgePath;
     const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(options.targetRoot, raw);
@@ -230,25 +250,25 @@ export function resolveKnowledgeBinding(options: {
     if (isSameOrNested(resolved, options.targetRoot)) {
       throw new KnowledgeBindingError(`Knowledge root must be separate from the Target — "${raw}" resolves inside the workspace`);
     }
-    return { knowledgeRoot: fs.realpathSync.native(resolved), via: "workspace-config" };
-  }
-
-  try {
-    const config = loadInstallationConfig(options.installationConfigPath ?? defaultInstallationConfigPath());
-    const candidate = config.knowledge_root;
-    if (candidate && looksLikeKnowledgeRoot(candidate) && !isSameOrNested(candidate, options.targetRoot)) {
-      return { knowledgeRoot: candidate, via: "installation" };
-    }
-    if (candidate && !looksLikeKnowledgeRoot(candidate)) {
+    const canonical = fs.realpathSync.native(resolved);
+    if (selected && canonicalPathForComparison(canonical) !== canonicalPathForComparison(selected.path)) {
       throw new KnowledgeBindingError(
-        `installation.yaml binds Knowledge root "${candidate}" but it has no knowledge/targets.yaml/knowledge-policy.yaml markers — re-run \`sta configure knowledge-root <path>\` with the real Knowledge repo`,
+        `knowledge.path "${raw}" resolves to ${canonical}, which does not match the selected Knowledge root "${selected.name}" (${selected.path}) — ` +
+          "knowledge.path is a compatibility assertion since named Knowledge roots; update .agent-team/config.yaml or rebind the installation (`sta configure knowledge-root`), never edit targets.yaml by hand",
       );
     }
-    return undefined;
-  } catch (e) {
-    if (e instanceof KnowledgeBindingError) throw e;
-    return undefined; // no installation config — treated as any other missing optional binding; callers decide whether that is fatal
+    return { knowledgeRoot: canonical, via: "workspace-config" };
   }
+
+  if (!selected) return undefined;
+  const candidate = selected.path;
+  if (!looksLikeKnowledgeRoot(candidate)) {
+    throw new KnowledgeBindingError(
+      `installation.yaml binds Knowledge root "${candidate}" but it has no knowledge/targets.yaml/knowledge-policy.yaml markers — re-run \`sta configure knowledge-root <path>\` with the real Knowledge repo`,
+    );
+  }
+  if (isSameOrNested(candidate, options.targetRoot)) return undefined;
+  return { knowledgeRoot: candidate, via: "installation" };
 }
 
 // --- Target binding ----------------------------------------------------------

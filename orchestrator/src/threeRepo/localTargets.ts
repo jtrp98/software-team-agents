@@ -19,6 +19,20 @@ function validator(): ValidateFunction {
 export function localTargetsPath(knowledgeRoot: string): string { return path.join(knowledgeRoot, ".workflow", "targets.local.yaml"); }
 function isSameOrNested(candidate: string, root: string): boolean { return candidate === root || candidate.startsWith(`${root}${path.sep}`); }
 
+/** The machine-local SSH host alias → canonical host mapping (DT §2.3),
+ * declared explicitly in this root's `targets.local.yaml` and read nowhere
+ * else — no ~/.ssh/config, no DNS. A missing mapping file means no aliases. */
+export function loadRemoteHostAliases(knowledgeRoot: string): Record<string, string> {
+  const file = localTargetsPath(knowledgeRoot);
+  let parsed: unknown;
+  try { parsed = parseYaml(fs.readFileSync(file, "utf8")); }
+  catch { return {}; }
+  const validate = validator();
+  if (!validate(parsed)) throw new LocalTargetMappingError(`local Target mapping is invalid: ${(validate.errors ?? []).map((e) => `${e.instancePath || "(root)"} ${e.message}`).join("; ")}`);
+  const aliases = (parsed as LocalTargetMapping & { remote_host_aliases?: Record<string, string> }).remote_host_aliases ?? {};
+  return { ...aliases };
+}
+
 export function loadLocalTargetMapping(knowledgeRoot: string, registry: TargetRegistry, frameworkRoot: string): ResolvedLocalTarget[] {
   const file = localTargetsPath(knowledgeRoot);
   let parsed: unknown;

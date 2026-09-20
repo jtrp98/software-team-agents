@@ -4,6 +4,7 @@ import { checkKnowledge } from "../knowledge/knowledgeBase.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { validateInstallation } from "../packaging/installValidation.js";
 import { assertStandaloneKnowledgeRoot, defaultInstallationConfigPath, loadInstallationConfig } from "./installation.js";
+import { resolveInstallationRoot } from "./rootSelector.js";
 import { loadLocalTargetMapping } from "./localTargets.js";
 import { loadTargetRegistry, TARGET_TYPE_ROLES, type TargetEntry, type TargetType } from "./targets.js";
 import { loadStackProfile } from "../profile/projectProfile.js";
@@ -68,6 +69,8 @@ export function exitCodeFor(report: DoctorReport): number {
 }
 
 export interface DoctorOptions {
+  /** `--root <name>` — inspect the named Knowledge root instead of the default (DR §4). */
+  knowledgeRootName?: string;
   /**
    * Project whose installation metadata, .claude and state store are examined.
    * Absent = the repository the user is standing in (process.cwd()); when
@@ -164,6 +167,11 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorRepo
     const config = loadInstallationConfig(options.installationConfigPath ?? defaultInstallationConfigPath());
     boundKnowledgeRoot = config.knowledge_root;
     knowledgeRootValue = config.knowledge_root;
+    // `--root <name>` inspects the named root (DR §4); an unknown name is an
+    // error, not a diagnosis, so it surfaces instead of degrading to a check.
+    if (options.knowledgeRootName !== undefined) {
+      knowledgeRootValue = resolveInstallationRoot(config, options.knowledgeRootName).path;
+    }
   } catch {
     configLoaded = false;
   }

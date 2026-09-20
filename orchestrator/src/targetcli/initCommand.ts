@@ -43,6 +43,8 @@ export interface TargetInitOptions {
   runtimes?: readonly WorkspaceRuntime[];
   /** Machine-wide installation.yaml override (tests); forwarded to the sync engine's DEV-workspace binding resolution. */
   installationConfigPath?: string;
+  /** Named Knowledge root (DR §4 `--root`) for the sync's DEV-workspace binding resolution. */
+  rootName?: string;
   /** Injectable prerequisite probe; init reports failures but does not refuse. */
   probe?: (runtime: WorkspaceRuntime) => { available: boolean; detail?: string };
 }
@@ -158,6 +160,7 @@ export function runTargetInit(options: TargetInitOptions): TargetInitResult {
     manifest: previousManifest,
     config,
     installationConfigPath: options.installationConfigPath,
+    rootName: options.rootName,
     now: options.now,
     force: options.force,
     explicitStack: options.stack,

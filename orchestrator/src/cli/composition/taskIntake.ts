@@ -9,6 +9,7 @@ import { readModuleDoc } from "../../agents/moduleDocs.js";
 import { readWorkPlan } from "../../docs/planGraph.js";
 import { preflightThreeRepoTask } from "../../threeRepo/preflight.js";
 import { installationConfigOverride, loadInstallationConfig } from "../../threeRepo/installation.js";
+import { resolveInstallationRoot } from "../../threeRepo/rootSelector.js";
 import { resolveModuleTargets } from "../../threeRepo/moduleTargetResolver.js";
 import { loadTargetRegistry } from "../../threeRepo/targets.js";
 import {
@@ -36,7 +37,7 @@ export function contractRootForTask(projectRoot: string, bindings: TargetBinding
 export function plannedTier(args: CliArgs, taskId: string): string | undefined {
   if (!args.module) return undefined;
   try {
-    const planMd = readModuleDoc(resolveContextDocsRoot(args.projectRoot), args.module, "plan.md");
+    const planMd = readModuleDoc(resolveContextDocsRoot(args.projectRoot, process.env, args.rootName), args.module, "plan.md");
     return planMd === null ? undefined : readWorkPlan(planMd).tasks.find((task) => task.id === taskId)?.tier;
   } catch {
     return undefined;
@@ -92,6 +93,7 @@ export function runtimeTaskWorkRoots(
       // its own "Framework root".
       frameworkRoot: resolveFrameworkRoot(),
       installationConfigPath,
+      knowledgeRootName: args.rootName,
       moduleScope,
       // openTask validated and logged this exact binding immediately before
       // resolving roots; repeating each warning once per stage adds no signal.
@@ -139,8 +141,11 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string):
   let moduleScope: TaskBindingModuleScope | undefined;
   const validateInstalledBindings = (): void => {
     const installation = loadInstallationConfig(installationConfigPath);
+    // The run's `--root` (or the installation default) decides which root's
+    // registry and module docs validate this task (DR §3).
+    const selectedKnowledgeRoot = resolveInstallationRoot(installation, args.rootName).path;
     if (args.module) {
-      const resolved = resolveModuleTargets(args.module, installation.knowledge_root, {
+      const resolved = resolveModuleTargets(args.module, selectedKnowledgeRoot, {
         frameworkRoot: resolveFrameworkRoot(),
       });
       moduleScope = {
@@ -152,7 +157,7 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string):
     const result = validateNewTaskBindings(
       classification,
       args.targetBindings,
-      loadTargetRegistry(installation.knowledge_root),
+      loadTargetRegistry(selectedKnowledgeRoot),
       { moduleScope },
     );
     for (const warning of result.warnings) console.warn(`[orchestrator] WARNING: ${warning}`);
@@ -177,7 +182,7 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string):
       `level=${classification.level} pipeline=${classification.pipeline.join(" -> ")}`,
   );
   for (const reason of classification.reasons) console.log(`[orchestrator]   reason: ${reason}`);
-  const docsRoot = resolveContextDocsRoot(args.projectRoot);
+  const docsRoot = resolveContextDocsRoot(args.projectRoot, process.env, args.rootName);
   const created = registry.create({
     taskId,
     classification,

@@ -686,13 +686,18 @@ describe("software-team-agents — target-first end to end", () => {
     ]);
     const templatesDir = path.join(fw, "templates");
 
-    expect((await capture(() => runTargetCli(["init"], target, fw))).code).toBe(0);
+    // [amended R10 — knowingly] every call names NO_INSTALLATION: since the
+    // DR §3 rule 7 assertion, resolveKnowledgeBinding also reads the
+    // installation during the legacy knowledge.path lane, so an unisolated
+    // sync would compare the fixture against the developer machine's real
+    // binding and the two runs would disagree about the rendered bytes.
+    expect((await capture(() => runTargetCli(["init"], target, fw, { installationConfigPath: NO_INSTALLATION }))).code).toBe(0);
     const cfg = defaultTargetConfig(path.basename(target), "2026-01-01T00:00:00Z", "dev");
     cfg.knowledge = { path: knowledge };
     writeTargetConfig(target, cfg);
 
     // `sync` reconciles it through a block without claiming project prose ...
-    const repeat = await capture(() => runTargetCli(["sync"], target, fw));
+    const repeat = await capture(() => runTargetCli(["sync"], target, fw, { installationConfigPath: NO_INSTALLATION }));
     expect(repeat.code, repeat.out).toBe(0);
     expect(stripBootstrapBlock(fs.readFileSync(path.join(target, "CLAUDE.md"), "utf8"))).toBe("# the project's own instructions\n");
 

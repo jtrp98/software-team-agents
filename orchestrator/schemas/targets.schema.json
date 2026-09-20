@@ -1,16 +1,37 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["schema_version", "targets"],
-  "properties": {
-    "schema_version": { "const": 1 },
-    "targets": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["target_id", "name", "remote_url", "status"], "properties": {
-      "target_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
-      "name": { "type": "string", "minLength": 1 },
-      "remote_url": { "type": "string", "minLength": 1, "pattern": "^(?!.*://[^/\\s:@]+:[^/\\s@]+@)(?!.*[?&](token|access_token|password)=).+$" },
-      "status": { "enum": ["active", "retired"] },
-      "type": { "enum": ["frontend", "backend", "fullstack"], "description": "The repository's delivery role, declared once on the Target (AD-1). Optional at schema_version: 1; required at v2 behind a propose-and-confirm migration." }
-    } } }
-  }
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "targets"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "targets": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["target_id", "name", "remote_url", "status"], "properties": {
+          "target_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "name": { "type": "string", "minLength": 1 },
+          "remote_url": { "type": "string", "minLength": 1, "pattern": "^(?!.*://[^/\\s:@]+:[^/\\s@]+@)(?!.*[?&](token|access_token|password)=).+$" },
+          "status": { "enum": ["active", "retired"] },
+          "type": { "enum": ["frontend", "backend", "fullstack"], "description": "The repository's delivery role, declared once on the Target (AD-1). Optional at schema_version: 1; required at v2 behind a propose-and-confirm migration." }
+        } } }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "targets"],
+      "properties": {
+        "schema_version": { "const": 2 },
+        "targets": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["target_id", "name", "remote_url", "status", "ownership_state"], "properties": {
+          "target_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+          "name": { "type": "string", "minLength": 1 },
+          "remote_url": { "type": "string", "minLength": 1, "pattern": "^(?!.*://[^/\\s:@]+:[^/\\s@]+@)(?!.*[?&](token|access_token|password)=).+$" },
+          "status": { "enum": ["active", "retired"] },
+          "type": { "enum": ["frontend", "backend", "fullstack"], "description": "The repository's delivery role, declared once on the Target (AD-1)." },
+          "ownership_state": { "enum": ["owned", "released"], "description": "The cross-root ownership claim (DT section 2.4). A released entry is a tombstone: it no longer owns its canonical coordinate. active+released is invalid." },
+          "repository_aliases": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Canonical repository coordinates (DT section 2.4) this Target answered to in the past - never SSH host aliases." }
+        } } }
+      }
+    }
+  ]
 }

@@ -1,3 +1,4 @@
+import { InstallationConfigError } from "../threeRepo/installation.js";
 import { resolveKnowledgeBinding } from "./roleWorkspace.js";
 
 export const KNOWLEDGE_ROOT_INCLUDE_PATH = ".claude/shared/knowledge-root.md";
@@ -153,6 +154,7 @@ export function resolveDevKnowledgeRoot(options: {
   targetRoot: string;
   config?: { role?: "ba" | "dev"; knowledge?: { path: string } };
   installationConfigPath?: string;
+  requestedRootName?: string;
 }): string | undefined {
   if (options.config?.role !== "dev") return undefined;
   try {
@@ -160,9 +162,15 @@ export function resolveDevKnowledgeRoot(options: {
       targetRoot: options.targetRoot,
       configKnowledgePath: options.config.knowledge?.path,
       installationConfigPath: options.installationConfigPath,
+      requestedRootName: options.requestedRootName,
     });
     return binding?.knowledgeRoot;
-  } catch {
+  } catch (error) {
+    // An installation file that exists but cannot be loaded must not silently
+    // render the workspace as if no Knowledge binding existed — that derived
+    // content would point the session at the wrong docs. Advisory binding
+    // problems (KnowledgeBindingError) stay non-fatal as before.
+    if (error instanceof InstallationConfigError) throw error;
     return undefined;
   }
 }

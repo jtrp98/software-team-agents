@@ -10,6 +10,7 @@ import { readTargetManifest, isTargetInitialized, loadTargetConfig, TargetNotIni
 import { installedFrameworkVersion } from "./version.js";
 import { runSession, type RuntimeName } from "./devCommand.js";
 import { applyCleanup, CleanupUnmanagedWorkspaceError, planCleanup, renderCleanupPlan, reportCleanupResult } from "./cleanupCommand.js";
+import { extractRootSelectorFlag } from "../threeRepo/rootSelector.js";
 
 /**
  * The single-workspace entry point: `software-team-agents init|sync|status|open`,
@@ -42,6 +43,8 @@ export const TARGET_USAGE =
   "\n" +
   "options:\n" +
   "  --target-root <path>   operate on <path> instead of the current directory\n" +
+  "  --root <name>          init/sync/status/open: read the named Knowledge root from\n" +
+  "                         installation.yaml (default when omitted)\n" +
   "  --role <name>          retired: accepted and ignored — nothing keys off a recorded\n" +
   "                         role anymore (old configs still open untouched)\n" +
   "  --stack <name>         init/sync: explicitly resolve ambiguous Target stack evidence\n" +
@@ -65,6 +68,8 @@ export interface TargetCliArgs {
   /** `--role` value, accepted for command-line compatibility and ignored (V10 TASK-026). */
   retiredRole?: string;
   stack?: string;
+  /** `--root <name>` — the named Knowledge root this command reads from (DR §4). */
+  rootName?: string;
   force: boolean;
   confirmAgentsPointer: boolean;
   autoSync: boolean;
@@ -83,9 +88,10 @@ export interface TargetCliArgs {
 
 /** Pure argv parser — no console/exit, directly testable. */
 export function parseTargetArgs(argv: string[]): TargetCliArgs {
-  const args: TargetCliArgs = { force: false, confirmAgentsPointer: false, autoSync: true, runtime: "claude", runtimeSelections: [], allowUnguardedRuntime: false, dryRun: false, yes: false, json: false, help: false, version: false };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
+  const { requestedName, rest } = extractRootSelectorFlag(argv);
+  const args: TargetCliArgs = { force: false, confirmAgentsPointer: false, autoSync: true, runtime: "claude", runtimeSelections: [], allowUnguardedRuntime: false, dryRun: false, yes: false, json: false, help: false, version: false, rootName: requestedName };
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
     switch (arg) {
       case "init":
       case "sync":
@@ -100,19 +106,19 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
         // Caught, not an alias: the answer names the one entry command (V10 TASK-026).
         throw new RetiredCommandError(arg);
       case "--target-root":
-        args.targetRoot = argv[++i];
+        args.targetRoot = rest[++i];
         if (!args.targetRoot) throw new Error("--target-root requires a path");
         break;
       case "--role": {
         // Accepted and ignored: nothing keys off a recorded role anymore
         // (V10 TASK-021 kept old configs readable; V10 TASK-026 retires the flag).
-        const value = argv[++i];
+        const value = rest[++i];
         if (!value) throw new Error("--role requires a value");
         args.retiredRole = value;
         break;
       }
       case "--stack":
-        args.stack = argv[++i];
+        args.stack = rest[++i];
         if (!args.stack) throw new Error("--stack requires a profile name");
         break;
       case "--force":
@@ -125,7 +131,7 @@ export function parseTargetArgs(argv: string[]): TargetCliArgs {
         args.autoSync = false;
         break;
       case "--runtime": {
-        const value = argv[++i] as RuntimeName | undefined;
+        const value = rest[++i] as RuntimeName | undefined;
         if (value !== "claude" && value !== "codex" && value !== "opencode" && value !== "antigravity") {
           throw new Error(`--runtime must be claude, codex, opencode or antigravity (got ${value ?? "nothing"})`);
         }
@@ -205,6 +211,9 @@ export async function runTargetCli(
     return 1;
   }
   const targetRootArg = args.targetRoot ?? cwd;
+  if (args.command === "cleanup" && args.rootName) {
+    throw new Error("cleanup does not select a Knowledge root; --root applies to init/sync/status/open");
+  }
 
   if (args.version) {
     console.log(installedFrameworkVersion(frameworkRoot));
@@ -222,6 +231,7 @@ export async function runTargetCli(
           stack: args.stack,
           runtimes: args.runtimeSelections,
           installationConfigPath: options.installationConfigPath,
+          rootName: args.rootName,
         });
         console.log(
           `[software-team-agents] ${result.role === "ba" ? "Knowledge" : "Target"} workspace ` +
@@ -256,6 +266,7 @@ export async function runTargetCli(
             config,
             role: config?.role,
             installationConfigPath: options.installationConfigPath,
+            rootName: args.rootName,
             now: new Date().toISOString(),
             force: args.force,
             explicitStack: args.stack,
@@ -294,7 +305,7 @@ export async function runTargetCli(
       }
 
       case "status": {
-        const status = gatherStatus({ targetRoot: targetRootArg, templatesDir: path.join(frameworkRoot, "templates"), installationConfigPath: options.installationConfigPath });
+        const status = gatherStatus({ targetRoot: targetRootArg, templatesDir: path.join(frameworkRoot, "templates"), installationConfigPath: options.installationConfigPath, rootName: args.rootName });
         if (args.json) console.log(JSON.stringify(status, null, 2));
         else console.log(renderStatus(status));
         return 0;
@@ -308,6 +319,7 @@ export async function runTargetCli(
           autoSync: args.autoSync,
           allowUnguardedRuntime: args.allowUnguardedRuntime,
           installationConfigPath: options.installationConfigPath,
+          rootName: args.rootName,
         });
       }
 

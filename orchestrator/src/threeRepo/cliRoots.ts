@@ -16,6 +16,7 @@ import { AgentStage } from "../types.js";
 import type { PersistedTask } from "../store/taskStore.js";
 import type { ThreeRepoRequestRoots } from "./preflight.js";
 import { defaultInstallationConfigPath, installationConfigOverride, loadInstallationConfig } from "./installation.js";
+import { resolveSelectedKnowledgeRootOrLegacy } from "./rootSelector.js";
 import { preflightThreeRepoTask } from "./preflight.js";
 import { resolveFrameworkRoot } from "../targetcli/roots.js";
 
@@ -50,6 +51,7 @@ export function resolveWritableWorkRoots(
   store: TaskLookup,
   stage: AgentStage,
   moduleName?: string,
+  requestedRootName?: string,
 ): QaWorkRoot[] {
   const configPath = installationConfigPath();
   try {
@@ -74,6 +76,7 @@ export function resolveWritableWorkRoots(
     roots3 = preflightThreeRepoTask(task, stage, {
       frameworkRoot: resolveFrameworkRoot(),
       installationConfigPath: configPath,
+      knowledgeRootName: requestedRootName,
       moduleName,
     });
   } catch (error) {
@@ -102,17 +105,14 @@ export function resolveWritableWorkRoots(
 /**
  * The root the module docs live under.
  *
- * - three-repo mode → the installation's `knowledge_root`
- * - single-repo / legacy project / any installation-config load failure → `projectRoot`
+ * - three-repo mode → the selected Knowledge root (DR §3 — `requestedRootName`
+ *   comes from the command's `--root`)
+ * - single-repo / legacy project with no installation file → `projectRoot`
+ * - an installation file that exists but cannot be loaded → throws (the
+ *   inventory's A12 silent fallback would have read the wrong docs)
  */
-export function resolveDocsRoot(projectRoot: string): string {
-  try {
-    const installation = loadInstallationConfig(installationConfigPath());
-    if (installation.knowledge_root) return installation.knowledge_root;
-  } catch {
-    // legacy project: projectRoot stands
-  }
-  return projectRoot;
+export function resolveDocsRoot(projectRoot: string, requestedRootName?: string): string {
+  return resolveSelectedKnowledgeRootOrLegacy(projectRoot, requestedRootName, installationConfigPath());
 }
 
 /** Thin wrapper naming the QA-side caller's intent — same resolver, same rules. */
@@ -121,8 +121,9 @@ export function resolveQaWorkRoots(
   taskId: string,
   store: TaskLookup,
   moduleName?: string,
+  requestedRootName?: string,
 ): QaWorkRoot[] {
-  return resolveWritableWorkRoots(projectRoot, taskId, store, AgentStage.QA_ENGINEER, moduleName);
+  return resolveWritableWorkRoots(projectRoot, taskId, store, AgentStage.QA_ENGINEER, moduleName, requestedRootName);
 }
 
 /**
@@ -132,14 +133,19 @@ export function resolveQaWorkRoots(
  * The outer `loadInstallationConfig` guard decides three-repo vs legacy once;
  * the returned callback reloads the task every stage (so `--resume` observes
  * retirement/mapping changes) and throws if it vanished from the store.
+ * Legacy means the installation *file is absent* — a file that exists but
+ * cannot be loaded throws (A15: an unusable installation must not pass for a
+ * legacy project and run against the wrong roots).
  */
 export function resolveThreeRepoTaskLookup(
   projectRoot: string,
   store: TaskLookup,
   moduleName?: string,
+  requestedRootName?: string,
 ): ((taskId: string, stage: AgentStage) => { task: PersistedTask; roots: ThreeRepoRequestRoots }) | undefined {
+  const configPath = installationConfigPath();
   try {
-    loadInstallationConfig(installationConfigPath());
+    loadInstallationConfig(configPath);
     return (taskId: string, stage: AgentStage) => {
       const task = store.loadTask(taskId);
       if (!task) throw new Error(`task ${taskId} disappeared from the state store`);
@@ -147,12 +153,15 @@ export function resolveThreeRepoTaskLookup(
         task,
         roots: preflightThreeRepoTask(task, stage, {
           frameworkRoot: resolveFrameworkRoot(),
-          installationConfigPath: installationConfigPath(),
+          installationConfigPath: configPath,
+          knowledgeRootName: requestedRootName,
           moduleName,
         }),
       };
     };
-  } catch {
-    return undefined;
+  } catch (error) {
+    const resolvedConfigPath = configPath ?? defaultInstallationConfigPath();
+    if (!fs.existsSync(resolvedConfigPath)) return undefined;
+    throw error;
   }
 }

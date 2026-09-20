@@ -64,6 +64,7 @@ export async function runContextVerb(rest: string[], defaultProjectRoot: string)
       phases,
       taskId,
       projectRoot,
+      rootName: extractRootSelectorFlag(rest).requestedName,
     });
     console.log(rest.includes("--json") ? JSON.stringify(contextCommandJson(result), null, 2) : renderContextCommand(result));
     // The one measurable-without-runtime-cooperation number `sta tokens` can
@@ -91,6 +92,7 @@ import { latestExecutionPacketPath, readExecutionPacketForAudit } from "../../st
 import { readExecutionPacket } from "../../state/runtimeArtifacts.js";
 import { recordContextComposition } from "../../observability/sessionRecord.js";
 import { flagValue, positionalArg } from "../support.js";
+import { extractRootSelectorFlag } from "../../threeRepo/rootSelector.js";
 import * as fs from "node:fs";
 import { packetConfigHash } from "../../artifacts/executionPacket.js";
 import { packetCompilerHash } from "../../runtime/agentRunAssembly.js";
