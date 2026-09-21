@@ -63,6 +63,27 @@ export function loadLocalTargetMapping(knowledgeRoot: string, registry: TargetRe
   return resolved;
 }
 
+/** Reads one root's `.workflow/targets.local.yaml` target-path map without
+ * the existence/standalone validation `loadLocalTargetMapping` applies: the
+ * ownership proof needs the *declared* path, and a checkout may legitimately
+ * not exist on this machine. The file itself is schema-validated by
+ * `loadRemoteHostAliases`, which reads the same file first. */
+export function declaredCheckoutPaths(knowledgeRoot: string): Record<string, string> {
+  try {
+    const parsed = parseYaml(fs.readFileSync(localTargetsPath(knowledgeRoot), "utf8")) as
+      | { targets?: Record<string, { path?: string }> }
+      | undefined;
+    const entries = parsed?.targets ?? {};
+    const paths: Record<string, string> = {};
+    for (const [targetId, entry] of Object.entries(entries)) {
+      if (entry?.path) paths[targetId] = path.resolve(entry.path);
+    }
+    return paths;
+  } catch {
+    return {};
+  }
+}
+
 /** Reverse lookup used by context assembly; exact canonical roots only, never a basename guess. */
 export function targetIdForLocalPath(entries: readonly ResolvedLocalTarget[], targetRoot: string): string | undefined {
   let canonical: string;

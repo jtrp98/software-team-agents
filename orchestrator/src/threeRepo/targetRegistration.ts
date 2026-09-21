@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { defaultInstallationConfigPath, loadInstallationConfig, normalizeKnowledgeRoots } from "./installation.js";
-import { canonicalRepositoryCoordinate, RepositoryCoordinateError } from "./repositoryIdentity.js";
+import { canonicalRepositoryCoordinate, RepositoryCoordinateError, assertCanonicalRepositoryCoordinate } from "./repositoryIdentity.js";
 import { loadRemoteHostAliases } from "./localTargets.js";
 import {
   loadTargetRegistry,
@@ -43,6 +43,11 @@ export interface RegisterTargetInput {
   type?: TargetType;
   /** Named destination root (DR §3); omitted = the installation's default. */
   rootName?: string;
+  /** Canonical coordinates the new entry keeps as alias history (DT §2.4 —
+   * the transfer's destination register uses this so a moved remote still
+   * answers to its old coordinate). Each entry is validated as a canonical
+   * coordinate and must not collide with another root's owner. */
+  repositoryAliases?: string[];
   installationConfigPath?: string;
 }
 
@@ -129,6 +134,23 @@ export function registerTarget(input: RegisterTargetInput): RegisterTargetResult
   const destinationRegistryPath = path.join(rootsMap[selected.name] as string, "targets.yaml");
   const destinationAliases = loadRemoteHostAliases(rootsMap[selected.name] as string);
   const candidateCoordinate = canonicalizeOrRefuse(input.remoteUrl, destinationAliases);
+  const candidateAliases: string[] = [];
+  for (const alias of input.repositoryAliases ?? []) {
+    try {
+      assertCanonicalRepositoryCoordinate(alias);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message.slice(error.message.indexOf(": ") + 2) : String(error);
+      throw new TargetRegistrationError(
+        `Target registration refused: repository alias "${alias}" is not a canonical repository coordinate: ${reason}`,
+      );
+    }
+    if (alias === candidateCoordinate) {
+      throw new TargetRegistrationError(
+        `Target registration refused: repository alias "${alias}" duplicates the candidate's own remote coordinate`,
+      );
+    }
+    candidateAliases.push(alias);
+  }
 
   const previousDestination = snapshots.get(selected.name) as TargetRegistry;
   let existing;
@@ -150,7 +172,7 @@ export function registerTarget(input: RegisterTargetInput): RegisterTargetResult
       status: "active",
       ...(input.type !== undefined ? { type: input.type } : {}),
       ownership_state: "owned",
-      repository_aliases: [],
+      repository_aliases: [...candidateAliases],
     });
   } else {
     if (existing.status === "active") {
@@ -169,13 +191,16 @@ export function registerTarget(input: RegisterTargetInput): RegisterTargetResult
     );
   }
 
-  // Step 4 (candidate side) — the candidate's coordinate must be free.
-  const candidateOwner = owners.get(candidateCoordinate);
-  if (candidateOwner !== undefined && !(candidateOwner.rootName === selected.name && candidateOwner.targetId === input.targetId)) {
-    throw new TargetRegistrationError(
-      `Target registration refused: canonical repository "${candidateCoordinate}" is already owned by root "${candidateOwner.rootName}" as Target "${candidateOwner.targetId}". ` +
-        "Run sta doctor and complete the human-approved Target ownership transfer; do not edit targets.yaml by hand.",
-    );
+  // Step 4 (candidate side) — the candidate's coordinates (remote + alias
+  // history) must be free.
+  for (const coordinate of [candidateCoordinate, ...candidateAliases]) {
+    const candidateOwner = owners.get(coordinate);
+    if (candidateOwner !== undefined && !(candidateOwner.rootName === selected.name && candidateOwner.targetId === input.targetId)) {
+      throw new TargetRegistrationError(
+        `Target registration refused: canonical repository "${coordinate}" is already owned by root "${candidateOwner.rootName}" as Target "${candidateOwner.targetId}". ` +
+          "Run sta doctor and complete the human-approved Target ownership transfer; do not edit targets.yaml by hand.",
+      );
+    }
   }
 
   // Step 5 — the registry's own immutability invariants run inside the writer.

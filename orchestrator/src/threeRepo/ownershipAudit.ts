@@ -1,6 +1,5 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parse as parseYaml } from "yaml";
 import {
   canonicalPathForComparison,
   defaultInstallationConfigPath,
@@ -8,7 +7,7 @@ import {
   normalizeKnowledgeRoots,
 } from "./installation.js";
 import { canonicalRepositoryCoordinate, RepositoryCoordinateError } from "./repositoryIdentity.js";
-import { loadRemoteHostAliases, localTargetsPath } from "./localTargets.js";
+import { declaredCheckoutPaths, loadRemoteHostAliases } from "./localTargets.js";
 import { loadTargetRegistry, normalizeTargetRegistry } from "./targets.js";
 
 /**
@@ -55,27 +54,6 @@ function isUnmappedAliasRefusal(error: RepositoryCoordinateError): boolean {
   return error.message.includes("has no machine-local canonical-host mapping");
 }
 
-/** Reads one root's `.workflow/targets.local.yaml` target-path map without
- * the existence/standalone validation `loadLocalTargetMapping` applies: the
- * ownership proof needs the *declared* path, and a checkout may legitimately
- * not exist on this machine. The file itself is schema-validated by
- * `loadRemoteHostAliases`, which reads the same file first. */
-function declaredCheckoutPaths(knowledgeRoot: string): Record<string, string> {
-  try {
-    const parsed = parseYaml(fs.readFileSync(localTargetsPath(knowledgeRoot), "utf8")) as
-      | { targets?: Record<string, { path?: string }> }
-      | undefined;
-    const entries = parsed?.targets ?? {};
-    const paths: Record<string, string> = {};
-    for (const [targetId, entry] of Object.entries(entries)) {
-      if (entry?.path) paths[targetId] = path.resolve(entry.path);
-    }
-    return paths;
-  } catch {
-    return {};
-  }
-}
-
 export function auditTargetOwnershipAcrossRoots(
   options: { installationConfigPath?: string } = {},
 ): OwnershipAuditResult {
@@ -102,6 +80,11 @@ export function auditTargetOwnershipAcrossRoots(
   const problems: string[] = [];
   const warnings: string[] = [];
   let releasedTombstones = 0;
+  /** Released tombstones collected for the pair proof: a finished transfer
+   * leaves one behind, and its coordinates must stay covered by a living
+   * owner — a tombstone with no owning destination pair is the intermediate
+   * state of an interrupted transfer (DT §4 "transfer pending/inconsistent"). */
+  const tombstones: Array<{ rootName: string; targetId: string; coordinates: string[] | null; reason?: string }> = [];
 
   for (const rootName of scannedRoots) {
     const rootPath = path.resolve(normalized.roots[rootName] as string);
@@ -127,6 +110,20 @@ export function auditTargetOwnershipAcrossRoots(
       const owner = `${rootName}/${target.target_id}`;
       if (target.ownership_state === "released") {
         releasedTombstones++;
+        try {
+          tombstones.push({
+            rootName,
+            targetId: target.target_id,
+            coordinates: [canonicalRepositoryCoordinate(target.remote_url, aliases), ...target.repository_aliases],
+          });
+        } catch (error) {
+          tombstones.push({
+            rootName,
+            targetId: target.target_id,
+            coordinates: null,
+            reason: error instanceof Error ? error.message : String(error),
+          });
+        }
         continue; // a tombstone claims nothing — that is what being released means
       }
       let key: string;
@@ -175,6 +172,29 @@ export function auditTargetOwnershipAcrossRoots(
       );
     }
   }
+  // The pair proof (DT §5.2 step 9 / §4 "transfer pending/inconsistent"): a
+  // released tombstone is a finished transfer's record, so a living owner
+  // must cover at least one of its coordinates. None does → the release sits
+  // in the intermediate state — the destination register never landed and the
+  // release was not rolled back; both roots refuse work until it is resolved.
+  let pairedTombstones = 0;
+  for (const tombstone of tombstones) {
+    if (tombstone.coordinates === null) {
+      problems.push(
+        `Target ownership: released tombstone "${tombstone.targetId}" in root "${tombstone.rootName}" has an identity that cannot be proven (${tombstone.reason}) — ` +
+          "the transfer pair cannot be verified; declare the alias mapping or repair the registry, fail-closed",
+      );
+      continue;
+    }
+    if (tombstone.coordinates.some((coordinate) => identityOwners.has(coordinate))) {
+      pairedTombstones++;
+      continue;
+    }
+    problems.push(
+      `Target ownership: released tombstone "${tombstone.targetId}" in root "${tombstone.rootName}" has no owning destination pair for canonical repository "${tombstone.coordinates[0]}" — ` +
+        "the transfer is incomplete; complete the destination register or roll the release back through the human-gated transfer flow before running either root.",
+    );
+  }
   if (scannedRoots.length > 0) warnings.push(CROSS_MACHINE_WARNING);
 
   // The coverage line is informational, not a defect of this machine: an
@@ -186,7 +206,10 @@ export function auditTargetOwnershipAcrossRoots(
   const passNote =
     scannedRoots.length > 0
       ? `${scannedRoots.length} configured root(s) scanned; owning keys unique across roots` +
-        (releasedTombstones > 0 ? `; ${releasedTombstones} released tombstone(s) not counted as owners` : "")
+        (releasedTombstones > 0
+          ? `; ${releasedTombstones} released tombstone(s) not counted as owners` +
+            (pairedTombstones > 0 ? `; ${pairedTombstones} released tombstone(s) paired with a living owner` : "")
+          : "")
       : "no installation config — a legacy single-root machine declares no roots to audit";
   const detail =
     problems.length > 0

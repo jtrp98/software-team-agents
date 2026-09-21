@@ -16,6 +16,7 @@ import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
 import { CHECKERS, runChecker } from "./cli/checkers.js";
 import { configuredTokenBudget, flagValue as supportFlagValue, positionalArg } from "./cli/support.js";
 import { runStatusVerb } from "./cli/verbs/status.js";
+import { runTransferVerb } from "./cli/verbs/transfer.js";
 import { runApproveVerb } from "./cli/verbs/approve.js";
 import { runPauseVerb } from "./cli/verbs/pause.js";
 import { runCancelVerb } from "./cli/verbs/cancel.js";
@@ -626,6 +627,7 @@ const VERBS = [
   "list-backups",
   "roles",
   "configure",
+  "transfer",
   "doctor",
   "runtimes",
   "changed",
@@ -695,6 +697,8 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string, d
       return runRolesVerb(rest, defaultProjectRoot);
     case "configure":
       return runConfigureVerb(rest, defaultProjectRoot);
+    case "transfer":
+      return runTransferVerb(rest, defaultProjectRoot);
     case "doctor":
       return runDoctorVerb(rest);
     case "runtimes":

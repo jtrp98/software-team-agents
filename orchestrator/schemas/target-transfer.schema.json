@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "transfer_id",
+    "source_root",
+    "source_target_id",
+    "destination_root",
+    "destination_target_id",
+    "destination_name",
+    "destination_remote_url",
+    "source_approved_by",
+    "destination_approved_by",
+    "confirmed_transfer_not_fork_or_mirror",
+    "status"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "transfer_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$", "description": "Stable name of one transfer; every operation re-proves the registry state against this record (DT section 5.2 steps 2/6/7)." },
+    "source_root": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+    "source_target_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" },
+    "destination_root": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+    "destination_target_id": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$", "description": "May equal or differ from source_target_id - target ids are per-root (DT section 1 invariant 2)." },
+    "destination_name": { "type": "string", "minLength": 1 },
+    "destination_type": { "enum": ["frontend", "backend", "fullstack"] },
+    "destination_remote_url": { "type": "string", "minLength": 1, "pattern": "^(?!.*://[^/\\s:@]+:[^/\\s@]+@)(?!.*[?&](token|access_token|password)=).+$" },
+    "destination_repository_aliases": { "type": "array", "items": { "type": "string", "minLength": 1 }, "description": "Canonical coordinates (never SSH aliases) the destination keeps as alias history - at minimum the source coordinates when the remote moved." },
+    "source_approved_by": { "type": "string", "minLength": 1, "description": "The person approving the release for the source root - a human act, typed by that person." },
+    "destination_approved_by": { "type": "string", "minLength": 1, "description": "The person approving for the destination root; both owners confirm when they are different people (step 2)." },
+    "confirmed_transfer_not_fork_or_mirror": { "type": "boolean", "description": "Step 2 confirmation: this is a transfer of one repository, not a fork/mirror being registered as a new Target." },
+    "status": { "enum": ["pending", "released", "completed", "rolled_back"], "description": "Mechanical ledger of the flow (pending -> released -> completed, or released -> rolled_back); written by the flow's operations, never in place of a human approval." }
+  }
+}

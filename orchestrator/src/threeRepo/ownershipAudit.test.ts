@@ -115,8 +115,7 @@ describe("V11 TASK-025 — Target ownership across configured roots (DT §4)", (
     expect(alias.problems.join("\n")).toContain(`canonical repository "github.com/acme/api" appears in multiple configured roots: personal/api, work/service`);
   });
 
-  it("does not count a released tombstone as an owner, but keeps `retired` owning (DT §5.1)", () => {
-    const configPath = path.join(tempRoot("cfg"), "installation.yaml");
+  it("does not count a released tombstone as an owner, but keeps `retired` owning (DT §5.1)", () => {    const configPath = path.join(tempRoot("cfg"), "installation.yaml");
     const rootA = tempRoot("rootA");
     const rootB = tempRoot("rootB");
     namesInstallation(configPath, rootA, rootB);
@@ -137,6 +136,34 @@ describe("V11 TASK-025 — Target ownership across configured roots (DT §4)", (
     const retired = auditTargetOwnershipAcrossRoots({ installationConfigPath: configPath });
     expect(retired.status).toBe("FAIL");
     expect(retired.problems.join("\n")).toContain("appears in multiple configured roots");
+  });
+
+  it("reports a released tombstone with no owning destination pair as FAIL — the interrupted transfer (DT §5.2/§4)", () => {
+    const configPath = path.join(tempRoot("cfg"), "installation.yaml");
+    const rootA = tempRoot("rootA");
+    const rootB = tempRoot("rootB");
+    namesInstallation(configPath, rootA, rootB);
+    // The source root released; the destination never registered — the
+    // intermediate state both roots refuse and the audit must not pass.
+    writeRegistry(
+      rootA,
+      `schema_version: 2\ntargets:\n  - target_id: api\n    name: api\n    remote_url: https://github.com/acme/api.git\n    status: retired\n    ownership_state: released\n    repository_aliases: []\n`,
+    );
+    const pending = auditTargetOwnershipAcrossRoots({ installationConfigPath: configPath });
+    expect(pending.status).toBe("FAIL");
+    expect(pending.problems.join("\n")).toContain(
+      `released tombstone "api" in root "personal" has no owning destination pair for canonical repository "github.com/acme/api"`,
+    );
+    expect(pending.problems.join("\n")).toContain("complete the destination register or roll the release back");
+
+    // The completed pair — the destination owns the coordinate — is the PASS shape.
+    writeRegistry(
+      rootB,
+      `schema_version: 2\ntargets:\n  - target_id: backend\n    name: backend\n    remote_url: https://github.com/acme/api.git\n    status: active\n    ownership_state: owned\n    repository_aliases: []\n`,
+    );
+    const complete = auditTargetOwnershipAcrossRoots({ installationConfigPath: configPath });
+    expect(complete.status).toBe("PASS");
+    expect(complete.detail).toContain("1 released tombstone(s) paired with a living owner");
   });
 
   it("FAILs on a registry that exists but cannot be proven, and treats an absent registry as empty (register's own semantics)", () => {
