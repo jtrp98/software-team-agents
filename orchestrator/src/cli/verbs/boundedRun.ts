@@ -107,9 +107,10 @@ export interface BoundedRunArgs {
 }
 
 export const BOUNDED_RUN_USAGE =
-  "sta bounded-run --module <name> (--all | --phase <n> | --task <id>[,<id>...]) [--until next-gate|qa|done] [--dry-run] [--autonomy edit|full] [--runtime <id>] [--model <name>] [--effort <name>] [--target-root <path>] [--target-id <id>...] [--knowledge-root <path>] [--run-branch <name>] [--project-root <path>] [--state-db <path>] <classification override flags>\n" +
+  "sta bounded-run --module <name> (--all | --phase <n> | --task <id>[,<id>...]) [--until next-gate|qa|done] [--dry-run] [--autonomy edit|full] [--runtime <id>] [--model <name>] [--effort <name>] [--target-root <path>] [--target-id <id>...] [--root <name>] [--knowledge-root <path>] [--run-branch <name>] [--project-root <path>] [--state-db <path>] <classification override flags>\n" +
   "sta bounded-run --resume <run-id> [--module <name>] [--until next-gate|qa|done] [--dry-run] [--autonomy edit|full] [--project-root <path>] [--state-db <path>]\n" +
   "  One initial command previews scope/order/gates/routes, then (without --dry-run) freezes and runs to the chosen boundary through DEV, deterministic verification and coherent QA/repair. Never waives a hard gate.\n" +
+  "  --root <name> selects the named Knowledge root (V11); --knowledge-root <path> is the deprecated compatibility channel — it must canonical-match exactly one registered root and is refused together with --root. A resume always uses the root frozen in the run.\n" +
   `  classification override flags (optional; deterministic classifyTask() remains authority): ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
 
 /** Pure argv parser — kept separate from process/console/exit so it is directly testable. */

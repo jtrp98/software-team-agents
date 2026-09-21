@@ -1292,6 +1292,20 @@ withTempProject((tmp) => {
     runPathHook('Write', path.join(workRoot, 'src', 'route.ts'), 'backend-engineer',
       managed({ STA_KNOWLEDGE_ROOT: knowledgeRoot })),
     ALLOW);
+
+  // TASK-028 sweep (DR §8.4) — the deny is not welded to one root: a second
+  // Knowledge root exists on disk, and the rule answers per the selection env,
+  // never per which root's path the write happens to land in.
+  const otherRoot = path.join(workRoot, 'other-knowledge');
+  fs.mkdirSync(path.join(otherRoot, '_docs', 'module', 'm'), { recursive: true });
+  check('managed session, selection complete on the second root -> its own design.md blocked',
+    runPathHook('Write', path.join(otherRoot, '_docs', 'module', 'm', 'design.md'), 'backend-engineer',
+      managed({ STA_KNOWLEDGE_ROOT: otherRoot, STA_KNOWLEDGE_ROOT_NAME: 'personal' })),
+    BLOCK);
+  check('managed session, incomplete selection with two roots on disk -> a write into the OTHER root is denied before the permission decision (no default resolved, no config read)',
+    runPathHook('Write', path.join(otherRoot, '_docs', 'module', 'm', 'design.md'), 'backend-engineer',
+      managed({ STA_KNOWLEDGE_ROOT_NAME: 'work' })),
+    BLOCK);
 });
 
 // A workspace written by an older `init` still records `role: ba` or `role:

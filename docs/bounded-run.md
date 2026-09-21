@@ -81,7 +81,8 @@ git log --oneline --decorate <base>..<run_branch>
 sta bounded-run --resume <run-id> --module <module> --autonomy edit
 ```
 
-resume ใช้ Target root (git-identity root), knowledge root, base revision, plan hash และ task order ที่ **frozen ไว้ใน run**
+resume ใช้ Target root (git-identity root), named Knowledge root (ชื่อ + canonical path — V11 freeze
+คู่ `STA_KNOWLEDGE_ROOT`/`STA_KNOWLEDGE_ROOT_NAME` ไว้ใน run), base revision, plan hash และ task order ที่ **frozen ไว้ใน run**
 ไม่ใช่ค่าจาก flag ของการเรียกครั้งนี้ — flag ที่ขัดแย้งคือ refusal ไม่ใช่ override ถ้า `plan.md`,
 `requirement.md` หรือ `design.md` เปลี่ยนไป คำสั่งจะ refuse แทนการรัน frozen scope กับ input ที่ต่างออกไป
 

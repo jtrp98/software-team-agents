@@ -278,3 +278,37 @@ describe("normalizeTargetRegistry — released stays loadable for tombstone read
     });
   });
 });
+
+describe("TASK-028 sweep — duplicates inside one root (DT §6 reject row)", () => {
+  it("a v2 file whose two entries claim one coordinate does not load — the collision refuses at read time", () => {
+    const k = knowledgeRoot(
+      "v2-collide",
+      `schema_version: 2\ntargets:\n  - target_id: api\n    name: API\n    remote_url: https://github.com/acme/api.git\n    status: active\n    ownership_state: owned\n  - target_id: backend\n    name: Backend\n    remote_url: git@github.com:acme/api.git\n    status: active\n    ownership_state: owned\n`,
+    );
+    expect(() => loadTargetRegistry(k)).toThrow(
+      /Target registry coordinates "api" and "backend" collide on "github\.com\/acme\/api"/,
+    );
+  });
+
+  it("the register flow refuses a second Target whose remote canonicalizes to a coordinate the same root already owns", () => {
+    const alpha = knowledgeRoot("alpha");
+    const beta = knowledgeRoot("beta");
+    twoRootInstallation(alpha, beta);
+    register({});
+    expect(() => register({ targetId: "api-shadow", name: "Shadow" })).toThrow(
+      /canonical repository "github\.com\/acme\/api" is already owned by root "alpha" as Target "api"/,
+    );
+  });
+
+  it("a retired Target of another root that was never released still blocks a new registration — only the transfer lifts it (DT §6)", () => {
+    const alpha = knowledgeRoot(
+      "alpha",
+      `schema_version: 2\ntargets:\n  - target_id: api\n    name: API\n    remote_url: https://github.com/acme/api.git\n    status: retired\n    ownership_state: owned\n`,
+    );
+    const beta = knowledgeRoot("beta");
+    twoRootInstallation(alpha, beta);
+    expect(() => register({ rootName: "beta" })).toThrow(
+      /canonical repository "github\.com\/acme\/api" is already owned by root "alpha" as Target "api"/,
+    );
+  });
+});

@@ -2,6 +2,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import Ajv from "ajv";
+import { parse as parseYaml } from "yaml";
 import { InstallationConfigError, loadInstallationConfig, normalizeKnowledgeRoots } from "./installation.js";
 
 /**
@@ -162,5 +164,34 @@ describe("installation config semantic rejects (DR §8.1)", () => {
       ["schema_version: 2", "default_root: personal", "knowledge_roots:", "  personal: /roots/personal", ""].join("\n"),
       "knowledge_root",
     );
+  });
+});
+
+describe("TASK-028 sweep — the V10 reader contract against a v2 file (DR §8.1)", () => {
+  it("a v1-only reader — V10's whole schema, kept verbatim as the installationV1 branch — refuses a v2 file with a clear error and never rewrites it", () => {
+    const schema = JSON.parse(
+      fs.readFileSync(path.resolve(import.meta.dirname, "..", "..", "schemas", "installation.schema.json"), "utf8"),
+    );
+    // V10's reader knew only the v1 shape: compile the v1 branch as the whole
+    // schema, carrying the shared definitions but not the v2 branch.
+    const v10Definitions = { ...schema.definitions };
+    delete v10Definitions.installationV2;
+    const v10Reader = new Ajv({ allErrors: true, strict: true }).compile({
+      ...schema.definitions.installationV1,
+      definitions: v10Definitions,
+    });
+    const file = writeInstallation(
+      v2Yaml("personal", "/roots/personal", { personal: "/roots/personal", work: "/roots/work" }),
+    );
+    const before = fs.readFileSync(file);
+    const parsed = parseYaml(fs.readFileSync(file, "utf8"));
+    expect(v10Reader(parsed)).toBe(false);
+    const keywords = (v10Reader.errors ?? []).map((error) => error.keyword);
+    // The refusal is structural, not an accident of one keyword: V10 sees both
+    // an unknown version and properties it never knew about.
+    expect(keywords).toContain("const");
+    expect(keywords).toContain("additionalProperties");
+    // A refused read mutates nothing — the downgrade stays repairable on disk.
+    expect(fs.readFileSync(file).equals(before)).toBe(true);
   });
 });

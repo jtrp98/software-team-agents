@@ -7,7 +7,9 @@ import { initTaskMachine } from "../state/taskState.js";
 import { newPersistedTask, type PersistedTask } from "../store/taskStore.js";
 import { AgentStage } from "../types.js";
 import { declareInstallationConfigOverrideChannelForTest } from "./installation.js";
+import { auditTargetOwnershipAcrossRoots } from "./ownershipAudit.js";
 import { preflightThreeRepoTask } from "./preflight.js";
+import { registerTarget } from "./targetRegistration.js";
 
 declareInstallationConfigOverrideChannelForTest();
 
@@ -103,6 +105,18 @@ function boundBackendTask(taskId = "T-owner"): PersistedTask {
 function unboundTask(taskId = "T-docs"): PersistedTask {
   const classification = classifyTask({ touchesBusinessRuleOnly: true });
   return newPersistedTask({ taskId, classification, machine: initTaskMachine(classification.pipeline, false), now: 1 });
+}
+
+/** A backend-bound task whose Target id is chosen by the test (the owning root's id). */
+function boundTask(taskId: string, targetId: string): PersistedTask {
+  const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+  return newPersistedTask({
+    taskId,
+    classification,
+    machine: initTaskMachine(classification.pipeline, false),
+    now: 1,
+    targetBindings: { targets: [{ target_id: targetId, role: AgentStage.BACKEND_ENGINEER }] },
+  });
 }
 
 const BACKEND = AgentStage.BACKEND_ENGINEER;
@@ -229,5 +243,92 @@ describe("preflightThreeRepoTask — assertRemoteIdentity through the canonical 
     expect(() =>
       preflightThreeRepoTask(boundBackendTask("T-origin"), BACKEND, { frameworkRoot: f.framework, installationConfigPath: f.config }),
     ).toThrow(/Target "backend".*expected canonical remote_url/);
+  });
+});
+
+describe("TASK-028 sweep — the selected root itself, both R05 directions, and the hand-edited state (DR §8.3, DT §6)", () => {
+  it("the selected root is revalidated at selection time: a v2 default that is not a standalone repository refuses before any registry read (DR §8.3)", () => {
+    const f = fixture("https://github.com/other/repo.git");
+    fs.rmSync(path.join(f.personal, ".git"), { recursive: true, force: true });
+    expect(() =>
+      preflightThreeRepoTask(boundBackendTask(), BACKEND, { frameworkRoot: f.framework, installationConfigPath: f.config }),
+    ).toThrow(/Knowledge root is not usable before starting T-owner/);
+  });
+
+  it("a named root nested inside the Framework root refuses at preflight for the session that selects it (DR §8.3)", () => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "v11-overlap-")));
+    roots.push(root);
+    const framework = path.join(root, "framework");
+    const personal = path.join(root, "personal");
+    const nested = path.join(framework, "nested-kb");
+    for (const dir of [framework, personal, nested]) fs.mkdirSync(path.join(dir, ".git"), { recursive: true });
+    const config = path.join(root, "installation.yaml");
+    fs.writeFileSync(
+      config,
+      [
+        "schema_version: 2",
+        `knowledge_root: ${JSON.stringify(personal)}`,
+        "default_root: personal",
+        "knowledge_roots:",
+        `  personal: ${JSON.stringify(personal)}`,
+        `  work: ${JSON.stringify(nested)}`,
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    process.env.STA_INSTALLATION_CONFIG = config;
+    expect(() =>
+      preflightThreeRepoTask(unboundTask(), AgentStage.BUSINESS_ANALYST, {
+        frameworkRoot: framework,
+        installationConfigPath: config,
+        knowledgeRootName: "work",
+      }),
+    ).toThrow(/overlaps Framework root/);
+  });
+
+  it("the R05 duplicate refuses from the other side too: a task bound to work's Target while personal owns the coordinate (DT §6)", () => {
+    const f = fixture("https://github.com/acme/api.git");
+    expect(() =>
+      preflightThreeRepoTask(boundTask("T-api", "api"), BACKEND, {
+        frameworkRoot: f.framework,
+        installationConfigPath: f.config,
+        knowledgeRootName: "work",
+      }),
+    ).toThrow(
+      /Target "api" in root "work" conflicts with Target "backend" in root "personal" for canonical repository "github\.com\/acme\/api"/,
+    );
+  });
+
+  it("a retired Target that was never released still blocks the other root at preflight — only the transfer's release lifts it (DT §6)", () => {
+    const retiredOwned = fixture(
+      "",
+      `schema_version: 2\ntargets:\n  - target_id: api\n    name: api\n    remote_url: https://github.com/acme/api.git\n    status: retired\n    ownership_state: owned\n`,
+    );
+    expect(() =>
+      preflightThreeRepoTask(boundBackendTask("T-retired"), BACKEND, { frameworkRoot: retiredOwned.framework, installationConfigPath: retiredOwned.config }),
+    ).toThrow(/conflicts with Target "api" in root "work" for canonical repository "github\.com\/acme\/api"/);
+  });
+
+  it("a hand-edited duplicate bypasses only the writer: preflight refuses, the doctor audit FAILs, and the register flow refuses on top (DT §6)", () => {
+    // Both registries are written straight to disk — no register call produced them.
+    const f = fixture("https://github.com/acme/api.git");
+    // (a) the bound lane in the selected root refuses
+    expect(() =>
+      preflightThreeRepoTask(boundBackendTask(), BACKEND, { frameworkRoot: f.framework, installationConfigPath: f.config }),
+    ).toThrow(/conflicts with Target "api" in root "work"/);
+    // (b) the doctor check FAILs from the same disk state
+    const audit = auditTargetOwnershipAcrossRoots({ installationConfigPath: f.config });
+    expect(audit.status).toBe("FAIL");
+    expect(audit.problems.join("\n")).toContain(`canonical repository "github.com/acme/api" appears in multiple configured roots: personal/backend, work/api`);
+    // (c) the administrative register cannot add anything on top of the same
+    // coordinate either — the writer gate catches what the hand-edit created.
+    expect(() =>
+      registerTarget({
+        targetId: "backend-shadow",
+        name: "Shadow",
+        remoteUrl: "https://github.com/acme/api.git",
+        installationConfigPath: f.config,
+      }),
+    ).toThrow(/is already owned by root "personal" as Target "backend"/);
   });
 });

@@ -209,28 +209,31 @@ export function retiredWaveFlagMessage(flag: string): string {
 
 export const USAGE =
   "usage (verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  sta run --task-id <id> --module <name> <classification flags> [--test-strategy <cross-task,multi-system,migration,security,release>] [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] [--effort <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--project-root <path>] [--state-db <path>]\n" +
+  "  sta run --task-id <id> --module <name> <classification flags> [--test-strategy <cross-task,multi-system,migration,security,release>] [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] [--effort <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--root <name>] [--project-root <path>] [--state-db <path>]\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  sta approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
-  "  sta resume  <task-id> --module <name> [--project-root <path>]   continue a task already in the store\n" +
-  "  sta retry   <task-id> --module <name> [--project-root <path>]   same as resume — there is no daemon here for the two to mean different things\n" +
+  "  sta resume  <task-id> --module <name> [--root <name>] [--project-root <path>]   continue a task already in the store; --root must match the root frozen at intake (it is an assertion, never a re-selection)\n" +
+  "  sta retry   <task-id> --module <name> [--root <name>] [--project-root <path>]   same as resume — there is no daemon here for the two to mean different things\n" +
   "  sta pause  <task-id> [--project-root <path>]   freeze a task; run/resume/retry refuse it until resumed\n" +
   "  sta cancel <task-id> [--reason <text>] [--project-root <path>]   give up on a task for good; run/resume/retry refuse it permanently\n" +
   "  sta audit  <task-id> [--decisions] [--project-root <path>]   the WHO/WHAT/WHEN/WHY/INPUT/OUTPUT/DECISION trail; --decisions shows only the choices\n" +
   "  sta qa-metrics [<task-id>] [--export-json <path>] [--baseline <path>] [--escaped-defects <n>]   QA token/mode/retry picture per task; --baseline compares against a saved export\n" +
   "  sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]   token/context composition across orchestrated and interactive runs\n" +
-  "  sta context <role> [--module <name>] [--phase <n,n>] [--task <id>] [--packet] [--views] [--json] [--project-root <path>]   deterministic context, latest validated packet, or read-only generated checklist/prompt views\n" +
+  "  sta context <role> [--module <name>] [--phase <n,n>] [--task <id>] [--packet] [--views] [--json] [--root <name>] [--project-root <path>]   deterministic context, latest validated packet, or read-only generated checklist/prompt views\n" +
   "  sta knowledge get <id>[,<id>...] [--lane <ba|sa|uxui|dev>] [--json] [--project-root <path>]   retrieve only permitted knowledge fields (default lane: dev)\n" +
   "  sta knowledge reconcile --target <id> [--json] [--project-root <knowledge-root>]   read-only current/desired evidence classifier\n" +
   "  sta policy [<area>] [<section>] [--json] [--project-root <path>]   read one policies/ section instead of the whole file; no args lists every area and section\n" +
   "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names\n" +
   "  sta init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
-  "  sta configure knowledge-root <path> [--config-path <path>]       validate and save this installation's single Knowledge root\n" +
+  "  sta configure knowledge-root <path> [--root <name>] [--default] [--config-path <path>]   bind a Knowledge root. With --root: the named-root surface (V11) — the first named operation migrates installation.yaml to v2 (`knowledge_roots` map + `default_root`); without --root: the V10 single-root form, still valid on a machine that has no v2 file and refused on one\n" +
+  "  sta configure default-root --root <name> [--config-path <path>]   switch which named root new work picks when no --root is given\n" +
+  "  sta transfer plan --source-root <name> --source-target <id> --destination-root <name> [--destination-target <id>]   read-only transfer plan + the approval-record template\n" +
+  "  sta transfer release|register|rollback|verify --transfer <path>   steps of the human-gated Target ownership transfer; a person fills and approves the record, the commands only check it\n" +
   "  sta configure identity --figma-email <email> --claude-email <email> [--config-path <path>]   declare the design accounts (same address; emails only, never a token)\n" +
-  "  sta doctor [--project-root <path>]                               read-only diagnostics; exit 1 on any FAIL, never mutates\n" +
+  "  sta doctor [--root <name>] [--project-root <path>]               read-only diagnostics; --root inspects that named root, no flag inspects the default; exit 1 on any FAIL, never mutates\n" +
   "  sta runtimes                                    which runtimes exist and how well each is supported\n" +
   "  sta changed [--project-root <path>] [--json]     surface working-tree changes and deterministic green/red gate status\n" +
-  "  sta report  [--output <path>] [--module <name>] [--project-root <path>]   visual dashboard as a static offline HTML page\n" +
+  "  sta report  [--output <path>] [--module <name>] [--root <name>] [--project-root <path>]   visual dashboard as a static offline HTML page\n" +
   `  ${BOUNDED_RUN_USAGE.split("\n").join("\n  ")}   explicit bounded run: intake/preview/freeze, then DEV -> verification -> checkpoint -> coherent QA/repair to a chosen boundary\n` +
   "  sta upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
   "  sta migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending\n" +

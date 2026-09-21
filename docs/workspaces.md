@@ -77,7 +77,8 @@ preflight ตรวจว่า origin remote ของ local checkout ตรง
 พร้อมเหตุผล
 
 ส่วน `knowledge.path` ใน `.agent-team/config.yaml` ของ Target checkout เป็น legacy config ที่ยังอ่านได้
-(round-trip) แต่ไม่ใช่วิธีผูกใหม่ใด ๆ ใน V10:
+(round-trip) แต่ไม่ใช่วิธีผูกใหม่ใด ๆ ใน V10 — และตั้งแต่ V11 มันถูกอ่านเป็น **compatibility assertion**:
+ถ้าประกาศไว้ path ต้อง canonical-match root ที่ session เลือกจริง ไม่ตรง = refuse พร้อม migration message:
 
 ```yaml
 # .agent-team/config.yaml ใน Target checkout (legacy — อ่านได้ ไม่ตัดสินอะไร)
@@ -91,6 +92,11 @@ overrides: []                   # path ที่ประกาศที่น�
 
 Machine-wide Knowledge binding (`sta configure knowledge-root <path>`) ยังใช้ได้เหมือนเดิมสำหรับ
 `sta context`/`doctor` เมื่ออยู่นอก workspace
+
+ตั้งแต่ V11 installation.yaml หนึ่งไฟล์ผูก Knowledge root ได้ **หลายชื่อ** (`schema_version: 2` —
+`knowledge_roots` map + `default_root`; ไฟล์ v1 แบบ scalar `knowledge_root` อ่านต่อได้ทันทีโดยไม่ถูกแก้)
+แต่หนึ่งคำสั่ง/หนึ่ง run/หนึ่ง session เลือกได้ **หนึ่ง root เท่านั้น** — ดูวิธีตั้งชื่อ/ย้าย default ที่
+[`cli.md`](cli.md) § Install / machine config; `status`/`sta context` รายงาน root ที่ session นี้เลือกจริงเสมอ
 
 ### Multi-Target scope ของ knowledge
 

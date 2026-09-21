@@ -98,12 +98,12 @@ project-owned-merged / project-owned-untouched / machine-local) อยู่ท�
 
 | ไฟล์ | อยู่ที่ | keys สำคัญ |
 |---|---|---|
-| `installation.yaml` | `%LOCALAPPDATA%\software-team-agents\` (Windows) หรือ `~/.config/software-team-agents/` | `schema_version: 1`, `knowledge_root` (เขียนโดย `sta configure knowledge-root`) |
+| `installation.yaml` | `%LOCALAPPDATA%\software-team-agents\` (Windows) หรือ `~/.config/software-team-agents/` | `schema_version: 1` (scalar `knowledge_root` — อ่านต่อได้โดยไม่ถูกแก้) หรือ `2` (`knowledge_roots` map + `default_root`, `knowledge_root` เป็น compatibility alias — เขียนโดย `sta configure knowledge-root [--root]/default-root`) |
 | `.agent-team/config.yaml` | Target/Knowledge workspace | `schema_version`, `target_id`, `registered_at`, `role` (legacy — read-only), `knowledge.path` (legacy), DEV `stack`, optional `execution`, `overrides[]` |
 | `.agent-team/manifest.json` | generated, ห้าม hand-edit | `framework_version`, `files[]` (path + pristine sha256) |
 | `.sta/config.yaml` | orchestrated/legacy project root | `schema_version: 1`, optional `execution`, `routing`, `qa`, `verification`, `token_budget`, `context_budget`; upgrade ไม่ rewrite ค่า project-owned นี้ |
-| `targets.yaml` | Knowledge root | registry ของ Target: `target_id/name/remote_url/status` |
-| `.workflow/targets.local.yaml` | Knowledge root (local) | map `target_id → path` |
+| `targets.yaml` | Knowledge root | registry ของ Target: `target_id/name/remote_url/status` (+ v2: `ownership_state` `owned\|released`, `repository_aliases` — canonical coordinates); canonical repository หนึ่งรายการมีเจ้าของได้ root เดียวต่อเครื่อง — บังคับที่ register/preflight และตรวจใน `sta doctor` |
+| `.workflow/targets.local.yaml` | Knowledge root (local) | map `target_id → path` + `remote_host_aliases` (machine-local SSH host mapping) |
 | `knowledge-policy.yaml` | Knowledge root | field visibility ต่อ role + freshness thresholds |
 | `model-tiers.yaml` | Framework repo (human-owned) | map Tier → model/effort ต่อ camp + role defaults |
 | `project.yaml` | Framework repo | `current` (stack ที่ agents สร้างได้จริง) vs `target` (stack อนาคต — checked ต่างมาตรฐาน) |
@@ -124,7 +124,13 @@ Runtime protocol ใช้ namespace `STA_*` เท่านั้นเพื�
 - `STA_TARGET_WORK_ROOTS` — JSON array `[{targetId, path, access}]` — แผนที่ access ของทุก Target ที่
   invocation เห็น เพื่อให้ guard ระบุชื่อ Target ในข้อความ refusal; ตัวมันเอง**ไม่ใช่**การให้สิทธิ์เขียน —
   write grant มาจาก `STA_WRITABLE_WORK_ROOTS` เท่านั้น
-- `STA_KNOWLEDGE_ROOT` — read-only Knowledge context เมื่อ resolve ได้
+- `STA_KNOWLEDGE_ROOT` — read-only Knowledge context เมื่อ resolve ได้; launcher เป็นผู้ resolve +
+  realpath แล้ว set ก่อน runtime เริ่ม — session หนึ่งเห็นค่าเดียว (หนึ่ง session = หนึ่ง root)
+- `STA_KNOWLEDGE_ROOT_NAME` — ชื่อของ root ที่ launcher เลือก (managed-session selection marker; V11) —
+  set คู่กับ `STA_KNOWLEDGE_ROOT` เสมอ; guard hook ใช้ marker นี้แยก managed session ออกจาก unbound shell
+  และ deny managed invocation ที่ selection ไม่ครบก่อนตัดสิน permission ใด (hook ไม่อ่าน installation
+  เอง — กัน TOCTOU); generated content (`knowledge-root.md`, bootstrap block) เป็น root-neutral —
+  ไม่ฝัง path หรือรายชื่อ root, selection จริงดูจาก `sta context`/`status`
 
 การเปลี่ยน namespace นี้เป็น breaking change: หลังอัปเกรด Framework ต้องรัน `software-team-agents sync`
 ให้ launchers, hooks และ generated bindings ทุก runtime รับ contract ชุดเดียวกันก่อนเริ่ม session ใหม่

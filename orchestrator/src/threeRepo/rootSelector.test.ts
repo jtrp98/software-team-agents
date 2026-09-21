@@ -13,6 +13,7 @@ import {
   resolveSelectedKnowledgeRootOrLegacy,
   RootSelectorFlagError,
 } from "./rootSelector.js";
+import { parseTargetArgs } from "../targetcli/cli.js";
 
 declareInstallationConfigOverrideChannelForTest();
 
@@ -167,5 +168,31 @@ describe("matchInstalledKnowledgeRootPath — the --knowledge-root compatibility
 
   it("v2: a path matching exactly one entry resolves to that entry", () => {
     expect(matchInstalledKnowledgeRootPath(V2, "C:\\kn\\PERSONAL\\")).toBe(path.resolve("C:\\kn\\personal"));
+  });
+});
+
+describe("TASK-028 sweep — the DR §4 command table: every targetcli surface parses --root through the one extractor", () => {
+  // The `sta` side (run/resume/retry) is pinned by cli.test.ts, bounded-run by
+  // boundedRun.test.ts, and the doctor/context/report/configure verbs carry
+  // their own selection tests. This table pins the targetcli half — the same
+  // `extractRootSelectorFlag` must sit in front of every command's parser, or
+  // a `--root` on that command silently does nothing.
+  for (const command of ["init", "sync", "status", "open", "cleanup"] as const) {
+    it(`software-team-agents ${command} --root <name> carries the requested root`, () => {
+      const args = parseTargetArgs([command, "--root", "work"]);
+      expect(args.command).toBe(command);
+      expect(args.rootName).toBe("work");
+    });
+    it(`software-team-agents ${command} without --root keeps rootName unset`, () => {
+      const args = parseTargetArgs([command]);
+      expect(args.command).toBe(command);
+      expect(args.rootName).toBeUndefined();
+    });
+  }
+  it("the parser refusals hold on a command too, not only at the unit level", () => {
+    expect(() => parseTargetArgs(["status", "--root", "a", "--root", "b"])).toThrow(/--root may be given at most once/);
+    expect(() => parseTargetArgs(["status", "--root", "work", "--knowledge-root", "C:\\kn"])).toThrow(
+      /--root and --knowledge-root are mutually exclusive/,
+    );
   });
 });
