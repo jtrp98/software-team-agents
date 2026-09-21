@@ -97,7 +97,9 @@ software-team-agents sync            # ถ้า status รายงาน OUTDA
 # 4. เริ่มงาน
 software-team-agents open            # interactive session จาก Knowledge workspace
 # หรือ headless pipeline:
-# sta run --task-id T-1 --module <module> --bug-fix --autonomy edit --project-root <knowledge-root>
+# sta run --task-id T-1 --module <module> --bug-fix --autonomy edit
+# (เครื่องที่มีหลาย named root: เพิ่ม --root <name>; --project-root <knowledge-root> ยังรับได้
+#  แต่เป็น compatibility assertion กับ root ที่ installation เลือกแล้ว ไม่ใช่ selector)
 ```
 
 ใน interactive session ใช้ workflow slash commands ได้: `/next` (ทำอะไรต่อ) ·

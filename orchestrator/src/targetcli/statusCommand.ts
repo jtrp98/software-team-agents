@@ -26,6 +26,7 @@ import {
 } from "./roleWorkspace.js";
 import { classifySyncState, type SyncState } from "./version.js";
 import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
+import { resolveInstallationRoot, summarizeKnowledgeSelection, type KnowledgeSelectionSummary } from "../threeRepo/rootSelector.js";
 import { detectInstructionSurface, isNestedInstruction, type InstructionSurfaceEntry } from "../threeRepo/ownership.js";
 import { targetStackWasHumanEdited } from "./targetProfile.js";
 import { CLAUDE_SETTINGS_PATH, guardCoverage, guardCoverageIsPositive, inspectGuardWiring, type GuardCoverage } from "./guardSettings.js";
@@ -52,6 +53,8 @@ export interface TargetStatus {
   workspaceKind: ReturnType<typeof detectWorkspaceKind>;
   knowledgeRoot?: string;
   knowledgeBinding?: { knowledgeRoot: string; via: string };
+  /** DR §7.4 — the session's Knowledge-root selection: name, canonical path, selection source and the default (read-only). Absent when no installation config exists. */
+  knowledgeSelection?: KnowledgeSelectionSummary;
   /** BA-workspace only: the optional Target binding, by `target_id` through the local mapping; "invalid" carries the problem in targetRoot. Absent when unset (silent, never required). */
   targetBinding?: { targetRoot: string; via: string };
   /** Set when the workspace still carries the removed committed `target.path`. Reported as a problem with its fix; never a load failure. */
@@ -195,7 +198,7 @@ export function antigravityReadiness(targetRoot: string, coverage: GuardCoverage
   return { ready: false, detail: `${md} agent source(s) available; ${coverage.detail}` };
 }
 
-export function gatherStatus(options: { targetRoot?: string; templatesDir?: string; installationConfigPath?: string } = {}): TargetStatus {
+export function gatherStatus(options: { targetRoot?: string; templatesDir?: string; installationConfigPath?: string; rootName?: string } = {}): TargetStatus {
   const roots = resolveRoots({ targetRoot: options.targetRoot });
   const templatesDir = options.templatesDir ?? path.join(roots.frameworkRoot, "templates");
   // The payload's own manifest decides what "installed" means — an explicit
@@ -293,13 +296,14 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
         targetRoot: roots.targetRoot,
         configKnowledgePath: config?.knowledge?.path,
         installationConfigPath: options.installationConfigPath,
+        requestedRootName: options.rootName,
       });
     } catch (e) {
       knowledgeBinding = { knowledgeRoot: e instanceof Error ? e.message : String(e), via: "invalid" };
     }
   } else if (shape === "knowledge") {
     try {
-      knowledgeBinding = resolveKnowledgeBinding({ targetRoot: roots.targetRoot, installationConfigPath: options.installationConfigPath });
+      knowledgeBinding = resolveKnowledgeBinding({ targetRoot: roots.targetRoot, installationConfigPath: options.installationConfigPath, requestedRootName: options.rootName });
     } catch {
       knowledgeBinding = undefined;
     }
@@ -331,12 +335,33 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
   let knowledgeBoundButUninitialized: string | undefined;
   try {
     const installed = loadInstallationConfig(options.installationConfigPath ?? defaultInstallationConfigPath());
-    if (installed.knowledge_root && hasKnowledgeMarkers(installed.knowledge_root) && !isTargetInitialized(installed.knowledge_root)) {
-      knowledgeBoundButUninitialized = installed.knowledge_root;
+    // With `--root`, the report follows the command's selection, not the
+    // installation default (statusCommand reads; DR §4).
+    const boundRoot = options.rootName
+      ? resolveInstallationRoot(installed, options.rootName).path
+      : installed.knowledge_root;
+    if (boundRoot && hasKnowledgeMarkers(boundRoot) && !isTargetInitialized(boundRoot)) {
+      knowledgeBoundButUninitialized = boundRoot;
     }
   } catch {
     // No installation config, or unreadable — nothing to warn about.
   }
+
+  // DR §7.4: status names the session's selection — root name, canonical
+  // path, selection source and the default it did not change. Undefined only
+  // when no installation config exists (a legacy machine has no selection to
+  // name); a file that exists but cannot be loaded stays silent here because
+  // the knowledgeBinding "invalid" path already reports the load failure.
+  const knowledgeSelection = (() => {
+    try {
+      return summarizeKnowledgeSelection({
+        requestedName: options.rootName,
+        installationConfigPath: options.installationConfigPath,
+      });
+    } catch {
+      return undefined;
+    }
+  })();
 
   return {
     targetRoot: roots.targetRoot,
@@ -346,6 +371,7 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     workspaceKind: kind,
     knowledgeRoot: roots.knowledgeRoot,
     knowledgeBinding,
+    knowledgeSelection,
     targetBinding,
     // The removed field is stripped by the schema, so without this an
     // un-migrated workspace would show no Target and no reason why.
@@ -425,6 +451,18 @@ export function renderStatus(status: TargetStatus): string {
       lines.push("Knowledge:");
       lines.push(`  ${status.knowledgeBinding.knowledgeRoot} (via ${status.knowledgeBinding.via}, read-only)`);
     }
+  }
+  // DR §7.4 — one line, both workspace shapes: the session's selection is
+  // exactly what the command reads, and the default is displayed, never changed.
+  if (status.knowledgeSelection) {
+    const selection = status.knowledgeSelection;
+    const namePart = selection.name !== undefined ? `"${selection.name}"` : "(unnamed launch env)";
+    lines.push(
+      `Knowledge root: ${namePart} → ${selection.path} ` +
+        `(selected via ${selection.source}` +
+        (selection.defaultRootName !== undefined ? `; default: ${selection.defaultRootName}` : "") +
+        " — status never re-selects)",
+    );
   }
   lines.push("Sync:");
   lines.push(`  state: ${status.syncState}`);

@@ -58,7 +58,7 @@ function knowledgeWith(targets: Record<string, string>): string {
 /** The real hook, run the way a host runs it, with only the variables a launch sets. */
 function hookVerdict(cwdRoot: string, target: string, env: NodeJS.ProcessEnv): { status: number | null; stderr: string } {
   const clean: NodeJS.ProcessEnv = { ...process.env, CLAUDE_PROJECT_DIR: cwdRoot };
-  for (const key of ["STA_ROLE", "STA_WRITABLE_WORK_ROOTS", GUARD_TARGET_WORK_ROOTS_ENV, "STA_KNOWLEDGE_ROOT"]) delete clean[key];
+  for (const key of ["STA_ROLE", "STA_WRITABLE_WORK_ROOTS", GUARD_TARGET_WORK_ROOTS_ENV, "STA_KNOWLEDGE_ROOT", "STA_KNOWLEDGE_ROOT_NAME"]) delete clean[key];
   const res = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: target } }),
     encoding: "utf8",

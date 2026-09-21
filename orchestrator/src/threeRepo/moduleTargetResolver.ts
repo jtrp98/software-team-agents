@@ -3,7 +3,7 @@ import { readModuleDoc, resolveModule } from "../agents/moduleDocs.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { parseModuleTargets } from "../docs/moduleTargets.js";
 import { loadLocalTargetMapping, localTargetsPath } from "./localTargets.js";
-import { loadTargetRegistry, targetById, targetsPath, type TargetEntry } from "./targets.js";
+import { loadTargetRegistry, isReleasedTombstone, targetById, targetsPath, type TargetEntry } from "./targets.js";
 
 export type ModuleTargetProblemSeverity = "note" | "warning" | "error";
 
@@ -129,6 +129,13 @@ export function resolveModuleTargets(
       continue;
     }
 
+    if (isReleasedTombstone(registryEntry)) {
+      result.problems.push({
+        severity: "error",
+        message: `Target "${targetId}" is a released tombstone in this root — module "${moduleName}" must not declare it; remove it from ${designPath} ## Targets or move the module through the human-gated ownership transfer`,
+      });
+      continue;
+    }
     if (registryEntry.status === "retired") {
       result.problems.push({
         severity: "error",

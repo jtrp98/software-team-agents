@@ -62,7 +62,8 @@ afterEach(async () => {
       fs.promises.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }),
     ),
   );
-});
+}, 90_000); // [amend R11] same cleanup hook as the R10 amendment (10s -> 30s -> 90s): Windows rm EPERM/EBUSY retries on freshly written fixture .git objects can exceed 30s under antivirus/load; product code holds no handles here (bisected: fails identically with the pre-R11 preflight)
+
 
 describe("parseBoundedRunArgs", () => {
   it("requires --module and exactly one scope for a new run", () => {
@@ -106,6 +107,16 @@ describe("parseBoundedRunArgs", () => {
     expect(() => parseBoundedRunArgs(["--module", "m", "--all", "--dry-run", "--not-a-flag"], "/repo")).toThrow(/unrecognized argument/);
   });
 
+  it("parses --root <name>; duplicates, missing values and --knowledge-root coexistence refuse (DR §4)", () => {
+    expect(parseBoundedRunArgs(["--module", "m", "--all", "--dry-run", "--root", "work"], "/repo").rootName).toBe("work");
+    expect(() => parseBoundedRunArgs(["--module", "m", "--all", "--dry-run", "--root"], "/repo")).toThrow(/--root requires a value/);
+    expect(() => parseBoundedRunArgs(["--module", "m", "--all", "--dry-run", "--root", "a", "--root", "b"], "/repo")).toThrow(/--root may be given at most once/);
+    expect(() => parseBoundedRunArgs(["--module", "m", "--all", "--dry-run", "--root", "a", "--knowledge-root", "C:\kn"], "/repo")).toThrow(
+      /--root and --knowledge-root are mutually exclusive/,
+    );
+    expect(() => parseBoundedRunArgs(["--module", "m", "--all", "--dry-run", "--root", "Work"], "/repo")).toThrow(/must match/);
+  });
+
   it("accumulates repeatable --target-id into targetIds and sets single targetId (T-V9-011)", () => {
     const single = parseBoundedRunArgs(["--module", "m", "--all", "--dry-run", "--target-id", "api"], "/repo");
     expect(single.targetIds).toEqual(["api"]);
@@ -132,6 +143,9 @@ describe("parseBoundedRunArgs", () => {
 });
 
 import { boundedRunProject as project } from "./boundedRunFixture.testSupport.js";
+import { declareInstallationConfigOverrideChannelForTest } from "../../threeRepo/installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 export function completingAdapter(targetRoot: string): MockRuntimeAdapter {
   let self: MockRuntimeAdapter;
@@ -211,6 +225,69 @@ describe("sta bounded-run (CLI)", () => {
     expect(errors.some((l) => l.includes("unknown-task") && l.includes("NOPE"))).toBe(true);
     // Nothing was registered — the refusal happened before any mutation.
     expect(fs.existsSync(path.join(root, "state.db"))).toBe(false);
+  });
+
+  it("selects the Knowledge root through the central selector: unknown --root refuses with the deterministic root list (DR §8.2)", async () => {
+    const { root, targetApi, knowledgeRoot } = threeRepoBoundedRunProject(roots, git);
+    const errors: string[] = [];
+    const spy = console.error;
+    console.error = (line: string) => errors.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-root", targetApi, "--project-root", root, "--dry-run", "--root", "nope"],
+        root,
+      );
+    } finally {
+      console.error = spy;
+    }
+    expect(code).toBe(1);
+    expect(errors.some((l) => l.includes('unknown Knowledge root "nope"') && l.includes("available roots: default"))).toBe(true);
+    // The same command with the v1 legacy name resolves and previews.
+    const logs: string[] = [];
+    const logSpy = console.log;
+    console.log = (line: string) => logs.push(line);
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-root", targetApi, "--project-root", root, "--dry-run", "--root", "default"],
+        root,
+      );
+    } finally {
+      console.log = logSpy;
+    }
+    expect(code).toBe(0);
+    expect(fs.existsSync(path.join(knowledgeRoot, "knowledge-root-touched.txt"))).toBe(false);
+  });
+
+  it("--knowledge-root survives as a compatibility channel only when the path canonical-matches a registered root (DR §4)", async () => {
+    const { root, targetApi, knowledgeRoot } = threeRepoBoundedRunProject(roots, git);
+    const logs: string[] = [];
+    const spy = console.log;
+    console.log = (line: string) => logs.push(line);
+    let code: number;
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-root", targetApi, "--project-root", root, "--dry-run", "--knowledge-root", knowledgeRoot.toUpperCase()],
+        root,
+      );
+    } finally {
+      console.log = spy;
+    }
+    expect(code).toBe(0);
+
+    const errors: string[] = [];
+    const errSpy = console.error;
+    console.error = (line: string) => errors.push(line);
+    try {
+      code = await runCli(
+        ["bounded-run", "--module", "orders", "--all", "--target-root", targetApi, "--project-root", root, "--dry-run", "--knowledge-root", path.join(knowledgeRoot, "elsewhere")],
+        root,
+      );
+    } finally {
+      console.error = errSpy;
+    }
+    expect(code).toBe(1);
+    expect(errors.some((l) => l.includes("does not match any registered Knowledge root"))).toBe(true);
   });
 
   it("runs an eligible task to COMPLETED through the real CLI dispatch", async () => {

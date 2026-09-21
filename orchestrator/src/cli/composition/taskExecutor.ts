@@ -48,6 +48,10 @@ export async function composeProductionTaskExecutor(
 ): Promise<TaskExecutorComposition> {
   const task = store.loadTask(taskId);
   if (!task) throw new Error(`cannot compose an executor for missing task ${taskId}`);
+  // DR §5: a resumed task answers to the root frozen at intake — the
+  // invocation's --root (if any) already passed the drift assertion at
+  // intake, so the frozen name is what every root resolution below uses.
+  const runRootName = args.rootName ?? task.knowledgeRoot?.name ?? undefined;
   const contractRoot = contractRootForTask(args.projectRoot, task.targetBindings);
   const resolvedAutonomy = args.autonomy ?? "propose";
   if (resolvedAutonomy === "propose") {
@@ -114,14 +118,14 @@ export async function composeProductionTaskExecutor(
     taskRunLog: (id) => new RunLog(store.runsForTask(id)),
     autonomy: args.autonomy,
     stageRoots: loadStageRoots(args.projectRoot),
-    threeRepoTask: resolveThreeRepoTaskLookup(args.projectRoot, store, args.module),
+    threeRepoTask: resolveThreeRepoTaskLookup(args.projectRoot, store, args.module, runRootName),
     enforceRoleWorkflow: fs.existsSync(path.join(args.projectRoot, "knowledge")),
     extraInstruction: `Environment: ${orchestrator.environment} — ${describeEnvironment(orchestrator.environment, args.projectRoot)}`,
     // T-V8-011 — feeds a real diff into task-specific retrieval when one
     // exists (a QA round, a repair attempt); a fresh DEV round simply has none yet.
     changedFiles: async (id) => {
       try {
-        const roots = resolveQaWorkRoots(args.projectRoot, id, store, args.module);
+        const roots = resolveQaWorkRoots(args.projectRoot, id, store, args.module, runRootName);
         const { files } = await collectQaChangedFiles(roots);
         return files;
       } catch {
@@ -130,9 +134,9 @@ export async function composeProductionTaskExecutor(
     },
   });
 
-  const qaRoots = resolveQaWorkRoots(args.projectRoot, taskId, store, args.module);
+  const qaRoots = resolveQaWorkRoots(args.projectRoot, taskId, store, args.module, runRootName);
   const qaChangedFiles = async (): Promise<string[]> => {
-    const roots = resolveQaWorkRoots(args.projectRoot, taskId, store, args.module);
+    const roots = resolveQaWorkRoots(args.projectRoot, taskId, store, args.module, runRootName);
     const { files } = await collectQaChangedFiles(roots);
     return files;
   };
@@ -142,7 +146,7 @@ export async function composeProductionTaskExecutor(
   const qaDiscovery = await collectQaChangedFiles(qaRoots).catch(() => ({ files: [] as string[], failedTargets: [] as string[] }));
   const qaContractChangedFiles = qaDiscovery.files;
   const qaInputs = await productionQaInputs({
-    docsRoot: resolveDocsRoot(args.projectRoot),
+    docsRoot: resolveDocsRoot(args.projectRoot, runRootName),
     moduleName: args.module ?? "",
     taskId,
     roots: qaRoots,
@@ -207,7 +211,7 @@ export async function composeProductionTaskExecutor(
           ...orchestrator.repairRoute ? repairQaSignals(orchestrator.repairRoute) : {},
         }),
         taskLevel: () => orchestrator.classification.level,
-        previousRound: () => previousRoundFromDocs(resolveDocsRoot(args.projectRoot), args.module ?? "", taskId),
+        previousRound: () => previousRoundFromDocs(resolveDocsRoot(args.projectRoot, runRootName), args.module ?? "", taskId),
       });
 
   return {

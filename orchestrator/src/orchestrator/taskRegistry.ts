@@ -4,7 +4,7 @@ import type { ClassificationResult } from "../classification/taskClassifier.js";
 import type { Budget } from "../cost/costControl.js";
 import type { Environment } from "../environment/environment.js";
 import { writeStateViewFromStore } from "../store/stateView.js";
-import { TaskNotFoundError, type PersistedTask, type TaskStore } from "../store/taskStore.js";
+import { TaskNotFoundError, type KnowledgeRootIdentity, type PersistedTask, type TaskStore } from "../store/taskStore.js";
 import { TaskGraph, taskGraphFromPlan, type TaskNode } from "../graph/taskGraph.js";
 import type { TargetBindings } from "../threeRepo/taskBindings.js";
 import { Orchestrator } from "./orchestrator.js";
@@ -115,6 +115,8 @@ export class TaskRegistry {
     docsRoot?: string;
     moduleName?: string;
     targetWorkRoots?: readonly RuntimeTaskWorkRoot[];
+    /** Knowledge-root identity frozen at intake (DR §5); null when no installation file existed. */
+    knowledgeRoot?: KnowledgeRootIdentity | null;
     changeAwareVerification?: boolean;
     /** Trusted intake supplied by the task creator; an executing agent cannot grant this to itself. */
     businessInput?: BusinessInputEvidence;
@@ -153,6 +155,7 @@ export class TaskRegistry {
       targetBindings: params.targetBindings,
       runtimeTask,
       businessInput: params.businessInput,
+      knowledgeRoot: params.knowledgeRoot,
     });
     this.refreshStateView();
     return orchestrator;

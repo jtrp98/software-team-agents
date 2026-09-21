@@ -3,6 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveContextDocsRoot } from "./roots.js";
+import { declareInstallationConfigOverrideChannelForTest } from "../threeRepo/installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 /**
  * T-V6-006: `resolveContextDocsRoot` must resolve the Knowledge root even
@@ -34,7 +37,7 @@ function writeInstallationConfig(dir: string, knowledgeRoot: string): string {
   return configPath;
 }
 
-describe("resolveContextDocsRoot — env > installation.yaml > projectRoot", () => {
+describe("resolveContextDocsRoot — env > installation selection > projectRoot", () => {
   it("env wins even when installation.yaml names a different root", () => {
     const projectRoot = tmpDir("project");
     const configuredKnowledge = tmpDir("configured-knowledge");
@@ -58,14 +61,33 @@ describe("resolveContextDocsRoot — env > installation.yaml > projectRoot", () 
     expect(resolveContextDocsRoot(projectRoot, {})).toBe(path.resolve(projectRoot));
   });
 
-  it("env unset, installation.yaml present but invalid — degrades to projectRoot, never throws", () => {
+  it("env unset, installation.yaml present but invalid — throws (fail-closed, DR §3 rule 6: only a missing file degrades to projectRoot)", () => {
+    // [amended R10 — knowingly] This case pinned the A10 fail-open ("never
+    // throws"). TASK-017 converts it: an installation that exists but cannot
+    // be loaded must stop the command instead of silently reading the
+    // project's own docs.
     const projectRoot = tmpDir("project");
     const cfgDir = tmpDir("cfg");
     const configPath = path.join(cfgDir, "installation.yaml");
-    fs.writeFileSync(configPath, "not: [valid, installation, config\n", "utf8");
+    fs.writeFileSync(configPath, "schema_version: 1\nknowledge_root: 123\n", "utf8");
     process.env[ENV_KEY] = configPath;
-    expect(() => resolveContextDocsRoot(projectRoot, {})).not.toThrow();
-    expect(resolveContextDocsRoot(projectRoot, {})).toBe(path.resolve(projectRoot));
+    expect(() => resolveContextDocsRoot(projectRoot, {})).toThrow(/installation config is invalid/);
+  });
+
+  it("env unset, installation v2 + requested --root name → the named root's docs", () => {
+    const projectRoot = tmpDir("project");
+    const personal = tmpDir("personal");
+    const defaultRoot = tmpDir("defaultroot");
+    const cfgDir = tmpDir("cfg");
+    const configPath = path.join(cfgDir, "installation.yaml");
+    fs.writeFileSync(
+      configPath,
+      `schema_version: 2\nknowledge_root: ${JSON.stringify(defaultRoot)}\ndefault_root: defaultroot\nknowledge_roots:\n  defaultroot: ${JSON.stringify(defaultRoot)}\n  personal: ${JSON.stringify(personal)}\n`,
+      "utf8",
+    );
+    process.env[ENV_KEY] = configPath;
+    expect(resolveContextDocsRoot(projectRoot, {}, "personal")).toBe(path.resolve(personal));
+    expect(resolveContextDocsRoot(projectRoot, {})).not.toBe(path.resolve(personal));
   });
 
   it("a launcher session (env set) is byte-identical to today's behaviour regardless of installation.yaml", () => {

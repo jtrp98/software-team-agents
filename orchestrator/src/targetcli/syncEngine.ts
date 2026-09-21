@@ -549,6 +549,8 @@ export interface ApplySyncOptions extends PlanSyncOptions {
   force?: boolean;
   /** Machine-wide installation.yaml override (tests); defaults to the real one when resolving a dev workspace's Knowledge binding. */
   installationConfigPath?: string;
+  /** Named Knowledge root (DR §4 `--root`) for the DEV-workspace binding resolution. */
+  rootName?: string;
   /** Explicit resolution for an ambiguous/unrecognized Target profile. */
   explicitStack?: string;
 }
@@ -563,6 +565,8 @@ export function devDerivedContent(options: {
   templatesDir: string;
   config?: TargetConfig;
   installationConfigPath?: string;
+  /** Named Knowledge root (DR §4 `--root`) for the DEV-workspace binding resolution. */
+  rootName?: string;
 }): { content: Map<string, string>; boundRoot?: string } | undefined {
   const config = options.config;
   if (!config?.role) return undefined;
@@ -572,6 +576,7 @@ export function devDerivedContent(options: {
       targetRoot: options.targetRoot,
       config,
       installationConfigPath: options.installationConfigPath,
+      requestedRootName: options.rootName,
     });
   } else {
     try {
@@ -585,7 +590,9 @@ export function devDerivedContent(options: {
   const content = new Map<string, string>();
   if (files.some((f) => f.path === CLAUDE_MD_PATH)) {
     const base = fs.readFileSync(path.join(options.templatesDir, CLAUDE_MD_PATH), "utf8");
-    content.set(CLAUDE_MD_PATH, renderWorkspaceClaude(base, { role: config.role, workspaceRoot: options.targetRoot, boundRoot }));
+    // Root-neutral bootstrap (DR §7): the resolved binding is not rendered —
+    // identical bytes for every named root, so concurrent sessions don't race.
+    content.set(CLAUDE_MD_PATH, renderWorkspaceClaude(base, { role: config.role, workspaceRoot: options.targetRoot }));
   }
   if (files.some((f) => f.path === AGENTS_MD_PATH) && content.has(CLAUDE_MD_PATH)) {
     content.set(AGENTS_MD_PATH, renderAgentsPointer(content.get(CLAUDE_MD_PATH)!));
@@ -595,8 +602,9 @@ export function devDerivedContent(options: {
   }
   if (config.role === "dev" && boundRoot) {
     // In the map so planStaleFiles treats it as regenerated (never stale) and
-    // a role flip later cleans it up through the ordinary stale path.
-    content.set(KNOWLEDGE_ROOT_INCLUDE_PATH, renderKnowledgeInclude(boundRoot));
+    // a role flip later cleans it up through the ordinary stale path. The
+    // presence gate stays binding-resolved, but the bytes are root-neutral.
+    content.set(KNOWLEDGE_ROOT_INCLUDE_PATH, renderKnowledgeInclude());
   }
   return content.size > 0 ? { content, boundRoot } : undefined;
 }
@@ -646,6 +654,7 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
     templatesDir: options.templatesDir,
     config,
     installationConfigPath: options.installationConfigPath,
+    rootName: options.rootName,
   });
   const derivedContent = derived?.content;
   const plan = planSync({ ...options, manifest, config, derivedContent });

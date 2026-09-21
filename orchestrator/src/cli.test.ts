@@ -26,6 +26,9 @@ import { RuntimeRegistry } from "./runtime/runtimeRegistry.js";
 import { LocalWorkspace } from "./runtime/localWorkspace.js";
 import type { RuntimeAdapter, RuntimeAgentRequest } from "./runtime/runtimeAdapter.js";
 import { RuntimeCapability } from "./runtime/runtimeCapabilities.js";
+import { declareInstallationConfigOverrideChannelForTest } from "./threeRepo/installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 // T-V6-006: resolveContextDocsRoot now falls back to installation.yaml when
 // STA_KNOWLEDGE_ROOT is unset, so every fixture in this file that
@@ -131,6 +134,14 @@ describe("parseArgs", () => {
     expect(args.autonomy).toBe("edit");
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--autonomy", "yolo"], "/repo")).toThrow(CliUsageError);
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--autonomy"], "/repo")).toThrow(CliUsageError);
+  });
+
+  it("parses --root <name> and refuses duplicates or a missing value (DR §4)", () => {
+    const args = parseArgs(["--task-id", "T-1", "--module", "m", "--root", "work"], "/repo");
+    expect(args.rootName).toBe("work");
+    expect(parseArgs(["--task-id", "T-1", "--module", "m"], "/repo").rootName).toBeUndefined();
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--root", "a", "--root", "b"], "/repo")).toThrow(CliUsageError);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--root"], "/repo")).toThrow(CliUsageError);
   });
 
   it("parses --runtime and rejects runtimes no adapter implements (T-OC5)", () => {
@@ -249,7 +260,7 @@ describe("T-V3R-032 production runtime composition", () => {
     const registry = createProductionRuntimeRegistry(defaultProjectRoot());
     expect(registry.ids()).toEqual(["claude-code", "codex", "opencode", "antigravity"]);
     expect([...registry.get("codex").models]).toContain("gpt-6-astra");
-    expect([...registry.get("opencode").models]).toContain("zai-coding-plan/glm-5.2#max");
+    expect([...registry.get("opencode").models]).toContain("zai-coding-plan/glm-5.3#max");
     expect([...registry.get("antigravity").models]).toContain("gemini-3.8-flash-high");
     const source = fs.readFileSync(path.join(defaultProjectRoot(), "orchestrator", "src", "cli", "composition", "taskExecutor.ts"), "utf8");
     expect(source).toContain("registry: runtimeRegistry");

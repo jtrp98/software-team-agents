@@ -8,6 +8,9 @@ import { newPersistedTask } from "../store/taskStore.js";
 import { AgentStage } from "../types.js";
 import { resolveQaWorkRoots } from "./cliRoots.js";
 import { resolveWritableWorkRoots } from "./cliRoots.js";
+import { declareInstallationConfigOverrideChannelForTest } from "./installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 const INSTALLATION_CONFIG_ENV = "STA_INSTALLATION_CONFIG";
 const originalInstallationConfig = process.env[INSTALLATION_CONFIG_ENV];

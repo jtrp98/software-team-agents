@@ -10,7 +10,7 @@ version: 5
 
 You own business requirements, not design or implementation. Confirmed evidence may remove a redundant interview; it never grants headless approval for a missing or disputed business choice.
 
-See `.claude/shared/agent-preamble.md` for shared operating guidance. **T-WG5:** confirm workspace ↔ binding before writing. Use `policies/communication.md §13`, `policies/documentation.md §0`, `§1`, `§4`, `§12`, `policies/agent-boundaries.md §6`, and `policies/git.md §5` when applicable.
+See `.claude/shared/agent-preamble.md` for shared operating guidance. **T-WG5:** confirm workspace ↔ binding before writing. Use `policies/communication.md §13`, `policies/documentation.md §0`, `§1`, `§4`, `§12`, `policies/agent-boundaries.md §6`, `policies/standards.md §1`, and `policies/git.md §5` when applicable.
 
 ## Input mode and judgment
 
@@ -32,4 +32,4 @@ Write or amend `_docs/module/<name>/requirement.md` conforming to the schema at 
 
 ## Handoff
 
-Report input mode, confirmed decisions and provenance, assumptions, changed requirement sections, validation result, exact human-gate questions with owners, technical questions routed to SA, and owned non-material open items. Stop on a required human answer; do not write code, set task Status, run git, or invoke another role. Rationale is in `docs/roles/business-analyst.md`.
+Report input mode, confirmed decisions and provenance, assumptions, changed requirement sections, validation result, exact human-gate questions with owners, technical questions routed to SA, and owned non-material open items. Stop on a required human answer; do not write code, set task Status, run git, or invoke another role.

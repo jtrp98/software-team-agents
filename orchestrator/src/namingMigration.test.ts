@@ -5,10 +5,6 @@ import { describe, expect, it } from "vitest";
 const projectRoot = path.resolve(import.meta.dirname, "../..");
 const excludedDirectories = new Set([".git", ".workflow", "node_modules", "dist", "planning", "release"]);
 const excludedFiles = new Set([
-  // Machine-local Codex hook wiring contains the checkout's physical path.
-  // The parent directory is not a Framework identifier and cannot be renamed
-  // without moving the user's checkout.
-  ".codex/hooks.json",
   ".claude/settings.local.json",
 ]);
 
@@ -28,7 +24,7 @@ function textFiles(root: string, relative = ""): string[] {
 }
 
 describe("vendor-neutral naming contract", () => {
-  it("contains no legacy Framework identifier outside historical planning and the physical checkout path", () => {
+  it("contains no legacy Framework identifier outside historical planning", () => {
     const offenders: string[] = [];
     const legacyIdentifier = ["agent", "claude"].join("");
     for (const relative of textFiles(projectRoot)) {

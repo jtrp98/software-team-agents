@@ -16,6 +16,9 @@ import { assertBindingsImmutable, uniqueBoundTargetIds, validateNewTaskBindings,
 import { preflightThreeRepoTask } from "./preflight.js";
 import { figmaPatConfigured } from "./identities.js";
 import type { TargetRegistry } from "./targets.js";
+import { declareInstallationConfigOverrideChannelForTest } from "./installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 const registry: TargetRegistry = {
   schema_version: 1,
@@ -185,11 +188,11 @@ describe("Phase 2 task Target bindings", () => {
     const taskRegistry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(target) });
     try {
       const wrongType = parseArgs(["--task-id", "wrong-type", "--module", "sales", "--bug-fix", "--frontend", "--frontend-target", "api", "--project-root", target], target);
-      expect(() => openTask(taskRegistry, wrongType, "wrong-type")).toThrow(/type "backend"/);
+      expect(() => openTask(taskRegistry, wrongType, "wrong-type", store)).toThrow(/type "backend"/);
       expect(store.loadTask("wrong-type")).toBeNull();
 
       const wrongScope = parseArgs(["--task-id", "wrong-scope", "--module", "sales", "--bug-fix", "--backend", "--backend-target", "other", "--project-root", target], target);
-      expect(() => openTask(taskRegistry, wrongScope, "wrong-scope")).toThrow(/outside module "sales"/);
+      expect(() => openTask(taskRegistry, wrongScope, "wrong-scope", store)).toThrow(/outside module "sales"/);
       expect(store.loadTask("wrong-scope")).toBeNull();
 
       // V10 TASK-009: two Targets on one engineer role are admitted; the
@@ -203,7 +206,7 @@ describe("Phase 2 task Target bindings", () => {
           ],
         },
       };
-      expect(() => openTask(taskRegistry, sameRoleOutsideModule, "same-role")).toThrow(/outside module "sales"/);
+      expect(() => openTask(taskRegistry, sameRoleOutsideModule, "same-role", store)).toThrow(/outside module "sales"/);
       expect(store.loadTask("same-role")).toBeNull();
     } finally {
       taskRegistry.close();

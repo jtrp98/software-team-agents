@@ -13,6 +13,7 @@ policies/
 ├── documentation.md     §0, §1, §2, §3, §4, §5b, §10, §11, §12
 ├── git.md               §5, §22
 ├── security.md          §5a, §5c-1, §5d, §21
+├── standards.md         §0–§10 (per-role standards baseline)
 └── ux.md                §17, §18
 ```
 
@@ -24,7 +25,7 @@ replaced is recorded as retired in `docs/bounded-wave-run.md`.
 
 ## What belongs here
 
-Policy is the answer to *ห้ามอะไร* — what no agent may do. Nine area files above plus this
+Policy is the answer to *ห้ามอะไร* — what no agent may do. Ten area files above plus this
 index, one file per area, so a rule can be found by asking "which area is this?" instead of
 searching one file's headings.
 

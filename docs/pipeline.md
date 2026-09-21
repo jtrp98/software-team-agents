@@ -115,7 +115,9 @@ sta roles review REQ-101 --as business-analyst
 sta roles approve REQ-101 --by "Somchai"
 
 # 2) (ครั้งเดียวต่อเครื่อง) bind machine เข้ากับ Knowledge root
-sta configure knowledge-root C:\src\company-knowledge
+#    V11: ตั้งชื่อ root ได้ (--root <name>); named operation แรก migrate installation.yaml เป็น v2
+#    เครื่องเดียวมี root ได้หลายชื่อ แต่หนึ่ง run/session เลือกหนึ่ง root (--root <name> หรือ default)
+sta configure knowledge-root C:\src\company-knowledge --root company --default
 sta doctor --project-root C:\src\company-knowledge
 
 # 3) ทำงานโค้ด — Target เป็น checkout ล้วน (path ต่อเครื่องอยู่ที่ .workflow/targets.local.yaml)

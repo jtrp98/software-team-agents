@@ -114,13 +114,27 @@ function knowledgeArtifactDenial(nodePath, target) {
   const role = process.env.STA_ROLE;
   if (!role || !KNOWLEDGE_DENIED_ROLES.includes(role)) return null;
   const kb = process.env.STA_KNOWLEDGE_ROOT;
-  if (!kb) return null;
+  // STA_KNOWLEDGE_ROOT_NAME is the managed-session marker: a launcher that
+  // resolved one named root sets it beside STA_KNOWLEDGE_ROOT, never half.
+  // A managed invocation missing the path cannot attribute its writes to any
+  // Knowledge root, so it denies before any permission decision; the hook
+  // resolves no default and reads no installation config (TOCTOU — the
+  // frozen selection must win). Unbound shells keep the legacy fail-open so
+  // single-repo mode is unchanged.
+  if (!kb) {
+    const rootName = process.env.STA_KNOWLEDGE_ROOT_NAME;
+    if (rootName) return { rel: target, why: knowledgeSelectionIncompleteWhy(rootName) };
+    return null;
+  }
   const rel = nodePath.relative(nodePath.resolve(kb), nodePath.resolve(target)).replace(/\\/g, '/');
   if (rel === '' || rel.startsWith('../') || nodePath.isAbsolute(rel)) return null;
   for (const pattern of WORKSPACE_BA_ARTIFACTS) {
     if (matchesGlob(pattern, rel)) return { rel: rel, why: knowledgeDenyWhy(role, pattern, kb) };
   }
   return null;
+}
+function knowledgeSelectionIncompleteWhy(rootName) {
+  return 'Not a role-boundary refusal: this session was launched as a managed Knowledge session (root name `' + rootName + '`) but its launch contract is incomplete — `STA_KNOWLEDGE_ROOT` is missing, so the guard cannot tell which Knowledge root this write belongs to and refuses before evaluating any permission (one session = one root). Relaunch through the launcher so the selection arrives whole.';
 }
 function knowledgeDenyWhy(role, pattern, knowledgeRoot) {
   return '`' + role + '` implements what the Knowledge repository (`' + knowledgeRoot + '`) already decided, so it may not write `' + pattern + '` there — that artifact is written by the role that owns it, never by an implementation stage.';

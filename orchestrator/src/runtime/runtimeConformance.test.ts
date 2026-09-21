@@ -68,6 +68,7 @@ const WORK_ROOTS: readonly RuntimeWorkRoot[] = [{ targetId: "target-a", path: TA
 const EXECUTOR_ENV = {
   STA_ROLE: ROLE,
   STA_KNOWLEDGE_ROOT: KNOWLEDGE_ROOT,
+  STA_KNOWLEDGE_ROOT_NAME: "conformance",
   STA_WRITABLE_WORK_ROOTS: JSON.stringify([TARGET_ROOT]),
 };
 
@@ -465,6 +466,7 @@ describe("T-V1-05 runtime conformance — one matrix, every runtime", () => {
         roots: {
           bindingRoot: root,
           knowledgeRoot: path.join(root, "knowledge"),
+          knowledgeRootName: "default",
           workRoots: [{ targetId: "target", path: path.join(root, "target"), access: "write" }],
         },
       }),

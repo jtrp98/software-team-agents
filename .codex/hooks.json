@@ -6,7 +6,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node 'C:\\src\\AgentClaude\\software-team-agents\\.codex\\hooks\\block-git.js'"
+            "command": "root=\"$(git rev-parse --show-toplevel)\" || exit $?; export CLAUDE_PROJECT_DIR=\"$root\"; node \"$root/.codex/hooks/block-git.js\"",
+            "commandWindows": "$root = git rev-parse --show-toplevel; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:CLAUDE_PROJECT_DIR = $root; node (Join-Path $root '.codex/hooks/block-git.js'); exit $LASTEXITCODE"
           }
         ]
       },
@@ -15,7 +16,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node 'C:\\src\\AgentClaude\\software-team-agents\\.codex\\hooks\\block-outside-repo.js'"
+            "command": "root=\"$(git rev-parse --show-toplevel)\" || exit $?; export CLAUDE_PROJECT_DIR=\"$root\"; node \"$root/.codex/hooks/block-outside-repo.js\"",
+            "commandWindows": "$root = git rev-parse --show-toplevel; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:CLAUDE_PROJECT_DIR = $root; node (Join-Path $root '.codex/hooks/block-outside-repo.js'); exit $LASTEXITCODE"
           }
         ]
       },
@@ -24,7 +26,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node 'C:\\src\\AgentClaude\\software-team-agents\\.codex\\hooks\\block-doc-rewrite.js'"
+            "command": "root=\"$(git rev-parse --show-toplevel)\" || exit $?; export CLAUDE_PROJECT_DIR=\"$root\"; node \"$root/.codex/hooks/block-doc-rewrite.js\"",
+            "commandWindows": "$root = git rev-parse --show-toplevel; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:CLAUDE_PROJECT_DIR = $root; node (Join-Path $root '.codex/hooks/block-doc-rewrite.js'); exit $LASTEXITCODE"
           }
         ]
       },
@@ -33,7 +36,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node 'C:\\src\\AgentClaude\\software-team-agents\\.codex\\hooks\\block-path-permissions.js'"
+            "command": "root=\"$(git rev-parse --show-toplevel)\" || exit $?; export CLAUDE_PROJECT_DIR=\"$root\"; node \"$root/.codex/hooks/block-path-permissions.js\"",
+            "commandWindows": "$root = git rev-parse --show-toplevel; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:CLAUDE_PROJECT_DIR = $root; node (Join-Path $root '.codex/hooks/block-path-permissions.js'); exit $LASTEXITCODE"
           }
         ]
       }
@@ -43,11 +47,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node 'C:\\src\\AgentClaude\\software-team-agents\\.codex\\hooks\\require-green-before-stop.js'"
+            "command": "root=\"$(git rev-parse --show-toplevel)\" || exit $?; export CLAUDE_PROJECT_DIR=\"$root\"; node \"$root/.codex/hooks/require-green-before-stop.js\"",
+            "commandWindows": "$root = git rev-parse --show-toplevel; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:CLAUDE_PROJECT_DIR = $root; node (Join-Path $root '.codex/hooks/require-green-before-stop.js'); exit $LASTEXITCODE"
           },
           {
             "type": "command",
-            "command": "node 'C:\\src\\AgentClaude\\software-team-agents\\.codex\\hooks\\block-secret-leak.js'"
+            "command": "root=\"$(git rev-parse --show-toplevel)\" || exit $?; export CLAUDE_PROJECT_DIR=\"$root\"; node \"$root/.codex/hooks/block-secret-leak.js\"",
+            "commandWindows": "$root = git rev-parse --show-toplevel; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:CLAUDE_PROJECT_DIR = $root; node (Join-Path $root '.codex/hooks/block-secret-leak.js'); exit $LASTEXITCODE"
           }
         ]
       }
@@ -57,11 +63,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node 'C:\\src\\AgentClaude\\software-team-agents\\.codex\\hooks\\require-green-before-stop.js'"
+            "command": "root=\"$(git rev-parse --show-toplevel)\" || exit $?; export CLAUDE_PROJECT_DIR=\"$root\"; node \"$root/.codex/hooks/require-green-before-stop.js\"",
+            "commandWindows": "$root = git rev-parse --show-toplevel; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:CLAUDE_PROJECT_DIR = $root; node (Join-Path $root '.codex/hooks/require-green-before-stop.js'); exit $LASTEXITCODE"
           },
           {
             "type": "command",
-            "command": "node 'C:\\src\\AgentClaude\\software-team-agents\\.codex\\hooks\\block-secret-leak.js'"
+            "command": "root=\"$(git rev-parse --show-toplevel)\" || exit $?; export CLAUDE_PROJECT_DIR=\"$root\"; node \"$root/.codex/hooks/block-secret-leak.js\"",
+            "commandWindows": "$root = git rev-parse --show-toplevel; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }; $env:CLAUDE_PROJECT_DIR = $root; node (Join-Path $root '.codex/hooks/block-secret-leak.js'); exit $LASTEXITCODE"
           }
         ]
       }

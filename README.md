@@ -60,7 +60,9 @@ software-team-agents sync            # ถ้า status รายงาน OUTDA
 # 4. เริ่มงาน
 software-team-agents open            # interactive session จาก Knowledge workspace
 # หรือ headless pipeline:
-# sta run --task-id T-1 --module <module> --bug-fix --autonomy edit --project-root <knowledge-root>
+# sta run --task-id T-1 --module <module> --bug-fix --autonomy edit
+# (เครื่องที่มีหลาย named root: เพิ่ม --root <name>; --project-root <knowledge-root> ยังรับได้
+#  แต่เป็น compatibility assertion กับ root ที่ installation เลือกแล้ว ไม่ใช่ selector)
 ```
 
 ใน interactive session ใช้ workflow slash commands ได้: `/next` (ทำอะไรต่อ) ·
@@ -103,6 +105,7 @@ BA/SA/PM/test-planner ทำงานจาก Knowledge workspace เสมอ 
 | CLI reference ทั้งสอง surface | [`docs/cli.md`](docs/cli.md) |
 | Runtime support + guard coverage + routing | [`docs/runtimes.md`](docs/runtimes.md) |
 | Pipeline, workflow, approval gates | [`docs/pipeline.md`](docs/pipeline.md) |
+| Standards registry ของ Framework | [`STANDARDS_MATRIX.md`](STANDARDS_MATRIX.md) |
 | Guards + การวินิจฉัย | [`docs/guards.md`](docs/guards.md) |
 | สถาปัตยกรรม + configuration reference | [`docs/architecture.md`](docs/architecture.md) |
 | Knowledge model (canonical) | [`knowledge/README.md`](knowledge/README.md) |

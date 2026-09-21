@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parsePlanTasks } from "../../docs/planGraph.js";
 import { renderCanonicalTasks, type PlanTask } from "../../docs/planTask.js";
 import { generateHtmlReport, parseStatusMd, runReportVerb, summarizeChangedByTarget, summarizeCodeIntel, type ReportData } from "./report.js";
+import { declareInstallationConfigOverrideChannelForTest } from "../../threeRepo/installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 const STA_INSTALLATION_CONFIG_ORIGINAL = process.env.STA_INSTALLATION_CONFIG;
 beforeEach(() => {

@@ -90,6 +90,7 @@ function hookVerdict(workspaceRoot: string, relPath: string, role?: string): { s
   delete env.STA_WRITABLE_WORK_ROOTS;
   delete env.STA_TARGET_WORK_ROOTS;
   delete env.STA_KNOWLEDGE_ROOT;
+  delete env.STA_KNOWLEDGE_ROOT_NAME;
   if (role) env.STA_ROLE = role;
   const res = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: path.join(workspaceRoot, ...relPath.split("/")) } }),

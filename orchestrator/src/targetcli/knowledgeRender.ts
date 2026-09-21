@@ -1,3 +1,4 @@
+import { InstallationConfigError } from "../threeRepo/installation.js";
 import { resolveKnowledgeBinding } from "./roleWorkspace.js";
 
 export const KNOWLEDGE_ROOT_INCLUDE_PATH = ".claude/shared/knowledge-root.md";
@@ -75,13 +76,22 @@ function displayPath(value: string | undefined): string {
 export interface BootstrapRenderOptions {
   role: "ba" | "dev";
   workspaceRoot: string;
-  /** Knowledge root for DEV; optional Target root for BA. */
-  boundRoot?: string;
 }
 
-/** The complete always-on Framework context. Keep details behind `sta policy`. */
+/**
+ * The complete always-on Framework context. Keep details behind `sta policy`.
+ *
+ * The binding is deliberately NOT baked here (DR §7): a value printed at sync
+ * time is a selector that goes stale the moment another named root is opened,
+ * and two sessions on different roots would race rewriting it. The one set of
+ * bytes per workspace therefore names no binding path — the selection is
+ * runtime data the session reads from the launch environment or `sta context`.
+ */
 export function renderBootstrapBlock(options: BootstrapRenderOptions): string {
-  const boundLabel = options.role === "dev" ? "Knowledge root (read-only)" : "Target root (optional, read-only)";
+  const boundLine =
+    options.role === "dev"
+      ? "- Knowledge root (read-only): resolved at launch, never baked into this file — read `$STA_KNOWLEDGE_ROOT` (name `$STA_KNOWLEDGE_ROOT_NAME`); `sta context` shows the same."
+      : "- Target root (optional, read-only): resolved at launch, never baked into this file — read `$STA_TARGET_ROOT` when bound; `sta context` shows the same.";
   // `sta context` takes the agent role doing the work, never the workspace role
   // this block was rendered for — naming `options.role` here would emit a
   // command that exits with "unknown agent role".
@@ -90,7 +100,7 @@ export function renderBootstrapBlock(options: BootstrapRenderOptions): string {
     BOOTSTRAP_OPEN,
     "# software-team-agents bootstrap",
     `- Workspace root (writable): ${displayPath(options.workspaceRoot)}`,
-    `- ${boundLabel}: ${displayPath(options.boundRoot)}`,
+    boundLine,
     "- Write scope: granted per run by the orchestrator's packet — never by a recorded role.",
     "- Human gates: material unresolved business choice or missing authority; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.",
     "- Hard boundary: no state-changing git.",
@@ -128,21 +138,29 @@ export function stripDevClaudeBanner(content: string): string {
   return stripBootstrapBlock(stripLegacyBanner(content));
 }
 
-/** Backward-compatible DEV wrapper; production uses `renderWorkspaceClaude`. */
+/**
+ * Backward-compatible DEV wrapper; production uses `renderWorkspaceClaude`.
+ * The root parameter predates root-neutral generated content and is
+ * deliberately ignored there (DR §7): binding values are runtime data.
+ */
 export function renderDevClaude(baseContent: string, knowledgeRoot: string, workspaceRoot = "<Target workspace>"): string {
-  return renderWorkspaceClaude(baseContent, { role: "dev", workspaceRoot, boundRoot: knowledgeRoot });
+  void knowledgeRoot;
+  return renderWorkspaceClaude(baseContent, { role: "dev", workspaceRoot });
 }
 
-export function renderKnowledgeInclude(knowledgeRoot: string): string {
+/** Root-neutral protocol/pointer (DR §7): names no root, so every named root renders the same bytes. */
+export function renderKnowledgeInclude(): string {
   return (
     "# Knowledge root (generated — do not edit)\n" +
     "\n" +
-    "Resolved from this workspace's Knowledge binding at sync time and\n" +
-    "regenerated on every `software-team-agents sync`.\n" +
+    "Root-neutral by design: these bytes are identical for every named root, so\n" +
+    "two sessions selecting different roots never race over this file. The real\n" +
+    "selection comes from the launch environment — `STA_KNOWLEDGE_ROOT` named by\n" +
+    "`STA_KNOWLEDGE_ROOT_NAME` — or from the run's frozen root; never from this\n" +
+    "file. Run `sta context` (or `sta status`) to see the name and path this\n" +
+    "session is bound to.\n" +
     "\n" +
-    `KNOWLEDGE_ROOT=${knowledgeRoot}\n` +
-    "\n" +
-    "Module documents live under `<root>/_docs/module/<name>/` inside that\n" +
+    "Module documents live under `_docs/module/<name>/` inside the selected\n" +
     "repository. A bound Target checkout treats that tree as READ-ONLY context;\n" +
     "documents are written by analysis roles in the Knowledge workspace\n" +
     "(`software-team-agents open`), never here.\n"
@@ -153,6 +171,7 @@ export function resolveDevKnowledgeRoot(options: {
   targetRoot: string;
   config?: { role?: "ba" | "dev"; knowledge?: { path: string } };
   installationConfigPath?: string;
+  requestedRootName?: string;
 }): string | undefined {
   if (options.config?.role !== "dev") return undefined;
   try {
@@ -160,9 +179,15 @@ export function resolveDevKnowledgeRoot(options: {
       targetRoot: options.targetRoot,
       configKnowledgePath: options.config.knowledge?.path,
       installationConfigPath: options.installationConfigPath,
+      requestedRootName: options.requestedRootName,
     });
     return binding?.knowledgeRoot;
-  } catch {
+  } catch (error) {
+    // An installation file that exists but cannot be loaded must not silently
+    // render the workspace as if no Knowledge binding existed — that derived
+    // content would point the session at the wrong docs. Advisory binding
+    // problems (KnowledgeBindingError) stay non-fatal as before.
+    if (error instanceof InstallationConfigError) throw error;
     return undefined;
   }
 }

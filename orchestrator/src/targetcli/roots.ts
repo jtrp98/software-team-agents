@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { defaultInstallationConfigPath, loadInstallationConfig, InstallationConfigError } from "../threeRepo/installation.js";
+import { loadInstallationConfig, defaultInstallationConfigPath } from "../threeRepo/installation.js";
+import { resolveSelectedKnowledgeRootOrLegacy } from "../threeRepo/rootSelector.js";
 
 /**
  * The root model for Target-first execution. Three roots, three
@@ -34,26 +35,23 @@ export interface Roots {
  * three-repo launch; single-repo runs use the project itself. Kept beside the
  * three-root model so callers don't invent conflicting precedence rules.
  *
- * Precedence: `env > installation.yaml > projectRoot`. The env var is what a
+ * Precedence: `env > installation selection > projectRoot`. The env var is what a
  * launcher session (`software-team-agents open`) sets; the installation-config
  * fallback is what makes a desktop session — which never goes through the
  * launcher and so never has it — usable instead of failing on the first turn.
- * A missing or invalid `installation.yaml` degrades to today's `projectRoot`
- * behaviour; it must never throw.
+ * The selection resolves through the central selector (DR §3): an installation
+ * that exists but cannot be loaded throws (a broken installation must never
+ * silently read someone else's docs); only a *missing* installation file
+ * degrades to `projectRoot`.
  */
 export function resolveContextDocsRoot(
   projectRoot: string,
   env: { STA_KNOWLEDGE_ROOT?: string | undefined } = process.env,
+  requestedRootName?: string,
 ): string {
   const knowledgeRoot = env.STA_KNOWLEDGE_ROOT?.trim();
   if (knowledgeRoot) return path.resolve(knowledgeRoot);
-  try {
-    const configured = loadInstallationConfig(defaultInstallationConfigPath()).knowledge_root;
-    if (configured) return path.resolve(configured);
-  } catch (error) {
-    if (!(error instanceof InstallationConfigError)) throw error;
-  }
-  return path.resolve(projectRoot);
+  return resolveSelectedKnowledgeRootOrLegacy(projectRoot, requestedRootName);
 }
 
 /**

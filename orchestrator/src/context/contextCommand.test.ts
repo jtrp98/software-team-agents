@@ -7,6 +7,9 @@ import { sliceModuleDocsWithSavings } from "../runtime/agentRunAssembly.js";
 import { buildContextCommand, ContextCommandError, contextCommandJson, describeCodeIntelFallback, renderContextCommand } from "./contextCommand.js";
 import { fixtureTask } from "../runtime/packetFixture.testSupport.js";
 import { renderCanonicalTasks } from "../docs/planTask.js";
+import { declareInstallationConfigOverrideChannelForTest } from "../threeRepo/installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 // T-V6-006: `env: {}` below means "no STA_KNOWLEDGE_ROOT", which now
 // falls through to installation.yaml — isolate it from whatever is real on

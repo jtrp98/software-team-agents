@@ -37,6 +37,7 @@ function targetTask(root: string) {
     roots: {
       bindingRoot: root,
       knowledgeRoot: path.join(root, "knowledge"),
+      knowledgeRootName: "default",
       workRoots: [{ targetId: "target", path: path.join(root, "target"), access: "write" as const }],
     },
   };

@@ -8,7 +8,15 @@ import { resolveContextDocsRoot, resolveFrameworkRoot } from "../../targetcli/ro
 import { readModuleDoc } from "../../agents/moduleDocs.js";
 import { readWorkPlan } from "../../docs/planGraph.js";
 import { preflightThreeRepoTask } from "../../threeRepo/preflight.js";
-import { loadInstallationConfig } from "../../threeRepo/installation.js";
+import {
+  defaultInstallationConfigPath,
+  installationConfigOverride,
+  loadInstallationConfig,
+  InstallationConfigError,
+} from "../../threeRepo/installation.js";
+import { assertRootMatchesFrozenIdentity, resolveInstallationRoot } from "../../threeRepo/rootSelector.js";
+import type { KnowledgeRootIdentity } from "../../store/taskStore.js";
+import type { TaskLookup } from "../../threeRepo/cliRoots.js";
 import { resolveModuleTargets } from "../../threeRepo/moduleTargetResolver.js";
 import { loadTargetRegistry } from "../../threeRepo/targets.js";
 import {
@@ -30,18 +38,18 @@ import { CliUsageError, type CliArgs } from "../../cli.js";
  */
 export function contractRootForTask(projectRoot: string, bindings: TargetBindings): string {
   return hasTargetBindings(bindings) ? resolveFrameworkRoot() : projectRoot;
-}
+}
 
 /** Optional phase-tier metadata is advisory input to routing, never a runtime gate. */
 export function plannedTier(args: CliArgs, taskId: string): string | undefined {
   if (!args.module) return undefined;
   try {
-    const planMd = readModuleDoc(resolveContextDocsRoot(args.projectRoot), args.module, "plan.md");
+    const planMd = readModuleDoc(resolveContextDocsRoot(args.projectRoot, process.env, args.rootName), args.module, "plan.md");
     return planMd === null ? undefined : readWorkPlan(planMd).tasks.find((task) => task.id === taskId)?.tier;
   } catch {
     return undefined;
   }
-}
+}
 
 /** Never called without a terminal: CI/headless execution must not read stdin. */
 export function promptForCamp(defaultRuntimeId: RuntimeId): RuntimeId {
@@ -50,7 +58,7 @@ export function promptForCamp(defaultRuntimeId: RuntimeId): RuntimeId {
   const read = fs.readSync(0, input, 0, input.length, null);
   const selected = input.toString("utf8", 0, read).trim();
   return (RUNTIME_IDS as readonly string[]).includes(selected) ? selected as RuntimeId : defaultRuntimeId;
-}
+}
 
 /**
  * Resolves the Target side of `contract globs ∩ Target work roots` before
@@ -69,8 +77,7 @@ export function runtimeTaskWorkRoots(
   }
 
   const preview = { taskId, classification, targetBindings: args.targetBindings };
-  const installationConfigPath =
-    process.env.STA_INSTALLATION_CONFIG || undefined;
+  const installationConfigPath = installationConfigOverride();
   const roots: RuntimeTaskWorkRoot[] = [];
   for (const stage of stages) {
     // Knowledge-only stages deliberately have no Target work roots. UX identity
@@ -93,6 +100,7 @@ export function runtimeTaskWorkRoots(
       // its own "Framework root".
       frameworkRoot: resolveFrameworkRoot(),
       installationConfigPath,
+      knowledgeRootName: args.rootName,
       moduleScope,
       // openTask validated and logged this exact binding immediately before
       // resolving roots; repeating each warning once per stage adds no signal.
@@ -103,7 +111,7 @@ export function runtimeTaskWorkRoots(
     }
   }
   return roots;
-}
+}
 
 /**
  * Resolves the orchestrator to drive: resumes the stored task with --resume,
@@ -111,10 +119,13 @@ export function runtimeTaskWorkRoots(
  * task id from scratch would re-pay for every stage that already ran, so it
  * has to be asked for explicitly.
  */
-export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string): Orchestrator {
+export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string, store: TaskLookup): Orchestrator {
   const exists = registry.has(taskId);
   if (args.resume) {
     if (!exists) throw new CliUsageError(`--resume: task ${taskId} is not in this store`);
+    // DR §5 invariant 5: a resume continues on the root frozen at intake; an
+    // explicit --root is a drift assertion against it, never a re-selection.
+    assertRootMatchesFrozenIdentity(store.loadTask(taskId)?.knowledgeRoot, args.rootName, installationConfigOverride());
     const orchestrator = registry.open(taskId);
     console.log(
       `[orchestrator] resumed task ${taskId} at ${orchestrator.machine.current} ` +
@@ -132,17 +143,33 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string):
   // Do this before a durable row is written, so malformed/retired/unknown ids
   // leave no partial task history behind.
   const isCodeTask = classification.pipeline.some((stage) => stage === AgentStage.BACKEND_ENGINEER || stage === AgentStage.FRONTEND_ENGINEER);
-  // `STA_INSTALLATION_CONFIG` lets a test (or an unusual setup) point the
-  // mode check at a specific file instead of the machine's real one — without
-  // it, merely having configured an installation once flips every CLI test that
-  // creates a legacy code task.
-  const installationConfigPath =
-    process.env.STA_INSTALLATION_CONFIG || undefined;
+  // The installation override is the test/E2E channel (DR §9B): a declared
+  // harness points the mode check at a specific file, and an undeclared
+  // production invocation is refused by `installationConfigOverride` instead
+  // of silently reading the machine's real installation.
+  const installationConfigPath = installationConfigOverride();
+  // DR §5: a task freezes its Knowledge-root identity at intake — resumes,
+  // later stages and drift assertions answer to this record, not to whatever
+  // the installation's default says by then. A missing installation file is
+  // the legacy single-repo mode with nothing to freeze; a file that exists
+  // but cannot be read must not pass for legacy (DR §3 rule 6).
+  let frozenKnowledgeRoot: KnowledgeRootIdentity | null = null;
+  try {
+    const installation = loadInstallationConfig(installationConfigPath);
+    const selected = resolveInstallationRoot(installation, args.rootName);
+    frozenKnowledgeRoot = { name: selected.name, path: selected.path };
+  } catch (error) {
+    const resolvedConfigPath = installationConfigPath ?? defaultInstallationConfigPath();
+    if (!(error instanceof InstallationConfigError && !fs.existsSync(resolvedConfigPath))) throw error;
+  }
   let moduleScope: TaskBindingModuleScope | undefined;
   const validateInstalledBindings = (): void => {
     const installation = loadInstallationConfig(installationConfigPath);
+    // The run's `--root` (or the installation default) decides which root's
+    // registry and module docs validate this task (DR §3).
+    const selectedKnowledgeRoot = resolveInstallationRoot(installation, args.rootName).path;
     if (args.module) {
-      const resolved = resolveModuleTargets(args.module, installation.knowledge_root, {
+      const resolved = resolveModuleTargets(args.module, selectedKnowledgeRoot, {
         frameworkRoot: resolveFrameworkRoot(),
       });
       moduleScope = {
@@ -154,7 +181,7 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string):
     const result = validateNewTaskBindings(
       classification,
       args.targetBindings,
-      loadTargetRegistry(installation.knowledge_root),
+      loadTargetRegistry(selectedKnowledgeRoot),
       { moduleScope },
     );
     for (const warning of result.warnings) console.warn(`[orchestrator] WARNING: ${warning}`);
@@ -179,7 +206,7 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string):
       `level=${classification.level} pipeline=${classification.pipeline.join(" -> ")}`,
   );
   for (const reason of classification.reasons) console.log(`[orchestrator]   reason: ${reason}`);
-  const docsRoot = resolveContextDocsRoot(args.projectRoot);
+  const docsRoot = resolveContextDocsRoot(args.projectRoot, process.env, args.rootName);
   const created = registry.create({
     taskId,
     classification,
@@ -194,7 +221,8 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string):
     moduleName: args.module,
     targetWorkRoots: runtimeTaskWorkRoots(args, taskId, classification, moduleScope),
     changeAwareVerification: !args.noQaOptimization,
+    knowledgeRoot: frozenKnowledgeRoot,
   });
   void created;
   return registry.open(taskId);
-}
+}

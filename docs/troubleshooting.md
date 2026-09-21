@@ -28,8 +28,35 @@
 - **อาการ:** session เปิดแต่ไม่มี knowledge context
 - **เหตุ:** V10 session เปิดได้ทั้งที่ไม่มี binding (workspace คือ Knowledge root เอง); context จาก root
   อื่นต้อง bind
-- **แก้:** ตั้ง `knowledge.path` ใน `.agent-team/config.yaml` หรือ
-  `sta configure knowledge-root <path>`
+- **แก้:** `sta configure knowledge-root <path> --root <name> --default` (V11 named-root surface; ฟอร์ม
+  pathless เดิมยังใช้ได้บนเครื่องที่ยังไม่มีไฟล์ v2) หรือเลือกตอนเริ่มงานด้วย `--root <name>` —
+  `sta context <role>` / `status` จะรายงาน root ที่ session เลือกจริงเสมอ
+- **เก่าแล้ว (legacy):** การตั้ง `knowledge.path` ใน `.agent-team/config.yaml` ยังอ่านได้แต่เป็น
+  compatibility assertion เท่านั้น — path ต้องตรง root ที่เลือกจริง ไม่งั้นถูก refuse
+
+### 3b. คำสั่ง refuse ว่า "unknown Knowledge root"
+
+- **อาการ:** `--root <name>` คืน error `unknown Knowledge root "x"; available roots: …`
+- **เหตุ:** ชื่อไม่มีใน `knowledge_roots` ของ installation.yaml บนเครื่องนี้
+- **แก้:** เพิ่ม root ด้วย `sta configure knowledge-root <path> --root <name>` หรือรันด้วยชื่อที่มีอยู่
+  (error พิมพ์รายชื่อ + default ให้แล้ว) — ห้ามแก้ installation.yaml มือข้าม writer
+
+### 3c. run/resume refuse ว่า task ถูก freeze กับ root อื่น
+
+- **อาการ:** resume/refuse พร้อมข้อความ `… is frozen to Knowledge root …`
+- **เหตุ:** V11 freeze ชื่อ+path ของ root ไว้ตอน intake; การเปลี่ยน default หรือส่ง `--root` อื่น
+  ระหว่างทางไม่มีผลกับ task ที่ freeze แล้ว
+- **แก้:** resume โดยไม่ส่ง `--root` (ใช้ frozen root) หรือเริ่ม task ใหม่สำหรับ root อื่น
+
+### 3d. register/preflight refuse ว่า canonical repository ถูก root อื่นเป็นเจ้าของ
+
+- **อาการ:** `Target registration refused: canonical repository … is already owned by root …` หรือ
+  preflight refuse `Target "x" in root "a" conflicts with Target "y" in root "b"`
+- **เหตุ:** Target ชุดเดียวกันถูกผูกได้กับ Knowledge root เดียวต่อเครื่อง — โครงสร้างนี้ตั้งใจให้ refuse
+  (hand-edit `targets.yaml` ข้าม writer ได้ แต่ preflight/doctor จับได้เสมอ)
+- **แก้:** `sta doctor` ดูภาพรวม แล้วทำตามขั้นตอน human-gated transfer
+  (`sta transfer plan` → คนกรอก/อนุมัติ approval record → `release` → `register` → `verify`) —
+  การย้ายเจ้าของเป็นการตัดสินของคน ไม่มีการย้ายอัตโนมัติ
 
 ### 4. Target ถูก reject ตอน preflight (remote mismatch)
 

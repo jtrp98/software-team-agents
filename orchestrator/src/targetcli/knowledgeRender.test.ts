@@ -18,9 +18,13 @@ const KNOWLEDGE_ROOT = "C:\\src\\schoolbright-knowledge";
 const TARGET_ROOT = "C:\\src\\schoolbright-app";
 
 describe("renderKnowledgeInclude", () => {
-  it("names the resolved root as a machine-readable assignment", () => {
-    const content = renderKnowledgeInclude(KNOWLEDGE_ROOT);
-    expect(content).toContain(`KNOWLEDGE_ROOT=${KNOWLEDGE_ROOT}`);
+  it("is root-neutral: it names no root and points at the runtime selection instead (DR §7)", () => {
+    const content = renderKnowledgeInclude();
+    expect(content).not.toContain(KNOWLEDGE_ROOT);
+    expect(content).not.toMatch(/^KNOWLEDGE_ROOT=/m);
+    expect(content).toContain("STA_KNOWLEDGE_ROOT");
+    expect(content).toContain("STA_KNOWLEDGE_ROOT_NAME");
+    expect(content).toContain("sta context");
     expect(content).toContain("generated");
     expect(content).toContain("_docs/module/<name>/");
   });
@@ -28,7 +32,7 @@ describe("renderKnowledgeInclude", () => {
 
 describe("T-V3-06 bootstrap rendering", () => {
   it("round-trips exactly, preserves every surrounding byte, and is idempotent over three renders", () => {
-    const options = { role: "dev" as const, workspaceRoot: TARGET_ROOT, boundRoot: KNOWLEDGE_ROOT };
+    const options = { role: "dev" as const, workspaceRoot: TARGET_ROOT };
     const once = renderWorkspaceClaude(BASE, options);
     const twice = renderWorkspaceClaude(once, options);
     const thrice = renderWorkspaceClaude(twice, options);
@@ -53,7 +57,7 @@ describe("T-V3-06 bootstrap rendering", () => {
   });
 
   it("keeps the block under 4 KB and structurally limited to identity, roots, gates, boundaries and pointers", () => {
-    const block = renderBootstrapBlock({ role: "dev", workspaceRoot: TARGET_ROOT, boundRoot: KNOWLEDGE_ROOT });
+    const block = renderBootstrapBlock({ role: "dev", workspaceRoot: TARGET_ROOT });
     expect(Buffer.byteLength(block, "utf8")).toBeLessThanOrEqual(BOOTSTRAP_BUDGET_BYTES);
     expect(block).toContain("STA_CONTEXT_CMD");
     expect(block).toContain("sta policy <area> <section>");
@@ -63,14 +67,25 @@ describe("T-V3-06 bootstrap rendering", () => {
     expect((block.match(/sta policy/g) ?? [])).toHaveLength(1);
   });
 
-  it("renders stable DEV and BA golden blocks with the correct bound root", () => {
-    const dev = renderBootstrapBlock({ role: "dev", workspaceRoot: TARGET_ROOT, boundRoot: KNOWLEDGE_ROOT });
-    const ba = renderBootstrapBlock({ role: "ba", workspaceRoot: KNOWLEDGE_ROOT, boundRoot: TARGET_ROOT });
+  it("is root-neutral: the bootstrap names no binding path — the selection is runtime data (DR §7)", () => {
+    const dev = renderBootstrapBlock({ role: "dev", workspaceRoot: TARGET_ROOT });
+    expect(dev).toContain("never baked into this file");
+    expect(dev).toContain("$STA_KNOWLEDGE_ROOT");
+    expect(dev).toContain("$STA_KNOWLEDGE_ROOT_NAME");
+    expect(dev).not.toContain(KNOWLEDGE_ROOT);
+    const ba = renderBootstrapBlock({ role: "ba", workspaceRoot: KNOWLEDGE_ROOT });
+    expect(ba).toContain("$STA_TARGET_ROOT");
+    expect(ba).not.toContain(TARGET_ROOT);
+  });
+
+  it("renders stable DEV and BA golden blocks with the binding left to the runtime", () => {
+    const dev = renderBootstrapBlock({ role: "dev", workspaceRoot: TARGET_ROOT });
+    const ba = renderBootstrapBlock({ role: "ba", workspaceRoot: KNOWLEDGE_ROOT });
     expect(dev).toMatchInlineSnapshot(`
       "<!-- sta:bootstrap -->
       # software-team-agents bootstrap
       - Workspace root (writable): \`C:\\src\\schoolbright-app\`
-      - Knowledge root (read-only): \`C:\\src\\schoolbright-knowledge\`
+      - Knowledge root (read-only): resolved at launch, never baked into this file — read \`$STA_KNOWLEDGE_ROOT\` (name \`$STA_KNOWLEDGE_ROOT_NAME\`); \`sta context\` shows the same.
       - Write scope: granted per run by the orchestrator's packet — never by a recorded role.
       - Human gates: material unresolved business choice or missing authority; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.
       - Hard boundary: no state-changing git.
@@ -90,7 +105,7 @@ describe("T-V3-06 bootstrap rendering", () => {
       "<!-- sta:bootstrap -->
       # software-team-agents bootstrap
       - Workspace root (writable): \`C:\\src\\schoolbright-knowledge\`
-      - Target root (optional, read-only): \`C:\\src\\schoolbright-app\`
+      - Target root (optional, read-only): resolved at launch, never baked into this file — read \`$STA_TARGET_ROOT\` when bound; \`sta context\` shows the same.
       - Write scope: granted per run by the orchestrator's packet — never by a recorded role.
       - Human gates: material unresolved business choice or missing authority; schema confirmation; third QA failure or Critical; Critical/Important security finding; real deploy or migration.
       - Hard boundary: no state-changing git.

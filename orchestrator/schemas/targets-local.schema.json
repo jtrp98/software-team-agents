@@ -4,6 +4,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "targets"],
   "properties": {
+        "remote_host_aliases": { "type": "object", "additionalProperties": { "type": "string", "minLength": 1 }, "description": "Machine-local SSH host alias to canonical dotted host (DT section 2.3). Never read from ~/.ssh/config or DNS." },
     "schema_version": { "const": 1 },
     "targets": { "type": "object", "additionalProperties": { "type": "object", "additionalProperties": false, "required": ["path"], "properties": { "path": { "type": "string", "minLength": 1 } } } }
   }

@@ -6,6 +6,9 @@ import { classifyTask } from "../../classification/taskClassifier.js";
 import { parseArgs } from "../../cli.js";
 import { AgentStage } from "../../types.js";
 import { runtimeTaskWorkRoots } from "./taskIntake.js";
+import { declareInstallationConfigOverrideChannelForTest } from "../../threeRepo/installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 const originalInstallation = process.env.STA_INSTALLATION_CONFIG;
 const roots: string[] = [];

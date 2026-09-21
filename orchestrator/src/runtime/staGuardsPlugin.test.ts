@@ -14,7 +14,7 @@ import { pathToFileURL } from "node:url";
 const pluginHref = pathToFileURL(path.resolve(import.meta.dirname, "../../../.opencode/plugin/sta-guards.js")).href;
 
 const roots: string[] = [];
-const envKeys = ["STA_ROLE", "STA_WRITABLE_WORK_ROOTS", "STA_TARGET_WORK_ROOTS", "STA_KNOWLEDGE_ROOT"] as const;
+const envKeys = ["STA_ROLE", "STA_WRITABLE_WORK_ROOTS", "STA_TARGET_WORK_ROOTS", "STA_KNOWLEDGE_ROOT", "STA_KNOWLEDGE_ROOT_NAME"] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {

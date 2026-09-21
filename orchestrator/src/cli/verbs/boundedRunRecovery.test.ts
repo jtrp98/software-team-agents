@@ -11,6 +11,9 @@ import { SqliteRunLedger } from "../../ledger/sqliteRunLedger.js";
 import { SqliteTaskStore } from "../../store/sqliteStore.js";
 import { defaultStateDbPath } from "../../store/stateView.js";
 import { boundedRunProject } from "./boundedRunFixture.testSupport.js";
+import { declareInstallationConfigOverrideChannelForTest } from "../../threeRepo/installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 /**
  * T-V8-022 — end-to-end recovery through the real `sta bounded-run` CLI.

@@ -21,6 +21,9 @@ import { sliceModuleDocsWithSavings } from "../runtime/agentRunAssembly.js";
 import { buildContextCommand } from "./contextCommand.js";
 import { fixtureTask } from "../runtime/packetFixture.testSupport.js";
 import { renderCanonicalTasks } from "../docs/planTask.js";
+import { declareInstallationConfigOverrideChannelForTest } from "../threeRepo/installation.js";
+
+declareInstallationConfigOverrideChannelForTest();
 
 // T-V6-006: `env: {}` (used below) now falls through to installation.yaml
 // when STA_KNOWLEDGE_ROOT is unset — isolate it from whatever is

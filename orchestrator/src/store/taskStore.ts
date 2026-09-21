@@ -20,6 +20,12 @@ import { TEST_STRATEGY_TRIGGERS } from "../classification/taskClassifier.js";
  * therefore *not* persisted: it is recomputed from `machine` + `gateContext`
  * on load.
  */
+export const KnowledgeRootIdentitySchema = z.object({
+  name: z.string().min(1),
+  path: z.string().min(1),
+});
+export type KnowledgeRootIdentity = z.infer<typeof KnowledgeRootIdentitySchema>;
+
 export const PersistedTaskSchema = z.object({
   taskId: z.string().min(1),
   createdAt: z.number(),
@@ -148,6 +154,14 @@ export const PersistedTaskSchema = z.object({
         ],
       };
     }),
+  /**
+   * The Knowledge-root identity frozen at intake (DR §5): a task runs on the
+   * root it was created with, so a later `default_root` change or `--root`
+   * flag cannot repoint a resumed task. Null for legacy rows and tasks
+   * created with no installation file — "nothing was frozen", which is true
+   * rather than broken, same defaulting pattern as `paused` above.
+   */
+  knowledgeRoot: KnowledgeRootIdentitySchema.nullable().default(null),
 });
 export type PersistedTask = z.infer<typeof PersistedTaskSchema>;
 
@@ -272,6 +286,7 @@ export function newPersistedTask(params: {
   targetBindings?: PersistedTask["targetBindings"];
   runtimeTask?: PersistedTask["runtimeTask"];
   gateContext?: PersistedTask["gateContext"];
+  knowledgeRoot?: PersistedTask["knowledgeRoot"];
 }): PersistedTask {
   return {
     taskId: params.taskId,
@@ -294,5 +309,6 @@ export function newPersistedTask(params: {
     environment: params.environment ?? Environment.LOCAL,
     deployPrepared: false,
     targetBindings: params.targetBindings ?? { targets: [] },
+    knowledgeRoot: params.knowledgeRoot ?? null,
   };
 }

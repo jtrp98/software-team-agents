@@ -1,5 +1,119 @@
 # Release Notes
 
+## software-team-agents 5.0.0 — V11 (2016-09-21)
+
+> Release date `2016-09-21` and target version `5.0.0` were confirmed by the release owner during
+> the V11 close round. The Major bucket is the mechanical result of the version rule below:
+> V11 introduces new fail-closed root-selection and Target-ownership refusals that operators must
+> understand before upgrading. Root `package.json` and `package-lock.json` carry `5.0.0`;
+> `templates/manifest.json` is re-stamped by `npm run build`. The private development package
+> `@software-team-agents/orchestrator` remains independently versioned at `0.3.0`.
+
+**Bucket: Major (`4.0.0 → 5.0.0`, confirmed).** V11 ships three coordinated tracks: a single
+Framework standards baseline for every Knowledge root, named multi-root selection with one root
+per session, and machine-local Target ownership that prevents one repository from being owned by
+multiple Knowledge roots. V10 single-root installations remain readable and usable without an
+eager rewrite, but operators adding a second root or encountering duplicate Target ownership must
+follow the migration order below.
+
+### Track A — Framework standards baseline
+
+- `STANDARDS_MATRIX.md` is the maintainer-facing registry at the Framework root. Role prompts carry
+  only pointers to their section in `policies/standards.md`; the full matrix is not copied into
+  prompts or Knowledge payloads.
+- The baseline applies equally to every Knowledge root. It creates no per-root standards overlay,
+  schema, guard, or new QA gate.
+- The release checklist requires maintainers to review the matrix when standards, policies,
+  workflows, or role contracts materially change. Tests keep `policies/standards.md` smaller than
+  the matrix and verify every role pointer resolves.
+
+### Track B — named Knowledge roots
+
+- `installation.yaml` schema v2 adds `knowledge_roots`, `default_root`, and the compatibility alias
+  `knowledge_root`. The v1 scalar shape remains a dual-reader input and normalizes in memory to a
+  synthetic `default` root without rewriting the file.
+- Root-aware commands accept `--root <name>`. A run/session freezes one root name and canonical
+  path; resume/retry refuses drift instead of re-reading a changed default. `--knowledge-root
+  <path>` and legacy `knowledge.path` are compatibility assertions, not competing selectors.
+- Managed launches receive one paired selection:
+  `STA_KNOWLEDGE_ROOT` + `STA_KNOWLEDGE_ROOT_NAME`. A partial selection refuses before a permission
+  decision. V11 close validation also fixes direct `software-team-agents open` launches from a
+  selected Knowledge workspace so they receive that same pair.
+- Generated Knowledge content is root-neutral. Sync does not embed absolute root paths or the map
+  of every configured root, and the 4,096-byte bootstrap ceiling is unchanged.
+
+### Track C — Target ownership
+
+- A canonical repository coordinate is derived from supported HTTPS, `ssh://`, and SCP-like
+  remotes. Credentials, query/fragment forms, local/file remotes, ambiguous aliases, and other
+  non-canonical identities are refused.
+- Register and preflight enforce one owning Knowledge root per canonical Target repository on the
+  current machine. `sta doctor` audits all configured roots, reports legacy hand-switch duplicates
+  as FAIL, and explicitly warns that cross-machine uniqueness is not guaranteed.
+- `targets.yaml` v2 adds `ownership_state: owned|released` and `repository_aliases`; v1 registries
+  remain readable in memory. Released tombstones preserve history and no longer admit new work.
+- Moving ownership is never automatic. `sta transfer plan → release → register → verify` requires a
+  human-approved transfer record, checks live tasks/module references/knowledge, and retains the
+  source tombstone. `rollback` is available before completion under the same approval record.
+
+### Breaking changes and required operator action
+
+1. **Invalid or ambiguous installed root state now fails closed.** A present but unreadable
+   `installation.yaml`, an unknown/duplicate selector, a changed frozen root, or an incomplete
+   managed launch selection is refused instead of falling back to the current directory/default.
+2. **Duplicate Target ownership now blocks work.** A Target registered under two configured roots,
+   an unreadable ownership registry, or a repository identity that cannot be proved through the
+   configured alias map refuses register/preflight and makes the ownership doctor check fail.
+3. **Legacy path selectors no longer select.** `--knowledge-root <path>`, `--project-root` on
+   Knowledge operations, and committed `knowledge.path` values only assert compatibility with the
+   selected named root. Mismatch is an actionable refusal.
+4. **Production use of `STA_INSTALLATION_CONFIG` is refused.** The override remains an explicit
+   test/packaged-E2E channel; production commands must use the canonical machine installation file.
+5. **Generated payload bytes change on sync.** Existing managed Knowledge files that embedded a
+   root path are regenerated into root-neutral form. `open --no-auto-sync` refuses an outdated
+   managed payload rather than launching with stale selection semantics.
+
+### Migration order for existing installations
+
+1. **Upgrade the Framework, then inspect each current root.** Run `software-team-agents status` and
+   `sta doctor` before adding a root. A V10 v1 installation should continue to open immediately and
+   must not be rewritten merely by reading, syncing, or opening it.
+2. **Sync every Knowledge workspace before opening managed sessions.** Run
+   `software-team-agents sync` for the current v1 root, or `software-team-agents sync --root <name>`
+   for each v2 root, so root-neutral generated content and the paired launch contract land together.
+3. **Adopt names only when needed.** The first named operation
+   `sta configure knowledge-root <path> --root <name> [--default]` migrates v1 to v2 while retaining
+   the original root and identities. Change the default explicitly with
+   `sta configure default-root --root <name>`.
+4. **Resolve ownership findings before running Targets.** If doctor reports a duplicate, do not
+   hand-edit one registry away. Use `sta transfer plan`, obtain human approval, then run `release`,
+   `register`, and `verify` in order; use `rollback` if the approved move cannot complete.
+5. **Update automation to use names.** Pass `--root <name>` to root-aware commands where the
+   installation default is not intended. Treat legacy path flags only as migration assertions.
+6. **Re-run the release/installation checks.** Confirm `software-team-agents status`, `sta doctor`,
+   application tests, and guard behavior from a session opened in each named root.
+
+### Known standards gaps — input to the next version
+
+V11 deliberately does not invent enforcement for operations standards that have no existing
+Framework home. Infrastructure as Code, OpenTelemetry coverage, and operations-side retention /
+backup policy remain applicability-dependent evidence owned by the project/Knowledge/Target. They
+are recorded as next-version design input, not silently promoted into V11 guards or QA gates.
+
+### Release status
+
+**RELEASABLE — deterministic repository checks passed.** TASK-012/013 targeted fixtures, the full
+Vitest suite (246 files; 3,766 passed and 2 skipped), the 1,073-case hook/script self-test,
+typecheck, build, documentation/pointer checks, bindings, and prompt-budget checks all pass.
+`npm run release:check` passed steps 1–30; its packaged-E2E step was initially blocked only by the
+sandbox denying npm-registry access, then passed 26/26 when that same step was rerun with approved
+network permission. The historical `planning/v11/evidence/baseline.md` artifact is absent; close
+evidence therefore compares the preserved R01/R03/R16 records and leaves acceptance of that
+substitution as an explicit human checkpoint. Tagging, pushing, publishing, deployment, migration,
+and state-changing Git remain separate human actions.
+
+---
+
 ## software-team-agents 4.0.0 — V10 (2026-09-17)
 
 > Written by the V10 close round (TASK-033). **The release date (2026-09-17) and the version

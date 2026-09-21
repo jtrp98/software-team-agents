@@ -21,3 +21,4 @@ coverage/
 
 # internal planning docs (T-checklists/handoffs) — local only
 planning/
+.zcodeignore

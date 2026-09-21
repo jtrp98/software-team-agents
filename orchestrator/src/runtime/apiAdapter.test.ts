@@ -106,6 +106,7 @@ describe("ApiAdapter — paid path safety", () => {
         roots: {
           bindingRoot: root,
           knowledgeRoot: path.join(root, "knowledge"),
+          knowledgeRootName: "default",
           workRoots: [{ targetId: "target", path: path.join(root, "target"), access: "write" }],
         },
       }),

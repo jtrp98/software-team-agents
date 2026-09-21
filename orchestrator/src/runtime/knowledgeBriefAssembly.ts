@@ -4,7 +4,7 @@ import { KnowledgeContext } from "../knowledge/knowledgeContext.js";
 import { canSeeKind } from "../knowledge/roleView.js";
 import { freshnessOf, type Freshness } from "../knowledge/freshness.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
-import { loadTargetRegistry } from "../threeRepo/targets.js";
+import { isReleasedTombstone, loadTargetRegistry, normalizeTargetRegistry } from "../threeRepo/targets.js";
 import { loadLocalTargetMapping, targetIdForLocalPath } from "../threeRepo/localTargets.js";
 
 /**
@@ -156,10 +156,29 @@ export function knowledgeBriefFor(stage: AgentStage, opts: KnowledgeBriefOptions
     }
     const context = KnowledgeContext.load(root);
     const retrieved = context.forRole(stage).query({ module: opts.moduleName, ...(targetId ? { target_ids: [targetId] } : {}) });
+    // DT §5.1 — items scoped only to released tombstones are historical
+    // archive and never render into a runtime brief, through the scoped query
+    // or the unscoped fallback alike. When the registry cannot say which ids
+    // are tombstones the brief keeps its additive contract; `--check-knowledge`
+    // and doctor own that failure.
+    let releasedTargetIds: Set<string> | undefined;
+    try {
+      releasedTargetIds = new Set(
+        normalizeTargetRegistry(loadTargetRegistry(root)).targets.filter(isReleasedTombstone).map((target) => target.target_id),
+      );
+    } catch {
+      releasedTargetIds = undefined;
+    }
     const rawById = new Map(context.kb.items.map((item) => [item.id, item]));
+    const briefable = releasedTargetIds
+      ? retrieved.items.filter((entry) => {
+          const ids = rawById.get(entry.item.id)?.target_ids ?? [];
+          return !(ids.length > 0 && ids.every((id) => releasedTargetIds!.has(id)));
+        })
+      : retrieved.items;
     let freshness = new Map<string, Freshness>();
     try {
-      freshness = new Map(retrieved.items.map((entry) => {
+      freshness = new Map(briefable.map((entry) => {
         const raw = rawById.get(entry.item.id)!;
         return [entry.item.id, (opts.freshnessResolver ?? freshnessOf)(raw, { now: opts.now ?? new Date().toISOString(), projectRoot: root, knowledgeRoot: root, targetPaths })];
       }));
@@ -168,7 +187,7 @@ export function knowledgeBriefFor(stage: AgentStage, opts: KnowledgeBriefOptions
       // to the pre-freshness brief for the same retrieval result.
       freshness = new Map();
     }
-    return renderKnowledgeBrief(retrieved.items.map((entry) => ({ ...entry.item, freshness: freshness.get(entry.item.id) })), stage, {
+    return renderKnowledgeBrief(briefable.map((entry) => ({ ...entry.item, freshness: freshness.get(entry.item.id) })), stage, {
       moduleName: opts.moduleName,
       referencedIds: opts.referencedIds,
       scopeNote,

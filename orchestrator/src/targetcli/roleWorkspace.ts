@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { defaultInstallationConfigPath, loadInstallationConfig } from "../threeRepo/installation.js";
+import { defaultInstallationConfigPath, loadInstallationConfig, canonicalPathForComparison } from "../threeRepo/installation.js";
+import { resolveInstallationRoot } from "../threeRepo/rootSelector.js";
 import { loadLocalTargetMapping, LocalTargetMappingError, type ResolvedLocalTarget } from "../threeRepo/localTargets.js";
 import { loadTargetRegistry, targetById, TargetRegistryError } from "../threeRepo/targets.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
@@ -189,6 +190,10 @@ export interface KnowledgeBinding {
   knowledgeRoot: string;
   /** Where the binding came from — recovery advice names it. "invalid" carries the problem text in knowledgeRoot instead. */
   via: "workspace-config" | "installation" | "workspace" | "invalid";
+  /** The selected root's name when an installation resolved the binding (DR §6
+   * launch contract). Undefined only for a legacy workspace-config binding
+   * with no installation selection. */
+  rootName?: string;
 }
 
 export class KnowledgeBindingError extends Error {}
@@ -204,16 +209,35 @@ function isSameOrNested(a: string, b: string): boolean {
 }
 
 /**
- * Resolves the Knowledge root a DEV workspace depends on:
- * `.agent-team/config.yaml` `knowledge.path` first (repo-relative binding,
- * committed with the target), then the machine-wide installation binding.
- * Fails closed with actionable recovery when nothing valid resolves.
+ * Resolves the Knowledge root a DEV workspace depends on.
+ *
+ * Since named roots (DR §3 rule 7) the legacy `.agent-team/config.yaml`
+ * `knowledge.path` is a *compatibility assertion*, not a selector: the root
+ * still comes from the installation's selected root, and a workspace-committed
+ * path that no longer matches it is a drift the command refuses with a
+ * migration message — the two files disagreeing about which Knowledge
+ * repository is in play is exactly the "wrote into the wrong repo" failure
+ * this framework exists to prevent.
+ *
+ * An installation file that exists but cannot be loaded throws (the old
+ * "callers decide whether that is fatal" fallback let a broken installation
+ * read as no Knowledge at all); only a *missing* installation file leaves the
+ * legacy binding standing.
  */
 export function resolveKnowledgeBinding(options: {
   targetRoot: string;
   configKnowledgePath?: string;
   installationConfigPath?: string;
+  requestedRootName?: string;
 }): KnowledgeBinding | undefined {
+  const installationPath = options.installationConfigPath ?? defaultInstallationConfigPath();
+  const installation = fs.existsSync(installationPath)
+    ? loadInstallationConfig(installationPath)
+    : undefined;
+  const selected = installation
+    ? resolveInstallationRoot(installation, options.requestedRootName)
+    : undefined;
+
   if (options.configKnowledgePath) {
     const raw = options.configKnowledgePath;
     const resolved = path.isAbsolute(raw) ? path.resolve(raw) : path.resolve(options.targetRoot, raw);
@@ -230,25 +254,32 @@ export function resolveKnowledgeBinding(options: {
     if (isSameOrNested(resolved, options.targetRoot)) {
       throw new KnowledgeBindingError(`Knowledge root must be separate from the Target — "${raw}" resolves inside the workspace`);
     }
-    return { knowledgeRoot: fs.realpathSync.native(resolved), via: "workspace-config" };
-  }
-
-  try {
-    const config = loadInstallationConfig(options.installationConfigPath ?? defaultInstallationConfigPath());
-    const candidate = config.knowledge_root;
-    if (candidate && looksLikeKnowledgeRoot(candidate) && !isSameOrNested(candidate, options.targetRoot)) {
-      return { knowledgeRoot: candidate, via: "installation" };
-    }
-    if (candidate && !looksLikeKnowledgeRoot(candidate)) {
+    const canonical = fs.realpathSync.native(resolved);
+    if (selected && canonicalPathForComparison(canonical) !== canonicalPathForComparison(selected.path)) {
       throw new KnowledgeBindingError(
-        `installation.yaml binds Knowledge root "${candidate}" but it has no knowledge/targets.yaml/knowledge-policy.yaml markers — re-run \`sta configure knowledge-root <path>\` with the real Knowledge repo`,
+        `knowledge.path "${raw}" resolves to ${canonical}, which does not match the selected Knowledge root "${selected.name}" (${selected.path}) — ` +
+          "knowledge.path is a compatibility assertion since named Knowledge roots; update .agent-team/config.yaml or rebind the installation (`sta configure knowledge-root`), never edit targets.yaml by hand",
       );
     }
-    return undefined;
-  } catch (e) {
-    if (e instanceof KnowledgeBindingError) throw e;
-    return undefined; // no installation config — treated as any other missing optional binding; callers decide whether that is fatal
+    return { knowledgeRoot: canonical, via: "workspace-config", rootName: selected?.name };
   }
+
+  if (!selected) return undefined;
+  if (!looksLikeKnowledgeRoot(selected.path)) {
+    throw new KnowledgeBindingError(
+      `installation.yaml binds Knowledge root "${selected.path}" but it has no knowledge/targets.yaml/knowledge-policy.yaml markers — re-run \`sta configure knowledge-root <path>\` with the real Knowledge repo`,
+    );
+  }
+  // DR §6 launch contract: the launcher hands the child the realpath'd
+  // canonical path, so hooks and prompts compare against the same string the
+  // filesystem answers for.
+  const candidate = fs.realpathSync.native(selected.path);
+  const workspace = fs.realpathSync.native(options.targetRoot);
+  if (canonicalPathForComparison(candidate) === canonicalPathForComparison(workspace)) {
+    return { knowledgeRoot: candidate, via: "workspace", rootName: selected.name };
+  }
+  if (isSameOrNested(candidate, options.targetRoot)) return undefined;
+  return { knowledgeRoot: candidate, via: "installation", rootName: selected.name };
 }
 
 // --- Target binding ----------------------------------------------------------
@@ -403,7 +434,12 @@ function canonicalOrResolved(candidate: string): string {
  *
  * STA_KNOWLEDGE_ROOT and STA_TARGET_ROOT name the read-only context a prompt
  * or hook may need, so nothing has to hard-code a machine-specific path. Both
- * stay absent when nothing resolved.
+ * stay absent when nothing resolved. Since named roots (DR §5 env/launch row)
+ * the Knowledge selection is path + `STA_KNOWLEDGE_ROOT_NAME` as one unit: the
+ * launcher strips any inherited shell values so the child can only ever see
+ * the selection resolved here. The name is the managed-session marker, so a
+ * name without a path refuses the launch; a path without a name is the legacy
+ * single-repo contract (DR §6 — an unbound invocation keeps the old rules).
  */
 export function launchEnv(
   role: WorkspaceRole,
@@ -412,15 +448,25 @@ export function launchEnv(
   targetRoot?: string,
   contextCommand?: string,
   targetWorkRoots: readonly GuardTargetWorkRoot[] = [],
+  knowledgeRootName?: string,
 ): NodeJS.ProcessEnv {
   // `role` is part of the signature so call sites state which command opened
   // the session; it no longer decides anything about write scope.
   void role;
+  if (knowledgeRootName !== undefined && !knowledgeRoot) {
+    throw new Error(
+      `incomplete Knowledge-root selection: STA_KNOWLEDGE_ROOT_NAME "${knowledgeRootName}" arrived without STA_KNOWLEDGE_ROOT — refusing to launch`,
+    );
+  }
+  const env: NodeJS.ProcessEnv = { ...existingEnv };
+  delete env.STA_KNOWLEDGE_ROOT;
+  delete env.STA_KNOWLEDGE_ROOT_NAME;
   return {
-    ...existingEnv,
+    ...env,
     STA_WRITABLE_WORK_ROOTS: "[]",
     ...(targetWorkRoots.length > 0 ? { [GUARD_TARGET_WORK_ROOTS_ENV]: serializeGuardTargetWorkRoots(targetWorkRoots) } : {}),
-    ...(knowledgeRoot ? { STA_KNOWLEDGE_ROOT: knowledgeRoot } : {}),
+    ...(knowledgeRoot && knowledgeRootName !== undefined ? { STA_KNOWLEDGE_ROOT: knowledgeRoot, STA_KNOWLEDGE_ROOT_NAME: knowledgeRootName } : {}),
+    ...(knowledgeRoot && knowledgeRootName === undefined ? { STA_KNOWLEDGE_ROOT: knowledgeRoot } : {}),
     ...(targetRoot ? { STA_TARGET_ROOT: targetRoot } : {}),
     ...(contextCommand ? { STA_CONTEXT_CMD: contextCommand } : {}),
   };

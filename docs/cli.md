@@ -25,7 +25,7 @@ commands:
             manifest-tracked files only, overrides คงอยู่, กู้คืนได้ด้วย sta rollback
 ```
 
-options: `--target-root <path>` · `--role <name>` (retired — accepted and ignored) ·
+options: `--target-root <path>` · `--root <name>` (init/sync/status/open — อ่าน named Knowledge root จาก `installation.yaml`; ไม่ส่ง = default) · `--role <name>` (retired — accepted and ignored) ·
 `--stack <name>` (init/sync) · `--force` (sync/init — overwrite ไฟล์ที่แก้เอง, backup ก่อน) ·
 `--confirm-agents-pointer` (sync) · `--no-auto-sync` (open) ·
 `--runtime <claude|codex|opencode|antigravity>` (open) · `--allow-unguarded-runtime` (open) ·
@@ -44,11 +44,11 @@ options: `--target-root <path>` · `--role <name>` (retired — accepted and ign
 ### Task lifecycle
 
 ```bash
-sta run      --task-id <id> --module <name> <classification flags> [--autonomy read-only|propose|edit|full] [--runtime claude-code|codex|opencode|antigravity]
-sta bounded-run --module <name> (--all|--phase <n>|--task <id,...>) [--until next-gate|qa|done] [--dry-run] [--autonomy edit|full]   # คู่มือ: docs/bounded-run.md
-sta bounded-run --resume <run-id> --module <name> [--dry-run]       # resume ระดับ run (ต่างจาก --resume ระดับ task)
-sta resume   --task-id <id> --module <name>          # continue task ใน store
-sta retry    --task-id <id> --module <name>          # same as resume
+sta run      --task-id <id> --module <name> <classification flags> [--autonomy read-only|propose|edit|full] [--runtime claude-code|codex|opencode|antigravity] [--root <name>]
+sta bounded-run --module <name> (--all|--phase <n>|--task <id,...>) [--until next-gate|qa|done] [--dry-run] [--autonomy edit|full] [--root <name>]   # คู่มือ: docs/bounded-run.md
+sta bounded-run --resume <run-id> --module <name> [--dry-run]       # resume ระดับ run (ต่างจาก --resume ระดับ task) — ใช้ root ที่ freeze ไว้ใน run
+sta resume   --task-id <id> --module <name> [--root <name>]          # continue task ใน store; --root ต้องตรง root ที่ freeze ไว้
+sta retry    --task-id <id> --module <name> [--root <name>]          # same as resume
 sta pause    --task-id <id>                          # freeze; run/resume/retry refuse
 sta cancel   --task-id <id> [--reason <text>]        # ปิด task ถาวร
 sta approve  <task-id> [--yes|--no]                  # resolve human gate ของ task
@@ -73,7 +73,7 @@ sta --list   [--project-root <path>]                 # ทุก task + batch �
 ### Context และ knowledge
 
 ```bash
-sta context <role> [--module <name>] [--phase <n,n>] [--task <id> --packet] [--views] [--json]
+sta context <role> [--module <name>] [--phase <n,n>] [--task <id> --packet] [--views] [--json] [--root <name>]
 sta knowledge get <id>[,<id>...] [--lane <ba|sa|uxui|dev>] [--json]
 sta knowledge reconcile --target <id> [--json]       # read-only current/desired evidence classifier
 sta policy [<area>] [<section>] [--json]             # อ่าน policies/ เป็น section แทนทั้งไฟล์
@@ -103,11 +103,29 @@ sta init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-ro
 sta upgrade --mode <legacy-project|three-repo> [...]  # legacy `.sta/`-only workspace: error พร้อมชี้ไป software-team-agents init
 sta migrate [--project-root <path>]                  # สำหรับ breaking manifest schema change
 sta rollback [--backup <name>] / sta list-backups    # คืนจาก .sta/backups/ snapshots
-sta configure knowledge-root <path>                  # machine-wide Knowledge binding
+sta configure knowledge-root <path> [--root <name>] [--default]
+            # ไม่ส่ง --root: ฟอร์ม single-root ของ V10 — ใช้ได้จนกว่าเครื่องจะมีไฟล์ v2 (แล้วจะถูก refuse พร้อมชี้ --root)
+            # ส่ง --root: named-root surface — named operation แรก migrate installation.yaml เป็น v2
+            #   (knowledge_roots map + default_root), คง identities และ root เดิม
+sta configure default-root --root <name>             # เปลี่ยน root ที่งานใหม่เลือกเมื่อไม่ส่ง --root
 sta configure identity --figma-email <e> --claude-email <e>   # design accounts (emails only)
-sta doctor [--project-root <path>]                   # read-only diagnostics, exit 1 เมื่อมี FAIL
+sta transfer plan --source-root <name> --source-target <id> --destination-root <name>
+sta transfer release|register|rollback|verify --transfer <path>
+            # ขั้นตอนย้ายความเป็นเจ้าของ Target ข้าม root — human-gated: คนเป็นผู้กรอกและอนุมัติ
+            # approval record, คำสั่งตรวจ record เท่านั้น (plan เป็น read-only)
+sta doctor [--root <name>] [--project-root <path>]   # read-only diagnostics, exit 1 เมื่อมี FAIL
+            # --root ตรวจ root ที่ระบุ, ไม่ส่ง = ตรวจ default; รวม check
+            # "Target ownership across configured roots" — duplicate key/alias/checkout
+            # ข้าม root = FAIL, SSH alias ไม่มี mapping = WARNING, ข้ามเครื่องเป็น WARNING
+            # (coverage เฉพาะ root ที่ installation ของเครื่องนี้ประกาศ — ไม่ใช่ guarantee)
 sta runtimes                                         # runtime + support level จาก source of truth เดียวกับ docs/runtimes.md
 ```
+
+**Named Knowledge roots (V11):** installation.yaml หนึ่งไฟล์มี root ได้หลายชื่อ (`knowledge_roots`) แต่
+หนึ่งคำสั่ง/หนึ่ง run/หนึ่ง session เลือกได้ **หนึ่ง root เท่านั้น** — เลือกด้วย `--root <name>` หรือใช้ default;
+`sta run` จะ freeze root ไว้ที่ intake แล้ว `sta resume/retry` ใช้ค่าที่ freeze เสมอ (`--root` ที่ส่งมาเป็น
+drift assertion — ขัด = refuse) รายชื่อ flag ที่รับ `--root`: run/resume/retry/bounded-run/context/report/doctor
+(ฝั่ง `sta`) และ init/sync/status/open (ฝั่ง `software-team-agents`)
 
 ### Classification flags (ให้ `sta run` / `sta bounded-run`)
 
@@ -138,7 +156,9 @@ flag เหล่านี้เลือก workflow ที่ right-size — �
 
 options เสริมของ run: `--frontend-target/--backend-target <id>` (immutable ต่อ task), `--phase <n,n>`,
 `--depends-on <id,id>`, `--ad-hoc`, `--env <local|dev|staging|production>`, `--state-db <path>`,
-`--project-root <path>` (three-repo mode: path คือ Knowledge root) — ไม่มี user-facing `--qa-skip`
+`--root <name>` (named Knowledge root — ดูหมายเหตุ Named Knowledge roots),
+`--project-root <path>` (three-repo mode: path คือ Knowledge root — เป็น compatibility assertion กับ
+root ที่ installation เลือกแล้ว ไม่ใช่ selector ตัวที่สอง) — ไม่มี user-facing `--qa-skip`
 
 ### Validation flags (`sta --check-*`)
 

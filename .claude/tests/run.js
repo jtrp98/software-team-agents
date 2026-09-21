@@ -1256,6 +1256,58 @@ withTempProject((tmp) => {
     ALLOW);
 });
 
+// V11 TASK-020 — the launch contract's selection marker reaches the guard.
+// STA_KNOWLEDGE_ROOT_NAME is set if and only if a launcher resolved one named
+// root, and always beside STA_KNOWLEDGE_ROOT. A managed invocation missing the
+// path denies before the permission decision (DR §6/§8.4); an unbound shell —
+// no marker — keeps the legacy rules of 9b-2 unchanged.
+section('9b-3. V11 TASK-020 — a managed Knowledge session refuses writes on an incomplete selection');
+
+withTempProject((tmp) => {
+  const workRoot = path.join(tmp, 'target');
+  const knowledgeRoot = path.join(workRoot, 'knowledge-repo');
+  const grant = { CLAUDE_PROJECT_DIR: tmp, STA_WRITABLE_WORK_ROOTS: JSON.stringify([workRoot]) };
+  const managed = (over) => Object.assign({}, grant, over);
+
+  check('managed session, selection complete -> design.md in the selected root blocked',
+    runPathHook('Write', path.join(knowledgeRoot, '_docs', 'module', 'm', 'design.md'), 'backend-engineer',
+      managed({ STA_KNOWLEDGE_ROOT: knowledgeRoot, STA_KNOWLEDGE_ROOT_NAME: 'work' })),
+    BLOCK);
+  check('managed session, selection complete -> Target source outside the selected root still allowed',
+    runPathHook('Write', path.join(workRoot, 'src', 'route.ts'), 'backend-engineer',
+      managed({ STA_KNOWLEDGE_ROOT: knowledgeRoot, STA_KNOWLEDGE_ROOT_NAME: 'work' })),
+    ALLOW);
+  check('managed session, name without path -> denied before the permission decision, even a plain Target source',
+    runPathHook('Write', path.join(workRoot, 'src', 'route.ts'), 'backend-engineer',
+      managed({ STA_KNOWLEDGE_ROOT_NAME: 'work' })),
+    BLOCK);
+  check('managed session, empty-string path counts as missing -> denied',
+    runPathHook('Write', path.join(workRoot, 'src', 'route.ts'), 'backend-engineer',
+      managed({ STA_KNOWLEDGE_ROOT: '', STA_KNOWLEDGE_ROOT_NAME: 'work' })),
+    BLOCK);
+  check('unbound shell, no marker at all -> the legacy fail-open is unchanged',
+    runPathHook('Write', path.join(knowledgeRoot, '_docs', 'module', 'm', 'design.md'), 'backend-engineer', grant),
+    ALLOW);
+  check('path without a name (legacy single-repo contract) -> the old path-scoped rule, unchanged',
+    runPathHook('Write', path.join(workRoot, 'src', 'route.ts'), 'backend-engineer',
+      managed({ STA_KNOWLEDGE_ROOT: knowledgeRoot })),
+    ALLOW);
+
+  // TASK-028 sweep (DR §8.4) — the deny is not welded to one root: a second
+  // Knowledge root exists on disk, and the rule answers per the selection env,
+  // never per which root's path the write happens to land in.
+  const otherRoot = path.join(workRoot, 'other-knowledge');
+  fs.mkdirSync(path.join(otherRoot, '_docs', 'module', 'm'), { recursive: true });
+  check('managed session, selection complete on the second root -> its own design.md blocked',
+    runPathHook('Write', path.join(otherRoot, '_docs', 'module', 'm', 'design.md'), 'backend-engineer',
+      managed({ STA_KNOWLEDGE_ROOT: otherRoot, STA_KNOWLEDGE_ROOT_NAME: 'personal' })),
+    BLOCK);
+  check('managed session, incomplete selection with two roots on disk -> a write into the OTHER root is denied before the permission decision (no default resolved, no config read)',
+    runPathHook('Write', path.join(otherRoot, '_docs', 'module', 'm', 'design.md'), 'backend-engineer',
+      managed({ STA_KNOWLEDGE_ROOT_NAME: 'work' })),
+    BLOCK);
+});
+
 // A workspace written by an older `init` still records `role: ba` or `role:
 // dev`. Keeping the field rather than rejecting the config is only worth
 // anything if it opens without error and changes no answer (V10 TASK-021).

@@ -6,7 +6,7 @@ import { freshnessOf } from "./freshness.js";
 import { digestOfSource, parseLocator } from "./sourceDigest.js";
 import { resolveSource } from "./sourceResolver.js";
 import { loadKnowledge } from "./knowledgeStore.js";
-import { loadTargetRegistry, targetById } from "../threeRepo/targets.js";
+import { isReleasedTombstone, loadTargetRegistry, targetById } from "../threeRepo/targets.js";
 import { loadLocalTargetMapping } from "../threeRepo/localTargets.js";
 
 export const RECONCILIATION_VERDICTS = [
@@ -119,7 +119,12 @@ export function classifyReconciliationItem(
 /** Pure read-only classifier. It has no import from any Knowledge writer. */
 export function reconcileKnowledge(options: { knowledgeRoot: string; frameworkRoot: string; targetId: string; now: string }): ReconciliationReport {
   const registry = loadTargetRegistry(options.knowledgeRoot);
-  targetById(registry, options.targetId);
+  const targetEntry = targetById(registry, options.targetId);
+  // DT §5.1: a released tombstone's items are historical archive — reconciling
+  // them here would read them back as current Target evidence.
+  if (isReleasedTombstone(targetEntry)) {
+    throw new Error(`Target "${options.targetId}" is a released tombstone in this root — its knowledge is historical archive; reconcile the Target in its owning root`);
+  }
   const mapped = loadLocalTargetMapping(options.knowledgeRoot, registry, options.frameworkRoot);
   const target = mapped.find((entry) => entry.target_id === options.targetId);
   if (!target) throw new Error(`Target "${options.targetId}" has no local path in .workflow/targets.local.yaml`);
