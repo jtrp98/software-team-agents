@@ -191,8 +191,8 @@ export interface KnowledgeBinding {
   /** Where the binding came from — recovery advice names it. "invalid" carries the problem text in knowledgeRoot instead. */
   via: "workspace-config" | "installation" | "workspace" | "invalid";
   /** The selected root's name when an installation resolved the binding (DR §6
-   * launch contract). Undefined in legacy single-repo mode — there is no name,
-   * and a path riding alone is what marks the session unmanaged. */
+   * launch contract). Undefined only for a legacy workspace-config binding
+   * with no installation selection. */
   rootName?: string;
 }
 
@@ -274,6 +274,10 @@ export function resolveKnowledgeBinding(options: {
   // canonical path, so hooks and prompts compare against the same string the
   // filesystem answers for.
   const candidate = fs.realpathSync.native(selected.path);
+  const workspace = fs.realpathSync.native(options.targetRoot);
+  if (canonicalPathForComparison(candidate) === canonicalPathForComparison(workspace)) {
+    return { knowledgeRoot: candidate, via: "workspace", rootName: selected.name };
+  }
   if (isSameOrNested(candidate, options.targetRoot)) return undefined;
   return { knowledgeRoot: candidate, via: "installation", rootName: selected.name };
 }

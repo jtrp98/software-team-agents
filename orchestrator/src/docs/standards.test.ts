@@ -56,6 +56,22 @@ describe("policies/standards.md section index (V11 TASK-005)", () => {
   });
 });
 
+describe("framework standards registry placement (V11 TASK-012)", () => {
+  it("keeps the shipped role index smaller than the maintainer-facing root matrix", () => {
+    const policy = path.join(REPO_ROOT, "policies", "standards.md");
+    const matrix = path.join(REPO_ROOT, "STANDARDS_MATRIX.md");
+    expect(fs.existsSync(matrix), "STANDARDS_MATRIX.md is at the Framework root").toBe(true);
+    expect(fs.statSync(policy).size).toBeLessThan(fs.statSync(matrix).size);
+  });
+
+  it("keeps the matrix review cadence explicit for the release checklist", () => {
+    const matrix = fs.readFileSync(path.join(REPO_ROOT, "STANDARDS_MATRIX.md"), "utf8");
+    expect(matrix).toContain(
+      "Review cadence: Review when standards, policies, workflows, or role contracts materially change",
+    );
+  });
+});
+
 describe("role prompts carry a resolvable standards pointer (V11 R02/R03 pointer health)", () => {
   // Same pointer shape promptBudget guard 4 matches, so what this pins is what the
   // --check-prompt-budget CI step resolves; presence per role is the part guard 4 cannot know.

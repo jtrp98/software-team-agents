@@ -1,15 +1,15 @@
 # Standards baseline per role
 
 The framework's external-standards baseline, indexed per role. The mapping itself — which standard,
-which level, which role — is declared and reviewed in `STANDARDS_MATRIX.md` (the maintainer-facing
-registry in the framework repository, not part of a synced workspace's payload). This file is the
+which level, which role — is declared and reviewed in framework-root `STANDARDS_MATRIX.md` (the maintainer-facing
+registry, not part of a synced workspace's payload). This file is the
 read side agents consume with `sta policy standards <section>`. It carries no normative text from
 any external standard, no version pins beyond what the matrix states, and no compliance or
 certification claim.
 
 ## 0. How to read
 
-Levels follow the matrix's requirement levels (STANDARDS_MATRIX.md §2):
+Levels follow framework-root `STANDARDS_MATRIX.md` §2 requirement levels:
 
 - **MUST** — mandatory framework baseline when the concern exists. Every MUST row here names the
   mechanism or evidence that backs it; a MUST with no mechanism is a known gap, reported at release,
@@ -175,6 +175,6 @@ prompt-layer limit and is reported as such at release.
 
 ---
 
-Maintenance: rows and levels here mirror `STANDARDS_MATRIX.md` — change the matrix first, then this
+Maintenance: rows and levels here mirror framework-root `STANDARDS_MATRIX.md` — change the matrix first, then this
 index, in the same edit. Keep this file smaller than the matrix: no normative standard text, no new
 rules. Role prompts point here as `policies/standards.md §<n>`.

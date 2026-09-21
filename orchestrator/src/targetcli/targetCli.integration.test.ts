@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { sha256Of } from "../packaging/templateManifest.js";
 import { runTargetCli } from "./cli.js";
@@ -11,7 +12,7 @@ import { checkTargetManifest, loadTargetConfig, readTargetManifest, writeTargetC
 import { configureKnowledgeRoot } from "../threeRepo/installation.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { defaultStateDbPath } from "../store/stateView.js";
-import { runDoctor } from "../threeRepo/doctor.js";
+import { exitCodeFor, runDoctor } from "../threeRepo/doctor.js";
 import type { InstructionSurfaceEntry } from "../threeRepo/ownership.js";
 import { stringify as stringifyYaml } from "yaml";
 import { inspectBootstrapBlock, inspectGitignoreBlock, stripBootstrapBlock } from "./knowledgeRender.js";
@@ -1728,6 +1729,143 @@ describe("role workspace architecture (T-ROLE)", () => {
     expect(launches[1]!.env?.STA_KNOWLEDGE_ROOT?.toLowerCase()).toBe(fs.realpathSync.native(work).toLowerCase());
     expect(launches[1]!.env?.STA_KNOWLEDGE_ROOT_NAME).toBe("work");
     expect(launches[0]!.env?.STA_KNOWLEDGE_ROOT).not.toBe(launches[1]!.env?.STA_KNOWLEDGE_ROOT);
+  });
+
+  describe("V11 TASK-013 — release migration and compatibility fixtures", () => {
+    const releaseFixtureFiles = (): { relPath: string; content: string }[] => {
+      const repoRoot = path.resolve(__dirname, "..", "..", "..");
+      const template = (relPath: string): { relPath: string; content: string } => ({
+        relPath,
+        content: fs.readFileSync(path.join(repoRoot, "templates", relPath), "utf8"),
+      });
+      return [
+        template("CLAUDE.md"),
+        template(".claude/settings.json"),
+        template(".claude/hooks/package.json"),
+        ...FRAMEWORK_HOOK_SCRIPTS.map((script) => template(`.claude/hooks/${script}`)),
+        template("contracts/system-analyst.yaml"),
+      ];
+    };
+
+    it("keeps a V10 single-root installation usable through init → sync → open without rewriting installation.yaml", async () => {
+      const base = tmpRoot("v10-release-compat");
+      const knowledge = makeKnowledgeRepo();
+      const installationPath = path.join(base, "installation.yaml");
+      write(base, "installation.yaml", `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\n`);
+      const before = fs.readFileSync(installationPath);
+      const fw = fakeFramework("5.0.0", releaseFixtureFiles());
+
+      const initialized = await capture(() => runTargetCli(["init"], knowledge, fw, { installationConfigPath: installationPath }));
+      expect(initialized.code, initialized.err).toBe(0);
+      const synced = await capture(() => runTargetCli(["sync"], knowledge, fw, { installationConfigPath: installationPath }));
+      expect(synced.code, synced.err).toBe(0);
+
+      let launchedEnv: NodeJS.ProcessEnv | undefined;
+      const opened = await runSession({
+        targetRoot: knowledge,
+        templatesDir: path.join(fw, "templates"),
+        installationConfigPath: installationPath,
+        probe: () => ({ available: true }),
+        launch: (_cmd, _args, _cwd, env) => {
+          launchedEnv = env;
+          return Promise.resolve(0);
+        },
+      });
+      expect(opened).toBe(0);
+      expect(launchedEnv?.STA_KNOWLEDGE_ROOT_NAME).toBe("default");
+      expect(launchedEnv?.STA_KNOWLEDGE_ROOT?.toLowerCase()).toBe(fs.realpathSync.native(knowledge).toLowerCase());
+      expect(fs.readFileSync(installationPath).equals(before)).toBe(true);
+    });
+
+    it("makes doctor report the legacy hand-switch duplicate across configured roots", async () => {
+      const base = tmpRoot("duplicate-release-compat");
+      const personal = makeKnowledgeRepo();
+      const work = makeKnowledgeRepo();
+      const installationPath = path.join(base, "installation.yaml");
+      write(
+        base,
+        "installation.yaml",
+        `schema_version: 2\nknowledge_root: ${JSON.stringify(personal)}\ndefault_root: personal\nknowledge_roots:\n  personal: ${JSON.stringify(personal)}\n  work: ${JSON.stringify(work)}\n`,
+      );
+      const duplicate = "schema_version: 1\ntargets:\n  - target_id: api\n    name: api\n    remote_url: https://github.com/acme/api.git\n    status: active\n    type: backend\n";
+      write(personal, "targets.yaml", duplicate);
+      write(work, "targets.yaml", duplicate);
+
+      const report = await runDoctor({ projectRoot: personal, installationConfigPath: installationPath });
+      const ownership = report.checks.find((entry) => entry.name === "Target ownership across configured roots");
+      expect(ownership).toMatchObject({ status: "FAIL" });
+      expect(ownership?.detail).toContain("personal/api, work/api");
+      expect(exitCodeFor(report)).toBe(1);
+    });
+
+    it("runs init → sync → open for two named roots and lets the guard write only inside the selected session root", async () => {
+      const base = tmpRoot("two-root-release-compat");
+      const personal = makeKnowledgeRepo();
+      const work = makeKnowledgeRepo();
+      const installationPath = path.join(base, "installation.yaml");
+      write(
+        base,
+        "installation.yaml",
+        `schema_version: 2\nknowledge_root: ${JSON.stringify(personal)}\ndefault_root: personal\nknowledge_roots:\n  personal: ${JSON.stringify(personal)}\n  work: ${JSON.stringify(work)}\n`,
+      );
+      const fw = fakeFramework("5.0.0", releaseFixtureFiles());
+
+      const launches = new Map<string, NodeJS.ProcessEnv>();
+      for (const [rootName, knowledge] of [["personal", personal], ["work", work]] as const) {
+        const initialized = await capture(() =>
+          runTargetCli(["init", "--root", rootName], knowledge, fw, { installationConfigPath: installationPath }),
+        );
+        expect(initialized.code, `${rootName}: ${initialized.err}`).toBe(0);
+        const synced = await capture(() =>
+          runTargetCli(["sync", "--root", rootName], knowledge, fw, { installationConfigPath: installationPath }),
+        );
+        expect(synced.code, `${rootName}: ${synced.err}`).toBe(0);
+        const opened = await runSession({
+          targetRoot: knowledge,
+          templatesDir: path.join(fw, "templates"),
+          installationConfigPath: installationPath,
+          rootName,
+          probe: () => ({ available: true }),
+          launch: (_cmd, _args, _cwd, env) => {
+            launches.set(rootName, env);
+            return Promise.resolve(0);
+          },
+        });
+        expect(opened, rootName).toBe(0);
+      }
+
+      const runGuard = (selected: string, filePath: string): number | null => {
+        const selectedRoot = selected === "personal" ? personal : work;
+        const env = {
+          ...process.env,
+          ...launches.get(selected),
+          CLAUDE_PROJECT_DIR: selectedRoot,
+          STA_ROLE: "system-analyst",
+        };
+        const input = JSON.stringify({ tool_name: "Write", tool_input: { file_path: filePath } });
+        for (const script of ["block-outside-repo.js", "block-path-permissions.js"] as const) {
+          const result = spawnSync(process.execPath, [path.join(selectedRoot, ".claude", "hooks", script)], {
+            cwd: selectedRoot,
+            env,
+            input,
+            encoding: "utf8",
+          });
+          if (result.status !== 0) return result.status;
+        }
+        return 0;
+      };
+
+      const personalDesign = path.join(personal, "_docs", "module", "m", "design.md");
+      const workDesign = path.join(work, "_docs", "module", "m", "design.md");
+      fs.mkdirSync(path.dirname(personalDesign), { recursive: true });
+      fs.mkdirSync(path.dirname(workDesign), { recursive: true });
+      expect(launches.get("personal")?.STA_KNOWLEDGE_ROOT_NAME).toBe("personal");
+      expect(launches.get("work")?.STA_KNOWLEDGE_ROOT_NAME).toBe("work");
+      expect(runGuard("personal", personalDesign)).toBe(0);
+      expect(runGuard("personal", workDesign)).toBe(2);
+      expect(runGuard("work", workDesign)).toBe(0);
+      expect(runGuard("work", personalDesign)).toBe(2);
+    });
   });
 
   it("T-V5-010: init reports the shared runtime prerequisite without refusing initialization", () => {
