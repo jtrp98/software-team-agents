@@ -209,7 +209,7 @@ export function retiredWaveFlagMessage(flag: string): string {
 
 export const USAGE =
   "usage (verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  sta run --task-id <id> --module <name> <classification flags> [--test-strategy <cross-task,multi-system,migration,security,release>] [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] [--effort <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--root <name>] [--project-root <path>] [--state-db <path>]\n" +
+  "  sta run --task-id <id> --module <name> <classification flags> [--test-strategy <cross-task,multi-system,migration,security,release>] [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity|zcode>] [--model <name>] [--effort <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--root <name>] [--project-root <path>] [--state-db <path>]\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  sta approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
   "  sta resume  <task-id> --module <name> [--root <name>] [--project-root <path>]   continue a task already in the store; --root must match the root frozen at intake (it is an assertion, never a re-selection)\n" +
@@ -252,7 +252,7 @@ export const USAGE =
   "  --model <name> and --effort <name> are explicit operator overrides for this run; adapters validate their own vocabulary. Task/role Tier cells are validated and fail closed when unsupported.\n" +
   "\n" +
   "underlying flag-based form:\n" +
-  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity>] [--model <name>] [--effort <name>] <classification flags>\n" +
+  "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity|zcode>] [--model <name>] [--effort <name>] <classification flags>\n" +
   "  sta --task-id <id> --module <name> --resume        continue a task already in the store\n" +
   "  sta --task-id <id> --module <name> [--token-budget <n>] [--no-qa-optimization|--no-deterministic-gate]   run with optional QA/budget controls\n" +
   "  sta --list [--project-root <path>]                 show every task and stop\n" +

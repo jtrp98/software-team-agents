@@ -3,7 +3,14 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { SpawnSyncReturns } from "node:child_process";
-import { CodexAdapter, addDirArgsFor, extractDeveloperInstructions, parseCodexJsonl, unreadableWorkRootCaveat } from "./codexAdapter.js";
+import {
+  CodexAdapter,
+  codexExecPolicyFor,
+  codexPermissionInvocationFor,
+  codexPermissionPathsFor,
+  extractDeveloperInstructions,
+  parseCodexJsonl,
+} from "./codexAdapter.js";
 import { NO_GUARDS, type RuntimeGuards, type RuntimeWorkRoot } from "./runtimeAdapter.js";
 import type { SpawnSync } from "./claudeCodeAdapter.js";
 
@@ -91,23 +98,25 @@ describe("CodexAdapter.executeAgent", () => {
 
     await adapter.executeAgent(baseRequest({ cwd: projectRoot, model: "gpt-6-astra", modelExplicit: true, effort: "high" }));
     expect(capturedArgs[capturedArgs.indexOf("--model") + 1]).toBe("gpt-6-astra");
-    expect(capturedArgs[capturedArgs.indexOf("--config") + 1]).toBe('model_reasoning_effort="high"');
+    const configValues = capturedArgs.flatMap((arg, index) => arg === "--config" ? [capturedArgs[index + 1]] : []);
+    expect(configValues).toContain('approval_policy="never"');
+    expect(configValues).toContain('model_reasoning_effort="high"');
 
     const refused = await adapter.executeAgent(baseRequest({ cwd: projectRoot, model: "not-a-tier-model", modelExplicit: true }));
     expect(refused.status).toBe("ERROR");
     expect(refused.diagnostics.join(" ")).toContain("configured Codex tier catalogue");
   });
 
-  it("maps autonomy onto sandbox/approval flags", async () => {
+  it("maps autonomy onto sandbox modes and uses the non-interactive approval policy accepted by codex exec", async () => {
     const projectRoot = tmpProject();
     writeRoleBinding(projectRoot, "backend-engineer");
-    const table: Array<["read-only" | "propose" | "edit" | "full", string, string]> = [
-      ["read-only", "read-only", "on-request"],
-      ["propose", "workspace-write", "on-request"],
-      ["edit", "workspace-write", "on-failure"],
-      ["full", "danger-full-access", "never"],
+    const table: Array<["read-only" | "propose" | "edit" | "full", string]> = [
+      ["read-only", "read-only"],
+      ["propose", "workspace-write"],
+      ["edit", "workspace-write"],
+      ["full", "danger-full-access"],
     ];
-    for (const [autonomy, sandbox, approval] of table) {
+    for (const [autonomy, sandbox] of table) {
       let capturedArgs: string[] = [];
       const spawnSync: SpawnSync = (_cmd, args) => {
         capturedArgs = args;
@@ -116,7 +125,9 @@ describe("CodexAdapter.executeAgent", () => {
       const adapter = new CodexAdapter({ projectRoot, spawnSync });
       await adapter.executeAgent(baseRequest({ cwd: projectRoot, autonomy }));
       expect(capturedArgs[capturedArgs.indexOf("--sandbox") + 1]).toBe(sandbox);
-      expect(capturedArgs[capturedArgs.indexOf("--ask-for-approval") + 1]).toBe(approval);
+      expect(capturedArgs).not.toContain("--ask-for-approval");
+      const configValues = capturedArgs.flatMap((arg, index) => arg === "--config" ? [capturedArgs[index + 1]] : []);
+      expect(configValues).toContain('approval_policy="never"');
     }
   });
 
@@ -253,17 +264,40 @@ describe("CodexAdapter.executeAgent", () => {
     expect(result.status).toBe("TIMEOUT");
   });
 
-  it("reports every requested guard axis unenforced — no guard mechanism is claimed at all", async () => {
+  it("runs a guarded writable request with a native per-run permission profile", async () => {
     const projectRoot = tmpProject();
     writeRoleBinding(projectRoot, "backend-engineer");
-    const spawnSync: SpawnSync = () => cliResult(0, "done");
+    let spawned = false;
+    const spawnSync: SpawnSync = () => {
+      spawned = true;
+      return cliResult(0, "done");
+    };
     const adapter = new CodexAdapter({ projectRoot, spawnSync });
 
     const result = await adapter.executeAgent(baseRequest({ cwd: projectRoot, guards: SOME_GUARDS }));
 
-    expect(result.guards.enforced).toEqual([]);
-    expect(result.guards.unenforced.length).toBeGreaterThan(0);
-    expect(result.guards.reason).toMatch(/no guard mechanism/);
+    expect(result.status).toBe("OK");
+    expect(spawned).toBe(true);
+    expect(result.guards.enforced).toContain("pre-tool-guard");
+    expect(result.guards.unenforced).toContain("exit-guard");
+  });
+
+  it("allows read-only analysis without claiming native exit enforcement", async () => {
+    const projectRoot = tmpProject();
+    writeRoleBinding(projectRoot, "backend-engineer");
+    let spawned = false;
+    const spawnSync: SpawnSync = () => {
+      spawned = true;
+      return cliResult(0, "done");
+    };
+    const adapter = new CodexAdapter({ projectRoot, spawnSync });
+
+    const result = await adapter.executeAgent(baseRequest({ cwd: projectRoot, autonomy: "read-only", guards: SOME_GUARDS }));
+
+    expect(result.status).toBe("OK");
+    expect(spawned).toBe(true);
+    expect(result.guards.unenforced).not.toContain("pre-tool-guard");
+    expect(result.guards.unenforced).toContain("exit-guard");
   });
 
   it("reports nothing enforced/unenforced when the request asked for no guards at all", async () => {
@@ -315,23 +349,23 @@ describe("CodexAdapter.probe", () => {
   });
 });
 
-describe("CodexAdapter — declared shape stays conservative (T110 is a partial implementation)", () => {
-  it("addresses a role's official .toml binding inside .codex/agents/, and declares no guard config path", () => {
+describe("CodexAdapter — declared shape stays conservative after real-install UAT", () => {
+  it("addresses a role's official .toml binding inside .codex/agents/, and keeps guardConfigPath null after UAT exposed exec-mode guard gaps", () => {
     const adapter = new CodexAdapter({ projectRoot: tmpProject() });
     expect(adapter.binding.dir).toBe(".codex");
     expect(adapter.binding.definitionPath("business-analyst")).toBe(".codex/agents/business-analyst.toml");
     expect(adapter.binding.guardConfigPath).toBeNull();
   });
 
-  it("does not claim NAMED_AGENTS, guard, structured-result, cost, or interactive-prompt capabilities", () => {
+  it("claims the verified structured result and per-run pre-tool guard, but no named-agent, native exit, cost, or interactive-prompt capability", () => {
     const adapter = new CodexAdapter({ projectRoot: tmpProject() });
+    expect(adapter.capabilities.has("structured-result" as never)).toBe(true);
+    expect(adapter.capabilities.has("pre-tool-guard" as never)).toBe(true);
     for (const cap of [
       "named-agents",
-      "pre-tool-guard",
       "post-tool-guard",
       "exit-guard",
       "per-agent-exit-guard",
-      "structured-result",
       "cost-reporting",
       "interactive-prompts",
       "parallel-execution",
@@ -390,6 +424,13 @@ describe("parseCodexJsonl — tolerant over documented event types, absent stays
     const parsed = parseCodexJsonl('{"type":"turn.completed","total_cost_usd":0.25}');
     expect(parsed.usage.costUsd).toBe(0.25);
     expect(parsed.usage.inputTokens).toBeUndefined();
+  });
+
+  it.each([
+    ["cached_input_tokens", '{"type":"turn.completed","usage":{"cached_input_tokens":166016}}', 166016],
+    ["cache_read_input_tokens", '{"type":"turn.completed","usage":{"cache_read_input_tokens":42}}', 42],
+  ])("reads cached tokens from the %s JSONL spelling", (_field, stdout, expected) => {
+    expect(parseCodexJsonl(stdout).usage.cachedInputTokens).toBe(expected);
   });
 });
 
@@ -450,36 +491,14 @@ describe("CodexAdapter v2 — documented machine surfaces (--json, -o/--output-l
   });
 });
 
-describe("addDirArgsFor — OFF10 M5, preflight write roots as sandbox-native grants", () => {
+describe("Codex work-root grants", () => {
   const roots: RuntimeWorkRoot[] = [
     { targetId: "backend", path: "C:/repos/backend", access: "write" },
     { targetId: "frontend", path: "C:/repos/frontend", access: "write" },
     { targetId: "docs", path: "C:/repos/docs", access: "read" },
   ];
 
-  it("adds exactly the write roots, once per root, under workspace-write autonomies", () => {
-    expect(addDirArgsFor(roots, "propose")).toEqual(["--add-dir", "C:/repos/backend", "--add-dir", "C:/repos/frontend"]);
-    expect(addDirArgsFor(roots, "edit")).toEqual(["--add-dir", "C:/repos/backend", "--add-dir", "C:/repos/frontend"]);
-  });
-
-  it("adds nothing for autonomies where an add is meaningless or misleading", () => {
-    // read-only sandbox ignores adds; danger-full-access makes them imply a boundary that isn't one.
-    expect(addDirArgsFor(roots, "read-only")).toEqual([]);
-    expect(addDirArgsFor(roots, "full")).toEqual([]);
-  });
-
-  it("handles absent/empty root lists", () => {
-    expect(addDirArgsFor(undefined, "edit")).toEqual([]);
-    expect(addDirArgsFor([], "propose")).toEqual([]);
-  });
-
-  it("surfaces — never swallows — the read-root caveat when it is live", () => {
-    expect(unreadableWorkRootCaveat(roots, "edit")).toMatch(/1 read-only work root\(s\) \(docs\).*no documented per-directory read grant/);
-    expect(unreadableWorkRootCaveat(roots.filter((r) => r.access === "write"), "edit")).toBeNull();
-    expect(unreadableWorkRootCaveat(roots, "read-only")).toBeNull();
-  });
-
-  it("lands --add-dir pairs in the spawned args, and states the read-root caveat for a mixed-root editing run", async () => {
+  it("lands only writable roots as --add-dir pairs in the per-run profile; read roots rely on broad read access", async () => {
     const projectRoot = tmpProject();
     writeRoleBinding(projectRoot, "backend-engineer");
     let capturedArgs: string[] = [];
@@ -489,14 +508,110 @@ describe("addDirArgsFor — OFF10 M5, preflight write roots as sandbox-native gr
     };
     const adapter = new CodexAdapter({ projectRoot, spawnSync });
 
-    const result = await adapter.executeAgent(baseRequest({ cwd: projectRoot, autonomy: "edit", workRoots: roots }));
+    const result = await adapter.executeAgent(baseRequest({ cwd: projectRoot, autonomy: "edit", workRoots: roots, guards: SOME_GUARDS }));
 
-    expect(capturedArgs).toContain("--sandbox");
-    expect(capturedArgs[capturedArgs.indexOf("--add-dir") + 1]).toBe("C:/repos/backend");
-    expect(capturedArgs[capturedArgs.indexOf("--add-dir", capturedArgs.indexOf("--add-dir") + 1) + 1]).toBe("C:/repos/frontend");
+    expect(capturedArgs).not.toContain("--sandbox");
+    const added = capturedArgs.flatMap((arg, index) => arg === "--add-dir" ? [capturedArgs[index + 1]] : []);
+    expect(added.map((entry) => path.normalize(entry))).toEqual([
+      path.resolve("C:/repos/backend"),
+      path.resolve("C:/repos/frontend"),
+    ]);
+    expect(added).not.toContain("C:/repos/docs");
     // Prompt stays last.
     expect(capturedArgs[capturedArgs.length - 1]).toContain("do the thing");
-    expect(result.diagnostics.some((d) => /1 read-only work root\(s\) \(docs\)/.test(d))).toBe(true);
+    expect(result.guards.enforced).toContain("pre-tool-guard");
+  });
+});
+
+describe("Codex per-run permission profile", () => {
+  it("converts trailing trees and expands interior module wildcards without widening to the parent", () => {
+    const root = tmpProject();
+    fs.mkdirSync(path.join(root, "_docs", "module", "alpha"), { recursive: true });
+    fs.mkdirSync(path.join(root, "_docs", "module", "beta"), { recursive: true });
+
+    expect(codexPermissionPathsFor(root, "src/**")).toEqual(["src"]);
+    expect(codexPermissionPathsFor(root, "**")).toEqual(["."]);
+    expect(codexPermissionPathsFor(root, "_docs/module/*/requirement.md")).toEqual([
+      "_docs/module/alpha/requirement.md",
+      "_docs/module/beta/requirement.md",
+    ]);
+  });
+
+  it("builds broad-read/narrow-write config, keeps protected paths read-only, and never maps guarded full to danger-full-access", () => {
+    const root = tmpProject();
+    const invocation = codexPermissionInvocationFor({
+      cwd: root,
+      autonomy: "full",
+      guards: { writeAllow: ["**"], writeDeny: [".git/**", "contracts/**"], forbidCommands: [], exitChecks: [] },
+    }, "win32");
+    const configs = invocation.args.flatMap((arg, index) => arg === "--config" ? [invocation.args[index + 1]] : []);
+
+    expect(invocation.args).not.toContain("--dangerously-bypass-hook-trust");
+    expect(invocation.args).not.toContain("--ignore-user-config");
+    expect(invocation.args).not.toContain("--sandbox");
+    expect(invocation.args).not.toContain("danger-full-access");
+    expect(configs).toContain('windows.sandbox="elevated"');
+    expect(configs.join("\n")).toContain('":root" = "read"');
+    expect(configs.join("\n")).toContain('"." = "write"');
+    expect(configs.join("\n")).toContain('".git" = "read"');
+    expect(configs.join("\n")).toContain('"contracts" = "read"');
+    expect(invocation.guards.enforced).toContain("pre-tool-guard");
+  });
+
+  it("fails closed when cwd is a read-only Target", () => {
+    const root = tmpProject();
+    expect(() => codexPermissionInvocationFor({
+      cwd: root,
+      autonomy: "edit",
+      guards: SOME_GUARDS,
+      workRoots: [{ targetId: "docs", path: root, access: "read" }],
+    })).toThrow(/bound read-only/);
+  });
+
+  it("compiles forbidden executable basenames into strict execpolicy rules", () => {
+    const policy = codexExecPolicyFor(["git", "git", "npm"], "win32");
+    expect(policy.match(/pattern = \["git"\]/g)).toHaveLength(1);
+    expect(policy).toContain('pattern = ["git.exe"]');
+    expect(policy).toContain('pattern = ["git.cmd"]');
+    expect(policy).toContain('pattern = ["npm"]');
+    expect(policy).toContain('decision = "forbidden"');
+    expect(() => codexExecPolicyFor(["git status"])).toThrow(/executable basename/);
+  });
+
+  it("does not add Windows executable suffixes on other platforms", () => {
+    const policy = codexExecPolicyFor(["git"], "linux");
+    expect(policy).toContain('pattern = ["git"]');
+    expect(policy).not.toContain("git.exe");
+  });
+
+  it("uses and cleans an isolated CODEX_HOME whose only rule is the packet command denial", async () => {
+    const root = tmpProject();
+    writeRoleBinding(root, "backend-engineer");
+    let runHome = "";
+    let policy = "";
+    let config = "";
+    let hookScript = "";
+    let capturedArgs: string[] = [];
+    const spawnSync: SpawnSync = (_command, args, options) => {
+      capturedArgs = args;
+      runHome = options.env?.CODEX_HOME ?? "";
+      policy = fs.readFileSync(path.join(runHome, "rules", "sta.rules"), "utf8");
+      config = fs.readFileSync(path.join(runHome, "config.toml"), "utf8");
+      hookScript = fs.readFileSync(path.join(runHome, "git-guard.cjs"), "utf8");
+      return cliResult(0, "done");
+    };
+    const adapter = new CodexAdapter({ projectRoot: root, spawnSync });
+
+    const result = await adapter.executeAgent(baseRequest({ cwd: root, autonomy: "edit", guards: SOME_GUARDS }));
+
+    expect(result.status).toBe("OK");
+    expect(policy).toContain('pattern = ["git"]');
+    expect(config).toContain('trust_level = "untrusted"');
+    expect(hookScript).toContain("gitExecutable");
+    expect(capturedArgs.join("\n")).toContain("hooks.PreToolUse=");
+    expect(capturedArgs).not.toContain("--dangerously-bypass-hook-trust");
+    expect(runHome).toMatch(/sta-codex-home-/);
+    expect(fs.existsSync(runHome)).toBe(false);
   });
 });
 
@@ -560,5 +675,80 @@ describe("CodexAdapter — OFF10 M6, --output-schema on schema-requested runs on
     expect(result.status).toBe("OK");
     expect(result.structured).toBeUndefined();
     expect(result.diagnostics.some((d) => /did not parse as JSON/.test(d))).toBe(true);
+  });
+});
+
+describe("CodexAdapter — Windows npm-shim resolution", () => {
+  function enoentOnce(): { spawnSync: SpawnSync; calls: Array<{ cmd: string; args: string[] }> } {
+    const calls: Array<{ cmd: string; args: string[] }> = [];
+    const spawnSync: SpawnSync = (cmd, args, options) => {
+      calls.push({ cmd, args: [...args] });
+      void options;
+      if (cmd === "codex") {
+        const err = Object.assign(new Error("spawnSync codex ENOENT"), { code: "ENOENT" });
+        return cliResult(null, "", err as NodeJS.ErrnoException);
+      }
+      return cliResult(0, "done via resolved");
+    };
+    return { spawnSync, calls };
+  }
+
+  it("on win32, an ENOENT from the bare command retries once through the resolved entry, keeping args", async () => {
+    const { spawnSync, calls } = enoentOnce();
+    const projectRoot = tmpProject();
+    writeRoleBinding(projectRoot, "backend-engineer");
+    const adapter = new CodexAdapter({
+      projectRoot,
+      spawnSync,
+      platform: "win32",
+      resolveCommand: (command) => (command === "codex" ? { file: "node-resolved", prefixArgs: ["C:\npm\bin\codex.js"] } : null),
+    });
+
+    const result = await adapter.executeAgent(baseRequest({ cwd: projectRoot, env: { FOO: "bar" } }));
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0].cmd).toBe("codex");
+    expect(calls[1].cmd).toBe("node-resolved");
+    expect(calls[1].args[0]).toBe("C:\npm\bin\codex.js");
+    expect(calls[1].args.slice(1)).toEqual(calls[0].args);
+    expect(result.status).toBe("OK");
+    expect(result.text).toBe("done via resolved");
+  });
+
+  it("on win32, stays UNAVAILABLE with the shim hint when the resolver finds nothing — one attempt only", async () => {
+    const { spawnSync, calls } = enoentOnce();
+    const projectRoot = tmpProject();
+    writeRoleBinding(projectRoot, "backend-engineer");
+    const adapter = new CodexAdapter({
+      projectRoot,
+      spawnSync,
+      platform: "win32",
+      resolveCommand: () => null,
+    });
+
+    const result = await adapter.executeAgent(baseRequest({ cwd: projectRoot }));
+
+    expect(calls).toHaveLength(1);
+    expect(result.status).toBe("UNAVAILABLE");
+    expect(result.diagnostics.some((d) => /shim spawnSync cannot execute/.test(d))).toBe(true);
+  });
+
+  it("on non-win32, an ENOENT is UNAVAILABLE without a resolve attempt", async () => {
+    const { spawnSync, calls } = enoentOnce();
+    const projectRoot = tmpProject();
+    writeRoleBinding(projectRoot, "backend-engineer");
+    const adapter = new CodexAdapter({
+      projectRoot,
+      spawnSync,
+      platform: "linux",
+      resolveCommand: () => {
+        throw new Error("resolver must not be consulted off win32");
+      },
+    });
+
+    const result = await adapter.executeAgent(baseRequest({ cwd: projectRoot }));
+
+    expect(calls).toHaveLength(1);
+    expect(result.status).toBe("UNAVAILABLE");
   });
 });

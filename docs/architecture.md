@@ -210,10 +210,11 @@ node ../.claude/tests/run.js   # hook/script self-test — ต้องเขี
 
 ## ข้อจำกัด (current)
 
-- **Codex runtime partial** — interactive launch ผ่าน `--runtime codex` ได้ แต่ headless adapter ยังไม่
-  เคย verify กับ install จริง UAT ครอบเฉพาะ Claude Code
-- **OpenCode runtime** — spike+UAT smoke ผ่าน แต่ exit checks ไม่มี in-band (`GUARD GAP` + QA round คือ
-  coverage), doc-rewrite/secret-leak hooks ยังไม่พอร์ตลง plugin
+- **Codex runtime preview/unguarded** — interactive และ headless adapter verify บน install จริงแล้ว แต่
+  native exec hooks ยัง fail closed ไม่ได้; guarded writable run จึงหยุดก่อน spawn และยังไม่รองรับ
+  unattended Target writes
+- **OpenCode runtime** — spike+UAT smoke ผ่านและ exit checks ใช้ runner กลางแบบ fail-closedแล้ว แต่
+  doc-rewrite guard ยังไม่พอร์ตลง plugin
 - **Contract write-globs จำกัด** — pattern ปัจจุบันครอบ `src/lib/**`, `server/**`, `app/api/**`,
   `prisma/**` ฯลฯ app code นอก pattern นี้ engineer แก้ไม่ได้ (hook บล็อก) — ต้องปรับ contract ให้ตรง
   โครงสร้าง project จริงก่อนใช้

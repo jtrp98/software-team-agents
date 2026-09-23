@@ -21,7 +21,7 @@
  * implementation" failure this module exists to prevent.
  */
 
-import { antigravityCoverageWithHooks, codexCoverage, opencodeCoverageWithPlugin } from "../targetcli/guardSettings.js";
+import { antigravityCoverageWithHooks, codexCoverageWithHooks, opencodeCoverageWithPlugin, zcodeCoverageWithSyncedPayload } from "../targetcli/guardSettings.js";
 
 export type RuntimeSupportLevel = "supported" | "preview" | "experimental" | "unsupported";
 
@@ -33,11 +33,13 @@ export const SUPPORT_LEVELS: readonly RuntimeSupportLevel[] = [
 ];
 
 /** The ids `--runtime` accepts — kept as data so CLI validation and this table cannot name different sets. */
-export const RUNTIME_IDS = ["claude-code", "codex", "opencode", "antigravity"] as const;
+export const RUNTIME_IDS = ["claude-code", "codex", "opencode", "antigravity", "zcode"] as const;
 export type RuntimeId = (typeof RUNTIME_IDS)[number];
 
 export interface RuntimeSupport {
   level: RuntimeSupportLevel;
+  /** Independently certified headless write path; deliberately not inferred from the broader support label. */
+  unattendedTargetWrites: boolean;
   /** What the level means for a user of this runtime, in one line. */
   claim: string;
 }
@@ -49,42 +51,58 @@ export interface RuntimeSupport {
 export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
   "claude-code": {
     level: "supported",
+    unattendedTargetWrites: true,
     claim:
-      "headless pipeline, hooks/guards and exit checks verified end to end; the default runtime for `sta run` and interactive launches, and the only runtime certified for unattended Target writes — V10's workspace-lane collapse does not move this boundary, because certification is keyed to the support level, never to which workspace a session launches from",
+      "headless pipeline, hooks/guards and exit checks verified end to end; the default runtime for `sta run` and interactive launches, and certified for unattended Target writes — V10's workspace-lane collapse does not move this boundary, because certification follows verified enforcement rather than which workspace a session launches from",
   },
   codex: {
-    level: "preview",
+    level: "supported",
+    unattendedTargetWrites: true,
     claim:
-      `interactive sessions via \`--runtime codex\` work and bindings generate completely; the headless adapter has never been verified against a real install — UAT covers Claude Code only. ` +
-      `Guard coverage: ${codexCoverage().detail} — a launch requires --allow-unguarded-runtime (T-V5-008). Analysis/proposal only; unattended Target writes are refused. ` +
-      `V10 does not change this status: the sandbox/approval mapping stays an untested assumption, and a session launched from the Knowledge workspace still ships no codex hook wiring, so Target-path guard coverage does not improve`,
+      `interactive sessions and the headless adapter are verified on real Codex 0.154.0/0.155.1 installs, including sandbox/approval parsing, JSONL, output-schema and cached-token normalisation. ` +
+      `Interactive guard coverage (once synced): ${codexCoverageWithHooks().detail}. ` +
+      `Headless enforcement is the per-run native permission profile — broad reads, writes only at packet-authorized paths, network disabled, packet-generated execpolicy plus OS deny rules for resolved Git executables — live-verified end to end on a real install (round three, 2026-09-23: outside-workspace write denied, in-workspace write allowed, read-only refused everything, network unreachable at DNS level), and exit checks run fail-closed after process exit through the provider-neutral ExitCheckRunner, which caught a real red typecheck with file and line. ` +
+      `This headless path is certified for unattended Target writes and is what \`supported\` scopes; interactive Codex receives no per-run profile, stays unguarded, needs \`--allow-unguarded-runtime\` and is limited to analysis/proposal, and the \`.codex/hooks.json\` payload remains compatibility wiring for that surface that is never claimed as headless enforcement. ` +
+      `V10 does not change this status`,
   },
   opencode: {
     level: "experimental",
+    unattendedTargetWrites: false,
     claim:
-      `spike-proven on 1.18.21 (probe, headless run, guards report); exit checks have no in-band enforcement (\`GUARD GAP\` + QA round cover it) and other versions' tool arg-shapes are unverified. ` +
+      `spike-proven on 1.18.21 (probe, headless run, guards report); native exit hooks are absent, so the provider-neutral fail-closed ExitCheckRunner verifies requested exit checks after a successful process exit; other versions' tool arg-shapes are unverified. ` +
       `Guard coverage (once synced): ${opencodeCoverageWithPlugin().detail}. Analysis/proposal only; partial guards do not certify unattended Target writes. ` +
       `V10 does not change this status: a session launched from the Knowledge workspace inherits the same partial coverage on Target paths`,
   },
   antigravity: {
-    level: "experimental",
+    level: "supported",
+    unattendedTargetWrites: true,
     claim:
-      `verified end to end on a real agy 1.1.27/Windows 11 install: probe, headless \`-p\`, JSON envelope, token usage, and one full adapter round-trip returning OK with real usage. ` +
-      `No named-agent store and no cost figure in the envelope, so roles are folded into the prompt and cost is never reported. ` +
-      `The PreToolUse deny path is confirmed real (deny blocks; a hook that cannot load also blocks) but fires only from the machine-global hooks file, so the workspace binding enforces nothing and Target-write stages stay refused rather than run unguarded. ` +
+      `interactive sessions and the headless adapter are verified on real agy installs with the machine-global bridge hook (~/.gemini/config/hooks.json). ` +
       `Guard coverage (once synced): ${antigravityCoverageWithHooks().detail}. ` +
-      `V10 does not change this status: collapsing the workspace lanes gives agy no workspace hook it can actually read`,
+      `Headless guarded writes enforce PreToolUse path permissions and the universal floor in-band via the bridge hook. ` +
+      `This headless path is certified for unattended Target writes; pipeline and guard integration are verified end to end. Provider-neutral exit checks run after successful headless execution. V10 does not change this status`,
+  },
+  zcode: {
+    level: "experimental",
+    unattendedTargetWrites: false,
+    claim:
+      `There is no CLI and no headless pipeline, so \`sta run --runtime zcode\` refuses as unregistered-for-execution and there is no launch path. ` +
+      `Guard wiring ships via \`.zcode/config.json\` and was live-verified end to end on a real ZCode Desktop session (2026-09-23, \`planning/v12/evidence/zcode-uat/\`); unattended Target-write stages stay refused. ` +
+      `Per-role Target/Knowledge write bounds apply to a role-play session only when it declares its role through \`software-team-agents session-role\` (\`.workflow/session-role.json\`); ` +
+      `an undeclared session keeps the universal floor alone, and read permissions stay instruction-level. ` +
+      `Guard coverage (once synced): ${zcodeCoverageWithSyncedPayload().detail}. ` +
+      `V10 does not change this status: a desktop-only runtime has no headless surface for the lane collapse to change`,
   },
 };
 
 /**
  * A support-level opt-in may enable an analysis/proposal route, but it must
- * never promote Target writes. In V8, the `supported` level is earned only by
- * complete real-install headless + guard UAT, so it is also the single
- * machine-readable certification boundary for unattended Target mutation.
+ * never promote Target writes by itself. Certification is an independent,
+ * explicit field because a runtime can have a verified headless boundary while
+ * its interactive surface remains preview (Codex), or vice versa.
  */
 export function isUnattendedTargetWriteCertified(runtimeId: string): boolean {
-  return runtimeId in RUNTIME_SUPPORT && RUNTIME_SUPPORT[runtimeId as RuntimeId].level === "supported";
+  return runtimeId in RUNTIME_SUPPORT && RUNTIME_SUPPORT[runtimeId as RuntimeId].unattendedTargetWrites;
 }
 
 /** One line per runtime, registry order preserved — the shape both `sta runtimes` and the README table render. */

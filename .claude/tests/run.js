@@ -1308,6 +1308,51 @@ withTempProject((tmp) => {
     BLOCK);
 });
 
+// V12 — a desktop role-play session (ZCode) has no orchestrator to set
+// STA_ROLE, so it declares the role it is playing through
+// .workflow/session-role.json, written only by `software-team-agents
+// session-role`. The declaration turns the per-role layer on; env identity
+// still wins; anything unreadable or off-shape is "no declared role" — the
+// floor-only posture of the interactive cases above.
+section('9b-4. V12 — a declared session role applies the per-role layer without STA_ROLE');
+
+withTempProject((tmp) => {
+  // Minimal contracts keep this section self-contained: the reader only needs
+  // the flow-style write/deny keys the header documents.
+  write(path.join(tmp, 'contracts', 'backend-engineer.yaml'),
+    'permissions:\n  read: ["README.md"]\n  write: ["README.md"]\n  deny: []\n');
+  write(path.join(tmp, 'contracts', 'qa-engineer.yaml'),
+    'permissions:\n  read: ["_docs/status.md"]\n  write: ["_docs/status.md"]\n  deny: []\n');
+  const env = { CLAUDE_PROJECT_DIR: tmp };
+  const declare = (body) => {
+    fs.mkdirSync(path.join(tmp, '.workflow'), { recursive: true });
+    if (body === null) fs.rmSync(path.join(tmp, '.workflow', 'session-role.json'), { force: true });
+    else write(path.join(tmp, '.workflow', 'session-role.json'), body);
+  };
+  const attempt = (rel) =>
+    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, ...rel.split('/')) } }, env);
+
+  declare(JSON.stringify({ role: 'qa-engineer', declared_at: '2026-09-22T00:00:00Z' }));
+  check('declared role -> contract write path allowed', attempt('_docs/status.md'), ALLOW);
+  check('  uncovered path denied, the role named in the refusal', attempt('app.ts'), BLOCK);
+  check('  the universal floor outranks the declaration', attempt('knowledge/_roles/ba/seen.yaml'), BLOCK);
+  check('  the declaration cannot rewrite itself through a file tool', attempt('.workflow/session-role.json'), BLOCK);
+
+  declare(JSON.stringify({ role: 'backend-engineer', stack: { write: ['server/**'], deny: [] } }));
+  check('declared stack globs arrive beside the role (server/** allowed)', attempt('server/route.ts'), ALLOW);
+  check('  the contract still bounds what the declaration cannot widen', attempt('_docs/status.md'), BLOCK);
+
+  check('env STA_ROLE wins over the declaration (qa-engineer env denies server/**)',
+    runPathHook('Write', path.join(tmp, 'server', 'route.ts'), 'qa-engineer', env), BLOCK);
+
+  declare(null);
+  check('declaration removed -> anonymous again, floor only', attempt('app.ts'), ALLOW);
+  declare('{not json');
+  check('corrupt declaration -> treated as no declared role', attempt('app.ts'), ALLOW);
+  declare(JSON.stringify({ role: 'Not A Role' }));
+  check('off-shape role string -> treated as no declared role', attempt('app.ts'), ALLOW);
+});
+
 // A workspace written by an older `init` still records `role: ba` or `role:
 // dev`. Keeping the field rather than rejecting the config is only worth
 // anything if it opens without error and changes no answer (V10 TASK-021).

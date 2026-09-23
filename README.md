@@ -3,8 +3,8 @@
 **Personal AI. Shared Knowledge. Common Process.**
 
 Process/workflow layer + orchestrator CLI สำหรับทีมซอฟต์แวร์ ที่จัดระเบียบการทำงานร่วมกันระหว่าง Human
-กับ AI coding runtimes — แต่ละคนใช้ AI/tool ของตัวเองได้ (Claude Code, Codex, OpenCode, Antigravity —
-ระดับการรองรับต่างกัน) แต่ทั้งทีมทำงานบน Knowledge และ Process ชุดเดียวกัน ไม่ใช่ AI model และไม่ได้มา
+กับ AI coding runtimes — แต่ละคนใช้ AI/tool ของตัวเองได้ (Claude Code, Codex, OpenCode, Antigravity,
+ZCode Desktop — ระดับการรองรับต่างกัน) แต่ทั้งทีมทำงานบน Knowledge และ Process ชุดเดียวกัน ไม่ใช่ AI model และไม่ได้มา
 แทน runtime จริง — ทุก run ยัง execute ผ่าน runtime ที่เลือก
 
 ## How It Fits Together
@@ -14,7 +14,7 @@ Human            ← intent, constraints, การตัดสินใจท�
   ↓
 software-team-agents   ← repo นี้: process/workflow layer + orchestrator (Framework)
   ↓
-AI Runtime       ← Claude Code (default) / Codex / OpenCode / Antigravity
+AI Runtime       ← Claude Code (default) / Codex / OpenCode / Antigravity / ZCode Desktop (interactive)
   ↓
 Knowledge / Target  ← ความรู้ร่วมของทีม (git repo แยก) / repo ของ product จริงที่ AI เขียนโค้ด
 ```

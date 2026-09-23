@@ -6,6 +6,7 @@ import { AgentStage } from "../types.js";
 import { createRuntimeExecutor } from "./runtimeExecutor.js";
 import { MockRuntimeAdapter, okResult } from "./mockAdapter.js";
 import { NO_GUARDS } from "./runtimeAdapter.js";
+import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import type { LedgerAttempt } from "../ledger/runLedger.js";
 
@@ -122,11 +123,34 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
     expect(runtime.requests).toHaveLength(0);
   });
 
-  // V10 (TASK-004): agy reads hooks only from the machine-global hooks file, so the lane
-  // collapse — sessions launching from the Knowledge workspace — must not open a Target-write
-  // path for it. The refusal keys on the runtime's certification, never on the lane.
-  it("T-V10 (TASK-004) refuses an antigravity Target-write attempt the same way", async () => {
-    const runtime = new MockRuntimeAdapter({ id: "antigravity", models: ["glm-4.7"], respond: () => okResult() });
+  // An uncertified runtime is refused for Target writes.
+  // The refusal keys on the runtime's certification, never on the lane.
+  it("T-V10 (TASK-004) refuses a zcode Target-write attempt the same way", async () => {
+    const runtime = new MockRuntimeAdapter({ id: "zcode", models: ["glm-4.7"], respond: () => okResult() });
+    const result = await createRuntimeExecutor({
+      runtime,
+      projectRoot: tmpProject(),
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+      registry: new RuntimeRegistry([runtime]),
+      frozenAttempt: frozen({
+        requested: { runtime: "zcode", model: "glm-4.7", effort: "high" },
+        observed: { runtime: "zcode", model: "glm-4.7", effort: "high" },
+        guard_evidence: { target_write: true, pre_tool_guard: true, writable_roots: ["C:/target"] },
+      }),
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain('runtime "zcode" is not certified for unattended Target writes');
+    expect(runtime.requests).toHaveLength(0);
+  });
+
+  it("allows a certified antigravity Target-write attempt when pre-tool guard is confirmed", async () => {
+    const runtime = new MockRuntimeAdapter({
+      id: "antigravity",
+      models: ["glm-4.7"],
+      capabilities: [RuntimeCapability.PRE_TOOL_GUARD],
+      respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }),
+    });
     const result = await createRuntimeExecutor({
       runtime,
       projectRoot: tmpProject(),
@@ -139,9 +163,8 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
         guard_evidence: { target_write: true, pre_tool_guard: true, writable_roots: ["C:/target"] },
       }),
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
-    expect(result.outcome.result).toBe("FAIL");
-    expect(result.outcome.failure_reason).toContain('runtime "antigravity" is not certified for unattended Target writes');
-    expect(runtime.requests).toHaveLength(0);
+    expect(result.outcome.result).toBe("PASS");
+    expect(runtime.requests).toHaveLength(1);
   });
 
   it("sends the ledger's model even when it is not this executor's own default, and conformance agrees", async () => {

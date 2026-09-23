@@ -1,0 +1,77 @@
+{
+  "hooks": {
+    "enabled": true,
+    "events": {
+      "PreToolUse": [
+        {
+          "matcher": "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "node",
+              "args": [
+                "${CLAUDE_PROJECT_DIR}/.claude/hooks/block-git.js"
+              ]
+            }
+          ]
+        },
+        {
+          "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "node",
+              "args": [
+                "${CLAUDE_PROJECT_DIR}/.claude/hooks/block-outside-repo.js"
+              ]
+            }
+          ]
+        },
+        {
+          "matcher": "Write",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "node",
+              "args": [
+                "${CLAUDE_PROJECT_DIR}/.claude/hooks/block-doc-rewrite.js"
+              ]
+            }
+          ]
+        },
+        {
+          "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "node",
+              "args": [
+                "${CLAUDE_PROJECT_DIR}/.claude/hooks/block-path-permissions.js"
+              ]
+            }
+          ]
+        }
+      ],
+      "Stop": [
+        {
+          "hooks": [
+            {
+              "type": "process",
+              "command": "node",
+              "args": [
+                "${CLAUDE_PROJECT_DIR}/.claude/hooks/require-green-before-stop.js"
+              ]
+            },
+            {
+              "type": "process",
+              "command": "node",
+              "args": [
+                "${CLAUDE_PROJECT_DIR}/.claude/hooks/block-secret-leak.js"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

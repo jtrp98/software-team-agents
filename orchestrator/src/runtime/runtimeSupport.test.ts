@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import { isUnattendedTargetWriteCertified, RUNTIME_IDS, RUNTIME_SUPPORT, SUPPORT_LEVELS } from "./runtimeSupport.js";
-import { antigravityCoverageWithHooks, codexCoverage, opencodeCoverageWithPlugin } from "../targetcli/guardSettings.js";
+import { antigravityCoverageWithHooks, codexCoverageWithHooks, opencodeCoverageWithPlugin, zcodeCoverageWithSyncedPayload } from "../targetcli/guardSettings.js";
 
 /**
  * The runtime table's canonical home is docs/runtimes.md — README links to it
@@ -18,6 +18,7 @@ const DISPLAY_NAME: Record<(typeof RUNTIME_IDS)[number], string> = {
   codex: "Codex",
   opencode: "OpenCode",
   antigravity: "Antigravity",
+  zcode: "ZCode Desktop",
 };
 
 const LEVEL_WORD = {
@@ -36,7 +37,7 @@ function runtimeDocRow(id: keyof typeof RUNTIME_SUPPORT): string | undefined {
 
 describe("runtimeSupport — the single source of truth for support claims (T-V1-04)", () => {
   it("covers exactly the runtimes `--runtime` accepts, so CLI and claims cannot name different sets", () => {
-    expect(RUNTIME_IDS).toEqual(["claude-code", "codex", "opencode", "antigravity"]);
+    expect(RUNTIME_IDS).toEqual(["claude-code", "codex", "opencode", "antigravity", "zcode"]);
     expect(Object.keys(RUNTIME_SUPPORT).sort()).toEqual([...RUNTIME_IDS].sort());
   });
 
@@ -63,9 +64,10 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
       }
     }
     expect(RUNTIME_SUPPORT["claude-code"].level).toBe("supported");
-    expect(RUNTIME_SUPPORT.codex.level).toBe("preview");
+    expect(RUNTIME_SUPPORT.codex.level).toBe("supported");
     expect(RUNTIME_SUPPORT.opencode.level).toBe("experimental");
-    expect(RUNTIME_SUPPORT.antigravity.level).toBe("experimental");
+    expect(RUNTIME_SUPPORT.antigravity.level).toBe("supported");
+    expect(RUNTIME_SUPPORT.zcode.level).toBe("experimental");
   });
 
   /**
@@ -74,20 +76,24 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
    * restatement that can drift from it.
    */
   it("quotes the exact guard-coverage detail T-V5-008 launch preflight consults", () => {
-    expect(RUNTIME_SUPPORT.codex.claim).toContain(codexCoverage().detail);
+    expect(RUNTIME_SUPPORT.codex.claim).toContain(codexCoverageWithHooks().detail);
     expect(RUNTIME_SUPPORT.opencode.claim).toContain(opencodeCoverageWithPlugin().detail);
     expect(RUNTIME_SUPPORT.antigravity.claim).toContain(antigravityCoverageWithHooks().detail);
+    expect(RUNTIME_SUPPORT.zcode.claim).toContain(zcodeCoverageWithSyncedPayload().detail);
   });
 
-  it("T-V8-031 certifies only the fully supported runtime for unattended Target writes", () => {
+  it("certifies only runtimes with an independently verified unattended write path", () => {
     expect(isUnattendedTargetWriteCertified("claude-code")).toBe(true);
-    expect(isUnattendedTargetWriteCertified("codex")).toBe(false);
+    expect(isUnattendedTargetWriteCertified("codex")).toBe(true);
     expect(isUnattendedTargetWriteCertified("opencode")).toBe(false);
-    expect(isUnattendedTargetWriteCertified("antigravity")).toBe(false);
+    expect(isUnattendedTargetWriteCertified("antigravity")).toBe(true);
+    expect(isUnattendedTargetWriteCertified("zcode")).toBe(false);
     expect(isUnattendedTargetWriteCertified("unregistered-runtime")).toBe(false);
-    for (const id of ["codex", "opencode", "antigravity"] as const) {
+    for (const id of ["opencode", "zcode"] as const) {
       expect(RUNTIME_SUPPORT[id].claim).toMatch(/analysis\/proposal|Target-write stages stay refused/i);
     }
+    expect(RUNTIME_SUPPORT.codex.claim).toContain("certified for unattended Target writes");
+    expect(RUNTIME_SUPPORT.antigravity.claim).toContain("certified for unattended Target writes");
   });
 
   // V10's lane collapse launches sessions from the Knowledge root. The certification
@@ -95,14 +101,16 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
   // collapse could change who may write Targets without anyone earning it.
   it("T-V10 (TASK-004) the workspace-lane collapse does not move the unattended certification boundary", () => {
     for (const id of RUNTIME_IDS) {
-      expect(isUnattendedTargetWriteCertified(id), id).toBe(id === "claude-code");
+      expect(isUnattendedTargetWriteCertified(id), id).toBe(id === "claude-code" || id === "codex" || id === "antigravity");
     }
   });
 
   it("T-V10 (TASK-004) every non-certified runtime declares that V10 leaves its status unchanged", () => {
-    for (const id of ["codex", "opencode", "antigravity"] as const) {
+    for (const id of ["opencode", "zcode"] as const) {
       expect(RUNTIME_SUPPORT[id].claim, `${id} must pin its V10 status`).toContain("V10 does not change this status");
     }
+    expect(RUNTIME_SUPPORT.codex.claim).toContain("V10 does not change this status");
+    expect(RUNTIME_SUPPORT.antigravity.claim).toContain("V10 does not change this status");
   });
 
   /**

@@ -12,6 +12,7 @@ import {
   GUARD_STACK_RULES_ENV,
   GUARD_TARGET_WORK_ROOTS_ENV,
   PathDeniedError,
+  SESSION_ROLE_PATH,
   UNIVERSAL_DENY,
   WORKSPACE_BA_ARTIFACTS,
   FRAMEWORK_PAYLOAD_ARTIFACTS,
@@ -280,15 +281,20 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
   const allHostPaths = () => [...GUARD_RULE_HOSTS.map((host) => host.path), GUARD_MIRROR];
 
   interface GeneratedGuardRules {
+    SESSION_ROLE_REL_PATH: string;
     UNIVERSAL_DENY: string[];
     WORKSPACE_BA_ARTIFACTS: string[];
     FRAMEWORK_PAYLOAD_ARTIFACTS: string[];
     matchesGlob(pattern: string, target: string): boolean;
-    frameworkPayloadDenial(relative: string): string | null;
+    frameworkPayloadDenial(relative: string, role: string | null): string | null;
     frameworkPayloadDenyWhy(pattern: string): string;
+    sessionRoleFromText(text: unknown): string | null;
+    declaredStackRulesFromText(text: unknown): { write: string[]; deny: string[] };
+    sessionRole(envRole: string | undefined, declaredText: unknown): string | null;
+    stackPathRules(declaredText?: unknown): { write: string[]; deny: string[] };
     boundReadOnlyTarget(nodePath: typeof path, target: string): string | null;
-    boundReadOnlyWhy(targetId: string): string;
-    knowledgeArtifactDenial(nodePath: typeof path, target: string): { rel: string; why: string } | null;
+    boundReadOnlyWhy(targetId: string, role: string | null): string;
+    knowledgeArtifactDenial(nodePath: typeof path, target: string, role: string | null): { rel: string; why: string } | null;
     knowledgeSelectionIncompleteWhy(rootName: string): string;
   }
 
@@ -299,7 +305,7 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
       .filter((line) => line !== GUARD_RULES_OPEN && line !== GUARD_RULES_CLOSE)
       .join("\n");
     return new Function(
-      `${body}\nreturn { UNIVERSAL_DENY, WORKSPACE_BA_ARTIFACTS, FRAMEWORK_PAYLOAD_ARTIFACTS, matchesGlob, frameworkPayloadDenial, frameworkPayloadDenyWhy, boundReadOnlyTarget, boundReadOnlyWhy, knowledgeArtifactDenial, knowledgeSelectionIncompleteWhy };`,
+      `${body}\nreturn { SESSION_ROLE_REL_PATH, UNIVERSAL_DENY, WORKSPACE_BA_ARTIFACTS, FRAMEWORK_PAYLOAD_ARTIFACTS, matchesGlob, frameworkPayloadDenial, frameworkPayloadDenyWhy, sessionRoleFromText, declaredStackRulesFromText, sessionRole, stackPathRules, boundReadOnlyTarget, boundReadOnlyWhy, knowledgeArtifactDenial, knowledgeSelectionIncompleteWhy };`,
     )() as GeneratedGuardRules;
   }
 
@@ -370,29 +376,21 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
 
   it("the generated Framework-payload denial agrees with the TypeScript one, and fires only for a named stage", () => {
     const generated = evaluateBlock();
-    const saved = process.env.STA_ROLE;
-    try {
-      delete process.env.STA_ROLE;
-      // No stage named: the per-stage layer cannot fire, exactly as the
-      // per-agent contract layer cannot.
-      expect(generated.frameworkPayloadDenial("contracts/backend-engineer.yaml")).toBeNull();
+    // No stage named: the per-stage layer cannot fire, exactly as the
+    // per-agent contract layer cannot.
+    expect(generated.frameworkPayloadDenial("contracts/backend-engineer.yaml", null)).toBeNull();
 
-      process.env.STA_ROLE = "backend-engineer";
-      for (const pattern of FRAMEWORK_PAYLOAD_ARTIFACTS) {
-        const sample = pattern.replace("/**", "/sample.yaml");
-        expect(generated.frameworkPayloadDenial(sample), sample).toBe(frameworkPayloadDenyWhy(pattern));
-      }
-      expect(generated.frameworkPayloadDenial("src/index.ts")).toBeNull();
-      expect(generated.frameworkPayloadDenial("_docs/module/m/design.md")).toBeNull();
-
-      // The workspace-role deny this replaced pointed at `software-team-agents
-      // ba|dev`, commands V10 removes.
-      expect(generated.frameworkPayloadDenyWhy("contracts/**")).toBe(frameworkPayloadDenyWhy("contracts/**"));
-      expect(generated.frameworkPayloadDenyWhy("contracts/**")).not.toMatch(/software-team-agents (ba|dev)/);
-    } finally {
-      if (saved === undefined) delete process.env.STA_ROLE;
-      else process.env.STA_ROLE = saved;
+    for (const pattern of FRAMEWORK_PAYLOAD_ARTIFACTS) {
+      const sample = pattern.replace("/**", "/sample.yaml");
+      expect(generated.frameworkPayloadDenial(sample, "backend-engineer"), sample).toBe(frameworkPayloadDenyWhy(pattern));
     }
+    expect(generated.frameworkPayloadDenial("src/index.ts", "backend-engineer")).toBeNull();
+    expect(generated.frameworkPayloadDenial("_docs/module/m/design.md", "backend-engineer")).toBeNull();
+
+    // The workspace-role deny this replaced pointed at `software-team-agents
+    // ba|dev`, commands V10 removes.
+    expect(generated.frameworkPayloadDenyWhy("contracts/**")).toBe(frameworkPayloadDenyWhy("contracts/**"));
+    expect(generated.frameworkPayloadDenyWhy("contracts/**")).not.toMatch(/software-team-agents (ba|dev)/);
   });
 
   /** The layout half of an engineer's rules reaches a hook through the environment. */
@@ -437,7 +435,7 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
       ]);
       expect(generated.boundReadOnlyTarget(path, path.join(writable, "src", "owned.ts"))).toBeNull();
       expect(generated.boundReadOnlyTarget(path, path.join(readOnly, "src", "foreign.ts"))).toBe("web");
-      expect(generated.boundReadOnlyWhy("web")).toMatch(/Target "web".*bound read-only.*backend-engineer/);
+      expect(generated.boundReadOnlyWhy("web", "backend-engineer")).toMatch(/Target "web".*bound read-only.*backend-engineer/);
       expect(JSON.parse(process.env[GUARD_TARGET_WORK_ROOTS_ENV]!)).toEqual([
         { targetId: "api", path: writable, access: "write" },
         { targetId: "web", path: readOnly, access: "read" },
@@ -503,7 +501,7 @@ describe("V11 TASK-020 — the managed-session selection marker in the knowledge
 
   /** Executes the rendered block the way a hook host does (same recipe as the T-V5-020 suite above). */
   function evaluateBlock(): {
-    knowledgeArtifactDenial(nodePath: typeof path, target: string): { rel: string; why: string } | null;
+    knowledgeArtifactDenial(nodePath: typeof path, target: string, role: string | null): { rel: string; why: string } | null;
     knowledgeSelectionIncompleteWhy(rootName: string): string;
   } {
     const body = renderGuardRuleBlock()
@@ -531,12 +529,12 @@ describe("V11 TASK-020 — the managed-session selection marker in the knowledge
 
   it("a managed invocation with the selection env complete denies Knowledge artifacts off the selected canonical path", () => {
     withGuardEnv({ STA_ROLE: "backend-engineer", STA_KNOWLEDGE_ROOT: kbFixture, STA_KNOWLEDGE_ROOT_NAME: "work" }, (generated) => {
-      const denial = generated.knowledgeArtifactDenial(path, path.join(kbFixture, "_docs", "module", "crm", "design.md"));
+      const denial = generated.knowledgeArtifactDenial(path, path.join(kbFixture, "_docs", "module", "crm", "design.md"), "backend-engineer");
       expect(denial).not.toBeNull();
       expect(denial!.rel).toBe("_docs/module/crm/design.md");
       expect(denial!.why).toContain(kbFixture);
       // A Target source outside the selected root still reaches the permission decision.
-      expect(generated.knowledgeArtifactDenial(path, path.resolve("fixture", "target", "src", "app.ts"))).toBeNull();
+      expect(generated.knowledgeArtifactDenial(path, path.resolve("fixture", "target", "src", "app.ts"), "backend-engineer")).toBeNull();
     });
   });
 
@@ -545,7 +543,7 @@ describe("V11 TASK-020 — the managed-session selection marker in the knowledge
     // launch contract broke, and no write can be attributed to a Knowledge root.
     withGuardEnv({ STA_ROLE: "backend-engineer", STA_KNOWLEDGE_ROOT_NAME: "work" }, (generated) => {
       for (const target of [path.resolve("fixture", "target", "src", "app.ts"), path.join(kbFixture, "knowledge", "x.yaml"), path.join(kbFixture, "_docs", "status.md")]) {
-        const denial = generated.knowledgeArtifactDenial(path, target);
+        const denial = generated.knowledgeArtifactDenial(path, target, "backend-engineer");
         expect(denial, target).not.toBeNull();
         expect(denial!.why).toContain("work");
         expect(denial!.why).toContain("STA_KNOWLEDGE_ROOT");
@@ -556,26 +554,26 @@ describe("V11 TASK-020 — the managed-session selection marker in the knowledge
 
   it("an empty-string path counts as missing for a managed invocation", () => {
     withGuardEnv({ STA_ROLE: "backend-engineer", STA_KNOWLEDGE_ROOT: "", STA_KNOWLEDGE_ROOT_NAME: "work" }, (generated) => {
-      expect(generated.knowledgeArtifactDenial(path, path.resolve("src", "app.ts"))).not.toBeNull();
+      expect(generated.knowledgeArtifactDenial(path, path.resolve("src", "app.ts"), "backend-engineer")).not.toBeNull();
     });
   });
 
   it("an unbound invocation (no marker) keeps the legacy rules — the fail-open and the path-only denial", () => {
     withGuardEnv({ STA_ROLE: "backend-engineer" }, (generated) => {
       // No name, no path: the V10 fail-open single-repo mode run.js pins.
-      expect(generated.knowledgeArtifactDenial(path, path.join(kbFixture, "_docs", "module", "m", "design.md"))).toBeNull();
+      expect(generated.knowledgeArtifactDenial(path, path.join(kbFixture, "_docs", "module", "m", "design.md"), "backend-engineer")).toBeNull();
       // Path without a name is the legacy contract: the old rule, unchanged.
       process.env.STA_KNOWLEDGE_ROOT = kbFixture;
-      const denial = generated.knowledgeArtifactDenial(path, path.join(kbFixture, "_docs", "module", "m", "design.md"));
+      const denial = generated.knowledgeArtifactDenial(path, path.join(kbFixture, "_docs", "module", "m", "design.md"), "backend-engineer");
       expect(denial).not.toBeNull();
       expect(denial!.rel).toBe("_docs/module/m/design.md");
-      expect(generated.knowledgeArtifactDenial(path, path.resolve("fixture", "target", "src", "app.ts"))).toBeNull();
+      expect(generated.knowledgeArtifactDenial(path, path.resolve("fixture", "target", "src", "app.ts"), "backend-engineer")).toBeNull();
     });
   });
 
   it("a role outside the knowledge-denied set is never touched by this rule", () => {
     withGuardEnv({ STA_ROLE: "system-analyst", STA_KNOWLEDGE_ROOT_NAME: "work" }, (generated) => {
-      expect(generated.knowledgeArtifactDenial(path, path.resolve("src", "app.ts"))).toBeNull();
+      expect(generated.knowledgeArtifactDenial(path, path.resolve("src", "app.ts"), "system-analyst")).toBeNull();
     });
   });
 
@@ -584,6 +582,86 @@ describe("V11 TASK-020 — the managed-session selection marker in the knowledge
     expect(block).not.toContain("STA_INSTALLATION_CONFIG");
     expect(block).not.toContain("knowledge_roots");
     expect(block).not.toContain("installation.yaml");
+  });
+});
+
+describe("declared session role — the desktop role-play identity channel (V12)", () => {
+  /** Same recipe as the T-V5-020 suite: executes the rendered block the way a hook host does. */
+  function evaluateBlock(): {
+    SESSION_ROLE_REL_PATH: string;
+    sessionRoleFromText(text: unknown): string | null;
+    declaredStackRulesFromText(text: unknown): { write: string[]; deny: string[] };
+    sessionRole(envRole: string | undefined, declaredText: unknown): string | null;
+    stackPathRules(declaredText?: unknown): { write: string[]; deny: string[] };
+    frameworkPayloadDenial(relative: string, role: string | null): string | null;
+    frameworkPayloadDenyWhy(pattern: string): string;
+  } {
+    const body = renderGuardRuleBlock()
+      .split("\n")
+      .filter((line) => line !== GUARD_RULES_OPEN && line !== GUARD_RULES_CLOSE)
+      .join("\n");
+    return new Function(
+      `${body}\nreturn { SESSION_ROLE_REL_PATH, sessionRoleFromText, declaredStackRulesFromText, sessionRole, stackPathRules, frameworkPayloadDenial, frameworkPayloadDenyWhy };`,
+    )();
+  }
+
+  it("renders the declared-role path from the one TypeScript constant", () => {
+    expect(evaluateBlock().SESSION_ROLE_REL_PATH).toBe(SESSION_ROLE_PATH);
+  });
+
+  it("sessionRoleFromText accepts exactly the shape the session-role CLI writes", () => {
+    const generated = evaluateBlock();
+    expect(generated.sessionRoleFromText(JSON.stringify({ role: "backend-engineer", declared_at: "2026-09-22T00:00:00Z" }))).toBe("backend-engineer");
+    expect(generated.sessionRoleFromText(JSON.stringify({ role: "qa-engineer", stack: { write: ["a/**"], deny: [] } }))).toBe("qa-engineer");
+    // Absent, unreadable or off-shape is "no declared role" — never a guess.
+    for (const bad of [null, undefined, "", "not json", "[]", '"str"', JSON.stringify({}), JSON.stringify({ role: "" }), JSON.stringify({ role: "Not A Role" }), JSON.stringify({ role: "backend_engineer" }), JSON.stringify({ role: 7 })]) {
+      expect(generated.sessionRoleFromText(bad), String(bad)).toBeNull();
+    }
+  });
+
+  it("sessionRole prefers env identity outright and falls back to the declaration only without one", () => {
+    const generated = evaluateBlock();
+    const declaration = JSON.stringify({ role: "qa-engineer" });
+    expect(generated.sessionRole("backend-engineer", declaration)).toBe("backend-engineer");
+    expect(generated.sessionRole(undefined, declaration)).toBe("qa-engineer");
+    expect(generated.sessionRole(undefined, "not json")).toBeNull();
+    expect(generated.sessionRole(undefined, null)).toBeNull();
+  });
+
+  it("the declaration's stack half merges beside the env channel, malformed dropping out empty", () => {
+    const generated = evaluateBlock();
+    const declaration = JSON.stringify({ role: "backend-engineer", stack: { write: ["server/**"], deny: ["dist/**"] } });
+    const saved = process.env[GUARD_STACK_RULES_ENV];
+    try {
+      delete process.env[GUARD_STACK_RULES_ENV];
+      expect(generated.stackPathRules(declaration)).toEqual({ write: ["server/**"], deny: ["dist/**"] });
+      expect(generated.stackPathRules()).toEqual({ write: [], deny: [] });
+
+      process.env[GUARD_STACK_RULES_ENV] = JSON.stringify({ write: ["src/**"], deny: [] });
+      expect(generated.stackPathRules(declaration)).toEqual({ write: ["src/**", "server/**"], deny: ["dist/**"] });
+
+      // A declaration whose stack half is garbage grants nothing extra — the
+      // failure is stricter than intended, never looser.
+      for (const bad of ["{not json", JSON.stringify({ role: "backend-engineer" }), JSON.stringify({ role: "backend-engineer", stack: { write: "server/**" } })]) {
+        expect(generated.stackPathRules(bad), bad).toEqual({ write: ["src/**"], deny: [] });
+      }
+    } finally {
+      if (saved === undefined) delete process.env[GUARD_STACK_RULES_ENV];
+      else process.env[GUARD_STACK_RULES_ENV] = saved;
+    }
+  });
+
+  it("a declared role turns the per-stage layer on with no env at all, exactly as STA_ROLE would", () => {
+    const generated = evaluateBlock();
+    const declaration = JSON.stringify({ role: "backend-engineer" });
+    // The same denial an orchestrated backend-engineer stage gets, now through
+    // the declaration alone.
+    expect(generated.frameworkPayloadDenial("contracts/backend-engineer.yaml", generated.sessionRole(undefined, declaration))).toBe(
+      generated.frameworkPayloadDenyWhy("contracts/**"),
+    );
+    // And without a declaration (or with an off-shape one) the layer stays off.
+    expect(generated.frameworkPayloadDenial("contracts/backend-engineer.yaml", generated.sessionRole(undefined, "not json"))).toBeNull();
+    expect(generated.frameworkPayloadDenial("contracts/backend-engineer.yaml", generated.sessionRole(undefined, null))).toBeNull();
   });
 });
 

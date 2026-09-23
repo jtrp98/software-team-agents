@@ -81,6 +81,24 @@ describe("detectRuntimeCapabilities — guard capabilities with no config path",
     expect(report.missingRequired).toContain(RuntimeCapability.PRE_TOOL_GUARD);
     expect(report.missingRequired).toContain(RuntimeCapability.EXIT_GUARD);
   });
+
+  it("verifies a claimed guard capability when the adapter declares per-run enforcement", async () => {
+    const adapter = new MockRuntimeAdapter({
+      capabilities: [RuntimeCapability.PRE_TOOL_GUARD],
+      binding: {
+        dir: ".mock",
+        definitionPath: (r) => `.mock/agents/${r}.md`,
+        guardConfigPath: null,
+        guardEnforcement: "per-run",
+      },
+    });
+
+    const report = await detectRuntimeCapabilities(adapter);
+
+    const check = report.checks.find((entry) => entry.capability === RuntimeCapability.PRE_TOOL_GUARD)!;
+    expect(check.verified).toBe(true);
+    expect(report.missingRequired).not.toContain(RuntimeCapability.PRE_TOOL_GUARD);
+  });
 });
 
 describe("detectRuntimeCapabilities — generic guard check (no deep checker registered)", () => {

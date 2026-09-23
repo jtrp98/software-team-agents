@@ -1,5 +1,143 @@
 # Release Notes
 
+## software-team-agents 6.0.0 — V12 (2026-09-23)
+
+> **Version 6.0.0 read mechanically from the bucket table at the bottom of this file (Major) and
+> confirmed by the release owner's instruction to prepare the V12 release (2026-09-23).** Root
+> `package.json` and `package-lock.json` carry `6.0.0`; `templates/manifest.json` is re-stamped by
+> `npm run build`. The private development package `@software-team-agents/orchestrator` remains
+> independently versioned at `0.3.0`. Tagging, pushing, publishing, deployment, migration, and
+> state-changing Git remain separate human actions.
+
+**Bucket: Major (`5.0.0 → 6.0.0`, mechanical).** V12 contains guards that were off and now refuse
+what previously passed: a declared session role makes an interactive session's writes deny-by-default
+under that role's contract, and the provider-neutral ExitCheckRunner fails headless runs closed after
+process exit on a red typecheck or a secret-shaped literal. It also promotes two runtimes — Codex and
+Antigravity join Claude Code at `supported`, each with live real-install evidence and named
+limitations — and adds ZCode Desktop as an interactive role-play runtime.
+
+### Track A — ZCode Desktop lane (new runtime)
+
+- New runtime id `zcode`, level `experimental`, desktop interactive role-play only: no CLI, no
+  headless pipeline; `sta run --runtime zcode` refuses at the registry and unattended Target-write
+  stages stay refused (certification unchanged: `false`).
+- `sta sync` now materialises `.zcode/config.json`: four PreToolUse guards (block-git,
+  block-outside-repo, block-doc-rewrite, block-path-permissions) plus a Stop pair
+  (require-green-before-stop, block-secret-leak), all reusing the `.claude/hooks/*.js` scripts via
+  the `${CLAUDE_PROJECT_DIR}` alias. Coverage is inspectable and fail-closed: synced+enabled →
+  `partial`; missing/disabled/corrupt → `unguarded`.
+- Declared session role: `software-team-agents session-role set <role>|clear|show` is the only
+  writer of `.workflow/session-role.json` (under the universal `.workflow/**` deny, so a session
+  cannot rewrite its own grant). When no orchestrator set `STA_ROLE`, the guard hooks fall back to
+  this declaration and the session gets the same per-role Target/Knowledge write bounds an
+  orchestrated stage gets: contract write allowlist (deny-by-default), contract deny, framework
+  payload deny, Knowledge denial for engineer roles, plus pre-resolved stack globs.
+- Live UAT on a real ZCode Desktop session (2026-09-23, `planning/v12/evidence/zcode-uat/`):
+  R01–R10 all pass — all five PreToolUse denials, declared-role allow/deny with the merged
+  contract+stack write list, framework-payload refusal, anti-self-grant floor, and the Stop pair
+  blocking a turn over a secret-shaped fixture with file:line named.
+
+### Track B — Codex: UAT, hardening, promotion to `supported`
+
+- `.codex/hooks.json` + mirrored hook scripts ship as compatibility wiring for the interactive TUI.
+  The verdict is honest and stays `unguarded` for that surface: default trust skips hooks entirely,
+  a crashed hook fails open, and Stop/SubagentStop do not enforce in exec mode — none of it is
+  claimed as headless enforcement.
+- Headless enforcement is the per-run native permission profile (broad reads, writes only at
+  packet-authorized paths, network disabled, packet-generated execpolicy plus OS deny rules for
+  resolved Git executables). Round-three UAT on a real 0.155.1 install proved it live:
+  outside-workspace write denied, in-workspace write allowed, read-only refused every write, and
+  network unreachable at DNS level.
+- The provider-neutral `ExitCheckRunner` captures a pre-run baseline and fails closed after process
+  exit on `code-green` (typecheck/lint) and `no-hardcoded-secret` for run-changed files — the live
+  round caught a real red typecheck with file and line. Exit checks are post-hoc, not in-band; that
+  limitation is named in the claim and covered by the QA round.
+- Adapter invocation fixed: the refused `--ask-for-approval` flag became
+  `--config approval_policy="never"`; `cached_input_tokens` parsing added with the old field kept as
+  fallback.
+- **Promoted `preview → supported`** (human gate, 2026-09-23): the claim scopes `supported` to the
+  headless path; interactive Codex receives no per-run profile, stays unguarded, requires
+  `--allow-unguarded-runtime`, and is limited to analysis/proposal.
+- Routing consequence: automatic routing now reaches Codex without
+  `routing.allow_below_supported`. Existing entries naming codex become redundant (harmless —
+  nothing errors).
+
+### Track C — Windows npm-shim resolution generalized
+
+- `npmCliResolver` knows `@openai/codex` and probes the `bin/<command>.js` entry layout alongside
+  the native-binary and `cli.js` layouts.
+- `CodexAdapter` gained the same one-retry spawn resolution `claudeCodeAdapter.ts` has: on win32 an
+  ENOENT from the bare command resolves the npm shim's real entry and retries once. Found live in
+  round three — an npm-installed codex (0.155.1) previously left the adapter UNAVAILABLE.
+
+### Track D — Antigravity promotion
+
+- Promoted `preview → supported` on the agy 1.2.7 machine-global bridge hook evidence
+  (`~/.gemini/config/hooks.json`): PreToolUse path permissions, the universal floor and
+  state-changing-git denial enforce in-band for headless runs; exit checks ride the same
+  provider-neutral runner. Certification for unattended Target rides the verified bridge-hook path.
+
+### Track E — discovery payload for role-less desktop sessions
+
+- `AGENTS.md`/`CLAUDE.md` bootstrap gains the "No role assigned?" contract: an unassigned session may
+  read anything, amend Knowledge-side documents it is explicitly told to change, and propose work —
+  the human decides. Target writes and approvals stay out of reach.
+
+### Breaking changes and required operator action
+
+1. **Declared session role tightens interactive writes.** After
+   `session-role set <role>`, every write tool call in that session is bounded by the role's
+   contract (deny-by-default) — writes that passed under the anonymous floor-only posture are now
+   refused with the role named. `session-role clear` returns to anonymous. The declaration cannot be
+   written by file tools; the CLI is the only writer.
+2. **Headless runs can now FAIL after the process exits.** The ExitCheckRunner fails a run closed
+   when its changed files leave a red typecheck/lint or contain a hardcoded secret. Runs that
+   previously "completed" red now return FAIL with file:line diagnostics.
+3. **Codex enters automatic routing.** `routing.allow_below_supported: [codex]` entries are
+   redundant now (they never error, they just stop being consulted). If you relied on codex NOT
+   being auto-selected, remove it from the registry/config instead.
+4. **ZCode Desktop sessions gain active guards after sync.** Writes that ZCode previously allowed
+   unchecked are now refused where the payload denies (git state changes, writes outside the
+   workspace, module-doc regeneration, contract-path violations). Restart ZCode after `sta sync`.
+5. **Antigravity enforcement requires the machine-global hooks file.** Workspace-level hook files
+   are never read by agy; the headless path relies on the installed bridge hook (see
+   `docs/runtimes.md`).
+
+### Migration order for existing installations
+
+1. Update the Framework, then run `software-team-agents sync` in every workspace: this delivers
+   `.zcode/config.json`, the refreshed hook scripts (declared-role support), and the current
+   `.codex` payload.
+2. ZCode Desktop users: restart the app after sync so the hook payload loads. Declare a role with
+   `session-role set <role>` when you want per-role enforcement; `session-role clear` when done.
+3. Codex operators: prune now-redundant `routing.allow_below_supported: [codex]` entries at your
+   leisure; interactive Codex launches still need `--allow-unguarded-runtime`.
+4. Windows npm-installed Codex: nothing to do — the adapter resolves the shim (previous installs
+   that exposed a native binary keep working unchanged).
+
+### Known gaps — input to the next version
+
+- zcode: Stop-hook continuations are capped at three per session (GUARD GAP — the QA round covers
+  it); PostToolUse and per-agent exit guards have no shipped mechanism; read permissions remain
+  instruction-level; `sta --check-bindings` does not yet drift-check `.zcode/config.json`.
+- codex: hooks stay compatibility-only; exit checks are post-hoc, never in-band; the
+  provider-refusal envelope pattern has not recurred on a real install since v6.
+- opencode: frozen — no investment, no removal (V12 Q2).
+
+### Release status
+
+**RELEASABLE — deterministic repository checks passed.** `npm run release:check` passed all 31
+steps on the confirming run, including the packaged `.tgz` E2E in a fresh environment (`sta
+--version` and `software-team-agents --version` report 6.0.0; a real Target `init`/`sync`/`open`
+cycle works without the Framework source repo). The full Vitest suite, the 1,083-case
+hook/script self-test, typecheck, and `sta --check-bindings` are green; one bounded-run hook
+timeout flaked in an earlier suite run and passed on an isolated rerun — the same flake shape the
+V11 release recorded. Live UAT evidence: ZCode R01–R10 (`planning/v12/evidence/zcode-uat/`) and
+codex round three R2-1…R2-6 (`planning/v12/evidence/codex-uat/`). Tagging, pushing, publishing,
+deployment, migration, and state-changing Git remain separate human actions.
+
+---
+
 ## software-team-agents 5.0.0 — V11 (2016-09-21)
 
 > Release date `2016-09-21` and target version `5.0.0` were confirmed by the release owner during

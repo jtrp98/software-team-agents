@@ -6,7 +6,7 @@ import { sha256Of } from "../packaging/templateManifest.js";
 import { runTargetCli } from "./cli.js";
 import { workspacePreflight, PreflightError, type RoleRunOptions } from "./devCommand.js";
 import { gatherStatus, renderStatus } from "./statusCommand.js";
-import { antigravityCoverageWithHooks, codexCoverage, guardCoverage, guardCoverageIsPositive, opencodeCoverageWithPlugin } from "./guardSettings.js";
+import { antigravityCoverageWithHooks, codexCoverageUnsynced, codexCoverageWithHooks, guardCoverage, guardCoverageIsPositive, opencodeCoverageWithPlugin } from "./guardSettings.js";
 import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
 import { loadTargetConfig, writeTargetConfig } from "./targetMeta.js";
 import { stringify as stringifyYaml } from "yaml";
@@ -167,17 +167,35 @@ afterEach(() => {
 });
 
 describe("T-V5-008 — guard coverage is a launch requirement", () => {
-  it("Codex reports NOT READY as unguarded — READY is unreachable without a verified guard mechanism", async () => {
+  it("Codex reports NOT READY until the V12 payload is synced — the bindings alone were never READY", async () => {
     const { target, templatesDir } = await initializedTarget();
     const status = gatherStatus({ targetRoot: target, templatesDir, installationConfigPath: NO_INSTALLATION });
 
-    // The bindings are complete; only the missing guard mechanism holds it back.
+    // The bindings are complete; without the synced `.codex/hooks.json` payload
+    // the verdict stays unguarded and holds the runtime back.
     expect(fs.existsSync(path.join(target, ".codex", "agents", "backend-engineer.toml"))).toBe(true);
     expect(status.codex.ready).toBe(false);
     expect(status.codex.detail).toMatch(/UNGUARDED/);
-    expect(status.codex.detail).toMatch(/no Codex guard mechanism/);
+    expect(status.codex.detail).toMatch(/has not been synced/);
     expect(renderStatus(status)).toContain("Codex: NOT READY");
     expect(renderStatus(status)).not.toContain("Codex: READY");
+  });
+
+  it("V12 — a synced Codex payload remains unguarded after real exec-mode UAT", async () => {
+    const { target, templatesDir } = await initializedTarget();
+    fs.mkdirSync(path.join(target, ".codex"), { recursive: true });
+    fs.writeFileSync(
+      path.join(target, ".codex", "hooks.json"),
+      JSON.stringify({ hooks: { PreToolUse: [{ matcher: "Bash", hooks: [] }], Stop: [{ hooks: [] }], SubagentStop: [{ hooks: [] }] } }),
+    );
+    const coverage = guardCoverage({ runtime: "codex", targetRoot: target });
+    expect(coverage.level).toBe("unguarded");
+    expect(coverage.enforced).toEqual([]);
+    expect(coverage.detail).toMatch(/bypass-hook-trust/);
+    expect(coverage.detail).toMatch(/fail open/);
+    const status = gatherStatus({ targetRoot: target, templatesDir, installationConfigPath: NO_INSTALLATION });
+    expect(status.codex.ready).toBe(false);
+    expect(renderStatus(status)).toContain("Codex: NOT READY");
   });
 
   it("`--runtime codex` fails preflight naming the gap, and no session is launched", async () => {
@@ -339,9 +357,11 @@ describe("T-V6-012 — Antigravity guard coverage tells the truth about an unobs
     expect(antigravityCoverageWithHooks().unenforced).toContain(RuntimeCapability.PER_AGENT_EXIT_GUARD);
   });
 
-  it("leaves Claude Code's and OpenCode's verdicts exactly as they were", () => {
+  it("codex's verdict stays unguarded even when the compatibility payload lands", () => {
     expect(opencodeCoverageWithPlugin().level).toBe("partial");
     expect(opencodeCoverageWithPlugin().enforced).toEqual([RuntimeCapability.PRE_TOOL_GUARD, RuntimeCapability.POST_TOOL_GUARD]);
-    expect(codexCoverage().level).toBe("unguarded");
+    expect(codexCoverageWithHooks().level).toBe("unguarded");
+    expect(codexCoverageWithHooks().enforced).toEqual([]);
+    expect(codexCoverageUnsynced().level).toBe("unguarded");
   });
 });

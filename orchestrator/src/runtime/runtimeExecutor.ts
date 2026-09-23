@@ -63,6 +63,12 @@ import type { ModelTierPolicy } from "./modelTiers.js";
 import { captureChangeSetFingerprint } from "../qa/changeSource.js";
 import type { LedgerAttempt } from "../ledger/runLedger.js";
 import { assertAdapterRequestMatchesAttempt } from "../ledger/attemptFreeze.js";
+import {
+  captureExitCheckBaseline,
+  runExitChecks,
+  type ExitCheckRootBaseline,
+  type ExitCheckRunner,
+} from "./exitCheckRunner.js";
 
 /**
  * An `AgentExecutor` built on a `RuntimeAdapter`.
@@ -175,6 +181,10 @@ export interface RuntimeExecutorOptions {
    * not a failure.
    */
   changedFiles?: (taskId: string) => Promise<string[]>;
+  /** Test/remote seam for provider-neutral post-process exit enforcement. */
+  exitCheckRunner?: ExitCheckRunner;
+  /** Test seam for the pre-spawn snapshot that prevents pre-existing user changes being attributed to this run. */
+  captureExitCheckBaseline?: (roots: readonly string[]) => Promise<ExitCheckRootBaseline[]>;
   /** Test seam; production always uses the real `codeIntelAssembly.codeIntelContext` (OFF unless `STA_CODE_INTEL=on`). */
   codeIntelContext?: (input: Parameters<typeof defaultCodeIntelContext>[0], deps?: CodeIntelSliceDeps) => ReturnType<typeof defaultCodeIntelContext>;
 }
@@ -827,7 +837,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       if (hasTargetWrite && !isUnattendedTargetWriteCertified(activeRuntime.id)) {
         return finish(failResult(
           `cannot start ${role}: runtime "${activeRuntime.id}" is not certified for unattended Target writes; ` +
-          `V8 permits non-Claude runtimes for analysis/proposal only until separate complete UAT and human promotion`,
+          `this runtime may run analysis/proposal stages only until its headless write boundary passes complete UAT and is explicitly certified`,
           declared,
         ));
       }
@@ -860,6 +870,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         }
       }
       const activeProbe = routeAvailability[activeRuntime.id];
+      let exitCheckBaseline: ExitCheckRootBaseline[] | undefined;
       if (activeProbe?.available === false) {
         result = {
           status: "UNAVAILABLE",
@@ -870,6 +881,23 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           diagnostics: [activeProbe.reason ?? "availability probe reported no reason"],
         };
       } else try {
+        // Native Stop hooks are not an enforcement claim for a headless runtime
+        // that does not declare EXIT_GUARD. Snapshot before spawn so the
+        // provider-neutral runner can verify exactly what this invocation
+        // changed and never grade unrelated dirty user files.
+        if (guards.exitChecks.length > 0 && !activeRuntime.capabilities.has(RuntimeCapability.EXIT_GUARD)) {
+          const exitRoots = stageWritableRoots.length > 0
+            ? stageWritableRoots.map((root) => root.path)
+            : [executionRoot];
+          try {
+            exitCheckBaseline = await (opts.captureExitCheckBaseline ?? captureExitCheckBaseline)(exitRoots);
+          } catch (error) {
+            return finish(failResult(
+              `EXIT_CHECK_BASELINE_UNAVAILABLE: refusing to spawn ${role} on runtime "${activeRuntime.id}" because fail-closed exit enforcement could not capture its pre-run state: ${String(error)}`,
+              declared,
+            ));
+          }
+        }
         result = await activeRuntime.executeAgent({
           role,
           // `cwd` selects the repository the agent works in; scope stays
@@ -917,6 +945,32 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         return finish(failResult(`adapter "${activeRuntime.id}" threw instead of returning a result: ${String(e)}`, declared));
       }
 
+      if (result.status === "OK" && guards.exitChecks.length > 0 && exitCheckBaseline) {
+        const report = await (opts.exitCheckRunner ?? runExitChecks)(exitCheckBaseline, guards.exitChecks);
+        const details = report.results.map((entry) =>
+          `${entry.check} [${entry.root}] ${entry.status}: ${entry.diagnostic}`,
+        );
+        result = {
+          ...result,
+          status: report.ok ? "OK" : "ERROR",
+          guards: {
+            enforced: [...new Set([...result.guards.enforced, RuntimeCapability.EXIT_GUARD])],
+            unenforced: result.guards.unenforced.filter((capability) => capability !== RuntimeCapability.EXIT_GUARD),
+            reason: result.guards.reason,
+          },
+          diagnostics: [...result.diagnostics, ...details],
+        };
+      } else if (result.status === "OK" && guards.exitChecks.length > 0 && result.guards.unenforced.includes(RuntimeCapability.EXIT_GUARD)) {
+        // A runtime that declared native enforcement gave us no reason to take
+        // a pre-spawn snapshot. If it then reports the guard absent, running a
+        // post-hoc check would misattribute pre-existing dirty files to this
+        // invocation, so this contract drift must refuse rather than guess.
+        return finish(failResult(
+          `EXIT_GUARD_REPORT_MISMATCH: adapter "${activeRuntime.id}" declared exit-guard capability but returned it unenforced; no safe pre-run baseline exists, so the run is rejected`,
+          declared,
+        ));
+      }
+
       metrics = metricsFrom(result, declared);
 
       if (result.status !== "UNAVAILABLE" && hasTargetWrite && !result.guards.enforced.includes(RuntimeCapability.PRE_TOOL_GUARD)) {
@@ -924,20 +978,6 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           `Target-write run of ${role} was rejected because adapter "${activeRuntime.id}" did not confirm pre-tool guard enforcement${result.guards.reason ? `: ${result.guards.reason}` : ""}`,
           metrics,
         ));
-      }
-
-      // The post-hoc half of the exit-check contract. A runtime without
-      // an in-band exit guard (OpenCode today, Codex on every build) finishes
-      // runs that requested `code-green`/`no-hardcoded-secret` with nobody
-      // having run them. The gap must be loud where a person reads the run, not
-      // silently absorbed into a PASS: QA's own round is what covers it until a
-      // cross-stack mechanical runner exists.
-      if (guards.exitChecks.length > 0 && result.guards.unenforced.includes(RuntimeCapability.EXIT_GUARD)) {
-        console.error(
-          `[orchestrator] GUARD GAP: ${role} requested exit checks (${guards.exitChecks.join(", ")}) but runtime ` +
-            `"${activeRuntime.id}" enforces none in-band${result.guards.reason ? ` — ${result.guards.reason}` : ""}. ` +
-            `They are NOT verified for this stage; qa-engineer's round and human review are the coverage.`,
-        );
       }
 
       if (result.status !== "UNAVAILABLE") break;

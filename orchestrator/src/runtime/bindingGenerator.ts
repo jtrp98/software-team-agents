@@ -353,6 +353,138 @@ export function mergeAgyHooks(projectContent: string): AgyHooksMergeResult {
   return { ok: true, changed: true, content: `${JSON.stringify({ ...current, [AGY_MANAGED_HOOK_KEY]: managed }, null, 2)}\n` };
 }
 
+// --- ZCode guard binding ----------------------------------------------------
+
+/** Where ZCode reads workspace hook configuration from (`<repo>/.zcode/config.json`). */
+export const ZCODE_CONFIG_PATH = ".zcode/config.json";
+
+export interface ZcodeHookRegistration {
+  matcher?: string;
+  hooks: Array<{ type: "process"; command: string; args: string[] }>;
+}
+
+/**
+ * The managed `hooks` value — the unit that is merged and drift-checked, not
+ * the whole file. ZCode's configuration-file hooks are disabled by default, so
+ * the payload forces `enabled: true`. Guard scripts are the Claude ones
+ * (`.claude/hooks/*.js`) — ZCode deliberately aliases `${CLAUDE_PROJECT_DIR}`,
+ * so no second copy of the scripts exists to drift.
+ */
+export function renderZcodeManagedHooks(): {
+  enabled: true;
+  events: { PreToolUse: ZcodeHookRegistration[]; Stop: ZcodeHookRegistration[] };
+} {
+  const guard = (script: string): ZcodeHookRegistration["hooks"][number] => ({
+    type: "process",
+    command: "node",
+    args: [`\${CLAUDE_PROJECT_DIR}/.claude/hooks/${script}`],
+  });
+  return {
+    enabled: true,
+    events: {
+      PreToolUse: [
+        { matcher: "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit", hooks: [guard("block-git.js")] },
+        { matcher: "Write|Edit|MultiEdit|NotebookEdit", hooks: [guard("block-outside-repo.js")] },
+        { matcher: "Write", hooks: [guard("block-doc-rewrite.js")] },
+        { matcher: "Write|Edit|MultiEdit|NotebookEdit", hooks: [guard("block-path-permissions.js")] },
+      ],
+      Stop: [{ hooks: [guard("require-green-before-stop.js"), guard("block-secret-leak.js")] }],
+    },
+  };
+}
+
+/** The whole file as shipped to a workspace that has none of its own. */
+export function renderZcodeConfigJson(): string {
+  return `${JSON.stringify({ hooks: renderZcodeManagedHooks() }, null, 2)}\n`;
+}
+
+export interface ZcodeConfigMergeResult {
+  ok: boolean;
+  changed?: boolean;
+  content?: string;
+  error?: string;
+}
+
+/**
+ * Replaces the framework-owned `PreToolUse`/`Stop` event arrays and forces
+ * `enabled: true`, leaving every other top-level key, every other `hooks`
+ * field and every other event the project defined untouched. ZCode event
+ * names are a closed set of seven, so the project cannot express its own
+ * guards in a key this framework would mistake for its own.
+ */
+export function mergeZcodeHooks(projectContent: string): ZcodeConfigMergeResult {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(projectContent);
+  } catch (e) {
+    return { ok: false, error: `${ZCODE_CONFIG_PATH} is not valid JSON: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ok: false, error: `${ZCODE_CONFIG_PATH} root must be a JSON object` };
+  }
+  const root = parsed as Record<string, unknown>;
+  const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+  const existingHooks = isObject(root.hooks) ? root.hooks : {};
+  const existingEvents = isObject(existingHooks.events) ? existingHooks.events : {};
+  const managed = renderZcodeManagedHooks();
+  const mergedHooks = {
+    ...existingHooks,
+    enabled: true as const,
+    events: { ...existingEvents, PreToolUse: managed.events.PreToolUse, Stop: managed.events.Stop },
+  };
+  if (JSON.stringify(root.hooks) === JSON.stringify(mergedHooks)) {
+    return { ok: true, changed: false, content: projectContent };
+  }
+  return { ok: true, changed: true, content: `${JSON.stringify({ ...root, hooks: mergedHooks }, null, 2)}\n` };
+}
+
+// --- Codex guard binding ----------------------------------------------------
+
+/** Where codex (0.154.0+) reads workspace hooks from — the Claude-style schema it demonstrably loads. */
+export const CODEX_HOOKS_PATH = ".codex/hooks.json";
+
+export interface CodexHooksMergeResult {
+  ok: boolean;
+  changed?: boolean;
+  content?: string;
+  error?: string;
+}
+
+/**
+ * Replaces the framework-owned `PreToolUse`/`Stop`/`SubagentStop` arrays with
+ * the shipped template's and preserves every other top-level key and event the
+ * project defined — the same managed rule the other hooks lanes follow. The
+ * scripts the arrays point at are this repo's own mirrors
+ * (`.codex/hooks/*.js`), byte-checked by `checkBindings`.
+ */
+export function mergeCodexHooks(projectContent: string, shippedContent: string): CodexHooksMergeResult {
+  const parse = (label: string, content: string): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } => {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content);
+    } catch (e) {
+      return { ok: false, error: `${label} is not valid JSON: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { ok: false, error: `${label} root must be a JSON object` };
+    return { ok: true, value: parsed as Record<string, unknown> };
+  };
+  const project = parse(CODEX_HOOKS_PATH, projectContent);
+  if (!project.ok) return { ok: false, error: project.error };
+  const shipped = parse("the shipped .codex/hooks.json template", shippedContent);
+  if (!shipped.ok) return { ok: false, error: shipped.error };
+  const isObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
+  const projectHooks = isObject(project.value.hooks) ? project.value.hooks : {};
+  const shippedHooks = isObject(shipped.value.hooks) ? shipped.value.hooks : {};
+  const mergedHooks = { ...projectHooks };
+  for (const event of ["PreToolUse", "Stop", "SubagentStop"] as const) {
+    if (shippedHooks[event] !== undefined) mergedHooks[event] = shippedHooks[event];
+  }
+  if (JSON.stringify(project.value.hooks) === JSON.stringify(mergedHooks)) {
+    return { ok: true, changed: false, content: projectContent };
+  }
+  return { ok: true, changed: true, content: `${JSON.stringify({ ...project.value, hooks: mergedHooks }, null, 2)}\n` };
+}
+
 export interface ParsedCommandMd {
   description: string;
   argumentHint?: string;
