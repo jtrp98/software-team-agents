@@ -28,6 +28,10 @@ const KNOWN_NPM_CLI_PACKAGES: Record<string, readonly string[]> = {
   // The npm package is `opencode-ai`; its shim wraps bin/opencode.exe (verified
   // against a 1.18.21 Windows install).
   opencode: ["node_modules", "opencode-ai"],
+  // The npm package is `@openai/codex`; its shim wraps bin/codex.js, a node
+  // entry script (verified against a 0.155.1 Windows install — the package
+  // carries no native `bin/codex.exe`).
+  codex: ["node_modules", "@openai", "codex"],
 };
 
 /** Everything `resolveNpmCliScript` touches, injectable so tests stay deterministic on any platform. */
@@ -73,6 +77,10 @@ export function resolveNpmCliScript(command: string, probe: NpmShimProbe = {}): 
     if (exists(nativeBinary)) return { file: nativeBinary, prefixArgs: [] };
     const jsEntry = path.join(pkgDir, "cli.js");
     if (exists(jsEntry)) return { file: probe.execPath ?? process.execPath, prefixArgs: [jsEntry] };
+    // Some packages name their node entry after the command instead of
+    // `cli.js` (e.g. `@openai/codex` ships `bin/codex.js`).
+    const binJsEntry = path.join(pkgDir, "bin", `${command}.js`);
+    if (exists(binJsEntry)) return { file: probe.execPath ?? process.execPath, prefixArgs: [binJsEntry] };
   }
   return null;
 }

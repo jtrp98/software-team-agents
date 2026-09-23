@@ -125,14 +125,14 @@ describe("T-V8-018 — an attempt cannot start without a complete, supported, ev
     try {
       freezeAttempt(freezeInput({
         availability: undefined,
-        observed: { runtime: "codex", model: "gpt-5", effort: "high" },
-        capabilityReport: capabilityReport({ runtimeId: "codex", checks: [] }),
+        observed: { runtime: "opencode", model: "gpt-5", effort: "high" },
+        capabilityReport: capabilityReport({ runtimeId: "opencode", checks: [] }),
       }));
       throw new Error("expected a refusal");
     } catch (error) {
       expect(error).toBeInstanceOf(AttemptFreezeError);
       const reasons = (error as AttemptFreezeError).reasons.join("\n");
-      expect(reasons).toContain('support level "preview"');
+      expect(reasons).toContain('support level "experimental"');
       expect(reasons).toContain("availability was never probed");
       expect(reasons).toContain("no verified model-selection capability");
       expect(reasons).toContain("requires a verified pre-tool guard");

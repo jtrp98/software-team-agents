@@ -670,13 +670,19 @@ describe("resolveNpmCliScript", () => {
   it("returns null when a shim exists but neither entry layout does, and for unknown commands", () => {
     const npmDir = path.join("C:", "npm");
     expect(resolveNpmCliScript("claude", probeOver([path.join(npmDir, "claude.cmd")], [npmDir]))).toBeNull();
+    // `codex` is a known package now: with every probe answering "exists", the
+    // native-binary layout wins and resolves instead of returning null.
     expect(
       resolveNpmCliScript("codex", {
         dirs: [npmDir],
         exists: () => true,
         execPath: "node-injected",
       }),
-    ).toBeNull();
+    ).toEqual({
+      file: path.join(npmDir, "node_modules", "@openai", "codex", "bin", "codex.exe"),
+      prefixArgs: [],
+    });
+    expect(resolveNpmCliScript("definitely-unknown", { dirs: [npmDir], exists: () => true })).toBeNull();
   });
 });
 

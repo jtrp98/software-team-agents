@@ -97,8 +97,25 @@
 
 - **ตรวจ:** ข้อความของ `status` บอกไฟล์ที่ขาดตรง ๆ
 - **แก้:** `software-team-agents sync` แล้ว `status` ซ้ำ
-- **`Codex: NOT READY` เป็นค่า default ที่ตั้งใจ** (unguarded) — เปิดแบบตั้งใจด้วย
-  `--allow-unguarded-runtime` เท่านั้น — โมเดล coverage ที่ [`runtimes.md`](runtimes.md)
+- **`Codex: NOT READY`** — หมายถึง interactive project-hook coverage เท่านั้น: UAT ยืนยันว่า
+  `.codex/hooks.json` ยังไม่ให้ fail-closed enforcement จึงต้องยืนยัน `--allow-unguarded-runtime`
+  ตอน `open` ส่วน `sta run --runtime codex` ใช้ headless adapter ซึ่งสร้าง native permission profile
+  และ isolated execpolicy จาก packet ต่อ run; guarded writable run จะหยุดก่อน spawn เฉพาะเมื่อ profile
+  แทนสิทธิ์ใน packet อย่างปลอดภัยไม่ได้ (`CODEX_PERMISSION_PROFILE_UNAVAILABLE`) (รายละเอียดที่ [`runtimes.md`](runtimes.md))
+
+### 8b. headless run ล้มด้วยปัญหา auth/quota
+
+- **อาการ:** run คืน `UNAVAILABLE`/`ERROR` ลักษณะ auth หรือ rate limit (codex พิมพ์ `ERROR:` บรรทัดท้าย
+  เช่น 401/403/429 — อ่านวิธีแยก refusal จริงจาก noise ที่ `codexAdapter.ts`)
+- **ตรวจ (คำสั่งที่ยืนยันบน install จริง):**
+  - Claude Code: `claude auth status`
+  - Codex: `codex login status` แล้ว `codex doctor` (วินิจฉัย config/auth/runtime ครบ)
+  - Antigravity (agy 1.2.7): ไม่มี subcommand เช็ค auth — อ่าน error ตอน run เท่านั้น
+  - ZCode: ไม่มี CLI — ตรวจจากตัว app
+- **แก้:** ล็อกอินใหม่ด้วยช่องทางของแต่ละ runtime (`claude auth login`, `codex login`; agy/ZCode ผ่าน
+  ตัว app) แล้วรัน `status`/คำสั่งเช็คซ้ำ — ถ้า error เป็นลักษณะ limit (เช่น 429) ให้เช็คหน้าต่าง quota ที่
+  [`runtimes.md`](runtimes.md) §Quota windows (ตัวเลขรายงานโดยผู้ใช้ — รูปแบบจริงยืนยันตอนใช้) แล้ว
+  เว้นรอบ; อย่า retry ถี่เพื่อบังคับผ่าน
 
 ### 9. Guards wired ไม่ครบ
 

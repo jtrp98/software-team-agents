@@ -260,6 +260,34 @@ describe("AntigravityAdapter — capability honesty", () => {
     expect(result.guards.unenforced).toContain(RuntimeCapability.EXIT_GUARD);
     expect(result.guards.reason).toBeTruthy();
   });
+
+  it("enforces PreToolUse guards when guardConfigPath is provided via bridge hook", async () => {
+    const root = fixture();
+    const calls: Call[] = [];
+    const adapter = new AntigravityAdapter({
+      projectRoot: root,
+      guardConfigPath: "C:/fake/.gemini/config/hooks.json",
+      agentsStoreRoot: "C:/fake/.gemini/config/agents",
+      spawnSync: recordingSpawn(calls),
+    });
+
+    expect(adapter.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)).toBe(true);
+    expect(adapter.capabilities.has(RuntimeCapability.POST_TOOL_GUARD)).toBe(true);
+    expect(adapter.capabilities.has(RuntimeCapability.NAMED_AGENTS)).toBe(true);
+    expect(adapter.binding.guardConfigPath).toBe("C:/fake/.gemini/config/hooks.json");
+
+    const result = await adapter.executeAgent(
+      request(root, {
+        guards: { writeAllow: ["src/**"], writeDeny: [".git/**"], forbidCommands: ["git"], exitChecks: ["code-green"] },
+      }),
+    );
+
+    expect(result.guards.enforced).toContain(RuntimeCapability.PRE_TOOL_GUARD);
+    expect(result.guards.enforced).toContain(RuntimeCapability.POST_TOOL_GUARD);
+    expect(result.guards.unenforced).toContain(RuntimeCapability.EXIT_GUARD);
+    expect(calls[0]!.env?.STA_ROLE).toBe("qa-engineer");
+    expect(calls[0]!.env?.STA_WORKSPACE_ROOT).toBe(root);
+  });
 });
 
 describe("parseAgyEnvelope", () => {

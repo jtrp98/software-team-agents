@@ -29,7 +29,7 @@ import {
   type TargetStackConfig,
 } from "./targetMeta.js";
 import { CLAUDE_SETTINGS_PATH, mergeFrameworkGuards } from "./guardSettings.js";
-import { AGY_HOOKS_PATH, mergeAgyHooks } from "../runtime/bindingGenerator.js";
+import { AGY_HOOKS_PATH, mergeAgyHooks, CODEX_HOOKS_PATH, mergeCodexHooks, ZCODE_CONFIG_PATH, mergeZcodeHooks } from "../runtime/bindingGenerator.js";
 import { resolveTargetBinding, runtimesForWorkspace, type WorkspaceRole, type WorkspaceRuntime } from "./roleWorkspace.js";
 import { missingInstructionConsequence } from "../threeRepo/ownership.js";
 import { planTargetProfile } from "./targetProfile.js";
@@ -157,6 +157,55 @@ function planPayloadFiles(
             action: merged.changed ? "update" : "unchanged",
             path: file.path,
             note: merged.changed ? "merge the managed AGY guard registration" : "managed AGY guard registration already current",
+          },
+        });
+      }
+      continue;
+    }
+    // ZCode's `.zcode/config.json` follows the same managed-key rule: the
+    // project's own keys (e.g. `mcp.servers`) and its own event entries
+    // survive; only the framework-owned PreToolUse/Stop arrays are replaced.
+    if (file.path === ZCODE_CONFIG_PATH && fs.existsSync(dest)) {
+      const merged = mergeZcodeHooks(fs.readFileSync(dest, "utf8"));
+      if (!merged.ok) {
+        planned.push({
+          conflict: {
+            path: file.path,
+            kind: "unmergeable-settings",
+            detail: `${merged.error}; recovery: fix the JSON manually, claim ${ZCODE_CONFIG_PATH} in .agent-team/config.yaml overrides, or re-run with --force to replace it after backup`,
+          },
+        });
+      } else {
+        planned.push({
+          entry: {
+            action: merged.changed ? "update" : "unchanged",
+            path: file.path,
+            note: merged.changed ? "merge the managed ZCode guard registration" : "managed ZCode guard registration already current",
+          },
+        });
+      }
+      continue;
+    }
+    // Codex's `.codex/hooks.json` follows the managed rule too: the shipped
+    // template owns the PreToolUse/Stop/SubagentStop arrays and the project's
+    // own keys and events survive untouched.
+    if (file.path === CODEX_HOOKS_PATH && fs.existsSync(dest)) {
+      const shipped = fs.readFileSync(path.join(templatesDir, ...file.path.split("/")), "utf8");
+      const merged = mergeCodexHooks(fs.readFileSync(dest, "utf8"), shipped);
+      if (!merged.ok) {
+        planned.push({
+          conflict: {
+            path: file.path,
+            kind: "unmergeable-settings",
+            detail: `${merged.error}; recovery: fix the JSON manually, claim ${CODEX_HOOKS_PATH} in .agent-team/config.yaml overrides, or re-run with --force to replace it after backup`,
+          },
+        });
+      } else {
+        planned.push({
+          entry: {
+            action: merged.changed ? "update" : "unchanged",
+            path: file.path,
+            note: merged.changed ? "merge the managed Codex guard registration" : "managed Codex guard registration already current",
           },
         });
       }
@@ -831,6 +880,35 @@ export function runTargetSync(options: ApplySyncOptions): SyncResult {
         backup(file.path);
         fs.writeFileSync(dest, merged.content, "utf8");
         performed.push({ action: "update", path: file.path, note: "merged the managed AGY guard registration; project entries preserved" });
+      } else {
+        performed.push(plannedFor);
+      }
+      managedEntries.push(file);
+      continue;
+    }
+    if (file.path === ZCODE_CONFIG_PATH && fs.existsSync(path.join(options.targetRoot, file.path))) {
+      const dest = path.join(options.targetRoot, file.path);
+      const merged = mergeZcodeHooks(fs.readFileSync(dest, "utf8"));
+      if (!merged.ok || merged.content === undefined) throw new Error(`ZCode config merge reached apply after preflight: ${merged.error ?? "no merged content"}`);
+      if (merged.changed) {
+        backup(file.path);
+        fs.writeFileSync(dest, merged.content, "utf8");
+        performed.push({ action: "update", path: file.path, note: "merged the managed ZCode guard registration; project entries preserved" });
+      } else {
+        performed.push(plannedFor);
+      }
+      managedEntries.push(file);
+      continue;
+    }
+    if (file.path === CODEX_HOOKS_PATH && fs.existsSync(path.join(options.targetRoot, file.path))) {
+      const dest = path.join(options.targetRoot, file.path);
+      const shipped = fs.readFileSync(path.join(options.templatesDir, ...file.path.split("/")), "utf8");
+      const merged = mergeCodexHooks(fs.readFileSync(dest, "utf8"), shipped);
+      if (!merged.ok || merged.content === undefined) throw new Error(`Codex hooks merge reached apply after preflight: ${merged.error ?? "no merged content"}`);
+      if (merged.changed) {
+        backup(file.path);
+        fs.writeFileSync(dest, merged.content, "utf8");
+        performed.push({ action: "update", path: file.path, note: "merged the managed Codex guard registration; project entries preserved" });
       } else {
         performed.push(plannedFor);
       }

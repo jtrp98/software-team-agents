@@ -1,4 +1,7 @@
 import { spawnSync as nodeSpawnSync, type SpawnSyncReturns } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { LocalWorkspace } from "./localWorkspace.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import type {
@@ -101,31 +104,49 @@ export interface AntigravityAdapterOptions {
   timeoutMs?: number;
   /** Models this installation is known to reach (`agy models`). No default — no catalogue is invented. */
   models?: readonly string[];
+  /** Optional override for machine-global hooks path; defaults to ~/.gemini/config/hooks.json if present. */
+  guardConfigPath?: string | null;
+  /** Optional override for machine-global agents store root; defaults to ~/.gemini/config/agents if present. */
+  agentsStoreRoot?: string | null;
 }
 
 export class AntigravityAdapter implements RuntimeAdapter {
   readonly id = ANTIGRAVITY_RUNTIME_ID;
   readonly displayName = "Antigravity";
-  readonly binding: RuntimeBinding = {
-    // No native agent store was demonstrated (§2), so the canonical role
-    // definition is read here and folded into the prompt — the same shape
-    // `apiAdapter.ts` uses, not a fourth rendering family.
-    dir: ".claude",
-    definitionPath: (role) => `.claude/agents/${role}.md`,
-    guardConfigPath: null,
-  };
-  readonly capabilities: ReadonlySet<RuntimeCapability> = new Set(ANTIGRAVITY_CAPABILITIES);
+  readonly binding: RuntimeBinding;
+  readonly capabilities: ReadonlySet<RuntimeCapability>;
   readonly models: ReadonlySet<string>;
   readonly workspace: RuntimeWorkspace;
 
   private readonly spawn: SpawnSync;
   private readonly defaultTimeoutMs: number;
+  private readonly guardConfigPath: string | null;
+  private readonly agentsStoreRoot: string | null;
 
   constructor(opts: AntigravityAdapterOptions) {
     this.workspace = new LocalWorkspace({ root: opts.projectRoot });
     this.spawn = opts.spawnSync ?? (nodeSpawnSync as unknown as SpawnSync);
     this.defaultTimeoutMs = opts.timeoutMs ?? 30 * 60_000;
     this.models = new Set(opts.models ?? []);
+
+    this.guardConfigPath = opts.guardConfigPath ?? null;
+    this.agentsStoreRoot = opts.agentsStoreRoot ?? null;
+
+    const caps = new Set<RuntimeCapability>(ANTIGRAVITY_CAPABILITIES);
+    if (this.guardConfigPath) {
+      caps.add(RuntimeCapability.PRE_TOOL_GUARD);
+      caps.add(RuntimeCapability.POST_TOOL_GUARD);
+    }
+    if (this.agentsStoreRoot) {
+      caps.add(RuntimeCapability.NAMED_AGENTS);
+    }
+    this.capabilities = caps;
+
+    this.binding = {
+      dir: ".claude",
+      definitionPath: (role) => `.claude/agents/${role}.md`,
+      guardConfigPath: this.guardConfigPath,
+    };
   }
 
   async probe(): Promise<RuntimeProbe> {
@@ -141,7 +162,7 @@ export class AntigravityAdapter implements RuntimeAdapter {
   }
 
   async executeAgent(req: RuntimeAgentRequest): Promise<RuntimeAgentResult> {
-    const guards = guardReportFor(req.guards);
+    const guards = guardReportFor(req.guards, this.guardConfigPath);
 
     let roleDefinition: string | null;
     try {
@@ -189,7 +210,7 @@ export class AntigravityAdapter implements RuntimeAdapter {
         encoding: "utf8",
         timeout: timeoutMs,
         maxBuffer: 64 * 1024 * 1024,
-        env: { ...process.env, ...req.env, STA_ROLE: req.role },
+        env: { ...process.env, ...req.env, STA_ROLE: req.role, STA_WORKSPACE_ROOT: req.cwd },
       });
     } catch (e) {
       return fail("UNAVAILABLE", guards, [`failed to spawn \`${ANTIGRAVITY_BINARY}\`: ${String(e)}`]);
@@ -273,10 +294,25 @@ export class AntigravityAdapter implements RuntimeAdapter {
  * is reported unenforced with a reason the orchestrator can act on. The
  * accounting is what keeps the gap loud rather than silent.
  */
-function guardReportFor(requested: RuntimeGuards): RuntimeGuardReport {
+function guardReportFor(requested: RuntimeGuards, guardConfigPath?: string | null): RuntimeGuardReport {
   const wantsPreTool = requested.writeAllow.length > 0 || requested.writeDeny.length > 0 || requested.forbidCommands.length > 0;
   const wantsExit = requested.exitChecks.length > 0;
   if (!wantsPreTool && !wantsExit) return { enforced: [], unenforced: [] };
+
+  if (guardConfigPath) {
+    const enforced: RuntimeCapability[] = [];
+    const unenforced: RuntimeCapability[] = [];
+    if (wantsPreTool) enforced.push(RuntimeCapability.PRE_TOOL_GUARD, RuntimeCapability.POST_TOOL_GUARD);
+    if (wantsExit) unenforced.push(RuntimeCapability.EXIT_GUARD, RuntimeCapability.PER_AGENT_EXIT_GUARD);
+    return {
+      enforced,
+      unenforced,
+      reason: unenforced.length > 0
+        ? "PreToolUse hooks enforced in-band via machine-global bridge; exit checks verified post-hoc by provider-neutral ExitCheckRunner"
+        : undefined,
+    };
+  }
+
   const unenforced: RuntimeCapability[] = [];
   if (wantsPreTool) unenforced.push(RuntimeCapability.PRE_TOOL_GUARD, RuntimeCapability.POST_TOOL_GUARD);
   if (wantsExit) unenforced.push(RuntimeCapability.EXIT_GUARD, RuntimeCapability.PER_AGENT_EXIT_GUARD);

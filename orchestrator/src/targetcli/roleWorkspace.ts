@@ -28,7 +28,7 @@ import type { TargetConfig, TargetManifest } from "./targetMeta.js";
 
 /** Where an interactive workspace runs and which managed payload it receives. */
 export type WorkspaceRole = "ba" | "dev";
-export type WorkspaceRuntime = "claude" | "codex" | "opencode" | "antigravity";
+export type WorkspaceRuntime = "claude" | "codex" | "opencode" | "antigravity" | "zcode";
 
 /** The recorded set wins; a manifest with non-Claude renderings but no
  * recorded runtime config is conservatively treated as opt-in to the three runtimes that

@@ -22,3 +22,8 @@ coverage/
 # internal planning docs (T-checklists/handoffs) — local only
 planning/
 .zcodeignore
+
+# ZCode client workspace artifacts (V12) — the guard payload `.zcode/config.json`
+# stays tracked (it is the framework's own synced lane), client noise does not.
+.zcode/*
+!.zcode/config.json

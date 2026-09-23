@@ -459,15 +459,15 @@ describe("resolveRuntimeRoute — availability, support and guard refusal", () =
   });
 
   it("refuses automatic routing below supported unless that exact runtime is opted in", () => {
-    const denied = route({ defaultRuntimeId: "codex", config: { schema_version: 1 } });
+    const denied = route({ defaultRuntimeId: "opencode", config: { schema_version: 1 } });
     expect(denied.selected).toBeUndefined();
-    expect(denied.error).toContain('support level "preview"');
+    expect(denied.error).toContain('support level "experimental"');
 
     const allowed = route({
-      defaultRuntimeId: "codex",
-      config: { schema_version: 1, routing: { allow_below_supported: ["codex"] } },
+      defaultRuntimeId: "opencode",
+      config: { schema_version: 1, routing: { allow_below_supported: ["opencode"] } },
     });
-    expect(allowed.selected?.runtime.id).toBe("codex");
+    expect(allowed.selected?.runtime.id).toBe("opencode");
 
     const explicit = route({ flags: { runtime: "codex", model: "gpt-5" } });
     expect(explicit.precedenceLevel).toBe(1);

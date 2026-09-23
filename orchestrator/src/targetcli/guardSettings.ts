@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { isUserOverridden, type TargetConfig, type TargetManifest } from "./targetMeta.js";
 import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
-import { AGY_GUARD_WRAPPER_PATH, AGY_HOOKS_PATH } from "../runtime/bindingGenerator.js";
+import { AGY_GUARD_WRAPPER_PATH, AGY_HOOKS_PATH, CODEX_HOOKS_PATH, ZCODE_CONFIG_PATH } from "../runtime/bindingGenerator.js";
 import type { WorkspaceRuntime } from "./roleWorkspace.js";
 
 export const CLAUDE_SETTINGS_PATH = ".claude/settings.json";
@@ -403,7 +403,7 @@ export function opencodeCoverageWithPlugin(): GuardCoverage {
     unenforced: [RuntimeCapability.EXIT_GUARD, RuntimeCapability.PER_AGENT_EXIT_GUARD],
     detail:
       `partial — ${OPENCODE_PLUGIN_PATH} enforces block-outside-repo and block-path-permissions, and each binding's permission block enforces block-git; ` +
-      "block-doc-rewrite, block-secret-leak and require-green-before-stop have no OpenCode mechanism and do not run",
+      "block-doc-rewrite, block-secret-leak and require-green-before-stop have no OpenCode mechanism; the latter two are enforced after headless process exit by the provider-neutral ExitCheckRunner",
   };
 }
 
@@ -422,25 +422,149 @@ function opencodeCoverage(targetRoot: string): GuardCoverage {
 }
 
 /**
- * Codex ships no guard payload at all: there is no `templates/.codex/`, so
- * nothing wires a hook in a Codex workspace, and the framework's own note in
- * `runtime/bindingGenerator.ts` records that Codex's hook-loading behaviour has
- * never been verified on a real install. Generated `.codex/agents/*.toml`
- * bindings are agent definitions, not enforcement. Until a mechanism exists and
- * is verified, the only honest verdict is `unguarded`.
+ * A committed Codex hook payload is compatibility wiring, not enforcement for
+ * an interactive `software-team-agents open` session.
+ * Real-install V12 UAT proved that exec-mode PreToolUse denial requires
+ * `--dangerously-bypass-hook-trust`, a crashing hook fails open, and
+ * Stop/SubagentStop do not enforce exit checks. Presence therefore stays
+ * `unguarded`; counting registrations as capability would be a fail-open claim.
+ * The headless adapter is separate: it compiles the run packet into a native
+ * permission profile and isolated execpolicy, so it does not claim these hooks.
  */
-/** Pure/static — Codex has no per-workspace state to check, so this doubles as the documentation source. */
-export function codexCoverage(): GuardCoverage {
+/** Pure/static — quotes the verified exec-mode posture into the registry claim. */
+export function codexCoverageWithHooks(): GuardCoverage {
   return {
     runtime: "codex",
     level: "unguarded",
     enforced: [],
     unenforced: ALL_GUARD_CAPABILITIES,
     detail:
-      "no Codex guard mechanism — the Framework payload ships no Codex hook wiring and Codex's hook loading has never been verified on a real install, so block-git, block-outside-repo, block-path-permissions, block-doc-rewrite, block-secret-leak and require-green-before-stop are all inactive",
+      "`.codex/hooks.json` is compatibility wiring only: real-install UAT on Codex 0.154.0/0.155.1 found PreToolUse denial only with --dangerously-bypass-hook-trust, hook crashes fail open, and Stop/SubagentStop do not enforce codex exec; interactive/project-hook guard capabilities remain unclaimed (the headless adapter uses a separate per-run native profile)",
   };
 }
 
+/** Static fallback for workspaces where the payload has never been synced — `unguarded`, never an assumed positive. */
+export function codexCoverageUnsynced(): GuardCoverage {
+  return {
+    runtime: "codex",
+    level: "unguarded",
+    enforced: [],
+    unenforced: ALL_GUARD_CAPABILITIES,
+    detail:
+      "no `.codex/hooks.json` in this workspace — the V12 Codex guard payload has not been synced (run software-team-agents sync), so block-git, block-outside-repo, block-path-permissions, block-doc-rewrite, block-secret-leak and require-green-before-stop are all inactive",
+  };
+}
+
+/**
+ * Inspectable verdict: payload presence can diagnose sync drift but never raises
+ * the verified exec-mode coverage above `unguarded`.
+ */
+export function codexCoverage(targetRoot: string): GuardCoverage {
+  const configPath = path.join(targetRoot, CODEX_HOOKS_PATH);
+  if (!fs.existsSync(configPath)) return codexCoverageUnsynced();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  } catch (e) {
+    return {
+      runtime: "codex",
+      level: "unguarded",
+      enforced: [],
+      unenforced: ALL_GUARD_CAPABILITIES,
+      detail: `${configPath} is not valid JSON (${e instanceof Error ? e.message : String(e)}) — guards fail closed to unguarded; run software-team-agents sync to rewrite it`,
+    };
+  }
+  const hooks = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>).hooks : undefined;
+  const events = hooks !== null && typeof hooks === "object" && !Array.isArray(hooks) ? (hooks as Record<string, unknown>).events ?? hooks : undefined;
+  const owned = ["PreToolUse", "Stop", "SubagentStop"].filter(
+    (event) => events !== null && typeof events === "object" && !Array.isArray(events) && Array.isArray((events as Record<string, unknown>)[event]) && ((events as Record<string, unknown>)[event] as unknown[]).length > 0,
+  );
+  if (owned.length < 3) {
+    return {
+      runtime: "codex",
+      level: "unguarded",
+      enforced: [],
+      unenforced: ALL_GUARD_CAPABILITIES,
+      detail: `\`.codex/hooks.json\` exists but wires ${owned.length}/3 managed events (${owned.join(", ") || "none"}) — run software-team-agents sync`,
+    };
+  }
+  return codexCoverageWithHooks();
+}
+
+/**
+ * ZCode Desktop is an interactive role-play runtime (the V12 decision): the
+ * user opens the desktop app directly and the AI plays pipeline roles from
+ * workspace instructions/skills. There is no CLI, so `sta run --runtime zcode`
+ * refuses at the registry and no launch preflight can reach this coverage.
+ * The `.zcode/config.json` hook payload (PreToolUse guards + a Stop hook whose
+ * continuation is capped at three) was live-verified end to end on a real
+ * ZCode Desktop session (2026-09-23, `planning/v12/evidence/zcode-uat/`): all
+ * five PreToolUse denials, the declared-session-role bounds, and the Stop
+ * secret-leak block fired for real. Full `enforced` stays unclaimed because
+ * the Stop continuation cap and the missing PostToolUse guard remain.
+ * The per-role path layer inside `block-path-permissions` resolves its role from
+ * `.workflow/session-role.json` (`software-team-agents session-role`) when no
+ * orchestrator set `STA_ROLE`, so a declared role-play session gets the same
+ * Target/Knowledge write bounds an orchestrated stage does.
+ */
+/** Pure/static — quotes the shipped-payload wiring state into the registry claim, the way `opencodeCoverageWithPlugin` does for OpenCode. */
+export function zcodeCoverageWithSyncedPayload(): GuardCoverage {
+  return {
+    runtime: "zcode",
+    level: "partial",
+    enforced: [RuntimeCapability.PRE_TOOL_GUARD],
+    unenforced: [RuntimeCapability.POST_TOOL_GUARD, RuntimeCapability.EXIT_GUARD, RuntimeCapability.PER_AGENT_EXIT_GUARD],
+    detail:
+      "`.zcode/config.json` wires four PreToolUse guards (block-git, block-outside-repo, block-doc-rewrite, block-path-permissions) plus the Stop pair — live-verified end to end on a real ZCode Desktop session (2026-09-23, planning/v12/evidence/zcode-uat); block-path-permissions takes its role from `.workflow/session-role.json` (declared via `software-team-agents session-role`) when no orchestrator set STA_ROLE, so a declared role-play session gets per-role Target/Knowledge write bounds; require-green-before-stop and block-secret-leak run on the Stop hook, but ZCode caps Stop continuations at three per session (GUARD GAP, covered by the QA round); PostToolUse and per-agent exit guards have no shipped guard",
+  };
+}
+
+/** Static fallback for workspaces where the payload has never been synced — `unguarded`, never an assumed positive. */
+export function zcodeCoverageUnsynced(): GuardCoverage {
+  return {
+    runtime: "zcode",
+    level: "unguarded",
+    enforced: [],
+    unenforced: ALL_GUARD_CAPABILITIES,
+    detail:
+      "no `.zcode/config.json` in this workspace — the V12 ZCode guard payload has not been synced (run software-team-agents sync), so block-git, block-outside-repo, block-path-permissions, block-doc-rewrite, block-secret-leak and require-green-before-stop are all inactive",
+  };
+}
+
+/**
+ * Inspectable verdict: the payload is shipped and enabled → `partial` (the
+ * Stop-hook continuation cap and the missing PostToolUse guard keep this from
+ * `enforced`); anything uninspectable fails closed to `unguarded` — a file
+ * that cannot be read is never reported as enforcement.
+ */
+export function zcodeCoverage(targetRoot: string): GuardCoverage {
+  const configPath = path.join(targetRoot, ".zcode", "config.json");
+  if (!fs.existsSync(configPath)) return zcodeCoverageUnsynced();
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(configPath, "utf8"));
+  } catch (e) {
+    return {
+      runtime: "zcode",
+      level: "unguarded",
+      enforced: [],
+      unenforced: ALL_GUARD_CAPABILITIES,
+      detail: `${configPath} is not valid JSON (${e instanceof Error ? e.message : String(e)}) — guards fail closed to unguarded; run software-team-agents sync to rewrite it`,
+    };
+  }
+  const hooks = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Record<string, unknown>).hooks : undefined;
+  const enabled = typeof hooks === "object" && hooks !== null && (hooks as Record<string, unknown>).enabled === true;
+  if (!enabled) {
+    return {
+      runtime: "zcode",
+      level: "unguarded",
+      enforced: [],
+      unenforced: ALL_GUARD_CAPABILITIES,
+      detail: "`.zcode/config.json` exists but `hooks.enabled` is not true — ZCode runs configuration-file hooks only when enabled, so every guard is inactive; run software-team-agents sync",
+    };
+  }
+  return zcodeCoverageWithSyncedPayload();
+}
 /**
  * Antigravity's guard mechanism is real, and the binding this framework ships
  * is nonetheless inert. Both halves are observed, and the gap between them is
@@ -493,7 +617,8 @@ export function guardCoverage(options: {
   /** Reuses an already-computed Claude wiring instead of reading settings twice. */
   wiring?: GuardWiringStatus;
 }): GuardCoverage {
-  if (options.runtime === "codex") return codexCoverage();
+  if (options.runtime === "codex") return codexCoverage(options.targetRoot);
+  if (options.runtime === "zcode") return zcodeCoverage(options.targetRoot);
   if (options.runtime === "antigravity") return antigravityCoverage(options.targetRoot);
   if (options.runtime === "opencode") return opencodeCoverage(options.targetRoot);
   const wiring = options.wiring ?? (options.templatesDir === undefined
