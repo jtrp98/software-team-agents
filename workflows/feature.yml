@@ -25,4 +25,4 @@ steps:
     when: touchesFrontend
   - agent: qa-engineer
   - agent: security
-    when: touchesSensitiveArea
+    when: touchesSensitiveAreaOrSchema

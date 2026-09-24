@@ -9,6 +9,7 @@ import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { NO_GUARDS, type RuntimeAgentRequest } from "./runtimeAdapter.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { FIXTURE_REVISION, runtimeTaskFixture } from "./packetFixture.testSupport.js";
+import { seedRealContracts } from "../testing/contractFixtures.js";
 
 const roots: string[] = [];
 function fixture(): string {
@@ -16,6 +17,7 @@ function fixture(): string {
   roots.push(root);
   fs.mkdirSync(path.join(root, ".claude", "agents"), { recursive: true });
   fs.writeFileSync(path.join(root, ".claude", "agents", "backend-engineer.md"), "canonical role instructions", "utf8");
+  seedRealContracts(root);
   return root;
 }
 afterEach(() => {

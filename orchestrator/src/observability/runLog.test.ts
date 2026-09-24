@@ -64,6 +64,7 @@ describe("RunLog", () => {
       qa_effort: null,
       deterministic_gate: null,
       document_gate: null,
+      contract_digest: null,
     });
   });
 

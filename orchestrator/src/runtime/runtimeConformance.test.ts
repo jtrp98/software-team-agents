@@ -15,6 +15,7 @@ import { NO_GUARDS, type RuntimeAdapter, type RuntimeAgentRequest, type RuntimeG
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { FIXTURE_REVISION, runtimeTaskFixture } from "./packetFixture.testSupport.js";
+import { seedRealContracts } from "../testing/contractFixtures.js";
 
 /**
  * The runtime conformance suite: one mandatory-case matrix run
@@ -206,6 +207,7 @@ afterAll(() => {
  */
 function writeFixture(root: string): void {
   fs.mkdirSync(path.join(root, ".claude", "agents"), { recursive: true });
+  seedRealContracts(root);
   fs.writeFileSync(
     path.join(root, ".claude", "settings.json"),
     JSON.stringify({

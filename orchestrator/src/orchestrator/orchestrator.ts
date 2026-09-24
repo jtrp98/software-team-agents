@@ -1093,6 +1093,7 @@ export class Orchestrator {
         deployPhase,
         startedAt: timing.start,
         endedAt: timing.end,
+        contractDigest: result.outcome.contract_digest ?? null,
       },
       refs: consumed ? [consumed] : [],
     });

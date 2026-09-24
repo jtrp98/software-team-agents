@@ -14,6 +14,7 @@ import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { resolveRuntimeRoute } from "./runtimeRouting.js";
 import * as contextBudget from "../context/contextBudget.js";
 import { FIXTURE_REVISION, runtimeTaskFixture } from "./packetFixture.testSupport.js";
+import { seedRealContracts } from "../testing/contractFixtures.js";
 
 const roots: string[] = [];
 function project(config?: string): string {
@@ -21,6 +22,7 @@ function project(config?: string): string {
   roots.push(root);
   fs.mkdirSync(path.join(root, ".claude", "agents"), { recursive: true });
   fs.writeFileSync(path.join(root, ".claude", "agents", "backend-engineer.md"), "---\nmodel: sonnet\nversion: 1\n---\nrole", "utf8");
+  seedRealContracts(root);
   if (config) {
     fs.mkdirSync(path.join(root, ".sta"), { recursive: true });
     fs.writeFileSync(path.join(root, ".sta", "config.yaml"), config, "utf8");

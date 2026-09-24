@@ -298,6 +298,15 @@ const BACKEND_ONLY: ClassificationInput = { touchesBackend: true };
 const FRONTEND_ONLY: ClassificationInput = { touchesFrontend: true };
 const BOTH_ENGINEERS: ClassificationInput = { touchesBackend: true, touchesFrontend: true };
 const SENSITIVE: ClassificationInput = { touchesBackend: true, touchesFrontend: true, touchesSensitiveArea: true };
+/**
+ * Probes the schema signal in combination with both engineer flags, alongside
+ * `SENSITIVE`, so {@link deriveSteps} can tell "forced by a sensitive area"
+ * apart from "forced by a schema obligation" — the blind spot that let
+ * `feature`'s SECURITY step ship without `touchesSchema` coverage (V13
+ * TASK-004): `isNewFeatureModuleOrProject` forces a security pass when either
+ * flag is set, but the pre-existing probe set never exercised `touchesSchema`.
+ */
+const SCHEMA_BOTH: ClassificationInput = { touchesBackend: true, touchesFrontend: true, touchesSchema: true };
 const TEST_STRATEGY: ClassificationInput = { touchesBackend: true, touchesFrontend: true, testStrategyTriggers: ["cross-task"] };
 
 /**
@@ -315,7 +324,15 @@ function deriveSteps(signal: keyof ClassificationInput, id: string): WorkflowSte
   const none = pipelineFor(NO_FLAGS);
   const backend = pipelineFor(BACKEND_ONLY);
   const frontend = pipelineFor(FRONTEND_ONLY);
+  const both = pipelineFor(BOTH_ENGINEERS);
   const sensitive = pipelineFor(SENSITIVE);
+  // Only `isNewFeatureModuleOrProject` is checked ahead of `touchesSchema` in
+  // the classifier's if-chain (taskClassifier.ts): combining `touchesSchema`
+  // with any other signal there is overridden by the schema-change branch
+  // before that signal's own branch is ever reached, so probing it for those
+  // signals would compare against a different workflow's shape rather than
+  // this one's.
+  const schemaBoth = signal === "isNewFeatureModuleOrProject" ? pipelineFor(SCHEMA_BOTH) : both;
   const testStrategy = pipelineFor(TEST_STRATEGY);
 
   const steps: WorkflowStep[] = [];
@@ -338,7 +355,13 @@ function deriveSteps(signal: keyof ClassificationInput, id: string): WorkflowSte
       continue;
     }
     if (!inBackend && !inFrontend) {
-      steps.push({ agent: stage, when: "touchesSensitiveArea" });
+      // Forced by the sensitive-area flag with neither engineer flag alone
+      // responsible. A schema obligation can force the same stage
+      // independently of touchesSensitiveArea (`feature`'s SECURITY step is
+      // the known case) — detected by comparing the schema-probed pipeline
+      // against the plain both-engineers one, which carries neither flag.
+      const forcedBySchemaToo = schemaBoth.includes(stage) && !both.includes(stage);
+      steps.push({ agent: stage, when: forcedBySchemaToo ? "touchesSensitiveAreaOrSchema" : "touchesSensitiveArea" });
       continue;
     }
     throw new WorkflowDerivationError(

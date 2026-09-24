@@ -88,6 +88,8 @@ export interface CliArgs {
   checkPromptBudget: boolean;
   /** Check workflows/*.yml against the classifier and exit. Same audience. */
   checkWorkflows: boolean;
+  /** Check that every stage a compiled workflow plan can select has a loadable role contract and an evidence rule, and exit. Same audience. */
+  checkWorkflowRoles: boolean;
   /** Check .codex/agents/*.toml renderings against their .claude/agents sources and exit. */
   checkBindings: boolean;
   /** Check project.yaml and stacks/ against the agent roster and exit. Same audience. */
@@ -259,6 +261,7 @@ export const USAGE =
   "  sta --check-layout [--project-root <path>]         check layout.yaml against the real directories\n" +
   "  sta --check-prompt-budget [--project-root <path>]  check the static prompt floor: CLAUDE.md + agent prompt budgets, no policies pre-read, pointers resolve\n" +
   "  sta --check-workflows [--project-root <path>]      check generated workflows/*.yml byte-match the classifier\n" +
+  "  sta --check-workflow-roles [--project-root <path>] check every stage a compiled workflow plan can select has a role contract and an evidence rule\n" +
   "  sta --check-bindings [--project-root <path>]       check generated renderings (.codex/agents, .opencode/agent, .opencode/commands, .agents/skills), the .codex/hooks mirrors and each hook's generated guard-rule block byte-match their sources\n" +
   "  sta --check-profile [--project-root <path>]        check project.yaml and stacks/ against the agent roster\n" +
   "  sta --check-decisions [--project-root <path>]      check decisions/*.md ADRs against the schema and cross-links\n" +
@@ -292,6 +295,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkLayoutFlag = false;
   let checkPromptBudgetFlag = false;
   let checkWorkflowsFlag = false;
+  let checkWorkflowRolesFlag = false;
   let checkBindingsFlag = false;
   let checkProfileFlag = false;
   let checkDecisionsFlag = false;
@@ -379,6 +383,8 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkPromptBudgetFlag = true;
     } else if (arg === "--check-workflows") {
       checkWorkflowsFlag = true;
+    } else if (arg === "--check-workflow-roles") {
+      checkWorkflowRolesFlag = true;
     } else if (arg === "--check-bindings") {
       checkBindingsFlag = true;
     } else if (arg === "--check-profile") {
@@ -488,6 +494,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkLayoutFlag &&
     !checkPromptBudgetFlag &&
     !checkWorkflowsFlag &&
+    !checkWorkflowRolesFlag &&
     !checkBindingsFlag &&
     !checkProfileFlag &&
     !checkDecisionsFlag &&
@@ -527,6 +534,7 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkLayout: checkLayoutFlag,
     checkPromptBudget: checkPromptBudgetFlag,
     checkWorkflows: checkWorkflowsFlag,
+    checkWorkflowRoles: checkWorkflowRolesFlag,
     checkBindings: checkBindingsFlag,
     checkProfile: checkProfileFlag,
     checkDecisions: checkDecisionsFlag,

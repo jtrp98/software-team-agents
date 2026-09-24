@@ -36,6 +36,11 @@ const EXPECTED: Record<string, { ok: string; fail: string; notes: CheckerDescrip
     fail: "[orchestrator] workflows/*.yml and the classifier disagree:",
     notes: "none",
   },
+  "--check-workflow-roles": {
+    ok: "[orchestrator] every stage a compiled workflow plan can select has a role contract and an evidence rule.",
+    fail: "[orchestrator] a compiled workflow plan can select a stage with no role contract or no evidence rule:",
+    notes: "none",
+  },
   "--check-bindings": {
     ok: "[orchestrator] generated bindings, hook mirrors and guard-rule blocks match their sources.",
     fail: "[orchestrator] generated bindings, hook mirrors or guard-rule blocks have drifted from their sources:",
@@ -143,7 +148,7 @@ describe("CHECKERS table", () => {
   });
 
   it("is a plain array of 20 rows in the same order the if-chain evaluated", () => {
-    expect(CHECKERS).toHaveLength(20);
+    expect(CHECKERS).toHaveLength(21);
     expect(CHECKERS.map((c) => c.cliFlag)).toEqual(Object.keys(EXPECTED));
   });
 

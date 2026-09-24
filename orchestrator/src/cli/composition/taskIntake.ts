@@ -25,7 +25,7 @@ import {
   type TaskBindingModuleScope,
   type TargetBindings,
 } from "../../threeRepo/taskBindings.js";
-import { resolveWorkflowId } from "../../workflow/workflowDefinition.js";
+import { compileWorkflowPlan, resolveWorkflowId } from "../../workflow/workflowDefinition.js";
 import type { RuntimeTaskWorkRoot } from "../../orchestrator/runtimeTask.js";
 import { CliUsageError, type CliArgs } from "../../cli.js";
 
@@ -71,7 +71,13 @@ export function runtimeTaskWorkRoots(
   classification: ReturnType<typeof classifyTask>,
   moduleScope?: TaskBindingModuleScope,
 ): RuntimeTaskWorkRoot[] {
-  const stages = classification.pipeline.filter((stage) => stage !== AgentStage.HUMAN);
+  // V13 TASK-004: work-root resolution goes through the same compiled,
+  // versioned plan `buildRuntimeTask` persists — not a second, independent
+  // read of `classification.pipeline` — so this is never a place the two can
+  // silently diverge. `compileWorkflowPlan` itself asserts the compiled
+  // pipeline agrees with `classifyTask()`, so this is not a behaviour change.
+  const compiled = compileWorkflowPlan(args.classification, resolveFrameworkRoot());
+  const stages = compiled.pipeline.filter((stage) => stage !== AgentStage.HUMAN);
   if (!hasTargetBindings(args.targetBindings)) {
     return stages.map((stage) => ({ stage, targetId: "legacy-project", path: args.projectRoot }));
   }
@@ -210,6 +216,7 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string, 
   const created = registry.create({
     taskId,
     classification,
+    classificationInput: args.classification,
     dependsOn: args.dependsOn,
     adHoc: args.adHoc,
     environment: args.environment,

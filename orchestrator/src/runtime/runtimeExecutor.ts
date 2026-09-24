@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { AgentStage, TaskLevel } from "../types.js";
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { getAgent } from "../agents/registry.js";
+import { resolveAuthoritativeContract } from "../agents/agentContract.js";
 import {
   GUARD_STACK_RULES_ENV,
   GUARD_TARGET_WORK_ROOTS_ENV,
@@ -16,7 +17,7 @@ import {
   compileExecutionPacket,
   assembleStageContext,
   handoffFromContext,
-  failResult,
+  failResult as failResultBase,
   qaArtifactResult,
   securityArtifactResult,
   suppressRawHandoffWhenNarrowed,
@@ -131,6 +132,17 @@ export interface RuntimeExecutorOptions {
   /** Stored Phase-1 task contract. Production supplies this for every runnable task. */
   runtimeTask?: (taskId: string) => RuntimeTask | null | undefined;
   dependencyEvidence?: (taskId: string) => readonly DependencyEvidence[];
+  /**
+   * V13 TASK-005 — the contract digest bound to this stage's latest recorded
+   * attempt on this task, when one exists (`contractDigestForStage` over
+   * `TaskStore.evidenceForTask`). The dispatch preflight compares it against
+   * the freshly resolved on-disk digest and refuses (fail closed) a
+   * retry/resume whose contract changed underneath it, rather than silently
+   * proceeding as if nothing changed. Absent for embedded/legacy callers with
+   * no evidence store to query — the check is then skipped, exactly as a
+   * first attempt (no prior digest) already is.
+   */
+  priorContractDigest?: (taskId: string, stage: AgentStage) => string | null;
   /** Fixture seam; production always resolves the actual current checkout. */
   packetBaseRevision?: (root: string) => Promise<string>;
   /** Optional bounded retention override; the runtime-artifact default otherwise applies. */
@@ -236,6 +248,8 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
   model?: string;
   promptVersion?: number;
   effort?: string;
+  /** V13 TASK-005 — the digest `resolveAuthoritativeContract` resolved and enforced before this attempt started. */
+  contract_digest?: string;
   context_chars: number;
   estimated_input_tokens: number;
   composition: {
@@ -272,6 +286,7 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     // so this reads identically to before until an adapter starts reporting one.
     effort: result.effort ?? declared.effort,
     requested_effort: declared.effort,
+    contract_digest: declared.contract_digest,
     tokens: (input_tokens ?? 0) + (output_tokens ?? 0),
     // `?? 0` here, unlike the `costUsd?: number` in the envelope: the run log's
     // `cost` is a number by contract, and "this runtime does not report cost" is
@@ -417,6 +432,39 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     const role = getAgent(req.stage).role;
     const moduleName = opts.moduleName(req.taskId);
     const phases = opts.phases?.(req.taskId);
+
+    // V13 TASK-005 — the contract preflight: dispatch is refused (fail closed)
+    // before any guard/work-root resolution when `contracts/<stage>.yaml` is
+    // missing, invalid, or disagrees with `AGENT_REGISTRY[stage]` (unknown
+    // role, wrong permitted role/inputs/outputs/capabilities/tools/states).
+    // The digest of the exact bytes checked here is what every refusal and
+    // every successful attempt below records — never recomputed after the
+    // fact.
+    let contractDigest: string;
+    try {
+      contractDigest = resolveAuthoritativeContract(req.stage, opts.projectRoot).digest;
+    } catch (error) {
+      return failResultBase(`cannot start ${role}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    // "Stale contract attempt": a retry/resume of this exact stage on this
+    // task re-resolves the contract fresh (immediately above) and compares it
+    // against the digest bound to that stage's own prior attempt. A contract
+    // that changed on disk between attempts must be visible and refused, not
+    // silently proceed as though the earlier attempt's grant still applies.
+    const priorContractDigest = opts.priorContractDigest?.(req.taskId, req.stage) ?? null;
+    if (priorContractDigest && priorContractDigest !== contractDigest) {
+      return failResultBase(
+        `cannot start ${role}: contracts/${req.stage}.yaml changed since a prior attempt of this stage on task ${req.taskId} ` +
+        `(recorded ${priorContractDigest}, now ${contractDigest}) — recompile/re-verify explicitly in a new attempt`,
+        { contract_digest: contractDigest },
+      );
+    }
+    // Shadows the imported `failResultBase` for the remainder of this attempt
+    // so every refusal below — and every PASS, via `metricsFrom`'s `declared`
+    // — carries the contract digest that was actually checked and enforced
+    // before this attempt started.
+    const failResult = (reason: string, metrics: Partial<RunMetrics> = {}): AgentExecutorResult =>
+      failResultBase(reason, { ...metrics, contract_digest: contractDigest });
 
     let threeRepo: { task: PersistedTask; roots: ThreeRepoRequestRoots } | undefined;
     if (opts.threeRepoTask) {
@@ -817,6 +865,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         model: activeModel,
         promptVersion: resolveAgentVersion(opts.projectRoot, role) ?? undefined,
         effort: activeEffort,
+        contract_digest: contractDigest,
         context_chars: prompt.length,
         estimated_input_tokens: contextBudget.estimatedInputTokens,
         composition: promptParts.composition,

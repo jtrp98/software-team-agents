@@ -27,6 +27,7 @@ import { routeRepair } from "../retry/repairRoute.js";
 import { resolveTargetRevision } from "../codeintel/targetRevision.js";
 import type { TaskGraph } from "../graph/taskGraph.js";
 import type { TaskStore } from "../store/taskStore.js";
+import { contractDigestForStage } from "../evidence/evidenceStore.js";
 import { stableHash, type DependencyEvidence } from "../artifacts/executionPacket.js";
 import { readModuleDoc } from "../agents/moduleDocs.js";
 import { parseOpenIssues } from "../orchestrator/failureClassifier.js";
@@ -349,6 +350,7 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
       autonomy: options.autonomy,
       classification: (id) => options.store.loadTask(id)?.classification,
       runtimeTask: (id) => (id === attempt.task_id ? runtimeTask : options.store.loadTask(id)?.runtimeTask),
+      priorContractDigest: (id, stage) => contractDigestForStage(options.store.evidenceForTask(id), stage),
       dependencyEvidence: (id) => {
         const t = options.ledger.readTask(attempt.run_id, id);
         return t ? dependencyEvidenceFor(options.ledger, attempt.run_id, t) : [];
@@ -401,6 +403,7 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
       guards: () => guards,
       autonomy: options.autonomy,
       classification: (id) => options.store.loadTask(id)?.classification,
+      priorContractDigest: (id, stage) => contractDigestForStage(options.store.evidenceForTask(id), stage),
       stageRoots: { [AgentStage.QA_ENGINEER]: writableRoot },
       modelPolicy,
     });

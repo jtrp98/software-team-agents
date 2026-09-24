@@ -91,6 +91,7 @@ describe("parseArgs", () => {
       checkLayout: false,
       checkPromptBudget: false,
       checkWorkflows: false,
+      checkWorkflowRoles: false,
       checkBindings: false,
       checkProfile: false,
       checkDecisions: false,

@@ -23,6 +23,7 @@ import { stableHash, contentHash } from "../../artifacts/executionPacket.js";
 import { unmetDependencies } from "../../orchestrator/taskStatus.js";
 import { verifyTaskCompletion } from "../../orchestrator/transitionGuard.js";
 import { RunLog } from "../../observability/runLog.js";
+import { contractDigestForStage } from "../../evidence/evidenceStore.js";
 import type { TaskStore } from "../../store/taskStore.js";
 import type { CliArgs } from "../../cli.js";
 import { contractRootForTask, plannedTier, promptForCamp } from "./taskIntake.js";
@@ -102,6 +103,7 @@ export async function composeProductionTaskExecutor(
     phases: () => (args.phases.length > 0 ? args.phases : undefined),
     taskLevel: (id) => store.loadTask(id)?.classification.level,
     runtimeTask: (id) => store.loadTask(id)?.runtimeTask,
+    priorContractDigest: (id, stage) => contractDigestForStage(store.evidenceForTask(id), stage),
     dependencyEvidence: (id) => {
       const task = store.loadTask(id);
       const all = store.listTasks();

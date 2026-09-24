@@ -1,12 +1,14 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import { AGENT_REGISTRY } from "./registry.js";
 import {
   AgentContractError,
   CONTRACTED_AGENTS,
+  ContractDispatchRefusedError,
   ContractRegistryMismatchError,
   assertContractsMatchRegistry,
   checkAllContracts,
@@ -15,6 +17,7 @@ import {
   diffContractAgainstRegistry,
   loadAgentContract,
   loadAllAgentContracts,
+  resolveAuthoritativeContract,
   type AgentContract,
 } from "./agentContract.js";
 
@@ -168,6 +171,17 @@ describe("diffContractAgainstRegistry", () => {
     const issues = diffContractAgainstRegistry({ ...contract, tools: ["Read"], states: [] });
     expect(issues.length).toBeGreaterThanOrEqual(2);
   });
+
+  it("reports an unknown role — a contract naming an agent the registry has no entry for at all", () => {
+    const contract = realContract(AgentStage.DEVOPS);
+    // A schema-valid, but registry-unknown, `agent.name` (bypassing the
+    // schema's own closed enum, which — by V13 TASK-005 design — already
+    // keeps every *shipped* contract from ever naming an unregistered role;
+    // this exercises `resolveAuthoritativeContract`'s registry-mismatch path
+    // exactly as a future registry/schema drift would surface it).
+    const issues = diffContractAgainstRegistry({ ...contract, agent: { ...contract.agent, name: "ghost-role", role: "ghost-role" } });
+    expect(issues).toEqual([`agent.name "ghost-role" is not a role this orchestrator knows`]);
+  });
 });
 
 describe("assertContractsMatchRegistry", () => {
@@ -188,5 +202,71 @@ describe("assertContractsMatchRegistry", () => {
     for (const agent of CONTRACTED_AGENTS) {
       expect(AGENT_REGISTRY[agent]).toBeDefined();
     }
+  });
+});
+
+/**
+ * V13 TASK-005 — the single function dispatch and `--check-contracts` both
+ * go through. BA/SA/Engineer(backend+frontend)/QA positive cases below cover
+ * every currently-real role this task's dispatch preflight protects;
+ * Reviewer does not exist yet (TASK-006 adds it) and is deliberately absent
+ * here rather than invented.
+ */
+describe("resolveAuthoritativeContract", () => {
+  it.each([
+    AgentStage.BUSINESS_ANALYST,
+    AgentStage.SYSTEM_ANALYST,
+    AgentStage.BACKEND_ENGINEER,
+    AgentStage.FRONTEND_ENGINEER,
+    AgentStage.QA_ENGINEER,
+  ])("resolves %s cleanly against the real, shipped contract and a stable sha256 digest", (stage) => {
+    const resolved = resolveAuthoritativeContract(stage);
+    expect(resolved.contract.agent.name).toBe(stage);
+    expect(resolved.digest).toMatch(/^[0-9a-f]{64}$/);
+    // Deterministic over the exact on-disk bytes: resolving twice with no
+    // change in between must answer the identical digest.
+    expect(resolveAuthoritativeContract(stage).digest).toBe(resolved.digest);
+  });
+
+  it("changes digest when the contract's bytes change on disk, and matches sha256 of those exact bytes", () => {
+    const contract = realContract(AgentStage.DEVOPS);
+    const root = fixtureRoot({ "devops.yaml": asYaml(contract) });
+    const before = resolveAuthoritativeContract(AgentStage.DEVOPS, root);
+    expect(before.digest).toBe(createHash("sha256").update(fs.readFileSync(path.join(root, "contracts", "devops.yaml"))).digest("hex"));
+    fs.writeFileSync(
+      path.join(root, "contracts", "devops.yaml"),
+      asYaml({ ...contract, agent: { ...contract.agent, description: contract.agent.description + " (edited)" } }),
+      "utf8",
+    );
+    const after = resolveAuthoritativeContract(AgentStage.DEVOPS, root);
+    expect(after.digest).not.toBe(before.digest);
+  });
+
+  it("refuses an unknown/misspelled stage name before any guard/work-root resolution — no contract file exists to resolve", () => {
+    // A stage nobody declared a contract for at all: this is the literal
+    // "unknown/misspelled stage name" dispatch would be asked to refuse.
+    // `AgentContractError` (not `ContractDispatchRefusedError`, which is
+    // reserved for a contract that loaded but disagrees with the registry —
+    // see `diffContractAgainstRegistry`'s own "unknown role" coverage below
+    // for the case where a contract loads but names an agent the registry
+    // itself has no entry for).
+    expect(() => resolveAuthoritativeContract("marketing-analyst", fixtureRoot({}))).toThrow(AgentContractError);
+    expect(() => resolveAuthoritativeContract("marketing-analyst", fixtureRoot({}))).not.toThrow(ContractDispatchRefusedError);
+  });
+
+  it("refuses a contract that disagrees with the registry — distinct from a missing/invalid file", () => {
+    const contract = realContract(AgentStage.QA_ENGINEER);
+    const root = fixtureRoot({
+      "qa-engineer.yaml": asYaml({
+        ...contract,
+        permissions: { ...contract.permissions, capabilities: [...contract.permissions.capabilities, "deploy" as never] },
+      }),
+    });
+    expect(() => resolveAuthoritativeContract(AgentStage.QA_ENGINEER, root)).toThrow(ContractDispatchRefusedError);
+    expect(() => resolveAuthoritativeContract(AgentStage.QA_ENGINEER, root)).not.toThrow(AgentContractError);
+  });
+
+  it("still refuses a missing contract file as AgentContractError, not ContractDispatchRefusedError", () => {
+    expect(() => resolveAuthoritativeContract(AgentStage.DEVOPS, fixtureRoot({}))).toThrow(AgentContractError);
   });
 });

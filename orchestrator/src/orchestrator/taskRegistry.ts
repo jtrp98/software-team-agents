@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import type { HumanDecisionVerifier } from "../gates/humanDecision.js";
 import { TaskState } from "../types.js";
-import type { ClassificationResult } from "../classification/taskClassifier.js";
+import type { ClassificationInput, ClassificationResult } from "../classification/taskClassifier.js";
 import type { Budget } from "../cost/costControl.js";
 import type { Environment } from "../environment/environment.js";
 import { writeStateViewFromStore } from "../store/stateView.js";
@@ -110,6 +110,8 @@ export class TaskRegistry {
   create(params: {
     taskId: string;
     classification: ClassificationResult;
+    /** Raw signals `classification` was computed from; threaded to `buildRuntimeTask` so it compiles and persists `workflow_plan` (V13 TASK-004). */
+    classificationInput?: ClassificationInput;
     dependsOn?: string[];
     environment?: Environment;
     targetBindings?: TargetBindings;
@@ -145,6 +147,7 @@ export class TaskRegistry {
       taskId: params.taskId,
       workflow: params.workflow ?? `classification:${params.classification.level.toLowerCase()}`,
       classification: params.classification,
+      classificationInput: params.classificationInput,
       dependsOn,
       projectRoot: params.projectRoot ?? defaultProjectRoot(),
       docsRoot: params.docsRoot,

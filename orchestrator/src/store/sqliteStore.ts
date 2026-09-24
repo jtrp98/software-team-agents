@@ -45,7 +45,7 @@ import {
 // the new field back as null ("not recorded"), nothing is guessed and nothing is lost. A
 // migration that would need to reinterpret or rewrite existing data does not go in this list (see
 // MIGRATIONS below), and an unknown version refuses to open rather than risk misreading it.
-const SCHEMA_VERSION = 20;
+const SCHEMA_VERSION = 21;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -107,7 +107,8 @@ CREATE TABLE IF NOT EXISTS runs (
   context_code_chars         INTEGER,
   context_tool_output_chars  INTEGER,
   context_reserve_chars      INTEGER,
-  verification_fingerprint   TEXT
+  verification_fingerprint   TEXT,
+  contract_digest            TEXT
 );
 CREATE INDEX IF NOT EXISTS runs_task_id ON runs (task_id);
 CREATE TABLE IF NOT EXISTS events (
@@ -296,6 +297,7 @@ interface RunRow {
   context_tool_output_chars: number | null;
   context_reserve_chars: number | null;
   verification_fingerprint: string | null;
+  contract_digest: string | null;
 }
 
 interface EventRow {
@@ -461,6 +463,12 @@ const MIGRATIONS: Record<number, (db: SqliteDatabase) => void> = {
     // transition guard therefore refuses to advance it (fail closed) rather
     // than trusting a cursor that no record justifies.
     db.exec(EVIDENCE_DDL);
+  },
+  20: (db) => {
+    // V13 TASK-005: a historical run never resolved (or recorded) a role
+    // contract digest before dispatch; null is the only truthful backfill.
+    const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
+    if (!existing.has("contract_digest")) db.exec("ALTER TABLE runs ADD COLUMN contract_digest TEXT");
   },
 };
 
@@ -629,8 +637,8 @@ export class SqliteTaskStore implements TaskStore {
     if (this.readOnly) throw new Error("state database was opened read-only");
     this.db
       .prepare(
-        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, context_chars, estimated_input_tokens, prompt_version, effort, requested_effort, qa_mode, qa_effort, deterministic_gate, document_gate, runtime, requested_runtime, requested_model, routing_basis, fallback_reason, fallback_count, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars, verification_fingerprint)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO runs (task_id, agent, start_time, end_time, duration, model, tokens, cost, result, retry_count, failure_reason, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, context_chars, estimated_input_tokens, prompt_version, effort, requested_effort, qa_mode, qa_effort, deterministic_gate, document_gate, runtime, requested_runtime, requested_model, routing_basis, fallback_reason, fallback_count, session_kind, static_chars, instruction_surface_bytes, handoff_chars, doc_chars, doc_chars_before, knowledge_chars, code_intel_chars, tool_output_chars, context_budget_chars, context_budget_source, context_overflow_chars, context_budget_warning, context_base_chars, context_task_chars, context_safety_chars, context_docs_chars, context_knowledge_chars, context_code_chars, context_tool_output_chars, context_reserve_chars, verification_fingerprint, contract_digest)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         record.task_id,
@@ -685,6 +693,7 @@ export class SqliteTaskStore implements TaskStore {
         record.context_tool_output_chars,
         record.context_reserve_chars,
         record.verification_fingerprint ? JSON.stringify(record.verification_fingerprint) : null,
+        record.contract_digest ?? null,
       );
   }
 
@@ -751,6 +760,7 @@ export class SqliteTaskStore implements TaskStore {
       context_code_chars: r.context_code_chars,
       context_tool_output_chars: r.context_tool_output_chars,
       context_reserve_chars: r.context_reserve_chars,
+      contract_digest: r.contract_digest,
       ...(r.verification_fingerprint === null ? {} : { verification_fingerprint: parseVerificationFingerprint(r.verification_fingerprint) }),
     };
   }

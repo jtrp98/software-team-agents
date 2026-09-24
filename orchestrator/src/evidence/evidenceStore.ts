@@ -87,6 +87,15 @@ const RoleRunPayloadSchema = z.strictObject({
   deployPhase: z.enum(["prepare", "execute"]).nullable(),
   startedAt: z.number(),
   endedAt: z.number(),
+  /**
+   * V13 TASK-005 — sha256 of the exact `contracts/<stage>.yaml` bytes that
+   * `resolveAuthoritativeContract` resolved and enforced *before this attempt
+   * was allowed to start* (`runtimeExecutor.ts`'s dispatch preflight) — never
+   * recomputed after the fact. Null only for an attempt refused at that same
+   * preflight, before any contract resolved (HUMAN is a gate, not a
+   * dispatched role, and never produces a "role-run" record at all).
+   */
+  contractDigest: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
 });
 
 const ArtifactPayloadSchema = z.strictObject({
@@ -262,6 +271,24 @@ export function checkEvidenceAppend(
   const missing = record.refs.filter((ref) => !hasRef(ref));
   if (missing.length > 0) throw new MissingEvidenceReferenceError(record.evidenceId, missing);
   return true;
+}
+
+/**
+ * V13 TASK-005 (Part D) — the contract digest bound to the latest recorded
+ * attempt of `stage` on this task's evidence, or `null` when that stage has
+ * never produced a "role-run" record. The dispatch preflight
+ * (`runtimeExecutor.ts`) uses this to detect a contract that changed on disk
+ * between one attempt and the next (a retry/resume), and any caller can use
+ * it to answer "which contract digest was bound to stage X attempt N"
+ * without new plumbing — `evidenceForTask` already returns every record.
+ */
+export function contractDigestForStage(records: readonly EvidenceRecord[], stage: AgentStage): string | null {
+  let latest: EvidenceRecord | null = null;
+  for (const record of records) {
+    if (record.stage !== stage || record.kind !== "role-run") continue;
+    if (!latest || record.attempt > latest.attempt) latest = record;
+  }
+  return latest && latest.payload.kind === "role-run" ? latest.payload.contractDigest : null;
 }
 
 /** The persistence half of the evidence store, implemented by every `TaskStore`. */

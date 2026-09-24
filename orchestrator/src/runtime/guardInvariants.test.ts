@@ -13,6 +13,7 @@ import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { compileExecutionPacket } from "./agentRunAssembly.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import { createProductionRuntimeRegistry } from "../cli/composition/runtimeRegistry.js";
+import { seedRealContracts } from "../testing/contractFixtures.js";
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
 const RUNTIME_ROOT = path.join(REPO_ROOT, "orchestrator", "src", "runtime");
@@ -21,6 +22,7 @@ const roots: string[] = [];
 function tempProject(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-guard-invariants-"));
   roots.push(root);
+  seedRealContracts(root);
   return root;
 }
 

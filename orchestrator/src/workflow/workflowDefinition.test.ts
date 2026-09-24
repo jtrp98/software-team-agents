@@ -7,8 +7,11 @@ import { classifyTask } from "../classification/taskClassifier.js";
 import {
   WorkflowError,
   WorkflowMismatchError,
+  WorkflowPlanMismatchError,
   assertWorkflowsMatchClassifier,
   checkAllWorkflows,
+  compileWorkflowPlan,
+  checkWorkflowRoleCoverage,
   listWorkflowIds,
   loadAllWorkflows,
   loadWorkflow,
@@ -161,6 +164,30 @@ describe("pipelineFromWorkflow", () => {
     );
   });
 
+  /**
+   * V13 TASK-004: `isNewFeatureModuleOrProject` forces a security pass when
+   * either `touchesSensitiveArea` or `touchesSchema` is set — a schema-only
+   * flag with no sensitive area must still trigger `feature`'s SECURITY step.
+   */
+  it("includes security via touchesSensitiveAreaOrSchema when only the schema flag is set", () => {
+    const feature = loadWorkflow("feature");
+    const security = feature.steps.find((s) => s.agent === AgentStage.SECURITY);
+    expect(security?.when).toBe("touchesSensitiveAreaOrSchema");
+    expect(pipelineFromWorkflow(feature, { isNewFeatureModuleOrProject: true, touchesBackend: true })).not.toContain(
+      AgentStage.SECURITY,
+    );
+    expect(
+      pipelineFromWorkflow(feature, { isNewFeatureModuleOrProject: true, touchesBackend: true, touchesSchema: true }),
+    ).toContain(AgentStage.SECURITY);
+    expect(
+      pipelineFromWorkflow(feature, {
+        isNewFeatureModuleOrProject: true,
+        touchesBackend: true,
+        touchesSensitiveArea: true,
+      }),
+    ).toContain(AgentStage.SECURITY);
+  });
+
   it("includes test-planner only for a named shared-strategy trigger", () => {
     const feature = loadWorkflow("feature");
     const ordinary = pipelineFromWorkflow(feature, { isNewFeatureModuleOrProject: true, touchesBackend: true });
@@ -194,6 +221,43 @@ describe("pipelineFromWorkflow", () => {
       AgentStage.BACKEND_ENGINEER,
       AgentStage.QA_ENGINEER,
     ]);
+  });
+});
+
+describe("compileWorkflowPlan", () => {
+  it("compiles from the on-disk workflow file, and agrees with classifyTask directly", () => {
+    const input = { isClearBugFix: true, touchesBackend: true, touchesFrontend: true };
+    const plan = compileWorkflowPlan(input);
+    expect(plan.workflowId).toBe("bugfix");
+    expect(plan.pipeline).toEqual(classifyTask(input).pipeline);
+    expect(plan.level).toBe(classifyTask(input).level);
+    expect(plan.requiresHumanApproval).toBe(classifyTask(input).requiresHumanApproval);
+    expect(plan.workflowDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(plan.workflowSource).toContain("bugfix.yml");
+  });
+
+  /** V13 TASK-004: the schema-only blind spot this task fixes, confirmed compiled correctly. */
+  it("includes security for a schema-only new feature — the gap this task fixed", () => {
+    const input = { isNewFeatureModuleOrProject: true, touchesSchema: true, touchesBackend: true };
+    const plan = compileWorkflowPlan(input);
+    expect(plan.workflowId).toBe("feature");
+    expect(plan.pipeline).toContain(AgentStage.SECURITY);
+    expect(plan.pipeline).toEqual(classifyTask(input).pipeline);
+  });
+
+  it("throws WorkflowPlanMismatchError rather than silently diverging when a hand-edited workflow file disagrees with the classifier", () => {
+    const root = generatedFixtureRoot();
+    const file = workflowPath("bugfix", root);
+    const dropped = fs
+      .readFileSync(file, "utf8")
+      .split(/\r?\n/)
+      .filter((line) => line !== "  - agent: qa-engineer")
+      .join("\n");
+    fs.writeFileSync(file, dropped, "utf8");
+
+    expect(() => compileWorkflowPlan({ isClearBugFix: true, touchesBackend: true }, root)).toThrow(
+      WorkflowPlanMismatchError,
+    );
   });
 });
 
@@ -235,6 +299,22 @@ describe("loadWorkflow", () => {
   it("rejects an agent this pipeline does not have", () => {
     const root = fixtureRoot({ "sample.yml": { ...valid, steps: [{ agent: "architect" }] } });
     expect(() => loadWorkflow("sample", root)).toThrow(WorkflowError);
+  });
+});
+
+describe("checkWorkflowRoleCoverage", () => {
+  it("passes against the real project — every selectable stage has a contract and an evidence rule", () => {
+    const result = checkWorkflowRoleCoverage();
+    expect(result.problems).toEqual([]);
+    expect(result.ok).toBe(true);
+  });
+
+  it("reports a stage with no contract file on disk as a missing role", () => {
+    const root = generatedFixtureRoot();
+    // No contracts/ directory at all in this throwaway fixture root.
+    const result = checkWorkflowRoleCoverage(root);
+    expect(result.ok).toBe(false);
+    expect(result.problems.some((p) => p.includes("missing role"))).toBe(true);
   });
 });
 

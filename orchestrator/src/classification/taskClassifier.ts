@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { AgentStage, TaskLevel } from "../types.js";
 
 /**
@@ -41,6 +42,28 @@ export const TEST_STRATEGY_TRIGGERS = [
   "release",
 ] as const;
 export type TestStrategyTrigger = (typeof TEST_STRATEGY_TRIGGERS)[number];
+
+/**
+ * Zod twin of {@link ClassificationInput}, persisted verbatim inside a
+ * RuntimeTask's `workflow_plan` (V13 TASK-004) so `assertRuntimeTaskFresh` can
+ * recompile the same plan from the exact input that produced it, rather than
+ * guessing one back out of the derived pipeline shape.
+ */
+export const ClassificationInputSchema = z
+  .object({
+    isTypoOrCopyOnly: z.boolean().optional(),
+    isClearBugFix: z.boolean().optional(),
+    touchesSchema: z.boolean().optional(),
+    touchesBusinessRuleOnly: z.boolean().optional(),
+    isIncrementalFeature: z.boolean().optional(),
+    isNewFeatureModuleOrProject: z.boolean().optional(),
+    isProductionDeployOrMigration: z.boolean().optional(),
+    touchesSensitiveArea: z.boolean().optional(),
+    touchesBackend: z.boolean().optional(),
+    touchesFrontend: z.boolean().optional(),
+    testStrategyTriggers: z.array(z.enum(TEST_STRATEGY_TRIGGERS)).optional(),
+  })
+  .strict();
 
 export interface TestPlannerDecision {
   required: boolean;

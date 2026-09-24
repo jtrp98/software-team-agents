@@ -6,7 +6,8 @@ import {
   moduleDocPath,
   readModuleDoc,
 } from "../agents/moduleDocs.js";
-import { pmMode, type ClassificationResult } from "../classification/taskClassifier.js";
+import { pmMode, ClassificationInputSchema, type ClassificationInput, type ClassificationResult } from "../classification/taskClassifier.js";
+import { compileWorkflowPlan, WorkflowPlanMismatchError, type CompiledWorkflowPlan } from "../workflow/workflowDefinition.js";
 import { taskGraphFromPlan } from "../graph/taskGraph.js";
 import { MAX_RETRY } from "../retry/retryPolicy.js";
 import { DEFAULT_ESCALATION_POLICY, type Severity } from "../escalation/escalationPolicy.js";
@@ -82,6 +83,23 @@ export const LegacyRuntimeTaskSchema = z.object({
 });
 export type LegacyRuntimeTask = z.infer<typeof LegacyRuntimeTaskSchema>;
 
+/**
+ * One task's compiled pipeline (V13 TASK-004), persisted alongside the
+ * RuntimeTask it governs: which `workflows/<id>.yml` was selected, the digest
+ * of its exact bytes at compile time, the resulting pipeline, and the
+ * classification input that produced it — enough for `assertRuntimeTaskFresh`
+ * to recompile the same plan later and refuse a stale one, the same way
+ * `plan_hash`/`artifact_hashes` refuse a stale plan.md/requirement.md.
+ */
+export const WorkflowPlanSchema = z.strictObject({
+  workflow_id: z.string().min(1),
+  workflow_source: z.string().min(1),
+  workflow_digest: Sha256Schema,
+  pipeline: z.array(z.enum(AgentStage)),
+  classification_input: ClassificationInputSchema,
+});
+export type WorkflowPlan = z.infer<typeof WorkflowPlanSchema>;
+
 export const RuntimeTaskV2Schema = z.strictObject({
   version: z.literal(2), task_id: z.string().min(1), workflow: z.string().min(1), pm_mode: z.enum(["lightweight", "full"]),
   contract: TaskContractSchema,
@@ -89,6 +107,8 @@ export const RuntimeTaskV2Schema = z.strictObject({
   artifact_hashes: z.array(SourceHashSchema).min(2), selected_traces: z.array(SelectedTraceSchema).min(1),
   /** Optional only for persisted pre-T-V8-007 rows. New builds require and populate exact evidence. */
   design_evidence: z.array(DesignEvidenceRefSchema).optional(),
+  /** Optional only for rows persisted before V13 TASK-004. New builds require and populate it. */
+  workflow_plan: WorkflowPlanSchema.optional(),
   dependencies: z.object({ task_ids: z.array(z.string()), outputs: z.array(DependencySchema) }),
   scope: LegacyRuntimeTaskSchema.shape.scope,
   required_verification: VerificationSchema,
@@ -125,6 +145,14 @@ export interface RuntimeTaskBuildInput {
   taskId: string;
   workflow: string;
   classification: ClassificationResult;
+  /**
+   * The raw signals `classification` was computed from. Optional only for
+   * legacy/programmatic callers that never had it to hand; when present,
+   * `buildRuntimeTask` compiles and persists `workflow_plan` from it (V13
+   * TASK-004) and uses its pipeline — rather than `classification.pipeline`
+   * directly — to filter `targetWorkRoots`.
+   */
+  classificationInput?: ClassificationInput;
   dependsOn?: readonly string[];
   projectRoot: string;
   docsRoot?: string;
@@ -228,7 +256,16 @@ export function buildRuntimeTask(input: RuntimeTaskBuildInput): RuntimeTaskV2 | 
     const isDesign = /^(?:DES|DEC)-/.test(id) || id.startsWith("Contract:");
     return selectTaskReference(isDesign ? designMd : requirementMd, id, source(isDesign ? "design.md" : "requirement.md"));
   });
-  const workRoots = (input.targetWorkRoots ?? []).filter(root => input.classification.pipeline.includes(root.stage));
+  // V13 TASK-004: the compiled workflow plan (when the raw classification
+  // input is available) governs which stages get a work root — not the raw
+  // `classification.pipeline` a second time. `compileWorkflowPlan` itself
+  // asserts the two agree, so this is a safety/architecture fix, never a
+  // behaviour change.
+  const workflowPlan: CompiledWorkflowPlan | undefined = input.classificationInput
+    ? compileWorkflowPlan(input.classificationInput, input.projectRoot)
+    : undefined;
+  const pipelineForScope = workflowPlan?.pipeline ?? input.classification.pipeline;
+  const workRoots = (input.targetWorkRoots ?? []).filter(root => pipelineForScope.includes(root.stage));
   const verification = requiredVerification(input);
   const { status: _status, ...contract } = task;
   return RuntimeTaskV2Schema.parse({
@@ -238,6 +275,17 @@ export function buildRuntimeTask(input: RuntimeTaskBuildInput): RuntimeTaskV2 | 
       { source: source("requirement.md"), hash: contentHash(requirementMd) },
       { source: source("design.md"), hash: contentHash(designMd) },
     ],
+    ...(workflowPlan
+      ? {
+          workflow_plan: {
+            workflow_id: workflowPlan.workflowId,
+            workflow_source: workflowPlan.workflowSource,
+            workflow_digest: workflowPlan.workflowDigest,
+            pipeline: workflowPlan.pipeline,
+            classification_input: input.classificationInput,
+          },
+        }
+      : {}),
     selected_traces: selected,
     dependencies: { task_ids: graph.dependenciesOf(task.id), outputs: graph.dependencyOutputsOf(task.id).map(d => ({ task_id: d.taskId, produces: d.produces, edges: d.edges.map(e => e.kind) })) },
     scope: { status: workRoots.length ? "resolved" : "unavailable", reason: workRoots.length ? null : "no stage work root was resolved", work_roots: workRoots.map(root => ({
@@ -266,5 +314,28 @@ export function assertRuntimeTaskFresh(task: RuntimeTaskV2): void {
   for (const ref of task.selected_traces) {
     const source = ref.source.slice(0, ref.source.lastIndexOf("#"));
     if (!task.artifact_hashes.some(a => a.source === source) || stableHash(selectTaskReference(fs.readFileSync(source, "utf8"), ref.id, source)) !== stableHash(ref)) throw new Error(`selected reference drift: ${ref.id}`);
+  }
+  if (task.workflow_plan) {
+    // `workflow_source` is always `<projectRoot>/workflows/<id>.yml`
+    // (workflowPath's own shape) — recovering `projectRoot` from it re-verifies
+    // against the same root the plan was compiled against, not a fresh guess.
+    const projectRoot = path.dirname(path.dirname(task.workflow_plan.workflow_source));
+    let fresh: CompiledWorkflowPlan;
+    try {
+      fresh = compileWorkflowPlan(task.workflow_plan.classification_input, projectRoot);
+    } catch (error) {
+      const detail = error instanceof WorkflowPlanMismatchError ? error.message : (error instanceof Error ? error.message : String(error));
+      throw new Error(`workflow plan drift: ${detail}; recompile explicitly in a new attempt`);
+    }
+    if (
+      fresh.workflowId !== task.workflow_plan.workflow_id ||
+      fresh.workflowDigest !== task.workflow_plan.workflow_digest ||
+      stableHash(fresh.pipeline) !== stableHash(task.workflow_plan.pipeline)
+    ) {
+      throw new Error(
+        `workflow plan drift: workflows/${task.workflow_plan.workflow_id}.yml (or its selection) no longer matches the ` +
+          "compiled plan this task was frozen with; recompile explicitly in a new attempt",
+      );
+    }
   }
 }

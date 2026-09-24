@@ -36,6 +36,7 @@ function roleRun(taskId: string, attempt: number, result: "PASS" | "FAIL" = "PAS
       deployPhase: null,
       startedAt: 1,
       endedAt: 2,
+      contractDigest: "a".repeat(64),
     },
     refs: [],
     recordedAt: 3,
@@ -195,7 +196,7 @@ describe("evidence store on a real file (V13 TASK-002)", () => {
       expect(migrated.evidenceForTask("T-EV")).toHaveLength(1);
       migrated.close();
       const check = new Database(file);
-      expect(check.pragma("user_version", { simple: true })).toBe(20);
+      expect(check.pragma("user_version", { simple: true })).toBe(21);
       check.close();
     } finally {
       try {

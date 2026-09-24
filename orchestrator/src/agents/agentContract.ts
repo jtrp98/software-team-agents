@@ -7,6 +7,7 @@ import { AgentStage, TaskState } from "../types.js";
 import type { Permission } from "./permissions.js";
 import { AGENT_REGISTRY } from "./registry.js";
 import type { Capability } from "./capabilities.js";
+import { contentHash } from "../artifacts/executionPacket.js";
 
 /**
  * Loads and checks `contracts/<agent-name>.yaml`.
@@ -209,4 +210,55 @@ export class ContractRegistryMismatchError extends Error {
 export function assertContractsMatchRegistry(projectRoot: string = defaultProjectRoot()): void {
   const result = checkAllContracts(projectRoot);
   if (!result.ok) throw new ContractRegistryMismatchError(result.problems);
+}
+
+/**
+ * Raised by {@link resolveAuthoritativeContract} — distinct from
+ * `AgentContractError` (file missing / invalid YAML / schema violation /
+ * filename-identity mismatch, all raised by `loadAgentContract` itself) and
+ * from `ContractRegistryMismatchError` (the aggregate `--check-contracts`
+ * result across every agent). This one names the single stage a dispatch
+ * attempt was refused for, and why: an unknown role (`agent.name` the
+ * registry has no entry for) or a specific field disagreeing with it.
+ */
+export class ContractDispatchRefusedError extends Error {
+  constructor(
+    public readonly agent: string,
+    public readonly problems: string[],
+  ) {
+    super(`refusing to dispatch ${agent}: its contract disagrees with the registry:\n- ${problems.join("\n- ")}`);
+    this.name = "ContractDispatchRefusedError";
+  }
+}
+
+export interface ResolvedContract {
+  contract: AgentContract;
+  /** sha256 of the exact raw bytes of `contracts/<agent>.yaml`, computed on the way in — never a re-serialized form. */
+  digest: string;
+}
+
+/**
+ * The one function dispatch and the static checker both go through (V13
+ * TASK-005): loads and schema-validates the contract (`loadAgentContract`,
+ * which already throws `AgentContractError` for a missing file, invalid YAML,
+ * schema violation or filename-identity mismatch), re-checks it against the
+ * registry entry the orchestrator actually runs on
+ * (`diffContractAgainstRegistry`, throwing `ContractDispatchRefusedError` on
+ * any disagreement including an unrecognized `agent.name`), and returns the
+ * loaded contract together with a digest of its exact on-disk bytes.
+ *
+ * This is deliberately not memoized: a contract can change between attempts,
+ * and the point of calling this immediately before dispatch is to see that
+ * change rather than a cached answer from an earlier stage of the same
+ * process.
+ */
+export function resolveAuthoritativeContract(
+  agent: AgentStage | string,
+  projectRoot: string = defaultProjectRoot(),
+): ResolvedContract {
+  const contract = loadAgentContract(agent, projectRoot);
+  const problems = diffContractAgainstRegistry(contract);
+  if (problems.length > 0) throw new ContractDispatchRefusedError(String(agent), problems);
+  const raw = fs.readFileSync(contractPath(agent, projectRoot));
+  return { contract, digest: contentHash(raw) };
 }

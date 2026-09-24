@@ -72,6 +72,39 @@ describe("the workflow catalog", () => {
     }
   });
 
+  /**
+   * V13 TASK-004: the pre-existing PROBES set never exercised `touchesSchema`,
+   * which is how `feature`'s SECURITY step shipped covering only
+   * `touchesSensitiveArea` even though `isNewFeatureModuleOrProject` also
+   * forces security when the caller flags `touchesSchema` alone. Routed
+   * through `resolveWorkflowId` rather than assumed per-signal, because
+   * `touchesSchema` combined with a lower-priority signal (e.g.
+   * `touchesBusinessRuleOnly`) legitimately reroutes to a different workflow
+   * file — that reroute is correct behaviour, not something this test should
+   * flag.
+   */
+  it("agrees with the classifier for every signal combined with touchesSchema, once routed through resolveWorkflowId", () => {
+    const workflows = catalogWorkflows();
+    const schemaProbes: ClassificationInput[] = [
+      { touchesSchema: true },
+      { touchesSchema: true, touchesBackend: true },
+      { touchesSchema: true, touchesFrontend: true },
+      { touchesSchema: true, touchesBackend: true, touchesFrontend: true },
+      { touchesSchema: true, touchesBackend: true, touchesSensitiveArea: true },
+    ];
+    for (const [id, signal] of Object.entries(SIGNAL_OF)) {
+      for (const probe of schemaProbes) {
+        const input: ClassificationInput = { ...probe, [signal]: true };
+        const selectedId = resolveWorkflowId(input, workflows);
+        const actual = classifyTask(input);
+        expect(
+          pipelineFromWorkflow(workflows[selectedId], input),
+          `${id} + ${JSON.stringify(probe)} -> ${selectedId}`,
+        ).toEqual(actual.pipeline);
+      }
+    }
+  });
+
   it("derives triage from the classifier's no-signal answer", () => {
     const triage = catalogWorkflows().triage;
     expect(triage.level).toBe(TaskLevel.UNKNOWN);

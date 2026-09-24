@@ -99,6 +99,14 @@ export interface RunMetrics {
    * instead of collapsing it into a single field.
    */
   requested_effort?: string;
+  /**
+   * V13 TASK-005 — sha256 of the exact `contracts/<stage>.yaml` bytes that
+   * `resolveAuthoritativeContract` resolved and enforced *before* this attempt
+   * was allowed to start. Absent only when the attempt never got that far
+   * (the contract itself could not be resolved) — a discrepancy in its own
+   * right, not a value to fabricate.
+   */
+  contract_digest?: string;
 }
 
 /**

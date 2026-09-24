@@ -9,6 +9,7 @@ import { NO_GUARDS } from "./runtimeAdapter.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import type { LedgerAttempt } from "../ledger/runLedger.js";
+import { seedRealContracts } from "../testing/contractFixtures.js";
 
 /**
  * T-V8-018, at the seam that matters: the ledger record is what the adapter
@@ -22,7 +23,9 @@ const HASH_B = "b".repeat(64);
 const RUN_ID = "01HZZZZZZZZZZZZZZZZZZZZZZZ";
 
 function tmpProject(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "frozen-attempt-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "frozen-attempt-"));
+  seedRealContracts(root);
+  return root;
 }
 
 function frozen(overrides: Partial<LedgerAttempt> = {}): LedgerAttempt {

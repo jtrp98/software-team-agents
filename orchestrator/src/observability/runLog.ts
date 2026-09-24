@@ -79,6 +79,8 @@ export interface RunRecord {
   document_gate: "enabled" | "disabled" | null;
   /** Source snapshot captured for a QA/security verdict; null when absent. */
   verification_fingerprint?: ChangeSetFingerprint | null;
+  /** V13 TASK-005 — sha256 of the `contracts/<stage>.yaml` bytes resolved and enforced before this attempt started. Absent for historical rows; null for an attempt refused before a contract resolved. */
+  contract_digest?: string | null;
 }
 
 export interface RunOutcome {
@@ -129,6 +131,7 @@ export interface RunOutcome {
   deterministic_gate?: "enabled" | "disabled";
   document_gate?: "enabled" | "disabled";
   verification_fingerprint?: ChangeSetFingerprint;
+  contract_digest?: string;
 }
 
 const NOT_REPORTED = "not reported";
@@ -233,6 +236,7 @@ export class RunLog {
       qa_effort: params.outcome.qa_effort ?? null,
       deterministic_gate: params.outcome.deterministic_gate ?? null,
       document_gate: params.outcome.document_gate ?? null,
+      contract_digest: params.outcome.contract_digest ?? null,
       ...(params.outcome.verification_fingerprint ? { verification_fingerprint: params.outcome.verification_fingerprint } : {}),
     };
     this.records.push(entry);

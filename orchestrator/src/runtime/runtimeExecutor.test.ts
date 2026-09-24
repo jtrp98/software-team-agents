@@ -3,6 +3,7 @@ import { renderCanonicalTasks } from "../docs/planTask.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentStage, TaskLevel } from "../types.js";
 import { ArtifactType } from "../artifacts/schemas.js";
@@ -24,6 +25,7 @@ import { SOURCE_OF_TRUTH_SENTENCE } from "../codeintel/resolver.js";
 import { declareInstallationConfigOverrideChannelForTest } from "../threeRepo/installation.js";
 import { decidePending, testHumanVerifier } from "../gates/humanDecision.testSupport.js";
 import { withStageEvidence } from "../evidence/stageEvidence.testSupport.js";
+import { seedRealContracts } from "../testing/contractFixtures.js";
 
 const human = { humanDecisionVerifier: testHumanVerifier() };
 
@@ -53,7 +55,9 @@ afterEach(() => {
  */
 
 function tmpProject(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "runtime-exec-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "runtime-exec-"));
+  seedRealContracts(root);
+  return root;
 }
 
 function writeAgentFile(root: string, role: string, frontmatter: string): void {
@@ -2009,5 +2013,100 @@ describe("createRuntimeExecutor — T-V6-014 routing.order at precedence level 4
 
     expect(result.outcome.fallback_count).toBe(1);
     expect(second.workspace.files.has("_docs/module/sales-crm/review.md")).toBe(false);
+  });
+});
+
+/**
+ * V13 TASK-005 — the contract dispatch preflight: `resolveAuthoritativeContract`
+ * runs before any guard/work-root resolution, refuses fail-closed on a
+ * mismatch, and binds the digest it checked to every attempt (PASS or FAIL).
+ */
+describe("createRuntimeExecutor — contract dispatch preflight (V13 TASK-005)", () => {
+  it("refuses dispatch, before any guard resolution, when the on-disk contract disagrees with the registry", async () => {
+    const root = tmpProject();
+    const contractFile = path.join(root, "contracts", "backend-engineer.yaml");
+    const contract = fs.readFileSync(contractFile, "utf8").replace(
+      "capabilities: [read, write_code, test]",
+      "capabilities: [read, write_code, test, deploy]",
+    );
+    fs.writeFileSync(contractFile, contract, "utf8");
+    const guards = vi.fn(() => NO_GUARDS);
+    const runtime = new MockRuntimeAdapter({ respond: () => okResult() });
+    const result = await createRuntimeExecutor({ runtime, projectRoot: root, moduleName: () => "sales-crm", guards })({
+      stage: AgentStage.BACKEND_ENGINEER,
+      taskId: "T-CONTRACT-MISMATCH",
+      context: [],
+    });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain("disagrees with the registry");
+    expect(guards).not.toHaveBeenCalled();
+    expect(runtime.requests).toEqual([]);
+  });
+
+  it("refuses dispatch for a stage nobody wrote a contract for at all", async () => {
+    const root = tmpProject();
+    fs.rmSync(path.join(root, "contracts", "backend-engineer.yaml"));
+    const guards = vi.fn(() => NO_GUARDS);
+    const runtime = new MockRuntimeAdapter({ respond: () => okResult() });
+    const result = await createRuntimeExecutor({ runtime, projectRoot: root, moduleName: () => "sales-crm", guards })({
+      stage: AgentStage.BACKEND_ENGINEER,
+      taskId: "T-CONTRACT-MISSING",
+      context: [],
+    });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain("no contract file");
+    expect(guards).not.toHaveBeenCalled();
+  });
+
+  it("binds the resolved contract digest — sha256 of the exact on-disk bytes — to a PASS outcome", async () => {
+    const root = tmpProject();
+    const expectedDigest = createHash("sha256").update(fs.readFileSync(path.join(root, "contracts", "backend-engineer.yaml"))).digest("hex");
+    const runtime = new MockRuntimeAdapter({ respond: () => okResult() });
+    const result = await executorFor(runtime, { projectRoot: root })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-CONTRACT-DIGEST", context: [] });
+    expect(result.outcome.result).toBe("PASS");
+    expect(result.outcome.contract_digest).toBe(expectedDigest);
+    expect(expectedDigest).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("binds the resolved contract digest to a FAIL outcome too, not only a PASS", async () => {
+    const root = tmpProject();
+    const expectedDigest = createHash("sha256").update(fs.readFileSync(path.join(root, "contracts", "backend-engineer.yaml"))).digest("hex");
+    const runtime = new MockRuntimeAdapter({ respond: () => ({ status: "ERROR" as const, exitCode: 1, text: "boom", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [] }) });
+    const result = await executorFor(runtime, { projectRoot: root })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-CONTRACT-DIGEST-FAIL", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.contract_digest).toBe(expectedDigest);
+  });
+
+  it("stale contract attempt: refuses a retry/resume of this exact stage whose on-disk contract changed since the prior recorded attempt", async () => {
+    const root = tmpProject();
+    const guards = vi.fn(() => NO_GUARDS);
+    const runtime = new MockRuntimeAdapter({ respond: () => okResult() });
+    const result = await createRuntimeExecutor({
+      runtime,
+      projectRoot: root,
+      moduleName: () => "sales-crm",
+      guards,
+      // Simulates a prior attempt of this exact stage recorded a digest that
+      // no longer matches the freshly re-resolved on-disk contract — the
+      // "role-run" evidence a retry/resume would find via
+      // `contractDigestForStage(store.evidenceForTask(taskId), stage)`.
+      priorContractDigest: () => "f".repeat(64),
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-STALE-CONTRACT", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain("changed since a prior attempt of this stage");
+    expect(guards).not.toHaveBeenCalled();
+    expect(runtime.requests).toEqual([]);
+  });
+
+  it("does not refuse when the prior recorded digest matches today's on-disk contract — the ordinary same-contract retry", async () => {
+    const root = tmpProject();
+    const digest = createHash("sha256").update(fs.readFileSync(path.join(root, "contracts", "backend-engineer.yaml"))).digest("hex");
+    const runtime = new MockRuntimeAdapter({ respond: () => okResult() });
+    const result = await executorFor(runtime, { projectRoot: root, priorContractDigest: () => digest })({
+      stage: AgentStage.BACKEND_ENGINEER,
+      taskId: "T-SAME-CONTRACT",
+      context: [],
+    });
+    expect(result.outcome.result).toBe("PASS");
   });
 });
