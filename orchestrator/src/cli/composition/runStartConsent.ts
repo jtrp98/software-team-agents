@@ -42,7 +42,7 @@ export async function askCodeIntelConsentAtRunStart(
 }
 
 function terminalPrompt(question: string): Promise<string> {
-  // Same per-question readline lifecycle as cli.ts's `confirm` — a long-lived
+  // A per-question readline lifecycle — a long-lived
   // interface here would fight whatever stdin handling the caller already has.
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise<string>((resolve, reject) => {

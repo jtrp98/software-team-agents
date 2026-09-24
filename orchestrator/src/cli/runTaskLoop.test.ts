@@ -9,30 +9,26 @@ const executor: AgentExecutor = vi.fn();
 function fixture(statuses: OrchestratorStatus[], stepResult?: OrchestratorStatus) {
   let cursor = 0;
   const summary = vi.fn(() => "run summary");
-  const decideApproval = vi.fn(() => { cursor++; });
-  const provideHumanApproval = vi.fn(() => { cursor++; });
+  const submitHumanDecision = vi.fn();
   const step = vi.fn(async () => stepResult ?? statuses[++cursor]);
   const orchestrator = {
     taskId: "T-LOOP",
     runLog: { summary },
     status: vi.fn(() => statuses[Math.min(cursor, statuses.length - 1)]),
-    decideApproval,
-    provideHumanApproval,
+    submitHumanDecision,
     step,
   } as unknown as Orchestrator;
   const registry = { refreshStateView: vi.fn() };
   const messages: string[] = [];
   const errors: string[] = [];
-  const confirm = vi.fn(async () => true);
   const io: RunTaskLoopIo = {
     log: (message) => messages.push(message),
     error: (message) => errors.push(message),
-    confirm,
-    isTTY: true,
-    actor: "alice",
   };
-  return { orchestrator, registry, io, messages, errors, confirm, decideApproval, provideHumanApproval, step, summary };
+  return { orchestrator, registry, io, messages, errors, submitHumanDecision, step, summary };
 }
+
+const REQUEST_ID = "apr_0123456789abcdef0123456789abcdef";
 
 const gate: OrchestratorStatus = {
   kind: "WAITING_FOR_HUMAN",
@@ -40,6 +36,7 @@ const gate: OrchestratorStatus = {
   to: TaskState.PLAN,
   reason: "schema confirmation required",
   approvalType: ApprovalType.SCHEMA_CONFIRMATION,
+  requestId: REQUEST_ID,
 };
 
 describe("runTaskLoop", () => {
@@ -55,39 +52,28 @@ describe("runTaskLoop", () => {
     expect(f.messages).toEqual(["[orchestrator] task T-LOOP BLOCKED: cannot continue"]);
   });
 
-  it("records a known TTY approval and continues to DEPLOYED", async () => {
+  it("parks on a human gate with its request id and never answers it", async () => {
     const f = fixture([gate, { kind: "DEPLOYED" }]);
-    await expect(runTaskLoop(f.orchestrator, f.registry, executor, f.io)).resolves.toBe(0);
-    expect(f.confirm).toHaveBeenCalledWith("Approve schema-confirmation?");
-    expect(f.decideApproval).toHaveBeenCalledWith(ApprovalType.SCHEMA_CONFIRMATION, true, { by: "alice" });
-  });
-
-  it("returns 3 for a TTY rejection and records the decision", async () => {
-    const f = fixture([gate]);
-    f.confirm.mockResolvedValue(false);
-    await expect(runTaskLoop(f.orchestrator, f.registry, executor, f.io)).resolves.toBe(3);
-    expect(f.decideApproval).toHaveBeenCalledWith(ApprovalType.SCHEMA_CONFIRMATION, false, { by: "alice" });
-    expect(f.messages.at(-1)).toBe("[orchestrator] rejected — task T-LOOP is stopped and the decision is recorded. Resuming will not ask again; revisit it deliberately if that was wrong.");
-  });
-
-  it("returns 4 without prompting when no TTY is attached", async () => {
-    const f = fixture([gate]);
-    f.io.isTTY = false;
     await expect(runTaskLoop(f.orchestrator, f.registry, executor, f.io)).resolves.toBe(4);
-    expect(f.confirm).not.toHaveBeenCalled();
-    expect(f.messages.at(-1)).toBe("[orchestrator] no terminal attached — parking task T-LOOP with the gate unanswered. Resolve it with: node orchestrator/dist/cli.js approve T-LOOP --yes|--no (or rerun this command in an interactive terminal), then --resume.");
+    expect(f.submitHumanDecision).not.toHaveBeenCalled();
+    expect(f.step).not.toHaveBeenCalled();
+    expect(f.messages.at(-1)).toBe(
+      `[orchestrator] parking task T-LOOP on pending request ${REQUEST_ID}. A person resolves it through a trusted channel: ` +
+        `node orchestrator/dist/cli.js approve T-LOOP --request ${REQUEST_ID} --yes|--no, then --resume.`,
+    );
   });
 
-  it("returns 2 for an unresolvable gate", async () => {
+  it("returns 2 for a gate with no pending request to answer", async () => {
     const f = fixture([{
       kind: "WAITING_FOR_HUMAN",
       from: TaskState.QA,
       to: TaskState.READY_TO_DEPLOY,
       reason: "unknown gate",
       approvalType: null,
+      requestId: null,
     }]);
     await expect(runTaskLoop(f.orchestrator, f.registry, executor, f.io)).resolves.toBe(2);
-    expect(f.confirm).not.toHaveBeenCalled();
+    expect(f.submitHumanDecision).not.toHaveBeenCalled();
   });
 
   it("returns 1 when a running stage does not advance", async () => {

@@ -25,6 +25,10 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import Database from "./store/sqliteDatabase.js";
+import { decidePending, testHumanVerifier } from "./gates/humanDecision.testSupport.js";
+import { withRequiredEvidence } from "./evidence/stageEvidence.testSupport.js";
+
+const human = { humanDecisionVerifier: testHumanVerifier() };
 
 /**
  * Failure Simulation (T56) — TASKS.md names six scenarios and asks that the orchestrator's
@@ -49,15 +53,16 @@ function makeExecutor(overrides: Partial<Record<AgentStage, (callIndex: number) 
     const idx = counts[req.stage] ?? 0;
     counts[req.stage] = idx + 1;
     const override = overrides[req.stage];
-    if (override) return override(idx);
-    return { outcome: { tokens: 100, cost: 0.01, result: "PASS" } };
+    // A successful stage carries the evidence a real composition attaches (V13 TASK-003).
+    if (override) return withRequiredEvidence(req, override(idx));
+    return withRequiredEvidence(req, { outcome: { tokens: 100, cost: 0.01, result: "PASS" } });
   };
 }
 
 describe("Failure Simulation (T56)", () => {
   it("scenario: QA fail — retries the owning engineer, then escalates past the ceiling (see also orchestrator.test.ts, pipeline.test.ts)", async () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
-    const orch = new Orchestrator("T-SIM-QA", classification);
+    const orch = new Orchestrator("T-SIM-QA", classification, human);
     const executor = makeExecutor({
       [AgentStage.QA_ENGINEER]: () => ({ outcome: { tokens: 100, cost: 0.01, result: "FAIL" } }),
     });
@@ -88,7 +93,7 @@ describe("Failure Simulation (T56)", () => {
       budget: null,
     };
     const classification = classifyTask({ touchesSchema: true, touchesBackend: true });
-    const orch = new Orchestrator("T-SIM-SECURITY", classification);
+    const orch = new Orchestrator("T-SIM-SECURITY", classification, human);
     let securityCalls = 0;
     const executor = makeExecutor({
       [AgentStage.SYSTEM_ANALYST]: () => ({
@@ -125,7 +130,7 @@ describe("Failure Simulation (T56)", () => {
         // that one and continue. The security escalation itself must stop the loop instead of
         // being auto-answered the same way.
         if (status.approvalType !== ApprovalType.SCHEMA_CONFIRMATION) break;
-        orch.provideHumanApproval("designApproved", true);
+        decidePending(orch, true);
       }
       status = await orch.step(executor);
     }
@@ -136,12 +141,12 @@ describe("Failure Simulation (T56)", () => {
     expect(status.kind).toBe("BLOCKED");
     expect(securityCalls).toBe(1); // exactly one attempt — no automatic re-run
     const openApprovals = orch.snapshot().approvals.filter((a) => a.status === "pending");
-    expect(openApprovals.some((a) => a.type === ApprovalType.SECURITY_RISK)).toBe(true);
+    expect(openApprovals.some((a) => a.scope.type === ApprovalType.SECURITY_RISK)).toBe(true);
   });
 
   it("scenario: agent timeout — a FAIL from a timed-out invocation is retried like any other FAIL, not treated as a crash (see also claudeCodeAdapter.test.ts's TIMEOUT test)", async () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
-    const orch = new Orchestrator("T-SIM-TIMEOUT", classification);
+    const orch = new Orchestrator("T-SIM-TIMEOUT", classification, human);
     const executor = makeExecutor({
       [AgentStage.QA_ENGINEER]: (idx) => ({
         outcome: {
@@ -164,7 +169,7 @@ describe("Failure Simulation (T56)", () => {
 
   it("scenario: API unavailable (claude CLI's is_error: true) — same uniform FAIL handling as any other cause (see also claudeCodeAdapter.test.ts's is_error test)", async () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
-    const orch = new Orchestrator("T-SIM-API", classification);
+    const orch = new Orchestrator("T-SIM-API", classification, human);
     const executor = makeExecutor({
       [AgentStage.QA_ENGINEER]: (idx) => ({
         outcome: {

@@ -16,6 +16,12 @@ import {
   type PersistedTask,
   type TaskStore,
 } from "./taskStore.js";
+import {
+  EvidenceCorruptError,
+  checkEvidenceAppend,
+  parseStoredEvidence,
+  type EvidenceRecord,
+} from "../evidence/evidenceStore.js";
 
 /**
  * The real store: one local SQLite file, no server, no daemon.
@@ -39,7 +45,7 @@ import {
 // the new field back as null ("not recorded"), nothing is guessed and nothing is lost. A
 // migration that would need to reinterpret or rewrite existing data does not go in this list (see
 // MIGRATIONS below), and an unknown version refuses to open rather than risk misreading it.
-const SCHEMA_VERSION = 19;
+const SCHEMA_VERSION = 20;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -168,6 +174,26 @@ CREATE TABLE IF NOT EXISTS ledger_events (
 CREATE INDEX IF NOT EXISTS ledger_events_run ON ledger_events (run_id, id);
 `;
 
+/**
+ * V13 TASK-002 evidence DDL. Same file and transaction as `tasks`, so a state
+ * change and the evidence justifying it commit together. `record` is the whole
+ * validated `EvidenceRecord`; the columns beside it exist to be queried.
+ */
+export const EVIDENCE_DDL = `
+CREATE TABLE IF NOT EXISTS evidence (
+  seq         INTEGER PRIMARY KEY AUTOINCREMENT,
+  evidence_id TEXT NOT NULL UNIQUE,
+  task_id     TEXT NOT NULL,
+  stage       TEXT NOT NULL,
+  attempt     INTEGER NOT NULL,
+  kind        TEXT NOT NULL,
+  digest      TEXT NOT NULL,
+  recorded_at INTEGER NOT NULL,
+  record      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS evidence_task ON evidence (task_id, seq);
+`;
+
 /** Named once so the DDL above and the migration below cannot drift apart. */
 const EVENT_AUDIT_COLUMNS = ["actor", "reason", "input", "output", "decision"] as const;
 
@@ -205,6 +231,11 @@ export class DatabaseUnavailableError extends Error {
     );
     this.name = "DatabaseUnavailableError";
   }
+}
+
+interface EvidenceRow {
+  evidence_id: string;
+  record: string;
 }
 
 interface TaskRow {
@@ -424,6 +455,13 @@ const MIGRATIONS: Record<number, (db: SqliteDatabase) => void> = {
     // journal instead.
     db.exec(LEDGER_DDL);
   },
+  19: (db) => {
+    // V13 TASK-002: a new, empty table. No historical byte is read or
+    // reinterpreted; a task written before it simply has no evidence, and the
+    // transition guard therefore refuses to advance it (fail closed) rather
+    // than trusting a cursor that no record justifies.
+    db.exec(EVIDENCE_DDL);
+  },
 };
 
 export class SqliteTaskStore implements TaskStore {
@@ -467,6 +505,7 @@ export class SqliteTaskStore implements TaskStore {
       this.db.pragma("journal_mode = WAL");
       this.db.exec(DDL);
       this.db.exec(LEDGER_DDL);
+      this.db.exec(EVIDENCE_DDL);
 
       const found = Number((this.db.pragma("user_version", { simple: true }) as number) ?? 0);
       if (found === 0) {
@@ -735,6 +774,56 @@ export class SqliteTaskStore implements TaskStore {
         record.output,
         record.decision,
       );
+  }
+
+  appendEvidence(record: EvidenceRecord): EvidenceRecord {
+    if (this.readOnly) throw new Error("state database was opened read-only");
+    const stored = parseStoredEvidence(record.evidenceId, JSON.parse(JSON.stringify(record)));
+    const existing = this.loadEvidence(stored.evidenceId);
+    const hasRef = this.db.prepare("SELECT 1 FROM evidence WHERE evidence_id = ? AND task_id = ?");
+    const write = checkEvidenceAppend(stored, existing, (ref) => hasRef.get(ref, stored.taskId) !== undefined);
+    if (write) {
+      this.db
+        .prepare(
+          `INSERT INTO evidence (evidence_id, task_id, stage, attempt, kind, digest, recorded_at, record)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          stored.evidenceId,
+          stored.taskId,
+          stored.stage,
+          stored.attempt,
+          stored.kind,
+          stored.digest,
+          stored.recordedAt,
+          JSON.stringify(stored),
+        );
+    }
+    return existing ?? stored;
+  }
+
+  loadEvidence(evidenceId: string): EvidenceRecord | null {
+    const row = this.db.prepare("SELECT evidence_id, record FROM evidence WHERE evidence_id = ?").get(evidenceId) as
+      | EvidenceRow
+      | undefined;
+    return row ? this.evidenceFromRow(row) : null;
+  }
+
+  evidenceForTask(taskId: string): EvidenceRecord[] {
+    const rows = this.db
+      .prepare("SELECT evidence_id, record FROM evidence WHERE task_id = ? ORDER BY seq ASC")
+      .all(taskId) as unknown as EvidenceRow[];
+    return rows.map((r) => this.evidenceFromRow(r));
+  }
+
+  private evidenceFromRow(row: EvidenceRow): EvidenceRecord {
+    let data: unknown;
+    try {
+      data = JSON.parse(row.record);
+    } catch (error) {
+      throw new EvidenceCorruptError(row.evidence_id, `record is not JSON (${(error as Error).message})`);
+    }
+    return parseStoredEvidence(row.evidence_id, data);
   }
 
   eventsForTask(taskId: string): PersistedEvent[] {

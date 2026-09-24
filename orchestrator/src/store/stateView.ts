@@ -4,6 +4,7 @@ import type { AgentStage } from "../types.js";
 import { MAX_RETRY } from "../retry/retryPolicy.js";
 import { describeStatus, phaseOf } from "../orchestrator/taskStatus.js";
 import { assertValidStateView } from "./stateSchema.js";
+import { gateEvidenceFrom } from "../gates/approval.js";
 import type { PersistedTask, TaskStore } from "./taskStore.js";
 
 /**
@@ -98,6 +99,7 @@ export function taskToYamlValue(
   previous: PreviousRun | null = null,
 ): YamlValue {
   const status = describeStatus(task, allTasks);
+  const approvalFacts = gateEvidenceFrom(task.approvals);
   // The stage the orchestrator will assign next — the cursor already points at
   // it, including after a failed round routed the task back to an engineer.
   const nextAgent = task.machine.pipeline[task.pipelineCursor] ?? null;
@@ -117,23 +119,29 @@ export function taskToYamlValue(
     waiting_on: status.waitingOn ?? [],
     retry: { qa: task.retries.qa, security: task.retries.security, max: MAX_RETRY },
     approvals: {
-      design_approved: task.gateContext.designApproved ?? false,
-      human_approved: task.gateContext.humanApproved ?? false,
-      // The booleans above are derived from this ledger; this is what records
-      // that a decision was *made* — including a "no", which the booleans
-      // alone cannot distinguish from "not asked yet".
+      // Derived from the ledger below at render time — never read from stored booleans.
+      design_approved: approvalFacts.designApproved ?? false,
+      human_approved: approvalFacts.humanApproved ?? false,
+      // The ledger records that a decision was *made* — including a "no", which
+      // the booleans alone cannot distinguish from "not asked yet".
       ledger: task.approvals.map((a) => ({
-        type: a.type,
+        request_id: a.requestId,
+        type: a.scope.type,
+        from: a.scope.from,
+        to: a.scope.to,
         required: a.required,
         status: a.status,
         reason: a.reason,
-        decided_by: a.decidedBy,
-        decided_at: a.decidedAt === null ? null : new Date(a.decidedAt).toISOString(),
+        decided_by: a.decision?.actor.id ?? null,
+        decided_via: a.decision?.source.channel ?? null,
+        decided_at: a.decision ? new Date(a.decision.decidedAt).toISOString() : null,
       })),
     },
     approval: (() => {
       const outstanding = task.approvals.find((a) => a.status === "pending");
-      return outstanding ? { required: outstanding.required, type: outstanding.type, status: outstanding.status } : null;
+      return outstanding
+        ? { request_id: outstanding.requestId, required: outstanding.required, type: outstanding.scope.type, status: outstanding.status }
+        : null;
     })(),
     last_failure: task.lastFailure
       ? {
@@ -146,6 +154,8 @@ export function taskToYamlValue(
           affected: task.lastFailure.affected,
         }
       : null,
+    // The Done record's id; its referenced evidence is queried from the store (`evidenceForTask`).
+    completion_evidence_id: task.completionEvidenceId,
     updated_at: new Date(task.updatedAt).toISOString(),
   };
 }

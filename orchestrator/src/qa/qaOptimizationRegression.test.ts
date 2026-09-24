@@ -10,6 +10,7 @@ import { planRecheck } from "./evidence.js";
 import { buildQaScope } from "./scope.js";
 import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
 import { runDeterministicVerification } from "./deterministic.js";
+import { PASSING_VERIFICATION, persistedSweep } from "../evidence/stageEvidence.testSupport.js";
 
 /**
  * QA optimization regression suite: each test exercises a *routing promise*
@@ -78,10 +79,10 @@ describe("QA08 routing table", () => {
         return Promise.resolve({ outcome: { tokens: 1, cost: 0, result: "PASS" } });
       },
       changedFiles: changed,
-      deterministicVerification: () => deterministic,
     });
     const result = await exec({
       stage: AgentStage.QA_ENGINEER,
+      deterministicVerification: persistedSweep(deterministic),
       taskId: "T",
       context: [],
     });
@@ -214,7 +215,7 @@ describe("QA08 orchestrator integration (decision persists; mode lands in the ru
     const exec = withQaOptimization({
       inner: async (req) => {
         if (req.stage === AgentStage.BACKEND_ENGINEER) {
-          return { outcome: { tokens: 10, cost: 0, result: "PASS" } };
+          return { outcome: { tokens: 10, cost: 0, result: "PASS" }, deterministicVerification: PASSING_VERIFICATION };
         }
         // The QA agent answered PASS but in the wrong mode for this decision.
         return {
@@ -245,7 +246,7 @@ describe("QA08 orchestrator integration (decision persists; mode lands in the ru
     const exec = withQaOptimization({
       inner: async (req) => {
         if (req.stage === AgentStage.BACKEND_ENGINEER) {
-          return { outcome: { tokens: 10, cost: 0, result: "PASS" } };
+          return { outcome: { tokens: 10, cost: 0, result: "PASS" }, deterministicVerification: PASSING_VERIFICATION };
         }
         void req;
         return {

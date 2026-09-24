@@ -10,6 +10,7 @@ import { LocalWorkspace } from "../runtime/localWorkspace.js";
 import { withQaOptimization } from "./optimized.js";
 import { createProjectRunner } from "./projectRunner.js";
 import { createPostDevVerificationHook } from "./verificationHook.js";
+import { persistedSweep } from "../evidence/stageEvidence.testSupport.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -46,7 +47,6 @@ describe("production deterministic QA regression", () => {
     const execute = withQaOptimization({
       inner: verification.executor,
       changedFiles: () => ["broken.ts"],
-      deterministicVerification: verification.verificationFor,
     });
 
     await orchestrator.step(execute);
@@ -78,14 +78,19 @@ describe("production deterministic QA regression", () => {
     const devRequest = { stage: AgentStage.BACKEND_ENGINEER, taskId: "T-SKIP", context: [] };
     const devResult = await verification.executor(devRequest);
     expect(devResult.outcome.result).toBe("PASS");
-    expect(verification.verificationFor(devRequest)?.status).toBe("skipped");
+    expect(devResult.deterministicVerification?.status).toBe("skipped");
 
     const execute = withQaOptimization({
       inner: verification.executor,
       changedFiles: () => ["src/unknown.ts"],
-      deterministicVerification: verification.verificationFor,
     });
-    const result = await execute({ stage: AgentStage.QA_ENGINEER, taskId: "T-SKIP", context: [] });
+    // STA hands QA the persisted sweep of the Dev attempt (V13 TASK-002).
+    const result = await execute({
+      stage: AgentStage.QA_ENGINEER,
+      taskId: "T-SKIP",
+      context: [],
+      deterministicVerification: persistedSweep(devResult.deterministicVerification!),
+    });
     expect(result.outcome.result).toBe("PASS");
     expect(result.outcome.tokens).toBe(7);
   });

@@ -10,6 +10,10 @@ import {
   type UnattendedGateInput,
 } from "./unattendedGate.js";
 
+function scope(type: ApprovalType) {
+  return { taskId: "BE-1", type, from: null, to: null };
+}
+
 function input(overrides: Partial<UnattendedGateInput> = {}): UnattendedGateInput {
   return {
     taskId: "BE-1",
@@ -50,21 +54,31 @@ describe("T-V8-029 — the unattended human/approval gate", () => {
   });
 
   it.each(Object.values(ApprovalType))("gates on every unanswered required approval type: %s", (type) => {
-    const failures = evaluateUnattendedGate(input({ approvals: [{ type, required: true, status: "pending" }] }));
+    const failures = evaluateUnattendedGate(input({ approvals: [{ scope: scope(type), required: true, status: "pending" }] }));
     expect(failures.map((failure) => failure.kind)).toContain("approval");
   });
 
   it("gates on an approval type this build does not recognize, rather than ignoring it", () => {
     const failures = evaluateUnattendedGate(input({
-      approvals: [{ type: "FUTURE_APPROVAL" as ApprovalType, required: false, status: "approved" }],
+      approvals: [{ scope: scope("FUTURE_APPROVAL" as ApprovalType), required: false, status: "approved" }],
     }));
     expect(failures.map((failure) => failure.kind)).toContain("approval");
   });
 
   it("lets an answered, approved approval through", () => {
     expect(evaluateUnattendedGate(input({
-      approvals: [{ type: ApprovalType.SCHEMA_CONFIRMATION, required: true, status: "approved" }],
+      approvals: [{ scope: scope(ApprovalType.SCHEMA_CONFIRMATION), required: true, status: "approved" }],
     }))).toEqual([]);
+  });
+
+  it("lets a request withdrawn by evidence through, and still gates a rejection", () => {
+    expect(evaluateUnattendedGate(input({
+      approvals: [{ scope: scope(ApprovalType.REQUIREMENT_INTERVIEW), required: true, status: "withdrawn" }],
+    }))).toEqual([]);
+    const rejected = evaluateUnattendedGate(input({
+      approvals: [{ scope: scope(ApprovalType.DEPLOY), required: true, status: "rejected" }],
+    }));
+    expect(rejected.map((failure) => failure.kind)).toContain("approval");
   });
 
   it("gates an owner stage that needs interactive prompts, and clears it with confirmed intake", () => {

@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import type { HumanDecisionVerifier } from "../gates/humanDecision.js";
 import { TaskState } from "../types.js";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
 import type { Budget } from "../cost/costControl.js";
@@ -9,6 +10,7 @@ import { TaskGraph, taskGraphFromPlan, type TaskNode } from "../graph/taskGraph.
 import type { TargetBindings } from "../threeRepo/taskBindings.js";
 import { Orchestrator } from "./orchestrator.js";
 import { describeStatus, unmetDependencies, type TaskStatusView } from "./taskStatus.js";
+import { verifyTaskCompletion } from "./transitionGuard.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import {
   buildRuntimeTask,
@@ -45,6 +47,8 @@ export interface TaskRegistryOptions {
   stateViewPath?: string;
   /** Read-only plan authority for this invocation; persisted states supply completion. */
   planTasks?: () => readonly WorkPlanTask[] | null;
+  /** Trusted human channel for approval decisions. Omitted = unconfigured: every decision fails closed. */
+  humanDecisionVerifier?: HumanDecisionVerifier;
 }
 
 export interface TaskListing {
@@ -72,6 +76,7 @@ export class TaskRegistry {
   private readonly now?: () => number;
   private readonly stateViewPath?: string;
   private readonly planTasks?: TaskRegistryOptions["planTasks"];
+  private readonly humanDecisionVerifier?: HumanDecisionVerifier;
   /** True while a `transaction()` is open: the file-backed state view cannot be rolled back, so it waits for the commit. */
   private deferStateView = false;
 
@@ -81,10 +86,11 @@ export class TaskRegistry {
     this.now = opts.now;
     this.stateViewPath = opts.stateViewPath;
     this.planTasks = opts.planTasks;
+    this.humanDecisionVerifier = opts.humanDecisionVerifier;
   }
 
   private orchestratorOptions() {
-    return { store: this.store, budget: this.budget, now: this.now };
+    return { store: this.store, budget: this.budget, now: this.now, humanDecisionVerifier: this.humanDecisionVerifier };
   }
 
   /** Reload authored input; persisted RuntimeTask fields are never a second plan authority. */
@@ -301,10 +307,19 @@ export class TaskRegistry {
     if (!task) throw new TaskNotFoundError(taskId);
     const tasks = this.store.listTasks();
     const plan = this.currentPlan(taskId);
-    if (!plan?.some(t => t.id === taskId)) return unmetDependencies(task, tasks);
+    if (!plan?.some(t => t.id === taskId)) {
+      const unmet = unmetDependencies(task, tasks);
+      // The pointer check above is a view; a dependency counts only once its completion record verifies.
+      const unverified = task.dependsOn.filter((id) => {
+        const dependency = tasks.find((t) => t.taskId === id);
+        return !unmet.includes(id) && (!dependency || !verifyTaskCompletion(this.store, dependency).done);
+      });
+      return [...unmet, ...unverified];
+    }
     const graph = taskGraphFromPlan(plan);
     if (JSON.stringify(graph.dependenciesOf(taskId).sort()) !== JSON.stringify([...task.dependsOn].sort())) throw new Error(`task ${taskId}: registered graph drift; explicitly recompile in a new attempt`);
-    const completed = tasks.filter(t => t.machine.current === TaskState.DEPLOYED && !t.cancelled && !t.paused && unmetDependencies(t, tasks).length === 0).map(t => t.taskId);
+    // Done, not merely DEPLOYED: each completion record is re-verified against the evidence store.
+    const completed = tasks.filter(t => verifyTaskCompletion(this.store, t).done && !t.cancelled && !t.paused && unmetDependencies(t, tasks).length === 0).map(t => t.taskId);
     return graph.waitingOn(taskId, completed, plan.filter(t => t.status === "blocked").map(t => t.id));
   }
 

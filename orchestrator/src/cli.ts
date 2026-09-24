@@ -2,7 +2,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as readline from "node:readline/promises";
 import { TEST_STRATEGY_TRIGGERS, type ClassificationInput, type TestStrategyTrigger } from "./classification/taskClassifier.js";
 import { FLAG_TO_CLASSIFICATION, type BooleanClassificationKey } from "./classification/classificationFlags.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
@@ -211,7 +210,7 @@ export const USAGE =
   "usage (verbs — thin wrappers over the flag-based form below, prefer these):\n" +
   "  sta run --task-id <id> --module <name> <classification flags> [--test-strategy <cross-task,multi-system,migration,security,release>] [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity|zcode>] [--model <name>] [--effort <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--root <name>] [--project-root <path>] [--state-db <path>]\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
-  "  sta approve <task-id> [--yes|--no] [--project-root <path>]   resolve the current human gate; interactive if neither flag is given\n" +
+  "  sta approve <task-id> --request <request-id> --yes|--no [--note <text>] [--project-root <path>]   submit a decision for one pending request through the trusted human channel; refused (exit 5) while none is configured\n" +
   "  sta resume  <task-id> --module <name> [--root <name>] [--project-root <path>]   continue a task already in the store; --root must match the root frozen at intake (it is an assertion, never a re-selection)\n" +
   "  sta retry   <task-id> --module <name> [--root <name>] [--project-root <path>]   same as resume — there is no daemon here for the two to mean different things\n" +
   "  sta pause  <task-id> [--project-root <path>]   freeze a task; run/resume/retry refuse it until resumed\n" +
@@ -278,7 +277,7 @@ export const USAGE =
   "  sta --check-roles [--project-root <path>]          check each role workspace's watermark against knowledge/\n" +
   "  sta --check-git-ownership [--project-root <path>]  check that Git mutation stays inside orchestrator/src/git/ and forbidden subcommands are absent\n" +
   "  sta --version                                      show the Framework version this CLI runs\n" +
-  "run/retry exit codes: 0 deployed · 1 blocked · 2 unknown gate · 3 rejected by a person · 4 parked — a gate awaits `sta approve <task-id> --yes|--no`\n" +
+  "run/retry exit codes: 0 deployed · 1 blocked · 2 unknown gate · 3 rejected by a person · 4 parked — a gate awaits `sta approve <task-id> --request <request-id> --yes|--no`\n" +
   `  classification flags: ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
 
 /** Pure argv parser — kept separate from process.argv/console/exit so it's directly testable. */
@@ -590,24 +589,6 @@ export function cliVersion(startDir: string = path.dirname(fileURLToPath(import.
   }
 }
 
-/**
- * Which `provideHumanApproval` field a gate's approval type maps to. Keyed on
- * `approvalType`, not on the edge's target state: `test-planner`
- * (and `project-manager` already did, for the "feature" pipeline) sits between
- * DESIGN and IMPLEMENTATION, so the schema-confirmation gate's target can be
- * PLAN rather than IMPLEMENTATION directly — the approval type is what stays
- * stable, per gatePolicy.ts/approval.ts's matching fix.
- */
-export async function confirm(question: string): Promise<boolean> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    const answer = await rl.question(`${question} [y/N] `);
-    return /^y(es)?$/i.test(answer.trim());
-  } finally {
-    rl.close();
-  }
-}
-
 const VERBS = [
   "run",
   "status",
@@ -824,9 +805,6 @@ export async function runCli(argv: string[], defaultProjectRoot: string, depende
     return await runTaskLoop(orchestrator, registry, composition.executor, {
       log: (message) => console.log(message),
       error: (message) => console.error(message),
-      confirm,
-      isTTY: process.stdin.isTTY === true,
-      actor: process.env.USER ?? process.env.USERNAME,
     });
   } finally {
     if (lockedTaskId) releaseTaskLock(args.projectRoot, lockedTaskId);

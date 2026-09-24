@@ -1,6 +1,6 @@
 import { AgentStage, TaskState } from "../types.js";
 import { STAGE_TO_STATE, forwardState } from "../state/taskState.js";
-import { checkGate } from "../gates/gatePolicy.js";
+import { checkGate, gateContextFor } from "../gates/gatePolicy.js";
 import type { PersistedTask } from "../store/taskStore.js";
 
 /**
@@ -39,6 +39,16 @@ export function isAgentAssignedAt(stage: AgentStage, state: TaskState, deployPre
     return state === TaskState.APPROVED;
   }
   return stageStateOf(stage) === state;
+}
+
+/**
+ * Pure view predicate for Done (V13 TASK-003): DEPLOYED *and* the
+ * `task-completion` evidence id the orchestrator wrote in the same transaction.
+ * A bare DEPLOYED state is not Done. Callers holding a store re-verify the
+ * record itself with `verifyTaskCompletion` (`transitionGuard.ts`).
+ */
+export function isTaskDone(task: Pick<PersistedTask, "machine" | "completionEvidenceId">): boolean {
+  return task.machine.current === TaskState.DEPLOYED && task.completionEvidenceId !== null;
 }
 
 /**
@@ -131,7 +141,11 @@ export function describeStatus(task: PersistedTask, allTasks?: readonly Persiste
   if (task.cancelled) return { kind: "CANCELLED", state: current, reason: task.cancelReason ?? "cancelled" };
   if (task.paused) return { kind: "PAUSED", state: current, reason: "paused — run `resume` or `retry` to continue" };
 
-  if (current === TaskState.DEPLOYED) return { kind: "DEPLOYED", state: current };
+  if (current === TaskState.DEPLOYED) {
+    return isTaskDone(task)
+      ? { kind: "DEPLOYED", state: current }
+      : { kind: "BLOCKED", state: current, reason: "DEPLOYED without recorded completion evidence — not Done" };
+  }
   if (current === TaskState.BLOCKED) {
     return { kind: "BLOCKED", state: current, reason: task.blockedReason ?? "blocked" };
   }
@@ -159,7 +173,7 @@ export function describeStatus(task: PersistedTask, allTasks?: readonly Persiste
   }
 
   if (next) {
-    const gate = checkGate(current, next, task.gateContext);
+    const gate = checkGate(current, next, gateContextFor(task.gateContext, task.approvals));
     if (!gate.allowed) {
       return {
         kind: "WAITING_FOR_HUMAN",
@@ -174,12 +188,12 @@ export function describeStatus(task: PersistedTask, allTasks?: readonly Persiste
   return { kind: "BLOCKED", state: current, reason: task.blockedReason ?? "no forward state available" };
 }
 
-/** Dependency ids that have not reached DEPLOYED — a missing task counts as unmet, never as satisfied. */
+/** Dependency ids that are not Done (`isTaskDone`) — a missing task counts as unmet, never as satisfied. */
 export function unmetDependencies(task: PersistedTask, allTasks: readonly PersistedTask[]): string[] {
   const byId = new Map(allTasks.map((t) => [t.taskId, t]));
   const satisfied = (id: string, ancestors: Set<string>): boolean => {
     const dependency = byId.get(id);
-    if (!dependency || dependency.cancelled || dependency.paused || dependency.machine.current !== TaskState.DEPLOYED || ancestors.has(id)) return false;
+    if (!dependency || dependency.cancelled || dependency.paused || !isTaskDone(dependency) || ancestors.has(id)) return false;
     return dependency.dependsOn.every(dep => satisfied(dep, new Set([...ancestors, id])));
   };
   return task.dependsOn.filter(id => !satisfied(id, new Set([task.taskId])));

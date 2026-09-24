@@ -369,7 +369,7 @@ export function createProductionBoundedRunServices(options: BoundedRunServiceOpt
     if (result.outcome.result === "FAIL") {
       return { kind: "halt", reason: result.outcome.failure_reason ?? result.failure?.reason ?? `${role} stage failed`, category: failureCategory(result) };
     }
-    const verification = hook.verificationFor(req);
+    const verification = result.deterministicVerification;
     if (!verification) {
       return { kind: "halt", reason: `no deterministic verification evidence was produced for ${attempt.task_id}`, category: "deterministic" };
     }

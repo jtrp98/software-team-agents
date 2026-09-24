@@ -8,6 +8,10 @@ import { AgentStage, TaskState } from "../types.js";
 import { ArtifactType, type HandoffArtifact, type QaReportArtifact, type SecurityReportArtifact } from "../artifacts/schemas.js";
 import { ApprovalType } from "../gates/approval.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
+import { decidePending, testHumanVerifier } from "../gates/humanDecision.testSupport.js";
+import { withRequiredEvidence } from "../evidence/stageEvidence.testSupport.js";
+
+const human = { humanDecisionVerifier: testHumanVerifier() };
 
 /**
  * Integration tests — end to end through the real seams `orchestrator.test.ts`'s unit tests
@@ -66,8 +70,9 @@ function makeExecutor(overrides: Partial<Record<AgentStage, (callIndex: number) 
     const idx = counts[req.stage] ?? 0;
     counts[req.stage] = idx + 1;
     const override = overrides[req.stage];
-    if (override) return override(idx);
-    return { outcome: { tokens: 100, cost: 0.01, result: "PASS" } };
+    // A successful stage carries the evidence a real composition attaches (V13 TASK-003).
+    if (override) return withRequiredEvidence(req, override(idx));
+    return withRequiredEvidence(req, { outcome: { tokens: 100, cost: 0.01, result: "PASS" } });
   };
 }
 
@@ -76,8 +81,7 @@ async function runToCompletion(orch: Orchestrator, executor: AgentExecutor, maxS
   for (let i = 0; i < maxSteps; i++) {
     const status = await orch.step(executor);
     if (status.kind === "WAITING_FOR_HUMAN") {
-      const field = status.approvalType === ApprovalType.SCHEMA_CONFIRMATION ? "designApproved" : "humanApproved";
-      orch.provideHumanApproval(field, true);
+      decidePending(orch, true);
       continue;
     }
     if (status.kind === "DEPLOYED" || status.kind === "BLOCKED") return status;
@@ -130,7 +134,7 @@ describe("Full pipeline integration", () => {
       }),
     });
 
-    let orch = new Orchestrator("T-INTEGRATION-1", classification, { store });
+    let orch = new Orchestrator("T-INTEGRATION-1", classification, { ...human, store });
 
     // Run until the first human-approval gate (schema confirmation) — then simulate a crash:
     // discard this Orchestrator entirely and rebuild from the sqlite file alone.
@@ -138,8 +142,8 @@ describe("Full pipeline integration", () => {
     while (status.kind !== "WAITING_FOR_HUMAN") status = await orch.step(executor);
     expect(status.approvalType).toBe(ApprovalType.SCHEMA_CONFIRMATION);
 
-    orch = Orchestrator.resume("T-INTEGRATION-1", store);
-    orch.provideHumanApproval("designApproved", true);
+    orch = Orchestrator.resume("T-INTEGRATION-1", store, human);
+    decidePending(orch, true);
 
     const final = await runToCompletion(orch, executor);
 
@@ -162,7 +166,7 @@ describe("Full pipeline integration", () => {
 
     // The sqlite file itself agrees with the in-memory result — not just the object the test
     // already holds a reference to.
-    const reloaded = Orchestrator.resume("T-INTEGRATION-1", store);
+    const reloaded = Orchestrator.resume("T-INTEGRATION-1", store, human);
     expect(reloaded.machine.current).toBe(TaskState.DEPLOYED);
     expect(reloaded.retries.qa).toBe(1);
   });
@@ -178,7 +182,7 @@ describe("Full pipeline integration", () => {
       }),
     });
 
-    let orch = new Orchestrator("T-INTEGRATION-2", classification, { store });
+    let orch = new Orchestrator("T-INTEGRATION-2", classification, { ...human, store });
 
     // Drive two rounds, then crash and resume for the rest — the retry ceiling must be
     // honoured across the reload, not restarted.
@@ -187,7 +191,7 @@ describe("Full pipeline integration", () => {
     await orch.step(executor);
     await orch.step(executor);
 
-    orch = Orchestrator.resume("T-INTEGRATION-2", store);
+    orch = Orchestrator.resume("T-INTEGRATION-2", store, human);
     const final = await runToCompletion(orch, executor);
 
     expect(final.kind).toBe("BLOCKED");
@@ -199,7 +203,7 @@ describe("Full pipeline integration", () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const executor = makeExecutor({});
 
-    const orch = new Orchestrator("T-INTEGRATION-3", classification, { store });
+    const orch = new Orchestrator("T-INTEGRATION-3", classification, { ...human, store });
     await orch.step(executor); // BACKEND_ENGINEER runs once
 
     // Pause is a human override applied straight to the store (TaskRegistry.pause's own
@@ -207,7 +211,7 @@ describe("Full pipeline integration", () => {
     const task = store.loadTask("T-INTEGRATION-3")!;
     store.saveTask({ ...task, paused: true });
 
-    const resumed = Orchestrator.resume("T-INTEGRATION-3", store);
+    const resumed = Orchestrator.resume("T-INTEGRATION-3", store, human);
     expect(resumed.snapshot().paused).toBe(true);
   });
 });

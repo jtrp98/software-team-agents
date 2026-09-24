@@ -5,6 +5,7 @@ import { Orchestrator } from "../orchestrator/orchestrator.js";
 import type { AgentExecutor, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
 import type { StructuredFailure } from "../orchestrator/failure.js";
+import { withRequiredEvidence } from "../evidence/stageEvidence.testSupport.js";
 
 /**
  * T-V8-015 through the real orchestrator: the route is recorded next to the
@@ -28,7 +29,7 @@ function failingQaReport(): QaReportArtifact {
 
 function executorWith(qaFailure: StructuredFailure | undefined): AgentExecutor {
   return async (req): Promise<AgentExecutorResult> => {
-    if (req.stage !== AgentStage.QA_ENGINEER) return { outcome: { tokens: 1, cost: 0, result: "PASS" } };
+    if (req.stage !== AgentStage.QA_ENGINEER) return withRequiredEvidence(req, { outcome: { tokens: 1, cost: 0, result: "PASS" } });
     return {
       outcome: { tokens: 1, cost: 0, result: "FAIL" },
       artifactType: ArtifactType.QA_REPORT,

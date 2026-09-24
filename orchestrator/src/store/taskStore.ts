@@ -10,6 +10,7 @@ import { RuntimeTaskSchema } from "../orchestrator/runtimeTask.js";
 import { BusinessInputEvidenceSchema } from "../gates/businessInput.js";
 import { DesignGateAssessmentSchema } from "../docs/designEvidence.js";
 import { TEST_STRATEGY_TRIGGERS } from "../classification/taskClassifier.js";
+import type { EvidenceStore } from "../evidence/evidenceStore.js";
 
 /**
  * Everything the orchestrator holds about one task, in a form that survives
@@ -57,18 +58,17 @@ export const PersistedTaskSchema = z.object({
     security: z.number().int().nonnegative(),
   }),
   /**
-   * Human evidence is persisted on purpose: an approval a person already gave
-   * must not be asked for again just because the process restarted. The two
-   * report fields are re-validated against their real artifact schemas on load,
-   * so a truncated or hand-edited row fails loudly instead of resuming a task
-   * on a QA report that no longer parses.
+   * Gate evidence other than human approval. Approval facts are never stored
+   * here: they exist only as `approvals` ledger records and are derived at
+   * check time, so a row carrying `requirementApproved`/`designApproved`/
+   * `humanApproved` is refused as corrupt rather than trusted. The two report
+   * fields are re-validated against their real artifact schemas on load, so a
+   * truncated or hand-edited row fails loudly instead of resuming a task on a
+   * QA report that no longer parses.
    */
-  gateContext: z.object({
-    requirementApproved: z.boolean().optional(),
+  gateContext: z.strictObject({
     businessInput: BusinessInputEvidenceSchema.optional(),
     designAssessment: DesignGateAssessmentSchema.optional(),
-    designApproved: z.boolean().optional(),
-    humanApproved: z.boolean().optional(),
     qaReport: QaReportArtifactSchema.optional(),
     securityReport: SecurityReportArtifactSchema.optional(),
     // The mode decision rides with the rest of the gate evidence so a resumed
@@ -83,14 +83,12 @@ export const PersistedTaskSchema = z.object({
     qaVerdictRequirements: z.array(z.string().min(1)).optional(),
   }),
   /**
-   * Every human decision this task has asked for, with its answer.
-   *
-   * `gateContext`'s booleans are derived from this, not kept beside it — one
-   * source of truth. Defaulted to empty so an old row still loads instead of
-   * failing as corrupt: an old task simply has no ledger yet, which is true
-   * rather than broken.
+   * Every approval request this task opened, with its trusted human decision
+   * (or evidence withdrawal). The only source of approval state: an approved
+   * pending request survives a restart because it lives here. A pre-V13
+   * record (no request id / scope / authenticated decision) fails to parse.
    */
-  approvals: z.array(ApprovalRecordSchema).default([]),
+  approvals: z.array(ApprovalRecordSchema),
   artifacts: z.record(z.string(), z.string()),
   pipelineCursor: z.number().int().nonnegative(),
   blockedReason: z.string().nullable(),
@@ -162,6 +160,13 @@ export const PersistedTaskSchema = z.object({
    * rather than broken, same defaulting pattern as `paused` above.
    */
   knowledgeRoot: KnowledgeRootIdentitySchema.nullable().default(null),
+  /**
+   * V13 TASK-003: the `task-completion` evidence record written in the same
+   * transaction that moved the task to DEPLOYED. Done is DEPLOYED *and* this
+   * record (`transitionGuard.ts` `isTaskDone`/`verifyTaskCompletion`); a row
+   * without the field is refused, and a DEPLOYED row with null is not Done.
+   */
+  completionEvidenceId: z.string().regex(/^evd_[0-9a-f]{32}$/).nullable(),
 });
 export type PersistedTask = z.infer<typeof PersistedTaskSchema>;
 
@@ -240,11 +245,11 @@ export class PersistedStateCorruptError extends Error {
  * be mutated afterwards through the caller's reference, and what comes out
  * cannot be mutated back into the store.
  */
-export interface TaskStore {
+export interface TaskStore extends EvidenceStore {
   /**
    * Runs `fn` as one all-or-nothing unit: every write inside it lands together
    * or none of them does, including writes made through a run ledger backed by
-   * the same file. Added for T-V8-017, whose whole point is that a plan cannot
+   * the same file and evidence records (V13 TASK-002). Added for T-V8-017, whose whole point is that a plan cannot
    * half-register. A nested call joins the open transaction and runs inline, so
    * an inner unit commits with the outer one or is rolled back with it.
    */
@@ -310,5 +315,6 @@ export function newPersistedTask(params: {
     deployPrepared: false,
     targetBindings: params.targetBindings ?? { targets: [] },
     knowledgeRoot: params.knowledgeRoot ?? null,
+    completionEvidenceId: null,
   };
 }

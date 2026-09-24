@@ -8,6 +8,10 @@ import { ApprovalType } from "../gates/approval.js";
 import { AGENT_REGISTRY } from "../agents/registry.js";
 import { PermissionDeniedError } from "../agents/permissionPolicy.js";
 import { Permission } from "../agents/permissions.js";
+import { decidePending, testHumanVerifier } from "../gates/humanDecision.testSupport.js";
+import { PASSING_VERIFICATION, withRequiredEvidence } from "../evidence/stageEvidence.testSupport.js";
+
+const human = { humanDecisionVerifier: testHumanVerifier() };
 
 // A doc-producing stage's validated artifact is always its HANDOFF (see
 // runtime/runtimeExecutor.ts's `ownedDoc` branch) — never a structured
@@ -57,8 +61,9 @@ function makeExecutor(overrides: Partial<Record<AgentStage, (callIndex: number) 
     const idx = counts[req.stage] ?? 0;
     counts[req.stage] = idx + 1;
     const override = overrides[req.stage];
-    if (override) return override(idx);
-    return { outcome: { tokens: 100, cost: 0.01, result: "PASS" } };
+    // A successful stage carries the evidence a real composition attaches (V13 TASK-003).
+    if (override) return withRequiredEvidence(req, override(idx));
+    return withRequiredEvidence(req, { outcome: { tokens: 100, cost: 0.01, result: "PASS" } });
   };
 }
 
@@ -66,11 +71,7 @@ async function runToCompletion(orch: Orchestrator, executor: AgentExecutor, maxS
   for (let i = 0; i < maxSteps; i++) {
     const status = await orch.step(executor);
     if (status.kind === "WAITING_FOR_HUMAN") {
-      // Keyed on approvalType, not on `to`: test-planner sits between DESIGN and
-      // IMPLEMENTATION, so the schema-confirmation gate's target is PLAN, not
-      // IMPLEMENTATION directly (gatePolicy.ts/approval.ts's matching fix).
-      const field = status.approvalType === ApprovalType.SCHEMA_CONFIRMATION ? "designApproved" : "humanApproved";
-      orch.provideHumanApproval(field, true);
+      decidePending(orch, true);
       continue;
     }
     if (status.kind === "DEPLOYED" || status.kind === "BLOCKED") return status;
@@ -81,7 +82,7 @@ async function runToCompletion(orch: Orchestrator, executor: AgentExecutor, maxS
 describe("Orchestrator", () => {
   it("drives a TRIVIAL frontend task straight to DEPLOYED in one step (no design phase — T-UX11)", async () => {
     const classification = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
-    const orch = new Orchestrator("T-TRIVIAL", classification);
+    const orch = new Orchestrator("T-TRIVIAL", classification, human);
     const executor = makeExecutor({});
     const status = await orch.step(executor);
     expect(status.kind).toBe("DEPLOYED");
@@ -91,7 +92,7 @@ describe("Orchestrator", () => {
 
   it("loops a SMALL task's QA failure back to the engineer, then deploys on the retry", async () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
-    const orch = new Orchestrator("T-SMALL", classification);
+    const orch = new Orchestrator("T-SMALL", classification, human);
     const executor = makeExecutor({
       [AgentStage.QA_ENGINEER]: (idx) => ({
         outcome: { tokens: 500, cost: 0.02, result: idx === 0 ? "FAIL" : "PASS" },
@@ -114,7 +115,7 @@ describe("Orchestrator", () => {
 
   it("escalates to BLOCKED once QA fails past MAX_RETRY", async () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
-    const orch = new Orchestrator("T-SMALL-FAIL", classification);
+    const orch = new Orchestrator("T-SMALL-FAIL", classification, human);
     const executor = makeExecutor({
       [AgentStage.QA_ENGINEER]: () => ({
         outcome: { tokens: 500, cost: 0.02, result: "FAIL" },
@@ -134,7 +135,7 @@ describe("Orchestrator", () => {
       touchesBackend: true,
       testStrategyTriggers: ["migration"],
     });
-    const orch = new Orchestrator("T-LARGE", classification);
+    const orch = new Orchestrator("T-LARGE", classification, human);
     const executor = makeExecutor({
       [AgentStage.SYSTEM_ANALYST]: () => ({
         outcome: { tokens: 2000, cost: 0.2, result: "PASS" },
@@ -174,7 +175,7 @@ describe("Orchestrator", () => {
       touchesBackend: true,
       testStrategyTriggers: ["migration"],
     });
-    const orch = new Orchestrator("T-GATE", classification);
+    const orch = new Orchestrator("T-GATE", classification, human);
     const executor = makeExecutor({
       [AgentStage.SYSTEM_ANALYST]: () => ({
         outcome: { tokens: 2000, cost: 0.2, result: "PASS" },
@@ -194,7 +195,7 @@ describe("Orchestrator", () => {
 
   it("stops with BLOCKED (STOP -> Human) once the token budget is exceeded", async () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
-    const orch = new Orchestrator("T-BUDGET", classification, { budget: { task_budget: Infinity, agent_budget: Infinity, retry_budget: 3, token_budget: 100 } });
+    const orch = new Orchestrator("T-BUDGET", classification, { ...human, budget: { task_budget: Infinity, agent_budget: Infinity, retry_budget: 3, token_budget: 100 } });
     const executor = makeExecutor({
       [AgentStage.BACKEND_ENGINEER]: () => ({ outcome: { tokens: 1000, cost: 0.01, result: "PASS" } }),
     });
@@ -206,7 +207,7 @@ describe("Orchestrator", () => {
 
   it("routes an UNKNOWN classification straight to BLOCKED without executing any agent", async () => {
     const classification = classifyTask({});
-    const orch = new Orchestrator("T-UNKNOWN", classification);
+    const orch = new Orchestrator("T-UNKNOWN", classification, human);
     const executor = makeExecutor({});
     const status = await orch.step(executor);
     expect(status.kind).toBe("BLOCKED");
@@ -215,7 +216,7 @@ describe("Orchestrator", () => {
 
   it("emits AGENT_ASSIGNED, AGENT_COMPLETED, and TASK_DEPLOYED for a TRIVIAL task's event bus", async () => {
     const classification = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
-    const orch = new Orchestrator("T-EVENTS", classification);
+    const orch = new Orchestrator("T-EVENTS", classification, human);
     const seen: string[] = [];
     orch.events.on("AGENT_ASSIGNED", (e) => seen.push(`ASSIGNED:${e.stage}`));
     orch.events.on("AGENT_COMPLETED", (e) => seen.push(`COMPLETED:${e.stage}`));
@@ -232,7 +233,7 @@ describe("Orchestrator", () => {
 
   it("does not re-emit AGENT_ASSIGNED for the same assignment on repeated status() polls", async () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
-    const orch = new Orchestrator("T-DEDUP", classification);
+    const orch = new Orchestrator("T-DEDUP", classification, human);
     let assignedCount = 0;
     orch.events.on("AGENT_ASSIGNED", () => assignedCount++);
 
@@ -244,7 +245,7 @@ describe("Orchestrator", () => {
 
   it("reportCompletion is the same event-driven path step() uses under the hood — no direct executor call needed", () => {
     const classification = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
-    const orch = new Orchestrator("T-PUSH", classification);
+    const orch = new Orchestrator("T-PUSH", classification, human);
     const assigned = orch.status();
     expect(assigned.kind).toBe("RUNNING");
     expect(assigned.kind === "RUNNING" && assigned.stage).toBe(AgentStage.FRONTEND_ENGINEER);
@@ -252,7 +253,7 @@ describe("Orchestrator", () => {
     // simulate "the agent finished and told us" without ever calling an executor callback
     const final = orch.reportCompletion(
       AgentStage.FRONTEND_ENGINEER,
-      { outcome: { tokens: 50, cost: 0.01, result: "PASS" } },
+      { outcome: { tokens: 50, cost: 0.01, result: "PASS" }, deterministicVerification: PASSING_VERIFICATION },
       { start: 0, end: 1 },
     );
     expect(final.kind).toBe("DEPLOYED");
@@ -260,7 +261,7 @@ describe("Orchestrator", () => {
 
   it("reportCompletion rejects a completion report for a stage that isn't currently assigned", () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
-    const orch = new Orchestrator("T-WRONG-STAGE", classification);
+    const orch = new Orchestrator("T-WRONG-STAGE", classification, human);
     orch.status(); // assigns BACKEND_ENGINEER
     expect(() =>
       orch.reportCompletion(
@@ -277,7 +278,7 @@ describe("Orchestrator", () => {
       touchesBackend: true,
       testStrategyTriggers: ["migration"],
     });
-    const orch = new Orchestrator("T-GATE-EVENT", classification);
+    const orch = new Orchestrator("T-GATE-EVENT", classification, human);
     const waiting: string[] = [];
     orch.events.on("WAITING_FOR_HUMAN", (e) => waiting.push(`${e.from}->${e.to}`));
     const executor = makeExecutor({
@@ -293,7 +294,7 @@ describe("Orchestrator", () => {
     expect(waiting).toEqual([`${TaskState.DESIGN}->${TaskState.PLAN}`]);
 
     const blocked: string[] = [];
-    const orch2 = new Orchestrator("T-BLOCKED-EVENT", classification, {
+    const orch2 = new Orchestrator("T-BLOCKED-EVENT", classification, { ...human,
       budget: { task_budget: Infinity, agent_budget: Infinity, retry_budget: 3, token_budget: 1 },
     });
     orch2.events.on("TASK_BLOCKED", (e) => blocked.push(e.reason));
@@ -311,7 +312,7 @@ describe("Orchestrator", () => {
 
   it("gives the backend-engineer only its policy-allowed context categories", async () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
-    const orch = new Orchestrator("T-CTX", classification);
+    const orch = new Orchestrator("T-CTX", classification, human);
     let capturedSources: string[] = [];
     const executor: AgentExecutor = (req) => {
       capturedSources = req.context.map((c) => c.source);
@@ -325,7 +326,7 @@ describe("Orchestrator", () => {
 describe("T44 — deploy prepare vs execute", () => {
   it("runs devops twice for a deploy-only task — prepare, then (after the DEPLOY gate) execute — never DEPLOYED before approval", async () => {
     const classification = classifyTask({ isProductionDeployOrMigration: true });
-    const orch = new Orchestrator("T-DEPLOY", classification);
+    const orch = new Orchestrator("T-DEPLOY", classification, human);
     const phases: (string | undefined)[] = [];
     const executor: AgentExecutor = (req) => {
       phases.push(req.deployPhase);
@@ -339,7 +340,7 @@ describe("T44 — deploy prepare vs execute", () => {
     expect(afterPrepare.kind).toBe("WAITING_FOR_HUMAN");
     if (afterPrepare.kind === "WAITING_FOR_HUMAN") expect(afterPrepare.approvalType).toBe(ApprovalType.DEPLOY);
 
-    orch.decideApproval(ApprovalType.DEPLOY, true, { by: "tester" });
+    decidePending(orch, true);
 
     const executeStatus = await orch.step(executor);
     expect(executeStatus.kind).toBe("DEPLOYED");
@@ -350,10 +351,10 @@ describe("T44 — deploy prepare vs execute", () => {
 
   it("the capability gate refuses the deploy execute launch when devops's contract loses `deploy`", async () => {
     const classification = classifyTask({ isProductionDeployOrMigration: true });
-    const orch = new Orchestrator("T-DEPLOY-NO-PERM", classification);
+    const orch = new Orchestrator("T-DEPLOY-NO-PERM", classification, human);
     const executor: AgentExecutor = () => ({ outcome: { tokens: 10, cost: 0, result: "PASS" } });
     await orch.step(executor); // prepare
-    orch.decideApproval(ApprovalType.DEPLOY, true, { by: "tester" });
+    decidePending(orch, true);
 
     // Simulate a contract edited to drop the destructive permission: the launch
     // itself must fail closed — no run is recorded as attempted, nothing deploys.
@@ -374,7 +375,7 @@ describe("T44 — deploy prepare vs execute", () => {
 
   it("a failed prepare run is retried as prepare again, never treated as done", async () => {
     const classification = classifyTask({ isProductionDeployOrMigration: true });
-    const orch = new Orchestrator("T-DEPLOY-FAIL", classification);
+    const orch = new Orchestrator("T-DEPLOY-FAIL", classification, human);
     const phases: (string | undefined)[] = [];
     let call = 0;
     const executor: AgentExecutor = (req) => {
@@ -399,10 +400,10 @@ describe("T44 — deploy prepare vs execute", () => {
     const { MemoryTaskStore } = await import("../store/memoryStore.js");
     const store = new MemoryTaskStore();
     const classification = classifyTask({ isProductionDeployOrMigration: true });
-    const orch = new Orchestrator("T-DEPLOY-RESUME", classification, { store });
+    const orch = new Orchestrator("T-DEPLOY-RESUME", classification, { ...human, store });
     await orch.step(() => ({ outcome: { tokens: 10, cost: 0.01, result: "PASS" } })); // prepare
 
-    const resumed = Orchestrator.resume("T-DEPLOY-RESUME", store);
+    const resumed = Orchestrator.resume("T-DEPLOY-RESUME", store, human);
     const status = resumed.status();
     expect(status.kind).toBe("WAITING_FOR_HUMAN"); // not RUNNING prepare again
     if (status.kind === "WAITING_FOR_HUMAN") expect(status.approvalType).toBe(ApprovalType.DEPLOY);
@@ -410,7 +411,7 @@ describe("T44 — deploy prepare vs execute", () => {
 
   it("a non-devops stage never gets a deployPhase", async () => {
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
-    const orch = new Orchestrator("T-NOT-DEPLOY", classification);
+    const orch = new Orchestrator("T-NOT-DEPLOY", classification, human);
     let captured: string | undefined = "unset";
     const executor: AgentExecutor = (req) => {
       captured = req.deployPhase;
@@ -424,12 +425,12 @@ describe("T44 — deploy prepare vs execute", () => {
 describe("T45 — a failed execute blocks instead of silently deploying", () => {
   async function toApproved(orch: Orchestrator): Promise<void> {
     await orch.step(() => ({ outcome: { tokens: 10, cost: 0.01, result: "PASS" } })); // prepare
-    orch.decideApproval(ApprovalType.DEPLOY, true, { by: "tester" });
+    decidePending(orch, true);
   }
 
   it("execute FAIL forces BLOCKED, never DEPLOYED, and names the Rollback runbook", async () => {
     const classification = classifyTask({ isProductionDeployOrMigration: true });
-    const orch = new Orchestrator("T-EXEC-FAIL", classification);
+    const orch = new Orchestrator("T-EXEC-FAIL", classification, human);
     await toApproved(orch);
 
     const status = await orch.step(() => ({ outcome: { tokens: 10, cost: 0.01, result: "FAIL" } })); // execute
@@ -446,7 +447,7 @@ describe("T45 — a failed execute blocks instead of silently deploying", () => 
 
   it("execute PASS still reaches DEPLOYED — the new block only fires on FAIL", async () => {
     const classification = classifyTask({ isProductionDeployOrMigration: true });
-    const orch = new Orchestrator("T-EXEC-PASS", classification);
+    const orch = new Orchestrator("T-EXEC-PASS", classification, human);
     await toApproved(orch);
 
     const status = await orch.step(() => ({ outcome: { tokens: 10, cost: 0.01, result: "PASS" } })); // execute
@@ -455,7 +456,7 @@ describe("T45 — a failed execute blocks instead of silently deploying", () => 
 
   it("a FAILed prepare (before approval) is retried, not routed through the T45 block — that only applies to execute", async () => {
     const classification = classifyTask({ isProductionDeployOrMigration: true });
-    const orch = new Orchestrator("T-PREPARE-FAIL", classification);
+    const orch = new Orchestrator("T-PREPARE-FAIL", classification, human);
 
     const status = await orch.step(() => ({ outcome: { tokens: 10, cost: 0.01, result: "FAIL" } })); // prepare fails
     expect(status.kind).toBe("RUNNING"); // reassigned to prepare again, not BLOCKED
@@ -484,13 +485,7 @@ describe("uxui-designer routes questions back to ba/sa (T-UX10)", () => {
       const status = await orch.step(executor);
       if (status.kind === "RUNNING" && status.stage === AgentStage.UXUI_DESIGNER) return;
       if (status.kind === "WAITING_FOR_HUMAN") {
-        const field =
-          status.approvalType === ApprovalType.REQUIREMENT_INTERVIEW
-            ? "requirementApproved"
-            : status.approvalType === ApprovalType.SCHEMA_CONFIRMATION
-              ? "designApproved"
-              : "humanApproved";
-        orch.provideHumanApproval(field, true);
+        decidePending(orch, true);
         continue;
       }
       if (status.kind === "BLOCKED" || status.kind === "DEPLOYED") break;
@@ -506,7 +501,7 @@ describe("uxui-designer routes questions back to ba/sa (T-UX10)", () => {
   });
 
   it("a value question routes back to business-analyst at REQUIREMENT, not forward to frontend", async () => {
-    const orch = new Orchestrator("T-UX-BA", feature());
+    const orch = new Orchestrator("T-UX-BA", feature(), human);
     await driveToUxui(orch, makeExecutor({}));
 
     const status = await orch.step(() => ({
@@ -522,7 +517,7 @@ describe("uxui-designer routes questions back to ba/sa (T-UX10)", () => {
 
   it("fails closed when a doc stage returns an invalid handoff instead of silently storing it", () => {
     const classification = classifyTask({ touchesSchema: true, touchesBackend: true });
-    const orch = new Orchestrator("T-BAD-HANDOFF", classification);
+    const orch = new Orchestrator("T-BAD-HANDOFF", classification, human);
     const status = orch.status();
     expect(status).toEqual({ kind: "RUNNING", stage: AgentStage.SYSTEM_ANALYST });
     expect(() => orch.reportCompletion(
@@ -537,7 +532,7 @@ describe("uxui-designer routes questions back to ba/sa (T-UX10)", () => {
   });
 
   it("a feasibility question routes back to system-analyst at DESIGN and re-walks the chain", async () => {
-    const orch = new Orchestrator("T-UX-SA", feature());
+    const orch = new Orchestrator("T-UX-SA", feature(), human);
     await driveToUxui(orch, makeExecutor({}));
 
     const status = await orch.step(() => ({
@@ -556,12 +551,12 @@ describe("uxui-designer routes questions back to ba/sa (T-UX10)", () => {
       touchesFrontend: true,
       testStrategyTriggers: ["cross-task"],
     });
-    const orch = new Orchestrator("T-UX-NOBA", classification);
+    const orch = new Orchestrator("T-UX-NOBA", classification, human);
     // incremental: SA -> TP -> BE -> UXUI -> FE -> QA; the DESIGN->PLAN schema gate still fires.
     await orch.step(() => pass); // system-analyst
-    orch.provideHumanApproval("designApproved", true);
+    decidePending(orch, true);
     await orch.step(() => pass); // test-planner
-    await orch.step(() => pass); // backend-engineer
+    await orch.step((req) => withRequiredEvidence(req, pass)); // backend-engineer
 
     const status = await orch.step(() => ({
       outcome: { tokens: 100, cost: 0.01, result: "FAIL" },
@@ -573,7 +568,7 @@ describe("uxui-designer routes questions back to ba/sa (T-UX10)", () => {
   });
 
   it("a critical-severity question stops for a person instead of routing automatically", async () => {
-    const orch = new Orchestrator("T-UX-CRIT", feature());
+    const orch = new Orchestrator("T-UX-CRIT", feature(), human);
     await driveToUxui(orch, makeExecutor({}));
 
     const status = await orch.step(() => ({

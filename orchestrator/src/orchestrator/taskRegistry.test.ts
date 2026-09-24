@@ -7,7 +7,9 @@ import { classifyTask } from "../classification/taskClassifier.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";
 import { TaskNotFoundError } from "../store/taskStore.js";
 import { DependencyNotMetError, TaskRegistry, UnknownDependencyError } from "./taskRegistry.js";
-import { ApprovalType } from "../gates/approval.js";
+import { decidePending, testHumanVerifier } from "../gates/humanDecision.testSupport.js";
+import { withStageEvidence } from "../evidence/stageEvidence.testSupport.js";
+
 
 const trivial = () => classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
 const incremental = () => classifyTask({ isIncrementalFeature: true, touchesBackend: true });
@@ -15,7 +17,7 @@ const incremental = () => classifyTask({ isIncrementalFeature: true, touchesBack
 const pass = { outcome: { tokens: 10, cost: 0.001, result: "PASS" as const } };
 
 function registry(stateViewPath?: string) {
-  return new TaskRegistry({ store: new MemoryTaskStore(), stateViewPath });
+  return new TaskRegistry({ store: new MemoryTaskStore(), stateViewPath, humanDecisionVerifier: testHumanVerifier() });
 }
 
 describe("TaskRegistry", () => {
@@ -66,7 +68,7 @@ describe("TaskRegistry", () => {
     const first = reg.create({ taskId: "T-1", classification: trivial() });
     reg.create({ taskId: "T-2", classification: trivial(), dependsOn: ["T-1"] });
 
-    await first.step(() => pass);
+    await first.step(withStageEvidence(() => pass));
     expect(first.machine.current).toBe(TaskState.DEPLOYED);
 
     const second = reg.open("T-2");
@@ -80,7 +82,7 @@ describe("TaskRegistry", () => {
 
     expect(reg.readyTasks().map((t) => t.taskId)).toEqual(["T-1"]);
 
-    await first.step(() => pass);
+    await first.step(withStageEvidence(() => pass));
     expect(reg.readyTasks().map((t) => t.taskId)).toEqual(["T-2"]);
   });
 
@@ -91,9 +93,9 @@ describe("TaskRegistry", () => {
     const first = reg.create({ taskId: "T-1", classification: incremental() });
     reg.create({ taskId: "T-2", classification: trivial(), dependsOn: ["T-1"] });
 
-    await first.step(() => pass); // system-analyst finishes; leaving DESIGN is gated
+    await first.step(withStageEvidence(() => pass)); // system-analyst finishes; leaving DESIGN is gated
     expect(first.status().kind).toBe("WAITING_FOR_HUMAN");
-    first.decideApproval(ApprovalType.SCHEMA_CONFIRMATION, false, { by: "test" });
+    decidePending(first, false);
     expect(first.status().kind).toBe("BLOCKED");
 
     expect(reg.readyTasks().map((t) => t.taskId)).toEqual([]);

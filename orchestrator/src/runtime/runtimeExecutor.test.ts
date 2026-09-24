@@ -8,7 +8,6 @@ import { AgentStage, TaskLevel } from "../types.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 import { Orchestrator } from "../orchestrator/orchestrator.js";
 import { classifyTask } from "../classification/taskClassifier.js";
-import { ApprovalType } from "../gates/approval.js";
 import { createRuntimeExecutor } from "./runtimeExecutor.js";
 import { ALL_MOCK_CAPABILITIES, MockRuntimeAdapter, okResult } from "./mockAdapter.js";
 import { NO_GUARDS, type RuntimeGuards } from "./runtimeAdapter.js";
@@ -23,6 +22,10 @@ import { latestExecutionPacketPath, readExecutionPacket } from "../state/runtime
 import type { ModelTierPolicy } from "./modelTiers.js";
 import { SOURCE_OF_TRUTH_SENTENCE } from "../codeintel/resolver.js";
 import { declareInstallationConfigOverrideChannelForTest } from "../threeRepo/installation.js";
+import { decidePending, testHumanVerifier } from "../gates/humanDecision.testSupport.js";
+import { withStageEvidence } from "../evidence/stageEvidence.testSupport.js";
+
+const human = { humanDecisionVerifier: testHumanVerifier() };
 
 declareInstallationConfigOverrideChannelForTest();
 
@@ -923,6 +926,7 @@ describe("document verdicts read back through the workspace (T108)", () => {
     const orch = new Orchestrator(
       "T-BA-HANDOFF",
       classifyTask({ isNewFeatureModuleOrProject: true, touchesBackend: true }),
+      human,
     );
     await orch.step(executorFor(runtime));
     const stored = orch.snapshot().artifacts[ArtifactType.HANDOFF];
@@ -985,11 +989,12 @@ describe("document verdicts read back through the workspace (T108)", () => {
 describe("the orchestrator drives a whole task through the interface (T108)", () => {
   /** Steps to completion, answering every human gate "yes" — the same helper shape the T55 integration suite uses. */
   async function runToCompletion(orch: Orchestrator, executor: Parameters<Orchestrator["step"]>[0], maxSteps = 20) {
+    // The composition's post-Dev sweep and reports stand in for the hooks a real run wires (V13 TASK-003).
+    const evidenced = withStageEvidence(executor);
     for (let i = 0; i < maxSteps; i++) {
-      const status = await orch.step(executor);
+      const status = await orch.step(evidenced);
       if (status.kind === "WAITING_FOR_HUMAN") {
-        const field = status.approvalType === ApprovalType.SCHEMA_CONFIRMATION ? "designApproved" : "humanApproved";
-        orch.provideHumanApproval(field, true);
+        decidePending(orch, true);
         continue;
       }
       if (status.kind === "DEPLOYED" || status.kind === "BLOCKED") return status;
@@ -1005,7 +1010,7 @@ describe("the orchestrator drives a whole task through the interface (T108)", ()
     });
 
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
-    const orch = new Orchestrator("T-RUNTIME", classification);
+    const orch = new Orchestrator("T-RUNTIME", classification, human);
     const executor = createRuntimeExecutor({
       runtime,
       projectRoot: tmpProject(),
@@ -1031,7 +1036,7 @@ describe("the orchestrator drives a whole task through the interface (T108)", ()
         models: ["sonnet"],
         files: { "_docs/module/sales-crm/review.md": PASSING_REVIEW },
       });
-      const orch = new Orchestrator(`T-COMPAT-${withRegistry ? "AFTER" : "BEFORE"}`, classification);
+      const orch = new Orchestrator(`T-COMPAT-${withRegistry ? "AFTER" : "BEFORE"}`, classification, human);
       const executor = createRuntimeExecutor({
         runtime,
         projectRoot,
@@ -1096,8 +1101,9 @@ describe("the orchestrator drives a whole task through the interface (T108)", ()
       guards: () => NO_GUARDS,
     });
 
-    let status = await orch.step(executor);
-    while (status.kind === "RUNNING") status = await orch.step(executor);
+    const evidenced = withStageEvidence(executor);
+    let status = await orch.step(evidenced);
+    for (let i = 0; status.kind === "RUNNING" && i < 20; i++) status = await orch.step(evidenced);
 
     expect(status.kind).toBe("BLOCKED");
     expect(orch.recovery?.kind).toBe("ESCALATE");
@@ -1108,7 +1114,7 @@ describe("the orchestrator drives a whole task through the interface (T108)", ()
    *
    * The orchestrator consults a structured failure only at `qa-engineer` and
    * `security` (see `reportCompletion`'s `failureKind`); at any other stage a
-   * FAIL simply advances the cursor. So the UNAVAILABLE/ERROR distinction is
+   * FAIL leaves the stage assigned for a retry (V13 TASK-003: it never advances). So the UNAVAILABLE/ERROR distinction is
    * carried faithfully in the record, but only *acted on* at those two stages.
    * That is pre-existing routing behaviour from T01/T06, not something T108
    * changed — and changing it would be a change to failure routing, which

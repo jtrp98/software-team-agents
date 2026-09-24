@@ -91,6 +91,7 @@
         "approvals",
         "approval",
         "last_failure",
+        "completion_evidence_id",
         "updated_at"
       ],
       "properties": {
@@ -162,7 +163,7 @@
           }
         },
         "approvals": {
-          "description": "The gate booleans, derived from the ledger below. Kept because readers already depend on them; the ledger is the source of truth.",
+          "description": "The gate booleans, derived from the ledger below at render time. The ledger is the only source of approval state.",
           "type": "object",
           "additionalProperties": false,
           "required": ["design_approved", "human_approved", "ledger"],
@@ -170,18 +171,22 @@
             "design_approved": { "type": "boolean" },
             "human_approved": { "type": "boolean" },
             "ledger": {
-              "description": "Every human decision this task asked for, with its answer. A rejected entry is an answer, not an absence — the task blocks on it rather than asking again.",
+              "description": "Every approval request this task opened, with its trusted human decision. A rejected entry is an answer, not an absence — the task blocks on it rather than asking again. A withdrawn entry was closed by evidence; no human answered it.",
               "type": "array",
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["type", "required", "status", "reason", "decided_by", "decided_at"],
+                "required": ["request_id", "type", "from", "to", "required", "status", "reason", "decided_by", "decided_via", "decided_at"],
                 "properties": {
+                  "request_id": { "type": "string", "pattern": "^apr_[0-9a-f]{32}$" },
                   "type": { "$ref": "#/definitions/approvalType" },
+                  "from": { "type": ["string", "null"] },
+                  "to": { "type": ["string", "null"] },
                   "required": { "type": "boolean" },
-                  "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+                  "status": { "type": "string", "enum": ["pending", "approved", "rejected", "withdrawn"] },
                   "reason": { "type": "string", "minLength": 1 },
                   "decided_by": { "type": ["string", "null"] },
+                  "decided_via": { "type": ["string", "null"] },
                   "decided_at": { "type": ["string", "null"] }
                 }
               }
@@ -194,11 +199,12 @@
             {
               "type": "object",
               "additionalProperties": false,
-              "required": ["required", "type", "status"],
+              "required": ["request_id", "required", "type", "status"],
               "properties": {
+                "request_id": { "type": "string", "pattern": "^apr_[0-9a-f]{32}$" },
                 "required": { "type": "boolean" },
                 "type": { "$ref": "#/definitions/approvalType" },
-                "status": { "type": "string", "enum": ["pending", "approved", "rejected"] }
+                "status": { "type": "string", "enum": ["pending"] }
               }
             },
             { "type": "null" }
@@ -225,6 +231,11 @@
             },
             { "type": "null" }
           ]
+        },
+        "completion_evidence_id": {
+          "description": "The task-completion evidence record that makes this task Done (V13 TASK-003); null until then.",
+          "type": ["string", "null"],
+          "pattern": "^evd_[0-9a-f]{32}$"
         },
         "updated_at": { "type": "string", "format": "date-time" }
       }

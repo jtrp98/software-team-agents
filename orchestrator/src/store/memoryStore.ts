@@ -1,4 +1,5 @@
 import type { RunRecord } from "../observability/runLog.js";
+import { checkEvidenceAppend, parseStoredEvidence, type EvidenceRecord } from "../evidence/evidenceStore.js";
 import {
   TaskAlreadyExistsError,
   TaskNotFoundError,
@@ -23,6 +24,7 @@ export class MemoryTaskStore implements TaskStore {
   private tasks = new Map<string, PersistedTask>();
   private runs: RunRecord[] = [];
   private events: PersistedEvent[] = [];
+  private evidence: EvidenceRecord[] = [];
   private inTransaction = false;
 
   /**
@@ -36,6 +38,7 @@ export class MemoryTaskStore implements TaskStore {
     const tasks = new Map([...this.tasks].map(([id, task]) => [id, structuredClone(task)] as const));
     const runs = this.runs.map((r) => ({ ...r }));
     const events = this.events.map((e) => structuredClone(e));
+    const evidence = this.evidence.map((e) => structuredClone(e));
     this.inTransaction = true;
     try {
       return fn();
@@ -43,6 +46,7 @@ export class MemoryTaskStore implements TaskStore {
       this.tasks = tasks;
       this.runs = runs;
       this.events = events;
+      this.evidence = evidence;
       throw error;
     } finally {
       this.inTransaction = false;
@@ -93,6 +97,27 @@ export class MemoryTaskStore implements TaskStore {
 
   eventsForTask(taskId: string): PersistedEvent[] {
     return this.events.filter((e) => e.taskId === taskId).map((e) => structuredClone(e));
+  }
+
+  appendEvidence(record: EvidenceRecord): EvidenceRecord {
+    const stored = parseStoredEvidence(record.evidenceId, structuredClone(record));
+    const existing = this.loadEvidence(stored.evidenceId);
+    const write = checkEvidenceAppend(stored, existing, (ref) =>
+      this.evidence.some((e) => e.evidenceId === ref && e.taskId === stored.taskId),
+    );
+    if (write) this.evidence.push(stored);
+    return structuredClone(existing ?? stored);
+  }
+
+  loadEvidence(evidenceId: string): EvidenceRecord | null {
+    const found = this.evidence.find((e) => e.evidenceId === evidenceId);
+    return found ? parseStoredEvidence(evidenceId, structuredClone(found)) : null;
+  }
+
+  evidenceForTask(taskId: string): EvidenceRecord[] {
+    return this.evidence
+      .filter((e) => e.taskId === taskId)
+      .map((e) => parseStoredEvidence(e.evidenceId, structuredClone(e)));
   }
 
   close(): void {

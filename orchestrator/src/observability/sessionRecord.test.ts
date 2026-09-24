@@ -6,6 +6,7 @@ import { AgentStage } from "../types.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";
 import { measureWorkspaceStatic, recordContextComposition, recordInteractiveSession } from "./sessionRecord.js";
 import type { ContextComposition } from "../context/contextCommand.js";
+import type { EvidenceRecord } from "../evidence/evidenceStore.js";
 
 describe("interactive session observability (T-V3TOK-002)", () => {
   it("keeps always-loaded and reachable static bytes distinct, then records their exact footprint", () => {
@@ -83,7 +84,8 @@ describe("recordContextComposition (T-V5-037)", () => {
     const failingStore = {
       appendRun: () => { throw new Error("db locked"); },
       transaction<T>(fn: () => T) { return fn(); }, createTask() {}, saveTask() {}, loadTask() { return null; }, listTasks() { return []; },
-      runsForTask() { return []; }, allRuns() { return []; }, appendEvent() {}, eventsForTask() { return []; }, close() {},
+      runsForTask() { return []; }, allRuns() { return []; }, appendEvent() {}, eventsForTask() { return []; },
+      appendEvidence(r: EvidenceRecord) { return r; }, loadEvidence() { return null; }, evidenceForTask() { return []; }, close() {},
     };
     expect(() =>
       recordContextComposition({

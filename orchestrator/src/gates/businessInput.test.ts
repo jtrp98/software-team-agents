@@ -20,6 +20,10 @@ import {
   type BusinessInputEvidence,
 } from "./businessInput.js";
 import { checkGate } from "./gatePolicy.js";
+import { decidePending, testHumanVerifier } from "./humanDecision.testSupport.js";
+import { withStageEvidence } from "../evidence/stageEvidence.testSupport.js";
+
+const human = { humanDecisionVerifier: testHumanVerifier() };
 
 const completeInput = (overrides: Partial<BusinessInputEvidence> = {}): BusinessInputEvidence =>
   BusinessInputEvidenceSchema.parse({
@@ -240,7 +244,7 @@ describe("T-V8-006 orchestration, prompt, resume, and invalidation", () => {
     const orch = new Orchestrator(
       "T-CONFIRMED",
       classifyTask({ isNewFeatureModuleOrProject: true, touchesBackend: true }),
-      { businessInput: completeInput() },
+      { ...human, businessInput: completeInput() },
     );
 
     const status = await orch.step((request) => {
@@ -271,7 +275,7 @@ describe("T-V8-006 orchestration, prompt, resume, and invalidation", () => {
     const orch = new Orchestrator(
       "T-MATERIAL-PREFLIGHT",
       classifyTask({ isNewFeatureModuleOrProject: true, touchesBackend: true }),
-      { businessInput: unresolved },
+      { ...human, businessInput: unresolved },
     );
 
     expect(orch.status()).toMatchObject({
@@ -295,20 +299,23 @@ describe("T-V8-006 orchestration, prompt, resume, and invalidation", () => {
           },
         ],
       }),
-      { by: "Finance owner" },
     );
 
     expect(orch.status()).toEqual({ kind: "RUNNING", stage: AgentStage.BUSINESS_ANALYST });
+    // Evidence discharged the gate; no person answered, so no approval is manufactured.
     expect(orch.approvalLedger.at(-1)).toMatchObject({
-      status: "approved",
-      decidedBy: "Finance owner",
+      status: "withdrawn",
+      decision: null,
+      withdrawal: { reason: "discharged by updated confirmed-input evidence" },
     });
+    expect(orch.store.eventsForTask(orch.taskId).map((e) => e.type)).not.toContain("APPROVAL_DECIDED");
   });
 
   it("rejects confirmed input manufactured by an executing agent", async () => {
     const orch = new Orchestrator(
       "T-SELF-CONFIRM",
       classifyTask({ isNewFeatureModuleOrProject: true, touchesBackend: true }),
+      human,
     );
 
     await expect(
@@ -316,7 +323,7 @@ describe("T-V8-006 orchestration, prompt, resume, and invalidation", () => {
         ...pass,
         gateEvidence: { businessInput: completeInput() },
       }) as unknown as AgentExecutorResult),
-    ).rejects.toThrow(/trusted task-creation evidence/);
+    ).rejects.toThrow(/gateEvidence refused/);
   });
 
   it("persists confirmed evidence across resume without re-running BA", async () => {
@@ -324,11 +331,11 @@ describe("T-V8-006 orchestration, prompt, resume, and invalidation", () => {
     const first = new Orchestrator(
       "T-RESUME-CONFIRMED",
       classifyTask({ isNewFeatureModuleOrProject: true, touchesBackend: true }),
-      { store, businessInput: completeInput() },
+      { ...human, store, businessInput: completeInput() },
     );
-    await first.step(() => pass);
+    await first.step(withStageEvidence(() => pass));
 
-    const resumed = Orchestrator.resume("T-RESUME-CONFIRMED", store);
+    const resumed = Orchestrator.resume("T-RESUME-CONFIRMED", store, human);
     const stages: AgentStage[] = [];
     await resumed.step((request) => {
       stages.push(request.stage);
@@ -347,14 +354,14 @@ describe("T-V8-006 orchestration, prompt, resume, and invalidation", () => {
         touchesBackend: true,
         testStrategyTriggers: ["cross-task"],
       }),
-      { businessInput: completeInput() },
+      { ...human, businessInput: completeInput() },
     );
 
-    await orch.step(() => pass); // BA
-    await orch.step(() => pass); // SA -> schema/feasibility gate (unchanged in this round)
-    orch.provideHumanApproval("designApproved", true);
-    await orch.step(() => pass); // test-planner
-    await orch.step(() => pass); // backend
+    await orch.step(withStageEvidence(() => pass)); // BA
+    await orch.step(withStageEvidence(() => pass)); // SA -> schema/feasibility gate (unchanged in this round)
+    decidePending(orch, true);
+    await orch.step(withStageEvidence(() => pass)); // test-planner
+    await orch.step(withStageEvidence(() => pass)); // backend
     const retry = await orch.step(() => ({ outcome: { tokens: 1, cost: 0, result: "FAIL" } })); // QA
 
     expect(retry).toEqual({ kind: "RUNNING", stage: AgentStage.BACKEND_ENGINEER });

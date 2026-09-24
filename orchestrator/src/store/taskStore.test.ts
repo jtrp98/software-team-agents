@@ -18,6 +18,29 @@ import {
 } from "./taskStore.js";
 import type { RunRecord } from "../observability/runLog.js";
 import { TaskRegistry } from "../orchestrator/taskRegistry.js";
+import { ApprovalType, type ApprovalRecord } from "../gates/approval.js";
+import { decidePending, testHumanVerifier } from "../gates/humanDecision.testSupport.js";
+import { withStageEvidence } from "../evidence/stageEvidence.testSupport.js";
+
+function approvedRecord(): ApprovalRecord {
+  return {
+    requestId: "apr_0123456789abcdef0123456789abcdef",
+    scope: { taskId: "T-1", type: ApprovalType.SCHEMA_CONFIRMATION, from: TaskState.DESIGN, to: TaskState.PLAN },
+    required: true,
+    status: "approved",
+    reason: "DESIGN_APPROVED required",
+    requestedAt: 1,
+    decision: {
+      decisionId: "d-1",
+      approved: true,
+      actor: { kind: "human", id: "reviewer" },
+      source: { channel: "unit-channel", evidenceRef: "r-1" },
+      decidedAt: 2,
+      note: null,
+    },
+    withdrawal: null,
+  };
+}
 import type { AgentExecutor, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
 
@@ -43,7 +66,7 @@ function passingQaReport(): QaReportArtifact {
 
 /** Every stage PASSes immediately (qa-engineer additionally reports a passing QA_REPORT artifact, since the QA->READY_TO_DEPLOY gate checks that, not just outcome.result) — enough to drive a task from CREATED to DEPLOYED without a human gate in the way. */
 function makeExecutor(overrides: Partial<Record<AgentStage, () => AgentExecutorResult>> = {}): AgentExecutor {
-  return (req) => {
+  return withStageEvidence((req) => {
     const override = overrides[req.stage];
     if (override) return override();
     if (req.stage === AgentStage.QA_ENGINEER) {
@@ -54,7 +77,7 @@ function makeExecutor(overrides: Partial<Record<AgentStage, () => AgentExecutorR
       };
     }
     return { outcome: { tokens: 10, cost: 0.001, result: "PASS" } };
-  };
+  });
 }
 
 function sampleTask(taskId = "T-1"): PersistedTask {
@@ -160,7 +183,7 @@ describe.each(implementations)("%s", (_name, makeStore) => {
     store.close();
   });
 
-  it("saves state changes and keeps human approvals across a reload", () => {
+  it("saves state changes and keeps the approval ledger across a reload", () => {
     const store = makeStore();
     const task = sampleTask();
     store.createTask(task);
@@ -169,14 +192,24 @@ describe.each(implementations)("%s", (_name, makeStore) => {
       updatedAt: 2_000,
       pipelineCursor: 2,
       retries: { qa: 1, security: 0 },
-      gateContext: { designApproved: true, humanApproved: true },
+      approvals: [approvedRecord()],
       blockedReason: "waiting on a person",
     });
     const loaded = store.loadTask("T-1")!;
     expect(loaded.pipelineCursor).toBe(2);
     expect(loaded.retries.qa).toBe(1);
-    expect(loaded.gateContext).toEqual({ designApproved: true, humanApproved: true });
+    expect(loaded.approvals).toEqual([approvedRecord()]);
+    expect(loaded.gateContext).toEqual({});
     expect(loaded.blockedReason).toBe("waiting on a person");
+    store.close();
+  });
+
+  it("refuses a row that carries approval booleans in its gate context", () => {
+    const store = makeStore();
+    const task = sampleTask();
+    store.createTask(task);
+    store.saveTask({ ...task, gateContext: { designApproved: true } as unknown as typeof task.gateContext });
+    expect(() => store.loadTask("T-1")).toThrow(PersistedStateCorruptError);
     store.close();
   });
 
@@ -318,7 +351,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       const first = new SqliteTaskStore(file);
       const task = sampleTask();
       first.createTask(task);
-      first.saveTask({ ...task, pipelineCursor: 3, gateContext: { designApproved: true } });
+      first.saveTask({ ...task, pipelineCursor: 3, approvals: [approvedRecord()] });
       first.appendRun(sampleRun());
       first.appendEvent({ taskId: "T-1", at: 7, type: "AGENT_ASSIGNED", payload: { stage: "qa-engineer" } });
       first.close();
@@ -326,7 +359,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       const second = new SqliteTaskStore(file);
       const loaded = second.loadTask("T-1")!;
       expect(loaded.pipelineCursor).toBe(3);
-      expect(loaded.gateContext.designApproved).toBe(true);
+      expect(loaded.approvals[0]).toMatchObject({ status: "approved", decision: { actor: { id: "reviewer" } } });
       expect(second.runsForTask("T-1")).toHaveLength(1);
       expect(second.eventsForTask("T-1")).toHaveLength(1);
       second.close();
@@ -542,7 +575,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       }
 
       const versionCheck = new Database(file, { readonly: true });
-        expect(versionCheck.pragma("user_version", { simple: true })).toBe(19);
+        expect(versionCheck.pragma("user_version", { simple: true })).toBe(20);
       expect((versionCheck.pragma("table_info(runs)") as { name: string }[]).filter((column) => routingColumns.includes(column.name as typeof routingColumns[number])).map((column) => column.name)).toEqual([...routingColumns]);
       versionCheck.close();
 
@@ -585,7 +618,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
 
       const versionCheck = new Database(file, { readonly: true });
       try {
-        expect(versionCheck.pragma("user_version", { simple: true })).toBe(19);
+        expect(versionCheck.pragma("user_version", { simple: true })).toBe(20);
       } finally {
         versionCheck.close();
       }
@@ -645,7 +678,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
 
       const verify = new Database(file, { readonly: true });
       try {
-        expect(verify.pragma("user_version", { simple: true })).toBe(19);
+        expect(verify.pragma("user_version", { simple: true })).toBe(20);
         expect((verify.prepare("SELECT state FROM tasks WHERE task_id = ?").get("T-V12") as { state: string }).state).toBe(legacyBytes);
       } finally {
         verify.close();
@@ -726,7 +759,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       // A brand-new store instance and a brand-new TaskRegistry — nothing here is the same
       // in-memory object as above; only the file on disk connects them.
       const secondStore = new SqliteTaskStore(file);
-      const secondRegistry = new TaskRegistry({ store: secondStore });
+      const secondRegistry = new TaskRegistry({ store: secondStore, humanDecisionVerifier: testHumanVerifier() });
       const orch2 = secondRegistry.open("T-1");
 
       let status = orch2.status();
@@ -735,7 +768,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
         if (status.kind === "WAITING_FOR_HUMAN") {
           // The bugfix pipeline has no schema gate, but deploy approval is always human —
           // one of the five stops that hold regardless of classification.
-          orch2.provideHumanApproval("humanApproved", true);
+          decidePending(orch2, true);
           status = orch2.status();
           continue;
         }

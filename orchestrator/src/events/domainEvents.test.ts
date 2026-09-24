@@ -6,6 +6,10 @@ import { ArtifactType, type QaReportArtifact, type SecurityReportArtifact } from
 import { ApprovalType } from "../gates/approval.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";
 import { DOMAIN_EVENT_TYPES, DomainEventType, isDomainEventType, verdictEventFor } from "./domainEvents.js";
+import { decidePending, testHumanVerifier, TEST_HUMAN_CHANNEL } from "../gates/humanDecision.testSupport.js";
+import { withRequiredEvidence } from "../evidence/stageEvidence.testSupport.js";
+
+const human = { humanDecisionVerifier: testHumanVerifier() };
 
 function qaReport(status: "PASS" | "FAIL"): QaReportArtifact {
   return {
@@ -37,8 +41,9 @@ function makeExecutor(
     const idx = counts[req.stage] ?? 0;
     counts[req.stage] = idx + 1;
     const override = overrides[req.stage];
-    if (override) return override(idx);
-    return { outcome: { tokens: 100, cost: 0.01, result: "PASS" } };
+    // A successful stage carries the evidence a real composition attaches (V13 TASK-003).
+    if (override) return withRequiredEvidence(req, override(idx));
+    return withRequiredEvidence(req, { outcome: { tokens: 100, cost: 0.01, result: "PASS" } });
   };
 }
 
@@ -70,13 +75,14 @@ describe("domain event vocabulary", () => {
     // The lifecycle events are a separate set and must not be mistaken for these.
     expect(isDomainEventType("AGENT_COMPLETED")).toBe(false);
     expect(isDomainEventType("TASK_DEPLOYED")).toBe(false);
-    expect(DOMAIN_EVENT_TYPES).toHaveLength(7);
+    expect(isDomainEventType("APPROVAL_WITHDRAWN")).toBe(true);
+    expect(DOMAIN_EVENT_TYPES).toHaveLength(8);
   });
 });
 
 describe("Orchestrator emits domain events", () => {
   it("emits QA_PASSED with the round number on a first-pass round", async () => {
-    const orch = new Orchestrator("T-PASS", classifyTask({ isClearBugFix: true, touchesBackend: true }));
+    const orch = new Orchestrator("T-PASS", classifyTask({ isClearBugFix: true, touchesBackend: true }), human);
     const events = recordEvents(orch);
     const executor = makeExecutor({
       [AgentStage.QA_ENGINEER]: () => ({
@@ -89,10 +95,7 @@ describe("Orchestrator emits domain events", () => {
     for (let i = 0; i < 10; i++) {
       const status = await orch.step(executor);
       if (status.kind === "WAITING_FOR_HUMAN") {
-        orch.provideHumanApproval(
-          status.approvalType === ApprovalType.SCHEMA_CONFIRMATION ? "designApproved" : "humanApproved",
-          true,
-        );
+        decidePending(orch, true);
         continue;
       }
       if (status.kind === "DEPLOYED" || status.kind === "BLOCKED") break;
@@ -105,7 +108,7 @@ describe("Orchestrator emits domain events", () => {
   });
 
   it("emits QA_FAILED carrying both the classified failure and the routing decision", async () => {
-    const orch = new Orchestrator("T-FAIL", classifyTask({ isClearBugFix: true, touchesBackend: true }));
+    const orch = new Orchestrator("T-FAIL", classifyTask({ isClearBugFix: true, touchesBackend: true }), human);
     const events = recordEvents(orch);
     const executor = makeExecutor({
       [AgentStage.QA_ENGINEER]: (idx) => ({
@@ -130,10 +133,7 @@ describe("Orchestrator emits domain events", () => {
     for (let i = 0; i < 10; i++) {
       const status = await orch.step(executor);
       if (status.kind === "WAITING_FOR_HUMAN") {
-        orch.provideHumanApproval(
-          status.approvalType === ApprovalType.SCHEMA_CONFIRMATION ? "designApproved" : "humanApproved",
-          true,
-        );
+        decidePending(orch, true);
         continue;
       }
       if (status.kind === "DEPLOYED" || status.kind === "BLOCKED") break;
@@ -156,6 +156,7 @@ describe("Orchestrator emits domain events", () => {
     const orch = new Orchestrator(
       "T-SEC",
       classifyTask({ isNewFeatureModuleOrProject: true, touchesSensitiveArea: true, touchesBackend: true }),
+      human,
     );
     const events = recordEvents(orch);
     const executor = makeExecutor({
@@ -174,14 +175,7 @@ describe("Orchestrator emits domain events", () => {
     for (let i = 0; i < 20; i++) {
       const status = await orch.step(executor);
       if (status.kind === "WAITING_FOR_HUMAN") {
-        orch.provideHumanApproval(
-          status.approvalType === ApprovalType.REQUIREMENT_INTERVIEW
-            ? "requirementApproved"
-            : status.approvalType === ApprovalType.SCHEMA_CONFIRMATION
-              ? "designApproved"
-              : "humanApproved",
-          true,
-        );
+        decidePending(orch, true);
         continue;
       }
       if (status.kind === "DEPLOYED" || status.kind === "BLOCKED") break;
@@ -197,6 +191,7 @@ describe("Orchestrator emits domain events", () => {
     const orch = new Orchestrator(
       "T-GATE",
       classifyTask({ isNewFeatureModuleOrProject: true, touchesSchema: true, touchesBackend: true }),
+      human,
     );
     const events = recordEvents(orch);
 
@@ -218,7 +213,7 @@ describe("Orchestrator emits domain events", () => {
     expect(required).toHaveLength(1);
     expect(required[0].payload).toMatchObject({
       taskId: "T-GATE",
-      approval: { type: ApprovalType.REQUIREMENT_INTERVIEW, status: "pending" },
+      approval: { scope: { taskId: "T-GATE", type: ApprovalType.REQUIREMENT_INTERVIEW }, status: "pending" },
     });
   });
 
@@ -226,6 +221,7 @@ describe("Orchestrator emits domain events", () => {
     const orch = new Orchestrator(
       "T-REJECT",
       classifyTask({ isNewFeatureModuleOrProject: true, touchesSchema: true, touchesBackend: true }),
+      human,
     );
     const events = recordEvents(orch);
     for (let i = 0; i < 10; i++) {
@@ -234,19 +230,21 @@ describe("Orchestrator emits domain events", () => {
       orch.reportCompletion(status.stage, { outcome: { tokens: 1, cost: 0, result: "PASS" } }, { start: 0, end: 1 });
     }
 
-    orch.decideApproval(ApprovalType.REQUIREMENT_INTERVIEW, false, { by: "jane", note: "model is wrong" });
+    decidePending(orch, false, { actorId: "jane", note: "model is wrong" });
 
     const decided = events.filter((e) => e.type === DomainEventType.APPROVAL_DECIDED);
     expect(decided).toHaveLength(1);
     expect(decided[0].payload).toMatchObject({
       type: ApprovalType.REQUIREMENT_INTERVIEW,
       approved: false,
-      by: "jane",
+      actorId: "jane",
+      channel: TEST_HUMAN_CHANNEL,
+      note: "model is wrong",
     });
   });
 
   it("emits DEPLOY_COMPLETED with what the task cost, alongside the bare TASK_DEPLOYED transition", async () => {
-    const orch = new Orchestrator("T-COST", classifyTask({ isClearBugFix: true, touchesBackend: true }));
+    const orch = new Orchestrator("T-COST", classifyTask({ isClearBugFix: true, touchesBackend: true }), human);
     const events = recordEvents(orch);
     let deployedTransitions = 0;
     orch.events.on("TASK_DEPLOYED", () => deployedTransitions++);
@@ -263,10 +261,7 @@ describe("Orchestrator emits domain events", () => {
     for (let i = 0; i < 10; i++) {
       const status = await orch.step(executor, () => (clock += 500));
       if (status.kind === "WAITING_FOR_HUMAN") {
-        orch.provideHumanApproval(
-          status.approvalType === ApprovalType.SCHEMA_CONFIRMATION ? "designApproved" : "humanApproved",
-          true,
-        );
+        decidePending(orch, true);
         continue;
       }
       if (status.kind === "DEPLOYED" || status.kind === "BLOCKED") break;
@@ -291,7 +286,7 @@ describe("Orchestrator emits domain events", () => {
 
   it("persists every domain event to the store, so the trail survives the process", async () => {
     const store = new MemoryTaskStore();
-    const orch = new Orchestrator("T-STORE", classifyTask({ isClearBugFix: true, touchesBackend: true }), { store });
+    const orch = new Orchestrator("T-STORE", classifyTask({ isClearBugFix: true, touchesBackend: true }), { ...human, store });
     const executor = makeExecutor({
       [AgentStage.QA_ENGINEER]: () => ({
         outcome: { tokens: 500, cost: 0.02, result: "PASS" },

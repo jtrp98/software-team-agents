@@ -63,8 +63,6 @@ export interface QaOptimizationOptions {
    * production provider.
    */
   changedFiles: (req: AgentExecutorRequest) => Promise<readonly string[]> | readonly string[];
-  /** Result captured by the stage-agnostic post-Dev verification hook. */
-  deterministicVerification?: (req: AgentExecutorRequest) => DeterministicVerification | undefined;
   /** Extra risk signals beyond the classification-derived defaults. */
   riskSignals?: (req: AgentExecutorRequest) => QaRiskSignals | undefined;
   /** Stored deterministic classification level used by the orthogonal effort gate. */
@@ -141,7 +139,9 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
     const decision: QaModeDecision = selectQaMode(req.taskId, scope, signals, { now });
     const effort = selectQaEffort(opts.taskLevel?.(req), signals, { allowSkip: opts.allowQaSkip });
 
-    const deterministic = opts.deterministicVerification?.(req);
+    // The persisted post-Dev sweep STA handed this round (V13 TASK-002) — the
+    // same record in the process that ran Dev and in one started after it.
+    const deterministic = req.deterministicVerification?.verification;
     // The run-log field records what happened, not what was requested:
     // "enabled" only where the sweep actually produced a result.
     // `opts.deterministicGate` still governs the *prompt wording* below (the
@@ -215,7 +215,7 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
       taskId: req.taskId,
       mode: decision,
       effort,
-      deterministicGate: opts.deterministicGate ?? (opts.deterministicVerification ? "enabled" : "disabled"),
+      deterministicGate: opts.deterministicGate ?? (deterministic ? "enabled" : "disabled"),
       scope,
       ...(contract ? { taskContract: contract } : {}),
       taskIntent: "",

@@ -239,6 +239,20 @@ export class RunLog {
     return entry;
   }
 
+  /** How many runs this log holds — the mark `truncate` rolls back to. */
+  size(): number {
+    return this.records.length;
+  }
+
+  /**
+   * Drops every run recorded after `size()` returned `length`. Used only by
+   * the orchestrator's atomic unit, so a run whose store transaction rolled
+   * back is not still counted against the budget in memory.
+   */
+  truncate(length: number): void {
+    this.records.length = Math.min(this.records.length, length);
+  }
+
   runsForTask(taskId: string): RunRecord[] {
     return this.records.filter((r) => r.task_id === taskId);
   }

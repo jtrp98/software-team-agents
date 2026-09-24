@@ -37,9 +37,14 @@ export interface PostDevVerificationOptions {
   };
 }
 
+/**
+ * The hook is an executor and nothing else: its verification travels on the
+ * result (`deterministicVerification`) into the orchestrator, which persists
+ * it as evidence of the attempt. No process-local copy exists to read later —
+ * a QA round in any process reads the persisted record (V13 TASK-002).
+ */
 export interface PostDevVerificationHook {
   executor: AgentExecutor;
-  verificationFor(req: AgentExecutorRequest): DeterministicVerification | undefined;
 }
 
 /** Compatibility path: no verification runs; only the existing audit field is made explicit on Dev records. */
@@ -57,12 +62,11 @@ export function withPostDevVerificationDisabled(inner: AgentExecutor): AgentExec
 /**
  * Runs deterministic verification immediately after a successful code-producing
  * stage. The expensive call has already happened; a red check returns a marked
- * failure which the orchestrator keeps at the same Dev stage, without invoking
- * QA or any other model.
+ * failure which the orchestrator keeps at the same Dev stage (a failed attempt
+ * never completes), without invoking QA or any other model. Pass or fail, the
+ * sweep rides on the result so the orchestrator persists it with the attempt.
  */
 export function createPostDevVerificationHook(opts: PostDevVerificationOptions): PostDevVerificationHook {
-  const evidence = new Map<string, DeterministicVerification>();
-
   const executor: AgentExecutor = async (req): Promise<AgentExecutorResult> => {
     const result = await opts.inner(req);
     if (!CODE_PRODUCING_STAGES.has(req.stage) || result.outcome.result === "FAIL") return result;
@@ -148,12 +152,12 @@ export function createPostDevVerificationHook(opts: PostDevVerificationOptions):
             },
           }
         : baseVerification;
-    evidence.set(req.taskId, verification);
 
     if (verification.passed) {
       return {
         ...result,
         outcome: { ...result.outcome, deterministic_gate: "enabled" },
+        deterministicVerification: verification,
       };
     }
 
@@ -168,12 +172,9 @@ export function createPostDevVerificationHook(opts: PostDevVerificationOptions):
         failure_reason: failureReason,
         deterministic_gate: "enabled",
       },
-      postDevVerificationFailed: true,
+      deterministicVerification: verification,
     };
   };
 
-  return {
-    executor,
-    verificationFor: (req) => evidence.get(req.taskId),
-  };
+  return { executor };
 }

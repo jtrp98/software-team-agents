@@ -189,18 +189,17 @@ describe("approval ledger in the view (T08)", () => {
     return { ...base, approvals };
   }
 
+  const REQUEST_ID = "apr_0123456789abcdef0123456789abcdef";
   const pending: PersistedTask["approvals"] = [
     {
-      type: ApprovalType.SCHEMA_CONFIRMATION,
+      requestId: REQUEST_ID,
+      scope: { taskId: "T-1", type: ApprovalType.SCHEMA_CONFIRMATION, from: null, to: null },
       required: true,
       status: "pending",
-      from: null,
-      to: null,
       reason: "DESIGN_APPROVED required before development can start",
       requestedAt: 0,
-      decidedAt: null,
-      decidedBy: null,
-      note: null,
+      decision: null,
+      withdrawal: null,
     },
   ];
 
@@ -209,6 +208,7 @@ describe("approval ledger in the view (T08)", () => {
     expect(yaml).toContain("approval:");
     expect(yaml).toContain("type: schema-confirmation");
     expect(yaml).toContain("status: pending");
+    expect(yaml).toContain(`request_id: ${REQUEST_ID}`);
   });
 
   it("shows null when nothing is outstanding", () => {
@@ -219,11 +219,23 @@ describe("approval ledger in the view (T08)", () => {
   /** A rejection has to be visible as an answer, not as an empty gate. */
   it("keeps a rejection in the ledger with who decided it and when", () => {
     const rejected: PersistedTask["approvals"] = [
-      { ...pending[0], status: "rejected", decidedAt: 1_700_000_000_000, decidedBy: "jaturapat" },
+      {
+        ...pending[0],
+        status: "rejected",
+        decision: {
+          decisionId: "d-1",
+          approved: false,
+          actor: { kind: "human", id: "jaturapat" },
+          source: { channel: "unit-channel", evidenceRef: "r-1" },
+          decidedAt: 1_700_000_000_000,
+          note: null,
+        },
+      },
     ];
     const yaml = renderStateYaml([taskWithApprovals(rejected)], { now: 0 });
     expect(yaml).toContain("status: rejected");
     expect(yaml).toContain("decided_by: jaturapat");
+    expect(yaml).toContain("decided_via: unit-channel");
     expect(yaml).toContain("decided_at:");
     // Answered, so nothing is outstanding any more.
     expect(yaml).toContain("approval: null");

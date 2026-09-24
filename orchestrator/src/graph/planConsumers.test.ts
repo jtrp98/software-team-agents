@@ -13,6 +13,7 @@ import { MemoryTaskStore } from "../store/memoryStore.js";
 import { classifyTask } from "../classification/taskClassifier.js";
 import { writePacketPlan } from "../runtime/packetFixture.testSupport.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
+import { PASSING_VERIFICATION } from "../evidence/stageEvidence.testSupport.js";
 
 const base = parseCanonicalPlan(fs.readFileSync(new URL("../docs/fixtures/canonical-plan.md", import.meta.url), "utf8")).tasks[0];
 const retrieval = (...refs: string[]) => `Hypothesis: The selected graph boundary is likely relevant; confirm it against current source.\nQuery: Locate definitions and references for the selected claims.\nProvenance: ${refs.join(", ")}`;
@@ -108,6 +109,18 @@ describe("T-V8-003 full-field graph consumers", () => {
     registry.create({ taskId: "AD-001", classification, adHoc: true });
     const first = store.loadTask("BE-004")!;
     store.saveTask({ ...first, machine: { ...first.machine, current: TaskState.DEPLOYED } });
+    // V13 TASK-003: a DEPLOYED state that no completion record backs is status-only completion.
+    expect(() => registry.open("FE-005")).toThrow(/BE-004/);
+    store.saveTask(first);
+    const upstream = registry.open("BE-004");
+    upstream.status();
+    expect(
+      upstream.reportCompletion(
+        AgentStage.FRONTEND_ENGINEER,
+        { outcome: { tokens: 1, cost: 0, result: "PASS" }, deterministicVerification: PASSING_VERIFICATION },
+        { start: 0, end: 1 },
+      ).kind,
+    ).toBe("DEPLOYED");
     expect(() => registry.open("FE-005")).not.toThrow();
     expect(registry.graph().edges).toEqual(taskGraphFromPlan(plan).edges);
   });

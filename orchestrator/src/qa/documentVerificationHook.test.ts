@@ -44,7 +44,6 @@ describe("DocumentVerificationHook", () => {
     expect(result.outcome.result).toBe("FAIL");
     expect(result.outcome.failure_reason).toContain("design.md is missing ## Architecture");
     expect(result.outcome.document_gate).toBe("enabled");
-    expect(result.postDevVerificationFailed).toBe(true);
   });
 
   it("plan.md with a cycle / unknown owner / illegal Tier -> recorded plan-graph failure, module-scoped", async () => {

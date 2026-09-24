@@ -13,6 +13,7 @@ import { defaultProjectRoot } from "./agents/agentContract.js";
 import { classifyTask } from "./classification/taskClassifier.js";
 import { SqliteTaskStore } from "./store/sqliteStore.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
+import { APPROVE_EXIT_NO_TRUSTED_CHANNEL, APPROVE_EXIT_REFUSED } from "./cli/verbs/approve.js";
 import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
 import { acquireTaskLock, releaseTaskLock } from "./concurrency/taskLock.js";
 import { Environment } from "./environment/environment.js";
@@ -685,6 +686,38 @@ describe("T31 verbs — run/status/approve/retry/resume/pause/cancel", () => {
     try {
       await expect(runCli(["approve", "ghost", "--yes", "--project-root", dir], dir)).rejects.toThrow(CliUsageError);
     } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("`approve` fails closed without a trusted human channel — no env actor, no --yes, can decide a pending request", async () => {
+    const dir = tmpDir();
+    const previousUser = process.env.USERNAME;
+    try {
+      const store = new SqliteTaskStore(defaultStateDbPath(dir));
+      const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+      const orch = registry.create({ taskId: "T-DEPLOY", classification: classifyTask({ isProductionDeployOrMigration: true }) });
+      const waiting = await orch.step(() => ({ outcome: { tokens: 1, cost: 0, result: "PASS" } })); // devops prepare
+      expect(waiting.kind).toBe("WAITING_FOR_HUMAN");
+      const requestId = orch.pendingApprovalRequest()!.requestId;
+      registry.close();
+
+      process.env.USERNAME = "definitely-a-human";
+      const args = ["approve", "T-DEPLOY", "--project-root", dir];
+      await expect(runCli([...args, "--yes"], dir)).rejects.toThrow(/--request <request-id> is required/);
+      expect(await runCli([...args, "--request", requestId, "--yes"], dir)).toBe(APPROVE_EXIT_NO_TRUSTED_CHANNEL);
+      expect(await runCli([...args, "--request", requestId, "--no"], dir)).toBe(APPROVE_EXIT_NO_TRUSTED_CHANNEL);
+      expect(await runCli([...args, "--request", "apr_ffffffffffffffffffffffffffffffff", "--yes"], dir)).toBe(APPROVE_EXIT_REFUSED);
+
+      const reopened = new SqliteTaskStore(defaultStateDbPath(dir));
+      const ledger = reopened.loadTask("T-DEPLOY")!.approvals;
+      expect(ledger).toHaveLength(1);
+      expect(ledger[0]).toMatchObject({ requestId, status: "pending", decision: null });
+      expect(reopened.eventsForTask("T-DEPLOY").map((e) => e.type)).not.toContain("APPROVAL_DECIDED");
+      reopened.close();
+    } finally {
+      if (previousUser === undefined) delete process.env.USERNAME;
+      else process.env.USERNAME = previousUser;
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

@@ -60,7 +60,7 @@ export interface UnattendedGateInput {
   classification: UnattendedGateClassification | null;
   /** Trusted persisted intake, which decides whether a BA stage still needs a person. */
   businessInput: BusinessInputEvidence | null;
-  approvals: readonly Pick<ApprovalRecord, "type" | "required" | "status">[] | null;
+  approvals: readonly Pick<ApprovalRecord, "scope" | "required" | "status">[] | null;
   paused?: boolean;
   cancelled?: boolean;
   cancelReason?: string | null;
@@ -96,13 +96,16 @@ export function evaluateUnattendedGate(input: UnattendedGateInput): UnattendedGa
     failures.push({ kind: "approval", reason: "approval ledger could not be loaded" });
   } else {
     const known = new Set<string>(Object.values(ApprovalType));
+    // A withdrawn request was closed by evidence and blocks nothing; every other
+    // required request must carry a recorded human "yes".
     const unanswered = input.approvals.filter((approval) =>
-      !known.has(approval.type) || (approval.required && approval.status !== "approved"),
+      !known.has(approval.scope.type) ||
+      (approval.required && approval.status !== "approved" && approval.status !== "withdrawn"),
     );
     if (unanswered.length > 0) {
       failures.push({
         kind: "approval",
-        reason: `unanswered or rejected approvals remain: ${unanswered.map((approval) => `${approval.type}:${approval.status}`).join(", ")}`,
+        reason: `unanswered or rejected approvals remain: ${unanswered.map((approval) => `${approval.scope.type}:${approval.status}`).join(", ")}`,
       });
     }
   }

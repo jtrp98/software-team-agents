@@ -146,14 +146,15 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
 
     case "APPROVAL_REQUIRED": {
       const approval = nested(payload, "approval") ?? {};
-      const approvalType = str(approval, "type");
-      const from = str(approval, "from");
-      const to = str(approval, "to");
+      const scope = nested(approval, "scope") ?? {};
+      const approvalType = str(scope, "type");
+      const from = str(scope, "from");
+      const to = str(scope, "to");
       return {
         actor: ORCHESTRATOR_ACTOR,
         reason: str(approval, "reason"),
         input: from && to ? `${from} -> ${to}` : null,
-        output: null,
+        output: str(approval, "requestId"),
         decision: `ask:${approvalType ?? "approval"}`,
       };
     }
@@ -162,14 +163,24 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
       const approved = payload["approved"] === true;
       const approvalType = str(payload, "type");
       return {
-        // The one event a person, not the pipeline, is the author of.
-        actor: str(payload, "by") ?? HUMAN_ACTOR,
+        // The one event a person, not the pipeline, is the author of — as the
+        // trusted channel authenticated them.
+        actor: str(payload, "actorId") ?? HUMAN_ACTOR,
         reason: str(payload, "note"),
-        input: approvalType,
+        input: str(payload, "requestId"),
         output: approved ? "approved" : "rejected",
         decision: `${approved ? "approve" : "reject"}:${approvalType ?? "approval"}`,
       };
     }
+
+    case "APPROVAL_WITHDRAWN":
+      return {
+        actor: ORCHESTRATOR_ACTOR,
+        reason: str(payload, "reason"),
+        input: str(payload, "requestId"),
+        output: "withdrawn",
+        decision: `withdraw:${str(payload, "type") ?? "approval"}`,
+      };
 
     case "TASK_BLOCKED":
       return {
@@ -209,8 +220,31 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
       };
     }
 
+    // V13 TASK-003: STA's completion decision for one stage attempt, from persisted evidence.
+    case "STAGE_COMPLETED": {
+      const refs = list(payload, "refs");
+      return {
+        actor: ORCHESTRATOR_ACTOR,
+        reason: null,
+        input: refs.length > 0 ? refs.join(", ") : null,
+        output: str(payload, "evidenceId"),
+        decision: `complete:${str(payload, "stage") ?? "stage"}#${num(payload, "attempt") ?? "?"}`,
+      };
+    }
+
+    case "STAGE_INCOMPLETE": {
+      const missing = list(payload, "missing");
+      return {
+        actor: ORCHESTRATOR_ACTOR,
+        reason: missing.length > 0 ? missing.join("; ") : null,
+        input: null,
+        output: null,
+        decision: `incomplete:${str(payload, "stage") ?? "stage"}#${num(payload, "attempt") ?? "?"}`,
+      };
+    }
+
     case "TASK_DEPLOYED":
-      return { actor: ORCHESTRATOR_ACTOR, reason: null, input: null, output: null, decision: "deploy" };
+      return { actor: ORCHESTRATOR_ACTOR, reason: null, input: null, output: str(payload, "completionEvidenceId"), decision: "deploy" };
 
     case "DEPLOY_COMPLETED": {
       const stages = list(payload, "stages");

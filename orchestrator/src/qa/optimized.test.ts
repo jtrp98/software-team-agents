@@ -5,6 +5,7 @@ import { withQaOptimization, riskSignalsFromClassification } from "./optimized.j
 import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
 import { runDeterministicVerification } from "./deterministic.js";
+import { persistedSweep } from "../evidence/stageEvidence.testSupport.js";
 
 function qaReq(overrides: Partial<AgentExecutorRequest> = {}): AgentExecutorRequest {
   return {
@@ -69,7 +70,9 @@ describe("withQaOptimization", () => {
       taskLevel: () => "SMALL" as ClassificationResult["level"],
       allowQaSkip: true,
       deterministicGate: "enabled",
-      deterministicVerification: () => ({
+    });
+
+    const result = await exec(qaReq({ deterministicVerification: persistedSweep({
         required: ["unit-tests"],
         status: "passed",
         ran: [{ id: "unit-tests", status: "PASS", durationMs: 1, outputSummary: "1 passed" }],
@@ -78,10 +81,7 @@ describe("withQaOptimization", () => {
         missingRequired: [],
         enforcement: "warn",
         passed: true,
-      }),
-    });
-
-    const result = await exec(qaReq());
+      }) }));
     expect(modelCalls).toBe(0);
     expect(result.outcome).toMatchObject({ result: "PASS", tokens: 0, qa_effort: "skip" });
     expect(result.artifactType).toBe("qa-report");
@@ -192,9 +192,8 @@ describe("withQaOptimization", () => {
     const exec = withQaOptimization({
       inner,
       changedFiles: () => ["src/a.ts"],
-      deterministicVerification: () => deterministic,
     });
-    const result = await exec(qaReq());
+    const result = await exec(qaReq({ deterministicVerification: persistedSweep(deterministic) }));
     expect(innerCalls).toBe(0);
     expect(result.outcome.result).toBe("FAIL");
     expect(result.outcome.failure_reason).toContain("deterministic verification failed before LLM QA");
@@ -278,8 +277,7 @@ describe("withQaOptimization", () => {
     const result = await withQaOptimization({
       inner: passingQaInner,
       changedFiles: () => ["src/a.ts"],
-      deterministicVerification: () => deterministic,
-    })(qaReq());
+    })(qaReq({ deterministicVerification: persistedSweep(deterministic) }));
     expect(result.outcome.deterministic_gate).toBe("enabled");
   });
 

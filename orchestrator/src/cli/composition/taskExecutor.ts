@@ -21,9 +21,9 @@ import { loadStageRoots } from "../../repos/repoMap.js";
 import { describeEnvironment } from "../../environment/environment.js";
 import { stableHash, contentHash } from "../../artifacts/executionPacket.js";
 import { unmetDependencies } from "../../orchestrator/taskStatus.js";
+import { verifyTaskCompletion } from "../../orchestrator/transitionGuard.js";
 import { RunLog } from "../../observability/runLog.js";
 import type { TaskStore } from "../../store/taskStore.js";
-import type { DeterministicVerification } from "../../qa/deterministic.js";
 import type { CliArgs } from "../../cli.js";
 import { contractRootForTask, plannedTier, promptForCamp } from "./taskIntake.js";
 import { runtimeRegistryFor, type CliDependencies } from "./runtimeRegistry.js";
@@ -35,7 +35,6 @@ import { runtimeRegistryFor, type CliDependencies } from "./runtimeRegistry.js";
  */
 export interface TaskExecutorComposition {
   executor: AgentExecutor;
-  verificationFor(taskId: string): DeterministicVerification | undefined;
 }
 
 /** The single production executor composition used by both manual and bounded-wave task paths. */
@@ -108,7 +107,9 @@ export async function composeProductionTaskExecutor(
       const all = store.listTasks();
       return (task?.dependsOn ?? []).map(dependencyId => {
         const dependency = store.loadTask(dependencyId);
-        if (!dependency || dependency.machine.current !== TaskState.DEPLOYED || dependency.paused || dependency.cancelled || unmetDependencies(dependency, all).length) throw new Error(`dependency ${dependencyId} lacks complete ledger evidence`);
+        // Done is re-verified against the evidence store, not read off the state name.
+        const completion = dependency ? verifyTaskCompletion(store, dependency) : null;
+        if (!dependency || !completion?.done || dependency.paused || dependency.cancelled || unmetDependencies(dependency, all).length) throw new Error(`dependency ${dependencyId} lacks complete ledger evidence${completion && !completion.done ? ` (${completion.reason})` : ""}`);
         return {
           task_id: dependencyId, status: "complete" as const, source: `task-store:${dependencyId}`, hash: stableHash(dependency),
           outputs: Object.entries(dependency.artifacts).map(([kind, text]) => ({ source: `task-store:${dependencyId}/artifacts/${kind}`, hash: contentHash(text) })),
@@ -198,7 +199,7 @@ export async function composeProductionTaskExecutor(
         changedFiles: qaChangedFiles,
         ...(args.noDeterministicGate
           ? { deterministicGate: "disabled" as const }
-          : { deterministicGate: "enabled" as const, deterministicVerification: verificationHook!.verificationFor }),
+          : { deterministicGate: "enabled" as const }),
         packageInputs: qaInputs.packageInputs,
         scopeInputs: qaInputs.scopeInputs,
         taskContract: qaInputs.taskContract,
@@ -214,12 +215,5 @@ export async function composeProductionTaskExecutor(
         previousRound: () => previousRoundFromDocs(resolveDocsRoot(args.projectRoot, runRootName), args.module ?? "", taskId),
       });
 
-  return {
-    executor,
-    verificationFor: (id) => verificationHook?.verificationFor({
-      stage: orchestrator.classification.pipeline[orchestrator.snapshot().pipelineCursor] ?? AgentStage.HUMAN,
-      taskId: id,
-      context: [],
-    }),
-  };
+  return { executor };
 }

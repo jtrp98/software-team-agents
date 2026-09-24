@@ -101,11 +101,8 @@ export function createDocumentVerificationHook(opts: DocumentVerificationHookOpt
         failure_reason: failureReason,
         document_gate: "enabled",
       },
-      // Note: we don't set postDevVerificationFailed because this is document validation, 
-      // but we want to route it back to the owning stage just like deterministic verification.
-      // Wait, "route a failure the way a deterministic failure already is — back to the owning stage, no model invocation between failure and routing"
-      // Wait, deterministic verification sets postDevVerificationFailed = true to keep the cursor on the same stage. Let's see.
-      postDevVerificationFailed: true,
+      // A FAIL outcome never completes the attempt, so the orchestrator keeps
+      // the owning stage assigned - no marker is needed to hold the cursor.
     };
   };
 

@@ -16,7 +16,8 @@ import type { RecoveryAction } from "../retry/recoveryPolicy.js";
  * which round passed (QA_PASSED/SECURITY_PASSED, for first-pass-rate tracking),
  * the actual ApprovalRecord rather than a generic "waiting" signal
  * (APPROVAL_REQUIRED, fired once per question, not on every status poll), the
- * human's answer (APPROVAL_DECIDED), and what reaching DEPLOYED cost in
+ * human's answer (APPROVAL_DECIDED) or its evidence-driven closure
+ * (APPROVAL_WITHDRAWN), and what reaching DEPLOYED cost in
  * stages/runs/tokens/time (DEPLOY_COMPLETED, alongside the bare TASK_DEPLOYED
  * transition).
  *
@@ -34,6 +35,7 @@ export enum DomainEventType {
   SECURITY_FAILED = "SECURITY_FAILED",
   APPROVAL_REQUIRED = "APPROVAL_REQUIRED",
   APPROVAL_DECIDED = "APPROVAL_DECIDED",
+  APPROVAL_WITHDRAWN = "APPROVAL_WITHDRAWN",
   DEPLOY_COMPLETED = "DEPLOY_COMPLETED",
 }
 
@@ -61,12 +63,26 @@ export interface ApprovalRequiredEvent {
   approval: ApprovalRecord;
 }
 
+/** A trusted human decision applied to one pending request (see gates/humanDecision.ts). */
 export interface ApprovalDecidedEvent {
   taskId: string;
+  requestId: string;
   type: ApprovalType;
   approved: boolean;
-  /** Free text, or null when the caller didn't say — this pipeline has no identity system (see approval.ts). */
-  by: string | null;
+  /** The authenticated actor, as the trusted channel identified them. */
+  actorId: string;
+  channel: string;
+  evidenceRef: string;
+  decisionId: string;
+  note: string | null;
+}
+
+/** A pending request STA closed because trusted evidence discharged its gate. No human answered. */
+export interface ApprovalWithdrawnEvent {
+  taskId: string;
+  requestId: string;
+  type: ApprovalType;
+  reason: string;
 }
 
 /** What reaching DEPLOYED actually cost. Read off the run log, not recomputed by the listener. */
@@ -89,6 +105,7 @@ export interface DomainEventMap {
   SECURITY_FAILED: VerdictFailedEvent;
   APPROVAL_REQUIRED: ApprovalRequiredEvent;
   APPROVAL_DECIDED: ApprovalDecidedEvent;
+  APPROVAL_WITHDRAWN: ApprovalWithdrawnEvent;
   DEPLOY_COMPLETED: DeployCompletedEvent;
 }
 

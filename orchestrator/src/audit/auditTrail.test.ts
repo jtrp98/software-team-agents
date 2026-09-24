@@ -14,6 +14,7 @@ import {
   HUMAN_ACTOR,
   ORCHESTRATOR_ACTOR,
 } from "./auditTrail.js";
+import { withStageEvidence } from "../evidence/stageEvidence.testSupport.js";
 import { Orchestrator, type AgentExecutor } from "../orchestrator/orchestrator.js";
 import { classifyTask } from "../classification/taskClassifier.js";
 import { AgentStage } from "../types.js";
@@ -22,6 +23,9 @@ import { ApprovalType } from "../gates/approval.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { RunLog } from "../observability/runLog.js";
+import { decidePending, testHumanVerifier } from "../gates/humanDecision.testSupport.js";
+
+const human = { humanDecisionVerifier: testHumanVerifier() };
 
 function qaReport(status: "PASS" | "FAIL"): QaReportArtifact {
   return {
@@ -98,12 +102,15 @@ describe("describeEvent (T37)", () => {
 
   it("attributes an approval decision to the person, not the pipeline", () => {
     const fields = describeEvent("APPROVAL_DECIDED", {
+      requestId: "apr_0123456789abcdef0123456789abcdef",
       type: "schema-confirmation",
       approved: false,
-      by: "jane",
+      actorId: "jane",
+      channel: "unit-channel",
       note: "Refund model is wrong",
     });
     expect(fields.actor).toBe("jane");
+    expect(fields.input).toBe("apr_0123456789abcdef0123456789abcdef");
     expect(fields.output).toBe("rejected");
     expect(fields.decision).toBe("reject:schema-confirmation");
   });
@@ -151,7 +158,7 @@ describe("toAuditEntry", () => {
 
 describe("audit trail over a real run (T37)", () => {
   function runToDeployed(store: MemoryTaskStore, taskId: string) {
-    const orch = new Orchestrator(taskId, classifyTask({ isClearBugFix: true, touchesBackend: true }), { store });
+    const orch = new Orchestrator(taskId, classifyTask({ isClearBugFix: true, touchesBackend: true }), { ...human, store });
     let calls = 0;
     const executor: AgentExecutor = (req) => {
       if (req.stage === AgentStage.QA_ENGINEER) {
@@ -175,7 +182,7 @@ describe("audit trail over a real run (T37)", () => {
       }
       return { outcome: { tokens: 100, cost: 0.01, result: "PASS" as const } };
     };
-    return { orch, executor };
+    return { orch, executor: withStageEvidence(executor) };
   }
 
   it("answers why a task went back to an engineer, from the store alone", async () => {
@@ -224,13 +231,13 @@ describe("audit trail over a real run (T37)", () => {
         touchesBackend: true,
         testStrategyTriggers: ["cross-task"],
       }),
-      { store },
+      { ...human, store },
     );
 
     for (let i = 0; i < 12; i++) {
       const status = orch.status();
       if (status.kind === "WAITING_FOR_HUMAN" && status.approvalType) {
-        orch.decideApproval(status.approvalType, true, { by: "tester" });
+        decidePending(orch, true);
         continue;
       }
       if (status.kind !== "RUNNING") break;
@@ -329,19 +336,19 @@ describe("audit trail over a real run (T37)", () => {
     const orch = new Orchestrator(
       "T-HUMAN",
       classifyTask({ isNewFeatureModuleOrProject: true, touchesSchema: true, touchesBackend: true }),
-      { store },
+      { ...human, store },
     );
     // Walk the run to the schema question, answering the interview gate whenever it appears.
     for (let i = 0; i < 20; i++) {
       const status = orch.status();
       if (status.kind === "WAITING_FOR_HUMAN" && status.approvalType === ApprovalType.REQUIREMENT_INTERVIEW) {
-        orch.decideApproval(ApprovalType.REQUIREMENT_INTERVIEW, true, { by: "somchai" });
+        decidePending(orch, true, { actorId: "somchai" });
         continue;
       }
       if (status.kind !== "RUNNING") break;
       orch.reportCompletion(status.stage, { outcome: { tokens: 1, cost: 0, result: "PASS" } }, { start: 0, end: 1 });
     }
-    orch.decideApproval(ApprovalType.SCHEMA_CONFIRMATION, true, { by: "somchai" });
+    decidePending(orch, true, { actorId: "somchai" });
 
     const trail = auditTrail(store, "T-HUMAN");
     const asked = trail.find((e) => e.type === "APPROVAL_REQUIRED");
@@ -351,6 +358,9 @@ describe("audit trail over a real run (T37)", () => {
     expect(asked!.decision).toBe(`ask:${ApprovalType.REQUIREMENT_INTERVIEW}`);
     expect(answered!.actor).toBe("somchai");
     expect(answered!.decision).toBe(`approve:${ApprovalType.REQUIREMENT_INTERVIEW}`);
+    // The trail names the exact request that was asked and then answered.
+    expect(asked!.output).toMatch(/^apr_[0-9a-f]{32}$/);
+    expect(answered!.input).toBe(asked!.output);
   });
 });
 

@@ -11,6 +11,7 @@ import { buildQaScope } from "./scope.js";
 import { buildQaTaskContract, requiredVerdictIds } from "./taskContract.js";
 import { withQaOptimization } from "./optimized.js";
 import type { DeterministicVerification } from "./deterministic.js";
+import { persistedSweep } from "../evidence/stageEvidence.testSupport.js";
 
 /**
  * T-V8-014 end-to-end: the contract-bound QA round. These exercise the seam
@@ -108,10 +109,9 @@ describe("contract-bound QA package", () => {
     const execute = withQaOptimization({
       inner: reportingExecutor(qaReport(), captured),
       changedFiles: () => ["src/orders/summary.ts"],
-      deterministicVerification: () => PASSING_DETERMINISTIC,
       taskContract: () => contract,
     });
-    const result = await execute(req());
+    const result = await execute(req({ deterministicVerification: persistedSweep(PASSING_DETERMINISTIC) }));
     expect(result.outcome.result).toBe("PASS");
     expect(captured.pkg).toContain("An empty order returns the documented zero total without an exception.");
     expect(captured.pkg).toContain("transitive descendants: FE-010");
@@ -149,10 +149,9 @@ describe("contract-bound QA package", () => {
         captured,
       ),
       changedFiles: () => ["src/orders/summary.ts"],
-      deterministicVerification: () => PASSING_DETERMINISTIC,
       taskContract: () => contract,
     });
-    const result = await execute(req());
+    const result = await execute(req({ deterministicVerification: persistedSweep(PASSING_DETERMINISTIC) }));
     expect(captured.pkg).toContain("FIND-0123456789abcdef [OPEN]");
     expect(captured.pkg).toContain("throws on empty line items");
     expect(result.gateEvidence?.qaVerdictRequirements).toContain("FIND-0123456789abcdef");
@@ -170,10 +169,9 @@ describe("FULL escalation from the plan's declared risk", () => {
     const execute = withQaOptimization({
       inner: reportingExecutor(qaReport({ mode: "TARGETED" })),
       changedFiles: () => ["src/orders/summary.ts"],
-      deterministicVerification: () => PASSING_DETERMINISTIC,
       taskContract: () => contract,
     });
-    const result = await execute(req());
+    const result = await execute(req({ deterministicVerification: persistedSweep(PASSING_DETERMINISTIC) }));
     expect(result.gateEvidence?.qaModeDecision?.mode).toBe("FULL");
     expect(result.gateEvidence?.qaModeDecision?.reasons).toContain(reason);
     expect(result.outcome.result).toBe("FAIL");
@@ -185,10 +183,9 @@ describe("FULL escalation from the plan's declared risk", () => {
     const execute = withQaOptimization({
       inner: reportingExecutor(qaReport({ mode: "FULL" })),
       changedFiles: () => ["src/orders/summary.ts"],
-      deterministicVerification: () => PASSING_DETERMINISTIC,
       taskContract: () => contract,
     });
-    expect((await execute(req())).outcome.result).toBe("PASS");
+    expect((await execute(req({ deterministicVerification: persistedSweep(PASSING_DETERMINISTIC) }))).outcome.result).toBe("PASS");
   });
 });
 
@@ -203,10 +200,9 @@ describe("rejection of an uncheckable verdict", () => {
         artifact: { ...qaReport(), requirements: {} },
       }),
       changedFiles: () => ["src/orders/summary.ts"],
-      deterministicVerification: () => PASSING_DETERMINISTIC,
       taskContract: () => contractFor(),
     });
-    const result = await execute(req());
+    const result = await execute(req({ deterministicVerification: persistedSweep(PASSING_DETERMINISTIC) }));
     expect(result.outcome.result).toBe("FAIL");
     expect(result.artifact).toBeUndefined();
     expect(result.outcome.failure_reason).toContain("bare PASS rejected");
@@ -217,10 +213,9 @@ describe("rejection of an uncheckable verdict", () => {
     const execute = withQaOptimization({
       inner: reportingExecutor(qaReport({ requirements: { "BE-004": "PASS", "DES-011": "PASS" } })),
       changedFiles: () => ["src/orders/summary.ts"],
-      deterministicVerification: () => PASSING_DETERMINISTIC,
       taskContract: () => contractFor(),
     });
-    const result = await execute(req());
+    const result = await execute(req({ deterministicVerification: persistedSweep(PASSING_DETERMINISTIC) }));
     expect(result.outcome.result).toBe("FAIL");
     expect(result.outcome.failure_reason).toContain("AC-007.2");
   });
@@ -234,10 +229,9 @@ describe("rejection of an uncheckable verdict", () => {
     const execute = withQaOptimization({
       inner: reportingExecutor(failing),
       changedFiles: () => ["src/orders/summary.ts"],
-      deterministicVerification: () => PASSING_DETERMINISTIC,
       taskContract: () => contractFor(),
     });
-    const result = await execute(req());
+    const result = await execute(req({ deterministicVerification: persistedSweep(PASSING_DETERMINISTIC) }));
     expect(result.outcome.result).toBe("FAIL");
     expect(result.artifact).toBe(failing);
   });
@@ -247,9 +241,8 @@ describe("rejection of an uncheckable verdict", () => {
     const execute = withQaOptimization({
       inner: reportingExecutor(report),
       changedFiles: () => ["src/orders/summary.ts"],
-      deterministicVerification: () => PASSING_DETERMINISTIC,
     });
-    const result = await execute(req());
+    const result = await execute(req({ deterministicVerification: persistedSweep(PASSING_DETERMINISTIC) }));
     expect(result.outcome.result).toBe("PASS");
     expect(result.gateEvidence?.qaVerdictRequirements).toBeUndefined();
   });
@@ -267,10 +260,9 @@ describe("no-suite behaviour stays explicit Unverified Behaviour", () => {
         }),
       ),
       changedFiles: () => ["src/orders/summary.ts"],
-      deterministicVerification: () => PASSING_DETERMINISTIC,
       taskContract: () => contractFor(),
     });
-    expect((await execute(req())).outcome.result).toBe("PASS");
+    expect((await execute(req({ deterministicVerification: persistedSweep(PASSING_DETERMINISTIC) }))).outcome.result).toBe("PASS");
   });
 
   it("the low-risk deterministic skip claims only the task, listing every AC/DES as unverified", async () => {
@@ -279,12 +271,11 @@ describe("no-suite behaviour stays explicit Unverified Behaviour", () => {
         throw new Error("the skip path must not call the QA model");
       },
       changedFiles: () => ["src/orders/summary.ts"],
-      deterministicVerification: () => PASSING_DETERMINISTIC,
       taskLevel: () => TaskLevel.TRIVIAL,
       allowQaSkip: true,
       taskContract: () => contractFor(),
     });
-    const result = await execute(req());
+    const result = await execute(req({ deterministicVerification: persistedSweep(PASSING_DETERMINISTIC) }));
     expect(result.outcome.result).toBe("PASS");
     const report = result.artifact as QaReportArtifact;
     expect(report.requirements).toEqual({ "BE-004": "PASS" });

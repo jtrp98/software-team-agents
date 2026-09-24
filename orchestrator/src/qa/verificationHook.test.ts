@@ -31,7 +31,7 @@ describe("post-Dev deterministic verification hook", () => {
     const result = await hook.executor(req(AgentStage.BACKEND_ENGINEER));
     expect(calls).toEqual(["lint", "typecheck", "unit-tests", "build"]);
     expect(result.outcome).toMatchObject({ result: "PASS", deterministic_gate: "enabled" });
-    expect(hook.verificationFor(req(AgentStage.BACKEND_ENGINEER))?.selection).toBeUndefined();
+    expect(result.deterministicVerification?.selection).toBeUndefined();
   });
 
   it("records the post-Dev selection and reason on deterministic run evidence", async () => {
@@ -54,8 +54,8 @@ describe("post-Dev deterministic verification hook", () => {
       },
     });
 
-    await hook.executor(req(AgentStage.BACKEND_ENGINEER));
-    expect(hook.verificationFor(req(AgentStage.BACKEND_ENGINEER))?.selection).toMatchObject({
+    const ran = await hook.executor(req(AgentStage.BACKEND_ENGINEER));
+    expect(ran.deterministicVerification?.selection).toMatchObject({
       source: "change-scope",
       taskTypes: ["api-endpoint"],
       levels: ["lint", "typecheck", "unit", "api", "build"],
@@ -82,9 +82,9 @@ describe("post-Dev deterministic verification hook", () => {
       },
     });
 
-    await hook.executor(req(AgentStage.BACKEND_ENGINEER));
+    const ran = await hook.executor(req(AgentStage.BACKEND_ENGINEER));
     expect(calls).toEqual(["lint", "typecheck", "unit-tests", "integration-tests", "build"]);
-    expect(hook.verificationFor(req(AgentStage.BACKEND_ENGINEER))?.selection).toMatchObject({
+    expect(ran.deterministicVerification?.selection).toMatchObject({
       source: "full-order",
       reason: expect.stringContaining("git unavailable"),
     });
@@ -133,7 +133,7 @@ describe("post-Dev deterministic verification hook", () => {
     });
     const result = await hook.executor(req(AgentStage.FRONTEND_ENGINEER));
     expect(result.outcome.result).toBe("PASS");
-    expect(hook.verificationFor(req(AgentStage.FRONTEND_ENGINEER))).toMatchObject({
+    expect(result.deterministicVerification).toMatchObject({
       status: "skipped",
       passed: true,
       enforcement: "warn",
@@ -148,7 +148,8 @@ describe("post-Dev deterministic verification hook", () => {
     });
     const result = await hook.executor(req(AgentStage.FRONTEND_ENGINEER));
     expect(result.outcome.result).toBe("FAIL");
-    expect(result.postDevVerificationFailed).toBe(true);
+    // The failed sweep rides on the result so the orchestrator persists it with the attempt (V13 TASK-002).
+    expect(result.deterministicVerification).toMatchObject({ passed: false, missingRequired: ["lint"] });
   });
 
   it("never runs deterministic checks around a non-code stage", async () => {
