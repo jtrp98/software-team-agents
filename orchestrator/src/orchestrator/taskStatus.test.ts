@@ -192,14 +192,14 @@ describe("phaseOf", () => {
 describe("describeStatus — next state", () => {
   it("says what state follows even while an agent is still running", () => {
     const base = task();
-    // cursor 2: pipeline is [system-analyst, test-planner, backend-engineer, qa-engineer], and
-    // IMPLEMENTATION is backend-engineer's state.
+    // cursor 2: pipeline is [system-analyst, test-planner, backend-engineer, reviewer, qa-engineer], and
+    // IMPLEMENTATION is backend-engineer's state; REVIEW follows it.
     const running = { ...base, machine: { ...base.machine, current: TaskState.IMPLEMENTATION }, pipelineCursor: 2 };
     const status = describeStatus(running);
 
     expect(status.kind).toBe("RUNNING");
     expect(status.currentAgent).toBe(AgentStage.BACKEND_ENGINEER);
-    expect(status.nextState).toBe(TaskState.QA);
+    expect(status.nextState).toBe(TaskState.REVIEW);
   });
 
   it("has no next state to report once the task is finished", () => {

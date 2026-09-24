@@ -56,7 +56,7 @@ function finding(overrides: Partial<Finding> = {}): Finding {
     files: [{ path: "src/orders/summary.ts", symbol: "serialize" }],
     expected: "zero total for an empty order",
     observed: "throws on empty line items",
-    evidence_refs: ["review.md#round-2"],
+    evidence_refs: ["qa.md#round-2"],
     retryable: true,
     requires_human: false,
     status: "OPEN",

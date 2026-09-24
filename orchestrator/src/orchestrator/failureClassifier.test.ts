@@ -8,7 +8,7 @@ import {
   parseOpenIssues,
 } from "./failureClassifier.js";
 
-/** A review.md shaped the way `qa-engineer.md` specifies its Open Issues table. */
+/** A qa.md shaped the way `qa-engineer.md` specifies its Open Issues table. */
 function review(rows: string[], extra = ""): string {
   return [
     "# sales-crm — Verification & Review",

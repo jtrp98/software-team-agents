@@ -43,6 +43,7 @@ function approvedRecord(): ApprovalRecord {
 }
 import type { AgentExecutor, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 // Deliberately a two-stage pipeline (backend-engineer -> qa-engineer) with no human gate at all
 // (no system-analyst/schema-confirmation, no deploy approval) — these tests are about
@@ -192,7 +193,7 @@ describe.each(implementations)("%s", (_name, makeStore) => {
       ...task,
       updatedAt: 2_000,
       pipelineCursor: 2,
-      retries: { qa: 1, security: 0 },
+      retries: { review: 0, qa: 1, security: 0 },
       approvals: [approvedRecord()],
       blockedReason: "waiting on a person",
     });
@@ -751,7 +752,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       const executor = makeExecutor({});
 
       const firstStore = new SqliteTaskStore(file);
-      const firstRegistry = new TaskRegistry({ store: firstStore });
+      const firstRegistry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store: firstStore });
       const orch1 = firstRegistry.create({ taskId: "T-1", classification: trivial() });
       await orch1.step(executor); // one stage in, then the process "dies"
       expect(orch1.status().kind).toBe("RUNNING");
@@ -760,7 +761,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
       // A brand-new store instance and a brand-new TaskRegistry — nothing here is the same
       // in-memory object as above; only the file on disk connects them.
       const secondStore = new SqliteTaskStore(file);
-      const secondRegistry = new TaskRegistry({ store: secondStore, humanDecisionVerifier: testHumanVerifier() });
+      const secondRegistry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store: secondStore, humanDecisionVerifier: testHumanVerifier() });
       const orch2 = secondRegistry.open("T-1");
 
       let status = orch2.status();
@@ -801,12 +802,12 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
     const file = tmpDbPath();
     try {
       const first = new SqliteTaskStore(file);
-      const firstRegistry = new TaskRegistry({ store: first });
+      const firstRegistry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store: first });
       firstRegistry.create({ taskId: "T-1", classification: trivial() });
       first.close();
 
       const second = new SqliteTaskStore(file);
-      const secondRegistry = new TaskRegistry({ store: second });
+      const secondRegistry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store: second });
       expect(() => secondRegistry.create({ taskId: "T-1", classification: trivial() })).toThrow(
         TaskAlreadyExistsError,
       );

@@ -62,7 +62,7 @@ export class LocalWorkspace implements RuntimeWorkspace {
       return fs.readFileSync(this.resolve(relPath), "utf8");
     } catch (e) {
       // A missing file is an answer, not a fault — the caller distinguishes
-      // "no review.md" from "an empty review.md" and both are meaningful. Any
+      // "no qa.md" from "an empty qa.md" and both are meaningful. Any
       // other failure (a permission error, a directory) is a real problem and
       // must not be flattened into the same null.
       if (isNotFound(e)) return null;

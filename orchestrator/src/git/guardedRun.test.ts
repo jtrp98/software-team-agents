@@ -125,7 +125,9 @@ describe("T-V8-019 — guarded one-writer RunLedger checkpoint boundary", () => 
         attempt: a, adapter: { status: "OK", exitCode: 0 }, runVerification: async () => verification,
         taskDescription: "implement owned path", allowedPathGlobs: ["src/**"], secretScanner: () => ({ ok: true, problems: [] }),
       });
-      expect(f.ledger.readTask(f.run.run_id, "BE-1")?.status).toBe("CHECKPOINTED");
+      // V13 TASK-007: the session records the attempt and the checkpoint, never
+      // a ledger task status (that is a projection of engine state).
+      expect(f.ledger.readTask(f.run.run_id, "BE-1")?.status).toBe("READY");
       expect(f.ledger.readAttempt(a.attempt_id)?.status).toBe("SUCCEEDED");
       expect(f.ledger.checkpointsForRun(f.run.run_id)).toEqual(expect.arrayContaining([
         expect.objectContaining({ task_id: "BE-1", attempt_id: a.attempt_id, packet_hash: HASH_B, sha: result.sha }),
@@ -154,7 +156,9 @@ describe("T-V8-019 — guarded one-writer RunLedger checkpoint boundary", () => 
     })).rejects.toMatchObject({ kind });
     expect(git(f.target, "diff", "--cached", "--name-only")).toBe("");
     expect(fs.existsSync(path.join(f.target, changed))).toBe(true);
-    expect(f.ledger.readRun(f.run.run_id)?.status).toBe("HALTED");
+    // The attempt fails; the run's stop is the engine's decision, not the session's.
+    expect(f.ledger.readAttempt(a.attempt_id)?.status).toBe("FAILED");
+    expect(f.ledger.readRun(f.run.run_id)?.status).toBe("RUNNING");
     session.close();
   });
 
@@ -202,15 +206,75 @@ describe("T-V8-019 — guarded one-writer RunLedger checkpoint boundary", () => 
     })).rejects.toMatchObject({ kind: "CHECKPOINT_RECONCILIATION_REQUIRED" });
     f.ledger.recordCheckpoint = recordCheckpoint;
     const committedSha = git(f.target, "rev-parse", "HEAD");
-    expect(f.ledger.readTask(f.run.run_id, a.task_id)?.status).toBe("VERIFYING");
+    // Reconciliation keys on the attempt still RUNNING, never on a task status.
     expect(f.ledger.readAttempt(a.attempt_id)?.status).toBe("RUNNING");
     first.close();
 
     const interrupted = f.ledger.readAttempt(a.attempt_id)!;
     const resumed = await GuardedRunSession.open({ ledger: f.ledger, runId: f.run.run_id, runtimeStateRoot: f.state, firstAttempt: interrupted, git: layer });
+    expect(resumed.pendingReconciliation).toBe(a.attempt_id);
     await expect(resumed.reconcileHeadCheckpoint(interrupted)).resolves.toBe(committedSha);
-    expect(f.ledger.readTask(f.run.run_id, a.task_id)?.status).toBe("CHECKPOINTED");
+    expect(f.ledger.readAttempt(a.attempt_id)?.status).toBe("SUCCEEDED");
     expect(f.ledger.checkpointsForRun(f.run.run_id)).toHaveLength(1);
+    expect(resumed.pendingReconciliation).toBeNull();
     resumed.close();
   }, 30_000);
+
+  it("V13 TASK-007 — keeps one writer on attempts, and a later attempt may start from this run's own checkpoint", { timeout: 30_000 }, async () => {
+    const f = seed({ tasks: [{ id: "BE-1" }, { id: "BE-2", dependsOn: ["BE-1"] }] });
+    const a = attempt(f);
+    const session = await GuardedRunSession.open({ ledger: f.ledger, runId: f.run.run_id, runtimeStateRoot: f.state, firstAttempt: a });
+    try {
+      session.beginTask(a);
+      // A second RUNNING attempt in the ledger (not a task status) is what the invariant refuses.
+      expect(() => session.beginTask(attempt(f, "BE-2"))).toThrow(/one-writer invariant: in-flight attempt\(s\)/);
+      fs.writeFileSync(path.join(f.target, "src", "one.txt"), "one\n");
+      const first = await session.checkpoint({
+        attempt: a, adapter: { status: "OK", exitCode: 0 }, runVerification: async () => verification,
+        taskDescription: "first", allowedPathGlobs: ["src/**"], secretScanner: () => ({ ok: true, problems: [] }),
+      });
+      // The next attempt's base is the run branch as recorded: the first checkpoint.
+      const next = attempt(f, "BE-2", { attempt_id: `${f.run.run_id}:BE-2:${AgentStage.BACKEND_ENGINEER}:2`, attempt: 2, base_revision: first.sha });
+      session.beginTask(next);
+      expect(f.ledger.readAttempt(next.attempt_id)?.status).toBe("RUNNING");
+      // Control: a base revision the run never recorded is refused.
+      const stranger = attempt(f, "BE-2", { attempt_id: `${f.run.run_id}:BE-2:${AgentStage.BACKEND_ENGINEER}:3`, attempt: 3, base_revision: "0".repeat(40) });
+      session.haltActiveAttempt(next, "fixture: free the slot");
+      expect(() => session.beginTask(stranger)).toThrow(/neither the frozen run base nor a checkpoint this run recorded/);
+    } finally { session.close(); }
+  });
+
+  it("V13 TASK-007 — abandons an interrupted attempt that left no work, and succeeds a no-change rerun on its own checkpoint without a second commit", { timeout: 30_000 }, async () => {
+    const f = seed();
+    const a = attempt(f);
+    const layer = new GitCommandLayer({ cwd: f.target });
+    const first = await GuardedRunSession.open({ ledger: f.ledger, runId: f.run.run_id, runtimeStateRoot: f.state, firstAttempt: a, git: layer });
+    first.beginTask(a);
+    first.close();
+    // Interrupted with a clean tree at the frozen base: nothing to re-attribute.
+    const resumed = await GuardedRunSession.open({ ledger: f.ledger, runId: f.run.run_id, runtimeStateRoot: f.state, firstAttempt: f.ledger.readAttempt(a.attempt_id)!, git: layer });
+    try {
+      expect(resumed.pendingReconciliation).toBeNull();
+      await resumed.abandonInterruptedAttempt(f.ledger.readAttempt(a.attempt_id)!, "fixture interruption");
+      expect(f.ledger.readAttempt(a.attempt_id)?.status).toBe("ABANDONED");
+
+      const b = attempt(f, "BE-1", { attempt_id: `${f.run.run_id}:BE-1:${AgentStage.BACKEND_ENGINEER}:2`, attempt: 2 });
+      resumed.beginTask(b);
+      fs.writeFileSync(path.join(f.target, "src", "work.txt"), "work\n");
+      const checkpoint = await resumed.checkpoint({
+        attempt: b, adapter: { status: "OK", exitCode: 0 }, runVerification: async () => verification,
+        taskDescription: "work", allowedPathGlobs: ["src/**"], secretScanner: () => ({ ok: true, problems: [] }),
+      });
+      const c = attempt(f, "BE-1", { attempt_id: `${f.run.run_id}:BE-1:${AgentStage.BACKEND_ENGINEER}:3`, attempt: 3, base_revision: checkpoint.sha });
+      resumed.beginTask(c);
+      await resumed.completeWithoutChange(c, checkpoint.sha);
+      expect(f.ledger.readAttempt(c.attempt_id)?.status).toBe("SUCCEEDED");
+      expect(git(f.target, "rev-list", "--count", "HEAD")).toBe("2");
+      // Defect: a dirty tree is never "no change".
+      const d = attempt(f, "BE-1", { attempt_id: `${f.run.run_id}:BE-1:${AgentStage.BACKEND_ENGINEER}:4`, attempt: 4, base_revision: checkpoint.sha });
+      resumed.beginTask(d);
+      fs.writeFileSync(path.join(f.target, "src", "more.txt"), "more\n");
+      await expect(resumed.completeWithoutChange(d, checkpoint.sha)).rejects.toMatchObject({ kind: "CHECKPOINT_STATE" });
+    } finally { resumed.close(); }
+  });
 });

@@ -3,7 +3,7 @@
 The accessibility and responsive baseline, and the split between shared design principles and
 project-derived visual style. No prompt carries this content: `uxui-designer`, `frontend-engineer`
 and `qa-engineer` retrieve it when the work renders UI. Nothing here weakens the human sign-off on
-a UX artifact (`ADR-005`, `roleExecutionGate.ts`) — a policy section is not a signature.
+a UX artifact (`ADR-005`, `stageGuards.ts`) — a policy section is not a signature.
 
 ---
 

@@ -15,14 +15,17 @@ import { decidePending, testHumanVerifier } from "../gates/humanDecision.testSup
 import { PASSING_VERIFICATION, passingQaReport, withRequiredEvidence } from "../evidence/stageEvidence.testSupport.js";
 import type { EvidenceRecord } from "../evidence/evidenceStore.js";
 import { STAGE_EVIDENCE_REQUIREMENTS, verifyTaskCompletion } from "./transitionGuard.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "./stageGuards.testSupport.js";
 
-const human = { humanDecisionVerifier: testHumanVerifier() };
-/** backend-engineer -> qa-engineer; no human gate. */
+const human = { humanDecisionVerifier: testHumanVerifier(), stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD };
+/** backend-engineer -> reviewer -> qa-engineer; no human gate. */
 const bugfix = () => classifyTask({ isClearBugFix: true, touchesBackend: true });
 /** devops "prepare" -> human deploy approval -> devops "execute". */
 const deploy = () => classifyTask({ isProductionDeployOrMigration: true });
 const PASS = { tokens: 10, cost: 0.001, result: "PASS" as const };
 const FAIL = { tokens: 10, cost: 0.001, result: "FAIL" as const };
+/** A reviewer PASS with the parsed review report and the dispatch contract digest a real run carries. */
+const reviewPass: AgentExecutor = (req) => withRequiredEvidence(req, { outcome: PASS });
 
 function tmpDbPath(): string {
   return path.join(os.tmpdir(), `sta-transitions-${Date.now()}-${Math.random().toString(36).slice(2)}`, "state.db");
@@ -48,7 +51,9 @@ describe("persisted evidence across a process boundary (V13 TASK-002)", () => {
       const store1 = new SqliteTaskStore(file);
       const orch1 = new Orchestrator("T-XP", bugfix(), { ...human, store: store1 });
       const afterDev = await orch1.step(() => ({ outcome: PASS, deterministicVerification: PASSING_VERIFICATION }));
-      expect(afterDev).toEqual({ kind: "RUNNING", stage: AgentStage.QA_ENGINEER });
+      expect(afterDev).toEqual({ kind: "RUNNING", stage: AgentStage.REVIEWER });
+      const afterReview = await orch1.step(reviewPass);
+      expect(afterReview).toEqual({ kind: "RUNNING", stage: AgentStage.QA_ENGINEER });
       store1.close();
 
       // Process 2: nothing in memory survives — only the file connects them.
@@ -87,11 +92,16 @@ describe("persisted evidence across a process boundary (V13 TASK-002)", () => {
       expect(referenced.map((r) => `${r.stage}:${r.kind}`).sort()).toEqual([
         "backend-engineer:stage-completion",
         "qa-engineer:stage-completion",
+        "reviewer:stage-completion",
       ]);
       expect(kinds(store3.evidenceForTask("T-XP"))).toEqual([
         "backend-engineer#1:role-run",
         "backend-engineer#1:deterministic-verification",
         "backend-engineer#1:stage-completion",
+        "reviewer#1:role-run",
+        "reviewer#1:artifact",
+        "reviewer#1:review-independence",
+        "reviewer#1:stage-completion",
         "qa-engineer#1:role-run",
         "qa-engineer#1:artifact",
         "qa-engineer#1:stage-completion",
@@ -180,7 +190,7 @@ describe("persisted evidence across a process boundary (V13 TASK-002)", () => {
 
     failOn = null;
     const retried = await orch.step(() => ({ outcome: PASS, deterministicVerification: PASSING_VERIFICATION }));
-    expect(retried).toEqual({ kind: "RUNNING", stage: AgentStage.QA_ENGINEER });
+    expect(retried).toEqual({ kind: "RUNNING", stage: AgentStage.REVIEWER });
     expect(kinds(inner.evidenceForTask("T-DISK"))[0]).toBe("backend-engineer#1:role-run");
   });
 });
@@ -247,6 +257,7 @@ describe("fail-closed transitions (V13 TASK-003)", () => {
     const store = new MemoryTaskStore();
     const orch = new Orchestrator("T-NOREPORT", bugfix(), { ...human, store });
     await orch.step(() => ({ outcome: PASS, deterministicVerification: PASSING_VERIFICATION }));
+    await orch.step(reviewPass);
     const after = await orch.step(() => ({ outcome: PASS }));
     expect(after).toEqual({ kind: "RUNNING", stage: AgentStage.QA_ENGINEER });
     const types = store.eventsForTask("T-NOREPORT").map((e) => e.type);
@@ -260,6 +271,7 @@ describe("fail-closed transitions (V13 TASK-003)", () => {
       const store1 = new SqliteTaskStore(file);
       const orch1 = new Orchestrator("T-QAFAIL", bugfix(), { ...human, store: store1 });
       await orch1.step(() => ({ outcome: PASS, deterministicVerification: PASSING_VERIFICATION }));
+      await orch1.step(reviewPass);
       const afterQa = await orch1.step(() => ({
         outcome: FAIL,
         artifactType: ArtifactType.QA_REPORT,
@@ -290,7 +302,7 @@ describe("fail-closed transitions (V13 TASK-003)", () => {
       const orch2 = Orchestrator.resume("T-RESTART", store2, human);
       expect(orch2.status()).toEqual({ kind: "RUNNING", stage: AgentStage.BACKEND_ENGINEER });
       const next = await orch2.step(() => ({ outcome: PASS, deterministicVerification: PASSING_VERIFICATION }));
-      expect(next).toEqual({ kind: "RUNNING", stage: AgentStage.QA_ENGINEER });
+      expect(next).toEqual({ kind: "RUNNING", stage: AgentStage.REVIEWER });
       expect(store2.evidenceForTask("T-RESTART").filter((r) => r.kind === "stage-completion").map((r) => r.attempt)).toEqual([2]);
       store2.close();
     } finally {
@@ -375,10 +387,8 @@ describe("fail-closed transitions (V13 TASK-003)", () => {
 
       const store2 = new SqliteTaskStore(file);
       const orch2 = Orchestrator.resume("T-TAMPER", store2, human);
-      await expect(
-        orch2.step(() => ({ outcome: PASS, artifactType: ArtifactType.QA_REPORT, artifact: passingQaReport("T-TAMPER") })),
-      ).rejects.toThrow(/digest does not match/);
-      expect(store2.loadTask("T-TAMPER")!.machine.current).toBe(TaskState.QA);
+      await expect(orch2.step(reviewPass)).rejects.toThrow(/digest does not match/);
+      expect(store2.loadTask("T-TAMPER")!.machine.current).toBe(TaskState.REVIEW);
       store2.close();
     } finally {
       cleanup(file);

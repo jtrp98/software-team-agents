@@ -194,7 +194,7 @@ role: ${role}
       await expect(guard("write", { filePath: path.join(root, "_docs", "module", "m", "plan.md") })).resolves.toBeUndefined();
       await expect(guard("write", { filePath: path.join(root, "_docs", "status.md") })).resolves.toBeUndefined();
       await expect(guard("write", { filePath: path.join(root, "targets.yaml") })).resolves.toBeUndefined();
-      await expect(guard("write", { filePath: path.join(root, "_docs", "module", "m", "review.md") })).resolves.toBeUndefined();
+      await expect(guard("write", { filePath: path.join(root, "_docs", "module", "m", "qa.md") })).resolves.toBeUndefined();
       await expect(guard("write", { filePath: path.join(root, "src", "a.ts") })).resolves.toBeUndefined();
     }
   });

@@ -2,6 +2,7 @@ import { AgentStage, TaskState } from "../types.js";
 import { STAGE_TO_STATE, forwardState } from "../state/taskState.js";
 import { checkGate, gateContextFor } from "../gates/gatePolicy.js";
 import type { PersistedTask } from "../store/taskStore.js";
+import type { StageEntryGuard } from "./stageGuards.js";
 
 /**
  * The TaskState a stage occupies while it runs. `devops` is the one stage
@@ -66,6 +67,7 @@ export type TaskPhase =
   | "backend"
   | "frontend"
   | "implementation"
+  | "review"
   | "qa"
   | "security"
   | "deploy"
@@ -86,6 +88,9 @@ export function phaseOf(state: TaskState, agent?: AgentStage): TaskPhase {
       if (agent === AgentStage.BACKEND_ENGINEER) return "backend";
       if (agent === AgentStage.FRONTEND_ENGINEER) return "frontend";
       return "implementation";
+    case TaskState.REVIEW:
+    case TaskState.REVIEW_FAILED:
+      return "review";
     case TaskState.QA:
     case TaskState.QA_FAILED:
       return "qa";
@@ -129,8 +134,17 @@ export interface TaskStatusView {
  * completely wrong for rendering a file or printing a list. Reading state
  * must never change it — so this reports what the stored state is, and leaves
  * moving it to the orchestrator.
+ *
+ * Given the engine's `stageEntryGuard` (V13 TASK-007), a stage the guard
+ * refuses is reported as BLOCKED with the guard's reason — the same answer
+ * `Orchestrator.status()` settles on — so a run's result and a listing never
+ * disagree about why a task is not moving. The guard only reads.
  */
-export function describeStatus(task: PersistedTask, allTasks?: readonly PersistedTask[]): TaskStatusView {
+export function describeStatus(
+  task: PersistedTask,
+  allTasks?: readonly PersistedTask[],
+  options: { stageEntryGuard?: StageEntryGuard } = {},
+): TaskStatusView {
   const { machine } = task;
   const current = machine.current;
 
@@ -169,6 +183,16 @@ export function describeStatus(task: PersistedTask, allTasks?: readonly Persiste
 
   const stage = machine.pipeline[task.pipelineCursor];
   if (stage !== undefined && isAgentAssignedAt(stage, current, task.deployPrepared)) {
+    const entry = options.stageEntryGuard?.({
+      taskId: task.taskId,
+      stage,
+      level: task.classification.level,
+      knowledgeRoot: task.knowledgeRoot,
+      runtimeTask: task.runtimeTask,
+    });
+    if (entry && !entry.allowed) {
+      return { kind: "BLOCKED", state: current, currentAgent: stage, nextState: next ?? undefined, reason: entry.reason };
+    }
     return { kind: "RUNNING", state: current, currentAgent: stage, nextState: next ?? undefined };
   }
 

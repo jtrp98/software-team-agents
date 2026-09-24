@@ -199,7 +199,7 @@ function openFinding(over: Partial<Parameters<typeof deriveFinding>[1]> = {}): F
     raised_by: AgentStage.QA_ENGINEER,
     expected: "AC-001.1: the discount field is preserved",
     observed: "the discount field is dropped on import",
-    evidence_refs: ["review.md#Round-1"],
+    evidence_refs: ["qa.md#Round-1"],
     ...over,
   });
 }
@@ -276,7 +276,7 @@ describe("T-V8-013 durable repair-packet persistence", () => {
   function repair(finding: Finding, diff = "diff --git a/src/import.ts b/src/import.ts\n+ fix") {
     return compileRepairPacket({
       originalPacket: { packet_hash: finding.packet_hash },
-      finding, currentDiff: diff, invalidatedEvidence: ["review.md#Round-1"], allowedDelta: "src/import.ts",
+      finding, currentDiff: diff, invalidatedEvidence: ["qa.md#Round-1"], allowedDelta: "src/import.ts",
     });
   }
 

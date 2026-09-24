@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { AgentStage, TaskLevel } from "../types.js";
+import { AgentStage } from "../types.js";
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import { getAgent } from "../agents/registry.js";
 import { resolveAuthoritativeContract } from "../agents/agentContract.js";
@@ -19,6 +19,7 @@ import {
   handoffFromContext,
   failResult as failResultBase,
   qaArtifactResult,
+  reviewerArtifactResult,
   securityArtifactResult,
   suppressRawHandoffWhenNarrowed,
   measureRolePrefixChars,
@@ -46,7 +47,6 @@ import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { isUnattendedTargetWriteCertified } from "./runtimeSupport.js";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
 import type { QaRiskSignals } from "../qa/mode.js";
-import { checkRoleExecutionGate } from "../roles/roleExecutionGate.js";
 import type { PersistedTask } from "../store/taskStore.js";
 import { stageWritesBoundTarget, type RuntimeTask } from "../orchestrator/runtimeTask.js";
 import type { ThreeRepoRequestRoots } from "../threeRepo/preflight.js";
@@ -119,12 +119,6 @@ export interface RuntimeExecutorOptions {
   extraInstruction?: string;
   phases?: (taskId: string) => number[] | undefined;
   sliceModuleDocs?: boolean;
-  /**
-   * T-UX12 — the task's classification level, when the caller knows it. Fed to
-   * the role-execution gate so TRIVIAL/SMALL frontend work is not blocked on a
-   * UX-artifact precondition the classifier deliberately skipped for it.
-   */
-  taskLevel?: (taskId: string) => TaskLevel | undefined;
   /** Per-stage working directory for a project whose pipeline spans several repos. */
   stageRoots?: Partial<Record<AgentStage, string>>;
   /** Phase 2's fail-closed resolver. When present it runs before adapter start. */
@@ -147,12 +141,6 @@ export interface RuntimeExecutorOptions {
   packetBaseRevision?: (root: string) => Promise<string>;
   /** Optional bounded retention override; the runtime-artifact default otherwise applies. */
   packetRetention?: number;
-  /**
-   * Makes the BA → SA → DEV human handoffs a prerequisite of the lead stages.
-   * Off by default so a project that has not adopted knowledge workspaces
-   * preserves the prior execution path.
-   */
-  enforceRoleWorkflow?: boolean;
   /**
    * Production routing. When present, runtime/model selection, cached
    * availability, support policy and write-stage capabilities are resolved per
@@ -184,6 +172,12 @@ export interface RuntimeExecutorOptions {
    * the difference between a reproducible attempt and a plausible one.
    */
   frozenAttempt?: LedgerAttempt;
+  /**
+   * V13 TASK-007 — the same seam, per request: the frozen ledger attempt the
+   * given task/stage is executing under right now (a bounded run's engineer
+   * stage), or undefined to route normally. Consulted before `frozenAttempt`.
+   */
+  frozenAttemptFor?: (taskId: string, stage: AgentStage) => LedgerAttempt | undefined;
   /** Original persisted winner basis for a frozen route. */
   frozenRoutingBasis?: string;
   /**
@@ -411,10 +405,10 @@ async function recordCampSwitchInvalidation(
   moduleName: string,
   entry: string,
 ): Promise<string | null> {
-  const relPath = `_docs/module/${moduleName}/review.md`;
+  const relPath = `_docs/module/${moduleName}/qa.md`;
   try {
     const existing = await runtime.workspace.readFile(relPath);
-    const head = existing === null || existing.trim() === "" ? `# review.md — ${moduleName}\n` : existing.replace(/\s*$/, "\n");
+    const head = existing === null || existing.trim() === "" ? `# qa.md — ${moduleName}\n` : existing.replace(/\s*$/, "\n");
     await runtime.workspace.writeFile(relPath, `${head}\n${entry}\n`);
     return null;
   } catch (e) {
@@ -481,13 +475,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       }
     }
 
-    if (opts.enforceRoleWorkflow) {
-      // In three-repo mode the workflow and UX artifacts live in Knowledge,
-      // never beside framework bindings. Preflight is read-only and runs before
-      // any adapter work, so resolving it first cannot create side effects.
-      const handoff = checkRoleExecutionGate(threeRepo?.roots.knowledgeRoot ?? opts.projectRoot, moduleName, req.stage, undefined, { level: opts.taskLevel?.(req.taskId) });
-      if (!handoff.allowed) return failResult(handoff.reason ?? `cannot start ${role}: role workflow gate failed`);
-    }
+    // The BA → SA → DEV lane prerequisites are not checked here: they are a
+    // stage-entry guard of the engine (`orchestrator/stageGuards.ts`), asked
+    // before a stage is ever assigned, so a refused stage never reaches an
+    // executor at all (V13 TASK-007).
 
     const stageWorkRoots = threeRepo?.roots.workRoots ?? [];
     const stageWritableRoots = stageWorkRoots.filter((root) => root.access === "write");
@@ -569,7 +560,12 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           extra: opts.extraInstruction,
         });
         if (JSON.stringify([...packet.scope.allow].sort()) !== JSON.stringify([...new Set(guards.writeAllow)].sort())) throw new Error("packet scope differs from the enforced stage contract; recompile with current stage grants");
-        const expectedRoots = threeRepo ? stageWritableRoots.map(root => path.resolve(root.path)) : [path.resolve(executionRoot)];
+        // A writer's packet roots are its writable roots; a verifier stage
+        // (reviewer, QA, security) holds only read access to the Targets it
+        // verifies, so its packet roots are those read roots and its write
+        // scope is its contract's Knowledge-side docs alone (V13 TASK-007).
+        const guardRoots = stageWritableRoots.length > 0 ? stageWritableRoots : stageWorkRoots;
+        const expectedRoots = threeRepo ? guardRoots.map(root => path.resolve(root.path)) : [path.resolve(executionRoot)];
         if (JSON.stringify(packet.scope.roots.map(root => path.resolve(root)).sort()) !== JSON.stringify(expectedRoots.sort())) throw new Error("packet work roots differ from effective stage guard roots; recompile");
         const preview = generatePromptPreview(packet, {
           current_revision: packet.identity.base_revision,
@@ -617,10 +613,11 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // Production routing remains above the orchestrator seam. Embedded callers
     // that do not supply a registry retain the fixed-runtime compatibility
     // behaviour.
+    const frozen = opts.frozenAttemptFor?.(req.taskId, req.stage) ?? opts.frozenAttempt;
     const writableRootPaths = threeRepo
       ? stageWritableRoots.map((root) => root.path)
-      : (opts.frozenAttempt?.guard_evidence.writable_roots ?? []);
-    const hasTargetWrite = writableRootPaths.length > 0 || (opts.frozenAttempt?.guard_evidence.target_write ?? false);
+      : (frozen?.guard_evidence.writable_roots ?? []);
+    const hasTargetWrite = writableRootPaths.length > 0 || (frozen?.guard_evidence.target_write ?? false);
     const requiresInteractivity = requiredCapabilitiesFor(
       req.stage,
       false,
@@ -649,7 +646,6 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     /** Entries the route already refused before the selected one. */
     let preRouteSkips: readonly RuntimeRouteAttempt[] = [];
     const classification = opts.classification?.(req.taskId);
-    const frozen = opts.frozenAttempt;
     if (frozen) {
       // The ledger already chose. Re-resolving would at best reproduce this
       // decision and at worst quietly replace it, so the only thing left to do
@@ -1072,13 +1068,19 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       return finish(failResult(describeFailure(activeRuntime.id, role, result, routingDiagnostics), metrics));
     }
 
-    // qa-engineer and security report their verdict in a document, not in an
-    // exit status — read it back through the runtime's own workspace so this
-    // works wherever the run happened, not only where the orchestrator's `fs`
-    // can reach.
+    // reviewer, qa-engineer and security report their verdict in a document,
+    // not in an exit status — read it back through the runtime's own workspace
+    // so this works wherever the run happened, not only where the
+    // orchestrator's `fs` can reach.
+    if (req.stage === AgentStage.REVIEWER) {
+      return finish(await fingerprintVerdict(
+        reviewerArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, OWNED_MODULE_DOC[AgentStage.REVIEWER]!)),
+        opts.projectRoot,
+      ));
+    }
     if (req.stage === AgentStage.QA_ENGINEER) {
       return finish(await fingerprintVerdict(
-        qaArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "review.md")),
+        qaArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "qa.md")),
         opts.projectRoot,
       ));
     }
@@ -1136,17 +1138,20 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
 }
 
 /**
- * The module document each non-reviewer doc stage must leave behind for its run
+ * The module document each doc stage must leave behind for its run
  * to count as successful (`policies/documentation.md` §1). Engineers are
  * deliberately absent: their deliverable is code across many paths, and their
  * mechanical gates (typecheck/lint at Stop, QA's own round) are what verify it.
  */
 const OWNED_MODULE_DOC: Partial<Record<AgentStage, string>> = {
+  // Read back as a verdict (`reviewerArtifactResult`) before the handoff
+  // branch below is reached — a review is judged, not indexed.
+  [AgentStage.REVIEWER]: "review.md",
   [AgentStage.BUSINESS_ANALYST]: "requirement.md",
   [AgentStage.SYSTEM_ANALYST]: "design.md",
   [AgentStage.PROJECT_MANAGER]: "plan.md",
   [AgentStage.TEST_PLANNER]: "test-plan.md",
-  // The same artifact path `roleExecutionGate.ts` requires to be present and
+  // The same artifact path `orchestrator/stageGuards.ts` requires to be present and
   // signed off before frontend work may start — the two must name one file.
   [AgentStage.UXUI_DESIGNER]: "uxui/design.md",
 };

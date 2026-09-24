@@ -18,6 +18,8 @@ import { stageStateOf } from "./taskStatus.js";
 export const EVIDENCE_REQUIREMENTS = [
   "role-run-succeeded",
   "deterministic-verification-passed",
+  "review-report-pass",
+  "review-independent",
   "qa-report-pass",
   "security-report-pass",
 ] as const;
@@ -32,6 +34,10 @@ export const STAGE_EVIDENCE_REQUIREMENTS: Readonly<Record<AgentStage, readonly E
   [AgentStage.UXUI_DESIGNER]: ["role-run-succeeded"],
   [AgentStage.BACKEND_ENGINEER]: ["role-run-succeeded", "deterministic-verification-passed"],
   [AgentStage.FRONTEND_ENGINEER]: ["role-run-succeeded", "deterministic-verification-passed"],
+  // The review verdict parsed from review.md, plus STA's own independence
+  // record (`review-independence`) — the reviewer's report alone never
+  // completes the stage.
+  [AgentStage.REVIEWER]: ["role-run-succeeded", "review-report-pass", "review-independent"],
   [AgentStage.QA_ENGINEER]: ["role-run-succeeded", "qa-report-pass"],
   [AgentStage.SECURITY]: ["role-run-succeeded", "security-report-pass"],
   [AgentStage.DEVOPS]: ["role-run-succeeded"],
@@ -50,6 +56,11 @@ function satisfies(requirement: EvidenceRequirement, record: EvidenceRecord): bo
       return payload.kind === "role-run" && payload.result === "PASS";
     case "deterministic-verification-passed":
       return payload.kind === "deterministic-verification" && payload.verification.passed;
+    case "review-report-pass":
+      return payload.kind === "artifact" && payload.artifactType === ArtifactType.REVIEW_REPORT && payload.verdict === "PASS";
+    case "review-independent":
+      // Only STA writes this kind, and only after its own checks held.
+      return payload.kind === "review-independence" && record.role === "orchestrator";
     case "qa-report-pass":
       return payload.kind === "artifact" && payload.artifactType === ArtifactType.QA_REPORT && payload.verdict === "PASS";
     case "security-report-pass":

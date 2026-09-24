@@ -92,26 +92,26 @@ describe("buildTraceChain", () => {
     expect(req2.status).toBe("verified");
   });
 
-  it("marks a requirement blocked when review.md has a blocking open issue naming its task", () => {
-    const reviewMd = `
+  it("marks a requirement blocked when qa.md has a blocking open issue naming its task", () => {
+    const qaMd = `
 ## Open Issues — all phases
 | Issue | Phase | Routes to | Blocking | Rounds |
 |---|---|---|---|---|
 | BE-001 login validation is wrong | 1 | backend-engineer | blocking | 1 |
 `;
-    const chain = buildTraceChain({ ...inputs(), planMd: planMd({ loginChecked: true }), reviewMd });
+    const chain = buildTraceChain({ ...inputs(), planMd: planMd({ loginChecked: true }), qaMd });
     const req1 = chain.find((e) => e.requirement === "REQ-001")!;
     expect(req1.status).toBe("blocked");
   });
 
   it("a non-blocking open issue does not prevent verified", () => {
-    const reviewMd = `
+    const qaMd = `
 ## Open Issues — all phases
 | Issue | Phase | Routes to | Blocking | Rounds |
 |---|---|---|---|---|
 | BE-001 minor copy nit | 1 | backend-engineer | non-blocking | 1 |
 `;
-    const chain = buildTraceChain({ ...inputs(), planMd: planMd({ loginChecked: true }), reviewMd });
+    const chain = buildTraceChain({ ...inputs(), planMd: planMd({ loginChecked: true }), qaMd });
     const req1 = chain.find((e) => e.requirement === "REQ-001")!;
     expect(req1.status).toBe("verified");
   });

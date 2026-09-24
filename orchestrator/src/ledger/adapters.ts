@@ -2,6 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { AgentStage, TaskState } from "../types.js";
 import type { PersistedTask } from "../store/taskStore.js";
+import { describeStatus } from "../orchestrator/taskStatus.js";
+import type { StageEntryGuard } from "../orchestrator/stageGuards.js";
 import { isKnownJournalRecord, readJournal, readRunManifest, type KnownJournalRecord, type RunManifest } from "../run/journal.js";
 import { reconstructRunState } from "../run/stateMachine.js";
 import { LEDGER_SCHEMA_VERSION, type LedgerCheckpoint, type LedgerEvent, type LedgerRun, type LedgerTask } from "./runLedger.js";
@@ -18,7 +20,7 @@ import type { LedgerRunStatus, LedgerTaskStatus } from "./vocabulary.js";
  * Bump `LEDGER_ADAPTER_VERSION` whenever a mapping below changes meaning, so a
  * projection carried into evidence can be told apart from a later one.
  */
-export const LEDGER_ADAPTER_VERSION = 1;
+export const LEDGER_ADAPTER_VERSION = 2;
 
 /**
  * `RunState` (wave) -> ledger run status.
@@ -51,29 +53,62 @@ export class LedgerAdapterError extends Error {
   }
 }
 
+/** What the engine's projection of one task needs beyond the row itself. */
+export interface EngineProjectionContext {
+  /** Every task in the store, for dependency readiness (`describeStatus`). */
+  allTasks: readonly PersistedTask[];
+  /** The stage-entry guard the engine that drives this task is built with. */
+  stageEntryGuard: StageEntryGuard;
+  /** `verifyTaskCompletion(store, task).done` - DEPLOYED is Done only when its completion evidence re-verifies. */
+  completionVerified: boolean;
+}
+
 /**
- * The per-task pipeline machine projected onto the coarse ledger status.
+ * The engine's persisted state projected onto the coarse ledger task status
+ * (V13 TASK-007, adapter version 2). This is the *only* way a bounded run's
+ * ledger task status is written: the ledger is an audit projection of the
+ * engine, never a second decider.
  *
- * These are two different questions and neither replaces the other:
- * `TaskState` says which pipeline stage a task sits at, the ledger status says
- * whether a run may move on from it. A `paused`/`cancelled` row reads BLOCKED
- * because a human froze it, which the pipeline machine itself knows nothing
- * about.
+ * The input is the engine's own status projection (`describeStatus`, with the
+ * same stage-entry guard the engine asks) plus the re-verified completion, so
+ * the ledger can never call a task DONE the engine would not:
+ *
+ * - DEPLOYED with re-verified completion evidence -> DONE; DEPLOYED without it -> BLOCKED;
+ * - anything a person must act on (a refused stage entry, a pending approval,
+ *   a blocked machine, a pause or cancel) -> BLOCKED;
+ * - waiting on a dependency, or not yet started -> PLANNED;
+ * - an independent verifier holding the task (reviewer/QA/security) -> VERIFYING;
+ * - every verification passed, before the approval/deploy edge -> CHECKPOINTED;
+ * - otherwise (an engineer holding it) -> RUNNING.
  */
-export function ledgerTaskStatusFromPersisted(task: PersistedTask): LedgerTaskStatus {
-  if (task.cancelled || task.paused) return "BLOCKED";
-  switch (task.machine.current) {
-    case TaskState.DEPLOYED:
-      return "DONE";
-    case TaskState.BLOCKED:
+export function ledgerTaskStatusFromPersisted(task: PersistedTask, context: EngineProjectionContext): LedgerTaskStatus {
+  const view = describeStatus(task, context.allTasks, { stageEntryGuard: context.stageEntryGuard });
+  switch (view.kind) {
+    case "DEPLOYED":
+      return context.completionVerified ? "DONE" : "BLOCKED";
+    case "BLOCKED":
+    case "WAITING_FOR_HUMAN":
+    case "PAUSED":
+    case "CANCELLED":
       return "BLOCKED";
+    case "WAITING_FOR_DEPENDENCY":
+      return "PLANNED";
+    case "RUNNING":
+      break;
+  }
+  switch (task.machine.current) {
     case TaskState.CREATED:
       return "PLANNED";
+    case TaskState.REVIEW:
+    case TaskState.REVIEW_FAILED:
+    case TaskState.QA:
+    case TaskState.QA_FAILED:
+    case TaskState.SECURITY:
+    case TaskState.SECURITY_FAILED:
+      return "VERIFYING";
     case TaskState.READY_TO_DEPLOY:
     case TaskState.APPROVED:
       return "CHECKPOINTED";
-    case TaskState.QA:
-      return "VERIFYING";
     default:
       return "RUNNING";
   }

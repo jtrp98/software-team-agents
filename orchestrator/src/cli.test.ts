@@ -28,6 +28,7 @@ import { LocalWorkspace } from "./runtime/localWorkspace.js";
 import type { RuntimeAdapter, RuntimeAgentRequest } from "./runtime/runtimeAdapter.js";
 import { RuntimeCapability } from "./runtime/runtimeCapabilities.js";
 import { declareInstallationConfigOverrideChannelForTest } from "./threeRepo/installation.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "./orchestrator/stageGuards.testSupport.js";
 
 declareInstallationConfigOverrideChannelForTest();
 
@@ -563,7 +564,7 @@ describe("T31 verbs — run/status/approve/retry/resume/pause/cancel", () => {
   /** Seeds a task directly through the registry, without going through `runCli`'s `run` verb — so these tests never need a real `claude` binary on PATH. */
   function seedTask(dir: string, taskId: string): void {
     const store = new SqliteTaskStore(defaultStateDbPath(dir));
-    const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+    const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
     registry.create({ taskId, classification: classifyTask({ isClearBugFix: true, touchesBackend: true }) });
     registry.close();
   }
@@ -696,7 +697,7 @@ describe("T31 verbs — run/status/approve/retry/resume/pause/cancel", () => {
     const previousUser = process.env.USERNAME;
     try {
       const store = new SqliteTaskStore(defaultStateDbPath(dir));
-      const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+      const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
       const orch = registry.create({ taskId: "T-DEPLOY", classification: classifyTask({ isProductionDeployOrMigration: true }) });
       const waiting = await orch.step(() => ({ outcome: { tokens: 1, cost: 0, result: "PASS" } })); // devops prepare
       expect(waiting.kind).toBe("WAITING_FOR_HUMAN");
@@ -742,7 +743,7 @@ describe("T32 dashboard — status emoji and watchListing", () => {
 
   function seedTask(dir: string, taskId: string): void {
     const store = new SqliteTaskStore(defaultStateDbPath(dir));
-    const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+    const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
     registry.create({ taskId, classification: classifyTask({ isClearBugFix: true, touchesBackend: true }) });
     registry.close();
   }
@@ -767,7 +768,7 @@ describe("T32 dashboard — status emoji and watchListing", () => {
     try {
       seedTask(dir, "T-1");
       const store = new SqliteTaskStore(defaultStateDbPath(dir));
-      const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+      const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
       let renders = 0;
       let sleeps = 0;
       const originalLog = console.log;
@@ -798,7 +799,7 @@ describe("T32 dashboard — status emoji and watchListing", () => {
     const dir = tmpDir();
     try {
       const store = new SqliteTaskStore(defaultStateDbPath(dir));
-      const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+      const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
       let clears = 0;
       try {
         await watchListing(registry, { intervalMs: 1, iterations: 2, sleep: async () => {}, clear: () => clears++ });
@@ -841,6 +842,43 @@ describe("T35 concurrency lock, wired into the CLI", () => {
     } finally {
       releaseTaskLock(dir, "T-1");
       fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("V13 TASK-007 — `sta run` refuses an engineer stage behind an unverified lane handoff before dispatching anything", async () => {
+    const dir = tmpDir();
+    const prevConfig = process.env.STA_INSTALLATION_CONFIG;
+    process.env.STA_INSTALLATION_CONFIG = path.join(dir, "no-installation.yaml");
+    // `sta init` seeds an empty knowledge/ — an empty model is not an approved handoff.
+    fs.mkdirSync(path.join(dir, "knowledge"), { recursive: true });
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((line: string) => { logs.push(line); });
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    let composed = false;
+    try {
+      const code = await runCli(
+        ["--task-id", "T-LANE", "--module", "m", "--project-root", dir, "--bug-fix", "--backend"],
+        dir,
+        { createRuntimeRegistry: () => { composed = true; throw new Error("no runtime may be composed for a refused stage"); } },
+      );
+      expect(code).toBe(1);
+      expect(logs.join("\n")).toMatch(/task T-LANE BLOCKED: cannot start backend-engineer: knowledge under .* holds no items/);
+      expect(logs.join("\n")).toContain("sta roles signoff sa --module m --by <name>");
+      expect(composed).toBe(false);
+      const store = new SqliteTaskStore(defaultStateDbPath(dir));
+      try {
+        const row = store.loadTask("T-LANE")!;
+        expect(row.machine.current).toBe(TaskState.IMPLEMENTATION);
+        expect(store.runsForTask("T-LANE")).toEqual([]);
+      } finally {
+        store.close();
+      }
+    } finally {
+      spy.mockRestore();
+      vi.restoreAllMocks();
+      if (prevConfig === undefined) delete process.env.STA_INSTALLATION_CONFIG;
+      else process.env.STA_INSTALLATION_CONFIG = prevConfig;
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* Windows may hold the db briefly */ }
     }
   });
 
@@ -921,7 +959,7 @@ describe("T-V3TOK-003 tokens verb", () => {
   it("T-V3R-080 renders known completed-task and fallback rollups", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-v3-rollups-"));
     const store = new SqliteTaskStore(defaultStateDbPath(dir));
-    const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+    const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
     registry.create({ taskId: "T-done", classification: classifyTask({ isClearBugFix: true, touchesBackend: true }) });
     const task = store.loadTask("T-done")!;
     store.saveTask({ ...task, machine: { ...task.machine, current: TaskState.DEPLOYED } });
@@ -1101,7 +1139,7 @@ describe("T37 audit verb", () => {
   /** Seeds a task and drives it far enough to produce a trail, without needing a real `claude` binary. */
   function seedWithEvents(dir: string, taskId: string): void {
     const store = new SqliteTaskStore(defaultStateDbPath(dir));
-    const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+    const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
     const orch = registry.create({
       taskId,
       classification: classifyTask({ isClearBugFix: true, touchesBackend: true }),
@@ -1298,7 +1336,7 @@ describe("T41 projects verb", () => {
     const { classifyTask } = await import("./classification/taskClassifier.js");
     const { defaultStateDbPath, defaultStateViewPath } = await import("./store/stateView.js");
     const store = new SqliteTaskStore(defaultStateDbPath(withTasks));
-    const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(withTasks) });
+    const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(withTasks) });
     registry.create({ taskId: "T-1", classification: classifyTask({ isTypoOrCopyOnly: true }), dependsOn: [] });
     registry.close();
 
@@ -1389,7 +1427,7 @@ describe("--env (T43)", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-env-"));
     try {
       const store = new SqliteTaskStore(defaultStateDbPath(dir));
-      const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(dir) });
+      const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
       registry.create({
         taskId: "T-1",
         classification: classifyTask({ isClearBugFix: true, touchesBackend: true }),

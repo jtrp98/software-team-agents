@@ -1,8 +1,11 @@
 # คู่มือ bounded run
 
 เอกสารนี้เป็น canonical home เพียงแห่งเดียวสำหรับการใช้งาน `sta bounded-run` — คำสั่งเดียวที่ compile
-plan scope, freeze มัน, แล้วเดิน DAG ผ่าน DEV → deterministic verification → checkpoint → coherent
-QA/repair จนถึง boundary ที่เลือก รายละเอียดของ checkpoint อยู่ที่
+plan scope, freeze มัน, แล้วเดินทุก task ผ่าน **task engine เดียวกับ `sta run`** (V13 TASK-007):
+ทุก task รัน plan-task workflow ของตัวเอง — owner engineer (frozen attempt + checkpoint) → reviewer →
+qa-engineer (→ security เมื่อ sensitive) — ด้วย executor composition, stage, evidence และ completion
+ชุดเดียวกับ `sta run` ไม่มี coherent QA ระดับชุดอีกแล้ว `--until` และ repair budget เป็นเพียง
+`RunPolicy` (เปลี่ยนจุดหยุด/งบ ไม่เปลี่ยน stage หรือ evidence) รายละเอียดของ checkpoint อยู่ที่
 [`policies/git.md` §22](../policies/git.md#22-orchestrator-owned-checkpoint-contract) และเหตุผลของ
 ขอบเขต Git อยู่ที่ [ADR-026](../decisions/ADR-026-trusted-orchestrator-git-ownership.md);
 คู่มือนี้ไม่เขียนซ้ำทั้งสองส่วน
@@ -51,13 +54,14 @@ sta bounded-run --module <module> --phase <n> --until next-gate --autonomy edit
 | สิ่งที่ตรวจ | ผู้บังคับใช้ | สิ่งที่คนต้องทำ |
 |---|---|---|
 | `plan.md` เป็น canonical plan, scope ปิด, ไม่มี cycle, ไม่ drift | `orchestrator/planCompilation.ts` | แก้ plan แล้ว `--dry-run` ใหม่; refusal บอก kind และ task id ที่ขัดแย้ง |
-| ไม่มี human/approval gate ค้างของ task ที่จะรัน | `run/unattendedGate.ts` | resolve gate (`sta approve <task-id>`) หรือ unpause/uncancel แล้วรันใหม่ |
-| dependency ทุกตัว checkpoint/done แล้ว | `RunLedger.readiness()` บน frozen DAG | ปล่อยให้ upstream task เดินก่อน; plan Status cell ปลดล็อกให้ไม่ได้ |
+| human/approval gate ของ task (schema/deploy approval ก่อน Done, security, pause/cancel) | engine: `checkGate` + approval ledger + `taskRunService` (pause/cancel) | ตอบ request ด้วย `sta approve <task-id>` หรือ unpause/uncancel แล้ว `--resume`; งานอัตโนมัติก่อน gate จะรันก่อน แล้ว task จอดรอที่ gate (เหมือน `sta run`) |
+| BA → SA → DEV handoff ถูก sign-off/ack แล้ว (Knowledge ว่าง = refuse) | engine stage-entry guard (`orchestrator/stageGuards.ts`) | `sta roles signoff` / `sta roles ack` แล้ว `--resume`; ไม่มี attempt ถูก freeze ก่อนผ่าน guard |
+| dependency ทุกตัว Done ที่ verify ได้ (DEPLOYED + task-completion evidence) | `TaskRegistry.waitingOn` ของ engine | ปล่อยให้ upstream task เดินก่อน; ledger/plan Status cell ปลดล็อกให้ไม่ได้ |
 | runtime support level, guard capability, writable root เดียวต่อ attempt | `ledger/attemptFreeze.ts` | แก้สาเหตุที่ refusal ระบุ; multi-Target run ต้องระบุ git-identity root |
-| bounded-run attempt ผูก Target เดียว | `run/boundedRunServices.ts` | engineer เข้าถึงทุก Target ที่ task ผูก (V10 TASK-008) แต่ checkpoint จะ commit ได้ Target เดียวต่อ attempt — ถ้า stage resolve writable Target มากกว่าหนึ่ง คำสั่ง gate ก่อน adapter จะเริ่มเขียน ให้แยก task ต่อ Target |
+| bounded-run attempt ผูก Target เดียว | `run/ledgerAttemptExecutor.ts` | engineer เข้าถึงทุก Target ที่ task ผูก (V10 TASK-008) แต่ checkpoint จะ commit ได้ Target เดียวต่อ attempt — ถ้า stage resolve writable Target มากกว่าหนึ่ง คำสั่ง gate ก่อน adapter จะเริ่มเขียน ให้แยก task ต่อ Target |
 | multi-Target run ระบุ git-identity root | `cli/verbs/boundedRun.ts` | เมื่อ run ครอบคลุมหลาย Target ต้องส่ง `--target-root` ชัดเจน เพื่อระบุ checkout ที่ผูกกับ branch/SHA และ ledger |
 | working tree สะอาดและอยู่ base/run branch ที่ frozen ไว้ | `git/guardedRun.ts` | ตรวจ diff และตัดสินใจกับงานค้างก่อน STA ไม่ลบหรือ restore ไฟล์ของคน |
-| deterministic gate รันได้จริงและผ่าน | `qa/verificationHook.ts` + controller | ทำตาม remediation ที่ refusal พิมพ์; ไม่มี suite = `unverified` ไม่ใช่ pass |
+| deterministic gate รันได้จริงและผ่าน | `qa/verificationHook.ts` + checkpoint (`git/checkpoint.ts`) | ทำตาม remediation ที่ refusal พิมพ์; ไม่มี suite = `unverified` ไม่ใช่ pass; checkpoint ที่ถูก refuse เป็น failed role-run — stage ไม่ complete |
 | ไม่มี run อื่นที่ยังไม่จบบน Target เดียวกัน | `git/guardedRun.ts` | reconcile run เดิมก่อน หรือ resume มันด้วย `--resume <run-id>` |
 
 ข้อความ refusal ระบุสาเหตุและ remediation ที่ใช้ได้กับ Target นั้น; อย่าเดา flag เพื่อบังคับผ่าน
@@ -71,9 +75,16 @@ sta report --module <module> --output .workflow/report.html
 git log --oneline --decorate <base>..<run_branch>
 ```
 
-`--resume ... --dry-run` พิมพ์ status, boundary, task order และ readiness ปัจจุบันจาก ledger
-โดยไม่แก้ state, `changed` รวม working-tree/gate, ส่วน `report` เขียน dashboard HTML
-`CHECKPOINTED` เป็นสถานะ durability เท่านั้น ไม่ใช่ QA verdict หรือ approval
+`--resume ... --dry-run` พิมพ์ status, boundary, task order และ readiness ปัจจุบันจาก **engine**
+(projection เดียวกับ `sta status`) โดยไม่แก้ state, `changed` รวม working-tree/gate, ส่วน `report` เขียน dashboard HTML
+
+ledger task status เป็น **projection** ของ engine เท่านั้น (`ledgerTaskStatusFromPersisted`): `DONE` =
+DEPLOYED และ completion evidence verify ได้, `CHECKPOINTED` = ผ่าน verification ทุก stage แล้วรอ approval/deploy
+edge, `VERIFYING` = reviewer/QA/security ถือ task, `BLOCKED` = รอคน; run เป็น `COMPLETED` ก็ต่อเมื่อทุก task
+verify ได้ว่า Done เท่านั้น
+
+exit code: `0` COMPLETED หรือหยุดที่ boundary `qa`, `4` รอคน (gate, guard, pause/cancel, repair budget หมด),
+`1` HALTED (stage ไม่ advance, checkpoint ถูก refuse, runtime halt), `2` refused
 
 ## 4. Resume run ที่หยุดไว้
 
@@ -101,7 +112,7 @@ resume ใช้ Target root (git-identity root), named Knowledge root (ชื�
 `ABANDONED` และ task ไม่ถูกนับว่าล้มเหลว
 
 `sta pause <task-id>` / `sta cancel <task-id>` หยุด **task** ไม่ใช่ process ที่กำลังรัน แต่ทั้งคู่เป็น
-gate ที่ bounded run ตัวถัดไปจะเคารพ (`run/unattendedGate.ts`)
+การหยุดที่ engine ตรวจก่อนทุก step (`engine/taskRunService.ts`) ทั้งใน `sta run` และ bounded run
 
 ## 6. Merge ในเครื่องโดยคน
 

@@ -6,6 +6,7 @@ import { flagValue, openStore, positionalArg } from "../support.js";
 export const APPROVAL_PROMPT: Record<ApprovalType, string> = {
   [ApprovalType.SCHEMA_CONFIRMATION]: "Confirm the exact risk-triggered design boundary: schema/migration, breaking compatibility, critical security, or material ambiguity",
   [ApprovalType.DEPLOY]: "Approve an actual deploy/migration to production",
+  [ApprovalType.REVIEW_FAILURE]: "A reviewer round came back ❌ Changes requested and no automatic route may answer it",
   [ApprovalType.QA_FAILURE]: "A QA round came back ⚠️/❌ and needs a decision",
   [ApprovalType.SECURITY_RISK]: "A Critical/Important security finding is unresolved",
   [ApprovalType.REQUIREMENT_INTERVIEW]: "Answer the displayed missing confirmation or material business question; generic approval cannot supply a missing decision",

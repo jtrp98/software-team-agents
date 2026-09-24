@@ -9,6 +9,13 @@ import { RESERVED_DIRS, writeKnowledgeItem } from "../knowledge/knowledgeStore.j
 import type { KnowledgeItem, KnowledgeItemOf, RequirementPayload } from "../knowledge/knowledgeModel.js";
 import { SAMPLE_NOW, sampleKnowledge } from "../knowledge/sampleKnowledge.js";
 import { USAGE, parseArgs, runCli } from "../cli.js";
+import { SqliteTaskStore } from "../store/sqliteStore.js";
+import { defaultStateDbPath } from "../store/stateView.js";
+import { Orchestrator } from "../orchestrator/orchestrator.js";
+import { classifyTask } from "../classification/taskClassifier.js";
+import { decideStageCompletion, latestAttempt } from "../orchestrator/transitionGuard.js";
+import { PASSING_VERIFICATION } from "../evidence/stageEvidence.testSupport.js";
+import { AgentStage, TaskState } from "../types.js";
 import {
   AcknowledgementError,
   PROJECT_WIDE_DIR,
@@ -27,6 +34,7 @@ import {
   roleWorkspacePath,
   writeRoleWorkspace,
 } from "./roleWorkspace.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 const NOW = "2026-08-21T10:00:00Z";
 const LATER = "2026-08-21T18:00:00Z";
@@ -608,10 +616,10 @@ describe("the roles sub-commands for T103-T107", () => {
     expect(early.code).toBe(1);
     expect(early.err).toMatch(/cannot go draft -> approved/);
 
-    const reviewed = await capture(["roles", "review", "RULE-007", "--as", "system-analyst", "--project-root", root], root);
+    const reviewed = await capture(["roles", "review", "RULE-007", "--by", "Jaturapat", "--project-root", root], root);
     expect(reviewed.code).toBe(0);
     // The checklist is what makes "reviewed" mean the same thing twice.
-    expect(reviewed.out).toMatch(/It confirmed:/);
+    expect(reviewed.out).toMatch(/RULE-007 reviewed by Jaturapat\. They confirmed:/);
     expect(reviewed.out).toMatch(/enforcement` says where it is actually held/);
 
     expect((await capture(["roles", "approve", "RULE-007", "--by", "Jaturapat", "--project-root", root], root)).code).toBe(0);
@@ -629,15 +637,56 @@ describe("the roles sub-commands for T103-T107", () => {
     expect(after.out).toMatch(/sta roles ack sa REQ-003,RULE-007/);
   });
 
-  it("refuses a review by the owner, and by a role that cannot see the kind", async () => {
+  /** V13 TASK-006: an agent review is the reviewer stage STA dispatches — never claimed from the CLI. */
+  it("refuses `roles review --as <agent>` outright, and requires the person's name", async () => {
     const root = project();
-    const byOwner = await capture(["roles", "review", "RULE-007", "--as", "business-analyst", "--project-root", root], root);
-    expect(byOwner.code).toBe(1);
-    expect(byOwner.err).toMatch(/owns RULE-007 and cannot review it/);
+    for (const as of ["reviewer", "system-analyst", "qa-engineer"]) {
+      await expect(
+        capture(["roles", "review", "RULE-007", "--as", as, "--project-root", root], root),
+      ).rejects.toThrow(/--as is no longer accepted — agent reviews are dispatched by STA as the reviewer stage/);
+    }
+    await expect(capture(["roles", "review", "RULE-007", "--project-root", root], root)).rejects.toThrow(
+      /--by <name> is required — this is a person's decision/,
+    );
+    // Nothing was written by any refused call.
+    expect(KnowledgeBase.load(root).get("RULE-007")!.status).toBe("draft");
+  });
 
-    const blind = await capture(["roles", "review", "RULE-007", "--as", "devops", "--project-root", root], root);
-    expect(blind.code).toBe(1);
-    expect(blind.err).toMatch(/does not see business-rule items/);
+  it("a person's `roles review --by` touches only the Knowledge item — never the task, its evidence or any stage", async () => {
+    const root = project();
+    const dbPath = defaultStateDbPath(root);
+    const store = new SqliteTaskStore(dbPath);
+    const orch = new Orchestrator("T-MANUAL-REVIEW", classifyTask({ isClearBugFix: true, touchesBackend: true }), { store, stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
+    // The engineer finished; the task now waits on the reviewer stage.
+    expect(await orch.step(() => ({ outcome: { tokens: 1, cost: 0, result: "PASS" }, deterministicVerification: PASSING_VERIFICATION }))).toEqual({
+      kind: "RUNNING",
+      stage: AgentStage.REVIEWER,
+    });
+    const taskBefore = store.loadTask("T-MANUAL-REVIEW");
+    const evidenceBefore = store.evidenceForTask("T-MANUAL-REVIEW");
+    const eventsBefore = store.eventsForTask("T-MANUAL-REVIEW").length;
+    store.close();
+
+    const reviewed = await capture(["roles", "review", "RULE-007", "--by", "alice", "--project-root", root], root);
+    expect(reviewed.code).toBe(0);
+    expect(reviewed.out).toMatch(/RULE-007 reviewed by alice/);
+    expect(KnowledgeBase.load(root).get("RULE-007")!.status).toBe("reviewed");
+
+    const after = new SqliteTaskStore(dbPath);
+    try {
+      expect(after.loadTask("T-MANUAL-REVIEW")).toEqual(taskBefore);
+      expect(after.evidenceForTask("T-MANUAL-REVIEW")).toEqual(evidenceBefore);
+      expect(after.eventsForTask("T-MANUAL-REVIEW")).toHaveLength(eventsBefore);
+      // The shortcut never completes a stage: the reviewer never ran, so REVIEW stays open.
+      const records = after.evidenceForTask("T-MANUAL-REVIEW");
+      expect(latestAttempt(records, AgentStage.REVIEWER)).toBe(0);
+      expect(decideStageCompletion(AgentStage.REVIEWER, 1, records).complete).toBe(false);
+      const resumed = Orchestrator.resume("T-MANUAL-REVIEW", after, { stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
+      expect(resumed.status()).toEqual({ kind: "RUNNING", stage: AgentStage.REVIEWER });
+      expect(resumed.machine.current).toBe(TaskState.REVIEW);
+    } finally {
+      after.close();
+    }
   });
 
   it("refuses a sign-off with no name, and one over a standing blocker", async () => {

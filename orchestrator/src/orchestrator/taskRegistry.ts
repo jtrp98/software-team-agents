@@ -11,6 +11,7 @@ import type { TargetBindings } from "../threeRepo/taskBindings.js";
 import { Orchestrator } from "./orchestrator.js";
 import { describeStatus, unmetDependencies, type TaskStatusView } from "./taskStatus.js";
 import { verifyTaskCompletion } from "./transitionGuard.js";
+import type { StageEntryGuard } from "./stageGuards.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import {
   buildRuntimeTask,
@@ -49,6 +50,14 @@ export interface TaskRegistryOptions {
   planTasks?: () => readonly WorkPlanTask[] | null;
   /** Trusted human channel for approval decisions. Omitted = unconfigured: every decision fails closed. */
   humanDecisionVerifier?: HumanDecisionVerifier;
+  /** Where dispatch reads `contracts/*.yaml`; the reviewer-independence check reads the same ones. */
+  contractRoot?: string;
+  /**
+   * V13 TASK-007 — the stage-entry guard every task this registry opens is
+   * built with. Required: production passes `createRoleLaneStageGuard`
+   * (`stageGuards.ts`); nothing defaults it and nothing turns it off.
+   */
+  stageEntryGuard: StageEntryGuard;
 }
 
 export interface TaskListing {
@@ -77,6 +86,9 @@ export class TaskRegistry {
   private readonly stateViewPath?: string;
   private readonly planTasks?: TaskRegistryOptions["planTasks"];
   private readonly humanDecisionVerifier?: HumanDecisionVerifier;
+  private readonly contractRoot?: string;
+  /** The guard every orchestrator this registry builds is given — and the one its status projection reads. */
+  readonly stageEntryGuard: StageEntryGuard;
   /** True while a `transaction()` is open: the file-backed state view cannot be rolled back, so it waits for the commit. */
   private deferStateView = false;
 
@@ -87,10 +99,19 @@ export class TaskRegistry {
     this.stateViewPath = opts.stateViewPath;
     this.planTasks = opts.planTasks;
     this.humanDecisionVerifier = opts.humanDecisionVerifier;
+    this.contractRoot = opts.contractRoot;
+    this.stageEntryGuard = opts.stageEntryGuard;
   }
 
   private orchestratorOptions() {
-    return { store: this.store, budget: this.budget, now: this.now, humanDecisionVerifier: this.humanDecisionVerifier };
+    return {
+      store: this.store,
+      budget: this.budget,
+      now: this.now,
+      humanDecisionVerifier: this.humanDecisionVerifier,
+      contractRoot: this.contractRoot,
+      stageEntryGuard: this.stageEntryGuard,
+    };
   }
 
   /** Reload authored input; persisted RuntimeTask fields are never a second plan authority. */
@@ -234,7 +255,7 @@ export class TaskRegistry {
 
   list(): TaskListing[] {
     const tasks = this.store.listTasks();
-    return tasks.map((task) => ({ task, status: describeStatus(task, tasks) }));
+    return tasks.map((task) => ({ task, status: describeStatus(task, tasks, { stageEntryGuard: this.stageEntryGuard }) }));
   }
 
   runsForTask(taskId: string): RunRecord[] {

@@ -10,7 +10,7 @@ import type { RuntimeWorkspace } from "./runtimeAdapter.js";
  * The Tool-execution port's contract, stated once and applied to every
  * implementation.
  *
- * `RuntimeWorkspace` is how the framework reads artifacts back (review.md,
+ * `RuntimeWorkspace` is how the framework reads artifacts back (qa.md,
  * security.md), writes nothing outside what preflight granted, and runs the
  * deterministic verification commands. Anything that satisfies this interface
  * must satisfy the behaviours below, or callers written against one

@@ -1,5 +1,6 @@
 import { AgentStage } from "../types.js";
-import { ArtifactType, type QaReportArtifact, type SecurityReportArtifact } from "../artifacts/schemas.js";
+import { ArtifactType, type QaReportArtifact, type ReviewReportArtifact, type SecurityReportArtifact } from "../artifacts/schemas.js";
+import { resolveAuthoritativeContract } from "../agents/agentContract.js";
 import type { AgentExecutor, AgentExecutorRequest, AgentExecutorResult, PersistedVerificationRef } from "../orchestrator/orchestrator.js";
 import type { DeterministicVerification } from "../qa/deterministic.js";
 
@@ -34,13 +35,39 @@ export function passingQaReport(taskId: string): QaReportArtifact {
   };
 }
 
+/** A reviewer PASS as `parseReviewReport` would produce it from a clean review.md. */
+export function passingReviewReport(taskId: string): ReviewReportArtifact {
+  return { taskId, verdict: "PASS", findings: [], reviewed: ["src/index.ts"] };
+}
+
+/** A reviewer FAIL with one open blocking finding owned by `owner`. */
+export function failingReviewReport(taskId: string, owner: AgentStage = AgentStage.BACKEND_ENGINEER): ReviewReportArtifact {
+  return {
+    taskId,
+    verdict: "FAIL",
+    findings: [
+      { id: "RV-1", severity: "BLOCKING", location: "src/index.ts:1", owner, status: "OPEN", description: "does not do what the design says" },
+    ],
+    reviewed: ["src/index.ts"],
+  };
+}
+
+/**
+ * The digest dispatch binds to a reviewer attempt (`resolveAuthoritativeContract`,
+ * V13 TASK-005) — the orchestrator's independence check requires one.
+ */
+export function reviewerContractDigest(): string {
+  return resolveAuthoritativeContract(AgentStage.REVIEWER).digest;
+}
+
 export function passingSecurityReport(taskId: string): SecurityReportArtifact {
   return { taskId, overallStatus: "PASS", findings: [] };
 }
 
 /**
  * Fills in the required evidence a successful stage result omitted: a passing
- * post-Dev sweep for a code-producing stage, a PASS report for QA/security.
+ * post-Dev sweep for a code-producing stage, a PASS report (and, for the
+ * reviewer, the dispatch contract digest) for reviewer/QA/security.
  * A FAIL result, or one that already carries the evidence, is returned as is —
  * so a test that means "this stage produced no evidence" must not use this.
  */
@@ -51,6 +78,14 @@ export function withRequiredEvidence(req: Pick<AgentExecutorRequest, "stage" | "
     result.deterministicVerification === undefined
   ) {
     return { ...result, deterministicVerification: PASSING_VERIFICATION };
+  }
+  if (req.stage === AgentStage.REVIEWER) {
+    const withArtifact: AgentExecutorResult = result.artifact === undefined
+      ? { ...result, artifactType: ArtifactType.REVIEW_REPORT as const, artifact: passingReviewReport(req.taskId) }
+      : result;
+    return withArtifact.outcome.contract_digest === undefined
+      ? { ...withArtifact, outcome: { ...withArtifact.outcome, contract_digest: reviewerContractDigest() } }
+      : withArtifact;
   }
   if (req.stage === AgentStage.QA_ENGINEER && result.artifact === undefined) {
     return { ...result, artifactType: ArtifactType.QA_REPORT, artifact: passingQaReport(req.taskId) };

@@ -112,7 +112,7 @@ Two consequences, both deliberate:
 
 ```bash
 sta roles [--module <name>]                     # where each lane stands, and what it is waiting on
-sta roles review <id> --as <agent>              # draft -> reviewed, with that kind's checklist
+sta roles review <id> --by <name>               # a person: draft -> reviewed, with that kind's checklist
 sta roles approve <id> --by <name>              # reviewed -> approved; a person only
 sta roles signoff <ba|sa|uxui|dev> --by <name>  # that lane's own gate  [--reject] [--note ...]
 sta roles ack <lane> <id>[,<id>...] --by <name> # record the handoff into that lane

@@ -42,8 +42,9 @@ step — frontend work level TRIVIAL/SMALL จึงไม่โดน UX-artifa
 
 ## Bounded run
 
-`sta bounded-run` compile + freeze plan scope ใน transaction เดียว แล้วเดิน DAG ผ่าน
-DEV → deterministic verification → checkpoint → coherent QA/repair; ไม่ push/merge/rollback —
+`sta bounded-run` compile + freeze plan scope ใน transaction เดียว แล้วเดินทุก task ผ่าน task engine
+เดียวกับ `sta run` (V13 TASK-007): owner engineer (frozen attempt → deterministic verification → checkpoint)
+→ reviewer → QA (→ security) ต่อ task; ไม่ push/merge/rollback —
 คู่มือฉบับเต็มอยู่ที่ [`bounded-run.md`](bounded-run.md) (record ของ wave run เดิมที่ปลดไปแล้วอยู่ที่
 [`bounded-wave-run.md`](bounded-wave-run.md))
 
@@ -59,21 +60,21 @@ gate สำคัญหยุดรอคนจริง:
 - deploy/migration จริง
 
 การอนุมัติเป็น **record** (type/status/who/when) — reject คือ record ที่ block งาน ไม่ใช่ flag ·
-pipeline แบบ orchestrated chain `qa-engineer` (ทุกงานที่แตะ code) และ `security` (sensitive/schema)
+pipeline แบบ orchestrated chain `reviewer` → `qa-engineer` (ทุกงานที่แตะ code) และ `security` (sensitive/schema)
 ให้อัตโนมัติ — ที่เป็น human gate คือ *คำตัดสิน* ของสองตัวนี้ ไม่ใช่การเรียกใช้
 
 resolve gate ด้วย `sta approve <task-id> [--yes|--no]`; task ที่ parked (exit 4) รอ gate นี้อยู่
 
 ## Roles ใน pipeline
 
-สิบเอ็ด role แต่ละตัวเป็นเจ้าของ artifact เดียว ไม่มีตัวใดเรียกตัวถัดไปได้ — ตาราง role/reads/writes
+สิบสอง role แต่ละตัวเป็นเจ้าของ artifact เดียว ไม่มีตัวใดเรียกตัวถัดไปได้ — ตาราง role/reads/writes
 อยู่ที่ [`CLAUDE.md`](../CLAUDE.md) § Roles และเหตุผลเชิงลึกที่ [`pipeline-rationale.md`](pipeline-rationale.md)
 role docs รายตัวอยู่ที่ [`roles/`](roles/) · lane approvals/signoffs (BA · SA · UXUI · DEV) ใช้
 `sta roles ...` — ดู [`cli.md`](cli.md) § Roles
 
 ## Failure / recovery
 
-Retry (รอบ owner จาก review.md) · Recover (ถอยไป stage ก่อนหน้าที่ task เคยผ่าน) · Rollback (กลับสู่
+Retry (รอบ owner จาก qa.md) · Recover (ถอยไป stage ก่อนหน้าที่ task เคยผ่าน) · Rollback (กลับสู่
 last verified state) · Escalate (ให้คนแก้) · Abort (หมด retry budget) — ประกาศใน
 `escalation-policy.yaml` ตรวจด้วย `sta --check-escalation-policy`
 
@@ -111,7 +112,7 @@ cd C:\src\company-knowledge
 software-team-agents init
 software-team-agents open                   # เปิด Claude Code จาก Knowledge workspace
 #  ... draft knowledge item, แล้วบันทึก human acts:
-sta roles review REQ-101 --as business-analyst
+sta roles review REQ-101 --by alice
 sta roles approve REQ-101 --by "Somchai"
 
 # 2) (ครั้งเดียวต่อเครื่อง) bind machine เข้ากับ Knowledge root

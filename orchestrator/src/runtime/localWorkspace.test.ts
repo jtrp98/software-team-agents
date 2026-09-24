@@ -13,20 +13,20 @@ function tmpRoot(): string {
 describe("LocalWorkspace (T108)", () => {
   it("round-trips a file, creating the directories on the way", async () => {
     const ws = new LocalWorkspace({ root: tmpRoot() });
-    await ws.writeFile("_docs/module/sales-crm/review.md", "## Round 1 (FULL)");
-    expect(await ws.readFile("_docs/module/sales-crm/review.md")).toBe("## Round 1 (FULL)");
-    expect(await ws.exists("_docs/module/sales-crm/review.md")).toBe(true);
+    await ws.writeFile("_docs/module/sales-crm/qa.md", "## Round 1 (FULL)");
+    expect(await ws.readFile("_docs/module/sales-crm/qa.md")).toBe("## Round 1 (FULL)");
+    expect(await ws.exists("_docs/module/sales-crm/qa.md")).toBe(true);
   });
 
   /**
    * `null` rather than an exception, matching `agents/moduleDocs.ts`: the
-   * QA/security readback has to tell "no review.md" from "an empty review.md",
+   * QA/security readback has to tell "no qa.md" from "an empty qa.md",
    * and both are meaningful answers rather than faults.
    */
   it("returns null for a file that does not exist", async () => {
     const ws = new LocalWorkspace({ root: tmpRoot() });
-    expect(await ws.readFile("_docs/module/nope/review.md")).toBeNull();
-    expect(await ws.exists("_docs/module/nope/review.md")).toBe(false);
+    expect(await ws.readFile("_docs/module/nope/qa.md")).toBeNull();
+    expect(await ws.exists("_docs/module/nope/qa.md")).toBe(false);
   });
 
   it("refuses to read or write outside its root", async () => {

@@ -69,14 +69,14 @@ When it's genuinely ambiguous, ask the user — and record the reason in `requir
 | `requirement.md` | `business-analyst` | business requirements, scope, declined features, references for any external fact |
 | `design.md` | `system-analyst` | feasibility verdicts, the confirmed Prisma schema, module breakdown |
 | `plan.md` | `project-manager` (task Status: `project-manager` writes rows `pending`, `qa-engineer` sets `verified`/`blocked`; engineers don't edit the table, they report progress in their handoff) | phased task table, with an optional phase-level `Tier` cast for implementation and QA work |
-| `review.md` | `qa-engineer` | open issues (all phases) + the current verify round + undeployed phases' `Unverified Behaviour` |
-| `review/phase-N.md` | `qa-engineer` | archived verify rounds for phases that are closed — read only on demand |
+| `qa.md` | `qa-engineer` | open issues (all phases) + the current verify round + undeployed phases' `Unverified Behaviour` |
+| `qa/phase-N.md` | `qa-engineer` | archived verify rounds for phases that are closed — read only on demand |
 | `security.md` | `security` | findings, accepted risks |
 | `deploy.md` | `devops` | environments, deploy/migration runbook, history |
 
 ### Canonical documents vs project reference material
 
-Only documents under `_docs/module/<name>/` (`requirement.md`, `design.md`, `plan.md`, `test-plan.md`, `review.md`, etc.) are STA-owned canonical documents. `--check-doc-structure` validates only these STA-owned current canonical documents against framework schemas.
+Only documents under `_docs/module/<name>/` (`requirement.md`, `design.md`, `plan.md`, `test-plan.md`, `qa.md`, etc.) are STA-owned canonical documents. `--check-doc-structure` validates only these STA-owned current canonical documents against framework schemas.
 
 External project documents and legacy documentation are **optional read-only evidence only** (CR-6, AD-11, AD-14). STA does not own, migrate, convert, reformat, or validate them, and they are never subject to `--check-doc-structure` or framework document validators. Current canonical STA knowledge is created and incrementally refreshed from project reality by `prompt-setup.md` and `prompt-update-knowledge.md` without any legacy documentation conversion machinery.
 
@@ -88,7 +88,7 @@ External project documents and legacy documentation are **optional read-only evi
 
 **Read it when you start** — it tells you which modules exist and what state they're in, which usually answers the module-resolution question before you have to ask.
 
-**Regenerate it when you finish**, as the last thing you do: run `node .claude/scripts/generate-status.js` with `Bash`. No agent hand-edits `status.md` with `Write`/`Edit` — the generator computes every module's `Docs:` line, per-phase table, `**Now**`, and `**Blocked on**` straight from `plan.md`'s task table (each row's `Status` cell), `review.md`'s `## Review Outcome` `**Status:**` line, `security.md`'s `## Open Findings` table, and `deploy.md`'s Deploy History, so there is nothing left to get out of sync by hand. It preserves the `## Scaffold` line verbatim (that one fact — is this project scaffolded — isn't derivable from any other document, so `setup` is still the one that sets it, and the generator never overwrites it).
+**Regenerate it when you finish**, as the last thing you do: run `node .claude/scripts/generate-status.js` with `Bash`. No agent hand-edits `status.md` with `Write`/`Edit` — the generator computes every module's `Docs:` line, per-phase table, `**Now**`, and `**Blocked on**` straight from `plan.md`'s task table (each row's `Status` cell), `qa.md`'s `## Review Outcome` `**Status:**` line, `security.md`'s `## Open Findings` table, and `deploy.md`'s Deploy History, so there is nothing left to get out of sync by hand. It preserves the `## Scaffold` line verbatim (that one fact — is this project scaffolded — isn't derivable from any other document, so `setup` is still the one that sets it, and the generator never overwrites it).
 
 ```markdown
 # Project Status
@@ -118,7 +118,7 @@ Use `✅` done · `⬜` not started/in progress · `⚠️` done with open issue
 
 A phase whose heading in `plan.md` carries `🔒 Security gate` keeps `security ⬜` until `security` has actually audited it. Never mark that one `n/a` — the flag exists precisely because someone already judged that it isn't.
 
-**The `(FULL)`/`(TARGETED)` mode comes straight from `qa-engineer`'s `**Status:**` line in `review.md`** — `generate-status.js` reads it, nobody types it into `status.md` directly any more. That parenthesis is the difference between a phase `devops` can ship and one that needs a full pass first (`.claude/agents/qa-engineer.md` defines the two modes and the gate).
+**The `(FULL)`/`(TARGETED)` mode comes straight from `qa-engineer`'s `**Status:**` line in `qa.md`** — `generate-status.js` reads it, nobody types it into `status.md` directly any more. That parenthesis is the difference between a phase `devops` can ship and one that needs a full pass first (`.claude/agents/qa-engineer.md` defines the two modes and the gate).
 
 **`status.md` is an index, not a source of truth.** If it ever disagrees with the actual documents, the documents win — and that's structural, not a discipline an agent has to remember: re-running the generator regenerates `status.md` from whatever the documents currently say, so "correcting" `status.md` means fixing the document it was computed from and regenerating, never hand-editing the index itself.
 
@@ -128,7 +128,7 @@ Don't put dates in `status.md`. It records where things stand right now; dated h
 
 ### Keeping `status.md` small — it's read on every single run, project-wide
 
-Same reasoning as `review.md` in §4, only wider: `review.md` taxes every run *on that module*; `status.md` taxes every run on *every* module, since it's the first thing read to get oriented. A module's section that grows round-by-round narrative becomes a cost every other module's runs pay too.
+Same reasoning as `qa.md` in §4, only wider: `qa.md` taxes every run *on that module*; `status.md` taxes every run on *every* module, since it's the first thing read to get oriented. A module's section that grows round-by-round narrative becomes a cost every other module's runs pay too.
 
 Each module's section holds exactly:
 
@@ -137,9 +137,9 @@ Each module's section holds exactly:
 3. **`**Now**:`** — the current actionable state, a few sentences
 4. **`**Blocked on**:`** — current blockers only, or `—`
 
-Anything more than that — how a decision was reached, a fixed bug's mechanism, a past round's findings, a judgment call's reasoning — belongs in that module's own documents (`design.md`'s `## Change Log`, `review.md`, `security.md`), which already carry it with more authority. Don't duplicate it into `status.md` as running narrative; a status update is a fact about *current state*, not a diary entry about how the run went.
+Anything more than that — how a decision was reached, a fixed bug's mechanism, a past round's findings, a judgment call's reasoning — belongs in that module's own documents (`design.md`'s `## Change Log`, `qa.md`, `security.md`), which already carry it with more authority. Don't duplicate it into `status.md` as running narrative; a status update is a fact about *current state*, not a diary entry about how the run went.
 
-**When a module's section has outgrown this** — superseded "Next step" paragraphs, resolved judgment calls, round-by-round history — move the superseded material verbatim into an archive file next to `status.md` (e.g. `status-archive.md`), the same way `qa-engineer` archives `review.md` rounds into `review/phase-N.md` (§4): move, don't summarize, don't discard, leave a one-line pointer under the module's section. This isn't only `qa-engineer`'s or the pipeline-driver's job — whoever notices the file has grown this way trims it, since every agent that reads `status.md` is who pays for leaving it untrimmed.
+**When a module's section has outgrown this** — superseded "Next step" paragraphs, resolved judgment calls, round-by-round history — move the superseded material verbatim into an archive file next to `status.md` (e.g. `status-archive.md`), the same way `qa-engineer` archives `qa.md` rounds into `qa/phase-N.md` (§4): move, don't summarize, don't discard, leave a one-line pointer under the module's section. This isn't only `qa-engineer`'s or the pipeline-driver's job — whoever notices the file has grown this way trims it, since every agent that reads `status.md` is who pays for leaving it untrimmed.
 
 ---
 
@@ -161,11 +161,11 @@ Once a document exists, you are amending it, not regenerating it.
 - **A task's Status cell in `plan.md`'s task table has one writer per value.** `project-manager` writes every new row `pending`, and is the only writer of `in_progress` (an engineer that started the row says so in its handoff, and `project-manager`/`qa-engineer` record it — engineers don't edit `plan.md`; their contracts deny `_docs/module/**`). Only `qa-engineer` sets `verified` or `blocked`, only after inspecting real code. No agent may clear or reorder a row it doesn't own the current value of — and this is exactly why `project-manager` must amend `plan.md` with `Edit` rather than rewriting it.
 - **`qa-engineer` may also *add* a `🔒 Security gate` to a phase heading in `plan.md`, never remove one.** `project-manager` can only flag what the design predicted; QA is looking at the code that got built, and `devops` gates on the heading. This is the only other write any agent but `project-manager` makes to `plan.md`.
 
-### Keeping `review.md` small — it is the one document every agent pays for
+### Keeping `qa.md` small — it is the one document every agent pays for
 
-"Amend, don't regenerate" applies to `review.md` too, but it must not be allowed to grow without limit. Every engineer, `security`, and `devops` run reads it in full, so once a phase is closed its per-task detail is pure cost to everyone downstream — nobody implementing Phase 6 needs to re-read what a Phase 1 bug was.
+"Amend, don't regenerate" applies to `qa.md` too, but it must not be allowed to grow without limit. Every engineer, `security`, and `devops` run reads it in full, so once a phase is closed its per-task detail is pure cost to everyone downstream — nobody implementing Phase 6 needs to re-read what a Phase 1 bug was.
 
-`review.md` holds exactly four things:
+`qa.md` holds exactly four things:
 
 1. **`## Open Issues — all phases`, at the very top** — every unresolved item from *any* phase, as a table: what it is, which phase it came from, which agent it routes to, and whether it's blocking. This section is why nothing gets lost when a round is archived, and it's the first thing an engineer should be able to act on.
 2. **The current verify round**, in full detail — including which mode it ran in, and, for a phase that still has open items, the `## Verified File Manifest` the next round needs in order to tell what moved.
@@ -174,35 +174,35 @@ Once a document exists, you are amending it, not regenerating it.
 
 Plus the `## Change Log` every document in this pipeline carries — one line per round, with the archived rounds' full entries travelling to the archive file along with them.
 
-When a phase's round is superseded, `qa-engineer` **moves** it — verbatim, never summarized or pruned — into `review/phase-N.md`, carries any still-open item up into `Open Issues`, keeps the phase's `Unverified Behaviour` block behind until it deploys, and leaves a pointer under `## Archived rounds`. Moving is not the same as discarding; the history stays complete and readable, it just stops being loaded by every run.
+When a phase's round is superseded, `qa-engineer` **moves** it — verbatim, never summarized or pruned — into `qa/phase-N.md`, carries any still-open item up into `Open Issues`, keeps the phase's `Unverified Behaviour` block behind until it deploys, and leaves a pointer under `## Archived rounds`. Moving is not the same as discarding; the history stays complete and readable, it just stops being loaded by every run.
 
 Sections 1 and 3 are both **outlive-your-round** sections, and they exist for the same failure: something a *later* stage needs, produced by a round that stops being current before that stage runs. Archiving one of those on schedule looks tidy and silently disarms a gate. When in doubt about whether something has been consumed yet, it stays.
 
 The exact section layout, the two verify modes (FULL and TARGETED), and what the manifest is for belong to `qa-engineer` and are defined in `.claude/agents/qa-engineer.md`. It is the only agent that writes any of this; everyone else reads `Open Issues` first and the current round second.
 
-**Do not read `review/phase-N.md` as part of your normal startup.** Read `review.md` only. Open an archive file solely when something specific sends you there — an `Open Issues` row you need the background on, a regression that looks like it's re-opening old work, or the user asking about past history.
+**Do not read `qa/phase-N.md` as part of your normal startup.** Read `qa.md` only. Open an archive file solely when something specific sends you there — an `Open Issues` row you need the background on, a regression that looks like it's re-opening old work, or the user asking about past history.
 
 ### Keeping `design.md`'s always-read sections small
 
 The same reasoning applies to `design.md`, and it hits harder here because §10 makes three of its sections — `## Feature-by-Feature Feasibility`, `## Risks & Dependencies`, `## Unresolved Open Questions` — mandatory reading on *every single run*, not just `system-analyst`'s own. A module that goes through several amend rounds naturally accumulates one question-and-answer table per round in those sections; left alone, each round adds its full reasoning and rejected alternatives on top of the last, and every future run — engineer, `qa-engineer`, `security`, `devops` — pays to read all of it just to find out today's rule.
 
-Once a decision in one of those three sections is closed (the question is answered and the resulting rule now lives in a Contract section, the Data Model, or `## Modules`), its role in the always-read section is done — the *rule* stays in a Contract section where it belongs, but the *question-and-answer record* of how it was reached is done being load-bearing. Move it, verbatim, into a `design-archive.md` next to `design.md`, the same way `qa-engineer` moves a closed round into `review/phase-N.md`: move, don't summarize, don't discard, leave a one-line pointer where it was ("mati ของแต่ละรอบย้ายไปเก็บที่ `design-archive.md` แล้ว — กติกาที่ใช้จริงอยู่ที่ § ... ด้านล่าง"). A decision's reasoning is still fully available, it just stops being loaded by every run that doesn't need it.
+Once a decision in one of those three sections is closed (the question is answered and the resulting rule now lives in a Contract section, the Data Model, or `## Modules`), its role in the always-read section is done — the *rule* stays in a Contract section where it belongs, but the *question-and-answer record* of how it was reached is done being load-bearing. Move it, verbatim, into a `design-archive.md` next to `design.md`, the same way `qa-engineer` moves a closed round into `qa/phase-N.md`: move, don't summarize, don't discard, leave a one-line pointer where it was ("mati ของแต่ละรอบย้ายไปเก็บที่ `design-archive.md` แล้ว — กติกาที่ใช้จริงอยู่ที่ § ... ด้านล่าง"). A decision's reasoning is still fully available, it just stops being loaded by every run that doesn't need it.
 
-This is `system-analyst`'s responsibility on the amend round that closes the decision, the same way archiving a `review.md` round is `qa-engineer`'s job — do it as part of the amend that resolves the question, not as separate cleanup work later. `.claude/agents/system-analyst.md`'s Output section has the template.
+This is `system-analyst`'s responsibility on the amend round that closes the decision, the same way archiving a `qa.md` round is `qa-engineer`'s job — do it as part of the amend that resolves the question, not as separate cleanup work later. `.claude/agents/system-analyst.md`'s Output section has the template.
 
 ### Archiving `design.md`'s Change Log
 
-The same move-verbatim pattern applies to `design.md`'s `## Change Log`. Once a dated entry belongs to a contract version that is no longer current — a later amend round has replaced it — that entry moves, verbatim, never summarized or pruned, into `design-archive.md`, leaving a one-line pointer where it was. The section itself is never emptied: `## Change Log` stays present, carrying its pointer and the entries for the current contract version, exactly as `--check-doc-structure`'s `hasChangeLog` check requires. This is `system-analyst`'s editorial act on the amend round that closes a contract version — the same "move, don't prune" distinction `review.md`'s rule above already makes, done as part of that amend, not as separate cleanup work later.
+The same move-verbatim pattern applies to `design.md`'s `## Change Log`. Once a dated entry belongs to a contract version that is no longer current — a later amend round has replaced it — that entry moves, verbatim, never summarized or pruned, into `design-archive.md`, leaving a one-line pointer where it was. The section itself is never emptied: `## Change Log` stays present, carrying its pointer and the entries for the current contract version, exactly as `--check-doc-structure`'s `hasChangeLog` check requires. This is `system-analyst`'s editorial act on the amend round that closes a contract version — the same "move, don't prune" distinction `qa.md`'s rule above already makes, done as part of that amend, not as separate cleanup work later.
 
 ### Catching up a document that grew bloated before it was ever archived
 
-The three rules above (`review.md`, `design.md`'s always-read sections, and `status.md` in §2) all assume archiving has been happening round by round. Nothing here retroactively splits a document — if `review.md`, `design.md`, or a `status.md` module section has simply never been archived and is now carrying rounds of history it shouldn't, the agent that notices does a one-time **catch-up round** instead of leaving it for "later":
+The three rules above (`qa.md`, `design.md`'s always-read sections, and `status.md` in §2) all assume archiving has been happening round by round. Nothing here retroactively splits a document — if `qa.md`, `design.md`, or a `status.md` module section has simply never been archived and is now carrying rounds of history it shouldn't, the agent that notices does a one-time **catch-up round** instead of leaving it for "later":
 
 1. Read the whole document once — the cost is paid once, here, instead of paid partially by every future run that keeps reading the bloat.
-2. Decide what's actually closed by that document's own rule: a `review.md` round that's superseded (a later round covers the same phase, or the phase deployed); a `design.md` decision whose rule now lives in a Contract section, the Data Model, or `## Modules`, or a `design.md` Change Log entry whose contract version is no longer current; a `status.md` module section holding anything beyond its four fields (§2).
-3. Move the closed material **verbatim** into that document's archive file (`review/phase-N.md`, `design-archive.md`, `status-archive.md`) — never summarize, never prune, exactly the same move as the steady-state rule makes each round.
-4. Leave a one-line pointer where the material was, and keep whatever the steady-state rule says must stay behind (`review.md`'s `Open Issues` and `Unverified Behaviour`; `design.md`'s current, still-open decisions and its Change Log's pointer plus current-contract-version entries; `status.md`'s current four fields).
-5. After the catch-up round, the normal per-round discipline (`qa-engineer` for `review.md`, `system-analyst` for `design.md`, whoever notices for `status.md`) is enough to keep it small going forward — catch-up is a one-time correction, not a new recurring job.
+2. Decide what's actually closed by that document's own rule: a `qa.md` round that's superseded (a later round covers the same phase, or the phase deployed); a `design.md` decision whose rule now lives in a Contract section, the Data Model, or `## Modules`, or a `design.md` Change Log entry whose contract version is no longer current; a `status.md` module section holding anything beyond its four fields (§2).
+3. Move the closed material **verbatim** into that document's archive file (`qa/phase-N.md`, `design-archive.md`, `status-archive.md`) — never summarize, never prune, exactly the same move as the steady-state rule makes each round.
+4. Leave a one-line pointer where the material was, and keep whatever the steady-state rule says must stay behind (`qa.md`'s `Open Issues` and `Unverified Behaviour`; `design.md`'s current, still-open decisions and its Change Log's pointer plus current-contract-version entries; `status.md`'s current four fields).
+5. After the catch-up round, the normal per-round discipline (`qa-engineer` for `qa.md`, `system-analyst` for `design.md`, whoever notices for `status.md`) is enough to keep it small going forward — catch-up is a one-time correction, not a new recurring job.
 
 This isn't gated behind any specific agent owning the fix: whichever agent's run would otherwise pay to read the bloat is the one authorized to do the catch-up, the same "whoever notices" principle §2 already uses for `status.md`.
 
@@ -232,7 +232,7 @@ How, without reading the file to find out where things are:
 2. `Grep` for `^## ` with `-n` on `plan.md` — a dozen lines that give you every section's start line.
 3. `Read` with `offset`/`limit` for each of the four ranges above.
 
-Nothing is lost by skipping the other phases: cross-phase dependencies live in `Sequencing Notes`, which you always read, and unfinished work from an earlier phase surfaces in `review.md`'s `## Open Issues — all phases`, which you also always read. If the user asks you to work across several phases, read each of those phases' blocks — the rule is "the phases your run touches", not "exactly one".
+Nothing is lost by skipping the other phases: cross-phase dependencies live in `Sequencing Notes`, which you always read, and unfinished work from an earlier phase surfaces in `qa.md`'s `## Open Issues — all phases`, which you also always read. If the user asks you to work across several phases, read each of those phases' blocks — the rule is "the phases your run touches", not "exactly one".
 
 `project-manager` is the exception: it owns `plan.md` and reads it in full when amending, because it has to place new work in the right order relative to everything already there.
 
@@ -255,11 +255,11 @@ Same technique — `Grep` for `^## ` to get the section map, then `Read` the ran
 
 `system-analyst` owns this document and reads it in full when amending. `qa-engineer` reads the Data Model in full every round — see `policies/architecture.md` §7 for why that one isn't optional. `project-manager` also reads the Data Model — to know what the work areas are when phasing (one task = one independently verifiable unit of work, batched by shared boundary; nothing mandates a task per model), not because each model becomes its own row; it usually runs before scaffold, when `design.md` is the only copy anyway.
 
-### `review.md`
+### `qa.md`
 
 Read **`## Open Issues — all phases`** first — it's at the top for that reason, and for most runs it's the only part you need to act on. Then the current round, for the phase you're working on.
 
-Don't open `review/phase-N.md` as part of startup. Go there only when an `Open Issues` row doesn't give you enough to act on, when something looks like it's re-opening closed work, or when the user asks about history. §4 has the full rule.
+Don't open `qa/phase-N.md` as part of startup. Go there only when an `Open Issues` row doesn't give you enough to act on, when something looks like it's re-opening closed work, or when the user asks about history. §4 has the full rule.
 
 ### `requirement.md`
 
@@ -269,7 +269,7 @@ Read it in full. It's the shortest of the four, it has no per-phase structure to
 
 ## 11. Language
 
-Every agent talks to the user in Thai — status updates, questions (`AskUserQuestion` labels/options included), and handoff summaries. **Every document an agent creates is written in Thai too** — `requirement.md`, `design.md`, `plan.md`, `test-plan.md`, `review.md`, `security.md`, `deploy.md`, `status.md`, and their `## Change Log` entries. This is not an exhaustive filename list; it names the module-root files as examples. **Every file any agent writes under `_docs/module/**` or `knowledge/**` follows the same rule** — explicitly including `review/phase-N.md`/`review/closure-*.md` (§4's archived-round files) and `uxui/**`/`ux-design/**` (`uxui-designer`'s draft artifacts) — unless it is machine-generated output from an external tool (e.g. `route-lens`/`schema-lens` maps) or literal code/config content. Keep technical vocabulary in its original English form rather than translating it (model/field names, stack terms like "endpoint"/"migration"/"schema", file paths, code identifiers, code/schema blocks) — translating those makes them harder to match against the actual code and docs, not easier to read.
+Every agent talks to the user in Thai — status updates, questions (`AskUserQuestion` labels/options included), and handoff summaries. **Every document an agent creates is written in Thai too** — `requirement.md`, `design.md`, `plan.md`, `test-plan.md`, `qa.md`, `security.md`, `deploy.md`, `status.md`, and their `## Change Log` entries. This is not an exhaustive filename list; it names the module-root files as examples. **Every file any agent writes under `_docs/module/**` or `knowledge/**` follows the same rule** — explicitly including `qa/phase-N.md`/`qa/closure-*.md` (§4's archived-round files) and `uxui/**`/`ux-design/**` (`uxui-designer`'s draft artifacts) — unless it is machine-generated output from an external tool (e.g. `route-lens`/`schema-lens` maps) or literal code/config content. Keep technical vocabulary in its original English form rather than translating it (model/field names, stack terms like "endpoint"/"migration"/"schema", file paths, code identifiers, code/schema blocks) — translating those makes them harder to match against the actual code and docs, not easier to read.
 
 This governs new content, not a retranslation pass: if a document already exists with content written in another language, amend it per §4 — add or edit your section in Thai — but don't retranslate the rest of the document as a side effect of an unrelated edit. Bringing a whole existing document over to Thai is a deliberate decision the user asks for explicitly.
 
@@ -282,5 +282,5 @@ changed, what's blocking (if anything), and the next agent/command in a few line
 reasoning only where the next reader has to make a decision from it (an ambiguous finding, a
 routed issue, an assumption flagged per the rule in `CLAUDE.md`'s "Rules that hold across every
 agent"). This is a rule about the chat message, not the document being written — `requirement.md`,
-`design.md`, `review.md`, and the rest keep whatever depth `§0`–`§11` and each agent's own file
+`design.md`, `qa.md`, and the rest keep whatever depth `§0`–`§11` and each agent's own file
 call for; a document is a reference asked for later, a handoff message is read once, right now.

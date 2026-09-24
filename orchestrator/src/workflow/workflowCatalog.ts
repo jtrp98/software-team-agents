@@ -42,6 +42,7 @@ export function workflowPath(id: string, projectRoot: string = defaultProjectRoo
 
 /** Every classification signal that selects a workflow, plus the id it selects. */
 const SIGNAL_WORKFLOWS: readonly { id: string; signal: keyof ClassificationInput }[] = [
+  { id: "plan-task", signal: "isPlanTask" },
   { id: "deploy", signal: "isProductionDeployOrMigration" },
   { id: "feature", signal: "isNewFeatureModuleOrProject" },
   { id: "schema-change", signal: "touchesSchema" },
@@ -107,7 +108,7 @@ const WORKFLOW_DOCS: Readonly<Record<string, WorkflowDoc>> = {
     rationale: ["Brand-new feature, module or project: no stage is skipped; BA validates confirmed intake or interviews for what is missing."],
     description: "New feature, module or project - the full chain, starting from business analysis.",
     priorityRationale: [
-      "Above `schema-change` (priority 2): a brand-new feature/module/project that",
+      "Ranked above `schema-change`: a brand-new feature/module/project that",
       "also touches the schema still starts from business analysis — it",
       "must not silently degrade into the schema-only pipeline that skips",
       "business-analyst and project-manager.",
@@ -143,6 +144,25 @@ const WORKFLOW_DOCS: Readonly<Record<string, WorkflowDoc>> = {
     ],
     description: "Restructuring with no intended behaviour change - verification is the point.",
   },
+  "plan-task": {
+    rationale: [
+      "One task of a canonical plan.md. Business analysis, design and planning already happened -",
+      "that is what produced the task - so its owner engineer implements it, an independent reviewer",
+      "reviews it, and qa-engineer verifies it, per task. There is no set-level QA pass.",
+      "",
+      "The task's authored risk still carries its obligations: a security pass for a sensitive or",
+      "schema-touching change, and - for an authored schema, deployment or migration gate - the human",
+      "approval before Done (requires_human_approval below is the ungated case).",
+    ],
+    description: "Canonical plan task - owner engineer, reviewer and QA per task; BA, SA and PM already ran.",
+    priorityRationale: [
+      "Checked before every other signal: a plan task's schema, security and deploy facts are",
+      "authored risk about already-analysed work, never a request to re-run the analysis.",
+    ],
+    notes: {
+      [AgentStage.SECURITY]: "a schema-touching plan task gets a security pass whether or not the plan flagged one",
+    },
+  },
   "schema-change": {
     rationale: [
       "Adds or alters a field/table/relation. The costliest mistake available in this pipeline,",
@@ -150,7 +170,7 @@ const WORKFLOW_DOCS: Readonly<Record<string, WorkflowDoc>> = {
     ],
     description: "Data model change - routes through system-analyst, schema confirmation always needs a person.",
     priorityRationale: [
-      "Below `feature` (priority 1): a brand-new feature/module that also needs new",
+      "Ranked below `feature`: a brand-new feature/module that also needs new",
       "tables must run the full BA normalization/interview step first — this pipeline is for",
       "schema work on something that already exists.",
     ],
@@ -203,6 +223,7 @@ const EXPLICIT_BEHAVIOUR: Readonly<
       { agent: AgentStage.TEST_PLANNER, when: "test_strategy_required" },
       { agent: AgentStage.BACKEND_ENGINEER, when: "touchesBackend" },
       { agent: AgentStage.FRONTEND_ENGINEER, when: "touchesFrontend" },
+      { agent: AgentStage.REVIEWER },
       { agent: AgentStage.QA_ENGINEER },
       { agent: AgentStage.DEVOPS },
     ],
@@ -214,6 +235,7 @@ const EXPLICIT_BEHAVIOUR: Readonly<
       { agent: AgentStage.TEST_PLANNER, when: "test_strategy_required" },
       { agent: AgentStage.BACKEND_ENGINEER, when: "touchesBackend" },
       { agent: AgentStage.FRONTEND_ENGINEER, when: "touchesFrontend" },
+      { agent: AgentStage.REVIEWER },
       { agent: AgentStage.QA_ENGINEER },
       { agent: AgentStage.SECURITY, when: "touchesSensitiveArea" },
     ],
@@ -225,6 +247,7 @@ const EXPLICIT_BEHAVIOUR: Readonly<
       { agent: AgentStage.TEST_PLANNER, when: "test_strategy_required" },
       { agent: AgentStage.BACKEND_ENGINEER, when: "touchesBackend" },
       { agent: AgentStage.FRONTEND_ENGINEER, when: "touchesFrontend" },
+      { agent: AgentStage.REVIEWER },
       { agent: AgentStage.QA_ENGINEER },
       { agent: AgentStage.SECURITY, when: "always_sensitive" },
       { agent: AgentStage.DEVOPS },
@@ -307,6 +330,11 @@ const SENSITIVE: ClassificationInput = { touchesBackend: true, touchesFrontend: 
  * flag is set, but the pre-existing probe set never exercised `touchesSchema`.
  */
 const SCHEMA_BOTH: ClassificationInput = { touchesBackend: true, touchesFrontend: true, touchesSchema: true };
+/** The signals the classifier tests ahead of `touchesSchema` — the only ones a schema probe can say anything about. */
+const SCHEMA_PROBED_SIGNALS: ReadonlySet<keyof ClassificationInput> = new Set<keyof ClassificationInput>([
+  "isPlanTask",
+  "isNewFeatureModuleOrProject",
+]);
 const TEST_STRATEGY: ClassificationInput = { touchesBackend: true, touchesFrontend: true, testStrategyTriggers: ["cross-task"] };
 
 /**
@@ -326,13 +354,13 @@ function deriveSteps(signal: keyof ClassificationInput, id: string): WorkflowSte
   const frontend = pipelineFor(FRONTEND_ONLY);
   const both = pipelineFor(BOTH_ENGINEERS);
   const sensitive = pipelineFor(SENSITIVE);
-  // Only `isNewFeatureModuleOrProject` is checked ahead of `touchesSchema` in
+  // Only `isPlanTask` and `isNewFeatureModuleOrProject` are checked ahead of `touchesSchema` in
   // the classifier's if-chain (taskClassifier.ts): combining `touchesSchema`
   // with any other signal there is overridden by the schema-change branch
   // before that signal's own branch is ever reached, so probing it for those
   // signals would compare against a different workflow's shape rather than
   // this one's.
-  const schemaBoth = signal === "isNewFeatureModuleOrProject" ? pipelineFor(SCHEMA_BOTH) : both;
+  const schemaBoth = SCHEMA_PROBED_SIGNALS.has(signal) ? pipelineFor(SCHEMA_BOTH) : both;
   const testStrategy = pipelineFor(TEST_STRATEGY);
 
   const steps: WorkflowStep[] = [];

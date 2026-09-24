@@ -62,6 +62,7 @@ const GUARDED_NAMES = new Set([
   'plan.md',
   'test-plan.md',
   'review.md',
+  'qa.md',
   'security.md',
   'deploy.md',
 ]);

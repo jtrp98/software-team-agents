@@ -141,11 +141,13 @@ describe("pipelineFromWorkflow", () => {
     const bugfix = loadWorkflow("bugfix");
     expect(pipelineFromWorkflow(bugfix, { touchesBackend: true })).toEqual([
       AgentStage.BACKEND_ENGINEER,
+      AgentStage.REVIEWER,
       AgentStage.QA_ENGINEER,
     ]);
     expect(pipelineFromWorkflow(bugfix, { touchesFrontend: true })).toEqual([
       // No uxui-designer: a bug fix has no design phase.
       AgentStage.FRONTEND_ENGINEER,
+      AgentStage.REVIEWER,
       AgentStage.QA_ENGINEER,
     ]);
   });

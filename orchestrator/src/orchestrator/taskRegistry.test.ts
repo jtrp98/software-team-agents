@@ -9,6 +9,7 @@ import { TaskNotFoundError } from "../store/taskStore.js";
 import { DependencyNotMetError, TaskRegistry, UnknownDependencyError } from "./taskRegistry.js";
 import { decidePending, testHumanVerifier } from "../gates/humanDecision.testSupport.js";
 import { withStageEvidence } from "../evidence/stageEvidence.testSupport.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "./stageGuards.testSupport.js";
 
 
 const trivial = () => classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
@@ -17,7 +18,7 @@ const incremental = () => classifyTask({ isIncrementalFeature: true, touchesBack
 const pass = { outcome: { tokens: 10, cost: 0.001, result: "PASS" as const } };
 
 function registry(stateViewPath?: string) {
-  return new TaskRegistry({ store: new MemoryTaskStore(), stateViewPath, humanDecisionVerifier: testHumanVerifier() });
+  return new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store: new MemoryTaskStore(), stateViewPath, humanDecisionVerifier: testHumanVerifier() });
 }
 
 describe("TaskRegistry", () => {
@@ -145,7 +146,7 @@ describe("TaskRegistry as a dependency graph (T10/T11 wiring)", () => {
   /** A store plus the registry over it, so a case can reach past the registry when it needs to. */
   function fixture() {
     const store = new MemoryTaskStore();
-    return { store, registry: new TaskRegistry({ store }) };
+    return { store, registry: new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store }) };
   }
 
   it("groups independent tasks into one batch", () => {

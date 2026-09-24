@@ -73,7 +73,7 @@ const POST_VERIFICATION: TaskState[] = [TaskState.READY_TO_DEPLOY, TaskState.APP
 
 /** The last state in the machine's own sequence that counts as verified work to fall back to. */
 function lastVerifiedState(machine: TaskMachine): TaskState | null {
-  for (const candidate of [TaskState.SECURITY, TaskState.QA, TaskState.IMPLEMENTATION]) {
+  for (const candidate of [TaskState.SECURITY, TaskState.QA, TaskState.REVIEW, TaskState.IMPLEMENTATION]) {
     if (machine.sequence.includes(candidate) && machine.history.includes(candidate)) return candidate;
   }
   return null;

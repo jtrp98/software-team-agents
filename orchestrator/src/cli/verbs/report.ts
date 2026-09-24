@@ -46,7 +46,7 @@ export interface PlanReportData {
   absent?: boolean;
 }
 
-export interface ReviewReportData {
+export interface QaReportData {
   moduleName: string;
   absent: boolean;
   outcome?: string;
@@ -62,7 +62,7 @@ export interface TargetDiffSummaryRow {
 /**
  * V10 TASK-018 — code-intel per-run summary, read off the audit trail and the
  * run records (metadata only: counts, reasons, char totals). Read-only
- * reporting: it is never a QA pass condition and adds nothing to review.md
+ * reporting: it is never a QA pass condition and adds nothing to qa.md
  * (user confirmation 9 — evidence of use is recorded, not enforced).
  */
 export interface CodeIntelTaskSummary {
@@ -110,7 +110,7 @@ export function summarizeCodeIntel(
 /**
  * Groups already-observed bounded-run checkpoints by target root (TASK-013).
  * Read-only reporting derived from `RunObservation`; it introduces no new
- * pass/fail condition and does not touch review.md.
+ * pass/fail condition and does not touch qa.md.
  */
 export function summarizeChangedByTarget(runs: readonly RunObservation[]): TargetDiffSummaryRow[] {
   const byRoot = new Map<string, Set<string>>();
@@ -134,7 +134,7 @@ export interface ReportData {
     error?: string;
   };
   plan: PlanReportData;
-  review: ReviewReportData;
+  qa: QaReportData;
   changed: ChangedSummary;
   runs?: RunObservation[];
   orphanRunBranches?: OrphanRunBranch[];
@@ -575,27 +575,27 @@ export function generateHtmlReport(report: ReportData): string {
       }
     </section>
 
-    <!-- BLOCK 3: Open Issues / Reviews -->
+    <!-- BLOCK 3: Open Issues / QA -->
     <section class="block">
       <div class="block-header">
-        <h2>3. Open Issues / Reviews</h2>
+        <h2>3. Open Issues / QA</h2>
         ${
-          report.review.absent
-            ? '<span class="badge badge-gray">review.md absent</span>'
-            : report.review.openIssues.length > 0
-            ? '<span class="badge badge-yellow">' + report.review.openIssues.length + ' open</span>'
+          report.qa.absent
+            ? '<span class="badge badge-gray">qa.md absent</span>'
+            : report.qa.openIssues.length > 0
+            ? '<span class="badge badge-yellow">' + report.qa.openIssues.length + ' open</span>'
             : '<span class="badge badge-green">clean</span>'
         }
       </div>
       ${
-        report.review.absent
+        report.qa.absent
           ? `<div class="card-notice">
-              <strong>No open reviews:</strong> <code>_docs/module/${escapeHtml(report.review.moduleName)}/review.md</code> absent.
+              <strong>No open QA issues:</strong> <code>_docs/module/${escapeHtml(report.qa.moduleName)}/qa.md</code> absent.
             </div>`
-          : report.review.openIssues.length === 0
+          : report.qa.openIssues.length === 0
           ? `<div class="card-notice card-success">
-              ✅ <strong>No open reviews:</strong> 0 open issues recorded in <code>review.md</code>.
-              ${report.review.outcome ? `<br><small>Latest Outcome: <code>${escapeHtml(report.review.outcome)}</code></small>` : ""}
+              ✅ <strong>No open QA issues:</strong> 0 open issues recorded in <code>qa.md</code>.
+              ${report.qa.outcome ? `<br><small>Latest Outcome: <code>${escapeHtml(report.qa.outcome)}</code></small>` : ""}
             </div>`
           : `<table>
               <thead>
@@ -608,7 +608,7 @@ export function generateHtmlReport(report: ReportData): string {
                 </tr>
               </thead>
               <tbody>
-                ${report.review.openIssues
+                ${report.qa.openIssues
                   .map(
                     (iss) => `<tr>
                   <td><code>${escapeHtml(iss.raw)}</code></td>
@@ -738,7 +738,7 @@ export function generateHtmlReport(report: ReportData): string {
         <h2>6. Code Intelligence (audit-trail summary)</h2>
         <span class="badge badge-gray">${report.codeIntel.length} TASK(S)</span>
       </div>
-      <div class="card-notice"><small class="meta-line">Metadata from the audit trail and run records only. Evidence of use is a record, never a QA pass condition — nothing here writes to review.md.</small></div>
+      <div class="card-notice"><small class="meta-line">Metadata from the audit trail and run records only. Evidence of use is a record, never a QA pass condition — nothing here writes to qa.md.</small></div>
       ${report.codeIntel.length === 0
         ? '<div class="card-notice">No code-intel activity recorded yet (feature default-on since V10; evidence appears after stages query the provider).</div>'
         : `<table>
@@ -833,17 +833,17 @@ export async function runReportVerb(rest: string[], defaultProjectRoot: string):
     }
   }
 
-  // 3. Read review.md
-  let reviewAbsent = true;
+  // 3. Read qa.md
+  let qaAbsent = true;
   let openIssues: OpenIssueRow[] = [];
-  let reviewOutcome: string | undefined;
+  let qaOutcome: string | undefined;
 
-  const reviewText = readModuleDoc(docsRoot, resolvedModuleName, "review.md");
-  if (reviewText) {
-    reviewAbsent = false;
-    openIssues = parseOpenIssues(reviewText);
-    const outcomeMatch = reviewText.match(/\*\*Status:\*\*\s*(.+)/i);
-    if (outcomeMatch) reviewOutcome = outcomeMatch[1].trim();
+  const qaText = readModuleDoc(docsRoot, resolvedModuleName, "qa.md");
+  if (qaText) {
+    qaAbsent = false;
+    openIssues = parseOpenIssues(qaText);
+    const outcomeMatch = qaText.match(/\*\*Status:\*\*\s*(.+)/i);
+    if (outcomeMatch) qaOutcome = outcomeMatch[1].trim();
   }
 
   // 4. Working tree changes & gate status
@@ -891,10 +891,10 @@ export async function runReportVerb(rest: string[], defaultProjectRoot: string):
       allPhases: planPhases,
       absent: planAbsent,
     },
-    review: {
+    qa: {
       moduleName: resolvedModuleName,
-      absent: reviewAbsent,
-      outcome: reviewOutcome,
+      absent: qaAbsent,
+      outcome: qaOutcome,
       openIssues,
     },
     changed,

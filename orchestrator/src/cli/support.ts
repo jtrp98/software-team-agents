@@ -1,6 +1,7 @@
 import { DEFAULT_BUDGET } from "../cost/costControl.js";
 import { StaConfigMissingError, loadStaConfig } from "../packaging/staConfig.js";
 import { TaskRegistry } from "../orchestrator/taskRegistry.js";
+import { createRoleLaneStageGuard } from "../orchestrator/stageGuards.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { defaultStateDbPath, defaultStateViewPath } from "../store/stateView.js";
 
@@ -31,7 +32,11 @@ export function flagValue(rest: string[], flag: string): string | undefined {
 
 export function openStore(projectRoot: string, stateDb?: string): { store: SqliteTaskStore; registry: TaskRegistry } {
   const store = new SqliteTaskStore(stateDb ?? defaultStateDbPath(projectRoot));
-  const registry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(projectRoot) });
+  const registry = new TaskRegistry({
+    store,
+    stateViewPath: defaultStateViewPath(projectRoot),
+    stageEntryGuard: createRoleLaneStageGuard({ projectRoot }),
+  });
   return { store, registry };
 }
 

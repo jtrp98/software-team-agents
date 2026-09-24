@@ -26,8 +26,9 @@ import { declareInstallationConfigOverrideChannelForTest } from "../threeRepo/in
 import { decidePending, testHumanVerifier } from "../gates/humanDecision.testSupport.js";
 import { withStageEvidence } from "../evidence/stageEvidence.testSupport.js";
 import { seedRealContracts } from "../testing/contractFixtures.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
-const human = { humanDecisionVerifier: testHumanVerifier() };
+const human = { humanDecisionVerifier: testHumanVerifier(), stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD };
 
 declareInstallationConfigOverrideChannelForTest();
 
@@ -78,7 +79,7 @@ function executorFor(runtime: MockRuntimeAdapter, over: Record<string, unknown> 
 
 // T-V8-014: a passing round has to map at least one id to a verdict under
 // `## Per-Task Results`; a status with no per-id verdict reads as FAIL.
-const PASSING_REVIEW = [
+const PASSING_QA = [
   "## Round 1 (FULL)",
   "- everything checks out ✅",
   "- 12 passed, 0 failed",
@@ -86,6 +87,24 @@ const PASSING_REVIEW = [
   "## Per-Task Results",
   "- BE-001 — ✅ Verified: order boundary matches DES-001",
 ].join("\n");
+
+/** A clean review.md round for `taskId`, in `.claude/agents/reviewer.md`'s format (V13 TASK-006). */
+function passingReview(taskId: string): string {
+  return [
+    "# review.md — sales-crm",
+    "",
+    "## Open Findings — all phases",
+    "| ID | Severity | Location | Owner | Status | Finding |",
+    "|---|---|---|---|---|---|",
+    "| RV-1 | non-blocking | src/orders.ts:12 | backend-engineer | resolved | naming follows the neighbouring files now |",
+    "",
+    `## Review Round 1 — ${taskId}`,
+    "**Verdict:** ✅ Approved",
+    "",
+    "## Reviewed",
+    "- src/orders.ts",
+  ].join("\n");
+}
 
 function addressableDesign(overrides: { compatibility?: string; schema?: string; migration?: string; security?: string; ambiguity?: string } = {}): string {
   const revision = "a".repeat(40), hash = "b".repeat(64);
@@ -466,24 +485,6 @@ describe("createRuntimeExecutor — what reaches the adapter (T108)", () => {
     expect(runtime.requests[0].cwd).toBe(backendRepo);
     expect(runtime.requests[1].cwd).toBe(hub);
   });
-
-  it("does not invoke a downstream agent when the opt-in T114 role handoff has not happened", async () => {
-    const root = tmpProject();
-    const runtime = new MockRuntimeAdapter();
-    const executor = createRuntimeExecutor({
-      runtime,
-      projectRoot: root,
-      moduleName: () => "sales-crm",
-      guards: () => NO_GUARDS,
-      enforceRoleWorkflow: true,
-    });
-
-    const result = await executor({ stage: AgentStage.SYSTEM_ANALYST, taskId: "T-114", context: [] });
-
-    expect(result.outcome.result).toBe("FAIL");
-    expect(result.outcome.failure_reason).toMatch(/no knowledge\/ directory/);
-    expect(runtime.requests).toEqual([]);
-  });
 });
 
 describe("model resolution — T58's seam, and the one T112 will use (T108)", () => {
@@ -820,9 +821,9 @@ describe("failure handling — UNAVAILABLE is not the task's fault (T108)", () =
 });
 
 describe("document verdicts read back through the workspace (T108)", () => {
-  it("reads review.md out of the runtime's own workspace and produces a QA artifact", async () => {
+  it("reads qa.md out of the runtime's own workspace and produces a QA artifact", async () => {
     const runtime = new MockRuntimeAdapter({
-      files: { "_docs/module/sales-crm/review.md": PASSING_REVIEW },
+      files: { "_docs/module/sales-crm/qa.md": PASSING_QA },
     });
 
     const result = await executorFor(runtime)({ stage: AgentStage.QA_ENGINEER, taskId: "T-1", context: [] });
@@ -839,7 +840,7 @@ describe("document verdicts read back through the workspace (T108)", () => {
    */
   it("never touches the local filesystem to do it", async () => {
     const runtime = new MockRuntimeAdapter({
-      files: { "_docs/module/sales-crm/review.md": PASSING_REVIEW },
+      files: { "_docs/module/sales-crm/qa.md": PASSING_QA },
     });
     const root = tmpProject();
     const executor = createRuntimeExecutor({
@@ -852,16 +853,75 @@ describe("document verdicts read back through the workspace (T108)", () => {
     const result = await executor({ stage: AgentStage.QA_ENGINEER, taskId: "T-1", context: [] });
 
     expect(result.artifactType).toBe(ArtifactType.QA_REPORT);
-    expect(fs.existsSync(path.join(root, "_docs", "module", "sales-crm", "review.md"))).toBe(false);
+    expect(fs.existsSync(path.join(root, "_docs", "module", "sales-crm", "qa.md"))).toBe(false);
   });
 
-  it("fails closed when the runtime reported success but no review.md exists", async () => {
+  it("fails closed when the runtime reported success but no qa.md exists", async () => {
     const runtime = new MockRuntimeAdapter();
     const result = await executorFor(runtime)({ stage: AgentStage.QA_ENGINEER, taskId: "T-1", context: [] });
 
     expect(result.outcome.result).toBe("FAIL");
     expect(result.artifactType).toBeUndefined();
+    expect(result.outcome.failure_reason).toMatch(/qa\.md doesn't exist/);
+  });
+
+  /** V13 TASK-006 cutover: QA's report is `qa.md`; a stale `review.md` is not QA's and is never read in its place. */
+  it("ignores a passing review.md left on disk — only qa.md is QA's report", async () => {
+    const runtime = new MockRuntimeAdapter({
+      files: { "_docs/module/sales-crm/review.md": PASSING_QA },
+    });
+    const result = await executorFor(runtime)({ stage: AgentStage.QA_ENGINEER, taskId: "T-1", context: [] });
+
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.artifactType).toBeUndefined();
+    expect(result.outcome.failure_reason).toMatch(/qa\.md doesn't exist/);
+  });
+
+  /** V13 TASK-006: the reviewer's verdict is the review.md STA reads back, never the runtime's exit status. */
+  it("fails closed when the reviewer reported success but no review.md exists, escalating rather than guessing an owner", async () => {
+    const runtime = new MockRuntimeAdapter();
+    const result = await executorFor(runtime)({ stage: AgentStage.REVIEWER, taskId: "T-1", context: [] });
+
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.artifactType).toBeUndefined();
     expect(result.outcome.failure_reason).toMatch(/review\.md doesn't exist/);
+    expect(result.failure).toMatchObject({ owner: AgentStage.HUMAN, requiresHuman: true });
+    // The attempt was still dispatched under a resolved contract.
+    expect(result.outcome.contract_digest).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("ignores a passing qa.md for the reviewer — only review.md is the reviewer's report", async () => {
+    const runtime = new MockRuntimeAdapter({ files: { "_docs/module/sales-crm/qa.md": PASSING_QA } });
+    const result = await executorFor(runtime)({ stage: AgentStage.REVIEWER, taskId: "T-1", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toMatch(/review\.md doesn't exist/);
+  });
+
+  it("reads the reviewer's PASS from review.md into a review-report artifact", async () => {
+    const runtime = new MockRuntimeAdapter({ files: { "_docs/module/sales-crm/review.md": passingReview("T-1") } });
+    const result = await executorFor(runtime)({ stage: AgentStage.REVIEWER, taskId: "T-1", context: [] });
+    expect(result.outcome.result).toBe("PASS");
+    expect(result.artifactType).toBe(ArtifactType.REVIEW_REPORT);
+    expect(result.artifact).toMatchObject({ taskId: "T-1", verdict: "PASS", reviewed: ["src/orders.ts"] });
+  });
+
+  it("reads a Changes requested review.md as FAIL routed to the finding's owner", async () => {
+    const changes = passingReview("T-1")
+      .replace("**Verdict:** ✅ Approved", "**Verdict:** ❌ Changes requested")
+      .replace("| RV-1 | non-blocking | src/orders.ts:12 | backend-engineer | resolved |", "| RV-1 | blocking | src/orders.ts:12 | backend-engineer | open |");
+    const runtime = new MockRuntimeAdapter({ files: { "_docs/module/sales-crm/review.md": changes } });
+    const result = await executorFor(runtime)({ stage: AgentStage.REVIEWER, taskId: "T-1", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.artifactType).toBe(ArtifactType.REVIEW_REPORT);
+    expect(result.failure).toMatchObject({ owner: AgentStage.BACKEND_ENGINEER, category: "implementation", requiresHuman: false });
+  });
+
+  it("a review.md whose Approved round lists nothing reviewed is a FAIL, not a PASS", async () => {
+    const empty = passingReview("T-1").replace("## Reviewed\n- src/orders.ts", "## Reviewed");
+    const runtime = new MockRuntimeAdapter({ files: { "_docs/module/sales-crm/review.md": empty } });
+    const result = await executorFor(runtime)({ stage: AgentStage.REVIEWER, taskId: "T-1", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toMatch(/reviewed nothing/);
   });
 
   it("fails a business-analyst run that wrote no requirement.md, despite exit 0", async () => {
@@ -959,7 +1019,7 @@ describe("document verdicts read back through the workspace (T108)", () => {
       "## Verification Summary (current round)",
       "Phase 2 (FULL) ❌ ไม่ผ่าน",
     ].join("\n");
-    const runtime = new MockRuntimeAdapter({ files: { "_docs/module/sales-crm/review.md": failedReview } });
+    const runtime = new MockRuntimeAdapter({ files: { "_docs/module/sales-crm/qa.md": failedReview } });
 
     const result = await executorFor(runtime)({ stage: AgentStage.QA_ENGINEER, taskId: "T-1", context: [] });
 
@@ -1009,7 +1069,7 @@ describe("the orchestrator drives a whole task through the interface (T108)", ()
   it("reaches DEPLOYED with no AI runtime installed and no knowledge of which adapter is behind the seam", async () => {
     const runtime = new MockRuntimeAdapter({
       id: "not-a-real-runtime",
-      files: { "_docs/module/sales-crm/review.md": PASSING_REVIEW },
+      files: { "_docs/module/sales-crm/qa.md": PASSING_QA, "_docs/module/sales-crm/review.md": passingReview("T-RUNTIME") },
       respond: () => okResult({ usage: { inputTokens: 100, outputTokens: 50, costUsd: 0.01 } }),
     });
 
@@ -1035,12 +1095,13 @@ describe("the orchestrator drives a whole task through the interface (T108)", ()
     for (const stage of classification.pipeline) writeAgentFile(projectRoot, stage, "model: sonnet");
 
     async function execute(withRegistry: boolean) {
+      const taskId = `T-COMPAT-${withRegistry ? "AFTER" : "BEFORE"}`;
       const runtime = new MockRuntimeAdapter({
         id: "claude-code",
         models: ["sonnet"],
-        files: { "_docs/module/sales-crm/review.md": PASSING_REVIEW },
+        files: { "_docs/module/sales-crm/qa.md": PASSING_QA, "_docs/module/sales-crm/review.md": passingReview(taskId) },
       });
-      const orch = new Orchestrator(`T-COMPAT-${withRegistry ? "AFTER" : "BEFORE"}`, classification, human);
+      const orch = new Orchestrator(taskId, classification, human);
       const executor = createRuntimeExecutor({
         runtime,
         projectRoot,
@@ -1062,12 +1123,12 @@ describe("the orchestrator drives a whole task through the interface (T108)", ()
   });
 
   it("the same task on a second, differently-named adapter behaves identically", async () => {
-    const files = { "_docs/module/sales-crm/review.md": PASSING_REVIEW };
     const results: string[] = [];
 
     for (const id of ["claude-code", "codex"]) {
+      const files = { "_docs/module/sales-crm/qa.md": PASSING_QA, "_docs/module/sales-crm/review.md": passingReview(`T-${id}`) };
       const runtime = new MockRuntimeAdapter({ id, files });
-      const orch = new Orchestrator(`T-${id}`, classifyTask({ isClearBugFix: true, touchesBackend: true }));
+      const orch = new Orchestrator(`T-${id}`, classifyTask({ isClearBugFix: true, touchesBackend: true }), { stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
       const executor = createRuntimeExecutor({
         runtime,
         projectRoot: tmpProject(),
@@ -1097,7 +1158,7 @@ describe("the orchestrator drives a whole task through the interface (T108)", ()
           : okResult(),
     });
 
-    const orch = new Orchestrator("T-UNAVAIL", classifyTask({ isClearBugFix: true, touchesBackend: true }));
+    const orch = new Orchestrator("T-UNAVAIL", classifyTask({ isClearBugFix: true, touchesBackend: true }), { stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
     const executor = createRuntimeExecutor({
       runtime,
       projectRoot: tmpProject(),
@@ -1958,15 +2019,15 @@ describe("createRuntimeExecutor — T-V6-014 routing.order at precedence level 4
     reasons: [],
   });
 
-  it("[ADR-025 #4] a switch inside a security-gate phase is written into review.md and into the run log", async () => {
+  it("[ADR-025 #4] a switch inside a security-gate phase is written into qa.md and into the run log", async () => {
     const { first, second } = pair("UNAVAILABLE");
-    second.workspace.files.set("_docs/module/sales-crm/review.md", "# review.md\n\n## Open Issues — all phases\n\n- none\n");
+    second.workspace.files.set("_docs/module/sales-crm/qa.md", "# qa.md\n\n## Open Issues — all phases\n\n- none\n");
     const result = await run(orderedProject(ORDER), [first, second], { classification: sensitive });
 
     expect(result.outcome).toMatchObject({ result: "PASS", runtime: "codex", fallback_count: 1 });
     expect(result.outcome.fallback_reason).toContain("ADR-025 #4");
 
-    const review = second.workspace.files.get("_docs/module/sales-crm/review.md")!;
+    const review = second.workspace.files.get("_docs/module/sales-crm/qa.md")!;
     expect(review).toContain("## Open Issues — all phases");
     expect(review).toContain("## Camp switch — verification invalidated");
     expect(review).toContain("claude-code → codex");
@@ -1975,12 +2036,12 @@ describe("createRuntimeExecutor — T-V6-014 routing.order at precedence level 4
 
   it("[ADR-025 #4] a switch whose invalidation cannot be recorded is refused, not laundered", async () => {
     const { first, second } = pair("UNAVAILABLE");
-    vi.spyOn(second.workspace, "writeFile").mockRejectedValue(new Error("review.md is read-only here"));
+    vi.spyOn(second.workspace, "writeFile").mockRejectedValue(new Error("qa.md is read-only here"));
     const result = await run(orderedProject(ORDER), [first, second], { classification: sensitive });
 
     expect(result.outcome.result).toBe("FAIL");
     expect(result.outcome.failure_reason).toContain("refusing the routing.order hop");
-    expect(result.outcome.failure_reason).toContain("review.md is read-only here");
+    expect(result.outcome.failure_reason).toContain("qa.md is read-only here");
     expect(result.outcome.fallback_count).toBe(0);
     expect(second.requests).toEqual([]);
   });
@@ -2007,12 +2068,12 @@ describe("createRuntimeExecutor — T-V6-014 routing.order at precedence level 4
     expect(codex.requests).toEqual([]);
   });
 
-  it("a phase with no security gate hops without touching review.md", async () => {
+  it("a phase with no security gate hops without touching qa.md", async () => {
     const { first, second } = pair("UNAVAILABLE");
     const result = await run(orderedProject(ORDER), [first, second]);
 
     expect(result.outcome.fallback_count).toBe(1);
-    expect(second.workspace.files.has("_docs/module/sales-crm/review.md")).toBe(false);
+    expect(second.workspace.files.has("_docs/module/sales-crm/qa.md")).toBe(false);
   });
 });
 

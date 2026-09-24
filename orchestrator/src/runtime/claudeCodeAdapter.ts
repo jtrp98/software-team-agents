@@ -30,7 +30,7 @@ export type { SpawnSync } from "./runtimeAdapter.js";
  * `agents/registry.ts` and `orchestrator.ts` directly.
  *
  * Everything that is this framework's business rather than Claude Code's —
- * assembling the prompt, slicing module docs, reading `review.md`/`security.md`
+ * assembling the prompt, slicing module docs, reading `qa.md`/`security.md`
  * back, mapping metrics — lives in `runtime/agentRunAssembly.ts` and is driven
  * by `runtime/runtimeExecutor.ts`, not by this file. This adapter only has to
  * answer: how does one run of one role actually happen on this machine, and

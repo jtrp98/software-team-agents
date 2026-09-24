@@ -41,7 +41,7 @@ export function contractRootForTask(projectRoot: string, bindings: TargetBinding
 }
 
 /** Optional phase-tier metadata is advisory input to routing, never a runtime gate. */
-export function plannedTier(args: CliArgs, taskId: string): string | undefined {
+export function plannedTier(args: Pick<CliArgs, "projectRoot" | "module" | "rootName">, taskId: string): string | undefined {
   if (!args.module) return undefined;
   try {
     const planMd = readModuleDoc(resolveContextDocsRoot(args.projectRoot, process.env, args.rootName), args.module, "plan.md");
@@ -92,6 +92,7 @@ export function runtimeTaskWorkRoots(
       ![
         AgentStage.BACKEND_ENGINEER,
         AgentStage.FRONTEND_ENGINEER,
+        AgentStage.REVIEWER,
         AgentStage.QA_ENGINEER,
         AgentStage.SECURITY,
         AgentStage.DEVOPS,
@@ -113,7 +114,11 @@ export function runtimeTaskWorkRoots(
       bindingWarning: () => {},
     });
     for (const root of resolved.workRoots) {
-      if (root.access === "write") roots.push({ stage, targetId: root.targetId, path: root.path, access: root.access });
+      // Verifier stages (reviewer, QA, security) carry the read-only Target
+      // roots they verify - the same rule a bounded run registers (V13 TASK-007);
+      // a writer is bound only where it writes.
+      const verifier = stage === AgentStage.REVIEWER || stage === AgentStage.QA_ENGINEER || stage === AgentStage.SECURITY;
+      if (verifier || root.access === "write") roots.push({ stage, targetId: root.targetId, path: root.path, access: root.access });
     }
   }
   return roots;
@@ -135,7 +140,7 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string, 
     const orchestrator = registry.open(taskId);
     console.log(
       `[orchestrator] resumed task ${taskId} at ${orchestrator.machine.current} ` +
-        `(qa retries ${orchestrator.retries.qa}, security retries ${orchestrator.retries.security})`,
+        `(review retries ${orchestrator.retries.review}, qa retries ${orchestrator.retries.qa}, security retries ${orchestrator.retries.security})`,
     );
     return orchestrator;
   }

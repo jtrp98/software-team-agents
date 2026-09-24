@@ -11,6 +11,7 @@ import { withQaOptimization } from "./optimized.js";
 import { createProjectRunner } from "./projectRunner.js";
 import { createPostDevVerificationHook } from "./verificationHook.js";
 import { persistedSweep } from "../evidence/stageEvidence.testSupport.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -29,7 +30,7 @@ describe("production deterministic QA regression", () => {
     fs.writeFileSync(path.join(root, "run-typecheck.cjs"), `const { spawnSync } = require('node:child_process'); process.exit(spawnSync(process.execPath, [${JSON.stringify(tsc)}, '-p', 'tsconfig.json'], { stdio: 'inherit' }).status ?? 1);`);
     fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ scripts: { typecheck: "node run-typecheck.cjs" } }));
 
-    const orchestrator = new Orchestrator("T-REAL-TSC", classifyTask({ isClearBugFix: true, touchesBackend: true }));
+    const orchestrator = new Orchestrator("T-REAL-TSC", classifyTask({ isClearBugFix: true, touchesBackend: true }), { stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
     let qaModelCalls = 0;
     const verification = createPostDevVerificationHook({
       inner: async (req) => {

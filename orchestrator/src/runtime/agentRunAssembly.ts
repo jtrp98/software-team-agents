@@ -14,7 +14,7 @@ import {
 } from "../artifacts/schemas.js";
 import type { AgentExecutorRequest, AgentExecutorResult } from "../orchestrator/orchestrator.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
-import { parseQaReport, parseSecurityReport, readModuleDoc } from "../agents/moduleDocs.js";
+import { parseQaReport, parseReviewReport, parseSecurityReport, readModuleDoc } from "../agents/moduleDocs.js";
 import { readWorkPlan, taskDesignRefs } from "../docs/planGraph.js";
 import {
   ContextManager,
@@ -22,7 +22,8 @@ import {
   type SelectedContext,
 } from "../context/contextManager.js";
 import { ContextLeakageError, type ContextItem } from "../context/contextSelection.js";
-import { classifyQaFailure, classifySecurityFailure } from "../orchestrator/failureClassifier.js";
+import { classifyQaFailure, classifyReviewFailure, classifySecurityFailure } from "../orchestrator/failureClassifier.js";
+import type { StructuredFailure } from "../orchestrator/failure.js";
 import { codeIntelContext } from "./codeIntelAssembly.js";
 import { knowledgeBriefFor } from "./knowledgeBriefAssembly.js";
 import { assertContextComposition, emptyContextBudgetComposition, type ContextBudgetComposition } from "../context/contextBudget.js";
@@ -33,7 +34,7 @@ import { buildTaskRetrievalQuery, type TaskRetrievalQuery } from "../context/ret
  * This module is the deterministic Task Compiler: everything about running a
  * stage that is *this framework's* business rather than any runtime's.
  * Assembling a prompt, slicing module docs to the sections a stage may read,
- * reading `review.md` back into a QA artifact, and routing a failed round by
+ * reading `qa.md` back into a QA artifact, and routing a failed round by
  * the owner the document names are all rules from `policies/` — they would be
  * identical whichever runtime process the stage actually spawns.
  *
@@ -645,7 +646,7 @@ export function failResult(reason: string, metrics: Partial<RunMetrics> = {}): A
 }
 
 /**
- * A qa-engineer run's result, from the `review.md` it wrote.
+ * A qa-engineer run's result, from the `qa.md` it wrote.
  *
  * Fails closed on a missing document even when the runtime reported success: a
  * round nobody can read is not a round that passed. The owner attached on a
@@ -657,20 +658,70 @@ export function qaArtifactResult(
   req: AgentExecutorRequest,
   metrics: RunMetrics,
   moduleName: string,
-  reviewMd: string | null,
+  qaMd: string | null,
 ): AgentExecutorResult {
-  if (reviewMd === null) {
+  if (qaMd === null) {
     return failResult(
-      `qa-engineer reported success but _docs/module/${moduleName}/review.md doesn't exist — cannot confirm the round`,
+      `qa-engineer reported success but _docs/module/${moduleName}/qa.md doesn't exist — cannot confirm the round`,
       metrics,
     );
   }
-  const { artifact } = parseQaReport(req.taskId, reviewMd);
+  const { artifact } = parseQaReport(req.taskId, qaMd);
   return {
     outcome: { ...metrics, result: artifact.status },
     artifactType: ArtifactType.QA_REPORT,
     artifact,
-    failure: artifact.status === "FAIL" ? (classifyQaFailure(reviewMd) ?? undefined) : undefined,
+    failure: artifact.status === "FAIL" ? (classifyQaFailure(qaMd) ?? undefined) : undefined,
+  };
+}
+
+/** The escalation a review.md nobody can read as a verdict gets: no owner is guessed. */
+function unreadableReviewFailure(reason: string): StructuredFailure {
+  return {
+    category: "unknown",
+    owner: AgentStage.HUMAN,
+    severity: "high",
+    retryable: false,
+    reason,
+    affected: [],
+    requiresHuman: true,
+  };
+}
+
+/**
+ * A reviewer run's result, from the `review.md` it wrote (V13 TASK-006).
+ *
+ * Same fail-closed rule as `qaArtifactResult`: the runtime reporting success is
+ * not a review — a missing review.md, or one whose current round cannot be read
+ * as a verdict, is a FAIL escalated to a person, never a PASS and never a
+ * guessed owner. A readable FAIL carries the structured failure whose owner is
+ * the one the reviewer named on its open blocking finding.
+ */
+export function reviewerArtifactResult(
+  req: AgentExecutorRequest,
+  metrics: RunMetrics,
+  moduleName: string,
+  reviewMd: string | null,
+): AgentExecutorResult {
+  if (reviewMd === null || reviewMd.trim() === "") {
+    const reason = `reviewer reported success but _docs/module/${moduleName}/review.md doesn't exist (or is empty) — cannot confirm the review`;
+    return { ...failResult(reason, metrics), failure: unreadableReviewFailure(reason) };
+  }
+  const parsed = parseReviewReport(req.taskId, reviewMd);
+  if (!parsed.artifact) {
+    const reason = `_docs/module/${moduleName}/review.md cannot be read as a review verdict: ${parsed.problems.join("; ")}`;
+    return { ...failResult(reason, metrics), failure: unreadableReviewFailure(reason) };
+  }
+  const artifact = parsed.artifact;
+  return {
+    outcome: {
+      ...metrics,
+      result: artifact.verdict,
+      ...(parsed.problems.length > 0 ? { failure_reason: parsed.problems.join("; ") } : {}),
+    },
+    artifactType: ArtifactType.REVIEW_REPORT,
+    artifact,
+    failure: artifact.verdict === "FAIL" ? classifyReviewFailure(artifact) : undefined,
   };
 }
 
@@ -697,7 +748,7 @@ export function securityArtifactResult(
   };
 }
 
-/** The two stages whose verdict lives in a document rather than in an exit status. */
+/** The three stages whose verdict lives in a document rather than in an exit status. */
 export function isDocumentVerdictStage(stage: AgentStage): boolean {
-  return stage === AgentStage.QA_ENGINEER || stage === AgentStage.SECURITY;
+  return stage === AgentStage.REVIEWER || stage === AgentStage.QA_ENGINEER || stage === AgentStage.SECURITY;
 }

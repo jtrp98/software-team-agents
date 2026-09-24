@@ -160,7 +160,7 @@ const RAW_REGISTRY: Record<AgentStage, AgentRegistryEntry> = {
     name: AgentStage.BACKEND_ENGINEER,
     role: "backend-engineer",
     responsibilities: ["implement API/DB code from design.md's contract"],
-    inputs: ["plan", "design", "requirements", "test-plan", "qa-report", "backend-code"],
+    inputs: ["plan", "design", "requirements", "test-plan", ArtifactType.REVIEW_REPORT, "qa-report", "backend-code"],
     outputs: ["backend-code"],
     tools: ["Write", "Edit", "Read", "Glob", "Grep", "Bash"],
     permissions: [Permission.READ, Permission.WRITE_CODE, Permission.TEST],
@@ -179,7 +179,7 @@ const RAW_REGISTRY: Record<AgentStage, AgentRegistryEntry> = {
     name: AgentStage.FRONTEND_ENGINEER,
     role: "frontend-engineer",
     responsibilities: ["implement UI code from design.md and the backend's actual API"],
-    inputs: ["plan", "design", "requirements", "test-plan", "qa-report", "frontend-code"],
+    inputs: ["plan", "design", "requirements", "test-plan", ArtifactType.REVIEW_REPORT, "qa-report", "frontend-code"],
     outputs: ["frontend-code"],
     tools: ["Write", "Edit", "Read", "Glob", "Grep", "Bash"],
     permissions: [Permission.READ, Permission.WRITE_CODE, Permission.TEST],
@@ -191,6 +191,28 @@ const RAW_REGISTRY: Record<AgentStage, AgentRegistryEntry> = {
       capabilities: [Capability.UI, Capability.TESTING],
     },
   },
+  [AgentStage.REVIEWER]: {
+    name: AgentStage.REVIEWER,
+    role: "reviewer",
+    responsibilities: [
+      "independently review implemented code against requirement.md, design.md and plan.md, recording file:line findings in review.md",
+      "never fix what it finds — the owning engineer does, and QA verifies afterwards",
+    ],
+    inputs: ["requirements", "design", "plan", "test-plan", ArtifactType.REVIEW_REPORT, "backend-code", "frontend-code"],
+    outputs: [ArtifactType.REVIEW_REPORT],
+    // No Bash: a reviewer reads code, it does not run it (QA's evidence round
+    // does). No AskUserQuestion: an unclear rule is a finding routed to its
+    // owner, not a question settled in the review chat.
+    tools: ["Read", "Glob", "Grep", "Write", "Edit"],
+    permissions: [Permission.READ, Permission.WRITE_DOCS],
+    allowed_states: [TaskState.REVIEW],
+    capability: {
+      languages: [],
+      frameworks: [],
+      database: [],
+      capabilities: [Capability.CODE_REVIEW],
+    },
+  },
   [AgentStage.QA_ENGINEER]: {
     name: AgentStage.QA_ENGINEER,
     role: "qa-engineer",
@@ -198,7 +220,7 @@ const RAW_REGISTRY: Record<AgentStage, AgentRegistryEntry> = {
       "verify implemented code against requirements/design with evidence",
       "mark plan.md tasks done — the only role allowed to",
     ],
-    inputs: ["requirements", "design", "plan", "test-plan", "backend-code", "frontend-code", "qa-evidence"],
+    inputs: ["requirements", "design", "plan", "test-plan", ArtifactType.REVIEW_REPORT, "backend-code", "frontend-code", "qa-evidence"],
     outputs: ["qa-report"],
     tools: ["Read", "Glob", "Grep", "Bash", "AskUserQuestion", "Write", "Edit"],
     permissions: [Permission.READ, Permission.TEST, Permission.WRITE_DOCS],

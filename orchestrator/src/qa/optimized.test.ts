@@ -28,7 +28,7 @@ const passingQaInner: AgentExecutor = (req) => {
     mode: /SCOPE NOT BOUNDED/.test(evidenceItem?.content ?? "") ? "FULL" : "TARGETED",
     requirements: { R1: "PASS" },
     tests: { passed: 3, failed: 0 },
-    evidence: ["review.md"],
+    evidence: ["qa.md"],
     risks: [],
     hasAutomatedTests: true,
     unverifiedBehaviour: [],

@@ -3,9 +3,12 @@ import * as path from "node:path";
 import {
   ArtifactType,
   HANDOFF_MAX_BYTES,
+  ReviewReportArtifactSchema,
   validateArtifact,
   type HandoffArtifact,
   type QaReportArtifact,
+  type ReviewFinding,
+  type ReviewReportArtifact,
   type SecurityReportArtifact,
 } from "../artifacts/schemas.js";
 import { AgentStage } from "../types.js";
@@ -17,7 +20,7 @@ import { extractIds } from "../traceability/traceability.js";
 import { contentHash } from "../artifacts/executionPacket.js";
 
 /**
- * Bridges the real pipeline's Markdown docs (`_docs/module/<name>/review.md`,
+ * Bridges the real pipeline's Markdown docs (`_docs/module/<name>/qa.md`,
  * `security.md` — written by the actual `qa-engineer`/`security` subagents
  * per `policies/documentation.md`) into the structured artifacts the
  * orchestrator's gates (gates/gatePolicy.ts) require. Regex-based: a helper
@@ -226,7 +229,7 @@ function minimalHandoff(stage: AgentStage, moduleName: string, opts: HandoffDeri
 }
 
 /**
- * T-V8-013 — a finding index entry's `id` must survive `review.md`/`design.md`
+ * T-V8-013 — a finding index entry's `id` must survive `qa.md`/`design.md`
  * rewrites and archive moves (policies/documentation.md's own archival
  * discipline), so it cannot be the line's *position*: the same open question
  * reworded elsewhere, or with an unrelated bullet added above it, would
@@ -471,8 +474,8 @@ export function parseTaskVerdicts(round: string, taskId: string): Record<string,
 }
 
 /**
- * Reads per-Target verdicts from review.md (T-V9-015).
- * Uses existing review.md conventions:
+ * Reads per-Target verdicts from qa.md (T-V9-015).
+ * Uses existing qa.md conventions:
  * - Bullet lines naming a target: `- Target api: ✅ Verified`, `- [web]: ❌ Failed`, etc.
  * - Status line trailers: `**Status:** ✅ Verified (FULL) — targets: api (PASS), web (PASS)`
  */
@@ -529,13 +532,13 @@ const STATUS_LINE_RE =
   /\*\*Status:\*\*\s*✅\s*Verified\s*\((FULL|TARGETED)\)|\*\*Status:\*\*\s*⚠️\s*Partial\s*\((FULL|TARGETED)\)|\*\*Status:\*\*\s*❌\s*Failed\s*\((FULL|TARGETED)\)/;
 
 /**
- * Parses `review.md`'s current round into a QaReportArtifact. Never invents a
+ * Parses `qa.md`'s current round into a QaReportArtifact. Never invents a
  * PASS: absence of a recognizable verdict — either the exact `**Status:**` line
  * or a bare ✅ with no ⚠️/❌ beside it — reads as FAIL, since a doc this parser
  * can't confidently read is not evidence of success.
  */
-export function parseQaReport(taskId: string, reviewMd: string): ParsedQaReport {
-  const round = tailSection(reviewMd, /^##\s+.*(round|verify|Round)/i) || reviewMd;
+export function parseQaReport(taskId: string, qaMd: string): ParsedQaReport {
+  const round = tailSection(qaMd, /^##\s+.*(round|verify|Round)/i) || qaMd;
 
   const statusLine = STATUS_LINE_RE.exec(round);
   let status: "PASS" | "FAIL";
@@ -557,10 +560,10 @@ export function parseQaReport(taskId: string, reviewMd: string): ParsedQaReport 
   const failed = failMatch ? Number(failMatch[1]) : 0;
   const hasAutomatedTests = passed + failed > 0;
 
-  let unverifiedBehaviour = bulletsUnder(reviewMd, "Unverified Behaviour[^\\n]*");
+  let unverifiedBehaviour = bulletsUnder(qaMd, "Unverified Behaviour[^\\n]*");
   if (!hasAutomatedTests && unverifiedBehaviour.length === 0) {
     unverifiedBehaviour = [
-      "no `## Unverified Behaviour` section found in review.md — automated tests are absent, " +
+      "no `## Unverified Behaviour` section found in qa.md — automated tests are absent, " +
         "but the section this bridge relies on to list what was only read, not run, is missing or empty",
     ];
   }
@@ -572,7 +575,7 @@ export function parseQaReport(taskId: string, reviewMd: string): ParsedQaReport 
     .map((l) => l.replace(/^[-*]\s+/, ""))
     .slice(0, 20);
   if (evidence.length === 0) {
-    evidence = [`parsed from review.md (task ${taskId}) — no bulleted evidence lines found in the current round`];
+    evidence = [`parsed from qa.md (task ${taskId}) — no bulleted evidence lines found in the current round`];
   }
 
   const requirements = parseTaskVerdicts(round, taskId);
@@ -604,6 +607,156 @@ export function parseQaReport(taskId: string, reviewMd: string): ParsedQaReport 
   };
 
   return { artifact, modeInferred: modeMatch === null };
+}
+
+export interface ParsedReviewReport {
+  /** Never PASS unless the document states it literally, read Reviewed files, and has nothing open and blocking. */
+  verdict: "PASS" | "FAIL";
+  findings: ReviewFinding[];
+  reviewed: string[];
+  /** Why the document could not be read as the verdict it states. Non-empty always reads as FAIL. */
+  problems: string[];
+  /**
+   * The schema-valid artifact, or null when the document cannot be expressed
+   * as one — a FAIL with nothing open and blocking gives no owner anything to
+   * fix, and an unreadable round has no verdict at all. Null is escalated to a
+   * person, never guessed into a route.
+   */
+  artifact: ReviewReportArtifact | null;
+}
+
+/** The literal verdict lines `.claude/agents/reviewer.md` tells the reviewer to write. */
+const REVIEW_VERDICT_LINE = /^\*\*Verdict:\*\*\s*(✅\s*Approved|❌\s*Changes requested)\s*$/gim;
+const REVIEW_ROUND_HEADING = /^Review Round\s+(\d+)\s*[—–-]\s*(\S+)\s*$/i;
+const REVIEW_FINDING_ID = /^RV-\d+$/;
+const REVIEW_LOCATION = /^[^\s:][^:]*:\d+(?:-\d+)?$/;
+const REVIEW_STAGES = new Set<string>(Object.values(AgentStage));
+
+function stripCell(cell: string): string {
+  return cell.replace(/`/g, "").trim();
+}
+
+function findingColumn(header: readonly string[], pattern: RegExp): number {
+  return header.findIndex((cell) => pattern.test(cell.trim()));
+}
+
+/**
+ * Parses the `## Open Findings — all phases` table of review.md. Every row
+ * must be complete: an id `RV-<n>`, a severity, a `path:line` location, an
+ * owner role, a status and a description. A row that is not is reported as a
+ * problem rather than skipped — a finding silently dropped is a blocking issue
+ * silently closed.
+ */
+function parseReviewFindings(section: string, problems: string[]): ReviewFinding[] {
+  const table = firstTable(section);
+  if (table.rows.length === 0) return [];
+  const col = {
+    id: findingColumn(table.header, /^id$/i),
+    severity: findingColumn(table.header, /^severity$/i),
+    location: findingColumn(table.header, /^location$/i),
+    owner: findingColumn(table.header, /^owner/i),
+    status: findingColumn(table.header, /^status$/i),
+    description: findingColumn(table.header, /^(?:finding|description|issue)$/i),
+  };
+  const missingColumns = Object.entries(col).filter(([, index]) => index < 0).map(([name]) => name);
+  if (missingColumns.length > 0) {
+    problems.push(`Open Findings table has no ${missingColumns.join(", ")} column`);
+    return [];
+  }
+  const findings: ReviewFinding[] = [];
+  for (const row of table.rows) {
+    const id = stripCell(row[col.id] ?? "");
+    const severity = stripCell(row[col.severity] ?? "").toLowerCase();
+    const location = stripCell(row[col.location] ?? "");
+    const owner = stripCell(row[col.owner] ?? "");
+    const status = stripCell(row[col.status] ?? "").toLowerCase();
+    const description = (row[col.description] ?? "").trim();
+    const label = id || "(no id)";
+    const rowProblems: string[] = [];
+    if (!REVIEW_FINDING_ID.test(id)) rowProblems.push(`id "${id}" is not RV-<n>`);
+    if (severity !== "blocking" && severity !== "non-blocking") rowProblems.push(`severity "${severity}" is not blocking|non-blocking`);
+    if (!REVIEW_LOCATION.test(location)) rowProblems.push(`location "${location}" is not path:line — a finding that cannot be tied to a file and line is not a finding`);
+    if (!REVIEW_STAGES.has(owner)) rowProblems.push(`owner "${owner}" is not a pipeline role`);
+    if (status !== "open" && status !== "resolved") rowProblems.push(`status "${status}" is not open|resolved`);
+    if (description === "") rowProblems.push("has no description");
+    if (rowProblems.length > 0) {
+      problems.push(`finding ${label}: ${rowProblems.join("; ")}`);
+      continue;
+    }
+    findings.push({
+      id,
+      severity: severity === "blocking" ? "BLOCKING" : "NON_BLOCKING",
+      location,
+      owner: owner as AgentStage,
+      status: status === "open" ? "OPEN" : "RESOLVED",
+      description,
+    });
+  }
+  return findings;
+}
+
+/**
+ * Parses `review.md` into the reviewer's verdict (V13 TASK-006).
+ *
+ * The current round is the last `## Review Round <n> — <task-id>` section,
+ * which must name this task and carry exactly one literal verdict line; the
+ * `## Reviewed` section after it lists the files the reviewer read. Fails
+ * closed at every step, never inventing a PASS: a missing, duplicated or
+ * unrecognizable verdict line reads as FAIL, a round for another task reads as
+ * FAIL, a PASS that lists nothing reviewed reads as FAIL, and a PASS beside an
+ * open blocking finding reads as FAIL — the safe reading of a contradiction is
+ * the one that does not close work.
+ */
+export function parseReviewReport(taskId: string, reviewMd: string): ParsedReviewReport {
+  const problems: string[] = [];
+  const all = sections(reviewMd, 2);
+
+  const openSection = all.find((s) => /^Open Findings\b/i.test(s.title));
+  if (!openSection) problems.push("review.md has no `## Open Findings — all phases` section");
+  const findings = openSection ? parseReviewFindings(openSection.body, problems) : [];
+
+  let roundIndex = -1;
+  all.forEach((s, index) => {
+    if (/^Review Round\b/i.test(s.title)) roundIndex = index;
+  });
+  let statedVerdict: "PASS" | "FAIL" | null = null;
+  if (roundIndex === -1) {
+    problems.push("review.md has no `## Review Round <n> — <task-id>` section");
+  } else {
+    const round = all[roundIndex];
+    const heading = REVIEW_ROUND_HEADING.exec(round.title);
+    if (!heading) problems.push(`current round heading "${round.title}" is not \`Review Round <n> — <task-id>\``);
+    else if (heading[2] !== taskId) problems.push(`current round reviews ${heading[2]}, not ${taskId}`);
+    const verdicts = [...round.body.matchAll(REVIEW_VERDICT_LINE)].map((m) => (m[1].includes("✅") ? "PASS" : "FAIL"));
+    if (verdicts.length === 0) problems.push("current round has no literal `**Verdict:** ✅ Approved` / `**Verdict:** ❌ Changes requested` line");
+    else if (verdicts.length > 1) problems.push(`current round states ${verdicts.length} verdict lines — exactly one is required`);
+    else statedVerdict = verdicts[0] as "PASS" | "FAIL";
+  }
+
+  const reviewedSection = roundIndex === -1 ? undefined : all.slice(roundIndex + 1).find((s) => /^Reviewed\b/i.test(s.title));
+  const reviewed = reviewedSection
+    ? reviewedSection.body
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => /^[-*]\s+/.test(line))
+        .map((line) => stripCell(line.replace(/^[-*]\s+/, "")))
+        .filter((line) => line !== "")
+    : [];
+  if (reviewed.length === 0) problems.push("no `## Reviewed` list of files after the current round — a review that read nothing reviewed nothing");
+
+  const openBlocking = findings.filter((f) => f.status === "OPEN" && f.severity === "BLOCKING");
+  const verdict: "PASS" | "FAIL" =
+    statedVerdict === "PASS" && problems.length === 0 && openBlocking.length === 0 ? "PASS" : "FAIL";
+  if (statedVerdict === "PASS" && openBlocking.length > 0) {
+    problems.push(`verdict says Approved but ${openBlocking.map((f) => f.id).join(", ")} is open and blocking`);
+  }
+
+  const candidate = { taskId, verdict, findings, reviewed };
+  const parsed = ReviewReportArtifactSchema.safeParse(candidate);
+  if (!parsed.success) {
+    problems.push(...parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`));
+  }
+  return { verdict, findings, reviewed, problems, artifact: parsed.success ? parsed.data : null };
 }
 
 const SEVERITY_MAP: Record<string, "CRITICAL" | "HIGH" | "LOW"> = {

@@ -15,7 +15,7 @@
     "approvalType": {
       "description": "The five points CLAUDE.md says always wait for a person, whatever mode the pipeline runs in.",
       "type": "string",
-      "enum": ["requirement-interview", "schema-confirmation", "qa-failure", "security-risk", "deploy"]
+      "enum": ["requirement-interview", "schema-confirmation", "review-failure", "qa-failure", "security-risk", "deploy"]
     },
     "agent": {
       "type": "string",
@@ -28,6 +28,7 @@
         "uxui-designer",
         "backend-engineer",
         "frontend-engineer",
+        "reviewer",
         "qa-engineer",
         "security",
         "devops",
@@ -42,6 +43,8 @@
         "DESIGN",
         "PLAN",
         "IMPLEMENTATION",
+        "REVIEW",
+        "REVIEW_FAILED",
         "QA",
         "QA_FAILED",
         "SECURITY",
@@ -63,6 +66,7 @@
         "backend",
         "frontend",
         "implementation",
+        "review",
         "qa",
         "security",
         "deploy",
@@ -152,11 +156,12 @@
         },
         "waiting_on": { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "retry": {
-          "description": "QA and security keep separate budgets, so the flat count/max pair is split rather than summed — a total would be compared against a per-kind ceiling and read wrong.",
+          "description": "Review, QA and security keep separate budgets, so the flat count/max pair is split rather than summed — a total would be compared against a per-kind ceiling and read wrong.",
           "type": "object",
           "additionalProperties": false,
-          "required": ["qa", "security", "max"],
+          "required": ["review", "qa", "security", "max"],
           "properties": {
+            "review": { "type": "integer", "minimum": 0 },
             "qa": { "type": "integer", "minimum": 0 },
             "security": { "type": "integer", "minimum": 0 },
             "max": { "type": "integer", "minimum": 0 }

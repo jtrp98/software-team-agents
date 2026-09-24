@@ -28,6 +28,7 @@ const PROBES: ClassificationInput[] = [
 ];
 
 const SIGNAL_OF: Record<string, keyof ClassificationInput> = {
+  "plan-task": "isPlanTask",
   deploy: "isProductionDeployOrMigration",
   feature: "isNewFeatureModuleOrProject",
   "schema-change": "touchesSchema",
@@ -38,7 +39,7 @@ const SIGNAL_OF: Record<string, keyof ClassificationInput> = {
 };
 
 describe("the workflow catalog", () => {
-  it("defines exactly the eleven workflows the pipeline has", () => {
+  it("defines exactly the twelve workflows the pipeline has", () => {
     expect(catalogWorkflowIds()).toEqual([
       "bugfix",
       "business-rule",
@@ -46,6 +47,7 @@ describe("the workflow catalog", () => {
       "feature",
       "hotfix",
       "incremental",
+      "plan-task",
       "refactor",
       "schema-change",
       "security-fix",
@@ -119,15 +121,31 @@ describe("the workflow catalog", () => {
    */
   it("derives the signal precedence from the classifier, matching the documented order", () => {
     expect(Object.fromEntries(derivePriorities())).toEqual({
-      deploy: 0,
-      feature: 1,
-      "schema-change": 2,
-      "business-rule": 3,
-      incremental: 4,
-      bugfix: 5,
-      typo: 6,
+      "plan-task": 0,
+      deploy: 1,
+      feature: 2,
+      "schema-change": 3,
+      "business-rule": 4,
+      incremental: 5,
+      bugfix: 6,
+      typo: 7,
       triage: 99,
     });
+  });
+
+  it("routes a plan task to plan-task whatever authored risk it carries (V13 TASK-007)", () => {
+    const workflows = catalogWorkflows();
+    for (const risk of [{}, { touchesSchema: true }, { touchesSensitiveArea: true }, { isProductionDeployOrMigration: true }]) {
+      const input: ClassificationInput = { isPlanTask: true, touchesBackend: true, ...risk };
+      expect(resolveWorkflowId(input), JSON.stringify(risk)).toBe("plan-task");
+      expect(pipelineFromWorkflow(workflows["plan-task"], input)).toEqual(classifyTask(input).pipeline);
+    }
+    expect(classifyTask({ isPlanTask: true, touchesBackend: true }).pipeline).toEqual([
+      AgentStage.BACKEND_ENGINEER, AgentStage.REVIEWER, AgentStage.QA_ENGINEER,
+    ]);
+    expect(classifyTask({ isPlanTask: true, touchesFrontend: true, touchesSchema: true }).pipeline).toEqual([
+      AgentStage.FRONTEND_ENGINEER, AgentStage.REVIEWER, AgentStage.QA_ENGINEER, AgentStage.SECURITY,
+    ]);
   });
 
   it("routes a new feature that also touches the schema to feature, not schema-change", () => {
@@ -172,10 +190,12 @@ describe("the workflow catalog", () => {
     }
   });
 
-  it("renders test-planner as a conditional step for every workflow", () => {
+  it("renders test-planner as a conditional step for every workflow that can run one", () => {
     for (const workflow of Object.values(catalogWorkflows())) {
       const step = workflow.steps.find(candidate => candidate.agent === AgentStage.TEST_PLANNER);
-      if (workflow.workflow === "triage") expect(step, workflow.workflow).toBeUndefined();
+      // A plan task's shared test strategy was decided at plan level (V13 TASK-007): its
+      // pipeline is owner, reviewer, QA and a conditional security pass — never test-planner.
+      if (workflow.workflow === "triage" || workflow.workflow === "plan-task") expect(step, workflow.workflow).toBeUndefined();
       else expect(step?.when, workflow.workflow).toBe("test_strategy_required");
     }
   });

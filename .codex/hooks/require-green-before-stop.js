@@ -24,7 +24,7 @@
  * block-doc-rewrite.js), so this can't say "only for frontend-engineer/backend-engineer".
  * It uses a proxy that turns out to be better than identity anyway: **did this run change
  * application code?** Doc-only agents (business-analyst, system-analyst, project-manager,
- * qa-engineer writing review.md) touch `_docs/**` and `.claude/**` and never trip it. An
+ * qa-engineer writing qa.md) touch `_docs/**` and `.claude/**` and never trip it. An
  * engineer that touched app source does.
  *
  * Read-only git (`git diff --name-only`, `git ls-files`) is how it sees what changed. That is

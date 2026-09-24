@@ -12,6 +12,7 @@ import { pipelineFromWorkflow } from "../workflow/workflowDefinition.js";
 import { TaskRegistry } from "./taskRegistry.js";
 import { buildRuntimeTask, assertRuntimeTaskFresh, type RuntimeTaskV2, type RuntimeTaskWorkRoot } from "./runtimeTask.js";
 import { workflowPath } from "../workflow/workflowDefinition.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "./stageGuards.testSupport.js";
 
 const adapterTripwire = vi.hoisted(() => ({ constructions: 0 }));
 
@@ -284,7 +285,7 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
 
   it("triage persists no RuntimeTask and keeps the existing human-stop sequence", () => {
     const store = new MemoryTaskStore();
-    const registry = new TaskRegistry({ store });
+    const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store });
     const orchestrator = registry.create({ taskId: "T-TRIAGE", classification: classifyTask({}), workflow: "triage" });
 
     expect(orchestrator.runtimeTask).toBeNull();
@@ -297,7 +298,7 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
   it("survives TaskRegistry resume without being reconstructed", () => {
     const { docsRoot, targetRoot } = fixture();
     const store = new MemoryTaskStore();
-    const registry = new TaskRegistry({ store });
+    const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
     const created = registry.create({
       taskId: "T-RESUME",
@@ -343,6 +344,7 @@ describe("workflow_plan (V13 TASK-004)", () => {
       targetWorkRoots: [
         { stage: AgentStage.BACKEND_ENGINEER, targetId: "backend", path: targetRoot },
         { stage: AgentStage.FRONTEND_ENGINEER, targetId: "frontend", path: targetRoot },
+        { stage: AgentStage.REVIEWER, targetId: "reviewer", path: targetRoot },
         { stage: AgentStage.QA_ENGINEER, targetId: "qa", path: targetRoot },
       ],
     })!;
@@ -396,7 +398,7 @@ describe("workflow_plan (V13 TASK-004)", () => {
   it("stays stable across a TaskRegistry resume when nothing about the workflow changed", () => {
     const { docsRoot, targetRoot } = fixture();
     const store = new MemoryTaskStore();
-    const registry = new TaskRegistry({ store });
+    const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store });
     const projectRoot = defaultProjectRoot();
     const input: ClassificationInput = { isClearBugFix: true, touchesBackend: true };
     const classification = classifyTask(input);

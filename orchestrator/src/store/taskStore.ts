@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { AgentStage, TaskLevel, TaskState } from "../types.js";
-import { QaReportArtifactSchema, SecurityReportArtifactSchema } from "../artifacts/schemas.js";
+import { QaReportArtifactSchema, ReviewReportArtifactSchema, SecurityReportArtifactSchema } from "../artifacts/schemas.js";
 import { StructuredFailureSchema } from "../orchestrator/failure.js";
 import { ApprovalRecordSchema } from "../gates/approval.js";
 import { QaModeDecisionSchema } from "../qa/mode.js";
@@ -54,6 +54,7 @@ export const PersistedTaskSchema = z.object({
     history: z.array(z.enum(TaskState)),
   }),
   retries: z.object({
+    review: z.number().int().nonnegative(),
     qa: z.number().int().nonnegative(),
     security: z.number().int().nonnegative(),
   }),
@@ -69,6 +70,7 @@ export const PersistedTaskSchema = z.object({
   gateContext: z.strictObject({
     businessInput: BusinessInputEvidenceSchema.optional(),
     designAssessment: DesignGateAssessmentSchema.optional(),
+    reviewReport: ReviewReportArtifactSchema.optional(),
     qaReport: QaReportArtifactSchema.optional(),
     securityReport: SecurityReportArtifactSchema.optional(),
     // The mode decision rides with the rest of the gate evidence so a resumed
@@ -301,7 +303,7 @@ export function newPersistedTask(params: {
     classification: params.classification,
     runtimeTask: params.runtimeTask ?? null,
     machine: params.machine,
-    retries: { qa: 0, security: 0 },
+    retries: { review: 0, qa: 0, security: 0 },
     gateContext: params.gateContext ?? {},
     approvals: [],
     artifacts: {},

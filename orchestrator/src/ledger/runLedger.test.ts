@@ -30,6 +30,8 @@ import {
 } from "./vocabulary.js";
 import { LEDGER_ADAPTER_VERSION, LedgerAdapterError, ledgerTaskStatusFromPersisted, projectWaveRun, resolveExecutionAuthority } from "./adapters.js";
 import { assertAuditRoundTrip, exportRunAudit, importRunAudit } from "./auditExport.js";
+import type { StageEntryGuard } from "../orchestrator/stageGuards.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 const HASH_A = "a".repeat(64);
 const HASH_B = "b".repeat(64);
@@ -314,16 +316,47 @@ describe("T-V8-016 — versioned compatibility adapters (dual-read, never dual-w
       machine: { pipeline: [AgentStage.BACKEND_ENGINEER], requiresHumanApproval: false, sequence: [TaskState.CREATED], current: TaskState.CREATED, history: [] },
       now: 1,
     });
-    const at = (current: TaskState) => ({ ...base, machine: { ...base.machine, current } });
-    expect(ledgerTaskStatusFromPersisted(at(TaskState.CREATED))).toBe("PLANNED");
-    expect(ledgerTaskStatusFromPersisted(at(TaskState.IMPLEMENTATION))).toBe("RUNNING");
-    expect(ledgerTaskStatusFromPersisted(at(TaskState.QA))).toBe("VERIFYING");
-    expect(ledgerTaskStatusFromPersisted(at(TaskState.READY_TO_DEPLOY))).toBe("CHECKPOINTED");
-    expect(ledgerTaskStatusFromPersisted(at(TaskState.DEPLOYED))).toBe("DONE");
-    expect(ledgerTaskStatusFromPersisted(at(TaskState.BLOCKED))).toBe("BLOCKED");
+    // A realistic pipeline for the engine's own status projection to walk.
+    const machine = {
+      pipeline: [AgentStage.BACKEND_ENGINEER, AgentStage.QA_ENGINEER],
+      requiresHumanApproval: false,
+      sequence: [TaskState.CREATED, TaskState.IMPLEMENTATION, TaskState.QA, TaskState.READY_TO_DEPLOY, TaskState.DEPLOYED],
+      history: [],
+    };
+    const at = (current: TaskState, cursor = 0) => ({ ...base, pipelineCursor: cursor, machine: { ...machine, current } });
+    const project = (task: ReturnType<typeof at>, options: { completionVerified?: boolean; guard?: StageEntryGuard } = {}) =>
+      ledgerTaskStatusFromPersisted(task, {
+        allTasks: [task],
+        stageEntryGuard: options.guard ?? ALLOW_EVERY_STAGE_TEST_GUARD,
+        completionVerified: options.completionVerified ?? false,
+      });
+    expect(project(at(TaskState.CREATED))).toBe("PLANNED");
+    expect(project(at(TaskState.IMPLEMENTATION))).toBe("RUNNING");
+    expect(project(at(TaskState.QA, 1))).toBe("VERIFYING");
+    expect(project(at(TaskState.READY_TO_DEPLOY, 1))).toBe("CHECKPOINTED");
+    // V13 TASK-007: DONE only when the engine's completion evidence re-verifies.
+    const deployed = { ...at(TaskState.DEPLOYED, 1), completionEvidenceId: "evd_completion" };
+    expect(project(deployed, { completionVerified: true })).toBe("DONE");
+    expect(project(deployed, { completionVerified: false })).toBe("BLOCKED");
+    expect(project(at(TaskState.DEPLOYED, 1), { completionVerified: true })).toBe("BLOCKED");
+    expect(project(at(TaskState.BLOCKED))).toBe("BLOCKED");
     // A human freeze is invisible to the pipeline machine but decisive for a run.
-    expect(ledgerTaskStatusFromPersisted({ ...at(TaskState.IMPLEMENTATION), paused: true })).toBe("BLOCKED");
-    expect(ledgerTaskStatusFromPersisted({ ...at(TaskState.IMPLEMENTATION), cancelled: true })).toBe("BLOCKED");
+    expect(project({ ...at(TaskState.IMPLEMENTATION), paused: true })).toBe("BLOCKED");
+    expect(project({ ...at(TaskState.IMPLEMENTATION), cancelled: true })).toBe("BLOCKED");
+    // A stage the engine's own entry guard refuses waits on a person, whatever the machine says.
+    expect(project(at(TaskState.IMPLEMENTATION), { guard: () => ({ allowed: false, reason: "no handoff" }) })).toBe("BLOCKED");
+  });
+
+  it("V13 TASK-007 — projectTaskStatus follows the engine without the transition table and records itself as a projection", () => {
+    const run = makeRun();
+    ledger.transaction(() => { ledger.createRun(run); ledger.registerTasks(makeTasks()); });
+    // PLANNED -> RUNNING is not a legal ledger transition, but it is what the engine says.
+    expect(() => ledger.setTaskStatus(run.run_id, "BE-004", "RUNNING")).toThrow(LedgerTransitionError);
+    expect(ledger.projectTaskStatus(run.run_id, "BE-004", "RUNNING", { reason: "engineer holds it" }).status).toBe("RUNNING");
+    expect(ledger.projectTaskStatus(run.run_id, "BE-004", "RUNNING").status).toBe("RUNNING");
+    const events = ledger.eventsForRun(run.run_id).filter((event) => event.kind === "TASK_STATUS" && event.task_id === "BE-004");
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ actor: "engine-projection", from: "PLANNED", to: "RUNNING", payload: { projection: true } });
   });
 
   it("projects a real wave run into ledger vocabulary and leaves its files untouched", () => {

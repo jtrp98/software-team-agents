@@ -12,8 +12,9 @@ import type { RecoveryAction } from "../retry/recoveryPolicy.js";
  * AGENT_COMPLETED, check `stage === qa-engineer`, then read `outcome.result` —
  * reconstructing a fact the orchestrator already knew. The domain events also
  * carry facts the lifecycle events can't express at all: the classified
- * failure and routing decision on a failed round (QA_FAILED/SECURITY_FAILED),
- * which round passed (QA_PASSED/SECURITY_PASSED, for first-pass-rate tracking),
+ * failure and routing decision on a failed round (REVIEW_FAILED/QA_FAILED/
+ * SECURITY_FAILED), which round passed (REVIEW_PASSED/QA_PASSED/SECURITY_PASSED,
+ * for first-pass-rate tracking),
  * the actual ApprovalRecord rather than a generic "waiting" signal
  * (APPROVAL_REQUIRED, fired once per question, not on every status poll), the
  * human's answer (APPROVAL_DECIDED) or its evidence-driven closure
@@ -29,6 +30,8 @@ import type { RecoveryAction } from "../retry/recoveryPolicy.js";
 
 /** Domain event names, as values — for a switch, a queue's routing key, or an audit filter. */
 export enum DomainEventType {
+  REVIEW_PASSED = "REVIEW_PASSED",
+  REVIEW_FAILED = "REVIEW_FAILED",
   QA_PASSED = "QA_PASSED",
   QA_FAILED = "QA_FAILED",
   SECURITY_PASSED = "SECURITY_PASSED",
@@ -99,6 +102,8 @@ export interface DeployCompletedEvent {
 }
 
 export interface DomainEventMap {
+  REVIEW_PASSED: VerdictPassedEvent;
+  REVIEW_FAILED: VerdictFailedEvent;
   QA_PASSED: VerdictPassedEvent;
   QA_FAILED: VerdictFailedEvent;
   SECURITY_PASSED: VerdictPassedEvent;
@@ -125,6 +130,7 @@ export function verdictEventFor(
   stage: AgentStage,
   passed: boolean,
 ): keyof DomainEventMap | null {
+  if (stage === AgentStage.REVIEWER) return passed ? "REVIEW_PASSED" : "REVIEW_FAILED";
   if (stage === AgentStage.QA_ENGINEER) return passed ? "QA_PASSED" : "QA_FAILED";
   if (stage === AgentStage.SECURITY) return passed ? "SECURITY_PASSED" : "SECURITY_FAILED";
   return null;

@@ -48,7 +48,7 @@ import { checkQaVerdictCoverage, describeQaVerdictCoverage } from "./verdict.js"
  */
 
 export interface PreviousQaRound {
-  /** Open findings from the last failed round (`review.md` Open Issues). */
+  /** Open findings from the last failed round (`qa.md` Open Issues). */
   findings: readonly QaFindingRecord[];
   /** Evidence produced by earlier rounds (deterministic results, prior checks). */
   evidence: readonly EvidenceRecord[];

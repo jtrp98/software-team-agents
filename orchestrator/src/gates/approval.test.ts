@@ -298,7 +298,7 @@ describe("describeApproval", () => {
 describe("the approval types", () => {
   it("covers each stable human-gate identity exactly once", () => {
     expect(Object.values(ApprovalType).sort()).toEqual(
-      ["deploy", "qa-failure", "requirement-interview", "schema-confirmation", "security-risk", "uxui-signoff"].sort(),
+      ["deploy", "review-failure", "qa-failure", "requirement-interview", "schema-confirmation", "security-risk", "uxui-signoff"].sort(),
     );
   });
 });

@@ -15,6 +15,7 @@ import { resolveRuntimeRoute } from "./runtimeRouting.js";
 import * as contextBudget from "../context/contextBudget.js";
 import { FIXTURE_REVISION, runtimeTaskFixture } from "./packetFixture.testSupport.js";
 import { seedRealContracts } from "../testing/contractFixtures.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 const roots: string[] = [];
 function project(config?: string): string {
@@ -107,12 +108,12 @@ describe("T-V5-040 one-route matrix", () => {
       guards: () => NO_GUARDS,
       sliceModuleDocs: false,
     });
-    const orch = new Orchestrator("T-SINGLE-STOP", classifyTask({ isClearBugFix: true, touchesBackend: true }));
+    const orch = new Orchestrator("T-SINGLE-STOP", classifyTask({ isClearBugFix: true, touchesBackend: true }), { stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
     const assigned = orch.status();
     expect(assigned).toMatchObject({ kind: "RUNNING", stage: AgentStage.BACKEND_ENGINEER });
     const stopped = await orch.step(executor);
     expect(stopped.kind).toBe("BLOCKED");
-    expect(orch.retries).toEqual({ qa: 0, security: 0 });
+    expect(orch.retries).toEqual({ review: 0, qa: 0, security: 0 });
     expect(orch.recovery?.kind).toBe("ESCALATE");
     expect(claude.requests).toHaveLength(0);
   });

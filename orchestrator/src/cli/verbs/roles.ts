@@ -85,16 +85,21 @@ async function runRolesSubCommand(
     }
 
     case "review": {
+      // V13 TASK-006: an agent review is the `reviewer` stage STA dispatches
+      // and verifies — it is never claimed from the CLI. `--as` is refused
+      // outright rather than ignored, so a script relying on it fails loudly.
+      if (rest.includes("--as") || args.includes("--as")) {
+        throw new CliUsageError(
+          "roles review: --as is no longer accepted — agent reviews are dispatched by STA as the reviewer stage, " +
+            "not claimed from the CLI; a manual review is a person's decision: roles review <id>[,<id>] --by <name>",
+        );
+      }
       // One id-list token: commas separate items, exactly like `roles ack`'s.
       // Extra positional tokens are ignored rather than mistaken for more ids —
       // unknown value-flags must never turn their values into item names.
       const ids = (args[1] ?? "").split(",").filter((a) => a !== "");
-      const as = flagValue(rest, "--as");
+      const reviewer = requireBy();
       if (ids.length === 0) throw new CliUsageError("roles review: an item id is required");
-      if (!as) throw new CliUsageError("roles review: --as <agent> is required — a review's content is which discipline looked");
-      if (!Object.values(AgentStage).includes(as as AgentStage)) {
-        throw new CliUsageError(`roles review: "${as}" is not an agent role`);
-      }
       for (const id of ids) {
         const item = kb.get(id);
         if (!item) {
@@ -102,12 +107,13 @@ async function runRolesSubCommand(
           return 1;
         }
         try {
-          writeKnowledgeItem(reviewItem(item, as as AgentStage, now), projectRoot);
+          // Only the Knowledge item changes: no task, stage or evidence is touched.
+          writeKnowledgeItem(reviewItem(item, now), projectRoot);
         } catch (e) {
           console.error(`[orchestrator] ${e instanceof Error ? e.message : String(e)}`);
           return 1;
         }
-        console.log(`[orchestrator] ${id} reviewed as ${as}. It confirmed:`);
+        console.log(`[orchestrator] ${id} reviewed by ${reviewer}. They confirmed:`);
         for (const line of checklistFor(item.kind)) console.log(`  - ${line}`);
       }
       return 0;

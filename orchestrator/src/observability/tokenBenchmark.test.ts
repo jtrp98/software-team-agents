@@ -25,7 +25,7 @@ describe("T-V3TOK-004 token benchmark", () => {
       expect(fs.readFileSync(path.join(dir, "design.md"), "utf8").length).toBe(TOKEN_BENCHMARK_DOC_BYTES.design);
       expect(fs.readFileSync(path.join(dir, "plan.md"), "utf8").length).toBe(TOKEN_BENCHMARK_DOC_BYTES.plan);
       expect(fs.readFileSync(path.join(dir, "requirement.md"), "utf8").length).toBe(TOKEN_BENCHMARK_DOC_BYTES.requirement);
-      expect(fs.readFileSync(path.join(dir, "review.md"), "utf8").length).toBe(TOKEN_BENCHMARK_DOC_BYTES.review);
+      expect(fs.readFileSync(path.join(dir, "qa.md"), "utf8").length).toBe(TOKEN_BENCHMARK_DOC_BYTES.qa);
       expect(fs.readFileSync(path.join(dir, "test-plan.md"), "utf8").length).toBe(TOKEN_BENCHMARK_DOC_BYTES.testPlan);
     } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
   });

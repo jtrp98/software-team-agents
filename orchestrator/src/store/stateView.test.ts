@@ -13,6 +13,7 @@ import { StateViewSchemaError } from "./stateSchema.js";
 import { MemoryTaskStore } from "./memoryStore.js";
 import { ApprovalType } from "../gates/approval.js";
 import { Orchestrator } from "../orchestrator/orchestrator.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 function task(taskId: string, overrides: Partial<PersistedTask> = {}): PersistedTask {
   const classification = classifyTask({
@@ -45,12 +46,12 @@ describe("state view", () => {
 
   it("says which agent is up and what the retry budget looks like", () => {
     const t = task("T-1");
-    // cursor 2: pipeline is [system-analyst, test-planner, backend-engineer, qa-engineer].
-    const doc = renderAndParse([{ ...t, machine: { ...t.machine, current: TaskState.IMPLEMENTATION }, pipelineCursor: 2, retries: { qa: 2, security: 0 } }]);
+    // cursor 2: pipeline is [system-analyst, test-planner, backend-engineer, reviewer, qa-engineer].
+    const doc = renderAndParse([{ ...t, machine: { ...t.machine, current: TaskState.IMPLEMENTATION }, pipelineCursor: 2, retries: { review: 0, qa: 2, security: 0 } }]);
 
     expect(doc.tasks[0].status).toBe("RUNNING");
     expect(doc.tasks[0].current_agent).toBe(AgentStage.BACKEND_ENGINEER);
-    expect(doc.tasks[0].retry).toEqual({ qa: 2, security: 0, max: MAX_RETRY });
+    expect(doc.tasks[0].retry).toEqual({ review: 0, qa: 2, security: 0, max: MAX_RETRY });
   });
 
   it("shows a blocked task with the reason it blocked on", () => {
@@ -148,7 +149,7 @@ describe("state view — T02 fields", () => {
     try {
       const file = path.join(dir, "state.yaml");
       const store = new MemoryTaskStore();
-      const orch = new Orchestrator("T-1", classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true }), { store });
+      const orch = new Orchestrator("T-1", classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true }), { store, stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
       await orch.step(() => ({ outcome: { tokens: 1, cost: 0, result: "PASS" } }));
 
       writeStateViewFromStore(file, store);

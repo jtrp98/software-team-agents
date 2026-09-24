@@ -10,8 +10,9 @@ import { ApprovalType } from "../gates/approval.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { decidePending, testHumanVerifier } from "../gates/humanDecision.testSupport.js";
 import { withRequiredEvidence } from "../evidence/stageEvidence.testSupport.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
-const human = { humanDecisionVerifier: testHumanVerifier() };
+const human = { humanDecisionVerifier: testHumanVerifier(), stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD };
 
 /**
  * Integration tests — end to end through the real seams `orchestrator.test.ts`'s unit tests
@@ -154,9 +155,11 @@ describe("Full pipeline integration", () => {
       TaskState.DESIGN,
       TaskState.PLAN,
       TaskState.IMPLEMENTATION,
+      TaskState.REVIEW,
       TaskState.QA,
       TaskState.QA_FAILED, // the round the crash happened in the middle of — recorded, not lost
       TaskState.IMPLEMENTATION,
+      TaskState.REVIEW,
       TaskState.QA,
       TaskState.SECURITY,
       TaskState.READY_TO_DEPLOY,

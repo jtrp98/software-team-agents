@@ -56,7 +56,7 @@ export const UNIVERSAL_DENY: string[] = [
   "knowledge/_roles/**",
 ];
 
-/** Analysis artifacts and registry files whose home is the Knowledge repo, never a Target workspace. Engineer-owned docs (review/security/deploy) stay writable here. */
+/** Analysis artifacts and registry files whose home is the Knowledge repo, never a Target workspace. Engineer-owned docs (qa/security/deploy) stay writable here. */
 export const WORKSPACE_BA_ARTIFACTS: readonly string[] = [
   "_docs/module/*/requirement.md",
   "_docs/module/*/design.md",

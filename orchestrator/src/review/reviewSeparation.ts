@@ -3,6 +3,7 @@ import { AGENT_REGISTRY } from "../agents/registry.js";
 import { Permission } from "../agents/permissions.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
+import { canWritePath, matchesGlob, pathRulesFor, targetPathRules, type PathRules } from "../agents/pathPermissions.js";
 import { pipelineFromWorkflow, type WorkflowDefinition } from "../workflow/workflowDefinition.js";
 import { catalogWorkflows } from "../workflow/workflowCatalog.js";
 import type { ClassificationInput } from "../classification/taskClassifier.js";
@@ -27,14 +28,34 @@ import type { ClassificationInput } from "../classification/taskClassifier.js";
  *     user's — reporting it keeps the choice visible without overriding it.
  */
 
-/** Which stages' work a reviewer's verdict covers. The reviewers are the two roles CLAUDE.md says never auto-chain — that is the same list, for the same reason. */
+/** Which stages' work a reviewer's verdict covers. */
 export const REVIEWS: Partial<Record<AgentStage, readonly AgentStage[]>> = {
+  // V13 TASK-006: the code review between implementation and QA.
+  [AgentStage.REVIEWER]: [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER, AgentStage.SETUP],
   [AgentStage.QA_ENGINEER]: [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER, AgentStage.SETUP],
   [AgentStage.SECURITY]: [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER, AgentStage.SETUP],
 };
 
 /** The artifacts that carry a verdict about someone else's work. Only a reviewer may produce one. */
-export const VERDICT_ARTIFACTS: readonly ArtifactType[] = [ArtifactType.QA_REPORT, ArtifactType.SECURITY_REPORT];
+export const VERDICT_ARTIFACTS: readonly ArtifactType[] = [
+  ArtifactType.REVIEW_REPORT,
+  ArtifactType.QA_REPORT,
+  ArtifactType.SECURITY_REPORT,
+];
+
+/**
+ * The one stage that may issue each verdict. Being *a* reviewer is not enough:
+ * QA claiming a review report would be QA marking the reviewer's homework, and
+ * the review stage would complete on a verdict its owner never gave.
+ */
+export const VERDICT_PRODUCER: Readonly<Partial<Record<ArtifactType, AgentStage>>> = {
+  [ArtifactType.REVIEW_REPORT]: AgentStage.REVIEWER,
+  [ArtifactType.QA_REPORT]: AgentStage.QA_ENGINEER,
+  [ArtifactType.SECURITY_REPORT]: AgentStage.SECURITY,
+};
+
+/** The module document the reviewer owns; no reviewed stage may write it. */
+export const REVIEW_DOC_SAMPLE = "_docs/module/sample-module/review.md";
 
 export const REVIEWER_STAGES: readonly AgentStage[] = Object.keys(REVIEWS) as AgentStage[];
 
@@ -56,6 +77,13 @@ export function reviewersFor(stage: AgentStage, pipeline?: readonly AgentStage[]
   return REVIEWER_STAGES.filter(
     (reviewer) => (REVIEWS[reviewer] ?? []).includes(stage) && (!pipeline || pipeline.includes(reviewer)),
   );
+}
+
+export class WrongVerdictProducerError extends Error {
+  constructor(public readonly stage: AgentStage, public readonly artifactType: ArtifactType, public readonly owner: AgentStage) {
+    super(`${stage} may not produce ${artifactType}: only ${owner} issues that verdict`);
+    this.name = "WrongVerdictProducerError";
+  }
 }
 
 export class SelfReviewError extends Error {
@@ -83,6 +111,69 @@ export function assertIndependentVerdict(stage: AgentStage, artifactType: Artifa
   if (artifactType === ArtifactType.HANDOFF) return;
   if (!VERDICT_ARTIFACTS.includes(artifactType)) return;
   if (!isReviewer(stage)) throw new SelfReviewError(stage, artifactType);
+  const owner = VERDICT_PRODUCER[artifactType];
+  if (owner !== undefined && owner !== stage) throw new WrongVerdictProducerError(stage, artifactType, owner);
+}
+
+/** A concrete repo-relative path a glob matches — `*` and `**` filled in — so two rule sets can be compared by `canWritePath`. */
+export function sampleGlobPath(glob: string): string {
+  const sample = glob
+    .replace(/\\/g, "/")
+    .replace(/\*\*/g, "sample-dir/sample-file")
+    .replace(/\*/g, "sample");
+  return sample;
+}
+
+/**
+ * The contract half of creator/reviewer separation (V13 TASK-006), read from
+ * the loaded `contracts/*.yaml` rather than the registry: the reviewer's write
+ * globs must not reach any path a reviewed stage may write, and no reviewed
+ * stage may write the reviewer's review.md — whether in the Knowledge
+ * workspace (`pathRulesFor`) or a bound Target checkout (`targetPathRules`).
+ */
+export function checkReviewerContractSeparation(projectRoot: string): string[] {
+  const problems: string[] = [];
+  const reviewer = AgentStage.REVIEWER;
+  let reviewerRules: PathRules;
+  try {
+    reviewerRules = pathRulesFor(reviewer, projectRoot);
+  } catch (e) {
+    return [`${reviewer}: contract could not be loaded (${(e as Error).message})`];
+  }
+  const reviewerSamples = [...reviewerRules.write.map(sampleGlobPath), REVIEW_DOC_SAMPLE];
+  for (const reviewed of REVIEWS[reviewer] ?? []) {
+    let ruleSets: Array<{ label: string; rules: PathRules }>;
+    try {
+      ruleSets = [
+        { label: "workspace", rules: pathRulesFor(reviewed, projectRoot) },
+        { label: "Target", rules: targetPathRules(reviewed, projectRoot) },
+      ];
+    } catch (e) {
+      problems.push(`${reviewed}: contract could not be loaded (${(e as Error).message})`);
+      continue;
+    }
+    for (const { label, rules } of ruleSets) {
+      for (const sample of reviewerSamples) {
+        if (canWritePath(rules, sample).allowed) {
+          problems.push(
+            `${reviewed} may write ${sample} (${label} rules) — a path the reviewer owns; ` +
+              "the stage under review could rewrite its own review",
+          );
+        }
+      }
+    }
+    for (const glob of ruleSets[0].rules.write) {
+      const sample = sampleGlobPath(glob);
+      if (!matchesGlob(glob, sample)) continue;
+      if (canWritePath(reviewerRules, sample).allowed) {
+        problems.push(
+          `${reviewer} may write ${sample}, which ${reviewed} writes (${glob}) — ` +
+            "a reviewer that can change the work it judges is not independent of it",
+        );
+      }
+    }
+  }
+  return problems;
 }
 
 export interface ReviewCoverage {
@@ -162,11 +253,11 @@ export interface ReviewSeparationResult {
  * roster alone — the other half is whether the pipeline a given kind of
  * change actually runs contains a reviewer at all.
  *
- * `projectRoot` is accepted and ignored — both halves are derived from code
- * (registry + classifier) now, independent of directory — kept only so
- * existing callers (CLI flag, release gate, assert wrapper) don't change.
+ * `projectRoot` is where `contracts/*.yaml` are loaded for the reviewer's
+ * contract-level check (`checkReviewerContractSeparation`); the registry and
+ * classifier halves are derived from code.
  */
-export function checkReviewSeparation(_projectRoot: string = defaultProjectRoot()): ReviewSeparationResult {
+export function checkReviewSeparation(projectRoot: string = defaultProjectRoot()): ReviewSeparationResult {
   const problems: string[] = [];
   const notes: string[] = [];
 
@@ -211,6 +302,8 @@ export function checkReviewSeparation(_projectRoot: string = defaultProjectRoot(
       problems.push(`nothing in the roster can produce ${artifact} — the verdict it carries would never be issued`);
     }
   }
+
+  problems.push(...checkReviewerContractSeparation(projectRoot));
 
   // The pipelines each kind of change actually runs, read from the workflow
   // catalog rather than by parsing `workflows/*.yml` (ADR-007).

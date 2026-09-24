@@ -16,6 +16,7 @@ import {
   reviewedStages,
   reviewersFor,
 } from "./reviewSeparation.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 describe("review separation, as a property of the roster (T39)", () => {
   it("holds for this repo — nothing can review its own work", () => {
@@ -24,8 +25,8 @@ describe("review separation, as a property of the roster (T39)", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("names qa-engineer and security as the reviewers, and nobody else", () => {
-    expect([...REVIEWER_STAGES].sort()).toEqual([AgentStage.QA_ENGINEER, AgentStage.SECURITY].sort());
+  it("names reviewer, qa-engineer and security as the reviewers, and nobody else", () => {
+    expect([...REVIEWER_STAGES].sort()).toEqual([AgentStage.REVIEWER, AgentStage.QA_ENGINEER, AgentStage.SECURITY].sort());
     expect(isReviewer(AgentStage.BACKEND_ENGINEER)).toBe(false);
   });
 
@@ -115,7 +116,7 @@ describe("assertIndependentVerdict — the runtime rule", () => {
 
 describe("the orchestrator refuses a self-review at runtime", () => {
   it("rejects a QA report submitted by the engineer whose work it covers", () => {
-    const orch = new Orchestrator("T-SELF", classifyTask({ isClearBugFix: true, touchesBackend: true }));
+    const orch = new Orchestrator("T-SELF", classifyTask({ isClearBugFix: true, touchesBackend: true }), { stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
     const status = orch.status();
     expect(status.kind).toBe("RUNNING");
     if (status.kind !== "RUNNING") return;

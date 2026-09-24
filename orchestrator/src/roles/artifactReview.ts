@@ -1,8 +1,6 @@
 import { AgentStage } from "../types.js";
 import type { KnowledgeItem, KnowledgeKind } from "../knowledge/knowledgeModel.js";
 import { StatusTransitionError, applyTransition, canTransition } from "../knowledge/ownership.js";
-import { canSeeKind } from "../knowledge/roleView.js";
-import { laneOf } from "./roleLane.js";
 
 /**
  * The one review flow every lane's artefacts go through before anything is
@@ -12,11 +10,10 @@ import { laneOf } from "./roleLane.js";
  * applies those rules through `canTransition` — hand-editing an item's YAML
  * bypasses every one of those checks and the version bump with them.
  *
- * On top of that, a reviewer must also be able to *read* the kind
- * (`canSeeKind`): a role whose context policy never puts `db-schema` in
- * front of it cannot meaningfully review one, and letting it sign one off
- * would record a check that never happened. The per-kind checklist exists so
- * "reviewed" means the same thing twice — each line is a rule already stated
+ * Both `reviewed` and `approved` are human decisions here: an agent's code
+ * review is the `reviewer` pipeline stage, never a Knowledge status set from
+ * the CLI. The per-kind checklist exists so "reviewed" means the same thing
+ * twice — each line is a rule already stated
  * in `policies/` or CLAUDE.md, phrased as a question, not new policy.
  *
  * The reviewer's name is deliberately not stored on the item: it would be a
@@ -82,40 +79,20 @@ export function checklistFor(kind: KnowledgeKind): string[] {
   return REVIEW_CHECKLIST[kind];
 }
 
-export class ArtifactReviewError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ArtifactReviewError";
-  }
-}
-
 /**
- * Moves an item to `reviewed` on behalf of `reviewer`.
+ * Moves an item to `reviewed` — a person's decision (V13 TASK-006).
  *
- * Two refusals before the transition is even attempted, both stated here rather
- * than left to `canTransition`, because its message would be right and unhelpful:
- * "cannot go draft -> reviewed" does not tell the caller that the problem is who
- * is asking.
+ * Agent code review is the `reviewer` stage STA dispatches and verifies from
+ * its own evidence; a CLI call can never claim it. A manual review of a
+ * Knowledge item is therefore recorded as what it is: a human act, through
+ * `ownership.ts`'s transition rules, touching only the item — never a task,
+ * a stage or any evidence. The person's name is echoed by the CLI, not
+ * stored on the item (see the module note above).
  */
-export function reviewItem(item: KnowledgeItem, reviewer: AgentStage, now: string): KnowledgeItem {
-  if (reviewer === AgentStage.HUMAN) {
-    // A person can do anything (ownership.ts's HUMAN bypass), but doing *this*
-    // as "human" loses the one fact a review record carries: which discipline
-    // looked at it. Ask for the role they were acting as.
-    throw new ArtifactReviewError(
-      `name the role ${item.id} was reviewed as, not "human" — a review's whole content is which discipline looked at it`,
-    );
-  }
-  if (!canSeeKind(reviewer, item.kind)) {
-    throw new ArtifactReviewError(
-      `${reviewer} does not see ${item.kind} items, so it cannot review ${item.id} — marking it reviewed would ` +
-        "record a check that did not happen",
-    );
-  }
-
-  const verdict = canTransition(item, "reviewed", reviewer);
+export function reviewItem(item: KnowledgeItem, now: string): KnowledgeItem {
+  const verdict = canTransition(item, "reviewed", AgentStage.HUMAN);
   if (!verdict.allowed) throw new StatusTransitionError(verdict);
-  return applyTransition(item, "reviewed", reviewer, now);
+  return applyTransition(item, "reviewed", AgentStage.HUMAN, now);
 }
 
 /**
@@ -125,32 +102,4 @@ export function reviewItem(item: KnowledgeItem, reviewer: AgentStage, now: strin
  */
 export function approveItem(item: KnowledgeItem, now: string): KnowledgeItem {
   return applyTransition(item, "approved", AgentStage.HUMAN, now);
-}
-
-export interface ReviewerSuggestion {
-  role: AgentStage;
-  why: string;
-}
-
-/**
- * Who could review this item — every role that may see the kind and does not own
- * the item. Returned as a list rather than one answer: T39's rule is "not the
- * owner", not "this specific reviewer", and naming a single one would quietly
- * become a requirement nobody agreed to.
- *
- * The downstream lane is listed first, because it is the one that has to live
- * with the artefact being wrong.
- */
-export function reviewersFor(item: KnowledgeItem): ReviewerSuggestion[] {
-  const ownerLane = laneOf(item.owner);
-  return Object.values(AgentStage)
-    .filter((role) => role !== AgentStage.HUMAN && role !== item.owner && canSeeKind(role, item.kind))
-    .map((role) => ({
-      role,
-      why:
-        laneOf(role) !== ownerLane
-          ? "in a different lane — it is the one that has to live with this being wrong"
-          : "same lane, different role",
-    }))
-    .sort((a, b) => (laneOf(a.role) === ownerLane ? 1 : 0) - (laneOf(b.role) === ownerLane ? 1 : 0));
 }

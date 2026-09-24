@@ -22,8 +22,9 @@ import {
 import { checkGate } from "./gatePolicy.js";
 import { decidePending, testHumanVerifier } from "./humanDecision.testSupport.js";
 import { withStageEvidence } from "../evidence/stageEvidence.testSupport.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
-const human = { humanDecisionVerifier: testHumanVerifier() };
+const human = { humanDecisionVerifier: testHumanVerifier(), stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD };
 
 const completeInput = (overrides: Partial<BusinessInputEvidence> = {}): BusinessInputEvidence =>
   BusinessInputEvidenceSchema.parse({

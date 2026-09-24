@@ -32,6 +32,12 @@ export const EVIDENCE_KINDS = [
   "deterministic-verification",
   /** A trusted human decision applied to a pending approval request. */
   "approval-decision",
+  /**
+   * STA's own check that a reviewer attempt was an independent review of the
+   * completed implementation (V13 TASK-006) — evaluated by the orchestrator,
+   * never taken from the reviewer's report.
+   */
+  "review-independence",
   /** STA's decision that a stage attempt satisfied its required evidence. */
   "stage-completion",
   /** STA's decision that the whole task is Done, referencing every evidence id that proves it. */
@@ -105,7 +111,7 @@ const ArtifactPayloadSchema = z.strictObject({
   contentDigest: z.string().regex(/^[0-9a-f]{64}$/),
   /** Where the bytes live; a Knowledge artifact reference replaces this in TASK-009. */
   location: z.string().min(1),
-  /** The verdict an artifact carries (QA/security report status), null for one that carries none. */
+  /** The verdict an artifact carries (review/QA/security report status), null for one that carries none. */
   verdict: z.string().nullable(),
 });
 
@@ -125,6 +131,18 @@ const ApprovalDecisionPayloadSchema = z.strictObject({
   evidenceRef: z.string().min(1),
 });
 
+const ReviewIndependencePayloadSchema = z.strictObject({
+  kind: z.literal("review-independence"),
+  /** The code-producing stages of this task's pipeline the review covers, in pipeline order. */
+  reviewedStages: z.array(z.enum(AgentStage)).min(1),
+  /** The stage-completion evidence ids of those stages' latest attempts — the implementation that was reviewed. */
+  implementationCompletionIds: z.array(z.string().regex(/^evd_[0-9a-f]{32}$/)).min(1),
+  /** The contract digest the reviewer attempt was dispatched under (its role-run record). */
+  reviewerContractDigest: z.string().regex(/^[0-9a-f]{64}$/),
+  /** The checks STA ran, by name, all of which held. */
+  checks: z.array(z.string().min(1)).min(1),
+});
+
 const StageCompletionPayloadSchema = z.strictObject({
   kind: z.literal("stage-completion"),
   /** The requirement names that were satisfied, in table order (`transitionGuard.ts`). */
@@ -141,6 +159,7 @@ export const EvidencePayloadSchema = z.discriminatedUnion("kind", [
   ArtifactPayloadSchema,
   DeterministicVerificationPayloadSchema,
   ApprovalDecisionPayloadSchema,
+  ReviewIndependencePayloadSchema,
   StageCompletionPayloadSchema,
   TaskCompletionPayloadSchema,
 ]);

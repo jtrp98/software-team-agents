@@ -10,8 +10,9 @@ import { PermissionDeniedError } from "../agents/permissionPolicy.js";
 import { Permission } from "../agents/permissions.js";
 import { decidePending, testHumanVerifier } from "../gates/humanDecision.testSupport.js";
 import { PASSING_VERIFICATION, withRequiredEvidence } from "../evidence/stageEvidence.testSupport.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "./stageGuards.testSupport.js";
 
-const human = { humanDecisionVerifier: testHumanVerifier() };
+const human = { humanDecisionVerifier: testHumanVerifier(), stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD };
 
 // A doc-producing stage's validated artifact is always its HANDOFF (see
 // runtime/runtimeExecutor.ts's `ownedDoc` branch) — never a structured
@@ -107,8 +108,10 @@ describe("Orchestrator", () => {
     const agentsRun = orch.runLog.all().map((r) => r.agent);
     expect(agentsRun).toEqual([
       AgentStage.BACKEND_ENGINEER,
+      AgentStage.REVIEWER,
       AgentStage.QA_ENGINEER,
       AgentStage.BACKEND_ENGINEER,
+      AgentStage.REVIEWER,
       AgentStage.QA_ENGINEER,
     ]);
   });
@@ -161,6 +164,7 @@ describe("Orchestrator", () => {
       TaskState.DESIGN,
       TaskState.PLAN, // test-planner, between system-analyst and the engineers
       TaskState.IMPLEMENTATION,
+      TaskState.REVIEW,
       TaskState.QA,
       TaskState.SECURITY,
       TaskState.READY_TO_DEPLOY,

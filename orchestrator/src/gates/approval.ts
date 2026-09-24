@@ -23,6 +23,8 @@ export enum ApprovalType {
   REQUIREMENT_INTERVIEW = "requirement-interview",
   /** Risk-triggered design gate (schema, migration, breaking, critical security, ambiguity). */
   SCHEMA_CONFIRMATION = "schema-confirmation",
+  /** A reviewer round whose failure no automatic route may answer (V13 TASK-006). */
+  REVIEW_FAILURE = "review-failure",
   /** Any ⚠️/❌ QA round. */
   QA_FAILURE = "qa-failure",
   /** Any 🔴/🟠 security finding. */

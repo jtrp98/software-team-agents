@@ -13,20 +13,20 @@ import {
 } from "../state/runtimeArtifacts.js";
 
 /**
- * The previous failed QA round's findings, read from the module's `review.md`
+ * The previous failed QA round's findings, read from the module's `qa.md`
  * (`## Open Issues`) — the input a recheck plan needs so round N+1 verifies
  * the named findings first instead of starting over.
  *
- * Findings carry no file lists today because review.md does not name files;
+ * Findings carry no file lists today because qa.md does not name files;
  * freshness keys stay unknown, which planRecheck treats as "no cross-boundary
  * signal" rather than inventing one. Evidence reuse across processes arrives
  * when deterministic results gain their own persistence.
  */
 export function previousRoundFromDocs(docsRoot: string, moduleName: string, taskId: string): { findings: QaFindingRecord[]; evidence: [] } | undefined {
   if (!moduleName) return undefined;
-  const reviewMd = readModuleDoc(docsRoot, moduleName, "review.md");
-  if (!reviewMd) return undefined;
-  const rows = parseOpenIssues(reviewMd);
+  const qaMd = readModuleDoc(docsRoot, moduleName, "qa.md");
+  if (!qaMd) return undefined;
+  const rows = parseOpenIssues(qaMd);
   if (rows.length === 0) return undefined;
   const findings: QaFindingRecord[] = rows.map((row, i) => ({
     id: `F${i + 1}`,

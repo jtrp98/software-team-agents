@@ -14,14 +14,15 @@ export const MAX_RETRY = 3;
 /** The automatic rounds an *ordinary* (low/medium/high) finding gets. `escalation-policy.yaml` is the authority; this names it for callers and tests. */
 export const ORDINARY_REPAIR_ROUNDS = 2;
 
-export type FailureKind = "qa" | "security";
+export type FailureKind = "review" | "qa" | "security";
 
 /**
- * QA and security are tracked as separate budgets on purpose: they check
- * different things, and a task that burned through 3 QA rounds hasn't used up
- * any of its security budget.
+ * Review, QA and security are tracked as separate budgets on purpose: they
+ * check different things, and a task that burned through 3 QA rounds hasn't
+ * used up any of its review or security budget.
  */
 export interface RetryBudget {
+  review: number;
   qa: number;
   security: number;
 }
@@ -34,11 +35,12 @@ export interface TaskRun {
 export function initTaskRun(pipeline: AgentStage[], requiresHumanApproval: boolean): TaskRun {
   return {
     machine: initTaskMachine(pipeline, requiresHumanApproval),
-    retries: { qa: 0, security: 0 },
+    retries: { review: 0, qa: 0, security: 0 },
   };
 }
 
 const FAILED_STATE: Record<FailureKind, TaskState> = {
+  review: TaskState.REVIEW_FAILED,
   qa: TaskState.QA_FAILED,
   security: TaskState.SECURITY_FAILED,
 };

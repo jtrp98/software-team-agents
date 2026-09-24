@@ -13,7 +13,7 @@ import { parseOpenIssues } from "../orchestrator/failureClassifier.js";
  * mapping file to keep in sync.
  *
  * Reuses `failureClassifier.ts`'s `parseOpenIssues()` rather than re-parsing
- * `review.md`'s Open Issues ids a second way.
+ * `qa.md`'s Open Issues ids a second way.
  *
  * `tests` is usually empty — automated tests are opt-in per CLAUDE.md's fixed
  * stack, so that's an expected state, not a hole in the chain. A `TEST-NNN`
@@ -35,7 +35,7 @@ export interface TraceInputs {
   requirementMd: string;
   designMd: string;
   planMd: string;
-  reviewMd?: string;
+  qaMd?: string;
 }
 
 function idPattern(prefix: string): RegExp {
@@ -103,12 +103,12 @@ function isTaskChecked(planMd: string, taskId: string): boolean {
  * `requirementMd`, in the order requirements were written.
  */
 export function buildTraceChain(inputs: TraceInputs): TraceEntry[] {
-  const { requirementMd, designMd, planMd, reviewMd } = inputs;
+  const { requirementMd, designMd, planMd, qaMd } = inputs;
   const requirementIds = extractIds(requirementMd, "REQ");
 
   const blockingIds = new Set<string>();
-  if (reviewMd) {
-    for (const row of parseOpenIssues(reviewMd)) {
+  if (qaMd) {
+    for (const row of parseOpenIssues(qaMd)) {
       if (row.blocking) for (const id of row.affected) blockingIds.add(id.toUpperCase());
     }
   }
@@ -123,7 +123,7 @@ export function buildTraceChain(inputs: TraceInputs): TraceEntry[] {
     const backend = idsOnSameLineAs(planMd, anchors, "BE");
     const frontend = idsOnSameLineAs(planMd, anchors, "FE");
     const tasks = [...backend, ...frontend];
-    const tests = idsOnSameLineAs(`${planMd}\n${reviewMd ?? ""}`, [requirement, ...design, ...tasks], "TEST");
+    const tests = idsOnSameLineAs(`${planMd}\n${qaMd ?? ""}`, [requirement, ...design, ...tasks], "TEST");
 
     if (tasks.length === 0) {
       return { requirement, design, tasks, tests, status: "planned" as const };

@@ -260,6 +260,18 @@ export interface RunLedger {
     to: LedgerTaskStatus,
     options?: { reason?: string; actor?: string },
   ): LedgerTask;
+  /**
+   * V13 TASK-007 — writes the engine's projection of one task
+   * (`ledgerTaskStatusFromPersisted`). A projection is not a transition: it
+   * follows whatever the engine's persisted state says, so the task-status
+   * transition table does not apply; an unchanged status writes nothing.
+   */
+  projectTaskStatus(
+    runIdValue: string,
+    taskId: string,
+    to: LedgerTaskStatus,
+    options?: { reason?: string },
+  ): LedgerTask;
   readiness(runIdValue: string): LedgerReadiness;
 
   /** Write-once by `attempt_id`; a replay with identical bytes is accepted, a changed one refuses. */
@@ -284,7 +296,7 @@ export interface RunLedger {
   eventsForRun(runIdValue: string): LedgerEvent[];
 
   /** Read-through to the authorities that already own these facts. */
-  retriesFor(taskId: string): { qa: number; security: number } | null;
+  retriesFor(taskId: string): { review: number; qa: number; security: number } | null;
   approvalsFor(taskId: string): readonly ApprovalRecord[] | null;
   findingsFor(taskId: string): readonly Finding[];
 

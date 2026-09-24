@@ -8,8 +8,9 @@ import { MemoryTaskStore } from "../store/memoryStore.js";
 import { DOMAIN_EVENT_TYPES, DomainEventType, isDomainEventType, verdictEventFor } from "./domainEvents.js";
 import { decidePending, testHumanVerifier, TEST_HUMAN_CHANNEL } from "../gates/humanDecision.testSupport.js";
 import { withRequiredEvidence } from "../evidence/stageEvidence.testSupport.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
-const human = { humanDecisionVerifier: testHumanVerifier() };
+const human = { humanDecisionVerifier: testHumanVerifier(), stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD };
 
 function qaReport(status: "PASS" | "FAIL"): QaReportArtifact {
   return {
@@ -71,12 +72,14 @@ describe("domain event vocabulary", () => {
 
   it("recognises its own event names and nothing else", () => {
     expect(isDomainEventType("QA_FAILED")).toBe(true);
+    expect(isDomainEventType("REVIEW_PASSED")).toBe(true);
+    expect(isDomainEventType("REVIEW_FAILED")).toBe(true);
     expect(isDomainEventType("DEPLOY_COMPLETED")).toBe(true);
     // The lifecycle events are a separate set and must not be mistaken for these.
     expect(isDomainEventType("AGENT_COMPLETED")).toBe(false);
     expect(isDomainEventType("TASK_DEPLOYED")).toBe(false);
     expect(isDomainEventType("APPROVAL_WITHDRAWN")).toBe(true);
-    expect(DOMAIN_EVENT_TYPES).toHaveLength(8);
+    expect(DOMAIN_EVENT_TYPES).toHaveLength(10);
   });
 });
 

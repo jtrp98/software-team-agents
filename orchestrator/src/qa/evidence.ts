@@ -36,7 +36,7 @@ export interface EvidenceRecord {
   createdAt: number;
 }
 
-/** One finding from a previous QA round's Open Issues (`review.md`). */
+/** One finding from a previous QA round's Open Issues (`qa.md`). */
 export interface QaFindingRecord {
   id: string;
   description: string;

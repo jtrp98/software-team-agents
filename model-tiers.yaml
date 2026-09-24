@@ -11,6 +11,7 @@ role_defaults:
   uxui-designer: T5
   backend-engineer: T5
   frontend-engineer: T5
+  reviewer: T3
   qa-engineer: T3
   security: T2
   devops: T5

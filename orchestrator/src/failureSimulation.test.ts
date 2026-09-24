@@ -27,8 +27,9 @@ import * as path from "node:path";
 import Database from "./store/sqliteDatabase.js";
 import { decidePending, testHumanVerifier } from "./gates/humanDecision.testSupport.js";
 import { withRequiredEvidence } from "./evidence/stageEvidence.testSupport.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "./orchestrator/stageGuards.testSupport.js";
 
-const human = { humanDecisionVerifier: testHumanVerifier() };
+const human = { humanDecisionVerifier: testHumanVerifier(), stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD };
 
 /**
  * Failure Simulation (T56) — TASKS.md names six scenarios and asks that the orchestrator's

@@ -10,7 +10,7 @@ import { STAGE_TO_STATE } from "../state/taskState.js";
  * back to backend-engineer" — that conclusion is drawn here, from the
  * pipeline the task actually has.
  *
- * Producing one of these from a real `review.md`/`security.md` (classifying
+ * Producing one of these from a real `qa.md`/`security.md` (classifying
  * prose into a category/owner) is deliberately not done here — an executor
  * that has no structured failure to report simply omits it, and routing
  * falls back to legacy behaviour.

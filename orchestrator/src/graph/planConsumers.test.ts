@@ -14,6 +14,7 @@ import { classifyTask } from "../classification/taskClassifier.js";
 import { writePacketPlan } from "../runtime/packetFixture.testSupport.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { PASSING_VERIFICATION } from "../evidence/stageEvidence.testSupport.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 const base = parseCanonicalPlan(fs.readFileSync(new URL("../docs/fixtures/canonical-plan.md", import.meta.url), "utf8")).tasks[0];
 const retrieval = (...refs: string[]) => `Hypothesis: The selected graph boundary is likely relevant; confirm it against current source.\nQuery: Locate definitions and references for the selected claims.\nProvenance: ${refs.join(", ")}`;
@@ -26,7 +27,7 @@ describe("T-V8-003 full-field graph consumers", () => {
   it("reloads the canonical plan for registry graph/readiness and refuses registered edge drift", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "v8-registry-plan-"));
     try {
-      const plan = tasks().slice(0, 2), store = new MemoryTaskStore(), registry = new TaskRegistry({ store });
+      const plan = tasks().slice(0, 2), store = new MemoryTaskStore(), registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store });
       writePacketPlan(root, plan);
       const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
       for (const task of plan) registry.create({ taskId: task.id, classification, moduleName: "packet-fixture", docsRoot: root, projectRoot: defaultProjectRoot() });
@@ -96,7 +97,7 @@ describe("T-V8-003 full-field graph consumers", () => {
   });
 
   it("registration and open preserve resolved edges and refuse ad-hoc disguise and status-only completion", () => {
-    const plan = tasks(), store = new MemoryTaskStore(), registry = new TaskRegistry({ store, planTasks: () => plan });
+    const plan = tasks(), store = new MemoryTaskStore(), registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, planTasks: () => plan });
     const classification = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
     expect(() => registry.create({ taskId: "FE-005", classification })).toThrow(/BE-004/);
     registry.create({ taskId: "BE-004", classification });

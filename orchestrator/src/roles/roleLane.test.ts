@@ -4,12 +4,12 @@ import { VIEW_OF } from "../knowledge/roleView.js";
 import { LANE_LABEL, ROLE_LANES, type RoleLane, isRoleLane, laneOf, rolesInLane } from "./roleLane.js";
 
 describe("laneOf (T99)", () => {
-  it("puts each of the eleven roles in exactly one lane", () => {
+  it("puts each of the twelve roles in exactly one lane", () => {
     const stages = Object.values(AgentStage).filter((s) => s !== AgentStage.HUMAN);
     for (const stage of stages) {
       expect(ROLE_LANES).toContain(laneOf(stage) as RoleLane);
     }
-    expect(stages).toHaveLength(11);
+    expect(stages).toHaveLength(12);
   });
 
   it("gives the human no lane — a lane of everything is not a lane", () => {
@@ -43,10 +43,11 @@ describe("rolesInLane", () => {
   });
 
   /** A lane says who reads together, not who may be chained to — CLAUDE.md's never-auto-chain rule is untouched. */
-  it("keeps qa-engineer and security in the dev lane", () => {
+  it("keeps reviewer, qa-engineer and security in the dev lane", () => {
     expect(rolesInLane("dev")).toEqual([
       AgentStage.BACKEND_ENGINEER,
       AgentStage.FRONTEND_ENGINEER,
+      AgentStage.REVIEWER,
       AgentStage.QA_ENGINEER,
       AgentStage.SECURITY,
       AgentStage.DEVOPS,
@@ -61,7 +62,7 @@ describe("rolesInLane", () => {
   it("covers every non-human role exactly once across the four lanes", () => {
     const all = ROLE_LANES.flatMap((lane) => rolesInLane(lane));
     expect(new Set(all).size).toBe(all.length);
-    expect(all).toHaveLength(11);
+    expect(all).toHaveLength(12);
     expect(all).not.toContain(AgentStage.HUMAN);
   });
 });

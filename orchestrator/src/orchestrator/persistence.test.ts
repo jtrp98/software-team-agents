@@ -13,6 +13,7 @@ import { ApprovalDecisionError, ApprovalType } from "../gates/approval.js";
 import { NoTrustedHumanChannelError, UntrustedHumanDecisionError, type HumanDecisionVerifier } from "../gates/humanDecision.js";
 import { decidePending, testHumanVerifier, trustedCredential, TEST_HUMAN_CHANNEL } from "../gates/humanDecision.testSupport.js";
 import { withStageEvidence } from "../evidence/stageEvidence.testSupport.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "./stageGuards.testSupport.js";
 
 function qaReport(status: "PASS" | "FAIL"): QaReportArtifact {
   return {
@@ -31,9 +32,9 @@ function qaReport(status: "PASS" | "FAIL"): QaReportArtifact {
 const pass: AgentExecutorResult = { outcome: { tokens: 100, cost: 0.01, result: "PASS" } };
 
 /** Every orchestrator here that answers a gate needs a trusted channel; production has none. */
-const human = { humanDecisionVerifier: testHumanVerifier() };
+const human = { humanDecisionVerifier: testHumanVerifier(), stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD };
 
-/** An incremental feature: system-analyst -> test-planner -> backend -> uxui-designer -> frontend -> qa. */
+/** An incremental feature: system-analyst -> test-planner -> backend -> uxui-designer -> frontend -> reviewer -> qa. */
 function incremental() {
   return classifyTask({
     isIncrementalFeature: true,
@@ -96,6 +97,7 @@ describe("Orchestrator persistence (T01)", () => {
     await first.step(withStageEvidence(() => ({ outcome: { tokens: 5_000, cost: 0.2, result: "PASS" } }))); // backend-engineer
     await first.step(withStageEvidence(() => ({ outcome: { tokens: 5_000, cost: 0.2, result: "PASS" } }))); // uxui-designer
     await first.step(withStageEvidence(() => ({ outcome: { tokens: 5_000, cost: 0.2, result: "PASS" } }))); // frontend-engineer
+    await first.step(withStageEvidence(() => pass)); // reviewer
     await first.step(() => ({
       outcome: { tokens: 1_000, cost: 0.05, result: "FAIL" },
       artifactType: ArtifactType.QA_REPORT,
@@ -107,7 +109,7 @@ describe("Orchestrator persistence (T01)", () => {
     const resumed = Orchestrator.resume("T-1", store, human);
     expect(resumed.retries.qa).toBe(1);
     expect(resumed.runLog.totalTokens("T-1")).toBe(first.runLog.totalTokens("T-1"));
-    expect(resumed.runLog.runsForTask("T-1")).toHaveLength(6);
+    expect(resumed.runLog.runsForTask("T-1")).toHaveLength(7);
   });
 
   it("keeps every routing decision in the store as an audit trail", async () => {
@@ -127,7 +129,7 @@ describe("Orchestrator persistence (T01)", () => {
   });
 
   it("throws when asked to resume a task that was never stored", () => {
-    expect(() => Orchestrator.resume("ghost", new MemoryTaskStore())).toThrow();
+    expect(() => Orchestrator.resume("ghost", new MemoryTaskStore(), { stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD })).toThrow();
   });
 });
 
@@ -141,6 +143,7 @@ describe("Orchestrator failure routing (T01)", () => {
     await orch.step(withStageEvidence(() => pass)); // backend
     await orch.step(withStageEvidence(() => pass)); // uxui-designer
     await orch.step(withStageEvidence(() => pass)); // frontend
+    await orch.step(withStageEvidence(() => pass)); // reviewer
     const status = await orch.step(() => ({
       outcome: { tokens: 100, cost: 0.01, result: "FAIL" },
       artifactType: ArtifactType.QA_REPORT,
@@ -349,6 +352,7 @@ describe("human approval as first-class state (T08)", () => {
     await orch.step(withStageEvidence(() => pass)); // backend-engineer
     await orch.step(withStageEvidence(() => pass)); // uxui-designer
     await orch.step(withStageEvidence(() => pass)); // frontend-engineer
+    await orch.step(withStageEvidence(() => pass)); // reviewer
     await orch.step(() => ({
       outcome: { tokens: 100, cost: 0.01, result: "FAIL" },
       artifactType: ArtifactType.QA_REPORT,
@@ -358,7 +362,7 @@ describe("human approval as first-class state (T08)", () => {
         owner: AgentStage.HUMAN,
         severity: "high",
         retryable: false,
-        reason: "review.md names no owner",
+        reason: "qa.md names no owner",
         affected: [],
         requiresHuman: true,
       }),
@@ -367,14 +371,14 @@ describe("human approval as first-class state (T08)", () => {
     const qaApproval = orch.approvalLedger.find((a) => a.scope.type === ApprovalType.QA_FAILURE);
     expect(qaApproval).toBeDefined();
     expect(qaApproval).toMatchObject({ status: "pending", required: true });
-    expect(qaApproval!.reason).toContain("review.md names no owner");
+    expect(qaApproval!.reason).toContain("qa.md names no owner");
   });
 });
 
 describe("trusted human approval (V13 TASK-001)", () => {
   async function waitingAtDesign(verifier?: HumanDecisionVerifier) {
     const store = new MemoryTaskStore();
-    const orch = new Orchestrator("T-1", incremental(), { store, ...(verifier ? { humanDecisionVerifier: verifier } : {}) });
+    const orch = new Orchestrator("T-1", incremental(), { store, stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, ...(verifier ? { humanDecisionVerifier: verifier } : {}) });
     await orch.step(withStageEvidence(() => pass)); // system-analyst; the DESIGN gate opens a request
     const pending = orch.pendingApprovalRequest();
     expect(pending).not.toBeNull();
@@ -473,7 +477,7 @@ describe("trusted human approval (V13 TASK-001)", () => {
     try {
       // Process 1: reaches the gate and parks. No decision is possible without a channel.
       const s1 = new SqliteTaskStore(file);
-      const p1 = new Orchestrator("T-1", incremental(), { store: s1 });
+      const p1 = new Orchestrator("T-1", incremental(), { store: s1, stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
       await p1.step(withStageEvidence(() => pass));
       const requestId = p1.pendingApprovalRequest()!.requestId;
       s1.close();
@@ -487,7 +491,7 @@ describe("trusted human approval (V13 TASK-001)", () => {
 
       // Process 3: the decision is durable, audited, and the gate is open.
       const s3 = new SqliteTaskStore(file);
-      const p3 = Orchestrator.resume("T-1", s3);
+      const p3 = Orchestrator.resume("T-1", s3, { stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
       expect(p3.approvalLedger[0]).toMatchObject({
         requestId,
         status: "approved",

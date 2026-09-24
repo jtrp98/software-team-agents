@@ -36,7 +36,8 @@ export interface ThreeRepoRequestRoots {
 export class TargetPreflightError extends Error {}
 
 function needsCode(stage: AgentStage): boolean {
-  return [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER, AgentStage.QA_ENGINEER, AgentStage.SECURITY, AgentStage.DEVOPS].includes(stage);
+  // The reviewer reads the implementation it reviews, like QA and security: read access, never write.
+  return [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER, AgentStage.REVIEWER, AgentStage.QA_ENGINEER, AgentStage.SECURITY, AgentStage.DEVOPS].includes(stage);
 }
 
 function accessFor(

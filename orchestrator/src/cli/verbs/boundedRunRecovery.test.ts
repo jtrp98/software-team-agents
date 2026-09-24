@@ -7,10 +7,12 @@ import { runCli } from "../../cli.js";
 import { RuntimeRegistry } from "../../runtime/runtimeRegistry.js";
 import { MockRuntimeAdapter, okResult } from "../../runtime/mockAdapter.js";
 import { RuntimeCapability } from "../../runtime/runtimeCapabilities.js";
+import type { RuntimeAgentResult } from "../../runtime/runtimeAdapter.js";
 import { SqliteRunLedger } from "../../ledger/sqliteRunLedger.js";
 import { SqliteTaskStore } from "../../store/sqliteStore.js";
 import { defaultStateDbPath } from "../../store/stateView.js";
-import { boundedRunProject } from "./boundedRunFixture.testSupport.js";
+import { boundedRunProject, playPlanTaskStage, PLAN_TASK_GUARD_FILES } from "./boundedRunFixture.testSupport.js";
+import { writeSignedOffHandoffs } from "../../orchestrator/stageGuards.testSupport.js";
 import { declareInstallationConfigOverrideChannelForTest } from "../../threeRepo/installation.js";
 
 declareInstallationConfigOverrideChannelForTest();
@@ -19,12 +21,12 @@ declareInstallationConfigOverrideChannelForTest();
  * T-V8-022 — end-to-end recovery through the real `sta bounded-run` CLI.
  *
  * boundedRunFaultMatrix.test.ts proves each persisted boundary against the
- * controller with fake services. This file proves the same claims one layer
- * up, where nothing is faked below the runtime adapter: real CLI dispatch,
- * real plan compilation and registration, the production
- * BoundedRunServices (packet compile, attempt freeze, deterministic hook,
- * production QA composition), the real guarded Git session, and a real
- * disposable Target repository. Two invocations of the binary stand in for
+ * engine with fake agents. This file proves the same claims one layer up,
+ * where nothing is faked below the runtime adapter: real CLI dispatch, real
+ * plan compilation and registration, the one task engine with the production
+ * executor composition `sta run` uses (packet compile, deterministic hook,
+ * reviewer and QA stages), the ledger-attempt boundary (attempt freeze, the
+ * real guarded Git session and checkpoint), and a real disposable Target. Two invocations of the binary stand in for
  * the crash: the first one ends at a durable stop, the process exits, and a
  * later `--resume` picks the run up from SQLite alone.
  */
@@ -92,58 +94,54 @@ function inspect<T>(root: string, read: (ledger: SqliteRunLedger) => T): T {
   }
 }
 
-/** An adapter whose DEV stage fails once, then behaves like the completing one. */
-function flakyAdapter(targetRoot: string, failFirstDev: boolean): MockRuntimeAdapter {
-  let devCalls = 0;
+/** A mock runtime playing every plan-task stage (see `playPlanTaskStage`). */
+function planTaskAdapter(
+  targetRoot: string,
+  options: { module?: string; engineer?: (call: number) => Partial<RuntimeAgentResult> | undefined } = {},
+): MockRuntimeAdapter {
+  let engineerCalls = 0;
   let self: MockRuntimeAdapter;
-  const guardedResult = (overrides: Parameters<typeof okResult>[0] = {}) => okResult({
-    guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] },
-    ...overrides,
-  });
   const adapter = new MockRuntimeAdapter({
     id: "claude-code",
     models: ["sonnet"],
     respond: (req) => {
-      if (req.role === "qa-engineer") {
-        self.workspace.files.set(
-          "_docs/module/orders/review.md",
-          "# review.md — orders\n\n## Round 1 — verify\n\n**Status:** ✅ Verified (FULL)\n\n" +
-            "## Per-Task Results\n\n" +
-            "- BE-004: ✅ Verified — the empty-order response stays stable.\n" +
-            "- AC-007.2: ✅ Verified — zero-total response confirmed by inspection.\n" +
-            "- DES-011: ✅ Verified — serializer boundary preserved.\n",
-        );
-        return guardedResult();
-      }
-      devCalls += 1;
-      if (failFirstDev && devCalls === 1) {
-        return guardedResult({ status: "UNAVAILABLE", exitCode: 1, text: "provider unavailable: upstream 503 during the attempt" });
-      }
-      fs.writeFileSync(path.join(targetRoot, "README.md"), "# orders\n\nReviewed the empty-order summary path.\n");
-      return guardedResult();
+      if (req.role !== "reviewer" && req.role !== "qa-engineer") engineerCalls += 1;
+      const over = playPlanTaskStage(req, self.workspace.files, targetRoot, { ...options, engineerCall: engineerCalls });
+      return okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] }, ...over });
     },
-    files: {
-      ".mock/guards.json": JSON.stringify({
-        hooks: {
-          PreToolUse: [{ hooks: [{ command: "node .claude/hooks/block-path-permissions.js" }] }],
-          Stop: [{ hooks: [{ command: "node .claude/hooks/require-green-before-stop.js" }] }],
-        },
-      }),
-    },
+    files: PLAN_TASK_GUARD_FILES,
   });
   self = adapter;
   return adapter;
 }
 
+/**
+ * An adapter whose first engineer call fails as a runtime error (a task
+ * defect the engine leaves incomplete and a later invocation reruns), then
+ * plays every plan-task stage to completion.
+ */
+function flakyAdapter(targetRoot: string, failFirstDev: boolean): MockRuntimeAdapter {
+  return planTaskAdapter(targetRoot, {
+    engineer: (call) => (failFirstDev && call === 1 ? { status: "ERROR", exitCode: 1, text: "runtime error: the agent crashed mid-attempt" } : undefined),
+  });
+}
+
+/** A project whose BA -> SA -> DEV handoffs a person has signed off and acknowledged. */
+function signedProject() {
+  const fixture = boundedRunProject(roots, git);
+  writeSignedOffHandoffs(fixture.root, "orders");
+  return fixture;
+}
+
 describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
-  it("E01 · a provider failure halts durably, and --resume finishes the same frozen run without re-registering it", async () => {
-    const { root, targetRoot } = boundedRunProject(roots, git);
+  it("E01 · a runtime failure halts durably, and --resume finishes the same frozen run without re-registering it", async () => {
+    const { root, targetRoot } = signedProject();
     const halted = await cli(
       ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit"],
       root,
       new RuntimeRegistry([flakyAdapter(targetRoot, true)]),
     );
-    expect(halted.code).not.toBe(0);
+    expect(halted.code).toBe(1);
     expect(halted.out.some((line) => line.includes("HALTED"))).toBe(true);
     expect(halted.out.some((line) => line.includes("sta bounded-run --resume"))).toBe(true);
 
@@ -152,16 +150,15 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
       return {
         runId: run.run_id,
         status: run.status,
-        haltReason: run.halt_reason,
         tasks: ledger.readTasks(run.run_id).map((task) => `${task.task_id}:${task.status}`),
         attempts: ledger.attemptsForTask(run.run_id, "BE-004").map((attempt) => `${attempt.attempt}:${attempt.status}`),
         checkpoints: ledger.checkpointsForRun(run.run_id).length,
       };
     });
     expect(afterHalt.status).toBe("HALTED");
-    expect(afterHalt.haltReason).toContain("provider unavailable");
-    expect(afterHalt.tasks).toEqual(["BE-004:FAILED"]);
-    expect(afterHalt.attempts).toEqual(["1:UNAVAILABLE"]);
+    // The ledger task status is the engine's projection: the engineer still holds the task.
+    expect(afterHalt.tasks).toEqual(["BE-004:RUNNING"]);
+    expect(afterHalt.attempts).toEqual(["1:FAILED"]);
     expect(afterHalt.checkpoints).toBe(0);
     expect(git(targetRoot, "rev-list", "--count", "HEAD")).toBe("1");
 
@@ -181,11 +178,9 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
         runCount: runs.length,
         runId: run.run_id,
         status: run.status,
-        planHash: run.plan_hash,
         tasks: ledger.readTasks(run.run_id).map((task) => `${task.task_id}:${task.status}`),
         attempts: ledger.attemptsForTask(run.run_id, "BE-004").map((attempt) => `${attempt.attempt}:${attempt.status}`),
         checkpoints: ledger.checkpointsForRun(run.run_id).map((item) => item.task_id),
-        qaRounds: ledger.eventsForRun(run.run_id).filter((event) => event.kind === "QA_ROUND_STARTED").length,
         linkage: ledger.checkpointsForRun(run.run_id).map((checkpoint) => {
           const attempt = ledger.readAttempt(checkpoint.attempt_id!)!;
           return {
@@ -197,37 +192,67 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
         }),
       };
     });
-    // Resume continues the *same* frozen run: one run row, same id, the
-    // failed attempt kept as history and a second attempt appended.
     expect(afterResume.runCount).toBe(1);
     expect(afterResume.runId).toBe(afterHalt.runId);
     expect(afterResume.status).toBe("COMPLETED");
     expect(afterResume.tasks).toEqual(["BE-004:DONE"]);
-    // Attempt numbers are unique and strictly increasing, but not dense: the
-    // production services compile the packet twice per attempt (once in
-    // prepareTask for the hash, once inside runtimeExecutor), so
-    // `nextExecutionPacketAttempt` ticks twice and the second ledger attempt
-    // is numbered 3. That double-compile is the gap Round 12 recorded and
-    // deliberately left to a later task; what matters for resume is that the
-    // history is append-only and the checkpoint still names its exact attempt.
-    expect(afterResume.attempts[0]).toBe("1:UNAVAILABLE");
+    // Attempt numbers are unique and increasing but not dense: the boundary's
+    // freeze and the runtime executor each compile a packet (the gap Round 12
+    // recorded), so the second ledger attempt may be numbered 3.
+    expect(afterResume.attempts[0]).toBe("1:FAILED");
     expect(afterResume.attempts).toHaveLength(2);
     expect(afterResume.attempts[1]).toMatch(/^[23]:SUCCEEDED$/);
     expect(afterResume.checkpoints).toEqual(["BE-004"]);
     expect(afterResume.linkage).toEqual([{ sameTask: true, samePacket: true, sameRun: true, succeeded: true }]);
-    // The eligible flow reached QA PASS with no manual agent launch: the only
-    // commands issued were the two `sta bounded-run` invocations above.
-    expect(afterResume.qaRounds).toBe(1);
+    // The engine ran the whole plan-task workflow, per task: engineer, reviewer, QA.
+    const store = new SqliteTaskStore(defaultStateDbPath(root));
+    try {
+      expect(store.eventsForTask("BE-004").filter((e) => e.type === "STAGE_COMPLETED").map((e) => e.payload.stage))
+        .toEqual(["backend-engineer", "reviewer", "qa-engineer"]);
+    } finally {
+      store.close();
+    }
     TRANSCRIPTS.e01_halt_then_resume = [...halted.out, "--- second invocation ---", ...resumed.out];
     expect(git(targetRoot, "rev-list", "--count", "HEAD")).toBe("2");
     expect(git(targetRoot, "branch", "--show-current")).toContain(`sta/run/orders/${afterHalt.runId}`);
-    // No automatic integration: main is untouched and the run branch is left
-    // for a person to merge.
+    // No automatic integration: main is untouched and the run branch is left for a person to merge.
     expect(git(targetRoot, "rev-list", "--count", "main")).toBe("1");
   }, 120_000);
 
+  it("E05 · an unavailable provider is the engine's human stop: the run waits, and a resume dispatches nothing", async () => {
+    const { root, targetRoot } = signedProject();
+    const unavailable = planTaskAdapter(targetRoot, {
+      engineer: () => ({ status: "UNAVAILABLE", exitCode: 1, text: "provider unavailable: upstream 503 during the attempt" }),
+    });
+    const stopped = await cli(
+      ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit"],
+      root,
+      new RuntimeRegistry([unavailable]),
+    );
+    expect(stopped.code, stopped.out.join("\n")).toBe(4);
+    const state = inspect(root, (ledger) => {
+      const run = ledger.listRuns()[0]!;
+      return {
+        runId: run.run_id,
+        status: run.status,
+        tasks: ledger.readTasks(run.run_id).map((task) => `${task.task_id}:${task.status}`),
+        attempts: ledger.attemptsForTask(run.run_id, "BE-004").map((attempt) => attempt.status),
+      };
+    });
+    expect(state).toMatchObject({ status: "AWAITING_HUMAN", tasks: ["BE-004:BLOCKED"], attempts: ["UNAVAILABLE"] });
+    const healthy = planTaskAdapter(targetRoot);
+    const again = await cli(
+      ["bounded-run", "--resume", state.runId, "--module", "orders", "--project-root", root, "--autonomy", "edit"],
+      root,
+      new RuntimeRegistry([healthy]),
+    );
+    // Recovering from an infrastructure stop is a person's decision (durable recovery is TASK-008's).
+    expect(again.code).toBe(4);
+    expect(healthy.requests).toEqual([]);
+  }, 120_000);
+
   it("E02 · a run whose plan.md changed under it refuses to resume instead of executing a frozen scope", async () => {
-    const { root, targetRoot } = boundedRunProject(roots, git);
+    const { root, targetRoot } = signedProject();
     const first = await cli(
       ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit"],
       root,
@@ -255,7 +280,7 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
   }, 120_000);
 
   it("E04 · --resume takes the Target from the frozen run and refuses a flag that repoints it", async () => {
-    const { root, targetRoot } = boundedRunProject(roots, git);
+    const { root, targetRoot } = signedProject();
     const halted = await cli(
       ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit"],
       root,

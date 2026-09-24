@@ -1,6 +1,6 @@
 /**
  * Shared identifiers used across the orchestrator.
- * AgentStage names are fixed to the eleven roles this platform replaces
+ * AgentStage names are fixed to the twelve roles this platform replaces
  * (see repo root CLAUDE.md) — no generic "Developer"/"SA" stand-ins.
  */
 export enum AgentStage {
@@ -12,6 +12,8 @@ export enum AgentStage {
   UXUI_DESIGNER = "uxui-designer",
   BACKEND_ENGINEER = "backend-engineer",
   FRONTEND_ENGINEER = "frontend-engineer",
+  /** Independent code review of the implementation, between the engineers and QA (V13 TASK-006). */
+  REVIEWER = "reviewer",
   QA_ENGINEER = "qa-engineer",
   SECURITY = "security",
   DEVOPS = "devops",
@@ -38,6 +40,9 @@ export enum TaskState {
   DESIGN = "DESIGN",
   PLAN = "PLAN",
   IMPLEMENTATION = "IMPLEMENTATION",
+  /** The reviewer stage: an independent review of the implementation, before QA verifies it. */
+  REVIEW = "REVIEW",
+  REVIEW_FAILED = "REVIEW_FAILED",
   QA = "QA",
   QA_FAILED = "QA_FAILED",
   SECURITY = "SECURITY",

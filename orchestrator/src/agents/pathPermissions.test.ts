@@ -113,7 +113,7 @@ describe("the shipped contracts' path rules", () => {
       [AgentStage.SYSTEM_ANALYST, "_docs/module/crm/design.md", "_docs/module/crm/plan.md"],
       [AgentStage.PROJECT_MANAGER, "_docs/module/crm/plan.md", "_docs/module/crm/design.md"],
       [AgentStage.TEST_PLANNER, "_docs/module/crm/test-plan.md", "_docs/module/crm/plan.md"],
-      [AgentStage.SECURITY, "_docs/module/crm/security.md", "_docs/module/crm/review.md"],
+      [AgentStage.SECURITY, "_docs/module/crm/security.md", "_docs/module/crm/qa.md"],
       [AgentStage.DEVOPS, "_docs/module/crm/deploy.md", "_docs/module/crm/design.md"],
     ];
     for (const [agent, own, other] of cases) {
@@ -127,7 +127,7 @@ describe("the shipped contracts' path rules", () => {
   it("stops an engineer writing any module document", () => {
     for (const agent of [AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER]) {
       const rules = pathRulesFor(agent);
-      for (const doc of ["design.md", "requirement.md", "plan.md", "test-plan.md", "review.md"]) {
+      for (const doc of ["design.md", "requirement.md", "plan.md", "test-plan.md", "qa.md"]) {
         expect(canWritePath(rules, `_docs/module/crm/${doc}`).allowed, `${agent} ${doc}`).toBe(false);
       }
     }
@@ -153,7 +153,7 @@ describe("the shipped contracts' path rules", () => {
     }
   });
 
-  it("lets qa-engineer edit plan.md, which is its one exception beyond review.md", () => {
+  it("lets qa-engineer edit plan.md, which is its one exception beyond qa.md", () => {
     expect(canWritePath(pathRulesFor(AgentStage.QA_ENGINEER), "_docs/module/crm/plan.md").allowed).toBe(true);
   });
 
@@ -251,7 +251,7 @@ describe("V10 TASK-021 — the Framework payload is denied per stage, not per wo
     expect(canWritePath(permissive, "_docs/module/crm/requirement.md").allowed).toBe(true);
     expect(canWritePath(permissive, "knowledge/sales/requirement/REQ-1.yaml").allowed).toBe(true);
     expect(canWritePath(permissive, "src/index.ts").allowed).toBe(true);
-    expect(canWritePath(permissive, "_docs/module/crm/review.md").allowed).toBe(true);
+    expect(canWritePath(permissive, "_docs/module/crm/qa.md").allowed).toBe(true);
   });
 
   it("TypeScript artifact lists match .claude/hooks/block-path-permissions.js and .opencode/plugin/sta-guards.js exactly", () => {
@@ -342,7 +342,7 @@ describe("T-V5-020 — one authored declaration, generated guard copies", () => 
       "knowledge/sales/requirement/REQ-1.yaml",
       "_docs/module/crm/requirement.md",
       "_docs/module/crm/uxui/design.md",
-      "_docs/module/crm/review.md",
+      "_docs/module/crm/qa.md",
       "_docs/status.md",
       "decisions/DR-001.yaml",
       "targets.yaml",
@@ -775,14 +775,16 @@ describe("T-V5-023 — stack-shaped path permissions live in the stack profile",
     expect([...backend.write].sort()).toEqual(
       ["README.md", "_docs/status-archive.md", "_docs/status.md", "app/api/**", "package.json", "prisma/**", "server/**", "src/lib/**", "src/server/**"].sort(),
     );
-    expect([...backend.deny].sort()).toEqual(["_docs/module/**", ".claude/**", "components/**", "contracts/**"].sort());
+    expect([...backend.deny].sort()).toEqual(
+      ["_docs/module/*/review.md", "_docs/module/*/review/**", "_docs/module/**", ".claude/**", "components/**", "contracts/**"].sort(),
+    );
 
     const frontend = pathRulesFor("frontend-engineer", workspace);
     expect([...frontend.write].sort()).toEqual(
       ["_docs/status-archive.md", "_docs/status.md", "app/**", "components/**", "public/**", "src/app/**", "src/components/**", "styles/**"].sort(),
     );
     expect([...frontend.deny].sort()).toEqual(
-      ["_docs/module/**", ".claude/**", "app/api/**", "contracts/**", "prisma/**", "server/**"].sort(),
+      ["_docs/module/*/review.md", "_docs/module/*/review/**", "_docs/module/**", ".claude/**", "app/api/**", "contracts/**", "prisma/**", "server/**"].sort(),
     );
   });
 

@@ -326,24 +326,24 @@ withTempProject((tmp) => {
   const env = { CLAUDE_PROJECT_DIR: tmp };
   const mod = path.join(tmp, '_docs', 'module', 'sales-crm');
 
-  for (const f of ['requirement.md', 'design.md', 'plan.md', 'test-plan.md', 'review.md', 'security.md', 'deploy.md']) {
+  for (const f of ['requirement.md', 'design.md', 'plan.md', 'test-plan.md', 'qa.md', 'security.md', 'deploy.md']) {
     write(path.join(mod, f), `# ${f}\n\n## Change Log\n- 2026-08-18 created\n`);
   }
-  write(path.join(mod, 'review', 'phase-1.md'), '# archived round\n');
+  write(path.join(mod, 'qa', 'phase-1.md'), '# archived round\n');
   write(path.join(tmp, '_docs', 'status.md'), '# Project Status\n');
 
   const cases = [
     ['Write over an existing plan.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'plan.md') } }, BLOCK],
     ['Write over an existing test-plan.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'test-plan.md') } }, BLOCK],
     ['Write over an existing design.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'design.md') } }, BLOCK],
-    ['Write over an existing review.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'review.md') } }, BLOCK],
+    ['Write over an existing qa.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'qa.md') } }, BLOCK],
     ['Write over an existing security.md is blocked', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'security.md') } }, BLOCK],
     ['relative path to an existing doc is blocked too', { tool_name: 'Write', tool_input: { file_path: '_docs/module/sales-crm/requirement.md' } }, BLOCK],
 
     ['Write to a doc that does not exist yet is allowed (first creation)', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs/module/new-mod/requirement.md') } }, ALLOW],
     ['Edit on an existing doc is allowed — that is the point', { tool_name: 'Edit', tool_input: { file_path: path.join(mod, 'plan.md') } }, ALLOW],
     ['MultiEdit on an existing doc is allowed', { tool_name: 'MultiEdit', tool_input: { file_path: path.join(mod, 'plan.md') } }, ALLOW],
-    ['Write to an archived round is allowed (not one of the seven)', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'review', 'phase-1.md') } }, ALLOW],
+    ['Write to an archived round is allowed (not one of the seven)', { tool_name: 'Write', tool_input: { file_path: path.join(mod, 'qa', 'phase-1.md') } }, ALLOW],
     ['Write to status.md is allowed (not a per-module doc)', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'status.md') } }, ALLOW],
     ['Write to app code named plan.md elsewhere is allowed', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'app', 'plan.md') } }, ALLOW],
   ];
@@ -1197,8 +1197,8 @@ withTempProject((tmp) => {
       runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env), ALLOW);
     check(`  ${label} -> design.md likewise`,
       runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'design.md') } }, env), ALLOW);
-    check(`  ${label} -> engineer-owned review.md allowed`,
-      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'review.md') } }, env), ALLOW);
+    check(`  ${label} -> engineer-owned qa.md allowed`,
+      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'qa.md') } }, env), ALLOW);
     check(`  ${label} -> app source allowed`,
       runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'src', 'app.ts') } }, env), ALLOW);
     check(`  ${label} -> backend-engineer still refused the Framework payload`,
@@ -1490,7 +1490,7 @@ withTempProject((tmp) => {
   const out = fs.readFileSync(path.join(tmp, '_docs', 'status.md'), 'utf8');
   check('Phase 1 fully checked -> implemented ✅', /Phase 1 — implemented ✅/.test(out) ? 0 : 1, 0);
   check('Phase 2 untouched -> implemented ⬜', /Phase 2 — implemented ⬜/.test(out) ? 0 : 1, 0);
-  check('no review.md yet -> verified ⬜', /Phase 1 — implemented ✅ · verified ⬜/.test(out) ? 0 : 1, 0);
+  check('no qa.md yet -> verified ⬜', /Phase 1 — implemented ✅ · verified ⬜/.test(out) ? 0 : 1, 0);
   check('Phase 2 is gated and unaudited -> security ⬜', /Phase 2.*security ⬜/.test(out) ? 0 : 1, 0);
   check('Phase 1 has no gate -> security n\\/a', /Phase 1.*security n\/a/.test(out) ? 0 : 1, 0);
   check('Now line points at the first open phase', /\*\*Now\*\*: Phase 1/.test(out) ? 0 : 1, 0);
@@ -1498,20 +1498,20 @@ withTempProject((tmp) => {
 
 withTempProject((tmp) => {
   write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), `# Plan\n\n## Phase 1: A\n${taskTable([['task one', 'verified']])}`);
-  write(path.join(tmp, '_docs', 'module', 'm', 'review.md'),
+  write(path.join(tmp, '_docs', 'module', 'm', 'qa.md'),
     '# Review\n\n## Review Outcome — Phase 1\n**Status:** ✅ Verified (FULL)\nAccepted.\n');
   write(path.join(tmp, '_docs', 'module', 'm', 'deploy.md'),
     '# Deploy\n\n## Deploy History\n| Date | Environment | Phase/Module | Outcome |\n|---|---|---|---|\n| 2026-01-01 | production | Phase 1 | success |\n');
   runGenerate({ CLAUDE_PROJECT_DIR: tmp });
   const out = fs.readFileSync(path.join(tmp, '_docs', 'status.md'), 'utf8');
-  check('review.md\'s Status line drives verified + mode', /verified ✅ \(FULL\)/.test(out) ? 0 : 1, 0);
+  check('qa.md\'s Status line drives verified + mode', /verified ✅ \(FULL\)/.test(out) ? 0 : 1, 0);
   check('deploy.md\'s history row drives deployed ✅', /deployed ✅/.test(out) ? 0 : 1, 0);
   check('fully done phase -> Now says complete', /\*\*Now\*\*: All phases complete/.test(out) ? 0 : 1, 0);
 });
 
 withTempProject((tmp) => {
   write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), `# Plan\n\n## Phase 1: A 🔒\n${taskTable([['task one', 'verified']])}`);
-  write(path.join(tmp, '_docs', 'module', 'm', 'review.md'),
+  write(path.join(tmp, '_docs', 'module', 'm', 'qa.md'),
     '# Review\n\n## Review Outcome — Phase 1\n**Status:** ✅ Verified (FULL)\nAccepted.\n');
   write(path.join(tmp, '_docs', 'module', 'm', 'security.md'),
     '# Security\n\n## Open Findings — all rounds\n| Sev | Finding | Location | Status | Round | Routes to |\n|---|---|---|---|---|---|\n| 🟠 | x | Phase 1 | 🔵 Open | 1 | backend-engineer |\n');
@@ -1522,7 +1522,7 @@ withTempProject((tmp) => {
 
 withTempProject((tmp) => {
   write(path.join(tmp, '_docs', 'module', 'm', 'plan.md'), `# Plan\n\n## Phase 1: A\n${taskTable([['task one', 'verified']])}`);
-  write(path.join(tmp, '_docs', 'module', 'm', 'review.md'),
+  write(path.join(tmp, '_docs', 'module', 'm', 'qa.md'),
     '# Review\n\n## Open Issues — all phases\n| Issue | Phase | Routes to | Blocking |\n|---|---|---|---|\n| BE-001 bug | 1 | backend-engineer | blocking |\n\n## Review Outcome — Phase 1\n**Status:** ⚠️ Partial (FULL)\nSent back.\n');
   runGenerate({ CLAUDE_PROJECT_DIR: tmp });
   const out = fs.readFileSync(path.join(tmp, '_docs', 'status.md'), 'utf8');

@@ -1,4 +1,3 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { AgentStage, TaskState } from "../../types.js";
 import type { Orchestrator, AgentExecutor } from "../../orchestrator/orchestrator.js";
@@ -26,21 +25,133 @@ import { RunLog } from "../../observability/runLog.js";
 import { contractDigestForStage } from "../../evidence/evidenceStore.js";
 import type { TaskStore } from "../../store/taskStore.js";
 import type { CliArgs } from "../../cli.js";
+import type { RuntimeAutonomy } from "../../runtime/runtimeAdapter.js";
+import type { RuntimeId } from "../../runtime/runtimeSupport.js";
+import type { RuntimeRouteFlags } from "../../runtime/runtimeRouting.js";
+import type { LedgerAttempt } from "../../ledger/runLedger.js";
+import type { DependencyEvidence } from "../../artifacts/executionPacket.js";
+import type { QaWorkRoot } from "../../threeRepo/cliRoots.js";
 import { contractRootForTask, plannedTier, promptForCamp } from "./taskIntake.js";
 import { runtimeRegistryFor, type CliDependencies } from "./runtimeRegistry.js";
 
-/**
- * What `composeProductionTaskExecutor` hands the single-task loop. It used to
- * live in `run/waveRunner.ts`, which T-V8-029 retired; the unified bounded run
- * composes its own services in `run/boundedRunServices.ts` instead.
- */
+/** What `composeProductionTaskExecutor` hands the task-run service (`engine/taskRunService.ts`). */
 export interface TaskExecutorComposition {
   executor: AgentExecutor;
 }
 
-/** The single production executor composition used by both manual and bounded-wave task paths. */
+/** The runtime a task's stages default to, and the operator's route flags. */
+export interface RuntimeSelection {
+  defaultRuntimeId: string;
+  routingFlags?: RuntimeRouteFlags;
+}
+
+/**
+ * Everything the one production executor composition reads (V13 TASK-007).
+ * `sta run` derives it from its argv (`taskExecutorOptionsFromArgs`); a
+ * bounded run derives it from its own argv plus the frozen run - the same
+ * composition either way, so every stage of every task is executed, verified
+ * and evidenced identically.
+ */
+export interface TaskExecutorOptions {
+  projectRoot: string;
+  module?: string;
+  rootName?: string;
+  autonomy?: RuntimeAutonomy;
+  runtime?: RuntimeId;
+  model?: string;
+  effort?: string;
+  phases: readonly number[];
+  noDeterministicGate: boolean;
+  noQaOptimization: boolean;
+  noDocumentGate: boolean;
+  /** Where packets and runtime artifacts land; absent = the executor's own rule (the Knowledge root of a three-repo task, else the project root). */
+  runtimeStateRoot?: string;
+  /** Per-stage execution roots; absent = `repos.yaml` (`loadStageRoots`). */
+  stageRoots?: Partial<Record<AgentStage, string>>;
+  /** The Target roots the deterministic sweep and QA read; absent = `resolveQaWorkRoots`. */
+  qaWorkRoots?: () => QaWorkRoot[];
+  /** The frozen ledger attempt a stage executes under (a bounded run's engineer stage); undefined = routed normally. */
+  frozenAttemptFor?: (taskId: string, stage: AgentStage) => LedgerAttempt | undefined;
+  /**
+   * The revision a stage's packet (and its design-evidence check) answers to;
+   * absent = the execution root's HEAD. A bounded run passes its frozen base:
+   * the run branch above it carries only that run's own recorded checkpoints -
+   * the same work `sta run` would have uncommitted on top of the same base.
+   */
+  packetBaseRevision?: (root: string) => Promise<string>;
+  /** The runtime selection per task; absent = `selectRuntime`. */
+  runtimeSelection?: (taskId: string) => RuntimeSelection;
+}
+
+export function taskExecutorOptionsFromArgs(args: CliArgs): TaskExecutorOptions {
+  return {
+    projectRoot: args.projectRoot,
+    module: args.module,
+    rootName: args.rootName,
+    autonomy: args.autonomy,
+    runtime: args.runtime,
+    model: args.model,
+    effort: args.effort,
+    phases: args.phases,
+    noDeterministicGate: args.noDeterministicGate,
+    noQaOptimization: args.noQaOptimization,
+    noDocumentGate: args.noDocumentGate,
+  };
+}
+
+/**
+ * The runtime a task's stages default to: the tier camp for a tiered phase,
+ * else `--runtime`, else the configured Single runner, else the default - and
+ * the operator's `--runtime/--model/--effort` as route flags.
+ */
+export function selectRuntime(options: TaskExecutorOptions, taskId: string): RuntimeSelection {
+  let staConfig: ReturnType<typeof loadStaConfig> | undefined;
+  try {
+    staConfig = loadStaConfig(options.projectRoot);
+  } catch {
+    staConfig = undefined;
+  }
+  const executionConfig = staConfig?.execution;
+  const phaseTier = plannedTier(options, taskId);
+  const tierCamp = phaseTier
+    ? selectTierCamp({
+        flagRuntime: options.runtime,
+        configuredRuntime: executionConfig?.runner,
+        hasConfiguredRoleRoute: staConfig?.routing?.by_role !== undefined,
+        isTTY: process.stdin.isTTY === true,
+        defaultRuntimeId: DEFAULT_RUNTIME_ID,
+        prompt: () => promptForCamp(DEFAULT_RUNTIME_ID),
+      })
+    : undefined;
+  const defaultRuntimeId = tierCamp?.runtimeId ?? options.runtime ?? executionConfig?.runner ?? DEFAULT_RUNTIME_ID;
+  const routingFlags = options.runtime || options.model || options.effort
+    ? { runtime: options.runtime, model: options.model, effort: options.effort }
+    : undefined;
+  return { defaultRuntimeId, ...(routingFlags ? { routingFlags } : {}) };
+}
+
+/**
+ * The dependency evidence a task's packet is compiled with: every dependency
+ * re-verified Done against the evidence store (never read off a state name).
+ */
+export function dependencyEvidenceFromStore(store: TaskStore, taskId: string): DependencyEvidence[] {
+  const task = store.loadTask(taskId);
+  const all = store.listTasks();
+  return (task?.dependsOn ?? []).map(dependencyId => {
+    const dependency = store.loadTask(dependencyId);
+    // Done is re-verified against the evidence store, not read off the state name.
+    const completion = dependency ? verifyTaskCompletion(store, dependency) : null;
+    if (!dependency || !completion?.done || dependency.paused || dependency.cancelled || unmetDependencies(dependency, all).length) throw new Error(`dependency ${dependencyId} lacks complete ledger evidence${completion && !completion.done ? ` (${completion.reason})` : ""}`);
+    return {
+      task_id: dependencyId, status: "complete" as const, source: `task-store:${dependencyId}`, hash: stableHash(dependency),
+      outputs: Object.entries(dependency.artifacts).map(([kind, text]) => ({ source: `task-store:${dependencyId}/artifacts/${kind}`, hash: contentHash(text) })),
+    };
+  });
+}
+
+/** The single production executor composition: `sta run` and a bounded run compose every stage here. */
 export async function composeProductionTaskExecutor(
-  args: CliArgs,
+  options: TaskExecutorOptions,
   taskId: string,
   orchestrator: Orchestrator,
   store: TaskStore,
@@ -48,12 +159,12 @@ export async function composeProductionTaskExecutor(
 ): Promise<TaskExecutorComposition> {
   const task = store.loadTask(taskId);
   if (!task) throw new Error(`cannot compose an executor for missing task ${taskId}`);
-  // DR §5: a resumed task answers to the root frozen at intake — the
+  // DR §5: a resumed task answers to the root frozen at intake - the
   // invocation's --root (if any) already passed the drift assertion at
   // intake, so the frozen name is what every root resolution below uses.
-  const runRootName = args.rootName ?? task.knowledgeRoot?.name ?? undefined;
-  const contractRoot = contractRootForTask(args.projectRoot, task.targetBindings);
-  const resolvedAutonomy = args.autonomy ?? "propose";
+  const runRootName = options.rootName ?? task.knowledgeRoot?.name ?? undefined;
+  const contractRoot = contractRootForTask(options.projectRoot, task.targetBindings);
+  const resolvedAutonomy = options.autonomy ?? "propose";
   if (resolvedAutonomy === "propose") {
     console.error(
       "[orchestrator] WARNING: autonomy is 'propose' (the default), which maps to permission mode 'default' — " +
@@ -62,73 +173,41 @@ export async function composeProductionTaskExecutor(
     );
   }
 
-  let staConfig: ReturnType<typeof loadStaConfig> | undefined;
-  try {
-    staConfig = loadStaConfig(args.projectRoot);
-  } catch {
-    staConfig = undefined;
-  }
-  const executionConfig = staConfig?.execution;
-  const phaseTier = plannedTier(args, taskId);
-  const tierCamp = phaseTier
-    ? selectTierCamp({
-        flagRuntime: args.runtime,
-        configuredRuntime: executionConfig?.runner,
-        hasConfiguredRoleRoute: staConfig?.routing?.by_role !== undefined,
-        isTTY: process.stdin.isTTY === true,
-        defaultRuntimeId: DEFAULT_RUNTIME_ID,
-        prompt: () => promptForCamp(DEFAULT_RUNTIME_ID),
-      })
-    : undefined;
-  const defaultRuntimeId = tierCamp?.runtimeId ?? args.runtime ?? executionConfig?.runner ?? DEFAULT_RUNTIME_ID;
-  const runtimeRegistry = runtimeRegistryFor(args.projectRoot, dependencies);
+  const { defaultRuntimeId, routingFlags } = (options.runtimeSelection ?? ((id: string) => selectRuntime(options, id)))(taskId);
+  const runtimeRegistry = runtimeRegistryFor(options.projectRoot, dependencies);
   const defaultRuntime = runtimeRegistry.tryGet(defaultRuntimeId);
   if (!defaultRuntime) throw new Error(`configured Single runner "${defaultRuntimeId}" is not registered`);
-  const routingFlags = args.runtime || args.model || args.effort
-    ? { runtime: args.runtime, model: args.model, effort: args.effort }
-    : undefined;
+  const qaWorkRoots = options.qaWorkRoots ?? (() => resolveQaWorkRoots(options.projectRoot, taskId, store, options.module, runRootName));
   const runtimeExecutor = createRuntimeExecutor({
     runtime: defaultRuntime,
     registry: runtimeRegistry,
     routingFlags,
-    planTier: (id) => plannedTier(args, id),
+    planTier: (id) => plannedTier(options, id),
     classification: (id) => store.loadTask(id)?.classification,
     riskSignals: (id) => {
       const classification = store.loadTask(id)?.classification;
       return classification ? riskSignalsFromClassification(classification) : undefined;
     },
-    projectRoot: args.projectRoot,
-    moduleName: () => args.module!,
+    projectRoot: options.projectRoot,
+    ...(options.runtimeStateRoot ? { runtimeStateRoot: options.runtimeStateRoot } : {}),
+    moduleName: () => options.module!,
     guards: contractGuardResolver(contractRoot),
-    phases: () => (args.phases.length > 0 ? args.phases : undefined),
-    taskLevel: (id) => store.loadTask(id)?.classification.level,
+    phases: () => (options.phases.length > 0 ? [...options.phases] : undefined),
     runtimeTask: (id) => store.loadTask(id)?.runtimeTask,
     priorContractDigest: (id, stage) => contractDigestForStage(store.evidenceForTask(id), stage),
-    dependencyEvidence: (id) => {
-      const task = store.loadTask(id);
-      const all = store.listTasks();
-      return (task?.dependsOn ?? []).map(dependencyId => {
-        const dependency = store.loadTask(dependencyId);
-        // Done is re-verified against the evidence store, not read off the state name.
-        const completion = dependency ? verifyTaskCompletion(store, dependency) : null;
-        if (!dependency || !completion?.done || dependency.paused || dependency.cancelled || unmetDependencies(dependency, all).length) throw new Error(`dependency ${dependencyId} lacks complete ledger evidence${completion && !completion.done ? ` (${completion.reason})` : ""}`);
-        return {
-          task_id: dependencyId, status: "complete" as const, source: `task-store:${dependencyId}`, hash: stableHash(dependency),
-          outputs: Object.entries(dependency.artifacts).map(([kind, text]) => ({ source: `task-store:${dependencyId}/artifacts/${kind}`, hash: contentHash(text) })),
-        };
-      });
-    },
+    dependencyEvidence: (id) => dependencyEvidenceFromStore(store, id),
     taskRunLog: (id) => new RunLog(store.runsForTask(id)),
-    autonomy: args.autonomy,
-    stageRoots: loadStageRoots(args.projectRoot),
-    threeRepoTask: resolveThreeRepoTaskLookup(args.projectRoot, store, args.module, runRootName),
-    enforceRoleWorkflow: fs.existsSync(path.join(args.projectRoot, "knowledge")),
-    extraInstruction: `Environment: ${orchestrator.environment} — ${describeEnvironment(orchestrator.environment, args.projectRoot)}`,
+    autonomy: options.autonomy,
+    stageRoots: options.stageRoots ?? loadStageRoots(options.projectRoot),
+    threeRepoTask: resolveThreeRepoTaskLookup(options.projectRoot, store, options.module, runRootName),
+    ...(options.frozenAttemptFor ? { frozenAttemptFor: options.frozenAttemptFor } : {}),
+    ...(options.packetBaseRevision ? { packetBaseRevision: options.packetBaseRevision } : {}),
+    extraInstruction: `Environment: ${orchestrator.environment} — ${describeEnvironment(orchestrator.environment, options.projectRoot)}`,
     // T-V8-011 — feeds a real diff into task-specific retrieval when one
     // exists (a QA round, a repair attempt); a fresh DEV round simply has none yet.
     changedFiles: async (id) => {
       try {
-        const roots = resolveQaWorkRoots(args.projectRoot, id, store, args.module, runRootName);
+        const roots = id === taskId ? qaWorkRoots() : resolveQaWorkRoots(options.projectRoot, id, store, options.module, runRootName);
         const { files } = await collectQaChangedFiles(roots);
         return files;
       } catch {
@@ -137,9 +216,9 @@ export async function composeProductionTaskExecutor(
     },
   });
 
-  const qaRoots = resolveQaWorkRoots(args.projectRoot, taskId, store, args.module, runRootName);
+  const qaRoots = qaWorkRoots();
   const qaChangedFiles = async (): Promise<string[]> => {
-    const roots = resolveQaWorkRoots(args.projectRoot, taskId, store, args.module, runRootName);
+    const roots = qaWorkRoots();
     const { files } = await collectQaChangedFiles(roots);
     return files;
   };
@@ -149,16 +228,16 @@ export async function composeProductionTaskExecutor(
   const qaDiscovery = await collectQaChangedFiles(qaRoots).catch(() => ({ files: [] as string[], failedTargets: [] as string[] }));
   const qaContractChangedFiles = qaDiscovery.files;
   const qaInputs = await productionQaInputs({
-    docsRoot: resolveDocsRoot(args.projectRoot, runRootName),
-    moduleName: args.module ?? "",
+    docsRoot: resolveDocsRoot(options.projectRoot, runRootName),
+    moduleName: options.module ?? "",
     taskId,
     roots: qaRoots,
-    projectRoot: args.projectRoot,
+    projectRoot: options.projectRoot,
     changedFiles: qaContractChangedFiles,
     unreadableTargets: qaDiscovery.failedTargets.length > 0 ? qaDiscovery.failedTargets : undefined,
   });
 
-  const verificationHook = args.noDeterministicGate
+  const verificationHook = options.noDeterministicGate
     ? null
     : createPostDevVerificationHook({
         inner: runtimeExecutor,
@@ -168,11 +247,11 @@ export async function composeProductionTaskExecutor(
           runner: createProjectRunner({
             root: root.path,
             workspace: new LocalWorkspace({ root: root.path }),
-            staticGatePath: path.join(args.projectRoot, ".claude", "scripts", "static-analysis-gate.js"),
+            staticGatePath: path.join(options.projectRoot, ".claude", "scripts", "static-analysis-gate.js"),
           }),
         }))),
         requiredVerification: () => orchestrator.runtimeTask?.required_verification,
-        ...(args.noQaOptimization
+        ...(options.noQaOptimization
           ? {}
           : {
               changeAware: {
@@ -185,21 +264,21 @@ export async function composeProductionTaskExecutor(
             }),
       });
   const postDevExecutor = verificationHook?.executor ?? withPostDevVerificationDisabled(runtimeExecutor);
-  const documentHook = args.noDocumentGate
+  const documentHook = options.noDocumentGate
     ? null
     : createDocumentVerificationHook({
         inner: postDevExecutor,
-        projectRoot: args.projectRoot,
-        moduleName: args.module,
+        projectRoot: options.projectRoot,
+        moduleName: options.module,
         blocking: true,
       });
   const docVerifiedExecutor = documentHook?.executor ?? withDocumentVerificationDisabled(postDevExecutor);
-  const executor = args.noQaOptimization
+  const executor = options.noQaOptimization
     ? docVerifiedExecutor
     : withQaOptimization({
         inner: docVerifiedExecutor,
         changedFiles: qaChangedFiles,
-        ...(args.noDeterministicGate
+        ...(options.noDeterministicGate
           ? { deterministicGate: "disabled" as const }
           : { deterministicGate: "enabled" as const }),
         packageInputs: qaInputs.packageInputs,
@@ -214,7 +293,7 @@ export async function composeProductionTaskExecutor(
           ...orchestrator.repairRoute ? repairQaSignals(orchestrator.repairRoute) : {},
         }),
         taskLevel: () => orchestrator.classification.level,
-        previousRound: () => previousRoundFromDocs(resolveDocsRoot(args.projectRoot, runRootName), args.module ?? "", taskId),
+        previousRound: () => previousRoundFromDocs(resolveDocsRoot(options.projectRoot, runRootName), options.module ?? "", taskId),
       });
 
   return { executor };

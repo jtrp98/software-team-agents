@@ -5,7 +5,7 @@ import type { StructuredFailure } from "../orchestrator/failure.js";
  * Which role a *kind* of problem belongs to — the inverse of
  * `failureClassifier.ts`'s `CATEGORY_BY_OWNER` map (that one answers "backend-engineer
  * was named, so what failure kind is this?"; this one answers "category is
- * `contract`, so who gets it?"). A named role in `review.md` always wins — a
+ * `contract`, so who gets it?"). A named role in `qa.md` always wins — a
  * person decided, and nothing here second-guesses that. This only covers the
  * case where a row states a category but no role.
  *

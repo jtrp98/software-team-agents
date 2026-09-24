@@ -14,6 +14,8 @@ export enum ArtifactType {
   PLAN = "plan",
   TEST_PLAN = "test-plan",
   QA_REPORT = "qa-report",
+  /** The reviewer's verdict on the implementation, parsed from `_docs/module/<m>/review.md` (V13 TASK-006). */
+  REVIEW_REPORT = "review-report",
   SECURITY_REPORT = "security-report",
   HANDOFF = "handoff",
   EXECUTION_PACKET = "execution-packet",
@@ -117,6 +119,7 @@ export type ExecutionPacket = z.infer<typeof ExecutionPacketSchema>;
 export type ValidatableArtifactType =
   | ArtifactType.HANDOFF
   | ArtifactType.EXECUTION_PACKET
+  | ArtifactType.REVIEW_REPORT
   | ArtifactType.QA_REPORT
   | ArtifactType.SECURITY_REPORT;
 
@@ -236,6 +239,60 @@ export const QaReportArtifactSchema = z
   );
 export type QaReportArtifact = z.infer<typeof QaReportArtifactSchema>;
 
+/**
+ * One reviewer finding (`## Open Findings — all phases` in review.md). A
+ * finding the reviewer cannot tie to a file and line is not a finding, so
+ * `location` must carry a `path:line` pointer.
+ */
+export const ReviewFindingSchema = z.strictObject({
+  id: z.string().regex(/^RV-\d+$/, "a review finding id is RV-<n>"),
+  severity: z.enum(["BLOCKING", "NON_BLOCKING"]),
+  location: z.string().regex(/^[^\s:][^:]*:\d+(?:-\d+)?$/, "a review finding location is path:line"),
+  /** The role whose work must change. Routing reads this; the reviewer never fixes anything itself. */
+  owner: z.enum(AgentStage),
+  status: z.enum(["OPEN", "RESOLVED"]),
+  description: z.string().min(1),
+});
+export type ReviewFinding = z.infer<typeof ReviewFindingSchema>;
+
+/**
+ * The reviewer's verdict on the implementation (V13 TASK-006), parsed from
+ * `_docs/module/<m>/review.md` by `parseReviewReport` — never accepted as an
+ * agent's claim. PASS and FAIL are both held to what they say: a PASS with an
+ * open blocking finding is a contradiction, and a FAIL with nothing open and
+ * blocking gives the owner nothing to fix.
+ */
+export const ReviewReportArtifactSchema = z
+  .strictObject({
+    taskId: z.string().min(1),
+    verdict: z.enum(["PASS", "FAIL"]),
+    findings: z.array(ReviewFindingSchema),
+    /** The files the reviewer actually read. A review that read nothing reviewed nothing. */
+    reviewed: z.array(z.string().min(1)).min(1),
+  })
+  .superRefine((report, ctx) => {
+    const openBlocking = report.findings.filter((f) => f.status === "OPEN" && f.severity === "BLOCKING");
+    if (report.verdict === "PASS" && openBlocking.length > 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["verdict"],
+        message: `verdict PASS requires no OPEN BLOCKING finding (open: ${openBlocking.map((f) => f.id).join(", ")})`,
+      });
+    }
+    if (report.verdict === "FAIL" && openBlocking.length === 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["findings"],
+        message: "verdict FAIL requires at least one OPEN BLOCKING finding — a failed review with nothing to fix is not actionable",
+      });
+    }
+    const ids = report.findings.map((f) => f.id);
+    if (new Set(ids).size !== ids.length) {
+      ctx.addIssue({ code: "custom", path: ["findings"], message: "review finding ids must be unique" });
+    }
+  });
+export type ReviewReportArtifact = z.infer<typeof ReviewReportArtifactSchema>;
+
 const SecurityFindingSchema = z.object({
   id: z.string().min(1),
   severity: z.enum(["CRITICAL", "HIGH", "MEDIUM", "LOW"]),
@@ -262,6 +319,7 @@ export const SecurityReportArtifactSchema = z
 export type SecurityReportArtifact = z.infer<typeof SecurityReportArtifactSchema>;
 
 export const ARTIFACT_SCHEMAS = {
+  [ArtifactType.REVIEW_REPORT]: ReviewReportArtifactSchema,
   [ArtifactType.QA_REPORT]: QaReportArtifactSchema,
   [ArtifactType.SECURITY_REPORT]: SecurityReportArtifactSchema,
   [ArtifactType.HANDOFF]: HandoffArtifactSchema,
@@ -279,6 +337,7 @@ export class ArtifactValidationError extends Error {
 }
 
 interface ArtifactDataMap {
+  [ArtifactType.REVIEW_REPORT]: ReviewReportArtifact;
   [ArtifactType.QA_REPORT]: QaReportArtifact;
   [ArtifactType.SECURITY_REPORT]: SecurityReportArtifact;
   [ArtifactType.HANDOFF]: HandoffArtifact;

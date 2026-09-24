@@ -12,6 +12,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { installFrameworkWorkflows } from "../../workflow/workflows.testSupport.js";
+import type { RuntimeAgentResult } from "../../runtime/runtimeAdapter.js";
 
 export interface BoundedRunFixture { root: string; targetRoot: string }
 
@@ -31,9 +33,10 @@ function sha256(text: string): string {
 }
 
 /** `roots` collects every created directory so the calling suite can remove them. */
-export function boundedRunProject(roots: string[], git: FixtureGit): BoundedRunFixture {
+export function boundedRunProject(roots: string[], git: FixtureGit, options: { module?: string } = {}): BoundedRunFixture {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "v8-boundedrun-cli-"));
   roots.push(root);
+  installFrameworkWorkflows(root);
   const targetRoot = fs.mkdtempSync(path.join(os.tmpdir(), "v8-boundedrun-cli-target-"));
   roots.push(targetRoot);
   git(targetRoot, "init", "-b", "main");
@@ -123,7 +126,6 @@ Deliver one independently verifiable contract-preserving task.
 Objective: Return the existing order summary for an empty order.
 Why: Clients need a stable empty-order response.
 Owner: backend-engineer
-Tier: T4
 Depends on: none
 Traceability: REQ-007, AC-007.2, DES-011
 Produces: Contract:OrderSummary.v2
@@ -168,7 +170,7 @@ None.
 Undated canonical fixture; no human sign-off is implied.
 `;
 
-  const docs = path.join(root, "_docs", "module", "orders");
+  const docs = path.join(root, "_docs", "module", options.module ?? "orders");
   fs.mkdirSync(docs, { recursive: true });
   fs.writeFileSync(path.join(docs, "plan.md"), plan);
   fs.writeFileSync(path.join(docs, "requirement.md"), requirement);
@@ -177,8 +179,60 @@ Undated canonical fixture; no human sign-off is implied.
   const templateContracts = path.join(fileURLToPath(new URL("../../../../templates/contracts", import.meta.url)));
   const contracts = path.join(root, "contracts");
   fs.mkdirSync(contracts, { recursive: true });
-  for (const role of ["backend-engineer", "qa-engineer"]) {
-    fs.copyFileSync(path.join(templateContracts, `${role}.yaml`), path.join(contracts, `${role}.yaml`));
+  // Every role's contract: the engine's reviewer-independence check reads them all.
+  for (const file of fs.readdirSync(templateContracts).filter((name) => name.endsWith(".yaml"))) {
+    fs.copyFileSync(path.join(templateContracts, file), path.join(contracts, file));
   }
   return { root, targetRoot };
 }
+
+/**
+ * V13 TASK-007 — plays every stage of the plan-task workflow the one engine
+ * runs for a bounded task, for a mock runtime's `respond`: the owner engineer
+ * writes `README.md` in the Target (inside its boundary write list), the
+ * reviewer an approving `review.md`, and QA a verifying `qa.md` for BE-004,
+ * both into the runtime's workspace. Returns the adapter-result overrides for
+ * the call (a scripted engineer failure), or undefined for an ordinary pass.
+ *
+ * (It takes the workspace map rather than constructing an adapter: only the
+ * composition root and tests may name a concrete adapter - portBoundaries.)
+ */
+export function playPlanTaskStage(
+  req: { role: string },
+  workspaceFiles: Map<string, string>,
+  targetRoot: string,
+  options: { module?: string; engineerCall?: number; engineer?: (call: number) => Partial<RuntimeAgentResult> | undefined } = {},
+): Partial<RuntimeAgentResult> | undefined {
+  const module = options.module ?? "orders";
+  if (req.role === "reviewer") {
+    workspaceFiles.set(
+      `_docs/module/${module}/review.md`,
+      `# review.md — ${module}\n\n## Open Findings — all phases\nNone.\n\n## Review Round 1 — BE-004\n**Verdict:** ✅ Approved\n\n## Reviewed\n- README.md\n`,
+    );
+    return undefined;
+  }
+  if (req.role === "qa-engineer") {
+    workspaceFiles.set(
+      `_docs/module/${module}/qa.md`,
+      `# qa.md — ${module}\n\n## Round 1 — verify\n\n**Status:** ✅ Verified (FULL)\n\n## Per-Task Results\n\n` +
+        "- BE-004: ✅ Verified — the empty-order response stays stable.\n" +
+        "- AC-007.2: ✅ Verified — zero-total response confirmed by inspection.\n" +
+        "- DES-011: ✅ Verified — serializer boundary preserved.\n",
+    );
+    return undefined;
+  }
+  const scripted = options.engineer?.(options.engineerCall ?? 1);
+  if (scripted) return scripted;
+  fs.writeFileSync(path.join(targetRoot, "README.md"), "# orders\n\nReviewed the empty-order summary path.\n");
+  return undefined;
+}
+
+/** The guard hook file a mock runtime needs so its pre-tool guard verifies. */
+export const PLAN_TASK_GUARD_FILES: Record<string, string> = {
+  ".mock/guards.json": JSON.stringify({
+    hooks: {
+      PreToolUse: [{ hooks: [{ command: "node .claude/hooks/block-path-permissions.js" }] }],
+      Stop: [{ hooks: [{ command: "node .claude/hooks/require-green-before-stop.js" }] }],
+    },
+  }),
+};

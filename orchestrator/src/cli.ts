@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { TEST_STRATEGY_TRIGGERS, type ClassificationInput, type TestStrategyTrigger } from "./classification/taskClassifier.js";
 import { FLAG_TO_CLASSIFICATION, type BooleanClassificationKey } from "./classification/classificationFlags.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
+import { createRoleLaneStageGuard } from "./orchestrator/stageGuards.js";
 import { DEFAULT_BUDGET, type Budget } from "./cost/costControl.js";
 import { readModuleDoc } from "./agents/moduleDocs.js";
 import { RUNTIME_IDS, type RuntimeId } from "./runtime/runtimeSupport.js";
@@ -39,7 +40,8 @@ import { runMigrateVerb } from "./cli/verbs/migrate.js";
 import { runRollbackVerb } from "./cli/verbs/rollback.js";
 import { runListBackupsVerb } from "./cli/verbs/listBackups.js";
 import { printListing } from "./cli/rendering/taskListing.js";
-import { runTaskLoop } from "./cli/runTaskLoop.js";
+import { runTasks } from "./engine/taskRunService.js";
+import { SINGLE_TASK_POLICY } from "./engine/runPolicy.js";
 import { acquireTaskLock, releaseTaskLock, TaskLockedError } from "./concurrency/taskLock.js";
 import { assertNoWorkspaceRunLock } from "./concurrency/workspaceRunLock.js";
 import { Environment, isEnvironment } from "./environment/environment.js";
@@ -48,7 +50,7 @@ import { resolveQaWorkRoots } from "./threeRepo/cliRoots.js";
 import { type TargetBindings } from "./threeRepo/taskBindings.js";
 import { readWorkPlan } from "./docs/planGraph.js";
 import { openTask } from "./cli/composition/taskIntake.js";
-import { composeProductionTaskExecutor } from "./cli/composition/taskExecutor.js";
+import { composeProductionTaskExecutor, taskExecutorOptionsFromArgs } from "./cli/composition/taskExecutor.js";
 import { askCodeIntelConsentAtRunStart } from "./cli/composition/runStartConsent.js";
 import type { CliDependencies } from "./cli/composition/runtimeRegistry.js";
 import { AgentStage } from "./types.js";
@@ -108,7 +110,7 @@ export interface CliArgs {
   checkRepos: boolean;
   /** Check environments.yaml, if one exists, against its schema and exit. Same audience. */
   checkEnvironments: boolean;
-  /** Check every module's requirement/design/plan/review/security doc structure against its schema and exit. Same audience. */
+  /** Check every module's requirement/design/plan/qa/security doc structure against its schema and exit. Same audience. */
   checkDocStructure: boolean;
   /** Check every module document and `##` section against its byte ceiling and exit. Same audience. */
   checkDocSize: boolean;
@@ -235,7 +237,7 @@ export const USAGE =
   "  sta runtimes                                    which runtimes exist and how well each is supported\n" +
   "  sta changed [--project-root <path>] [--json]     surface working-tree changes and deterministic green/red gate status\n" +
   "  sta report  [--output <path>] [--module <name>] [--root <name>] [--project-root <path>]   visual dashboard as a static offline HTML page\n" +
-  `  ${BOUNDED_RUN_USAGE.split("\n").join("\n  ")}   explicit bounded run: intake/preview/freeze, then DEV -> verification -> checkpoint -> coherent QA/repair to a chosen boundary\n` +
+  `  ${BOUNDED_RUN_USAGE.split("\n").join("\n  ")}   explicit bounded run: intake/preview/freeze, then every task through the one task engine (owner engineer + checkpoint -> reviewer -> QA [-> security]) to a chosen boundary\n` +
   "  sta upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
   "  sta migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending\n" +
   "  sta rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups`\n" +
@@ -243,7 +245,7 @@ export const USAGE =
   "  sta roles [--module <name>] [--project-root <path>]   where BA, SA, UXUI and DEV each stand against knowledge/\n" +
   "  sta roles ack <ba|sa|uxui|dev> <id>[,<id>...] --by <name> [--module <name>]   record that a person in that lane has seen those items\n" +
   "  sta roles signoff <ba|sa|uxui|dev> --by <name> [--reject] [--note <text>] [--module <name>]   that lane's own approval gate\n" +
-  "  sta roles review <id> --as <agent>   move a knowledge item draft -> reviewed, with its checklist\n" +
+  "  sta roles review <id>[,<id>...] --by <name>   a person moves a knowledge item draft -> reviewed, with its checklist (agent code review is the reviewer stage STA dispatches, never this)\n" +
   "  sta roles approve <id> --by <name>   move a reviewed item to approved — a person only\n" +
   "  sta roles inbox [<ba|sa|uxui|dev>] [--module <name>]   what each lane has to look at, derived fresh\n" +
   "  sta roles impact <id>[,<id>...]   which lanes changing those items would reach, before changing them\n" +
@@ -751,6 +753,11 @@ export async function runCli(argv: string[], defaultProjectRoot: string, depende
     },
     budget: budgetFor(args),
     stateViewPath: defaultStateViewPath(args.projectRoot),
+    // The runtime executor resolves contracts from this root at dispatch.
+    contractRoot: args.projectRoot,
+    // V13 TASK-007: the role-lane prerequisites are a stage-entry guard of the
+    // engine, always on, reading the task's own Knowledge root.
+    stageEntryGuard: createRoleLaneStageGuard({ projectRoot: args.projectRoot, moduleName: args.module }),
   });
   let lockedTaskId: string | undefined;
 
@@ -808,12 +815,21 @@ export async function runCli(argv: string[], defaultProjectRoot: string, depende
       { interactive: process.stdin.isTTY === true },
     );
 
-    const composition = await composeProductionTaskExecutor(args, taskId, orchestrator, store, dependencies);
-
-    return await runTaskLoop(orchestrator, registry, composition.executor, {
-      log: (message) => console.log(message),
-      error: (message) => console.error(message),
+    // `sta run` is one task through the one task-run service (V13 TASK-007):
+    // the same engine, stage guards, evidence and completion a multi-task run
+    // uses; SINGLE_TASK_POLICY only says where to stop.
+    const result = await runTasks({
+      registry,
+      store,
+      taskIds: [orchestrator.taskId],
+      executorFor: async (running) => (await composeProductionTaskExecutor(taskExecutorOptionsFromArgs(args), running.taskId, running, store, dependencies)).executor,
+      policy: SINGLE_TASK_POLICY,
+      io: {
+        log: (message) => console.log(message),
+        error: (message) => console.error(message),
+      },
     });
+    return result.exitCode;
   } finally {
     if (lockedTaskId) releaseTaskLock(args.projectRoot, lockedTaskId);
     registry.close();

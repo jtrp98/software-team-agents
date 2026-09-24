@@ -137,7 +137,7 @@ describe("contract-bound QA package", () => {
       files: [{ path: "src/orders/summary.ts" }],
       expected: "zero total for an empty order",
       observed: "throws on empty line items",
-      evidence_refs: ["review.md#round-1"],
+      evidence_refs: ["qa.md#round-1"],
       retryable: true,
       requires_human: false,
       status: "OPEN",

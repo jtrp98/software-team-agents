@@ -72,18 +72,18 @@ business-analyst → system-analyst → project-manager → [test-planner when s
 | Agent | Owns | Reads | Writes |
 |---|---|---|---|
 | `setup` | project skeleton | `design.md` (optional), stack files | scaffolding, `schema.prisma`, `.env`, `.gitignore` |
-| `business-analyst` | business requirements | `review.md`, `design.md`, `requirement.md` (amend) | `requirement.md` |
-| `system-analyst` | feasibility + data model | `requirement.md`, `review.md`, stack files | `design.md` |
+| `business-analyst` | business requirements | `qa.md`, `design.md`, `requirement.md` (amend) | `requirement.md` |
+| `system-analyst` | feasibility + data model | `requirement.md`, `qa.md`, stack files | `design.md` |
 | `project-manager` | work graph — phased task list as a validated dependency DAG (`sta --check-plan`) | `design.md`, `requirement.md`, `status.md`'s Scaffold line | `plan.md` |
 | `test-planner` | shared test strategy for cross-task, multi-system, migration, security, or release work | `requirement.md`, `design.md`, `plan.md` | conditional `test-plan.md` |
 | `uxui-designer` | UX/UI analysis + recommendations (read-only consultant; drafts only, a person signs off) | `requirement.md`, `design.md`, design sources under `knowledge/_sources/design/<module>/`, Figma via read-only MCP, Claude Design via fail-closed MCP (draft-only) | `_docs/module/*/uxui/**`, `knowledge/*/ux-design/**` (`UX-*` drafts) |
-| `frontend-engineer` | UI code | `plan.md`, `design.md`, `requirement.md`, optional `test-plan.md`, `review.md`, the module's signed UX artifact | app code |
-| `backend-engineer` | API/DB code | `plan.md`, `design.md`, `requirement.md`, optional `test-plan.md`, `review.md` | app code |
-| `qa-engineer` | verification | all docs + `schema.prisma` + real code | `review.md`, `review/phase-N.md`, task Status cells and add-only `🔒 Security gate` in `plan.md` |
-| `security` | security audit | `requirement.md`, `design.md`, `review.md`, `schema.prisma`, real code | `security.md` |
-| `devops` | deploy, CI, migrations | `status.md`, `review.md`, `security.md`, `plan.md`, `design.md`, `schema.prisma`, stack files | `deploy.md`, infra files |
+| `frontend-engineer` | UI code | `plan.md`, `design.md`, `requirement.md`, optional `test-plan.md`, `qa.md`, the module's signed UX artifact | app code |
+| `backend-engineer` | API/DB code | `plan.md`, `design.md`, `requirement.md`, optional `test-plan.md`, `qa.md` | app code |
+| `qa-engineer` | verification | all docs + `schema.prisma` + real code | `qa.md`, `qa/phase-N.md`, task Status cells and add-only `🔒 Security gate` in `plan.md` |
+| `security` | security audit | `requirement.md`, `design.md`, `qa.md`, `schema.prisma`, real code | `security.md` |
+| `devops` | deploy, CI, migrations | `status.md`, `qa.md`, `security.md`, `plan.md`, `design.md`, `schema.prisma`, stack files | `deploy.md`, infra files |
 
-**Three-repo note:** every path above that sits in the module folder (`_docs/module/<name>/…`) or under `knowledge/` is a **Knowledge-repository** location, written only from the Knowledge workspace (`software-team-agents open`). Analysis-role Writes columns — requirement/design/plan/test-plan and everything the `business-analyst`…`uxui-designer` rows produce — are that workspace's own artifacts. Engineer/QA/security/devops stages run orchestrated with a named Target; they write app code plus their own docs (`review.md`, `security.md`, `deploy.md`) there and read Knowledge as read-only context. `qa-engineer` evaluates every bound Target and updates `plan.md`'s Status cells directly (V10 TASK-028 — the old relay table and its label are retired; the Status-cell edit is bounded to those cells by prompt and QA review, and every plan.md lives in the one Knowledge repo).
+**Three-repo note:** every path above that sits in the module folder (`_docs/module/<name>/…`) or under `knowledge/` is a **Knowledge-repository** location, written only from the Knowledge workspace (`software-team-agents open`). Analysis-role Writes columns — requirement/design/plan/test-plan and everything the `business-analyst`…`uxui-designer` rows produce — are that workspace's own artifacts. Engineer/QA/security/devops stages run orchestrated with a named Target; they write app code plus their own docs (`qa.md`, `security.md`, `deploy.md`) there and read Knowledge as read-only context. `qa-engineer` evaluates every bound Target and updates `plan.md`'s Status cells directly (V10 TASK-028 — the old relay table and its label are retired; the Status-cell edit is bounded to those cells by prompt and QA review, and every plan.md lives in the one Knowledge repo).
 
 **Ownership domains:** “Three-Repo” names three repository types, not only three ownership domains. Local **Runtime State** is the fourth domain: `.workflow/state.db`, its generated view, execution packets, verification evidence, and run artifacts are machine-local/regenerable and gitignored. The ownership guard explicitly refuses to classify `packets/`, `evidence/`, or `runs/` as Knowledge-owned, even where compatibility paths place other `.workflow/` metadata under a Knowledge root.
 
@@ -113,8 +113,8 @@ _docs/
         ├── plan.md              ← project-manager  (task Status cell + added security gates: qa-engineer)
         ├── test-plan.md         ← test-planner
         ├── uxui/design.md       ← uxui-designer (the lane artifact a person signs off before frontend work)
-        ├── review.md            ← qa-engineer  (open issues + current round + unverified behaviour)
-        ├── review/
+        ├── qa.md                ← qa-engineer  (open issues + current round + unverified behaviour)
+        ├── qa/
         │   └── phase-N.md       ← qa-engineer  (archived rounds — read on demand only)
         ├── security.md          ← security
         └── deploy.md            ← devops
@@ -203,4 +203,4 @@ their prompts point there rather than repeating a universal stack.
 
 ## Coming back to a project
 
-Read `_docs/status.md` first — it says which modules exist, how far each has got, and which agent should pick it up. Then open that module's docs in order: `requirement.md` → `design.md` → `plan.md` (unchecked boxes = remaining work) → `review.md` → `security.md` → `deploy.md`.
+Read `_docs/status.md` first — it says which modules exist, how far each has got, and which agent should pick it up. Then open that module's docs in order: `requirement.md` → `design.md` → `plan.md` (unchecked boxes = remaining work) → `qa.md` → `security.md` → `deploy.md`.

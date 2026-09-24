@@ -24,8 +24,9 @@ import { MemoryTaskStore } from "../store/memoryStore.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { RunLog } from "../observability/runLog.js";
 import { decidePending, testHumanVerifier } from "../gates/humanDecision.testSupport.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
-const human = { humanDecisionVerifier: testHumanVerifier() };
+const human = { humanDecisionVerifier: testHumanVerifier(), stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD };
 
 function qaReport(status: "PASS" | "FAIL"): QaReportArtifact {
   return {

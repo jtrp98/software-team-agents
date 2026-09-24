@@ -1,6 +1,6 @@
 import { TaskState } from "../types.js";
 import { canTransition, transition, type TaskMachine } from "../state/taskState.js";
-import type { QaReportArtifact, SecurityReportArtifact } from "../artifacts/schemas.js";
+import type { QaReportArtifact, ReviewReportArtifact, SecurityReportArtifact } from "../artifacts/schemas.js";
 import { canCloseWith, type QaModeDecision } from "../qa/mode.js";
 import { checkQaVerdictCoverage } from "../qa/verdict.js";
 import {
@@ -29,6 +29,8 @@ export interface GateContext {
   designAssessment?: DesignGateAssessment;
   /** Derived from the ledger, like `requirementApproved`. */
   designApproved?: boolean;
+  /** The reviewer's parsed verdict (V13 TASK-006); leaving REVIEW forward requires PASS. */
+  reviewReport?: ReviewReportArtifact;
   qaReport?: QaReportArtifact;
   securityReport?: SecurityReportArtifact;
   /** Derived from the ledger, like `requirementApproved`. */
@@ -122,6 +124,12 @@ export function checkGate(from: TaskState, to: TaskState, ctx: GateContext): Gat
             ? designGateReason(ctx.designAssessment)
             : "DESIGN_APPROVED required before development can start",
         };
+  }
+
+  if (from === TaskState.REVIEW && to !== TaskState.REVIEW_FAILED) {
+    return ctx.reviewReport?.verdict === "PASS"
+      ? { allowed: true }
+      : { allowed: false, reason: "REVIEW_PASS required — review-report.verdict must be PASS" };
   }
 
   if (from === TaskState.QA && to !== TaskState.QA_FAILED) {

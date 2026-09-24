@@ -10,7 +10,8 @@ import { planRecheck } from "./evidence.js";
 import { buildQaScope } from "./scope.js";
 import { ArtifactType, type QaReportArtifact } from "../artifacts/schemas.js";
 import { runDeterministicVerification } from "./deterministic.js";
-import { PASSING_VERIFICATION, persistedSweep } from "../evidence/stageEvidence.testSupport.js";
+import { PASSING_VERIFICATION, persistedSweep, withRequiredEvidence } from "../evidence/stageEvidence.testSupport.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 /**
  * QA optimization regression suite: each test exercises a *routing promise*
@@ -206,7 +207,7 @@ describe("QA08 orchestrator integration (decision persists; mode lands in the ru
   function newTask() {
     const store = new MemoryTaskStore();
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
-    const orch = new Orchestrator(`T-QA-${Math.random().toString(36).slice(2, 7)}`, classification, { store });
+    const orch = new Orchestrator(`T-QA-${Math.random().toString(36).slice(2, 7)}`, classification, { store, stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
     return { store, orch };
   }
 
@@ -217,6 +218,7 @@ describe("QA08 orchestrator integration (decision persists; mode lands in the ru
         if (req.stage === AgentStage.BACKEND_ENGINEER) {
           return { outcome: { tokens: 10, cost: 0, result: "PASS" }, deterministicVerification: PASSING_VERIFICATION };
         }
+        if (req.stage === AgentStage.REVIEWER) return withRequiredEvidence(req, { outcome: { tokens: 10, cost: 0, result: "PASS" } });
         // The QA agent answered PASS but in the wrong mode for this decision.
         return {
           outcome: { tokens: 10, cost: 0, result: "PASS" },
@@ -229,6 +231,7 @@ describe("QA08 orchestrator integration (decision persists; mode lands in the ru
     });
 
     await orch.step(exec); // backend
+    await orch.step(exec); // reviewer
     const status = await orch.step(exec); // qa
     expect(status.kind).toBe("WAITING_FOR_HUMAN");
 
@@ -248,6 +251,7 @@ describe("QA08 orchestrator integration (decision persists; mode lands in the ru
         if (req.stage === AgentStage.BACKEND_ENGINEER) {
           return { outcome: { tokens: 10, cost: 0, result: "PASS" }, deterministicVerification: PASSING_VERIFICATION };
         }
+        if (req.stage === AgentStage.REVIEWER) return withRequiredEvidence(req, { outcome: { tokens: 10, cost: 0, result: "PASS" } });
         void req;
         return {
           outcome: { tokens: 10, cost: 0, result: "PASS" },
@@ -257,7 +261,8 @@ describe("QA08 orchestrator integration (decision persists; mode lands in the ru
       },
       changedFiles: () => ["src/a.ts"],
     });
-    await orch.step(exec);
+    await orch.step(exec); // backend
+    await orch.step(exec); // reviewer
     const status = await orch.step(exec);
     // Past QA entirely — this minimal pipeline has no devops stage, so a PASS
     // round with a matching decision carries the task all the way through.

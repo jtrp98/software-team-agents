@@ -5,7 +5,7 @@ description: Bug fix where requirement and schema are already clear - BA, SA and
 trigger:
   kind: signal
   signal: isClearBugFix
-  priority: 5
+  priority: 6
 level: SMALL
 requires_human_approval: false
 steps:
@@ -15,6 +15,7 @@ steps:
     when: touchesBackend
   - agent: frontend-engineer
     when: touchesFrontend
+  - agent: reviewer
   - agent: qa-engineer
   - agent: security
     when: touchesSensitiveArea

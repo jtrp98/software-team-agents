@@ -25,9 +25,29 @@ import { contractGuardResolver } from "../../runtime/runtimeGuards.js";
 import { GitCommandLayer } from "../../git/commandLayer.js";
 import { inspectRepositoryPreflight } from "../../git/preflight.js";
 import { createRunId } from "../../run/journal.js";
-import { BoundedRunController, type AwaitingHumanTask, type ControllerExitKind } from "../../run/boundedRunController.js";
-import { createProductionBoundedRunServices } from "../../run/boundedRunServices.js";
-import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "../../runtime/runtimeRegistry.js";
+import { LedgerAttemptBoundary, workRootForStage } from "../../run/ledgerAttemptExecutor.js";
+import {
+  boundedRunStageGuard,
+  driveBoundedRun,
+  engineViewOfRun,
+  type AwaitingHumanTask,
+} from "../../engine/boundedRunService.js";
+import { boundedRunPolicy } from "../../engine/runPolicy.js";
+import { TaskRegistry } from "../../orchestrator/taskRegistry.js";
+import { defaultStateViewPath } from "../../store/stateView.js";
+import { DEFAULT_BUDGET } from "../../cost/costControl.js";
+import { configuredTokenBudget } from "../support.js";
+import { acquireTaskLock, releaseTaskLock, TaskLockedError } from "../../concurrency/taskLock.js";
+import {
+  composeProductionTaskExecutor,
+  dependencyEvidenceFromStore,
+  selectRuntime,
+  type RuntimeSelection,
+  type TaskExecutorOptions,
+} from "../composition/taskExecutor.js";
+import type { QaWorkRoot } from "../../threeRepo/cliRoots.js";
+import { plannedTier } from "../composition/taskIntake.js";
+import { RuntimeRegistry } from "../../runtime/runtimeRegistry.js";
 import { RUNTIME_IDS, type RuntimeId } from "../../runtime/runtimeSupport.js";
 import type { RuntimeAutonomy } from "../../runtime/runtimeAdapter.js";
 import { loadStaConfig, StaConfigMissingError } from "../../packaging/staConfig.js";
@@ -57,9 +77,12 @@ import { parseCanonicalPlan } from "../../docs/planTask.js";
  * by a canonical `plan.md`, preview exactly what would freeze (task
  * set/order, plan hash, gates, base revision), then — unless `--dry-run` —
  * freeze it for real with `compileAndRegisterPlan` and drive it to the
- * chosen boundary with `BoundedRunController` (T-V8-020) through the
- * production `BoundedRunServices` (T-V8-021's own new wiring,
- * `run/boundedRunServices.ts`).
+ * chosen boundary through the one task engine (V13 TASK-007,
+ * `engine/boundedRunService.ts`): every task runs the plan-task workflow
+ * (owner engineer, reviewer, QA, security when sensitive) exactly as
+ * `sta run` would, with the same executor composition; `--until` and the
+ * repair budget are a `RunPolicy` (limits only), and engineer writes land
+ * through the ledger-attempt boundary (`run/ledgerAttemptExecutor.ts`).
  *
  * Preview and execution are provably the same computation, not two that
  * merely ought to agree: both call `resolvePlanScope`/`previewPlanRegistration`
@@ -109,7 +132,7 @@ export interface BoundedRunArgs {
 export const BOUNDED_RUN_USAGE =
   "sta bounded-run --module <name> (--all | --phase <n> | --task <id>[,<id>...]) [--until next-gate|qa|done] [--dry-run] [--autonomy edit|full] [--runtime <id>] [--model <name>] [--effort <name>] [--target-root <path>] [--target-id <id>...] [--root <name>] [--knowledge-root <path>] [--run-branch <name>] [--project-root <path>] [--state-db <path>] <classification override flags>\n" +
   "sta bounded-run --resume <run-id> [--module <name>] [--until next-gate|qa|done] [--dry-run] [--autonomy edit|full] [--project-root <path>] [--state-db <path>]\n" +
-  "  One initial command previews scope/order/gates/routes, then (without --dry-run) freezes and runs to the chosen boundary through DEV, deterministic verification and coherent QA/repair. Never waives a hard gate.\n" +
+  "  One initial command previews scope/order/gates/routes, then (without --dry-run) freezes and runs every task through the one task engine — owner engineer (frozen attempt + checkpoint), reviewer, QA, security when sensitive — to the chosen boundary. Never waives a hard gate.\n" +
   "  --root <name> selects the named Knowledge root (V11); --knowledge-root <path> is the deprecated compatibility channel — it must canonical-match exactly one registered root and is refused together with --root. A resume always uses the root frozen in the run.\n" +
   `  classification override flags (optional; deterministic classifyTask() remains authority): ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
 
@@ -318,16 +341,6 @@ export function renderAwaitingHuman(awaiting: readonly AwaitingHumanTask[]): str
   return lines;
 }
 
-function exitCodeFor(kind: ControllerExitKind): number {
-  switch (kind) {
-    case "COMPLETED": return 0;
-    case "HALTED": return 1;
-    case "REFUSED": return 2;
-    case "INTERRUPTED": return 130;
-    case "GATE": return 4;
-  }
-}
-
 function renderPreview(input: {
   module: string;
   scope: PlanRunScope;
@@ -363,6 +376,27 @@ function renderPreview(input: {
   return lines;
 }
 
+/** The QA/deterministic roots of a single-repo bounded task: its compiled QA roots, else the frozen Target. */
+function qaRootsFor(runtimeTask: import("../../orchestrator/runtimeTask.js").RuntimeTask | null, targetRoot: string): QaWorkRoot[] {
+  const roots: QaWorkRoot[] = [];
+  if (runtimeTask && "version" in runtimeTask && runtimeTask.version === 2) {
+    const qaStage = runtimeTask.scope.work_roots.filter((root) => root.stage === AgentStage.QA_ENGINEER);
+    const seen = new Set<string>();
+    for (const root of qaStage.length > 0 ? qaStage : runtimeTask.scope.work_roots) {
+      const key = `${root.target_id ?? ""}::${root.root}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      roots.push(root.target_id ? { targetId: root.target_id, path: root.root } : { path: root.root });
+    }
+  }
+  return roots.length > 0 ? roots : [{ path: targetRoot }];
+}
+
+/** The stages that verify a Target read-only: their packets carry its read roots, never write access to its code. */
+function isVerifierStage(stage: AgentStage): boolean {
+  return stage === AgentStage.REVIEWER || stage === AgentStage.QA_ENGINEER || stage === AgentStage.SECURITY;
+}
+
 /** Same comparison `git/guardedRun.ts` uses for a resolved root. */
 function sameRoot(left: string, right: string): boolean {
   return path.resolve(left).toLocaleLowerCase("en-US") === path.resolve(right).toLocaleLowerCase("en-US");
@@ -370,10 +404,8 @@ function sameRoot(left: string, right: string): boolean {
 
 export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: string, dependencies: CliDependencies = {}): Promise<number> {
   const args = parseBoundedRunArgs(rest, defaultProjectRoot);
-  const { store, registry } = openStore(args.projectRoot, args.stateDb);
-  const ledger = new SqliteRunLedger(store, { projectRoot: args.projectRoot });
   const runtimeRegistry: RuntimeRegistry = (dependencies.createRuntimeRegistry ?? createProductionRuntimeRegistry)(args.projectRoot);
-  const defaultRuntimeId = args.runtime ?? DEFAULT_RUNTIME_ID;
+  const defaultRuntimeId = selectRuntime({ projectRoot: args.projectRoot, runtime: args.runtime, model: args.model, effort: args.effort, phases: [], noDeterministicGate: false, noQaOptimization: false, noDocumentGate: false }, "").defaultRuntimeId;
 
   const installationConfigPath = installationConfigOverride();
   let installation: InstallationConfig | undefined;
@@ -425,6 +457,10 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
   // about (ADR-006 Option A); filled in by whichever branch resolves the run.
   const codeIntelConsentTargets: { targetId: string; path: string }[] = [];
 
+  // Opened only once every root is resolved: each refusal above returns
+  // before anything is opened, so none of them can leak the state database.
+  const { store, registry } = openStore(args.projectRoot, args.stateDb);
+  const ledger = new SqliteRunLedger(store, { projectRoot: args.projectRoot });
   try {
     let runId: string;
 
@@ -487,11 +523,17 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
       console.log(
         `[bounded-run] resuming run ${runId}: status=${run.status} boundary=${run.boundary} task_order=${run.task_order.join(",")}`,
       );
-      const readiness = ledger.readiness(runId);
+      // One status projection: the engine's own, with the guard the run is driven with.
+      const views = engineViewOfRun(ledger, store, run);
+      const group = (predicate: (item: (typeof views)[number]) => boolean) => views.filter(predicate).map((item) => item.task.task_id).join(",") || "none";
       console.log(
-        `[bounded-run] readiness: ready=${readiness.ready.join(",") || "none"} waiting=${readiness.waiting.map((w) => w.task_id).join(",") || "none"} ` +
-          `blocked=${readiness.blocked.join(",") || "none"} settled=${readiness.settled.join(",") || "none"}`,
+        `[bounded-run] readiness: done=${group((item) => item.status === "DONE")} blocked=${group((item) => item.status === "BLOCKED")} ` +
+          `waiting=${group((item) => item.view?.kind === "WAITING_FOR_DEPENDENCY")} ` +
+          `runnable=${group((item) => item.status !== "DONE" && item.status !== "BLOCKED" && item.view?.kind !== "WAITING_FOR_DEPENDENCY")}`,
       );
+      for (const item of views.filter((view) => view.status === "BLOCKED")) {
+        console.log(`[bounded-run]   ${item.task.task_id}: ${item.reason.replace(/\s+/g, " ").trim()}`);
+      }
       if (args.dryRun) return 0;
       // The frozen run's own Target is what every ledger artifact answers to;
       // tasks bound to further Targets were consented for when the run started.
@@ -596,6 +638,7 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
                 ![
                   AgentStage.BACKEND_ENGINEER,
                   AgentStage.FRONTEND_ENGINEER,
+                  AgentStage.REVIEWER,
                   AgentStage.QA_ENGINEER,
                   AgentStage.SECURITY,
                   AgentStage.DEVOPS,
@@ -610,7 +653,9 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
                 bindingWarning: () => {},
               });
               for (const root of preflightRoots.workRoots) {
-                if (stage === AgentStage.QA_ENGINEER || root.access === "write") {
+                // Verifier stages (reviewer, QA, security) carry the read-only Target roots they
+                // verify; a writer is bound only where it writes.
+                if (isVerifierStage(stage) || root.access === "write") {
                   targetWorkRoots.push({ stage, targetId: root.targetId, path: root.path, access: root.access });
                 }
               }
@@ -706,14 +751,16 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
                 targetWorkRoots: taskWorkRootsMap.get(task.id),
               };
             }
+            // Single-repo: every stage of the task's plan-task workflow runs in
+            // the frozen Target (owner engineer, reviewer, QA, security).
+            const pipeline = preview.tasks.find((item) => item.taskId === task.id)?.classification.pipeline ?? [task.owner as AgentStage];
             return {
               projectRoot: args.projectRoot,
               docsRoot,
               workflow: "bounded-run",
-              targetWorkRoots: [
-                { stage: task.owner as AgentStage, targetId, path: targetRoot },
-                { stage: AgentStage.QA_ENGINEER, targetId, path: targetRoot },
-              ],
+              targetWorkRoots: pipeline
+                .filter((stage) => stage !== AgentStage.HUMAN)
+                .map((stage) => ({ stage, targetId, path: targetRoot })),
             };
           },
         });
@@ -737,30 +784,117 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
     // headless stdin never asks, and the hook itself never blocks the run.
     await askCodeIntelConsentAtRunStart(codeIntelConsentTargets, { interactive: process.stdin.isTTY === true });
 
-    const services = createProductionBoundedRunServices({
-      ledger, store, registry: runtimeRegistry,
-      projectRoot: contractRoot, targetRoot,
+    const frozenRun = ledger.readRun(runId)!;
+    const moduleName = frozenRun.module;
+    // The engine a bounded run drives is the one `sta run` drives: same
+    // registry shape, same stage-entry guard (the frozen run's Knowledge
+    // root and module), same executor composition.
+    const engineRegistry = new TaskRegistry({
+      store,
+      stateViewPath: defaultStateViewPath(args.projectRoot),
+      contractRoot,
+      budget: { ...DEFAULT_BUDGET, token_budget: configuredTokenBudget(args.projectRoot) },
+      stageEntryGuard: boundedRunStageGuard(frozenRun),
+    });
+    const executorOptions: TaskExecutorOptions = {
+      projectRoot: args.projectRoot,
+      module: moduleName,
+      rootName: args.rootName,
+      autonomy: args.autonomy,
+      runtime: args.runtime,
+      model: args.model,
+      effort: args.effort,
+      phases: [],
+      noDeterministicGate: false,
+      noQaOptimization: false,
+      noDocumentGate: false,
       // V10 TASK-025 — runtime state has one home, the Knowledge root, so
       // packets/locks never land in whatever cwd the run was commanded from.
       runtimeStateRoot: knowledgeRoot,
-      defaultRuntimeId,
-      // `--runtime` stays in `defaultRuntimeId` (its shipped bounded-run meaning);
-      // only model/effort ride the flag lane that reaches resolveRuntimeRoute.
-      routingFlags: args.model || args.effort ? { model: args.model, effort: args.effort } : undefined,
-      moduleName: args.module ?? ledger.readRun(runId)!.module,
-      docsRoot,
+    };
+    const selections = new Map<string, RuntimeSelection>();
+    const runtimeSelection = (taskId: string): RuntimeSelection => {
+      let selection = selections.get(taskId);
+      if (!selection) {
+        selection = selectRuntime(executorOptions, taskId);
+        selections.set(taskId, selection);
+      }
+      return selection;
+    };
+    const boundary = new LedgerAttemptBoundary({
+      ledger,
+      runId,
+      store,
+      runtimeStateRoot: knowledgeRoot,
+      contractRoot,
+      registry: runtimeRegistry,
+      runtimeSelection,
+      taskTier: (taskId) => plannedTier(executorOptions, taskId),
       guards: contractGuardResolver(contractRoot),
-      autonomy: args.autonomy,
+      dependencyEvidence: (taskId) => dependencyEvidenceFromStore(store, taskId),
       adapterVersion: cliVersion(),
     });
-    const controller = new BoundedRunController({ ledger, runId, runtimeStateRoot: knowledgeRoot, services });
-    const result = await controller.run();
-    console.log(`[bounded-run] ${result.kind}: ${result.reason} (attempts=${result.launchedAttempts}, qa_rounds=${result.qaRounds})`);
-    for (const line of renderAwaitingHuman(result.awaitingHuman)) console.log(line);
-    if (result.kind === "GATE" || result.kind === "HALTED") {
-      console.log(`[bounded-run] next: resolve the gate, then \`sta bounded-run --resume ${result.runId} --module ${args.module ?? ledger.readRun(runId)!.module}\`, or \`sta status\`/\`sta report\` for the wider picture.`);
+
+    const locked: string[] = [];
+    try {
+      for (const taskId of frozenRun.task_order) {
+        acquireTaskLock(args.projectRoot, taskId);
+        locked.push(taskId);
+      }
+    } catch (error) {
+      for (const taskId of locked) releaseTaskLock(args.projectRoot, taskId);
+      if (error instanceof TaskLockedError) {
+        console.error(`[bounded-run] ${error.message}`);
+        return 4;
+      }
+      throw error;
     }
-    return exitCodeFor(result.kind);
+
+    let outcome;
+    try {
+      outcome = await driveBoundedRun({
+        ledger,
+        runId,
+        registry: engineRegistry,
+        store,
+        boundary,
+        // The boundary frozen with the run (a resume keeps it, as it always has).
+        policy: boundedRunPolicy(frozenRun.boundary),
+        io: { log: (message) => console.log(message), error: (message) => console.error(message) },
+        executorFor: async (orchestrator) => {
+          const runtimeTask = store.loadTask(orchestrator.taskId)?.runtimeTask ?? null;
+          const stageRoots = Object.fromEntries(
+            orchestrator.classification.pipeline.map((stage) => [stage, workRootForStage(runtimeTask, stage, targetRoot)]),
+          ) as Partial<Record<AgentStage, string>>;
+          return (await composeProductionTaskExecutor(
+            {
+              ...executorOptions,
+              stageRoots,
+              runtimeSelection,
+              frozenAttemptFor: boundary.frozenAttemptFor,
+              // Every packet of this run answers to the run's frozen base (see TaskExecutorOptions).
+              packetBaseRevision: async () => frozenRun.base_sha,
+              // A single-repo run's QA and deterministic sweep read the frozen
+              // Target, not the project root the command was issued from.
+              ...(installation ? {} : { qaWorkRoots: () => qaRootsFor(runtimeTask, targetRoot) }),
+            },
+            orchestrator.taskId,
+            orchestrator,
+            store,
+            { createRuntimeRegistry: () => runtimeRegistry },
+          )).executor;
+        },
+      });
+    } finally {
+      for (const taskId of locked) releaseTaskLock(args.projectRoot, taskId);
+      engineRegistry.close();
+    }
+    console.log(`[bounded-run] ${outcome.kind}: ${outcome.reason} (run ${outcome.runId} status=${outcome.runStatus ?? "unknown"})`);
+    for (const line of renderAwaitingHuman(outcome.awaitingHuman)) console.log(line);
+    if (outcome.kind === "GATE" || outcome.kind === "HALTED" || outcome.kind === "BOUNDARY") {
+      console.log(`[bounded-run] next: resolve what stopped it, then \`sta bounded-run --resume ${outcome.runId} --module ${moduleName} --autonomy <edit|full>\`, or \`sta status\`/\`sta report\` for the wider picture.`);
+    }
+    return outcome.exitCode;
   } finally {
     ledger.close();
     registry.close();

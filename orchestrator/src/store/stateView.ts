@@ -117,7 +117,7 @@ export function taskToYamlValue(
     depends_on: task.dependsOn,
     target_bindings: task.targetBindings,
     waiting_on: status.waitingOn ?? [],
-    retry: { qa: task.retries.qa, security: task.retries.security, max: MAX_RETRY },
+    retry: { review: task.retries.review, qa: task.retries.qa, security: task.retries.security, max: MAX_RETRY },
     approvals: {
       // Derived from the ledger below at render time — never read from stored booleans.
       design_approved: approvalFacts.designApproved ?? false,

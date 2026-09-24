@@ -18,7 +18,7 @@ import type { SpawnSyncReturns } from "node:child_process";
  *
  * This interface is only the second part. Everything runtime-neutral —
  * assembling the prompt, slicing module docs to the sections a stage may read
- * (policies/documentation.md §10), reading `review.md`/`security.md` back into
+ * (policies/documentation.md §10), reading `qa.md`/`security.md` back into
  * artifacts, mapping metrics into `RunOutcome` — lives in
  * `runtime/agentRunAssembly.ts` and is shared by every adapter. An adapter that
  * found itself needing to re-do any of that would be a sign the split is in the
@@ -333,7 +333,7 @@ export type SpawnSync = (
  * Files and commands, in the place the agent's work actually lives.
  *
  * Async throughout even though both current implementations are local and
- * synchronous. Not speculative generality: the framework reads `review.md` and
+ * synchronous. Not speculative generality: the framework reads `qa.md` and
  * `security.md` back through this after every QA/security run, and capability
  * detection runs `typecheck` through it — if a runtime is ever driven somewhere the
  * orchestrator's own `fs` cannot see, a synchronous signature could not follow,

@@ -20,6 +20,14 @@ export interface ClassificationInput {
   isIncrementalFeature?: boolean;
   /** Brand-new feature, module, or project — needs full BA normalization/interview handling. */
   isNewFeatureModuleOrProject?: boolean;
+  /**
+   * One task of a canonical `plan.md` (V13 TASK-007): BA, SA and PM already
+   * ran — that is what produced the task — so it is implemented by its owner
+   * engineer, reviewed, and verified by QA per task. Set by
+   * `classificationInputForPlanTask` together with the owner-derived
+   * `touchesBackend`/`touchesFrontend` and the authored risk facts.
+   */
+  isPlanTask?: boolean;
   /** An actual production deploy or DB migration. */
   isProductionDeployOrMigration?: boolean;
   /** Touches auth, personal data, payments, file upload, or untrusted external input. */
@@ -57,6 +65,7 @@ export const ClassificationInputSchema = z
     touchesBusinessRuleOnly: z.boolean().optional(),
     isIncrementalFeature: z.boolean().optional(),
     isNewFeatureModuleOrProject: z.boolean().optional(),
+    isPlanTask: z.boolean().optional(),
     isProductionDeployOrMigration: z.boolean().optional(),
     touchesSensitiveArea: z.boolean().optional(),
     touchesBackend: z.boolean().optional(),
@@ -148,6 +157,14 @@ function includesDesignPhase(input: ClassificationInput): boolean {
   );
 }
 
+/**
+ * V13 TASK-006: every pipeline that verifies the work reviews it first —
+ * the reviewer runs after the last code-producing stage and immediately
+ * before qa-engineer. A pipeline with no QA stage (a copy fix) gets no
+ * reviewer either; that right-sizing call stays the user's.
+ */
+const REVIEW_THEN_VERIFY: readonly AgentStage[] = [AgentStage.REVIEWER, AgentStage.QA_ENGINEER];
+
 function engineerStages(input: ClassificationInput, reasons: string[]): AgentStage[] {
   const stages: AgentStage[] = [];
   // backend-engineer always precedes frontend-engineer within a phase — never parallel.
@@ -188,6 +205,41 @@ function withSecurityGate(
 export function classifyTask(input: ClassificationInput): ClassificationResult {
   const reasons: string[] = [];
 
+  if (input.isPlanTask) {
+    // Checked first: every other signal a plan task carries (schema, security,
+    // deployment/migration) is an authored risk fact about work BA/SA/PM
+    // already analysed, not a request to re-run that analysis. The task gets
+    // its owner, an independent review and QA; the risk facts add only the
+    // obligations every workflow attaches to them — a security pass for a
+    // sensitive or schema-touching change, and the human approval before Done
+    // for a schema change or a production deploy/migration.
+    reasons.push("canonical plan task — BA/SA/PM already ran; owner engineer, reviewer and QA verify it per task");
+    const stages: AgentStage[] = [];
+    if (input.touchesBackend) stages.push(AgentStage.BACKEND_ENGINEER);
+    if (input.touchesFrontend) stages.push(AgentStage.FRONTEND_ENGINEER);
+    if (stages.length === 0) {
+      reasons.push("no engineer stage selected — a plan task is owned by backend-engineer or frontend-engineer");
+    }
+    const schemaAlso = Boolean(input.touchesSchema);
+    const { pipeline, sensitiveGate } = withSecurityGate([...stages, ...REVIEW_THEN_VERIFY], {
+      ...input,
+      touchesSensitiveArea: input.touchesSensitiveArea || schemaAlso,
+    });
+    const requiresHumanApproval = schemaAlso || Boolean(input.isProductionDeployOrMigration);
+    if (requiresHumanApproval) {
+      reasons.push("authored schema/deployment/migration gate — a person approves before the task is Done");
+    }
+    return {
+      level: TaskLevel.MEDIUM,
+      pipeline,
+      requiresHumanApproval,
+      sensitiveGate,
+      touchesSchema: schemaAlso,
+      testStrategyTriggers: [],
+      reasons,
+    };
+  }
+
   if (input.isProductionDeployOrMigration) {
     reasons.push(
       "production deploy/migration — always LARGE_CRITICAL, always requires human approval before devops runs",
@@ -222,7 +274,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
       AgentStage.PROJECT_MANAGER,
       ...conditionalTestPlanner(input, reasons),
       ...engineerStages(input, reasons),
-      AgentStage.QA_ENGINEER,
+      ...REVIEW_THEN_VERIFY,
     ];
     const { pipeline, sensitiveGate } = withSecurityGate(base, {
       ...input,
@@ -249,7 +301,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
       AgentStage.SYSTEM_ANALYST,
       ...conditionalTestPlanner(input, reasons),
       ...engineerStages(input, reasons),
-      AgentStage.QA_ENGINEER,
+      ...REVIEW_THEN_VERIFY,
     ];
     const { pipeline, sensitiveGate } = withSecurityGate(base, {
       ...input,
@@ -273,7 +325,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
       AgentStage.SYSTEM_ANALYST,
       ...conditionalTestPlanner(input, reasons),
       ...engineerStages(input, reasons),
-      AgentStage.QA_ENGINEER,
+      ...REVIEW_THEN_VERIFY,
     ];
     const { pipeline, sensitiveGate } = withSecurityGate(base, input);
     return {
@@ -292,7 +344,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
       AgentStage.SYSTEM_ANALYST,
       ...conditionalTestPlanner(input, reasons),
       ...engineerStages(input, reasons),
-      AgentStage.QA_ENGINEER,
+      ...REVIEW_THEN_VERIFY,
     ];
     const { pipeline, sensitiveGate } = withSecurityGate(base, input);
     return {
@@ -307,7 +359,7 @@ export function classifyTask(input: ClassificationInput): ClassificationResult {
 
   if (input.isClearBugFix) {
     reasons.push("bug fix, requirement and schema already clear — BA/SA/PM all skipped");
-    const base = [...conditionalTestPlanner(input, reasons), ...engineerStages(input, reasons), AgentStage.QA_ENGINEER];
+    const base = [...conditionalTestPlanner(input, reasons), ...engineerStages(input, reasons), ...REVIEW_THEN_VERIFY];
     const { pipeline, sensitiveGate } = withSecurityGate(base, input);
     return {
       level: TaskLevel.SMALL,

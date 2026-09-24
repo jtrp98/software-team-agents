@@ -40,8 +40,8 @@ function asYaml(contract: unknown): string {
 }
 
 describe("the shipped contracts", () => {
-  it("exist for all eleven agents, and not for `human` — a gate is not an agent", () => {
-    expect(CONTRACTED_AGENTS).toHaveLength(11);
+  it("exist for all twelve agents, and not for `human` — a gate is not an agent", () => {
+    expect(CONTRACTED_AGENTS).toHaveLength(12);
     expect(CONTRACTED_AGENTS).not.toContain(AgentStage.HUMAN);
     for (const agent of CONTRACTED_AGENTS) {
       expect(fs.existsSync(contractPath(agent))).toBe(true);
@@ -193,8 +193,8 @@ describe("assertContractsMatchRegistry", () => {
       throw new Error("expected it to throw");
     } catch (e) {
       expect(e).toBeInstanceOf(ContractRegistryMismatchError);
-      // ten missing contract files (only setup's was written) plus the tool mismatch on setup
-      expect((e as ContractRegistryMismatchError).problems.length).toBe(11);
+      // eleven missing contract files (only setup's was written) plus the tool mismatch on setup
+      expect((e as ContractRegistryMismatchError).problems.length).toBe(12);
     }
   });
 
@@ -226,6 +226,20 @@ describe("resolveAuthoritativeContract", () => {
     // Deterministic over the exact on-disk bytes: resolving twice with no
     // change in between must answer the identical digest.
     expect(resolveAuthoritativeContract(stage).digest).toBe(resolved.digest);
+  });
+
+  /** V13 TASK-005 carry-over, closed by TASK-006: the reviewer now has a real contract. */
+  it("resolves the reviewer: schema-valid, registry-consistent, and a stable digest of its exact bytes", () => {
+    const resolved = resolveAuthoritativeContract(AgentStage.REVIEWER);
+    expect(resolved.contract.agent).toMatchObject({ name: "reviewer", role: "reviewer" });
+    expect(diffContractAgainstRegistry(resolved.contract)).toEqual([]);
+    expect(resolved.contract.output.required).toEqual(["review-report"]);
+    expect(resolved.contract.states).toEqual(["REVIEW"]);
+    expect(resolved.contract.permissions.capabilities).not.toContain("write_code");
+    expect(resolved.contract.tools).not.toContain("Bash");
+    const raw = fs.readFileSync(path.join(defaultProjectRoot(), "contracts", "reviewer.yaml"));
+    expect(resolved.digest).toBe(createHash("sha256").update(raw).digest("hex"));
+    expect(resolveAuthoritativeContract(AgentStage.REVIEWER).digest).toBe(resolved.digest);
   });
 
   it("changes digest when the contract's bytes change on disk, and matches sha256 of those exact bytes", () => {

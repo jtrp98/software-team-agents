@@ -83,7 +83,7 @@ sta policy [<area>] [<section>] [--json]             # อ่าน policies/ �
 
 ```bash
 sta roles                                        # ทุก lane ยืนตรงไหนของ module
-sta roles review REQ-101 --as system-analyst     # draft → reviewed (พร้อม checklist)
+sta roles review REQ-101 --by alice             # draft → reviewed โดยคน (พร้อม checklist); agent review คือ reviewer stage ที่ STA dispatch
 sta roles approve REQ-101 --by "<ชื่อคน>"         # reviewed → approved (คนเท่านั้น)
 sta roles signoff ba --by "<ชื่อคน>"              # ปิด gate ของ lane ตัวเอง [--reject] [--note]
 sta roles ack sa REQ-101 --by "<ชื่อคน>"          # record ว่าคนใน lane เห็น item แล้ว

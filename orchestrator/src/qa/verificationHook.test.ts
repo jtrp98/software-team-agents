@@ -4,6 +4,7 @@ import { defaultProjectRoot } from "../agents/agentContract.js";
 import { Orchestrator, type AgentExecutorRequest } from "../orchestrator/orchestrator.js";
 import { AgentStage } from "../types.js";
 import { createPostDevVerificationHook, withPostDevVerificationDisabled } from "./verificationHook.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 function required(
   levels: string[],
@@ -94,6 +95,7 @@ describe("post-Dev deterministic verification hook", () => {
     const orchestrator = new Orchestrator(
       "T-TYPO-VERIFY",
       classifyTask({ isTypoOrCopyOnly: true, touchesBackend: true }),
+      { stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD },
     );
     let modelCalls = 0;
     let qaCalls = 0;

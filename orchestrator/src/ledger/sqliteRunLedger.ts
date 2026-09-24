@@ -204,6 +204,30 @@ export class SqliteRunLedger implements RunLedger {
     });
   }
 
+  projectTaskStatus(runId: string, taskId: string, to: LedgerTaskStatus, options: { reason?: string } = {}): LedgerTask {
+    return this.transaction(() => {
+      const task = this.readTask(runId, taskId);
+      if (!task) throw new LedgerNotFoundError(`task in run ${runId}`, taskId);
+      if (task.status === to) return task;
+      const updated: LedgerTask = { ...task, status: to, updated_at: this.now() };
+      this.db
+        .prepare("UPDATE ledger_tasks SET record = ? WHERE run_id = ? AND task_id = ?")
+        .run(JSON.stringify(LedgerTaskSchema.parse(updated)), runId, taskId);
+      this.appendEvent({
+        run_id: runId,
+        task_id: taskId,
+        at: updated.updated_at,
+        kind: "TASK_STATUS",
+        actor: "engine-projection",
+        reason: options.reason ?? null,
+        from: task.status,
+        to,
+        payload: { projection: true },
+      });
+      return updated;
+    });
+  }
+
   /**
    * Readiness from the frozen DAG plus ledger status — the single authority
    * T-V8-017 requires. It deliberately reads no plan file: the plan the run
@@ -382,7 +406,7 @@ export class SqliteRunLedger implements RunLedger {
 
   // -- read-through to the authorities that already own these facts --------
 
-  retriesFor(taskId: string): { qa: number; security: number } | null {
+  retriesFor(taskId: string): { review: number; qa: number; security: number } | null {
     const task = this.store.loadTask(taskId);
     return task ? { ...task.retries } : null;
   }

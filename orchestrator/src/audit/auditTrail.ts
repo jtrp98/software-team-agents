@@ -100,6 +100,7 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
       };
     }
 
+    case "REVIEW_PASSED":
     case "QA_PASSED":
     case "SECURITY_PASSED": {
       const round = num(payload, "round");
@@ -114,6 +115,7 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
       };
     }
 
+    case "REVIEW_FAILED":
     case "QA_FAILED":
     case "SECURITY_FAILED": {
       const failure = nested(payload, "failure");
@@ -345,7 +347,7 @@ export interface FormatAuditOptions {
  * Renders a trail for a person reading a terminal.
  *
  * One block per event rather than one line: `reason` is routinely a full
- * sentence from `review.md`, and a table that truncates the "why" column defeats
+ * sentence from `qa.md`, and a table that truncates the "why" column defeats
  * the purpose of having recorded it.
  */
 export function formatAuditTrail(entries: readonly AuditEntry[], opts: FormatAuditOptions = {}): string {

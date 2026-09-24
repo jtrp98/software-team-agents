@@ -17,6 +17,7 @@ import { preflightThreeRepoTask } from "./preflight.js";
 import { figmaPatConfigured } from "./identities.js";
 import type { TargetRegistry } from "./targets.js";
 import { declareInstallationConfigOverrideChannelForTest } from "./installation.js";
+import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 declareInstallationConfigOverrideChannelForTest();
 
@@ -185,7 +186,7 @@ describe("Phase 2 task Target bindings", () => {
     const previousConfig = process.env.STA_INSTALLATION_CONFIG;
     process.env.STA_INSTALLATION_CONFIG = config;
     const store = new SqliteTaskStore(path.join(target, "state.db"));
-    const taskRegistry = new TaskRegistry({ store, stateViewPath: defaultStateViewPath(target) });
+    const taskRegistry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(target) });
     try {
       const wrongType = parseArgs(["--task-id", "wrong-type", "--module", "sales", "--bug-fix", "--frontend", "--frontend-target", "api", "--project-root", target], target);
       expect(() => openTask(taskRegistry, wrongType, "wrong-type", store)).toThrow(/type "backend"/);

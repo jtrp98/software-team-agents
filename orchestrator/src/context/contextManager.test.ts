@@ -103,7 +103,7 @@ model Deal { id Int }
 - 2026-08-01 สร้าง
 `;
 
-const REVIEW = `# review — sales-crm
+const QA_DOC = `# qa — sales-crm
 
 ## Open Issues — all phases
 - BE-010 ยัง fail
@@ -338,20 +338,20 @@ describe("design.md — §10 slice", () => {
   });
 });
 
-describe("review.md — §10 slice", () => {
+describe("qa.md — §10 slice", () => {
   it("always keeps Open Issues, which most runs are the only part to act on", () => {
-    const out = selectDocContext(req(AgentStage.BACKEND_ENGINEER, "review"), REVIEW);
+    const out = selectDocContext(req(AgentStage.BACKEND_ENGINEER, "qa"), QA_DOC);
     expect(out.kept).toContain("Open Issues — all phases");
     expect(out.text).toContain("BE-010 ยัง fail");
   });
 
   it("keeps Unverified Behaviour, which outlives the round that produced it", () => {
-    const out = selectDocContext(req(AgentStage.DEVOPS, "review"), REVIEW);
+    const out = selectDocContext(req(AgentStage.DEVOPS, "qa"), QA_DOC);
     expect(out.kept).toContain("Unverified Behaviour — undeployed phases");
   });
 
   it("keeps the current round and drops closed ones", () => {
-    const out = selectDocContext(req(AgentStage.BACKEND_ENGINEER, "review"), REVIEW);
+    const out = selectDocContext(req(AgentStage.BACKEND_ENGINEER, "qa"), QA_DOC);
     expect(out.kept).toContain("Phase 2 verify round 1 (TARGETED)");
     expect(out.skipped).toContain("Phase 1 verify round 2 (FULL)");
   });
@@ -393,8 +393,8 @@ describe("failing open when the structure is not what §10 expects", () => {
     expect(out.reason).toContain("passed through whole");
   });
 
-  it("returns the whole review when there is no Open Issues section to anchor on", () => {
-    const out = selectDocContext(req(AgentStage.BACKEND_ENGINEER, "review"), "# r\n\n## Round 1\n✅\n");
+  it("returns the whole QA report when there is no Open Issues section to anchor on", () => {
+    const out = selectDocContext(req(AgentStage.BACKEND_ENGINEER, "qa"), "# r\n\n## Round 1\n✅\n");
     expect(out.fullDocument).toBe(true);
     expect(out.reason).toContain("Open Issues");
   });
@@ -447,25 +447,25 @@ describe("ContextManager against real files", () => {
 
   /** The policy picks the documents; §10 picks how much of each. */
   it("gives a stage only the documents its context policy allows", () => {
-    const root = fixtureProject({ plan: PLAN, design: DESIGN, review: REVIEW, requirement: "# req\n\nสั้น\n" });
+    const root = fixtureProject({ plan: PLAN, design: DESIGN, qa: QA_DOC, requirement: "# req\n\nสั้น\n" });
     const cm = new ContextManager({ projectRoot: root, moduleName: "sales-crm" });
 
     const backend = cm.forStage(AgentStage.BACKEND_ENGINEER, [2]).map((s) => s.doc);
-    expect(backend).toEqual(expect.arrayContaining(["plan", "design", "requirement", "review"]));
+    expect(backend).toEqual(expect.arrayContaining(["plan", "design", "requirement", "qa"]));
 
     // setup's policy is design-only, so nothing else reaches it however many docs exist.
     expect(cm.forStage(AgentStage.SETUP).map((s) => s.doc)).toEqual(["design"]);
   });
 
   it("never hands a stage a document its policy excludes", () => {
-    const root = fixtureProject({ plan: PLAN, design: DESIGN, review: REVIEW });
+    const root = fixtureProject({ plan: PLAN, design: DESIGN, qa: QA_DOC });
     const cm = new ContextManager({ projectRoot: root, moduleName: "sales-crm" });
     // system-analyst reads requirements and the QA report — not plan.md.
     expect(cm.forStage(AgentStage.SYSTEM_ANALYST, [2]).map((s) => s.doc)).not.toContain("plan");
   });
 
   it("reports what the slicing saved, so a filter that stops working is visible", () => {
-    const root = fixtureProject({ plan: PLAN, design: DESIGN, review: REVIEW, requirement: "# req\n\nสั้น\n" });
+    const root = fixtureProject({ plan: PLAN, design: DESIGN, qa: QA_DOC, requirement: "# req\n\nสั้น\n" });
     const cm = new ContextManager({ projectRoot: root, moduleName: "sales-crm" });
     const selected = cm.forStage(AgentStage.BACKEND_ENGINEER, [2]);
     const savings = cm.savings(selected);
@@ -475,7 +475,7 @@ describe("ContextManager against real files", () => {
 
   it("maps every artifact category that has a backing document", () => {
     expect(CATEGORY_TO_DOC["plan"]).toBe("plan");
-    expect(CATEGORY_TO_DOC["qa-report"]).toBe("review");
+    expect(CATEGORY_TO_DOC["qa-report"]).toBe("qa");
     expect(CATEGORY_TO_DOC["security-report"]).toBe("security");
     expect(CATEGORY_TO_DOC["backend-code"]).toBeUndefined();
   });
@@ -573,9 +573,9 @@ describe("T-V3TOK-052 slicing safety invariants", () => {
     for (const heading of ["Feature-by-Feature Feasibility", "Risks & Dependencies", "Unresolved Open Questions"]) {
       expect(design.kept).toContain(heading);
     }
-    const review = selectDocContext(req(AgentStage.BACKEND_ENGINEER, "review", [2]), REVIEW);
-    expect(review.kept).toContain("Open Issues — all phases");
-    expect(review.kept).toContain("Unverified Behaviour — undeployed phases");
+    const qa = selectDocContext(req(AgentStage.BACKEND_ENGINEER, "qa", [2]), QA_DOC);
+    expect(qa.kept).toContain("Open Issues — all phases");
+    expect(qa.kept).toContain("Unverified Behaviour — undeployed phases");
   });
 
   it("property 4: structure mismatches return the whole document with a reason", () => {
@@ -643,7 +643,7 @@ describe("T-V3TOK-052 slicing safety invariants", () => {
   });
 
   it("property 8: sta context and sta run receive byte-identical document fragments", async () => {
-    const root = fixtureProject({ requirement: "# req\n\nสั้น\n", design: DESIGN, plan: PLAN, review: REVIEW });
+    const root = fixtureProject({ requirement: "# req\n\nสั้น\n", design: DESIGN, plan: PLAN, qa: QA_DOC });
     try {
       const command = await buildContextCommand({
         role: "backend-engineer",
