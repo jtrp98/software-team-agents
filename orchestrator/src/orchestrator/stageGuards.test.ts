@@ -35,7 +35,8 @@ describe("checkRoleLaneEntry — the role-lane stage guard (T114, moved from rol
     expect(waiting.allowed).toBe(false);
     if (!waiting.allowed) {
       expect(waiting.reason).toMatch(/SA lane has not acknowledged/);
-      expect(waiting.reason).toContain(`sta roles ack sa ${baItems.join(",")} --module ${MODULE} --by <name>`);
+      expect(waiting.reason).toContain("trusted human decision channel is required");
+      expect(waiting.reason).toContain(baItems.join(", "));
     }
 
     acknowledgeLane(root, kb, "sa", baItems);
@@ -51,7 +52,7 @@ describe("checkRoleLaneEntry — the role-lane stage guard (T114, moved from rol
     expect(waiting.allowed).toBe(false);
     if (!waiting.allowed) {
       expect(waiting.reason).toMatch(/SA lane is awaiting-signoff/);
-      expect(waiting.reason).toMatch(/sta roles signoff sa/);
+      expect(waiting.reason).toMatch(/trusted human decision channel/);
     }
 
     acknowledgeLane(root, kb, "dev", signOffLane(root, kb, "sa"));
@@ -71,7 +72,7 @@ describe("checkRoleLaneEntry — the role-lane stage guard (T114, moved from rol
     expect(blocked.allowed).toBe(false);
     if (!blocked.allowed) {
       expect(blocked.reason).toMatch(/no knowledge\/ directory/);
-      expect(blocked.reason).toContain(`sta roles signoff ba --module ${MODULE} --by <name>`);
+      expect(blocked.reason).toContain("trusted human decision channel");
     }
   });
 
@@ -83,7 +84,7 @@ describe("checkRoleLaneEntry — the role-lane stage guard (T114, moved from rol
       expect(refused.allowed).toBe(false);
       if (!refused.allowed) {
         expect(refused.reason).toMatch(/holds no items/);
-        expect(refused.reason).toMatch(/sta roles (signoff|ack)/);
+        expect(refused.reason).toMatch(/trusted human decision channel/);
       }
     }
   });
@@ -114,7 +115,7 @@ describe("checkRoleLaneEntry — the role-lane stage guard (T114, moved from rol
       "ux-design",
       "UX-201",
       { artifact: `_docs/module/${MODULE}/uxui/design.md`, refines: ["DES-003"] },
-      { owner: AgentStage.HUMAN, status: "approved" },
+      { owner: AgentStage.UXUI_DESIGNER, status: "approved" },
     );
     writeKnowledgeItem(ux, root, { force: true });
     expect(entry(root, AgentStage.FRONTEND_ENGINEER).allowed).toBe(false);

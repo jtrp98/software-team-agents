@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import { AgentStage } from "../types.js";
 import type { KnowledgeItem } from "./knowledgeModel.js";
 import { KnowledgeBase, checkKnowledge } from "./knowledgeBase.js";
-import { writeKnowledgeItem } from "./knowledgeStore.js";
+import { seedKnowledgeFixture } from "./knowledgeFixture.testSupport.js";
 import { RECONCILIATION_VERDICTS, classifyReconciliationItem, reconcileKnowledge, type ReconciliationEvidence } from "./reconcile.js";
 import { digestOfSource } from "./sourceDigest.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
@@ -74,7 +74,7 @@ describe("T-V3-10 reconciliation Cases A-E", () => {
     const specificB = { ...requirement("REQ-SB"), schema_version: 2, target_ids: ["b"], sources: [source("target", "current.txt", "b", digestOfSource("current.txt", b))] } as KnowledgeItem;
     const unknown = requirement("REQ-U", { schema_version: 2, target_ids: [], sources: [source("external", "interview", null, null)] });
     const match = { ...requirement("REQ-M"), schema_version: 2, target_ids: [], sources: [source("knowledge", "stable.txt", null, digestOfSource("stable.txt", knowledge)), source("target", "current.txt", "a", digestOfSource("current.txt", a))] } as KnowledgeItem;
-    for (const item of [aStale, pending, specificA, specificB, unknown, match]) writeKnowledgeItem(item, knowledge, { force: true });
+    for (const item of [aStale, pending, specificA, specificB, unknown, match]) seedKnowledgeFixture(item, knowledge);
     return { knowledge, a, b };
   }
   it("classifies A-E deterministically, without cross-Target conflicts or writes", () => {

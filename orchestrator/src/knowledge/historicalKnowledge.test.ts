@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import { checkKnowledge } from "./knowledgeBase.js";
-import { writeKnowledgeItem } from "./knowledgeStore.js";
+import { seedKnowledgeFixture } from "./knowledgeFixture.testSupport.js";
 import { makeItem } from "./sampleKnowledge.js";
 import { knowledgeBriefFor } from "../runtime/knowledgeBriefAssembly.js";
 import { reconcileKnowledge } from "./reconcile.js";
@@ -61,7 +61,7 @@ function registryWithTombstone(): void {
 }
 
 function knowledgeItem(id: string, targetIds: string[]): void {
-  writeKnowledgeItem(
+  seedKnowledgeFixture(
     makeItem(
       "requirement",
       id,
@@ -76,7 +76,6 @@ function knowledgeItem(id: string, targetIds: string[]): void {
       },
     ),
     root,
-    { force: true },
   );
 }
 

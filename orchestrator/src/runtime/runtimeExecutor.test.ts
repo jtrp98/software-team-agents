@@ -27,6 +27,9 @@ import { decidePending, testHumanVerifier } from "../gates/humanDecision.testSup
 import { withStageEvidence } from "../evidence/stageEvidence.testSupport.js";
 import { seedRealContracts } from "../testing/contractFixtures.js";
 import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
+import { MemoryTaskStore } from "../store/memoryStore.js";
+import { verifiedRoleAttemptProvenance } from "../knowledge/artifactProvenance.js";
+import type { TargetBindings } from "../threeRepo/taskBindings.js";
 
 const human = { humanDecisionVerifier: testHumanVerifier(), stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD };
 
@@ -1218,6 +1221,56 @@ describe("createRuntimeExecutor — three-repo guard enforcement", () => {
     const runtimeTask = runtimeTaskFixture(knowledgeRoot, { taskId, targetRoot, allow: [] });
     return { bindingRoot, knowledgeRoot, targetRoot, runtimeTask };
   }
+  it("records the exact packet and contract before invoking the adapter", async () => {
+    let dispatchCount = 0;
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () => {
+      expect(dispatchCount).toBe(1);
+      return okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } });
+    } });
+    const scoped = scopedFixture("T-before-adapter");
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const task = { runtimeTask: scoped.runtimeTask, taskId: "T-before-adapter", classification,
+      targetBindings: { targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }] } } as never;
+    const executor = createRuntimeExecutor({ runtime, projectRoot: tmpProject(), moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS, packetBaseRevision: async () => FIXTURE_REVISION,
+      threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot,
+        knowledgeRootName: "default", workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "write" }] } }),
+    });
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-before-adapter", context: [],
+      recordDispatch: ({ packetPath, packetHash, contractDigest, runtimeId }) => {
+        dispatchCount += 1;
+        expect(readExecutionPacket(path.resolve(scoped.knowledgeRoot, packetPath)).packet_hash).toBe(packetHash);
+        expect(contractDigest).toMatch(/^[0-9a-f]{64}$/);
+        expect(runtimeId).toBe(runtime.id);
+      },
+    });
+    expect(result.outcome.result).toBe("PASS");
+    expect(dispatchCount).toBe(1);
+  });
+  it("binds an actual STA role run to the packet persisted before the adapter call", async () => {
+    const runtime = new MockRuntimeAdapter({ id: "claude-code", respond: () =>
+      okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }) });
+    const scoped = scopedFixture("T-sta-dispatch");
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const targetBindings: TargetBindings = { targets: [{ target_id: "api", role: AgentStage.BACKEND_ENGINEER }] };
+    const task = { runtimeTask: scoped.runtimeTask, taskId: "T-sta-dispatch", classification, targetBindings } as never;
+    const executor = createRuntimeExecutor({ runtime, projectRoot: scoped.bindingRoot, moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS, packetBaseRevision: async () => FIXTURE_REVISION,
+      threeRepoTask: () => ({ task, roots: { bindingRoot: scoped.bindingRoot, knowledgeRoot: scoped.knowledgeRoot,
+        knowledgeRootName: "default", workRoots: [{ targetId: "api", path: scoped.targetRoot, access: "write" }] } }),
+    });
+    const store = new MemoryTaskStore();
+    const orchestrator = new Orchestrator("T-sta-dispatch", classification, { ...human, store,
+      runtimeTask: scoped.runtimeTask, contractRoot: scoped.bindingRoot,
+      targetBindings, knowledgeRoot: { name: "default", path: scoped.knowledgeRoot } });
+    await orchestrator.step(withStageEvidence(executor));
+    expect(runtime.requests).toHaveLength(1);
+    const records = store.evidenceForTask("T-sta-dispatch");
+    const dispatch = records.find((item) => item.kind === "role-dispatch");
+    const run = records.find((item) => item.kind === "role-run" && item.stage === AgentStage.BACKEND_ENGINEER);
+    expect(dispatch?.evidenceId).toBeTruthy();
+    expect(verifiedRoleAttemptProvenance(store, run!.evidenceId).dispatchEvidenceId).toBe(dispatch?.evidenceId);
+  });
   it("does not start a Target-write run when the runtime lacks a pre-tool guard", async () => {
     const runtime = new MockRuntimeAdapter({ id: "claude-code", capabilities: [RuntimeCapability.NAMED_AGENTS] });
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { classifyTask } from "../classification/taskClassifier.js";
 import { checkKnowledge } from "../knowledge/knowledgeBase.js";
-import { writeKnowledgeItem } from "../knowledge/knowledgeStore.js";
+import { seedKnowledgeFixture } from "../knowledge/knowledgeFixture.testSupport.js";
 import { makeItem } from "../knowledge/sampleKnowledge.js";
 import { initTaskMachine } from "../state/taskState.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
@@ -138,7 +138,7 @@ function writeModuleDeclaring(fixture_: Fixture, targetId = "api"): string {
 }
 
 function writeKnowledgeScopedTo(fixture_: Fixture, targetId = "api"): void {
-  writeKnowledgeItem(
+  seedKnowledgeFixture(
     makeItem(
       "requirement",
       "REQ-1",
@@ -512,7 +512,7 @@ describe("the intermediate state and verify — steps 8/9", () => {
       'schema_version: 2\ntargets:\n  - target_id: api\n    name: API\n    remote_url: https://github.com/acme/api.git\n    status: retired\n    type: backend\n    ownership_state: released\n',
       "utf8",
     );
-    writeKnowledgeItem(
+    seedKnowledgeFixture(
       makeItem(
         "requirement",
         "REQ-ORPHAN",

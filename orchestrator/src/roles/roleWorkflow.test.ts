@@ -122,7 +122,7 @@ describe("the BA lane workflow (T100)", () => {
     const state = baState(withStatus({ "RULE-007": "approved" }));
     expect(state.stage).toBe("awaiting-signoff");
     expect(state.nextAction.actor).toBe("human");
-    expect(state.nextAction.what).toMatch(/sta roles signoff ba --by <name>/);
+    expect(state.nextAction.what).toMatch(/trusted human decision channel/);
   });
 
   it("is ready, and says how to record the handoff, once approved and signed off", () => {
@@ -132,7 +132,7 @@ describe("the BA lane workflow (T100)", () => {
     expect(state.approved).toEqual(["REQ-003", "RULE-007"]);
     expect(state.handoff.to).toBe("sa");
     expect(state.handoff.blockers).toEqual([]);
-    expect(state.nextAction.what).toMatch(/sta roles ack sa REQ-003,RULE-007 --by <name>/);
+    expect(state.nextAction.what).toMatch(/trusted human decision channel/);
   });
 
   it("blocks the handoff on anything not yet approved, and says why", () => {

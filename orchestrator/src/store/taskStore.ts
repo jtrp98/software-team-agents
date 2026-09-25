@@ -2,6 +2,8 @@ import { z } from "zod";
 import { AgentStage, TaskLevel, TaskState } from "../types.js";
 import { QaReportArtifactSchema, ReviewReportArtifactSchema, SecurityReportArtifactSchema } from "../artifacts/schemas.js";
 import { StructuredFailureSchema } from "../orchestrator/failure.js";
+import { RECOVERY_POLICY_VERSION, RecoveryActionSchema, HandoffIntentSchema } from "../retry/recoveryPolicy.js";
+import { RepairRouteSchema } from "../retry/repairRoute.js";
 import { ApprovalRecordSchema } from "../gates/approval.js";
 import { QaModeDecisionSchema } from "../qa/mode.js";
 import { Environment } from "../environment/environment.js";
@@ -95,6 +97,29 @@ export const PersistedTaskSchema = z.object({
   pipelineCursor: z.number().int().nonnegative(),
   blockedReason: z.string().nullable(),
   lastFailure: StructuredFailureSchema.nullable(),
+  /** STA's decision for the last failed attempt, committed with its retry count. */
+  recoveryDecision: z.strictObject({
+    policyVersion: z.literal(RECOVERY_POLICY_VERSION),
+    stage: z.enum(AgentStage),
+    attempt: z.number().int().positive(),
+    failureKind: z.enum(["review", "qa", "security"]).nullable(),
+    action: RecoveryActionSchema,
+    repairRoute: RepairRouteSchema.nullable(),
+    handoffIntent: HandoffIntentSchema,
+  }).nullable(),
+  /** Reserved before executor side effects. A restarted process must reconcile
+   * this attempt instead of silently dispatching the same work again. */
+  inFlightAttempt: z.strictObject({
+    stage: z.enum(AgentStage),
+    attempt: z.number().int().positive(),
+    idempotencyKey: z.string().min(1),
+  }).nullable(),
+  settledAttempt: z.strictObject({
+    stage: z.enum(AgentStage),
+    attempt: z.number().int().positive(),
+    idempotencyKey: z.string().min(1),
+    resultDigest: z.string().regex(/^[0-9a-f]{64}$/),
+  }).nullable(),
   /**
    * A human-imposed override, orthogonal to the pipeline's own state machine. Defaulted so an
    * old row still loads: an old task simply was never paused/cancelled, which is true rather
@@ -310,6 +335,9 @@ export function newPersistedTask(params: {
     pipelineCursor: 0,
     blockedReason: null,
     lastFailure: null,
+    recoveryDecision: null,
+    inFlightAttempt: null,
+    settledAttempt: null,
     paused: false,
     cancelled: false,
     cancelReason: null,

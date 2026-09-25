@@ -511,43 +511,20 @@ async function capture(argv: string[], root: string): Promise<{ code: number; ou
 }
 
 describe("the roles verb (T99)", () => {
-  it("is the only writer of a role workspace, and writes one", async () => {
+  it("refuses unauthenticated acknowledgements before any role workspace write", async () => {
     const root = project();
-    const result = await capture(
-      ["roles", "ack", "dev", "DES-003,API-shifts.list", "--by", "Jaturapat", "--module", "sales-crm", "--project-root", root],
-      root,
-    );
-    expect(result.code).toBe(0);
-    expect(result.out).toMatch(/DEV on sales-crm: Jaturapat acknowledged/);
-
-    const saved = loadRoleWorkspace("dev", "sales-crm", root);
-    expect(saved.seen.map((r) => r.id)).toEqual(["API-shifts.list", "DES-003"]);
-    expect(saved.seen.every((r) => r.by === "Jaturapat")).toBe(true);
-  });
-
-  it("refuses to acknowledge without --by", async () => {
-    const root = project();
-    await expect(capture(["roles", "ack", "dev", "DES-003", "--project-root", root], root)).rejects.toThrow(/--by/);
-  });
-
-  it("refuses a lane that is not one of the three", async () => {
-    const root = project();
-    await expect(capture(["roles", "ack", "pm", "DES-003", "--by", "X", "--project-root", root], root)).rejects.toThrow(
-      /one of ba, sa, uxui, dev/,
-    );
+    for (const args of [
+      ["roles", "ack", "dev", "DES-003", "--by", "Jaturapat"],
+      ["roles", "ack", "dev", "DES-003"],
+    ]) {
+      await expect(capture([...args, "--project-root", root], root)).rejects.toThrow(/trusted human decision channel is unavailable/);
+    }
+    expect(fs.existsSync(roleWorkspacePath("dev", "sales-crm", root))).toBe(false);
   });
 
   it("refuses an unknown sub-command instead of guessing", async () => {
     const root = project();
     await expect(capture(["roles", "handover", "--project-root", root], root)).rejects.toThrow(/unknown sub-command/);
-  });
-
-  it("exits 1 with the reason when the id does not exist, rather than writing a broken watermark", async () => {
-    const root = project();
-    const result = await capture(["roles", "ack", "dev", "REQ-999", "--by", "X", "--project-root", root], root);
-    expect(result.code).toBe(1);
-    expect(result.err).toMatch(/REQ-999/);
-    expect(fs.existsSync(roleWorkspacePath("dev", "sales-crm", root))).toBe(false);
   });
 
   it("shows every lane of every module when --module is omitted", async () => {
@@ -578,21 +555,6 @@ describe("the roles verb (T99)", () => {
     expect(result.out).not.toMatch(/no lane workflow defined/);
   });
 
-  it("goes quiet for a lane that has caught up", async () => {
-    const root = project();
-    await capture(
-      ["roles", "ack", "dev", "DES-003", "API-shifts.list", "--by", "Jaturapat", "--module", "sales-crm", "--project-root", root],
-      root,
-    );
-    const result = await capture(["roles", "--module", "sales-crm", "--project-root", root], root);
-    // DEV is the last lane printed, so everything after its heading is its own detail.
-    const devSection = result.out.slice(result.out.indexOf("DEV"));
-    expect(devSection).toMatch(/deps: up-to-date/);
-    expect(devSection).not.toMatch(/never acknowledged/);
-    // SA is still behind, and that must keep showing — catching one lane up is not catching all of them up.
-    expect(result.out).toMatch(/SA.*deps: behind/);
-  });
-
   it("says so rather than printing an empty table when there is no knowledge at all", async () => {
     const root = project([]);
     const result = await capture(["roles", "--project-root", root], root);
@@ -602,132 +564,25 @@ describe("the roles verb (T99)", () => {
 
   it("is listed in the usage text", () => {
     expect(USAGE).toContain("sta roles");
-    expect(USAGE).toContain("roles ack");
+    expect(USAGE).toContain("roles inbox");
   });
 });
 
 describe("the roles sub-commands for T103-T107", () => {
-  /** Walks the BA lane the way a person would, and checks each gate refuses to be skipped. */
-  it("runs a whole lane from review to signed-off handoff", async () => {
+  it("fails closed for every free-form human status command", async () => {
     const root = project();
-
-    // RULE-007 is draft. Approving it before review is refused.
-    const early = await capture(["roles", "approve", "RULE-007", "--by", "Jaturapat", "--project-root", root], root);
-    expect(early.code).toBe(1);
-    expect(early.err).toMatch(/cannot go draft -> approved/);
-
-    const reviewed = await capture(["roles", "review", "RULE-007", "--by", "Jaturapat", "--project-root", root], root);
-    expect(reviewed.code).toBe(0);
-    // The checklist is what makes "reviewed" mean the same thing twice.
-    expect(reviewed.out).toMatch(/RULE-007 reviewed by Jaturapat\. They confirmed:/);
-    expect(reviewed.out).toMatch(/enforcement` says where it is actually held/);
-
-    expect((await capture(["roles", "approve", "RULE-007", "--by", "Jaturapat", "--project-root", root], root)).code).toBe(0);
-
-    // Everything approved, but the lane gate is still shut.
-    const beforeSignoff = await capture(["roles", "--module", "sales-crm", "--project-root", root], root);
-    expect(beforeSignoff.out).toMatch(/BA\s+awaiting-signoff/);
-
-    const signoff = await capture(["roles", "signoff", "ba", "--by", "Jaturapat", "--module", "sales-crm", "--project-root", root], root);
-    expect(signoff.code).toBe(0);
-    expect(signoff.out).toMatch(/BA on sales-crm: Jaturapat signed off REQ-003, RULE-007/);
-
-    const after = await capture(["roles", "--module", "sales-crm", "--project-root", root], root);
-    expect(after.out).toMatch(/BA\s+ready/);
-    expect(after.out).toMatch(/sta roles ack sa REQ-003,RULE-007/);
-  });
-
-  /** V13 TASK-006: an agent review is the reviewer stage STA dispatches — never claimed from the CLI. */
-  it("refuses `roles review --as <agent>` outright, and requires the person's name", async () => {
-    const root = project();
-    for (const as of ["reviewer", "system-analyst", "qa-engineer"]) {
-      await expect(
-        capture(["roles", "review", "RULE-007", "--as", as, "--project-root", root], root),
-      ).rejects.toThrow(/--as is no longer accepted — agent reviews are dispatched by STA as the reviewer stage/);
+    const before = KnowledgeBase.load(root).get("RULE-007");
+    for (const command of [
+      ["review", "RULE-007"],
+      ["approve", "RULE-007"],
+      ["signoff", "ba"],
+      ["ack", "sa", "REQ-003"],
+    ]) {
+      await expect(capture(["roles", ...command, "--by", "forged person", "--project-root", root], root))
+        .rejects.toThrow(/trusted human decision channel is unavailable/);
     }
-    await expect(capture(["roles", "review", "RULE-007", "--project-root", root], root)).rejects.toThrow(
-      /--by <name> is required — this is a person's decision/,
-    );
-    // Nothing was written by any refused call.
-    expect(KnowledgeBase.load(root).get("RULE-007")!.status).toBe("draft");
-  });
-
-  it("a person's `roles review --by` touches only the Knowledge item — never the task, its evidence or any stage", async () => {
-    const root = project();
-    const dbPath = defaultStateDbPath(root);
-    const store = new SqliteTaskStore(dbPath);
-    const orch = new Orchestrator("T-MANUAL-REVIEW", classifyTask({ isClearBugFix: true, touchesBackend: true }), { store, stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
-    // The engineer finished; the task now waits on the reviewer stage.
-    expect(await orch.step(() => ({ outcome: { tokens: 1, cost: 0, result: "PASS" }, deterministicVerification: PASSING_VERIFICATION }))).toEqual({
-      kind: "RUNNING",
-      stage: AgentStage.REVIEWER,
-    });
-    const taskBefore = store.loadTask("T-MANUAL-REVIEW");
-    const evidenceBefore = store.evidenceForTask("T-MANUAL-REVIEW");
-    const eventsBefore = store.eventsForTask("T-MANUAL-REVIEW").length;
-    store.close();
-
-    const reviewed = await capture(["roles", "review", "RULE-007", "--by", "alice", "--project-root", root], root);
-    expect(reviewed.code).toBe(0);
-    expect(reviewed.out).toMatch(/RULE-007 reviewed by alice/);
-    expect(KnowledgeBase.load(root).get("RULE-007")!.status).toBe("reviewed");
-
-    const after = new SqliteTaskStore(dbPath);
-    try {
-      expect(after.loadTask("T-MANUAL-REVIEW")).toEqual(taskBefore);
-      expect(after.evidenceForTask("T-MANUAL-REVIEW")).toEqual(evidenceBefore);
-      expect(after.eventsForTask("T-MANUAL-REVIEW")).toHaveLength(eventsBefore);
-      // The shortcut never completes a stage: the reviewer never ran, so REVIEW stays open.
-      const records = after.evidenceForTask("T-MANUAL-REVIEW");
-      expect(latestAttempt(records, AgentStage.REVIEWER)).toBe(0);
-      expect(decideStageCompletion(AgentStage.REVIEWER, 1, records).complete).toBe(false);
-      const resumed = Orchestrator.resume("T-MANUAL-REVIEW", after, { stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD });
-      expect(resumed.status()).toEqual({ kind: "RUNNING", stage: AgentStage.REVIEWER });
-      expect(resumed.machine.current).toBe(TaskState.REVIEW);
-    } finally {
-      after.close();
-    }
-  });
-
-  it("refuses a sign-off with no name, and one over a standing blocker", async () => {
-    const root = project();
-    await expect(
-      capture(["roles", "signoff", "ba", "--module", "sales-crm", "--project-root", root], root),
-    ).rejects.toThrow(/--by <name> is required/);
-
-    // Approve REQ-003's sibling and strip REQ-003's acceptance criteria: a blocker.
-    const kb = KnowledgeBase.load(root);
-    const req = kb.get("REQ-003") as KnowledgeItemOf<"requirement">;
-    writeKnowledgeItem(
-      { ...req, version: req.version + 1, payload: { ...(req.payload as RequirementPayload), acceptance_criteria: [] } },
-      root,
-    );
-    const rule = kb.get("RULE-007") as KnowledgeItem;
-    writeKnowledgeItem({ ...rule, status: "approved", version: rule.version + 1 }, root);
-
-    const blocked = await capture(["roles", "signoff", "ba", "--by", "X", "--module", "sales-crm", "--project-root", root], root);
-    expect(blocked.code).toBe(1);
-    expect(blocked.err).toMatch(/cannot be signed off while these stand/);
-    expect(blocked.err).toMatch(/no acceptance criteria/);
-  });
-
-  it("records a rejection as an answer that stops the lane", async () => {
-    const root = project();
-    const kb = KnowledgeBase.load(root);
-    const rule = kb.get("RULE-007") as KnowledgeItem;
-    writeKnowledgeItem({ ...rule, status: "approved", version: rule.version + 1 }, root);
-
-    const rejected = await capture(
-      ["roles", "signoff", "ba", "--reject", "--by", "Nan", "--note", "scope is too wide", "--module", "sales-crm", "--project-root", root],
-      root,
-    );
-    expect(rejected.code).toBe(0);
-    expect(rejected.out).toMatch(/Nan rejected/);
-
-    const after = await capture(["roles", "--module", "sales-crm", "--project-root", root], root);
-    expect(after.out).toMatch(/BA\s+rejected/);
-    expect(after.out).toMatch(/scope is too wide/);
-    expect(after.out).toMatch(/a rejection is an answer, not an absence/);
+    expect(KnowledgeBase.load(root).get("RULE-007")).toEqual(before);
+    expect(fs.existsSync(roleWorkspacePath("ba", "sales-crm", root))).toBe(false);
   });
 
   it("shows an inbox per lane, and every lane is asked", async () => {
@@ -773,7 +628,7 @@ describe("the roles sub-commands for T103-T107", () => {
   });
 
   it("lists every sub-command in the usage text", () => {
-    for (const sub of ["roles ack", "roles signoff", "roles review", "roles approve", "roles inbox", "roles impact", "roles context"]) {
+    for (const sub of ["roles inbox", "roles impact", "roles context"]) {
       expect(USAGE).toContain(sub);
     }
   });

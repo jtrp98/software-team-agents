@@ -20,7 +20,7 @@ import type { RuntimeTask } from "./runtimeTask.js";
  * dispatched, no role-run is recorded, and the task's state machine is left
  * exactly as it was, so the same question is asked again on the next poll and
  * the stop clears by itself once a person records the missing sign-off or
- * acknowledgement (`sta roles signoff` / `sta roles ack`). Nothing here
+ * acknowledgement through a trusted human decision channel. Nothing here
  * writes: an acknowledgement is a person-only act.
  *
  * Fail closed, always: a missing, empty or invalid Knowledge model cannot
@@ -83,8 +83,8 @@ export function requiredHandoff(stage: AgentStage): { from: RoleLane; to: RoleLa
 
 function laneActions(handoff: { from: RoleLane; to: RoleLane }, moduleName: string): string {
   return (
-    `a person signs off the ${handoff.from.toUpperCase()} lane (\`sta roles signoff ${handoff.from} --module ${moduleName} --by <name>\`) ` +
-    `and the ${handoff.to.toUpperCase()} lane acknowledges it (\`sta roles ack ${handoff.to} <ids> --module ${moduleName} --by <name>\`)`
+    `a person signs off the ${handoff.from.toUpperCase()} lane and the ${handoff.to.toUpperCase()} lane acknowledges it ` +
+    `through a trusted human decision channel (module ${moduleName})`
   );
 }
 
@@ -165,7 +165,7 @@ export function checkRoleLaneEntry(input: RoleLaneEntryInput): StageEntryDecisio
         allowed: false,
         reason:
           `${prefix}: frontend work requires an approved current UX artifact and human uxui-signoff — a person approves ` +
-          `the module's ux-design item and signs it off (\`sta roles signoff uxui --module ${moduleName} --by <name>\`)`,
+          `the module's ux-design item and signs it off through a trusted human decision channel (module ${moduleName})`,
       };
     }
   }
@@ -177,7 +177,7 @@ export function checkRoleLaneEntry(input: RoleLaneEntryInput): StageEntryDecisio
       allowed: false,
       reason:
         `${prefix}: ${handoff.from.toUpperCase()} lane is ${state.stage}${detail} — next (${state.nextAction.actor}): ` +
-        `${state.nextAction.what} (module ${moduleName}; add --module ${moduleName})`,
+        `${state.nextAction.what} (module ${moduleName})`,
     };
   }
   if (!state.handoff.acknowledgedByTarget) {
@@ -185,8 +185,7 @@ export function checkRoleLaneEntry(input: RoleLaneEntryInput): StageEntryDecisio
       allowed: false,
       reason:
         `${prefix}: ${handoff.to.toUpperCase()} lane has not acknowledged the approved ${handoff.from.toUpperCase()} handoff ` +
-        `(${state.handoff.items.join(", ") || "no items"}) — a person runs ` +
-        `\`sta roles ack ${handoff.to} ${state.handoff.items.join(",") || "<ids>"} --module ${moduleName} --by <name>\``,
+        `(${state.handoff.items.join(", ") || "no items"}) — a trusted human decision channel is required`,
     };
   }
   return ALLOWED;

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
 import { KNOWLEDGE_SCHEMA_VERSION, type KnowledgeItemOf, KnowledgeItemError } from "./knowledgeModel.js";
+import { seedKnowledgeFixture } from "./knowledgeFixture.testSupport.js";
 import {
   KnowledgeVersionConflictError,
   PROJECT_WIDE_DIR,
@@ -79,13 +80,16 @@ describe("round trip", () => {
     expect(readKnowledgeFile(file)).toEqual(item);
   });
 
-  it("preserves v2 target associations when an item is rewritten", () => {
+  it("refuses direct canonical v2 writes even when role metadata and force are supplied", () => {
     const item = requirement("REQ-005", {
       schema_version: 2,
       target_ids: ["sb-web-helper"],
       sources: [{ type: "file", locator: "_docs/module/sales-crm/requirement.md", captured_at: NOW, digest: "sha256:9f2a", origin: { root: "knowledge", target_id: null } }],
     });
-    writeKnowledgeItem(item, root);
+    expect(() => writeKnowledgeItem(item, root)).toThrow(/verified role-attempt commit/);
+    expect(() => writeKnowledgeItem(item, root, { force: true })).toThrow(/verified role-attempt commit/);
+    expect(fs.existsSync(pathFor(item, root))).toBe(false);
+    seedKnowledgeFixture(item, root);
     expect(readKnowledgeFile(pathFor(item, root)).target_ids).toEqual(["sb-web-helper"]);
   });
 

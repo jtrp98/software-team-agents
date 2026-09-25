@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { Orchestrator, type AgentExecutor, type AgentExecutorResult } from "./orchestrator.js";
 import { classifyTask } from "../classification/taskClassifier.js";
 import { AgentStage, TaskState } from "../types.js";
@@ -9,8 +12,15 @@ import { AGENT_REGISTRY } from "../agents/registry.js";
 import { PermissionDeniedError } from "../agents/permissionPolicy.js";
 import { Permission } from "../agents/permissions.js";
 import { decidePending, testHumanVerifier } from "../gates/humanDecision.testSupport.js";
-import { PASSING_VERIFICATION, withRequiredEvidence } from "../evidence/stageEvidence.testSupport.js";
+import { PASSING_VERIFICATION, failingReviewReport, withRequiredEvidence } from "../evidence/stageEvidence.testSupport.js";
 import { ALLOW_EVERY_STAGE_TEST_GUARD } from "./stageGuards.testSupport.js";
+import { FIXTURE_REVISION, packetFixture, runtimeTaskFixture } from "../runtime/packetFixture.testSupport.js";
+import { compileExecutionPacket } from "../runtime/agentRunAssembly.js";
+import { stableHash } from "../artifacts/executionPacket.js";
+import { writeExecutionPacket } from "../state/runtimeArtifacts.js";
+import { resolveAuthoritativeContract } from "../agents/agentContract.js";
+import { verifiedArtifactProvenance, verifiedRoleAttemptProvenance } from "../knowledge/artifactProvenance.js";
+import { pathRulesFor } from "../agents/pathPermissions.js";
 
 const human = { humanDecisionVerifier: testHumanVerifier(), stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD };
 
@@ -81,6 +91,176 @@ async function runToCompletion(orch: Orchestrator, executor: AgentExecutor, maxS
 }
 
 describe("Orchestrator", () => {
+  it("reserves an attempt before executor side effects and refuses a crash-time repeat", async () => {
+    const { MemoryTaskStore } = await import("../store/memoryStore.js");
+    const store = new MemoryTaskStore();
+    const classification = classifyTask({ isProductionDeployOrMigration: true });
+    const orch = new Orchestrator("T-RESERVE", classification, { ...human, store });
+    await orch.step(() => ({ outcome: { tokens: 1, cost: 0, result: "PASS" } })); // prepare
+    decidePending(orch, true);
+    let finish!: (value: AgentExecutorResult) => void;
+    const result: AgentExecutorResult = { outcome: { tokens: 1, cost: 0, result: "PASS" } };
+    const pending = orch.step(() => new Promise<AgentExecutorResult>((resolve) => { finish = resolve; }));
+    const reservation = store.loadTask("T-RESERVE")!.inFlightAttempt;
+    expect(reservation).toEqual({ stage: AgentStage.DEVOPS, attempt: 2, idempotencyKey: "T-RESERVE:devops:2" });
+    const restarted = Orchestrator.resume("T-RESERVE", store, human);
+    expect(restarted.status()).toMatchObject({ kind: "BLOCKED" });
+    let repeated = 0;
+    expect((await restarted.step(() => { repeated += 1; return result; })).kind).toBe("BLOCKED");
+    expect(repeated).toBe(0);
+    finish(result);
+    expect((await pending).kind).toBe("DEPLOYED");
+    const after = Orchestrator.resume("T-RESERVE", store, human);
+    const runs = after.runLog.all().length;
+    expect(after.reportCompletion(AgentStage.DEVOPS, result, { start: 0, end: 0 }, reservation!.idempotencyKey).kind).toBe("DEPLOYED");
+    expect(after.runLog.all()).toHaveLength(runs);
+    expect(() => after.reportCompletion(AgentStage.DEVOPS, { outcome: { tokens: 2, cost: 0, result: "PASS" } }, { start: 0, end: 0 }, reservation!.idempotencyKey)).toThrow(/different result bytes/);
+  });
+
+  it("persists the recovery policy decision and retry budget across resume", async () => {
+    const { MemoryTaskStore } = await import("../store/memoryStore.js");
+    const store = new MemoryTaskStore();
+    const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+    const orch = new Orchestrator("T-RECOVERY-DURABLE", classification, { ...human, store });
+    const executor = makeExecutor({ [AgentStage.REVIEWER]: () => ({
+      outcome: { tokens: 1, cost: 0, result: "FAIL" },
+      artifactType: ArtifactType.REVIEW_REPORT,
+      artifact: failingReviewReport("T-RECOVERY-DURABLE"),
+    }) });
+    await orch.step(executor);
+    await orch.step(executor);
+    const before = store.loadTask("T-RECOVERY-DURABLE")!;
+    expect(before.retries.review).toBe(1);
+    expect(before.recoveryDecision?.policyVersion).toBe(1);
+    expect(before.recoveryDecision?.repairRoute).toBeNull();
+    expect(before.recoveryDecision?.handoffIntent).toMatchObject({
+      sourceStage: AgentStage.REVIEWER,
+      nextStage: AgentStage.BACKEND_ENGINEER,
+      nextRuntime: null,
+      scopeDigest: null,
+    });
+    const recoveryEvidence = store.evidenceForTask("T-RECOVERY-DURABLE").find((item) => item.kind === "recovery-decision");
+    const roleRun = store.evidenceForTask("T-RECOVERY-DURABLE").find((item) => item.kind === "role-run" && item.stage === AgentStage.REVIEWER);
+    expect(recoveryEvidence?.refs).toContain(roleRun?.evidenceId);
+    expect(recoveryEvidence?.payload).toMatchObject({ handoffIntent: before.recoveryDecision?.handoffIntent });
+    const resumed = Orchestrator.resume("T-RECOVERY-DURABLE", store, human);
+    expect(resumed.recovery).toEqual(before.recoveryDecision?.action);
+    expect(resumed.repairRoute).toEqual(before.recoveryDecision?.repairRoute);
+    expect(store.loadTask("T-RECOVERY-DURABLE")?.recoveryDecision?.handoffIntent).toEqual(before.recoveryDecision?.handoffIntent);
+    expect(resumed.status()).toMatchObject({ kind: "RUNNING", stage: AgentStage.BACKEND_ENGINEER });
+    expect(resumed.retries.review).toBe(1);
+  });
+  it("binds handoff evidence to the canonical frozen task scope", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-handoff-scope-"));
+    try {
+      const taskId = "T-FROZEN-HANDOFF";
+      const runtimeTask = runtimeTaskFixture(root, { taskId });
+      const { MemoryTaskStore } = await import("../store/memoryStore.js");
+      const store = new MemoryTaskStore();
+      const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+      const orch = new Orchestrator(taskId, classification, { ...human, store, runtimeTask });
+      const executor = makeExecutor({ [AgentStage.REVIEWER]: () => ({
+        outcome: { tokens: 1, cost: 0, result: "FAIL" },
+        artifactType: ArtifactType.REVIEW_REPORT,
+        artifact: failingReviewReport(taskId),
+      }) });
+      await orch.step(executor);
+      await orch.step(executor);
+      const decision = store.loadTask(taskId)?.recoveryDecision;
+      expect(decision?.handoffIntent.scopeDigest).toBe(stableHash({ scope: runtimeTask.scope, knowledgeRoot: null, targetBindings: { targets: [] } }));
+      expect(decision?.handoffIntent.nextRuntime).toBeNull();
+      expect(store.evidenceForTask(taskId).find((record) => record.kind === "recovery-decision")?.payload).toMatchObject({ handoffIntent: decision?.handoffIntent });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("refuses a Controller result without pre-dispatch proof and preserves an in-flight attempt across restart", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-governed-dispatch-"));
+    try {
+      const taskId = "T-GOVERNED-DISPATCH";
+      const runtimeTask = runtimeTaskFixture(root, { taskId });
+      const packet = packetFixture(root, { taskId });
+      const persisted = writeExecutionPacket({ projectRoot: root, packet });
+      const packetPath = path.relative(root, persisted.path).replace(/\\/g, "/");
+      const stage = AgentStage.BACKEND_ENGINEER;
+      const contractDigest = resolveAuthoritativeContract(stage).digest;
+      const { MemoryTaskStore } = await import("../store/memoryStore.js");
+      const store = new MemoryTaskStore();
+      const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });
+      const opts = { ...human, store, runtimeTask, knowledgeRoot: { name: "knowledge", path: root } };
+      const orch = new Orchestrator(taskId, classification, opts);
+      const result: AgentExecutorResult = withRequiredEvidence({ stage, taskId }, {
+        outcome: { tokens: 1, cost: 0, result: "PASS", runtime: "test", contract_digest: contractDigest },
+        packetPath,
+      });
+      expect(() => orch.reportCompletion(stage, result, { start: 0, end: 1 }, `${taskId}:${stage}:1`)).toThrow(/no pre-dispatch attempt reservation/);
+      expect(store.evidenceForTask(taskId)).toHaveLength(0);
+      let finish!: (result: AgentExecutorResult) => void;
+      const pending = orch.step((req) => {
+        req.recordDispatch!({ packetPath, packetHash: packet.packet_hash, contractDigest, runtimeId: "test" });
+        return new Promise<AgentExecutorResult>((resolve) => { finish = resolve; });
+      });
+      const reserved = store.loadTask(taskId)?.inFlightAttempt;
+      expect(reserved).toMatchObject({ idempotencyKey: `${taskId}:${stage}:1` });
+      const resumed = Orchestrator.resume(taskId, store, opts);
+      expect(resumed.status()).toMatchObject({ kind: "BLOCKED" });
+      let reruns = 0;
+      expect((await resumed.step(() => { reruns += 1; return result; })).kind).toBe("BLOCKED");
+      expect(reruns).toBe(0);
+      expect(() => orch.reportCompletion(stage, { ...result, outcome: { ...result.outcome, runtime: "forged" } },
+        { start: 0, end: 1 }, `${taskId}:${stage}:1`)).toThrow(/differs from pre-dispatch/);
+      finish(result);
+      await pending;
+      const run = store.evidenceForTask(taskId).find((item) => item.kind === "role-run" && item.stage === stage);
+      expect(verifiedRoleAttemptProvenance(store, run!.evidenceId)).toMatchObject({ stage, attempt: 1, contractDigest });
+      const after = Orchestrator.resume(taskId, store, opts);
+      const count = store.evidenceForTask(taskId).length;
+      after.reportCompletion(stage, result, { start: 0, end: 1 }, `${taskId}:${stage}:1`);
+      expect(store.evidenceForTask(taskId)).toHaveLength(count);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it.each([false, true])("%s: Knowledge commit requires document bytes changed after BA dispatch", async (changed) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-knowledge-commit-"));
+    try {
+      const taskId = changed ? "T-BA-CHANGED" : "T-BA-UNCHANGED";
+      const stage = AgentStage.BUSINESS_ANALYST;
+      const runtimeTask = runtimeTaskFixture(root, { taskId, stage, allow: ["_docs/module/*/requirement.md"] });
+      const rules = pathRulesFor(stage);
+      const packet = compileExecutionPacket({
+        req: { stage, taskId, context: [] }, role: stage, runtimeTask,
+        contractScope: { allow: rules.write, deny: rules.deny }, attempt: 1, baseRevision: FIXTURE_REVISION,
+      });
+      const saved = writeExecutionPacket({ projectRoot: root, packet });
+      const packetPath = path.relative(root, saved.path).replace(/\\/g, "/");
+      const sourcePath = path.join(root, "_docs", "module", "packet-fixture", "requirement.md");
+      const sourceArtifact = { path: path.relative(root, sourcePath).replace(/\\/g, "/") };
+      const contractDigest = resolveAuthoritativeContract(stage).digest;
+      const { MemoryTaskStore } = await import("../store/memoryStore.js");
+      const store = new MemoryTaskStore();
+      const classification = classifyTask({ touchesBusinessRuleOnly: true, touchesBackend: true });
+      const orch = new Orchestrator(taskId, classification, { ...human, store, runtimeTask, knowledgeRoot: { name: "knowledge", path: root } });
+      const run = () => orch.step((req) => {
+        req.recordDispatch!({ packetPath, packetHash: packet.packet_hash, contractDigest, runtimeId: "test" });
+        if (changed) fs.appendFileSync(sourcePath, "\nrole attempt amendment\n");
+        return { outcome: { tokens: 1, cost: 0, result: "PASS", runtime: "test", contract_digest: contractDigest },
+          packetPath, sourceArtifact, artifactType: ArtifactType.HANDOFF,
+          artifact: { ...okHandoff, task_id: taskId } };
+      });
+      if (!changed) {
+        await expect(run()).rejects.toThrow(/not authored in the dispatched attempt/);
+        expect(store.evidenceForTask(taskId).some((item) => item.kind === "artifact")).toBe(false);
+        expect(store.loadTask(taskId)?.inFlightAttempt).toMatchObject({ stage, attempt: 1 });
+      } else {
+        await run();
+        const artifact = store.evidenceForTask(taskId).find((item) => item.kind === "artifact" && item.stage === stage);
+        expect(verifiedArtifactProvenance(store, artifact!.evidenceId)).toMatchObject({ stage, roleAttemptId: `${taskId}:${stage}:1` });
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
   it("drives a TRIVIAL frontend task straight to DEPLOYED in one step (no design phase — T-UX11)", async () => {
     const classification = classifyTask({ isTypoOrCopyOnly: true, touchesFrontend: true });
     const orch = new Orchestrator("T-TRIVIAL", classification, human);

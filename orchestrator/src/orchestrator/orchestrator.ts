@@ -1,8 +1,10 @@
 import { AgentStage, TaskState } from "../types.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ClassificationResult } from "../classification/taskClassifier.js";
 import { forceBlock, forwardState, recoverTo, transition, type TaskMachine } from "../state/taskState.js";
 import { MAX_RETRY, initTaskRun, recordFailure, type FailureKind, type RetryBudget, type TaskRun } from "../retry/retryPolicy.js";
-import { decideRecovery, type RecoveryAction } from "../retry/recoveryPolicy.js";
+import { decideRecovery, decideHandoffIntent, RECOVERY_POLICY_VERSION, type RecoveryAction } from "../retry/recoveryPolicy.js";
 import { routeRepair, type RepairRoute } from "../retry/repairRoute.js";
 import { policyFor } from "../escalation/escalationPolicy.js";
 import { routeFailure } from "./failure.js";
@@ -61,7 +63,10 @@ import {
   BusinessInputEvidenceSchema,
   type BusinessInputEvidence,
 } from "../gates/businessInput.js";
-import { contentHash } from "../artifacts/executionPacket.js";
+import { contentHash, stableHash } from "../artifacts/executionPacket.js";
+import { readExecutionPacket } from "../state/runtimeArtifacts.js";
+import { resolveAuthoritativeContract } from "../agents/agentContract.js";
+import { canWritePath, pathRulesFor } from "../agents/pathPermissions.js";
 import {
   DeterministicVerificationSchema,
   buildEvidence,
@@ -81,6 +86,12 @@ import {
 } from "./transitionGuard.js";
 
 const CODE_PRODUCING_STAGES: ReadonlySet<AgentStage> = new Set([AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER]);
+const ROLE_DOCUMENT: Partial<Record<AgentStage, string>> = {
+  [AgentStage.BUSINESS_ANALYST]: "requirement.md",
+  [AgentStage.SYSTEM_ANALYST]: "design.md",
+  [AgentStage.REVIEWER]: "review.md",
+  [AgentStage.QA_ENGINEER]: "qa.md",
+};
 
 /** The stages a reviewer round reviews — the one table `reviewSeparation.ts` states. */
 const REVIEWED_BY_REVIEWER: readonly AgentStage[] = REVIEWS[AgentStage.REVIEWER] ?? [];
@@ -108,6 +119,10 @@ export interface PersistedVerificationRef {
 export interface AgentExecutorRequest {
   stage: AgentStage;
   taskId: string;
+  /** STA reservation key; a runtime must use it when reporting this attempt. */
+  idempotencyKey?: string;
+  /** Called by STA runtime composition after packet verification and before adapter invocation. */
+  recordDispatch?: (identity: { packetPath: string; packetHash: string; contractDigest: string; runtimeId: string }) => void;
   context: ContextItem[];
   /** Only set when stage is DEVOPS: which of the two runs this is, so the executor's prompt can say so. See `isAgentAssignedAt` in taskStatus.ts. */
   deployPhase?: "prepare" | "execute";
@@ -134,6 +149,8 @@ export interface AgentExecutorResult {
   artifact?: unknown;
   /** Runtime-state path of the exact packet used for this attempt. */
   packetPath?: string;
+  /** STA runtime composition names the on-disk role document it read back. */
+  sourceArtifact?: { path: string };
   /**
    * STA-derived gate facts relayed from the execution composition (design
    * risk assessment, QA mode decision, QA verdict requirements). Strictly
@@ -354,16 +371,16 @@ export class Orchestrator {
   private stateBeforeFailure: TaskState = TaskState.CREATED;
   /** What the last failure resolved to. Exposed for the CLI and the run log; not persisted — it is derived, not state. */
   private lastRecovery: RecoveryAction | null = null;
-  /**
-   * The deterministic repair route for the most recent failure (T-V8-015).
-   * Process-local, exactly like `lastRecovery`: it is a derivation of the
-   * persisted `lastFailure`, so a resumed task recomputes it rather than
-   * reading a second stored copy that could drift from the failure it
-   * describes. `invalidates` is empty here because this class holds no task
-   * graph; the descendant set is computed by whoever owns the graph, from the
-   * same `invalidationSetFor`.
-   */
+  private recoveryDecision: PersistedTask["recoveryDecision"] = null;
+  private inFlightAttempt: PersistedTask["inFlightAttempt"] = null;
+  private settledAttempt: PersistedTask["settledAttempt"] = null;
+  /** Last repair policy output, persisted with the failure it classified. */
   private lastRepairRoute: RepairRoute | null = null;
+  /** The intake scope is immutable for a canonical task; handoff refers to its digest. */
+  private frozenScopeDigest(): string | null {
+    if (!this.runtimeTask || !("version" in this.runtimeTask) || this.runtimeTask.version !== 2) return null;
+    return stableHash({ scope: this.runtimeTask.scope, knowledgeRoot: this.knowledgeRoot, targetBindings: this.targetBindings });
+  }
   /** The `task-completion` evidence id written when the task reached DEPLOYED; null until then. */
   private completionEvidenceId: string | null;
   /** The completion decision for the most recent stage attempt - derived and process-local, for callers explaining a stop. */
@@ -395,6 +412,11 @@ export class Orchestrator {
       this.pipelineCursor = restore.pipelineCursor;
       this.blockedReason = restore.blockedReason ?? undefined;
       this.lastFailure = restore.lastFailure;
+      this.recoveryDecision = restore.recoveryDecision;
+      this.lastRecovery = restore.recoveryDecision?.action ?? null;
+      this.lastRepairRoute = restore.recoveryDecision?.repairRoute ?? null;
+      this.inFlightAttempt = restore.inFlightAttempt;
+      this.settledAttempt = restore.settledAttempt;
       this.approvals = [...restore.approvals];
       this.paused = restore.paused;
       this.cancelled = restore.cancelled;
@@ -417,6 +439,9 @@ export class Orchestrator {
       this.pipelineCursor = 0;
       this.blockedReason = undefined;
       this.lastFailure = null;
+      this.recoveryDecision = null;
+      this.inFlightAttempt = null;
+      this.settledAttempt = null;
       this.approvals = [];
       this.paused = false;
       this.cancelled = false;
@@ -509,6 +534,9 @@ export class Orchestrator {
       pipelineCursor: this.pipelineCursor,
       blockedReason: this.blockedReason ?? null,
       lastFailure: this.lastFailure,
+      recoveryDecision: this.recoveryDecision,
+      inFlightAttempt: this.inFlightAttempt,
+      settledAttempt: this.settledAttempt,
       paused: this.paused,
       cancelled: this.cancelled,
       cancelReason: this.cancelReason,
@@ -552,6 +580,9 @@ export class Orchestrator {
       deployPrepared: this.deployPrepared,
       stateBeforeFailure: this.stateBeforeFailure,
       lastRecovery: this.lastRecovery,
+      recoveryDecision: this.recoveryDecision,
+      inFlightAttempt: this.inFlightAttempt,
+      settledAttempt: this.settledAttempt,
       lastRepairRoute: this.lastRepairRoute,
       completionEvidenceId: this.completionEvidenceId,
       lastStageDecision: this.lastStageDecision,
@@ -575,6 +606,9 @@ export class Orchestrator {
       this.deployPrepared = saved.deployPrepared;
       this.stateBeforeFailure = saved.stateBeforeFailure;
       this.lastRecovery = saved.lastRecovery;
+      this.recoveryDecision = saved.recoveryDecision;
+      this.inFlightAttempt = saved.inFlightAttempt;
+      this.settledAttempt = saved.settledAttempt;
       this.lastRepairRoute = saved.lastRepairRoute;
       this.completionEvidenceId = saved.completionEvidenceId;
       this.lastStageDecision = saved.lastStageDecision;
@@ -609,6 +643,66 @@ export class Orchestrator {
         recordedAt: this.now(),
       }),
     );
+  }
+
+  /** A governed attempt is reserved only after its exact packet is on disk,
+   * before the adapter can touch Knowledge or a Target. A crash leaves the
+   * reservation unresolved and a second command cannot silently rerun it. */
+  private recordRoleDispatch(
+    stage: AgentStage,
+    attempt: number,
+    idempotencyKey: string,
+    identity: { packetPath: string; packetHash: string; contractDigest: string; runtimeId: string },
+  ): void {
+    this.atomic(() => {
+      if (!this.knowledgeRoot || !this.runtimeTask || !("version" in this.runtimeTask) || this.runtimeTask.version !== 2) {
+        throw new Error(`${stage}: no canonical Knowledge-bound task for dispatch`);
+      }
+      if (this.pipeline[this.pipelineCursor] !== stage || latestAttempt(this.evidence(), stage) + 1 !== attempt ||
+          idempotencyKey !== `${this.taskId}:${stage}:${attempt}`) {
+        throw new Error(`${stage}: dispatch does not match assigned attempt`);
+      }
+      if (this.inFlightAttempt) throw new Error(`attempt ${this.inFlightAttempt.idempotencyKey} already has a dispatch`);
+      const root = fs.realpathSync(this.knowledgeRoot.path);
+      const absolute = path.resolve(root, identity.packetPath);
+      const real = fs.realpathSync(absolute);
+      const within = path.relative(root, real);
+      if (within.startsWith("..") || path.isAbsolute(within) || absolute !== real) {
+        throw new Error(`${stage}: dispatch packet escapes the frozen Knowledge root`);
+      }
+      const packet = readExecutionPacket(real, { packetHash: identity.packetHash, planHash: this.runtimeTask.plan_hash });
+      if (packet.task_id !== this.taskId || packet.stage !== stage || packet.role !== AGENT_REGISTRY[stage].role) {
+        throw new Error(`${stage}: dispatch packet has a different task, stage or role`);
+      }
+      const contractDigest = resolveAuthoritativeContract(stage, this.contractRoot).digest;
+      if (identity.contractDigest !== contractDigest) throw new Error(`${stage}: dispatch contract digest differs from authoritative role contract`);
+      const scopeDigest = this.frozenScopeDigest();
+      if (!scopeDigest) throw new Error(`${stage}: canonical frozen scope is absent`);
+      let sourceBeforeDigest: string | null = null;
+      const expectedDoc = ROLE_DOCUMENT[stage];
+      if (expectedDoc) {
+        const expected = path.resolve(path.dirname(this.runtimeTask.plan_source), expectedDoc);
+        const relativeDoc = path.relative(root, expected);
+        if (relativeDoc.startsWith("..") || path.isAbsolute(relativeDoc)) throw new Error(`${stage}: role document escapes the frozen Knowledge root`);
+        const rel = relativeDoc.replace(/\\/g, "/");
+        if (!canWritePath(pathRulesFor(stage, this.contractRoot), rel).allowed ||
+            !canWritePath({ write: packet.scope.allow, deny: packet.scope.deny, read: [] }, rel).allowed) {
+          throw new Error(`${stage}: role document is outside authoritative contract or packet write scope`);
+        }
+        if (fs.existsSync(expected)) {
+          if (fs.realpathSync(expected) !== expected) throw new Error(`${stage}: role document is not a regular canonical path`);
+          sourceBeforeDigest = contentHash(fs.readFileSync(expected));
+        }
+      }
+      this.recordEvidence({
+        stage, attempt, role: AGENT_REGISTRY[stage].role, subject: "dispatch",
+        payload: { kind: "role-dispatch", idempotencyKey, packetPath: identity.packetPath,
+          packetHash: identity.packetHash, contractDigest, scopeDigest, runtimeId: identity.runtimeId,
+          sourceBeforeDigest },
+      });
+      this.inFlightAttempt = { stage, attempt, idempotencyKey };
+      this.persist();
+    });
   }
 
   /**
@@ -888,6 +982,9 @@ export class Orchestrator {
       if (current === TaskState.BLOCKED) {
         return this.settle({ kind: "BLOCKED", reason: this.blockedReason ?? "blocked" });
       }
+      if (this.inFlightAttempt) {
+        return this.settle({ kind: "BLOCKED", reason: `attempt ${this.inFlightAttempt.idempotencyKey} has an unresolved executor outcome; reconcile it before another dispatch` });
+      }
 
       const stage = this.pipeline[this.pipelineCursor];
       // A pre-classified material business question has no reason to spend a BA
@@ -1042,8 +1139,29 @@ export class Orchestrator {
     stage: AgentStage,
     result: AgentExecutorResult,
     timing: { start: number; end: number },
+    idempotencyKey?: string,
   ): OrchestratorStatus {
-    return this.atomic(() => this.completeAttempt(stage, result, timing));
+    return this.atomic(() => {
+      const digest = contentHash(JSON.stringify(result));
+      if (idempotencyKey && this.settledAttempt?.idempotencyKey === idempotencyKey) {
+        if (this.settledAttempt.resultDigest !== digest) throw new Error(`attempt ${idempotencyKey} was already settled with different result bytes`);
+        return this.advance();
+      }
+      if (this.inFlightAttempt && (idempotencyKey !== this.inFlightAttempt.idempotencyKey || stage !== this.inFlightAttempt.stage)) {
+        throw new Error(`attempt ${this.inFlightAttempt.idempotencyKey} is reserved; a different or unkeyed result cannot settle it`);
+      }
+      const governed = this.knowledgeRoot && this.runtimeTask && "version" in this.runtimeTask && this.runtimeTask.version === 2;
+      if (governed && (result.outcome.result === "PASS" || result.artifact !== undefined) &&
+          (!idempotencyKey || this.inFlightAttempt?.idempotencyKey !== idempotencyKey)) {
+        throw new Error(`${stage}: governed result has no pre-dispatch attempt reservation`);
+      }
+      const reservation = this.inFlightAttempt ?? (idempotencyKey ? { stage, attempt: latestAttempt(this.evidence(), stage) + 1, idempotencyKey } : null);
+      this.inFlightAttempt = null;
+      const status = this.completeAttempt(stage, result, timing);
+      if (reservation) this.settledAttempt = { ...reservation, resultDigest: digest };
+      this.persist();
+      return status;
+    });
   }
 
   /**
@@ -1091,6 +1209,48 @@ export class Orchestrator {
               : null;
       artifact = { type: result.artifactType, stored: JSON.stringify(validated), verdict };
     }
+    const assignedAttempt = latestAttempt(this.evidence(), stage) + 1;
+    const dispatch = this.evidence().find((item) => item.kind === "role-dispatch" && item.stage === stage && item.attempt === assignedAttempt);
+    if (this.knowledgeRoot && this.runtimeTask && "version" in this.runtimeTask && this.runtimeTask.version === 2 &&
+        (result.outcome.result === "PASS" || artifact)) {
+      if (!dispatch || dispatch.payload.kind !== "role-dispatch") throw new Error(`${stage}: no pre-dispatch evidence for governed artifact`);
+      if (result.packetPath !== dispatch.payload.packetPath || result.outcome.contract_digest !== dispatch.payload.contractDigest ||
+          result.outcome.runtime !== dispatch.payload.runtimeId) {
+        throw new Error(`${stage}: result identity differs from pre-dispatch packet, contract or runtime`);
+      }
+      const root = fs.realpathSync(this.knowledgeRoot.path);
+      const absolute = path.resolve(root, dispatch.payload.packetPath);
+      const real = fs.realpathSync(absolute);
+      const within = path.relative(root, real);
+      if (within.startsWith("..") || path.isAbsolute(within) || absolute !== real) throw new Error(`${stage}: dispatch packet escaped the frozen Knowledge root`);
+      readExecutionPacket(real, { packetHash: dispatch.payload.packetHash, planHash: this.runtimeTask.plan_hash });
+      if (dispatch.payload.scopeDigest !== this.frozenScopeDigest()) throw new Error(`${stage}: frozen scope changed after dispatch`);
+    }
+    let knowledgeSource: { path: string; digest: string } | null = null;
+    const expectedDoc = ROLE_DOCUMENT[stage];
+    if (artifact && expectedDoc && this.knowledgeRoot && this.runtimeTask && "version" in this.runtimeTask && this.runtimeTask.version === 2) {
+      if (!result.outcome.contract_digest || !result.packetPath) {
+        throw new Error(`${stage}: Knowledge artifact has no contract-bound dispatch packet`);
+      }
+      const relative = result.sourceArtifact?.path.replace(/\\/g, "/");
+      if (!relative || !relative.startsWith("_docs/module/")) {
+        throw new Error(`${stage}: missing Knowledge document provenance for ${expectedDoc}`);
+      }
+      const root = fs.realpathSync(this.knowledgeRoot.path);
+      const absolute = path.resolve(root, relative);
+      const expected = path.resolve(path.dirname(this.runtimeTask.plan_source), expectedDoc);
+      const real = fs.realpathSync(absolute);
+      const within = path.relative(root, real);
+      if (within.startsWith("..") || path.isAbsolute(within) || absolute !== expected || real !== expected) {
+        throw new Error(`${stage}: Knowledge document path does not match the frozen module/root`);
+      }
+      const bytes = fs.readFileSync(real);
+      if (bytes.length === 0) throw new Error(`${stage}: Knowledge document is empty`);
+      knowledgeSource = { path: relative, digest: contentHash(bytes.toString("utf8")) };
+      if (dispatch?.payload.kind !== "role-dispatch" || dispatch.payload.sourceBeforeDigest === knowledgeSource.digest) {
+        throw new Error(`${stage}: Knowledge document bytes were not authored in the dispatched attempt`);
+      }
+    }
     let verification: z.infer<typeof DeterministicVerificationSchema> | undefined;
     if (result.deterministicVerification !== undefined) {
       if (!CODE_PRODUCING_STAGES.has(stage)) {
@@ -1132,6 +1292,11 @@ export class Orchestrator {
     // The attempt's evidence, as STA observed it. A QA run references the
     // persisted sweep it was handed (the same derivation `step()` used).
     const role = AGENT_REGISTRY[stage].role;
+    const observedContractDigest = result.outcome.contract_digest ?? null;
+    const authoritativeContractDigest = resolveAuthoritativeContract(stage, this.contractRoot).digest;
+    if (observedContractDigest && observedContractDigest !== authoritativeContractDigest) {
+      throw new Error(`${stage}: artifact/dispatch contract digest mismatch`);
+    }
     const consumed = stage === AgentStage.QA_ENGINEER ? this.persistedVerification(priorEvidence)?.evidenceId : undefined;
     const roleRun = this.recordEvidence({
       stage,
@@ -1148,9 +1313,9 @@ export class Orchestrator {
         deployPhase,
         startedAt: timing.start,
         endedAt: timing.end,
-        contractDigest: result.outcome.contract_digest ?? null,
+        contractDigest: observedContractDigest,
       },
-      refs: consumed ? [consumed] : [],
+      refs: [...(consumed ? [consumed] : []), ...(dispatch ? [dispatch.evidenceId] : [])],
     });
     if (artifact) {
       this.artifactStore[artifact.type] = artifact.stored;
@@ -1167,6 +1332,11 @@ export class Orchestrator {
           kind: "artifact",
           artifactType: artifact.type,
           contentDigest: contentHash(artifact.stored),
+          roleAttemptId: `${this.taskId}:${stage}:${attempt}`,
+          ownerRole: stage,
+          contractDigest: authoritativeContractDigest,
+          sourceDigest: knowledgeSource?.digest ?? null,
+          knowledgePath: knowledgeSource?.path ?? null,
           location: `task-store:${this.taskId}/artifacts/${artifact.type}`,
           verdict: artifact.verdict,
         },
@@ -1254,6 +1424,17 @@ export class Orchestrator {
     // pipeline cursor, so an explicit human resume retries the same stage.
     if (requiresHumanStop) {
       this.lastRecovery = { kind: "ESCALATE", strategy: "escalate_to_human", reason: result.failure!.reason };
+      this.lastRepairRoute = routeRepair({
+        finding: { task_id: this.taskId, category: result.failure!.category, owner: result.failure!.owner,
+          retryable: result.failure!.retryable, requires_human: result.failure!.requiresHuman },
+        pipeline: this.pipeline,
+      });
+      this.recoveryDecision = {
+        policyVersion: RECOVERY_POLICY_VERSION, stage, attempt, failureKind: failureKindOf(stage), action: this.lastRecovery,
+        repairRoute: this.lastRepairRoute,
+        handoffIntent: decideHandoffIntent(this.lastRecovery, `${this.taskId}:${stage}:${attempt}`, stage, this.frozenScopeDigest()),
+      };
+      this.recordRecoveryEvidence(stage, attempt);
       this.run = { ...this.run, machine: forceBlock(this.run.machine) };
       this.blockedReason = result.failure!.reason;
       this.emitVerdict(stage, result);
@@ -1283,7 +1464,7 @@ export class Orchestrator {
       this.run = recordFailure(this.run, failureKind, {
         countsAsDefect: result.failure?.category !== "infrastructure",
       });
-      this.applyFailureRoute(failureKind, result.failure);
+      this.applyFailureRoute(failureKind, result.failure, stage, attempt);
     }
 
     // The UX/UI consultant does not fail the way a verifier does — its
@@ -1344,7 +1525,7 @@ export class Orchestrator {
    * different answers. The agent that reported the failure makes none of these
    * calls — it supplies facts, the orchestrator draws the conclusion.
    */
-  private applyFailureRoute(failureKind: FailureKind, failure: StructuredFailure | undefined): void {
+  private applyFailureRoute(failureKind: FailureKind, failure: StructuredFailure | undefined, stage: AgentStage, attempt: number): void {
     // Recorded alongside the recovery action, not instead of it: the action
     // says which state the task moves to, the route says what the repair
     // consists of, what it invalidates, and whether the round after it has to
@@ -1370,6 +1551,12 @@ export class Orchestrator {
       currentState: this.stateBeforeFailure,
     });
     this.lastRecovery = action;
+    this.recoveryDecision = {
+      policyVersion: RECOVERY_POLICY_VERSION, stage, attempt, failureKind, action,
+      repairRoute: this.lastRepairRoute,
+      handoffIntent: decideHandoffIntent(action, `${this.taskId}:${stage}:${attempt}`, stage, this.frozenScopeDigest()),
+    };
+    this.recordRecoveryEvidence(stage, attempt);
 
     if (this.run.machine.current === TaskState.BLOCKED) {
       // retryPolicy already forced BLOCKED because the budget is spent. No
@@ -1420,6 +1607,22 @@ export class Orchestrator {
         return;
       }
     }
+  }
+
+  private recordRecoveryEvidence(stage: AgentStage, attempt: number): void {
+    const decision = this.recoveryDecision;
+    if (!decision) throw new Error("recovery decision is absent");
+    const roleRun = this.evidence().find((item) => item.kind === "role-run" && item.stage === stage && item.attempt === attempt);
+    if (!roleRun) throw new Error(`recovery decision has no matching role attempt ${stage}:${attempt}`);
+    this.recordEvidence({
+      stage, attempt, role: "orchestrator", subject: "recovery",
+      payload: {
+        kind: "recovery-decision", policyVersion: decision.policyVersion,
+        failureKind: decision.failureKind, action: decision.action,
+        repairRoute: decision.repairRoute, handoffIntent: decision.handoffIntent,
+      },
+      refs: [roleRun.evidenceId],
+    });
   }
 
   /**
@@ -1570,6 +1773,8 @@ export class Orchestrator {
     if (status.kind !== "RUNNING") return status;
 
     const { stage } = status;
+    const attempt = latestAttempt(this.evidence(), stage) + 1;
+    const idempotencyKey = `${this.taskId}:${stage}:${attempt}`;
     const context = selectContext(stage, this.artifactStore);
     // At the moment this status was returned, DEVOPS is only ever assigned at exactly one
     // of these two states (see isAgentAssignedAt) — so the current state alone tells us which run.
@@ -1584,10 +1789,23 @@ export class Orchestrator {
     if (stage === AgentStage.DEVOPS && deployPhase === "execute") {
       assertPermission(stage, Permission.DEPLOY);
     }
+    // Deploy/migration is the destructive stage that cannot be repeated after
+    // an unknown outcome. Other stages carry the same key, while the bounded
+    // run's ledger/checkpoint boundary reconciles code side effects on restart.
+    if (stage === AgentStage.DEVOPS && deployPhase === "execute") this.atomic(() => {
+      if (this.inFlightAttempt) throw new Error(`attempt ${this.inFlightAttempt.idempotencyKey} is already reserved`);
+      this.inFlightAttempt = { stage, attempt, idempotencyKey };
+      this.persist();
+    });
     const start = now();
     const result = await executor({
       stage,
       taskId: this.taskId,
+      idempotencyKey,
+      ...(this.knowledgeRoot && this.runtimeTask && "version" in this.runtimeTask && this.runtimeTask.version === 2
+        ? { recordDispatch: (identity: { packetPath: string; packetHash: string; contractDigest: string; runtimeId: string }) =>
+            this.recordRoleDispatch(stage, attempt, idempotencyKey, identity) }
+        : {}),
       context,
       deployPhase,
       qaRound,
@@ -1599,6 +1817,6 @@ export class Orchestrator {
     });
     const end = now();
 
-    return this.reportCompletion(stage, result, { start, end });
+    return this.reportCompletion(stage, result, { start, end }, idempotencyKey);
   }
 }

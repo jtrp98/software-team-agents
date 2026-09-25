@@ -157,7 +157,7 @@ describe("V13 TASK-007 — `sta run` and `sta bounded-run` are one engine", () =
     expect(f.ledger.attemptsForTask(f.run.run_id, "BE-1")).toEqual([]);
     expect(git(f.target, "branch", "--list", f.run.run_branch)).toBe("");
     expect(ledgerStatuses(f)).toEqual({ "BE-1": "BLOCKED" });
-    expect(engineViewOfRun(f.ledger, f.store, f.run)[0]!.reason).toMatch(/sta roles (signoff|ack)/);
+    expect(engineViewOfRun(f.ledger, f.store, f.run)[0]!.reason).toMatch(/trusted human decision channel/);
     // The machine was never forced to BLOCKED: a person's handoff clears it.
     expect(f.store.loadTask("BE-1")!.machine.current).toBe(TaskState.IMPLEMENTATION);
 

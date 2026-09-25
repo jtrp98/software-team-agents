@@ -282,7 +282,7 @@ describe("the role-lane stage-entry guard fires on every entry point (V13 TASK-0
         const refused = await runTasks({ registry, store, taskIds: ["T-LANE"], executorFor: () => executor, policy, io: quietIo() });
         expect(refused).toMatchObject({ exit: "BLOCKED", exitCode: 1, stoppedAt: { taskId: "T-LANE" } });
         expect(refused.stoppedAt!.reason).toMatch(reasonFor[knowledge]);
-        expect(refused.stoppedAt!.reason).toMatch(/sta roles (signoff|ack)|sta --check-knowledge/);
+        expect(refused.stoppedAt!.reason).toMatch(/trusted human decision channel|sta --check-knowledge/);
         expect(executor).not.toHaveBeenCalled();
         // One projection: BLOCKED with the guard's reason — yet the machine was never forced to BLOCKED
         // and no role-run was recorded, so nothing failed; it is waiting on a person.

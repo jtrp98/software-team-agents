@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { renameSyncRetrying } from "../concurrency/atomicRename.js";
+import { mayOwn } from "./ownership.js";
 import {
   type KnowledgeItem,
   KnowledgeItemError,
@@ -297,6 +298,8 @@ export function writeKnowledgeItem(
   options: WriteOptions = {},
 ): string {
   const problems = checkKnowledgeItem(item);
+  if (!mayOwn(item.kind, item.owner)) problems.push(`${item.owner} cannot own ${item.kind}; role-owned artifacts require their owning role and human decisions remain separate`);
+  if (item.schema_version === 2) problems.push("canonical Knowledge items require a verified role-attempt commit; direct item writes are closed");
   if (problems.length > 0) throw new KnowledgeItemError(item.id, problems);
 
   const filePath = pathFor(item, projectRoot);

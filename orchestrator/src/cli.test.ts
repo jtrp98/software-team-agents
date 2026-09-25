@@ -863,7 +863,7 @@ describe("T35 concurrency lock, wired into the CLI", () => {
       );
       expect(code).toBe(1);
       expect(logs.join("\n")).toMatch(/task T-LANE BLOCKED: cannot start backend-engineer: knowledge under .* holds no items/);
-      expect(logs.join("\n")).toContain("sta roles signoff sa --module m --by <name>");
+      expect(logs.join("\n")).toContain("trusted human decision channel");
       expect(composed).toBe(false);
       const store = new SqliteTaskStore(defaultStateDbPath(dir));
       try {

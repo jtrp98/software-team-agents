@@ -31,7 +31,7 @@ export interface TransitionVerdict {
   reason: string;
 }
 
-/** Roles that may own an item of each kind, from CLAUDE.md's ownership table. `human` may own anything. */
+/** Roles that may author each kind. Human decisions are separate records. */
 export const ALLOWED_OWNERS: Record<KnowledgeKind, AgentStage[]> = {
   requirement: [AgentStage.BUSINESS_ANALYST],
   "business-rule": [AgentStage.BUSINESS_ANALYST],
@@ -46,7 +46,7 @@ export const ALLOWED_OWNERS: Record<KnowledgeKind, AgentStage[]> = {
 };
 
 export function mayOwn(kind: KnowledgeKind, role: AgentStage): boolean {
-  return role === AgentStage.HUMAN || ALLOWED_OWNERS[kind].includes(role);
+  return kind === "decision" ? role === AgentStage.HUMAN : ALLOWED_OWNERS[kind].includes(role);
 }
 
 interface TransitionRule {
@@ -159,7 +159,7 @@ export function checkOwnership(items: KnowledgeItem[]): OwnershipProblem[] {
       problem:
         `owned by ${item.owner}, which does not own ${item.kind} items` +
         (ALLOWED_OWNERS[item.kind].length > 0
-          ? ` (expected ${ALLOWED_OWNERS[item.kind].join(", ")} or human)`
+          ? ` (expected ${ALLOWED_OWNERS[item.kind].join(", ")})`
           : " (only a person owns a decision)"),
     }));
 }

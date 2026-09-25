@@ -243,10 +243,7 @@ export const USAGE =
   "  sta rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups`\n" +
   "  sta list-backups [--project-root <path>]   list this project's .sta/backups/ snapshots, oldest first\n" +
   "  sta roles [--module <name>] [--project-root <path>]   where BA, SA, UXUI and DEV each stand against knowledge/\n" +
-  "  sta roles ack <ba|sa|uxui|dev> <id>[,<id>...] --by <name> [--module <name>]   record that a person in that lane has seen those items\n" +
-  "  sta roles signoff <ba|sa|uxui|dev> --by <name> [--reject] [--note <text>] [--module <name>]   that lane's own approval gate\n" +
-  "  sta roles review <id>[,<id>...] --by <name>   a person moves a knowledge item draft -> reviewed, with its checklist (agent code review is the reviewer stage STA dispatches, never this)\n" +
-  "  sta roles approve <id> --by <name>   move a reviewed item to approved — a person only\n" +
+  "  sta roles ack|signoff|review|approve   unavailable until a trusted human decision channel is configured\n" +
   "  sta roles inbox [<ba|sa|uxui|dev>] [--module <name>]   what each lane has to look at, derived fresh\n" +
   "  sta roles impact <id>[,<id>...]   which lanes changing those items would reach, before changing them\n" +
   "  sta roles context <ba|sa|uxui|dev> [<id>] [--full] [--module <name>]   what that lane may see, and via which role\n" +

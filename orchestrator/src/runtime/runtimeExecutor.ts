@@ -538,6 +538,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     }
 
     let packetPath: string | undefined;
+    let packetHash: string | undefined;
     let promptParts: PromptPartsResult;
     if (runtimeTask) {
       try {
@@ -588,6 +589,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           maxRunsPerTask: opts.packetRetention,
         });
         packetPath = path.relative(runtimeStateRoot, persisted.path).replace(/\\/g, "/");
+        packetHash = packet.packet_hash;
         promptParts = packet;
       } catch (error) {
         return failResult(`cannot compile or persist execution packet for ${role}: ${String(error)}`);
@@ -943,6 +945,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
             ));
           }
         }
+        if (req.recordDispatch) {
+          if (!packetPath || !packetHash) throw new Error("governed dispatch has no persisted execution packet");
+          req.recordDispatch({ packetPath, packetHash, contractDigest, runtimeId: activeRuntime.id });
+        }
         result = await activeRuntime.executeAgent({
           role,
           // `cwd` selects the repository the agent works in; scope stays
@@ -1073,16 +1079,13 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // so this works wherever the run happened, not only where the
     // orchestrator's `fs` can reach.
     if (req.stage === AgentStage.REVIEWER) {
-      return finish(await fingerprintVerdict(
-        reviewerArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, OWNED_MODULE_DOC[AgentStage.REVIEWER]!)),
-        opts.projectRoot,
-      ));
+      const docName = OWNED_MODULE_DOC[AgentStage.REVIEWER]!;
+      const verdict = await fingerprintVerdict(reviewerArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, docName)), opts.projectRoot);
+      return finish(verdict.artifact ? { ...verdict, sourceArtifact: { path: `_docs/module/${moduleName}/${docName}` } } : verdict);
     }
     if (req.stage === AgentStage.QA_ENGINEER) {
-      return finish(await fingerprintVerdict(
-        qaArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "qa.md")),
-        opts.projectRoot,
-      ));
+      const verdict = await fingerprintVerdict(qaArtifactResult(req, metrics, moduleName, await readModuleDocVia(activeRuntime, moduleName, "qa.md")), opts.projectRoot);
+      return finish(verdict.artifact ? { ...verdict, sourceArtifact: { path: `_docs/module/${moduleName}/qa.md` } } : verdict);
     }
     if (req.stage === AgentStage.SECURITY) {
       return finish(await fingerprintVerdict(
@@ -1129,6 +1132,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         outcome: { ...metrics, result: "PASS" },
         artifactType: ArtifactType.HANDOFF,
         artifact: handoff.artifact,
+        sourceArtifact: { path: `_docs/module/${moduleName}/${ownedDoc}` },
         gateEvidence,
       });
     }

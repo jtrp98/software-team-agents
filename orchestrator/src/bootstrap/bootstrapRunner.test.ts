@@ -114,14 +114,15 @@ describe("recordHumanValidation", () => {
     expect(() => recordHumanValidation("Nok", root, NOW)).toThrow(BootstrapNotSettledError);
   });
 
-  it("moves status to ready once every stage is settled and a name is recorded", async () => {
+  it("rejects a name without trusted decision evidence after stages settle", async () => {
     initBootstrap(null, root, NOW);
     for (const id of ["repository", "documentation", "db-schema", "api", "architecture", "human-input"] as const) {
       await runBootstrapStage(stubStage(id, [], true), root, NOW);
     }
-    const state = recordHumanValidation("Nok", root, NOW);
-    expect(state.status).toBe("ready");
-    expect(state.validated_by).toBe("Nok");
+    expect(() => recordHumanValidation("Nok", root, NOW)).toThrow(/trusted human decision record/);
+    const { state } = readBootstrapState(root);
+    expect(state?.status).toBe("pending_validation");
+    expect(state?.validated_by).toBeNull();
   });
 });
 

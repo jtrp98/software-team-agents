@@ -485,7 +485,7 @@ function nextActionFor(spec: LaneSpec, stage: RoleWorkflowStage, facts: StageFac
       return {
         actor: "human",
         agent: null,
-        what: `${because}. Record it with \`sta roles signoff ${spec.lane} --by <name>\`.`,
+        what: `${because}. A trusted human decision channel is required to record the sign-off.`,
       };
     }
 
@@ -515,7 +515,7 @@ function nextActionFor(spec: LaneSpec, stage: RoleWorkflowStage, facts: StageFac
         agent: null,
         what:
           `hand off to ${LANE_LABEL[spec.handoffTo]}: ${ids(facts.approved).join(", ")} are approved. ` +
-          `Record it with \`sta roles ack ${spec.handoffTo} ${ids(facts.approved).join(",")} --by <name>\`.${carried}`,
+          `A trusted human decision channel is required to acknowledge the handoff.${carried}`,
       };
     }
   }

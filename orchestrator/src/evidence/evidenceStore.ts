@@ -4,6 +4,8 @@ import { AgentStage } from "../types.js";
 import { stableHash } from "../artifacts/executionPacket.js";
 import { ArtifactType } from "../artifacts/schemas.js";
 import { ApprovalType } from "../gates/approval.js";
+import { HandoffIntentSchema, RecoveryActionSchema, RECOVERY_POLICY_VERSION } from "../retry/recoveryPolicy.js";
+import { RepairRouteSchema } from "../retry/repairRoute.js";
 
 /**
  * Persisted, typed evidence (V13 TASK-002).
@@ -24,8 +26,12 @@ import { ApprovalType } from "../gates/approval.js";
  */
 
 export const EVIDENCE_KINDS = [
+  /** Packet and contract identity STA persisted before the executor was invoked. */
+  "role-dispatch",
   /** One role execution of a stage attempt — the outcome STA observed, not the agent's claim about it. */
   "role-run",
+  /** STA's versioned retry and handoff decision for a failed role attempt. */
+  "recovery-decision",
   /** A validated artifact the attempt produced, referenced by content digest. */
   "artifact",
   /** The deterministic post-Dev sweep, stored whole so a later process (QA) reads the real result. */
@@ -104,11 +110,38 @@ const RoleRunPayloadSchema = z.strictObject({
   contractDigest: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
 });
 
+const RoleDispatchPayloadSchema = z.strictObject({
+  kind: z.literal("role-dispatch"),
+  idempotencyKey: z.string().min(1),
+  packetPath: z.string().min(1),
+  packetHash: z.string().regex(/^[0-9a-f]{64}$/),
+  contractDigest: z.string().regex(/^[0-9a-f]{64}$/),
+  scopeDigest: z.string().regex(/^[0-9a-f]{64}$/),
+  runtimeId: z.string().min(1),
+  sourceBeforeDigest: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+});
+
+const RecoveryDecisionPayloadSchema = z.strictObject({
+  kind: z.literal("recovery-decision"),
+  policyVersion: z.literal(RECOVERY_POLICY_VERSION),
+  failureKind: z.enum(["review", "qa", "security"]).nullable(),
+  action: RecoveryActionSchema,
+  repairRoute: RepairRouteSchema.nullable(),
+  handoffIntent: HandoffIntentSchema,
+});
+
 const ArtifactPayloadSchema = z.strictObject({
   kind: z.literal("artifact"),
   artifactType: z.enum(ArtifactType),
   /** sha256 of the exact stored artifact bytes (`artifacts[artifactType]` on the task row). */
   contentDigest: z.string().regex(/^[0-9a-f]{64}$/),
+  /** Identity and contract of the STA-dispatched role attempt that produced it. */
+  roleAttemptId: z.string().min(1),
+  ownerRole: z.enum(AgentStage),
+  contractDigest: z.string().regex(/^[0-9a-f]{64}$/),
+  /** Digest of the actual Knowledge document, when the runtime produced one. */
+  sourceDigest: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  knowledgePath: z.string().min(1).nullable(),
   /** Where the bytes live; a Knowledge artifact reference replaces this in TASK-009. */
   location: z.string().min(1),
   /** The verdict an artifact carries (review/QA/security report status), null for one that carries none. */
@@ -155,7 +188,9 @@ const TaskCompletionPayloadSchema = z.strictObject({
 });
 
 export const EvidencePayloadSchema = z.discriminatedUnion("kind", [
+  RoleDispatchPayloadSchema,
   RoleRunPayloadSchema,
+  RecoveryDecisionPayloadSchema,
   ArtifactPayloadSchema,
   DeterministicVerificationPayloadSchema,
   ApprovalDecisionPayloadSchema,
