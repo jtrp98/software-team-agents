@@ -70,7 +70,7 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
     unattendedTargetWrites: false,
     claim:
       `spike-proven on 1.18.21 (probe, headless run, guards report); native exit hooks are absent, so the provider-neutral fail-closed ExitCheckRunner verifies requested exit checks after a successful process exit; other versions' tool arg-shapes are unverified. ` +
-      `Guard coverage (once synced): ${opencodeCoverageWithPlugin().detail}. Analysis/proposal only; partial guards do not certify unattended Target writes. ` +
+      `Guard coverage (once synced): ${opencodeCoverageWithPlugin().detail}. The headless adapter implements the V13 executor lifecycle (fresh-session resume, honest cancel accounting, evidence with changed files and the native session reference); a run whose workspace lacks the sta-guards plugin is refused before spawn (V13 TASK-014). Analysis/proposal only; partial guards do not certify unattended Target writes. ` +
       `V10 does not change this status: a session launched from the Knowledge workspace inherits the same partial coverage on Target paths`,
   },
   antigravity: {

@@ -108,6 +108,19 @@ export interface RunMetrics {
    * right, not a value to fabricate.
    */
   contract_digest?: string;
+  /**
+   * V13 TASK-014 — the executor attempt id the port minted for this run,
+   * bound to task/stage before any spawn. Absent when the run was refused
+   * before an attempt existed, or came from a probe/execute-only adapter
+   * lifted onto the port, which mints no persistent attempt record.
+   */
+  attempt_id?: string;
+  /**
+   * V13 TASK-014 — the runtime's native session reference for this attempt,
+   * lifted from the runtime's own output by the adapter (never self-reported
+   * by the agent). Absent when the runtime echoes no session id.
+   */
+  session_ref?: string;
 }
 
 /**

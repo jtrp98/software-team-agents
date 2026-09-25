@@ -25,7 +25,8 @@
  * OpenCode's headless default is allow-all (spike §7) — fail-open. This
  * plugin plus the bindings' permission blocks are what make a run guarded at
  * all; if this file goes missing, `sta status` reports OpenCode NOT READY and
- * the adapter downgrades its guard report instead of pretending.
+ * the adapter refuses the run before spawn (V13 TASK-014) instead of
+ * launching anything unguarded.
  *
  * IDENTITY AND ENVIRONMENT
  *

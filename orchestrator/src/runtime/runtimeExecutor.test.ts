@@ -226,6 +226,26 @@ describe("createRuntimeExecutor — what reaches the adapter (T108)", () => {
     expect(runtime.requests[0].definitionPath).toBe(".mock/agents/backend-engineer.md");
   });
 
+  it("V13 TASK-014 dispatches through the lifecycle port: the request names its task/stage and the run log records the attempt identity", async () => {
+    const runtime = new MockRuntimeAdapter({ id: "some-runtime" });
+    const executor = executorFor(runtime);
+
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-PORT-1", context: [] });
+
+    // The attempt is bound to task and stage before any spawn — the port's
+    // attempt id is minted from exactly that identity.
+    expect(runtime.requests[0].taskId).toBe("T-PORT-1");
+    expect(runtime.requests[0].stage).toBe(AgentStage.BACKEND_ENGINEER);
+    // The attempt the port prepared is the one the mock executed.
+    const attempts = [...runtime.attempts.keys()];
+    expect(attempts).toHaveLength(1);
+    expect(runtime.resultsByAttempt.has(attempts[0]!)).toBe(true);
+    // The run log record names the attempt and the runtime's own session
+    // reference — collected from the port, never self-reported by the agent.
+    expect(result.outcome.attempt_id).toBe(attempts[0]);
+    expect(result.outcome.session_ref).toMatch(/^mock-session-/);
+  });
+
   it("hands over the assembled prompt, not the raw context, so every adapter gets the same one", async () => {
     const runtime = new MockRuntimeAdapter();
     const executor = executorFor(runtime);

@@ -65,6 +65,8 @@ describe("RunLog", () => {
       deterministic_gate: null,
       document_gate: null,
       contract_digest: null,
+      attempt_id: null,
+      session_ref: null,
     });
   });
 

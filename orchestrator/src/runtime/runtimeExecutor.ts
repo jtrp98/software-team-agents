@@ -30,10 +30,12 @@ import { codeIntelContext as defaultCodeIntelContext, retrievalCandidatesForPack
 import { buildTaskRetrievalQuery } from "../context/retrievalQuery.js";
 import type {
   RuntimeAdapter,
+  RuntimeAgentRequest,
   RuntimeAgentResult,
   RuntimeAutonomy,
   RuntimeGuards,
 } from "./runtimeAdapter.js";
+import { executorPortFor, ExecutorPortRefusalError } from "./executorPort.js";
 import type { GuardResolver } from "./runtimeGuards.js";
 import type { RuntimeRegistry } from "./runtimeRegistry.js";
 import {
@@ -244,6 +246,10 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
   effort?: string;
   /** V13 TASK-005 — the digest `resolveAuthoritativeContract` resolved and enforced before this attempt started. */
   contract_digest?: string;
+  /** V13 TASK-014 — the executor attempt id the port minted for this run. */
+  attempt_id?: string;
+  /** V13 TASK-014 — the runtime's native session reference, lifted from its own output. */
+  session_ref?: string;
   context_chars: number;
   estimated_input_tokens: number;
   composition: {
@@ -281,6 +287,8 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     effort: result.effort ?? declared.effort,
     requested_effort: declared.effort,
     contract_digest: declared.contract_digest,
+    attempt_id: declared.attempt_id,
+    session_ref: declared.session_ref,
     tokens: (input_tokens ?? 0) + (output_tokens ?? 0),
     // `?? 0` here, unlike the `costUsd?: number` in the envelope: the run log's
     // `cost` is a number by contract, and "this runtime does not report cost" is
@@ -921,6 +929,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         }
       }
       const activeProbe = routeAvailability[activeRuntime.id];
+      // V13 TASK-014 — the attempt identity and session reference of THIS
+      // loop iteration's dispatch, threaded into the run metrics below.
+      let attemptId: string | undefined;
+      let attemptSessionRef: string | undefined;
       let exitCheckBaseline: ExitCheckRootBaseline[] | undefined;
       if (activeProbe?.available === false) {
         result = {
@@ -953,7 +965,14 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           if (!packetPath || !packetHash) throw new Error("governed dispatch has no persisted execution packet");
           req.recordDispatch({ packetPath, packetHash, contractDigest, runtimeId: activeRuntime.id });
         }
-        result = await activeRuntime.executeAgent({
+        // V13 TASK-014 — the one dispatch path: through the executor lifecycle
+        // port. `prepare` mints the attempt identity (bound to task/stage)
+        // before any spawn; `execute` runs that exact attempt; a runtime that
+        // declares EVIDENCE_COLLECTION has its normalized evidence collected in
+        // the same flow. A probe/execute-only adapter rides `executorPortFor`'s
+        // typed-refusal wrapper — there is no port-less dispatch path left.
+        const port = executorPortFor(activeRuntime);
+        const adapterRequest: RuntimeAgentRequest = {
           role,
           // `cwd` selects the repository the agent works in; scope stays
           // independently bounded by canonical workRoots below.
@@ -963,6 +982,10 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           workRoots: threeRepo?.roots.workRoots,
           definitionPath: activeRuntime.binding.definitionPath(role),
           prompt,
+          // The attempt's task/stage binding — the port mints the attempt id
+          // from the packet identity plus these.
+          taskId: req.taskId,
+          stage: req.stage,
           model: declared.model,
           modelExplicit: activeModelExplicit,
           effort: activeAdapterEffort,
@@ -992,11 +1015,31 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
               : {}),
           },
           timeoutMs: opts.timeoutMs,
-        });
+        };
+        const preparedAttempt = await port.prepare(adapterRequest);
+        result = await port.execute(preparedAttempt);
+        attemptId = preparedAttempt.attemptId;
+        if (port.capabilities.has(RuntimeCapability.EVIDENCE_COLLECTION)) {
+          try {
+            const evidence = await port.collectEvidence(preparedAttempt);
+            attemptSessionRef = evidence.sessionRef;
+          } catch (error) {
+            // Evidence collection is observability, not enforcement — a failure
+            // to collect must not fail a run whose work already succeeded
+            // (fail-closed result/diff verification lands in TASK-017/018).
+            result = { ...result, diagnostics: [...result.diagnostics, `attempt evidence collection failed (non-fatal): ${error instanceof Error ? error.message : String(error)}`] };
+          }
+        }
       } catch (e) {
-        // `executeAgent` is contracted never to throw. If one does, that is an
-        // adapter bug — and it still must not take the task down, so it lands as a
-        // FAIL that names the adapter rather than the agent.
+        if (e instanceof ExecutorPortRefusalError) {
+          // A typed refusal is the port refusing a lifecycle operation before
+          // any spawn — a refusal to run this attempt, not an adapter bug.
+          return finish(failResult(`cannot start ${role}: executor "${activeRuntime.id}" refused the attempt: ${String(e)}`, declared));
+        }
+        // `executeAgent`/`port.execute` are contracted never to throw beyond a
+        // typed refusal. If one does, that is an adapter bug — and it still
+        // must not take the task down, so it lands as a FAIL that names the
+        // adapter rather than the agent.
         return finish(failResult(`adapter "${activeRuntime.id}" threw instead of returning a result: ${String(e)}`, declared));
       }
 
@@ -1026,7 +1069,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         ));
       }
 
-      metrics = metricsFrom(result, declared);
+      metrics = metricsFrom(result, { ...declared, attempt_id: attemptId, session_ref: attemptSessionRef });
 
       if (result.status !== "UNAVAILABLE" && hasTargetWrite && !result.guards.enforced.includes(RuntimeCapability.PRE_TOOL_GUARD)) {
         return finish(failResult(

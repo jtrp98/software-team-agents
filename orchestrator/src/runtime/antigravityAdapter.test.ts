@@ -228,7 +228,15 @@ describe("AntigravityAdapter — capability honesty", () => {
   it("declares only what a spike transcript backs", () => {
     const adapter = new AntigravityAdapter({ projectRoot: fixture() });
     expect([...adapter.capabilities].sort()).toEqual(
-      [RuntimeCapability.MODEL_SELECTION, RuntimeCapability.STRUCTURED_RESULT].sort(),
+      [
+        RuntimeCapability.MODEL_SELECTION,
+        RuntimeCapability.STRUCTURED_RESULT,
+        // V13 TASK-014 — the single-shot lifecycle implemented over the same
+        // spawn surface (fresh-session resume, cancel accounting, evidence).
+        RuntimeCapability.ATTEMPT_RESUME,
+        RuntimeCapability.ATTEMPT_CANCEL,
+        RuntimeCapability.EVIDENCE_COLLECTION,
+      ].sort(),
     );
     for (const unclaimed of [
       RuntimeCapability.PRE_TOOL_GUARD,

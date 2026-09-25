@@ -2,6 +2,14 @@ import { spawnSync as nodeSpawnSync, type SpawnSyncReturns } from "node:child_pr
 import Ajv, { type ValidateFunction } from "ajv";
 import { LocalWorkspace } from "./localWorkspace.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import { SingleShotLifecycle } from "./singleShotLifecycle.js";
+import type {
+  ExecutorAttemptRef,
+  ExecutorCancelOutcome,
+  ExecutorEvidence,
+  ExecutorPort,
+  PreparedExecutorAttempt,
+} from "./executorPort.js";
 import type {
   RuntimeAdapter,
   RuntimeAgentRequest,
@@ -81,6 +89,14 @@ const CLAUDE_CODE_CAPABILITIES: readonly RuntimeCapability[] = [
   RuntimeCapability.STRUCTURED_RESULT,
   RuntimeCapability.COST_REPORTING,
   RuntimeCapability.INTERACTIVE_PROMPTS,
+  // V13 TASK-014 — the lifecycle this adapter actually implements through
+  // `SingleShotLifecycle`: fresh-session resume from the persisted attempt
+  // journal (Claude Code's headless `-p` runs have no mid-attempt restore to
+  // resume into), honest cancel accounting, and evidence collection computed
+  // from the run's own spawn and the work-root snapshots around it.
+  RuntimeCapability.ATTEMPT_RESUME,
+  RuntimeCapability.ATTEMPT_CANCEL,
+  RuntimeCapability.EVIDENCE_COLLECTION,
 ];
 
 /**
@@ -155,6 +171,8 @@ interface ClaudeCliJsonResult {
   terminal_reason?: string;
   /** The upstream HTTP status, present only alongside `terminal_reason: "api_error"`. */
   api_error_status?: number;
+  /** The session this turn ran in — the native session reference the lifecycle records as evidence. */
+  session_id?: string;
   result?: string;
   total_cost_usd?: number;
   usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
@@ -262,9 +280,11 @@ export interface ClaudeCodeAdapterOptions {
    * effect of using this adapter.
    */
   outputSchema?: Record<string, unknown>;
+  /** Injectable for tests; roots the lifecycle's attempt journal instead of the OS temp dir default. */
+  journalRoot?: string;
 }
 
-export class ClaudeCodeAdapter implements RuntimeAdapter {
+export class ClaudeCodeAdapter implements ExecutorPort {
   readonly id = "claude-code";
   readonly displayName = "Claude Code";
   readonly binding: RuntimeBinding = {
@@ -283,6 +303,8 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
   private readonly outputSchema?: Record<string, unknown>;
   private readonly outputValidator?: ValidateFunction;
   private readonly outputSchemaError?: string;
+  /** V13 TASK-014 — the lifecycle port, over this adapter's one spawn-and-parse implementation. */
+  private readonly lifecycle: SingleShotLifecycle;
 
   constructor(opts: ClaudeCodeAdapterOptions) {
     this.workspace = new LocalWorkspace({ root: opts.projectRoot });
@@ -298,6 +320,36 @@ export class ClaudeCodeAdapter implements RuntimeAdapter {
         this.outputSchemaError = String(error);
       }
     }
+    this.lifecycle = new SingleShotLifecycle(this.id, {
+      run: (req) => this.executeAgent(req),
+      sessionRefFrom: (result) => {
+        const envelope = result.raw as ClaudeCliJsonResult | undefined;
+        return typeof envelope?.session_id === "string" && envelope.session_id.length > 0 ? envelope.session_id : undefined;
+      },
+      journalRoot: opts.journalRoot,
+    });
+  }
+
+  // V13 TASK-014 — the lifecycle port, delegating to the shared single-shot
+  // implementation over `executeAgent`. `executeAgent` itself stays the
+  // unchanged single-shot seam `RuntimeAdapter` has always exposed.
+  prepare(req: RuntimeAgentRequest): Promise<PreparedExecutorAttempt> {
+    return this.lifecycle.prepare(req);
+  }
+  execute(attempt: PreparedExecutorAttempt): Promise<RuntimeAgentResult> {
+    return this.lifecycle.execute(attempt);
+  }
+  resume(ref: ExecutorAttemptRef): Promise<RuntimeAgentResult> {
+    return this.lifecycle.resume(ref);
+  }
+  cancel(ref: ExecutorAttemptRef): Promise<ExecutorCancelOutcome> {
+    return this.lifecycle.cancel(ref);
+  }
+  collectResult(ref: ExecutorAttemptRef): Promise<RuntimeAgentResult | null> {
+    return this.lifecycle.collectResult(ref);
+  }
+  collectEvidence(ref: ExecutorAttemptRef): Promise<ExecutorEvidence> {
+    return this.lifecycle.collectEvidence(ref);
   }
 
   /**

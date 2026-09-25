@@ -81,6 +81,10 @@ export interface RunRecord {
   verification_fingerprint?: ChangeSetFingerprint | null;
   /** V13 TASK-005 — sha256 of the `contracts/<stage>.yaml` bytes resolved and enforced before this attempt started. Absent for historical rows; null for an attempt refused before a contract resolved. */
   contract_digest?: string | null;
+  /** V13 TASK-014 — the executor attempt id the port minted for this run, bound to task/stage before any spawn. Null when the run was refused before an attempt existed. */
+  attempt_id?: string | null;
+  /** V13 TASK-014 — the runtime's native session reference, lifted from its own output by the adapter. Null when the runtime echoes none. */
+  session_ref?: string | null;
 }
 
 export interface RunOutcome {
@@ -132,6 +136,8 @@ export interface RunOutcome {
   document_gate?: "enabled" | "disabled";
   verification_fingerprint?: ChangeSetFingerprint;
   contract_digest?: string;
+  attempt_id?: string;
+  session_ref?: string;
 }
 
 const NOT_REPORTED = "not reported";
@@ -237,6 +243,8 @@ export class RunLog {
       deterministic_gate: params.outcome.deterministic_gate ?? null,
       document_gate: params.outcome.document_gate ?? null,
       contract_digest: params.outcome.contract_digest ?? null,
+      attempt_id: params.outcome.attempt_id ?? null,
+      session_ref: params.outcome.session_ref ?? null,
       ...(params.outcome.verification_fingerprint ? { verification_fingerprint: params.outcome.verification_fingerprint } : {}),
     };
     this.records.push(entry);

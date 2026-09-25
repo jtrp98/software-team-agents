@@ -392,7 +392,9 @@ function claudeCoverage(wiring: GuardWiringStatus): GuardCoverage {
  * each rendered binding's `permission.bash` block denies state-changing git.
  * Doc-rewrite, secret-leak and green-before-stop have no OpenCode mechanism —
  * the plugin's own header says so, and OpenCode's default posture is allow-all,
- * so a missing plugin means nothing is enforced at all.
+ * so a missing plugin means nothing is enforced at all. Since V13 TASK-014 the
+ * headless adapter refuses a run whose workspace lacks the plugin before any
+ * spawn, instead of launching an unguarded run.
  */
 /** The `partial` verdict when the plugin is present — pure/static, so documentation can quote it without a workspace. */
 export function opencodeCoverageWithPlugin(): GuardCoverage {
@@ -403,7 +405,8 @@ export function opencodeCoverageWithPlugin(): GuardCoverage {
     unenforced: [RuntimeCapability.EXIT_GUARD, RuntimeCapability.PER_AGENT_EXIT_GUARD],
     detail:
       `partial — ${OPENCODE_PLUGIN_PATH} enforces block-outside-repo and block-path-permissions, and each binding's permission block enforces block-git; ` +
-      "block-doc-rewrite, block-secret-leak and require-green-before-stop have no OpenCode mechanism; the latter two are enforced after headless process exit by the provider-neutral ExitCheckRunner",
+      "block-doc-rewrite, block-secret-leak and require-green-before-stop have no OpenCode mechanism; the latter two are enforced after headless process exit by the provider-neutral ExitCheckRunner; " +
+      "the headless adapter refuses a run whose workspace lacks this plugin before spawn (V13 TASK-014), because OpenCode's default posture is allow-all",
   };
 }
 
@@ -415,7 +418,7 @@ function opencodeCoverage(targetRoot: string): GuardCoverage {
       level: "unguarded",
       enforced: [],
       unenforced: ALL_GUARD_CAPABILITIES,
-      detail: `no ${OPENCODE_PLUGIN_PATH} — OpenCode's default posture is allow-all, so block-git, block-outside-repo, block-path-permissions, block-doc-rewrite, block-secret-leak and require-green-before-stop are all inactive; run software-team-agents sync`,
+      detail: `no ${OPENCODE_PLUGIN_PATH} — OpenCode's default posture is allow-all, so block-git, block-outside-repo, block-path-permissions, block-doc-rewrite, block-secret-leak and require-green-before-stop are all inactive; the headless adapter refuses the run before spawn (V13 TASK-014); run software-team-agents sync`,
     };
   }
   return opencodeCoverageWithPlugin();

@@ -5,6 +5,14 @@ import {
   resolveNpmCliScript,
   type CommandResolver,
 } from "./npmCliResolver.js";
+import { SingleShotLifecycle } from "./singleShotLifecycle.js";
+import type {
+  ExecutorAttemptRef,
+  ExecutorCancelOutcome,
+  ExecutorEvidence,
+  ExecutorPort,
+  PreparedExecutorAttempt,
+} from "./executorPort.js";
 import type {
   RuntimeAdapter,
   RuntimeAgentRequest,
@@ -38,14 +46,18 @@ import type {
  * - The binding's declarative `permission:` block plus the auto-loaded
  *   `.opencode/plugin/sta-guards.js` plugin are the enforcement half of this
  *   framework's guards. The spike proved OpenCode's headless default posture is
- *   allow-all, so those two layers are what makes a run guarded at all; the
- *   adapter reports honestly which of them it could verify per run.
+ *   allow-all, so those two layers are what makes a run guarded at all — and
+ *   since V13 TASK-014, a run without the plugin is refused before spawn
+ *   instead of proceeding unguarded.
  *
  * WHAT IS DELIBERATELY NOT CLAIMED
  * - `EXIT_GUARD` / `PER_AGENT_EXIT_GUARD` — no Stop-hook equivalent has been
  *   verified under `opencode run`. Exit checks stay the orchestrator's post-hoc
  *   job on this runtime, and every run that requests them is told so via
- *   `RuntimeGuardReport.unenforced`.
+ *   `RuntimeGuardReport.unenforced`. That partial coverage is recorded
+ *   truthfully in `guardSettings.ts`/`runtimeSupport.ts` and is why OpenCode
+ *   stays uncertified until TASK-017/018's fail-closed STA verification and
+ *   TASK-025's real governed-run UAT pass.
  * - `INTERACTIVE_PROMPTS` — `opencode run` is non-interactive; stages that put
  *   a question to a person cannot run here as designed.
  * - `PARALLEL_EXECUTION` — unclaimed by every adapter.
@@ -63,6 +75,13 @@ const OPENCODE_CAPABILITIES: readonly RuntimeCapability[] = [
   RuntimeCapability.PROJECT_LEVEL_BINDING,
   RuntimeCapability.STRUCTURED_RESULT,
   RuntimeCapability.COST_REPORTING,
+  // V13 TASK-014 — the lifecycle implemented through `SingleShotLifecycle`:
+  // fresh-session resume from the persisted attempt journal, honest cancel
+  // accounting, and evidence computed from the spawn and the work-root
+  // snapshots around it.
+  RuntimeCapability.ATTEMPT_RESUME,
+  RuntimeCapability.ATTEMPT_CANCEL,
+  RuntimeCapability.EVIDENCE_COLLECTION,
 ];
 
 /**
@@ -86,9 +105,11 @@ export interface OpenCodeAdapterOptions {
   resolveCommand?: CommandResolver;
   /** Injectable for tests; defaults to `process.platform`. */
   platform?: string;
+  /** Injectable for tests; roots the lifecycle's attempt journal instead of the OS temp dir default. */
+  journalRoot?: string;
 }
 
-export class OpenCodeAdapter implements RuntimeAdapter {
+export class OpenCodeAdapter implements ExecutorPort {
   readonly id = "opencode";
   readonly displayName = "OpenCode";
   readonly binding: RuntimeBinding = {
@@ -107,6 +128,8 @@ export class OpenCodeAdapter implements RuntimeAdapter {
   private readonly defaultTimeoutMs: number;
   private readonly resolveCommand: CommandResolver;
   private readonly platform: string;
+  /** V13 TASK-014 — the lifecycle port, over this adapter's one spawn-and-parse implementation. */
+  private readonly lifecycle: SingleShotLifecycle;
 
   constructor(opts: OpenCodeAdapterOptions) {
     this.workspace = new LocalWorkspace({ root: opts.projectRoot });
@@ -115,6 +138,36 @@ export class OpenCodeAdapter implements RuntimeAdapter {
     this.models = new Set(opts.models ?? []);
     this.resolveCommand = opts.resolveCommand ?? resolveNpmCliScript;
     this.platform = opts.platform ?? process.platform;
+    this.lifecycle = new SingleShotLifecycle(this.id, {
+      run: (req) => this.executeAgent(req),
+      sessionRefFrom: (result) => {
+        const raw = result.raw as { stdout?: string } | undefined;
+        if (!raw || typeof raw.stdout !== "string") return undefined;
+        return parseOpenCodeJsonl(raw.stdout).sessionID;
+      },
+      journalRoot: opts.journalRoot,
+    });
+  }
+
+  // V13 TASK-014 — the lifecycle port, delegating to the shared single-shot
+  // implementation over `executeAgent`.
+  prepare(req: RuntimeAgentRequest): Promise<PreparedExecutorAttempt> {
+    return this.lifecycle.prepare(req);
+  }
+  execute(attempt: PreparedExecutorAttempt): Promise<RuntimeAgentResult> {
+    return this.lifecycle.execute(attempt);
+  }
+  resume(ref: ExecutorAttemptRef): Promise<RuntimeAgentResult> {
+    return this.lifecycle.resume(ref);
+  }
+  cancel(ref: ExecutorAttemptRef): Promise<ExecutorCancelOutcome> {
+    return this.lifecycle.cancel(ref);
+  }
+  collectResult(ref: ExecutorAttemptRef): Promise<RuntimeAgentResult | null> {
+    return this.lifecycle.collectResult(ref);
+  }
+  collectEvidence(ref: ExecutorAttemptRef): Promise<ExecutorEvidence> {
+    return this.lifecycle.collectEvidence(ref);
   }
 
   async probe(): Promise<RuntimeProbe> {
@@ -161,6 +214,28 @@ export class OpenCodeAdapter implements RuntimeAdapter {
         guards: { enforced: [], unenforced: [] },
         diagnostics: [
           `no role binding found at ${req.definitionPath} — \`opencode run --agent\` would silently fall back to OpenCode's default agent; regenerate bindings via sta init/sync`,
+        ],
+      };
+    }
+
+    // V13 TASK-014 — refuse before spawn when the sta-guards plugin is
+    // missing. OpenCode's headless default posture is allow-all (spike §7):
+    // without the plugin nothing enforces contract path ownership or
+    // workspace containment, so a run launched anyway would be unguarded
+    // while looking identical to a guarded one. Refusal — not a downgraded
+    // guard report — is the fail-closed answer; restore the plugin via
+    // sta init/sync.
+    const pluginPresent = await this.workspace.exists(this.binding.guardConfigPath!).catch(() => false);
+    if (!pluginPresent) {
+      return {
+        status: "ERROR",
+        exitCode: null,
+        text: "",
+        usage: {},
+        guards: { enforced: [], unenforced: [RuntimeCapability.PRE_TOOL_GUARD, RuntimeCapability.POST_TOOL_GUARD] },
+        diagnostics: [
+          `refusing to run: ${this.binding.guardConfigPath} is missing and OpenCode's default posture is allow-all, so this run would enforce nothing ` +
+            `(V13 TASK-014 refuses it before spawn) — restore the plugin via sta init/sync`,
         ],
       };
     }
@@ -275,11 +350,10 @@ export class OpenCodeAdapter implements RuntimeAdapter {
   }
 
   /**
-   * Honest per-run guard accounting. Enforced = the mechanisms this runtime
-   * actually has and this project actually ships: the binding's permission
-   * frontmatter plus the sta-guards plugin (checked on disk). Exit checks have
-   * no verified mechanism on OpenCode and are always reported unenforced so
-   * T111/T-OC7 covers them post-hoc.
+   * Honest per-run guard accounting for a run that already passed the
+   * plugin-presence refusal above: the plugin (checked before spawn) enforces
+   * pre/post tool path guards, and exit checks have no verified mechanism on
+   * OpenCode so they are always reported unenforced for post-hoc coverage.
    */
   private async guardReportFor(requested: RuntimeGuards): Promise<RuntimeGuardReport> {
     const wantsPreToolGuard =
@@ -299,11 +373,9 @@ export class OpenCodeAdapter implements RuntimeAdapter {
       unenforced.push(RuntimeCapability.PRE_TOOL_GUARD, RuntimeCapability.POST_TOOL_GUARD);
     }
     if (wantsExitGuard) unenforced.push(RuntimeCapability.EXIT_GUARD, RuntimeCapability.PER_AGENT_EXIT_GUARD);
-    const reason = !pluginPresent
-      ? `${this.binding.guardConfigPath} is missing — OpenCode enforces nothing declaratively beyond the binding's own permission block; restore it via sta init/sync`
-      : wantsExitGuard
-        ? "OpenCode has no verified Stop-hook equivalent under `opencode run` — exit checks run post-hoc in the orchestrator"
-        : undefined;
+    const reason = wantsExitGuard
+      ? "OpenCode has no verified Stop-hook equivalent under `opencode run` — exit checks run post-hoc in the orchestrator"
+      : undefined;
     return { enforced, unenforced, ...(reason ? { reason } : {}) };
   }
 }
@@ -312,9 +384,11 @@ export class OpenCodeAdapter implements RuntimeAdapter {
  * Tolerant reader over `opencode run --format json`'s NDJSON stream (shapes
  * verified on the spike; anything absent stays undefined per the absent ≠ 0
  * invariant). Never throws on a line it cannot parse. Text parts concatenate in
- * arrival order — the model may split its reply across several parts.
+ * arrival order — the model may split its reply across several parts. The
+ * stream's `sessionID` (top-level on every event, seen in the spike fixture)
+ * is lifted so the lifecycle can record the native session reference.
  */
-export function parseOpenCodeJsonl(stdout: string): { text: string; usage: RuntimeUsage; model?: string; finishReason?: string } {
+export function parseOpenCodeJsonl(stdout: string): { text: string; usage: RuntimeUsage; model?: string; sessionID?: string; finishReason?: string } {
   const texts: string[] = [];
   let inputTokens: number | undefined;
   let outputTokens: number | undefined;
@@ -322,6 +396,7 @@ export function parseOpenCodeJsonl(stdout: string): { text: string; usage: Runti
   let cacheCreationInputTokens: number | undefined;
   let costUsd: number | undefined;
   let model: string | undefined;
+  let sessionID: string | undefined;
   let finishReason: string | undefined;
   for (const line of stdout.split("\n")) {
     const trimmed = line.trim();
@@ -332,6 +407,7 @@ export function parseOpenCodeJsonl(stdout: string): { text: string; usage: Runti
     } catch {
       continue;
     }
+    if (typeof event.sessionID === "string" && event.sessionID.length > 0) sessionID = event.sessionID;
     const part = event.part as Record<string, unknown> | undefined;
     if (!part || typeof part !== "object") continue;
     if (event.type === "text" && typeof part.text === "string") texts.push(part.text);
@@ -360,6 +436,7 @@ export function parseOpenCodeJsonl(stdout: string): { text: string; usage: Runti
         ? { inputTokens, outputTokens, cachedInputTokens, cacheCreationInputTokens, costUsd }
         : {},
     model,
+    ...(sessionID ? { sessionID } : {}),
     finishReason,
   };
 }

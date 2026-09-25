@@ -5,6 +5,14 @@ import * as path from "node:path";
 import { LocalWorkspace } from "./localWorkspace.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { resolveNpmCliScript as resolveNpmCliScriptImpl, type CommandResolver } from "./npmCliResolver.js";
+import { SingleShotLifecycle } from "./singleShotLifecycle.js";
+import type {
+  ExecutorAttemptRef,
+  ExecutorCancelOutcome,
+  ExecutorEvidence,
+  ExecutorPort,
+  PreparedExecutorAttempt,
+} from "./executorPort.js";
 import type {
   RuntimeAdapter,
   RuntimeAgentRequest,
@@ -158,6 +166,14 @@ const CODEX_CAPABILITIES: readonly RuntimeCapability[] = [
   RuntimeCapability.PRE_TOOL_GUARD,
   RuntimeCapability.PROJECT_LEVEL_BINDING,
   RuntimeCapability.STRUCTURED_RESULT,
+  // V13 TASK-014 — the lifecycle implemented through `SingleShotLifecycle`:
+  // fresh-session resume from the persisted attempt journal, honest cancel
+  // accounting, and evidence computed from the spawn and the work-root
+  // snapshots around it. No session reference is lifted: no session id has
+  // been verified in the `codex exec --json` stream, and one is never invented.
+  RuntimeCapability.ATTEMPT_RESUME,
+  RuntimeCapability.ATTEMPT_CANCEL,
+  RuntimeCapability.EVIDENCE_COLLECTION,
 ];
 
 export const CODEX_PERMISSION_PROFILE_UNAVAILABLE = "CODEX_PERMISSION_PROFILE_UNAVAILABLE";
@@ -475,9 +491,11 @@ export interface CodexAdapterOptions {
    * effect of this adapter existing.
    */
   outputSchema?: Record<string, unknown>;
+  /** Injectable for tests; roots the lifecycle's attempt journal instead of the OS temp dir default. */
+  journalRoot?: string;
 }
 
-export class CodexAdapter implements RuntimeAdapter {
+export class CodexAdapter implements ExecutorPort {
   readonly id = "codex";
   readonly displayName = "Codex";
   readonly binding: RuntimeBinding = {
@@ -506,6 +524,8 @@ export class CodexAdapter implements RuntimeAdapter {
   private readonly inheritCodexAuth: boolean;
   private readonly resolveCommand: CommandResolver;
   private readonly platform: string;
+  /** V13 TASK-014 — the lifecycle port, over this adapter's one spawn-and-parse implementation. */
+  private readonly lifecycle: SingleShotLifecycle;
 
   constructor(opts: CodexAdapterOptions) {
     this.workspace = new LocalWorkspace({ root: opts.projectRoot });
@@ -519,6 +539,30 @@ export class CodexAdapter implements RuntimeAdapter {
     // credential store. Production construction inherits only auth.json into
     // the isolated per-run home; config, plugins, MCPs, and user rules do not.
     this.inheritCodexAuth = opts.spawnSync === undefined;
+    // No `sessionRefFrom`: no session id has been verified in the `codex exec
+    // --json` event stream, so evidence records none rather than inventing one.
+    this.lifecycle = new SingleShotLifecycle(this.id, { run: (req) => this.executeAgent(req), journalRoot: opts.journalRoot });
+  }
+
+  // V13 TASK-014 — the lifecycle port, delegating to the shared single-shot
+  // implementation over `executeAgent`.
+  prepare(req: RuntimeAgentRequest): Promise<PreparedExecutorAttempt> {
+    return this.lifecycle.prepare(req);
+  }
+  execute(attempt: PreparedExecutorAttempt): Promise<RuntimeAgentResult> {
+    return this.lifecycle.execute(attempt);
+  }
+  resume(ref: ExecutorAttemptRef): Promise<RuntimeAgentResult> {
+    return this.lifecycle.resume(ref);
+  }
+  cancel(ref: ExecutorAttemptRef): Promise<ExecutorCancelOutcome> {
+    return this.lifecycle.cancel(ref);
+  }
+  collectResult(ref: ExecutorAttemptRef): Promise<RuntimeAgentResult | null> {
+    return this.lifecycle.collectResult(ref);
+  }
+  collectEvidence(ref: ExecutorAttemptRef): Promise<ExecutorEvidence> {
+    return this.lifecycle.collectEvidence(ref);
   }
 
   /**

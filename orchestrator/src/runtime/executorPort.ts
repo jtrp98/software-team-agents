@@ -82,6 +82,14 @@ export interface ExecutorEvidence {
   /** Adapter-native log or transcript references, opaque to Core. */
   readonly logs: readonly string[];
   readonly sessionRef?: string;
+  /**
+   * V13 TASK-014 — the files this attempt actually changed, captured by the
+   * adapter itself from the work roots before and after its run (read-only git
+   * inspection plus content digests, the same source `exitCheckRunner` uses) —
+   * never read off the agent's report. Undefined, never an empty list, when
+   * the workspace could not be snapshotted (not a git checkout, git unusable).
+   */
+  readonly changedFiles?: readonly string[];
   readonly collectedAt: number;
 }
 
@@ -91,6 +99,8 @@ export type ExecutorRefusalCode =
   | "unsupported-operation"
   /** The reference names no attempt this adapter knows. */
   | "unknown-attempt"
+  /** The attempt was cancelled — it can neither execute nor resume under this id. */
+  | "attempt-cancelled"
   /** The runtime itself is unusable right now. */
   | "runtime-unavailable";
 
@@ -234,3 +244,36 @@ export function executeOnlyLifecycle(adapter: RuntimeAdapter): ExecutorPort {
 
 /** The status constants the port normalizes on, re-exported for the contract suite's readability. */
 export type { RuntimeRunStatus };
+
+/**
+ * Whether this adapter implements the lifecycle port itself. Structural, on
+ * purpose: the composition root constructs adapters as `RuntimeAdapter`s and
+ * the port is a superset of that interface, so the honest question is "can
+ * this object answer prepare/resume/cancel/collect" — not a registry of which
+ * class was supposed to implement what.
+ */
+export function isExecutorPort(adapter: RuntimeAdapter): adapter is ExecutorPort {
+  return (
+    "prepare" in adapter &&
+    "resume" in adapter &&
+    "cancel" in adapter &&
+    "collectResult" in adapter &&
+    "collectEvidence" in adapter &&
+    typeof adapter.prepare === "function" &&
+    typeof (adapter as ExecutorPort).resume === "function" &&
+    typeof (adapter as ExecutorPort).cancel === "function" &&
+    typeof (adapter as ExecutorPort).collectResult === "function" &&
+    typeof (adapter as ExecutorPort).collectEvidence === "function"
+  );
+}
+
+/**
+ * The one view STA Core dispatches through. An adapter that implements the
+ * port is used as-is; a probe/execute-only adapter is lifted onto the port by
+ * `executeOnlyLifecycle`, which answers every lifecycle operation it has not
+ * declared with a typed refusal. Either way the caller holds an
+ * `ExecutorPort` — there is no second, port-less dispatch path to fall into.
+ */
+export function executorPortFor(adapter: RuntimeAdapter): ExecutorPort {
+  return isExecutorPort(adapter) ? adapter : executeOnlyLifecycle(adapter);
+}

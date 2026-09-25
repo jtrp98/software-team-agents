@@ -188,8 +188,11 @@ describe("an unreachable runtime is UNAVAILABLE, never a throw", () => {
 
   it("OpenCodeAdapter maps a failed spawn to UNAVAILABLE", async () => {
     const adapter = new OpenCodeAdapter({ projectRoot, spawnSync: enoentSpawn() });
-    // The binding must exist or the adapter fails fast before ever spawning.
+    // The binding must exist or the adapter fails fast before ever spawning,
+    // and so must the sta-guards plugin — V13 TASK-014 refuses a run whose
+    // workspace lacks it (allow-all default posture) before any spawn.
     await adapter.workspace.writeFile(adapter.binding.definitionPath("qa-engineer"), "role text");
+    await adapter.workspace.writeFile(adapter.binding.guardConfigPath!, "export const StaGuards = async () => ({});\n");
     const result = await adapter.executeAgent(requestFor(adapter));
     expect(result.status).toBe("UNAVAILABLE");
   });
