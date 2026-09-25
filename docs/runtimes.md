@@ -21,17 +21,20 @@ Guard coverage per runtime คือ verdict เดียวกับที่ `
 `--allow-unguarded-runtime` ซึ่งจะพิมพ์ `[UNGUARDED SESSION — acknowledged]` บน launch line
 
 - **enforced** — guards ทั้งหก wired และ verified
-- **partial** — บังคับได้บางส่วน; ส่วนที่ขาดรายงานเป็น `GUARD GAP` และให้ QA round เป็นตัวครอบ
-- **unguarded** — payload ไม่มีกลไก hook ฝั่งนั้นเลย
+- **partial** — native runtime guard บังคับได้บางส่วน; exit checks ที่ runtime ไม่บังคับเองจะถูก
+  `ExitCheckRunner` กลางตรวจแบบ fail-closed หลัง process จบ
+- **unguarded** — ไม่มี native pre-tool enforcement ที่เชื่อถือได้; การมีไฟล์ config อย่างเดียวไม่นับ
+  เป็น enforcement
 
 ## ตาราง runtime
 
 | Runtime | สถานะ | Guard coverage |
 |---|---|---|
-| **Claude Code** | ✅ **Supported** — implemented + verified (pipeline, guards, capability probe); the only V8 runtime certified for unattended Target writes | **enforced** — ครบทั้งหก (`block-git`, `block-outside-repo`, `block-path-permissions`, `block-doc-rewrite`, `block-secret-leak`, `require-green-before-stop`) |
-| **Codex** | ⚠️ **Preview** — `open --runtime codex` เปิด interactive session ได้ และ `.codex/agents/*.toml` + skills mirror `.agents/skills/**` ถูก generate ครบ แต่ headless pipeline (`sta run`) วิ่งบน Claude Code เป็น default; `CodexAdapter` ยังเป็น implementation ที่ไม่เคย verify กับ install จริง; V8 จำกัดไว้ที่ analysis/proposal และ refuse unattended Target writes | **unguarded** — payload ไม่ ship Codex hook wiring เลย; launch ต้อง `--allow-unguarded-runtime` |
-| **OpenCode** | 🧪 **Experimental** — bindings + plugin `sta-guards.js` + commands mirror sync ครบ (`/name` ผ่าน `opencode run --command`), `open --runtime opencode` และ `sta run --runtime opencode` ใช้ได้; adapter/permission ผ่านการ spike แต่ exit checks (typecheck/secret ตอนจบ run) ยังไม่มี in-band — รายงานเป็น GUARD GAP และให้ QA round เป็นตัวครอบ; V8 จำกัดไว้ที่ analysis/proposal | **partial** — plugin บังคับ `block-outside-repo` + `block-path-permissions`, permission block ของ binding บังคับ `block-git`; `block-doc-rewrite`, `block-secret-leak`, `require-green-before-stop` ไม่มีกลไกบน OpenCode workspace **ที่ขาด plugin = unguarded** ไม่ใช่ partial (OpenCode default posture คือ allow-all) |
-| **Antigravity** | 🧪 **Experimental** — runtime id `antigravity`, binary `agy`; probe, headless `-p`, JSON envelope, token usage และ adapter round-trip เต็มรอบ verify แล้วบน install จริง (agy 1.1.27/Windows 11) ไม่มี project agent store → role ถูก fold เข้า prompt; envelope ไม่มีช่อง cost → ไม่ claim `COST_REPORTING`; Target-write stages ยังถูกปฏิเสธ | **unguarded** — deny path มีจริงและ fail closed จริง (hook คืน `deny` → block; hook load ไม่ขึ้น → block) แต่ agy อ่าน hooks **จาก `~/.gemini/config/hooks.json` ระดับเครื่องเท่านั้น** — `.agents/hooks.json` ใน workspace ไม่เคยถูกอ่าน → guard ที่ ship มากับ repo ไม่ enforce อะไร |
+| **Claude Code** | ✅ **Supported** — implemented + verified (pipeline, guards, capability probe); certified for unattended Target writes | **enforced** — ครบทั้งหก (`block-git`, `block-outside-repo`, `block-path-permissions`, `block-doc-rewrite`, `block-secret-leak`, `require-green-before-stop`) |
+| **Codex** | ✅ **Supported** — interactive และ headless adapter verify บน Codex 0.154.0/0.155.1 แล้ว; headless enforcement = per-run native permission profile (เขียนเฉพาะ path ที่ packet อนุญาต ปิด network บล็อก Git ด้วย execpolicy + OS deny) **live-verified ปลายทางจริง รอบสาม 2026-09-23** (deny นอก workspace / allow ใน workspace / read-only deny ทุก write / network ตายระดับ DNS) และ exit checks fail-closed จับ typecheck แดงหลัง process จบ; certified for unattended Target writes; **interactive session ยัง unguarded** — ต้อง `--allow-unguarded-runtime` และจำกัด analysis/proposal | **headless enforced / interactive unguarded** — adapter ใช้ native permission profile + isolated execpolicy โดยไม่พึ่ง project hook; `.codex/hooks.json` ยังเป็น compatibility payload สำหรับ interactive เท่านั้น (default trust ข้าม hooks, hook พัง fail-open — ไม่ถูก claim เป็น enforcement ฝั่ง headless); exit checks ใช้ `ExitCheckRunner` กลางหลัง process จบ |
+| **OpenCode** | 🧪 **Experimental** — bindings + plugin `sta-guards.js` + commands mirror sync ครบ (`/name` ผ่าน `opencode run --command`), `open --runtime opencode` และ `sta run --runtime opencode` ใช้ได้; native exit hook ไม่มี แต่ `ExitCheckRunner` กลางตรวจ typecheck/lint และ secret แบบ fail-closed หลัง process จบ; V8 จำกัดไว้ที่ analysis/proposal | **partial** — plugin บังคับ `block-outside-repo` + `block-path-permissions`, permission block ของ binding บังคับ `block-git`; `block-doc-rewrite`, `block-secret-leak` และ `require-green-before-stop` ไม่มีกลไก native บน OpenCode workspace โดยสองตัวหลังมี runner กลางครอบ; **ที่ขาด plugin = unguarded** ไม่ใช่ partial (OpenCode default posture คือ allow-all) |
+| **Antigravity** | ✅ **Supported** — runtime id `antigravity`, binary `agy`; probe, headless `-p`, JSON envelope, token usage, adapter round-trip และ machine-global bridge hook (`~/.gemini/config/hooks.json`) verify บน install จริง (agy 1.2.7/Windows 11) แล้ว; headless guarded write ได้รับ certification สำหรับ unattended Target writes ผ่าน bridge hook; pipeline และ guards verified ครบถ้วน | **enforced via bridge hook** — deny path มีจริงและ fail closed จริง; agy อ่าน PreToolUse hooks จาก `~/.gemini/config/hooks.json` ระดับเครื่อง forward ไปหา `sta-guard.js` และ `block-git.js` บังคับ path permissions, block git state-changing และ universal floor ในตัว; exit checks ใช้ `ExitCheckRunner` กลางหลัง process จบ |
+| **ZCode Desktop** | 🧪 **Experimental** — desktop interactive role-play runtime (คำตัดสิน V12): ผู้ใช้เปิด ZCode เองแล้ว AI เล่น role ของ pipeline จาก instructions/skills + `sta context`/`sta policy`; ไม่มี CLI ไม่มี headless — `sta run --runtime zcode` refuse ที่ registry และไม่มี launch path; guard wiring `.zcode/config.json` **UAT สดผ่านครบบน session จริง (2026-09-23, `planning/v12/evidence/zcode-uat/`)**; unattended Target writes ยัง refuse เสมอ | **partial** — payload sync แล้ว wire 4 PreToolUse guards + Stop pair; `block-path-permissions` อ่าน role จาก `STA_ROLE` หรือ `.workflow/session-role.json` ที่ประกาศผ่าน `software-team-agents session-role` — session ที่ประกาศ role ได้ per-role Target/Knowledge write bounds เหมือน orchestrated stage, session ที่ไม่ประกาศเหลือ floor เท่านั้น (read ยังเป็น instruction-level); Stop-hook โดน cap 3 continuations ต่อ session (GUARD GAP, QA round ครอบ); PostToolUse และ per-agent exit guards ไม่มี guard ที่ ship มา |
 
 Same verdict, three places: ตารางนี้, `sta runtimes` (อ่าน `RUNTIME_SUPPORT` ตรง) และ
 `software-team-agents --help`'s `--runtime` line — ทั้งสาม quote `guardSettings.ts`'s
@@ -42,7 +45,30 @@ enforce จริง (`orchestrator/src/runtime/runtimeSupport.test.ts` pin ไ�
 
 การรัน unattended ต้องใช้ `--autonomy edit` หรือ `full` — default (`propose`) ติด permission prompt
 ที่ไม่มีคนกดใน headless run สิทธิ์เขียน Target แบบ unattended เป็นของ runtime ที่ได้รับ certification
-(ดูตาราง — ปัจจุบันคือ Claude Code เท่านั้น)
+(ดูตาราง — ปัจจุบันคือ Claude Code, Codex headless adapter และ Antigravity headless adapter)
+
+### ตรวจสถานะ login ก่อน run ยาว
+
+run ที่ยาวขึ้นคือ quota ที่เสียเปล่ามากขึ้นเมื่อ auth มีปัญหา — เช็คก่อนเริ่มด้วยคำสั่งที่ยืนยันแล้ว
+บน install จริงของแต่ละ runtime:
+| Runtime | คำสั่งเช็ค | หมายเหตุ |
+|---|---|---|
+| Claude Code | `claude auth status` | subcommand ยืนยันบน 2.1.278 (`claude auth --help`: login/logout/status) |
+| Codex | `codex login status` · `codex doctor` | ยืนยันบน 0.154.0 — `login status` ตอบสถานะ (เช่น "Logged in using ChatGPT"); `doctor` วินิจฉัย config/auth/runtime ครบและ read-only |
+| Antigravity (agy) | — ไม่มี subcommand เช็ค auth บน 1.2.7 | ปัญหา auth จะแสดงเป็น error/denied ตอน run เท่านั้น (ดู [`troubleshooting.md`](troubleshooting.md)) |
+| ZCode | — ไม่มี CLI | ตรวจจากตัว app เท่านั้น |
+
+### Quota windows
+
+| Runtime | หน้าต่างที่รายงาน |
+|---|---|
+| Claude Code | 5 ชม. / 7 วัน |
+| Codex | 7 วัน |
+| Antigravity | 5 ชม. / 7 วัน |
+| ZCode | 5 ชม. / 7 วัน |
+
+> ที่มา: รายงานโดยผู้ใช้ 2026-09-21 (BA round Q7) — รูปแบบหน้าต่าง/เพดานจริงต้องยืนยันตอนใช้;
+> ตัวเลขนี้ใช้วางแผนรัน probe/UAT เป็นช่วงสั้น ๆ ไม่ใช่ข้อกำหนดที่ผู้ให้บริการประกาศ
 
 ## Runtime routing — interactive selection vs pipeline routing
 

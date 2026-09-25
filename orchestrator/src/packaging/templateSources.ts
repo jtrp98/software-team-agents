@@ -47,6 +47,16 @@ export const TEMPLATE_SOURCES: readonly TemplateSourceEntry[] = [
   // travels with nobody.
   { relPath: ".agents/hooks", kind: "dir" },
   { relPath: ".agents/hooks.json", kind: "file" },
+  // ZCode Desktop's guard binding (V12): `.zcode/config.json` is tracked and
+  // committed like `.agents/hooks.json` — a gitignored guard travels with
+  // nobody, and ZCode client artifacts under `.zcode/` are handled by the
+  // workspace `.gitignore` block instead.
+  { relPath: ".zcode/config.json", kind: "file" },
+  // Codex's guard binding (V12): hooks.json + the mirrored hook scripts ship to
+  // workspaces the same way `.claude/hooks` does — codex 0.154.0 reads this
+  // Claude-style schema (registration observed in `~/.codex/config.toml`).
+  { relPath: ".codex/hooks", kind: "dir" },
+  { relPath: ".codex/hooks.json", kind: "file" },
   { relPath: "contracts", kind: "dir" },
   { relPath: "workflows", kind: "dir" },
   { relPath: "policies", kind: "dir" },

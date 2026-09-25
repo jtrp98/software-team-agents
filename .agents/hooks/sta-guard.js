@@ -73,11 +73,14 @@ const UNIVERSAL_DENY = ['.git/**', 'node_modules/**', '.workflow/**', 'dist/**',
 const WORKSPACE_BA_ARTIFACTS = ['_docs/module/*/requirement.md', '_docs/module/*/design.md', '_docs/module/*/design-archive.md', '_docs/module/*/test-plan.md', '_docs/module/*/plan.md', '_docs/module/*/uxui/**', '_docs/status.md', 'knowledge/**', 'decisions/**', 'targets.yaml', 'knowledge-policy.yaml'];
 const FRAMEWORK_PAYLOAD_ARTIFACTS = ['contracts/**', 'workflows/**', 'stacks/**', 'layout.yaml', 'test-pyramid.yaml', 'escalation-policy.yaml'];
 const KNOWLEDGE_DENIED_ROLES = ['backend-engineer', 'frontend-engineer', 'devops'];
-function frameworkPayloadDenial(relative) {
+const SESSION_ROLE_REL_PATH = '.workflow/session-role.json';
+function frameworkPayloadDenial(relative, role) {
   // Bound to the stage, not to the checkout: one workspace carries both the
   // Framework payload and the Knowledge documents, so where a write lands
-  // says nothing about whether it is allowed.
-  if (!process.env.STA_ROLE) return null;
+  // says nothing about whether it is allowed. The role arrives resolved:
+  // the env identity when the orchestrator spawned this process, otherwise
+  // a desktop role-play session's declared file.
+  if (!role) return null;
   for (const pattern of FRAMEWORK_PAYLOAD_ARTIFACTS) {
     if (matchesGlob(pattern, relative)) return frameworkPayloadDenyWhy(pattern);
   }
@@ -86,11 +89,46 @@ function frameworkPayloadDenial(relative) {
 function frameworkPayloadDenyWhy(pattern) {
   return '`' + pattern + '` is Framework payload — `sta sync` materialises it and a person edits it. No agent contract grants it, so no stage may write it; change it in the Framework repository and sync.';
 }
-function stackPathRules() {
+function sessionRoleFromText(text) {
+  // The declared-session-role channel: a desktop role-play session has no
+  // STA_ROLE env (no launch path sets one), so the role it is playing arrives
+  // as this CLI-written file instead. The path sits under .workflow/, which
+  // UNIVERSAL_DENY refuses to every agent's file tools, so a session cannot
+  // rewrite its own declaration. Anything absent, unreadable or off-shape is
+  // 'no declared role' — the floor-only posture, never an error.
+  if (typeof text !== 'string' || text === '') return null;
   let parsed;
-  try { parsed = JSON.parse(process.env.STA_STACK_PATH_RULES || '{}'); } catch { return { write: [], deny: [] }; }
+  try { parsed = JSON.parse(text); } catch { return null; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  if (typeof parsed.role !== 'string' || !/^[a-z][a-z0-9-]*$/.test(parsed.role)) return null;
+  return parsed.role;
+}
+function declaredStackRulesFromText(text) {
+  // The stack half of the declaration, the same {write, deny} shape the
+  // STA_STACK_PATH_RULES channel carries, pre-resolved by the same CLI call
+  // the orchestrator uses. Malformed drops out empty, which over-restricts an
+  // engineer role rather than letting a layout path through.
+  if (typeof text !== 'string' || text === '') return { write: [], deny: [] };
+  let parsed;
+  try { parsed = JSON.parse(text); } catch { return { write: [], deny: [] }; }
+  const stack = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed.stack : null;
   const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);
-  return { write: list(parsed && parsed.write), deny: list(parsed && parsed.deny) };
+  return { write: list(stack && stack.write), deny: list(stack && stack.deny) };
+}
+function sessionRole(envRole, declaredText) {
+  // Orchestrated identity wins outright: a stage the runtime spawned is
+  // exactly who the env says. Only a process without one falls to the
+  // declared file, and with neither this returns null — the floor-only
+  // posture every host keeps for an anonymous session.
+  if (envRole) return envRole;
+  return sessionRoleFromText(declaredText);
+}
+function stackPathRules(declaredText) {
+  let parsed;
+  try { parsed = JSON.parse(process.env.STA_STACK_PATH_RULES || '{}'); } catch { parsed = {}; }
+  const declared = declaredStackRulesFromText(declaredText);
+  const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);
+  return { write: list(parsed && parsed.write).concat(declared.write), deny: list(parsed && parsed.deny).concat(declared.deny) };
 }
 function boundReadOnlyTarget(nodePath, target) {
   let roots; try { roots = JSON.parse(process.env.STA_TARGET_WORK_ROOTS || '[]'); } catch { return null; }
@@ -104,14 +142,12 @@ function boundReadOnlyTarget(nodePath, target) {
   }
   return null;
 }
-function boundReadOnlyWhy(targetId) {
-  const role = process.env.STA_ROLE || 'current role';
-  return 'Blocked: Target "' + targetId + '" is bound read-only for this ' + role + ' invocation; writing to it is refused.';
+function boundReadOnlyWhy(targetId, role) {
+  return 'Blocked: Target "' + targetId + '" is bound read-only for this ' + (role || 'current role') + ' invocation; writing to it is refused.';
 }
-function knowledgeArtifactDenial(nodePath, target) {
+function knowledgeArtifactDenial(nodePath, target, role) {
   // The Knowledge root can sit inside a granted work root, so this runs off
   // the root the runtime named rather than off the workspace-relative path.
-  const role = process.env.STA_ROLE;
   if (!role || !KNOWLEDGE_DENIED_ROLES.includes(role)) return null;
   const kb = process.env.STA_KNOWLEDGE_ROOT;
   // STA_KNOWLEDGE_ROOT_NAME is the managed-session marker: a launcher that
@@ -158,6 +194,22 @@ function matchesGlob(pattern, target) {
 
 const ALLOW = JSON.stringify({ decision: 'allow' });
 
+/**
+ * The declared session-role file — the one channel a desktop role-play session
+ * (ZCode, the V12 decision: no CLI, no launch path, no env channel) declares
+ * the role it is playing through. `software-team-agents session-role` is the
+ * only writer, and the path sits under `.workflow/`, which the universal floor
+ * denies to every agent's file tools. Absent or unreadable means "no declared
+ * role" and changes nothing.
+ */
+function readSessionRoleText() {
+  try {
+    return fs.readFileSync(path.join(root, SESSION_ROLE_REL_PATH), 'utf8');
+  } catch {
+    return null;
+  }
+}
+
 let raw = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', (chunk) => { raw += chunk; });
@@ -195,8 +247,14 @@ function run(input) {
   const targets = pathCandidates(toolParameters(input));
   if (targets.length === 0) return `\`${tool}\` was called with no recognisable destination path, so this guard cannot check where it writes`;
 
+  // Identity resolved once per call: env first, the declared session role only
+  // when the orchestrator never named one. Null means anonymous — the floor
+  // alone applies, exactly as it always has.
+  const declaredText = readSessionRoleText();
+  const role = sessionRole(process.env.STA_ROLE, declaredText);
+
   for (const target of targets) {
-    const reason = checkOne(target);
+    const reason = checkOne(target, undefined, role, declaredText);
     if (reason !== null) return reason;
   }
   return null;
@@ -243,23 +301,23 @@ function pathCandidates(parameters) {
   return found;
 }
 
-function checkOne(rawPath, input) {
+function checkOne(rawPath, input, role, declaredText) {
   const norm = String(rawPath).replace(/\\/g, "/");
   if (norm.includes("/.gemini/antigravity/") || (input && input.artifactDirectoryPath && norm.startsWith(String(input.artifactDirectoryPath).replace(/\\/g, "/")))) return null;
   const readOnlyTarget = boundReadOnlyTarget(path, path.resolve(root, rawPath));
-  if (readOnlyTarget !== null) return boundReadOnlyWhy(readOnlyTarget);
+  if (readOnlyTarget !== null) return boundReadOnlyWhy(readOnlyTarget, role);
 
   // Ahead of the work-root branch below, which allows anything the floor lets
   // through: a Knowledge root may itself sit inside a granted work root.
-  const knowledgeDenial = knowledgeArtifactDenial(path, path.resolve(root, rawPath));
-  if (knowledgeDenial !== null) return denyMessage(knowledgeDenial.rel, process.env.STA_ROLE, knowledgeDenial.why);
+  const knowledgeDenial = knowledgeArtifactDenial(path, path.resolve(root, rawPath), role);
+  if (knowledgeDenial !== null) return denyMessage(knowledgeDenial.rel, role, knowledgeDenial.why);
   const workRelative = toWritableWorkRelative(rawPath);
   if (workRelative !== null) {
     for (const pattern of UNIVERSAL_DENY) {
-      if (matchesGlob(pattern, workRelative)) return denyMessage(workRelative, process.env.STA_ROLE || null, `no agent may write \`${pattern}\``);
+      if (matchesGlob(pattern, workRelative)) return denyMessage(workRelative, role || null, `no agent may write \`${pattern}\``);
     }
-    const workFrameworkWhy = frameworkPayloadDenial(workRelative);
-    if (workFrameworkWhy !== null) return denyMessage(workRelative, process.env.STA_ROLE, workFrameworkWhy);
+    const workFrameworkWhy = frameworkPayloadDenial(workRelative, role);
+    if (workFrameworkWhy !== null) return denyMessage(workRelative, role, workFrameworkWhy);
     return null;
   }
 
@@ -271,13 +329,14 @@ function checkOne(rawPath, input) {
   }
 
   // Framework payload — per stage, not per checkout.
-  const frameworkWhy = frameworkPayloadDenial(rel);
-  if (frameworkWhy !== null) return denyMessage(rel, process.env.STA_ROLE, frameworkWhy);
+  const frameworkWhy = frameworkPayloadDenial(rel, role);
+  if (frameworkWhy !== null) return denyMessage(rel, role, frameworkWhy);
 
-  const role = process.env.STA_ROLE;
-  if (!role) return null; // interactive run: the floor above is all this can honestly enforce
+  if (!role) return null; // no env role and no declared session role: the floor above is all this can honestly enforce
 
-  const rules = readRules(role);
+  // The declaration's stack half travels only with the declaration's role: an
+  // env identity must not inherit layout globs declared for a different role.
+  const rules = readRules(role, process.env.STA_ROLE ? null : declaredText);
   if (!rules) return null; // unknown role or unreadable contract — the floor above still held
 
   for (const pattern of rules.deny) {
@@ -316,7 +375,7 @@ function toRepoRelative(target) {
   return rel;
 }
 
-function readRules(role) {
+function readRules(role, declaredText) {
   if (!/^[a-z][a-z0-9-]*$/.test(role)) return null; // never let an env var build a path
   let text;
   try {
@@ -327,7 +386,7 @@ function readRules(role) {
   const write = readList(text, 'write');
   const deny = readList(text, 'deny');
   if (write === null) return null; // not the shape this reader understands
-  const stack = stackPathRules();
+  const stack = stackPathRules(declaredText);
   return { write: write.concat(stack.write), deny: (deny === null ? [] : deny).concat(stack.deny) };
 }
 

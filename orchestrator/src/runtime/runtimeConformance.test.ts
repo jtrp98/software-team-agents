@@ -261,11 +261,12 @@ async function runConformance(impl: Implementation): Promise<ConformanceRow[]> {
   };
 
   const result = await adapter.executeAgent(request);
+  const guardResult = result;
   // The NUL separator keeps distinct argv elements distinct — a prompt that
   // happened to contain "--agent" must not fuse with flag positions.
   const surface = calls.map((c) => c.args.join("\u0000")).join("\n");
   const env = calls[0]?.env ?? {};
-  const guards: RuntimeGuardReport = result.guards;
+  const guards: RuntimeGuardReport = guardResult.guards;
 
   const preToolEnforced = guards.enforced.includes(RuntimeCapability.PRE_TOOL_GUARD);
   const preToolHonestlyUnenforced =
@@ -335,14 +336,20 @@ async function runConformance(impl: Implementation): Promise<ConformanceRow[]> {
     {
       caseId: "hook-plugin-execution",
       verdict:
-        adapter.binding.guardConfigPath !== null
+        adapter.binding.guardEnforcement === "per-run"
+          ? preToolEnforced
+            ? "ENFORCED"
+            : "FAIL"
+          : adapter.binding.guardConfigPath !== null
           ? preToolEnforced
             ? "ENFORCED"
             : "FAIL"
           : guards.reason
             ? "REPORTED_UNENFORCED"
             : "FAIL",
-      detail: adapter.binding.guardConfigPath ?? guards.reason,
+      detail: adapter.binding.guardEnforcement === "per-run"
+        ? "native permission profile compiled for this invocation"
+        : adapter.binding.guardConfigPath ?? guards.reason,
     },
     {
       caseId: "exit-handling",
@@ -386,10 +393,10 @@ describe("T-V1-05 runtime conformance — one matrix, every runtime", () => {
           "exit-handling": "ENFORCED",
         },
         codex: {
-          "allowed-write-guard": "REPORTED_UNENFORCED",
-          "forbidden-write-guard": "REPORTED_UNENFORCED",
-          "state-changing-git-protection": "REPORTED_UNENFORCED",
-          "hook-plugin-execution": "REPORTED_UNENFORCED",
+          "allowed-write-guard": "ENFORCED",
+          "forbidden-write-guard": "ENFORCED",
+          "state-changing-git-protection": "ENFORCED",
+          "hook-plugin-execution": "ENFORCED",
           "exit-handling": "REPORTED_UNENFORCED",
         },
         opencode: {
@@ -499,7 +506,7 @@ describe("T-V1-05 runtime conformance — one matrix, every runtime", () => {
         workRoots: WORK_ROOTS,
         definitionPath: adapter.binding.definitionPath(ROLE),
         prompt: PROMPT,
-        autonomy: "edit",
+        autonomy: adapter.id === "codex" ? "read-only" : "edit",
         guards: GUARDS,
         env: EXECUTOR_ENV,
       });

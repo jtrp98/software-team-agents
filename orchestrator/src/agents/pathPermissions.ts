@@ -28,6 +28,13 @@ import { defaultProjectRoot, loadAgentContract } from "./agentContract.js";
  *      from an environment variable the orchestrator sets on the child process, and
  *      falls back to a universal floor when it is absent (an interactive session).
  *
+ * A desktop role-play session (ZCode, the V12 decision) has neither an orchestrator
+ * nor a launch path to set that env var, so it has a second, explicit identity
+ * channel: `SESSION_ROLE_PATH`, written only by the workspace CLI's `session-role`
+ * verb. The env var wins whenever it exists; the declaration is read only when it
+ * does not. Either way the per-role layer applies, and with neither the hook keeps
+ * the floor-only posture it has always had.
+ *
  * The floor matters: without identity the hook still blocks what no agent may
  * ever write. A partial guard that is honest about its limits beats a complete
  * one that only works when someone remembers to set an env var.
@@ -192,6 +199,27 @@ function globToRegExp(pattern: string): RegExp {
 export const GUARD_STACK_RULES_ENV = "STA_STACK_PATH_RULES";
 
 /**
+ * The one file a desktop role-play session (ZCode — V12's interactive runtime)
+ * declares its played role through: `{ role: string, stack?: { write: string[],
+ * deny: string[] } }`, written only by the workspace CLI's `session-role` verb.
+ *
+ * The path sits under `.workflow/`, which `UNIVERSAL_DENY` already refuses to
+ * every agent's file tools, so a session cannot rewrite its own declaration
+ * mid-session — the CLI (a person, or the AI on that person's explicit
+ * instruction) is the only writer. The hook reads it only when `STA_ROLE` is
+ * absent, so an orchestrated run behaves byte-for-byte as before, and a session
+ * without a declaration keeps the floor-only posture it has always had.
+ *
+ * The `stack` half carries the same resolved layout globs the orchestrated path
+ * hands over on `STA_STACK_PATH_RULES`, pre-resolved by the same
+ * `resolveStackPathRules` call — a hook still parses no YAML, so the CLI joins
+ * `.agent-team/config.yaml` to `stacks/<profile>/stack.yaml` on the session's
+ * behalf. Absent or unresolved means the globs drop out of both lists, which
+ * over-restricts an engineer role rather than letting a layout path through.
+ */
+export const SESSION_ROLE_PATH = ".workflow/session-role.json";
+
+/**
  * Full Target access map for a single invocation. This is identification data
  * for guard refusal messages, not a grant: only
  * `STA_WRITABLE_WORK_ROOTS` can open a write root.
@@ -236,11 +264,14 @@ export const GUARD_RULE_HOSTS: readonly GuardRuleHost[] = [
  * here, next to the rules it applies — not in three hook files.
  */
 const GUARD_RULE_FUNCTION_SOURCE: readonly string[] = [
-  "function frameworkPayloadDenial(relative) {",
+  `const SESSION_ROLE_REL_PATH = ${jsRuleLiteral(SESSION_ROLE_PATH)};`,
+  "function frameworkPayloadDenial(relative, role) {",
   "  // Bound to the stage, not to the checkout: one workspace carries both the",
   "  // Framework payload and the Knowledge documents, so where a write lands",
-  "  // says nothing about whether it is allowed.",
-  "  if (!process.env.STA_ROLE) return null;",
+  "  // says nothing about whether it is allowed. The role arrives resolved:",
+  "  // the env identity when the orchestrator spawned this process, otherwise",
+  "  // a desktop role-play session's declared file.",
+  "  if (!role) return null;",
   "  for (const pattern of FRAMEWORK_PAYLOAD_ARTIFACTS) {",
   "    if (matchesGlob(pattern, relative)) return frameworkPayloadDenyWhy(pattern);",
   "  }",
@@ -249,11 +280,46 @@ const GUARD_RULE_FUNCTION_SOURCE: readonly string[] = [
   "function frameworkPayloadDenyWhy(pattern) {",
   "  return '`' + pattern + '` is Framework payload — `sta sync` materialises it and a person edits it. No agent contract grants it, so no stage may write it; change it in the Framework repository and sync.';",
   "}",
-  "function stackPathRules() {",
+  "function sessionRoleFromText(text) {",
+  "  // The declared-session-role channel: a desktop role-play session has no",
+  "  // STA_ROLE env (no launch path sets one), so the role it is playing arrives",
+  "  // as this CLI-written file instead. The path sits under .workflow/, which",
+  "  // UNIVERSAL_DENY refuses to every agent's file tools, so a session cannot",
+  "  // rewrite its own declaration. Anything absent, unreadable or off-shape is",
+  "  // 'no declared role' — the floor-only posture, never an error.",
+  "  if (typeof text !== 'string' || text === '') return null;",
   "  let parsed;",
-  "  try { parsed = JSON.parse(process.env.STA_STACK_PATH_RULES || '{}'); } catch { return { write: [], deny: [] }; }",
+  "  try { parsed = JSON.parse(text); } catch { return null; }",
+  "  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;",
+  "  if (typeof parsed.role !== 'string' || !/^[a-z][a-z0-9-]*$/.test(parsed.role)) return null;",
+  "  return parsed.role;",
+  "}",
+  "function declaredStackRulesFromText(text) {",
+  "  // The stack half of the declaration, the same {write, deny} shape the",
+  "  // STA_STACK_PATH_RULES channel carries, pre-resolved by the same CLI call",
+  "  // the orchestrator uses. Malformed drops out empty, which over-restricts an",
+  "  // engineer role rather than letting a layout path through.",
+  "  if (typeof text !== 'string' || text === '') return { write: [], deny: [] };",
+  "  let parsed;",
+  "  try { parsed = JSON.parse(text); } catch { return { write: [], deny: [] }; }",
+  "  const stack = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed.stack : null;",
   "  const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);",
-  "  return { write: list(parsed && parsed.write), deny: list(parsed && parsed.deny) };",
+  "  return { write: list(stack && stack.write), deny: list(stack && stack.deny) };",
+  "}",
+  "function sessionRole(envRole, declaredText) {",
+  "  // Orchestrated identity wins outright: a stage the runtime spawned is",
+  "  // exactly who the env says. Only a process without one falls to the",
+  "  // declared file, and with neither this returns null — the floor-only",
+  "  // posture every host keeps for an anonymous session.",
+  "  if (envRole) return envRole;",
+  "  return sessionRoleFromText(declaredText);",
+  "}",
+  "function stackPathRules(declaredText) {",
+  "  let parsed;",
+  "  try { parsed = JSON.parse(process.env.STA_STACK_PATH_RULES || '{}'); } catch { parsed = {}; }",
+  "  const declared = declaredStackRulesFromText(declaredText);",
+  "  const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);",
+  "  return { write: list(parsed && parsed.write).concat(declared.write), deny: list(parsed && parsed.deny).concat(declared.deny) };",
   "}",
   "function boundReadOnlyTarget(nodePath, target) {",
   `  let roots; try { roots = JSON.parse(process.env.${GUARD_TARGET_WORK_ROOTS_ENV} || '[]'); } catch { return null; }`,
@@ -267,14 +333,12 @@ const GUARD_RULE_FUNCTION_SOURCE: readonly string[] = [
   "  }",
   "  return null;",
   "}",
-  "function boundReadOnlyWhy(targetId) {",
-  "  const role = process.env.STA_ROLE || 'current role';",
-  "  return 'Blocked: Target \"' + targetId + '\" is bound read-only for this ' + role + ' invocation; writing to it is refused.';",
+  "function boundReadOnlyWhy(targetId, role) {",
+  "  return 'Blocked: Target \"' + targetId + '\" is bound read-only for this ' + (role || 'current role') + ' invocation; writing to it is refused.';",
   "}",
-  "function knowledgeArtifactDenial(nodePath, target) {",
+  "function knowledgeArtifactDenial(nodePath, target, role) {",
   "  // The Knowledge root can sit inside a granted work root, so this runs off",
   "  // the root the runtime named rather than off the workspace-relative path.",
-  "  const role = process.env.STA_ROLE;",
   "  if (!role || !KNOWLEDGE_DENIED_ROLES.includes(role)) return null;",
   "  const kb = process.env.STA_KNOWLEDGE_ROOT;",
   "  // STA_KNOWLEDGE_ROOT_NAME is the managed-session marker: a launcher that",

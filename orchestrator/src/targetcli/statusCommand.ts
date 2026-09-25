@@ -95,6 +95,7 @@ export interface TargetStatus {
   codex: RuntimeReadiness;
   opencode: RuntimeReadiness;
   antigravity: RuntimeReadiness;
+  zcode: RuntimeReadiness;
   /** V3 omission is healthy: the effective values reproduce pre-V3 behavior. */
   v3Configuration: { configured: boolean; detail: string };
 }
@@ -196,6 +197,20 @@ export function antigravityReadiness(targetRoot: string, coverage: GuardCoverage
   const md = countFiles(path.join(targetRoot, ".claude", "agents"), ".md");
   if (md === 0) return { ready: false, detail: "no agent sources synced yet — run software-team-agents sync" };
   return { ready: false, detail: `${md} agent source(s) available; ${coverage.detail}` };
+}
+
+/**
+ * ZCode Desktop readiness is guard-only by design (the V12 decision): there is
+ * no binding to count and no launch to pass — sessions are opened directly in
+ * the desktop app and the AI role-plays from workspace instructions/skills.
+ * READY therefore means "the hook payload is synced and the coverage verdict
+ * is positive", never "the pipeline can run on it".
+ */
+export function zcodeReadiness(targetRoot: string, coverage: GuardCoverage): RuntimeReadiness {
+  const configPath = path.join(targetRoot, ".zcode", "config.json");
+  if (!fs.existsSync(configPath)) return { ready: false, detail: "no .zcode/config.json — desktop-only runtime; sync ships the guard payload" };
+  if (!guardCoverageIsPositive(coverage)) return { ready: false, detail: coverage.detail };
+  return { ready: true, detail: `desktop interactive runtime; ${coverage.detail}` };
 }
 
 export function gatherStatus(options: { targetRoot?: string; templatesDir?: string; installationConfigPath?: string; rootName?: string } = {}): TargetStatus {
@@ -405,6 +420,7 @@ export function gatherStatus(options: { targetRoot?: string; templatesDir?: stri
     codex: codexReadiness(roots.targetRoot, guardCoverage({ runtime: "codex", targetRoot: roots.targetRoot })),
     opencode: opencodeReadiness(roots.targetRoot, guardCoverage({ runtime: "opencode", targetRoot: roots.targetRoot })),
     antigravity: antigravityReadiness(roots.targetRoot, guardCoverage({ runtime: "antigravity", targetRoot: roots.targetRoot })),
+    zcode: zcodeReadiness(roots.targetRoot, guardCoverage({ runtime: "zcode", targetRoot: roots.targetRoot })),
     v3Configuration: v3ExecutionStatus(config, staConfig),
   };
 }
@@ -527,6 +543,7 @@ export function renderStatus(status: TargetStatus): string {
   lines.push(`Codex: ${status.codex.ready ? "READY" : "NOT READY"} — ${status.codex.detail}`);
   lines.push(`OpenCode: ${status.opencode.ready ? "READY" : "NOT READY"} — ${status.opencode.detail}`);
   lines.push(`Antigravity: ${status.antigravity.ready ? "READY" : "NOT READY"} — ${status.antigravity.detail}`);
+  lines.push(`ZCode Desktop: ${status.zcode.ready ? "READY" : "NOT READY"} — ${status.zcode.detail}`);
   if (workspaceShapeOf(status.workspaceKind, status.role) !== "knowledge" && status.knowledgeRoot) lines.push(`Installation Knowledge root: ${status.knowledgeRoot}`);
   return lines.join("\n");
 }

@@ -208,7 +208,11 @@ export async function detectRuntimeCapabilities(
     reasons.set(RuntimeCapability.NAMED_AGENTS, `binding directory ${adapter.binding.dir} not found — cannot confirm a role definition could be loaded from it`);
   }
 
-  if (adapter.binding.guardConfigPath === null) {
+  if (adapter.binding.guardConfigPath === null && adapter.binding.guardEnforcement === "per-run") {
+    for (const cap of GUARD_CAPABILITIES) {
+      if (claimed.has(cap)) verified.add(cap);
+    }
+  } else if (adapter.binding.guardConfigPath === null) {
     for (const cap of GUARD_CAPABILITIES) {
       if (claimed.has(cap)) reasons.set(cap, `runtime "${adapter.id}" declares no guard config path — nothing to verify a claim against`);
     }

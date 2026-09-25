@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { LocalWorkspace } from "./localWorkspace.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+import { resolveNpmCliScript as resolveNpmCliScriptImpl, type CommandResolver } from "./npmCliResolver.js";
 import type {
   RuntimeAdapter,
   RuntimeAgentRequest,
@@ -15,7 +16,6 @@ import type {
   RuntimeProbe,
   RuntimeUsage,
   RuntimeWorkspace,
-  RuntimeWorkRoot,
   SpawnSync,
 } from "./runtimeAdapter.js";
 
@@ -70,7 +70,10 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
     if (usage && typeof usage === "object") {
       if (typeof usage.input_tokens === "number") inputTokens = usage.input_tokens;
       if (typeof usage.output_tokens === "number") outputTokens = usage.output_tokens;
-      if (typeof usage.cache_read_input_tokens === "number") cachedInputTokens = usage.cache_read_input_tokens;
+      // Current Codex JSONL uses `cached_input_tokens`; keep the older
+      // `cache_read_input_tokens` spelling as a compatibility fallback.
+      if (typeof usage.cached_input_tokens === "number") cachedInputTokens = usage.cached_input_tokens;
+      else if (typeof usage.cache_read_input_tokens === "number") cachedInputTokens = usage.cache_read_input_tokens;
       // T-V8-012: no cache-*creation* counter has ever been observed in a Codex
       // JSONL event; `RuntimeUsage.cacheCreationInputTokens` stays unset here,
       // same absent-≠-0 posture as every other unconfirmed field on this adapter.
@@ -92,25 +95,22 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
  * designed against, written to prove the interface is not Claude-Code-shaped
  * in disguise.
  *
- * **THIS IS A PARTIAL, ASSUMPTION-HEAVY IMPLEMENTATION — READ BEFORE TRUSTING IT.**
+ * **HEADLESS WRITES USE A PER-RUN NATIVE POLICY — INTERACTIVE CODEX DOES NOT.**
  *
- * Nobody has run this adapter against a real `codex` install in this repo. Every
- * flag, exit-code convention, and capability claim below is either (a) publicly
- * documented Codex CLI behaviour as of this framework's knowledge cutoff, marked
- * with a confidence note, or (b) an explicit assumption mirroring
- * `claudeCodeAdapter.ts`'s shape where Codex's actual behaviour is unknown.
- * This is deliberately marked partial with stated assumptions rather than made
- * to look complete. Capability detection is what turns "assumed" into
- * "verified" once this runs against a real installation — until then, treat
- * every `capabilities` claim here as a hypothesis, not a fact.
+ * V12 UAT exercised the invocation surfaces against real Codex CLI 0.154.0 and
+ * 0.155.1 installs. The adapter now compiles every guarded headless run into a
+ * custom native permission profile: broad read access, packet-scoped writes,
+ * protected framework metadata, no network, an isolated execpolicy, and OS
+ * deny rules for resolved forbidden executables such as Git. This is
+ * intentionally the same host-native
+ * security posture as the Claude adapter, not a container boundary.
  *
  * WHAT IS REASONABLY CONFIDENT
  * - `codex exec "<prompt>"` runs one non-interactive turn and exits — the shape
  *   `executeAgent` needs (a single request in, a single result out).
- * - `--sandbox <read-only|workspace-write|danger-full-access>` and
- *   `--ask-for-approval <untrusted|on-failure|on-request|never>` are Codex's own
- *   permission axes — the closest thing it has to Claude Code's
- *   `--permission-mode`.
+ * - Guarded writes use a custom permission profile rather than the legacy
+ *   `--sandbox` modes. `codex exec` is non-interactive, so the adapter passes
+ *   `approval_policy="never"` through `--config`.
  * - `AGENTS.md` (and a project `.codex/config.toml`) are Codex's project-level,
  *   committed configuration — the `PROJECT_LEVEL_BINDING` capability is claimed
  *   on that basis alone, not on any guard mechanism.
@@ -124,18 +124,16 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
  *   definition is still read here and folded into the prompt via documented
  *   flags only — which is why the capability stays unclaimed. Do not flip this
  *   to `true` without a confirmed native `exec` selector.
- * - `PRE_TOOL_GUARD` / `POST_TOOL_GUARD` / `EXIT_GUARD` / `PER_AGENT_EXIT_GUARD`
- *   — no confirmed, generally-available hook mechanism equivalent to Claude
- *   Code's `PreToolUse`/`Stop`/`SubagentStop` array in `settings.json`. Some
- *   Codex builds are reported to run arbitrary notify commands, but the shape
- *   and reliability (including whether it fires at all under `codex exec`,
- *   which is what this framework spawns) is not something this task can verify
- *   without a real install. Claiming these would let a guard-dependent stage
- *   believe it is enforced when it silently is not — the exact fail-open failure
- *   `policies/security.md` §5d warns about. `binding.guardConfigPath` is `null`
- *   for the same reason (see its doc-comment in `runtimeAdapter.ts`: `null` is
- *   the honest answer that forces guards to be covered post-hoc).
- * - `STRUCTURED_RESULT` / `COST_REPORTING` — the adapter speaks two
+ * - `POST_TOOL_GUARD` / `EXIT_GUARD` / `PER_AGENT_EXIT_GUARD` — V12 UAT proved
+ *   project hooks need a trust bypass, a crashing hook fails open, and Stop did
+ *   not fire under `codex exec`. The adapter does not trust those hooks. It
+ *   claims `PRE_TOOL_GUARD` only for the native permission/execpolicy boundary
+ *   assembled by this adapter for the exact run; provider-neutral exit checks
+ *   remain the runner's responsibility.
+ * - `STRUCTURED_RESULT` — real-install UAT pinned the JSONL + output-schema
+ *   round trip, so the normalised structured result is now a declared
+ *   capability. `COST_REPORTING` remains unclaimed: no cost value is present.
+ *   The adapter speaks two
  *   documented machine surfaces: `--json` (JSONL event stream) and `-o/--output-
  *   last-message` (final message written to a file). Token/model values are
  *   taken from event payloads **only where actually present** — payload shapes
@@ -157,8 +155,12 @@ export function parseCodexJsonl(stdout: string): { usage: RuntimeUsage; model?: 
 
 const CODEX_CAPABILITIES: readonly RuntimeCapability[] = [
   RuntimeCapability.MODEL_SELECTION,
+  RuntimeCapability.PRE_TOOL_GUARD,
   RuntimeCapability.PROJECT_LEVEL_BINDING,
+  RuntimeCapability.STRUCTURED_RESULT,
 ];
+
+export const CODEX_PERMISSION_PROFILE_UNAVAILABLE = "CODEX_PERMISSION_PROFILE_UNAVAILABLE";
 
 /**
  * Codex's own final `ERROR:` lines when the provider refused to serve, each
@@ -178,7 +180,7 @@ const CODEX_CAPABILITIES: readonly RuntimeCapability[] = [
  */
 const PROVIDER_REFUSAL_PATTERN = /^ERROR: (?:exceeded retry limit, last status: 429\b|unexpected status 40[13]\b)/m;
 
-/** `RuntimeAutonomy` onto Codex's own sandbox/approval axes — assumption, unverified against a real install. See file header. */
+/** Read-only runs retain the stable legacy mode; writable runs use the richer permission profile below. */
 const SANDBOX_MODE: Record<RuntimeAutonomy, string> = {
   "read-only": "read-only",
   propose: "workspace-write",
@@ -186,12 +188,259 @@ const SANDBOX_MODE: Record<RuntimeAutonomy, string> = {
   full: "danger-full-access",
 };
 
-const APPROVAL_MODE: Record<RuntimeAutonomy, string> = {
-  "read-only": "on-request",
-  propose: "on-request",
-  edit: "on-failure",
-  full: "never",
-};
+const CODEX_PERMISSION_PROFILE = "sta_run";
+const ALWAYS_READ_ONLY_IN_WORKSPACE = [".git", ".codex", ".agents"] as const;
+
+function tomlString(value: string): string {
+  return JSON.stringify(value);
+}
+
+function normalizeGuardPattern(pattern: string): string {
+  const normalized = pattern.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+  if (
+    normalized.length === 0 ||
+    normalized.startsWith("/") ||
+    /^[A-Za-z]:\//.test(normalized) ||
+    normalized.split("/").some((part) => part === "..")
+  ) {
+    throw new Error(`unsafe guard path pattern ${JSON.stringify(pattern)} — paths must be non-empty and workspace-relative`);
+  }
+  return normalized;
+}
+
+function segmentMatcher(segment: string): RegExp {
+  const escaped = segment.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*");
+  return new RegExp(`^${escaped}$`);
+}
+
+/**
+ * Codex supports exact read/write paths and a trailing `/**`, but not interior
+ * read/write globs. Expand only wildcard directory segments that already
+ * exist, retaining later literal segments so a role may create its owned file.
+ */
+export function codexPermissionPathsFor(root: string, rawPattern: string): string[] {
+  const pattern = normalizeGuardPattern(rawPattern);
+  if (pattern === "**") return ["."];
+  const trailingTree = pattern.endsWith("/**");
+  const withoutTree = trailingTree ? pattern.slice(0, -3).replace(/\/$/, "") : pattern;
+  if (!withoutTree.includes("*")) return [withoutTree || "."];
+
+  const parts = withoutTree.split("/");
+  const walk = (relative: string, index: number): string[] => {
+    if (index >= parts.length) return [relative || "."];
+    const segment = parts[index]!;
+    if (!segment.includes("*")) {
+      const next = relative ? `${relative}/${segment}` : segment;
+      return walk(next, index + 1);
+    }
+    const absoluteParent = path.join(root, ...relative.split("/").filter(Boolean));
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(absoluteParent, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    const matcher = segmentMatcher(segment);
+    const needsDirectory = index < parts.length - 1 || trailingTree;
+    return entries.flatMap((entry) => {
+      if (!matcher.test(entry.name) || (needsDirectory && !entry.isDirectory())) return [];
+      const next = relative ? `${relative}/${entry.name}` : entry.name;
+      return walk(next, index + 1);
+    });
+  };
+  return [...new Set(walk("", 0))];
+}
+
+export interface CodexPermissionInvocation {
+  readonly args: readonly string[];
+  readonly guards: RuntimeGuardReport;
+}
+
+/** Compile packet command denials into Codex's strictest execpolicy decision. */
+export function codexExecPolicyFor(
+  commands: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const basenames = commands.map((rawCommand) => {
+    const command = rawCommand.trim();
+    if (!/^[A-Za-z0-9._-]+$/.test(command)) {
+      throw new Error(`unsupported forbidden command ${JSON.stringify(rawCommand)} — expected one executable basename`);
+    }
+    return command;
+  });
+  const policyNames = basenames.flatMap((command) =>
+    platform === "win32" && path.extname(command).length === 0
+      ? [command, ...[".exe", ".cmd", ".bat", ".com", ".ps1"].map((extension) => `${command}${extension}`)]
+      : [command],
+  );
+  return [...new Set(policyNames)]
+    .map((command) =>
+      `prefix_rule(pattern = [${JSON.stringify(command)}], decision = "forbidden", justification = "Blocked by the software-team-agents run contract")`,
+    )
+    .join("\n");
+}
+
+interface PreparedCodexHome {
+  readonly path: string;
+  cleanup(): void;
+}
+
+/** Adapter-owned companion to the execpolicy parser for opaque shell strings. */
+const CODEX_GIT_GUARD_SCRIPT = String.raw`'use strict';
+let raw = '';
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => { raw += chunk; });
+process.stdin.on('end', () => {
+  let input;
+  try { input = JSON.parse(raw); }
+  catch { console.error('Blocked: malformed PreToolUse input.'); process.exit(2); }
+  const command = String(input?.tool_input?.command || '');
+  const gitExecutable = /(?:^|[\s;&|()])(?:["']?(?:[A-Za-z]:[\\/][^"';|]*[\\/]|\/[^"';|]*\/)?)git(?:\.exe|\.cmd|\.bat|\.com|\.ps1)?(?=$|[\s"';&|()])/i;
+  const dotGit = /(?:^|[\\/])\.git(?:[\\/]|$)/i;
+  if (gitExecutable.test(command) || dotGit.test(command)) {
+    console.error('Blocked: Git commands and direct .git access belong to the human operator.');
+    process.exit(2);
+  }
+  process.exit(0);
+});
+`;
+
+function codexInlineGitHookArgs(runHome: string): string[] {
+  const script = path.join(runHome, "git-guard.cjs");
+  const command = `node ${JSON.stringify(script)}`;
+  const handler = `{ type = "command", command = ${tomlString(command)}, command_windows = ${tomlString(command)}, timeout = 10 }`;
+  const registration = `{ matcher = "Bash|PowerShell", hooks = [${handler}] }`;
+  return ["--config", `hooks.PreToolUse=[${registration}]`];
+}
+
+function prepareCodexRunHome(
+  commands: readonly string[],
+  projectRoot: string,
+  sourceHome: string,
+  inheritAuth: boolean,
+): PreparedCodexHome {
+  const runHome = fs.mkdtempSync(path.join(os.tmpdir(), "sta-codex-home-"));
+  try {
+    const policy = codexExecPolicyFor(commands);
+    if (policy.length > 0) {
+      const rulesDir = path.join(runHome, "rules");
+      fs.mkdirSync(rulesDir, { recursive: true });
+      fs.writeFileSync(path.join(rulesDir, "sta.rules"), `${policy}\n`, "utf8");
+    }
+
+    // Project-local config, hooks, and execpolicy are ignored for this run.
+    // Only the adapter's permission profile and execpolicy are active.
+    fs.writeFileSync(
+      path.join(runHome, "config.toml"),
+      `[projects.${tomlString(path.resolve(projectRoot))}]\ntrust_level = "untrusted"\n`,
+      "utf8",
+    );
+    fs.writeFileSync(path.join(runHome, "git-guard.cjs"), CODEX_GIT_GUARD_SCRIPT, "utf8");
+
+    if (inheritAuth) {
+      const authSource = path.join(sourceHome, "auth.json");
+      if (fs.existsSync(authSource)) {
+        const authTarget = path.join(runHome, "auth.json");
+        // Copy, never link: a provider token refresh inside the temporary home
+        // must not be able to mutate the user's persistent credential file.
+        fs.copyFileSync(authSource, authTarget);
+        try {
+          fs.chmodSync(authTarget, 0o600);
+        } catch {
+          // Windows ACLs, not POSIX mode bits, are the effective protection.
+        }
+      }
+    }
+
+    return {
+      path: runHome,
+      cleanup: () => {
+        try {
+          fs.rmSync(runHome, { recursive: true, force: true });
+        } catch {
+          // best-effort cleanup of an orchestrator-owned temporary directory
+        }
+      },
+    };
+  } catch (error) {
+    try {
+      fs.rmSync(runHome, { recursive: true, force: true });
+    } catch {
+      // preserve the original preparation failure
+    }
+    throw error;
+  }
+}
+
+/**
+ * Build one self-contained native permission profile. `:root = read` matches
+ * Claude Code's read posture; only packet-authorized workspace paths are
+ * writable. Deny globs become read-only paths because the contract denies
+ * mutation, not inspection.
+ */
+export function codexPermissionInvocationFor(
+  req: Pick<RuntimeAgentRequest, "cwd" | "autonomy" | "guards" | "workRoots" | "env">,
+  platform: NodeJS.Platform = process.platform,
+): CodexPermissionInvocation {
+  const wantsPreTool = requiresPreToolGuard(req.guards, req.autonomy);
+  const wantsExit = req.guards.exitChecks.length > 0;
+  if (!wantsPreTool) {
+    return {
+      args: ["--sandbox", SANDBOX_MODE[req.autonomy], "--config", 'approval_policy="never"'],
+      guards: guardReport(false, wantsExit),
+    };
+  }
+
+  const cwd = path.resolve(req.cwd);
+  const cwdWorkRoot = req.workRoots?.find((root) => path.resolve(root.path) === cwd);
+  if (cwdWorkRoot?.access === "read") {
+    throw new Error(`cwd ${cwd} is Target "${cwdWorkRoot.targetId}" bound read-only; refusing to turn it into a writable Codex workspace root`);
+  }
+
+  const permissions = new Map<string, "read" | "write">();
+  permissions.set(".", "read");
+  for (const pattern of req.guards.writeAllow) {
+    const expanded = codexPermissionPathsFor(cwd, pattern);
+    if (expanded.length === 0) {
+      throw new Error(`write-allow pattern ${JSON.stringify(pattern)} cannot be represented safely for Codex because its wildcard parent does not exist`);
+    }
+    for (const allowed of expanded) permissions.set(allowed, "write");
+  }
+  for (const protectedPath of ALWAYS_READ_ONLY_IN_WORKSPACE) permissions.set(protectedPath, "read");
+  for (const pattern of req.guards.writeDeny) {
+    for (const denied of codexPermissionPathsFor(cwd, pattern)) permissions.set(denied, "read");
+  }
+
+  const workspaceEntries = [...permissions.entries()]
+    .map(([permissionPath, access]) => `${tomlString(permissionPath)} = ${tomlString(access)}`)
+    .join(", ");
+  const filesystemEntries = [
+    '":root" = "read"',
+    `":workspace_roots" = { ${workspaceEntries} }`,
+  ].filter(Boolean).join(", ");
+  const profile = `{ filesystem = { ${filesystemEntries} }, network = { enabled = false } }`;
+  const writeRoots = [...new Set((req.workRoots ?? [])
+    .filter((root) => root.access === "write")
+    .map((root) => path.resolve(root.path))
+    .filter((root) => root !== cwd))];
+  const args = [
+    "--strict-config",
+    "--ephemeral",
+    "-C",
+    cwd,
+    "--config",
+    "project_root_markers=[]",
+    "--config",
+    'approval_policy="never"',
+    ...(platform === "win32" ? ["--config", 'windows.sandbox="elevated"'] : []),
+    "--config",
+    `default_permissions=${tomlString(CODEX_PERMISSION_PROFILE)}`,
+    "--config",
+    `permissions.${CODEX_PERMISSION_PROFILE}=${profile}`,
+    ...writeRoots.flatMap((root) => ["--add-dir", root]),
+  ];
+  return { args, guards: guardReport(true, wantsExit) };
+}
 
 /** Codex's current configurable reasoning levels for the GPT-5.6/Astra family. */
 const CODEX_REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh", "max"]);
@@ -203,6 +452,15 @@ export interface CodexAdapterOptions {
   spawnSync?: SpawnSync;
   /** Default per-run timeout in ms, overridable per request via `RuntimeAgentRequest.timeoutMs`. */
   timeoutMs?: number;
+  /**
+   * Injectable for tests; defaults to `resolveNpmCliScript`. Only consulted when
+   * `platform` is win32 and a spawn came back ENOENT — the one case where the
+   * bare command name is known-unusable rather than merely absent (an
+   * npm-installed `codex` is a `.cmd`/`.ps1` shim spawnSync cannot execute).
+   */
+  resolveCommand?: CommandResolver;
+  /** Injectable for tests; defaults to `process.platform`. */
+  platform?: string;
   /**
    * Models this installation is known to reach. No default — see file header.
    * `RuntimeRegistry.reaching()` answers nothing for this runtime until a caller
@@ -230,10 +488,13 @@ export class CodexAdapter implements RuntimeAdapter {
     // selector is documented (see header).
     dir: ".codex",
     definitionPath: (role) => `.codex/agents/${role}.toml`,
-    // No confirmed project-level guard-wiring file for Codex. `null` is the
-    // deliberate, honest answer `runtimeAdapter.ts` documents for exactly this
-    // situation — these guards must be covered post-hoc, not assumed.
+    // Project hooks remain intentionally untrusted. `null` says the binding
+    // file itself proves no guard; guarded headless runs are certified by the
+    // per-run permission profile and isolated execpolicy below.
     guardConfigPath: null,
+    // Headless execution does not trust project hooks. It compiles the active
+    // packet into a native permission profile and reports that exact run.
+    guardEnforcement: "per-run",
   };
   readonly capabilities: ReadonlySet<RuntimeCapability> = new Set(CODEX_CAPABILITIES);
   readonly models: ReadonlySet<string>;
@@ -242,6 +503,9 @@ export class CodexAdapter implements RuntimeAdapter {
   private readonly spawn: SpawnSync;
   private readonly defaultTimeoutMs: number;
   private readonly outputSchema?: Record<string, unknown>;
+  private readonly inheritCodexAuth: boolean;
+  private readonly resolveCommand: CommandResolver;
+  private readonly platform: string;
 
   constructor(opts: CodexAdapterOptions) {
     this.workspace = new LocalWorkspace({ root: opts.projectRoot });
@@ -249,12 +513,38 @@ export class CodexAdapter implements RuntimeAdapter {
     this.defaultTimeoutMs = opts.timeoutMs ?? 30 * 60_000;
     this.models = new Set(opts.models ?? []);
     this.outputSchema = opts.outputSchema;
+    this.resolveCommand = opts.resolveCommand ?? resolveNpmCliScriptImpl;
+    this.platform = opts.platform ?? process.platform;
+    // Unit tests inject a fake process and must never reach into the user's
+    // credential store. Production construction inherits only auth.json into
+    // the isolated per-run home; config, plugins, MCPs, and user rules do not.
+    this.inheritCodexAuth = opts.spawnSync === undefined;
+  }
+
+  /**
+   * One spawn, plus the single retry it is allowed: on Windows an ENOENT from a
+   * bare command name usually means "npm shim", not "not installed" — resolve
+   * the shim's real entry script and try once more (same seam as
+   * `claudeCodeAdapter.ts`). Any other error (or a resolver that finds nothing)
+   * returns the first result untouched.
+   */
+  private spawnResolved(
+    command: string,
+    args: string[],
+    options: Parameters<SpawnSync>[2],
+  ): { proc: SpawnSyncReturns<string>; resolvedThrough: string | null } {
+    const proc = this.spawn(command, args, options);
+    const code = proc.error ? (proc.error as NodeJS.ErrnoException).code : undefined;
+    if (code !== "ENOENT" || this.platform !== "win32") return { proc, resolvedThrough: null };
+    const resolved = this.resolveCommand(command);
+    if (!resolved) return { proc, resolvedThrough: null };
+    return { proc: this.spawn(resolved.file, [...resolved.prefixArgs, ...args], options), resolvedThrough: resolved.file };
   }
 
   async probe(): Promise<RuntimeProbe> {
     let proc: SpawnSyncReturns<string>;
     try {
-      proc = this.spawn("codex", ["--version"], { encoding: "utf8", timeout: 10_000, maxBuffer: 1024 * 1024 });
+      ({ proc } = this.spawnResolved("codex", ["--version"], { encoding: "utf8", timeout: 10_000, maxBuffer: 1024 * 1024 }));
     } catch (e) {
       return { available: false, reason: String(e) };
     }
@@ -264,9 +554,22 @@ export class CodexAdapter implements RuntimeAdapter {
   }
 
   async executeAgent(req: RuntimeAgentRequest): Promise<RuntimeAgentResult> {
-    // No guard mechanism is claimed (see file header), so any requested guard
-    // axis is reported unenforced up front — never silently dropped.
-    const guards = noGuardMechanismReport(req.guards);
+    let invocation: CodexPermissionInvocation;
+    try {
+      invocation = codexPermissionInvocationFor(req);
+    } catch (error) {
+      return {
+        status: "ERROR",
+        exitCode: null,
+        text: "",
+        usage: {},
+        guards: guardReport(false, req.guards.exitChecks.length > 0, requiresPreToolGuard(req.guards, req.autonomy)),
+        diagnostics: [
+          `${CODEX_PERMISSION_PROFILE_UNAVAILABLE}: refusing guarded codex exec before spawn — ${String(error)}`,
+        ],
+      };
+    }
+    const guards = invocation.guards;
 
     // NAMED_AGENTS is not claimed (no documented exec-level selector): the
     // role's official `.toml` binding is read and its developer_instructions
@@ -344,9 +647,24 @@ export class CodexAdapter implements RuntimeAdapter {
       };
     }
 
-    // Preflight write roots become sandbox-native --add-dir grants
-    // (OS-enforced) instead of living only in env the sandbox never read.
-    const addDirs = addDirArgsFor(req.workRoots, req.autonomy);
+    let runHome: PreparedCodexHome | null = null;
+    if (requiresPreToolGuard(req.guards, req.autonomy)) {
+      try {
+        const sourceHome = req.env?.CODEX_HOME ?? process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
+        runHome = prepareCodexRunHome(req.guards.forbidCommands, req.cwd, sourceHome, this.inheritCodexAuth);
+      } catch (error) {
+        return {
+          status: "ERROR",
+          exitCode: null,
+          text: "",
+          usage: {},
+          guards: guardReport(false, req.guards.exitChecks.length > 0, true),
+          diagnostics: [
+            `${CODEX_PERMISSION_PROFILE_UNAVAILABLE}: refusing guarded codex exec before spawn — ${String(error)}`,
+          ],
+        };
+      }
+    }
 
     // Two documented machine surfaces, used together:
     //   --json                    → stdout becomes a JSONL event stream (usage/model scanned tolerantly)
@@ -361,11 +679,8 @@ export class CodexAdapter implements RuntimeAdapter {
     }
     const args = [
       "exec",
-      "--sandbox",
-      SANDBOX_MODE[req.autonomy],
-      "--ask-for-approval",
-      APPROVAL_MODE[req.autonomy],
-      ...addDirs,
+      ...invocation.args,
+      ...(runHome ? codexInlineGitHookArgs(runHome.path) : []),
       ...(req.modelExplicit && req.model ? ["--model", req.model] : []),
       ...(req.effort ? ["--config", `model_reasoning_effort=\"${req.effort}\"`] : []),
       "--json",
@@ -376,24 +691,38 @@ export class CodexAdapter implements RuntimeAdapter {
     ];
 
     let proc: SpawnSyncReturns<string>;
+    let resolvedThrough: string | null = null;
     try {
-      proc = this.spawn("codex", args, {
+      ({ proc, resolvedThrough } = this.spawnResolved("codex", args, {
         cwd: req.cwd,
         encoding: "utf8",
         timeout: req.timeoutMs ?? this.defaultTimeoutMs,
         maxBuffer: 64 * 1024 * 1024,
         // Same channel as `claudeCodeAdapter.ts` — set unconditionally since it
         // costs nothing if the runtime never asks a guard to read it.
-        env: { ...process.env, ...req.env, STA_ROLE: req.role },
-      });
+        env: {
+          ...process.env,
+          ...req.env,
+          STA_ROLE: req.role,
+          ...(runHome ? { CODEX_HOME: runHome.path } : {}),
+        },
+      }));
     } catch (e) {
       return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards, diagnostics: [`failed to spawn \`codex\`: ${String(e)}`] };
+    } finally {
+      runHome?.cleanup();
     }
 
     if (proc.error) {
       const code = (proc.error as NodeJS.ErrnoException).code;
       if (code === "ENOENT") {
-        return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards, diagnostics: [`\`codex\` binary not found: ${proc.error.message}`] };
+        const diagnostics = [`\`codex\` binary not found: ${proc.error.message}`];
+        if (resolvedThrough === null && this.platform === "win32") {
+          diagnostics.push(
+            "on Windows an npm-installed `codex` is a .cmd/.ps1 shim spawnSync cannot execute; no resolvable entry was found — install the native build or expose a real executable on PATH",
+          );
+        }
+        return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards, diagnostics };
       }
       if (code === "ETIMEDOUT") {
         return { status: "TIMEOUT", exitCode: proc.status ?? null, text: "", usage: {}, guards, diagnostics: [`\`codex exec\` timed out: ${proc.error.message}`] };
@@ -452,9 +781,6 @@ export class CodexAdapter implements RuntimeAdapter {
     if (structuredParseFailed) {
       diagnostics.push("--output-schema was requested but the final message did not parse as JSON — structured is absent for this run");
     }
-    const readCaveat = unreadableWorkRootCaveat(req.workRoots, req.autonomy);
-    if (readCaveat) diagnostics.push(readCaveat);
-
     // See PROVIDER_REFUSAL_PATTERN: a refusal to serve must not spend the
     // task's retry budget or trigger recovery for something the task did not
     // cause.
@@ -487,60 +813,25 @@ export class CodexAdapter implements RuntimeAdapter {
   }
 }
 
-/** Every requested guard axis is unenforced, because no guard mechanism is claimed at all (`binding.guardConfigPath` is `null`). */
-function noGuardMechanismReport(requested: RuntimeGuards): RuntimeGuardReport {
-  const wantsPreToolGuard = requested.writeAllow.length > 0 || requested.writeDeny.length > 0 || requested.forbidCommands.length > 0;
-  const wantsExitGuard = requested.exitChecks.length > 0;
+/** Per-run truth: native permissions cover pre-tool writes/commands; exit checks remain provider-neutral. */
+function guardReport(preToolEnforced: boolean, wantsExitGuard: boolean, wantsPreToolGuard = preToolEnforced): RuntimeGuardReport {
   if (!wantsPreToolGuard && !wantsExitGuard) return { enforced: [], unenforced: [] };
+  const enforced = preToolEnforced ? [RuntimeCapability.PRE_TOOL_GUARD] : [];
   const unenforced = [
-    ...(wantsPreToolGuard ? [RuntimeCapability.PRE_TOOL_GUARD] : []),
+    ...(!preToolEnforced && wantsPreToolGuard ? [RuntimeCapability.PRE_TOOL_GUARD] : []),
     ...(wantsExitGuard ? [RuntimeCapability.EXIT_GUARD, RuntimeCapability.PER_AGENT_EXIT_GUARD] : []),
   ];
   return {
-    enforced: [],
+    enforced,
     unenforced,
-    reason: "codexAdapter.ts claims no guard mechanism (binding.guardConfigPath is null) — see file header for why",
+    reason: wantsExitGuard
+      ? "Codex write/command scope is enforced by the per-run native permission profile and isolated execpolicy; exit checks are enforced by the provider-neutral runner"
+      : undefined,
   };
 }
 
-/**
- * OFF10 M5 — the preflight write roots, carried natively instead of by
- * convention. Until now a Target repo this run may write reached Codex only as
- * an env var the sandbox never read; `--add-dir` hands the same directories to
- * the OS-enforced sandbox itself, which is strictly stronger than anything the
- * env+hooks channel can promise.
- *
- * Mapping rules (deliberately least-privilege):
- * - write roots under `propose`/`edit` (the two workspace-write autonomies) →
- *   one `--add-dir <path>` each.
- * - `read-only` autonomy runs in a read-only sandbox where adds are meaningless.
- * - `full` maps to danger-full-access — everything is writable anyway, and
- *   passing roots there would imply they were the boundary when they are not.
- * - read-only work roots are NOT added: `--add-dir` grants write access, and
- *   per-directory read grants are not exposed by any documented exec flag. The
- *   caller sees a diagnostic whenever that gap is live (see `executeAgent`),
- *   so reliance on Codex's default read posture is stated, never silent.
- */
-export function addDirArgsFor(
-  workRoots: readonly RuntimeWorkRoot[] | undefined,
-  autonomy: RuntimeAutonomy,
-): string[] {
-  if (!workRoots || workRoots.length === 0) return [];
-  if (autonomy !== "propose" && autonomy !== "edit") return [];
-  const args: string[] = [];
-  for (const root of workRoots) {
-    if (root.access === "write") args.push("--add-dir", root.path);
-  }
-  return args;
-}
-
-/** Read-only roots that could not be granted natively — surfaced, not swallowed. */
-export function unreadableWorkRootCaveat(workRoots: readonly RuntimeWorkRoot[] | undefined, autonomy: RuntimeAutonomy): string | null {
-  if (!workRoots || (autonomy !== "propose" && autonomy !== "edit")) return null;
-  const readOnly = workRoots.filter((r) => r.access === "read");
-  if (readOnly.length === 0) return null;
-  return (
-    `${readOnly.length} read-only work root(s) (${readOnly.map((r) => r.targetId).join(", ")}) rely on Codex's ` +
-    `default read posture — codex exec exposes no documented per-directory read grant today`
-  );
+/** A read-only OS sandbox makes write/command denial non-operative; every writable mode needs a real pre-tool guard. */
+function requiresPreToolGuard(requested: RuntimeGuards, autonomy: RuntimeAutonomy): boolean {
+  return autonomy !== "read-only" &&
+    (requested.writeAllow.length > 0 || requested.writeDeny.length > 0 || requested.forbidCommands.length > 0);
 }

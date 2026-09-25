@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { RuntimeRegistry } from "../../runtime/runtimeRegistry.js";
 import { loadModelTiers, MODEL_TIER_IDS } from "../../runtime/modelTiers.js";
 import { ClaudeCodeAdapter } from "../../runtime/claudeCodeAdapter.js";
@@ -11,7 +14,7 @@ export interface CliDependencies {
 
 export function runtimeRegistryFor(projectRoot: string, dependencies: CliDependencies): RuntimeRegistry {
   return (dependencies.createRuntimeRegistry ?? createProductionRuntimeRegistry)(projectRoot);
-}
+}
 
 /**
  * The production composition root.
@@ -36,10 +39,17 @@ export function createProductionRuntimeRegistry(projectRoot: string): RuntimeReg
       return [];
     }
   };
+  const defaultAgyHooks = path.join(os.homedir(), ".gemini", "config", "hooks.json");
+  const defaultAgyAgents = path.join(os.homedir(), ".gemini", "config", "agents");
   return RuntimeRegistry.forProcess([
     new ClaudeCodeAdapter({ projectRoot }),
     new CodexAdapter({ projectRoot, models: modelsFor("openai") }),
     new OpenCodeAdapter({ projectRoot, models: modelsFor("zai") }),
-    new AntigravityAdapter({ projectRoot, models: modelsFor("google") }),
+    new AntigravityAdapter({
+      projectRoot,
+      models: modelsFor("google"),
+      guardConfigPath: fs.existsSync(defaultAgyHooks) ? defaultAgyHooks : null,
+      agentsStoreRoot: fs.existsSync(defaultAgyAgents) ? defaultAgyAgents : null,
+    }),
   ]);
 }

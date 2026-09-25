@@ -19,7 +19,7 @@ wire ผ่าน `.claude/settings.json`:
 | `block-git.js` | PreToolUse (Bash/Write/Edit) | state-changing git ถูก block (read-only ผ่าน) |
 | `block-outside-repo.js` | PreToolUse | ทุก write resolve อยู่ใน writable roots เท่านั้น |
 | `block-doc-rewrite.js` | PreToolUse (Write) | doc ที่มีอยู่ต้อง amend ไม่ regenerate |
-| `block-path-permissions.js` | PreToolUse | เขียนได้เฉพาะ path ที่ `contracts/<role>.yaml` ให้ (role อ่านจาก `STA_ROLE`) + **Framework payload deny**: `contracts/**`, `workflows/**`, `stacks/**`, `layout.yaml`, `test-pyramid.yaml`, `escalation-policy.yaml` ถูก block เมื่อ `STA_ROLE` ถูกตั้ง — เปลี่ยนที่ Framework repo แล้ว sync; knowledge artifacts (requirement/design/test-plan/plan/`knowledge/**` ฯลฯ) ถูก deny ต่อ stage engineer/frontend/backend/devops |
+| `block-path-permissions.js` | PreToolUse | เขียนได้เฉพาะ path ที่ `contracts/<role>.yaml` ให้ (role อ่านจาก `STA_ROLE` หรือ declared session role — ดู § Declared session role ด้านล่าง) + **Framework payload deny**: `contracts/**`, `workflows/**`, `stacks/**`, `layout.yaml`, `test-pyramid.yaml`, `escalation-policy.yaml` ถูก block เมื่อรู้จัก role — เปลี่ยนที่ Framework repo แล้ว sync; knowledge artifacts (requirement/design/test-plan/plan/`knowledge/**` ฯลฯ) ถูก deny ต่อ stage engineer/frontend/backend/devops |
 | `require-green-before-stop.js` | Stop/SubagentStop | engineer ส่งงานต่อไม่ได้ถ้า typecheck/lint แดง |
 | `block-secret-leak.js` | Stop/SubagentStop | ไฟล์ที่ run แก้ห้ามมี hardcoded secret (`.env.example` รวมด้วย) |
 
@@ -39,6 +39,23 @@ per-agent boundary (write/deny ต่อ role) เป็น **orchestrated-run g
 `STA_ROLE` จึงไม่มี per-role enforcement แต่ยังได้ floor ที่ห้ามข้ามทุกกรณี (`.git/`, `node_modules/`,
 `.workflow/`, `dist/`, `knowledge/_roles/`) บวก workspace boundary — เหตุผลเต็มที่
 [`pipeline-rationale.md`](pipeline-rationale.md)
+
+## Declared session role (desktop role-play)
+
+runtime ที่ไม่มี orchestrator ตั้ง `STA_ROLE` ให้ session — ZCode Desktop ตามคำตัดสิน V12 — ประกาศ role
+ที่กำลังเล่นได้ผ่านไฟล์เดียวของ framework: `software-team-agents session-role set <role>|clear|show`
+เขียน `.workflow/session-role.json` (`{ role, stack?: { write, deny }, declared_at }`) คำสั่งเดียวของ CLI
+เท่านั้นที่เขียนได้ — path อยู่ใต้ `.workflow/` ซึ่ง universal floor ห้ามทุก agent เขียนผ่าน file tool อยู่แล้ว
+session จึงแก้สิทธิ์ตัวเองไม่ได้ (เขียนผ่าน shell เป็นช่องว่างที่เอกสารยอมรับอยู่แล้ว เช่นเดียวกับ
+`block-outside-repo.js` ที่ไม่ parse shell)
+
+กติกาการอ่าน (เหมือนกันทุก host ที่ render จาก `pathPermissions.ts`): `STA_ROLE` ที่ orchestrator ตั้ง
+**ชนะเสมอ**; เมื่อไม่มี จึง fallback ไปอ่านไฟล์ประกาศ — ได้ per-role layer ครบชุดเท่า orchestrated stage:
+write allowlist จาก contract (deny-by-default), contract deny, framework payload deny, knowledge deny
+ของ backend/frontend/devops และ stack globs ที่ CLI pre-resolve ให้ด้วย `resolveStackPathRules` ก่อนเขียน
+ไฟล์เสีย/รูปทรงผิด/ไม่มีไฟล์ = "ไม่มี role ประกาศ" — กลับไป floor-only เท่าเดิมทุกไบต์ ไม่มีทางหลวมกว่า
+session ที่ไม่ประกาศ และ read permission ยังเป็น instruction-level เหมือนเดิม (hook ไม่ enforce read
+เหมือนกันทุก runtime)
 
 ## Guards ถูกเทสต์
 

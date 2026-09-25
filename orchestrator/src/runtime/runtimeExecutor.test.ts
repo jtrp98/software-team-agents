@@ -10,7 +10,7 @@ import { Orchestrator } from "../orchestrator/orchestrator.js";
 import { classifyTask } from "../classification/taskClassifier.js";
 import { ApprovalType } from "../gates/approval.js";
 import { createRuntimeExecutor } from "./runtimeExecutor.js";
-import { MockRuntimeAdapter, okResult } from "./mockAdapter.js";
+import { ALL_MOCK_CAPABILITIES, MockRuntimeAdapter, okResult } from "./mockAdapter.js";
 import { NO_GUARDS, type RuntimeGuards } from "./runtimeAdapter.js";
 import { GuardResolutionError } from "./runtimeGuards.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
@@ -362,29 +362,49 @@ describe("createRuntimeExecutor — what reaches the adapter (T108)", () => {
     expect(runtime.requests[0].guards).toEqual(guards);
   });
 
-  it("announces a GUARD GAP when exit checks were requested but the runtime enforces none in-band (T-OC7)", async () => {
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const runtime = new MockRuntimeAdapter({
-        respond: () =>
-          okResult({
-            guards: {
-              enforced: [],
-              unenforced: [RuntimeCapability.EXIT_GUARD],
-              reason: "no verified Stop-hook equivalent",
-            },
-          }),
-      });
-      const executor = executorFor(runtime, {
-        guards: () => ({ writeAllow: [], writeDeny: [], forbidCommands: [], exitChecks: ["code-green"] }),
-      });
-      await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-1", context: [] });
+  it("runs provider-neutral exit checks and fails closed instead of announcing a GUARD GAP (DES-122)", async () => {
+    const runtime = new MockRuntimeAdapter({
+      capabilities: ALL_MOCK_CAPABILITIES.filter((capability) => capability !== RuntimeCapability.EXIT_GUARD),
+      respond: () =>
+        okResult({
+          guards: {
+            enforced: [],
+            // Even a buggy adapter that forgets to report the gap cannot skip
+            // the runner: its declared capability set is the pre-spawn truth.
+            unenforced: [],
+          },
+        }),
+    });
+    const executor = executorFor(runtime, {
+      guards: () => ({ writeAllow: [], writeDeny: [], forbidCommands: [], exitChecks: ["code-green"] }),
+      captureExitCheckBaseline: async (roots: string[]) => roots.map((root) => ({ root, fingerprint: { files: {} } })),
+      exitCheckRunner: async (baselines: Array<{ root: string }>) => ({
+        ok: false,
+        results: [{ check: "code-green", root: baselines[0]!.root, status: "FAIL", diagnostic: "typecheck: red" }],
+      }),
+    });
 
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("GUARD GAP"));
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining("code-green"));
-    } finally {
-      errorSpy.mockRestore();
-    }
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-1", context: [] });
+
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain("code-green");
+    expect(result.outcome.failure_reason).toContain("typecheck: red");
+  });
+
+  it("refuses before adapter spawn when an unenforced exit-check baseline cannot be captured", async () => {
+    const runtime = new MockRuntimeAdapter({
+      capabilities: ALL_MOCK_CAPABILITIES.filter((capability) => capability !== RuntimeCapability.EXIT_GUARD),
+    });
+    const executor = executorFor(runtime, {
+      guards: () => ({ writeAllow: [], writeDeny: [], forbidCommands: [], exitChecks: ["no-hardcoded-secret"] }),
+      captureExitCheckBaseline: async () => { throw new Error("not a readable git worktree"); },
+    });
+
+    const result = await executor({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-1", context: [] });
+
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain("EXIT_CHECK_BASELINE_UNAVAILABLE");
+    expect(runtime.requests).toEqual([]);
   });
 
   it("stays silent about exit checks when they were not requested", async () => {
@@ -1647,9 +1667,9 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
 
   // The support-level gate guards the one automatic route (precedence 4, the
   // named default runner), which is the only route nobody chose explicitly.
-  it("refuses an automatic preview route before either adapter starts", async () => {
+  it("refuses an automatic below-supported route before either adapter starts", async () => {
     const projectRoot = tmpProject();
-    const preview = new MockRuntimeAdapter({ id: "codex" });
+    const preview = new MockRuntimeAdapter({ id: "opencode" });
     const other = new MockRuntimeAdapter({ id: "claude-code" });
     const result = await createRuntimeExecutor({
       runtime: preview,
@@ -1659,7 +1679,7 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
       guards: () => NO_GUARDS,
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-SUPPORT-GATE", context: [] });
     expect(result.outcome.result).toBe("FAIL");
-    expect(result.outcome.failure_reason).toContain('support level "preview"');
+    expect(result.outcome.failure_reason).toContain('support level "experimental"');
     expect(preview.requests).toEqual([]);
     expect(other.requests).toEqual([]);
   });
@@ -1667,8 +1687,8 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
   it("lets routing.allow_below_supported opt one runtime past the automatic support gate", async () => {
     const projectRoot = tmpProject();
     fs.mkdirSync(path.join(projectRoot, ".sta"), { recursive: true });
-    fs.writeFileSync(path.join(projectRoot, ".sta", "config.yaml"), "schema_version: 1\nrouting:\n  allow_below_supported: [codex]\n", "utf8");
-    const preview = new MockRuntimeAdapter({ id: "codex" });
+    fs.writeFileSync(path.join(projectRoot, ".sta", "config.yaml"), "schema_version: 1\nrouting:\n  allow_below_supported: [opencode]\n", "utf8");
+    const preview = new MockRuntimeAdapter({ id: "opencode" });
     const result = await createRuntimeExecutor({
       runtime: preview,
       registry: new RuntimeRegistry([preview]),
@@ -1678,6 +1698,22 @@ describe("createRuntimeExecutor — T112 opt-in cross-runtime routing", () => {
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-SUPPORT-OPTIN", context: [] });
     expect(result.outcome.result).toBe("PASS");
     expect(preview.requests).toHaveLength(1);
+  });
+
+  // V12 promotion: codex is `supported`, so the automatic default route reaches it
+  // without `routing.allow_below_supported` — the opt-in for it is now redundant.
+  it("an automatic route to a runtime promoted to supported needs no opt-in (codex, V12 promotion)", async () => {
+    const projectRoot = tmpProject();
+    const promoted = new MockRuntimeAdapter({ id: "codex" });
+    const result = await createRuntimeExecutor({
+      runtime: promoted,
+      registry: new RuntimeRegistry([promoted]),
+      projectRoot,
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-SUPPORT-PROMOTED", context: [] });
+    expect(result.outcome.result).toBe("PASS");
+    expect(promoted.requests).toHaveLength(1);
   });
 
   // An unavailable route stops the stage rather than executing a different

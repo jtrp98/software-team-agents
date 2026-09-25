@@ -20,6 +20,7 @@ const base = {
   codex: { ready: false, detail: "UNGUARDED" },
   opencode: { ready: true, detail: "ok" },
   antigravity: { ready: false, detail: "unguarded" },
+  zcode: { ready: false, detail: "no .zcode/config.json — desktop-only runtime; sync ships the guard payload" },
   v3Configuration: { configured: false, detail: "not configured — defaults apply" },
 };
 
