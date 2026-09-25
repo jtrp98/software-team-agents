@@ -100,13 +100,14 @@ afterEach(() => {
   while (roots.length > 0) fs.rmSync(roots.pop()!, { recursive: true, force: true });
 });
 
-describe("V10 TASK-010 — packet scope on module/target", () => {
-  it("scopes a writable Target work root to the whole Target, not to the role×stack allowlist", () => {
+describe("V13 TASK-011 — packet scope on module/target", () => {
+  it("scopes a writable Target work root by the role×stack allowlist — a root binding alone grants no path", () => {
     const f = fixture();
-    expect(f.guards.writeAllow).toEqual(["**"]);
-    expect(f.packet.scope.allow).toEqual(["**"]);
-    // The old axis: a Node/Prisma layout glob is no longer what grants the write.
-    expect(f.packet.scope.allow).not.toContain("server/**");
+    // The fixture Target records no stack profile, so the scope is the
+    // contract's role boundary alone; a Target with a recorded stack would
+    // add its layout globs. Either way there is no Target-wide allow.
+    expect(f.guards.writeAllow).toEqual(["README.md", "_docs/status.md", "_docs/status-archive.md"]);
+    expect(f.packet.scope.allow).not.toContain("**");
   });
 
   it("keeps the Knowledge-side role contract for a stage with no writable Target root", () => {
@@ -151,18 +152,16 @@ describe("V10 TASK-010 — packet scope on module/target", () => {
     expect(() => assertTaskContractPaths(["src/a.ts"], ["**"], ["knowledge/**"])).not.toThrow();
   });
 
-  it("checkpoints a write outside the old role×stack allowlist but inside the bound Target", async () => {
+  it("refuses a write the role×stack allowlist does not grant, even inside the bound Target", async () => {
     const f = fixture();
     fs.mkdirSync(path.join(f.target, "infra"), { recursive: true });
     fs.writeFileSync(path.join(f.target, "infra", "main.tf"), 'resource "null_resource" "a" {}\n');
-    const result = await checkpointTask(checkpointInput(f));
-    expect(result.changedPaths).toEqual(["infra/main.tf"]);
-    expect(git(f.target, ["show", "--pretty=format:", "--name-only", "HEAD"]).split(/\r?\n/).filter(Boolean))
-      .toEqual(["infra/main.tf"]);
+    expect(await refusalKind(checkpointTask(checkpointInput(f)))).toBe("TASK_CONTRACT_VIOLATION");
+    expect(git(f.target, ["diff", "--cached", "--name-only"])).toBe("");
   });
 
   it.each([[".workflow/forged.json"], ["node_modules/evil.js"], ["dist/bundle.js"]])(
-    "still refuses %s at DENIED_PATH under a Target-wide allow",
+    "still refuses %s at DENIED_PATH under the scoped Target allow",
     async (relativePath) => {
       const f = fixture();
       const destination = path.join(f.target, relativePath);

@@ -86,17 +86,25 @@ afterEach(() => {
   for (const root of temporaryRoots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe("V10 TASK-008 — module write scope in preflight", () => {
+describe("V13 TASK-011 — per-role write scope in preflight", () => {
   it.each([
-    [AgentStage.BACKEND_ENGINEER, { api: "write", worker: "write", web: "write" }],
-    [AgentStage.FRONTEND_ENGINEER, { api: "write", worker: "write", web: "write" }],
+    [AgentStage.BACKEND_ENGINEER, { api: "write", worker: "write", web: "read" }],
+    [AgentStage.FRONTEND_ENGINEER, { api: "read", worker: "read", web: "write" }],
     [AgentStage.DEVOPS, { api: "write", worker: "write", web: "write" }],
     [AgentStage.QA_ENGINEER, { api: "read", worker: "read", web: "read" }],
     [AgentStage.SECURITY, { api: "read", worker: "read", web: "read" }],
-  ])("gives %s the expected access on every Target the task binds", (stage, expected) => {
+  ])("gives %s write only on Targets bound to its own role; the sibling role's Target stays read-only", (stage, expected) => {
     const { options } = fixture();
     const roots = preflightThreeRepoTask(task("matrix"), stage, options).workRoots;
     expect(accessByTarget(roots)).toEqual(expected);
+  });
+
+  it("denies an engineer write on a Target another role owns — cross-role root write refusal", () => {
+    const { options } = fixture();
+    const backendRoots = preflightThreeRepoTask(task("cross-role"), AgentStage.BACKEND_ENGINEER, options).workRoots;
+    expect(backendRoots.find((root) => root.targetId === "web")).toMatchObject({ access: "read" });
+    const frontendRoots = preflightThreeRepoTask(task("cross-role"), AgentStage.FRONTEND_ENGINEER, options).workRoots;
+    expect(frontendRoots.find((root) => root.targetId === "api")).toMatchObject({ access: "read" });
   });
 
   it("keeps a Target the task does not bind out of workRoots entirely, not merely read-only", () => {

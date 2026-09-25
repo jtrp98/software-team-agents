@@ -464,32 +464,16 @@ export function pathRulesFor(agent: AgentStage | string, projectRoot: string = d
   };
 }
 
-/**
- * Everything in a bound Target checkout.
- *
- * Role×stack globs answer "which directory does this role own", which is a
- * Knowledge-repository question. Inside a Target the only boundary that matters
- * is which Target, and an allowlist cannot express that — V10 D1: the real
- * enforcer is `packet.scope.allow` at checkpoint, and it refused paths the
- * task's own module legitimately owned.
- */
-export const TARGET_WIDE_WRITE: readonly string[] = ["**"];
-
-/**
- * Write rules for a Target work root a stage writes, as opposed to the
- * Knowledge-side rules `pathRulesFor` returns.
- *
- * Widening the allow list moves the whole weight of the boundary onto deny, so
- * both halves that still have to hold are kept: Knowledge-owned artifacts stay
- * denied wherever a checkout happens to carry a copy of one, and the role's own
- * contract deny keeps framework payload (`contracts/**`, `.claude/**`) out of
- * engineer hands. `UNIVERSAL_DENY` is layered on by `contractGuards`, as with
- * every other rule set here.
- */
-export function targetPathRules(agent: AgentStage | string, projectRoot: string = defaultProjectRoot()): PathRules {
-  const contract = contractPathRules(agent, projectRoot);
+/** A Target binding grants a root, while the contract and that Target's stack
+ * layout grant paths inside it. New paths are denied until scoped explicitly. */
+export function targetPathRules(
+  agent: AgentStage | string,
+  projectRoot: string = defaultProjectRoot(),
+  targetRoot: string = projectRoot,
+): PathRules {
+  const contract = pathRulesFor(agent, projectRoot, targetRoot);
   return {
-    write: [...TARGET_WIDE_WRITE],
+    write: contract.write.filter((glob) => glob !== "**"),
     deny: [...new Set([...WORKSPACE_BA_ARTIFACTS, ...contract.deny])],
     read: contract.read,
   };

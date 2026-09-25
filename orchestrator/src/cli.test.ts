@@ -69,7 +69,7 @@ describe("T-V9-023 obsolete documentation and knowledge conversion CLI removal",
   });
 
   it("rejects removed knowledge migration actions at dispatch", async () => {
-    await expect(runCli(["knowledge", "migrate-v2"], defaultProjectRoot())).rejects.toThrow(/expected sub-command get or reconcile/);
+    await expect(runCli(["knowledge", "migrate-v2"], defaultProjectRoot())).rejects.toThrow(/expected sub-command get, manifest or reconcile/);
     await expect(runCli(["knowledge-migrate"], defaultProjectRoot())).rejects.toThrow(CliUsageError);
     await expect(runCli(["adopt"], defaultProjectRoot())).rejects.toThrow(CliUsageError);
   });
@@ -272,9 +272,10 @@ describe("T-V3R-032 production runtime composition", () => {
 });
 
 describe("three-repo contract authority", () => {
-  it("uses the Framework contract for a bound Target while preserving the legacy workspace contract", () => {
-    expect(contractRootForTask("C:/target", { targets: [{ target_id: "rainybot", role: AgentStage.BACKEND_ENGINEER }] })).toBe(resolveFrameworkRoot());
-    expect(contractRootForTask("C:/legacy", { targets: [] })).toBe("C:/legacy");
+  it("resolves the role-contract authority from the Framework root alone — a Target never supplies contracts", () => {
+    // V13 TASK-011: the legacy workspace-contract fallback is gone; every
+    // task's guard is scoped from Framework-owned contracts.
+    expect(contractRootForTask()).toBe(resolveFrameworkRoot());
   });
 });
 
@@ -818,6 +819,31 @@ describe("T35 concurrency lock, wired into the CLI", () => {
     return fs.mkdtempSync(path.join(os.tmpdir(), "orchestrator-lock-"));
   }
 
+  // V13 TASK-011: `sta run` refuses an unbound code task at intake, so the
+  // lock tests build the minimal explicit binding — one backend Target, its
+  // local mapping, and module docs whose design declares that Target.
+  function threeRepoFixture(dir: string, taskId: string): string {
+    const knowledge = path.join(dir, "knowledge");
+    fs.mkdirSync(path.join(knowledge, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(knowledge, ".workflow"), { recursive: true });
+    fs.writeFileSync(
+      path.join(knowledge, "targets.yaml"),
+      "schema_version: 1\ntargets:\n  - target_id: api\n    name: API\n    remote_url: https://github.com/acme/api.git\n    status: active\n    type: backend\n",
+    );
+    const target = path.join(dir, "target");
+    fs.mkdirSync(path.join(target, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(target, ".git", "config"), '[remote "origin"]\n\turl = https://github.com/acme/api.git\n');
+    fs.writeFileSync(
+      path.join(knowledge, ".workflow", "targets.local.yaml"),
+      `schema_version: 1\ntargets:\n  api:\n    path: ${JSON.stringify(target)}\n`,
+    );
+    writePacketPlan(knowledge, [fixtureTask({ id: taskId })], "m", target);
+    fs.appendFileSync(path.join(knowledge, "_docs", "module", "m", "design.md"), "\n## Targets\n\n- api\n");
+    fs.writeFileSync(path.join(dir, "installation.yaml"), `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledge)}\n`);
+    process.env.STA_INSTALLATION_CONFIG = path.join(dir, "installation.yaml");
+    return knowledge;
+  }
+
   it("refuses to run/resume a task another process already holds the lock for", async () => {
     const dir = tmpDir();
     try {
@@ -848,28 +874,28 @@ describe("T35 concurrency lock, wired into the CLI", () => {
   it("V13 TASK-007 — `sta run` refuses an engineer stage behind an unverified lane handoff before dispatching anything", async () => {
     const dir = tmpDir();
     const prevConfig = process.env.STA_INSTALLATION_CONFIG;
-    process.env.STA_INSTALLATION_CONFIG = path.join(dir, "no-installation.yaml");
-    // `sta init` seeds an empty knowledge/ — an empty model is not an approved handoff.
-    fs.mkdirSync(path.join(dir, "knowledge"), { recursive: true });
+    // The fixture's Knowledge root holds no items — an empty model is not an
+    // approved handoff, and that is exactly what the guard must refuse on.
+    const knowledge = threeRepoFixture(dir, "BE-LANE");
     const logs: string[] = [];
     const spy = vi.spyOn(console, "log").mockImplementation((line: string) => { logs.push(line); });
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     let composed = false;
     try {
       const code = await runCli(
-        ["--task-id", "T-LANE", "--module", "m", "--project-root", dir, "--bug-fix", "--backend"],
+        ["--task-id", "BE-LANE", "--module", "m", "--project-root", dir, "--bug-fix", "--backend", "--backend-target", "api"],
         dir,
         { createRuntimeRegistry: () => { composed = true; throw new Error("no runtime may be composed for a refused stage"); } },
       );
       expect(code).toBe(1);
-      expect(logs.join("\n")).toMatch(/task T-LANE BLOCKED: cannot start backend-engineer: knowledge under .* holds no items/);
+      expect(logs.join("\n")).toMatch(new RegExp(`cannot start backend-engineer: no knowledge/ directory exists under .*${knowledge.replace(/\\/g, "\\\\")}`));
       expect(logs.join("\n")).toContain("trusted human decision channel");
       expect(composed).toBe(false);
       const store = new SqliteTaskStore(defaultStateDbPath(dir));
       try {
-        const row = store.loadTask("T-LANE")!;
+        const row = store.loadTask("BE-LANE")!;
         expect(row.machine.current).toBe(TaskState.IMPLEMENTATION);
-        expect(store.runsForTask("T-LANE")).toEqual([]);
+        expect(store.runsForTask("BE-LANE")).toEqual([]);
       } finally {
         store.close();
       }
@@ -884,16 +910,15 @@ describe("T35 concurrency lock, wired into the CLI", () => {
 
   it("releases the lock once the run finishes (even though it fails without a real `claude` binary), so a later call is not permanently locked out", async () => {
     const dir = tmpDir();
-    // A code task with no bindings is legal only in legacy (unconfigured) mode.
-    // This test must not depend on whether THIS machine has an installation
-    // configured, so point the mode check at a path that cannot exist.
+    // V13 TASK-011: the run carries an explicit three-repo binding; the run
+    // fails before dispatch (empty-Knowledge lane handoff), and the lock must
+    // still be released rather than leaking, or every future call would
+    // return 4 forever.
     const prevConfig = process.env.STA_INSTALLATION_CONFIG;
-    process.env.STA_INSTALLATION_CONFIG = path.join(dir, "no-installation.yaml");
-    // No lock pre-held this time — run will fail quickly (no `claude` on PATH in CI), but the
-    // lock must still be released rather than leaking, or every future call would return 4 forever.
+    threeRepoFixture(dir, "BE-LOCK");
     try {
-      await runCli(["--task-id", "T-1", "--module", "m", "--project-root", dir, "--bug-fix", "--backend"], dir);
-      const code = await runCli(["status", "T-1", "--project-root", dir], dir);
+      await runCli(["--task-id", "BE-LOCK", "--module", "m", "--project-root", dir, "--bug-fix", "--backend", "--backend-target", "api"], dir);
+      const code = await runCli(["status", "BE-LOCK", "--project-root", dir], dir);
       expect(code).toBe(0); // status never touches the lock, but this also proves the store isn't wedged
     } finally {
       if (prevConfig === undefined) delete process.env.STA_INSTALLATION_CONFIG;

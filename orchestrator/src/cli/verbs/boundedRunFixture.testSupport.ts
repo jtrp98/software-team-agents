@@ -14,6 +14,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { installFrameworkWorkflows } from "../../workflow/workflows.testSupport.js";
 import type { RuntimeAgentResult } from "../../runtime/runtimeAdapter.js";
+import { writeSignedOffHandoffs } from "../../orchestrator/stageGuards.testSupport.js";
 
 export interface BoundedRunFixture { root: string; targetRoot: string }
 
@@ -236,3 +237,322 @@ export const PLAN_TASK_GUARD_FILES: Record<string, string> = {
     },
   }),
 };
+
+/** Reusable three-repo CLI fixture (V13 TASK-011): explicit Knowledge/Target binding for dispatching runs. */
+export interface ThreeRepoFixture {
+  root: string;
+  knowledgeRoot: string;
+  targetApi: string;
+  targetWeb: string;
+  installationConfig: string;
+}
+
+export function threeRepoBoundedRunProject(
+  rootsList: string[],
+  gitRunner: (root: string, ...args: string[]) => string,
+  options: {
+    multiTask?: boolean;
+    omitPlanTargets?: boolean;
+    retiredApi?: boolean;
+    originMismatch?: boolean;
+    /** Record the BA -> SA -> DEV handoffs a person signed off (needed only where the engineer must run). */
+    signed?: boolean;
+  } = {},
+): ThreeRepoFixture {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-cli-"));
+  installFrameworkWorkflows(root);
+  rootsList.push(root);
+
+  const knowledgeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-kn-"));
+  rootsList.push(knowledgeRoot);
+  gitRunner(knowledgeRoot, "init", "-b", "main");
+  gitRunner(knowledgeRoot, "config", "user.name", "Fixture");
+  gitRunner(knowledgeRoot, "config", "user.email", "fixture@example.invalid");
+
+  const targetApi = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-api-"));
+  rootsList.push(targetApi);
+  gitRunner(targetApi, "init", "-b", "main");
+  gitRunner(targetApi, "config", "user.name", "Fixture");
+  gitRunner(targetApi, "config", "user.email", "fixture@example.invalid");
+  gitRunner(targetApi, "config", "remote.origin.url", options.originMismatch ? "https://github.com/acme/wrong.git" : "https://github.com/acme/api.git");
+  fs.mkdirSync(path.join(targetApi, "src"), { recursive: true });
+  const orderSource = "export function orderSummary(): number { return 0; }\n";
+  fs.writeFileSync(path.join(targetApi, "src", "orders.ts"), orderSource);
+  fs.writeFileSync(path.join(targetApi, "package.json"), JSON.stringify({ name: "orders-api", scripts: { test: "node -e \"process.exit(0)\"" } }, null, 2));
+  fs.mkdirSync(path.join(targetApi, ".claude", "scripts"), { recursive: true });
+  fs.writeFileSync(
+    path.join(targetApi, ".claude", "scripts", "static-analysis-gate.js"),
+    "process.stdout.write(JSON.stringify({ ok: true, problems: [] }));\nprocess.exit(0);\n",
+  );
+  gitRunner(targetApi, "add", "--", "src/orders.ts", "package.json", ".claude/scripts/static-analysis-gate.js");
+  gitRunner(targetApi, "commit", "-m", "initial", "--");
+  const headSha = gitRunner(targetApi, "rev-parse", "HEAD");
+  const orderHash = sha256(orderSource);
+
+  const targetWeb = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-web-"));
+  rootsList.push(targetWeb);
+  gitRunner(targetWeb, "init", "-b", "main");
+  gitRunner(targetWeb, "config", "user.name", "Fixture");
+  gitRunner(targetWeb, "config", "user.email", "fixture@example.invalid");
+  gitRunner(targetWeb, "config", "remote.origin.url", "https://github.com/acme/web.git");
+  fs.mkdirSync(path.join(targetWeb, "src"), { recursive: true });
+  fs.writeFileSync(path.join(targetWeb, "src", "App.tsx"), "export function App() { return null; }\n");
+  fs.writeFileSync(path.join(targetWeb, "package.json"), JSON.stringify({ name: "orders-web", scripts: { test: "node -e \"process.exit(0)\"" } }, null, 2));
+  fs.mkdirSync(path.join(targetWeb, ".claude", "scripts"), { recursive: true });
+  fs.writeFileSync(
+    path.join(targetWeb, ".claude", "scripts", "static-analysis-gate.js"),
+    "process.stdout.write(JSON.stringify({ ok: true, problems: [] }));\nprocess.exit(0);\n",
+  );
+  gitRunner(targetWeb, "add", "--", "src/App.tsx", "package.json", ".claude/scripts/static-analysis-gate.js");
+  gitRunner(targetWeb, "commit", "-m", "initial", "--");
+
+  fs.writeFileSync(
+    path.join(knowledgeRoot, "targets.yaml"),
+    `schema_version: 1\ntargets:\n  - target_id: api\n    name: Orders API\n    remote_url: https://github.com/acme/api.git\n    status: ${options.retiredApi ? "retired" : "active"}\n    type: backend\n  - target_id: web\n    name: Orders Web\n    remote_url: https://github.com/acme/web.git\n    status: active\n    type: frontend\n`,
+  );
+  fs.mkdirSync(path.join(knowledgeRoot, ".workflow"), { recursive: true });
+  fs.writeFileSync(
+    path.join(knowledgeRoot, ".workflow", "targets.local.yaml"),
+    `schema_version: 1\ntargets:\n  api:\n    path: ${JSON.stringify(targetApi)}\n  web:\n    path: ${JSON.stringify(targetWeb)}\n`,
+  );
+  gitRunner(knowledgeRoot, "add", "--", "targets.yaml");
+  gitRunner(knowledgeRoot, "commit", "-m", "initial", "--");
+
+  const installationConfig = path.join(root, "installation.yaml");
+  fs.writeFileSync(
+    installationConfig,
+    `schema_version: 1\nknowledge_root: ${JSON.stringify(knowledgeRoot)}\n`,
+  );
+  process.env.STA_INSTALLATION_CONFIG = installationConfig;
+
+  const requirement = "# Requirement\n\n- REQ-007: Order summary responses stay stable when no line item exists.\n- AC-007.2: Zero-total responses for orders with no line items must stay serializable.\n";
+  const design = `# Design
+
+Design evidence format: 1
+
+## Feasibility Summary
+
+Independently implementable.
+
+## Feature-by-Feature Feasibility
+
+One declaration below defines the selected behavior.
+
+## Data Model
+
+No schema changes.
+
+## DES-011 \u2014 Order summary response
+Contract:OrderSummary.v2 \u2014 the empty-order response shape.
+Contract:OrderWeb.v1 \u2014 the web UI contract shape.
+DEC-011 \u2014 keep summary construction behind one serializer boundary.
+Evidence EVD-011: claim=DES-011 | state=confirmed | path=src/orders.ts | symbol=orderSummary | line=1 | revision=${headSha} | basis=source | tool=rg-read | hash=${orderHash}
+Evidence EVD-012: claim=Contract:OrderSummary.v2 | state=confirmed | path=src/orders.ts | symbol=orderSummary | line=1 | revision=${headSha} | basis=source | tool=rg-read | hash=${orderHash}
+Evidence EVD-013: claim=DEC-011 | state=confirmed | path=src/orders.ts | symbol=orderSummary | line=1 | revision=${headSha} | basis=source | tool=rg-read | hash=${orderHash}
+Evidence EVD-014: claim=Contract:OrderWeb.v1 | state=confirmed | path=src/orders.ts | symbol=orderSummary | line=1 | revision=${headSha} | basis=source | tool=rg-read | hash=${orderHash}
+Compatibility: unchanged
+Data/schema: unchanged
+Migration/backfill: none
+Security: none
+Fallback: retain the current empty-order handler.
+Material ambiguity: none
+
+## Modules
+
+Orders service.
+
+## Targets
+
+- api
+- web
+
+## Risks & Dependencies
+
+The per-section decision records are authoritative.
+
+## Unresolved Open Questions
+
+\u2014
+
+## Change Log
+
+- Undated fixture; no human sign-off is implied.
+`;
+
+  const singlePlan = `# Plan
+
+PlanTask format: 1
+
+## Plan Summary
+Deliver one independently verifiable contract-preserving task.
+
+## Phase 1: Orders
+
+### Task BE-004 \u2014 Preserve the order summary
+
+Objective: Return the existing order summary for an empty order.
+Why: Clients need a stable empty-order response.
+Owner: backend-engineer
+Depends on: none
+Traceability: REQ-007, AC-007.2, DES-011
+Produces: Contract:OrderSummary.v2
+Consumes: none
+Risk: shared-contract
+Human gate: none
+Status: pending
+${options.omitPlanTargets ? "" : "Targets: api\n"}
+#### Scope and constraints
+
+Preserve the response contract while handling empty line items.
+
+#### Retrieval hints
+
+Hypothesis: The OrderSummary serializer and empty-order regression are likely boundaries; confirm symbols and paths against current source.
+Query: Locate definitions and references for Contract:OrderSummary.v2 and the empty-order behavior.
+Provenance: DES-011, Contract:OrderSummary.v2
+
+#### Do not modify
+
+Authentication, database schema and unrelated response fields.
+
+#### Acceptance criteria
+
+AC-007.2: An empty order returns the documented zero total without an exception.
+
+#### Required validation and expected evidence
+
+Verify AC-007.2 with the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.
+
+#### Rollback/compatibility notes
+
+Preserve existing nonempty-order serialization. The patch can be removed independently.
+
+## Sequencing Notes
+No preceding implementation is required.
+
+## Unresolved Open Questions
+None.
+
+## Change Log
+Undated canonical fixture; no human sign-off is implied.
+`;
+
+  const multiPlan = `# Plan
+
+PlanTask format: 1
+
+## Plan Summary
+Deliver two tasks across two targets.
+
+## Phase 1: Orders
+
+### Task BE-004 \u2014 Preserve the order summary
+
+Objective: Return the existing order summary for an empty order.
+Why: Clients need a stable empty-order response.
+Owner: backend-engineer
+Depends on: none
+Traceability: REQ-007, AC-007.2, DES-011
+Produces: Contract:OrderSummary.v2
+Consumes: none
+Risk: shared-contract
+Human gate: none
+Status: pending
+Targets: api
+
+#### Scope and constraints
+
+Preserve the response contract while handling empty line items.
+
+#### Retrieval hints
+
+Hypothesis: The OrderSummary serializer and empty-order regression are likely boundaries; confirm symbols and paths against current source.
+Query: Locate definitions and references for Contract:OrderSummary.v2 and the empty-order behavior.
+Provenance: DES-011, Contract:OrderSummary.v2
+
+#### Do not modify
+
+Authentication, database schema and unrelated response fields.
+
+#### Acceptance criteria
+
+AC-007.2: An empty order returns the documented zero total without an exception.
+
+#### Required validation and expected evidence
+
+Verify AC-007.2 with the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.
+
+#### Rollback/compatibility notes
+
+Preserve existing nonempty-order serialization. The patch can be removed independently.
+
+### Task FE-005 \u2014 Render the order summary
+
+Objective: Render the order summary on web.
+Why: Users need to view order summaries.
+Owner: frontend-engineer
+Depends on: BE-004
+Traceability: REQ-007, AC-007.2, DES-011
+Produces: Contract:OrderWeb.v1
+Consumes: Contract:OrderSummary.v2
+Risk: shared-contract
+Human gate: none
+Status: pending
+Targets: web
+
+#### Scope and constraints
+
+Render order summary in web interface.
+
+#### Retrieval hints
+
+Hypothesis: App component renders order summary.
+Query: Locate definitions and references for Contract:OrderSummary.v2 and the empty-order behavior.
+Provenance: DES-011, Contract:OrderSummary.v2, Contract:OrderWeb.v1
+
+#### Do not modify
+
+Authentication, database schema and unrelated response fields.
+
+#### Acceptance criteria
+
+AC-007.2: An empty order returns the documented zero total without an exception.
+
+#### Required validation and expected evidence
+
+Verify AC-007.2 with unit tests. Record commands, exit codes and response assertions.
+
+#### Rollback/compatibility notes
+
+Preserve existing nonempty-order serialization. The patch can be removed independently.
+
+## Sequencing Notes
+No preceding implementation is required.
+
+## Unresolved Open Questions
+None.
+
+## Change Log
+Undated canonical fixture; no human sign-off is implied.
+`;
+
+  const plan = options.multiTask ? multiPlan : singlePlan;
+
+  const docs = path.join(knowledgeRoot, "_docs", "module", "orders");
+  fs.mkdirSync(docs, { recursive: true });
+  fs.writeFileSync(path.join(docs, "plan.md"), plan);
+  fs.writeFileSync(path.join(docs, "requirement.md"), requirement);
+  fs.writeFileSync(path.join(docs, "design.md"), design);
+
+  const templateContracts = path.join(fileURLToPath(new URL("../../../../templates/contracts", import.meta.url)));
+  const contracts = path.join(root, "contracts");
+  fs.mkdirSync(contracts, { recursive: true });
+  // Every role's contract: the engine's reviewer-independence check reads them all.
+  for (const file of fs.readdirSync(templateContracts).filter((name) => name.endsWith(".yaml"))) {
+    fs.copyFileSync(path.join(templateContracts, file), path.join(contracts, file));
+  }
+  // The BA -> SA -> DEV handoffs a person signed off (the engine's role-lane guard reads the Knowledge root).
+  if (options.signed) writeSignedOffHandoffs(knowledgeRoot, "orders");
+
+  return { root, knowledgeRoot, targetApi, targetWeb, installationConfig };
+}

@@ -46,12 +46,8 @@ function accessFor(
   task: Pick<PersistedTask, "targetBindings">,
 ): WorkspaceAccess {
   if (stage === AgentStage.BACKEND_ENGINEER || stage === AgentStage.FRONTEND_ENGINEER) {
-    // The unit of write scope is the task's Target set, not the role binding:
-    // one module's code is reachable from every Target the task binds, so
-    // narrowing an engineer to its own binding strands the sibling Target's
-    // half of the same change as read-only. The upper bound stays the module's
-    // declared `## Targets` in `validateBindingPolicy`.
-    return uniqueBoundTargetIds(task.targetBindings).includes(targetId) ? "write" : "read";
+    return task.targetBindings.targets.some((binding) => binding.target_id === targetId && binding.role === stage)
+      ? "write" : "read";
   }
   if (stage === AgentStage.DEVOPS) return "write";
   return "read";

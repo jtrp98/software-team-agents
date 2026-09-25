@@ -60,10 +60,7 @@ export function contractGuards(
 ): RuntimeGuards {
   let rules;
   try {
-    // A stage writing a bound Target is scoped by Target, not by stack layout
-    // (V10 TASK-010); every other stage still works inside Knowledge, where the
-    // role contract is the boundary.
-    rules = scope?.targetSide ? targetPathRules(role, projectRoot) : pathRulesFor(role, projectRoot, layoutRoot);
+    rules = scope?.targetSide ? targetPathRules(role, projectRoot, layoutRoot) : pathRulesFor(role, projectRoot, layoutRoot);
   } catch (e) {
     throw new GuardResolutionError(role, e);
   }

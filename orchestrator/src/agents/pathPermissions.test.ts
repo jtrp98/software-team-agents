@@ -839,13 +839,15 @@ describe("T-V5-023 — stack-shaped path permissions live in the stack profile",
 describe("V10 TASK-010 — target-side write rules", () => {
   const FRAMEWORK_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
-  it("grants the whole Target instead of the role×stack allowlist", () => {
+  it("scopes Target writes to the role×stack allowlist — a root binding alone grants no path (V13 TASK-011)", () => {
     const rules = targetPathRules(AgentStage.BACKEND_ENGINEER, FRAMEWORK_ROOT);
-    expect(rules.write).toEqual(["**"]);
-    expect(canWritePath(rules, "infra/main.tf").allowed).toBe(true);
-    expect(canWritePath(rules, "ClassOnlineWeb/Views/Home/Index.cshtml").allowed).toBe(true);
-    // The role×stack rules would have refused both of these.
-    expect(canWritePath(pathRulesFor(AgentStage.BACKEND_ENGINEER, FRAMEWORK_ROOT), "infra/main.tf").allowed).toBe(false);
+    expect(rules.write).toEqual(pathRulesFor(AgentStage.BACKEND_ENGINEER, FRAMEWORK_ROOT).write);
+    expect(rules.write).not.toContain("**");
+    // What the contract+stack grant holds on the Knowledge side holds on the
+    // Target side; everything else is refused by default.
+    expect(canWritePath(rules, "server/routes/deal.ts").allowed).toBe(true);
+    expect(canWritePath(rules, "infra/main.tf").allowed).toBe(false);
+    expect(canWritePath(rules, "ClassOnlineWeb/Views/Home/Index.cshtml").allowed).toBe(false);
   });
 
   it("still refuses Knowledge artifacts and framework payload", () => {

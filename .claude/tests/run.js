@@ -1087,14 +1087,24 @@ check(
 );
 
 const targetWorkRoot = path.join(os.tmpdir(), 'sta-target-work');
+// V13 TASK-011: a runtime grant names a real checkout, and a bound Target
+// write is scoped by the role contract plus the stack half the orchestrator
+// hands over — a root binding alone grants no path.
+fs.mkdirSync(path.join(targetWorkRoot, 'src'), { recursive: true });
+const targetStackRules = { STA_STACK_PATH_RULES: JSON.stringify({ write: ['src/**'], deny: [] }) };
 check(
   'backend-engineer may write only the runtime-granted canonical Target root',
-  runPathHook('Write', path.join(targetWorkRoot, 'src', 'route.ts'), 'backend-engineer', { STA_WRITABLE_WORK_ROOTS: JSON.stringify([targetWorkRoot]) }),
+  runPathHook('Write', path.join(targetWorkRoot, 'src', 'route.ts'), 'backend-engineer', { STA_WRITABLE_WORK_ROOTS: JSON.stringify([targetWorkRoot]), ...targetStackRules }),
   ALLOW,
 );
 check(
   'runtime-granted Target root still blocks .git writes',
   runPathHook('Write', path.join(targetWorkRoot, '.git', 'config'), 'backend-engineer', { STA_WRITABLE_WORK_ROOTS: JSON.stringify([targetWorkRoot]) }),
+  BLOCK,
+);
+check(
+  '  a Target path no role/stack rule grants is denied — a root binding alone grants no path (V13 TASK-011)',
+  runPathHook('Write', path.join(targetWorkRoot, 'whatever', 'unlisted.txt'), 'backend-engineer', { STA_WRITABLE_WORK_ROOTS: JSON.stringify([targetWorkRoot]), ...targetStackRules }),
   BLOCK,
 );
 
@@ -1178,14 +1188,21 @@ withTempProject((tmp) => {
     payloadRes.status === BLOCK && payloadRes.stderr.includes('Framework payload') && !/software-team-agents (ba|dev)/.test(payloadRes.stderr) ? 0 : 1, 0);
 
   // The same rule inside a granted Target work root, where the floor branch
-  // used to return early and let everything else through.
+  // used to return early and let everything else through. V13 TASK-011: the
+  // grant is a real checkout and the write is scoped by the role contract.
   const workRoot = path.join(tmp, 'target');
+  fs.mkdirSync(path.join(workRoot, 'src'), { recursive: true });
+  write(path.join(tmp, 'contracts', 'backend-engineer.yaml'),
+    'permissions:\n  read: ["README.md"]\n  write: ["README.md"]\n  deny: []\n');
+  const workGrant = {
+    CLAUDE_PROJECT_DIR: tmp,
+    STA_WRITABLE_WORK_ROOTS: JSON.stringify([workRoot]),
+    STA_STACK_PATH_RULES: JSON.stringify({ write: ['src/**'], deny: [] }),
+  };
   check('  the ban reaches a granted Target work root too',
-    runPathHook('Write', path.join(workRoot, 'contracts', 'backend-engineer.yaml'), 'backend-engineer',
-      { CLAUDE_PROJECT_DIR: tmp, STA_WRITABLE_WORK_ROOTS: JSON.stringify([workRoot]) }), BLOCK);
+    runPathHook('Write', path.join(workRoot, 'contracts', 'backend-engineer.yaml'), 'backend-engineer', workGrant), BLOCK);
   check('  Target source in that same root stays allowed',
-    runPathHook('Write', path.join(workRoot, 'src', 'route.ts'), 'backend-engineer',
-      { CLAUDE_PROJECT_DIR: tmp, STA_WRITABLE_WORK_ROOTS: JSON.stringify([workRoot]) }), ALLOW);
+    runPathHook('Write', path.join(workRoot, 'src', 'route.ts'), 'backend-engineer', workGrant), ALLOW);
 
   // What the recorded role no longer does. Knowledge artifacts are banned by
   // stage (9b-2), not by which repository the session was opened in — one
@@ -1223,6 +1240,15 @@ section('9b-2. V10 TASK-012 — engineer/devops never write Knowledge, wherever 
 withTempProject((tmp) => {
   const workRoot = path.join(tmp, 'target');
   const knowledgeRoot = path.join(workRoot, 'knowledge-repo');
+  // V13 TASK-011: the grant names a real checkout, and every role's write is
+  // scoped by a resolvable contract — minimal flow-style contracts keep this
+  // section self-contained.
+  fs.mkdirSync(path.join(knowledgeRoot, '_docs', 'module', 'm'), { recursive: true });
+  write(path.join(tmp, 'contracts', 'backend-engineer.yaml'), 'permissions:\n  read: ["README.md"]\n  write: ["src/**"]\n  deny: []\n');
+  write(path.join(tmp, 'contracts', 'frontend-engineer.yaml'), 'permissions:\n  read: ["README.md"]\n  write: ["src/**"]\n  deny: []\n');
+  write(path.join(tmp, 'contracts', 'devops.yaml'), 'permissions:\n  read: ["README.md"]\n  write: ["knowledge-repo/_docs/**", "src/**"]\n  deny: []\n');
+  write(path.join(tmp, 'contracts', 'system-analyst.yaml'), 'permissions:\n  read: ["README.md"]\n  write: ["knowledge-repo/_docs/**"]\n  deny: []\n');
+  write(path.join(tmp, 'contracts', 'qa-engineer.yaml'), 'permissions:\n  read: ["README.md"]\n  write: ["knowledge-repo/_docs/**"]\n  deny: []\n');
   const grant = {
     CLAUDE_PROJECT_DIR: tmp,
     STA_WRITABLE_WORK_ROOTS: JSON.stringify([workRoot]),
@@ -1250,10 +1276,10 @@ withTempProject((tmp) => {
     runPathHook('Write', path.join(knowledgeRoot, 'knowledge', '_roles', 'ba', 'seen.yaml'), 'system-analyst',
       { CLAUDE_PROJECT_DIR: tmp, STA_WRITABLE_WORK_ROOTS: JSON.stringify([knowledgeRoot]), STA_KNOWLEDGE_ROOT: knowledgeRoot }),
     BLOCK);
-  check('no STA_KNOWLEDGE_ROOT -> the rule cannot fire, and the floor is all that is left',
+  check('no STA_KNOWLEDGE_ROOT -> deny-default still refuses an unscoped docs write into the granted Target (V13 TASK-011)',
     runPathHook('Write', path.join(knowledgeRoot, '_docs', 'module', 'm', 'design.md'), 'backend-engineer',
       { CLAUDE_PROJECT_DIR: tmp, STA_WRITABLE_WORK_ROOTS: JSON.stringify([workRoot]) }),
-    ALLOW);
+    BLOCK);
 });
 
 // V11 TASK-020 — the launch contract's selection marker reaches the guard.
@@ -1398,13 +1424,21 @@ check(
 // the universal floor against the Target's own root, the Knowledge ban, and the
 // read-only Target refusal — and that nothing puts a role×stack allowlist back
 // in, which Phase 2 replaced with module/Target scope (V10 TASK-024).
-section('9d. V10 TASK-024 — launched from Knowledge, writing a Target: what the guard still enforces');
+section('9d. V13 TASK-011 — launched from Knowledge, writing a Target: binding + role/contract scope, deny by default');
 
 withTempProject((knowledge) => {
   const target = path.join(knowledge, '..', path.basename(knowledge) + '-target');
   const readOnly = path.join(knowledge, '..', path.basename(knowledge) + '-readonly');
-  fs.mkdirSync(target, { recursive: true });
+  const escapeDir = path.join(knowledge, '..', path.basename(knowledge) + '-escape');
+  fs.mkdirSync(path.join(target, 'src'), { recursive: true });
   fs.mkdirSync(readOnly, { recursive: true });
+  fs.mkdirSync(escapeDir, { recursive: true });
+  // Minimal contract so the role layer resolves; the hook reads contracts from
+  // the session root (no dependencies, flow style only — see section 9b-4).
+  write(path.join(knowledge, 'contracts', 'backend-engineer.yaml'),
+    'permissions:\n  read: ["README.md"]\n  write: ["src/**"]\n  deny: []\n');
+  write(path.join(knowledge, 'contracts', 'system-analyst.yaml'),
+    'permissions:\n  read: ["README.md"]\n  write: ["_docs/**"]\n  deny: []\n');
   try {
     const grant = {
       CLAUDE_PROJECT_DIR: knowledge,
@@ -1416,17 +1450,22 @@ withTempProject((knowledge) => {
       ]),
     };
 
-    // 1. A path inside the granted Target.
+    // 1. A path inside the granted Target, covered by the role's write rules.
     check('engineer -> <target>/src/x.ts allowed from a Knowledge root',
       runPathHook('Write', path.join(target, 'src', 'x.ts'), 'backend-engineer', grant), ALLOW);
     check('  the floor is evaluated against the Target, not the session root',
       runPathHook('Write', path.join(target, '.git', 'config'), 'backend-engineer', grant), BLOCK);
     check('  and Framework payload stays refused there too',
       runPathHook('Write', path.join(target, 'contracts', 'backend-engineer.yaml'), 'backend-engineer', grant), BLOCK);
-    // Phase 2 moved scope to module/Target; a path outside this role's contract
-    // globs must NOT be refused here, or the allowlist is back by accident.
-    check('  a path no contract glob covers is still allowed — no role x stack allowlist in a Target',
-      runPathHook('Write', path.join(target, 'whatever', 'unlisted.txt'), 'backend-engineer', grant), ALLOW);
+    // V13 TASK-011: a root binding alone grants no path — a Target write the
+    // role contract does not grant is refused, not silently allowed.
+    check('  a Target path no contract glob grants is denied — deny by default',
+      runPathHook('Write', path.join(target, 'whatever', 'unlisted.txt'), 'backend-engineer', grant), BLOCK);
+    // A symlink inside the granted root that resolves outside it is refused:
+    // the decision runs on the canonical path, not the spelled one.
+    fs.symlinkSync(escapeDir, path.join(target, 'src', 'escape'), 'junction');
+    check('  a symlink escaping the granted root is refused on its canonical path',
+      runPathHook('Write', path.join(target, 'src', 'escape', 'x.ts'), 'backend-engineer', grant), BLOCK);
 
     // 2. A path inside the Knowledge root the session was launched from.
     check('engineer -> <knowledge>/_docs/module/m/design.md refused',
@@ -1446,14 +1485,20 @@ withTempProject((knowledge) => {
       refused.status === BLOCK && refused.stderr.includes('Target "web"') ? 0 : 1, 0);
     check('  an interactive session (no STA_ROLE) gets the same refusal — TASK-023 read-only decision',
       runPathHook('Write', path.join(readOnly, 'src', 'x.ts'), undefined, grant), BLOCK);
-    check('a path in neither repository is left to block-outside-repo.js',
-      runPathHook('Write', path.join(knowledge, '..', 'elsewhere', 'stray.txt'), 'backend-engineer', grant), ALLOW);
+    // V13 TASK-011: with a resolved role the hook itself refuses a path in
+    // neither repository — no bound write root covers it. An anonymous
+    // interactive session stays block-outside-repo.js's case.
+    check('a path in neither repository is refused for a named role — no bound write root covers it',
+      runPathHook('Write', path.join(knowledge, '..', 'elsewhere', 'stray.txt'), 'backend-engineer', grant), BLOCK);
+    check('  an anonymous session leaves it to block-outside-repo.js',
+      runPathHook('Write', path.join(knowledge, '..', 'elsewhere', 'stray.txt'), undefined, grant), ALLOW);
     check('  and block-outside-repo.js does refuse it',
       runHook('block-outside-repo.js', { tool_name: 'Write', tool_input: { file_path: path.join(knowledge, '..', 'elsewhere', 'stray.txt') } },
         { CLAUDE_PROJECT_DIR: knowledge, STA_WRITABLE_WORK_ROOTS: JSON.stringify([target]) }), BLOCK);
   } finally {
     fs.rmSync(target, { recursive: true, force: true });
     fs.rmSync(readOnly, { recursive: true, force: true });
+    fs.rmSync(escapeDir, { recursive: true, force: true });
   }
 });
 

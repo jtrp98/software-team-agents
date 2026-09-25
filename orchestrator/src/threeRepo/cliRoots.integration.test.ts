@@ -95,11 +95,13 @@ describe("resolveWritableWorkRoots — real three-repo installation", () => {
     }
   });
 
-  it("keeps legacy single-repo fallback when no installation config exists", () => {
+  it("refuses when no installation config exists — the legacy single-repo fallback is gone (V13 TASK-011)", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "sta-cli-roots-legacy-"));
     process.env[INSTALLATION_CONFIG_ENV] = path.join(root, "missing-installation.yaml");
     try {
-      expect(resolveWritableWorkRoots(root, "T-legacy", { loadTask: () => null }, AgentStage.QA_ENGINEER)).toEqual([{ path: root }]);
+      expect(() => resolveWritableWorkRoots(root, "T-legacy", { loadTask: () => null }, AgentStage.QA_ENGINEER)).toThrow(
+        /T-legacy cannot resolve its Target binding/,
+      );
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

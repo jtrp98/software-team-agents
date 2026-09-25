@@ -527,7 +527,11 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       return failResult(`cannot assemble authorized handoff context: ${String(error)}`);
     }
 
-    const executionRoot = workRoot?.path ?? threeRepo?.roots.bindingRoot ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot;
+    // Read-only Target roots are verifier inputs, never the verifier's cwd or
+    // writable repository. Document-producing stages execute in Knowledge.
+    const executionRoot = threeRepo
+      ? (stageWritableRoots[0]?.path ?? threeRepo.roots.knowledgeRoot)
+      : (workRoot?.path ?? opts.stageRoots?.[req.stage] ?? opts.projectRoot);
     let guards: RuntimeGuards;
     try {
       guards = opts.guards(role, executionRoot, { targetSide: stageWritesBoundTarget(runtimeTask, req.stage) });
@@ -546,7 +550,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         // Framework binding root only ever hosted contracts, never packets.
         const runtimeStateRoot = threeRepo?.roots.knowledgeRoot ?? opts.runtimeStateRoot ?? opts.projectRoot;
         const baseRevision = await (opts.packetBaseRevision ?? resolveTargetRevision)(executionRoot);
-        const codeIntel = await packetCodeIntel(opts, req, runtimeTask, moduleName, executionRoot, workRoot?.targetId, baseRevision);
+        const codeIntel = await packetCodeIntel(opts, req, runtimeTask, moduleName, workRoot?.path ?? executionRoot, workRoot?.targetId, baseRevision);
         const packet = compileExecutionPacket({
           req,
           role,

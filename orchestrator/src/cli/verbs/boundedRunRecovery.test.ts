@@ -11,7 +11,7 @@ import type { RuntimeAgentResult } from "../../runtime/runtimeAdapter.js";
 import { SqliteRunLedger } from "../../ledger/sqliteRunLedger.js";
 import { SqliteTaskStore } from "../../store/sqliteStore.js";
 import { defaultStateDbPath } from "../../store/stateView.js";
-import { boundedRunProject, playPlanTaskStage, PLAN_TASK_GUARD_FILES } from "./boundedRunFixture.testSupport.js";
+import { boundedRunProject, playPlanTaskStage, PLAN_TASK_GUARD_FILES, threeRepoBoundedRunProject } from "./boundedRunFixture.testSupport.js";
 import { writeSignedOffHandoffs } from "../../orchestrator/stageGuards.testSupport.js";
 import { declareInstallationConfigOverrideChannelForTest } from "../../threeRepo/installation.js";
 
@@ -128,18 +128,19 @@ function flakyAdapter(targetRoot: string, failFirstDev: boolean): MockRuntimeAda
 
 /** A project whose BA -> SA -> DEV handoffs a person has signed off and acknowledged. */
 function signedProject() {
-  const fixture = boundedRunProject(roots, git);
-  writeSignedOffHandoffs(fixture.root, "orders");
-  return fixture;
+  // V13 TASK-011: dispatch requires an explicit binding, so the recovery
+  // scenarios run the three-repo fixture (single-repo dispatch no longer
+  // resolves roots). The frozen-run semantics under test are identical.
+  return threeRepoBoundedRunProject(roots, git, { signed: true });
 }
 
 describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
   it("E01 · a runtime failure halts durably, and --resume finishes the same frozen run without re-registering it", async () => {
-    const { root, targetRoot } = signedProject();
+    const { root, targetApi } = signedProject();
     const halted = await cli(
-      ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit"],
+      ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
       root,
-      new RuntimeRegistry([flakyAdapter(targetRoot, true)]),
+      new RuntimeRegistry([flakyAdapter(targetApi, true)]),
     );
     expect(halted.code).toBe(1);
     expect(halted.out.some((line) => line.includes("HALTED"))).toBe(true);
@@ -160,12 +161,12 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
     expect(afterHalt.tasks).toEqual(["BE-004:RUNNING"]);
     expect(afterHalt.attempts).toEqual(["1:FAILED"]);
     expect(afterHalt.checkpoints).toBe(0);
-    expect(git(targetRoot, "rev-list", "--count", "HEAD")).toBe("1");
+    expect(git(targetApi, "rev-list", "--count", "HEAD")).toBe("1");
 
     const resumed = await cli(
       ["bounded-run", "--resume", afterHalt.runId, "--module", "orders", "--project-root", root, "--autonomy", "edit"],
       root,
-      new RuntimeRegistry([flakyAdapter(targetRoot, false)]),
+      new RuntimeRegistry([flakyAdapter(targetApi, false)]),
     );
     expect(resumed.out.join("\n")).toContain(`resuming run ${afterHalt.runId}`);
     expect(resumed.code, resumed.out.join("\n")).toBe(0);
@@ -213,19 +214,19 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
       store.close();
     }
     TRANSCRIPTS.e01_halt_then_resume = [...halted.out, "--- second invocation ---", ...resumed.out];
-    expect(git(targetRoot, "rev-list", "--count", "HEAD")).toBe("2");
-    expect(git(targetRoot, "branch", "--show-current")).toContain(`sta/run/orders/${afterHalt.runId}`);
+    expect(git(targetApi, "rev-list", "--count", "HEAD")).toBe("2");
+    expect(git(targetApi, "branch", "--show-current")).toContain(`sta/run/orders/${afterHalt.runId}`);
     // No automatic integration: main is untouched and the run branch is left for a person to merge.
-    expect(git(targetRoot, "rev-list", "--count", "main")).toBe("1");
+    expect(git(targetApi, "rev-list", "--count", "main")).toBe("1");
   }, 120_000);
 
   it("E05 · an unavailable provider is the engine's human stop: the run waits, and a resume dispatches nothing", async () => {
-    const { root, targetRoot } = signedProject();
-    const unavailable = planTaskAdapter(targetRoot, {
+    const { root, targetApi } = signedProject();
+    const unavailable = planTaskAdapter(targetApi, {
       engineer: () => ({ status: "UNAVAILABLE", exitCode: 1, text: "provider unavailable: upstream 503 during the attempt" }),
     });
     const stopped = await cli(
-      ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit"],
+      ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
       root,
       new RuntimeRegistry([unavailable]),
     );
@@ -240,7 +241,7 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
       };
     });
     expect(state).toMatchObject({ status: "AWAITING_HUMAN", tasks: ["BE-004:BLOCKED"], attempts: ["UNAVAILABLE"] });
-    const healthy = planTaskAdapter(targetRoot);
+    const healthy = planTaskAdapter(targetApi);
     const again = await cli(
       ["bounded-run", "--resume", state.runId, "--module", "orders", "--project-root", root, "--autonomy", "edit"],
       root,
@@ -252,39 +253,39 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
   }, 120_000);
 
   it("E02 · a run whose plan.md changed under it refuses to resume instead of executing a frozen scope", async () => {
-    const { root, targetRoot } = signedProject();
+    const { root, knowledgeRoot, targetApi } = signedProject();
     const first = await cli(
-      ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit"],
+      ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
       root,
-      new RuntimeRegistry([flakyAdapter(targetRoot, true)]),
+      new RuntimeRegistry([flakyAdapter(targetApi, true)]),
     );
     expect(first.code).not.toBe(0);
     const runId = inspect(root, (ledger) => ledger.listRuns()[0]!.run_id);
 
-    const planPath = path.join(root, "_docs", "module", "orders", "plan.md");
+    const planPath = path.join(knowledgeRoot, "_docs", "module", "orders", "plan.md");
     const original = fs.readFileSync(planPath, "utf8");
     fs.writeFileSync(planPath, original.replace("Objective: Return the existing order summary for an empty order.", "Objective: Rewrite the order summary contract from scratch."));
 
-    const refused = await cli(["bounded-run", "--resume", runId, "--module", "orders", "--project-root", root, "--autonomy", "edit"], root, new RuntimeRegistry([flakyAdapter(targetRoot, false)]));
+    const refused = await cli(["bounded-run", "--resume", runId, "--module", "orders", "--project-root", root, "--autonomy", "edit"], root, new RuntimeRegistry([flakyAdapter(targetApi, false)]));
     expect(refused.code).toBe(1);
     expect(refused.out.join("\n")).toMatch(/plan_hash drifted|recompile explicitly/);
     expect(inspect(root, (ledger) => ledger.checkpointsForRun(runId).length)).toBe(0);
-    expect(git(targetRoot, "rev-list", "--count", "HEAD")).toBe("1");
+    expect(git(targetApi, "rev-list", "--count", "HEAD")).toBe("1");
 
     // Control: restoring the exact plan bytes lets the identical resume run.
     fs.writeFileSync(planPath, original);
-    const resumed = await cli(["bounded-run", "--resume", runId, "--module", "orders", "--project-root", root, "--autonomy", "edit"], root, new RuntimeRegistry([flakyAdapter(targetRoot, false)]));
+    const resumed = await cli(["bounded-run", "--resume", runId, "--module", "orders", "--project-root", root, "--autonomy", "edit"], root, new RuntimeRegistry([flakyAdapter(targetApi, false)]));
     expect(resumed.code, resumed.out.join("\n")).toBe(0);
     expect(inspect(root, (ledger) => ledger.readRun(runId)?.status)).toBe("COMPLETED");
     TRANSCRIPTS.e02_stale_plan_refusal = [...refused.out, "--- plan restored ---", ...resumed.out];
   }, 120_000);
 
   it("E04 · --resume takes the Target from the frozen run and refuses a flag that repoints it", async () => {
-    const { root, targetRoot } = signedProject();
+    const { root, targetApi } = signedProject();
     const halted = await cli(
-      ["bounded-run", "--module", "orders", "--all", "--target-root", targetRoot, "--project-root", root, "--autonomy", "edit"],
+      ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
       root,
-      new RuntimeRegistry([flakyAdapter(targetRoot, true)]),
+      new RuntimeRegistry([flakyAdapter(targetApi, true)]),
     );
     expect(halted.code).not.toBe(0);
     const runId = inspect(root, (ledger) => ledger.listRuns()[0]!.run_id);
@@ -294,7 +295,7 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
     const repointed = await cli(
       ["bounded-run", "--resume", runId, "--module", "orders", "--project-root", root, "--target-root", elsewhere, "--autonomy", "edit"],
       root,
-      new RuntimeRegistry([flakyAdapter(targetRoot, false)]),
+      new RuntimeRegistry([flakyAdapter(targetApi, false)]),
     );
     expect(repointed.code).toBe(1);
     expect(repointed.out.join("\n")).toContain("--target-root");
@@ -308,11 +309,11 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
     const resumed = await cli(
       ["bounded-run", "--resume", runId, "--module", "orders", "--project-root", root, "--autonomy", "edit"],
       root,
-      new RuntimeRegistry([flakyAdapter(targetRoot, false)]),
+      new RuntimeRegistry([flakyAdapter(targetApi, false)]),
     );
     expect(resumed.code, resumed.out.join("\n")).toBe(0);
     expect(inspect(root, (ledger) => ledger.readRun(runId)?.status)).toBe("COMPLETED");
-    expect(git(targetRoot, "rev-list", "--count", "HEAD")).toBe("2");
+    expect(git(targetApi, "rev-list", "--count", "HEAD")).toBe("2");
     TRANSCRIPTS.e04_repointed_resume_refusal = [...repointed.out, "--- resumed with the frozen Target ---", ...resumed.out];
   }, 120_000);
 

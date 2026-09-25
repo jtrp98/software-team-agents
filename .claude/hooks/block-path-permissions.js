@@ -237,6 +237,8 @@ function run(input) {
 
   const target = (input.tool_input && (input.tool_input.file_path || input.tool_input.notebook_path)) || '';
   if (!target) return null;
+  const effectiveTarget = canonicalWriteTarget(target);
+  if (!effectiveTarget) return deny(target, process.env.STA_ROLE || null, 'Cannot resolve the write path safely.');
 
   // Identity resolved once per call: env first, the declared session role only
   // when the orchestrator never named one. Null means anonymous — the floor
@@ -244,30 +246,43 @@ function run(input) {
   const declaredText = readSessionRoleText();
   const role = sessionRole(process.env.STA_ROLE, declaredText);
 
-  const readOnlyTarget = boundReadOnlyTarget(path, path.resolve(root, target));
+  const readOnlyTarget = boundReadOnlyTarget(path, effectiveTarget);
   if (readOnlyTarget !== null) return boundReadOnlyWhy(readOnlyTarget, role);
 
   // Ahead of the work-root branch below, which allows anything the floor lets
   // through: a Knowledge root may itself sit inside a granted work root.
-  const knowledgeDenial = knowledgeArtifactDenial(path, path.resolve(root, target), role);
+  const knowledgeDenial = knowledgeArtifactDenial(path, effectiveTarget, role);
   if (knowledgeDenial !== null) return deny(knowledgeDenial.rel, role, knowledgeDenial.why);
 
-  // Three-repo runtime hands this hook only canonical write roots selected by
-  // preflight. A Target path is outside the Framework contract's relative
-  // globs, so evaluate the universal floor relative to that Target and allow
-  // it only after the runtime supplied a matching root.
-  const workRelative = toWritableWorkRelative(target);
+  // A root binding alone grants no path. Apply the resolved role+stack rules
+  // to the path relative to that Target, with the same hard deny floor.
+  const workRelative = toWritableWorkRelative(effectiveTarget);
   if (workRelative !== null) {
     for (const pattern of UNIVERSAL_DENY) {
       if (matchesGlob(pattern, workRelative)) return deny(workRelative, role || null, `no agent may write \`${pattern}\``);
     }
     const workFrameworkWhy = frameworkPayloadDenial(workRelative, role);
     if (workFrameworkWhy !== null) return deny(workRelative, role, workFrameworkWhy);
-    return null;
+    const workRules = role ? readRules(role, process.env.STA_ROLE ? null : declaredText) : null;
+    if (!workRules) return deny(workRelative, role, 'A bound Target write requires a resolvable role contract.');
+    // Knowledge-owned artifacts stay denied to implementation stages wherever
+    // a checkout happens to carry a copy of one — the same roles the
+    // Knowledge-root check above refuses, so an owner writing its own
+    // document into the bound Knowledge root is not caught here twice.
+    if (role && KNOWLEDGE_DENIED_ROLES.includes(role)) {
+      for (const pattern of WORKSPACE_BA_ARTIFACTS) {
+        if (matchesGlob(pattern, workRelative)) return deny(workRelative, role, 'This Target path is denied by ' + pattern);
+      }
+    }
+    for (const pattern of workRules.deny) {
+      if (matchesGlob(pattern, workRelative)) return deny(workRelative, role, 'This Target path is denied by ' + pattern);
+    }
+    if (workRules.write.some((pattern) => matchesGlob(pattern, workRelative))) return null;
+    return deny(workRelative, role, 'No role/stack write rule grants this Target path.');
   }
 
-  const rel = toRepoRelative(target);
-  if (rel === null) return null; // outside the repo -- block-outside-repo.js owns that case
+  const rel = toRepoRelative(effectiveTarget);
+  if (rel === null) return role ? deny(target, role, 'The resolved path is outside the bound write roots.') : null;
 
   for (const pattern of UNIVERSAL_DENY) {
     if (matchesGlob(pattern, rel)) {
@@ -305,6 +320,19 @@ function run(input) {
   );
 }
 
+function canonicalWriteTarget(target) {
+  const absolute = path.resolve(root, target);
+  let ancestor = absolute;
+  const suffix = [];
+  while (!fs.existsSync(ancestor)) {
+    const parent = path.dirname(ancestor);
+    if (parent === ancestor) return null;
+    suffix.unshift(path.basename(ancestor));
+    ancestor = parent;
+  }
+  try { return path.join(fs.realpathSync.native(ancestor), ...suffix); } catch { return null; }
+}
+
 function toWritableWorkRelative(target) {
   let roots;
   try { roots = JSON.parse(process.env.STA_WRITABLE_WORK_ROOTS || '[]'); } catch { return null; }
@@ -312,7 +340,9 @@ function toWritableWorkRelative(target) {
   const abs = path.resolve(path.isAbsolute(target) ? target : path.resolve(root, target));
   for (const rawRoot of roots) {
     if (typeof rawRoot !== 'string' || !path.isAbsolute(rawRoot)) continue;
-    const rel = path.relative(rawRoot, abs).replace(/\\/g, '/');
+    let canonicalRoot;
+    try { canonicalRoot = fs.realpathSync.native(rawRoot); } catch { continue; }
+    const rel = path.relative(canonicalRoot, abs).replace(/\\/g, '/');
     if (rel === '') return rel;
     if (!rel.startsWith('../') && !path.isAbsolute(rel)) return rel;
   }
@@ -322,7 +352,9 @@ function toWritableWorkRelative(target) {
 /** Repo-relative, forward slashes. Null when the path escapes the repo. */
 function toRepoRelative(target) {
   const abs = path.isAbsolute(target) ? target : path.resolve(root, target);
-  const rel = path.relative(root, abs).replace(/\\/g, '/');
+  let canonicalRoot;
+  try { canonicalRoot = fs.realpathSync.native(root); } catch { return null; }
+  const rel = path.relative(canonicalRoot, abs).replace(/\\/g, '/');
   if (rel === '' || rel.startsWith('../')) return null;
   return rel;
 }

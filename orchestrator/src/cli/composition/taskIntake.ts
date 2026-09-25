@@ -4,17 +4,16 @@ import { classifyTask } from "../../classification/taskClassifier.js";
 import { Orchestrator } from "../../orchestrator/orchestrator.js";
 import { TaskRegistry } from "../../orchestrator/taskRegistry.js";
 import { RUNTIME_IDS, type RuntimeId } from "../../runtime/runtimeSupport.js";
-import { resolveContextDocsRoot, resolveFrameworkRoot } from "../../targetcli/roots.js";
+import { resolveFrameworkRoot } from "../../targetcli/roots.js";
 import { readModuleDoc } from "../../agents/moduleDocs.js";
 import { readWorkPlan } from "../../docs/planGraph.js";
 import { preflightThreeRepoTask } from "../../threeRepo/preflight.js";
 import {
-  defaultInstallationConfigPath,
   installationConfigOverride,
   loadInstallationConfig,
-  InstallationConfigError,
 } from "../../threeRepo/installation.js";
 import { assertRootMatchesFrozenIdentity, resolveInstallationRoot } from "../../threeRepo/rootSelector.js";
+import { assertStandaloneFrameworkRoot, assertStandaloneKnowledgeRoot } from "../../threeRepo/installation.js";
 import type { KnowledgeRootIdentity } from "../../store/taskStore.js";
 import type { TaskLookup } from "../../threeRepo/cliRoots.js";
 import { resolveModuleTargets } from "../../threeRepo/moduleTargetResolver.js";
@@ -33,18 +32,18 @@ import { CliUsageError, type CliArgs } from "../../cli.js";
  * Three-repo tasks persist their execution scope from Framework-owned role
  * contracts.  Resolve the packet guard from that same authority: using the
  * Target's last-synced copy can silently filter a newly granted Framework
- * path out of an otherwise valid RuntimeTask.  Legacy tasks remain governed
- * by their single workspace's contract.
+ * path out of an otherwise valid RuntimeTask.
  */
-export function contractRootForTask(projectRoot: string, bindings: TargetBindings): string {
-  return hasTargetBindings(bindings) ? resolveFrameworkRoot() : projectRoot;
+export function contractRootForTask(): string {
+  return resolveFrameworkRoot();
 }
 
 /** Optional phase-tier metadata is advisory input to routing, never a runtime gate. */
 export function plannedTier(args: Pick<CliArgs, "projectRoot" | "module" | "rootName">, taskId: string): string | undefined {
   if (!args.module) return undefined;
   try {
-    const planMd = readModuleDoc(resolveContextDocsRoot(args.projectRoot, process.env, args.rootName), args.module, "plan.md");
+    const selected = resolveInstallationRoot(loadInstallationConfig(installationConfigOverride()), args.rootName);
+    const planMd = readModuleDoc(selected.path, args.module, "plan.md");
     return planMd === null ? undefined : readWorkPlan(planMd).tasks.find((task) => task.id === taskId)?.tier;
   } catch {
     return undefined;
@@ -63,7 +62,7 @@ export function promptForCamp(defaultRuntimeId: RuntimeId): RuntimeId {
 /**
  * Resolves the Target side of `contract globs ∩ Target work roots` before
  * RuntimeTask is persisted. This is the existing three-repo preflight, not a
- * second root resolver. Legacy single-repo runs retain their one shared root.
+ * second root resolver.
  */
 export function runtimeTaskWorkRoots(
   args: CliArgs,
@@ -79,7 +78,13 @@ export function runtimeTaskWorkRoots(
   const compiled = compileWorkflowPlan(args.classification, resolveFrameworkRoot());
   const stages = compiled.pipeline.filter((stage) => stage !== AgentStage.HUMAN);
   if (!hasTargetBindings(args.targetBindings)) {
-    return stages.map((stage) => ({ stage, targetId: "legacy-project", path: args.projectRoot }));
+    if (stages.some((stage) => stage === AgentStage.BACKEND_ENGINEER || stage === AgentStage.FRONTEND_ENGINEER)) {
+      throw new CliUsageError(`task ${taskId} has no explicit Target binding`);
+    }
+    preflightThreeRepoTask({ taskId, classification, targetBindings: args.targetBindings }, AgentStage.BUSINESS_ANALYST, {
+      frameworkRoot: resolveFrameworkRoot(), installationConfigPath: installationConfigOverride(), knowledgeRootName: args.rootName, moduleScope,
+    });
+    return [];
   }
 
   const preview = { taskId, classification, targetBindings: args.targetBindings };
@@ -159,20 +164,12 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string, 
   // production invocation is refused by `installationConfigOverride` instead
   // of silently reading the machine's real installation.
   const installationConfigPath = installationConfigOverride();
-  // DR §5: a task freezes its Knowledge-root identity at intake — resumes,
-  // later stages and drift assertions answer to this record, not to whatever
-  // the installation's default says by then. A missing installation file is
-  // the legacy single-repo mode with nothing to freeze; a file that exists
-  // but cannot be read must not pass for legacy (DR §3 rule 6).
-  let frozenKnowledgeRoot: KnowledgeRootIdentity | null = null;
-  try {
-    const installation = loadInstallationConfig(installationConfigPath);
-    const selected = resolveInstallationRoot(installation, args.rootName);
-    frozenKnowledgeRoot = { name: selected.name, path: selected.path };
-  } catch (error) {
-    const resolvedConfigPath = installationConfigPath ?? defaultInstallationConfigPath();
-    if (!(error instanceof InstallationConfigError && !fs.existsSync(resolvedConfigPath))) throw error;
-  }
+  // The selected Knowledge identity is mandatory and frozen before any task row is created.
+  const installation = loadInstallationConfig(installationConfigPath);
+  const selected = resolveInstallationRoot(installation, args.rootName);
+  assertStandaloneFrameworkRoot(resolveFrameworkRoot());
+  assertStandaloneKnowledgeRoot(selected.path);
+  const frozenKnowledgeRoot: KnowledgeRootIdentity = { name: selected.name, path: selected.path };
   let moduleScope: TaskBindingModuleScope | undefined;
   const validateInstalledBindings = (): void => {
     const installation = loadInstallationConfig(installationConfigPath);
@@ -197,18 +194,8 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string, 
     );
     for (const warning of result.warnings) console.warn(`[orchestrator] WARNING: ${warning}`);
   };
-  if (hasTargetBindings(args.targetBindings)) {
-    validateInstalledBindings();
-  } else if (isCodeTask) {
-    // Legacy project-mode remains supported when no installation exists. Once
-    // an installation has been configured, however, this is three-repo mode
-    // and a code task without an explicit binding must never be persisted.
-    try {
-      validateInstalledBindings();
-    } catch (error) {
-      if (!(error instanceof Error) || !error.message.startsWith("cannot read installation config")) throw error;
-    }
-  }
+  if (isCodeTask && !hasTargetBindings(args.targetBindings)) throw new CliUsageError(`task ${taskId} requires an explicit Target binding`);
+  validateInstalledBindings();
   // Naming the workflow makes the generated `workflows/<id>.yml` reachable from
   // a run: the file that explains *why* this pipeline is shaped this way is one
   // `cat` away, rather than something a reader has to match up by eye.
@@ -217,7 +204,7 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string, 
       `level=${classification.level} pipeline=${classification.pipeline.join(" -> ")}`,
   );
   for (const reason of classification.reasons) console.log(`[orchestrator]   reason: ${reason}`);
-  const docsRoot = resolveContextDocsRoot(args.projectRoot, process.env, args.rootName);
+  const docsRoot = frozenKnowledgeRoot.path;
   const created = registry.create({
     taskId,
     classification,

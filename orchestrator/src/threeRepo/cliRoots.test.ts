@@ -61,11 +61,13 @@ afterEach(() => {
 });
 
 describe("resolveWritableWorkRoots", () => {
-  it("no installation config (legacy project) → [projectRoot]", () => {
+  it("no installation config → refuses: an unbound root is never a scope (V13 TASK-011)", () => {
     loadInstallationConfig.mockImplementation(() => {
-      throw new Error("cannot read installation config");
+      throw new InstallationConfigError("cannot read installation config");
     });
-    expect(resolveWritableWorkRoots(PR, "T-1", { loadTask: () => null }, AgentStage.QA_ENGINEER)).toEqual([{ path: PR }]);
+    expect(() => resolveWritableWorkRoots(PR, "T-1", { loadTask: () => null }, AgentStage.QA_ENGINEER)).toThrow(
+      /T-1 cannot resolve its Target binding because the installation config is unusable/,
+    );
   });
 
   it("installation config present, but the task is not in the store → refuses", () => {
@@ -118,19 +120,14 @@ describe("resolveWritableWorkRoots", () => {
 });
 
 describe("resolveDocsRoot", () => {
-  it("no installation config (legacy project) → projectRoot", () => {
+  it("no installation config → refuses: documents verify against a bound Knowledge root only (V13 TASK-011)", () => {
     loadInstallationConfig.mockImplementation(() => {
       throw new InstallationConfigError("cannot read installation config");
     });
-    expect(resolveDocsRoot(PR)).toBe(path.resolve(PR));
+    expect(() => resolveDocsRoot(PR)).toThrow(/cannot read installation config/);
   });
 
   it("installation file exists but is unusable → throws (fail-closed, DR §3 rule 6)", () => {
-    // [amended R10 — knowingly] The removed case mocked `{}` (a shape the
-    // loader can never return — schema requires schema_version +
-    // knowledge_root) and pinned the A12 silent projectRoot fallback.
-    // TASK-017 makes "exists but broken" a thrown error; missing file stays
-    // legacy (covered by the case above via the absent config path).
     const existing = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "sta-cliRoots-broken-")), "installation.yaml");
     fs.writeFileSync(existing, "placeholder: the loader is mocked; only the file's existence matters", "utf8");
     process.env.STA_INSTALLATION_CONFIG = existing;
@@ -147,11 +144,11 @@ describe("resolveDocsRoot", () => {
 });
 
 describe("resolveThreeRepoTaskLookup", () => {
-  it("no installation config → undefined (legacy, executor gets no threeRepoTask)", () => {
+  it("no installation config → refuses: the executor never runs without resolved roots (V13 TASK-011)", () => {
     loadInstallationConfig.mockImplementation(() => {
       throw new InstallationConfigError("cannot read installation config");
     });
-    expect(resolveThreeRepoTaskLookup(PR, { loadTask: () => null })).toBeUndefined();
+    expect(() => resolveThreeRepoTaskLookup(PR, { loadTask: () => null })).toThrow(/cannot read installation config/);
   });
 
   it("installation file exists but is unusable → throws (A15 fail-closed, DR §3 rule 6)", () => {
@@ -205,19 +202,20 @@ describe("all five production call sites share the same resolvers", () => {
     return out;
   }
 
-  it("single-repo (no config): all five sites resolve to projectRoot", () => {
+  it("no config: every site refuses — the legacy projectRoot fallback is gone (V13 TASK-011)", () => {
     loadInstallationConfig.mockImplementation(() => {
       throw new InstallationConfigError("cannot read installation config");
     });
-    const task = {};
-    const store = { loadTask: () => task as never };
+    const store = { loadTask: () => ({}) as never };
     // Three writable-root sites: qaRoots and both changedFiles closures.
-    expect(resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER)).toEqual([{ path: PR }]);
-    expect(resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER)).toEqual([{ path: PR }]);
-    expect(resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER)).toEqual([{ path: PR }]);
+    for (let i = 0; i < 3; i++) {
+      expect(() => resolveWritableWorkRoots(PR, "T-1", store, AgentStage.QA_ENGINEER)).toThrow(
+        /installation config is unusable/,
+      );
+    }
     // two docs-root sites (qaDocsRoot + previousRound closure)
-    expect(resolveDocsRoot(PR)).toBe(path.resolve(PR));
-    expect(resolveDocsRoot(PR)).toBe(oldDocsRoot(PR));
+    expect(() => resolveDocsRoot(PR)).toThrow(/cannot read installation config/);
+    expect(() => resolveDocsRoot(PR)).toThrow(/cannot read installation config/);
   });
 
   it("three-repo: all five sites resolve consistently without a Framework fallback", () => {

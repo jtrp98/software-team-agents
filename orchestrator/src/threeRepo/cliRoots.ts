@@ -7,16 +7,14 @@
  * maintained copies that could drift — a drifted copy would silently resolve
  * QA against the wrong root.
  *
- * A missing installation config means "legacy project — `projectRoot`
- * stands". Once a three-repo installation is detectable, resolution is
- * fail-closed. `preflightThreeRepoTask` is reused, never reimplemented.
+ * An installation and an explicit task binding are mandatory. The same
+ * preflight resolves every verifier and execution root.
  */
-import * as fs from "node:fs";
 import { AgentStage } from "../types.js";
 import type { PersistedTask } from "../store/taskStore.js";
 import type { ThreeRepoRequestRoots } from "./preflight.js";
-import { defaultInstallationConfigPath, installationConfigOverride, loadInstallationConfig } from "./installation.js";
-import { resolveSelectedKnowledgeRootOrLegacy } from "./rootSelector.js";
+import { installationConfigOverride, loadInstallationConfig } from "./installation.js";
+import { resolveInstallationRoot } from "./rootSelector.js";
 import { preflightThreeRepoTask } from "./preflight.js";
 import { resolveFrameworkRoot } from "../targetcli/roots.js";
 
@@ -38,8 +36,7 @@ export interface QaWorkRoot {
  * The writable work roots a QA-side stage operates on.
  *
  * - three-repo mode → every Target bound to the task, deduped by (targetId, path)
- * - single-repo / legacy project with no installation config → `[{ path: projectRoot }]`
- * - detectable three-repo mode with an unusable task/Target binding → throws
+ * - an unusable installation or task/Target binding → throws
  *
  * QA deliberately has read access to each Target. These are nevertheless the
  * task's writable implementation roots, so filtering by QA's access would
@@ -57,8 +54,6 @@ export function resolveWritableWorkRoots(
   try {
     loadInstallationConfig(configPath);
   } catch (error) {
-    const resolvedConfigPath = configPath ?? defaultInstallationConfigPath();
-    if (!fs.existsSync(resolvedConfigPath)) return [{ path: projectRoot }];
     throw new WritableWorkRootResolutionError(
       `task ${taskId} cannot resolve its Target binding because the installation config is unusable: ${error instanceof Error ? error.message : String(error)}`,
     );
@@ -107,12 +102,10 @@ export function resolveWritableWorkRoots(
  *
  * - three-repo mode → the selected Knowledge root (DR §3 — `requestedRootName`
  *   comes from the command's `--root`)
- * - single-repo / legacy project with no installation file → `projectRoot`
- * - an installation file that exists but cannot be loaded → throws (the
- *   inventory's A12 silent fallback would have read the wrong docs)
+ * - missing or invalid installation → throws
  */
-export function resolveDocsRoot(projectRoot: string, requestedRootName?: string): string {
-  return resolveSelectedKnowledgeRootOrLegacy(projectRoot, requestedRootName, installationConfigPath());
+export function resolveDocsRoot(_projectRoot: string, requestedRootName?: string): string {
+  return resolveInstallationRoot(loadInstallationConfig(installationConfigPath()), requestedRootName).path;
 }
 
 /** Thin wrapper naming the QA-side caller's intent — same resolver, same rules. */
@@ -128,25 +121,21 @@ export function resolveQaWorkRoots(
 
 /**
  * The per-stage `{ task, roots }` lookup the runtime executor calls, or
- * `undefined` when this is not a three-repo installation.
+ * A missing installation is a refusal, never an absent scope.
  *
  * The outer `loadInstallationConfig` guard decides three-repo vs legacy once;
  * the returned callback reloads the task every stage (so `--resume` observes
  * retirement/mapping changes) and throws if it vanished from the store.
- * Legacy means the installation *file is absent* — a file that exists but
- * cannot be loaded throws (A15: an unusable installation must not pass for a
- * legacy project and run against the wrong roots).
  */
 export function resolveThreeRepoTaskLookup(
-  projectRoot: string,
+  _projectRoot: string,
   store: TaskLookup,
   moduleName?: string,
   requestedRootName?: string,
-): ((taskId: string, stage: AgentStage) => { task: PersistedTask; roots: ThreeRepoRequestRoots }) | undefined {
+): (taskId: string, stage: AgentStage) => { task: PersistedTask; roots: ThreeRepoRequestRoots } {
   const configPath = installationConfigPath();
-  try {
-    loadInstallationConfig(configPath);
-    return (taskId: string, stage: AgentStage) => {
+  loadInstallationConfig(configPath);
+  return (taskId: string, stage: AgentStage) => {
       const task = store.loadTask(taskId);
       if (!task) throw new Error(`task ${taskId} disappeared from the state store`);
       return {
@@ -158,10 +147,5 @@ export function resolveThreeRepoTaskLookup(
           moduleName,
         }),
       };
-    };
-  } catch (error) {
-    const resolvedConfigPath = configPath ?? defaultInstallationConfigPath();
-    if (!fs.existsSync(resolvedConfigPath)) return undefined;
-    throw error;
-  }
+  };
 }

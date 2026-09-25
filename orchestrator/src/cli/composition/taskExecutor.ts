@@ -163,7 +163,7 @@ export async function composeProductionTaskExecutor(
   // invocation's --root (if any) already passed the drift assertion at
   // intake, so the frozen name is what every root resolution below uses.
   const runRootName = options.rootName ?? task.knowledgeRoot?.name ?? undefined;
-  const contractRoot = contractRootForTask(options.projectRoot, task.targetBindings);
+  const contractRoot = contractRootForTask();
   const resolvedAutonomy = options.autonomy ?? "propose";
   if (resolvedAutonomy === "propose") {
     console.error(
@@ -268,7 +268,7 @@ export async function composeProductionTaskExecutor(
     ? null
     : createDocumentVerificationHook({
         inner: postDevExecutor,
-        projectRoot: options.projectRoot,
+        projectRoot: resolveDocsRoot(options.projectRoot, runRootName),
         moduleName: options.module,
         blocking: true,
       });

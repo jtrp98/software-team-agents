@@ -224,6 +224,7 @@ export const USAGE =
   "  sta tokens [<task-id>] [--since <iso>] [--by <role|stage|session>] [--export-json <path>] [--baseline <path>]   token/context composition across orchestrated and interactive runs\n" +
   "  sta context <role> [--module <name>] [--phase <n,n>] [--task <id>] [--packet] [--views] [--json] [--root <name>] [--project-root <path>]   deterministic context, latest validated packet, or read-only generated checklist/prompt views\n" +
   "  sta knowledge get <id>[,<id>...] [--lane <ba|sa|uxui|dev>] [--json] [--project-root <path>]   retrieve only permitted knowledge fields (default lane: dev)\n" +
+  "  sta knowledge manifest [--json] [--project-root <knowledge-root>]   canonical discovery index: operating instructions, knowledge, artifacts, decisions, tasks + next action (exit 1 on any stale/missing reference)\n" +
   "  sta knowledge reconcile --target <id> [--json] [--project-root <knowledge-root>]   read-only current/desired evidence classifier\n" +
   "  sta policy [<area>] [<section>] [--json] [--project-root <path>]   read one policies/ section instead of the whole file; no args lists every area and section\n" +
   "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names\n" +
