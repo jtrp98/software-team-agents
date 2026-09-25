@@ -31,7 +31,9 @@ function concreteAdapterSources(): Array<{ file: string; source: string }> {
     .readdirSync(RUNTIME_ROOT)
     .filter((name) => name.endsWith("Adapter.ts") && name !== "runtimeAdapter.ts")
     .map((name) => ({ file: name, source: fs.readFileSync(path.join(RUNTIME_ROOT, name), "utf8") }))
-    .filter(({ source }) => /implements\s+RuntimeAdapter\b/.test(source));
+    // V13 TASK-013 — concrete adapters implement the lifecycle port, which
+    // extends RuntimeAdapter; either spelling is a concrete adapter source.
+    .filter(({ source }) => /implements\s+(?:RuntimeAdapter|ExecutorPort)\b/.test(source));
 }
 
 afterEach(() => {

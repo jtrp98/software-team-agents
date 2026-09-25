@@ -211,54 +211,53 @@ describe("T-V5-008 — guard coverage is a launch requirement", () => {
     expect(failed.name).toBe("Guards wired");
     expect(failed.detail).toMatch(/codex enforces no guard in this workspace/);
     expect(failed.detail).toMatch(/block-secret-leak/);
-    expect(failed.detail).toMatch(/--allow-unguarded-runtime/);
+    // V13 TASK-012 — no acknowledgement path exists any more: the failure
+    // names the routes that stay governed instead of a bypass flag.
+    expect(failed.detail).toMatch(/--runtime claude|sta run/);
+    expect(failed.detail).not.toMatch(/allow-unguarded/);
   });
 
   it("`ba --runtime codex` fails preflight too — the Knowledge workspace is not exempt", async () => {
     const knowledge = makeKnowledgeRepo();
     const fw = fakeFramework("1.0.0", guardPayload());
     const templatesDir = path.join(fw, "templates");
-    expect(await silently(() => runTargetCli(["init", "--role", "ba", "--runtime", "codex"], knowledge, fw, { installationConfigPath: NO_INSTALLATION }))).toBe(0);
+    expect(await silently(() => runTargetCli(["init", "--runtime", "codex"], knowledge, fw, { installationConfigPath: NO_INSTALLATION }))).toBe(0);
 
-    const baPreflight = (options: RoleRunOptions) =>
-      workspacePreflight("ba", { targetRoot: knowledge, templatesDir, installationConfigPath: NO_INSTALLATION, probe: () => ({ available: true }), ...options });
-
-    expect(() => baPreflight({ runtime: "codex" })).toThrow(/codex enforces no guard in this workspace/);
-    const acknowledged = baPreflight({ runtime: "codex", allowUnguardedRuntime: true });
-    expect(acknowledged.guards.level).toBe("unguarded");
-    expect(guardCheck(acknowledged.checks)?.detail).toMatch(/UNGUARDED, acknowledged/);
+    expect(() =>
+      workspacePreflight("ba", { targetRoot: knowledge, templatesDir, installationConfigPath: NO_INSTALLATION, probe: () => ({ available: true }), runtime: "codex" }),
+    ).toThrow(/codex enforces no guard in this workspace/);
   });
 
-  it("the acknowledgement flag launches, and the launch is recorded as unguarded", async () => {
+  it("V13 TASK-012 — no launch is possible on an unguarded runtime, and nothing is recorded as acknowledged", async () => {
     const { target, templatesDir } = await initializedTarget();
-    const context = preflight(target, templatesDir, { runtime: "codex", allowUnguardedRuntime: true });
-    expect(context.guards.level).toBe("unguarded");
-    expect(context.guards.enforced).toEqual([]);
-    expect(guardCheck(context.checks)).toMatchObject({
-      ok: true,
-      detail: expect.stringMatching(/codex: UNGUARDED, acknowledged via --allow-unguarded-runtime/),
-    });
-
-    // The launch line itself states it, so the session transcript carries the fact.
+    let launched = false;
     const logged: string[] = [];
     const originalLog = console.log;
+    const originalError = console.error;
     console.log = (...parts: unknown[]) => logged.push(parts.map(String).join(" "));
+    console.error = (...parts: unknown[]) => logged.push(parts.map(String).join(" "));
     try {
       const { runSession } = await import("./devCommand.js");
-      await runSession({
+      const exit = await runSession({
         targetRoot: target,
         templatesDir,
         runtime: "codex",
-        allowUnguardedRuntime: true,
         installationConfigPath: NO_INSTALLATION,
         probe: () => ({ available: true }),
-        launch: async () => 0,
+        launch: async () => {
+          launched = true;
+          return 0;
+        },
         recordSession: () => {},
       });
+      expect(exit).toBe(1);
     } finally {
       console.log = originalLog;
+      console.error = originalError;
     }
-    expect(logged.join("\n")).toContain("[UNGUARDED SESSION — acknowledged]");
+    expect(launched).toBe(false);
+    expect(logged.join("\n")).toMatch(/preflight failed/);
+    expect(logged.join("\n")).not.toMatch(/UNGUARDED SESSION/);
   });
 
   it("preflight consults guard coverage for every runtime, not only claude", async () => {
@@ -292,7 +291,7 @@ describe("T-V5-008 — guard coverage is a launch requirement", () => {
     expect(() => preflight(target, templatesDir, { runtime: "opencode" })).toThrow(/opencode enforces no guard/);
   });
 
-  it("no guard that is enforced today becomes unenforced: a broken Claude wiring still fails, flag or not", async () => {
+  it("no guard that is enforced today becomes unenforced: a broken Claude wiring still fails, no flag can excuse it", async () => {
     const { target, templatesDir } = await initializedTarget();
 
     // Baseline: fully wired Claude passes with its unchanged verdict wording.
@@ -306,21 +305,19 @@ describe("T-V5-008 — guard coverage is a launch requirement", () => {
     settings.hooks.PreToolUse.pop();
     fs.writeFileSync(settingsPath, JSON.stringify(settings), "utf8");
 
-    // The registration gap fails preflight ...
+    // The registration gap fails preflight — a repairable fault is never a
+    // deliberate choice, and V13 left no bypass to try.
     expect(() => preflight(target, templatesDir)).toThrow(/Guards wired.*7\/8.*software-team-agents sync/);
-    // ... and the acknowledgement flag cannot excuse it. A repairable fault
-    // is never a deliberate choice.
-    expect(() => preflight(target, templatesDir, { allowUnguardedRuntime: true })).toThrow(/Guards wired.*7\/8.*software-team-agents sync/);
     expect(gatherStatus({ targetRoot: target, templatesDir, installationConfigPath: NO_INSTALLATION }).claude.ready).toBe(false);
 
-    // Unreadable settings stay a hard failure under the flag too.
+    // Unreadable settings stay a hard failure.
     fs.writeFileSync(settingsPath, "{not json", "utf8");
-    expect(() => preflight(target, templatesDir, { allowUnguardedRuntime: true })).toThrow(/Guards wired/);
+    expect(() => preflight(target, templatesDir)).toThrow(/Guards wired/);
   });
 
-  it("the flag does not weaken a runtime whose guards are present: opencode keeps its partial verdict", async () => {
+  it("opencode keeps its partial verdict when its guard plugin is present", async () => {
     const { target, templatesDir } = await initializedTarget();
-    const context = preflight(target, templatesDir, { runtime: "opencode", allowUnguardedRuntime: true });
+    const context = preflight(target, templatesDir, { runtime: "opencode" });
     expect(context.guards.level).toBe("partial");
     expect(guardCheck(context.checks)?.detail).not.toMatch(/UNGUARDED/);
   });

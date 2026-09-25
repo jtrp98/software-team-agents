@@ -65,11 +65,14 @@ describe("sta-guards plugin (OpenCode)", () => {
   it("allows writes inside the workspace and ignores non-path tools", async () => {
     const root = workspace();
     const guard = await hookFor(root);
-    await expect(guard("write", { filePath: path.join(root, "_docs", "x.md") })).resolves.toBeUndefined();
+    await expect(guard("write", { filePath: path.join(root, "src", "x.md") })).resolves.toBeUndefined();
     // Relative paths resolve against the workspace root.
     await expect(guard("edit", { file_path: "src/a.ts" })).resolves.toBeUndefined();
     // Bash never touches this guard (declarative permission globs own git).
     await expect(guard("bash", { command: "git push --force" })).resolves.toBeUndefined();
+    // V13 TASK-012: the governed artifact tree is refused on the unassigned
+    // floor — a session claim grants nothing.
+    await expect(guard("write", { filePath: path.join(root, "_docs", "x.md") })).rejects.toThrow(/STA dispatch/);
   });
 
   it("blocks writes resolving outside the workspace", async () => {
@@ -190,11 +193,13 @@ role: ${role}
       const root = roleWorkspace(role);
       delete process.env.STA_ROLE;
       const guard = await hookFor(root);
-      // The Knowledge ban that used to live here is stage-bound now (TASK-012).
-      await expect(guard("write", { filePath: path.join(root, "_docs", "module", "m", "plan.md") })).resolves.toBeUndefined();
-      await expect(guard("write", { filePath: path.join(root, "_docs", "status.md") })).resolves.toBeUndefined();
+      // The recorded role still decides nothing (V13 TASK-012): the governed
+      // artifact tree is refused identically for both roles on the unassigned
+      // floor, and everything outside it answers identically too.
+      await expect(guard("write", { filePath: path.join(root, "_docs", "module", "m", "plan.md") })).rejects.toThrow(/STA dispatch/);
+      await expect(guard("write", { filePath: path.join(root, "_docs", "status.md") })).rejects.toThrow(/STA dispatch/);
+      await expect(guard("write", { filePath: path.join(root, "_docs", "module", "m", "qa.md") })).rejects.toThrow(/STA dispatch/);
       await expect(guard("write", { filePath: path.join(root, "targets.yaml") })).resolves.toBeUndefined();
-      await expect(guard("write", { filePath: path.join(root, "_docs", "module", "m", "qa.md") })).resolves.toBeUndefined();
       await expect(guard("write", { filePath: path.join(root, "src", "a.ts") })).resolves.toBeUndefined();
     }
   });
@@ -212,6 +217,7 @@ role: ${role}
     const root = workspace();
     const guard = await hookFor(root);
     await expect(guard("write", { filePath: path.join(root, "contracts", "x.yaml") })).resolves.toBeUndefined();
-    await expect(guard("write", { filePath: path.join(root, "_docs", "module", "m", "plan.md") })).resolves.toBeUndefined();
+    // The unassigned floor's governed-artifact refusal needs no config either.
+    await expect(guard("write", { filePath: path.join(root, "_docs", "module", "m", "plan.md") })).rejects.toThrow(/STA dispatch/);
   });
 });

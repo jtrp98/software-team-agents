@@ -48,6 +48,8 @@ export const EVIDENCE_KINDS = [
   "stage-completion",
   /** STA's decision that the whole task is Done, referencing every evidence id that proves it. */
   "task-completion",
+  /** V13 TASK-012 — STA issuing or consuming one scoped attempt grant (direct-mode dispatch token). */
+  "attempt-grant",
 ] as const;
 export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
 
@@ -187,6 +189,18 @@ const TaskCompletionPayloadSchema = z.strictObject({
   pipeline: z.array(z.enum(AgentStage)),
 });
 
+const AttemptGrantPayloadSchema = z.strictObject({
+  kind: z.literal("attempt-grant"),
+  /** `issued` = STA created the grant; `consumed` = the attempt presented it back and it is spent. */
+  event: z.enum(["issued", "consumed"]),
+  grantId: z.string().regex(/^agr_[0-9a-f]{32}$/),
+  role: z.string().min(1),
+  contractDigest: z.string().regex(/^[0-9a-f]{64}$/),
+  /** Digest of the granted scope — what makes a tampered token recognisable against its own record. */
+  scopeDigest: z.string().regex(/^[0-9a-f]{64}$/),
+  expiresAt: z.number(),
+});
+
 export const EvidencePayloadSchema = z.discriminatedUnion("kind", [
   RoleDispatchPayloadSchema,
   RoleRunPayloadSchema,
@@ -197,6 +211,7 @@ export const EvidencePayloadSchema = z.discriminatedUnion("kind", [
   ReviewIndependencePayloadSchema,
   StageCompletionPayloadSchema,
   TaskCompletionPayloadSchema,
+  AttemptGrantPayloadSchema,
 ]);
 export type EvidencePayload = z.infer<typeof EvidencePayloadSchema>;
 

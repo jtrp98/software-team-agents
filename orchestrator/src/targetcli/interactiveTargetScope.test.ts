@@ -127,8 +127,11 @@ describe("V10 TASK-023 — an interactive session reads its Targets and writes n
 
     // The decision is the rule, not an accident of the missing role: the same
     // write is still refused when a stage name is present, and the session's
-    // own workspace stays writable either way.
+    // own workspace stays writable outside the governed artifact tree (V13
+    // TASK-012: an unassigned session's `_docs/**` writes are refused on the
+    // floor — read/discover/propose is its contract).
     expect(hookVerdict(knowledge, path.join(api, "src", "route.ts"), { ...env, STA_ROLE: "backend-engineer" }).status).toBe(2);
-    expect(hookVerdict(knowledge, path.join(knowledge, "_docs", "module", "m", "requirement.md"), env).status).toBe(0);
+    expect(hookVerdict(knowledge, path.join(knowledge, "_docs", "module", "m", "requirement.md"), env).status).toBe(2);
+    expect(hookVerdict(knowledge, path.join(knowledge, "notes", "session.md"), env).status).toBe(0);
   });
 });

@@ -502,10 +502,12 @@ export function codexCoverage(targetRoot: string): GuardCoverage {
  * five PreToolUse denials, the declared-session-role bounds, and the Stop
  * secret-leak block fired for real. Full `enforced` stays unclaimed because
  * the Stop continuation cap and the missing PostToolUse guard remain.
- * The per-role path layer inside `block-path-permissions` resolves its role from
- * `.workflow/session-role.json` (`software-team-agents session-role`) when no
- * orchestrator set `STA_ROLE`, so a declared role-play session gets the same
- * Target/Knowledge write bounds an orchestrated stage does.
+ * The per-role path layer inside `block-path-permissions` resolves its role
+ * from a STA-issued scoped attempt grant (`.workflow/attempt-grant.json`,
+ * issued by `sta grant issue` — V13 TASK-012) when no orchestrator set
+ * `STA_ROLE`, so a granted session gets the same Target/Knowledge write
+ * bounds an orchestrated stage does; the retired `.workflow/session-role.json`
+ * self-declaration grants nothing.
  */
 /** Pure/static — quotes the shipped-payload wiring state into the registry claim, the way `opencodeCoverageWithPlugin` does for OpenCode. */
 export function zcodeCoverageWithSyncedPayload(): GuardCoverage {
@@ -515,7 +517,7 @@ export function zcodeCoverageWithSyncedPayload(): GuardCoverage {
     enforced: [RuntimeCapability.PRE_TOOL_GUARD],
     unenforced: [RuntimeCapability.POST_TOOL_GUARD, RuntimeCapability.EXIT_GUARD, RuntimeCapability.PER_AGENT_EXIT_GUARD],
     detail:
-      "`.zcode/config.json` wires four PreToolUse guards (block-git, block-outside-repo, block-doc-rewrite, block-path-permissions) plus the Stop pair — live-verified end to end on a real ZCode Desktop session (2026-09-23, planning/v12/evidence/zcode-uat); block-path-permissions takes its role from `.workflow/session-role.json` (declared via `software-team-agents session-role`) when no orchestrator set STA_ROLE, so a declared role-play session gets per-role Target/Knowledge write bounds; require-green-before-stop and block-secret-leak run on the Stop hook, but ZCode caps Stop continuations at three per session (GUARD GAP, covered by the QA round); PostToolUse and per-agent exit guards have no shipped guard",
+      "`.zcode/config.json` wires four PreToolUse guards (block-git, block-outside-repo, block-doc-rewrite, block-path-permissions) plus the Stop pair — live-verified end to end on a real ZCode Desktop session (2026-09-23, planning/v12/evidence/zcode-uat); block-path-permissions takes its role from a STA-issued attempt grant (`.workflow/attempt-grant.json`, issued via `sta grant issue`) when no orchestrator set STA_ROLE, so a granted session gets per-role Target/Knowledge write bounds; require-green-before-stop and block-secret-leak run on the Stop hook, but ZCode caps Stop continuations at three per session (GUARD GAP, covered by the QA round); PostToolUse and per-agent exit guards have no shipped guard",
   };
 }
 

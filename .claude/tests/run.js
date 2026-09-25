@@ -1206,17 +1206,20 @@ withTempProject((tmp) => {
 
   // What the recorded role no longer does. Knowledge artifacts are banned by
   // stage (9b-2), not by which repository the session was opened in — one
-  // workspace now holds the payload and the documents together.
+  // workspace now holds the payload and the documents together. And since
+  // V13 TASK-012 an unassigned session has no governed-artifact authority at
+  // all: read/discover/propose is its contract, so the role-owned document
+  // tree is refused on the floor, whatever the recorded workspace role says.
   const env = { CLAUDE_PROJECT_DIR: tmp };
   for (const [label, config] of [['role: dev', DEV_CONFIG], ['role: ba', BA_CONFIG]]) {
     write(path.join(tmp, '.agent-team', 'config.yaml'), config);
-    check(`${label} -> requirement.md allowed interactively (no STA_ROLE, no per-agent rule reachable)`,
-      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env), ALLOW);
+    check(`${label} -> requirement.md refused on the unassigned floor (V13 TASK-012: governed work is role-owned)`,
+      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env), BLOCK);
     check(`  ${label} -> design.md likewise`,
-      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'design.md') } }, env), ALLOW);
-    check(`  ${label} -> engineer-owned qa.md allowed`,
-      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'qa.md') } }, env), ALLOW);
-    check(`  ${label} -> app source allowed`,
+      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'design.md') } }, env), BLOCK);
+    check(`  ${label} -> engineer-owned qa.md likewise`,
+      runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'qa.md') } }, env), BLOCK);
+    check(`  ${label} -> app source still allowed (the floor posture, unchanged)`,
       runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, 'src', 'app.ts') } }, env), ALLOW);
     check(`  ${label} -> backend-engineer still refused the Framework payload`,
       runPathHook('Write', path.join(tmp, 'contracts', 'backend-engineer.yaml'), 'backend-engineer', env), BLOCK);
@@ -1226,7 +1229,7 @@ withTempProject((tmp) => {
 
   fs.rmSync(path.join(tmp, '.agent-team'), { recursive: true, force: true });
   check('no .agent-team/config.yaml -> identical answers, nothing was keyed off it',
-    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env), ALLOW);
+    runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, '_docs', 'module', 'm', 'requirement.md') } }, env), BLOCK);
   check('  and the payload ban does not need it either',
     runPathHook('Write', path.join(tmp, 'contracts', 'backend-engineer.yaml'), 'backend-engineer', env), BLOCK);
 });
@@ -1334,13 +1337,27 @@ withTempProject((tmp) => {
     BLOCK);
 });
 
-// V12 — a desktop role-play session (ZCode) has no orchestrator to set
-// STA_ROLE, so it declares the role it is playing through
-// .workflow/session-role.json, written only by `software-team-agents
-// session-role`. The declaration turns the per-role layer on; env identity
-// still wins; anything unreadable or off-shape is "no declared role" — the
-// floor-only posture of the interactive cases above.
-section('9b-4. V12 — a declared session role applies the per-role layer without STA_ROLE');
+// V13 TASK-012 — a direct-mode session has no orchestrator to set STA_ROLE,
+// so its only per-role authority is a STA-issued scoped attempt grant
+// (.workflow/attempt-grant.json, written by `sta grant issue`). The fixture
+// signs tokens the way STA's issuer does (canonical JSON + HMAC-SHA256 over
+// the workspace key) — that is the exact contract the hook verifies. A
+// self-written role file — the retired `.workflow/session-role.json`
+// declaration, reborn as an unsigned grant — grants nothing; the env identity
+// still wins; anything unreadable, unsigned or expired is "no grant", and an
+// unassigned session is refused the governed artifact tree on the floor.
+section('9b-4. V13 TASK-012 — a verified attempt grant applies the per-role layer without STA_ROLE');
+
+const crypto = require('crypto');
+
+function signGrant(unsigned, keyHex) {
+  const normalize = (v) => Array.isArray(v)
+    ? v.map(normalize)
+    : (v && typeof v === 'object')
+      ? Object.fromEntries(Object.entries(v).filter(([, val]) => val !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).map(([k, val]) => [k, normalize(val)]))
+      : v;
+  return { ...unsigned, signature: crypto.createHmac('sha256', keyHex).update(JSON.stringify(normalize(unsigned))).digest('hex') };
+}
 
 withTempProject((tmp) => {
   // Minimal contracts keep this section self-contained: the reader only needs
@@ -1350,33 +1367,69 @@ withTempProject((tmp) => {
   write(path.join(tmp, 'contracts', 'qa-engineer.yaml'),
     'permissions:\n  read: ["_docs/status.md"]\n  write: ["_docs/status.md"]\n  deny: []\n');
   const env = { CLAUDE_PROJECT_DIR: tmp };
-  const declare = (body) => {
-    fs.mkdirSync(path.join(tmp, '.workflow'), { recursive: true });
-    if (body === null) fs.rmSync(path.join(tmp, '.workflow', 'session-role.json'), { force: true });
-    else write(path.join(tmp, '.workflow', 'session-role.json'), body);
+  const KEY = '9'.repeat(64);
+  fs.mkdirSync(path.join(tmp, '.workflow'), { recursive: true });
+  write(path.join(tmp, '.workflow', 'sta-grant-key'), KEY + '\n');
+  const tokenPath = path.join(tmp, '.workflow', 'attempt-grant.json');
+  const grantFile = (token) => {
+    if (token === null) fs.rmSync(tokenPath, { force: true });
+    else write(tokenPath, JSON.stringify(token, null, 2) + '\n');
   };
+  const unsigned = (over) => ({
+    attempt_grant: 1,
+    grant_id: 'agr_' + 'a'.repeat(32),
+    role: 'qa-engineer',
+    stage: 'qa-engineer',
+    task_id: 'T-1',
+    contract_digest: 'b'.repeat(64),
+    scope: { write: [], deny: [], stack: { write: [], deny: [] } },
+    work_roots: [],
+    knowledge_root: null,
+    issued_at: '2026-09-25T00:00:00.000Z',
+    expires_at: '2026-09-26T00:00:00.000Z',
+    nonce: 'c'.repeat(32),
+    ...over,
+  });
   const attempt = (rel) =>
     runHook('block-path-permissions.js', { tool_name: 'Write', tool_input: { file_path: path.join(tmp, ...rel.split('/')) } }, env);
 
-  declare(JSON.stringify({ role: 'qa-engineer', declared_at: '2026-09-22T00:00:00Z' }));
-  check('declared role -> contract write path allowed', attempt('_docs/status.md'), ALLOW);
+  grantFile(signGrant(unsigned(), KEY));
+  check('issued grant -> contract write path allowed', attempt('_docs/status.md'), ALLOW);
   check('  uncovered path denied, the role named in the refusal', attempt('app.ts'), BLOCK);
-  check('  the universal floor outranks the declaration', attempt('knowledge/_roles/ba/seen.yaml'), BLOCK);
-  check('  the declaration cannot rewrite itself through a file tool', attempt('.workflow/session-role.json'), BLOCK);
+  check('  the universal floor outranks the grant', attempt('knowledge/_roles/ba/seen.yaml'), BLOCK);
+  check('  the grant cannot rewrite itself through a file tool', attempt('.workflow/attempt-grant.json'), BLOCK);
 
-  declare(JSON.stringify({ role: 'backend-engineer', stack: { write: ['server/**'], deny: [] } }));
-  check('declared stack globs arrive beside the role (server/** allowed)', attempt('server/route.ts'), ALLOW);
-  check('  the contract still bounds what the declaration cannot widen', attempt('_docs/status.md'), BLOCK);
+  grantFile(signGrant(unsigned({ grant_id: 'agr_' + 'd'.repeat(32), role: 'backend-engineer', scope: { write: [], deny: [], stack: { write: ['server/**'], deny: [] } } }), KEY));
+  check('granted stack globs arrive beside the role (server/** allowed)', attempt('server/route.ts'), ALLOW);
+  check('  the contract still bounds what the grant cannot widen', attempt('_docs/status.md'), BLOCK);
 
-  check('env STA_ROLE wins over the declaration (qa-engineer env denies server/**)',
+  check('env STA_ROLE wins over the grant (qa-engineer env denies server/**)',
     runPathHook('Write', path.join(tmp, 'server', 'route.ts'), 'qa-engineer', env), BLOCK);
 
-  declare(null);
-  check('declaration removed -> anonymous again, floor only', attempt('app.ts'), ALLOW);
-  declare('{not json');
-  check('corrupt declaration -> treated as no declared role', attempt('app.ts'), ALLOW);
-  declare(JSON.stringify({ role: 'Not A Role' }));
-  check('off-shape role string -> treated as no declared role', attempt('app.ts'), ALLOW);
+  // A self-written token: the old self-declaration reborn. Shape plausible,
+  // signature absent — the hook applies no per-role layer and the unassigned
+  // floor refuses the governed artifact tree.
+  grantFile(unsigned());
+  check('self-written token (no signature) grants nothing', attempt('_docs/status.md'), BLOCK);
+  // A real token with one field edited after signing: if the hook trusted the
+  // widened scope it would allow the granted contract path; detecting the
+  // tamper means no per-role layer at all, so the write is refused.
+  const tampered = signGrant(unsigned({ grant_id: 'agr_' + 'e'.repeat(32) }), KEY);
+  tampered.scope = { write: ['**'], deny: [], stack: { write: [], deny: [] } };
+  grantFile(tampered);
+  check('tampered token (signature no longer covers the bytes) grants nothing', attempt('_docs/status.md'), BLOCK);
+  // Expired against the clock the hook runs with.
+  grantFile(signGrant(unsigned({ grant_id: 'agr_' + 'f'.repeat(32), expires_at: '2026-09-24T00:00:00.000Z' }), KEY));
+  check('expired grant -> no per-role layer, the unassigned floor refuses the artifact tree', attempt('_docs/status.md'), BLOCK);
+
+  grantFile(null);
+  check('grant removed -> unassigned again: governed artifacts refused, floor posture elsewhere', attempt('_docs/status.md'), BLOCK);
+  check('  app source still allowed on the floor', attempt('app.ts'), ALLOW);
+  grantFile('{not json');
+  check('corrupt token -> treated as no grant', attempt('_docs/status.md'), BLOCK);
+  check('  and still no per-role layer for it', attempt('app.ts'), ALLOW);
+  grantFile(signGrant(unsigned({ role: 'Not A Role' }), KEY));
+  check('off-shape role string -> treated as no grant', attempt('_docs/status.md'), BLOCK);
 });
 
 // A workspace written by an older `init` still records `role: ba` or `role:
@@ -1402,7 +1455,10 @@ withTempProject((tmp) => {
   for (const [label, config] of configs) {
     if (config === null) fs.rmSync(path.join(tmp, '.agent-team'), { recursive: true, force: true });
     else write(path.join(tmp, '.agent-team', 'config.yaml'), config);
-    check(`${label} -> plan.md allowed interactively`, attempt('_docs/module/m/plan.md'), ALLOW);
+    // V13 TASK-012: plan.md is governed work, refused on the unassigned floor
+    // whatever the recorded workspace role says — the recorded role decides
+    // nothing, and no session claim changes that.
+    check(`${label} -> plan.md refused on the unassigned floor`, attempt('_docs/module/m/plan.md'), BLOCK);
     check(`  ${label} -> contracts allowed interactively (no stage named)`, attempt('contracts/backend-engineer.yaml'), ALLOW);
     check(`  ${label} -> contracts refused for a named stage`, asEngineer('contracts/backend-engineer.yaml'), BLOCK);
     check(`  ${label} -> the floor still holds`, attempt('node_modules/pkg/index.js'), BLOCK);

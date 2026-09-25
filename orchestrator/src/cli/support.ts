@@ -6,7 +6,7 @@ import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { defaultStateDbPath, defaultStateViewPath } from "../store/stateView.js";
 
 /** Flags a verb accepts that take a value — their value must never be mistaken for a positional argument. */
-const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--phase", "--task", "--target", "--by", "--since", "--docs-root", "--config-path", "--source-root", "--source-target", "--destination-root", "--destination-target", "--transfer", "--knowledge-root", "--root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime", "--model", "--effort", "--mode", "--as", "--note", "--lane", "--request"]);
+const VERB_VALUE_FLAGS = new Set(["--project-root", "--state-db", "--reason", "--interval", "--module", "--phase", "--task", "--target", "--by", "--since", "--docs-root", "--config-path", "--source-root", "--source-target", "--destination-root", "--destination-target", "--transfer", "--knowledge-root", "--root", "--figma-email", "--claude-email", "--now", "--confirm", "--export-json", "--baseline", "--escaped-defects", "--runtime", "--model", "--effort", "--mode", "--as", "--note", "--lane", "--request", "--stage", "--file", "--ttl-hours"]);
 
 /** Every non-flag token in a verb's remaining args, in order, skipping over each value-flag's own argument. */
 export function positionalArgs(rest: string[]): string[] {

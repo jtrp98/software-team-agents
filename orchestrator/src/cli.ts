@@ -31,6 +31,7 @@ import { runRuntimesVerb } from "./cli/verbs/runtimes.js";
 import { runChangedVerb } from "./cli/verbs/changed.js";
 import { runReportVerb } from "./cli/verbs/report.js";
 import { runBoundedRunVerb, BOUNDED_RUN_USAGE } from "./cli/verbs/boundedRun.js";
+import { runGrantVerb, GRANT_USAGE } from "./cli/verbs/grant.js";
 import { runProjectsVerb } from "./cli/verbs/projects.js";
 import { runInitVerb } from "./cli/verbs/init.js";
 import { runConfigureVerb } from "./cli/verbs/configure.js";
@@ -226,6 +227,7 @@ export const USAGE =
   "  sta knowledge get <id>[,<id>...] [--lane <ba|sa|uxui|dev>] [--json] [--project-root <path>]   retrieve only permitted knowledge fields (default lane: dev)\n" +
   "  sta knowledge manifest [--json] [--project-root <knowledge-root>]   canonical discovery index: operating instructions, knowledge, artifacts, decisions, tasks + next action (exit 1 on any stale/missing reference)\n" +
   "  sta knowledge reconcile --target <id> [--json] [--project-root <knowledge-root>]   read-only current/desired evidence classifier\n" +
+  `  ${GRANT_USAGE.split("\n").join("\n  ")}` +
   "  sta policy [<area>] [<section>] [--json] [--project-root <path>]   read one policies/ section instead of the whole file; no args lists every area and section\n" +
   "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names\n" +
   "  sta init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
@@ -612,6 +614,7 @@ const VERBS = [
   "tokens",
   "context",
   "knowledge",
+  "grant",
   "policy",
   "upgrade",
   "migrate",
@@ -671,6 +674,8 @@ async function runVerb(verb: Verb, rest: string[], defaultProjectRoot: string, d
       return runContextVerb(rest, defaultProjectRoot);
     case "knowledge":
       return runKnowledgeVerb(rest, defaultProjectRoot);
+    case "grant":
+      return runGrantVerb(rest, defaultProjectRoot);
     case "policy":
       return runPolicyVerb(rest, defaultProjectRoot);
     case "projects":

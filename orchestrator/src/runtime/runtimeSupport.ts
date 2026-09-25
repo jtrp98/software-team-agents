@@ -62,7 +62,7 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
       `interactive sessions and the headless adapter are verified on real Codex 0.154.0/0.155.1 installs, including sandbox/approval parsing, JSONL, output-schema and cached-token normalisation. ` +
       `Interactive guard coverage (once synced): ${codexCoverageWithHooks().detail}. ` +
       `Headless enforcement is the per-run native permission profile — broad reads, writes only at packet-authorized paths, network disabled, packet-generated execpolicy plus OS deny rules for resolved Git executables — live-verified end to end on a real install (round three, 2026-09-23: outside-workspace write denied, in-workspace write allowed, read-only refused everything, network unreachable at DNS level), and exit checks run fail-closed after process exit through the provider-neutral ExitCheckRunner, which caught a real red typecheck with file and line. ` +
-      `This headless path is certified for unattended Target writes and is what \`supported\` scopes; interactive Codex receives no per-run profile, stays unguarded, needs \`--allow-unguarded-runtime\` and is limited to analysis/proposal, and the \`.codex/hooks.json\` payload remains compatibility wiring for that surface that is never claimed as headless enforcement. ` +
+      `This headless path is certified for unattended Target writes and is what \`supported\` scopes; interactive Codex receives no per-run profile and stays unguarded, so a V13 direct-mode launch refuses it (no acknowledgement bypass remains — V13 TASK-012) and it is limited to analysis/proposal through STA dispatch, and the \`.codex/hooks.json\` payload remains compatibility wiring for that surface that is never claimed as headless enforcement. ` +
       `V10 does not change this status`,
   },
   opencode: {
@@ -88,8 +88,8 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
     claim:
       `There is no CLI and no headless pipeline, so \`sta run --runtime zcode\` refuses as unregistered-for-execution and there is no launch path. ` +
       `Guard wiring ships via \`.zcode/config.json\` and was live-verified end to end on a real ZCode Desktop session (2026-09-23, \`planning/v12/evidence/zcode-uat/\`); unattended Target-write stages stay refused. ` +
-      `Per-role Target/Knowledge write bounds apply to a role-play session only when it declares its role through \`software-team-agents session-role\` (\`.workflow/session-role.json\`); ` +
-      `an undeclared session keeps the universal floor alone, and read permissions stay instruction-level. ` +
+      `Per-role Target/Knowledge write bounds apply to a direct-mode session only through a STA-issued scoped attempt grant (\`sta grant issue\` writing \`.workflow/attempt-grant.json\` — V13 TASK-012); ` +
+      `an ungranted session keeps the universal floor plus the governed-artifact denial, and read permissions stay instruction-level. ` +
       `Guard coverage (once synced): ${zcodeCoverageWithSyncedPayload().detail}. ` +
       `V10 does not change this status: a desktop-only runtime has no headless surface for the lane collapse to change`,
   },

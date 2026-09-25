@@ -26,14 +26,20 @@ import { defaultProjectRoot, loadAgentContract } from "./agentContract.js";
  *   2. Enforced here, by the orchestrator, which does know which agent it invoked.
  *   3. Enforced by `.claude/hooks/block-path-permissions.js`, which reads the role
  *      from an environment variable the orchestrator sets on the child process, and
- *      falls back to a universal floor when it is absent (an interactive session).
+ *      falls back to a verified attempt grant when it is absent (a direct-mode
+ *      session).
  *
- * A desktop role-play session (ZCode, the V12 decision) has neither an orchestrator
- * nor a launch path to set that env var, so it has a second, explicit identity
- * channel: `SESSION_ROLE_PATH`, written only by the workspace CLI's `session-role`
- * verb. The env var wins whenever it exists; the declaration is read only when it
- * does not. Either way the per-role layer applies, and with neither the hook keeps
- * the floor-only posture it has always had.
+ * A direct-mode session (opened without an orchestrator — desktop runtimes) has
+ * no launch path to set that env var. Its only per-role authority is a
+ * STA-issued scoped attempt grant (`governance/attemptGrant.ts`, issued by
+ * `sta grant issue`): a signed token binding role, contract digest, task,
+ * scope and expiry to one attempt. The hook verifies the signature and expiry
+ * in-band and STA verifies issuance/consumption out-of-band; a self-written
+ * role file grants nothing — the retired `.workflow/session-role.json`
+ * self-declaration channel is gone (V13 TASK-012). With neither an env role
+ * nor a valid grant the hook keeps the floor posture, plus one addition the
+ * grant channel makes honest: an unassigned session is denied the governed
+ * artifacts themselves, because read/discover/propose is all its authority.
  *
  * The floor matters: without identity the hook still blocks what no agent may
  * ever write. A partial guard that is honest about its limits beats a complete
@@ -199,25 +205,40 @@ function globToRegExp(pattern: string): RegExp {
 export const GUARD_STACK_RULES_ENV = "STA_STACK_PATH_RULES";
 
 /**
- * The one file a desktop role-play session (ZCode — V12's interactive runtime)
- * declares its played role through: `{ role: string, stack?: { write: string[],
- * deny: string[] } }`, written only by the workspace CLI's `session-role` verb.
+ * The one file a direct-mode session holds its STA-issued per-role authority
+ * through: the signed attempt-grant token (`governance/attemptGrant.ts`),
+ * written only by `sta grant issue` after STA's own dispatch decision.
  *
  * The path sits under `.workflow/`, which `UNIVERSAL_DENY` already refuses to
- * every agent's file tools, so a session cannot rewrite its own declaration
- * mid-session — the CLI (a person, or the AI on that person's explicit
- * instruction) is the only writer. The hook reads it only when `STA_ROLE` is
- * absent, so an orchestrated run behaves byte-for-byte as before, and a session
- * without a declaration keeps the floor-only posture it has always had.
- *
- * The `stack` half carries the same resolved layout globs the orchestrated path
- * hands over on `STA_STACK_PATH_RULES`, pre-resolved by the same
- * `resolveStackPathRules` call — a hook still parses no YAML, so the CLI joins
- * `.agent-team/config.yaml` to `stacks/<profile>/stack.yaml` on the session's
- * behalf. Absent or unresolved means the globs drop out of both lists, which
- * over-restricts an engineer role rather than letting a layout path through.
+ * every agent's file tools, so a session cannot rewrite its own grant through
+ * a file tool — and a hand-written file fails the signature check the hook
+ * applies before it trusts anything in the token. The hook reads it only when
+ * `STA_ROLE` is absent, so an orchestrated run behaves byte-for-byte as
+ * before. Authority is single-use: `sta grant consume` spends the grant and
+ * removes the file.
  */
-export const SESSION_ROLE_PATH = ".workflow/session-role.json";
+export const ATTEMPT_GRANT_TOKEN_PATH = ".workflow/attempt-grant.json";
+export const ATTEMPT_GRANT_KEY_PATH = ".workflow/sta-grant-key";
+
+/**
+ * What a session with no identity at all may not write. Every governed
+ * artifact is role-owned (`TASK-009` provenance): a direct-mode session's
+ * authority is read, discover and propose, so its file tools never reach the
+ * role-owned document tree — the grant, not a claim, is what turns the
+ * per-role layer on. Deliberately narrower than the engineer-side Knowledge
+ * deny: `knowledge/**` and `decisions/**` stay open to an instructed
+ * unassigned session amending shared Knowledge (the operating rules' own
+ * allowance), while role-owned work products do not.
+ */
+export const UNASSIGNED_SESSION_DENY: readonly string[] = ["_docs/**"];
+
+/** The why-text for an unassigned-session deny. Names the route, not a workaround. */
+export function unassignedSessionDenyWhy(pattern: string): string {
+  return (
+    `\`${pattern}\` is governed work — role-owned artifacts change through STA dispatch, not a direct session. ` +
+    "Propose the change and let STA assign the role that owns it; a per-role write bound comes only from a valid attempt grant."
+  );
+}
 
 /**
  * Full Target access map for a single invocation. This is identification data
@@ -264,13 +285,73 @@ export const GUARD_RULE_HOSTS: readonly GuardRuleHost[] = [
  * here, next to the rules it applies — not in three hook files.
  */
 const GUARD_RULE_FUNCTION_SOURCE: readonly string[] = [
-  `const SESSION_ROLE_REL_PATH = ${jsRuleLiteral(SESSION_ROLE_PATH)};`,
+  `const ATTEMPT_GRANT_REL_PATH = ${jsRuleLiteral(ATTEMPT_GRANT_TOKEN_PATH)};`,
+  `const ATTEMPT_GRANT_KEY_REL_PATH = ${jsRuleLiteral(ATTEMPT_GRANT_KEY_PATH)};`,
+  "function unassignedSessionDenial(relative) {",
+  "  // A session with no identity holds no governed-artifact authority: read,",
+  "  // discover and propose is all an unassigned direct session may do, so the",
+  "  // role-owned document tree stays out of its file tools' reach. What turns",
+  "  // the per-role layer on is a verified grant, never a claim.",
+  "  for (const pattern of UNASSIGNED_SESSION_DENY) {",
+  "    if (matchesGlob(pattern, relative)) return unassignedSessionDenyWhy(pattern);",
+  "  }",
+  "  return null;",
+  "}",
+  "function unassignedSessionDenyWhy(pattern) {",
+  "  return '`' + pattern + '` is governed work — role-owned artifacts change through STA dispatch, not a direct session. Propose the change and let STA assign the role that owns it; a per-role write bound comes only from a valid attempt grant.';",
+  "}",
+  "function canonicalGrantJson(value) {",
+  "  // The same normalization STA signs under: sorted keys, undefined dropped.",
+  "  // The grant bytes must hash identically on both ends or every signature",
+  "  // fails, so this stays small and stands still.",
+  "  const normalize = (v) => Array.isArray(v) ? v.map(normalize)",
+  "    : (v && typeof v === 'object') ? Object.fromEntries(Object.entries(v)",
+  "      .filter(([, val]) => val !== undefined)",
+  "      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))",
+  "      .map(([key, val]) => [key, normalize(val)])) : v;",
+  "  return JSON.stringify(normalize(value));",
+  "}",
+  "function grantSignatureValid(token, createHmac, keyHex) {",
+  "  // HMAC-SHA256 over every field but `signature`, compared constant-time.",
+  "  // A hand-written file fails here unless it also carries STA's key — and",
+  "  // even then STA's own issuance record is what completes a write.",
+  "  if (!token || typeof token !== 'object' || Array.isArray(token)) return false;",
+  "  if (typeof token.signature !== 'string' || !/^[0-9a-f]{64}$/.test(token.signature)) return false;",
+  "  const unsigned = {};",
+  "  for (const key of Object.keys(token)) { if (key !== 'signature') unsigned[key] = token[key]; }",
+  "  const expected = createHmac('sha256', keyHex).update(canonicalGrantJson(unsigned)).digest('hex');",
+  "  if (expected.length !== token.signature.length) return false;",
+  "  let diff = 0;",
+  "  for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ token.signature.charCodeAt(i);",
+  "  return diff === 0;",
+  "}",
+  "function attemptGrantFromText(text, createHmac, keyHex, nowMs) {",
+  "  // The STA-issued attempt grant: the one channel a direct-mode session's",
+  "  // per-role authority arrives through, written only by `sta grant issue`",
+  "  // after STA's own dispatch decision. Anything absent, unreadable,",
+  "  // off-shape, unsigned or expired is 'no grant' — the floor posture,",
+  "  // never an error. The env identity wins outright when an orchestrator",
+  "  // set one; a grant is read only when it did not.",
+  "  if (typeof text !== 'string' || text === '') return null;",
+  "  let parsed;",
+  "  try { parsed = JSON.parse(text); } catch { return null; }",
+  "  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;",
+  "  if (parsed.attempt_grant !== 1) return null;",
+  "  if (typeof parsed.role !== 'string' || !/^[a-z][a-z0-9-]*$/.test(parsed.role)) return null;",
+  "  if (typeof parsed.grant_id !== 'string' || !/^agr_[0-9a-f]{32}$/.test(parsed.grant_id)) return null;",
+  "  if (typeof parsed.expires_at !== 'string' || !Number.isFinite(Date.parse(parsed.expires_at))) return null;",
+  "  if (Date.parse(parsed.expires_at) <= nowMs) return null;",
+  "  if (!grantSignatureValid(parsed, createHmac, keyHex)) return null;",
+  "  const stack = parsed.scope && typeof parsed.scope === 'object' && !Array.isArray(parsed.scope) ? parsed.scope.stack : null;",
+  "  const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);",
+  "  return { grantId: parsed.grant_id, role: parsed.role, stack: { write: list(stack && stack.write), deny: list(stack && stack.deny) } };",
+  "}",
   "function frameworkPayloadDenial(relative, role) {",
   "  // Bound to the stage, not to the checkout: one workspace carries both the",
   "  // Framework payload and the Knowledge documents, so where a write lands",
   "  // says nothing about whether it is allowed. The role arrives resolved:",
   "  // the env identity when the orchestrator spawned this process, otherwise",
-  "  // a desktop role-play session's declared file.",
+  "  // a direct-mode session's verified attempt grant.",
   "  if (!role) return null;",
   "  for (const pattern of FRAMEWORK_PAYLOAD_ARTIFACTS) {",
   "    if (matchesGlob(pattern, relative)) return frameworkPayloadDenyWhy(pattern);",
@@ -280,46 +361,12 @@ const GUARD_RULE_FUNCTION_SOURCE: readonly string[] = [
   "function frameworkPayloadDenyWhy(pattern) {",
   "  return '`' + pattern + '` is Framework payload — `sta sync` materialises it and a person edits it. No agent contract grants it, so no stage may write it; change it in the Framework repository and sync.';",
   "}",
-  "function sessionRoleFromText(text) {",
-  "  // The declared-session-role channel: a desktop role-play session has no",
-  "  // STA_ROLE env (no launch path sets one), so the role it is playing arrives",
-  "  // as this CLI-written file instead. The path sits under .workflow/, which",
-  "  // UNIVERSAL_DENY refuses to every agent's file tools, so a session cannot",
-  "  // rewrite its own declaration. Anything absent, unreadable or off-shape is",
-  "  // 'no declared role' — the floor-only posture, never an error.",
-  "  if (typeof text !== 'string' || text === '') return null;",
-  "  let parsed;",
-  "  try { parsed = JSON.parse(text); } catch { return null; }",
-  "  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;",
-  "  if (typeof parsed.role !== 'string' || !/^[a-z][a-z0-9-]*$/.test(parsed.role)) return null;",
-  "  return parsed.role;",
-  "}",
-  "function declaredStackRulesFromText(text) {",
-  "  // The stack half of the declaration, the same {write, deny} shape the",
-  "  // STA_STACK_PATH_RULES channel carries, pre-resolved by the same CLI call",
-  "  // the orchestrator uses. Malformed drops out empty, which over-restricts an",
-  "  // engineer role rather than letting a layout path through.",
-  "  if (typeof text !== 'string' || text === '') return { write: [], deny: [] };",
-  "  let parsed;",
-  "  try { parsed = JSON.parse(text); } catch { return { write: [], deny: [] }; }",
-  "  const stack = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed.stack : null;",
-  "  const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);",
-  "  return { write: list(stack && stack.write), deny: list(stack && stack.deny) };",
-  "}",
-  "function sessionRole(envRole, declaredText) {",
-  "  // Orchestrated identity wins outright: a stage the runtime spawned is",
-  "  // exactly who the env says. Only a process without one falls to the",
-  "  // declared file, and with neither this returns null — the floor-only",
-  "  // posture every host keeps for an anonymous session.",
-  "  if (envRole) return envRole;",
-  "  return sessionRoleFromText(declaredText);",
-  "}",
-  "function stackPathRules(declaredText) {",
+  "function stackPathRules(grant) {",
   "  let parsed;",
   "  try { parsed = JSON.parse(process.env.STA_STACK_PATH_RULES || '{}'); } catch { parsed = {}; }",
-  "  const declared = declaredStackRulesFromText(declaredText);",
+  "  const granted = grant ? grant.stack : { write: [], deny: [] };",
   "  const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);",
-  "  return { write: list(parsed && parsed.write).concat(declared.write), deny: list(parsed && parsed.deny).concat(declared.deny) };",
+  "  return { write: list(parsed && parsed.write).concat(granted.write), deny: list(parsed && parsed.deny).concat(granted.deny) };",
   "}",
   "function boundReadOnlyTarget(nodePath, target) {",
   `  let roots; try { roots = JSON.parse(process.env.${GUARD_TARGET_WORK_ROOTS_ENV} || '[]'); } catch { return null; }`,
@@ -403,6 +450,7 @@ export function renderGuardRuleBlock(): string {
     list("WORKSPACE_BA_ARTIFACTS", WORKSPACE_BA_ARTIFACTS),
     list("FRAMEWORK_PAYLOAD_ARTIFACTS", FRAMEWORK_PAYLOAD_ARTIFACTS),
     list("KNOWLEDGE_DENIED_ROLES", KNOWLEDGE_DENIED_ROLES),
+    list("UNASSIGNED_SESSION_DENY", UNASSIGNED_SESSION_DENY),
     ...GUARD_RULE_FUNCTION_SOURCE,
     GUARD_RULES_CLOSE,
     "",

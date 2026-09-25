@@ -94,9 +94,12 @@ describe("AGY guard wrapper — allow is emitted on exactly one path", () => {
     expect(verdict.allowed).toBe(false);
     expect(verdict.reason).toMatch(/Framework payload/);
 
-    // V10 TASK-021: the same workspace no longer refuses a Knowledge artifact
-    // for being `role: dev` — that ban is stage-bound now (TASK-012).
-    expect(invoke(WRAPPER, root, writeCall("_docs/module/billing/design.md")).allowed).toBe(true);
+    // V13 TASK-012: the same workspace's governed artifact tree is refused to
+    // an unassigned session on the floor — the recorded role still decides
+    // nothing, and a session claim grants nothing either.
+    const unassigned = invoke(WRAPPER, root, writeCall("_docs/module/billing/design.md"));
+    expect(unassigned.allowed).toBe(false);
+    expect(unassigned.reason).toMatch(/STA dispatch/);
   });
 
   it("denies a write that resolves outside the workspace root", () => {

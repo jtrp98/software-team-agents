@@ -132,6 +132,15 @@ export const NO_GUARDS: RuntimeGuards = Object.freeze({
 });
 
 export interface RuntimeAgentRequest {
+  /**
+   * V13 TASK-013 — the task this attempt belongs to, as the orchestrator
+   * named it. Optional because nothing in the request's mechanics needs it,
+   * but the lifecycle port's attempt identity does: an attempt is bound to a
+   * task and stage, and adapters record both on the attempts they start.
+   */
+  readonly taskId?: string;
+  /** The stage this attempt executes, alongside `role`. */
+  readonly stage?: string;
   /** This framework's own name for the role — `AGENT_REGISTRY[stage].role`, which is also how the binding addresses it. */
   readonly role: string;
   /** Absolute directory the run happens in. Honours `stageRoots` for a multi-repo project. */

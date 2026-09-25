@@ -69,12 +69,6 @@ export interface RoleRunOptions {
   runtime?: RuntimeName;
   /** Sync managed files automatically when the plan is conflict-free (default true). */
   autoSync?: boolean;
-  /**
-   * Deliberately accept a session on a runtime that enforces no guard. Never
-   * a default and never implicit: without it, an unguarded runtime fails
-   * preflight. It cannot excuse a *broken* guard mechanism.
-   */
-  allowUnguardedRuntime?: boolean;
   now?: string;
   /** Overrides where the machine-wide installation binding is read from (tests; unusual setups). */
   installationConfigPath?: string;
@@ -202,11 +196,12 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
   // but unregistered guard fails closed with this exact diagnosis.
   //
   // This consults the verdict for whichever runtime is launching, not only
-  // Claude. A runtime with no mechanism at all (`unguarded`) stops the launch
-  // unless the user acknowledges it explicitly; a *broken* mechanism is never
-  // acknowledgeable, because it is a repairable fault rather than a deliberate
-  // choice, and letting a flag past it would weaken a guard that is enforced
-  // today.
+  // Claude. A runtime with no mechanism at all (`unguarded`) stops the launch:
+  // a V13 direct-mode session has no acknowledgement bypass left (the retired
+  // `--allow-unguarded-runtime` write bypass is gone — V13 TASK-012), because
+  // a launch that enforces nothing cannot hold the per-role boundary its
+  // attempt grant describes. A *broken* mechanism fails for the same reason it
+  // always did: it is a repairable fault, not a deliberate choice.
   const launchRuntime = options.runtime ?? "claude";
   const coverage = guardCoverage({
     runtime: launchRuntime,
@@ -229,18 +224,11 @@ export function workspacePreflight(role: WorkspaceRole, options: RoleRunOptions 
     );
   }
   if (coverage.level === "unguarded") {
-    if (!options.allowUnguardedRuntime) {
-      fail(
-        "Guards wired",
-        `${launchRuntime} enforces no guard in this workspace — ${coverage.detail}. ` +
-          "Re-run with --allow-unguarded-runtime to accept an unguarded session deliberately, or launch with --runtime claude.",
-      );
-    }
-    checks.push({
-      name: "Guards wired",
-      ok: true,
-      detail: `${launchRuntime}: UNGUARDED, acknowledged via --allow-unguarded-runtime — ${coverage.detail}`,
-    });
+    fail(
+      "Guards wired",
+      `${launchRuntime} enforces no guard in this workspace — ${coverage.detail}. ` +
+        "Launch with --runtime claude, or run the stage through `sta run` where STA verifies the attempt itself.",
+    );
   } else if (coverage.level === "not-required") {
     checks.push({
       name: "Guards wired",
@@ -477,11 +465,7 @@ async function runRoleSession(role: WorkspaceRole, options: RoleRunOptions): Pro
     throw e;
   }
   for (const c of ctx.checks) console.log(`[software-team-agents] ✓ ${c.name}${c.detail ? ` — ${c.detail}` : ""}`);
-  // An acknowledged unguarded launch is recorded as such on the launch line
-  // itself, so the session's own transcript states that none of the six
-  // guards was active.
-  const unguarded = ctx.guards.level === "unguarded" ? " [UNGUARDED SESSION — acknowledged]" : "";
-  console.log(`[software-team-agents] starting ${ctx.runtime} (${WORKSPACE_ROLE_LABEL[role]})${unguarded} from ${ctx.workspaceRoot} ...`);
+  console.log(`[software-team-agents] starting ${ctx.runtime} (${WORKSPACE_ROLE_LABEL[role]}) from ${ctx.workspaceRoot} ...`);
   const launch = options.launch ?? defaultLaunch;
   const startedAt = Date.now();
   // Measure before the runtime starts: an interactive session may edit its own
