@@ -86,8 +86,9 @@ export const RUNTIME_SUPPORT: Record<RuntimeId, RuntimeSupport> = {
     level: "experimental",
     unattendedTargetWrites: false,
     claim:
-      `There is no CLI and no headless pipeline, so \`sta run --runtime zcode\` refuses as unregistered-for-execution and there is no launch path. ` +
-      `Guard wiring ships via \`.zcode/config.json\` and was live-verified end to end on a real ZCode Desktop session (2026-09-23, \`planning/v12/evidence/zcode-uat/\`); unattended Target-write stages stay refused. ` +
+      `The ZCode install bundles its agent CLI (\`resources/glm/zcode.cjs\`, headless \`-p --json\`), which the governed ZcodeAdapter drives through the V13 executor lifecycle (V13 TASK-015): fresh-session resume, honest cancel accounting, evidence with the native session id and run-changed files, and a post-run write check that turns any write outside the grant into ERROR. ` +
+      `A guarded run is refused before spawn unless the synced \`.zcode/config.json\` hooks are all persistently trusted (the headless engine skips untrusted project hooks; trust is a person's \`zcode hooks trust review\`); an explicit model or effort is refused (no per-run flag), and a packet too long for the Windows command line is refused, never truncated. ` +
+      `Guard wiring ships via \`.zcode/config.json\` and was live-verified end to end on a real ZCode Desktop session (2026-09-23, \`planning/v12/evidence/zcode-uat/\`); unattended Target-write stages stay refused until governed UAT certifies the headless path. ` +
       `Per-role Target/Knowledge write bounds apply to a direct-mode session only through a STA-issued scoped attempt grant (\`sta grant issue\` writing \`.workflow/attempt-grant.json\` — V13 TASK-012); ` +
       `an ungranted session keeps the universal floor plus the governed-artifact denial, and read permissions stay instruction-level. ` +
       `Guard coverage (once synced): ${zcodeCoverageWithSyncedPayload().detail}. ` +

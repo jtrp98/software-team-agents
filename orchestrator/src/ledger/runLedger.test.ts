@@ -92,6 +92,7 @@ function makeAttempt(overrides: Partial<LedgerAttempt> = {}): LedgerAttempt {
     route_basis: "level-2;task-tier:T2/task-tier:T2",
     tier: "T2",
     adapter_version: "claude-code@1",
+    runtime_version: "2.1.0",
     config_hash: HASH_A, plan_hash: HASH_C, base_revision: "abc1234",
     capability_evidence: [{ capability: "pre-tool-guard", verified: true, detail: null }],
     guard_evidence: { target_write: true, pre_tool_guard: true, writable_roots: [path.join(root, "target")] },

@@ -96,6 +96,19 @@ export enum RuntimeCapability {
 export const ALL_RUNTIME_CAPABILITIES: readonly RuntimeCapability[] = Object.values(RuntimeCapability);
 
 /**
+ * V13 TASK-016 — what makes a runtime a governed *executor* rather than just
+ * something that can run a prompt: the lifecycle port's resume, cancel and
+ * evidence operations (TASK-013). A governed write is routed only to a runtime
+ * that declares all three and implements the port; certification (the
+ * `runtimeSupport` record) is the other half, never implied by these.
+ */
+export const EXECUTOR_LIFECYCLE_CAPABILITIES: readonly RuntimeCapability[] = [
+  RuntimeCapability.ATTEMPT_RESUME,
+  RuntimeCapability.ATTEMPT_CANCEL,
+  RuntimeCapability.EVIDENCE_COLLECTION,
+];
+
+/**
  * The capabilities this framework's design depends on. A runtime missing one of
  * these can still be driven, but something the pipeline promises stops being
  * true — so capability detection reports each absence rather than letting it pass.

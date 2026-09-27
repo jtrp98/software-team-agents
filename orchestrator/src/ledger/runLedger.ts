@@ -142,6 +142,12 @@ export const LedgerAttemptSchema = z.strictObject({
   tier: text.nullable(),
   /** Adapter/config identity, so a rebuilt binary cannot silently resume someone else's contract. */
   adapter_version: text,
+  /**
+   * V13 TASK-016 — the executor version the availability probe reported when
+   * this attempt was selected. Pinned: dispatch and resume refuse a runtime
+   * that now reports anything else. Null only when the probe named no version.
+   */
+  runtime_version: text.nullable(),
   config_hash: sha256,
   plan_hash: sha256,
   base_revision: revision,

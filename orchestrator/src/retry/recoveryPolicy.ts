@@ -61,8 +61,11 @@ export const RecoveryActionSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("ABORT"), strategy: z.literal("abort"), reason: z.string() }),
 ]);
 
-/** The durable handoff intent. TASK-016 resolves a certified runtime and
- * records the execution attempt; null here must never be treated as one. */
+/** The durable handoff intent. It names no runtime on purpose: the runtime is
+ * chosen when the next attempt is dispatched (V13 TASK-016 — certified,
+ * capable, available executors only) and pinned, with its version, on that
+ * attempt's record. `nextRuntime` stays null; it must never be read as a
+ * selection. */
 export const HandoffIntentSchema = z.strictObject({
   policyVersion: z.literal(RECOVERY_POLICY_VERSION),
   sourceAttemptId: z.string().min(1),

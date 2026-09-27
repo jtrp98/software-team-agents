@@ -291,6 +291,7 @@ export class SqliteRunLedger implements RunLedger {
         runtime: record.observed.runtime,
         model: record.observed.model,
         effort: record.observed.effort,
+        runtime_version: record.runtime_version,
         packet_hash: record.packet_hash,
         ...(record.reroute_of === null ? {} : { reroute_of: record.reroute_of }),
       },

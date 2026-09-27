@@ -495,10 +495,12 @@ export function codexCoverage(targetRoot: string): GuardCoverage {
 }
 
 /**
- * ZCode Desktop is an interactive role-play runtime (the V12 decision): the
- * user opens the desktop app directly and the AI plays pipeline roles from
- * workspace instructions/skills. There is no CLI, so `sta run --runtime zcode`
- * refuses at the registry and no launch preflight can reach this coverage.
+ * ZCode Desktop was treated as an interactive role-play runtime (the V12
+ * decision). V13 TASK-015 traced the install and found the ZCode agent CLI it
+ * bundles (`resources/glm/zcode.cjs`, headless `-p --json`), so
+ * `sta run --runtime zcode` now reaches the governed `ZcodeAdapter`; that
+ * adapter refuses a guarded run unless every STA hook below is persistently
+ * trusted, because the headless engine skips untrusted project hooks.
  * The `.zcode/config.json` hook payload (PreToolUse guards + a Stop hook whose
  * continuation is capped at three) was live-verified end to end on a real
  * ZCode Desktop session (2026-09-23, `planning/v12/evidence/zcode-uat/`): all
@@ -520,7 +522,7 @@ export function zcodeCoverageWithSyncedPayload(): GuardCoverage {
     enforced: [RuntimeCapability.PRE_TOOL_GUARD],
     unenforced: [RuntimeCapability.POST_TOOL_GUARD, RuntimeCapability.EXIT_GUARD, RuntimeCapability.PER_AGENT_EXIT_GUARD],
     detail:
-      "`.zcode/config.json` wires four PreToolUse guards (block-git, block-outside-repo, block-doc-rewrite, block-path-permissions) plus the Stop pair — live-verified end to end on a real ZCode Desktop session (2026-09-23, planning/v12/evidence/zcode-uat); block-path-permissions takes its role from a STA-issued attempt grant (`.workflow/attempt-grant.json`, issued via `sta grant issue`) when no orchestrator set STA_ROLE, so a granted session gets per-role Target/Knowledge write bounds; require-green-before-stop and block-secret-leak run on the Stop hook, but ZCode caps Stop continuations at three per session (GUARD GAP, covered by the QA round); PostToolUse and per-agent exit guards have no shipped guard",
+      "`.zcode/config.json` wires four PreToolUse guards (block-git, block-outside-repo, block-doc-rewrite, block-path-permissions) plus the Stop pair — live-verified end to end on a real ZCode Desktop session (2026-09-23, planning/v12/evidence/zcode-uat); the headless ZCode CLI runs them only once their declarations are persistently trusted (`zcode hooks trust review`, a person's decision), so the governed adapter refuses a guarded run until they are; block-path-permissions takes its role from a STA-issued attempt grant (`.workflow/attempt-grant.json`, issued via `sta grant issue`) when no orchestrator set STA_ROLE, so a granted session gets per-role Target/Knowledge write bounds; require-green-before-stop and block-secret-leak run on the Stop hook, but ZCode caps Stop continuations at three per session (GUARD GAP, covered by the QA round); PostToolUse and per-agent exit guards have no shipped guard",
   };
 }
 

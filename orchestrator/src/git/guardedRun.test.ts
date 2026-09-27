@@ -76,7 +76,7 @@ function attempt(f: ReturnType<typeof seed>, taskId = "BE-1", overrides: Partial
     stage: task.owner, attempt: 1, status: "FROZEN",
     requested: { runtime: "claude-code", model: "opus", effort: "high" },
     observed: { runtime: "claude-code", model: "opus", effort: "high" },
-    model_explicit: true, route_basis: "task-tier:T2", tier: "T2", adapter_version: "test@1",
+    model_explicit: true, route_basis: "task-tier:T2", tier: "T2", adapter_version: "test@1", runtime_version: null,
     config_hash: HASH_A, plan_hash: HASH_C, base_revision: f.run.base_sha,
     capability_evidence: [{ capability: "pre-tool-guard", verified: true, detail: null }],
     guard_evidence: { target_write: true, pre_tool_guard: true, writable_roots: [f.target] },

@@ -121,6 +121,12 @@ export interface RunMetrics {
    * by the agent). Absent when the runtime echoes no session id.
    */
   session_ref?: string;
+  /**
+   * V13 TASK-016 — the executor version pinned to this attempt: what the
+   * availability probe reported for the selected runtime before dispatch.
+   * Absent when the probe named no version.
+   */
+  runtime_version?: string;
 }
 
 /**

@@ -247,6 +247,55 @@ describe("T-V8-018 — provider failure halts; only an explicit reroute creates 
   });
 });
 
+describe("V13 TASK-016 — the executor and its version are pinned to the attempt", () => {
+  it("pins the probed executor version and refuses to resume on a different one", () => {
+    const attempt = freezeAttempt(freezeInput({ availability: { available: true, version: "2.1.0" } }));
+    expect(attempt.runtime_version).toBe("2.1.0");
+    expect(ledger.readAttempt(attempt.attempt_id)!.runtime_version).toBe("2.1.0");
+    expect(() => assertAttemptResumable(attempt, { runtimeId: "claude-code", runtimeVersion: "2.1.0" })).not.toThrow();
+    expect(() => assertAttemptResumable(attempt, { runtimeId: "claude-code", runtimeVersion: "2.2.0" })).toThrow(
+      /runtime_version \(frozen=2\.1\.0, current=2\.2\.0\)/,
+    );
+  });
+
+  it("records a probe without a version as null, never an invented one", () => {
+    expect(freezeAttempt(freezeInput()).runtime_version).toBeNull();
+  });
+
+  it("refuses to freeze a governed write on an uncertified executor", () => {
+    expect(() =>
+      freezeAttempt(freezeInput({
+        requested: { runtime: "zcode" },
+        observed: { runtime: "zcode" },
+        modelExplicit: false,
+        capabilityReport: capabilityReport({ runtimeId: "zcode" }),
+      })),
+    ).toThrow(/runtime "zcode" is not certified for unattended Target writes/);
+  });
+
+  it("a reroute to another executor keeps the task, stage, plan and packet, and pins the new executor's version", () => {
+    const first = freezeAttempt(freezeInput({ availability: { available: true, version: "2.1.0" } }));
+    haltAttempt(ledger, first.attempt_id, "unavailable", "binary missing", 3_000);
+    const second = rerouteAttempt(ledger.readAttempt(first.attempt_id)!, {
+      ...freezeInput({
+        attempt: 2,
+        requested: { runtime: "codex", model: "gpt-5", effort: "high" },
+        observed: { runtime: "codex", model: "gpt-5", effort: "high" },
+        capabilityReport: capabilityReport({ runtimeId: "codex" }),
+        availability: { available: true, version: "0.155.1" },
+      }),
+    });
+    expect(second.observed.runtime).toBe("codex");
+    expect(second.runtime_version).toBe("0.155.1");
+    expect(second.reroute_of).toBe(first.attempt_id);
+    for (const key of ["task_id", "stage", "plan_hash", "packet_hash", "config_hash", "base_revision"] as const) {
+      expect(second[key], key).toBe(first[key]);
+    }
+    expect(ledger.readAttempt(first.attempt_id)!.observed.runtime).toBe("claude-code");
+    expect(ledger.readAttempt(first.attempt_id)!.runtime_version).toBe("2.1.0");
+  });
+});
+
 describe("T-V8-018 — resume replays the same packet or refuses", () => {
   let attempt: LedgerAttempt;
   beforeEach(() => { attempt = freezeAttempt(freezeInput()); });

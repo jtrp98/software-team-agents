@@ -7,7 +7,8 @@ import {
   type BusinessInputEvidence,
 } from "../gates/businessInput.js";
 import { StaConfigInvalidError, StaConfigMissingError, loadStaConfig, type StaConfig } from "../packaging/staConfig.js";
-import { RuntimeCapability } from "./runtimeCapabilities.js";
+import { EXECUTOR_LIFECYCLE_CAPABILITIES, RuntimeCapability } from "./runtimeCapabilities.js";
+import { isExecutorPort } from "./executorPort.js";
 import { DEFAULT_RUNTIME_ID, RuntimeRegistry } from "./runtimeRegistry.js";
 import type { RuntimeAdapter, RuntimeProbe } from "./runtimeAdapter.js";
 import { isUnattendedTargetWriteCertified, RUNTIME_SUPPORT, type RuntimeSupportLevel } from "./runtimeSupport.js";
@@ -171,6 +172,23 @@ export function requiredCapabilitiesFor(
   }
   if (hasTargetWrite) required.push(RuntimeCapability.PRE_TOOL_GUARD);
   return required;
+}
+
+/**
+ * V13 TASK-016 — why a runtime is not a governed executor, or null when it is
+ * one: it must implement the lifecycle port and declare every lifecycle
+ * capability (resume, cancel, evidence). Checked against the adapter's own
+ * declaration — a structural fact of its implementation, not of the install —
+ * and applied to every governed write alongside the certification record.
+ */
+export function governedExecutorGap(runtime: RuntimeAdapter): string | null {
+  if (!isExecutorPort(runtime)) {
+    return `runtime "${runtime.id}" does not implement the executor lifecycle port (prepare/execute/resume/cancel/collect)`;
+  }
+  const missing = EXECUTOR_LIFECYCLE_CAPABILITIES.filter((capability) => !runtime.capabilities.has(capability));
+  return missing.length > 0
+    ? `runtime "${runtime.id}" does not declare the executor lifecycle capabilities a governed write needs: ${missing.join(", ")}`
+    : null;
 }
 
 function loadConfigSafely(projectRoot: string, diagnostics: string[]): StaConfig | null {
@@ -393,6 +411,8 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
     if (unmet.length > 0) {
       diagnostics.push(`runtime "${runtime.id}" lacks ${evidence} capabilities required by this stage: ${unmet.join(", ")}`);
     }
+    const executorGap = (opts.hasTargetWrite ?? false) ? governedExecutorGap(runtime) : null;
+    if (executorGap) diagnostics.push(executorGap);
     // Only the automatic default is gated on support level; a runtime the
     // operator named explicitly is their call.
     if (walkable && unavailable) {
@@ -419,6 +439,10 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
         ...base,
         skipReason: `runtime "${runtime.id}" lacks ${evidence} capabilities required by this stage: ${unmet.join(", ")}`,
       });
+    } else if (executorGap) {
+      // V13 TASK-016 — a governed write runs only through a runtime STA can
+      // resume, cancel and collect evidence from — never a bare prompt runner.
+      attempts.push({ runtimeId: runtime.id, runtime, ...base, skipReason: executorGap });
     } else {
       attempts.push({ runtimeId: runtime.id, runtime, ...base });
     }
@@ -472,7 +496,7 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
         `routing.allow_below_supported applies only to analysis/proposal routes`;
     } else if (precedenceLevel === 4 && level !== "supported" && !supportOptIns.has(head.runtimeId)) {
       error = `refusing to auto-route to runtime "${head.runtimeId}" at support level "${level}" without per-runtime opt-in`;
-    } else if (required.length > 0) {
+    } else if (required.length > 0 && required.some((capability) => !(runtime ? (opts.verifiedCapabilities?.[runtime.id] ?? runtime.capabilities) : new Set<RuntimeCapability>()).has(capability))) {
       const declaredOrVerified = runtime
         ? (opts.verifiedCapabilities?.[runtime.id] ?? runtime.capabilities)
         : new Set<RuntimeCapability>();
@@ -484,6 +508,8 @@ export function resolveRuntimeRoute(opts: ResolveRuntimeRouteOptions): RuntimeRo
       error = unmet.includes(RuntimeCapability.PRE_TOOL_GUARD)
         ? `runtime "${head.runtimeId}" cannot enforce a pre-tool workspace guard for Target write access; refusing route with missing required capability: ${unmet.join(", ")}`
         : `runtime "${head.runtimeId}" cannot run this stage: missing required capability ${unmet.join(", ") || "unknown"}`;
+    } else if ((opts.hasTargetWrite ?? false) && runtime && governedExecutorGap(runtime)) {
+      error = `${governedExecutorGap(runtime)}; refusing a governed-write route`;
     } else {
       error = `no eligible candidate remains for requested runtime "${head.runtimeId}"`;
     }

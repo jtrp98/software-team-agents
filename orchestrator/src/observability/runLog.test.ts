@@ -67,6 +67,7 @@ describe("RunLog", () => {
       contract_digest: null,
       attempt_id: null,
       session_ref: null,
+      runtime_version: null,
     });
   });
 

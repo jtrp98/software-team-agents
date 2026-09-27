@@ -39,6 +39,7 @@ import { executorPortFor, ExecutorPortRefusalError } from "./executorPort.js";
 import type { GuardResolver } from "./runtimeGuards.js";
 import type { RuntimeRegistry } from "./runtimeRegistry.js";
 import {
+  governedExecutorGap,
   requiredCapabilitiesFor,
   resolveRuntimeRoute,
   type RuntimeRouteAttempt,
@@ -250,6 +251,8 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
   attempt_id?: string;
   /** V13 TASK-014 — the runtime's native session reference, lifted from its own output. */
   session_ref?: string;
+  /** V13 TASK-016 — the executor version the availability probe reported before dispatch, pinned to this attempt. */
+  runtime_version?: string;
   context_chars: number;
   estimated_input_tokens: number;
   composition: {
@@ -289,6 +292,7 @@ function metricsFrom(result: RuntimeAgentResult, declared: {
     contract_digest: declared.contract_digest,
     attempt_id: declared.attempt_id,
     session_ref: declared.session_ref,
+    runtime_version: declared.runtime_version,
     tokens: (input_tokens ?? 0) + (output_tokens ?? 0),
     // `?? 0` here, unlike the `costUsd?: number` in the envelope: the run log's
     // `cost` is a number by contract, and "this runtime does not report cost" is
@@ -650,7 +654,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // compatibility contract while forwarding centrally resolved or operator
     // effort to adapters.
     let activeAdapterEffort: string | undefined;
-    let routeAvailability: Readonly<Record<string, { available: boolean; reason?: string }>> = {};
+    let routeAvailability: Readonly<Record<string, { available: boolean; reason?: string; version?: string }>> = {};
     const routingDiagnostics: string[] = [];
     let requestedRuntime: string | undefined;
     let requestedModel: string | undefined;
@@ -676,6 +680,17 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         ));
       }
       routeAvailability = opts.registry ? await opts.registry.probeAll() : {};
+      // V13 TASK-016 — the executor version is part of the frozen route. A
+      // runtime upgraded (or downgraded) underneath a frozen attempt is a
+      // different executor than the one selected; replaying the attempt on it
+      // is refused, and a person or an explicit reroute starts a new attempt.
+      const probedVersion = routeAvailability[adapter.id]?.version ?? null;
+      if (frozen.runtime_version !== null && probedVersion !== frozen.runtime_version) {
+        return finish(failResult(
+          `cannot start ${role}: frozen attempt ${frozen.attempt_id} pinned runtime "${adapter.id}" at version ${frozen.runtime_version}, ` +
+            `but the installed executor now reports ${probedVersion ?? "no version"} — create an explicit new attempt rather than replaying on a different executor`,
+        ));
+      }
       activeRuntime = adapter;
       activeModel = frozen.observed.model ?? undefined;
       activeModelExplicit = frozen.model_explicit;
@@ -882,6 +897,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         doc_chars_before: stageContext.docCharsBefore,
         role_prefix_chars: rolePrefixChars,
         runtime: activeRuntime.id,
+        // V13 TASK-016 — the executor version selection saw, pinned to this attempt's record.
+        runtime_version: routeAvailability[activeRuntime.id]?.version,
         requested_runtime: requestedRuntime,
         requested_model: requestedModel,
         routing_basis: routingBasis,
@@ -902,6 +919,13 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       }
       if (hasTargetWrite && !activeRuntime.capabilities.has(RuntimeCapability.PRE_TOOL_GUARD)) {
         return finish(failResult(`cannot start ${role}: runtime "${activeRuntime.id}" cannot enforce a pre-tool workspace guard for Target write access`, declared));
+      }
+      // V13 TASK-016 — certification alone is not enough: a governed write
+      // runs only on an executor STA can resume, cancel and collect evidence
+      // from. Checked here too because a frozen attempt never re-enters routing.
+      const executorGap = hasTargetWrite ? governedExecutorGap(activeRuntime) : null;
+      if (executorGap) {
+        return finish(failResult(`cannot start ${role}: ${executorGap}; a governed write needs a certified executor`, declared));
       }
       // Second gate, deliberately worded differently: this is not a safety gap,
       // it is a stage whose work — the interview — this runtime cannot do at

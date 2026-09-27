@@ -85,6 +85,8 @@ export interface RunRecord {
   attempt_id?: string | null;
   /** V13 TASK-014 — the runtime's native session reference, lifted from its own output by the adapter. Null when the runtime echoes none. */
   session_ref?: string | null;
+  /** V13 TASK-016 — the executor version the availability probe reported for the runtime this attempt ran on. Null when the probe named none. */
+  runtime_version?: string | null;
 }
 
 export interface RunOutcome {
@@ -138,6 +140,7 @@ export interface RunOutcome {
   contract_digest?: string;
   attempt_id?: string;
   session_ref?: string;
+  runtime_version?: string;
 }
 
 const NOT_REPORTED = "not reported";
@@ -245,6 +248,7 @@ export class RunLog {
       contract_digest: params.outcome.contract_digest ?? null,
       attempt_id: params.outcome.attempt_id ?? null,
       session_ref: params.outcome.session_ref ?? null,
+      runtime_version: params.outcome.runtime_version ?? null,
       ...(params.outcome.verification_fingerprint ? { verification_fingerprint: params.outcome.verification_fingerprint } : {}),
     };
     this.records.push(entry);

@@ -8,6 +8,7 @@ import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import { CodexAdapter } from "./codexAdapter.js";
 import { OpenCodeAdapter } from "./openCodeAdapter.js";
 import { AntigravityAdapter } from "./antigravityAdapter.js";
+import { ZcodeAdapter } from "./zcodeAdapter.js";
 import { MockRuntimeAdapter, okResult } from "./mockAdapter.js";
 import { NO_GUARDS } from "./runtimeAdapter.js";
 import {
@@ -57,13 +58,15 @@ function spawnResult(over: Partial<SpawnSyncReturns<string>>): SpawnSyncReturns<
 }
 
 /** A spawn that answers `--version` for its binary and a well-formed run result otherwise. */
-function fakeSpawn(binary: "claude" | "codex" | "opencode" | "agy"): SpawnSync {
+function fakeSpawn(binary: "claude" | "codex" | "opencode" | "agy" | "zcode"): SpawnSync {
   return ((_command: string, args: string[]) => {
     if (args.includes("--version")) return spawnResult({ stdout: `0.0.0-${binary}-test\n` });
     if (args.includes("-p") || args.includes("exec")) {
       return spawnResult({
         stdout:
-          binary === "agy"
+          binary === "zcode"
+            ? JSON.stringify({ sessionId: "sess_contract", traceId: "t", response: "done", eventCount: 1, projection: { status: "completed" } })
+            : binary === "agy"
             ? JSON.stringify({ conversation_id: "c", status: "SUCCESS", response: "done", duration_seconds: 1, num_turns: 1, usage: { input_tokens: 3, output_tokens: 4, total_tokens: 7 } })
             : binary === "claude"
             ? JSON.stringify({ result: "done", is_error: false, usage: { input_tokens: 1, output_tokens: 2 }, total_cost_usd: 0 })
@@ -163,6 +166,31 @@ const implementations: { name: string; declaresLifecycle: boolean; make: () => E
       realAdapterFixture(
         (root) => writeBindingFile(root, ".claude/agents/qa-engineer.md", "role text"),
         (root) => new AntigravityAdapter({ projectRoot: root, spawnSync: fakeSpawn("agy"), journalRoot: path.join(root, "attempts") }),
+      ),
+  },
+  {
+    // V13 TASK-015 — the fifth executor, over a fake install tree (CLI entry +
+    // built-in provider config + user profile) so no ZCode install is needed.
+    name: "ZcodeAdapter",
+    declaresLifecycle: true,
+    make: () =>
+      realAdapterFixture(
+        (root) => {
+          writeBindingFile(root, ".claude/agents/qa-engineer.md", "role text");
+          writeBindingFile(root, "install/resources/glm/zcode.cjs", "// fake entry\n");
+          writeBindingFile(root, "install/resources/config/provider/zcode-builtin.json", "{}\n");
+          writeBindingFile(root, "home/.zcode/v2/provider_config.json", "{}\n");
+        },
+        (root) =>
+          new ZcodeAdapter({
+            projectRoot: root,
+            cliEntry: path.join(root, "install", "resources", "glm", "zcode.cjs"),
+            nodePath: "node",
+            env: { USERPROFILE: path.join(root, "home"), HOME: path.join(root, "home") },
+            platform: "linux",
+            spawnSync: fakeSpawn("zcode"),
+            journalRoot: path.join(root, "attempts"),
+          }),
       ),
   },
 ];
@@ -546,6 +574,7 @@ describe("the port boundary — STA Core holds no runtime's command or session v
     ["codex CLI flags", /["'`](exec|dangerously-bypass-hook-trust|conversation_id|developer_instructions)["'`]/],
     ["opencode envelope", /["'`](part\.type|tool\.execute\.before)["'`]/],
     ["antigravity envelope", /["'`](conversation_id|num_turns|artifactDirectoryPath)["'`]/],
+    ["zcode envelope", /["'`](workspaceHookTrust|trusted_persistent|zcode\.cjs|sessionId)["'`]/],
   ];
 
   it("no core module names a runtime's commands or session format", () => {

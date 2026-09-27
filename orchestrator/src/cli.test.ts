@@ -261,7 +261,7 @@ describe("T-V3R-032 production runtime composition", () => {
     // T-V5-039 — the paid API adapter is never constructed here; --runtime
     // only offers runtimes that can actually run.
     const registry = createProductionRuntimeRegistry(defaultProjectRoot());
-    expect(registry.ids()).toEqual(["claude-code", "codex", "opencode", "antigravity"]);
+    expect(registry.ids()).toEqual(["claude-code", "codex", "opencode", "antigravity", "zcode"]);
     expect([...registry.get("codex").models]).toContain("gpt-6-astra");
     expect([...registry.get("opencode").models]).toContain("zai-coding-plan/glm-5.3#max");
     expect([...registry.get("antigravity").models]).toContain("gemini-3.8-flash-high");

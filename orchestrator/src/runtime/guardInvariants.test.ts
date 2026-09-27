@@ -82,6 +82,7 @@ describe("T-V3R-001 guardrail invariants", () => {
       "codexAdapter.ts",
       "mockAdapter.ts",
       "openCodeAdapter.ts",
+      "zcodeAdapter.ts",
     ]);
     const forbidden = /(?:ANTHROPIC|CLAUDE|OPENAI|CODEX|OPENCODE)_(?:API_KEY|AUTH_TOKEN)|AWS_SHARED_CREDENTIALS_FILE|GOOGLE_APPLICATION_CREDENTIALS|["'`](?:\.ssh|\.aws)[\\/]|credentials\.json/gi;
     const violations = adapters.flatMap(({ file, source }) => [...source.matchAll(forbidden)].map((match) => `${file}: ${match[0]}`));

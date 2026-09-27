@@ -108,16 +108,27 @@ export interface SingleShotLifecycleOptions {
   readonly sessionRefFrom?: (result: RuntimeAgentResult) => string | undefined;
   /** Directory the journal persists under. Defaults to a per-runtime subdirectory of the OS temp dir; tests inject an isolated root. */
   readonly journalRoot?: string;
+  /**
+   * V13 TASK-015 — an adapter-owned, deterministic check of what the run
+   * actually did, evaluated after the post-run snapshot and before the attempt
+   * is journalled finished. It receives the files the snapshots say changed
+   * (undefined when no snapshot could be taken) and returns one line per
+   * violation; any violation turns an `OK` run into `ERROR`, so a runtime's
+   * own report can never be the reason an attempt counts as a success.
+   */
+  readonly verifyRun?: (req: RuntimeAgentRequest, changedFiles: readonly string[] | undefined) => readonly string[];
 }
 
 export class SingleShotLifecycle {
   private readonly run: (req: RuntimeAgentRequest) => Promise<RuntimeAgentResult>;
   private readonly sessionRefFrom?: (result: RuntimeAgentResult) => string | undefined;
   private readonly journalDir: string;
+  private readonly verifyRun?: (req: RuntimeAgentRequest, changedFiles: readonly string[] | undefined) => readonly string[];
 
   constructor(readonly runtimeId: string, options: SingleShotLifecycleOptions) {
     this.run = options.run;
     this.sessionRefFrom = options.sessionRefFrom;
+    this.verifyRun = options.verifyRun;
     this.journalDir = options.journalRoot ?? path.join(os.tmpdir(), "sta-executor-attempts", runtimeId);
   }
 
@@ -272,10 +283,15 @@ export class SingleShotLifecycle {
     const after = await this.snapshot(roots, record, `after ${verb}`);
     record.state = "finished";
     record.updated_at = Date.now();
-    record.result = result;
     const sessionRef = this.sessionRefFrom?.(result);
     if (sessionRef) record.session_ref = sessionRef;
     if (before && after) record.changed_files = changedBetween(before, after);
+    const violations = this.verifyRun?.(record.request, record.changed_files) ?? [];
+    if (violations.length > 0) {
+      record.logs.push(...violations.map((violation) => `post-run verification failed: ${violation}`));
+      if (result.status === "OK") result = { ...result, status: "ERROR", diagnostics: [...result.diagnostics, ...violations] };
+    }
+    record.result = result;
     record.logs.push(`run ${verb}: status ${result.status}, exit ${result.exitCode ?? "unknown"}`);
     this.writeJournal(record, verb === "resumed" ? "resume" : "execute");
     return result;

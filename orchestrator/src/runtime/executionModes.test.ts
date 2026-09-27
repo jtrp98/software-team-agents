@@ -7,7 +7,7 @@ import { classifyTask } from "../classification/taskClassifier.js";
 import { Orchestrator } from "../orchestrator/orchestrator.js";
 import { RunLog } from "../observability/runLog.js";
 import { createRuntimeExecutor } from "./runtimeExecutor.js";
-import { RuntimeCapability } from "./runtimeCapabilities.js";
+import { EXECUTOR_LIFECYCLE_CAPABILITIES, RuntimeCapability } from "./runtimeCapabilities.js";
 import { MockRuntimeAdapter, okResult } from "./mockAdapter.js";
 import { NO_GUARDS, type RuntimeRunStatus } from "./runtimeAdapter.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
@@ -230,14 +230,15 @@ describe("T-V5-040 fail-closed evidence matrix", () => {
     const unavailable = new MockRuntimeAdapter({
       id: "claude-code",
       models: ["sonnet"],
-      capabilities: [RuntimeCapability.PRE_TOOL_GUARD, RuntimeCapability.MODEL_SELECTION],
+      // V13 TASK-016 — a governed-write candidate must be a lifecycle executor.
+      capabilities: [RuntimeCapability.PRE_TOOL_GUARD, RuntimeCapability.MODEL_SELECTION, ...EXECUTOR_LIFECYCLE_CAPABILITIES],
       respond: () => okResult({ status: "UNAVAILABLE", exitCode: null, diagnostics: ["subscription offline"] }),
     });
     const weak = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"], capabilities: [RuntimeCapability.MODEL_SELECTION] });
     const good = new MockRuntimeAdapter({
       id: "opencode",
       models: ["sonnet"],
-      capabilities: [RuntimeCapability.PRE_TOOL_GUARD, RuntimeCapability.MODEL_SELECTION],
+      capabilities: [RuntimeCapability.PRE_TOOL_GUARD, RuntimeCapability.MODEL_SELECTION, ...EXECUTOR_LIFECYCLE_CAPABILITIES],
       respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }),
     });
     const result = await createRuntimeExecutor({

@@ -1,6 +1,6 @@
 import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
 import type { RuntimeCapabilityReport } from "../runtime/runtimeCapabilityDetection.js";
-import { RUNTIME_SUPPORT, type RuntimeId } from "../runtime/runtimeSupport.js";
+import { isUnattendedTargetWriteCertified, RUNTIME_SUPPORT, type RuntimeId } from "../runtime/runtimeSupport.js";
 import type { RuntimeAgentRequest } from "../runtime/runtimeAdapter.js";
 import type { AgentStage } from "../types.js";
 import {
@@ -73,8 +73,8 @@ export interface FreezeAttemptInput {
   configHash: string;
   planHash: string;
   baseRevision: string;
-  /** The availability probe result resolved *before* this call. A stale or absent probe refuses. */
-  availability: { available: boolean; reason?: string } | undefined;
+  /** The availability probe result resolved *before* this call. A stale or absent probe refuses. Its `version` is pinned to the attempt. */
+  availability: { available: boolean; reason?: string; version?: string } | undefined;
   capabilityReport: RuntimeCapabilityReport;
   targetWrite: boolean;
   writableRoots: readonly string[];
@@ -105,6 +105,11 @@ export function freezeAttempt(input: FreezeAttemptInput): LedgerAttempt {
     reasons.push(
       `runtime "${input.observed.runtime}" has support level "${support.level}"; V8 admits only "supported" runtimes to an unattended Target-writing attempt`,
     );
+  }
+  // V13 TASK-016 — the certification record is its own gate: a supported
+  // label never implies certified governed writes.
+  if (support && input.targetWrite && !isUnattendedTargetWriteCertified(input.observed.runtime)) {
+    reasons.push(`runtime "${input.observed.runtime}" is not certified for unattended Target writes`);
   }
   if (!input.availability) {
     reasons.push("candidate availability was never probed; selection must complete before an attempt starts, not during it");
@@ -153,6 +158,7 @@ export function freezeAttempt(input: FreezeAttemptInput): LedgerAttempt {
     route_basis: input.routeBasis,
     tier: input.tier ?? null,
     adapter_version: input.adapterVersion,
+    runtime_version: input.availability?.version ?? null,
     config_hash: input.configHash,
     plan_hash: input.planHash,
     base_revision: input.baseRevision,
@@ -278,7 +284,7 @@ export function rerouteAttempt(previous: LedgerAttempt, next: Omit<FreezeAttempt
  */
 export function assertAttemptResumable(
   attempt: LedgerAttempt,
-  current: { packetHash?: string; configHash?: string; planHash?: string; baseRevision?: string; runtimeId?: string; adapterVersion?: string },
+  current: { packetHash?: string; configHash?: string; planHash?: string; baseRevision?: string; runtimeId?: string; adapterVersion?: string; runtimeVersion?: string | null },
 ): void {
   const drift: string[] = [];
   const compare = (name: string, frozen: unknown, actual: unknown): void => {
@@ -291,6 +297,7 @@ export function assertAttemptResumable(
   compare("base_revision", attempt.base_revision, current.baseRevision);
   compare("runtime", attempt.observed.runtime, current.runtimeId);
   compare("adapter_version", attempt.adapter_version, current.adapterVersion);
+  compare("runtime_version", attempt.runtime_version, current.runtimeVersion);
   if (drift.length > 0) throw new AttemptResumeError(attempt.attempt_id, drift);
   if (attempt.status !== "FROZEN" && attempt.status !== "RUNNING") {
     throw new AttemptResumeError(attempt.attempt_id, [`its status is ${attempt.status}, which is already settled`]);

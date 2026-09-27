@@ -7,6 +7,7 @@ import { ClaudeCodeAdapter } from "../../runtime/claudeCodeAdapter.js";
 import { CodexAdapter } from "../../runtime/codexAdapter.js";
 import { OpenCodeAdapter } from "../../runtime/openCodeAdapter.js";
 import { AntigravityAdapter } from "../../runtime/antigravityAdapter.js";
+import { ZcodeAdapter } from "../../runtime/zcodeAdapter.js";
 
 export interface CliDependencies {
   createRuntimeRegistry?: (projectRoot: string) => RuntimeRegistry;
@@ -51,5 +52,9 @@ export function createProductionRuntimeRegistry(projectRoot: string): RuntimeReg
       guardConfigPath: fs.existsSync(defaultAgyHooks) ? defaultAgyHooks : null,
       agentsStoreRoot: fs.existsSync(defaultAgyAgents) ? defaultAgyAgents : null,
     }),
+    // V13 TASK-015 — the governed ZCode adapter over the CLI bundled with the
+    // ZCode install. Registered like the others; routing's certification and
+    // capability gates (not registration) decide what it may run.
+    new ZcodeAdapter({ projectRoot }),
   ]);
 }

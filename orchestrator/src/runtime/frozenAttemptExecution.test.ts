@@ -6,7 +6,7 @@ import { AgentStage } from "../types.js";
 import { createRuntimeExecutor } from "./runtimeExecutor.js";
 import { MockRuntimeAdapter, okResult } from "./mockAdapter.js";
 import { NO_GUARDS } from "./runtimeAdapter.js";
-import { RuntimeCapability } from "./runtimeCapabilities.js";
+import { EXECUTOR_LIFECYCLE_CAPABILITIES, RuntimeCapability } from "./runtimeCapabilities.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import type { LedgerAttempt } from "../ledger/runLedger.js";
 import { seedRealContracts } from "../testing/contractFixtures.js";
@@ -38,6 +38,7 @@ function frozen(overrides: Partial<LedgerAttempt> = {}): LedgerAttempt {
     route_basis: "level-2;task-tier:T2/task-tier:T2",
     tier: "T2",
     adapter_version: "claude-code@1",
+    runtime_version: null,
     config_hash: HASH_A, plan_hash: HASH_B, base_revision: "abc1234",
     capability_evidence: [],
     guard_evidence: { target_write: false, pre_tool_guard: true, writable_roots: [] },
@@ -151,7 +152,8 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
     const runtime = new MockRuntimeAdapter({
       id: "antigravity",
       models: ["glm-4.7"],
-      capabilities: [RuntimeCapability.PRE_TOOL_GUARD],
+      // V13 TASK-016 — certified AND a lifecycle executor: both gates must pass.
+      capabilities: [RuntimeCapability.PRE_TOOL_GUARD, ...EXECUTOR_LIFECYCLE_CAPABILITIES],
       respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }),
     });
     const result = await createRuntimeExecutor({
