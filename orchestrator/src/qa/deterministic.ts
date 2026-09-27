@@ -38,6 +38,13 @@ export interface DeterministicCheckResult {
   durationMs: number;
   /** Tail of the tool's own output — the evidence an engineer fixes from. */
   outputSummary: string;
+  /**
+   * V13 TASK-018 — the real process exit code the command produced, when the
+   * runner knows one; null when the runner graded a report that carries no
+   * exit code (the static-analysis gate's per-check rows) and absent when the
+   * runner predates the field.
+   */
+  exitCode?: number | null;
   /** Per-Target results when verification ran across multiple targets (T-V9-015). */
   targetResults?: readonly DeterministicTargetResult[];
 }
@@ -49,11 +56,23 @@ export interface DeterministicVerification {
   failures: DeterministicCheckResult[];
   /** Checks not configured for this project — recorded so absence stays visible. */
   skipped: DeterministicCheckId[];
-  /** Required policy levels which produced no executable evidence. */
+  /** Required sweep-owned checks which produced no executable evidence — each one blocks. */
   missingRequired: string[];
+  /**
+   * Required policy levels with no deterministic runner (api/e2e). The sweep
+   * cannot produce their evidence; they stay the QA strategy floor's visible
+   * requirements, recorded here instead of blocking a stage on a check that
+   * can never run.
+   */
+  runnerless: string[];
   /** `skipped` is deliberately distinct from a successful verification. */
   status: "passed" | "failed" | "skipped";
-  enforcement: "warn" | "enforce";
+  /**
+   * V13 TASK-017 — required deterministic guards are always enforced. The
+   * historical `warn` posture (a missing required check passes) is deleted:
+   * a required check that produced no evidence blocks the stage.
+   */
+  enforcement: "enforce";
   passed: boolean;
   selection?: {
     source: string;
@@ -61,13 +80,17 @@ export interface DeterministicVerification {
     levels: string[];
     reason: string;
   };
+  /**
+   * V13 TASK-018 — sha256 over the change-set fingerprint the sweep graded,
+   * when the hook captured one: evidence that these test/build results speak
+   * about exactly this source state, and that a later edit invalidates them.
+   */
+  changeSetDigest?: string;
 }
 
 export interface DeterministicVerificationOptions {
   /** RuntimeTask.required_verification levels. Omitted preserves the full historical order. */
   levels?: readonly string[];
-  /** Defaults to warning-only; enforcement requires an explicit policy value. */
-  enforcement?: "warn" | "enforce";
 }
 
 /**
@@ -91,6 +114,15 @@ function checkForLevel(level: string): DeterministicCheckId | null {
   }
 }
 
+/**
+ * Checks the deterministic runner can never execute (V13 TASK-017/018) — a
+ * required one is recorded as `runnerless`, not missing, because the sweep
+ * owns no way to produce its evidence (the QA strategy enforces it instead).
+ * The project runner is the authority on this; importing it here keeps one
+ * declaration.
+ */
+import { SWEEP_RUNNERLESS_CHECKS } from "./projectRunner.js";
+
 export function deterministicChecksForLevels(levels: readonly string[]): DeterministicCheckId[] {
   const selected = new Set(levels.map(checkForLevel).filter((id): id is DeterministicCheckId => id !== null));
   return DETERMINISTIC_ORDER.filter((id) => selected.has(id));
@@ -103,7 +135,7 @@ export async function runDeterministicVerification(
   const ran: DeterministicCheckResult[] = [];
   const failures: DeterministicCheckResult[] = [];
   const skipped: DeterministicCheckId[] = [];
-  const enforcement = options.enforcement ?? "warn";
+  const runnerless: string[] = [];
   const required = options.levels === undefined
     ? [...DETERMINISTIC_ORDER]
     : deterministicChecksForLevels(options.levels);
@@ -122,7 +154,11 @@ export async function runDeterministicVerification(
       };
     }
     if (result === null) {
-      skipped.push(id);
+      // A check the runner can never execute is a fact about the sweep, not a
+      // skipped obligation; a check it could execute but this project has not
+      // configured is missing required evidence and blocks.
+      if (SWEEP_RUNNERLESS_CHECKS.includes(id)) runnerless.push(id);
+      else skipped.push(id);
       continue;
     }
     ran.push(result);
@@ -132,15 +168,23 @@ export async function runDeterministicVerification(
       // them, but record them as not-run rather than letting their absence read
       // as "passed implicitly".
       const failedAt = required.indexOf(id);
-      skipped.push(...required.slice(failedAt + 1));
+      for (const later of required.slice(failedAt + 1)) {
+        if (SWEEP_RUNNERLESS_CHECKS.includes(later)) runnerless.push(later);
+        else skipped.push(later);
+      }
       break;
     }
   }
 
-  const missingRequired = [...unsupportedRequired, ...skipped];
+  const missingRequired = [...skipped];
   const status = failures.length > 0 ? "failed" : ran.length === 0 ? "skipped" : "passed";
-  const passed = failures.length === 0 && !(enforcement === "enforce" && missingRequired.length > 0);
-  return { required, ran, failures, skipped, missingRequired, status, enforcement, passed };
+  // V13 TASK-017 — always enforced: a required check that produced no evidence
+  // (not configured, or a failure stopped the sequence before it ran) blocks.
+  // A required level the sweep can never grade (api/e2e, integration) is
+  // recorded as `runnerless`, not missing: the sweep owns no evidence for it
+  // to withhold, and the QA strategy enforces it instead.
+  const passed = failures.length === 0 && missingRequired.length === 0;
+  return { required, ran, failures, skipped, missingRequired, runnerless: [...unsupportedRequired, ...runnerless], status, enforcement: "enforce", passed };
 }
 
 /** One-line summary for prompts / logs / the evidence package. */
@@ -153,7 +197,10 @@ export function renderDeterministicVerification(v: DeterministicVerification): s
     : [];
   if (v.status === "skipped") {
     const lines = [...selectionLines, "deterministic verification: no checks configured for this project — SKIPPED (not PASS)"];
-    if (v.enforcement === "enforce" && v.missingRequired.length > 0) {
+    for (const level of v.runnerless) {
+      lines.push(`- ${level}: NO RUNNER (QA strategy floor requirement, not a sweep check)`);
+    }
+    if (v.missingRequired.length > 0) {
       lines.push(`BLOCKED by test-pyramid enforcement; missing required evidence: ${v.missingRequired.join(", ")}`);
     }
     return lines;
@@ -171,8 +218,8 @@ export function renderDeterministicVerification(v: DeterministicVerification): s
     }
   }
   for (const id of v.skipped) lines.push(`- ${id}: SKIPPED (not configured)`);
-  for (const level of v.missingRequired.filter((level) => checkForLevel(level) === null)) {
-    lines.push(`- ${level}: SKIPPED (no V3 runtime runner)`);
+  for (const level of v.runnerless) {
+    lines.push(`- ${level}: NO RUNNER (QA strategy floor requirement, not a sweep check)`);
   }
   if (!v.passed) {
     const f = v.failures[0];
@@ -187,8 +234,6 @@ export function renderDeterministicVerification(v: DeterministicVerification): s
     } else {
       lines.push(`BLOCKED by test-pyramid enforcement; missing required evidence: ${v.missingRequired.join(", ")}`);
     }
-  } else if (v.missingRequired.length > 0) {
-    lines.push(`WARNING (warn-only): missing required evidence: ${v.missingRequired.join(", ")}`);
   }
   return lines;
 }

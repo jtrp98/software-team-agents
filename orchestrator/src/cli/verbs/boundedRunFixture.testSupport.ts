@@ -46,7 +46,7 @@ export function boundedRunProject(roots: string[], git: FixtureGit, options: { m
   fs.mkdirSync(path.join(targetRoot, "src"), { recursive: true });
   const orderSource = "export function orderSummary(): number { return 0; }\n";
   fs.writeFileSync(path.join(targetRoot, "src", "orders.ts"), orderSource);
-  fs.writeFileSync(path.join(targetRoot, "package.json"), JSON.stringify({ name: "fixture-target", scripts: { test: "node -e \"process.exit(0)\"" } }, null, 2));
+  fs.writeFileSync(path.join(targetRoot, "package.json"), JSON.stringify({ name: "fixture-target", scripts: { test: "node -e \"process.exit(0)\"", lint: "node -e \"process.exit(0)\"", typecheck: "node -e \"process.exit(0)\"", build: "node -e \"process.exit(0)\"" } }, null, 2));
   // The production secret scanner (`git/checkpoint.ts`'s `scanChangedFilesForSecrets`,
   // used whenever `BoundedRunServiceOptions.secretScanner` is not overridden)
   // shells out to this exact script in the *Target* root with
@@ -278,7 +278,7 @@ export function threeRepoBoundedRunProject(
   fs.mkdirSync(path.join(targetApi, "src"), { recursive: true });
   const orderSource = "export function orderSummary(): number { return 0; }\n";
   fs.writeFileSync(path.join(targetApi, "src", "orders.ts"), orderSource);
-  fs.writeFileSync(path.join(targetApi, "package.json"), JSON.stringify({ name: "orders-api", scripts: { test: "node -e \"process.exit(0)\"" } }, null, 2));
+  fs.writeFileSync(path.join(targetApi, "package.json"), JSON.stringify({ name: "orders-api", scripts: { test: "node -e \"process.exit(0)\"", lint: "node -e \"process.exit(0)\"", typecheck: "node -e \"process.exit(0)\"", build: "node -e \"process.exit(0)\"" } }, null, 2));
   fs.mkdirSync(path.join(targetApi, ".claude", "scripts"), { recursive: true });
   fs.writeFileSync(
     path.join(targetApi, ".claude", "scripts", "static-analysis-gate.js"),
@@ -297,7 +297,7 @@ export function threeRepoBoundedRunProject(
   gitRunner(targetWeb, "config", "remote.origin.url", "https://github.com/acme/web.git");
   fs.mkdirSync(path.join(targetWeb, "src"), { recursive: true });
   fs.writeFileSync(path.join(targetWeb, "src", "App.tsx"), "export function App() { return null; }\n");
-  fs.writeFileSync(path.join(targetWeb, "package.json"), JSON.stringify({ name: "orders-web", scripts: { test: "node -e \"process.exit(0)\"" } }, null, 2));
+  fs.writeFileSync(path.join(targetWeb, "package.json"), JSON.stringify({ name: "orders-web", scripts: { test: "node -e \"process.exit(0)\"", lint: "node -e \"process.exit(0)\"", typecheck: "node -e \"process.exit(0)\"", build: "node -e \"process.exit(0)\"" } }, null, 2));
   fs.mkdirSync(path.join(targetWeb, ".claude", "scripts"), { recursive: true });
   fs.writeFileSync(
     path.join(targetWeb, ".claude", "scripts", "static-analysis-gate.js"),

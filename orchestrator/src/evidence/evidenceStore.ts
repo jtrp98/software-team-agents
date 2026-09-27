@@ -36,6 +36,11 @@ export const EVIDENCE_KINDS = [
   "artifact",
   /** The deterministic post-Dev sweep, stored whole so a later process (QA) reads the real result. */
   "deterministic-verification",
+  /**
+   * V13 TASK-017 — STA's own post-run scope verification of one attempt: the
+   * verdict on the files the executor port's snapshots say the run changed.
+   */
+  "scope-postflight",
   /** A trusted human decision applied to a pending approval request. */
   "approval-decision",
   /**
@@ -68,6 +73,7 @@ const DeterministicCheckResultSchema = z.strictObject({
   status: z.enum(["PASS", "FAIL"]),
   durationMs: z.number(),
   outputSummary: z.string(),
+  exitCode: z.number().nullable().optional(),
   targetResults: z.array(DeterministicTargetResultSchema).readonly().optional(),
 });
 
@@ -78,9 +84,13 @@ export const DeterministicVerificationSchema = z.strictObject({
   failures: z.array(DeterministicCheckResultSchema),
   skipped: z.array(z.enum(DETERMINISTIC_CHECK_IDS)),
   missingRequired: z.array(z.string()),
+  runnerless: z.array(z.string()),
   status: z.enum(["passed", "failed", "skipped"]),
-  enforcement: z.enum(["warn", "enforce"]),
+  // V13 TASK-017 — the `warn` posture is deleted; a stored verification that
+  // claims it fails this schema rather than being quietly trusted.
+  enforcement: z.literal("enforce"),
   passed: z.boolean(),
+  changeSetDigest: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   selection: z
     .strictObject({
       source: z.string(),
@@ -155,6 +165,16 @@ const DeterministicVerificationPayloadSchema = z.strictObject({
   verification: DeterministicVerificationSchema,
 });
 
+const ScopePostflightPayloadSchema = z.strictObject({
+  kind: z.literal("scope-postflight"),
+  ok: z.boolean(),
+  checked: z.number().int().nonnegative(),
+  violations: z.array(z.string()),
+  digest: z.string().regex(/^[0-9a-f]{64}$/),
+  runtimeId: z.string().min(1),
+  contractDigest: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+});
+
 const ApprovalDecisionPayloadSchema = z.strictObject({
   kind: z.literal("approval-decision"),
   requestId: z.string().min(1),
@@ -207,6 +227,7 @@ export const EvidencePayloadSchema = z.discriminatedUnion("kind", [
   RecoveryDecisionPayloadSchema,
   ArtifactPayloadSchema,
   DeterministicVerificationPayloadSchema,
+  ScopePostflightPayloadSchema,
   ApprovalDecisionPayloadSchema,
   ReviewIndependencePayloadSchema,
   StageCompletionPayloadSchema,

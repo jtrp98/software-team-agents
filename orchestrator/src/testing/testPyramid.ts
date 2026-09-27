@@ -29,8 +29,6 @@ export interface TaskTypePolicy {
 
 export interface TestPyramid {
   version: number;
-  /** Ships warning-only by default. A project must explicitly opt in to enforcement. */
-  enforcement?: "warn" | "enforce";
   task_types: Record<string, TaskTypePolicy>;
 }
 
@@ -54,7 +52,13 @@ export const FULL_RUNTIME_VERIFICATION_LEVELS: readonly RuntimeVerificationLevel
 
 export interface RuntimeVerificationSelection {
   levels: RuntimeVerificationLevel[];
-  enforcement: "warn" | "enforce";
+  /**
+   * V13 TASK-017 — always `enforce`. The historical `warn` posture (a project
+   * opt-out that let a required check pass without evidence) is deleted from
+   * the policy file and the selection alike: a required check that produced no
+   * evidence blocks the stage.
+   */
+  enforcement: "enforce";
   source: "test-pyramid" | "full-order";
   reason: string;
 }
@@ -138,7 +142,7 @@ export function runtimeVerificationFor(
   pyramid: TestPyramid,
 ): RuntimeVerificationSelection {
   const required = requiredLevelsFor(taskType, pyramid);
-  const enforcement = pyramid.enforcement ?? "warn";
+  const enforcement = "enforce" as const;
   if (required === null) {
     return {
       levels: [...FULL_RUNTIME_VERIFICATION_LEVELS],
@@ -163,20 +167,19 @@ export function runtimeVerificationFor(
   ];
   return {
     levels: order.filter((level) => selected.has(level)),
-    enforcement,
+    enforcement: "enforce",
     source: "test-pyramid",
     reason: `selected from test-pyramid.yaml task type "${taskType}" with the always-on mechanical baseline`,
   };
 }
 
 function fullOrderSelection(
-  enforcement: "warn" | "enforce",
   reason: string,
   taskTypes: readonly string[] = [],
 ): TaskAwareVerificationSelection {
   return {
     levels: [...FULL_RUNTIME_VERIFICATION_LEVELS],
-    enforcement,
+    enforcement: "enforce",
     source: "full-order",
     reason,
     taskTypes: [...new Set(taskTypes)].sort(),
@@ -191,10 +194,8 @@ export function runtimeVerificationForTaskTypes(
   reason: string,
 ): TaskAwareVerificationSelection {
   const uniqueTypes = [...new Set(taskTypes)].sort();
-  const enforcement = pyramid.enforcement ?? "warn";
   if (uniqueTypes.length === 0) {
     return fullOrderSelection(
-      enforcement,
       `${reason}; no test-pyramid task type resolved, preserving the historical full deterministic order`,
     );
   }
@@ -202,7 +203,6 @@ export function runtimeVerificationForTaskTypes(
   const unknownTypes = uniqueTypes.filter((taskType) => requiredLevelsFor(taskType, pyramid) === null);
   if (unknownTypes.length > 0) {
     return fullOrderSelection(
-      enforcement,
       `${reason}; unknown test-pyramid task type(s): ${unknownTypes.join(", ")}, preserving the historical full deterministic order`,
       uniqueTypes,
     );
@@ -223,7 +223,7 @@ export function runtimeVerificationForTaskTypes(
   ];
   return {
     levels: order.filter((level) => selected.has(level)),
-    enforcement,
+    enforcement: "enforce",
     source: "test-pyramid",
     reason: `${reason}; selected task type(s): ${uniqueTypes.join(", ")}`,
     taskTypes: uniqueTypes,
@@ -288,14 +288,12 @@ export interface ChangeAwareVerificationInput {
 export function refineVerificationFromScope(input: ChangeAwareVerificationInput): TaskAwareVerificationSelection {
   if (!input.pyramid) {
     return fullOrderSelection(
-      input.selection.enforcement,
       `test-pyramid policy unavailable; preserving the historical full deterministic order${input.pyramidUnavailableReason ? `: ${input.pyramidUnavailableReason}` : ""}`,
       input.taskTypes,
     );
   }
   if (!input.scope.bounded) {
     return fullOrderSelection(
-      input.selection.enforcement,
       `change scope is unbounded (${input.scope.unboundedReason ?? "unknown reason"}); preserving the historical full deterministic order`,
       input.taskTypes,
     );
@@ -318,7 +316,6 @@ export function refineVerificationFromScope(input: ChangeAwareVerificationInput)
       ? `changed file(s) do not resolve to a test-pyramid task type: ${unresolvedChangedFiles.join(", ")}`
       : "no changed file or structured signal resolves to a test-pyramid task type";
     return fullOrderSelection(
-      input.selection.enforcement,
       `${detail}; preserving the historical full deterministic order`,
       [...taskTypes],
     );

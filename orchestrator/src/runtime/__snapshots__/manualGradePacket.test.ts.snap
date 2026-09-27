@@ -60,7 +60,7 @@ AC-007.2: An empty order returns the documented zero total without an exception.
 Verify AC-007.2 with the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.
 
 Levels: lint, typecheck, unit, integration, build
-Verification policy: full-order; enforcement: warn
+Verification policy: full-order; enforcement: enforce
 
 ## Risk and human gates
 Risk: shared-contract
@@ -139,7 +139,7 @@ AC-007.2: An empty order returns the documented zero total without an exception.
 Verify AC-007.2 with the empty-order regression and existing serializer tests. Record commands, exit codes and response assertions.
 
 Levels: lint, typecheck, unit, integration, build
-Verification policy: full-order; enforcement: warn
+Verification policy: full-order; enforcement: enforce
 
 ## Risk and human gates
 Risk: shared-contract

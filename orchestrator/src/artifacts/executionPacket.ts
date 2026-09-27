@@ -23,7 +23,10 @@ export const RetrievalCandidateSchema = z.strictObject({
 });
 export const VerificationSchema = z.object({
   status: z.enum(["selected", "full-order", "deferred"]), levels: z.array(text), reason: text,
-  enforcement: z.enum(["warn", "enforce"]).optional(), task_types: z.array(text).optional(),
+  // V13 TASK-017 — `warn` is deleted: a required check that produced no
+  // evidence blocks. A persisted task still carrying `warn` fails this schema
+  // and must be recompiled, exactly as an explicit cutover demands.
+  enforcement: z.literal("enforce").optional(), task_types: z.array(text).optional(),
   selection_source: z.enum(["task-classification", "change-scope", "full-order"]).optional(),
 });
 

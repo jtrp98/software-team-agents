@@ -15,8 +15,8 @@
 #
 # `.claude/agents/test-planner.md` consults it when a conditional strategy is triggered, and
 # `orchestrator/src/testing/testPyramid.ts` feeds the same floor into RuntimeTask and
-# deterministic execution. V3 is warning-only unless a project explicitly sets
-# `enforcement: enforce`; an omitted value therefore preserves existing exit behaviour.
+# deterministic execution. Required checks are always enforced (V13 TASK-017): a
+# required check that produces no evidence blocks the stage — there is no warn posture.
 
 version: 1
 

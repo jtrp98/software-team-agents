@@ -16,6 +16,7 @@ export const PASSING_VERIFICATION: DeterministicVerification = {
   failures: [],
   skipped: [],
   missingRequired: [],
+  runnerless: [],
   status: "passed",
   enforcement: "enforce",
   passed: true,

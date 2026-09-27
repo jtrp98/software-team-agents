@@ -35,7 +35,7 @@ import type {
   RuntimeAutonomy,
   RuntimeGuards,
 } from "./runtimeAdapter.js";
-import { executorPortFor, ExecutorPortRefusalError } from "./executorPort.js";
+import { executorPortFor, ExecutorPortRefusalError, type ExecutorEvidence } from "./executorPort.js";
 import type { GuardResolver } from "./runtimeGuards.js";
 import type { RuntimeRegistry } from "./runtimeRegistry.js";
 import {
@@ -62,6 +62,7 @@ import { RunLog } from "../observability/runLog.js";
 import { writeExecutionPacket, nextExecutionPacketAttempt } from "../state/runtimeArtifacts.js";
 import { resolveTargetRevision } from "../codeintel/targetRevision.js";
 import type { DependencyEvidence } from "../artifacts/executionPacket.js";
+import { stableHash } from "../artifacts/executionPacket.js";
 import { formatModelPolicyBasis } from "./tierRouting.js";
 import type { ModelTierPolicy } from "./modelTiers.js";
 import { captureChangeSetFingerprint } from "../qa/changeSource.js";
@@ -73,6 +74,8 @@ import {
   type ExitCheckRootBaseline,
   type ExitCheckRunner,
 } from "./exitCheckRunner.js";
+import { verifyChangedFilesScope, type PostflightRoot } from "./postflight.js";
+import type { PostflightGuardOutcome } from "../orchestrator/orchestrator.js";
 
 /**
  * An `AgentExecutor` built on a `RuntimeAdapter`.
@@ -625,8 +628,14 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       });
     }
     const prompt = promptParts.text;
-    const finish = (result: AgentExecutorResult): AgentExecutorResult =>
-      packetPath ? { ...result, packetPath } : result;
+    // V13 TASK-017 — the postflight scope verdict of the dispatch below, if one
+    // ran. Attached to every result `finish` emits so the orchestrator persists
+    // it as evidence of the attempt (a blocked check is a recorded check).
+    let postflightOutcome: PostflightGuardOutcome | undefined;
+    const finish = (result: AgentExecutorResult): AgentExecutorResult => {
+      const graded = postflightOutcome ? { ...result, postflightGuard: postflightOutcome } : result;
+      return packetPath ? { ...graded, packetPath } : graded;
+    };
 
     // Production routing remains above the orchestrator seam. Embedded callers
     // that do not supply a registry retain the fixed-runtime compatibility
@@ -957,6 +966,8 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
       // loop iteration's dispatch, threaded into the run metrics below.
       let attemptId: string | undefined;
       let attemptSessionRef: string | undefined;
+      let collectedEvidence: ExecutorEvidence | undefined;
+      let evidenceCollectError: string | undefined;
       let exitCheckBaseline: ExitCheckRootBaseline[] | undefined;
       if (activeProbe?.available === false) {
         result = {
@@ -1045,14 +1056,13 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         attemptId = preparedAttempt.attemptId;
         if (port.capabilities.has(RuntimeCapability.EVIDENCE_COLLECTION)) {
           try {
-            const evidence = await port.collectEvidence(preparedAttempt);
-            attemptSessionRef = evidence.sessionRef;
+            collectedEvidence = await port.collectEvidence(preparedAttempt);
+            attemptSessionRef = collectedEvidence.sessionRef;
           } catch (error) {
-            // Evidence collection is observability, not enforcement — a failure
-            // to collect must not fail a run whose work already succeeded
-            // (fail-closed result/diff verification lands in TASK-017/018).
-            result = { ...result, diagnostics: [...result.diagnostics, `attempt evidence collection failed (non-fatal): ${error instanceof Error ? error.message : String(error)}`] };
+            evidenceCollectError = error instanceof Error ? error.message : String(error);
           }
+        } else {
+          evidenceCollectError = `executor "${activeRuntime.id}" does not declare EVIDENCE_COLLECTION`;
         }
       } catch (e) {
         if (e instanceof ExecutorPortRefusalError) {
@@ -1091,6 +1101,54 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           `EXIT_GUARD_REPORT_MISMATCH: adapter "${activeRuntime.id}" declared exit-guard capability but returned it unenforced; no safe pre-run baseline exists, so the run is rejected`,
           declared,
         ));
+      }
+
+      // V13 TASK-017 — the mandatory postflight: STA verifies, from the
+      // executor port's own changed-files evidence, that a successful attempt
+      // only ever touched paths its enforced scope allows. The hook layer is
+      // defense in depth; this check — run by STA, after the child is gone,
+      // before the result is accepted — is the enforcement. A missing check is
+      // itself a refusal: without changed-file evidence an OK cannot be told
+      // apart from an unauthorized one, so it is not accepted.
+      if (result.status === "OK" && guards.writeAllow.length > 0) {
+        const scopeRoots: readonly PostflightRoot[] = (threeRepo?.roots.workRoots.length ?? 0) > 0
+          ? threeRepo!.roots.workRoots.map((root) => ({ targetId: root.targetId, path: root.path, access: root.access }))
+          : [{ path: executionRoot, access: "write" as const }];
+        if (!collectedEvidence || collectedEvidence.changedFiles === undefined) {
+          const detail = evidenceCollectError
+            ? `changed-files evidence unavailable (${evidenceCollectError})`
+            : "the executor could not snapshot its workspace, so the files this run changed are unknown";
+          const violations = [`postflight scope check missing: ${detail}`];
+          postflightOutcome = {
+            ok: false,
+            checked: 0,
+            violations,
+            digest: stableHash({ checked: 0, violations }),
+            runtimeId: activeRuntime.id,
+            contractDigest,
+          };
+          return finish(failResult(
+            `required postflight check missing for ${role}: ${detail} — an OK whose changed files are unknown is refused`,
+            metricsFrom(result, { ...declared, attempt_id: attemptId, session_ref: attemptSessionRef }),
+          ));
+        }
+        const scopeCheck = verifyChangedFilesScope({
+          role,
+          roots: scopeRoots,
+          changedFiles: collectedEvidence.changedFiles,
+          rules: { write: [...guards.writeAllow], deny: [...guards.writeDeny] },
+        });
+        postflightOutcome = {
+          ok: scopeCheck.ok,
+          checked: scopeCheck.checked,
+          violations: scopeCheck.violations,
+          digest: scopeCheck.digest,
+          runtimeId: activeRuntime.id,
+          contractDigest,
+        };
+        if (!scopeCheck.ok) {
+          result = { ...result, status: "ERROR", diagnostics: [...result.diagnostics, ...scopeCheck.violations] };
+        }
       }
 
       metrics = metricsFrom(result, { ...declared, attempt_id: attemptId, session_ref: attemptSessionRef });

@@ -66,7 +66,6 @@ describe("persisted evidence across a process boundary (V13 TASK-002)", () => {
           return { outcome: PASS, artifactType: ArtifactType.QA_REPORT, artifact: passingQaReport("T-XP") };
         },
         changedFiles: () => ["src/a.ts"],
-        deterministicGate: "enabled",
       });
       const afterQa = await orch2.step(qa);
       expect(seen[0]!.deterministicVerification?.verification).toEqual(PASSING_VERIFICATION);

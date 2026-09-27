@@ -134,7 +134,7 @@ describe("runtimeVerificationFor", () => {
     const pyramid = loadTestPyramid(fixtureRoot(VALID_YAML));
     expect(runtimeVerificationFor("ui-component", pyramid)).toEqual({
       levels: ["lint", "typecheck", "unit", "build"],
-      enforcement: "warn",
+      enforcement: "enforce",
       source: "test-pyramid",
       reason: expect.stringContaining("ui-component"),
     });
@@ -144,14 +144,15 @@ describe("runtimeVerificationFor", () => {
     const pyramid = loadTestPyramid(fixtureRoot(VALID_YAML));
     expect(runtimeVerificationFor("ghost-type", pyramid)).toMatchObject({
       levels: ["lint", "typecheck", "unit", "integration", "build"],
-      enforcement: "warn",
+      enforcement: "enforce",
       source: "full-order",
     });
   });
 
-  it("makes enforcement reachable only through an explicit policy value", () => {
-    const pyramid = loadTestPyramid(fixtureRoot(VALID_YAML.replace("version: 1", "version: 1\nenforcement: enforce")));
-    expect(runtimeVerificationFor("ui-component", pyramid).enforcement).toBe("enforce");
+  it("refuses a policy file that still declares the deleted warn posture (V13 TASK-017)", () => {
+    expect(() =>
+      loadTestPyramid(fixtureRoot(VALID_YAML.replace("version: 1", 'version: 1\nenforcement: warn'))),
+    ).toThrow(TestPyramidError);
   });
 });
 

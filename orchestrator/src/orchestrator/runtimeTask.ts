@@ -192,7 +192,7 @@ function requiredVerification(input: RuntimeTaskBuildInput): RuntimeTask["requir
       status: "full-order",
       levels: [...FULL_RUNTIME_VERIFICATION_LEVELS],
       reason: `test-pyramid policy unavailable; preserving the historical full deterministic order: ${error instanceof Error ? error.message : String(error)}`,
-      enforcement: "warn",
+      enforcement: "enforce",
       task_types: [],
       selection_source: "full-order",
     };

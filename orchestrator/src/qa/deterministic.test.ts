@@ -38,11 +38,16 @@ describe("runDeterministicVerification", () => {
     expect(v.failures[0].id).toBe("typecheck");
   });
 
-  it("records unconfigured checks as skipped, not failed", async () => {
+  it("records unconfigured checks as skipped - and each one blocks (V13 TASK-017)", async () => {
     const v = await runDeterministicVerification((id) => (id === "build" ? pass(id) : null));
-    expect(v.passed).toBe(true);
+    expect(v.passed).toBe(false);
     expect(v.ran.map((r) => r.id)).toEqual(["build"]);
-    expect(v.skipped).toEqual(["lint", "typecheck", "unit-tests", "integration-tests"]);
+    expect(v.skipped).toEqual(["lint", "typecheck", "unit-tests"]);
+    expect(v.missingRequired).toEqual(["lint", "typecheck", "unit-tests"]);
+    // integration-tests is never executable by the sweep - runnerless, not missing.
+    expect(v.runnerless).toEqual(["integration-tests"]);
+    // `status` describes the checks that ran (all green); `passed` is the gate
+    // verdict, and the missing required evidence blocks it.
     expect(v.status).toBe("passed");
   });
 
@@ -57,17 +62,19 @@ describe("runDeterministicVerification", () => {
     expect(v.passed).toBe(true);
   });
 
-  it("warns by default but fails only after explicit enforcement when required evidence is missing", async () => {
-    const warn = await runDeterministicVerification(() => null, { levels: ["lint", "unit"] });
-    expect(warn).toMatchObject({ status: "skipped", enforcement: "warn", passed: true });
-    expect(renderDeterministicVerification(warn).join("\n")).toContain("SKIPPED (not PASS)");
+  it("blocks when required evidence is missing - there is no warn posture (V13 TASK-017)", async () => {
+    const v = await runDeterministicVerification(() => null, { levels: ["lint", "unit"] });
+    expect(v).toMatchObject({ status: "skipped", enforcement: "enforce", passed: false });
+    expect(v.missingRequired).toEqual(["lint", "unit-tests"]);
+    expect(renderDeterministicVerification(v).join("\n")).toContain("BLOCKED by test-pyramid enforcement");
+  });
 
-    const enforce = await runDeterministicVerification(() => null, {
-      levels: ["lint", "unit"],
-      enforcement: "enforce",
-    });
-    expect(enforce).toMatchObject({ status: "skipped", enforcement: "enforce", passed: false });
-    expect(renderDeterministicVerification(enforce).join("\n")).toContain("BLOCKED by test-pyramid enforcement");
+  it("records a required level with no runner as runnerless, not missing (V13 TASK-017)", async () => {
+    const v = await runDeterministicVerification(() => null, { levels: ["lint", "api"] });
+    expect(v.runnerless).toEqual(["api"]);
+    expect(v.missingRequired).toEqual(["lint"]);
+    expect(v.passed).toBe(false);
+    expect(renderDeterministicVerification(v).join("\n")).toContain("api: NO RUNNER (QA strategy floor requirement, not a sweep check)");
   });
 
   it("turns a throwing runner into a FAIL instead of crashing the pipeline", async () => {
@@ -127,8 +134,9 @@ describe("renderDeterministicVerification", () => {
       failures: [],
       skipped: [],
       missingRequired: [],
+      runnerless: [],
       status: "passed",
-      enforcement: "warn",
+      enforcement: "enforce",
       passed: true,
     };
     const lines = renderDeterministicVerification(v);
@@ -166,8 +174,9 @@ describe("renderDeterministicVerification", () => {
       ],
       skipped: [],
       missingRequired: [],
+      runnerless: [],
       status: "failed",
-      enforcement: "warn",
+      enforcement: "enforce",
       passed: false,
     };
     const text = renderDeterministicVerification(v).join("\n");
@@ -189,8 +198,9 @@ describe("renderDeterministicVerification", () => {
       failures: [],
       skipped: [],
       missingRequired: [],
+      runnerless: [],
       status: "passed",
-      enforcement: "warn",
+      enforcement: "enforce",
       passed: true,
     };
     const lines = renderDeterministicVerification(v);

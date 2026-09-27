@@ -8,6 +8,7 @@ import {
   type RuntimeProbe,
   type RuntimeWorkspace,
 } from "./runtimeAdapter.js";
+import * as path from "node:path";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import {
   CAPABILITY_FOR_OPERATION,
@@ -112,8 +113,8 @@ export interface MockRuntimeOptions {
   probe?: RuntimeProbe;
   /** Files the workspace starts with, keyed by repo-relative path. */
   files?: Record<string, string>;
-  /** What to return for a given request. Defaults to a plain `OK`. */
-  respond?: (req: RuntimeAgentRequest, callIndex: number) => RuntimeAgentResult;
+  /** What to return for a given request. Defaults to a plain `OK`. A run is async, so an async responder is fine. */
+  respond?: (req: RuntimeAgentRequest, callIndex: number) => RuntimeAgentResult | Promise<RuntimeAgentResult>;
   /** V13 TASK-013 — what `resume` returns for a reference. Defaults to a normalized resumed `OK`. */
   resumeRespond?: (ref: ExecutorAttemptRef) => RuntimeAgentResult;
   /** V13 TASK-013 — what `cancel` reports. Defaults to `{status: "cancelled"}`. */
@@ -136,11 +137,13 @@ export class MockRuntimeAdapter implements ExecutorPort {
   readonly attempts: Map<string, RuntimeAgentRequest> = new Map();
   /** The normalized result each executed attempt finished with (V13 TASK-013). */
   readonly resultsByAttempt: Map<string, RuntimeAgentResult> = new Map();
+  /** The workspace files each executed attempt changed — the mock's own snapshot diff (V13 TASK-017). */
+  readonly changedFilesByAttempt: Map<string, readonly string[]> = new Map();
   /** Every resume/cancel reference presented to the lifecycle, in order (V13 TASK-013). */
   readonly lifecycleRefs: ExecutorAttemptRef[] = [];
 
   private readonly probeResult: RuntimeProbe;
-  private readonly respond: (req: RuntimeAgentRequest, callIndex: number) => RuntimeAgentResult;
+  private readonly respond: (req: RuntimeAgentRequest, callIndex: number) => RuntimeAgentResult | Promise<RuntimeAgentResult>;
   private readonly resumeRespond?: (ref: ExecutorAttemptRef) => RuntimeAgentResult;
   private readonly cancelRespond?: (ref: ExecutorAttemptRef) => ExecutorCancelOutcome;
 
@@ -191,8 +194,23 @@ export class MockRuntimeAdapter implements ExecutorPort {
     if (!req) {
       throw new ExecutorPortRefusalError("unknown-attempt", "execute", this.id, `attempt ${attempt.attemptId} was never prepared by this adapter`);
     }
+    // The same snapshot discipline the real adapters run: diff the workspace
+    // around the spawn and report what changed as attempt evidence. The
+    // workspace is the cwd, so files are only attributed when the cwd is one
+    // of the snapshotted roots — a verifier stage whose cwd sits outside its
+    // (read-only) Target roots honestly reports `[]`, exactly like production.
+    const before = new Map(this.workspace.files);
     const result = await this.executeAgent(req);
+    const changed = [...new Set([...before.keys(), ...this.workspace.files.keys()])]
+      .filter((key) => before.get(key) !== this.workspace.files.get(key))
+      .sort();
+    const snapshotRoots = req.workRoots?.length ? req.workRoots : [{ targetId: undefined, path: req.cwd }];
+    const cwdRoot = snapshotRoots.find((root) => path.resolve(root.path) === path.resolve(req.cwd));
+    const evidenceChanged = cwdRoot
+      ? changed.map((file) => (snapshotRoots.length > 1 && cwdRoot.targetId ? `${cwdRoot.targetId}:${file}` : file))
+      : [];
     this.resultsByAttempt.set(attempt.attemptId, result);
+    this.changedFilesByAttempt.set(attempt.attemptId, evidenceChanged);
     return result;
   }
 
@@ -224,12 +242,14 @@ export class MockRuntimeAdapter implements ExecutorPort {
     this.requireCapability("collectEvidence");
     this.lifecycleRefs.push(ref);
     const result = this.resultsByAttempt.get(ref.attemptId) ?? null;
+    const changedFiles = this.changedFilesByAttempt.get(ref.attemptId);
     return {
       attemptId: ref.attemptId,
       runtimeId: this.id,
       result,
       logs: [`mock://attempt/${ref.attemptId}`],
       sessionRef: `mock-session-${ref.attemptId.slice(0, 8)}`,
+      ...(changedFiles ? { changedFiles } : {}),
       collectedAt: Date.now(),
     };
   }
@@ -237,7 +257,7 @@ export class MockRuntimeAdapter implements ExecutorPort {
   async executeAgent(req: RuntimeAgentRequest): Promise<RuntimeAgentResult> {
     const index = this.requests.length;
     this.requests.push(req);
-    return this.respond(req, index);
+    return await this.respond(req, index);
   }
 
   /** The roles this adapter was asked to run, in order. The assertion most tests actually want. */

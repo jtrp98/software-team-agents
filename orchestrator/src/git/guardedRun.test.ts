@@ -39,7 +39,7 @@ function repository(): string {
 const verification: DeterministicVerification = {
   required: ["typecheck"],
   ran: [{ id: "typecheck", status: "PASS", durationMs: 1, outputSummary: "ok" }],
-  failures: [], skipped: [], missingRequired: [], status: "passed", enforcement: "enforce", passed: true,
+  failures: [], skipped: [], missingRequired: [], runnerless: [], status: "passed", enforcement: "enforce", passed: true,
 };
 
 function seed(options: { tasks?: Array<{ id: string; owner?: AgentStage; dependsOn?: string[] }> } = {}) {

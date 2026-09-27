@@ -229,7 +229,7 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
     expect(known.required_verification).toMatchObject({
       status: "selected",
       levels: ["lint", "typecheck", "unit", "build"],
-      enforcement: "warn",
+      enforcement: "enforce",
       task_types: ["business-rule"],
       selection_source: "task-classification",
     });
@@ -244,7 +244,7 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
     expect(unknown.required_verification).toMatchObject({
       status: "full-order",
       levels: ["lint", "typecheck", "unit", "integration", "build"],
-      enforcement: "warn",
+      enforcement: "enforce",
       task_types: [],
       selection_source: "full-order",
     });
@@ -278,7 +278,7 @@ describe("RuntimeTask deterministic execution contract (T-V3R-010)", () => {
     expect(compatibility.required_verification).toEqual({
       status: "full-order",
       levels: ["lint", "typecheck", "unit", "integration", "build"],
-      enforcement: "warn",
+      enforcement: "enforce",
       reason: expect.stringContaining('task type "schema-change" is absent'),
     });
   });

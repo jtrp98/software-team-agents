@@ -125,7 +125,7 @@ async function crash(f: EngineFixture, handle: CrashHandle, options: Parameters<
 const failedVerification: DeterministicVerification = {
   required: ["typecheck"], ran: [{ id: "typecheck", status: "FAIL", durationMs: 1, outputSummary: "TS2322" }],
   failures: [{ id: "typecheck", status: "FAIL", durationMs: 1, outputSummary: "TS2322" }], skipped: [],
-  missingRequired: [], status: "failed", enforcement: "enforce", passed: false,
+  missingRequired: [], runnerless: [], status: "failed", enforcement: "enforce", passed: false,
 };
 
 const PLAN_STAGES = [AgentStage.BACKEND_ENGINEER, AgentStage.REVIEWER, AgentStage.QA_ENGINEER];
@@ -504,7 +504,7 @@ describe("T-V8-022 — non-crash fault classes end the run explicitly and durabl
     const f = seed();
     const skipped: DeterministicVerification = {
       required: ["typecheck"], ran: [], failures: [], skipped: ["typecheck"], missingRequired: ["typecheck"],
-      status: "skipped", enforcement: "enforce", passed: false,
+      runnerless: [], status: "skipped", enforcement: "enforce", passed: false,
     };
     const result = await driveFixture(f, { agents: fakeAgents(f, { verification: () => skipped }) });
     expect(result.kind).toBe("HALTED");

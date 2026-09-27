@@ -83,8 +83,6 @@ export interface QaOptimizationOptions {
    * round that has no registered plan task.
    */
   taskContract?: (req: AgentExecutorRequest) => QaTaskContract | undefined;
-  /** Recorded on the QA run so the explicit deterministic escape hatch is auditable. */
-  deterministicGate?: "enabled" | "disabled";
 }
 
 export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
@@ -215,7 +213,6 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
       taskId: req.taskId,
       mode: decision,
       effort,
-      deterministicGate: opts.deterministicGate ?? (deterministic ? "enabled" : "disabled"),
       scope,
       ...(contract ? { taskContract: contract } : {}),
       taskIntent: "",

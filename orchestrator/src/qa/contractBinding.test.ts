@@ -58,8 +58,9 @@ const PASSING_DETERMINISTIC: DeterministicVerification = {
   failures: [],
   skipped: [],
   missingRequired: [],
+  runnerless: [],
   status: "passed",
-  enforcement: "warn",
+  enforcement: "enforce",
   passed: true,
 } as unknown as DeterministicVerification;
 

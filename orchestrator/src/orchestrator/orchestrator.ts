@@ -116,6 +116,25 @@ export interface PersistedVerificationRef {
   verification: DeterministicVerification;
 }
 
+/**
+ * V13 TASK-017 — STA's own post-run scope verification verdict for one
+ * attempt: what the executor port's changed-files evidence was graded against,
+ * and what it violated. Produced by the runtime executor's mandatory
+ * postflight, persisted as `scope-postflight` evidence; absent only for an
+ * attempt whose guard scope grants no writes at all.
+ */
+export interface PostflightGuardOutcome {
+  ok: boolean;
+  /** How many changed files were graded. */
+  checked: number;
+  /** One line per violation; empty exactly when `ok`. */
+  violations: readonly string[];
+  /** sha256 over the graded inputs and verdicts — binds the evidence to the exact check. */
+  digest: string;
+  runtimeId: string;
+  contractDigest: string | null;
+}
+
 export interface AgentExecutorRequest {
   stage: AgentStage;
   taskId: string;
@@ -165,6 +184,12 @@ export interface AgentExecutorResult {
    * after that the store - not this object - is the source of truth.
    */
   deterministicVerification?: DeterministicVerification;
+  /**
+   * V13 TASK-017 — the runtime executor's mandatory postflight scope check:
+   * STA's own verdict on the files this attempt actually changed. The
+   * orchestrator persists it as `scope-postflight` evidence of this attempt.
+   */
+  postflightGuard?: PostflightGuardOutcome;
   /**
    * A failure as structured data: what broke, who owns it, whether a person
    * must look. The agent supplies the facts; the orchestrator decides where
@@ -1350,6 +1375,24 @@ export class Orchestrator {
         role: "orchestrator",
         subject: "post-dev-verification",
         payload: { kind: "deterministic-verification", verification },
+        refs: [roleRun.evidenceId],
+      });
+    }
+    if (result.postflightGuard) {
+      this.recordEvidence({
+        stage,
+        attempt,
+        role: "orchestrator",
+        subject: "postflight",
+        payload: {
+          kind: "scope-postflight",
+          ok: result.postflightGuard.ok,
+          checked: result.postflightGuard.checked,
+          violations: [...result.postflightGuard.violations],
+          digest: result.postflightGuard.digest,
+          runtimeId: result.postflightGuard.runtimeId,
+          contractDigest: result.postflightGuard.contractDigest,
+        },
         refs: [roleRun.evidenceId],
       });
     }

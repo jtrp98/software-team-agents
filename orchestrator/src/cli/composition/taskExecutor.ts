@@ -5,8 +5,8 @@ import { createRuntimeExecutor } from "../../runtime/runtimeExecutor.js";
 import { withQaOptimization, riskSignalsFromClassification } from "../../qa/optimized.js";
 import { collectQaChangedFiles } from "../../qa/changeSource.js";
 import { combineProjectRunners, createProjectRunner } from "../../qa/projectRunner.js";
-import { createPostDevVerificationHook, withPostDevVerificationDisabled } from "../../qa/verificationHook.js";
-import { createDocumentVerificationHook, withDocumentVerificationDisabled } from "../../qa/documentVerificationHook.js";
+import { createPostDevVerificationHook } from "../../qa/verificationHook.js";
+import { createDocumentVerificationHook } from "../../qa/documentVerificationHook.js";
 import { LocalWorkspace } from "../../runtime/localWorkspace.js";
 import { loadStaConfig } from "../../packaging/staConfig.js";
 import { repairQaSignals } from "../../retry/repairRoute.js";
@@ -159,6 +159,20 @@ export async function composeProductionTaskExecutor(
 ): Promise<TaskExecutorComposition> {
   const task = store.loadTask(taskId);
   if (!task) throw new Error(`cannot compose an executor for missing task ${taskId}`);
+  // V13 TASK-017/018 — the deterministic and document gates are mandatory
+  // verification, not options. The disable paths are deleted; a caller that
+  // still asks for one is refused instead of silently running unverified.
+  // (TASK-024 removes the flags from the CLI surface itself.)
+  if (options.noDeterministicGate) {
+    throw new Error(
+      "deterministic verification is mandatory (V13 TASK-017); the --no-deterministic-gate bypass no longer exists — remove the flag and let the gate run",
+    );
+  }
+  if (options.noDocumentGate) {
+    throw new Error(
+      "document verification is mandatory (V13 TASK-018); the --no-document-gate bypass no longer exists — remove the flag and let the gate run",
+    );
+  }
   // DR §5: a resumed task answers to the root frozen at intake - the
   // invocation's --root (if any) already passed the drift assertion at
   // intake, so the frozen name is what every root resolution below uses.
@@ -237,50 +251,45 @@ export async function composeProductionTaskExecutor(
     unreadableTargets: qaDiscovery.failedTargets.length > 0 ? qaDiscovery.failedTargets : undefined,
   });
 
-  const verificationHook = options.noDeterministicGate
-    ? null
-    : createPostDevVerificationHook({
-        inner: runtimeExecutor,
-        deterministicRunner: () => combineProjectRunners(qaRoots.map((root) => ({
-          targetId: root.targetId,
-          root: root.path,
-          runner: createProjectRunner({
-            root: root.path,
-            workspace: new LocalWorkspace({ root: root.path }),
-            staticGatePath: path.join(options.projectRoot, ".claude", "scripts", "static-analysis-gate.js"),
-          }),
-        }))),
-        requiredVerification: () => orchestrator.runtimeTask?.required_verification,
-        ...(options.noQaOptimization
-          ? {}
-          : {
-              changeAware: {
-                changedFiles: qaChangedFiles,
-                scopeInputs: qaInputs.scopeInputs,
-                projectRoot: resolveFrameworkRoot(),
-                workflow: orchestrator.runtimeTask?.workflow ?? "",
-                classification: orchestrator.classification,
-              },
-            }),
-      });
-  const postDevExecutor = verificationHook?.executor ?? withPostDevVerificationDisabled(runtimeExecutor);
-  const documentHook = options.noDocumentGate
-    ? null
-    : createDocumentVerificationHook({
-        inner: postDevExecutor,
-        projectRoot: resolveDocsRoot(options.projectRoot, runRootName),
-        moduleName: options.module,
-        blocking: true,
-      });
-  const docVerifiedExecutor = documentHook?.executor ?? withDocumentVerificationDisabled(postDevExecutor);
+  // V13 TASK-017 — the post-Dev deterministic sweep is unconditional. There is
+  // no disabled fallback executor: the hook always wraps the runtime executor.
+  const verificationHook = createPostDevVerificationHook({
+    inner: runtimeExecutor,
+    deterministicRunner: () => combineProjectRunners(qaRoots.map((root) => ({
+      targetId: root.targetId,
+      root: root.path,
+      runner: createProjectRunner({
+        root: root.path,
+        workspace: new LocalWorkspace({ root: root.path }),
+        staticGatePath: path.join(options.projectRoot, ".claude", "scripts", "static-analysis-gate.js"),
+      }),
+    }))),
+    requiredVerification: () => orchestrator.runtimeTask?.required_verification,
+    ...(options.noQaOptimization
+      ? {}
+      : {
+          changeAware: {
+            changedFiles: qaChangedFiles,
+            scopeInputs: qaInputs.scopeInputs,
+            projectRoot: resolveFrameworkRoot(),
+            workflow: orchestrator.runtimeTask?.workflow ?? "",
+            classification: orchestrator.classification,
+            verificationRoots: qaRoots,
+          },
+        }),
+  });
+  const postDevExecutor = verificationHook.executor;
+  const documentHook = createDocumentVerificationHook({
+    inner: postDevExecutor,
+    projectRoot: resolveDocsRoot(options.projectRoot, runRootName),
+    moduleName: options.module,
+  });
+  const docVerifiedExecutor = documentHook.executor;
   const executor = options.noQaOptimization
     ? docVerifiedExecutor
     : withQaOptimization({
         inner: docVerifiedExecutor,
         changedFiles: qaChangedFiles,
-        ...(options.noDeterministicGate
-          ? { deterministicGate: "disabled" as const }
-          : { deterministicGate: "enabled" as const }),
         packageInputs: qaInputs.packageInputs,
         scopeInputs: qaInputs.scopeInputs,
         taskContract: qaInputs.taskContract,

@@ -1,16 +1,22 @@
+import { execFileSync } from "node:child_process";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+
+const EOL = "\n";
 import { classifyTask } from "../classification/taskClassifier.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { Orchestrator, type AgentExecutorRequest } from "../orchestrator/orchestrator.js";
 import { AgentStage } from "../types.js";
-import { createPostDevVerificationHook, withPostDevVerificationDisabled } from "./verificationHook.js";
+import { createPostDevVerificationHook } from "./verificationHook.js";
 import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 
 function required(
   levels: string[],
-  enforcement: "warn" | "enforce" = "warn",
-): { status: "selected"; levels: string[]; reason: string; enforcement: "warn" | "enforce" } {
-  return { status: "selected", levels, reason: "fixture", enforcement };
+): { status: "selected"; levels: string[]; reason: string; enforcement: "enforce" } {
+  // V13 TASK-017 — there is no warn posture left; selections are enforced.
+  return { status: "selected", levels, reason: "fixture", enforcement: "enforce" };
 }
 
 function req(stage: AgentStage): AgentExecutorRequest {
@@ -43,7 +49,7 @@ describe("post-Dev deterministic verification hook", () => {
         status: "full-order",
         levels: ["lint", "typecheck", "unit", "integration", "build"],
         reason: "no build-time task type",
-        enforcement: "warn",
+        enforcement: "enforce",
         task_types: [],
         selection_source: "full-order",
       }),
@@ -112,7 +118,7 @@ describe("post-Dev deterministic verification hook", () => {
         status: "full-order",
         levels: ["lint", "typecheck", "unit", "integration", "build"],
         reason: "unknown type keeps full order",
-        enforcement: "warn",
+        enforcement: "enforce",
       }),
     });
 
@@ -127,31 +133,52 @@ describe("post-Dev deterministic verification hook", () => {
     });
   });
 
-  it("records all-skipped as distinct from PASS while warn-only preserves the exit result", async () => {
+  it("blocks an all-skipped sweep - a required check missing is not a pass (V13 TASK-017)", async () => {
     const hook = createPostDevVerificationHook({
       inner: async () => ({ outcome: { tokens: 1, cost: 0, result: "PASS" } }),
       deterministicRunner: () => () => null,
       requiredVerification: () => required(["lint", "typecheck"]),
     });
     const result = await hook.executor(req(AgentStage.FRONTEND_ENGINEER));
-    expect(result.outcome.result).toBe("PASS");
+    expect(result.outcome.result).toBe("FAIL");
     expect(result.deterministicVerification).toMatchObject({
       status: "skipped",
-      passed: true,
-      enforcement: "warn",
+      passed: false,
+      enforcement: "enforce",
+      missingRequired: ["lint", "typecheck"],
     });
   });
 
-  it("makes a skipped required check blocking only under explicit enforcement", async () => {
-    const hook = createPostDevVerificationHook({
-      inner: async () => ({ outcome: { tokens: 1, cost: 0, result: "PASS" } }),
-      deterministicRunner: () => () => null,
-      requiredVerification: () => required(["lint"], "enforce"),
-    });
-    const result = await hook.executor(req(AgentStage.FRONTEND_ENGINEER));
-    expect(result.outcome.result).toBe("FAIL");
-    // The failed sweep rides on the result so the orchestrator persists it with the attempt (V13 TASK-002).
-    expect(result.deterministicVerification).toMatchObject({ passed: false, missingRequired: ["lint"] });
+  it("binds the sweep to the change set it graded with a digest (V13 TASK-018)", async () => {
+    // A real git fixture: the digest is over the change-set fingerprint the
+    // sweep graded, so a later edit to the same files invalidates the record.
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "verification-digest-"));
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: root, stdio: "ignore" });
+    try {
+      git("init", "-q");
+      fs.writeFileSync(path.join(root, "src.ts"), "export {}" + EOL, "utf8");
+      git("add", ".");
+      git("commit", "-m", "base");
+      fs.writeFileSync(path.join(root, "src.ts"), "export const changed = true;" + EOL, "utf8");
+
+      const hook = createPostDevVerificationHook({
+        inner: async () => ({ outcome: { tokens: 1, cost: 0, result: "PASS" } }),
+        deterministicRunner: () => (id) => ({ id, status: "PASS", durationMs: 1, outputSummary: "ok" }),
+        requiredVerification: () => required(["typecheck"]),
+        changeAware: {
+          changedFiles: () => ["src.ts"],
+          projectRoot: defaultProjectRoot(),
+          workflow: "bugfix",
+          classification: { sensitiveGate: false },
+          verificationRoots: [{ path: root }],
+        },
+      });
+      const result = await hook.executor(req(AgentStage.BACKEND_ENGINEER));
+      expect(result.outcome.result).toBe("PASS");
+      expect(result.deterministicVerification?.changeSetDigest).toMatch(/^[0-9a-f]{64}$/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 });
+    }
   });
 
   it("never runs deterministic checks around a non-code stage", async () => {
@@ -168,14 +195,15 @@ describe("post-Dev deterministic verification hook", () => {
     expect(checks).toBe(0);
   });
 
-  it("the compatibility path makes no check call and records the gate as disabled", async () => {
-    let modelCalls = 0;
-    const executor = withPostDevVerificationDisabled(async () => {
-      modelCalls += 1;
-      return { outcome: { tokens: 2, cost: 0, result: "PASS" } };
+  it("runs with no disabled fallback: the hook cannot be switched off (V13 TASK-017)", async () => {
+    // The module no longer exports a disabled executor; the only post-Dev
+    // path is the enforcing hook, and it runs on every code-producing stage.
+    const hook = createPostDevVerificationHook({
+      inner: async () => ({ outcome: { tokens: 2, cost: 0, result: "PASS" } }),
+      deterministicRunner: () => (id) => ({ id, status: "PASS", durationMs: 1, outputSummary: "ok" }),
+      requiredVerification: () => required(["lint"]),
     });
-    const result = await executor(req(AgentStage.BACKEND_ENGINEER));
-    expect(modelCalls).toBe(1);
-    expect(result.outcome).toEqual({ tokens: 2, cost: 0, result: "PASS", deterministic_gate: "disabled" });
+    const result = await hook.executor(req(AgentStage.BACKEND_ENGINEER));
+    expect(result.outcome).toMatchObject({ result: "PASS", deterministic_gate: "enabled" });
   });
 });

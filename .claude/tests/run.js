@@ -1385,8 +1385,11 @@ withTempProject((tmp) => {
     scope: { write: [], deny: [], stack: { write: [], deny: [] } },
     work_roots: [],
     knowledge_root: null,
-    issued_at: '2026-09-25T00:00:00.000Z',
-    expires_at: '2026-09-26T00:00:00.000Z',
+    // The positive-path grant is minted against the current clock so it can
+    // never go stale as wall time passes; the negative test below keeps a
+    // fixed, forever-past expiry on purpose.
+    issued_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
     nonce: 'c'.repeat(32),
     ...over,
   });
