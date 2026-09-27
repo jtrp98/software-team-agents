@@ -4,7 +4,9 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { RuntimeTaskV2Schema, assertRuntimeTaskFresh, type RuntimeTaskV2 } from "../orchestrator/runtimeTask.js";
 import { planTaskHash } from "../docs/planTask.js";
-import { PacketFieldsSchema, packetConfigHash, renderPacketSections, renderPacketText, stableHash, contentHash, type DependencyEvidence, type PacketFields } from "../artifacts/executionPacket.js";
+import { z } from "zod";
+import { PacketFieldsSchema, RoleContractDigestSchema, ExpectedOutputSchema, packetConfigHash, renderPacketSections, renderPacketText, stableHash, contentHash, type DependencyEvidence, type PacketFields } from "../artifacts/executionPacket.js";
+import type { AgentContract } from "../agents/agentContract.js";
 import { verifyDesignEvidence } from "../docs/designEvidence.js";
 import {
   ArtifactType,
@@ -545,6 +547,17 @@ function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
+export const STAGE_DOCUMENT: Partial<Record<AgentStage, string>> = {
+  [AgentStage.BUSINESS_ANALYST]: "requirement.md",
+  [AgentStage.SYSTEM_ANALYST]: "design.md",
+  [AgentStage.PROJECT_MANAGER]: "plan.md",
+  [AgentStage.TEST_PLANNER]: "test-plan.md",
+  [AgentStage.UXUI_DESIGNER]: "uxui/design.md",
+  [AgentStage.REVIEWER]: "review.md",
+  [AgentStage.QA_ENGINEER]: "qa.md",
+  [AgentStage.SECURITY]: "security.md",
+};
+
 export const renderExecutionPacketSections = renderPacketSections;
 
 export interface CompileExecutionPacketInput {
@@ -563,6 +576,18 @@ export interface CompileExecutionPacketInput {
   extra?: string;
   /** Legacy context input is deliberately not rendered; v2 selects exact records. */
   sources?: Omit<PromptSources, "task">;
+  /** V13 TASK-020: Authoritative contract resolved for this stage. */
+  authoritativeContract?: AgentContract;
+  /** V13 TASK-020: SHA-256 digest of the authoritative contract file. */
+  contractDigest?: string;
+  /** V13 TASK-020: Operating rules and constraints. */
+  rules?: readonly string[];
+  /** V13 TASK-020: Knowledge brief lines relevant to this role/task. */
+  relevantKnowledge?: readonly string[];
+  /** V13 TASK-020: Expected output description. */
+  expectedOutput?: z.infer<typeof ExpectedOutputSchema>;
+  /** V13 TASK-020: Attempt or correlation ID. */
+  correlationId?: string;
 }
 
 export function packetCompilerHash(): string {
@@ -617,6 +642,43 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
   const stageInstructions = [businessInputInstruction, input.extra ?? ""]
     .filter((part) => part.length > 0)
     .join("\n\n");
+
+  let roleContract: z.infer<typeof RoleContractDigestSchema> | undefined;
+  if (input.authoritativeContract && input.contractDigest) {
+    roleContract = {
+      name: input.authoritativeContract.agent.name,
+      role: input.authoritativeContract.agent.role,
+      digest: input.contractDigest,
+      ...(input.authoritativeContract.constraints ? { constraints: [...input.authoritativeContract.constraints] } : {}),
+      ...(input.authoritativeContract.tools ? { tools: [...input.authoritativeContract.tools] } : {}),
+    };
+  }
+
+  const rawRules = input.rules ?? input.authoritativeContract?.constraints;
+  const cleanedRules = rawRules
+    ? rawRules.map((r) => r.trim()).filter((r) => r.length > 0)
+    : undefined;
+  const rules = cleanedRules && cleanedRules.length > 0 ? cleanedRules : undefined;
+
+  const cleanedKnowledge = input.relevantKnowledge
+    ? input.relevantKnowledge.map((k) => k.trim()).filter((k) => k.length > 0)
+    : undefined;
+  const relevantKnowledge = cleanedKnowledge && cleanedKnowledge.length > 0
+    ? cleanedKnowledge
+    : undefined;
+
+  let expectedOutput = input.expectedOutput;
+  if (!expectedOutput && input.authoritativeContract) {
+    const docName = STAGE_DOCUMENT[input.req.stage];
+    expectedOutput = {
+      artifact_type: input.authoritativeContract.output.required[0] ?? (docName ? docName.replace(/\.md$/, "") : "code"),
+      ...(docName ? { doc_path: `_docs/module/${path.basename(path.dirname(task.plan_source))}/${docName}`, schema_name: `${docName.replace(/\.md$/, "")}.schema.json` } : {}),
+      ...(input.authoritativeContract.output.required.length ? { required_sections: [...input.authoritativeContract.output.required] } : {}),
+    };
+  }
+
+  const correlationId = input.correlationId;
+
   const fields = PacketFieldsSchema.parse({
     version: 2, attempt: input.attempt ?? 1, task_id: input.req.taskId, stage: input.req.stage, role: input.role,
     contract: task.contract,
@@ -645,6 +707,11 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
       }),
       compiler_version: "v8-packet-2", compiler_hash: packetCompilerHash(), base_revision: input.baseRevision,
     },
+    ...(roleContract ? { role_contract: roleContract } : {}),
+    ...(rules && rules.length ? { rules } : {}),
+    ...(relevantKnowledge && relevantKnowledge.length ? { relevant_knowledge: relevantKnowledge } : {}),
+    ...(expectedOutput ? { expected_output: expectedOutput } : {}),
+    ...(correlationId ? { correlation_id: correlationId } : {}),
   });
   const text = renderPacketText(fields);
   const payload = {

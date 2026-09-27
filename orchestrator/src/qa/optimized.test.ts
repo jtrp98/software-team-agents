@@ -7,6 +7,37 @@ import type { ClassificationResult } from "../classification/taskClassifier.js";
 import { runDeterministicVerification } from "./deterministic.js";
 import { persistedSweep, PASSING_VERIFICATION } from "../evidence/stageEvidence.testSupport.js";
 
+import type { QaTaskContract } from "./taskContract.js";
+
+function mockQaTaskContract(taskId = "T1"): QaTaskContract {
+  return {
+    taskId,
+    title: "Test Task",
+    phase: 1,
+    owner: "backend-engineer",
+    objective: "Test objective",
+    why: "Test why",
+    acceptanceText: "AC-001: test passes",
+    acceptanceIds: ["AC-001"],
+    designIds: [],
+    requirementIds: [],
+    produces: [],
+    consumes: [],
+    validationAndEvidence: "Verify with tests",
+    scopeAndConstraints: "None",
+    doNotModify: "None",
+    compatibility: "None",
+    risk: [],
+    humanGate: [],
+    dependencyOutputs: [],
+    blastRadius: { dependencies: [], descendants: [], contractEdges: [], phases: [1] },
+    fileManifest: ["src/a.ts"],
+    boundTargets: [],
+    openFindings: [],
+    closedFindings: [],
+  };
+}
+
 function qaReq(overrides: Partial<AgentExecutorRequest> = {}): AgentExecutorRequest {
   return {
     stage: AgentStage.QA_ENGINEER,
@@ -59,16 +90,31 @@ describe("withQaOptimization", () => {
     expect(evidence).toContain("Effort: lightweight");
   });
 
-  it("opt-in low-risk skip consumes passing deterministic evidence without a model call", async () => {
+  it("low-risk task dispatches QA model call with lightweight effort (V13 TASK-019: no synthetic skip)", async () => {
     let modelCalls = 0;
+    let evidenceContext = "";
     const exec = withQaOptimization({
-      inner: async () => {
+      inner: async (req) => {
         modelCalls++;
-        return { outcome: { tokens: 99, cost: 1, result: "PASS" } };
+        evidenceContext = req.context.find((c) => c.source === "qa-evidence")?.content ?? "";
+        return {
+          outcome: { tokens: 50, cost: 0.05, result: "PASS" },
+          artifactType: ArtifactType.QA_REPORT,
+          artifact: {
+            taskId: req.taskId,
+            status: "PASS",
+            mode: "TARGETED",
+            requirements: { [req.taskId]: "PASS" },
+            tests: { passed: 1, failed: 0 },
+            evidence: ["qa.md"],
+            risks: [],
+            hasAutomatedTests: true,
+            unverifiedBehaviour: [],
+          },
+        };
       },
       changedFiles: () => ["src/a.ts"],
       taskLevel: () => "SMALL" as ClassificationResult["level"],
-      allowQaSkip: true,
     });
 
     const result = await exec(qaReq({ deterministicVerification: persistedSweep({
@@ -82,21 +128,22 @@ describe("withQaOptimization", () => {
         enforcement: "enforce",
         passed: true,
       }) }));
-    expect(modelCalls).toBe(0);
-    expect(result.outcome).toMatchObject({ result: "PASS", tokens: 0, qa_effort: "skip" });
+    expect(modelCalls).toBe(1);
+    expect(result.outcome).toMatchObject({ result: "PASS", qa_effort: "lightweight" });
     expect(result.artifactType).toBe("qa-report");
     expect(result.gateEvidence?.qaModeDecision?.mode).toBe("TARGETED");
+    expect(evidenceContext).toContain("Effort: lightweight");
+    expect(evidenceContext).toContain("unit-tests");
   });
 
-  it("refuses opt-in skip when passing deterministic evidence is absent", async () => {
+  it("claimed PASS without QA report artifact fails closed (V13 TASK-019)", async () => {
     const result = await withQaOptimization({
-      inner: async () => ({ outcome: { tokens: 99, cost: 1, result: "PASS" } }),
+      inner: async () => ({ outcome: { tokens: 50, cost: 0.05, result: "PASS" } }),
       changedFiles: () => ["src/a.ts"],
-      taskLevel: () => "SMALL" as ClassificationResult["level"],
-      allowQaSkip: true,
+      taskContract: () => mockQaTaskContract(),
     })(qaReq());
     expect(result.outcome.result).toBe("FAIL");
-    expect(result.outcome.failure_reason).toMatch(/refusing to close without evidence/);
+    expect(result.outcome.failure_reason).toMatch(/claimed PASS without producing a QA report artifact/);
   });
 
   it("removes the mechanical rerun instruction when a real sweep result is supplied", async () => {

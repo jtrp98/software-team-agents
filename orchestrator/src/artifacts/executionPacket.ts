@@ -53,6 +53,22 @@ export function packetConfigHash(input: {
   });
 }
 
+export const RoleContractDigestSchema = z.strictObject({
+  name: text,
+  role: text,
+  version: z.string().optional(),
+  digest: Sha256Schema,
+  constraints: z.array(text).optional(),
+  tools: z.array(text).optional(),
+});
+
+export const ExpectedOutputSchema = z.strictObject({
+  artifact_type: text,
+  doc_path: text.optional(),
+  schema_name: text.optional(),
+  required_sections: z.array(text).optional(),
+});
+
 export const PacketFieldsSchema = z.strictObject({
   version: z.literal(2), attempt: z.number().int().positive(), task_id: text,
   stage: z.enum(AgentStage), role: text,
@@ -76,6 +92,12 @@ export const PacketFieldsSchema = z.strictObject({
     task_hash: Sha256Schema, plan_hash: Sha256Schema, artifact_hashes: z.array(SourceHashSchema).min(2),
     config_hash: Sha256Schema, compiler_version: z.literal("v8-packet-2"), compiler_hash: Sha256Schema, base_revision: RevisionSchema,
   }),
+  /** V13 TASK-020 — self-contained role contract binding, rules, knowledge, expected output and correlation. */
+  role_contract: RoleContractDigestSchema.optional(),
+  rules: z.array(text).optional(),
+  relevant_knowledge: z.array(text).optional(),
+  expected_output: ExpectedOutputSchema.optional(),
+  correlation_id: text.optional(),
 });
 export type PacketFields = z.infer<typeof PacketFieldsSchema>;
 export type DependencyEvidence = z.infer<typeof DependencyEvidenceSchema>;
@@ -111,6 +133,25 @@ export function renderPacketSections(packet: PacketFields): string[] {
     // wrapped in another `section()` heading.
     ...(packet.code_intel_evidence ? [packet.code_intel_evidence] : []),
     ...packet.verification_context.map(c => section("Verification evidence", c.content)),
+    ...(packet.role_contract ? [
+      section("Role contract", [
+        `${packet.role_contract.name} (${packet.role_contract.role}) — contract digest: ${packet.role_contract.digest}`,
+        ...(packet.role_contract.version ? [`Version: ${packet.role_contract.version}`] : []),
+        ...(packet.role_contract.tools && packet.role_contract.tools.length ? [`Tools: ${packet.role_contract.tools.join(", ")}`] : []),
+        ...(packet.role_contract.constraints && packet.role_contract.constraints.length ? [`Constraints:\n${list(packet.role_contract.constraints)}`] : []),
+      ].join("\n")),
+    ] : []),
+    ...(packet.rules && packet.rules.length ? [section("Rules and constraints", list(packet.rules))] : []),
+    ...(packet.relevant_knowledge && packet.relevant_knowledge.length ? [section("Relevant knowledge", list(packet.relevant_knowledge))] : []),
+    ...(packet.expected_output ? [
+      section("Expected output", [
+        `Artifact type: ${packet.expected_output.artifact_type}`,
+        ...(packet.expected_output.doc_path ? [`Knowledge path: ${packet.expected_output.doc_path}`] : []),
+        ...(packet.expected_output.schema_name ? [`Schema: ${packet.expected_output.schema_name}`] : []),
+        ...(packet.expected_output.required_sections && packet.expected_output.required_sections.length ? [`Required sections:\n${list(packet.expected_output.required_sections)}`] : []),
+      ].join("\n")),
+    ] : []),
+    ...(packet.correlation_id ? [section("Correlation ID", packet.correlation_id)] : []),
   ];
 }
 

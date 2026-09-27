@@ -23,9 +23,12 @@ import {
   securityArtifactResult,
   suppressRawHandoffWhenNarrowed,
   measureRolePrefixChars,
+  STAGE_DOCUMENT,
+  referencedKnowledgeIds,
   type PromptPartsResult,
   type RunMetrics,
 } from "./agentRunAssembly.js";
+import { knowledgeBriefFor } from "./knowledgeBriefAssembly.js";
 import { codeIntelContext as defaultCodeIntelContext, retrievalCandidatesForPacket, type CodeIntelSliceDeps } from "./codeIntelAssembly.js";
 import { buildTaskRetrievalQuery } from "../context/retrievalQuery.js";
 import type {
@@ -449,9 +452,11 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     // The digest of the exact bytes checked here is what every refusal and
     // every successful attempt below records — never recomputed after the
     // fact.
+    let authoritativeContract: ReturnType<typeof resolveAuthoritativeContract>;
     let contractDigest: string;
     try {
-      contractDigest = resolveAuthoritativeContract(req.stage, opts.projectRoot).digest;
+      authoritativeContract = resolveAuthoritativeContract(req.stage, opts.projectRoot);
+      contractDigest = authoritativeContract.digest;
     } catch (error) {
       return failResultBase(`cannot start ${role}: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -566,18 +571,36 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         const runtimeStateRoot = threeRepo?.roots.knowledgeRoot ?? opts.runtimeStateRoot ?? opts.projectRoot;
         const baseRevision = await (opts.packetBaseRevision ?? resolveTargetRevision)(executionRoot);
         const codeIntel = await packetCodeIntel(opts, req, runtimeTask, moduleName, workRoot?.path ?? executionRoot, workRoot?.targetId, baseRevision);
+        const packetAttempt = nextExecutionPacketAttempt(runtimeStateRoot, req.taskId, req.stage);
+        const moduleDocName = STAGE_DOCUMENT[req.stage];
         const packet = compileExecutionPacket({
           req,
           role,
           runtimeTask,
           contractScope: { allow: guards.writeAllow, deny: guards.writeDeny },
-          attempt: nextExecutionPacketAttempt(runtimeStateRoot, req.taskId, req.stage),
+          attempt: packetAttempt,
           baseRevision,
           config: { target: loadTargetConfig(executionRoot), guardStackRules: resolveGuardStackRules(role, executionRoot) },
           dependencyEvidence: opts.dependencyEvidence?.(req.taskId),
           retrievalCandidates: codeIntel.retrievalCandidates,
           codeIntelEvidence: codeIntel.evidenceBlock,
           extra: opts.extraInstruction,
+          authoritativeContract: authoritativeContract.contract,
+          contractDigest: authoritativeContract.digest,
+          rules: authoritativeContract.contract.constraints,
+          relevantKnowledge: knowledgeBriefFor(req.stage, {
+            projectRoot: opts.projectRoot,
+            knowledgeRoot: threeRepo?.roots.knowledgeRoot,
+            moduleName,
+            referencedIds: referencedKnowledgeIds(threeRepo?.roots.knowledgeRoot ?? opts.projectRoot, moduleName, req.taskId),
+            targetRoot: workRoot?.path,
+          }),
+          expectedOutput: {
+            artifact_type: authoritativeContract.contract.output.required[0] ?? (moduleDocName ? moduleDocName.replace(/\.md$/, "") : "code"),
+            ...(moduleDocName ? { doc_path: `_docs/module/${moduleName}/${moduleDocName}`, schema_name: `${moduleDocName.replace(/\.md$/, "")}.schema.json` } : {}),
+            required_sections: authoritativeContract.contract.output.required,
+          },
+          correlationId: `${req.taskId}:${req.stage}:${packetAttempt}`,
         });
         if (JSON.stringify([...packet.scope.allow].sort()) !== JSON.stringify([...new Set(guards.writeAllow)].sort())) throw new Error("packet scope differs from the enforced stage contract; recompile with current stage grants");
         // A writer's packet roots are its writable roots; a verifier stage

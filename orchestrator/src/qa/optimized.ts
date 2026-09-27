@@ -67,7 +67,7 @@ export interface QaOptimizationOptions {
   riskSignals?: (req: AgentExecutorRequest) => QaRiskSignals | undefined;
   /** Stored deterministic classification level used by the orthogonal effort gate. */
   taskLevel?: (req: AgentExecutorRequest) => TaskLevel | undefined;
-  /** Low-risk skip is opt-in; absent preserves the pre-V3 model-QA path. */
+  /** @deprecated V13 TASK-019: synthetic QA skip is removed; QA role is always dispatched. */
   allowQaSkip?: boolean;
   /** Previous failed round's findings/evidence; absent on round 0. */
   previousRound?: (req: AgentExecutorRequest) => PreviousQaRound | undefined;
@@ -135,7 +135,7 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
     }
 
     const decision: QaModeDecision = selectQaMode(req.taskId, scope, signals, { now });
-    const effort = selectQaEffort(opts.taskLevel?.(req), signals, { allowSkip: opts.allowQaSkip });
+    const effort = selectQaEffort(opts.taskLevel?.(req), signals);
 
     // The persisted post-Dev sweep STA handed this round (V13 TASK-002) — the
     // same record in the process that ran Dev and in one started after it.
@@ -164,47 +164,6 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
           qa_effort: effort.effort,
           deterministic_gate: gateOutcome,
         },
-      };
-    }
-
-    if (effort.effort === "skip") {
-      if (!deterministic?.passed) {
-        const failed = failResult(
-          "QA effort selected skip, but no passing deterministic verification was available; refusing to close without evidence",
-        );
-        return {
-          ...failed,
-          outcome: { ...failed.outcome, qa_effort: "skip", deterministic_gate: gateOutcome },
-          gateEvidence: { ...(failed.gateEvidence ?? {}), qaModeDecision: decision },
-        };
-      }
-      // The low-risk skip closes on deterministic evidence alone, so it may
-      // only claim what a mechanical sweep actually proves: this task ran its
-      // checks green. Every acceptance/design id stays explicitly unverified
-      // rather than being folded silently into the PASS - that is the
-      // difference between a cheap round and an underscoped one.
-      const skipRequired = contract ? requiredVerdictIds(contract) : [];
-      const report: QaReportArtifact = {
-        taskId: req.taskId,
-        status: "PASS",
-        mode: decision.mode,
-        requirements: { [req.taskId]: "PASS" },
-        ...(contract && contract.boundTargets && contract.boundTargets.length > 0
-          ? { targets: Object.fromEntries(contract.boundTargets.map((t) => [t, "PASS"])) }
-          : {}),
-        tests: { passed: deterministic.ran.length, failed: deterministic.failures.length },
-        evidence: renderDeterministicVerification(deterministic),
-        risks: [],
-        hasAutomatedTests: deterministic.ran.some((check) => check.id === "unit-tests" || check.id === "integration-tests"),
-        unverifiedBehaviour: skipRequired
-          .filter((id) => id !== req.taskId)
-          .map((id) => `${id} - read but not executed: this round closed on the low-risk deterministic skip, which verifies mechanical checks only`),
-      };
-      return {
-        outcome: { tokens: 0, cost: 0, result: "PASS", qa_effort: "skip", deterministic_gate: gateOutcome },
-        artifactType: ArtifactType.QA_REPORT,
-        artifact: report,
-        gateEvidence: { qaModeDecision: decision, ...(skipRequired.length > 0 ? { qaVerdictRequirements: skipRequired } : {}) },
       };
     }
 
@@ -245,10 +204,28 @@ export function withQaOptimization(opts: QaOptimizationOptions): AgentExecutor {
       ...withPolicy,
       gateEvidence: { ...(withPolicy.gateEvidence ?? {}), qaVerdictRequirements: required },
     };
-    // Only a report the QA agent itself produced is checked here. The
-    // synthesized skip report above already states its own coverage honestly,
-    // and a round that produced no report at all is a different failure with
-    // its own existing path.
+    // V13 TASK-019: Only a report the QA agent itself produced is checked here.
+    // A QA run claiming PASS without a QA report artifact must be rejected.
+    if (enriched.outcome.result === "PASS" && (enriched.artifactType !== ArtifactType.QA_REPORT || !enriched.artifact)) {
+      const failed = failResult(
+        `QA report for ${req.taskId} cannot close its round — QA claimed PASS without producing a QA report artifact`,
+        withPolicy.outcome,
+      );
+      return {
+        ...failed,
+        outcome: { ...failed.outcome, result: "FAIL", qa_effort: effort.effort, deterministic_gate: gateOutcome },
+        gateEvidence: { qaModeDecision: decision, qaVerdictRequirements: required },
+        failure: {
+          category: "test",
+          owner: AgentStage.QA_ENGINEER,
+          severity: "high",
+          retryable: true,
+          reason: "missing QA report artifact",
+          affected: [req.taskId],
+          requiresHuman: false,
+        },
+      };
+    }
     if (enriched.artifactType !== ArtifactType.QA_REPORT || !enriched.artifact) return enriched;
 
     const coverage = checkQaVerdictCoverage({

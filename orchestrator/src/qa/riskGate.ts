@@ -10,7 +10,7 @@ export interface QaEffortDecision {
 }
 
 export interface SelectQaEffortOptions {
-  /** Backward-compatible default: low-risk work still receives model QA until risk-based skip is opted in. */
+  /** @deprecated V13 TASK-019: synthetic QA skip is removed; low-risk tasks receive lightweight QA role verification. */
   allowSkip?: boolean;
 }
 
@@ -30,7 +30,7 @@ const SIGNAL_REASONS: ReadonlyArray<{ key: keyof QaRiskSignals; reason: string }
 export function selectQaEffort(
   level: TaskLevel | undefined,
   signals: QaRiskSignals = {},
-  options: SelectQaEffortOptions = {},
+  _options: SelectQaEffortOptions = {},
 ): QaEffortDecision {
   const vetoReasons = SIGNAL_REASONS.filter(({ key }) => signals[key]).map(({ reason }) => reason);
   if (vetoReasons.length > 0) {
@@ -47,7 +47,8 @@ export function selectQaEffort(
     return { effort: "lightweight", reasons: ["medium task level"] };
   }
 
-  return options.allowSkip
-    ? { effort: "skip", reasons: ["low-risk task and skip explicitly enabled"] }
-    : { effort: "lightweight", reasons: ["low-risk task; skip not enabled"] };
+  // V13 TASK-019 — every QA-requiring task dispatches the QA role; synthetic PASS
+  // and skip are removed. Low-risk tasks receive lightweight model QA.
+  return { effort: "lightweight", reasons: ["low-risk task"] };
 }
+

@@ -266,22 +266,29 @@ describe("no-suite behaviour stays explicit Unverified Behaviour", () => {
     expect((await execute(req({ deterministicVerification: persistedSweep(PASSING_DETERMINISTIC) }))).outcome.result).toBe("PASS");
   });
 
-  it("the low-risk deterministic skip claims only the task, listing every AC/DES as unverified", async () => {
+  it("low-risk task dispatches QA role and requires real QA coverage (V13 TASK-019)", async () => {
+    const captured: { pkg?: string } = {};
     const execute = withQaOptimization({
-      inner: async () => {
-        throw new Error("the skip path must not call the QA model");
-      },
+      inner: reportingExecutor(
+        qaReport({
+          requirements: {
+            "BE-004": "PASS",
+            "AC-007.2": "PASS",
+            "DES-011": "PASS",
+          },
+        }),
+        captured,
+      ),
       changedFiles: () => ["src/orders/summary.ts"],
       taskLevel: () => TaskLevel.TRIVIAL,
-      allowQaSkip: true,
       taskContract: () => contractFor(),
     });
     const result = await execute(req({ deterministicVerification: persistedSweep(PASSING_DETERMINISTIC) }));
+    expect(captured.pkg).toBeDefined();
     expect(result.outcome.result).toBe("PASS");
+    expect(result.outcome.qa_effort).toBe("lightweight");
     const report = result.artifact as QaReportArtifact;
-    expect(report.requirements).toEqual({ "BE-004": "PASS" });
-    expect(report.unverifiedBehaviour.join(" ")).toContain("AC-007.2");
-    expect(report.unverifiedBehaviour.join(" ")).toContain("DES-011");
+    expect(report.requirements).toEqual({ "BE-004": "PASS", "AC-007.2": "PASS", "DES-011": "PASS" });
   });
 
   describe("multi-target QA contract and aggregation (T-V9-015)", () => {

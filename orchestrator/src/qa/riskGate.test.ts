@@ -8,8 +8,8 @@ describe("T-V3R-060 QaEffort decision matrix", () => {
   const scope = buildQaScope({ taskId: "T", changedFiles: ["src/a.ts"] });
 
   it.each([
-    [TaskLevel.TRIVIAL, {}, true, "skip", "TARGETED"],
-    [TaskLevel.SMALL, {}, true, "skip", "TARGETED"],
+    [TaskLevel.TRIVIAL, {}, true, "lightweight", "TARGETED"],
+    [TaskLevel.SMALL, {}, true, "lightweight", "TARGETED"],
     [TaskLevel.SMALL, {}, false, "lightweight", "TARGETED"],
     [TaskLevel.MEDIUM, {}, true, "lightweight", "TARGETED"],
     [TaskLevel.LARGE_CRITICAL, {}, true, "full", "TARGETED"],

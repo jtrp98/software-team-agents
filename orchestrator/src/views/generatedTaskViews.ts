@@ -83,6 +83,11 @@ const PACKET_SECTION_SOURCES: Readonly<Record<string, readonly string[]>> = {
   "Expansion pointers": ["expansion_pointers"],
   "Stage instructions": ["stage_instructions"],
   "Verification evidence": ["verification_context"],
+  "Role contract": ["role_contract"],
+  "Rules and constraints": ["rules"],
+  "Relevant knowledge": ["relevant_knowledge"],
+  "Expected output": ["expected_output"],
+  "Correlation ID": ["correlation_id"],
 };
 
 export interface PromptSourceMapEntry {
