@@ -5,13 +5,11 @@ import * as path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runCli } from "../../cli.js";
 import { RuntimeRegistry } from "../../runtime/runtimeRegistry.js";
-import { MockRuntimeAdapter, okResult } from "../../runtime/mockAdapter.js";
-import { RuntimeCapability } from "../../runtime/runtimeCapabilities.js";
 import type { RuntimeAgentResult } from "../../runtime/runtimeAdapter.js";
 import { SqliteRunLedger } from "../../ledger/sqliteRunLedger.js";
 import { SqliteTaskStore } from "../../store/sqliteStore.js";
 import { defaultStateDbPath } from "../../store/stateView.js";
-import { boundedRunProject, playPlanTaskStage, PLAN_TASK_GUARD_FILES, signHandoffs, threeRepoBoundedRunProject } from "./boundedRunFixture.testSupport.js";
+import { BoundedRunCodexFixture, boundedRunProject, playPlanTaskStage, signHandoffs, threeRepoBoundedRunProject } from "./boundedRunFixture.testSupport.js";
 import { declareInstallationConfigOverrideChannelForTest } from "../../threeRepo/installation.js";
 
 declareInstallationConfigOverrideChannelForTest();
@@ -97,21 +95,12 @@ function inspect<T>(root: string, read: (ledger: SqliteRunLedger) => T): T {
 function planTaskAdapter(
   targetRoot: string,
   options: { module?: string; engineer?: (call: number) => Partial<RuntimeAgentResult> | undefined } = {},
-): MockRuntimeAdapter {
+): BoundedRunCodexFixture {
   let engineerCalls = 0;
-  let self: MockRuntimeAdapter;
-  const adapter = new MockRuntimeAdapter({
-    id: "claude-code",
-    models: ["sonnet"],
-    respond: (req) => {
-      if (req.role !== "reviewer" && req.role !== "qa-engineer") engineerCalls += 1;
-      const over = playPlanTaskStage(req, self.workspace.files, targetRoot, { ...options, engineerCall: engineerCalls });
-      return okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] }, ...over });
-    },
-    files: PLAN_TASK_GUARD_FILES,
+  return new BoundedRunCodexFixture(targetRoot, (req, files) => {
+    if (req.role !== "reviewer" && req.role !== "qa-engineer") engineerCalls += 1;
+    return playPlanTaskStage(req, files, targetRoot, { ...options, engineerCall: engineerCalls });
   });
-  self = adapter;
-  return adapter;
 }
 
 /**
@@ -119,7 +108,7 @@ function planTaskAdapter(
  * defect the engine leaves incomplete and a later invocation reruns), then
  * plays every plan-task stage to completion.
  */
-function flakyAdapter(targetRoot: string, failFirstDev: boolean): MockRuntimeAdapter {
+function flakyAdapter(targetRoot: string, failFirstDev: boolean): BoundedRunCodexFixture {
   return planTaskAdapter(targetRoot, {
     engineer: (call) => (failFirstDev && call === 1 ? { status: "ERROR", exitCode: 1, text: "runtime error: the agent crashed mid-attempt" } : undefined),
   });

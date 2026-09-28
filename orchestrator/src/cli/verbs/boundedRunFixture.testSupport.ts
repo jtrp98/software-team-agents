@@ -14,6 +14,10 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { installFrameworkWorkflows } from "../../workflow/workflows.testSupport.js";
 import type { RuntimeAgentResult } from "../../runtime/runtimeAdapter.js";
+import type { RuntimeAgentRequest } from "../../runtime/runtimeAdapter.js";
+import { CodexAdapter } from "../../runtime/codexAdapter.js";
+import { MemoryWorkspace, okResult } from "../../runtime/mockAdapter.js";
+import { RuntimeCapability } from "../../runtime/runtimeCapabilities.js";
 import { writeSignedOffHandoffs } from "../../orchestrator/stageGuards.testSupport.js";
 import { defaultStateDbPath } from "../../store/stateView.js";
 
@@ -29,6 +33,28 @@ export interface BoundedRunFixture { root: string; targetRoot: string }
  * to it.
  */
 export type FixtureGit = (root: string, ...args: string[]) => string;
+
+/** Test-only Codex composition: real Codex identity and native a1 preflight,
+ * with a scripted role body so CLI tests never spawn a model process. */
+export class BoundedRunCodexFixture extends CodexAdapter {
+  override readonly workspace: MemoryWorkspace;
+  readonly requests: RuntimeAgentRequest[] = [];
+  private readonly respond: (req: RuntimeAgentRequest, files: Map<string, string>) => Partial<RuntimeAgentResult> | undefined;
+
+  constructor(targetRoot: string, respond: (req: RuntimeAgentRequest, files: Map<string, string>) => Partial<RuntimeAgentResult> | undefined) {
+    super({ projectRoot: targetRoot, models: ["gpt-5.5"] });
+    this.workspace = new MemoryWorkspace();
+    this.respond = respond;
+  }
+
+  override async probe() { return { available: true, version: "fixture-codex" }; }
+
+  override async executeAgent(req: RuntimeAgentRequest): Promise<RuntimeAgentResult> {
+    this.requests.push(req);
+    const over = this.respond(req, this.workspace.files);
+    return okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] }, ...over });
+  }
+}
 
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex");
@@ -178,19 +204,21 @@ Undated canonical fixture; no human sign-off is implied.
   fs.writeFileSync(path.join(docs, "requirement.md"), requirement);
   fs.writeFileSync(path.join(docs, "design.md"), design);
 
-  const templateContracts = path.join(fileURLToPath(new URL("../../../../templates/contracts", import.meta.url)));
+  // Both dispatch and completion hash the Framework's authoritative contracts.
+  // A generated template snapshot can lag and make resume reject the digest.
+  const frameworkContracts = fileURLToPath(new URL("../../../../contracts", import.meta.url));
   const contracts = path.join(root, "contracts");
   fs.mkdirSync(contracts, { recursive: true });
   // Every role's contract: the engine's reviewer-independence check reads them all.
-  for (const file of fs.readdirSync(templateContracts).filter((name) => name.endsWith(".yaml"))) {
-    fs.copyFileSync(path.join(templateContracts, file), path.join(contracts, file));
+  for (const file of fs.readdirSync(frameworkContracts).filter((name) => name.endsWith(".yaml"))) {
+    fs.copyFileSync(path.join(frameworkContracts, file), path.join(contracts, file));
   }
   return { root, targetRoot };
 }
 
 /**
  * V13 TASK-007 — plays every stage of the plan-task workflow the one engine
- * runs for a bounded task, for a mock runtime's `respond`: the owner engineer
+ * runs for a bounded task, for the test-only executor's `respond`: the owner engineer
  * writes `README.md` in the Target (inside its boundary write list), the
  * reviewer an approving `review.md`, and QA a verifying `qa.md` for BE-004,
  * both into the runtime's workspace. Returns the adapter-result overrides for
@@ -229,16 +257,6 @@ export function playPlanTaskStage(
   return undefined;
 }
 
-/** The guard hook file a mock runtime needs so its pre-tool guard verifies. */
-export const PLAN_TASK_GUARD_FILES: Record<string, string> = {
-  ".mock/guards.json": JSON.stringify({
-    hooks: {
-      PreToolUse: [{ hooks: [{ command: "node .claude/hooks/block-path-permissions.js" }] }],
-      Stop: [{ hooks: [{ command: "node .claude/hooks/require-green-before-stop.js" }] }],
-    },
-  }),
-};
-
 /** Reusable three-repo CLI fixture (V13 TASK-011): explicit Knowledge/Target binding for dispatching runs. */
 export interface ThreeRepoFixture {
   root: string;
@@ -260,6 +278,8 @@ export function threeRepoBoundedRunProject(
 ): ThreeRepoFixture {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-cli-"));
   installFrameworkWorkflows(root);
+  fs.mkdirSync(path.join(root, ".sta"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".sta", "config.yaml"), "schema_version: 1\nexecution:\n  mode: single\n  runner: codex\n");
   rootsList.push(root);
 
   const knowledgeRoot = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-kn-"));
@@ -543,12 +563,12 @@ Undated canonical fixture; no human sign-off is implied.
   fs.writeFileSync(path.join(docs, "requirement.md"), requirement);
   fs.writeFileSync(path.join(docs, "design.md"), design);
 
-  const templateContracts = path.join(fileURLToPath(new URL("../../../../templates/contracts", import.meta.url)));
+  const frameworkContracts = fileURLToPath(new URL("../../../../contracts", import.meta.url));
   const contracts = path.join(root, "contracts");
   fs.mkdirSync(contracts, { recursive: true });
   // Every role's contract: the engine's reviewer-independence check reads them all.
-  for (const file of fs.readdirSync(templateContracts).filter((name) => name.endsWith(".yaml"))) {
-    fs.copyFileSync(path.join(templateContracts, file), path.join(contracts, file));
+  for (const file of fs.readdirSync(frameworkContracts).filter((name) => name.endsWith(".yaml"))) {
+    fs.copyFileSync(path.join(frameworkContracts, file), path.join(contracts, file));
   }
   return { root, knowledgeRoot, targetApi, targetWeb, installationConfig };
 }

@@ -8,8 +8,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CliUsageError, runCli } from "../../cli.js";
 import { parseBoundedRunArgs, renderAwaitingHuman, BOUNDED_RUN_USAGE } from "./boundedRun.js";
 import { RuntimeRegistry } from "../../runtime/runtimeRegistry.js";
-import { MockRuntimeAdapter, okResult } from "../../runtime/mockAdapter.js";
-import { RuntimeCapability } from "../../runtime/runtimeCapabilities.js";
 import type { RuntimeAgentResult } from "../../runtime/runtimeAdapter.js";
 import { writeSignedOffHandoffs } from "../../orchestrator/stageGuards.testSupport.js";
 import { SqliteRunLedger } from "../../ledger/sqliteRunLedger.js";
@@ -136,7 +134,7 @@ describe("parseBoundedRunArgs", () => {
   });
 });
 
-import { boundedRunProject as project, playPlanTaskStage, PLAN_TASK_GUARD_FILES, signHandoffs, threeRepoBoundedRunProject } from "./boundedRunFixture.testSupport.js";
+import { BoundedRunCodexFixture, boundedRunProject as project, playPlanTaskStage, signHandoffs, threeRepoBoundedRunProject } from "./boundedRunFixture.testSupport.js";
 import { declareInstallationConfigOverrideChannelForTest } from "../../threeRepo/installation.js";
 import { installFrameworkWorkflows } from "../../workflow/workflows.testSupport.js";
 
@@ -146,25 +144,16 @@ declareInstallationConfigOverrideChannelForTest();
 function planTaskAdapter(
   targetRoot: string,
   options: { module?: string; engineer?: (call: number) => Partial<RuntimeAgentResult> | undefined } = {},
-): MockRuntimeAdapter {
+): BoundedRunCodexFixture {
   let engineerCalls = 0;
-  let self: MockRuntimeAdapter;
-  const adapter = new MockRuntimeAdapter({
-    id: "claude-code",
-    models: ["sonnet"],
-    respond: (req) => {
-      if (req.role !== "reviewer" && req.role !== "qa-engineer") engineerCalls += 1;
-      const over = playPlanTaskStage(req, self.workspace.files, targetRoot, { ...options, engineerCall: engineerCalls });
-      return okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] }, ...over });
-    },
-    files: PLAN_TASK_GUARD_FILES,
+  return new BoundedRunCodexFixture(targetRoot, (req, files) => {
+    if (req.role !== "reviewer" && req.role !== "qa-engineer") engineerCalls += 1;
+    return playPlanTaskStage(req, files, targetRoot, { ...options, engineerCall: engineerCalls });
   });
-  self = adapter;
-  return adapter;
 }
 
 /** Plays every stage of the plan-task workflow (engineer, reviewer, QA) to a verified pass. */
-export function completingAdapter(targetRoot: string): MockRuntimeAdapter {
+export function completingAdapter(targetRoot: string): BoundedRunCodexFixture {
   return planTaskAdapter(targetRoot);
 }
 
@@ -824,7 +813,9 @@ describe("T-V10 bounded-run autonomy/routing plumbing (TASK-005, TASK-006)", () 
       // The three-repo freeze resolves the model-tiers role default (the
       // single-repo freeze had no policy reachable and froze null); the
       // explicit --effort rides through beside it.
-      expect(attempts[0]!.requested).toEqual({ runtime: "claude-code", model: "sonnet", effort: "high" });
+      // The legacy frontmatter still supplies the requested model label;
+      // Codex uses its runtime default because this was not an explicit model selection.
+      expect(attempts[0]!.requested).toEqual({ runtime: "codex", model: "sonnet", effort: "high" });
       expect(attempts[0]!.route_basis).toBe("level-1");
     } finally {
       ledger.close();

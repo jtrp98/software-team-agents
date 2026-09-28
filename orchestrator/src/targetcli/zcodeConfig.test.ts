@@ -11,7 +11,9 @@ const TEMPLATE = fs.readFileSync(path.join(REPO_ROOT, "templates", ".zcode", "co
 
 describe("zcode guard payload (V12)", () => {
   it("the shipped template is exactly what renderZcodeConfigJson emits — one source, no drift", () => {
-    expect(TEMPLATE).toBe(renderZcodeConfigJson());
+    // Git may check the template out with CRLF on Windows; compare every
+    // rendered byte after folding only that platform line ending to LF.
+    expect(TEMPLATE.replace(/\r\n/g, "\n")).toBe(renderZcodeConfigJson());
   });
 
   it("the managed hooks wire the four PreToolUse guard scripts and the Stop pair, always enabled", () => {
