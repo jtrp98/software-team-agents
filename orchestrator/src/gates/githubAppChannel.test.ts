@@ -176,6 +176,16 @@ describe("github-app channel — accepting a decision (V13 TASK-027)", () => {
     expect(orch.status().kind).toBe("BLOCKED");
   });
 
+  it("accepts an allowlisted maintainer and verifies the role against api.github.com", async () => {
+    const fixture = new GithubFixture();
+    fixture.repositoryRoles.set(APPROVER.id, "maintain");
+    const { orch, pending, issue } = await published(fixture);
+    fixture.comment(issue, `sta-approve: ${pending.requestId}`, APPROVER, at(5));
+    const { decision } = await orch.submitHumanDecision({ requestId: pending.requestId });
+    expect(decision.approved).toBe(true);
+    expect(fixture.calls.some((call) => call.url === `${GITHUB_API_BASE}/repos/acme/approvals/collaborators/${APPROVER.login}/permission`)).toBe(true);
+  });
+
   it("accepts a new approver added to the allowlist without any code change", async () => {
     const fixture = new GithubFixture();
     const { orch, pending, issue, store } = await published(fixture);
@@ -277,6 +287,28 @@ describe("github-app channel — refusing (fail closed, nothing recorded) (V13 T
     );
   });
 
+  it("refuses an allowlisted user without admin or maintain on the approval repo", async () => {
+    for (const role of ["write", "read", "triage", "none"]) {
+      await refusedFor(
+        (f, id, issue) => {
+          f.repositoryRoles.set(APPROVER.id, role);
+          f.comment(issue, `sta-approve: ${id}`, APPROVER, at(5));
+        },
+        /insufficient-repo-role/,
+      );
+    }
+  });
+
+  it("refuses a permission response for another GitHub identity", async () => {
+    await refusedFor(
+      (f, id, issue) => {
+        f.permissionIdentity.set(APPROVER.id, OUTSIDER);
+        f.comment(issue, `sta-approve: ${id}`, APPROVER, at(5));
+      },
+      /insufficient-repo-role/,
+    );
+  });
+
   it("refuses an edited comment", async () => {
     await refusedFor((f, id, issue) => f.comment(issue, `sta-approve: ${id}`, APPROVER, at(5), { updated_at: at(9) }), /edited/);
   });
@@ -341,6 +373,9 @@ describe("github-app channel — refusing (fail closed, nothing recorded) (V13 T
       },
       { name: "network", arrange: (f) => f.failures.push({ match: /\/issues\/1$/, throws: new TypeError("fetch failed") }), expected: /fetch failed/ },
       { name: "non-JSON", arrange: (f) => f.failures.push({ match: /\/comments/, notJson: true }), expected: /not JSON/ },
+      { name: "permission 404", arrange: (f) => f.failures.push({ match: /\/collaborators\/.*\/permission/, status: 404 }), expected: /HTTP 404/ },
+      { name: "permission 403", arrange: (f) => f.failures.push({ match: /\/collaborators\/.*\/permission/, status: 403 }), expected: /HTTP 403/ },
+      { name: "permission timeout", arrange: (f) => f.failures.push({ match: /\/collaborators\/.*\/permission/, throws: new DOMException("The operation was aborted due to timeout", "TimeoutError") }), expected: /TimeoutError/ },
     ];
     for (const c of cases) {
       const fixture = new GithubFixture();

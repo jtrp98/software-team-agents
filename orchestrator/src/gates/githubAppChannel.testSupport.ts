@@ -67,6 +67,10 @@ export class GithubFixture {
   readonly calls: FixtureCall[] = [];
   /** Every URL the channel asked for that is not under api.github.com. Must stay empty. */
   readonly foreignCalls: string[] = [];
+  /** Role names returned by GitHub's collaborator-permission endpoint. */
+  readonly repositoryRoles = new Map<number, string>();
+  /** Override the identity in the permission response to test login/id binding. */
+  readonly permissionIdentity = new Map<number, FixtureUser>();
   /** Makes the next matching call fail: an HTTP status, a thrown transport error, or a non-JSON body. */
   failures: Array<{ match: RegExp; status?: number; throws?: Error; notJson?: boolean; once?: boolean }> = [];
   private nextIssue = 1;
@@ -120,6 +124,15 @@ export class GithubFixture {
     }
     // Uninstalling the App revokes every installation token it was issued.
     if (authorization !== `Bearer ${FIXTURE_TOKEN}` || !this.installed) return json({ message: "Bad credentials" }, 401);
+    const permissionMatch = new RegExp(`^${repoPath}/collaborators/([^/]+)/permission$`).exec(p);
+    if (method === "GET" && permissionMatch) {
+      const login = decodeURIComponent(permissionMatch[1]!);
+      const user = this.comments.map((comment) => comment.user).find((author) => author?.login.toLowerCase() === login.toLowerCase());
+      if (!user) return json({ message: "Not Found" }, 404);
+      const role = this.repositoryRoles.get(user.id) ?? "admin";
+      const responseUser = this.permissionIdentity.get(user.id) ?? user;
+      return json({ permission: role === "maintain" ? "write" : role, role_name: role, user: responseUser });
+    }
     if (method === "POST" && p === `${repoPath}/issues`) {
       const issue: FixtureIssue = { number: this.nextIssue++, title: body.title, body: body.body, state: "open", state_reason: null };
       this.issues.set(issue.number, issue);

@@ -87,14 +87,15 @@ describe("TASK-016 — selection requires certification, capability and availabi
   });
 
   it("refuses a certified runtime whose adapter is not a governed executor", () => {
-    for (const weak of [bareRunner("claude-code"), portless("claude-code")]) {
+    for (const weak of [bareRunner("codex"), portless("codex")]) {
       const result = resolveRuntimeRoute({
         role: "backend-engineer",
         stage: AgentStage.BACKEND_ENGINEER,
         projectRoot: project(),
         registry: new RuntimeRegistry([weak]),
         config: null,
-        availability: { "claude-code": { available: true } },
+        flags: { runtime: "codex" },
+        availability: { codex: { available: true } },
         hasTargetWrite: true,
       });
       expect(result.selected).toBeUndefined();
@@ -115,19 +116,21 @@ describe("TASK-016 — selection requires certification, capability and availabi
     expect(result.selected?.runtime.id).toBe("claude-code");
   });
 
-  it("routing.order walks past an incapable executor to the next certified, capable one", () => {
+  // V13 TASK-027 R14C (a1): codex is the only certified governed-write
+  // executor, so the walk passes an uncertified-but-capable one to reach it.
+  it("routing.order walks past an uncertified executor to the next certified, capable one", () => {
     const result = resolveRuntimeRoute({
       role: "backend-engineer",
       stage: AgentStage.BACKEND_ENGINEER,
       projectRoot: project(),
-      registry: new RuntimeRegistry([bareRunner("claude-code"), new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] })]),
+      registry: new RuntimeRegistry([new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] }), new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] })]),
       config: { schema_version: 1, routing: { order: ["claude-code", "codex"] } },
       availability: { "claude-code": { available: true }, codex: { available: true } },
       hasTargetWrite: true,
       modelPolicy: null,
     });
     expect(result.selected?.runtime.id).toBe("codex");
-    expect(result.attempts[0]!.skipReason).toMatch(/executor lifecycle capabilities/);
+    expect(result.attempts[0]!.skipReason).toMatch(/runtime "claude-code" is not certified for unattended Target writes/);
   });
 
   it("refuses an uncertified runtime for a governed write even when named explicitly, but lets it run analysis", () => {
@@ -179,7 +182,8 @@ describe("TASK-016 — selection requires certification, capability and availabi
       registry: new RuntimeRegistry([new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] }), new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] })]),
       config: { schema_version: 1, routing: { order: ["codex", "claude-code"] } },
       availability: { codex: { available: false, reason: "binary not found" }, "claude-code": { available: true } },
-      hasTargetWrite: true,
+      // An analysis route: the only certified governed-write executor is the unavailable one.
+      hasTargetWrite: false,
       modelPolicy: null,
     });
     expect(walked.selected?.runtime.id).toBe("claude-code");
@@ -193,14 +197,14 @@ describe("TASK-016 — selection requires certification, capability and availabi
       expect(governedExecutorGap(runtime), runtime.id).toBeNull();
       for (const capability of EXECUTOR_LIFECYCLE_CAPABILITIES) expect(runtime.capabilities.has(capability), runtime.id).toBe(true);
     }
-    expect(RUNTIME_IDS.filter(isUnattendedTargetWriteCertified)).toEqual(["claude-code", "codex", "antigravity"]);
+    expect(RUNTIME_IDS.filter(isUnattendedTargetWriteCertified)).toEqual(["codex"]);
   });
 });
 
 describe("TASK-016 — the executor gate and the per-attempt version pin", () => {
   it("refuses a frozen governed write on a certified runtime that is no governed executor", async () => {
     const root = project();
-    const weak = bareRunner("antigravity");
+    const weak = bareRunner("codex");
     const result = await createRuntimeExecutor({
       runtime: weak,
       projectRoot: root,
@@ -210,8 +214,8 @@ describe("TASK-016 — the executor gate and the per-attempt version pin", () =>
       packetBaseRevision: async () => FIXTURE_REVISION,
       runtimeTask: (taskId, stage) => runtimeTaskFixture(root, { taskId, stage, allow: [], moduleName: "sales-crm" }),
       frozenAttempt: frozen({
-        requested: { runtime: "antigravity", model: "sonnet", effort: "high" },
-        observed: { runtime: "antigravity", model: "sonnet", effort: "high" },
+        requested: { runtime: "codex", model: "sonnet", effort: "high" },
+        observed: { runtime: "codex", model: "sonnet", effort: "high" },
         guard_evidence: { target_write: true, pre_tool_guard: true, writable_roots: ["C:/target"] },
       }),
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });

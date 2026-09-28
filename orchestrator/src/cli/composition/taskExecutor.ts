@@ -2,6 +2,7 @@ import * as path from "node:path";
 import { AgentStage, TaskState } from "../../types.js";
 import type { Orchestrator, AgentExecutor } from "../../orchestrator/orchestrator.js";
 import { createRuntimeExecutor } from "../../runtime/runtimeExecutor.js";
+import { approvalIsolationDenial } from "./approvalIsolation.js";
 import { withQaOptimization, riskSignalsFromClassification } from "../../qa/optimized.js";
 import { collectQaChangedFiles } from "../../qa/changeSource.js";
 import { combineProjectRunners, createProjectRunner } from "../../qa/projectRunner.js";
@@ -174,6 +175,7 @@ export async function composeProductionTaskExecutor(
   const qaWorkRoots = options.qaWorkRoots ?? (() => resolveQaWorkRoots(options.projectRoot, taskId, store, options.module, runRootName));
   const runtimeExecutor = createRuntimeExecutor({
     runtime: defaultRuntime,
+    approvalIsolationPreflight: approvalIsolationDenial,
     registry: runtimeRegistry,
     routingFlags,
     planTier: (id) => plannedTier(options, id),

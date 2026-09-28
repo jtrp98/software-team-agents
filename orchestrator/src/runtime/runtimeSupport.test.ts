@@ -83,17 +83,17 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
   });
 
   it("certifies only runtimes with an independently verified unattended write path", () => {
-    expect(isUnattendedTargetWriteCertified("claude-code")).toBe(true);
+    expect(isUnattendedTargetWriteCertified("claude-code")).toBe(false);
     expect(isUnattendedTargetWriteCertified("codex")).toBe(true);
     expect(isUnattendedTargetWriteCertified("opencode")).toBe(false);
-    expect(isUnattendedTargetWriteCertified("antigravity")).toBe(true);
+    expect(isUnattendedTargetWriteCertified("antigravity")).toBe(false);
     expect(isUnattendedTargetWriteCertified("zcode")).toBe(false);
     expect(isUnattendedTargetWriteCertified("unregistered-runtime")).toBe(false);
     for (const id of ["opencode", "zcode"] as const) {
-      expect(RUNTIME_SUPPORT[id].claim).toMatch(/analysis\/proposal|Target-write stages stay refused/i);
+      expect(RUNTIME_SUPPORT[id].claim).toMatch(/production role dispatch is refused before spawn|Target-write stages stay refused/i);
     }
     expect(RUNTIME_SUPPORT.codex.claim).toContain("certified for unattended Target writes");
-    expect(RUNTIME_SUPPORT.antigravity.claim).toContain("certified for unattended Target writes");
+    expect(RUNTIME_SUPPORT.antigravity.claim).toContain("unattended Target writes are not certified");
   });
 
   // V10's lane collapse launches sessions from the Knowledge root. The certification
@@ -101,12 +101,12 @@ describe("runtimeSupport — the single source of truth for support claims (T-V1
   // collapse could change who may write Targets without anyone earning it.
   it("T-V10 (TASK-004) the workspace-lane collapse does not move the unattended certification boundary", () => {
     for (const id of RUNTIME_IDS) {
-      expect(isUnattendedTargetWriteCertified(id), id).toBe(id === "claude-code" || id === "codex" || id === "antigravity");
+      expect(isUnattendedTargetWriteCertified(id), id).toBe(id === "codex");
     }
   });
 
   it("T-V10 (TASK-004) every non-certified runtime declares that V10 leaves its status unchanged", () => {
-    for (const id of ["opencode", "zcode"] as const) {
+    for (const id of ["claude-code", "opencode", "antigravity", "zcode"] as const) {
       expect(RUNTIME_SUPPORT[id].claim, `${id} must pin its V10 status`).toContain("V10 does not change this status");
     }
     expect(RUNTIME_SUPPORT.codex.claim).toContain("V10 does not change this status");

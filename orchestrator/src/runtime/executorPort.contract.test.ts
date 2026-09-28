@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import type { SpawnSyncReturns } from "node:child_process";
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, vi } from "vitest";
 import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import { CodexAdapter } from "./codexAdapter.js";
 import { OpenCodeAdapter } from "./openCodeAdapter.js";
@@ -21,6 +21,10 @@ import {
 } from "./executorPort.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import type { RuntimeAdapter, RuntimeAgentRequest, SpawnSync } from "./runtimeAdapter.js";
+
+vi.mock("../gates/humanChannelConfig.js", () => ({
+  approvalChannelDir: () => path.join(os.tmpdir(), "sta-test-approval-channel"),
+}));
 
 /**
  * V13 TASK-013/TASK-014 — the executor lifecycle port's contract, stated once

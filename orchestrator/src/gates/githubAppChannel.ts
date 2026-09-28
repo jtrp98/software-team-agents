@@ -31,6 +31,8 @@ import {
  *   - it was created after the request was opened;
  *   - its author is a `User`, never a `Bot` or App;
  *   - the author's numeric user id is on this gate type's approver list;
+ *   - GitHub says that same user currently has admin or maintain on the
+ *     approval repository (queried with the installation token at verify);
  *   - it was never edited (`updated_at === created_at`).
  *
  * The API base is a constant. Nothing here reads the environment, and the
@@ -94,6 +96,10 @@ const CommentSchema = z.object({
   updated_at: z.string().min(1),
   issue_url: z.string().min(1),
 });
+const RepositoryPermissionSchema = z.object({
+  role_name: z.string(),
+  user: z.object({ id: z.number().int().positive(), login: z.string().min(1) }),
+});
 type GithubComment = z.infer<typeof CommentSchema>;
 
 class ChannelCallError extends Error {}
@@ -111,7 +117,7 @@ function sameRepository(a: GithubRepository, b: GithubRepository): boolean {
 }
 
 /** What a candidate comment failed, for the refusal message. */
-export type CommentRejection = "other-request" | "wrong-issue" | "before-request" | "not-a-user" | "not-an-approver" | "edited" | "no-author";
+export type CommentRejection = "other-request" | "wrong-issue" | "before-request" | "not-a-user" | "not-an-approver" | "edited" | "no-author" | "insufficient-repo-role";
 
 export function createGithubAppChannel(options: GithubAppChannelOptions): HumanDecisionVerifier {
   const transport = options.transport ?? ((url, init) => globalThis.fetch(url, init));
@@ -214,6 +220,19 @@ export function createGithubAppChannel(options: GithubAppChannelOptions): HumanD
     throw new ChannelCallError(`Issue #${issue} has more than ${MAX_COMMENT_PAGES * COMMENTS_PER_PAGE} comments; refusing to guess which one decides`);
   }
 
+  async function hasApprovalRepoAuthority(token: string, user: NonNullable<GithubComment["user"]>): Promise<boolean> {
+    const permission = parse(
+      RepositoryPermissionSchema,
+      await call("GET", `${repoPath}/collaborators/${encodeURIComponent(user.login)}/permission`, token),
+      "repository permission",
+    );
+    // The permission endpoint can be queried by login, but the numeric id is
+    // the allowlist identity. Both must identify the comment author.
+    if (permission.user.id !== user.id || permission.user.login.toLowerCase() !== user.login.toLowerCase()) return false;
+    // `permission: write` also describes maintain; only role_name preserves it.
+    return permission.role_name === "admin" || permission.role_name === "maintain";
+  }
+
   function issueApiUrl(issue: number): string {
     return `${GITHUB_API_BASE}${repoPath}/issues/${issue}`;
   }
@@ -271,10 +290,16 @@ export function createGithubAppChannel(options: GithubAppChannelOptions): HumanD
 
       const rejected: string[] = [];
       const valid: GithubComment[] = [];
+      let permissionToken: string | null = null;
       for (const comment of comments) {
         const line = (comment.body ?? "").split(/\r?\n/, 1)[0]!.trim();
         if (!DECISION_LINE.test(line)) continue; // conversation, not a decision attempt
-        const why = judge(comment, request, bound.issue);
+        let why = judge(comment, request, bound.issue);
+        if (why === null) {
+          permissionToken ??= await guarded(request.requestId, () => installationToken());
+          const authorized = await guarded(request.requestId, () => hasApprovalRepoAuthority(permissionToken!, comment.user!));
+          if (!authorized) why = "insufficient-repo-role";
+        }
         if (why === null) valid.push(comment);
         else rejected.push(`comment ${comment.id} (${comment.user?.login ?? "no author"}): ${why}`);
       }

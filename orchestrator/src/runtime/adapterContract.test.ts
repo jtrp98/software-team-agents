@@ -2,7 +2,7 @@
 import * as os from "node:os";
 import * as path from "node:path";
 import type { SpawnSyncReturns } from "node:child_process";
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { describe, expect, it, beforeAll, afterAll, vi } from "vitest";
 import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import { CodexAdapter } from "./codexAdapter.js";
 import { OpenCodeAdapter } from "./openCodeAdapter.js";
@@ -11,6 +11,10 @@ import { MockRuntimeAdapter, okResult } from "./mockAdapter.js";
 import { NO_GUARDS } from "./runtimeAdapter.js";
 import type { RuntimeAdapter, RuntimeAgentRequest, SpawnSync } from "./runtimeAdapter.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
+
+vi.mock("../gates/humanChannelConfig.js", () => ({
+  approvalChannelDir: () => path.join(os.tmpdir(), "sta-test-approval-channel"),
+}));
 
 /**
  * OFF04 — the Runtime port's contract, stated once and applied to every

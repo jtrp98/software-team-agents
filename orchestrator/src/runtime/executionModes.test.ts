@@ -236,15 +236,16 @@ describe("T-V5-040 fail-closed evidence matrix", () => {
     "schema_version: 1\nexecution:\n  mode: auto\n  allow_handoff: true\n  allow_paid_fallback: false\nrouting:\n  allow_below_supported: [codex, opencode]\n";
 
   it("a UNAVAILABLE result on a Target-write stage stops the task with no second runtime tried", async () => {
-    const root = project(inertAutoConfig);
+    // V13 TASK-027 R14C (a1): the governed write routes to codex, the only certified executor.
+    const root = project(`${inertAutoConfig}  by_role:\n    backend-engineer:\n      runtime: codex\n`);
     const unavailable = new MockRuntimeAdapter({
-      id: "claude-code",
+      id: "codex",
       models: ["sonnet"],
       // V13 TASK-016 — a governed-write candidate must be a lifecycle executor.
       capabilities: [RuntimeCapability.PRE_TOOL_GUARD, RuntimeCapability.MODEL_SELECTION, ...EXECUTOR_LIFECYCLE_CAPABILITIES],
       respond: () => okResult({ status: "UNAVAILABLE", exitCode: null, diagnostics: ["subscription offline"] }),
     });
-    const weak = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"], capabilities: [RuntimeCapability.MODEL_SELECTION] });
+    const weak = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"], capabilities: [RuntimeCapability.MODEL_SELECTION] });
     const good = new MockRuntimeAdapter({
       id: "opencode",
       models: ["sonnet"],
@@ -265,8 +266,8 @@ describe("T-V5-040 fail-closed evidence matrix", () => {
 
     expect(result.outcome).toMatchObject({
       result: "FAIL",
-      requested_runtime: "claude-code",
-      runtime: "claude-code",
+      requested_runtime: "codex",
+      runtime: "codex",
       fallback_count: 0,
     });
     expect(result.outcome.failure_reason).toContain("subscription offline");

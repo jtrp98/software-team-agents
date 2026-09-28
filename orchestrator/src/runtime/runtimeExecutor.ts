@@ -92,6 +92,8 @@ import type { PostflightGuardOutcome } from "../orchestrator/orchestrator.js";
 export interface RuntimeExecutorOptions {
   /** The runtime that actually runs the agent. */
   runtime: RuntimeAdapter;
+  /** Production a1 gate, evaluated against the selected adapter and exact request before any attempt is recorded. */
+  approvalIsolationPreflight?: (runtime: RuntimeAdapter, request: RuntimeAgentRequest) => string | null;
   /** Root of the target project — where the role definitions and `_docs/` live. */
   projectRoot: string;
   /**
@@ -993,10 +995,6 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
             ));
           }
         }
-        if (req.recordDispatch) {
-          if (!packetPath || !packetHash) throw new Error("governed dispatch has no persisted execution packet");
-          req.recordDispatch({ packetPath, packetHash, contractDigest, runtimeId: activeRuntime.id });
-        }
         // V13 TASK-014 — the one dispatch path: through the executor lifecycle
         // port. `prepare` mints the attempt identity (bound to task/stage)
         // before any spawn; `execute` runs that exact attempt; a runtime that
@@ -1048,6 +1046,12 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
           },
           timeoutMs: opts.timeoutMs,
         };
+        const isolationDenial = opts.approvalIsolationPreflight?.(activeRuntime, adapterRequest);
+        if (isolationDenial) return finish(failResult(`cannot start ${role}: ${isolationDenial}`, declared));
+        if (req.recordDispatch) {
+          if (!packetPath || !packetHash) throw new Error("governed dispatch has no persisted execution packet");
+          req.recordDispatch({ packetPath, packetHash, contractDigest, runtimeId: activeRuntime.id });
+        }
         const preparedAttempt = await port.prepare(adapterRequest);
         result = await port.execute(preparedAttempt);
         attemptId = preparedAttempt.attemptId;

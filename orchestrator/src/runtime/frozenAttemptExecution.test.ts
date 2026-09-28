@@ -159,10 +159,10 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
     expect(runtime.requests).toHaveLength(0);
   });
 
-  it("allows a certified antigravity Target-write attempt when pre-tool guard is confirmed", async () => {
+  it("allows a certified codex Target-write attempt when pre-tool guard is confirmed", async () => {
     const runtime = new MockRuntimeAdapter({
-      id: "antigravity",
-      models: ["glm-4.7"],
+      id: "codex",
+      models: ["gpt-5.5"],
       // V13 TASK-016 — certified AND a lifecycle executor: both gates must pass.
       capabilities: [RuntimeCapability.PRE_TOOL_GUARD, ...EXECUTOR_LIFECYCLE_CAPABILITIES],
       respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }),
@@ -174,13 +174,39 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
       guards: () => NO_GUARDS,
       registry: new RuntimeRegistry([runtime]),
       frozenAttempt: frozen({
-        requested: { runtime: "antigravity", model: "glm-4.7", effort: "high" },
-        observed: { runtime: "antigravity", model: "glm-4.7", effort: "high" },
+        requested: { runtime: "codex", model: "gpt-5.5", effort: "high" },
+        observed: { runtime: "codex", model: "gpt-5.5", effort: "high" },
         guard_evidence: { target_write: true, pre_tool_guard: true, writable_roots: ["C:/target"] },
       }),
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
     expect(result.outcome.result).toBe("PASS");
     expect(runtime.requests).toHaveLength(1);
+  });
+
+  // V13 TASK-027 R14C (a1): a previously frozen antigravity/claude-code
+  // Target-write attempt no longer dispatches once certification is withdrawn.
+  it.each(["antigravity", "claude-code"])("refuses a frozen %s Target-write attempt after a1 withdrew its certification", async (id) => {
+    const runtime = new MockRuntimeAdapter({
+      id,
+      models: ["glm-4.7"],
+      capabilities: [RuntimeCapability.PRE_TOOL_GUARD, ...EXECUTOR_LIFECYCLE_CAPABILITIES],
+      respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }),
+    });
+    const result = await executorFor({
+      runtime,
+      projectRoot: tmpProject(),
+      moduleName: () => "sales-crm",
+      guards: () => NO_GUARDS,
+      registry: new RuntimeRegistry([runtime]),
+      frozenAttempt: frozen({
+        requested: { runtime: id, model: "glm-4.7", effort: "high" },
+        observed: { runtime: id, model: "glm-4.7", effort: "high" },
+        guard_evidence: { target_write: true, pre_tool_guard: true, writable_roots: ["C:/target"] },
+      }),
+    })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
+    expect(result.outcome.result).toBe("FAIL");
+    expect(result.outcome.failure_reason).toContain(`runtime "${id}" is not certified for unattended Target writes`);
+    expect(runtime.requests).toHaveLength(0);
   });
 
   it("sends the ledger's model even when it is not this executor's own default, and conformance agrees", async () => {

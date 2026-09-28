@@ -14,7 +14,7 @@ import { SqliteRunLedger } from "../ledger/sqliteRunLedger.js";
 import type { LedgerAttempt } from "../ledger/runLedger.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
 import { RuntimeRegistry } from "../runtime/runtimeRegistry.js";
-import { MockRuntimeAdapter, okResult } from "../runtime/mockAdapter.js";
+import { MockRuntimeAdapter, mockBinding, okResult } from "../runtime/mockAdapter.js";
 import { RuntimeCapability } from "../runtime/runtimeCapabilities.js";
 import { contractGuardResolver } from "../runtime/runtimeGuards.js";
 import { withRequiredEvidence } from "../evidence/stageEvidence.testSupport.js";
@@ -80,19 +80,16 @@ function register(extraWorkRoots: (targetRoot: string) => readonly RuntimeTaskWo
   return { root, targetRoot, store, ledger, run: result.run };
 }
 
+// V13 TASK-027 R14C (a1): codex is the only runtime certified for governed
+// Target writes. Like the real CodexAdapter, its guards are compiled per run
+// (no binding file), so capability detection verifies them from the claim.
 function guardedAdapter(): MockRuntimeAdapter {
   return new MockRuntimeAdapter({
-    id: "claude-code",
+    id: "codex",
     models: ["sonnet"],
+    binding: { ...mockBinding(), guardConfigPath: null, guardEnforcement: "per-run" },
     respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }),
-    files: {
-      ".mock/guards.json": JSON.stringify({
-        hooks: {
-          PreToolUse: [{ hooks: [{ command: "node .claude/hooks/block-path-permissions.js" }] }],
-          Stop: [{ hooks: [{ command: "node .claude/hooks/require-green-before-stop.js" }] }],
-        },
-      }),
-    },
+    files: { ".mock/agents/.keep": "" },
   });
 }
 
@@ -104,7 +101,7 @@ function boundary(f: ReturnType<typeof register>, registry: RuntimeRegistry): Le
     runtimeStateRoot: f.root,
     contractRoot: f.root,
     registry,
-    runtimeSelection: () => ({ defaultRuntimeId: "claude-code" }),
+    runtimeSelection: () => ({ defaultRuntimeId: "codex" }),
     guards: contractGuardResolver(f.root),
     dependencyEvidence: () => [],
     adapterVersion: "test@1",

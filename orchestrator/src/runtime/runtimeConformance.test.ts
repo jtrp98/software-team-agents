@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { SpawnSyncReturns } from "node:child_process";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { AgentStage } from "../types.js";
 import { ClaudeCodeAdapter } from "./claudeCodeAdapter.js";
 import { CodexAdapter } from "./codexAdapter.js";
@@ -17,6 +17,10 @@ import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { FIXTURE_REVISION, runtimeTaskFixture } from "./packetFixture.testSupport.js";
 import { seedRealContracts } from "../testing/contractFixtures.js";
+
+vi.mock("../gates/humanChannelConfig.js", () => ({
+  approvalChannelDir: () => path.join(os.tmpdir(), "sta-test-approval-channel"),
+}));
 
 /**
  * The runtime conformance suite: one mandatory-case matrix run
