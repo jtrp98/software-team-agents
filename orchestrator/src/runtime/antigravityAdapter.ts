@@ -2,6 +2,7 @@ import { spawnSync as nodeSpawnSync, type SpawnSyncReturns } from "node:child_pr
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { AGY_HOOKS_PATH } from "./bindingGenerator.js";
 import { LocalWorkspace } from "./localWorkspace.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { SingleShotLifecycle } from "./singleShotLifecycle.js";
@@ -147,8 +148,8 @@ export class AntigravityAdapter implements ExecutorPort {
     this.spawn = opts.spawnSync ?? (nodeSpawnSync as unknown as SpawnSync);
     this.defaultTimeoutMs = opts.timeoutMs ?? 30 * 60_000;
     this.models = new Set(opts.models ?? []);
-
-    this.guardConfigPath = opts.guardConfigPath ?? null;
+    const workspaceHook = path.join(opts.projectRoot, AGY_HOOKS_PATH);
+    this.guardConfigPath = opts.guardConfigPath !== undefined ? opts.guardConfigPath : (fs.existsSync(workspaceHook) ? workspaceHook : null);
     this.agentsStoreRoot = opts.agentsStoreRoot ?? null;
 
     const caps = new Set<RuntimeCapability>(ANTIGRAVITY_CAPABILITIES);
@@ -226,7 +227,18 @@ export class AntigravityAdapter implements ExecutorPort {
     }
 
     const diagnostics: string[] = [];
-    const args = ["-p", `${roleDefinition.trim()}\n\n${req.prompt}`, "--output-format", "json"];
+    const args: string[] = [];
+    if (req.cwd) {
+      args.push("--add-dir", req.cwd);
+    }
+    if (req.workRoots) {
+      for (const wr of req.workRoots) {
+        if (wr.path && wr.path !== req.cwd) {
+          args.push("--add-dir", wr.path);
+        }
+      }
+    }
+    args.push("-p", `${roleDefinition.trim()}\n\n${req.prompt}`, "--output-format", "json");
 
     if (req.model && req.modelExplicit) {
       // `RuntimeAgentRequest.modelExplicit` contracts for refusal over
@@ -357,7 +369,7 @@ function guardReportFor(requested: RuntimeGuards, guardConfigPath?: string | nul
       enforced,
       unenforced,
       reason: unenforced.length > 0
-        ? "PreToolUse hooks enforced in-band via machine-global bridge; exit checks verified post-hoc by provider-neutral ExitCheckRunner"
+        ? "PreToolUse hooks enforced in-band; exit checks verified post-hoc by provider-neutral ExitCheckRunner"
         : undefined,
     };
   }
@@ -369,7 +381,7 @@ function guardReportFor(requested: RuntimeGuards, guardConfigPath?: string | nul
     enforced: [],
     unenforced,
     reason:
-      "agy reads PreToolUse hooks only from the machine-global ~/.gemini/config/hooks.json; the workspace's own .agents/hooks.json is never consulted, so writes, git and exit checks are covered post-hoc by the orchestrator and the QA round, never by this runtime",
+      "no guard configuration path found; run software-team-agents sync to generate .agents/hooks.json or configure machine-global hooks",
   };
 }
 

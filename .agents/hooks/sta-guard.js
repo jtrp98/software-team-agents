@@ -30,23 +30,19 @@
  * and a path guard that tried to parse shell would deny far more than it understands.
  * Doc-rewrite, secret-leak and exit checks have no AGY mechanism either.
  *
- * THIS FILE IS CURRENTLY INERT, AND ITS PARSER IS KNOWN WRONG
+ * ENFORCEMENT ON REAL AGY (V13 TASK-029)
  *
- * Two facts were captured against a real agy 1.1.27 install
- * (planning/v6/v6-agy-spike-evidence.md §13) after this wrapper was written:
+ * Verified against real agy 1.2.7 (planning/v13/evidence/round-14d.md):
  *
- *   1. agy reads PreToolUse hooks only from the machine-global
- *      `~/.gemini/config/hooks.json`. The workspace `.agents/hooks.json` that
- *      names this file is never consulted, so nothing here runs today.
- *   2. The real payload is `{"toolCall": {"name": ..., "args": {...}}}` in
- *      camelCase, the hook's cwd is the directory holding hooks.json (not the
- *      workspace), and `workspacePaths` comes back empty. The extraction below
- *      matches none of that — it would deny every call rather than allow a
- *      legitimate write.
- *
- * Both are tracked as their own tasks. Until they land, treat this file as a
- * shipped skeleton, not as enforcement: the fail-closed direction below is the
- * only thing about it that is currently true.
+ *   1. When agy is invoked with `--add-dir <workspace>` (and the workspace is
+ *      trusted in `trustedWorkspaces`), agy loads `.agents/hooks.json` directly
+ *      from the workspace and executes this guard.
+ *   2. The payload is `{"toolCall": {"name": ..., "args": {...}}, "workspacePaths": [...]}`
+ *      in camelCase protojson. This wrapper extracts tool name and arguments,
+ *      checks the universal floor and approval channel denial, and enforces
+ *      per-role path permissions from the active contract or attempt grant.
+ *   3. Out-of-scope write calls receive `{"decision":"deny","reason":"..."}`
+ *      and are hard-blocked by agy.
  */
 
 'use strict';
@@ -338,7 +334,7 @@ function run(input) {
   const role = process.env.STA_ROLE || (grant ? grant.role : null);
 
   for (const target of targets) {
-    const reason = checkOne(target, undefined, role, grant);
+    const reason = checkOne(target, input, role, grant);
     if (reason !== null) return reason;
   }
   return null;
