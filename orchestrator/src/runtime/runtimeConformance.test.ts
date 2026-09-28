@@ -10,7 +10,6 @@ import { createRuntimeExecutor } from "./runtimeExecutor.js";
 import { MockRuntimeAdapter } from "./mockAdapter.js";
 import { OpenCodeAdapter } from "./openCodeAdapter.js";
 import { AntigravityAdapter } from "./antigravityAdapter.js";
-import { ApiAdapter } from "./apiAdapter.js";
 import { ZcodeAdapter, managedZcodeHooks } from "./zcodeAdapter.js";
 import { renderZcodeConfigJson } from "./bindingGenerator.js";
 import { NO_GUARDS, type RuntimeAdapter, type RuntimeAgentRequest, type RuntimeGuardReport, type RuntimeWorkRoot, type SpawnSync } from "./runtimeAdapter.js";
@@ -109,7 +108,7 @@ interface CapturedCall {
 }
 
 /** Records every spawn and answers each binary's well-shaped success envelope. */
-function capturingSpawn(binary: "claude" | "codex" | "opencode" | "agy" | "paid-api" | "zcode", calls: CapturedCall[]): SpawnSync {
+function capturingSpawn(binary: "claude" | "codex" | "opencode" | "agy" | "zcode", calls: CapturedCall[]): SpawnSync {
   return ((_command: string, args: string[], options: { env?: NodeJS.ProcessEnv; input?: string }) => {
     calls.push({ args, env: options.env, input: options.input });
     const stdout =
@@ -157,7 +156,7 @@ function enoentSpawn(): SpawnSync {
 
 interface Implementation {
   readonly id: string;
-  readonly binary: "claude" | "codex" | "opencode" | "agy" | "paid-api" | "zcode";
+  readonly binary: "claude" | "codex" | "opencode" | "agy" | "zcode";
   /** `resolveCommand: () => null` keeps the Windows npm-shim retry out — this suite measures surfaces, not PATH resolution. */
   readonly make: (projectRoot: string, spawn: SpawnSync) => RuntimeAdapter;
 }
@@ -206,28 +205,6 @@ const IMPLEMENTATIONS: readonly Implementation[] = [
         journalRoot: path.join(root, "attempts"),
       });
     },
-  },
-  {
-    id: "paid-api",
-    binary: "paid-api",
-    make: (root, spawn) => new ApiAdapter({
-      projectRoot: root,
-      models: ["api-model"],
-      probe: async () => ({ available: true, version: "mock-api" }),
-      invoke: async (request) => {
-        const proc = spawn("paid-api", [request.role, request.prompt], {
-          cwd: request.cwd,
-          encoding: "utf8",
-          timeout: request.timeoutMs,
-          env: { ...process.env, ...request.env },
-          input: request.prompt,
-        });
-        if (proc.error) {
-          return { status: "UNAVAILABLE", exitCode: null, text: "", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [proc.error.message] };
-        }
-        return { status: "OK", exitCode: 0, text: "done", usage: {}, guards: { enforced: [], unenforced: [] }, diagnostics: [] };
-      },
-    }),
   },
 ];
 
@@ -342,14 +319,14 @@ async function runConformance(impl: Implementation): Promise<ConformanceRow[]> {
     {
       caseId: "role-contract-loading",
       verdict:
-        impl.id === "codex" || impl.id === "paid-api" || impl.id === "antigravity" || impl.id === "zcode"
+        impl.id === "codex" || impl.id === "antigravity" || impl.id === "zcode"
           ? surface.includes(INSTRUCTIONS_MARKER)
             ? "PASS"
             : "FAIL"
           : surface.split("\u0000").includes("--agent") && surface.split("\u0000").includes(ROLE)
             ? "PASS"
             : "FAIL",
-      detail: impl.id === "codex" || impl.id === "paid-api" || impl.id === "antigravity" || impl.id === "zcode" ? "role instructions folded into the prompt" : "--agent <role> names the binding entry",
+      detail: impl.id === "codex" || impl.id === "antigravity" || impl.id === "zcode" ? "role instructions folded into the prompt" : "--agent <role> names the binding entry",
     },
     { caseId: "context-injection", verdict: surface.includes(PROMPT) || calls.some((c) => c.input === PROMPT) ? "PASS" : "FAIL" },
     {
@@ -463,13 +440,6 @@ describe("T-V1-05 runtime conformance — one matrix, every runtime", () => {
           "hook-plugin-execution": "ENFORCED",
           "exit-handling": "REPORTED_UNENFORCED",
         },
-        "paid-api": {
-          "allowed-write-guard": "REPORTED_UNENFORCED",
-          "forbidden-write-guard": "REPORTED_UNENFORCED",
-          "state-changing-git-protection": "REPORTED_UNENFORCED",
-          "hook-plugin-execution": "REPORTED_UNENFORCED",
-          "exit-handling": "REPORTED_UNENFORCED",
-        },
       };
 
       it(`earns its declared guard verdicts (${JSON.stringify(expectations[impl.id])})`, async () => {
@@ -564,7 +534,7 @@ describe("T-V1-05 runtime conformance — one matrix, every runtime", () => {
       expect(observed?.STA_ROLE, adapter.id).toBe(EXECUTOR_ENV.STA_ROLE);
       expect(observed?.STA_WRITABLE_WORK_ROOTS, adapter.id).toBe(EXECUTOR_ENV.STA_WRITABLE_WORK_ROOTS);
     }
-    expect(registry.ids()).toEqual(["claude-code", "codex", "opencode", "antigravity", "zcode", "paid-api", "mock"]);
+    expect(registry.ids()).toEqual(["claude-code", "codex", "opencode", "antigravity", "zcode", "mock"]);
   });
 
   it("reports the orchestrator-owned axes as covered elsewhere, naming the owning suites", async () => {

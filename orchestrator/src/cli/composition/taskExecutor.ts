@@ -61,9 +61,6 @@ export interface TaskExecutorOptions {
   model?: string;
   effort?: string;
   phases: readonly number[];
-  noDeterministicGate: boolean;
-  noQaOptimization: boolean;
-  noDocumentGate: boolean;
   /** Where packets and runtime artifacts land; absent = the executor's own rule (the Knowledge root of a three-repo task, else the project root). */
   runtimeStateRoot?: string;
   /** Per-stage execution roots; absent = `repos.yaml` (`loadStageRoots`). */
@@ -93,9 +90,6 @@ export function taskExecutorOptionsFromArgs(args: CliArgs): TaskExecutorOptions 
     model: args.model,
     effort: args.effort,
     phases: args.phases,
-    noDeterministicGate: args.noDeterministicGate,
-    noQaOptimization: args.noQaOptimization,
-    noDocumentGate: args.noDocumentGate,
   };
 }
 
@@ -159,20 +153,6 @@ export async function composeProductionTaskExecutor(
 ): Promise<TaskExecutorComposition> {
   const task = store.loadTask(taskId);
   if (!task) throw new Error(`cannot compose an executor for missing task ${taskId}`);
-  // V13 TASK-017/018 — the deterministic and document gates are mandatory
-  // verification, not options. The disable paths are deleted; a caller that
-  // still asks for one is refused instead of silently running unverified.
-  // (TASK-024 removes the flags from the CLI surface itself.)
-  if (options.noDeterministicGate) {
-    throw new Error(
-      "deterministic verification is mandatory (V13 TASK-017); the --no-deterministic-gate bypass no longer exists — remove the flag and let the gate run",
-    );
-  }
-  if (options.noDocumentGate) {
-    throw new Error(
-      "document verification is mandatory (V13 TASK-018); the --no-document-gate bypass no longer exists — remove the flag and let the gate run",
-    );
-  }
   // DR §5: a resumed task answers to the root frozen at intake - the
   // invocation's --root (if any) already passed the drift assertion at
   // intake, so the frozen name is what every root resolution below uses.
@@ -265,18 +245,14 @@ export async function composeProductionTaskExecutor(
       }),
     }))),
     requiredVerification: () => orchestrator.runtimeTask?.required_verification,
-    ...(options.noQaOptimization
-      ? {}
-      : {
-          changeAware: {
-            changedFiles: qaChangedFiles,
-            scopeInputs: qaInputs.scopeInputs,
-            projectRoot: resolveFrameworkRoot(),
-            workflow: orchestrator.runtimeTask?.workflow ?? "",
-            classification: orchestrator.classification,
-            verificationRoots: qaRoots,
-          },
-        }),
+    changeAware: {
+      changedFiles: qaChangedFiles,
+      scopeInputs: qaInputs.scopeInputs,
+      projectRoot: resolveFrameworkRoot(),
+      workflow: orchestrator.runtimeTask?.workflow ?? "",
+      classification: orchestrator.classification,
+      verificationRoots: qaRoots,
+    },
   });
   const postDevExecutor = verificationHook.executor;
   const documentHook = createDocumentVerificationHook({
@@ -285,25 +261,23 @@ export async function composeProductionTaskExecutor(
     moduleName: options.module,
   });
   const docVerifiedExecutor = documentHook.executor;
-  const executor = options.noQaOptimization
-    ? docVerifiedExecutor
-    : withQaOptimization({
-        inner: docVerifiedExecutor,
-        changedFiles: qaChangedFiles,
-        packageInputs: qaInputs.packageInputs,
-        scopeInputs: qaInputs.scopeInputs,
-        taskContract: qaInputs.taskContract,
-        // T-V8-015: a repair whose route demands FULL cannot be discharged by
-        // a TARGETED round. Read live from the orchestrator (a derivation of
-        // the persisted last failure), so a resumed repair round is held to
-        // the same requirement as the one that raised it.
-        riskSignals: () => ({
-          ...riskSignalsFromClassification(orchestrator.classification),
-          ...orchestrator.repairRoute ? repairQaSignals(orchestrator.repairRoute) : {},
-        }),
-        taskLevel: () => orchestrator.classification.level,
-        previousRound: () => previousRoundFromDocs(resolveDocsRoot(options.projectRoot, runRootName), options.module ?? "", taskId),
-      });
+  const executor = withQaOptimization({
+    inner: docVerifiedExecutor,
+    changedFiles: qaChangedFiles,
+    packageInputs: qaInputs.packageInputs,
+    scopeInputs: qaInputs.scopeInputs,
+    taskContract: qaInputs.taskContract,
+    // T-V8-015: a repair whose route demands FULL cannot be discharged by
+    // a TARGETED round. Read live from the orchestrator (a derivation of
+    // the persisted last failure), so a resumed repair round is held to
+    // the same requirement as the one that raised it.
+    riskSignals: () => ({
+      ...riskSignalsFromClassification(orchestrator.classification),
+      ...orchestrator.repairRoute ? repairQaSignals(orchestrator.repairRoute) : {},
+    }),
+    taskLevel: () => orchestrator.classification.level,
+    previousRound: () => previousRoundFromDocs(resolveDocsRoot(options.projectRoot, runRootName), options.module ?? "", taskId),
+  });
 
   return { executor };
 }

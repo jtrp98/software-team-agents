@@ -219,7 +219,7 @@ export function openTask(registry: TaskRegistry, args: CliArgs, taskId: string, 
     docsRoot,
     moduleName: args.module,
     targetWorkRoots: runtimeTaskWorkRoots(args, taskId, classification, moduleScope),
-    changeAwareVerification: !args.noQaOptimization,
+    changeAwareVerification: true,
     knowledgeRoot: frozenKnowledgeRoot,
   });
   void created;

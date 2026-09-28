@@ -405,7 +405,7 @@ function sameRoot(left: string, right: string): boolean {
 export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: string, dependencies: CliDependencies = {}): Promise<number> {
   const args = parseBoundedRunArgs(rest, defaultProjectRoot);
   const runtimeRegistry: RuntimeRegistry = (dependencies.createRuntimeRegistry ?? createProductionRuntimeRegistry)(args.projectRoot);
-  const defaultRuntimeId = selectRuntime({ projectRoot: args.projectRoot, runtime: args.runtime, model: args.model, effort: args.effort, phases: [], noDeterministicGate: false, noQaOptimization: false, noDocumentGate: false }, "").defaultRuntimeId;
+  const defaultRuntimeId = selectRuntime({ projectRoot: args.projectRoot, runtime: args.runtime, model: args.model, effort: args.effort, phases: [] }, "").defaultRuntimeId;
 
   const installationConfigPath = installationConfigOverride();
   let installation: InstallationConfig | undefined;
@@ -804,9 +804,6 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
       model: args.model,
       effort: args.effort,
       phases: [],
-      noDeterministicGate: false,
-      noQaOptimization: false,
-      noDocumentGate: false,
       // V10 TASK-025 — runtime state has one home, the Knowledge root, so
       // packets/locks never land in whatever cwd the run was commanded from.
       runtimeStateRoot: knowledgeRoot,

@@ -730,7 +730,7 @@ export class SqliteTaskStore implements TaskStore {
       context_chars: r.context_chars,
       estimated_input_tokens: r.estimated_input_tokens,
       qa_mode: r.qa_mode === "FULL" || r.qa_mode === "TARGETED" ? r.qa_mode : null,
-      qa_effort: r.qa_effort === "skip" || r.qa_effort === "lightweight" || r.qa_effort === "full" ? r.qa_effort : null,
+      qa_effort: r.qa_effort === "lightweight" || r.qa_effort === "full" ? r.qa_effort : null,
       deterministic_gate: r.deterministic_gate === "enabled" || r.deterministic_gate === "disabled" ? r.deterministic_gate : null,
         document_gate: r.document_gate === "enabled" || r.document_gate === "disabled" ? r.document_gate : null,
       runtime: r.runtime,

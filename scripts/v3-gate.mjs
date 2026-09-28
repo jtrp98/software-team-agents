@@ -86,9 +86,9 @@ const GATES = {
     // T-V5-039 — the paid runtime is retired, not merely opt-in-gated: this
     // gate now pins that it is *never* reachable, from any config or flag,
     // rather than pinning that a now-deleted opt-in defaulted to off.
+    // (V13 TASK-024: ApiAdapter is completely deleted).
     title: "paid API runtime unreachability (paid-api is never offered)",
     files: [
-      "src/runtime/apiAdapter.test.ts",
       "src/runtime/guardInvariants.test.ts",
       "src/packaging/staConfig.test.ts",
       "src/runtime/executionModes.test.ts",
@@ -98,8 +98,6 @@ const GATES = {
       "keeps V3 execution defaults additive and paid fallback off when the block is absent",
       "defaults paid fallback off when execution exists without that key",
       "criterion 5 — the paid API runtime is never offered; ApiAdapter is unreachable from production construction",
-      "implements RuntimeAdapter without claiming any guard capability",
-      "refuses a Target-write stage before the mocked transport is invoked",
       "an unlisted registered runtime is never auto-appended to the fallback chain",
     ],
   },

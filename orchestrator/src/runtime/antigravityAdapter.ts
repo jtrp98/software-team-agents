@@ -50,7 +50,7 @@ import type {
  * - `NAMED_AGENTS` — `agy agents` stayed `[]` under both project-scoped
  *   directory conventions tried, and `--agent <unknown>` applied no persona and
  *   printed no warning (§2). Role delivery folds the definition into the
- *   prompt, as `apiAdapter.ts` does.
+ *   prompt.
  * - `COST_REPORTING` — the envelope's `usage` carries token counts only, with
  *   no cost field (§1b), so `RuntimeUsage.costUsd` stays undefined rather than
  *   claiming a run was free.

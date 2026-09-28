@@ -20,11 +20,9 @@ export function runtimeRegistryFor(projectRoot: string, dependencies: CliDepende
 /**
  * The production composition root.
  *
- * The paid API adapter is no longer constructed here at all:
- * `--runtime` only offers runtimes that can actually run, and `ApiAdapter`
- * (`runtime/apiAdapter.ts`) has no `invoke` in production, so every call it
- * received always returned `NOT_CONFIGURED`. The class itself survives as an
- * unwired reference implementation; it is simply never registered.
+ * The paid API adapter is removed entirely in V13 TASK-024.
+ * Production registers exactly the five target runtimes:
+ * Claude Code, Codex, OpenCode, Antigravity, and ZCode.
  */
 export function createProductionRuntimeRegistry(projectRoot: string): RuntimeRegistry {
   // The human-owned tier file is the one declarative source for models this

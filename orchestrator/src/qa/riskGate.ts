@@ -2,16 +2,11 @@ import { TaskLevel } from "../types.js";
 import type { QaRiskSignals } from "./mode.js";
 
 /** How much model judgment a QA round receives. Independent from QaMode's verification surface. */
-export type QaEffort = "skip" | "lightweight" | "full";
+export type QaEffort = "lightweight" | "full";
 
 export interface QaEffortDecision {
   effort: QaEffort;
   reasons: string[];
-}
-
-export interface SelectQaEffortOptions {
-  /** @deprecated V13 TASK-019: synthetic QA skip is removed; low-risk tasks receive lightweight QA role verification. */
-  allowSkip?: boolean;
 }
 
 const SIGNAL_REASONS: ReadonlyArray<{ key: keyof QaRiskSignals; reason: string }> = [
@@ -30,7 +25,6 @@ const SIGNAL_REASONS: ReadonlyArray<{ key: keyof QaRiskSignals; reason: string }
 export function selectQaEffort(
   level: TaskLevel | undefined,
   signals: QaRiskSignals = {},
-  _options: SelectQaEffortOptions = {},
 ): QaEffortDecision {
   const vetoReasons = SIGNAL_REASONS.filter(({ key }) => signals[key]).map(({ reason }) => reason);
   if (vetoReasons.length > 0) {

@@ -120,9 +120,6 @@ describe("parseArgs", () => {
       runtime: undefined,
       model: undefined,
       mode: undefined,
-      noQaOptimization: false,
-      noDeterministicGate: false,
-      noDocumentGate: false,
       tokenBudget: undefined,
       version: false,
     });
@@ -192,12 +189,25 @@ describe("parseArgs", () => {
     expect(USAGE).not.toContain("--mode <single|auto|manual>");
   });
 
-  it("parses the post-hoc token budget and deterministic-gate escape hatch", () => {
-    const args = parseArgs(["--task-id", "T-1", "--module", "m", "--token-budget", "42000", "--no-deterministic-gate"], "/repo");
+  it("parses the post-hoc token budget and rejects non-positive values", () => {
+    const args = parseArgs(["--task-id", "T-1", "--module", "m", "--token-budget", "42000"], "/repo");
     expect(args.tokenBudget).toBe(42_000);
-    expect(args.noDeterministicGate).toBe(true);
-    expect(parseArgs(["--task-id", "T-1", "--module", "m", "--no-document-gate"], "/repo").noDocumentGate).toBe(true);
     expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--token-budget", "0"], "/repo")).toThrow(CliUsageError);
+  });
+
+  it("V13 TASK-024: rejects removed gate and QA optimization bypass flags as unrecognized arguments", () => {
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--no-deterministic-gate"], "/repo"))
+      .toThrow(CliUsageError);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--no-deterministic-gate"], "/repo"))
+      .toThrow(/unrecognized argument: --no-deterministic-gate/);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--no-document-gate"], "/repo"))
+      .toThrow(CliUsageError);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--no-document-gate"], "/repo"))
+      .toThrow(/unrecognized argument: --no-document-gate/);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--no-qa-optimization"], "/repo"))
+      .toThrow(CliUsageError);
+    expect(() => parseArgs(["--task-id", "T-1", "--module", "m", "--no-qa-optimization"], "/repo"))
+      .toThrow(/unrecognized argument: --no-qa-optimization/);
   });
 
   it("--project-root overrides the default", () => {

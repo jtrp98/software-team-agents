@@ -67,8 +67,6 @@ export interface QaOptimizationOptions {
   riskSignals?: (req: AgentExecutorRequest) => QaRiskSignals | undefined;
   /** Stored deterministic classification level used by the orthogonal effort gate. */
   taskLevel?: (req: AgentExecutorRequest) => TaskLevel | undefined;
-  /** @deprecated V13 TASK-019: synthetic QA skip is removed; QA role is always dispatched. */
-  allowQaSkip?: boolean;
   /** Previous failed round's findings/evidence; absent on round 0. */
   previousRound?: (req: AgentExecutorRequest) => PreviousQaRound | undefined;
   /** Caller extras for the evidence package (task intent, diff summary…). */

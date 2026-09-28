@@ -82,3 +82,31 @@ describe("TASK-023: Canonical schema enforcement (no legacy fallback path)", () 
     expect(parsed.success).toBe(false);
   });
 });
+
+describe("TASK-024: No governance bypass switches, obsolete interfaces or unused apiAdapter", () => {
+  const bypassSymbols = [
+    "ApiAdapter",
+    "PAID_API_RUNTIME_ID",
+    "noDeterministicGate",
+    "noDocumentGate",
+    "noQaOptimization",
+    "allowQaSkip",
+  ];
+
+  it.each(bypassSymbols)("production source contains no references to %s", (symbol) => {
+    const regex = new RegExp(`\\b${symbol}\\b`);
+    expect(offendersFor(regex)).toEqual([]);
+  });
+
+  it("apiAdapter.ts and sessionRole.ts do not exist on disk", () => {
+    expect(fs.existsSync(path.join(SRC, "runtime", "apiAdapter.ts"))).toBe(false);
+    expect(fs.existsSync(path.join(SRC, "targetcli", "sessionRole.ts"))).toBe(false);
+  });
+
+  it("cli usage help contains no references to bypass flags", () => {
+    const cliSource = ALL_SOURCES.find(({ file }) => file === "cli.ts")?.text ?? "";
+    expect(cliSource).not.toMatch(/--no-deterministic-gate/);
+    expect(cliSource).not.toMatch(/--no-document-gate/);
+    expect(cliSource).not.toMatch(/--no-qa-optimization/);
+  });
+});

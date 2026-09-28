@@ -40,22 +40,20 @@ per-agent boundary (write/deny ต่อ role) เป็น **orchestrated-run g
 `.workflow/`, `dist/`, `knowledge/_roles/`) บวก workspace boundary — เหตุผลเต็มที่
 [`pipeline-rationale.md`](pipeline-rationale.md)
 
-## Declared session role (desktop role-play)
+## Scoped attempt grant (desktop role-play)
 
-runtime ที่ไม่มี orchestrator ตั้ง `STA_ROLE` ให้ session — ZCode Desktop ตามคำตัดสิน V12 — ประกาศ role
-ที่กำลังเล่นได้ผ่านไฟล์เดียวของ framework: `software-team-agents session-role set <role>|clear|show`
-เขียน `.workflow/session-role.json` (`{ role, stack?: { write, deny }, declared_at }`) คำสั่งเดียวของ CLI
-เท่านั้นที่เขียนได้ — path อยู่ใต้ `.workflow/` ซึ่ง universal floor ห้ามทุก agent เขียนผ่าน file tool อยู่แล้ว
-session จึงแก้สิทธิ์ตัวเองไม่ได้ (เขียนผ่าน shell เป็นช่องว่างที่เอกสารยอมรับอยู่แล้ว เช่นเดียวกับ
-`block-outside-repo.js` ที่ไม่ parse shell)
+คำสั่ง `session-role` และ self-declared `.workflow/session-role.json` ถูกถอดออกแล้วใน V13 (TASK-012/TASK-024) —
+สิทธิ์ per-role ไม่สามารถ self-declare ได้อีกต่อไป:
+การรัน direct mode บน desktop runtime (เช่น ZCode) จะได้รับ per-role write rules เฉพาะเมื่อมี STA-issued scoped
+attempt grant (`sta grant issue`) เขียน token ลง `.workflow/attempt-grant.json` ซึ่งผูก role, contract digest,
+task, scoped paths และ expiry เข้ากับ attempt เดียว พร้อม HMAC signature
 
 กติกาการอ่าน (เหมือนกันทุก host ที่ render จาก `pathPermissions.ts`): `STA_ROLE` ที่ orchestrator ตั้ง
-**ชนะเสมอ**; เมื่อไม่มี จึง fallback ไปอ่านไฟล์ประกาศ — ได้ per-role layer ครบชุดเท่า orchestrated stage:
-write allowlist จาก contract (deny-by-default), contract deny, framework payload deny, knowledge deny
-ของ backend/frontend/devops และ stack globs ที่ CLI pre-resolve ให้ด้วย `resolveStackPathRules` ก่อนเขียน
-ไฟล์เสีย/รูปทรงผิด/ไม่มีไฟล์ = "ไม่มี role ประกาศ" — กลับไป floor-only เท่าเดิมทุกไบต์ ไม่มีทางหลวมกว่า
-session ที่ไม่ประกาศ และ read permission ยังเป็น instruction-level เหมือนเดิม (hook ไม่ enforce read
-เหมือนกันทุก runtime)
+**ชนะเสมอ**; เมื่อไม่มี จึงตรวจ scoped attempt grant ที่ยังไม่หมดอายุและ signature ถูกต้อง — ได้ per-role layer
+ครบชุดเท่า orchestrated stage: write allowlist จาก contract (deny-by-default), contract deny, framework payload deny,
+knowledge deny ของ backend/frontend/devops และ stack globs
+หาก token เสีย/หมดอายุ/ไม่มี token = กลับไป floor-only เท่าเดิมทุกไบต์ ไม่มีทางหลวมกว่า และ read permission
+ยังเป็น instruction-level เหมือนเดิม (hook ไม่ enforce read เหมือนกันทุก runtime)
 
 ## Guards ถูกเทสต์
 
@@ -67,8 +65,10 @@ session ที่ไม่ประกาศ และ read permission ยัง
 - **OpenCode** — git deny เป็น declarative `permission.bash` globs ใน binding + plugin `sta-guards.js`
   (outside-root/path permissions); doc-rewrite/secret-leak/exit checks ยังไม่ in-band → `GUARD GAP` +
   QA round ครอบ workspace ที่ขาด plugin = **unguarded** (OpenCode default posture คือ allow-all)
-- **Codex / Antigravity** — ไม่มีกลไก hook ฝั่ง workspace (Antigravity อ่าน hooks เฉพาะระดับเครื่อง) →
-  launch ต้อง `--allow-unguarded-runtime` — รายละเอียดที่ [`runtimes.md`](runtimes.md)
+- **Codex / Antigravity** — Codex headless ใช้ native per-run permission profile + execpolicy/OS deny;
+  Antigravity อ่าน PreToolUse hooks จาก config ระดับเครื่อง (`~/.gemini/config/hooks.json`);
+  interactive session ที่ไม่มี hook enforcement จะถูกปฏิเสธ (ไม่มี acknowledgement bypass แล้ว — V13 TASK-012) —
+  รายละเอียดที่ [`runtimes.md`](runtimes.md)
 
 ## Profile-aware static analysis
 

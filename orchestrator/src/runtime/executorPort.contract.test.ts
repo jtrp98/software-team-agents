@@ -590,8 +590,8 @@ describe("the port boundary — STA Core holds no runtime's command or session v
 
   it("lifts a probe/execute-only adapter with honest refusals, identity intact", async () => {
     // The four real adapters now implement the port natively; the wrapper
-    // remains the honest lift for any probe/execute-only adapter (e.g. the
-    // unwired ApiAdapter) — it adds no capability the wrapped adapter
+    // remains the honest lift for any probe/execute-only adapter (e.g. a
+    // minimal mock adapter) — it adds no capability the wrapped adapter
     // did not claim.
     const adapter: RuntimeAdapter = new MockRuntimeAdapter({ capabilities: [RuntimeCapability.NAMED_AGENTS] });
     const port = executeOnlyLifecycle(adapter);

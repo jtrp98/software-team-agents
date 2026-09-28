@@ -80,7 +80,6 @@ describe("T-V3R-001 guardrail invariants", () => {
     const adapters = concreteAdapterSources();
     expect(adapters.map(({ file }) => file).sort()).toEqual([
       "antigravityAdapter.ts",
-      "apiAdapter.ts",
       "claudeCodeAdapter.ts",
       "codexAdapter.ts",
       "mockAdapter.ts",
@@ -93,11 +92,12 @@ describe("T-V3R-001 guardrail invariants", () => {
   });
 
   // The paid API runtime is never offered: no config or flag can make
-  // production construction reach `ApiAdapter` any more.
+  // production construction reach `ApiAdapter` any more (ApiAdapter is deleted in V13 TASK-024).
   it("criterion 5 — the paid API runtime is never offered; ApiAdapter is unreachable from production construction", () => {
     const config = defaultStaConfig();
     expect(config.execution?.allow_paid_fallback ?? false).toBe(false);
     expect(createProductionRuntimeRegistry(REPO_ROOT).ids()).not.toContain("paid-api");
+    expect(fs.existsSync(path.join(REPO_ROOT, "orchestrator", "src", "runtime", "apiAdapter.ts"))).toBe(false);
   });
 
   // An unregistered routing target is a closed route: it must reach no

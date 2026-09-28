@@ -8,30 +8,29 @@ describe("T-V3R-060 QaEffort decision matrix", () => {
   const scope = buildQaScope({ taskId: "T", changedFiles: ["src/a.ts"] });
 
   it.each([
-    [TaskLevel.TRIVIAL, {}, true, "lightweight", "TARGETED"],
-    [TaskLevel.SMALL, {}, true, "lightweight", "TARGETED"],
-    [TaskLevel.SMALL, {}, false, "lightweight", "TARGETED"],
-    [TaskLevel.MEDIUM, {}, true, "lightweight", "TARGETED"],
-    [TaskLevel.LARGE_CRITICAL, {}, true, "full", "TARGETED"],
-    [TaskLevel.UNKNOWN, {}, true, "full", "TARGETED"],
-    [TaskLevel.SMALL, { changesSharedContract: true }, true, "full", "FULL"],
-    [TaskLevel.SMALL, { migrationOrCutover: true }, true, "full", "FULL"],
-    [TaskLevel.SMALL, { crossTargetImpact: true }, true, "full", "FULL"],
-    [TaskLevel.SMALL, { releaseGateRequiresFull: true }, true, "full", "FULL"],
-  ] as const)("%s with %j and allowSkip=%s -> (%s, %s)", (level, signals, allowSkip, effort, mode) => {
-    expect(selectQaEffort(level, signals, { allowSkip }).effort).toBe(effort);
+    [TaskLevel.TRIVIAL, {}, "lightweight", "TARGETED"],
+    [TaskLevel.SMALL, {}, "lightweight", "TARGETED"],
+    [TaskLevel.MEDIUM, {}, "lightweight", "TARGETED"],
+    [TaskLevel.LARGE_CRITICAL, {}, "full", "TARGETED"],
+    [TaskLevel.UNKNOWN, {}, "full", "TARGETED"],
+    [TaskLevel.SMALL, { changesSharedContract: true }, "full", "FULL"],
+    [TaskLevel.SMALL, { migrationOrCutover: true }, "full", "FULL"],
+    [TaskLevel.SMALL, { crossTargetImpact: true }, "full", "FULL"],
+    [TaskLevel.SMALL, { releaseGateRequiresFull: true }, "full", "FULL"],
+  ] as const)("%s with %j -> (%s, %s)", (level, signals, effort, mode) => {
+    expect(selectQaEffort(level, signals).effort).toBe(effort);
     expect(selectQaMode("T", scope, signals, { now: () => 1 }).mode).toBe(mode);
   });
 
-  it("sensitiveGate is a hard veto: its mapped risk signal can never select skip", () => {
-    expect(selectQaEffort(TaskLevel.SMALL, { securitySensitive: true }, { allowSkip: true })).toEqual({
+  it("sensitiveGate is a hard veto: its mapped risk signal selects full effort", () => {
+    expect(selectQaEffort(TaskLevel.SMALL, { securitySensitive: true })).toEqual({
       effort: "full",
       reasons: ["sensitive gate"],
     });
   });
 
-  it("touchesSchema is a hard veto and can never select skip", () => {
-    expect(selectQaEffort(TaskLevel.SMALL, { touchesSchema: true }, { allowSkip: true })).toEqual({
+  it("touchesSchema is a hard veto and selects full effort", () => {
+    expect(selectQaEffort(TaskLevel.SMALL, { touchesSchema: true })).toEqual({
       effort: "full",
       reasons: ["schema/architecture change"],
     });
@@ -39,8 +38,8 @@ describe("T-V3R-060 QaEffort decision matrix", () => {
 
   it("is deterministic for identical signals", () => {
     const signals = { changesSharedContract: true, crossTargetImpact: true };
-    expect(selectQaEffort(TaskLevel.MEDIUM, signals, { allowSkip: true })).toEqual(
-      selectQaEffort(TaskLevel.MEDIUM, signals, { allowSkip: true }),
+    expect(selectQaEffort(TaskLevel.MEDIUM, signals)).toEqual(
+      selectQaEffort(TaskLevel.MEDIUM, signals),
     );
   });
 });

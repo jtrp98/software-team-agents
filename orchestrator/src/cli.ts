@@ -157,15 +157,6 @@ export interface CliArgs {
   model?: string;
   /** Operator-visible reasoning-effort override; runtime adapters validate their own vocabulary. */
   effort?: string;
-  /**
-   * QA optimization (change-aware scope, deterministic pre-checks, TARGETED/FULL
-   * routing) is on by default for qa-engineer rounds; this flag restores the
-   * unoptimized executor behaviour for a task where someone explicitly wants it.
-   */
-  noQaOptimization: boolean;
-  /** Escape hatch for a Target whose deterministic tools are known-broken. */
-  noDeterministicGate: boolean;
-  noDocumentGate: boolean;
   /** Post-hoc task token budget. */
   tokenBudget?: number;
   /** `--root <name>` — the named Knowledge root this run reads from (DR §4). */
@@ -213,7 +204,7 @@ export function retiredWaveFlagMessage(flag: string): string {
 
 export const USAGE =
   "usage (verbs — thin wrappers over the flag-based form below, prefer these):\n" +
-  "  sta run --task-id <id> --module <name> <classification flags> [--test-strategy <cross-task,multi-system,migration,security,release>] [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity|zcode>] [--model <name>] [--effort <name>] [--token-budget <n>] [--no-qa-optimization] [--no-deterministic-gate] [--root <name>] [--project-root <path>] [--state-db <path>]\n" +
+  "  sta run --task-id <id> --module <name> <classification flags> [--test-strategy <cross-task,multi-system,migration,security,release>] [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity|zcode>] [--model <name>] [--effort <name>] [--token-budget <n>] [--root <name>] [--project-root <path>] [--state-db <path>]\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
   "  sta approve <task-id> --request <request-id> --yes|--no [--note <text>] [--project-root <path>]   submit a decision for one pending request through the trusted human channel; refused (exit 5) while none is configured\n" +
   "  sta resume  <task-id> --module <name> [--root <name>] [--project-root <path>]   continue a task already in the store; --root must match the root frozen at intake (it is an assertion, never a re-selection)\n" +
@@ -257,7 +248,7 @@ export const USAGE =
   "underlying flag-based form:\n" +
   "  sta --task-id <id> --module <name> [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--project-root <path>] [--state-db <path>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity|zcode>] [--model <name>] [--effort <name>] <classification flags>\n" +
   "  sta --task-id <id> --module <name> --resume        continue a task already in the store\n" +
-  "  sta --task-id <id> --module <name> [--token-budget <n>] [--no-qa-optimization|--no-deterministic-gate]   run with optional QA/budget controls\n" +
+  "  sta --task-id <id> --module <name> [--token-budget <n>]                           run with optional token budget control\n" +
   "  sta --list [--project-root <path>]                 show every task and stop\n" +
   "  sta --check-contracts [--project-root <path>]      check contracts/*.yaml against the agent registry\n" +
   "  sta --check-layout [--project-root <path>]         check layout.yaml against the real directories\n" +
@@ -323,9 +314,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let runtime: RuntimeId | undefined;
   let model: string | undefined;
   let effort: string | undefined;
-  let noQaOptimization = false;
-  let noDeterministicGate = false;
-  let noDocumentGate = false;
   let tokenBudget: number | undefined;
   let version = false;
   let rootName: string | undefined;
@@ -463,12 +451,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
           "Use --runtime <id>, --model <name> and/or --effort <name> for this run, or routing.by_role in .sta/config.yaml for a per-role override. " +
           "A route that cannot execute always stops for a person; nothing hands off to another runner.",
       );
-    } else if (arg === "--no-qa-optimization") {
-      noQaOptimization = true;
-    } else if (arg === "--no-deterministic-gate") {
-      noDeterministicGate = true;
-    } else if (arg === "--no-document-gate") {
-      noDocumentGate = true;
     } else if (arg === "--token-budget") {
       const value = Number(argv[++i]);
       if (!Number.isInteger(value) || value <= 0) throw new CliUsageError("--token-budget must be a positive integer");
@@ -564,9 +546,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     runtime,
     model,
     effort,
-    noQaOptimization,
-    noDeterministicGate,
-    noDocumentGate,
     tokenBudget,
     rootName,
     version,
