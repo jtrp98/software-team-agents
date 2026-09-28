@@ -98,7 +98,7 @@ describe("Orchestrator emits domain events", () => {
     for (let i = 0; i < 10; i++) {
       const status = await orch.step(executor);
       if (status.kind === "WAITING_FOR_HUMAN") {
-        decidePending(orch, true);
+        await decidePending(orch, true);
         continue;
       }
       if (status.kind === "DEPLOYED" || status.kind === "BLOCKED") break;
@@ -136,7 +136,7 @@ describe("Orchestrator emits domain events", () => {
     for (let i = 0; i < 10; i++) {
       const status = await orch.step(executor);
       if (status.kind === "WAITING_FOR_HUMAN") {
-        decidePending(orch, true);
+        await decidePending(orch, true);
         continue;
       }
       if (status.kind === "DEPLOYED" || status.kind === "BLOCKED") break;
@@ -178,7 +178,7 @@ describe("Orchestrator emits domain events", () => {
     for (let i = 0; i < 20; i++) {
       const status = await orch.step(executor);
       if (status.kind === "WAITING_FOR_HUMAN") {
-        decidePending(orch, true);
+        await decidePending(orch, true);
         continue;
       }
       if (status.kind === "DEPLOYED" || status.kind === "BLOCKED") break;
@@ -220,7 +220,7 @@ describe("Orchestrator emits domain events", () => {
     });
   });
 
-  it("emits APPROVAL_DECIDED with the answer, including a rejection", () => {
+  it("emits APPROVAL_DECIDED with the answer, including a rejection", async () => {
     const orch = new Orchestrator(
       "T-REJECT",
       classifyTask({ isNewFeatureModuleOrProject: true, touchesSchema: true, touchesBackend: true }),
@@ -233,7 +233,7 @@ describe("Orchestrator emits domain events", () => {
       orch.reportCompletion(status.stage, { outcome: { tokens: 1, cost: 0, result: "PASS" } }, { start: 0, end: 1 });
     }
 
-    decidePending(orch, false, { actorId: "jane", note: "model is wrong" });
+    await decidePending(orch, false, { actorId: "jane", note: "model is wrong" });
 
     const decided = events.filter((e) => e.type === DomainEventType.APPROVAL_DECIDED);
     expect(decided).toHaveLength(1);
@@ -264,7 +264,7 @@ describe("Orchestrator emits domain events", () => {
     for (let i = 0; i < 10; i++) {
       const status = await orch.step(executor, () => (clock += 500));
       if (status.kind === "WAITING_FOR_HUMAN") {
-        decidePending(orch, true);
+        await decidePending(orch, true);
         continue;
       }
       if (status.kind === "DEPLOYED" || status.kind === "BLOCKED") break;

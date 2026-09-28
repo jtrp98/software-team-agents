@@ -40,7 +40,7 @@
           ]
         },
         {
-          "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+          "matcher": "Bash|PowerShell|Read|Write|Edit|MultiEdit|NotebookEdit|NotebookRead|Grep|Glob|LS",
           "hooks": [
             {
               "type": "process",

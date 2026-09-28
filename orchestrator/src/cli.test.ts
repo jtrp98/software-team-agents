@@ -720,6 +720,9 @@ describe("T31 verbs — run/status/approve/retry/resume/pause/cancel", () => {
       await expect(runCli([...args, "--yes"], dir)).rejects.toThrow(/--request <request-id> is required/);
       expect(await runCli([...args, "--request", requestId, "--yes"], dir)).toBe(APPROVE_EXIT_NO_TRUSTED_CHANNEL);
       expect(await runCli([...args, "--request", requestId, "--no"], dir)).toBe(APPROVE_EXIT_NO_TRUSTED_CHANNEL);
+      // V13 TASK-027: the answer can be left to the channel — still closed without one.
+      expect(await runCli([...args, "--request", requestId], dir)).toBe(APPROVE_EXIT_NO_TRUSTED_CHANNEL);
+      await expect(runCli([...args, "--request", requestId, "--yes", "--no"], dir)).rejects.toThrow(/mutually exclusive/);
       expect(await runCli([...args, "--request", "apr_ffffffffffffffffffffffffffffffff", "--yes"], dir)).toBe(APPROVE_EXIT_REFUSED);
 
       const reopened = new SqliteTaskStore(defaultStateDbPath(dir));

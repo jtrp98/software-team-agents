@@ -82,7 +82,7 @@ async function runToCompletion(orch: Orchestrator, executor: AgentExecutor, maxS
   for (let i = 0; i < maxSteps; i++) {
     const status = await orch.step(executor);
     if (status.kind === "WAITING_FOR_HUMAN") {
-      decidePending(orch, true);
+      await decidePending(orch, true);
       continue;
     }
     if (status.kind === "DEPLOYED" || status.kind === "BLOCKED") return status;
@@ -144,7 +144,7 @@ describe("Full pipeline integration", () => {
     expect(status.approvalType).toBe(ApprovalType.SCHEMA_CONFIRMATION);
 
     orch = Orchestrator.resume("T-INTEGRATION-1", store, human);
-    decidePending(orch, true);
+    await decidePending(orch, true);
 
     const final = await runToCompletion(orch, executor);
 

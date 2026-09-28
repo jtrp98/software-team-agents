@@ -241,6 +241,21 @@ export function unassignedSessionDenyWhy(pattern: string): string {
 }
 
 /**
+ * V13 TASK-027 — what names the human-owned approval channel: its fixed
+ * directory under the account home (`humanChannelConfig.ts`) and the App key's
+ * file name. The GitHub App key and the per-gate approver list live there, and
+ * whoever can change the list controls approval, so this is a floor above
+ * every role, grant and work root: any tool call — read or write, file tool or
+ * shell — whose path or command names it is refused, on every runtime that
+ * carries the generated block. Matching is textual on commands (a shell guard
+ * cannot see through globbing or variables — the residual is recorded in
+ * `planning/v13/evidence/round-14a.md`) and on resolved, symlink-followed paths
+ * for file tools.
+ */
+export const APPROVAL_CHANNEL_DIR_NAME = ".sta-approval-channel";
+export const APPROVAL_CHANNEL_DENY_MARKERS: readonly string[] = [APPROVAL_CHANNEL_DIR_NAME, "github-app.private-key"];
+
+/**
  * Full Target access map for a single invocation. This is identification data
  * for guard refusal messages, not a grant: only
  * `STA_WRITABLE_WORK_ROOTS` can open a write root.
@@ -286,6 +301,46 @@ export const GUARD_RULE_HOSTS: readonly GuardRuleHost[] = [
  */
 const GUARD_RULE_FUNCTION_SOURCE: readonly string[] = [
   `const ATTEMPT_GRANT_REL_PATH = ${jsRuleLiteral(ATTEMPT_GRANT_TOKEN_PATH)};`,
+  "function approvalChannelDenial(nodePath, nodeFs, root, args) {",
+  "  // V13 TASK-027: the human-owned approval channel (GitHub App key, approver",
+  "  // list) is refused to every tool call that names it, read or write, file",
+  "  // tool or shell, whatever the role, grant or work root. Paths are checked",
+  "  // resolved and symlink-followed; command text is checked as written.",
+  "  if (!args || typeof args !== 'object') return null;",
+  "  const texts = [];",
+  "  const visit = (object, depth) => {",
+  "    for (const key of Object.keys(object)) {",
+  "      const value = object[key];",
+  "      const pathKey = /path|file|dir|cwd|pattern|glob/i.test(key);",
+  "      const textKey = /^(command|cmd|commandline|script|input|patch)$/i.test(key);",
+  "      for (const item of Array.isArray(value) ? value : [value]) {",
+  "        if (typeof item === 'string' && item !== '') {",
+  "          if (!pathKey && !textKey) continue;",
+  "          texts.push(item);",
+  "          if (!pathKey) continue;",
+  "          let resolved = null;",
+  "          try { resolved = nodePath.resolve(root, item); texts.push(resolved); } catch { resolved = null; }",
+  "          if (resolved && nodeFs && typeof nodeFs.realpathSync === 'function') {",
+  "            try { texts.push(nodeFs.realpathSync(resolved)); } catch { /* absent: the resolved text is what there is */ }",
+  "          }",
+  "        } else if (depth > 0 && item && typeof item === 'object') {",
+  "          visit(item, depth - 1);",
+  "        }",
+  "      }",
+  "    }",
+  "  };",
+  "  visit(args, 2);",
+  "  for (const text of texts) {",
+  "    const folded = text.replace(/\\\\/g, '/').toLowerCase();",
+  "    for (const marker of APPROVAL_CHANNEL_DENY_MARKERS) {",
+  "      if (folded.includes(marker)) return approvalChannelDenyWhy();",
+  "    }",
+  "  }",
+  "  return null;",
+  "}",
+  "function approvalChannelDenyWhy() {",
+  "  return 'Blocked: this names the human-owned STA approval channel (`~/' + APPROVAL_CHANNEL_DENY_MARKERS[0] + '/`: the GitHub App key and the approver list). No agent may read or change it, on any runtime or role; a person configures it and only STA reads it.';",
+  "}",
   `const ATTEMPT_GRANT_KEY_REL_PATH = ${jsRuleLiteral(ATTEMPT_GRANT_KEY_PATH)};`,
   "function unassignedSessionDenial(relative) {",
   "  // A session with no identity holds no governed-artifact authority: read,",
@@ -455,6 +510,7 @@ export function renderGuardRuleBlock(): string {
     list("FRAMEWORK_PAYLOAD_ARTIFACTS", FRAMEWORK_PAYLOAD_ARTIFACTS),
     list("KNOWLEDGE_DENIED_ROLES", KNOWLEDGE_DENIED_ROLES),
     list("UNASSIGNED_SESSION_DENY", UNASSIGNED_SESSION_DENY),
+    list("APPROVAL_CHANNEL_DENY_MARKERS", APPROVAL_CHANNEL_DENY_MARKERS),
     ...GUARD_RULE_FUNCTION_SOURCE,
     GUARD_RULES_CLOSE,
     "",

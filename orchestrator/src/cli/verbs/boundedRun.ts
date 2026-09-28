@@ -69,6 +69,7 @@ import { preflightThreeRepoTask, TargetPreflightError } from "../../threeRepo/pr
 import type { RuntimeTaskWorkRoot } from "../../orchestrator/runtimeTask.js";
 import { resolveFrameworkRoot } from "../../targetcli/roots.js";
 import { parseCanonicalPlan } from "../../docs/planTask.js";
+import { resolveHumanDecisionChannel } from "../../gates/humanChannelConfig.js";
 
 /**
  * T-V8-021 — the explicit bounded-run CLI.
@@ -794,6 +795,7 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
       contractRoot,
       budget: { ...DEFAULT_BUDGET, token_budget: configuredTokenBudget(args.projectRoot) },
       stageEntryGuard: boundedRunStageGuard(frozenRun),
+      humanDecisionVerifier: resolveHumanDecisionChannel(),
     });
     const executorOptions: TaskExecutorOptions = {
       projectRoot: args.projectRoot,

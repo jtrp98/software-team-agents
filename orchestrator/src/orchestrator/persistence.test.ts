@@ -64,7 +64,7 @@ describe("Orchestrator persistence (T01)", () => {
     const store = new MemoryTaskStore();
     const first = new Orchestrator("T-1", incremental(), { store, ...human });
     await first.step(withStageEvidence(() => pass)); // system-analyst done
-    decidePending(first, true);
+    await decidePending(first, true);
     await first.step(withStageEvidence(() => pass)); // test-planner done
     await first.step(withStageEvidence(() => pass)); // backend-engineer done
     await first.step(withStageEvidence(() => pass)); // uxui-designer done
@@ -79,12 +79,12 @@ describe("Orchestrator persistence (T01)", () => {
     expect(ran).toEqual([AgentStage.FRONTEND_ENGINEER]);
   });
 
-  it("refuses to record an approval before the gate has opened a request", () => {
+  it("refuses to record an approval before the gate has opened a request", async () => {
     const store = new MemoryTaskStore();
     const first = new Orchestrator("T-1", incremental(), { store, ...human });
     first.status(); // system-analyst is assigned; the DESIGN gate has not been reached
     expect(first.pendingApprovalRequest()).toBeNull();
-    expect(() => decidePending(first, true)).toThrow(/no pending approval request/);
+    await expect(decidePending(first, true)).rejects.toThrow(/no pending approval request/);
     expect(store.loadTask("T-1")!.approvals).toEqual([]);
   });
 
@@ -92,7 +92,7 @@ describe("Orchestrator persistence (T01)", () => {
     const store = new MemoryTaskStore();
     const first = new Orchestrator("T-1", incremental(), { store, ...human });
     await first.step(withStageEvidence(() => pass)); // system-analyst
-    decidePending(first, true);
+    await decidePending(first, true);
     await first.step(withStageEvidence(() => pass)); // test-planner
     await first.step(withStageEvidence(() => ({ outcome: { tokens: 5_000, cost: 0.2, result: "PASS" } }))); // backend-engineer
     await first.step(withStageEvidence(() => ({ outcome: { tokens: 5_000, cost: 0.2, result: "PASS" } }))); // uxui-designer
@@ -138,7 +138,7 @@ describe("Orchestrator failure routing (T01)", () => {
     const store = new MemoryTaskStore();
     const orch = new Orchestrator("T-1", incremental(), { store, ...human });
     await orch.step(withStageEvidence(() => pass)); // system-analyst
-    decidePending(orch, true);
+    await decidePending(orch, true);
     await orch.step(withStageEvidence(() => pass)); // test-planner
     await orch.step(withStageEvidence(() => pass)); // backend
     await orch.step(withStageEvidence(() => pass)); // uxui-designer
@@ -216,7 +216,7 @@ describe("Orchestrator persistence — against the real file-backed store", () =
       const firstStore = new SqliteTaskStore(file);
       const first = new Orchestrator("T-1", incremental(), { store: firstStore, ...human });
       await first.step(withStageEvidence(() => pass)); // system-analyst ran and cost real money
-      decidePending(first, true);
+      await decidePending(first, true);
       firstStore.close(); // process dies here
 
       const secondStore = new SqliteTaskStore(file);
@@ -283,7 +283,7 @@ describe("human approval as first-class state (T08)", () => {
     const { orch } = atSchemaGate();
     await orch.step(withStageEvidence(() => pass));
     orch.status();
-    decidePending(orch, true, { actorId: "jaturapat", note: "schema ok" });
+    await decidePending(orch, true, { actorId: "jaturapat", note: "schema ok" });
 
     expect(orch.status()).toEqual({ kind: "RUNNING", stage: AgentStage.TEST_PLANNER });
     expect(orch.approvalLedger[0]).toMatchObject({
@@ -301,7 +301,7 @@ describe("human approval as first-class state (T08)", () => {
     const { orch } = atSchemaGate();
     await orch.step(withStageEvidence(() => pass));
     orch.status();
-    decidePending(orch, false, { actorId: "jaturapat", note: "ยังไม่มี field discount" });
+    await decidePending(orch, false, { actorId: "jaturapat", note: "ยังไม่มี field discount" });
 
     const status = orch.status();
     expect(status.kind).toBe("BLOCKED");
@@ -316,7 +316,7 @@ describe("human approval as first-class state (T08)", () => {
     const { store, orch } = atSchemaGate();
     await orch.step(withStageEvidence(() => pass));
     orch.status();
-    decidePending(orch, true, { actorId: "jaturapat" });
+    await decidePending(orch, true, { actorId: "jaturapat" });
 
     const resumed = Orchestrator.resume("T-1", store, human);
     expect(resumed.approvalLedger[0]).toMatchObject({ status: "approved", decision: { actor: { id: "jaturapat" } } });
@@ -327,14 +327,14 @@ describe("human approval as first-class state (T08)", () => {
     const { store, orch } = atSchemaGate();
     await orch.step(withStageEvidence(() => pass));
     orch.status();
-    decidePending(orch, false, { note: "no" });
+    await decidePending(orch, false, { note: "no" });
 
     expect(Orchestrator.resume("T-1", store, human).status().kind).toBe("BLOCKED");
   });
 
-  it("refuses an unsolicited decision for a request the task never opened", () => {
+  it("refuses an unsolicited decision for a request the task never opened", async () => {
     const { orch, store } = atSchemaGate();
-    const err = catchError(() =>
+    const err = await catchError(() =>
       orch.submitHumanDecision({ requestId: "apr_00000000000000000000000000000000", approved: true, credential: trustedCredential() }),
     );
     expect(err).toBeInstanceOf(ApprovalDecisionError);
@@ -347,7 +347,7 @@ describe("human approval as first-class state (T08)", () => {
     const store = new MemoryTaskStore();
     const orch = new Orchestrator("T-1", incremental(), { store, ...human });
     await orch.step(withStageEvidence(() => pass)); // system-analyst
-    decidePending(orch, true);
+    await decidePending(orch, true);
     await orch.step(withStageEvidence(() => pass)); // test-planner
     await orch.step(withStageEvidence(() => pass)); // backend-engineer
     await orch.step(withStageEvidence(() => pass)); // uxui-designer
@@ -387,7 +387,7 @@ describe("trusted human approval (V13 TASK-001)", () => {
 
   it("fails closed by default: with no trusted channel configured, no decision is recorded", async () => {
     const { store, orch, pending } = await waitingAtDesign();
-    const err = catchError(() => orch.submitHumanDecision({ requestId: pending.requestId, approved: true, credential: trustedCredential() }));
+    const err = await catchError(() => orch.submitHumanDecision({ requestId: pending.requestId, approved: true, credential: trustedCredential() }));
     expect(err).toBeInstanceOf(NoTrustedHumanChannelError);
     expect(store.loadTask("T-1")!.approvals[0].status).toBe("pending");
     expect(orch.status().kind).toBe("WAITING_FOR_HUMAN");
@@ -410,26 +410,26 @@ describe("trusted human approval (V13 TASK-001)", () => {
 
   it("rejects a submission the channel cannot authenticate", async () => {
     const { orch, pending } = await waitingAtDesign(testHumanVerifier());
-    const err = catchError(() => orch.submitHumanDecision({ requestId: pending.requestId, approved: true, credential: { token: "guessed" } }));
+    const err = await catchError(() => orch.submitHumanDecision({ requestId: pending.requestId, approved: true, credential: { token: "guessed" } }));
     expect(err).toBeInstanceOf(UntrustedHumanDecisionError);
     expect(orch.approvalLedger[0].status).toBe("pending");
   });
 
   it("rejects an authenticated actor who is not authorized for the request", async () => {
     const { orch, pending } = await waitingAtDesign(testHumanVerifier({ authorizedActors: ["tech-lead"] }));
-    const err = catchError(() =>
+    const err = await catchError(() =>
       orch.submitHumanDecision({ requestId: pending.requestId, approved: true, credential: trustedCredential({ actorId: "intern" }) }),
     );
     expect(err).toBeInstanceOf(UntrustedHumanDecisionError);
     expect(orch.approvalLedger[0].status).toBe("pending");
-    orch.submitHumanDecision({ requestId: pending.requestId, approved: true, credential: trustedCredential({ actorId: "tech-lead" }) });
+    await orch.submitHumanDecision({ requestId: pending.requestId, approved: true, credential: trustedCredential({ actorId: "tech-lead" }) });
     expect(orch.approvalLedger[0]).toMatchObject({ status: "approved", decision: { actor: { id: "tech-lead" } } });
   });
 
   it("rejects a decision whose attested scope differs from the request", async () => {
     const { orch, pending } = await waitingAtDesign(testHumanVerifier());
     for (const scope of [{ taskId: "T-OTHER" }, { type: ApprovalType.DEPLOY }, { to: TaskState.IMPLEMENTATION }]) {
-      const err = catchError(() =>
+      const err = await catchError(() =>
         orch.submitHumanDecision({ requestId: pending.requestId, approved: true, credential: trustedCredential({ scope }) }),
       );
       expect((err as ApprovalDecisionError).code).toBe("scope-mismatch");
@@ -440,12 +440,12 @@ describe("trusted human approval (V13 TASK-001)", () => {
   it("rejects a verifier that answers a different request or claims another channel", async () => {
     const laundering: HumanDecisionVerifier = {
       channel: "laundering",
-      verify: (request, submission, now) => ({
+      verify: async (request, submission, { now }) => ({
         requestId: submission.requestId,
         scope: request.scope,
         decision: {
           decisionId: "d-1",
-          approved: submission.approved,
+          approved: submission.approved ?? true,
           actor: { kind: "human", id: "x" },
           source: { channel: "some-other-channel", evidenceRef: "r" },
           decidedAt: now,
@@ -454,7 +454,7 @@ describe("trusted human approval (V13 TASK-001)", () => {
       }),
     };
     const { orch, pending } = await waitingAtDesign(laundering);
-    expect(catchError(() => orch.submitHumanDecision({ requestId: pending.requestId, approved: true }))).toBeInstanceOf(
+    expect(await catchError(() => orch.submitHumanDecision({ requestId: pending.requestId, approved: true }))).toBeInstanceOf(
       UntrustedHumanDecisionError,
     );
     expect(orch.approvalLedger[0].status).toBe("pending");
@@ -463,11 +463,11 @@ describe("trusted human approval (V13 TASK-001)", () => {
   it("rejects a replay of an applied decision, including after a restart", async () => {
     const { store, orch, pending } = await waitingAtDesign(testHumanVerifier());
     const submission = { requestId: pending.requestId, approved: true, credential: trustedCredential({ decisionId: "dec-once" }) };
-    orch.submitHumanDecision(submission);
-    expect((catchError(() => orch.submitHumanDecision(submission)) as ApprovalDecisionError).code).toBe("not-pending");
+    await orch.submitHumanDecision(submission);
+    expect((await catchError(() => orch.submitHumanDecision(submission)) as ApprovalDecisionError).code).toBe("not-pending");
 
     const resumed = Orchestrator.resume("T-1", store, human);
-    expect((catchError(() => resumed.submitHumanDecision(submission)) as ApprovalDecisionError).code).toBe("not-pending");
+    expect((await catchError(() => resumed.submitHumanDecision(submission)) as ApprovalDecisionError).code).toBe("not-pending");
     expect(resumed.approvalLedger).toHaveLength(1);
   });
 
@@ -486,7 +486,7 @@ describe("trusted human approval (V13 TASK-001)", () => {
       const s2 = new SqliteTaskStore(file);
       const p2 = Orchestrator.resume("T-1", s2, human);
       expect(p2.pendingApprovalRequest()?.requestId).toBe(requestId);
-      p2.submitHumanDecision({ requestId, approved: true, credential: trustedCredential({ actorId: "jaturapat" }) });
+      await p2.submitHumanDecision({ requestId, approved: true, credential: trustedCredential({ actorId: "jaturapat" }) });
       s2.close();
 
       // Process 3: the decision is durable, audited, and the gate is open.
@@ -507,9 +507,9 @@ describe("trusted human approval (V13 TASK-001)", () => {
   });
 });
 
-function catchError(fn: () => unknown): unknown {
+async function catchError(fn: () => unknown): Promise<unknown> {
   try {
-    fn();
+    await fn();
   } catch (e) {
     return e;
   }

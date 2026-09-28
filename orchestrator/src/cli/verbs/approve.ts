@@ -13,18 +13,24 @@ export const APPROVAL_PROMPT: Record<ApprovalType, string> = {
   [ApprovalType.UXUI_SIGNOFF]: "Confirm the current UX/UI artifact before frontend work starts",
 };
 
-/** Exit code when no trusted human identity channel can authenticate the decision. */
+/** Exit code when no trusted human identity channel can authenticate the decision (unconfigured, or unreachable). */
 export const APPROVE_EXIT_NO_TRUSTED_CHANNEL = 5;
 /** Exit code when the ledger refuses the decision (unknown, settled, superseded, wrong scope, replay, untrusted output). */
 export const APPROVE_EXIT_REFUSED = 6;
+/** Exit code when STA has just announced the request on its channel: nobody can have answered it yet. */
+export const APPROVE_EXIT_ANNOUNCED = 4;
 
 /**
- * `approve <task-id> --request <request-id> --yes|--no [--note <text>]`
+ * `approve <task-id> --request <request-id> [--yes|--no] [--note <text>]`
  *
- * Submits a decision for one exact pending request through the task's trusted
- * human channel. Nothing here identifies the person: no environment variable,
- * OS user name or flag is accepted as an actor. With no trusted channel
- * configured the submission is refused and the request stays pending.
+ * Asks the task's trusted human channel for the decision on one exact pending
+ * request. Nothing here identifies the person: no environment variable, OS
+ * user name or flag is accepted as an actor. With the github-app channel the
+ * first call opens the request's Issue (exit 4); a later call reads the
+ * approver's `sta-approve|sta-reject: <request-id>` comment from GitHub. The
+ * answer is the comment's: `--yes`/`--no` only states what the caller
+ * expects, and a mismatch is refused. With no trusted channel configured the
+ * submission is refused and the request stays pending.
  */
 export async function runApproveVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
@@ -61,10 +67,35 @@ export async function runApproveVerb(rest: string[], defaultProjectRoot: string)
     if (!requestId) {
       throw new CliUsageError(`approve: --request <request-id> is required; the pending request is ${pending.requestId}`);
     }
-    if (yes === no) throw new CliUsageError("approve: exactly one of --yes or --no is required");
+    if (yes && no) throw new CliUsageError("approve: --yes and --no are mutually exclusive");
 
     try {
-      orchestrator.submitHumanDecision({ requestId, approved: yes, ...(note === undefined ? {} : { note }) });
+      if (requestId === pending.requestId) {
+        const publication = await orchestrator.publishPendingApproval();
+        if (publication) {
+          console.log(`[orchestrator] request ${publication.requestId} is announced on ${publication.channel}: ${publication.url ?? publication.ref}`);
+          if (publication.fresh) {
+            console.log(
+              `[orchestrator] an authorized approver answers there with a new comment \`sta-approve: ${requestId}\` or \`sta-reject: ${requestId}\`; ` +
+                "run this command again afterwards.",
+            );
+            return APPROVE_EXIT_ANNOUNCED;
+          }
+        }
+      }
+      const { decision, settleError } = await orchestrator.submitHumanDecision({
+        requestId,
+        ...(yes || no ? { approved: yes } : {}),
+        ...(note === undefined ? {} : { note }),
+      });
+      registry.refreshStateView();
+      if (settleError) console.error(`[orchestrator] decision recorded, but the channel could not settle its announcement: ${settleError}`);
+      console.log(
+        decision.approved
+          ? `[orchestrator] approved ${requestId} (${decision.actor.id} via ${decision.source.channel}).`
+          : `[orchestrator] rejected ${requestId} (${decision.actor.id} via ${decision.source.channel}) — recorded, will not be asked again on resume.`,
+      );
+      return decision.approved ? 0 : 3;
     } catch (e) {
       if (e instanceof NoTrustedHumanChannelError) {
         console.error(`[orchestrator] refused: ${e.message}`);
@@ -76,9 +107,6 @@ export async function runApproveVerb(rest: string[], defaultProjectRoot: string)
       }
       throw e;
     }
-    registry.refreshStateView();
-    console.log(yes ? `[orchestrator] approved ${requestId}.` : `[orchestrator] rejected ${requestId} — recorded, will not be asked again on resume.`);
-    return yes ? 0 : 3;
   } finally {
     registry.close();
   }

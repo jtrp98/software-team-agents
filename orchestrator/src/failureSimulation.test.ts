@@ -131,7 +131,7 @@ describe("Failure Simulation (T56)", () => {
         // that one and continue. The security escalation itself must stop the loop instead of
         // being auto-answered the same way.
         if (status.approvalType !== ApprovalType.SCHEMA_CONFIRMATION) break;
-        decidePending(orch, true);
+        await decidePending(orch, true);
       }
       status = await orch.step(executor);
     }

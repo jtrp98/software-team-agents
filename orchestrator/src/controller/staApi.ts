@@ -6,8 +6,8 @@ import {
   UntrustedHumanDecisionError,
   type HumanDecisionSubmission,
   type HumanDecisionVerifier,
-  UNCONFIGURED_HUMAN_CHANNEL,
 } from "../gates/humanDecision.js";
+import { resolveHumanDecisionChannel } from "../gates/humanChannelConfig.js";
 import { APPROVAL_PROMPT } from "../cli/verbs/approve.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { readModuleDoc } from "../agents/moduleDocs.js";
@@ -62,6 +62,12 @@ export interface SemanticRequiredGate {
   type: ApprovalType;
   reason: string;
   prompt: string;
+  /**
+   * Where STA announced the request on its trusted channel (github-app: the
+   * Issue a person answers on), from persisted evidence. Null until STA has
+   * published it. A link to follow, never a way to answer.
+   */
+  announcement: { channel: string; ref: string; url: string | null } | null;
 }
 
 export interface SemanticTaskStatus {
@@ -144,6 +150,8 @@ export interface SemanticExecuteResponse {
   gate?: SemanticRequiredGate | null;
   evidenceRef?: string;
   denialReason?: string;
+  /** Set when the task parked on a human gate and its channel could not announce it; the request stays pending. */
+  announcementError?: string;
 }
 
 export interface SemanticResultAttempt {
@@ -236,7 +244,7 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
   const ownsStore = !options.store;
   const store = options.store ?? new SqliteTaskStore(options.stateDb ?? defaultStateDbPath(projectRoot));
   const stageEntryGuard = options.stageEntryGuard ?? createRoleLaneStageGuard({ projectRoot });
-  const humanDecisionVerifier = options.humanDecisionVerifier ?? UNCONFIGURED_HUMAN_CHANNEL;
+  const humanDecisionVerifier = options.humanDecisionVerifier ?? resolveHumanDecisionChannel();
   const now = options.now ?? Date.now;
 
   const registry =
@@ -248,6 +256,16 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
       stageEntryGuard,
       humanDecisionVerifier,
     });
+
+  /** Publishes the task's pending request on the trusted channel; returns the failure, if any. Never decides anything. */
+  async function announcePending(orch: Orchestrator): Promise<string | undefined> {
+    try {
+      await orch.publishPendingApproval();
+      return undefined;
+    } catch (e) {
+      return e instanceof Error ? e.message : String(e);
+    }
+  }
 
   function getOrchestrator(taskId: string): Orchestrator {
     const task = store.loadTask(taskId);
@@ -301,6 +319,7 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
           type: pending.scope.type,
           reason: pending.reason,
           prompt: APPROVAL_PROMPT[pending.scope.type] ?? pending.reason,
+          announcement: orch.approvalPublication(pending.requestId, evidence),
         }
       : null;
 
@@ -478,13 +497,16 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
       const orch = registry.resume(params.taskId);
       const pending = orch.pendingApprovalRequest();
       if (pending) {
+        const announcementError = await announcePending(orch);
+        const status = await getTaskSemanticStatus(params.taskId);
         return {
           ok: false,
           taskId: params.taskId,
           nextAction: `Approve pending ${pending.scope.type} gate: ${pending.reason}`,
-          status: statusBefore,
-          gate: statusBefore.requiredGate,
+          status,
+          gate: status.requiredGate,
           denialReason: "Task is blocked on pending human approval gate",
+          ...(announcementError === undefined ? {} : { announcementError }),
         };
       }
 
@@ -524,6 +546,8 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
 
       const stepStatus = await orch.step(executor);
       registry.refreshStateView();
+      // A gate this step opened is announced now, so the person learns of it without anyone polling.
+      const announcementError = stepStatus.kind === "WAITING_FOR_HUMAN" ? await announcePending(orch) : undefined;
 
       const statusAfter = await getTaskSemanticStatus(params.taskId);
       const latestEvidence = orch.evidence().slice(-1)[0]?.evidenceId;
@@ -537,6 +561,7 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
         gate: statusAfter.requiredGate,
         evidenceRef: latestEvidence,
         denialReason: stepStatus.kind === "BLOCKED" ? stepStatus.reason : undefined,
+        ...(announcementError === undefined ? {} : { announcementError }),
       };
     },
 
@@ -630,13 +655,25 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
       }
 
       try {
-        orch.submitHumanDecision(params.submission);
+        // The channel announces the question before anyone can answer it; a
+        // fresh announcement means no comment can exist yet.
+        const publication = await orch.publishPendingApproval();
+        if (publication?.fresh) {
+          return {
+            ok: false,
+            taskId: params.taskId,
+            requestId: params.requestId,
+            code: "announced",
+            denialReason: `request announced on ${publication.channel} (${publication.url ?? publication.ref}); an authorized approver answers there first`,
+          };
+        }
+        const { decision } = await orch.submitHumanDecision(params.submission);
         registry.refreshStateView();
         return {
           ok: true,
           taskId: params.taskId,
           requestId: params.requestId,
-          approved: params.submission.approved,
+          approved: decision.approved,
         };
       } catch (e) {
         if (e instanceof NoTrustedHumanChannelError) {

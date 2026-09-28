@@ -82,7 +82,7 @@ async function runToCompletion(orch: Orchestrator, executor: AgentExecutor, maxS
   for (let i = 0; i < maxSteps; i++) {
     const status = await orch.step(executor);
     if (status.kind === "WAITING_FOR_HUMAN") {
-      decidePending(orch, true);
+      await decidePending(orch, true);
       continue;
     }
     if (status.kind === "DEPLOYED" || status.kind === "BLOCKED") return status;
@@ -97,7 +97,7 @@ describe("Orchestrator", () => {
     const classification = classifyTask({ isProductionDeployOrMigration: true });
     const orch = new Orchestrator("T-RESERVE", classification, { ...human, store });
     await orch.step(() => ({ outcome: { tokens: 1, cost: 0, result: "PASS" } })); // prepare
-    decidePending(orch, true);
+    await decidePending(orch, true);
     let finish!: (value: AgentExecutorResult) => void;
     const result: AgentExecutorResult = { outcome: { tokens: 1, cost: 0, result: "PASS" } };
     const pending = orch.step(() => new Promise<AgentExecutorResult>((resolve) => { finish = resolve; }));
@@ -524,7 +524,7 @@ describe("T44 — deploy prepare vs execute", () => {
     expect(afterPrepare.kind).toBe("WAITING_FOR_HUMAN");
     if (afterPrepare.kind === "WAITING_FOR_HUMAN") expect(afterPrepare.approvalType).toBe(ApprovalType.DEPLOY);
 
-    decidePending(orch, true);
+    await decidePending(orch, true);
 
     const executeStatus = await orch.step(executor);
     expect(executeStatus.kind).toBe("DEPLOYED");
@@ -538,7 +538,7 @@ describe("T44 — deploy prepare vs execute", () => {
     const orch = new Orchestrator("T-DEPLOY-NO-PERM", classification, human);
     const executor: AgentExecutor = () => ({ outcome: { tokens: 10, cost: 0, result: "PASS" } });
     await orch.step(executor); // prepare
-    decidePending(orch, true);
+    await decidePending(orch, true);
 
     // Simulate a contract edited to drop the destructive permission: the launch
     // itself must fail closed — no run is recorded as attempted, nothing deploys.
@@ -609,7 +609,7 @@ describe("T44 — deploy prepare vs execute", () => {
 describe("T45 — a failed execute blocks instead of silently deploying", () => {
   async function toApproved(orch: Orchestrator): Promise<void> {
     await orch.step(() => ({ outcome: { tokens: 10, cost: 0.01, result: "PASS" } })); // prepare
-    decidePending(orch, true);
+    await decidePending(orch, true);
   }
 
   it("execute FAIL forces BLOCKED, never DEPLOYED, and names the Rollback runbook", async () => {
@@ -669,7 +669,7 @@ describe("uxui-designer routes questions back to ba/sa (T-UX10)", () => {
       const status = await orch.step(executor);
       if (status.kind === "RUNNING" && status.stage === AgentStage.UXUI_DESIGNER) return;
       if (status.kind === "WAITING_FOR_HUMAN") {
-        decidePending(orch, true);
+        await decidePending(orch, true);
         continue;
       }
       if (status.kind === "BLOCKED" || status.kind === "DEPLOYED") break;
@@ -738,7 +738,7 @@ describe("uxui-designer routes questions back to ba/sa (T-UX10)", () => {
     const orch = new Orchestrator("T-UX-NOBA", classification, human);
     // incremental: SA -> TP -> BE -> UXUI -> FE -> QA; the DESIGN->PLAN schema gate still fires.
     await orch.step(() => pass); // system-analyst
-    decidePending(orch, true);
+    await decidePending(orch, true);
     await orch.step(() => pass); // test-planner
     await orch.step((req) => withRequiredEvidence(req, pass)); // backend-engineer
 

@@ -96,7 +96,7 @@ describe("TaskRegistry", () => {
 
     await first.step(withStageEvidence(() => pass)); // system-analyst finishes; leaving DESIGN is gated
     expect(first.status().kind).toBe("WAITING_FOR_HUMAN");
-    decidePending(first, false);
+    await decidePending(first, false);
     expect(first.status().kind).toBe("BLOCKED");
 
     expect(reg.readyTasks().map((t) => t.taskId)).toEqual([]);

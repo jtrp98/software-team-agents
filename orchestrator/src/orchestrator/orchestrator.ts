@@ -21,10 +21,14 @@ import {
   withdrawApproval,
   type ApprovalLedger,
   type ApprovalRecord,
+  type HumanDecisionRecord,
+  type VerifiedHumanDecision,
 } from "../gates/approval.js";
 import {
   UNCONFIGURED_HUMAN_CHANNEL,
+  UntrustedHumanDecisionError,
   assertVerifierOutput,
+  type ApprovalPublication,
   type HumanDecisionSubmission,
   type HumanDecisionVerifier,
 } from "../gates/humanDecision.js";
@@ -762,37 +766,142 @@ export class Orchestrator {
   }
 
   /**
+   * Where this task's configured channel announced `requestId`, read from
+   * persisted `approval-publication` evidence — never from the channel or a
+   * caller, so a decision is looked for only where STA itself asked.
+   */
+  approvalPublication(requestId: string, records: readonly EvidenceRecord[] = this.evidence()): ApprovalPublication | null {
+    for (const record of records) {
+      const payload = record.payload;
+      if (payload.kind !== "approval-publication") continue;
+      if (payload.requestId !== requestId || payload.channel !== this.humanDecisionVerifier.channel) continue;
+      return { channel: payload.channel, ref: payload.ref, url: payload.url };
+    }
+    return null;
+  }
+
+  /**
+   * Announces the pending request on the trusted channel (github-app: opens
+   * one Issue) and persists where, exactly once per request. Returns null when
+   * nothing is pending or the channel has nothing to announce (unconfigured).
+   * A channel failure throws and leaves the request pending — publication is
+   * how a person learns of the question, never a decision.
+   *
+   * The channel is awaited outside any store transaction; the record is then
+   * written only if the request is still the pending one. A crash between the
+   * two can leave one unrecorded announcement behind (a second Issue on the
+   * next publish), never a decision.
+   */
+  async publishPendingApproval(): Promise<(ApprovalPublication & { requestId: string; fresh: boolean }) | null> {
+    const pending = this.pendingApprovalRequest();
+    if (!pending) return null;
+    const existing = this.approvalPublication(pending.requestId);
+    if (existing) return { ...existing, requestId: pending.requestId, fresh: false };
+    const verifier = this.humanDecisionVerifier;
+    if (!verifier.publish) return null;
+    const artifacts = this.latestArtifactDigests();
+    const published = await verifier.publish({ request: pending, artifacts });
+    if (published.channel !== verifier.channel) {
+      throw new UntrustedHumanDecisionError(`channel ${verifier.channel} reported a publication on channel ${published.channel}`);
+    }
+    this.atomic(() => {
+      if (this.pendingApprovalRequest()?.requestId !== pending.requestId) {
+        throw new ApprovalDecisionError("not-pending", `approval request ${pending.requestId} stopped being pending while it was being published`);
+      }
+      this.recordEvidence({
+        stage: AgentStage.HUMAN,
+        attempt: 1,
+        role: "orchestrator",
+        subject: pending.requestId,
+        payload: {
+          kind: "approval-publication",
+          requestId: pending.requestId,
+          type: pending.scope.type,
+          channel: published.channel,
+          ref: published.ref,
+          url: published.url,
+          artifacts: artifacts.map((a) => ({ ...a })),
+        },
+        refs: artifacts.map((a) => a.evidenceId),
+      });
+    });
+    return { ...published, requestId: pending.requestId, fresh: true };
+  }
+
+  /** The latest artifact evidence per artifact type — what an announced approval is about. */
+  private latestArtifactDigests(): Array<{ artifactType: string; contentDigest: string; evidenceId: string }> {
+    const latest = new Map<string, { artifactType: string; contentDigest: string; evidenceId: string }>();
+    for (const record of this.evidence()) {
+      if (record.payload.kind !== "artifact") continue;
+      latest.set(record.payload.artifactType, {
+        artifactType: record.payload.artifactType,
+        contentDigest: record.payload.contentDigest,
+        evidenceId: record.evidenceId,
+      });
+    }
+    return [...latest.values()];
+  }
+
+  /**
    * Records a human answer to a pending request — the only way an approval
    * state is ever set. The configured trusted channel must authenticate the
    * submission (the default channel refuses everything), and the ledger then
    * refuses an unknown, settled, superseded, wrong-scope or replayed decision.
    * Nothing is written unless every check passes.
    *
+   * The channel is awaited before the store transaction opens, and the
+   * pending check runs again inside it against the persisted row, so a
+   * decision recorded meanwhile by another process is refused as not-pending.
+   * After the commit the channel may settle its announcement (close the
+   * Issue); a failure there is reported and can never undo the decision.
+   *
    * A rejection is an answer, not an absence: it is stored as `rejected`, and
    * `advance()` blocks the task on it rather than posing the same question on
    * the next poll.
    */
-  submitHumanDecision(submission: HumanDecisionSubmission): void {
-    this.atomic(() => this.applySubmittedDecision(submission));
+  async submitHumanDecision(submission: HumanDecisionSubmission): Promise<{ decision: HumanDecisionRecord; settleError: string | null }> {
+    const request = this.decidableRequest(submission.requestId);
+    const verifier = this.humanDecisionVerifier;
+    const publication = this.approvalPublication(request.requestId);
+    const verified = assertVerifierOutput(
+      verifier,
+      submission,
+      await verifier.verify(request, submission, { now: this.now(), publication }),
+    );
+    this.atomic(() => this.applyVerifiedDecision(request, verified));
+    let settleError: string | null = null;
+    if (verifier.settle) {
+      try {
+        await verifier.settle(request, verified.decision, publication);
+      } catch (e) {
+        settleError = e instanceof Error ? e.message : String(e);
+      }
+    }
+    return { decision: verified.decision, settleError };
   }
 
-  private applySubmittedDecision(submission: HumanDecisionSubmission): void {
-    const request = findApprovalRequest(this.approvals, submission.requestId);
+  private decidableRequest(requestId: string): ApprovalRecord {
+    const request = findApprovalRequest(this.approvals, requestId);
     if (!request) {
       throw new ApprovalDecisionError(
         "unknown-request",
-        `no approval request ${submission.requestId} was opened for task ${this.taskId} — a decision cannot precede the question`,
+        `no approval request ${requestId} was opened for task ${this.taskId} — a decision cannot precede the question`,
       );
     }
     if (request.status !== "pending") {
       throw new ApprovalDecisionError("not-pending", `approval request ${request.requestId} is already ${request.status}`);
     }
-    const now = this.now();
-    const verified = assertVerifierOutput(
-      this.humanDecisionVerifier,
-      submission,
-      this.humanDecisionVerifier.verify(request, submission, now),
-    );
+    return request;
+  }
+
+  private applyVerifiedDecision(request: ApprovalRecord, verified: VerifiedHumanDecision): void {
+    // The verifier ran outside the transaction: re-read the persisted row so a
+    // decision another process recorded meanwhile is a refusal, not a race.
+    const onDisk = findApprovalRequest(this.store.loadTask(this.taskId)?.approvals ?? [], request.requestId);
+    if (onDisk && onDisk.status !== "pending") {
+      throw new ApprovalDecisionError("not-pending", `approval request ${request.requestId} is already ${onDisk.status}`);
+    }
+    this.decidableRequest(request.requestId);
     this.approvals = applyHumanDecision(this.approvals, verified);
     // The decision is evidence too: the ledger says a person answered, this
     // record puts the answer in the chain a transition and Done reference.

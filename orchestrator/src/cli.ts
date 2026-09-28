@@ -6,6 +6,7 @@ import { TEST_STRATEGY_TRIGGERS, type ClassificationInput, type TestStrategyTrig
 import { FLAG_TO_CLASSIFICATION, type BooleanClassificationKey } from "./classification/classificationFlags.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
 import { createRoleLaneStageGuard } from "./orchestrator/stageGuards.js";
+import { resolveHumanDecisionChannel } from "./gates/humanChannelConfig.js";
 import { DEFAULT_BUDGET, type Budget } from "./cost/costControl.js";
 import { readModuleDoc } from "./agents/moduleDocs.js";
 import { RUNTIME_IDS, type RuntimeId } from "./runtime/runtimeSupport.js";
@@ -206,7 +207,7 @@ export const USAGE =
   "usage (verbs — thin wrappers over the flag-based form below, prefer these):\n" +
   "  sta run --task-id <id> --module <name> <classification flags> [--test-strategy <cross-task,multi-system,migration,security,release>] [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity|zcode>] [--model <name>] [--effort <name>] [--token-budget <n>] [--root <name>] [--project-root <path>] [--state-db <path>]\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
-  "  sta approve <task-id> --request <request-id> --yes|--no [--note <text>] [--project-root <path>]   submit a decision for one pending request through the trusted human channel; refused (exit 5) while none is configured\n" +
+  "  sta approve <task-id> --request <request-id> [--yes|--no] [--note <text>] [--project-root <path>]   read the decision on one pending request from the trusted human channel (github-app: the first call opens its Issue, exit 4; an approver answers there with `sta-approve|sta-reject: <request-id>`); refused (exit 5) while no channel is configured\n" +
   "  sta resume  <task-id> --module <name> [--root <name>] [--project-root <path>]   continue a task already in the store; --root must match the root frozen at intake (it is an assertion, never a re-selection)\n" +
   "  sta retry   <task-id> --module <name> [--root <name>] [--project-root <path>]   same as resume — there is no daemon here for the two to mean different things\n" +
   "  sta pause  <task-id> [--project-root <path>]   freeze a task; run/resume/retry refuse it until resumed\n" +
@@ -273,7 +274,7 @@ export const USAGE =
   "  sta --check-roles [--project-root <path>]          check each role workspace's watermark against knowledge/\n" +
   "  sta --check-git-ownership [--project-root <path>]  check that Git mutation stays inside orchestrator/src/git/ and forbidden subcommands are absent\n" +
   "  sta --version                                      show the Framework version this CLI runs\n" +
-  "run/retry exit codes: 0 deployed · 1 blocked · 2 unknown gate · 3 rejected by a person · 4 parked — a gate awaits `sta approve <task-id> --request <request-id> --yes|--no`\n" +
+  "run/retry exit codes: 0 deployed · 1 blocked · 2 unknown gate · 3 rejected by a person · 4 parked — a gate awaits a person's answer on the trusted channel, then `sta approve <task-id> --request <request-id>`\n" +
   `  classification flags: ${Object.keys(FLAG_TO_CLASSIFICATION).join(" ")}`;
 
 /** Pure argv parser — kept separate from process.argv/console/exit so it's directly testable. */
@@ -740,6 +741,8 @@ export async function runCli(argv: string[], defaultProjectRoot: string, depende
     // V13 TASK-007: the role-lane prerequisites are a stage-entry guard of the
     // engine, always on, reading the task's own Knowledge root.
     stageEntryGuard: createRoleLaneStageGuard({ projectRoot: args.projectRoot, moduleName: args.module }),
+    // V13 TASK-027: the human-owned github-app channel when configured, else closed.
+    humanDecisionVerifier: resolveHumanDecisionChannel(),
   });
   let lockedTaskId: string | undefined;
 

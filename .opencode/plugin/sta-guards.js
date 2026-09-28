@@ -74,7 +74,48 @@ const WORKSPACE_BA_ARTIFACTS = ['_docs/module/*/requirement.md', '_docs/module/*
 const FRAMEWORK_PAYLOAD_ARTIFACTS = ['contracts/**', 'workflows/**', 'stacks/**', 'layout.yaml', 'test-pyramid.yaml', 'escalation-policy.yaml'];
 const KNOWLEDGE_DENIED_ROLES = ['backend-engineer', 'frontend-engineer', 'devops'];
 const UNASSIGNED_SESSION_DENY = ['_docs/**'];
+const APPROVAL_CHANNEL_DENY_MARKERS = ['.sta-approval-channel', 'github-app.private-key'];
 const ATTEMPT_GRANT_REL_PATH = '.workflow/attempt-grant.json';
+function approvalChannelDenial(nodePath, nodeFs, root, args) {
+  // V13 TASK-027: the human-owned approval channel (GitHub App key, approver
+  // list) is refused to every tool call that names it, read or write, file
+  // tool or shell, whatever the role, grant or work root. Paths are checked
+  // resolved and symlink-followed; command text is checked as written.
+  if (!args || typeof args !== 'object') return null;
+  const texts = [];
+  const visit = (object, depth) => {
+    for (const key of Object.keys(object)) {
+      const value = object[key];
+      const pathKey = /path|file|dir|cwd|pattern|glob/i.test(key);
+      const textKey = /^(command|cmd|commandline|script|input|patch)$/i.test(key);
+      for (const item of Array.isArray(value) ? value : [value]) {
+        if (typeof item === 'string' && item !== '') {
+          if (!pathKey && !textKey) continue;
+          texts.push(item);
+          if (!pathKey) continue;
+          let resolved = null;
+          try { resolved = nodePath.resolve(root, item); texts.push(resolved); } catch { resolved = null; }
+          if (resolved && nodeFs && typeof nodeFs.realpathSync === 'function') {
+            try { texts.push(nodeFs.realpathSync(resolved)); } catch { /* absent: the resolved text is what there is */ }
+          }
+        } else if (depth > 0 && item && typeof item === 'object') {
+          visit(item, depth - 1);
+        }
+      }
+    }
+  };
+  visit(args, 2);
+  for (const text of texts) {
+    const folded = text.replace(/\\/g, '/').toLowerCase();
+    for (const marker of APPROVAL_CHANNEL_DENY_MARKERS) {
+      if (folded.includes(marker)) return approvalChannelDenyWhy();
+    }
+  }
+  return null;
+}
+function approvalChannelDenyWhy() {
+  return 'Blocked: this names the human-owned STA approval channel (`~/' + APPROVAL_CHANNEL_DENY_MARKERS[0] + '/`: the GitHub App key and the approver list). No agent may read or change it, on any runtime or role; a person configures it and only STA reads it.';
+}
 const ATTEMPT_GRANT_KEY_REL_PATH = '.workflow/sta-grant-key';
 function unassignedSessionDenial(relative) {
   // A session with no identity holds no governed-artifact authority: read,
@@ -241,6 +282,15 @@ export const StaGuards = async ({ project }) => {
   return {
     "tool.execute.before": async (input, output) => {
       const tool = String((input && input.tool) || "").toLowerCase();
+      // Every tool, not only path writers: the approval channel is refused to
+      // reads and shell commands too (V13 TASK-027).
+      let approvalChannelWhy = null;
+      try {
+        approvalChannelWhy = approvalChannelDenial(nodePath, nodeFs, root, output && output.args ? output.args : {});
+      } catch {
+        approvalChannelWhy = null; // never trap an agent because this guard itself broke
+      }
+      if (approvalChannelWhy) throw new Error(approvalChannelWhy);
       if (!PATH_TOOLS.has(tool)) return;
       let reason = null;
       try {

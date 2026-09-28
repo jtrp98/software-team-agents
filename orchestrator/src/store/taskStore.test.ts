@@ -770,7 +770,7 @@ describe("SqliteTaskStore — the durability the in-memory store cannot prove", 
         if (status.kind === "WAITING_FOR_HUMAN") {
           // The bugfix pipeline has no schema gate, but deploy approval is always human —
           // one of the five stops that hold regardless of classification.
-          decidePending(orch2, true);
+          await decidePending(orch2, true);
           status = orch2.status();
           continue;
         }

@@ -41,6 +41,12 @@ export const EVIDENCE_KINDS = [
    * verdict on the files the executor port's snapshots say the run changed.
    */
   "scope-postflight",
+  /**
+   * V13 TASK-027 — where STA announced a pending approval request on its
+   * trusted channel (github-app: the Issue it opened). A decision is looked
+   * for only there, and the binding survives a restart.
+   */
+  "approval-publication",
   /** A trusted human decision applied to a pending approval request. */
   "approval-decision",
   /**
@@ -186,6 +192,24 @@ const ApprovalDecisionPayloadSchema = z.strictObject({
   evidenceRef: z.string().min(1),
 });
 
+const ApprovalPublicationPayloadSchema = z.strictObject({
+  kind: z.literal("approval-publication"),
+  requestId: z.string().min(1),
+  type: z.enum(ApprovalType),
+  channel: z.string().min(1),
+  /** The channel's own locator (github-app: `owner/repo#<issue>`). */
+  ref: z.string().min(1),
+  url: z.string().min(1).nullable(),
+  /** What the person was shown as the subject of the approval: the task's latest artifact digests at the time of asking. */
+  artifacts: z.array(
+    z.strictObject({
+      artifactType: z.string().min(1),
+      contentDigest: z.string().regex(/^[0-9a-f]{64}$/),
+      evidenceId: z.string().regex(/^evd_[0-9a-f]{32}$/),
+    }),
+  ),
+});
+
 const ReviewIndependencePayloadSchema = z.strictObject({
   kind: z.literal("review-independence"),
   /** The code-producing stages of this task's pipeline the review covers, in pipeline order. */
@@ -228,6 +252,7 @@ export const EvidencePayloadSchema = z.discriminatedUnion("kind", [
   ArtifactPayloadSchema,
   DeterministicVerificationPayloadSchema,
   ScopePostflightPayloadSchema,
+  ApprovalPublicationPayloadSchema,
   ApprovalDecisionPayloadSchema,
   ReviewIndependencePayloadSchema,
   StageCompletionPayloadSchema,

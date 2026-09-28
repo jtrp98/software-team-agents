@@ -222,7 +222,7 @@ describe("audit trail over a real run (T37)", () => {
     expect(trail.some((e) => e.type === "AGENT_COMPLETED")).toBe(true);
   });
 
-  it("records what the agent was handed, not just that it was assigned", () => {
+  it("records what the agent was handed, not just that it was assigned", async () => {
     const store = new MemoryTaskStore();
     const orch = new Orchestrator(
       "T-INPUT",
@@ -238,7 +238,7 @@ describe("audit trail over a real run (T37)", () => {
     for (let i = 0; i < 12; i++) {
       const status = orch.status();
       if (status.kind === "WAITING_FOR_HUMAN" && status.approvalType) {
-        decidePending(orch, true);
+        await decidePending(orch, true);
         continue;
       }
       if (status.kind !== "RUNNING") break;
@@ -332,7 +332,7 @@ describe("audit trail over a real run (T37)", () => {
     expect(rendered).toContain("model=not reported → not reported");
   });
 
-  it("records a human's answer as the human's, in the trail", () => {
+  it("records a human's answer as the human's, in the trail", async () => {
     const store = new MemoryTaskStore();
     const orch = new Orchestrator(
       "T-HUMAN",
@@ -343,13 +343,13 @@ describe("audit trail over a real run (T37)", () => {
     for (let i = 0; i < 20; i++) {
       const status = orch.status();
       if (status.kind === "WAITING_FOR_HUMAN" && status.approvalType === ApprovalType.REQUIREMENT_INTERVIEW) {
-        decidePending(orch, true, { actorId: "somchai" });
+        await decidePending(orch, true, { actorId: "somchai" });
         continue;
       }
       if (status.kind !== "RUNNING") break;
       orch.reportCompletion(status.stage, { outcome: { tokens: 1, cost: 0, result: "PASS" } }, { start: 0, end: 1 });
     }
-    decidePending(orch, true, { actorId: "somchai" });
+    await decidePending(orch, true, { actorId: "somchai" });
 
     const trail = auditTrail(store, "T-HUMAN");
     const asked = trail.find((e) => e.type === "APPROVAL_REQUIRED");

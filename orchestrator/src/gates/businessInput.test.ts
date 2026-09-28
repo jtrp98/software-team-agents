@@ -360,7 +360,7 @@ describe("T-V8-006 orchestration, prompt, resume, and invalidation", () => {
 
     await orch.step(withStageEvidence(() => pass)); // BA
     await orch.step(withStageEvidence(() => pass)); // SA -> schema/feasibility gate (unchanged in this round)
-    decidePending(orch, true);
+    await decidePending(orch, true);
     await orch.step(withStageEvidence(() => pass)); // test-planner
     await orch.step(withStageEvidence(() => pass)); // backend
     const retry = await orch.step(() => ({ outcome: { tokens: 1, cost: 0, result: "FAIL" } })); // QA

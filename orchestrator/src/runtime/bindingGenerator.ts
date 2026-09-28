@@ -282,10 +282,16 @@ export const AGY_MANAGED_HOOK_KEY = "sta-guards";
  * observed, so no alternation or pattern is emitted.
  */
 const AGY_GUARDED_TOOLS: readonly string[] = [
+  "find_by_name",
+  "grep_search",
+  "list_dir",
   "multi_replace_file_content",
   "notebook_edit",
   "replace_file_content",
+  // Reads and shell (V13 TASK-027): the approval-channel floor refuses them too.
+  "run_command",
   "sed_file",
+  "view_file",
   "write_to_file",
 ];
 
@@ -386,7 +392,8 @@ export function renderZcodeManagedHooks(): {
         { matcher: "Bash|PowerShell|Write|Edit|MultiEdit|NotebookEdit", hooks: [guard("block-git.js")] },
         { matcher: "Write|Edit|MultiEdit|NotebookEdit", hooks: [guard("block-outside-repo.js")] },
         { matcher: "Write", hooks: [guard("block-doc-rewrite.js")] },
-        { matcher: "Write|Edit|MultiEdit|NotebookEdit", hooks: [guard("block-path-permissions.js")] },
+        // Reads and shell too: the approval-channel floor refuses them (V13 TASK-027).
+        { matcher: "Bash|PowerShell|Read|Write|Edit|MultiEdit|NotebookEdit|NotebookRead|Grep|Glob|LS", hooks: [guard("block-path-permissions.js")] },
       ],
       Stop: [{ hooks: [guard("require-green-before-stop.js"), guard("block-secret-leak.js")] }],
     },

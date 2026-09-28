@@ -3,6 +3,7 @@ import { StaConfigMissingError, loadStaConfig } from "../packaging/staConfig.js"
 import { TaskRegistry } from "../orchestrator/taskRegistry.js";
 import { createRoleLaneStageGuard } from "../orchestrator/stageGuards.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
+import { resolveHumanDecisionChannel } from "../gates/humanChannelConfig.js";
 import { defaultStateDbPath, defaultStateViewPath } from "../store/stateView.js";
 
 /** Flags a verb accepts that take a value — their value must never be mistaken for a positional argument. */
@@ -36,6 +37,7 @@ export function openStore(projectRoot: string, stateDb?: string): { store: Sqlit
     store,
     stateViewPath: defaultStateViewPath(projectRoot),
     stageEntryGuard: createRoleLaneStageGuard({ projectRoot }),
+    humanDecisionVerifier: resolveHumanDecisionChannel(),
   });
   return { store, registry };
 }

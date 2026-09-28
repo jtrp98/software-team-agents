@@ -332,7 +332,11 @@ describe("driveTask — the per-task loop (migrated from cli/runTaskLoop.test.ts
     requestId: REQUEST_ID,
   };
 
-  function fixture(statuses: OrchestratorStatus[], stepResult?: OrchestratorStatus) {
+  function fixture(
+    statuses: OrchestratorStatus[],
+    stepResult?: OrchestratorStatus,
+    publish: () => Promise<unknown> = async () => null,
+  ) {
     let cursor = 0;
     const summary = vi.fn(() => "run summary");
     const step = vi.fn(async () => stepResult ?? statuses[++cursor]!);
@@ -343,6 +347,7 @@ describe("driveTask — the per-task loop (migrated from cli/runTaskLoop.test.ts
       step,
       stageDecision: null,
       events: { on: () => () => undefined },
+      publishPendingApproval: vi.fn(publish),
     } as unknown as DrivableTask;
     const io = quietIo();
     const drive = () => driveTask(orchestrator, {
@@ -352,7 +357,7 @@ describe("driveTask — the per-task loop (migrated from cli/runTaskLoop.test.ts
       executor: async () => executor,
       persisted: () => ({ paused: false, cancelled: false, cancelReason: null, failureRounds: 0 }),
     });
-    return { drive, io, step };
+    return { drive, io, step, orchestrator };
   }
 
   it("ends DONE for DEPLOYED and prints the run summary", async () => {
@@ -372,9 +377,32 @@ describe("driveTask — the per-task loop (migrated from cli/runTaskLoop.test.ts
     await expect(f.drive()).resolves.toMatchObject({ kind: "WAITING" });
     expect(f.step).not.toHaveBeenCalled();
     expect(f.io.lines.at(-1)).toBe(
-      `[orchestrator] parking task T-LOOP on pending request ${REQUEST_ID}. A person resolves it through a trusted channel: ` +
-        `node orchestrator/dist/cli.js approve T-LOOP --request ${REQUEST_ID} --yes|--no, then --resume.`,
+      `[orchestrator] parking task T-LOOP on pending request ${REQUEST_ID}. A person answers it on the trusted channel; then: ` +
+        `node orchestrator/dist/cli.js approve T-LOOP --request ${REQUEST_ID}, then --resume.`,
     );
+  });
+
+  it("announces the parked request on the trusted channel and prints where to answer it (V13 TASK-027)", async () => {
+    const f = fixture([gate], undefined, async () => ({
+      channel: "github-app",
+      ref: "acme/approvals#7",
+      url: "https://github.com/acme/approvals/issues/7",
+      requestId: REQUEST_ID,
+      fresh: true,
+    }));
+    await expect(f.drive()).resolves.toMatchObject({ kind: "WAITING" });
+    expect(f.orchestrator.publishPendingApproval).toHaveBeenCalledTimes(1);
+    expect(f.io.lines).toContain(`[orchestrator] request ${REQUEST_ID} is announced on github-app: https://github.com/acme/approvals/issues/7`);
+    expect(f.step).not.toHaveBeenCalled();
+  });
+
+  it("still parks, and says so, when the channel cannot announce the request", async () => {
+    const f = fixture([gate], undefined, async () => {
+      throw new Error("github-app: GET /repos/acme/approvals/installation answered HTTP 404");
+    });
+    await expect(f.drive()).resolves.toMatchObject({ kind: "WAITING" });
+    expect(f.io.lines.some((line) => /could not announce request .* HTTP 404/.test(line))).toBe(true);
+    expect(f.step).not.toHaveBeenCalled();
   });
 
   it("is STUCK on a gate with no pending request to answer", async () => {

@@ -95,7 +95,7 @@ export interface TaskStop {
 }
 
 /** The structural slice of an `Orchestrator` one task's drive needs — so the loop is testable on its own. */
-export type DrivableTask = Pick<Orchestrator, "taskId" | "status" | "step" | "stageDecision" | "events"> & {
+export type DrivableTask = Pick<Orchestrator, "taskId" | "status" | "step" | "stageDecision" | "events" | "publishPendingApproval"> & {
   runLog: Pick<Orchestrator["runLog"], "summary">;
 };
 
@@ -108,7 +108,12 @@ export interface DriveTaskOptions {
   persisted: () => { paused: boolean; cancelled: boolean; cancelReason: string | null; failureRounds: number };
 }
 
-function waitingStop(taskId: string, status: Extract<OrchestratorStatus, { kind: "WAITING_FOR_HUMAN" }>, io: RunTasksIo): TaskStop {
+async function waitingStop(
+  orchestrator: DrivableTask,
+  status: Extract<OrchestratorStatus, { kind: "WAITING_FOR_HUMAN" }>,
+  io: RunTasksIo,
+): Promise<TaskStop> {
+  const taskId = orchestrator.taskId;
   const label = status.approvalType ? `${status.approvalType}` : `${status.from} -> ${status.to}`;
   io.log(`[orchestrator] human decision required (${label}): ${status.reason}`);
   if (status.approvalType) io.log(`[orchestrator]   ${APPROVAL_PROMPT[status.approvalType]}`);
@@ -116,10 +121,19 @@ function waitingStop(taskId: string, status: Extract<OrchestratorStatus, { kind:
     io.log(`[orchestrator] task ${taskId} stuck waiting: ${status.from} -> ${status.to} has no pending approval request to answer.`);
     return { kind: "STUCK", reason: status.reason };
   }
+  // Announce the question on the trusted channel (github-app: one Issue per
+  // request, persisted). A failure leaves the request pending and is said
+  // out loud; it never answers anything.
+  try {
+    const publication = await orchestrator.publishPendingApproval();
+    if (publication) io.log(`[orchestrator] request ${publication.requestId} is announced on ${publication.channel}: ${publication.url ?? publication.ref}`);
+  } catch (e) {
+    io.error(`[orchestrator] could not announce request ${status.requestId} on the trusted channel: ${e instanceof Error ? e.message : String(e)}`);
+  }
   io.log(
     `[orchestrator] parking task ${taskId} on pending request ${status.requestId}. ` +
-      `A person resolves it through a trusted channel: ` +
-      `node orchestrator/dist/cli.js approve ${taskId} --request ${status.requestId} --yes|--no, then --resume.`,
+      `A person answers it on the trusted channel; then: ` +
+      `node orchestrator/dist/cli.js approve ${taskId} --request ${status.requestId}, then --resume.`,
   );
   return { kind: "WAITING", reason: status.reason };
 }
@@ -166,7 +180,7 @@ export async function driveTask(orchestrator: DrivableTask, options: DriveTaskOp
         io.log(`[orchestrator] task ${taskId} BLOCKED: ${status.reason}`);
         return { kind: "BLOCKED", reason: status.reason };
       }
-      if (status.kind === "WAITING_FOR_HUMAN") return waitingStop(taskId, status, io);
+      if (status.kind === "WAITING_FOR_HUMAN") return waitingStop(orchestrator, status, io);
 
       io.log(`[orchestrator] running ${status.stage}...`);
       const verdictsBefore = qaVerdicts;

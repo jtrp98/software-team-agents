@@ -1095,7 +1095,7 @@ describe("the orchestrator drives a whole task through the interface (T108)", ()
     for (let i = 0; i < maxSteps; i++) {
       const status = await orch.step(evidenced);
       if (status.kind === "WAITING_FOR_HUMAN") {
-        decidePending(orch, true);
+        await decidePending(orch, true);
         continue;
       }
       if (status.kind === "DEPLOYED" || status.kind === "BLOCKED") return status;

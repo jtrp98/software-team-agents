@@ -325,7 +325,7 @@ describe("fail-closed transitions (V13 TASK-003)", () => {
     const orch = new Orchestrator("T-APPROVAL", deploy(), { ...human, store });
     const waiting = await orch.step(() => ({ outcome: PASS })); // devops prepare
     expect(waiting.kind).toBe("WAITING_FOR_HUMAN");
-    decidePending(orch, true);
+    await decidePending(orch, true);
     // Simulate a ledger whose decision was written without passing through STA:
     // same approved record, but the decision evidence is gone.
     const row = store.loadTask("T-APPROVAL")!;
@@ -343,7 +343,7 @@ describe("fail-closed transitions (V13 TASK-003)", () => {
     const store = new MemoryTaskStore();
     const orch = new Orchestrator("T-DONE", deploy(), { ...human, store });
     await orch.step(() => ({ outcome: PASS })); // devops prepare
-    decidePending(orch, true);
+    await decidePending(orch, true);
     expect(await orch.step(() => ({ outcome: PASS }))).toEqual({ kind: "DEPLOYED" }); // devops execute
     expect(kinds(store.evidenceForTask("T-DONE"))).toEqual([
       "devops#1:role-run",

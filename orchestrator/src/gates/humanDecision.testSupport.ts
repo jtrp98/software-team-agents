@@ -1,6 +1,6 @@
 import type { Orchestrator } from "../orchestrator/orchestrator.js";
 import type { ApprovalRecord, VerifiedHumanDecision } from "./approval.js";
-import { UntrustedHumanDecisionError, type HumanDecisionSubmission, type HumanDecisionVerifier } from "./humanDecision.js";
+import { UntrustedHumanDecisionError, type HumanDecisionContext, type HumanDecisionSubmission, type HumanDecisionVerifier } from "./humanDecision.js";
 
 /**
  * Test-only trusted channel. It stands in for a real authenticated channel so
@@ -24,7 +24,10 @@ export function testHumanVerifier(opts: { defaultActor?: string; authorizedActor
   let counter = 0;
   return {
     channel: TEST_HUMAN_CHANNEL,
-    verify(request: ApprovalRecord, submission: HumanDecisionSubmission, now: number): VerifiedHumanDecision {
+    async verify(request: ApprovalRecord, submission: HumanDecisionSubmission, { now }: HumanDecisionContext): Promise<VerifiedHumanDecision> {
+      if (submission.approved === undefined) {
+        throw new UntrustedHumanDecisionError(`${TEST_HUMAN_CHANNEL}: this channel carries no answer of its own — the submission must say approve or reject`);
+      }
       const credential = submission.credential as TestCredential | undefined;
       if (!credential || credential.token !== TEST_HUMAN_CREDENTIAL) {
         throw new UntrustedHumanDecisionError(`${TEST_HUMAN_CHANNEL}: credential not authenticated`);
@@ -55,10 +58,10 @@ export function trustedCredential(extra: Omit<TestCredential, "token"> = {}): Te
 }
 
 /** Answers whatever request the task is waiting on, through the orchestrator's configured channel. */
-export function decidePending(orchestrator: Orchestrator, approved: boolean, extra: { note?: string; actorId?: string } = {}): string {
+export async function decidePending(orchestrator: Orchestrator, approved: boolean, extra: { note?: string; actorId?: string } = {}): Promise<string> {
   const pending = orchestrator.pendingApprovalRequest();
   if (!pending) throw new Error(`task ${orchestrator.taskId} has no pending approval request`);
-  orchestrator.submitHumanDecision({
+  await orchestrator.submitHumanDecision({
     requestId: pending.requestId,
     approved,
     ...(extra.note === undefined ? {} : { note: extra.note }),
