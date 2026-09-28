@@ -5,7 +5,7 @@ import { z } from "zod";
 import { AGENT_REGISTRY } from "../agents/registry.js";
 import { ATTEMPT_GRANT_KEY_PATH, ATTEMPT_GRANT_TOKEN_PATH, type GuardTargetWorkRoot } from "../agents/pathPermissions.js";
 import { stableHash } from "../artifacts/executionPacket.js";
-import type { AgentStage } from "../types.js";
+import { AgentStage } from "../types.js";
 import { buildEvidence, type EvidencePayload, type EvidenceRecord, type EvidenceStore } from "../evidence/evidenceStore.js";
 
 /** Hook-facing token/key paths — owned by `pathPermissions.ts` (they render into every guard host), re-exported here. */
@@ -235,6 +235,19 @@ export function grantEvidence(input: {
 export function issueAttemptGrant(store: EvidenceStore, input: IssueAttemptGrantInput): IssuedAttemptGrant {
   if (!Number.isFinite(input.ttlMs) || input.ttlMs <= 0) {
     throw new AttemptGrantRejectedError("malformed", null, `ttlMs must be positive (got ${input.ttlMs})`);
+  }
+  const isEngineerAttempt =
+    input.stage === AgentStage.BACKEND_ENGINEER ||
+    input.stage === AgentStage.FRONTEND_ENGINEER ||
+    input.stage === AgentStage.DEVOPS;
+  for (const root of input.workRoots ?? []) {
+    if (root.access === "write" && !isEngineerAttempt) {
+      throw new AttemptGrantRejectedError(
+        "unregistered-role",
+        null,
+        `Product write grant is restricted to Engineer attempts: stage ${input.stage} cannot be granted write access to Target "${root.targetId}"`,
+      );
+    }
   }
   const issuedAt = new Date(input.now).toISOString();
   const expiresAt = new Date(input.now + input.ttlMs).toISOString();

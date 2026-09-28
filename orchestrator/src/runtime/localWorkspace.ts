@@ -6,6 +6,7 @@ import type {
   RuntimeCommandResult,
   RuntimeWorkspace,
 } from "./runtimeAdapter.js";
+import { matchesGlob } from "../agents/pathPermissions.js";
 
 /**
  * `RuntimeWorkspace` over the local filesystem.
@@ -29,6 +30,14 @@ export class OutsideWorkspaceError extends Error {
   }
 }
 
+/** Thrown when a write is attempted on a read-only workspace or outside allowed target write paths (V13 TASK-022). */
+export class WorkspaceWriteDeniedError extends Error {
+  constructor(relPath: string, root: string, reason?: string) {
+    super(`write to ${relPath} denied in workspace ${root}${reason ? `: ${reason}` : ""}`);
+    this.name = "WorkspaceWriteDeniedError";
+  }
+}
+
 export interface LocalWorkspaceOptions {
   /** Absolute path the workspace is rooted at. Every relative path is resolved against it. */
   root: string;
@@ -36,10 +45,19 @@ export interface LocalWorkspaceOptions {
   spawnSync?: typeof nodeSpawnSync;
   /** Default per-command timeout, overridable per call. Generous rather than absent — a `build` on a cold cache is slow, but a hung command must not hold a task forever. */
   defaultTimeoutMs?: number;
+  /** Read-only workspace: refuses all write operations. */
+  readOnly?: boolean;
+  /** Scoped allowed write patterns (globs relative to root). When non-empty, writes to non-matching paths are refused. */
+  allowedWritePaths?: readonly string[];
+  /** Denied write patterns (globs relative to root). Outranks allowedWritePaths. */
+  deniedWritePaths?: readonly string[];
 }
 
 export class LocalWorkspace implements RuntimeWorkspace {
   readonly root: string;
+  readonly readOnly: boolean;
+  readonly allowedWritePaths?: readonly string[];
+  readonly deniedWritePaths?: readonly string[];
   private readonly spawn: typeof nodeSpawnSync;
   private readonly defaultTimeoutMs: number;
 
@@ -47,6 +65,9 @@ export class LocalWorkspace implements RuntimeWorkspace {
     this.root = path.resolve(opts.root);
     this.spawn = opts.spawnSync ?? nodeSpawnSync;
     this.defaultTimeoutMs = opts.defaultTimeoutMs ?? 10 * 60_000;
+    this.readOnly = opts.readOnly ?? false;
+    this.allowedWritePaths = opts.allowedWritePaths;
+    this.deniedWritePaths = opts.deniedWritePaths;
   }
 
   /** Resolves a workspace-relative path, refusing anything that climbs out. An absolute path is accepted only when it is already inside the root. */
@@ -72,6 +93,18 @@ export class LocalWorkspace implements RuntimeWorkspace {
 
   async writeFile(relPath: string, content: string): Promise<void> {
     const abs = this.resolve(relPath);
+    const normalizedRel = path.relative(this.root, abs).replace(/\\/g, "/");
+    if (this.readOnly) {
+      throw new WorkspaceWriteDeniedError(relPath, this.root, "workspace is read-only");
+    }
+    if (this.deniedWritePaths && this.deniedWritePaths.some((pattern) => matchesGlob(pattern, normalizedRel))) {
+      throw new WorkspaceWriteDeniedError(relPath, this.root, "path matches a denied write pattern");
+    }
+    if (this.allowedWritePaths && this.allowedWritePaths.length > 0) {
+      if (!this.allowedWritePaths.some((pattern) => matchesGlob(pattern, normalizedRel))) {
+        throw new WorkspaceWriteDeniedError(relPath, this.root, "path is not covered by allowed write patterns");
+      }
+    }
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, content, "utf8");
   }

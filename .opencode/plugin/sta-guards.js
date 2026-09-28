@@ -133,7 +133,8 @@ function attemptGrantFromText(text, createHmac, keyHex, nowMs) {
   if (!grantSignatureValid(parsed, createHmac, keyHex)) return null;
   const stack = parsed.scope && typeof parsed.scope === 'object' && !Array.isArray(parsed.scope) ? parsed.scope.stack : null;
   const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);
-  return { grantId: parsed.grant_id, role: parsed.role, stack: { write: list(stack && stack.write), deny: list(stack && stack.deny) } };
+  const workRoots = Array.isArray(parsed.work_roots) ? parsed.work_roots : [];
+  return { grantId: parsed.grant_id, role: parsed.role, stack: { write: list(stack && stack.write), deny: list(stack && stack.deny) }, workRoots };
 }
 function frameworkPayloadDenial(relative, role) {
   // Bound to the stage, not to the checkout: one workspace carries both the
@@ -157,8 +158,11 @@ function stackPathRules(grant) {
   const list = (value) => (Array.isArray(value) ? value.filter((item) => typeof item === 'string' && item !== '') : []);
   return { write: list(parsed && parsed.write).concat(granted.write), deny: list(parsed && parsed.deny).concat(granted.deny) };
 }
-function boundReadOnlyTarget(nodePath, target) {
-  let roots; try { roots = JSON.parse(process.env.STA_TARGET_WORK_ROOTS || '[]'); } catch { return null; }
+function boundReadOnlyTarget(nodePath, target, grant) {
+  let roots; try { roots = JSON.parse(process.env.STA_TARGET_WORK_ROOTS || '[]'); } catch { roots = []; }
+  if (!Array.isArray(roots) || roots.length === 0) {
+    if (grant && Array.isArray(grant.workRoots)) roots = grant.workRoots;
+  }
   if (!Array.isArray(roots)) return null;
   const absolute = nodePath.resolve(target);
   for (const candidate of roots) {
@@ -272,7 +276,7 @@ export const StaGuards = async ({ project }) => {
     const grant = readAttemptGrant();
     const role = process.env.STA_ROLE || (grant ? grant.role : null);
 
-    const readOnlyTarget = boundReadOnlyTarget(np, target);
+    const readOnlyTarget = boundReadOnlyTarget(np, target, grant);
     if (readOnlyTarget !== null) return boundReadOnlyWhy(readOnlyTarget, role);
 
     // Ahead of `evaluateRules`, which allows anything the floor lets through

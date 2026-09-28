@@ -20,6 +20,7 @@ import { isAgentAssignedAt, isTaskDone } from "../../orchestrator/taskStatus.js"
 import { AgentStage } from "../../types.js";
 import { CliUsageError } from "../../cli.js";
 import { flagValue, openStore, positionalArg, positionalArgs } from "../support.js";
+import { resolveSessionTargetWorkRoots } from "../../targetcli/roleWorkspace.js";
 
 /**
  * `sta grant issue|verify|consume` — V13 TASK-012, the STA-issued scoped
@@ -133,6 +134,21 @@ export async function runGrantVerb(rest: string[], defaultProjectRoot: string): 
       }
       const role = getAgent(stage).role;
       const now = Date.now();
+      const sessionTargetRoots = resolveSessionTargetWorkRoots({
+        knowledgeRoot: projectRoot,
+        workspaceRoot: projectRoot,
+      });
+      const isEngineer = stage === AgentStage.BACKEND_ENGINEER || stage === AgentStage.FRONTEND_ENGINEER;
+      const isDevops = stage === AgentStage.DEVOPS;
+      const workRoots = sessionTargetRoots.map((entry) => {
+        const isBoundTarget =
+          isEngineer &&
+          Boolean(task.targetBindings?.targets.some((binding) => binding.target_id === entry.targetId && binding.role === stage));
+        const access = (isBoundTarget || (isDevops && Boolean(task.targetBindings?.targets.length)))
+          ? ("write" as const)
+          : ("read" as const);
+        return { targetId: entry.targetId, path: entry.path, access };
+      });
       const { token, tokenPath } = issueAttemptGrant(store, {
         stateRoot: projectRoot,
         taskId,
@@ -140,6 +156,7 @@ export async function runGrantVerb(rest: string[], defaultProjectRoot: string): 
         role,
         contractDigest,
         scope: scopeFor(stage, role, projectRoot),
+        workRoots,
         ttlMs: ttlHours * 3_600_000,
         now,
       });

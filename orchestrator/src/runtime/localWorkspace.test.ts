@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
-import { LocalWorkspace, OutsideWorkspaceError } from "./localWorkspace.js";
+import { LocalWorkspace, OutsideWorkspaceError, WorkspaceWriteDeniedError } from "./localWorkspace.js";
 import { RuntimeCapability } from "./runtimeCapabilities.js";
 import { missingRequiredCapabilities, REQUIRED_RUNTIME_CAPABILITIES } from "./runtimeCapabilities.js";
 
@@ -51,6 +51,46 @@ describe("LocalWorkspace (T108)", () => {
     const ws = new LocalWorkspace({ root });
     await ws.writeFile(path.join(root, "inside.md"), "ok");
     expect(await ws.readFile("inside.md")).toBe("ok");
+  });
+
+  it("refuses write operations when configured as readOnly (V13 TASK-022)", async () => {
+    const root = tmpRoot();
+    const ws = new LocalWorkspace({ root, readOnly: true });
+    await expect(ws.writeFile("any.txt", "content")).rejects.toThrow(WorkspaceWriteDeniedError);
+    await expect(ws.writeFile("any.txt", "content")).rejects.toThrow(/workspace is read-only/);
+  });
+
+  it("restricts writes to allowedWritePaths when configured (V13 TASK-022)", async () => {
+    const root = tmpRoot();
+    const ws = new LocalWorkspace({
+      root,
+      allowedWritePaths: ["src/**", "package.json"],
+    });
+
+    await ws.writeFile("src/index.ts", "console.log(1);");
+    expect(await ws.readFile("src/index.ts")).toBe("console.log(1);");
+
+    await ws.writeFile("package.json", "{}");
+    expect(await ws.readFile("package.json")).toBe("{}");
+
+    await expect(ws.writeFile("docs/readme.md", "# Readme")).rejects.toThrow(WorkspaceWriteDeniedError);
+    await expect(ws.writeFile("docs/readme.md", "# Readme")).rejects.toThrow(/not covered by allowed write patterns/);
+  });
+
+  it("enforces deniedWritePaths over allowedWritePaths (V13 TASK-022)", async () => {
+    const root = tmpRoot();
+    const ws = new LocalWorkspace({
+      root,
+      allowedWritePaths: ["**/*"],
+      deniedWritePaths: [".git/**", "secrets/**"],
+    });
+
+    await ws.writeFile("src/app.ts", "export const ok = 1;");
+    expect(await ws.readFile("src/app.ts")).toBe("export const ok = 1;");
+
+    await expect(ws.writeFile(".git/config", "evil")).rejects.toThrow(WorkspaceWriteDeniedError);
+    await expect(ws.writeFile("secrets/key.pem", "secret")).rejects.toThrow(WorkspaceWriteDeniedError);
+    await expect(ws.writeFile("secrets/key.pem", "secret")).rejects.toThrow(/matches a denied write pattern/);
   });
 
   it("runs a command in the workspace root and reports its exit code and output", async () => {
