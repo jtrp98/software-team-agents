@@ -230,7 +230,7 @@ export const USAGE =
   `  ${GRANT_USAGE.split("\n").join("\n  ")}` +
   "  sta policy [<area>] [<section>] [--json] [--project-root <path>]   read one policies/ section instead of the whole file; no args lists every area and section\n" +
   "  sta projects [--workspace <path>] [--project-root <path>]   read-only status summary for every project workspace.yaml names\n" +
-  "  sta init    --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
+  "  sta init    --mode three-repo [--templates <dir>] [--project-root <path>] [--force]   initialize an explicit install mode\n" +
   "  sta configure knowledge-root <path> [--root <name>] [--default] [--config-path <path>]   bind a Knowledge root. With --root: the named-root surface (V11) — the first named operation migrates installation.yaml to v2 (`knowledge_roots` map + `default_root`); without --root: the V10 single-root form, still valid on a machine that has no v2 file and refused on one\n" +
   "  sta configure default-root --root <name> [--config-path <path>]   switch which named root new work picks when no --root is given\n" +
   "  sta transfer plan --source-root <name> --source-target <id> --destination-root <name> [--destination-target <id>]   read-only transfer plan + the approval-record template\n" +
@@ -241,7 +241,7 @@ export const USAGE =
   "  sta changed [--project-root <path>] [--json]     surface working-tree changes and deterministic green/red gate status\n" +
   "  sta report  [--output <path>] [--module <name>] [--root <name>] [--project-root <path>]   visual dashboard as a static offline HTML page\n" +
   `  ${BOUNDED_RUN_USAGE.split("\n").join("\n  ")}   explicit bounded run: intake/preview/freeze, then every task through the one task engine (owner engineer + checkpoint -> reviewer -> QA [-> security]) to a chosen boundary\n` +
-  "  sta upgrade --mode <legacy-project|three-repo> [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
+  "  sta upgrade --mode three-repo [--templates <dir>] [--project-root <path>]   upgrade an explicit install mode\n" +
   "  sta migrate [--project-root <path>]   carry .sta/ across a breaking manifest schema change, if one is pending\n" +
   "  sta rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups`\n" +
   "  sta list-backups [--project-root <path>]   list this project's .sta/backups/ snapshots, oldest first\n" +

@@ -45,41 +45,7 @@ const ContextBudgetCompositionSchema = z
   })
   .strict();
 
-/**
- * The deterministic handoff from Task Compiler to runtime execution. It is a
- * regenerable Local Runtime State artifact, never an authored module document.
- */
-export const LegacyExecutionPacketSchema = z
-  .object({
-    text: z.string().min(1),
-    composition: PromptCompositionSchema,
-    budgetComposition: ContextBudgetCompositionSchema,
-    task_id: z.string().min(1),
-    stage: z.enum(AgentStage),
-    role: z.string().min(1),
-    acceptance_criteria: z.array(z.string().min(1)),
-    required_verification: z.array(z.string().min(1)),
-    stop_conditions: z.array(z.string().min(1)),
-    scope: z
-      .object({
-        allow: z.array(z.string().min(1)),
-        deny: z.array(z.string().min(1)),
-      })
-      .strict(),
-    sources: z.array(z.string().min(1)),
-  })
-  .strict()
-  .superRefine((packet, ctx) => {
-    const compositionChars = Object.values(packet.composition).reduce((sum, chars) => sum + chars, 0);
-    const budgetChars = Object.values(packet.budgetComposition).reduce((sum, chars) => sum + chars, 0);
-    if (compositionChars !== packet.text.length) {
-      ctx.addIssue({ code: "custom", path: ["composition"], message: `composition totals ${compositionChars}, expected text length ${packet.text.length}` });
-    }
-    if (budgetChars !== packet.text.length) {
-      ctx.addIssue({ code: "custom", path: ["budgetComposition"], message: `budget composition totals ${budgetChars}, expected text length ${packet.text.length}` });
-    }
-  });
-export type LegacyExecutionPacket = z.infer<typeof LegacyExecutionPacketSchema>;
+
 
 export const ExecutionPacketSchema = PacketFieldsSchema.extend({
   text: z.string().min(1), composition: PromptCompositionSchema,

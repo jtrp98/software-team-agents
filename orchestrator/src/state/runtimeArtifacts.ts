@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ArtifactType, validateArtifact, LegacyExecutionPacketSchema, type LegacyExecutionPacket, type ExecutionPacket } from "../artifacts/schemas.js";
+import { ArtifactType, validateArtifact, type ExecutionPacket } from "../artifacts/schemas.js";
 import { AgentStage } from "../types.js";
 import { FindingSchema, RepairPacketSchema, assertCanTransitionFinding, type Finding, type RepairPacket } from "../artifacts/finding.js";
 
@@ -236,7 +236,7 @@ export function readExecutionPacket(packetPath: string, expected?: { packetHash?
   const stat = fs.lstatSync(packetPath);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`execution packet is not a regular file: ${packetPath}`);
   const raw = JSON.parse(fs.readFileSync(packetPath, "utf8"));
-  if (raw.version !== 2) throw new Error("legacy packet is audit-only; explicitly recompile in a new attempt before execution");
+  if (raw.version !== 2) throw new Error("legacy execution packet is no longer supported; canonical v2 execution packet required");
   const packet = validateArtifact(ArtifactType.EXECUTION_PACKET, raw);
   for (const [name, actual, wanted] of [
     ["packet", packet.packet_hash, expected?.packetHash], ["base revision", packet.identity.base_revision, expected?.baseRevision],
@@ -244,13 +244,6 @@ export function readExecutionPacket(packetPath: string, expected?: { packetHash?
     ["compiler", packet.identity.compiler_hash, expected?.compilerHash],
   ]) if (wanted !== undefined && actual !== wanted) throw new Error(`${name} hash/revision drift; recompile in a new attempt`);
   return packet;
-}
-
-export function readExecutionPacketForAudit(packetPath: string): ExecutionPacket | LegacyExecutionPacket {
-  const stat = fs.lstatSync(packetPath);
-  if (!stat.isFile() || stat.isSymbolicLink()) throw new Error(`execution packet is not a regular file: ${packetPath}`);
-  const raw = JSON.parse(fs.readFileSync(packetPath, "utf8"));
-  return raw.version === 2 ? readExecutionPacket(packetPath) : LegacyExecutionPacketSchema.parse(raw);
 }
 
 /** Latest regular packet for a stage, ordered by its numeric attempt. */

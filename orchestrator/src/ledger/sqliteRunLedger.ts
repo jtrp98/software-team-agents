@@ -27,7 +27,6 @@ import {
   TERMINAL_RUN_STATUSES,
   applyAttemptStatus,
   applyRunStatus,
-  applyTaskStatus,
   type LedgerAttemptStatus,
   type LedgerRunStatus,
   type LedgerTaskStatus,
@@ -172,36 +171,6 @@ export class SqliteRunLedger implements RunLedger {
       | { record: string }
       | undefined;
     return row ? LedgerTaskSchema.parse(JSON.parse(row.record)) : null;
-  }
-
-  setTaskStatus(
-    runId: string,
-    taskId: string,
-    to: LedgerTaskStatus,
-    options: { reason?: string; actor?: string } = {},
-  ): LedgerTask {
-    return this.transaction(() => {
-      const task = this.readTask(runId, taskId);
-      if (!task) throw new LedgerNotFoundError(`task in run ${runId}`, taskId);
-      const transition = applyTaskStatus(`${runId}/${taskId}`, task.status, to);
-      if (transition.idempotent) return task;
-      const updated: LedgerTask = { ...task, status: to, updated_at: this.now() };
-      this.db
-        .prepare("UPDATE ledger_tasks SET record = ? WHERE run_id = ? AND task_id = ?")
-        .run(JSON.stringify(LedgerTaskSchema.parse(updated)), runId, taskId);
-      this.appendEvent({
-        run_id: runId,
-        task_id: taskId,
-        at: updated.updated_at,
-        kind: "TASK_STATUS",
-        actor: options.actor ?? "orchestrator",
-        reason: options.reason ?? null,
-        from: task.status,
-        to,
-        payload: {},
-      });
-      return updated;
-    });
   }
 
   projectTaskStatus(runId: string, taskId: string, to: LedgerTaskStatus, options: { reason?: string } = {}): LedgerTask {

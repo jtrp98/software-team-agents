@@ -3,8 +3,6 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { AgentStage } from "../types.js";
-import { projectWaveRun, resolveExecutionAuthority, LedgerAdapterError } from "../ledger/adapters.js";
 import { observeRuns } from "./observability.js";
 import { runArtifactPaths, type KnownJournalRecord, type RunManifest } from "./journal.js";
 import { writeLegacyWaveRun } from "./legacyWaveRecord.testSupport.js";
@@ -77,6 +75,11 @@ describe("T-V8-029 — the retired wave lifecycle is unreachable, not merely unu
     "pruneWaveRunArtifacts",
     "WAVE_ATTEMPT_STARTED",
     "WAVE_CHECKPOINT_REATTRIBUTED",
+    "projectWaveRun",
+    "resolveExecutionAuthority",
+    "LegacyExecutionPacketSchema",
+    "readExecutionPacketForAudit",
+    "LegacyRuntimeTaskSchema",
   ])("no production source calls retired symbol %s", (symbol) => {
     expect(offendersFor(new RegExp(escapeRegExp(symbol)))).toEqual([]);
   });
@@ -150,39 +153,12 @@ describe("T-V8-029 — a legacy wave record stays inspectable and cannot be resu
     }
   }
 
-  it("projects into ledger vocabulary and reports the legacy journal as its authority", async () => {
-    await withRoot((root) => {
-      writeLegacyWaveRun(root, manifest(), RECORDS);
-      const projection = projectWaveRun(root, RUN_ID, {
-        taskOwners: new Map([["BE-1", AgentStage.BACKEND_ENGINEER]]),
-      });
-      expect(projection.run.run_id).toBe(RUN_ID);
-      expect(projection.tasks[0]).toMatchObject({ task_id: "BE-1", status: "CHECKPOINTED" });
-      expect(projection.checkpoints[0]?.sha).toBe("c".repeat(40));
-      expect(resolveExecutionAuthority({ projectRoot: root, runId: RUN_ID, ledgerHasRun: false })).toMatchObject({
-        authority: "legacy-wave-journal",
-      });
-      // The ledger wins the moment it holds the run; there is no tie-break.
-      expect(resolveExecutionAuthority({ projectRoot: root, runId: RUN_ID, ledgerHasRun: true })).toMatchObject({
-        authority: "ledger",
-      });
-    });
-  });
-
-  it("refuses to claim state for a run id neither store holds", async () => {
-    await withRoot((root) => {
-      expect(() => resolveExecutionAuthority({ projectRoot: root, runId: RUN_ID, ledgerHasRun: false }))
-        .toThrow(LedgerAdapterError);
-    });
-  });
-
   it("stays byte-identical after being read, because no writer exists to append to it", async () => {
     await withRoot(async (root) => {
       writeLegacyWaveRun(root, manifest({ target_root: root, knowledge_root: root }), RECORDS);
       const paths = runArtifactPaths(root, RUN_ID);
       const before = { manifest: fs.readFileSync(paths.manifest), journal: fs.readFileSync(paths.journal) };
 
-      projectWaveRun(root, RUN_ID, { taskOwners: new Map([["BE-1", AgentStage.BACKEND_ENGINEER]]) });
       await observeRuns(root);
 
       expect(fs.readFileSync(paths.manifest).equals(before.manifest)).toBe(true);

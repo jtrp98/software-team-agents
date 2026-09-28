@@ -10,6 +10,7 @@ import { EXECUTOR_LIFECYCLE_CAPABILITIES, RuntimeCapability } from "./runtimeCap
 import { RuntimeRegistry } from "./runtimeRegistry.js";
 import type { LedgerAttempt } from "../ledger/runLedger.js";
 import { seedRealContracts } from "../testing/contractFixtures.js";
+import { FIXTURE_REVISION, runtimeTaskFixture } from "./packetFixture.testSupport.js";
 
 /**
  * T-V8-018, at the seam that matters: the ledger record is what the adapter
@@ -26,6 +27,16 @@ function tmpProject(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "frozen-attempt-"));
   seedRealContracts(root);
   return root;
+}
+
+function executorFor(opts: Parameters<typeof createRuntimeExecutor>[0]) {
+  const root = opts.projectRoot!;
+  return createRuntimeExecutor({
+    runtimeTask: (taskId, stage) =>
+      runtimeTaskFixture(root, { taskId, stage, allow: [], moduleName: opts.moduleName ? opts.moduleName(taskId) : "sales-crm" }),
+    packetBaseRevision: async () => FIXTURE_REVISION,
+    ...opts,
+  });
 }
 
 function frozen(overrides: Partial<LedgerAttempt> = {}): LedgerAttempt {
@@ -52,7 +63,7 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
   it("uses the ledger's runtime/model/effort instead of re-resolving a route", async () => {
     const chosen = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet", "opus"], respond: () => okResult() });
     const other = new MockRuntimeAdapter({ id: "codex", models: ["gpt-5"], respond: () => okResult() });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime: other,
       projectRoot: tmpProject(),
       moduleName: () => "sales-crm",
@@ -80,7 +91,7 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
 
   it("refuses when the frozen runtime is not registered in this process", async () => {
     const only = new MockRuntimeAdapter({ id: "codex", respond: () => okResult() });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime: only,
       projectRoot: tmpProject(),
       moduleName: () => "sales-crm",
@@ -95,7 +106,7 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
 
   it("refuses a frozen attempt that belongs to another task or stage", async () => {
     const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"], respond: () => okResult() });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime,
       projectRoot: tmpProject(),
       moduleName: () => "sales-crm",
@@ -110,7 +121,7 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
 
   it("T-V8-031 refuses a previously frozen non-Claude Target-write attempt after support policy is enforced", async () => {
     const runtime = new MockRuntimeAdapter({ id: "opencode", models: ["glm-4.7"], respond: () => okResult() });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime,
       projectRoot: tmpProject(),
       moduleName: () => "sales-crm",
@@ -131,7 +142,7 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
   // The refusal keys on the runtime's certification, never on the lane.
   it("T-V10 (TASK-004) refuses a zcode Target-write attempt the same way", async () => {
     const runtime = new MockRuntimeAdapter({ id: "zcode", models: ["glm-4.7"], respond: () => okResult() });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime,
       projectRoot: tmpProject(),
       moduleName: () => "sales-crm",
@@ -156,7 +167,7 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
       capabilities: [RuntimeCapability.PRE_TOOL_GUARD, ...EXECUTOR_LIFECYCLE_CAPABILITIES],
       respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }),
     });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime,
       projectRoot: tmpProject(),
       moduleName: () => "sales-crm",
@@ -174,7 +185,7 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
 
   it("sends the ledger's model even when it is not this executor's own default, and conformance agrees", async () => {
     const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"], respond: () => okResult() });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime,
       projectRoot: tmpProject(),
       moduleName: () => "sales-crm",
@@ -193,7 +204,7 @@ describe("T-V8-018 — the executor hands the adapter exactly the frozen route",
   it("halts on an unavailable frozen provider instead of hopping to the next candidate", async () => {
     const unavailable = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"], probe: { available: false, reason: "binary not found" } });
     const spare = new MockRuntimeAdapter({ id: "codex", models: ["gpt-5"], respond: () => okResult() });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime: unavailable,
       projectRoot: tmpProject(),
       moduleName: () => "sales-crm",

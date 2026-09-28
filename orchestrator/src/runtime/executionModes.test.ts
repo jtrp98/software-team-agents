@@ -46,6 +46,16 @@ function targetTask(root: string) {
   };
 }
 
+function executorFor(opts: Parameters<typeof createRuntimeExecutor>[0]) {
+  const root = opts.projectRoot ?? roots[roots.length - 1]!;
+  return createRuntimeExecutor({
+    runtimeTask: (taskId, stage) =>
+      runtimeTaskFixture(root, { taskId, stage, allow: [], moduleName: opts.moduleName ? opts.moduleName(taskId) : "phase-4" }),
+    packetBaseRevision: async () => FIXTURE_REVISION,
+    ...opts,
+  });
+}
+
 /**
  * T-V5-040 replaces T-V3R-040's three-mode matrix. Execution modes, the handoff
  * candidate chain and the legacy `model_routing` spelling are removed, so the
@@ -59,7 +69,7 @@ describe("T-V5-040 one-route matrix", () => {
     const root = project();
     const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
     const codex = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime: claude,
       registry: new RuntimeRegistry([claude, codex]),
       projectRoot: root,
@@ -82,7 +92,7 @@ describe("T-V5-040 one-route matrix", () => {
     const root = project();
     const claude = new MockRuntimeAdapter({ id: "claude-code", probe: { available: false, reason: "single missing" } });
     const codex = new MockRuntimeAdapter({ id: "codex" });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime: claude,
       registry: new RuntimeRegistry([claude, codex]),
       projectRoot: root,
@@ -100,7 +110,7 @@ describe("T-V5-040 one-route matrix", () => {
   it("an unavailable route blocks the orchestrator without advancing or consuming a retry", async () => {
     const root = project();
     const claude = new MockRuntimeAdapter({ id: "claude-code", probe: { available: false, reason: "single missing" } });
-    const executor = createRuntimeExecutor({
+    const executor = executorFor({
       runtime: claude,
       registry: new RuntimeRegistry([claude]),
       projectRoot: root,
@@ -169,7 +179,7 @@ describe("T-V5-040 one-route matrix", () => {
     );
     const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
     const codex = new MockRuntimeAdapter({ id: "codex", models: ["gpt-5"] });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime: claude,
       registry: new RuntimeRegistry([claude, codex]),
       projectRoot: root,
@@ -196,7 +206,7 @@ describe("T-V5-040 one-route matrix", () => {
     );
     const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
     const codex = new MockRuntimeAdapter({ id: "codex", models: ["gpt-5"] });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime: claude,
       registry: new RuntimeRegistry([claude, codex]),
       routingFlags: { runtime: "claude-code" },
@@ -241,7 +251,7 @@ describe("T-V5-040 fail-closed evidence matrix", () => {
       capabilities: [RuntimeCapability.PRE_TOOL_GUARD, RuntimeCapability.MODEL_SELECTION, ...EXECUTOR_LIFECYCLE_CAPABILITIES],
       respond: () => okResult({ guards: { enforced: [RuntimeCapability.PRE_TOOL_GUARD], unenforced: [] } }),
     });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime: unavailable,
       registry: new RuntimeRegistry([unavailable, weak, good]),
       projectRoot: root,
@@ -289,7 +299,7 @@ describe("T-V5-040 fail-closed evidence matrix", () => {
     const root = project(inertAutoConfig);
     const first = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ status: "UNAVAILABLE", diagnostics: ["offline"] }) });
     const second = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime: first,
       registry: new RuntimeRegistry([first, second]),
       projectRoot: root,
@@ -307,7 +317,7 @@ describe("T-V5-040 fail-closed evidence matrix", () => {
     const root = project(inertAutoConfig);
     const first = new MockRuntimeAdapter({ id: "claude-code", respond: () => okResult({ status, exitCode: 1, diagnostics: [status] }) });
     const second = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime: first,
       registry: new RuntimeRegistry([first, second]),
       projectRoot: root,
@@ -328,7 +338,7 @@ describe("T-V5-040 fail-closed evidence matrix", () => {
       models: ["sonnet"],
       probe: { available: false, reason: `${id} offline` },
     }));
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime: adapters[0]!,
       registry: new RuntimeRegistry(adapters),
       projectRoot: root,
@@ -349,7 +359,7 @@ describe("T-V5-040 fail-closed evidence matrix", () => {
     const resolver = vi.spyOn(contextBudget, "resolveContextBudgetFromProject")
       .mockReturnValue({ chars: 1, source: "role" });
     try {
-      const result = await createRuntimeExecutor({
+      const result = await executorFor({
         runtime: claude,
         registry: new RuntimeRegistry([claude, codex]),
         projectRoot: root,
@@ -370,7 +380,7 @@ describe("T-V5-040 fail-closed evidence matrix", () => {
     const root = project(`${inertAutoConfig}context_budget:\n  mode: reject\n  roles:\n    backend-engineer: 1\n`);
     const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
     const codex = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime: claude,
       registry: new RuntimeRegistry([claude, codex]),
       projectRoot: root,
@@ -397,7 +407,7 @@ describe("T-V5-040 fail-closed evidence matrix", () => {
     const claude = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"] });
     const codex = new MockRuntimeAdapter({ id: "codex", models: ["sonnet"] });
     const extra = new MockRuntimeAdapter({ id: "extra-runtime", models: ["sonnet"] });
-    const result = await createRuntimeExecutor({
+    const result = await executorFor({
       runtime: claude,
       registry: new RuntimeRegistry([claude, codex, extra]),
       projectRoot: root,

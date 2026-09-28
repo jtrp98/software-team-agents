@@ -47,7 +47,8 @@ describe("T-V3R-001 guardrail invariants", () => {
     for (const stage of roles) {
       const role = stage;
       const contract = contractGuards(role, REPO_ROOT);
-      const runtimeTask = runtimeTaskFixture(tempProject(), { taskId: `T-SCOPE-${role}`, stage, allow: [...contract.writeAllow, "widened/**"] });
+      const projectRoot = tempProject();
+      const runtimeTask = runtimeTaskFixture(projectRoot, { taskId: `T-SCOPE-${role}`, stage, allow: [...contract.writeAllow, "widened/**"] });
       const packet = compileExecutionPacket({
         req: { stage, taskId: runtimeTask.task_id, context: [] },
         role,
@@ -61,10 +62,12 @@ describe("T-V3R-001 guardrail invariants", () => {
       const runtime = new MockRuntimeAdapter();
       const executor = createRuntimeExecutor({
         runtime,
-        projectRoot: tempProject(),
+        projectRoot,
         moduleName: () => "phase-0",
         guards: () => contract,
         sliceModuleDocs: false,
+        packetBaseRevision: async () => FIXTURE_REVISION,
+        runtimeTask: () => runtimeTask,
       });
       await executor({ stage, taskId: `T-SCOPE-${role}`, context: [] });
       const effectiveScope = runtime.requests[0]?.guards.writeAllow;
@@ -124,6 +127,9 @@ describe("T-V3R-001 guardrail invariants", () => {
       moduleName: () => "phase-0",
       guards: () => guards,
       sliceModuleDocs: false,
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      runtimeTask: (taskId, stage) =>
+        runtimeTaskFixture(refusedRoot, { taskId, stage, allow: [...guards.writeAllow], moduleName: "phase-0" }),
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-UNREGISTERED-GUARDS", context: [] });
     expect(refused.outcome.result).toBe("FAIL");
     expect(refused.outcome.failure_reason).toContain("missing-runtime");
@@ -139,9 +145,12 @@ describe("T-V3R-001 guardrail invariants", () => {
       moduleName: () => "phase-0",
       guards: () => guards,
       sliceModuleDocs: false,
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      runtimeTask: (taskId, stage) =>
+        runtimeTaskFixture(routedRoot, { taskId, stage, allow: [...guards.writeAllow], moduleName: "phase-0" }),
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-ROUTED-GUARDS", context: [] });
     expect(routed.requests).toHaveLength(1);
-    expect(routed.requests[0].guards).toBe(guards);
+    expect(routed.requests[0].guards).toEqual(guards);
     expect(guards).toEqual(before);
   });
 });

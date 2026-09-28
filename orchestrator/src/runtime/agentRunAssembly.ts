@@ -722,10 +722,6 @@ export function compileExecutionPacket(input: CompileExecutionPacketInput): Exec
   return validateArtifact(ArtifactType.EXECUTION_PACKET, { ...payload, packet_hash: stableHash(payload) });
 }
 
-/** Compatibility wrapper for existing callers/tests using the old sliced array. */
-export function buildPrompt(req: AgentExecutorRequest, extra?: string, sliced?: string[]): string {
-  return buildPromptParts(req, extra, { docs: sliced }).text;
-}
 
 export function failResult(reason: string, metrics: Partial<RunMetrics> = {}): AgentExecutorResult {
   return { outcome: { tokens: 0, cost: 0, context_chars: 0, ...metrics, result: "FAIL", failure_reason: reason } };

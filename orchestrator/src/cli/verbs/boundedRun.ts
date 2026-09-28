@@ -422,11 +422,11 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
   // Reassigned on --resume: a frozen run owns its Target, and re-deriving it
   // from flags is how a resume ends up writing into the wrong repository.
   let targetRoot = path.resolve(args.targetRoot ?? args.projectRoot);
-  let targetId = args.targetId ?? (args.targetIds?.[0] ?? "legacy-project");
+  let targetId = args.targetId ?? (args.targetIds?.[0] ?? "target");
   // DR §4: `--root <name>` is the selector; `--knowledge-root <path>` survives
   // one migration window as a compatibility channel whose path must
   // canonical-match exactly one registered root; no flag = the installation's
-  // default (or the legacy project root when no installation file exists).
+  // default (or the project root when no installation file exists).
   let knowledgeRoot: string;
   try {
     if (args.knowledgeRoot) {
@@ -450,9 +450,8 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
   }
   const docsRoot = resolveContextDocsRoot(args.projectRoot, process.env, args.rootName);
   // Contract/agent-registry authority: `resolveFrameworkRoot()` applies to
-  // a three-repo, Target-bound task (`contractRootForTask`'s rule);
-  // legacy single-repo runs use the project root itself.
-  const contractRoot = installation ? resolveFrameworkRoot() : args.projectRoot;
+  // a three-repo, Target-bound task (`contractRootForTask`'s rule).
+  const contractRoot = resolveFrameworkRoot();
   // V10 TASK-015 — Targets whose index freshness the run start will ask
   // about (ADR-006 Option A); filled in by whichever branch resolves the run.
   const codeIntelConsentTargets: { targetId: string; path: string }[] = [];

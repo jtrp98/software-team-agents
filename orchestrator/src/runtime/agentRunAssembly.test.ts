@@ -7,7 +7,6 @@ import { ArtifactType, type HandoffArtifact } from "../artifacts/schemas.js";
 import { AgentStage } from "../types.js";
 import type { RuntimeTask } from "../orchestrator/runtimeTask.js";
 import {
-  buildPrompt,
   buildPromptParts,
   compileExecutionPacket,
   handoffFromContext,
@@ -40,11 +39,6 @@ describe("buildPromptParts (T-V3TOK-001)", () => {
     expect(assembled.composition.handoff_chars).toBeGreaterThan(0);
   });
 
-  it("keeps buildPrompt's legacy output as a wrapper", () => {
-    const req = { stage: AgentStage.SETUP, taskId: "T-legacy", context: [] };
-    expect(buildPrompt(req, "note", ["doc"])).toBe(buildPromptParts(req, "note", { docs: ["doc"] }).text);
-  });
-
   it("keeps the no-handoff prompt byte-identical to the pre-P6 composition", () => {
     const req = { stage: AgentStage.SETUP, taskId: "T-legacy", context: [] };
     const expected = [
@@ -55,7 +49,7 @@ describe("buildPromptParts (T-V3TOK-001)", () => {
       "",
       "Finish by stating clearly what you completed and, per convention, what should happen next — the orchestrator reads your exit status and the docs you wrote, not a special reply format.",
     ].join("\n");
-    expect(buildPrompt(req, undefined, ["doc"])).toBe(expected);
+    expect(buildPromptParts(req, undefined, { docs: ["doc"] }).text).toBe(expected);
   });
 });
 
@@ -153,11 +147,11 @@ describe("sliceModuleDocsWithSavings", () => {
       const sliced = sliceModuleDocsWithSavings(AgentStage.PROJECT_MANAGER, {
         projectRoot: root, moduleName: "sales", phases: [1], handoff,
       });
-      const prompt = buildPrompt(
+      const prompt = buildPromptParts(
         { stage: AgentStage.PROJECT_MANAGER, taskId: "T-1", context: [{ source: ArtifactType.HANDOFF, content: JSON.stringify(handoff) }] },
         undefined,
-        sliced.docs,
-      );
+        { docs: sliced.docs },
+      ).text;
       expect(prompt).toContain("slice pointed to by the structured HANDOFF");
       expect(prompt).toContain("sta context project-manager --module sales --phase 1");
       expect(prompt).toContain("Known-irrelevant sections not included:");

@@ -41,14 +41,15 @@ export function writePacketPlan(root: string, tasks: PlanTask[], moduleName = "p
   fs.writeFileSync(path.join(dir, "design.md"), ["# Design", "", "Design evidence format: 1", "", ...designSections, "", "## Modules", "fixture"].join("\n"));
 }
 
-export function runtimeTaskFixture(root: string, opts: { taskId?: string; stage?: AgentStage; allow?: string[]; access?: "read" | "write"; targetRoot?: string; overrides?: Partial<PlanTask>; input?: Partial<RuntimeTaskBuildInput> } = {}) {
+export function runtimeTaskFixture(root: string, opts: { taskId?: string; moduleName?: string; stage?: AgentStage; allow?: string[]; access?: "read" | "write"; targetRoot?: string; overrides?: Partial<PlanTask>; input?: Partial<RuntimeTaskBuildInput> } = {}) {
   fs.mkdirSync(opts.targetRoot ?? root, { recursive: true });
   const task = fixtureTask({ id: opts.taskId ?? "T-PACKET", ...opts.overrides });
   const stage = opts.stage ?? AgentStage.BACKEND_ENGINEER;
   const plan = [...task.dependsOn.map(id => fixtureTask({ id })), task];
-  writePacketPlan(root, plan, "packet-fixture", opts.targetRoot ?? root);
+  const moduleName = opts.moduleName ?? (opts.input?.moduleName ?? "packet-fixture");
+  writePacketPlan(root, plan, moduleName, opts.targetRoot ?? root);
   const runtimeTask = buildRuntimeTask({
-    taskId: task.id, projectRoot: defaultProjectRoot(), docsRoot: root, moduleName: "packet-fixture", workflow: "bugfix",
+    taskId: task.id, projectRoot: defaultProjectRoot(), docsRoot: root, moduleName, workflow: "bugfix",
     classification: classifyTask({ isClearBugFix: true, touchesBackend: true }),
     targetWorkRoots: [{ stage: AgentStage.BACKEND_ENGINEER, targetId: "fixture", path: opts.targetRoot ?? root }],
     ...opts.input,

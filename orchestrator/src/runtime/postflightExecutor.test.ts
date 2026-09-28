@@ -53,6 +53,9 @@ function executorFor(runtime: MockRuntimeAdapter, over: Record<string, unknown> 
     projectRoot,
     moduleName: () => "sales-crm",
     guards: () => SCOPE,
+    packetBaseRevision: async () => FIXTURE_REVISION,
+    runtimeTask: (taskId: string, stage?: AgentStage) =>
+      runtimeTaskFixture(projectRoot, { taskId, stage, allow: ["src/**"], moduleName: "sales-crm" }),
     ...over,
   });
 }

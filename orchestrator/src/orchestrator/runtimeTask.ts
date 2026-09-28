@@ -47,41 +47,8 @@ const RuntimeTaskScopeRootSchema = z.object({
   ),
 });
 
-/**
- * The execution-ready task produced by deterministic Lightweight PM logic.
- * It is persisted runtime state, not an authored plan and not a prompt.
- * `expected_changes` is intentionally absent: predicting files would be the
- * only field here that needs model reasoning.
- */
-export const LegacyRuntimeTaskSchema = z.object({
-  task_id: z.string().min(1),
-  workflow: z.string().min(1),
-  pm_mode: z.enum(["lightweight", "full"]),
-  why: z.string().min(1),
-  goal: z.string().min(1),
-  source_of_truth: AvailabilitySchema.extend({ paths: z.array(z.string().min(1)) }),
-  dependencies: z.object({
-    task_ids: z.array(z.string().min(1)),
-    plan_readiness: z.enum(["ready", "waiting", "started", "verified", "blocked", "untracked"]),
-    waiting_on: z.array(z.string().min(1)),
-    reason: z.string().nullable(),
-  }),
-  scope: AvailabilitySchema.extend({ work_roots: z.array(RuntimeTaskScopeRootSchema) }),
-  do_not_touch: z.array(z.string().min(1)).min(1),
-  acceptance_criteria: AvailabilitySchema.extend({ items: z.array(z.string().min(1)) }),
-  required_verification: z.object({
-    // `deferred` remains readable for older persisted state.
-    status: z.enum(["selected", "full-order", "deferred"]),
-    levels: z.array(z.string()),
-    reason: z.string().min(1),
-    enforcement: z.enum(["warn", "enforce"]).optional(),
-    task_types: z.array(z.string()).optional(),
-    selection_source: z.enum(["task-classification", "change-scope", "full-order"]).optional(),
-  }),
-  evidence_required: z.array(z.string().min(1)).min(1),
-  stop_conditions: z.array(z.string().min(1)).min(1),
-});
-export type LegacyRuntimeTask = z.infer<typeof LegacyRuntimeTaskSchema>;
+export const RuntimeTaskScopeSchema = AvailabilitySchema.extend({ work_roots: z.array(RuntimeTaskScopeRootSchema) });
+export type RuntimeTaskScope = z.infer<typeof RuntimeTaskScopeSchema>;
 
 /**
  * One task's compiled pipeline (V13 TASK-004), persisted alongside the
@@ -110,13 +77,13 @@ export const RuntimeTaskV2Schema = z.strictObject({
   /** Optional only for rows persisted before V13 TASK-004. New builds require and populate it. */
   workflow_plan: WorkflowPlanSchema.optional(),
   dependencies: z.object({ task_ids: z.array(z.string()), outputs: z.array(DependencySchema) }),
-  scope: LegacyRuntimeTaskSchema.shape.scope,
+  scope: RuntimeTaskScopeSchema,
   required_verification: VerificationSchema,
   stop_conditions: z.array(z.string().min(1)).min(1),
 });
-export const RuntimeTaskSchema = z.union([RuntimeTaskV2Schema, LegacyRuntimeTaskSchema]);
+export const RuntimeTaskSchema = RuntimeTaskV2Schema;
 export type RuntimeTaskV2 = z.infer<typeof RuntimeTaskV2Schema>;
-export type RuntimeTask = z.infer<typeof RuntimeTaskSchema>;
+export type RuntimeTask = RuntimeTaskV2;
 
 /** One already-resolved Target root that a stage may write. */
 export interface RuntimeTaskWorkRoot {

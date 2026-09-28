@@ -260,12 +260,7 @@ export interface RunLedger {
   registerTasks(tasks: readonly LedgerTask[]): void;
   readTasks(runIdValue: string): LedgerTask[];
   readTask(runIdValue: string, taskId: string): LedgerTask | null;
-  setTaskStatus(
-    runIdValue: string,
-    taskId: string,
-    to: LedgerTaskStatus,
-    options?: { reason?: string; actor?: string },
-  ): LedgerTask;
+
   /**
    * V13 TASK-007 — writes the engine's projection of one task
    * (`ledgerTaskStatusFromPersisted`). A projection is not a transition: it

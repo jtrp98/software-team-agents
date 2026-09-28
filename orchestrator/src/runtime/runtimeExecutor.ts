@@ -13,15 +13,13 @@ import { loadTargetConfig } from "../targetcli/targetMeta.js";
 import { resolveAgentEffort, resolveAgentModel, resolveAgentVersion } from "../agents/agentModel.js";
 import type { StructuredFailure } from "../orchestrator/failure.js";
 import {
-  buildPromptParts,
   compileExecutionPacket,
-  assembleStageContext,
   handoffFromContext,
+  sliceModuleDocsWithSavings,
   failResult as failResultBase,
   qaArtifactResult,
   reviewerArtifactResult,
   securityArtifactResult,
-  suppressRawHandoffWhenNarrowed,
   measureRolePrefixChars,
   STAGE_DOCUMENT,
   referencedKnowledgeIds,
@@ -133,7 +131,7 @@ export interface RuntimeExecutorOptions {
   /** Phase 2's fail-closed resolver. When present it runs before adapter start. */
   threeRepoTask?: (taskId: string, stage: AgentStage) => { task: PersistedTask; roots: ThreeRepoRequestRoots };
   /** Stored Phase-1 task contract. Production supplies this for every runnable task. */
-  runtimeTask?: (taskId: string) => RuntimeTask | null | undefined;
+  runtimeTask?: (taskId: string, stage?: AgentStage) => RuntimeTask | null | undefined;
   dependencyEvidence?: (taskId: string) => readonly DependencyEvidence[];
   /**
    * V13 TASK-005 — the contract digest bound to this stage's latest recorded
@@ -520,31 +518,22 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     let incomingHandoff;
     try {
       incomingHandoff = handoffFromContext(req.context);
-    } catch (error) {
-      return failResult(`cannot use prior-stage handoff: ${String(error)}`);
-    }
-    const runtimeTask = threeRepo?.task.runtimeTask ?? opts.runtimeTask?.(req.taskId) ?? null;
-    let stageContext;
-    try {
-      stageContext = sliceDocs && !(runtimeTask && "version" in runtimeTask && runtimeTask.version === 2)
-        ? await assembleStageContext(req.stage, {
-            projectRoot: opts.projectRoot,
-            docsRoot: threeRepo?.roots.knowledgeRoot ?? opts.projectRoot,
-            knowledgeRoot: threeRepo?.roots.knowledgeRoot,
-            moduleName,
-            phases,
-            taskId: req.taskId,
-            handoff: incomingHandoff ?? undefined,
-            targetRoot: workRoot?.path,
-            targetId: workRoot?.targetId,
-          })
-        : {
-            docs: [], knowledge: [], codeIntel: [], selected: [], docCharsBefore: 0,
-            savings: { bytesBefore: 0, bytesAfter: 0, savedPct: 0 },
-            directFileReads: 0,
-          };
+      if (incomingHandoff) {
+        const docsRoot = threeRepo?.roots.knowledgeRoot ?? opts.projectRoot;
+        sliceModuleDocsWithSavings(req.stage, {
+          projectRoot: docsRoot,
+          moduleName,
+          phases,
+          taskId: req.taskId,
+          handoff: incomingHandoff,
+        });
+      }
     } catch (error) {
       return failResult(`cannot assemble authorized handoff context: ${String(error)}`);
+    }
+    const runtimeTask = threeRepo?.task.runtimeTask ?? (await opts.runtimeTask?.(req.taskId, req.stage)) ?? null;
+    if (!runtimeTask || !("version" in runtimeTask) || runtimeTask.version !== 2) {
+      return failResult(`task ${req.taskId}: missing semantic RuntimeTask; author canonical task fields and explicitly recompile before execution`);
     }
 
     // Read-only Target roots are verifier inputs, never the verifier's cwd or
@@ -564,91 +553,76 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
     let packetPath: string | undefined;
     let packetHash: string | undefined;
     let promptParts: PromptPartsResult;
-    if (runtimeTask) {
-      try {
-        // V10 TASK-025 — the Knowledge root is the one runtime-state home; the
-        // Framework binding root only ever hosted contracts, never packets.
-        const runtimeStateRoot = threeRepo?.roots.knowledgeRoot ?? opts.runtimeStateRoot ?? opts.projectRoot;
-        const baseRevision = await (opts.packetBaseRevision ?? resolveTargetRevision)(executionRoot);
-        const codeIntel = await packetCodeIntel(opts, req, runtimeTask, moduleName, workRoot?.path ?? executionRoot, workRoot?.targetId, baseRevision);
-        const packetAttempt = nextExecutionPacketAttempt(runtimeStateRoot, req.taskId, req.stage);
-        const moduleDocName = STAGE_DOCUMENT[req.stage];
-        const packet = compileExecutionPacket({
-          req,
-          role,
-          runtimeTask,
-          contractScope: { allow: guards.writeAllow, deny: guards.writeDeny },
-          attempt: packetAttempt,
-          baseRevision,
-          config: { target: loadTargetConfig(executionRoot), guardStackRules: resolveGuardStackRules(role, executionRoot) },
-          dependencyEvidence: opts.dependencyEvidence?.(req.taskId),
-          retrievalCandidates: codeIntel.retrievalCandidates,
-          codeIntelEvidence: codeIntel.evidenceBlock,
-          extra: opts.extraInstruction,
-          authoritativeContract: authoritativeContract.contract,
-          contractDigest: authoritativeContract.digest,
-          rules: authoritativeContract.contract.constraints,
-          relevantKnowledge: knowledgeBriefFor(req.stage, {
-            projectRoot: opts.projectRoot,
-            knowledgeRoot: threeRepo?.roots.knowledgeRoot,
-            moduleName,
-            referencedIds: referencedKnowledgeIds(threeRepo?.roots.knowledgeRoot ?? opts.projectRoot, moduleName, req.taskId),
-            targetRoot: workRoot?.path,
-          }),
-          expectedOutput: {
-            artifact_type: authoritativeContract.contract.output.required[0] ?? (moduleDocName ? moduleDocName.replace(/\.md$/, "") : "code"),
-            ...(moduleDocName ? { doc_path: `_docs/module/${moduleName}/${moduleDocName}`, schema_name: `${moduleDocName.replace(/\.md$/, "")}.schema.json` } : {}),
-            required_sections: authoritativeContract.contract.output.required,
-          },
-          correlationId: `${req.taskId}:${req.stage}:${packetAttempt}`,
-        });
-        if (JSON.stringify([...packet.scope.allow].sort()) !== JSON.stringify([...new Set(guards.writeAllow)].sort())) throw new Error("packet scope differs from the enforced stage contract; recompile with current stage grants");
-        // A writer's packet roots are its writable roots; a verifier stage
-        // (reviewer, QA, security) holds only read access to the Targets it
-        // verifies, so its packet roots are those read roots and its write
-        // scope is its contract's Knowledge-side docs alone (V13 TASK-007).
-        const guardRoots = stageWritableRoots.length > 0 ? stageWritableRoots : stageWorkRoots;
-        const expectedRoots = threeRepo ? guardRoots.map(root => path.resolve(root.path)) : [path.resolve(executionRoot)];
-        if (JSON.stringify(packet.scope.roots.map(root => path.resolve(root)).sort()) !== JSON.stringify(expectedRoots.sort())) throw new Error("packet work roots differ from effective stage guard roots; recompile");
-        const preview = generatePromptPreview(packet, {
-          current_revision: packet.identity.base_revision,
-          current_config_hash: packet.identity.config_hash,
-          current_compiler_hash: packet.identity.compiler_hash,
-          current_plan_hash: packet.identity.plan_hash,
-        });
-        if (preview.state !== "executable" || preview.prompt.text !== packet.text || preview.prompt.hash !== preview.persisted_packet.text_hash) {
-          throw new Error(`generated prompt preview drift: ${preview.stale_reasons.join("; ") || "prompt bytes differ"}`);
-        }
-        guards = { ...guards, writeAllow: packet.scope.allow, writeDeny: packet.scope.deny };
-        const persisted = writeExecutionPacket({
-          projectRoot: runtimeStateRoot,
-          packet,
-          // The state home is the Knowledge root itself now, so only the
-          // Targets stay forbidden — every resolved one, primary or not.
-          forbiddenRoots: threeRepo
-            ? threeRepo.roots.workRoots.map((root) => root.path)
-            : [],
-          maxRunsPerTask: opts.packetRetention,
-        });
-        packetPath = path.relative(runtimeStateRoot, persisted.path).replace(/\\/g, "/");
-        packetHash = packet.packet_hash;
-        promptParts = packet;
-      } catch (error) {
-        return failResult(`cannot compile or persist execution packet for ${role}: ${String(error)}`);
-      }
-    } else {
-      if (opts.runtimeTask || threeRepo) return failResult(`task ${req.taskId}: missing semantic RuntimeTask; author canonical task fields and explicitly recompile before execution`);
-      // Historical or embedded callers may have no RuntimeTask. Production
-      // tasks created since state schema v13 always take the packet path above.
-      // T-V8-011: once a doc slice was already narrowed using this HANDOFF, its
-      // provenance is visible in the kept text — printing the same references
-      // again as raw JSON would be duplication, not context.
-      const promptReq = { ...req, context: suppressRawHandoffWhenNarrowed(req.context, stageContext.selected) };
-      promptParts = buildPromptParts(promptReq, opts.extraInstruction, {
-        docs: stageContext.docs,
-        knowledge: stageContext.knowledge,
-        codeIntel: stageContext.codeIntel,
+    try {
+      // V10 TASK-025 — the Knowledge root is the one runtime-state home; the
+      // Framework binding root only ever hosted contracts, never packets.
+      const runtimeStateRoot = threeRepo?.roots.knowledgeRoot ?? opts.runtimeStateRoot ?? opts.projectRoot;
+      const baseRevision = await (opts.packetBaseRevision ?? resolveTargetRevision)(executionRoot);
+      const codeIntel = await packetCodeIntel(opts, req, runtimeTask, moduleName, workRoot?.path ?? executionRoot, workRoot?.targetId, baseRevision);
+      const packetAttempt = nextExecutionPacketAttempt(runtimeStateRoot, req.taskId, req.stage);
+      const moduleDocName = STAGE_DOCUMENT[req.stage];
+      const packet = compileExecutionPacket({
+        req,
+        role,
+        runtimeTask,
+        contractScope: { allow: guards.writeAllow, deny: guards.writeDeny },
+        attempt: packetAttempt,
+        baseRevision,
+        config: { target: loadTargetConfig(executionRoot), guardStackRules: resolveGuardStackRules(role, executionRoot) },
+        dependencyEvidence: opts.dependencyEvidence?.(req.taskId),
+        retrievalCandidates: codeIntel.retrievalCandidates,
+        codeIntelEvidence: codeIntel.evidenceBlock,
+        extra: opts.extraInstruction,
+        authoritativeContract: authoritativeContract.contract,
+        contractDigest: authoritativeContract.digest,
+        rules: authoritativeContract.contract.constraints,
+        relevantKnowledge: knowledgeBriefFor(req.stage, {
+          projectRoot: opts.projectRoot,
+          knowledgeRoot: threeRepo?.roots.knowledgeRoot,
+          moduleName,
+          referencedIds: referencedKnowledgeIds(threeRepo?.roots.knowledgeRoot ?? opts.projectRoot, moduleName, req.taskId),
+          targetRoot: workRoot?.path,
+        }),
+        expectedOutput: {
+          artifact_type: authoritativeContract.contract.output.required[0] ?? (moduleDocName ? moduleDocName.replace(/\.md$/, "") : "code"),
+          ...(moduleDocName ? { doc_path: `_docs/module/${moduleName}/${moduleDocName}`, schema_name: `${moduleDocName.replace(/\.md$/, "")}.schema.json` } : {}),
+          required_sections: authoritativeContract.contract.output.required,
+        },
+        correlationId: `${req.taskId}:${req.stage}:${packetAttempt}`,
       });
+      if (JSON.stringify([...packet.scope.allow].sort()) !== JSON.stringify([...new Set(guards.writeAllow)].sort())) throw new Error("packet scope differs from the enforced stage contract; recompile with current stage grants");
+      // A writer's packet roots are its writable roots; a verifier stage
+      // (reviewer, QA, security) holds only read access to the Targets it
+      // verifies, so its packet roots are those read roots and its write
+      // scope is its contract's Knowledge-side docs alone (V13 TASK-007).
+      const guardRoots = stageWritableRoots.length > 0 ? stageWritableRoots : stageWorkRoots;
+      const expectedRoots = threeRepo ? guardRoots.map(root => path.resolve(root.path)) : [path.resolve(executionRoot)];
+      if (JSON.stringify(packet.scope.roots.map(root => path.resolve(root)).sort()) !== JSON.stringify(expectedRoots.sort())) throw new Error("packet work roots differ from effective stage guard roots; recompile");
+      const preview = generatePromptPreview(packet, {
+        current_revision: packet.identity.base_revision,
+        current_config_hash: packet.identity.config_hash,
+        current_compiler_hash: packet.identity.compiler_hash,
+        current_plan_hash: packet.identity.plan_hash,
+      });
+      if (preview.state !== "executable" || preview.prompt.text !== packet.text || preview.prompt.hash !== preview.persisted_packet.text_hash) {
+        throw new Error(`generated prompt preview drift: ${preview.stale_reasons.join("; ") || "prompt bytes differ"}`);
+      }
+      guards = { ...guards, writeAllow: packet.scope.allow, writeDeny: packet.scope.deny };
+      const persisted = writeExecutionPacket({
+        projectRoot: runtimeStateRoot,
+        packet,
+        // The state home is the Knowledge root itself now, so only the
+        // Targets stay forbidden — every resolved one, primary or not.
+        forbiddenRoots: threeRepo
+          ? threeRepo.roots.workRoots.map((root) => root.path)
+          : [],
+        maxRunsPerTask: opts.packetRetention,
+      });
+      packetPath = path.relative(runtimeStateRoot, persisted.path).replace(/\\/g, "/");
+      packetHash = packet.packet_hash;
+      promptParts = packet;
+    } catch (error) {
+      return failResult(`cannot compile or persist execution packet for ${role}: ${String(error)}`);
     }
     const prompt = promptParts.text;
     // V13 TASK-017 — the postflight scope verdict of the dispatch below, if one
@@ -894,7 +868,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
             context_chars: prompt.length,
             estimated_input_tokens: contextBudget.estimatedInputTokens,
             ...promptParts.composition,
-            doc_chars_before: stageContext.docCharsBefore,
+            doc_chars_before: promptParts.composition.doc_chars,
             instruction_surface_bytes: rolePrefixChars ?? undefined,
             runtime: activeRuntime.id,
             requested_runtime: requestedRuntime,
@@ -926,7 +900,7 @@ export function createRuntimeExecutor(opts: RuntimeExecutorOptions): AgentExecut
         context_chars: prompt.length,
         estimated_input_tokens: contextBudget.estimatedInputTokens,
         composition: promptParts.composition,
-        doc_chars_before: stageContext.docCharsBefore,
+        doc_chars_before: promptParts.composition.doc_chars,
         role_prefix_chars: rolePrefixChars,
         runtime: activeRuntime.id,
         // V13 TASK-016 — the executor version selection saw, pinned to this attempt's record.

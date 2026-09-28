@@ -13,6 +13,7 @@ import { RuntimeRegistry } from "./runtimeRegistry.js";
 import { governedExecutorGap, resolveRuntimeRoute } from "./runtimeRouting.js";
 import { isUnattendedTargetWriteCertified, RUNTIME_IDS } from "./runtimeSupport.js";
 import { createProductionRuntimeRegistry } from "../cli/composition/runtimeRegistry.js";
+import { FIXTURE_REVISION, runtimeTaskFixture } from "./packetFixture.testSupport.js";
 
 /**
  * V13 TASK-016 — governed writes are routed only to certified, capable,
@@ -198,13 +199,16 @@ describe("TASK-016 — selection requires certification, capability and availabi
 
 describe("TASK-016 — the executor gate and the per-attempt version pin", () => {
   it("refuses a frozen governed write on a certified runtime that is no governed executor", async () => {
+    const root = project();
     const weak = bareRunner("antigravity");
     const result = await createRuntimeExecutor({
       runtime: weak,
-      projectRoot: project(),
+      projectRoot: root,
       moduleName: () => "sales-crm",
       guards: () => NO_GUARDS,
       registry: new RuntimeRegistry([weak]),
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      runtimeTask: (taskId, stage) => runtimeTaskFixture(root, { taskId, stage, allow: [], moduleName: "sales-crm" }),
       frozenAttempt: frozen({
         requested: { runtime: "antigravity", model: "sonnet", effort: "high" },
         observed: { runtime: "antigravity", model: "sonnet", effort: "high" },
@@ -217,13 +221,16 @@ describe("TASK-016 — the executor gate and the per-attempt version pin", () =>
   });
 
   it("refuses to replay a frozen attempt on an executor whose version drifted", async () => {
+    const root = project();
     const upgraded = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"], probe: { available: true, version: "2.2.0" }, respond: () => okResult() });
     const result = await createRuntimeExecutor({
       runtime: upgraded,
-      projectRoot: project(),
+      projectRoot: root,
       moduleName: () => "sales-crm",
       guards: () => NO_GUARDS,
       registry: new RuntimeRegistry([upgraded]),
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      runtimeTask: (taskId, stage) => runtimeTaskFixture(root, { taskId, stage, allow: [], moduleName: "sales-crm" }),
       frozenAttempt: frozen({ runtime_version: "2.1.0" }),
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
     expect(result.outcome.result).toBe("FAIL");
@@ -233,13 +240,16 @@ describe("TASK-016 — the executor gate and the per-attempt version pin", () =>
   });
 
   it("dispatches a frozen attempt on the pinned version and records that version on the run", async () => {
+    const root = project();
     const pinned = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"], probe: { available: true, version: "2.1.0" }, respond: () => okResult() });
     const result = await createRuntimeExecutor({
       runtime: pinned,
-      projectRoot: project(),
+      projectRoot: root,
       moduleName: () => "sales-crm",
       guards: () => NO_GUARDS,
       registry: new RuntimeRegistry([pinned]),
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      runtimeTask: (taskId, stage) => runtimeTaskFixture(root, { taskId, stage, allow: [], moduleName: "sales-crm" }),
       frozenAttempt: frozen({ runtime_version: "2.1.0" }),
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
     expect(result.outcome.result).toBe("PASS");
@@ -248,13 +258,16 @@ describe("TASK-016 — the executor gate and the per-attempt version pin", () =>
   });
 
   it("records the selected executor's version on an unfrozen routed run", async () => {
+    const root = project();
     const runtime = new MockRuntimeAdapter({ id: "claude-code", models: ["sonnet"], probe: { available: true, version: "9.9.9" }, respond: () => okResult() });
     const result = await createRuntimeExecutor({
       runtime,
-      projectRoot: project(),
+      projectRoot: root,
       moduleName: () => "sales-crm",
       guards: () => NO_GUARDS,
       registry: new RuntimeRegistry([runtime]),
+      packetBaseRevision: async () => FIXTURE_REVISION,
+      runtimeTask: (taskId, stage) => runtimeTaskFixture(root, { taskId, stage, allow: [], moduleName: "sales-crm" }),
     })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
     expect(result.outcome.runtime_version).toBe("9.9.9");
   });
@@ -271,6 +284,8 @@ describe("TASK-016 — the executor gate and the per-attempt version pin", () =>
         moduleName: () => "sales-crm",
         guards: () => NO_GUARDS,
         registry,
+        packetBaseRevision: async () => FIXTURE_REVISION,
+        runtimeTask: (taskId, stage) => runtimeTaskFixture(root, { taskId, stage, allow: [], moduleName: "sales-crm" }),
         frozenAttempt: attempt,
       })({ stage: AgentStage.BACKEND_ENGINEER, taskId: "BE-004", context: [] });
 
@@ -299,7 +314,7 @@ describe("TASK-016 — the executor gate and the per-attempt version pin", () =>
     expect(b!.role).toBe(a!.role);
     expect(b!.taskId).toBe(a!.taskId);
     expect(b!.stage).toBe(a!.stage);
-    expect(b!.prompt).toBe(a!.prompt);
+    expect(b!.prompt.replace(/:2\b/g, ":1").replace(/attempt 2\b/g, "attempt 1")).toBe(a!.prompt);
     expect(b!.guards).toEqual(a!.guards);
     expect(two.outcome.contract_digest).toBe(one.outcome.contract_digest);
     // Each executor minted its own attempt identity for its own dispatch.

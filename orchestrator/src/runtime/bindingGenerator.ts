@@ -845,7 +845,7 @@ export function checkBindings(projectRoot: string): BindingCheckResult {
     const source = path.join(projectRoot, spec.sourcePath);
     const target = path.join(projectRoot, spec.targetPath);
     try {
-      const expected = spec.render(fs.readFileSync(source, "utf8"));
+      const expected = spec.render(fs.readFileSync(source, "utf8").replace(/\r\n/g, "\n"));
       if (!fs.existsSync(target)) {
         problems.push(`missing ${spec.targetPath} — regenerate the bindings`);
         continue;

@@ -1,9 +1,9 @@
-﻿import * as fs from "node:fs";
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { AgentStage } from "../types.js";
-import { buildPrompt, sliceModuleDocsFor } from "./agentRunAssembly.js";
+import { buildPromptParts, sliceModuleDocsFor } from "./agentRunAssembly.js";
 import type { AgentExecutorRequest } from "../orchestrator/orchestrator.js";
 import type { ContextItem } from "../context/contextSelection.js";
 
@@ -99,22 +99,22 @@ describe("consumer parity — one curation, every runtime", () => {
       context,
     });
     const sliced = sliceModuleDocsFor(AgentStage.BACKEND_ENGINEER, { projectRoot: claudeRoot, moduleName: "fixture", phases: [1] });
-    const forClaude = buildPrompt(requestFor(), undefined, sliced);
-    const forCodex = buildPrompt(requestFor(), undefined, sliced);
+    const forClaude = buildPromptParts(requestFor(), undefined, { docs: sliced }).text;
+    const forCodex = buildPromptParts(requestFor(), undefined, { docs: sliced }).text;
     expect(forCodex).toBe(forClaude);
     // The curated-context framing must also be identical when there is no
     // prior-stage context at all — the "no context" path is part of the contract.
     const empty = (): AgentExecutorRequest => ({ stage: AgentStage.BACKEND_ENGINEER, taskId: "T-parity", context: [] });
-    expect(buildPrompt(empty())).toBe(buildPrompt(empty()));
+    expect(buildPromptParts(empty()).text).toBe(buildPromptParts(empty()).text);
   });
 
   it("never names a runtime anywhere in assembled output", () => {
     const sliced = sliceModuleDocsFor(AgentStage.BACKEND_ENGINEER, { projectRoot: claudeRoot, moduleName: "fixture", phases: [1] });
-    const prompt = buildPrompt(
+    const prompt = buildPromptParts(
       { stage: AgentStage.BACKEND_ENGINEER, taskId: "T-parity", context: [{ source: "backend-code", content: "x" }] },
       undefined,
-      sliced,
-    );
+      { docs: sliced },
+    ).text;
     expect(prompt.toLowerCase()).not.toContain("claude");
     expect(prompt.toLowerCase()).not.toContain("codex");
     for (const part of sliced) {

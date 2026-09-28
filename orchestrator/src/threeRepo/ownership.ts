@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { RUNTIME_ARTIFACT_KINDS } from "../state/runtimeArtifacts.js";
 
 export type RepositoryOwner = "framework" | "knowledge" | "target";
-export type InstallMode = "legacy-project" | "three-repo";
+export type InstallMode = "three-repo";
 
 export const INSTRUCTION_PRECEDENCE = [
   "framework-managed",
@@ -267,17 +267,9 @@ export function ownerOfPath(relativePath: string): RepositoryOwner {
   return "framework";
 }
 
-/** Framework install/upgrade manifests may contain only framework-owned paths.
- * Legacy project mode is deliberately opt-in because its bindings share names
- * with Target instructions. */
-export function assertFrameworkManagedPaths(paths: readonly string[], mode: InstallMode = "three-repo"): void {
-  const isLegacyFrameworkInstruction = (candidate: string): boolean => {
-    const normalised = normalise(candidate);
-    return normalised === "CLAUDE.md" || normalised === "AGENTS.md" || normalised.startsWith(".claude/");
-  };
-  const forbidden = paths.filter((candidate) =>
-    ownerOfPath(candidate) !== "framework" && !(mode === "legacy-project" && isLegacyFrameworkInstruction(candidate)),
-  );
+/** Framework install/upgrade manifests may contain only framework-owned paths. */
+export function assertFrameworkManagedPaths(paths: readonly string[], _mode: InstallMode = "three-repo"): void {
+  const forbidden = paths.filter((candidate) => ownerOfPath(candidate) !== "framework");
   if (forbidden.length > 0) {
     throw new Error(`framework manifest includes project-owned path(s): ${forbidden.join(", ")}`);
   }

@@ -8,7 +8,7 @@ import { taskGraphFromPlan } from "../graph/taskGraph.js";
 import { readWorkPlan, taskObjective, taskDesignRefs } from "../docs/planGraph.js";
 import {
   latestExecutionPacketPath,
-  readExecutionPacketForAudit,
+  readExecutionPacket,
   readFindingsForTask,
 } from "../state/runtimeArtifacts.js";
 
@@ -130,8 +130,7 @@ function latestQaPacketEvidence(projectRoot: string, taskId: string, stage: Agen
   try {
     const packetPath = latestExecutionPacketPath(projectRoot, taskId, stage);
     if (!packetPath) return undefined;
-    const packet = readExecutionPacketForAudit(packetPath);
-    if (!("version" in packet) || packet.version !== 2) return undefined;
+    const packet = readExecutionPacket(packetPath);
     return { stage: packet.stage, attempt: packet.attempt, identity: packet.identity, dependencies: packet.dependencies, packet_hash: packet.packet_hash };
   } catch {
     return undefined;
