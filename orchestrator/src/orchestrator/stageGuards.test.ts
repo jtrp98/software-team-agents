@@ -5,14 +5,15 @@ import { describe, expect, it } from "vitest";
 import { AgentStage, TaskLevel } from "../types.js";
 import { writeKnowledgeItem } from "../knowledge/knowledgeStore.js";
 import { makeItem } from "../knowledge/sampleKnowledge.js";
-import { recordSignoff } from "../roles/roleApproval.js";
-import { emptyWorkspace, writeRoleWorkspace } from "../roles/roleWorkspace.js";
+import { MemoryTaskStore } from "../store/memoryStore.js";
+import type { TaskStore } from "../store/taskStore.js";
 import { checkRoleLaneEntry, createRoleLaneStageGuard, knowledgeRootForTask, moduleOfRuntimeTask, type StageEntryRequest } from "./stageGuards.js";
 import {
   LANE_FIXTURE_MODULE as MODULE,
   LANE_FIXTURE_NOW as NOW,
-  acknowledgeLane,
-  signOffLane,
+  acknowledgeLane as acknowledgeLaneIn,
+  decideLane,
+  signOffLane as signOffLaneIn,
   writeApprovedKnowledge,
 } from "./stageGuards.testSupport.js";
 import type { RuntimeTask } from "./runtimeTask.js";
@@ -21,32 +22,43 @@ function tmpProject(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "stage-guards-"));
 }
 
-function entry(root: string, stage: AgentStage, level: TaskLevel = TaskLevel.MEDIUM, moduleName = MODULE) {
-  return checkRoleLaneEntry({ knowledgeRoot: root, moduleName, stage, level, now: NOW });
+/** One lane ledger per Knowledge root in this file — the store the guard under test reads. */
+const ledgers = new Map<string, TaskStore>();
+function ledgerFor(root: string): TaskStore {
+  if (!ledgers.has(root)) ledgers.set(root, new MemoryTaskStore());
+  return ledgers.get(root)!;
 }
 
+function entry(root: string, stage: AgentStage, level: TaskLevel = TaskLevel.MEDIUM, moduleName = MODULE) {
+  return checkRoleLaneEntry({ knowledgeRoot: root, ledger: ledgerFor(root), moduleName, stage, level, now: NOW });
+}
+
+/** A person's sign-off / acknowledgement through the test-only trusted channel, persisted in `root`'s ledger. */
+const signOffLane = (root: string, lane: "ba" | "sa") => signOffLaneIn(root, lane, MODULE, ledgerFor(root));
+const acknowledgeLane = (root: string, lane: "sa" | "dev", ids: readonly string[]) => acknowledgeLaneIn(root, lane, ids, MODULE, ledgerFor(root));
+
 describe("checkRoleLaneEntry — the role-lane stage guard (T114, moved from roles/roleExecutionGate.ts in V13 TASK-007)", () => {
-  it("keeps SA out until BA's human sign-off has been acknowledged, naming the ack a person must record", () => {
+  it("keeps SA out until BA's human sign-off has been acknowledged, naming the ack a person must record", async () => {
     const root = tmpProject();
-    const kb = writeApprovedKnowledge(root);
-    const baItems = signOffLane(root, kb, "ba");
+    writeApprovedKnowledge(root);
+    const baItems = await signOffLane(root, "ba");
 
     const waiting = entry(root, AgentStage.SYSTEM_ANALYST);
     expect(waiting.allowed).toBe(false);
     if (!waiting.allowed) {
       expect(waiting.reason).toMatch(/SA lane has not acknowledged/);
-      expect(waiting.reason).toContain("trusted human decision channel is required");
+      expect(waiting.reason).toContain("trusted human decision channel (`sta roles ack sa --module sales-crm`)");
       expect(waiting.reason).toContain(baItems.join(", "));
     }
 
-    acknowledgeLane(root, kb, "sa", baItems);
+    await acknowledgeLane(root, "sa", baItems);
     expect(entry(root, AgentStage.SYSTEM_ANALYST)).toEqual({ allowed: true });
   });
 
-  it("keeps both implementation stages out until SA hands its approved design to DEV", () => {
+  it("keeps both implementation stages out until SA hands its approved design to DEV", async () => {
     const root = tmpProject();
-    const kb = writeApprovedKnowledge(root);
-    acknowledgeLane(root, kb, "sa", signOffLane(root, kb, "ba"));
+    writeApprovedKnowledge(root);
+    await acknowledgeLane(root, "sa", await signOffLane(root, "ba"));
 
     const waiting = entry(root, AgentStage.BACKEND_ENGINEER);
     expect(waiting.allowed).toBe(false);
@@ -55,19 +67,19 @@ describe("checkRoleLaneEntry — the role-lane stage guard (T114, moved from rol
       expect(waiting.reason).toMatch(/trusted human decision channel/);
     }
 
-    acknowledgeLane(root, kb, "dev", signOffLane(root, kb, "sa"));
+    await acknowledgeLane(root, "dev", await signOffLane(root, "sa"));
     expect(entry(root, AgentStage.BACKEND_ENGINEER)).toEqual({ allowed: true });
     expect(entry(root, AgentStage.FRONTEND_ENGINEER)).toMatchObject({ allowed: false });
   });
 
-  it("never gates a stage no lane owns", () => {
+  it("never gates a stage no lane owns", async () => {
     const root = tmpProject();
     for (const stage of [AgentStage.BUSINESS_ANALYST, AgentStage.REVIEWER, AgentStage.QA_ENGINEER, AgentStage.SECURITY, AgentStage.DEVOPS]) {
       expect(entry(root, stage)).toEqual({ allowed: true });
     }
   });
 
-  it("refuses when the knowledge/ directory is missing", () => {
+  it("refuses when the knowledge/ directory is missing", async () => {
     const blocked = entry(tmpProject(), AgentStage.SYSTEM_ANALYST);
     expect(blocked.allowed).toBe(false);
     if (!blocked.allowed) {
@@ -76,7 +88,7 @@ describe("checkRoleLaneEntry — the role-lane stage guard (T114, moved from rol
     }
   });
 
-  it("refuses when the knowledge/ directory exists but holds nothing — an empty model is not an approved handoff", () => {
+  it("refuses when the knowledge/ directory exists but holds nothing — an empty model is not an approved handoff", async () => {
     const root = tmpProject();
     fs.mkdirSync(path.join(root, "knowledge"), { recursive: true });
     for (const stage of [AgentStage.SYSTEM_ANALYST, AgentStage.BACKEND_ENGINEER, AgentStage.FRONTEND_ENGINEER]) {
@@ -89,7 +101,7 @@ describe("checkRoleLaneEntry — the role-lane stage guard (T114, moved from rol
     }
   });
 
-  it("refuses when Knowledge is invalid", () => {
+  it("refuses when Knowledge is invalid", async () => {
     const root = tmpProject();
     writeApprovedKnowledge(root);
     const broken = path.join(root, "knowledge", MODULE, "requirement", "REQ-999.yaml");
@@ -100,11 +112,11 @@ describe("checkRoleLaneEntry — the role-lane stage guard (T114, moved from rol
     if (!refused.allowed) expect(refused.reason).toMatch(/knowledge under .* is invalid/);
   });
 
-  it("gates frontend work on an approved current UX artifact plus its human sign-off (T146/T150)", () => {
+  it("gates frontend work on an approved current UX artifact plus its human sign-off (T146/T150)", async () => {
     const root = tmpProject();
-    const kb = writeApprovedKnowledge(root);
-    acknowledgeLane(root, kb, "sa", signOffLane(root, kb, "ba"));
-    acknowledgeLane(root, kb, "dev", signOffLane(root, kb, "sa"));
+    writeApprovedKnowledge(root);
+    await acknowledgeLane(root, "sa", await signOffLane(root, "ba"));
+    await acknowledgeLane(root, "dev", await signOffLane(root, "sa"));
     expect(entry(root, AgentStage.BACKEND_ENGINEER)).toEqual({ allowed: true });
 
     const noUx = entry(root, AgentStage.FRONTEND_ENGINEER);
@@ -124,10 +136,15 @@ describe("checkRoleLaneEntry — the role-lane stage guard (T114, moved from rol
     fs.writeFileSync(path.join(root, "_docs", "module", MODULE, "uxui", "design.md"), "# ux ui\n");
     expect(entry(root, AgentStage.FRONTEND_ENGINEER).allowed).toBe(false);
 
-    writeRoleWorkspace(
-      recordSignoff(emptyWorkspace("uxui", MODULE, NOW), { approved: [ux], approve: true, by: "Mina", now: NOW }),
-      root,
-    );
+    await decideLane(ledgerFor(root), root, MODULE, "uxui", "signoff");
+    expect(entry(root, AgentStage.FRONTEND_ENGINEER)).toEqual({ allowed: true });
+
+    // The UX file's bytes are part of what was signed: editing it makes the sign-off stale.
+    fs.writeFileSync(path.join(root, "_docs", "module", MODULE, "uxui", "design.md"), "# ux ui (edited after sign-off)\n");
+    const editedArtifact = entry(root, AgentStage.FRONTEND_ENGINEER);
+    expect(editedArtifact.allowed).toBe(false);
+    if (!editedArtifact.allowed) expect(editedArtifact.reason).toMatch(/UX artifact/);
+    fs.writeFileSync(path.join(root, "_docs", "module", MODULE, "uxui", "design.md"), "# ux ui\n");
     expect(entry(root, AgentStage.FRONTEND_ENGINEER)).toEqual({ allowed: true });
 
     writeKnowledgeItem({ ...ux, version: (ux.version as number) + 1 }, root, { force: true });
@@ -136,11 +153,11 @@ describe("checkRoleLaneEntry — the role-lane stage guard (T114, moved from rol
     if (!stale.allowed) expect(stale.reason).toMatch(/UX artifact/);
   });
 
-  it("skips the UX-artifact precondition for TRIVIAL/SMALL tasks but keeps it for MEDIUM+ and UNKNOWN (T-UX12)", () => {
+  it("skips the UX-artifact precondition for TRIVIAL/SMALL tasks but keeps it for MEDIUM+ and UNKNOWN (T-UX12)", async () => {
     const root = tmpProject();
-    const kb = writeApprovedKnowledge(root);
-    acknowledgeLane(root, kb, "sa", signOffLane(root, kb, "ba"));
-    acknowledgeLane(root, kb, "dev", signOffLane(root, kb, "sa"));
+    writeApprovedKnowledge(root);
+    await acknowledgeLane(root, "sa", await signOffLane(root, "ba"));
+    await acknowledgeLane(root, "dev", await signOffLane(root, "sa"));
 
     expect(entry(root, AgentStage.FRONTEND_ENGINEER, TaskLevel.TRIVIAL)).toEqual({ allowed: true });
     expect(entry(root, AgentStage.FRONTEND_ENGINEER, TaskLevel.SMALL)).toEqual({ allowed: true });
@@ -150,7 +167,8 @@ describe("checkRoleLaneEntry — the role-lane stage guard (T114, moved from rol
 
     // The SA→DEV handoff itself is never waived by level — only the UX precondition is.
     const saNotAcknowledged = tmpProject();
-    signOffLane(saNotAcknowledged, writeApprovedKnowledge(saNotAcknowledged), "ba");
+    writeApprovedKnowledge(saNotAcknowledged);
+    await signOffLane(saNotAcknowledged, "ba");
     expect(entry(saNotAcknowledged, AgentStage.FRONTEND_ENGINEER, TaskLevel.SMALL).allowed).toBe(false);
   });
 });
@@ -165,13 +183,13 @@ describe("createRoleLaneStageGuard — the production guard's Knowledge root and
     ...overrides,
   });
 
-  it("reads the task's frozen Knowledge root, not the project root, when one was frozen at intake", () => {
+  it("reads the task's frozen Knowledge root, not the project root, when one was frozen at intake", async () => {
     const project = tmpProject();
     const knowledge = tmpProject();
-    const kb = writeApprovedKnowledge(knowledge);
-    acknowledgeLane(knowledge, kb, "sa", signOffLane(knowledge, kb, "ba"));
-    acknowledgeLane(knowledge, kb, "dev", signOffLane(knowledge, kb, "sa"));
-    const guard = createRoleLaneStageGuard({ projectRoot: project, moduleName: MODULE });
+    writeApprovedKnowledge(knowledge);
+    await acknowledgeLane(knowledge, "sa", await signOffLane(knowledge, "ba"));
+    await acknowledgeLane(knowledge, "dev", await signOffLane(knowledge, "sa"));
+    const guard = createRoleLaneStageGuard({ projectRoot: project, moduleName: MODULE, ledger: ledgerFor(knowledge) });
 
     expect(knowledgeRootForTask({ knowledgeRoot: { name: "k", path: knowledge } }, project)).toBe(knowledge);
     expect(knowledgeRootForTask({ knowledgeRoot: null }, project)).toBe(project);
@@ -179,15 +197,15 @@ describe("createRoleLaneStageGuard — the production guard's Knowledge root and
     expect(guard(request()).allowed).toBe(false); // the project root has no Knowledge at all
   });
 
-  it("takes the module from the task's canonical RuntimeTask when the invocation names none, and refuses when neither does", () => {
+  it("takes the module from the task's canonical RuntimeTask when the invocation names none, and refuses when neither does", async () => {
     const root = tmpProject();
-    const kb = writeApprovedKnowledge(root);
-    acknowledgeLane(root, kb, "sa", signOffLane(root, kb, "ba"));
-    acknowledgeLane(root, kb, "dev", signOffLane(root, kb, "sa"));
+    writeApprovedKnowledge(root);
+    await acknowledgeLane(root, "sa", await signOffLane(root, "ba"));
+    await acknowledgeLane(root, "dev", await signOffLane(root, "sa"));
     const runtimeTask = { version: 2, plan_source: path.join(root, "_docs", "module", MODULE, "plan.md") } as unknown as RuntimeTask;
     expect(moduleOfRuntimeTask(runtimeTask)).toBe(MODULE);
 
-    const guard = createRoleLaneStageGuard({ projectRoot: root });
+    const guard = createRoleLaneStageGuard({ projectRoot: root, ledger: ledgerFor(root) });
     expect(guard(request({ runtimeTask }))).toEqual({ allowed: true });
     const unbound = guard(request());
     expect(unbound.allowed).toBe(false);

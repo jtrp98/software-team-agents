@@ -4,6 +4,7 @@ import { impactOf } from "../knowledge/knowledgeGraph.js";
 import { LANE_LABEL, ROLE_LANES, type RoleLane, laneOf } from "./roleLane.js";
 import { type RoleWorkspace, dependenciesOf } from "./roleWorkspace.js";
 import { signoffVerdict } from "./roleApproval.js";
+import type { LaneRefsOf } from "./roleWorkflow.js";
 
 /**
  * Change propagation and impact notification, computed rather than delivered:
@@ -70,6 +71,7 @@ export function notificationsFor(
   module: string | null,
   kb: KnowledgeBase,
   workspace: RoleWorkspace,
+  refsOf: LaneRefsOf,
 ): Notification[] {
   const notifications: Notification[] = [];
   const seen = new Map(workspace.seen.map((ref) => [ref.id, ref.version]));
@@ -139,8 +141,11 @@ export function notificationsFor(
   }
 
   // 3. This lane's own gate, when the change knocked it over.
-  const approved = kb.query({ module }).filter((item) => laneOf(item.owner) === lane && item.status === "approved");
-  const verdict = signoffVerdict(workspace, approved);
+  // What the sign-off would cover now (everything past draft), compared by version and digest.
+  const candidates = kb
+    .query({ module })
+    .filter((item) => laneOf(item.owner) === lane && (item.status === "approved" || item.status === "reviewed"));
+  const verdict = signoffVerdict(workspace, refsOf(candidates));
   if (verdict.state === "stale") {
     for (const id of verdict.changed) {
       notifications.push({
@@ -182,8 +187,9 @@ export function propagate(
   module: string | null,
   kb: KnowledgeBase,
   workspaces: (lane: RoleLane) => RoleWorkspace,
+  refsOf: LaneRefsOf,
 ): LanePropagation[] {
-  return ROLE_LANES.map((lane) => ({ lane, notifications: notificationsFor(lane, module, kb, workspaces(lane)) }));
+  return ROLE_LANES.map((lane) => ({ lane, notifications: notificationsFor(lane, module, kb, workspaces(lane), refsOf) }));
 }
 
 /**

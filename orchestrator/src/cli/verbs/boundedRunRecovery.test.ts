@@ -11,8 +11,7 @@ import type { RuntimeAgentResult } from "../../runtime/runtimeAdapter.js";
 import { SqliteRunLedger } from "../../ledger/sqliteRunLedger.js";
 import { SqliteTaskStore } from "../../store/sqliteStore.js";
 import { defaultStateDbPath } from "../../store/stateView.js";
-import { boundedRunProject, playPlanTaskStage, PLAN_TASK_GUARD_FILES, threeRepoBoundedRunProject } from "./boundedRunFixture.testSupport.js";
-import { writeSignedOffHandoffs } from "../../orchestrator/stageGuards.testSupport.js";
+import { boundedRunProject, playPlanTaskStage, PLAN_TASK_GUARD_FILES, signHandoffs, threeRepoBoundedRunProject } from "./boundedRunFixture.testSupport.js";
 import { declareInstallationConfigOverrideChannelForTest } from "../../threeRepo/installation.js";
 
 declareInstallationConfigOverrideChannelForTest();
@@ -127,16 +126,16 @@ function flakyAdapter(targetRoot: string, failFirstDev: boolean): MockRuntimeAda
 }
 
 /** A project whose BA -> SA -> DEV handoffs a person has signed off and acknowledged. */
-function signedProject() {
+async function signedProject() {
   // V13 TASK-011: dispatch requires an explicit binding, so the recovery
   // scenarios run the three-repo fixture (single-repo dispatch no longer
   // resolves roots). The frozen-run semantics under test are identical.
-  return threeRepoBoundedRunProject(roots, git, { signed: true });
+  return signHandoffs(threeRepoBoundedRunProject(roots, git));
 }
 
 describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
   it("E01 · a runtime failure halts durably, and --resume finishes the same frozen run without re-registering it", async () => {
-    const { root, targetApi } = signedProject();
+    const { root, targetApi } = await signedProject();
     const halted = await cli(
       ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
       root,
@@ -221,7 +220,7 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
   }, 120_000);
 
   it("E05 · an unavailable provider is the engine's human stop: the run waits, and a resume dispatches nothing", async () => {
-    const { root, targetApi } = signedProject();
+    const { root, targetApi } = await signedProject();
     const unavailable = planTaskAdapter(targetApi, {
       engineer: () => ({ status: "UNAVAILABLE", exitCode: 1, text: "provider unavailable: upstream 503 during the attempt" }),
     });
@@ -253,7 +252,7 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
   }, 120_000);
 
   it("E02 · a run whose plan.md changed under it refuses to resume instead of executing a frozen scope", async () => {
-    const { root, knowledgeRoot, targetApi } = signedProject();
+    const { root, knowledgeRoot, targetApi } = await signedProject();
     const first = await cli(
       ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
       root,
@@ -281,7 +280,7 @@ describe("T-V8-022 — sta bounded-run end-to-end recovery", () => {
   }, 120_000);
 
   it("E04 · --resume takes the Target from the frozen run and refuses a flag that repoints it", async () => {
-    const { root, targetApi } = signedProject();
+    const { root, targetApi } = await signedProject();
     const halted = await cli(
       ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
       root,

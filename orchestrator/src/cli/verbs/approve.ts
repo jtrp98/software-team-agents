@@ -10,7 +10,14 @@ export const APPROVAL_PROMPT: Record<ApprovalType, string> = {
   [ApprovalType.QA_FAILURE]: "A QA round came back ⚠️/❌ and needs a decision",
   [ApprovalType.SECURITY_RISK]: "A Critical/Important security finding is unresolved",
   [ApprovalType.REQUIREMENT_INTERVIEW]: "Answer the displayed missing confirmation or material business question; generic approval cannot supply a missing decision",
-  [ApprovalType.UXUI_SIGNOFF]: "Confirm the current UX/UI artifact before frontend work starts",
+  [ApprovalType.UXUI_SIGNOFF]: "Sign off the UXUI lane: the listed UX artifacts at these exact versions are binding and frontend work may start",
+  [ApprovalType.BA_SIGNOFF]: "Sign off the BA lane: the listed requirement items at these exact versions are binding and the BA lane is finished",
+  [ApprovalType.SA_SIGNOFF]: "Sign off the SA lane: the listed design items at these exact versions are binding and the SA lane is finished",
+  [ApprovalType.DEV_SIGNOFF]: "Sign off the DEV lane: the listed task items at these exact versions are binding",
+  [ApprovalType.BA_ACK]: "Acknowledge, for the BA lane, that you have seen the listed items at these exact versions",
+  [ApprovalType.SA_ACK]: "Acknowledge, for the SA lane, that you have seen the listed items at these exact versions",
+  [ApprovalType.UXUI_ACK]: "Acknowledge, for the UXUI lane, that you have seen the listed items at these exact versions",
+  [ApprovalType.DEV_ACK]: "Acknowledge, for the DEV lane, that you have seen the listed items at these exact versions",
 };
 
 /** Exit code when no trusted human identity channel can authenticate the decision (unconfigured, or unreachable). */

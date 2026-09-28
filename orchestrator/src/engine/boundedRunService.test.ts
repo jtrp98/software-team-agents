@@ -144,8 +144,10 @@ describe("V13 TASK-007 — `sta run` and `sta bounded-run` are one engine", () =
     const knowledge = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "v13-bounded-knowledge-")));
     roots.push(knowledge);
     fs.mkdirSync(path.join(knowledge, "knowledge"), { recursive: true });
-    const guard = boundedRunStageGuard({ knowledge_root: knowledge, module: LANE_FIXTURE_MODULE });
-    const f = seed({ guard, knowledgeRoot: knowledge, module: LANE_FIXTURE_MODULE });
+    // The guard reads the fixture's own store; `f` exists by the time it is first asked.
+    let f!: ReturnType<typeof seed>;
+    const guard = boundedRunStageGuard({ knowledge_root: knowledge, module: LANE_FIXTURE_MODULE }, { laneRequests: (root, module) => f.store.laneRequests(root, module) });
+    f = seed({ guard, knowledgeRoot: knowledge, module: LANE_FIXTURE_MODULE });
     const freeze = vi.fn(fixtureFreeze(f.ledger, f));
     const agents = fakeAgents(f);
 
@@ -161,7 +163,7 @@ describe("V13 TASK-007 — `sta run` and `sta bounded-run` are one engine", () =
     // The machine was never forced to BLOCKED: a person's handoff clears it.
     expect(f.store.loadTask("BE-1")!.machine.current).toBe(TaskState.IMPLEMENTATION);
 
-    writeSignedOffHandoffs(knowledge);
+    await writeSignedOffHandoffs(knowledge, LANE_FIXTURE_MODULE, f.store);
     const resumed = await driveFixture(f, { agents, freeze });
     expect(resumed.kind, JSON.stringify({ reason: resumed.reason, runs: f.store.runsForTask("BE-1").map((r) => r.failure_reason) })).toBe("COMPLETED");
     expect(freeze).toHaveBeenCalledTimes(1);

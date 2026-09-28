@@ -8,6 +8,10 @@ import {
   type HumanDecisionVerifier,
 } from "../gates/humanDecision.js";
 import { resolveHumanDecisionChannel } from "../gates/humanChannelConfig.js";
+import { ApprovalDecisionError } from "../gates/approval.js";
+import type { LaneAction } from "../gates/laneApproval.js";
+import { LaneActRefusedError, LaneDecisionService } from "../roles/laneDecisions.js";
+import type { RoleLane } from "../roles/roleLane.js";
 import { APPROVAL_PROMPT } from "../cli/verbs/approve.js";
 import { defaultProjectRoot } from "../agents/agentContract.js";
 import { readModuleDoc } from "../agents/moduleDocs.js";
@@ -202,6 +206,41 @@ export interface SemanticApproveResponse {
   denialReason?: string;
 }
 
+/**
+ * A person's lane sign-off or acknowledgement (V13 TASK-028), through the
+ * same trusted channel `approve` uses. Without `requestId`, STA opens (or
+ * reuses) the pending lane request over the exact current items and
+ * announces it; with it, STA reads the decision from the channel.
+ */
+export interface SemanticLaneDecisionParams {
+  module: string;
+  lane: RoleLane;
+  action: LaneAction;
+  /** Acknowledgement only: the items acknowledged. Default: what the sending lanes hand off to this lane. */
+  itemIds?: readonly string[];
+  requestId?: string;
+  submission?: Omit<HumanDecisionSubmission, "requestId">;
+  caller?: {
+    kind?: string;
+    id?: string;
+  };
+}
+
+export interface SemanticLaneDecisionResponse {
+  ok: boolean;
+  module: string;
+  lane: RoleLane;
+  action: LaneAction;
+  requestId?: string;
+  /** What the request covers, as STA recorded it. */
+  items?: readonly { id: string; version: number }[];
+  approved?: boolean;
+  /** Where STA announced the request; a link to follow, never a way to answer. */
+  announcement?: { channel: string; ref: string; url: string | null } | null;
+  code?: string;
+  denialReason?: string;
+}
+
 export interface SemanticCancelResponse {
   ok: boolean;
   taskId: string;
@@ -230,6 +269,7 @@ export interface StaApi {
   execute(params: SemanticExecuteParams): Promise<SemanticExecuteResponse>;
   result(params: { taskId: string }): Promise<SemanticResultResponse>;
   approve(params: SemanticApproveParams): Promise<SemanticApproveResponse>;
+  laneDecision(params: SemanticLaneDecisionParams): Promise<SemanticLaneDecisionResponse>;
   cancel(params: { taskId: string; reason: string }): Promise<SemanticCancelResponse>;
   close(): void;
 }
@@ -243,7 +283,7 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
   const projectRoot = path.resolve(options.projectRoot ?? defaultProjectRoot());
   const ownsStore = !options.store;
   const store = options.store ?? new SqliteTaskStore(options.stateDb ?? defaultStateDbPath(projectRoot));
-  const stageEntryGuard = options.stageEntryGuard ?? createRoleLaneStageGuard({ projectRoot });
+  const stageEntryGuard = options.stageEntryGuard ?? createRoleLaneStageGuard({ projectRoot, ledger: store });
   const humanDecisionVerifier = options.humanDecisionVerifier ?? resolveHumanDecisionChannel();
   const now = options.now ?? Date.now;
 
@@ -693,6 +733,57 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
             code: "refused",
             denialReason: (e as Error).message,
           };
+        }
+        throw e;
+      }
+    },
+
+    async laneDecision(params: SemanticLaneDecisionParams): Promise<SemanticLaneDecisionResponse> {
+      // Same caller boundary as approve: the Controller never answers for a person.
+      if (params.caller?.kind === "controller") {
+        throw new UntrustedHumanDecisionError("Controller cannot sign off or acknowledge a lane: lane decisions require trusted human authority.");
+      }
+      if (!params.caller || params.caller.kind !== "human") {
+        throw new UntrustedHumanDecisionError(`Lane decision actor must be human; got ${params.caller?.kind ?? "unspecified"}`);
+      }
+      const base = { module: params.module, lane: params.lane, action: params.action };
+      const lanes = new LaneDecisionService({ store, verifier: humanDecisionVerifier, now });
+      try {
+        let requestId = params.requestId;
+        if (requestId === undefined) {
+          requestId = lanes.request(projectRoot, params.module, params.lane, params.action, params.itemIds).requestId;
+        } else {
+          const existing = store.loadLaneRequest(requestId);
+          if (!existing || existing.scope.module !== params.module || existing.scope.lane !== params.lane || existing.scope.action !== params.action) {
+            return { ok: false, ...base, requestId, code: "refused", denialReason: `lane request ${requestId} is not a pending ${params.lane} ${params.action} for module ${params.module}` };
+          }
+        }
+        const record = store.loadLaneRequest(requestId)!;
+        const items = record.scope.items.map((item) => ({ id: item.id, version: item.version }));
+        const publication = await lanes.publish(requestId);
+        const announcement = publication ? { channel: publication.channel, ref: publication.ref, url: publication.url } : null;
+        if (publication?.fresh || (params.requestId === undefined && publication)) {
+          return {
+            ok: false,
+            ...base,
+            requestId,
+            items,
+            announcement,
+            code: "announced",
+            denialReason: `request announced on ${publication.channel} (${publication.url ?? publication.ref}); an authorized approver answers there first`,
+          };
+        }
+        const { record: decided } = await lanes.submit({ requestId, ...(params.submission ?? {}) });
+        return { ok: true, ...base, requestId, items, announcement, approved: decided.decision!.approved };
+      } catch (e) {
+        if (e instanceof NoTrustedHumanChannelError) {
+          return { ok: false, ...base, ...(params.requestId ? { requestId: params.requestId } : {}), code: "no-trusted-channel", denialReason: e.message };
+        }
+        if (e instanceof LaneActRefusedError) {
+          return { ok: false, ...base, code: `not-ready:${e.code}`, denialReason: e.message };
+        }
+        if (e instanceof UntrustedHumanDecisionError || e instanceof ApprovalDecisionError) {
+          return { ok: false, ...base, ...(params.requestId ? { requestId: params.requestId } : {}), code: "refused", denialReason: e.message };
         }
         throw e;
       }

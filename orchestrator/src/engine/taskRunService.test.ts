@@ -275,7 +275,8 @@ describe("the role-lane stage-entry guard fires on every entry point (V13 TASK-0
     for (const [name, policy] of policies) {
       it(`${knowledge} Knowledge ⇒ the engineer stage is never dispatched under ${name}, and a valid signoff + ack lets it run`, async () => {
         const root = prepare(knowledge);
-        const { registry, store } = registryWith(createRoleLaneStageGuard({ projectRoot: root, moduleName: LANE_FIXTURE_MODULE }));
+        const laneStore = new MemoryTaskStore();
+        const { registry, store } = registryWith(createRoleLaneStageGuard({ projectRoot: root, moduleName: LANE_FIXTURE_MODULE, ledger: laneStore }), laneStore);
         register(registry, "T-LANE", PLAN_TASK);
         const executor = vi.fn(passingExecutor());
 
@@ -296,7 +297,7 @@ describe("the role-lane stage-entry guard fires on every entry point (V13 TASK-0
 
         // A person records the handoffs (fixture of `sta roles signoff`/`ack`); the same task now runs.
         if (knowledge === "invalid") fs.rmSync(path.join(root, "knowledge"), { recursive: true, force: true });
-        writeSignedOffHandoffs(root);
+        await writeSignedOffHandoffs(root, LANE_FIXTURE_MODULE, store);
         const resumed = await runTasks({ registry, store, taskIds: ["T-LANE"], executorFor: () => executor, policy, io: quietIo() });
         expect(resumed.exit).toBe("DONE");
         expect(executor.mock.calls[0]![0].stage).toBe(AgentStage.BACKEND_ENGINEER);
@@ -304,15 +305,16 @@ describe("the role-lane stage-entry guard fires on every entry point (V13 TASK-0
     }
   }
 
-  it("the same refusal is what `Orchestrator.status()` settles on, re-evaluated on every poll", () => {
+  it("the same refusal is what `Orchestrator.status()` settles on, re-evaluated on every poll", async () => {
     const root = prepare("empty");
-    const { registry } = registryWith(createRoleLaneStageGuard({ projectRoot: root, moduleName: LANE_FIXTURE_MODULE }));
+    const laneStore = new MemoryTaskStore();
+    const { registry } = registryWith(createRoleLaneStageGuard({ projectRoot: root, moduleName: LANE_FIXTURE_MODULE, ledger: laneStore }), laneStore);
     register(registry, "T-POLL", { isPlanTask: true, touchesFrontend: true });
     const orchestrator = registry.open("T-POLL");
     const first = orchestrator.status();
     expect(first).toMatchObject({ kind: "BLOCKED" });
     expect(orchestrator.machine.current).toBe(TaskState.IMPLEMENTATION);
-    writeSignedOffHandoffs(root);
+    await writeSignedOffHandoffs(root, LANE_FIXTURE_MODULE, laneStore);
     // Signed-off lanes, but frontend at MEDIUM also needs the signed UX artifact — still refused, a different reason.
     const second = orchestrator.status();
     expect(second.kind).toBe("BLOCKED");

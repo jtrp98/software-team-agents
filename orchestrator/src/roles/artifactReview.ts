@@ -95,11 +95,7 @@ export function reviewItem(item: KnowledgeItem, now: string): KnowledgeItem {
   return applyTransition(item, "reviewed", AgentStage.HUMAN, now);
 }
 
-/**
- * Moves a `reviewed` item to `approved`. Only ever a person: `applyTransition`
- * enforces it, and this wrapper exists so no caller has to remember to pass
- * `AgentStage.HUMAN` — passing anything else here would be the bug.
- */
-export function approveItem(item: KnowledgeItem, now: string): KnowledgeItem {
-  return applyTransition(item, "approved", AgentStage.HUMAN, now);
-}
+// There is no item-approval writer (V13 TASK-028, human decision 3): an item
+// is approved by the lane sign-off decision that covers it, in STA's lane
+// ledger (`laneDecisions.ts`). Writing `status: approved` into a file grants
+// nothing, so no function here offers to.

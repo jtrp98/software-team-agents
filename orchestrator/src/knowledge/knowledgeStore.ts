@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
@@ -242,6 +243,20 @@ function contentOf(item: KnowledgeItem): string {
  */
 export function sameKnowledgeContent(a: KnowledgeItem, b: KnowledgeItem): boolean {
   return contentOf(a) === contentOf(b);
+}
+
+/**
+ * What a lane decision binds an item's content to (V13 TASK-028): sha256 over
+ * the same content `sameKnowledgeContent` compares, minus `status`. The
+ * version is bound separately. `status` is left out because it is not the
+ * subject of a decision but the thing a decision replaces — a file saying
+ * `approved` is never authority, so editing that word must neither forge nor
+ * revoke anything. Any other edit to a signed item, even one that forgot to
+ * bump `version`, moves the digest and makes the decision stale.
+ */
+export function knowledgeSubjectDigest(item: KnowledgeItem): string {
+  const { status: _status, ...subject } = item;
+  return createHash("sha256").update(contentOf(subject as KnowledgeItem)).digest("hex");
 }
 
 function orderedForYaml(item: KnowledgeItem): Record<string, unknown> {

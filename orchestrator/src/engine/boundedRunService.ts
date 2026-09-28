@@ -2,7 +2,7 @@ import type { LedgerRun, LedgerTask, RunLedger } from "../ledger/runLedger.js";
 import type { LedgerRunStatus, LedgerTaskStatus } from "../ledger/vocabulary.js";
 import { applyRunStatus, LedgerTransitionError } from "../ledger/vocabulary.js";
 import { ledgerTaskStatusFromPersisted } from "../ledger/adapters.js";
-import { createRoleLaneStageGuard, type StageEntryGuard } from "../orchestrator/stageGuards.js";
+import { createRoleLaneStageGuard, type LaneLedgerReader, type StageEntryGuard } from "../orchestrator/stageGuards.js";
 import type { TaskRegistry } from "../orchestrator/taskRegistry.js";
 import { describeStatus, type TaskStatusView } from "../orchestrator/taskStatus.js";
 import { verifyTaskCompletion } from "../orchestrator/transitionGuard.js";
@@ -58,8 +58,8 @@ export interface BoundedRunOutcome {
 }
 
 /** The stage-entry guard a bounded run's engine is built with: the frozen run's Knowledge root and module. */
-export function boundedRunStageGuard(run: Pick<LedgerRun, "knowledge_root" | "module">): StageEntryGuard {
-  return createRoleLaneStageGuard({ projectRoot: run.knowledge_root, moduleName: run.module });
+export function boundedRunStageGuard(run: Pick<LedgerRun, "knowledge_root" | "module">, laneLedger: LaneLedgerReader): StageEntryGuard {
+  return createRoleLaneStageGuard({ projectRoot: run.knowledge_root, moduleName: run.module, ledger: laneLedger });
 }
 
 export interface EngineTaskView {
@@ -72,7 +72,7 @@ export interface EngineTaskView {
 }
 
 /** Reads - never writes - the engine's view of every task of a bounded run. */
-export function engineViewOfRun(ledger: RunLedger, store: TaskStore, run: LedgerRun, guard: StageEntryGuard = boundedRunStageGuard(run)): EngineTaskView[] {
+export function engineViewOfRun(ledger: RunLedger, store: TaskStore, run: LedgerRun, guard: StageEntryGuard = boundedRunStageGuard(run, store)): EngineTaskView[] {
   const all = store.listTasks();
   return ledger.readTasks(run.run_id).map((task) => {
     const row = all.find((candidate) => candidate.taskId === task.task_id);
@@ -120,7 +120,7 @@ function writeRunStatus(ledger: RunLedger, runId: string, to: LedgerRunStatus, r
 export interface DriveBoundedRunInput {
   ledger: RunLedger;
   runId: string;
-  /** Built with `boundedRunStageGuard(run)`. */
+  /** Built with `boundedRunStageGuard(run, store)`. */
   registry: TaskRegistry;
   store: TaskStore;
   /** The Target-mutation boundary engineer stages run through. */

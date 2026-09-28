@@ -82,18 +82,22 @@ sta policy [<area>] [<section>] [--json]             # อ่าน policies/ �
 ### Roles / Knowledge lanes (BA · SA · UXUI · DEV)
 
 ```bash
-sta roles                                        # ทุก lane ยืนตรงไหนของ module
-sta roles review REQ-101 --by alice             # draft → reviewed โดยคน (พร้อม checklist); agent review คือ reviewer stage ที่ STA dispatch
-sta roles approve REQ-101 --by "<ชื่อคน>"         # reviewed → approved (คนเท่านั้น)
-sta roles signoff ba --by "<ชื่อคน>"              # ปิด gate ของ lane ตัวเอง [--reject] [--note]
-sta roles ack sa REQ-101 --by "<ชื่อคน>"          # record ว่าคนใน lane เห็น item แล้ว
+sta roles                                        # ทุก lane ยืนตรงไหนของ module (+ lane request ที่ pending)
+sta roles signoff ba --module <name>             # เปิด/ประกาศ lane request (github-app: Issue) → exit 4
+sta roles signoff ba --module <name> --request <request-id>   # อ่าน comment ของผู้อนุมัติ → บันทึก decision
+sta roles ack sa [REQ-101,...] --module <name> [--request <request-id>]   # คนใน lane ผู้รับยืนยันว่าเห็น version เหล่านี้แล้ว
 sta roles inbox [ba|sa|uxui|dev]                 # lane นี้มีอะไรต้องดู
 sta roles impact REQ-101                         # lane ไหนจะโดนกระทบถ้าแก้ item นี้
 sta roles context dev                            # lane นี้เห็นอะไรได้บ้าง
 ```
 
-lane ที่มีจริง: `ba | sa | uxui | dev` — acknowledge/signoff เป็น human act บันทึกใน
-`knowledge/_roles/**` (agent เขียนไฟล์นี้ไม่ได้ทุกกรณี) โมเดลเต็มอยู่ที่
+lane ที่มีจริง: `ba | sa | uxui | dev` — sign-off และ ack เป็น human decision แยกกันสองครั้ง
+(V13 TASK-028) ผ่าน trusted channel เดียวกับ `sta approve` (github-app) และบันทึกใน lane ledger ของ
+STA state DB เท่านั้น: gate type ต่อ lane (`ba-signoff`, `sa-signoff`, `uxui-signoff`, `dev-signoff`,
+`ba-ack`, `sa-ack`, `uxui-ack`, `dev-ack`) แต่ละตัวมี approver allowlist ของตัวเอง; sign-off ทำให้ item
+ของ lane เป็น approved ด้วย (ไม่มี `roles approve` แยก) และผูก `{id, version, digest}` — item เปลี่ยน =
+stale. ไม่มี channel = request ค้าง pending (exit 5). `--by`, ไฟล์ `knowledge/_roles/**` และ `status: approved`
+ในไฟล์ item ไม่ใช่ authority; `roles review`/`roles approve` ถูกปฏิเสธ. โมเดลเต็มอยู่ที่
 [`knowledge/README.md`](../knowledge/README.md) § Role workspaces
 
 ### Install / machine config / diagnostics
@@ -169,7 +173,7 @@ registry เดียวใน `orchestrator/src/cli/checkers.ts` — ตรว�
 `--check-escalation-policy` · `--check-workspace` (workspace.yaml + misplaced docs) · `--check-repos` ·
 `--check-environments` · `--check-doc-structure` · `--check-doc-size` ·
 `--check-plan` (plan.md เป็น dependency graph) · `--check-knowledge` · `--check-installation` ·
-`--check-roles` · `--check-git-ownership` (git mutation อยู่ใน `orchestrator/src/git/` เท่านั้น) ·
+`--check-git-ownership` (git mutation อยู่ใน `orchestrator/src/git/` เท่านั้น) ·
 `--build-templates <out-dir>` · `--version`
 
 ---

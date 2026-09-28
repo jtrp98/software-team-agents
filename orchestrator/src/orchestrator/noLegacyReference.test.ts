@@ -110,3 +110,35 @@ describe("TASK-024: No governance bypass switches, obsolete interfaces or unused
     expect(cliSource).not.toMatch(/--no-qa-optimization/);
   });
 });
+
+describe("TASK-028: no file-backed lane authority remains", () => {
+  const fileAuthoritySymbols = [
+    "loadRoleWorkspace",
+    "writeRoleWorkspace",
+    "readRoleWorkspaceFile",
+    "listRoleWorkspaceFiles",
+    "checkRoleWorkspaces",
+    "roleWorkspacePath",
+    "recordSignoff",
+    "APPROVAL_TYPE_OF_LANE",
+    "workspacesUnder",
+    "checkRoles",
+  ];
+
+  it.each(fileAuthoritySymbols)("production source contains no references to %s", (symbol) => {
+    expect(offendersFor(new RegExp(`\b${symbol}\b`))).toEqual([]);
+  });
+
+  it("the role-workspace file schema is gone", () => {
+    expect(fs.existsSync(path.resolve(SRC, "..", "schemas", "role-workspace.schema.json"))).toBe(false);
+  });
+
+  it("no production path reads knowledge/_roles/ (only the guard floor names it)", () => {
+    const readers = PRODUCTION_SOURCES.filter(({ file, text }) =>
+      file !== "agents/pathPermissions.ts" &&
+      file !== "threeRepo/ownership.ts" &&
+      text.split(/\r?\n/).some((line) => /ROLES_DIRNAME|["'`]_roles["'`/]/.test(line) && !/^\s*([*]|\/\/|\/[*])/.test(line)),
+    ).map(({ file }) => file);
+    expect(readers).toEqual(["knowledge/knowledgeStore.ts"]); // RESERVED_DIRS: the item walk skips it
+  });
+});

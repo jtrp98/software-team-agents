@@ -2,6 +2,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import SqliteDatabase from "./sqliteDatabase.js";
+import { ApprovalDecisionError } from "../gates/approval.js";
+import { parseLaneRecord, type LaneApprovalRecord } from "../gates/laneApproval.js";
 import type { AgentStage } from "../types.js";
 import type { RunRecord } from "../observability/runLog.js";
 import type { ChangeSetFingerprint } from "../qa/changeSource.js";
@@ -45,7 +47,7 @@ import {
 // the new field back as null ("not recorded"), nothing is guessed and nothing is lost. A
 // migration that would need to reinterpret or rewrite existing data does not go in this list (see
 // MIGRATIONS below), and an unknown version refuses to open rather than risk misreading it.
-const SCHEMA_VERSION = 21;
+const SCHEMA_VERSION = 22;
 
 const DDL = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -193,6 +195,29 @@ CREATE TABLE IF NOT EXISTS evidence (
   record      TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS evidence_task ON evidence (task_id, seq);
+`;
+
+/**
+ * V13 TASK-028: the lane ledger — lane sign-offs and acknowledgements as
+ * pending requests and trusted decisions. Not task-scoped: a lane act is about
+ * one module's knowledge under one Knowledge root. `record` is the whole
+ * validated `LaneApprovalRecord`; the columns beside it exist to be queried,
+ * and `decision_id` is UNIQUE so one channel decision can never be applied to
+ * two requests.
+ */
+export const LANE_DECISIONS_DDL = `
+CREATE TABLE IF NOT EXISTS lane_decisions (
+  seq            INTEGER PRIMARY KEY AUTOINCREMENT,
+  request_id     TEXT NOT NULL UNIQUE,
+  knowledge_root TEXT NOT NULL,
+  module         TEXT NOT NULL,
+  lane           TEXT NOT NULL,
+  action         TEXT NOT NULL,
+  status         TEXT NOT NULL,
+  decision_id    TEXT UNIQUE,
+  record         TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS lane_decisions_module ON lane_decisions (knowledge_root, module, seq);
 `;
 
 /** Named once so the DDL above and the migration below cannot drift apart. */
@@ -470,7 +495,29 @@ const MIGRATIONS: Record<number, (db: SqliteDatabase) => void> = {
     const existing = new Set((db.pragma("table_info(runs)") as { name: string }[]).map((c) => c.name));
     if (!existing.has("contract_digest")) db.exec("ALTER TABLE runs ADD COLUMN contract_digest TEXT");
   },
+  21: (db) => {
+    // V13 TASK-028: a new, empty table. Nothing is imported from
+    // `knowledge/_roles/**`: those files were never authenticated, so a lane
+    // with no decision here is unsigned and unacknowledged — which blocks
+    // (fail closed) until a person decides through the trusted channel.
+    db.exec(LANE_DECISIONS_DDL);
+  },
 };
+
+interface LaneDecisionRow {
+  request_id: string;
+  record: string;
+}
+
+function laneRecordFromRow(row: LaneDecisionRow): LaneApprovalRecord {
+  let data: unknown;
+  try {
+    data = JSON.parse(row.record);
+  } catch (error) {
+    throw new ApprovalDecisionError("untrusted-decision", `stored lane request ${row.request_id} is not JSON (${(error as Error).message})`);
+  }
+  return parseLaneRecord(row.request_id, data);
+}
 
 export class SqliteTaskStore implements TaskStore {
   private readonly db: SqliteDatabase;
@@ -514,6 +561,7 @@ export class SqliteTaskStore implements TaskStore {
       this.db.exec(DDL);
       this.db.exec(LEDGER_DDL);
       this.db.exec(EVIDENCE_DDL);
+      this.db.exec(LANE_DECISIONS_DDL);
 
       const found = Number((this.db.pragma("user_version", { simple: true }) as number) ?? 0);
       if (found === 0) {
@@ -851,6 +899,57 @@ export class SqliteTaskStore implements TaskStore {
         decision: r.decision,
       }),
     );
+  }
+
+  insertLaneRequest(record: LaneApprovalRecord): void {
+    if (this.readOnly) throw new Error("state database was opened read-only");
+    const stored = parseLaneRecord(record.requestId, JSON.parse(JSON.stringify(record)));
+    this.db
+      .prepare(
+        `INSERT INTO lane_decisions (request_id, knowledge_root, module, lane, action, status, decision_id, record)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        stored.requestId,
+        stored.scope.knowledgeRoot,
+        stored.scope.module,
+        stored.scope.lane,
+        stored.scope.action,
+        stored.status,
+        stored.decision?.decisionId ?? null,
+        JSON.stringify(stored),
+      );
+  }
+
+  updateLaneRequest(record: LaneApprovalRecord): void {
+    if (this.readOnly) throw new Error("state database was opened read-only");
+    const stored = parseLaneRecord(record.requestId, JSON.parse(JSON.stringify(record)));
+    const existing = this.loadLaneRequest(stored.requestId);
+    if (!existing) throw new Error(`lane request ${stored.requestId} was never opened`);
+    if (JSON.stringify(existing.scope) !== JSON.stringify(stored.scope) || existing.requestedAt !== stored.requestedAt) {
+      throw new Error(`lane request ${stored.requestId}: its scope is immutable once opened`);
+    }
+    this.db
+      .prepare("UPDATE lane_decisions SET status = ?, decision_id = ?, record = ? WHERE request_id = ?")
+      .run(stored.status, stored.decision?.decisionId ?? null, JSON.stringify(stored), stored.requestId);
+  }
+
+  loadLaneRequest(requestId: string): LaneApprovalRecord | null {
+    const row = this.db.prepare("SELECT request_id, record FROM lane_decisions WHERE request_id = ?").get(requestId) as
+      | LaneDecisionRow
+      | undefined;
+    return row ? laneRecordFromRow(row) : null;
+  }
+
+  laneRequests(knowledgeRoot: string, module: string): LaneApprovalRecord[] {
+    const rows = this.db
+      .prepare("SELECT request_id, record FROM lane_decisions WHERE knowledge_root = ? AND module = ? ORDER BY seq ASC")
+      .all(knowledgeRoot, module) as unknown as LaneDecisionRow[];
+    return rows.map(laneRecordFromRow);
+  }
+
+  laneDecisionIdExists(decisionId: string): boolean {
+    return this.db.prepare("SELECT 1 FROM lane_decisions WHERE decision_id = ?").get(decisionId) !== undefined;
   }
 
   close(): void {

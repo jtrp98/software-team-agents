@@ -36,7 +36,7 @@ export function openStore(projectRoot: string, stateDb?: string): { store: Sqlit
   const registry = new TaskRegistry({
     store,
     stateViewPath: defaultStateViewPath(projectRoot),
-    stageEntryGuard: createRoleLaneStageGuard({ projectRoot }),
+    stageEntryGuard: createRoleLaneStageGuard({ projectRoot, ledger: store }),
     humanDecisionVerifier: resolveHumanDecisionChannel(),
   });
   return { store, registry };

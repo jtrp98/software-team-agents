@@ -1,4 +1,5 @@
-import { HumanDecisionRecordSchema, type ApprovalRecord, type HumanDecisionRecord, type VerifiedHumanDecision } from "./approval.js";
+import { HumanDecisionRecordSchema, type ApprovalRecord, type HumanDecisionRecord } from "./approval.js";
+import type { LaneApprovalRecord } from "./laneApproval.js";
 
 /**
  * The trusted human channel: the only thing that may turn a submission into
@@ -20,6 +21,21 @@ import { HumanDecisionRecordSchema, type ApprovalRecord, type HumanDecisionRecor
  * `github-app` channel when its human-owned configuration is complete, else
  * `UNCONFIGURED_HUMAN_CHANNEL`, which fails every approval closed.
  */
+/**
+ * Every question a trusted channel can be asked: a task's gate request
+ * (`approval.ts`) or a lane act (`laneApproval.ts`, V13 TASK-028). Both carry
+ * an immutable STA-minted `requestId`, the time it was opened and a scope
+ * whose `type` names the gate — and so the approver list — it is decided under.
+ */
+export type HumanDecisionRequest = ApprovalRecord | LaneApprovalRecord;
+
+/** What a channel attests for one request: the same request id, the scope it verified, and the decision. */
+export interface VerifiedDecisionFor<R extends HumanDecisionRequest> {
+  requestId: string;
+  scope: R["scope"];
+  decision: HumanDecisionRecord;
+}
+
 export interface HumanDecisionSubmission {
   /** The pending request this submission answers. */
   requestId: string;
@@ -56,8 +72,8 @@ export interface HumanDecisionContext {
 
 /** What a channel shows the human about the request it announces. Never an authority input. */
 export interface ApprovalAnnouncement {
-  request: ApprovalRecord;
-  /** Digests of the task's latest artifacts at the time of asking — what the person is approving. */
+  request: HumanDecisionRequest;
+  /** Digests of the task's latest artifacts at the time of asking — what the person is approving. A lane request lists its items in its scope instead. */
   artifacts: ReadonlyArray<{ artifactType: string; contentDigest: string; evidenceId: string }>;
 }
 
@@ -76,13 +92,13 @@ export interface HumanDecisionVerifier {
    * throws. Returns the decision in the ledger's shape; the orchestrator still
    * applies every ledger check (pending, scope, replay) afterwards.
    */
-  verify(request: ApprovalRecord, submission: HumanDecisionSubmission, context: HumanDecisionContext): Promise<VerifiedHumanDecision>;
+  verify<R extends HumanDecisionRequest>(request: R, submission: HumanDecisionSubmission, context: HumanDecisionContext): Promise<VerifiedDecisionFor<R>>;
   /**
    * Called once the decision is committed (github-app: closes the Issue).
    * Best effort — the decision is already durable; a failure here is reported,
    * never rolled back into the ledger.
    */
-  settle?(request: ApprovalRecord, decision: HumanDecisionRecord, publication: ApprovalPublication | null): Promise<void>;
+  settle?(request: HumanDecisionRequest, decision: HumanDecisionRecord, publication: ApprovalPublication | null): Promise<void>;
 }
 
 export class NoTrustedHumanChannelError extends Error {
@@ -144,11 +160,11 @@ export class UntrustedHumanDecisionError extends Error {
  * verifier's own channel. A verifier cannot launder a decision for another
  * request or claim to be a different channel.
  */
-export function assertVerifierOutput(
+export function assertVerifierOutput<R extends HumanDecisionRequest>(
   verifier: HumanDecisionVerifier,
   submission: HumanDecisionSubmission,
-  verified: VerifiedHumanDecision,
-): VerifiedHumanDecision {
+  verified: VerifiedDecisionFor<R>,
+): VerifiedDecisionFor<R> {
   if (verified.requestId !== submission.requestId) {
     throw new UntrustedHumanDecisionError(`verifier ${verifier.channel} answered ${verified.requestId}, not the submitted ${submission.requestId}`);
   }

@@ -1,14 +1,17 @@
 import { sign, type KeyObject } from "node:crypto";
 import { z } from "zod";
-import { ApprovalType, type ApprovalRecord, type HumanDecisionRecord, type VerifiedHumanDecision } from "./approval.js";
+import { ApprovalType, type ApprovalRecord, type HumanDecisionRecord } from "./approval.js";
+import type { LaneApprovalRecord } from "./laneApproval.js";
 import {
   HumanChannelUnavailableError,
   UntrustedHumanDecisionError,
   type ApprovalAnnouncement,
   type ApprovalPublication,
   type HumanDecisionContext,
+  type HumanDecisionRequest,
   type HumanDecisionSubmission,
   type HumanDecisionVerifier,
+  type VerifiedDecisionFor,
 } from "./humanDecision.js";
 
 /**
@@ -215,7 +218,7 @@ export function createGithubAppChannel(options: GithubAppChannelOptions): HumanD
     return `${GITHUB_API_BASE}${repoPath}/issues/${issue}`;
   }
 
-  function judge(comment: GithubComment, request: ApprovalRecord, issue: number): CommentRejection | null {
+  function judge(comment: GithubComment, request: HumanDecisionRequest, issue: number): CommentRejection | null {
     const line = (comment.body ?? "").split(/\r?\n/, 1)[0]!.trim();
     const match = DECISION_LINE.exec(line);
     if (!match || match[2] !== request.requestId) return "other-request";
@@ -244,7 +247,7 @@ export function createGithubAppChannel(options: GithubAppChannelOptions): HumanD
       });
     },
 
-    async verify(request: ApprovalRecord, submission: HumanDecisionSubmission, context: HumanDecisionContext): Promise<VerifiedHumanDecision> {
+    async verify<R extends HumanDecisionRequest>(request: R, submission: HumanDecisionSubmission, context: HumanDecisionContext): Promise<VerifiedDecisionFor<R>> {
       const publication = context.publication;
       if (!publication || publication.channel !== GITHUB_APP_CHANNEL) {
         throw new UntrustedHumanDecisionError(
@@ -315,7 +318,7 @@ export function createGithubAppChannel(options: GithubAppChannelOptions): HumanD
       };
     },
 
-    async settle(request: ApprovalRecord, decision: HumanDecisionRecord, publication: ApprovalPublication | null): Promise<void> {
+    async settle(request: HumanDecisionRequest, decision: HumanDecisionRecord, publication: ApprovalPublication | null): Promise<void> {
       const bound = publication ? parseIssueRef(publication.ref) : null;
       if (!bound || !sameRepository(bound.repository, repo)) return;
       await guarded(request.requestId, async () => {
@@ -334,28 +337,20 @@ export function createGithubAppChannel(options: GithubAppChannelOptions): HumanD
   };
 }
 
-function issueTitle(request: ApprovalRecord): string {
+function isLaneRequest(request: HumanDecisionRequest): request is LaneApprovalRecord {
+  return "kind" in request.scope && request.scope.kind === "lane";
+}
+
+function issueTitle(request: HumanDecisionRequest): string {
+  if (isLaneRequest(request)) {
+    const { scope } = request;
+    return `STA approval: ${scope.type} for module ${scope.module} (${request.requestId})`;
+  }
   return `STA approval: ${request.scope.type} for ${request.scope.taskId} (${request.requestId})`;
 }
 
-function issueBody(request: ApprovalRecord, artifacts: ApprovalAnnouncement["artifacts"]): string {
-  const edge = request.scope.from && request.scope.to ? `${request.scope.from} → ${request.scope.to}` : "none (escalation)";
-  const artifactLines =
-    artifacts.length === 0
-      ? ["- none recorded yet"]
-      : artifacts.map((a) => `- ${a.artifactType}: \`sha256:${a.contentDigest}\` (evidence \`${a.evidenceId}\`)`);
+function decisionInstructions(request: HumanDecisionRequest): string[] {
   return [
-    "STA is waiting for a human decision.",
-    "",
-    `- Request: \`${request.requestId}\``,
-    `- Task: \`${request.scope.taskId}\``,
-    `- Gate: \`${request.scope.type}\``,
-    `- Edge: ${edge}`,
-    `- Reason: ${request.reason}`,
-    "",
-    "Artifacts at the time of asking:",
-    ...artifactLines,
-    "",
     "An authorized approver decides by posting a **new** comment whose first line is exactly one of:",
     "",
     "```",
@@ -365,5 +360,55 @@ function issueBody(request: ApprovalRecord, artifacts: ApprovalAnnouncement["art
     "",
     "Anything after the first line is recorded as the note. Edited comments, comments by bots or apps,",
     "comments by anyone not on this gate's approver list, and comments naming another request are ignored.",
+  ];
+}
+
+function laneIssueBody(request: LaneApprovalRecord): string {
+  const { scope } = request;
+  const act =
+    scope.action === "signoff"
+      ? `Sign off the ${scope.lane.toUpperCase()} lane: the items below become binding at exactly these versions and the lane is finished.`
+      : `Acknowledge for the ${scope.lane.toUpperCase()} lane that you have seen the items below at exactly these versions.`;
+  return [
+    "STA is waiting for a human decision.",
+    "",
+    `- Request: \`${request.requestId}\``,
+    `- Module: \`${scope.module}\``,
+    `- Lane: \`${scope.lane}\` (${scope.action})`,
+    `- Gate: \`${scope.type}\``,
+    `- Reason: ${request.reason}`,
+    "",
+    act,
+    "",
+    "Items at the time of asking:",
+    ...scope.items.map((item) => `- ${item.id} v${item.version} (\`sha256:${item.digest}\`)`),
+    "",
+    "If any of these items changes before you answer, STA withdraws this request and asks again.",
+    "",
+    ...decisionInstructions(request),
+  ].join("\n");
+}
+
+function issueBody(request: HumanDecisionRequest, artifacts: ApprovalAnnouncement["artifacts"]): string {
+  if (isLaneRequest(request)) return laneIssueBody(request);
+  const task: ApprovalRecord = request;
+  const edge = task.scope.from && task.scope.to ? `${task.scope.from} → ${task.scope.to}` : "none (escalation)";
+  const artifactLines =
+    artifacts.length === 0
+      ? ["- none recorded yet"]
+      : artifacts.map((a) => `- ${a.artifactType}: \`sha256:${a.contentDigest}\` (evidence \`${a.evidenceId}\`)`);
+  return [
+    "STA is waiting for a human decision.",
+    "",
+    `- Request: \`${task.requestId}\``,
+    `- Task: \`${task.scope.taskId}\``,
+    `- Gate: \`${task.scope.type}\``,
+    `- Edge: ${edge}`,
+    `- Reason: ${task.reason}`,
+    "",
+    "Artifacts at the time of asking:",
+    ...artifactLines,
+    "",
+    ...decisionInstructions(task),
   ].join("\n");
 }

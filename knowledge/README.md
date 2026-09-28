@@ -19,7 +19,7 @@ knowledge/
 ├── _conflicts/          ← CONF-*.yaml: a person's decision about two facts that contradict
 ├── _bootstrap/          ← STATE.yaml: how far first-time discovery got
 ├── _human-input/        ← what a person supplied that no file could be read for
-└── _roles/              ← <module>/<lane>.yaml: where BA, SA and DEV each stand
+└── _roles/              ← reserved and guard-denied; read by nothing since V13 TASK-028 (lane decisions live in STA's ledger)
 ```
 
 Every `_`-prefixed name above is reserved — the item walk skips them, so they can never be
@@ -82,50 +82,50 @@ item may get before it is called stale. Agents read knowledge through
 and the field policy (which parts) **before** returning anything — and always reports what it
 withheld, so an absent fact and a hidden one never look the same.
 
-## Role workspaces (`_roles/`)
+## Role workspaces (lane sign-off and acknowledgement)
 
 V1.5 puts lanes — BA, SA, UXUI and DEV — around this one knowledge base, each with a person
-who decides. `_roles/<module>/<lane>.yaml` holds the only two things about a lane that cannot
-be worked out from `knowledge/` itself:
+who decides. Two things about a lane cannot be worked out from `knowledge/` itself, and since
+V13 TASK-028 both are **trusted human decisions in STA's lane ledger** (the `lane_decisions`
+table of the STA state DB), never files:
 
-- **`seen`** — which version of which item the person in that lane has acknowledged.
-- **`signoffs`** — that person's own approval gate, and the exact item versions each
-  answer covered. Approving an *item* says a fact is binding; signing off the *lane* says the
-  lane is finished and the next one may start. A sign-off names versions so that amending
-  what it covered makes it stale by arithmetic, rather than leaving a flag that outlives its
-  subject. There is no `pending` status: "asked and unanswered" is the derived stage
-  `awaiting-signoff`.
+- **sign-off** — the person in the lane says the lane is finished. The same decision makes the
+  lane's items binding: an item is `approved` exactly when the lane's latest decided sign-off
+  covers it at its current `{id, version, digest}`. There is no separate item approval.
+- **acknowledgement (ack)** — a separate decision by the person in the *receiving* lane that
+  they have seen those exact versions. The handoff watermark is built from these.
+
+Each lane and act has its own gate type, and so its own approver allowlist in the human-owned
+github-app configuration: `ba-signoff`, `sa-signoff`, `uxui-signoff`, `dev-signoff`, `ba-ack`,
+`sa-ack`, `uxui-ack`, `dev-ack`. STA opens a pending request over the exact current items,
+announces it on the trusted channel (the same one `sta approve` uses) and records a decision
+only when the channel verifies it; an item edited or bumped after the request or the decision
+makes it stale. With no channel configured the request stays pending.
+
+What is **not** authority, anywhere: a file under `knowledge/_roles/**` (nothing reads it; the
+path stays in `UNIVERSAL_DENY` so no agent can leave one there), an item file's own
+`status: approved` (read as `reviewed` until a sign-off covers it), and any name typed on the
+command line (`--by` is refused).
 
 Everything else — what the lane is drafting, what moved under it, what it is waiting on a
-person for, what it should be told about — is computed from those two every time it is asked.
-
-Two consequences, both deliberate:
-
-- **Nothing writes into another lane's file.** BA amending `REQ-003` does not notify DEV;
-  DEV notices, because DEV's own recorded version of `REQ-003` no longer matches. So "every
-  affected lane is told" is arithmetic rather than a discipline somebody has to keep.
-- **No agent may write one of these files at all.** `knowledge/_roles/**` is in
-  `UNIVERSAL_DENY` (`orchestrator/src/agents/pathPermissions.ts` and the matching hook), so
-  the block holds in every mode, with or without a contract. An acknowledgement and a sign-off
-  each record a human act; an agent that could write one could record it on that person's
-  behalf. The writer is a person, through `sta roles`.
+person for, what it should be told about — is computed from those decisions every time it is
+asked. Nothing writes into another lane's watermark: BA amending `REQ-003` does not notify DEV;
+DEV notices, because DEV's acknowledged version of `REQ-003` no longer matches.
 
 ```bash
-sta roles [--module <name>]                     # where each lane stands, and what it is waiting on
-sta roles review <id> --by <name>               # a person: draft -> reviewed, with that kind's checklist
-sta roles approve <id> --by <name>              # reviewed -> approved; a person only
-sta roles signoff <ba|sa|uxui|dev> --by <name>  # that lane's own gate  [--reject] [--note ...]
-sta roles ack <lane> <id>[,<id>...] --by <name> # record the handoff into that lane
-sta roles inbox [<lane>]                        # what each lane has to look at, derived fresh
-sta roles impact <id>[,<id>...]                 # which lanes a change would reach, before making it
-sta roles context <lane> [<id>]                 # what that lane may see, and via which role
+sta roles [--module <name>]                                  # where each lane stands, plus pending lane requests
+sta roles signoff <ba|sa|uxui|dev> --module <name>           # open + announce the request (exit 4)
+sta roles signoff <lane> --module <name> --request <id>      # record the approver's decision from the channel
+sta roles ack <lane> [<id>[,<id>...]] --module <name> [--request <id>]   # the receiving lane's acknowledgement
+sta roles inbox [<lane>]                                     # what each lane has to look at, derived fresh
+sta roles impact <id>[,<id>...]                              # which lanes a change would reach, before making it
+sta roles context <lane> [<id>]                              # what that lane may see, and via which role
 ```
 
 ## Checking it
 
 ```bash
 node orchestrator/dist/cli.js --check-knowledge
-node orchestrator/dist/cli.js --check-roles
 ```
 
 Reports dangling relation targets, an id whose prefix does not match its kind, two files
@@ -133,9 +133,8 @@ claiming one id, a relation whose two ends are not a legal pair, an `approved` i
 source, a `supersedes` cycle, and any file left holding a git conflict marker. An empty (or
 absent) `knowledge/` passes with a note — this checks consistency, not progress.
 
-`--check-roles` covers `_roles/` separately: a lane file that disagrees with its own path, a
-watermark pointing at an item that no longer exists, or one claiming a version the item never
-reached. A lane simply being *behind* is a note, not a failure — being told is the point.
+`--check-roles` was removed with the `_roles/` files (V13 TASK-028): lane state is `sta roles`,
+read from the lane ledger.
 
 ## Schema v2 scope, origin, freshness, and reconciliation
 

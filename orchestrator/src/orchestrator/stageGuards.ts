@@ -1,9 +1,7 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { AgentStage, TaskLevel } from "../types.js";
-import { KnowledgeBase } from "../knowledge/knowledgeBase.js";
-import { loadKnowledge } from "../knowledge/knowledgeStore.js";
-import { loadRoleWorkspace } from "../roles/roleWorkspace.js";
+import type { LaneDecisionStore } from "../gates/laneApproval.js";
+import { laneItemRefs, laneWorkspaces, loadGovernedKnowledge, uxArtifactFile } from "../roles/laneDecisions.js";
 import { roleWorkflowState, workflowFor } from "../roles/roleWorkflow.js";
 import { signoffVerdict } from "../roles/roleApproval.js";
 import type { RoleLane } from "../roles/roleLane.js";
@@ -22,6 +20,12 @@ import type { RuntimeTask } from "./runtimeTask.js";
  * the stop clears by itself once a person records the missing sign-off or
  * acknowledgement through a trusted human decision channel. Nothing here
  * writes: an acknowledgement is a person-only act.
+ *
+ * Authority is read from one place only (V13 TASK-028): the persisted lane
+ * ledger (`laneApproval.ts`), whose records a trusted channel decided. Item
+ * statuses are governed by it (`laneDecisions.ts`); `knowledge/_roles/**`,
+ * an item file's `status: approved` and any typed name are never read as a
+ * sign-off, an acknowledgement or an approval.
  *
  * Fail closed, always: a missing, empty or invalid Knowledge model cannot
  * prove a handoff, so it refuses — an empty `knowledge/` directory is not an
@@ -88,9 +92,14 @@ function laneActions(handoff: { from: RoleLane; to: RoleLane }, moduleName: stri
   );
 }
 
+/** What the guard reads lane decisions from: the task store's lane ledger. */
+export type LaneLedgerReader = Pick<LaneDecisionStore, "laneRequests">;
+
 export interface RoleLaneEntryInput {
   /** The Knowledge root to read (`knowledgeRootForTask`). */
   knowledgeRoot: string;
+  /** The persisted lane ledger — the only source of sign-offs and acknowledgements. */
+  ledger: LaneLedgerReader;
   moduleName: string;
   stage: AgentStage;
   level: TaskLevel;
@@ -111,7 +120,7 @@ export function checkRoleLaneEntry(input: RoleLaneEntryInput): StageEntryDecisio
   const root = input.knowledgeRoot;
   const prefix = `cannot start ${stage}`;
 
-  const loaded = loadKnowledge(root);
+  const loaded = loadGovernedKnowledge(root, input.ledger);
   if (loaded.missing) {
     return {
       allowed: false,
@@ -142,25 +151,23 @@ export function checkRoleLaneEntry(input: RoleLaneEntryInput): StageEntryDecisio
     return { allowed: false, reason: `${prefix}: no workflow is defined for the ${handoff.from.toUpperCase()} lane` };
   }
 
-  const knowledge = new KnowledgeBase(loaded.items);
+  const knowledge = loaded.kb;
+  const workspaces = laneWorkspaces(loaded.recordsFor, loaded.root, moduleName, now);
+  const refsOf = (items: Parameters<typeof laneItemRefs>[0]) => laneItemRefs(items, loaded.root);
   if (stage === AgentStage.FRONTEND_ENGINEER && uxGateApplies(input.level)) {
-    const artifacts = knowledge
+    // Approved here means covered by the current uxui sign-off decision; the
+    // artifact bytes are part of each item's digest, so an edited UX file is stale.
+    const currentArtifacts = knowledge
       .query({ module: moduleName, kinds: ["ux-design"], status: "approved" })
-      .filter((item): item is Extract<typeof item, { kind: "ux-design" }> => item.kind === "ux-design");
-    const uxui = loadRoleWorkspace("uxui", moduleName, root, now);
-    const expectedPrefix = `_docs/module/${moduleName}/uxui/`;
-    const canonicalRoot = fs.realpathSync.native(path.resolve(root));
-    const currentArtifacts = artifacts.filter((artifact) =>
-      artifact.payload.artifact.startsWith(expectedPrefix) && (() => {
-        const candidate = path.resolve(canonicalRoot, artifact.payload.artifact);
-        return candidate.startsWith(`${canonicalRoot}${path.sep}`) && fs.existsSync(candidate) && fs.statSync(candidate).isFile() &&
-          fs.realpathSync.native(candidate).startsWith(`${canonicalRoot}${path.sep}`);
-      })() && artifact.payload.refines.some((id) => {
-        const design = knowledge.resolve(id, moduleName);
-        return design?.kind === "architecture" && design.status === "approved";
-      }),
-    );
-    if (currentArtifacts.length === 0 || signoffVerdict(uxui, currentArtifacts).state !== "current") {
+      .filter((artifact) =>
+        artifact.kind === "ux-design" &&
+        uxArtifactFile(artifact, loaded.root) !== null &&
+        artifact.payload.refines.some((id) => {
+          const design = knowledge.resolve(id, moduleName);
+          return design?.kind === "architecture" && design.status === "approved";
+        }),
+      );
+    if (currentArtifacts.length === 0 || signoffVerdict(workspaces("uxui"), refsOf(currentArtifacts)).state !== "current") {
       return {
         allowed: false,
         reason:
@@ -170,7 +177,7 @@ export function checkRoleLaneEntry(input: RoleLaneEntryInput): StageEntryDecisio
     }
   }
 
-  const state = roleWorkflowState(workflow, moduleName, knowledge, (lane) => loadRoleWorkspace(lane, moduleName, root, now));
+  const state = roleWorkflowState(workflow, moduleName, knowledge, workspaces, refsOf);
   if (state.stage !== "ready" || state.handoff.blockers.length > 0) {
     const detail = state.handoff.blockers.length > 0 ? `: ${state.handoff.blockers.join("; ")}` : "";
     return {
@@ -185,7 +192,8 @@ export function checkRoleLaneEntry(input: RoleLaneEntryInput): StageEntryDecisio
       allowed: false,
       reason:
         `${prefix}: ${handoff.to.toUpperCase()} lane has not acknowledged the approved ${handoff.from.toUpperCase()} handoff ` +
-        `(${state.handoff.items.join(", ") || "no items"}) — a trusted human decision channel is required`,
+        `(${state.handoff.items.join(", ") || "no items"}) at its current versions — a person acknowledges it through the ` +
+        `trusted human decision channel (\`sta roles ack ${handoff.to} --module ${moduleName}\`)`,
     };
   }
   return ALLOWED;
@@ -194,6 +202,8 @@ export function checkRoleLaneEntry(input: RoleLaneEntryInput): StageEntryDecisio
 export interface RoleLaneStageGuardOptions {
   /** The project root: where Knowledge lives for a task with no frozen Knowledge root. */
   projectRoot: string;
+  /** The task store's lane ledger. Required: there is no other source of lane decisions. */
+  ledger: LaneLedgerReader;
   /** The module this invocation is bound to (`--module`); otherwise read from the task's canonical RuntimeTask. */
   moduleName?: string;
   now?: () => string;
@@ -220,6 +230,7 @@ export function createRoleLaneStageGuard(opts: RoleLaneStageGuardOptions): Stage
     }
     return checkRoleLaneEntry({
       knowledgeRoot: knowledgeRootForTask(request, opts.projectRoot),
+      ledger: opts.ledger,
       moduleName,
       stage: request.stage,
       level: request.level,

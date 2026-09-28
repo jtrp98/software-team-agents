@@ -1,27 +1,168 @@
-/** Read-only lane inspection. Human decisions require a trusted channel (TASK-001). */
+import { CliUsageError } from "../../cli.js";
+import { ApprovalDecisionError } from "../../gates/approval.js";
+import { resolveHumanDecisionChannel } from "../../gates/humanChannelConfig.js";
+import { NoTrustedHumanChannelError, UntrustedHumanDecisionError } from "../../gates/humanDecision.js";
+import type { LaneAction, LaneApprovalRecord } from "../../gates/laneApproval.js";
+import { KnowledgeContext } from "../../knowledge/knowledgeContext.js";
+import { renderKnowledgeRetrieval } from "../../knowledge/retrievalRender.js";
+import { lanesAffectedBy, notificationsFor } from "../../roles/changePropagation.js";
+import { laneContext, laneGet } from "../../roles/laneContext.js";
+import {
+  LaneActRefusedError,
+  LaneDecisionService,
+  laneItemRefs,
+  laneWorkspaces,
+  loadGovernedKnowledge,
+  type GovernedKnowledge,
+} from "../../roles/laneDecisions.js";
+import { LANE_LABEL, ROLE_LANES, isRoleLane, type RoleLane } from "../../roles/roleLane.js";
+import { describeStage, roleWorkflowState, workflowFor } from "../../roles/roleWorkflow.js";
+import { laneView } from "../../roles/roleWorkspace.js";
+import { SqliteTaskStore } from "../../store/sqliteStore.js";
+import { defaultStateDbPath } from "../../store/stateView.js";
+import { flagValue, positionalArgs } from "../support.js";
+import { APPROVE_EXIT_ANNOUNCED, APPROVE_EXIT_NO_TRUSTED_CHANNEL, APPROVE_EXIT_REFUSED, APPROVAL_PROMPT } from "./approve.js";
+
+/**
+ * `sta roles` — where each lane stands, and the one way a person signs a lane
+ * off or acknowledges a handoff (V13 TASK-028).
+ *
+ * Every reading here goes through the lane ledger (`laneDecisions.ts`): item
+ * statuses are governed by trusted sign-off decisions, and each lane's
+ * watermark and sign-off history are projections of trusted decisions. No
+ * `knowledge/_roles/**` file is read.
+ *
+ * `signoff` and `ack` use the production trusted channel — the same one
+ * `sta approve` uses. The first call opens a pending lane request with an
+ * STA-minted id over the exact current `{id, version, digest}` of the items
+ * and announces it (github-app: an Issue); a later call with `--request`
+ * reads the approver's `sta-approve|sta-reject: <request-id>` comment. With no
+ * trusted channel configured the request stays pending and nothing is
+ * recorded. Nothing on the command line identifies the person: `--by` is
+ * refused, and `--yes`/`--no` only state what the caller expects.
+ */
+
+const DECISION_ACTS: Record<string, LaneAction> = { signoff: "signoff", ack: "ack" };
+
+function requireLane(args: string[]): RoleLane {
+  const lane = args[1];
+  if (lane === undefined || !isRoleLane(lane)) {
+    throw new CliUsageError(`roles ${args[0]}: a lane is required — one of ${ROLE_LANES.join(", ")}`);
+  }
+  return lane;
+}
+
+function describeRequest(record: LaneApprovalRecord): string {
+  const { scope } = record;
+  return (
+    `lane request ${record.requestId} (${scope.type}, module ${scope.module}): ` +
+    scope.items.map((item) => `${item.id} v${item.version}`).join(", ")
+  );
+}
+
+async function runLaneDecision(
+  act: LaneAction,
+  args: string[],
+  rest: string[],
+  projectRoot: string,
+  moduleFlag: string | undefined,
+): Promise<number> {
+  const lane = requireLane(args);
+  if (moduleFlag === undefined) throw new CliUsageError(`roles ${act}: --module <name> is required — a lane decision is about one module`);
+  const ids = args.slice(2).flatMap((a) => a.split(",")).filter((a) => a !== "");
+  const requestId = flagValue(rest, "--request");
+  const yes = rest.includes("--yes");
+  const no = rest.includes("--no");
+  if (yes && no) throw new CliUsageError(`roles ${act}: --yes and --no are mutually exclusive`);
+  const note = flagValue(rest, "--note");
+  const knowledgeRoot = flagValue(rest, "--knowledge-root") ?? projectRoot;
+
+  const store = new SqliteTaskStore(flagValue(rest, "--state-db") ?? defaultStateDbPath(projectRoot));
+  try {
+    const service = new LaneDecisionService({ store, verifier: resolveHumanDecisionChannel() });
+    try {
+      if (requestId === undefined) {
+        const request = service.request(knowledgeRoot, moduleFlag, lane, act, ids.length > 0 ? ids : undefined);
+        console.log(`[orchestrator] pending ${describeRequest(request)}`);
+        console.log(`[orchestrator]   ${APPROVAL_PROMPT[request.scope.type]}`);
+        const publication = await service.publish(request.requestId);
+        if (!publication) {
+          throw new NoTrustedHumanChannelError(request.requestId);
+        }
+        console.log(`[orchestrator] request ${request.requestId} is announced on ${publication.channel}: ${publication.url ?? publication.ref}`);
+        console.log(
+          `[orchestrator] an authorized approver answers there with a new comment \`sta-approve: ${request.requestId}\` or ` +
+            `\`sta-reject: ${request.requestId}\`; then run \`sta roles ${act} ${lane} --module ${moduleFlag} --request ${request.requestId}\`.`,
+        );
+        return APPROVE_EXIT_ANNOUNCED;
+      }
+
+      const existing = store.loadLaneRequest(requestId);
+      if (!existing) throw new ApprovalDecisionError("unknown-request", `no lane request ${requestId} was opened here`);
+      if (existing.scope.lane !== lane || existing.scope.action !== act || existing.scope.module !== moduleFlag) {
+        throw new ApprovalDecisionError(
+          "scope-mismatch",
+          `lane request ${requestId} is a ${existing.scope.lane} ${existing.scope.action} for module ${existing.scope.module}, not a ${lane} ${act} for ${moduleFlag}`,
+        );
+      }
+      console.log(`[orchestrator] ${describeRequest(existing)}`);
+      const publication = await service.publish(requestId);
+      if (publication?.fresh) {
+        console.log(`[orchestrator] request ${requestId} is announced on ${publication.channel}: ${publication.url ?? publication.ref}; an authorized approver answers there first.`);
+        return APPROVE_EXIT_ANNOUNCED;
+      }
+      const { record, settleError } = await service.submit({
+        requestId,
+        ...(yes || no ? { approved: yes } : {}),
+        ...(note === undefined ? {} : { note }),
+      });
+      if (settleError) console.error(`[orchestrator] decision recorded, but the channel could not settle its announcement: ${settleError}`);
+      const decision = record.decision!;
+      console.log(
+        decision.approved
+          ? `[orchestrator] ${act === "signoff" ? "signed off" : "acknowledged"} ${LANE_LABEL[lane]} for ${moduleFlag} (${decision.actor.id} via ${decision.source.channel}).`
+          : `[orchestrator] rejected ${requestId} (${decision.actor.id} via ${decision.source.channel}) — recorded.`,
+      );
+      return decision.approved ? 0 : 3;
+    } catch (e) {
+      if (e instanceof NoTrustedHumanChannelError) {
+        console.error(`[orchestrator] refused: ${e.message}`);
+        return APPROVE_EXIT_NO_TRUSTED_CHANNEL;
+      }
+      if (e instanceof ApprovalDecisionError || e instanceof UntrustedHumanDecisionError) {
+        console.error(`[orchestrator] refused: ${e.message}`);
+        return APPROVE_EXIT_REFUSED;
+      }
+      if (e instanceof LaneActRefusedError) {
+        console.error(`[orchestrator] cannot ask for a ${LANE_LABEL[lane]} ${act} yet: ${e.message}`);
+        return 1;
+      }
+      throw e;
+    }
+  } finally {
+    store.close();
+  }
+}
+
+/** Read-only lane inspection over the governed Knowledge and the lane ledger. */
 async function runRolesSubCommand(
   args: string[],
   rest: string[],
   projectRoot: string,
   moduleFlag: string | undefined,
-  kb: KnowledgeBase,
+  governed: GovernedKnowledge,
   now: string,
 ): Promise<number> {
   const module = moduleFlag ?? null;
-  const workspaces = workspacesUnder(projectRoot, module, now);
-  const requireLane = (): RoleLane => {
-    const lane = args[1];
-    if (lane === undefined || !isRoleLane(lane)) {
-      throw new CliUsageError(`roles ${args[0]}: a lane is required — one of ${ROLE_LANES.join(", ")}`);
-    }
-    return lane;
-  };
+  const kb = governed.kb;
+  const workspaces = laneWorkspaces(governed.recordsFor, governed.root, module, now);
+  const refsOf = (items: Parameters<typeof laneItemRefs>[0]) => laneItemRefs(items, governed.root);
   switch (args[0]) {
     case "inbox": {
       const lanes = args[1] !== undefined && isRoleLane(args[1]) ? [args[1] as RoleLane] : [...ROLE_LANES];
       let total = 0;
       for (const lane of lanes) {
-        const notifications = notificationsFor(lane, module, kb, workspaces(lane));
+        const notifications = notificationsFor(lane, module, kb, workspaces(lane), refsOf);
         total += notifications.length;
         console.log(`\n${LANE_LABEL[lane]} — ${notifications.length} to look at`);
         for (const n of notifications) console.log(`  [${n.reason}] ${n.message}`);
@@ -48,7 +189,7 @@ async function runRolesSubCommand(
     }
 
     case "context": {
-      const lane = requireLane();
+      const lane = requireLane(args);
       const id = args[2];
       const context = KnowledgeContext.load(projectRoot, now);
 
@@ -72,8 +213,9 @@ async function runRolesSubCommand(
           return 0;
         }
         const { item, viaRole, provenance } = outcome.item;
+        const governedStatus = kb.resolve(item.id, item.module)?.status ?? item.status;
         console.log(`[orchestrator] ${id} as the ${LANE_LABEL[lane]} lane sees it (via ${viaRole}):`);
-        console.log(`  ${item.title} [${item.kind}, ${item.status}, owned by ${item.owner}]`);
+        console.log(`  ${item.title} [${item.kind}, ${governedStatus}, owned by ${item.owner}]`);
         if (item.withheld.length > 0) console.log(`  withheld: ${item.withheld.join(", ")}`);
         console.log(`  ${provenance.citation}`);
         return 0;
@@ -93,24 +235,40 @@ async function runRolesSubCommand(
   throw new CliUsageError(`roles: unhandled sub-command "${args[0]}"`);
 }
 
-/** Read-only role lane status and context. Unauthenticated status writes fail closed. */
+/** Lane status and context, plus lane sign-off/acknowledgement through the trusted human channel. */
 export async function runRolesVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
   const moduleFlag = flagValue(rest, "--module");
   const args = positionalArgs(rest);
-  if (["ack", "signoff", "review", "approve"].includes(args[0] ?? "")) {
-    throw new CliUsageError(`roles ${args[0]}: trusted human decision channel is unavailable; --by cannot authorize a status change`);
+  if (rest.includes("--by") || rest.includes("--as")) {
+    throw new CliUsageError(
+      `roles: ${rest.includes("--by") ? "--by" : "--as"} is not an identity — a lane decision is authenticated by the trusted human channel, never by a name on the command line`,
+    );
   }
+  if (args[0] === "approve") {
+    throw new CliUsageError(
+      "roles approve: an item becomes binding through its lane's sign-off — run `sta roles signoff <lane> --module <name>`",
+    );
+  }
+  if (args[0] === "review") {
+    throw new CliUsageError("roles review: trusted human decision channel is unavailable for item review; a status change is never authorized from the command line");
+  }
+  const act = DECISION_ACTS[args[0] ?? ""];
+  if (act) return runLaneDecision(act, args, rest, projectRoot, moduleFlag);
+
   const SUB_COMMANDS = ["inbox", "impact", "context"];
   if (args.length > 0 && !SUB_COMMANDS.includes(args[0])) {
-    throw new CliUsageError(`roles: unknown sub-command "${args[0]}" — one of ${SUB_COMMANDS.join(", ")}`);
+    throw new CliUsageError(`roles: unknown sub-command "${args[0]}" — one of signoff, ack, ${SUB_COMMANDS.join(", ")}`);
   }
-  const kb = KnowledgeBase.load(projectRoot);
-  const now = new Date().toISOString();
-  if (args.length > 0) return runRolesSubCommand(args, rest, projectRoot, moduleFlag, kb, now);
-  if (args.length === 0) {
+  const store = new SqliteTaskStore(flagValue(rest, "--state-db") ?? defaultStateDbPath(projectRoot));
+  try {
+    const governed = loadGovernedKnowledge(flagValue(rest, "--knowledge-root") ?? projectRoot, store);
+    const now = new Date().toISOString();
+    if (args.length > 0) return await runRolesSubCommand(args, rest, projectRoot, moduleFlag, governed, now);
+
     // No --module shows every module that has knowledge in it, so a lane sitting behind
     // in a module the caller forgot about is still visible.
+    const kb = governed.kb;
     const modules: (string | null)[] =
       moduleFlag !== undefined
         ? [moduleFlag]
@@ -121,13 +279,14 @@ export async function runRolesVerb(rest: string[], defaultProjectRoot: string): 
       console.log("[orchestrator] no knowledge captured yet — a lane has nothing to stand on.");
       return 0;
     }
+    const refsOf = (items: Parameters<typeof laneItemRefs>[0]) => laneItemRefs(items, governed.root);
     for (const module of modules) {
       console.log(`\n${module ?? "(project-wide)"}`);
-      const workspaces = workspacesUnder(projectRoot, module, now);
+      const workspaces = laneWorkspaces(governed.recordsFor, governed.root, module, now);
       for (const lane of ROLE_LANES) {
         const view = laneView(workspaces(lane), kb);
         const spec = workflowFor(lane);
-        const state = spec ? roleWorkflowState(spec, module, kb, workspaces) : null;
+        const state = spec ? roleWorkflowState(spec, module, kb, workspaces, refsOf) : null;
 
         // Two different questions, both printed: `stage` is where the lane's own
         // work has got to, `deps` is whether what it depends on moved under it.
@@ -141,21 +300,17 @@ export async function runRolesVerb(rest: string[], defaultProjectRoot: string): 
           console.log(`       changed since acknowledged: ${view.stale.map((s) => `${s.id} v${s.version}->v${s.currentVersion}`).join(", ")}`);
         }
         if (view.unseen.length > 0) console.log(`       never acknowledged: ${view.unseen.join(", ")}`);
-        if (view.awaitingApproval.length > 0) console.log(`       waiting on a person: ${view.awaitingApproval.join(", ")}`);
+        if (view.awaitingApproval.length > 0) console.log(`       waiting on the lane sign-off: ${view.awaitingApproval.join(", ")}`);
+      }
+      if (module !== null) {
+        for (const pending of governed.recordsFor(module).filter((r) => r.status === "pending")) {
+          const where = pending.publication ? ` — answer at ${pending.publication.url ?? pending.publication.ref}` : " — not announced yet";
+          console.log(`  pending ${describeRequest(pending)}${where}`);
+        }
       }
     }
     return 0;
+  } finally {
+    store.close();
   }
-
-  throw new CliUsageError("roles: unhandled command");
 }
-import { CliUsageError } from "../../cli.js";
-import { KnowledgeBase } from "../../knowledge/knowledgeBase.js";
-import { KnowledgeContext } from "../../knowledge/knowledgeContext.js";
-import { renderKnowledgeRetrieval } from "../../knowledge/retrievalRender.js";
-import { LANE_LABEL, ROLE_LANES, isRoleLane, type RoleLane } from "../../roles/roleLane.js";
-import { laneView } from "../../roles/roleWorkspace.js";
-import { describeStage, roleWorkflowState, workflowFor, workspacesUnder } from "../../roles/roleWorkflow.js";
-import { lanesAffectedBy, notificationsFor } from "../../roles/changePropagation.js";
-import { laneContext, laneGet } from "../../roles/laneContext.js";
-import { flagValue, positionalArgs } from "../support.js";

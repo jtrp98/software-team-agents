@@ -136,7 +136,7 @@ describe("parseBoundedRunArgs", () => {
   });
 });
 
-import { boundedRunProject as project, playPlanTaskStage, PLAN_TASK_GUARD_FILES, threeRepoBoundedRunProject } from "./boundedRunFixture.testSupport.js";
+import { boundedRunProject as project, playPlanTaskStage, PLAN_TASK_GUARD_FILES, signHandoffs, threeRepoBoundedRunProject } from "./boundedRunFixture.testSupport.js";
 import { declareInstallationConfigOverrideChannelForTest } from "../../threeRepo/installation.js";
 import { installFrameworkWorkflows } from "../../workflow/workflows.testSupport.js";
 
@@ -169,9 +169,9 @@ export function completingAdapter(targetRoot: string): MockRuntimeAdapter {
 }
 
 /** A single-repo project whose BA -> SA -> DEV handoffs a person has signed off and acknowledged. */
-function signedProject() {
+async function signedProject() {
   const fixture = project(roots, git);
-  writeSignedOffHandoffs(fixture.root, "orders");
+  await writeSignedOffHandoffs(fixture.root, "orders");
   return fixture;
 }
 
@@ -293,7 +293,7 @@ describe("sta bounded-run (CLI)", () => {
     // V13 TASK-011: dispatch requires an explicit binding, so the CLI dispatch
     // test runs the three-repo fixture (the single-repo freeze still exists
     // for TASK-023 to cut over, but a dispatching run resolves real roots).
-    const { root, targetApi } = threeRepoBoundedRunProject(roots, git, { signed: true });
+    const { root, targetApi } = await signHandoffs(threeRepoBoundedRunProject(roots, git));
     const adapter = completingAdapter(targetApi);
     const registry = new RuntimeRegistry([adapter]);
     const logs: string[] = [];
@@ -333,7 +333,7 @@ describe("sta bounded-run (CLI)", () => {
   }, 30_000);
 
   it("halts a run with no runtime to compose, and names the exact resume command", async () => {
-    const { root, targetRoot } = signedProject();
+    const { root, targetRoot } = await signedProject();
     const registry = new RuntimeRegistry([]); // nothing registered
     const logs: string[] = [];
     const spy = console.log;
@@ -437,7 +437,7 @@ describe("sta bounded-run (CLI)", () => {
     expect(statusOutput).toContain("see `sta status BE-004` for what a person must do");
 
     // A person records the handoffs; the same frozen run now completes.
-    writeSignedOffHandoffs(knowledgeRoot, "orders");
+    await writeSignedOffHandoffs(knowledgeRoot, "orders", defaultStateDbPath(root));
     const resumedLogs: string[] = [];
     const resumedSpy = console.log;
     console.log = (line: string) => resumedLogs.push(line);
@@ -496,7 +496,7 @@ describe("sta bounded-run (CLI)", () => {
 
 describe("T-V9-011 sta bounded-run Target binding reconciliation", () => {
   it("three-repo bounded run populates registry-validated targetBindings and preflight-derived targetWorkRoots", async () => {
-    const { root, targetApi } = threeRepoBoundedRunProject(roots, git, { signed: true });
+    const { root, targetApi } = await signHandoffs(threeRepoBoundedRunProject(roots, git));
     const adapter = completingAdapter(targetApi);
     const registry = new RuntimeRegistry([adapter]);
     const logs: string[] = [];
@@ -537,7 +537,7 @@ describe("T-V9-011 sta bounded-run Target binding reconciliation", () => {
   }, 30_000);
 
   it("V13 TASK-007 — the three-repo reviewer reads the Target and may write only its Knowledge-side review docs", async () => {
-    const { root, knowledgeRoot, targetApi } = threeRepoBoundedRunProject(roots, git, { signed: true });
+    const { root, knowledgeRoot, targetApi } = await signHandoffs(threeRepoBoundedRunProject(roots, git));
     const adapter = completingAdapter(targetApi);
     const code = await runCli(
       ["bounded-run", "--module", "orders", "--all", "--target-id", "api", "--project-root", root, "--autonomy", "edit"],
@@ -688,7 +688,7 @@ describe("T-V9-011 sta bounded-run Target binding reconciliation", () => {
 
 describe("V10 TASK-025 — runtime state has one home: the Knowledge root", () => {
   it("a three-repo run persists every packet under the Knowledge root, and the invoking cwd gains none", async () => {
-    const { root, knowledgeRoot, targetApi } = threeRepoBoundedRunProject(roots, git, { signed: true });
+    const { root, knowledgeRoot, targetApi } = await signHandoffs(threeRepoBoundedRunProject(roots, git));
     const adapter = completingAdapter(targetApi);
     const logs: string[] = [];
     const spy = console.log;
@@ -721,7 +721,7 @@ describe("V10 TASK-025 — runtime state has one home: the Knowledge root", () =
 
 describe("T-V10 bounded-run autonomy/routing plumbing (TASK-005, TASK-006)", () => {
   it("TASK-005 — `--autonomy edit` reaches every adapter request the engine dispatches, not just the parser", async () => {
-    const { root, targetApi } = threeRepoBoundedRunProject(roots, git, { signed: true });
+    const { root, targetApi } = await signHandoffs(threeRepoBoundedRunProject(roots, git));
     const adapter = completingAdapter(targetApi);
     const logs: string[] = [];
     const spy = console.log;
@@ -742,7 +742,7 @@ describe("T-V10 bounded-run autonomy/routing plumbing (TASK-005, TASK-006)", () 
   }, 30_000);
 
   it("TASK-005 — a --dry-run still needs no autonomy and dispatches nothing at all", async () => {
-    const { root, targetRoot } = signedProject();
+    const { root, targetRoot } = await signedProject();
     const adapter = completingAdapter(targetRoot);
     const logs: string[] = [];
     const spy = console.log;
@@ -763,7 +763,7 @@ describe("T-V10 bounded-run autonomy/routing plumbing (TASK-005, TASK-006)", () 
   });
 
   it("TASK-006 — `--model` reaches the attempt freeze, and an explicit model stays fail-closed there", async () => {
-    const { root, targetApi } = threeRepoBoundedRunProject(roots, git, { signed: true });
+    const { root, targetApi } = await signHandoffs(threeRepoBoundedRunProject(roots, git));
     const adapter = completingAdapter(targetApi);
     const logs: string[] = [];
     const spy = console.log;
@@ -798,7 +798,7 @@ describe("T-V10 bounded-run autonomy/routing plumbing (TASK-005, TASK-006)", () 
   }, 30_000);
 
   it("TASK-006 — `--effort` rides the flag lane end-to-end into the attempt's frozen requested route", async () => {
-    const { root, targetApi } = threeRepoBoundedRunProject(roots, git, { signed: true });
+    const { root, targetApi } = await signHandoffs(threeRepoBoundedRunProject(roots, git));
     const adapter = completingAdapter(targetApi);
     const logs: string[] = [];
     const spy = console.log;

@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import { installFrameworkWorkflows } from "../../workflow/workflows.testSupport.js";
 import type { RuntimeAgentResult } from "../../runtime/runtimeAdapter.js";
 import { writeSignedOffHandoffs } from "../../orchestrator/stageGuards.testSupport.js";
+import { defaultStateDbPath } from "../../store/stateView.js";
 
 export interface BoundedRunFixture { root: string; targetRoot: string }
 
@@ -255,8 +256,6 @@ export function threeRepoBoundedRunProject(
     omitPlanTargets?: boolean;
     retiredApi?: boolean;
     originMismatch?: boolean;
-    /** Record the BA -> SA -> DEV handoffs a person signed off (needed only where the engineer must run). */
-    signed?: boolean;
   } = {},
 ): ThreeRepoFixture {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "v9-three-repo-cli-"));
@@ -551,8 +550,15 @@ Undated canonical fixture; no human sign-off is implied.
   for (const file of fs.readdirSync(templateContracts).filter((name) => name.endsWith(".yaml"))) {
     fs.copyFileSync(path.join(templateContracts, file), path.join(contracts, file));
   }
-  // The BA -> SA -> DEV handoffs a person signed off (the engine's role-lane guard reads the Knowledge root).
-  if (options.signed) writeSignedOffHandoffs(knowledgeRoot, "orders");
-
   return { root, knowledgeRoot, targetApi, targetWeb, installationConfig };
+}
+
+/**
+ * Records the BA -> SA -> DEV handoffs a person signed off and acknowledged —
+ * trusted decisions in the lane ledger of the state file the CLI under test
+ * opens (needed only where the engineer must run).
+ */
+export async function signHandoffs<T extends { root: string; knowledgeRoot: string }>(fixture: T): Promise<T> {
+  await writeSignedOffHandoffs(fixture.knowledgeRoot, "orders", defaultStateDbPath(fixture.root));
+  return fixture;
 }

@@ -33,6 +33,21 @@ export enum ApprovalType {
   DEPLOY = "deploy",
   /** Human UX/UI approval before a frontend stage may start. */
   UXUI_SIGNOFF = "uxui-signoff",
+  /**
+   * Lane sign-off and lane acknowledgement (V13 TASK-028): one gate type per
+   * lane and act, so each has its own approver list. A sign-off also makes the
+   * lane's items binding (`reviewed → approved`); an acknowledgement records
+   * that the receiving lane's person has seen the exact versions handed over.
+   * Decided through the trusted channel and kept in the lane ledger
+   * (`laneApproval.ts`), never in a Knowledge file.
+   */
+  BA_SIGNOFF = "ba-signoff",
+  SA_SIGNOFF = "sa-signoff",
+  DEV_SIGNOFF = "dev-signoff",
+  BA_ACK = "ba-ack",
+  SA_ACK = "sa-ack",
+  UXUI_ACK = "uxui-ack",
+  DEV_ACK = "dev-ack",
 }
 
 export const ApprovalStatusSchema = z.enum(["pending", "approved", "rejected", "withdrawn"]);
@@ -180,6 +195,8 @@ export class ApprovalDecisionError extends Error {
       | "unknown-request"
       | "not-pending"
       | "superseded"
+      /** A lane request whose subject changed before the decision was recorded (V13 TASK-028). */
+      | "stale"
       | "scope-mismatch"
       | "replay"
       | "untrusted-decision",

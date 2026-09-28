@@ -13,6 +13,7 @@ import { BusinessInputEvidenceSchema } from "../gates/businessInput.js";
 import { DesignGateAssessmentSchema } from "../docs/designEvidence.js";
 import { TEST_STRATEGY_TRIGGERS } from "../classification/taskClassifier.js";
 import type { EvidenceStore } from "../evidence/evidenceStore.js";
+import type { LaneDecisionStore } from "../gates/laneApproval.js";
 
 /**
  * Everything the orchestrator holds about one task, in a form that survives
@@ -272,7 +273,8 @@ export class PersistedStateCorruptError extends Error {
  * be mutated afterwards through the caller's reference, and what comes out
  * cannot be mutated back into the store.
  */
-export interface TaskStore extends EvidenceStore {
+/** The lane ledger (V13 TASK-028) lives in the same store so a lane decision commits with the same guarantees as a task's. */
+export interface TaskStore extends EvidenceStore, LaneDecisionStore {
   /**
    * Runs `fn` as one all-or-nothing unit: every write inside it lands together
    * or none of them does, including writes made through a run ledger backed by

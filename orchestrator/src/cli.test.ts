@@ -107,7 +107,6 @@ describe("parseArgs", () => {
       checkPlan: false,
       checkKnowledge: false,
       checkInstallation: false,
-      checkRoles: false,
       checkGitOwnership: false,
       buildTemplates: undefined,
       environment: Environment.LOCAL,

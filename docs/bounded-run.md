@@ -55,7 +55,7 @@ sta bounded-run --module <module> --phase <n> --until next-gate --autonomy edit
 |---|---|---|
 | `plan.md` เป็น canonical plan, scope ปิด, ไม่มี cycle, ไม่ drift | `orchestrator/planCompilation.ts` | แก้ plan แล้ว `--dry-run` ใหม่; refusal บอก kind และ task id ที่ขัดแย้ง |
 | human/approval gate ของ task (schema/deploy approval ก่อน Done, security, pause/cancel) | engine: `checkGate` + approval ledger + `taskRunService` (pause/cancel) | ตอบ request ด้วย `sta approve <task-id>` หรือ unpause/uncancel แล้ว `--resume`; งานอัตโนมัติก่อน gate จะรันก่อน แล้ว task จอดรอที่ gate (เหมือน `sta run`) |
-| BA → SA → DEV handoff ถูก sign-off/ack แล้ว (Knowledge ว่าง = refuse) | engine stage-entry guard (`orchestrator/stageGuards.ts`) | `sta roles signoff` / `sta roles ack` แล้ว `--resume`; ไม่มี attempt ถูก freeze ก่อนผ่าน guard |
+| BA → SA → DEV handoff ถูก sign-off/ack แล้ว (Knowledge ว่าง = refuse) | engine stage-entry guard (`orchestrator/stageGuards.ts`) | `sta roles signoff` / `sta roles ack` (trusted human channel, lane ledger) แล้ว `--resume`; ไม่มี attempt ถูก freeze ก่อนผ่าน guard |
 | dependency ทุกตัว Done ที่ verify ได้ (DEPLOYED + task-completion evidence) | `TaskRegistry.waitingOn` ของ engine | ปล่อยให้ upstream task เดินก่อน; ledger/plan Status cell ปลดล็อกให้ไม่ได้ |
 | runtime support level, guard capability, writable root เดียวต่อ attempt | `ledger/attemptFreeze.ts` | แก้สาเหตุที่ refusal ระบุ; multi-Target run ต้องระบุ git-identity root |
 | bounded-run attempt ผูก Target เดียว | `run/ledgerAttemptExecutor.ts` | engineer เข้าถึงทุก Target ที่ task ผูก (V10 TASK-008) แต่ checkpoint จะ commit ได้ Target เดียวต่อ attempt — ถ้า stage resolve writable Target มากกว่าหนึ่ง คำสั่ง gate ก่อน adapter จะเริ่มเขียน ให้แยก task ต่อ Target |

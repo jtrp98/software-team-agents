@@ -97,7 +97,6 @@ for (const flag of [
   "--check-doc-structure",
   "--check-doc-size",
   "--check-knowledge",
-  "--check-roles",
   // The bindings check is what caught the last silent rendering drift; CI does
   // not run it yet, so the release gate is where it must pass.
   "--check-bindings",

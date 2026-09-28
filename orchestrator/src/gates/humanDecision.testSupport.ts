@@ -1,6 +1,12 @@
 import type { Orchestrator } from "../orchestrator/orchestrator.js";
-import type { ApprovalRecord, VerifiedHumanDecision } from "./approval.js";
-import { UntrustedHumanDecisionError, type HumanDecisionContext, type HumanDecisionSubmission, type HumanDecisionVerifier } from "./humanDecision.js";
+import {
+  UntrustedHumanDecisionError,
+  type HumanDecisionContext,
+  type HumanDecisionRequest,
+  type HumanDecisionSubmission,
+  type HumanDecisionVerifier,
+  type VerifiedDecisionFor,
+} from "./humanDecision.js";
 
 /**
  * Test-only trusted channel. It stands in for a real authenticated channel so
@@ -15,8 +21,8 @@ export interface TestCredential {
   actorId?: string;
   /** Fixed decision id, for replay tests. Defaults to a fresh id per verification. */
   decisionId?: string;
-  /** Overrides the scope the channel attests to, for wrong-scope tests. */
-  scope?: Partial<ApprovalRecord["scope"]>;
+  /** Overrides the scope the channel attests to, for wrong-scope tests (task or lane scope fields). */
+  scope?: Record<string, unknown>;
 }
 
 export function testHumanVerifier(opts: { defaultActor?: string; authorizedActors?: readonly string[] } = {}): HumanDecisionVerifier {
@@ -24,7 +30,7 @@ export function testHumanVerifier(opts: { defaultActor?: string; authorizedActor
   let counter = 0;
   return {
     channel: TEST_HUMAN_CHANNEL,
-    async verify(request: ApprovalRecord, submission: HumanDecisionSubmission, { now }: HumanDecisionContext): Promise<VerifiedHumanDecision> {
+    async verify<R extends HumanDecisionRequest>(request: R, submission: HumanDecisionSubmission, { now }: HumanDecisionContext): Promise<VerifiedDecisionFor<R>> {
       if (submission.approved === undefined) {
         throw new UntrustedHumanDecisionError(`${TEST_HUMAN_CHANNEL}: this channel carries no answer of its own — the submission must say approve or reject`);
       }
@@ -39,7 +45,7 @@ export function testHumanVerifier(opts: { defaultActor?: string; authorizedActor
       counter += 1;
       return {
         requestId: submission.requestId,
-        scope: { ...request.scope, ...(credential.scope ?? {}) },
+        scope: { ...request.scope, ...(credential.scope ?? {}) } as R["scope"],
         decision: {
           decisionId: credential.decisionId ?? `test-decision-${request.requestId}-${counter}`,
           approved: submission.approved,

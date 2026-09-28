@@ -122,8 +122,6 @@ export interface CliArgs {
   checkKnowledge: boolean;
   /** Check .sta/manifest.json and .sta/config.yaml against the project's real files and exit. Same audience. */
   checkInstallation: boolean;
-  /** Check every role workspace under knowledge/_roles/ — each lane's watermark against the knowledge it refers to — and exit. Same audience. */
-  checkRoles: boolean;
   /** Check that only orchestrator/src/git/ can mutate Git and that remote/destructive subcommands are absent. */
   checkGitOwnership: boolean;
   /** Snapshot every framework template file into an output directory, with manifest.json, and exit. Not a --check-*: it writes, it doesn't just report. */
@@ -238,7 +236,9 @@ export const USAGE =
   "  sta rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups`\n" +
   "  sta list-backups [--project-root <path>]   list this project's .sta/backups/ snapshots, oldest first\n" +
   "  sta roles [--module <name>] [--project-root <path>]   where BA, SA, UXUI and DEV each stand against knowledge/\n" +
-  "  sta roles ack|signoff|review|approve   unavailable until a trusted human decision channel is configured\n" +
+  "  sta roles signoff <ba|sa|uxui|dev> --module <name> [--request <request-id>] [--yes|--no] [--note <text>]   a person signs the lane off (it also makes the lane's items binding) through the trusted human channel\n" +
+  "  sta roles ack <ba|sa|uxui|dev> [<id>[,<id>...]] --module <name> [--request <request-id>] [--yes|--no]   a person acknowledges the handed-off items through the trusted human channel\n" +
+  "    signoff/ack exit codes: 0 decided yes · 3 rejected · 4 announced, answer on the channel then re-run with --request · 5 no trusted channel · 6 refused (stale/replay/wrong scope)\n" +
   "  sta roles inbox [<ba|sa|uxui|dev>] [--module <name>]   what each lane has to look at, derived fresh\n" +
   "  sta roles impact <id>[,<id>...]   which lanes changing those items would reach, before changing them\n" +
   "  sta roles context <ba|sa|uxui|dev> [<id>] [--full] [--module <name>]   what that lane may see, and via which role\n" +
@@ -271,7 +271,6 @@ export const USAGE =
   "  sta --check-knowledge [--project-root <path>]      check knowledge/*.yaml against its schema and cross-links\n" +
   "  sta --build-templates <out-dir> [--project-root <path>]  snapshot framework template files + manifest.json into <out-dir>\n" +
   "  sta --check-installation [--project-root <path>]   check .agent-team/manifest.json against the project's real files — needs an initialized workspace; fails on a bare Framework checkout by design\n" +
-  "  sta --check-roles [--project-root <path>]          check each role workspace's watermark against knowledge/\n" +
   "  sta --check-git-ownership [--project-root <path>]  check that Git mutation stays inside orchestrator/src/git/ and forbidden subcommands are absent\n" +
   "  sta --version                                      show the Framework version this CLI runs\n" +
   "run/retry exit codes: 0 deployed · 1 blocked · 2 unknown gate · 3 rejected by a person · 4 parked — a gate awaits a person's answer on the trusted channel, then `sta approve <task-id> --request <request-id>`\n" +
@@ -304,7 +303,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
   let checkPlanFlag = false;
   let checkKnowledgeFlag = false;
   let checkInstallationFlag = false;
-  let checkRolesFlag = false;
   let checkGitOwnershipFlag = false;
   let buildTemplatesOutDir: string | undefined;
   let environment: Environment = Environment.LOCAL;
@@ -404,8 +402,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
       checkKnowledgeFlag = true;
     } else if (arg === "--check-installation") {
       checkInstallationFlag = true;
-    } else if (arg === "--check-roles") {
-      checkRolesFlag = true;
     } else if (arg === "--check-git-ownership") {
       checkGitOwnershipFlag = true;
     } else if (arg === "--build-templates") {
@@ -494,7 +490,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     !checkPlanFlag &&
     !checkKnowledgeFlag &&
     !checkInstallationFlag &&
-    !checkRolesFlag &&
     !checkGitOwnershipFlag &&
     !buildTemplatesOutDir
   ) {
@@ -534,7 +529,6 @@ export function parseArgs(argv: string[], defaultProjectRoot: string): CliArgs {
     checkPlan: checkPlanFlag,
     checkKnowledge: checkKnowledgeFlag,
     checkInstallation: checkInstallationFlag,
-    checkRoles: checkRolesFlag,
     checkGitOwnership: checkGitOwnershipFlag,
     buildTemplates: buildTemplatesOutDir,
     environment,
@@ -740,7 +734,7 @@ export async function runCli(argv: string[], defaultProjectRoot: string, depende
     contractRoot: args.projectRoot,
     // V13 TASK-007: the role-lane prerequisites are a stage-entry guard of the
     // engine, always on, reading the task's own Knowledge root.
-    stageEntryGuard: createRoleLaneStageGuard({ projectRoot: args.projectRoot, moduleName: args.module }),
+    stageEntryGuard: createRoleLaneStageGuard({ projectRoot: args.projectRoot, moduleName: args.module, ledger: store }),
     // V13 TASK-027: the human-owned github-app channel when configured, else closed.
     humanDecisionVerifier: resolveHumanDecisionChannel(),
   });

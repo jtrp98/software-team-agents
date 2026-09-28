@@ -85,7 +85,8 @@ describe("recordContextComposition (T-V5-037)", () => {
       appendRun: () => { throw new Error("db locked"); },
       transaction<T>(fn: () => T) { return fn(); }, createTask() {}, saveTask() {}, loadTask() { return null; }, listTasks() { return []; },
       runsForTask() { return []; }, allRuns() { return []; }, appendEvent() {}, eventsForTask() { return []; },
-      appendEvidence(r: EvidenceRecord) { return r; }, loadEvidence() { return null; }, evidenceForTask() { return []; }, close() {},
+      appendEvidence(r: EvidenceRecord) { return r; }, loadEvidence() { return null; }, evidenceForTask() { return []; },
+      insertLaneRequest() {}, updateLaneRequest() {}, loadLaneRequest() { return null; }, laneRequests() { return []; }, laneDecisionIdExists() { return false; }, close() {},
     };
     expect(() =>
       recordContextComposition({

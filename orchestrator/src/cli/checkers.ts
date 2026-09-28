@@ -27,7 +27,6 @@ import { checkDocStructure, checkDocSize } from "../docs/docStructure.js";
 import { checkPlanGraphs } from "../docs/planGraph.js";
 import { checkKnowledge } from "../knowledge/knowledgeBase.js";
 import { validateInstallation } from "../packaging/installValidation.js";
-import { checkRoleWorkspaces } from "../roles/roleWorkspace.js";
 import { checkGitOwnership } from "../git/ownershipCheck.js";
 
 /**
@@ -67,7 +66,6 @@ export type CheckerFlag =
   | "checkPlan"
   | "checkKnowledge"
   | "checkInstallation"
-  | "checkRoles"
   | "checkGitOwnership";
 
 /**
@@ -264,16 +262,6 @@ export const CHECKERS: readonly CheckerDescriptor[] = [
     run: (root) => toOutcome(validateInstallation(root)),
     okMessage: "[orchestrator] installation metadata (.agent-team/) agrees with the project's real files.",
     failHeading: "[orchestrator] installation metadata has problems:",
-    notes: "leading",
-  },
-  {
-    flag: "checkRoles",
-    cliFlag: "--check-roles",
-    run: (root) => toOutcome(checkRoleWorkspaces(root)),
-    okMessage: "[orchestrator] every role workspace agrees with knowledge/.",
-    failHeading: "[orchestrator] role workspaces have problems:",
-    // "BA is behind on sales-crm" is the check working — what a lane needs to be
-    // told, not a repo inconsistency to fail on.
     notes: "leading",
   },
   {

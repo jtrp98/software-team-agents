@@ -298,7 +298,23 @@ describe("describeApproval", () => {
 describe("the approval types", () => {
   it("covers each stable human-gate identity exactly once", () => {
     expect(Object.values(ApprovalType).sort()).toEqual(
-      ["deploy", "review-failure", "qa-failure", "requirement-interview", "schema-confirmation", "security-risk", "uxui-signoff"].sort(),
+      [
+        "deploy",
+        "review-failure",
+        "qa-failure",
+        "requirement-interview",
+        "schema-confirmation",
+        "security-risk",
+        // Lane acts (V13 TASK-028): one gate per lane and act, each with its own approver list.
+        "uxui-signoff",
+        "ba-signoff",
+        "sa-signoff",
+        "dev-signoff",
+        "ba-ack",
+        "sa-ack",
+        "uxui-ack",
+        "dev-ack",
+      ].sort(),
     );
   });
 });

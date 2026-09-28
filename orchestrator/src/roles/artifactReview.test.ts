@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { KNOWLEDGE_KINDS, type KnowledgeItem } from "../knowledge/knowledgeModel.js";
 import { StatusTransitionError } from "../knowledge/ownership.js";
 import { sampleKnowledge } from "../knowledge/sampleKnowledge.js";
-import { REVIEW_CHECKLIST, approveItem, checklistFor, reviewItem } from "./artifactReview.js";
+import * as ArtifactReview from "./artifactReview.js";
+import { REVIEW_CHECKLIST, checklistFor, reviewItem } from "./artifactReview.js";
 
 const NOW = "2026-08-21T10:00:00Z";
 
@@ -38,15 +39,10 @@ describe("reviewItem (V13 TASK-006: a person's decision)", () => {
   });
 });
 
-describe("approveItem", () => {
-  it("moves a reviewed item to approved", () => {
-    const approved = approveItem({ ...item("RULE-007"), status: "reviewed" }, NOW);
-    expect(approved.status).toBe("approved");
-  });
-
-  /** There is no draft -> approved shortcut: that is what makes review optional. */
-  it("refuses to skip review", () => {
-    expect(() => approveItem(item("RULE-007"), NOW)).toThrow(StatusTransitionError);
+describe("item approval (V13 TASK-028)", () => {
+  /** Approval is the lane sign-off decision in STA's ledger; no writer sets `status: approved` in a file. */
+  it("offers no item-approval writer", () => {
+    expect("approveItem" in ArtifactReview).toBe(false);
   });
 });
 

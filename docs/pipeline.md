@@ -111,9 +111,10 @@ git clone https://github.com/<org>/company-knowledge.git C:\src\company-knowledg
 cd C:\src\company-knowledge
 software-team-agents init
 software-team-agents open                   # เปิด Claude Code จาก Knowledge workspace
-#  ... draft knowledge item, แล้วบันทึก human acts:
-sta roles review REQ-101 --by alice
-sta roles approve REQ-101 --by "Somchai"
+#  ... draft knowledge item, แล้วคนเซ็น lane ผ่าน trusted channel (github-app Issue):
+sta roles signoff ba --module <name>                        # เปิด request → ผู้อนุมัติ comment บน Issue
+sta roles signoff ba --module <name> --request <request-id> # บันทึก decision (ทำให้ item ของ BA เป็น approved)
+sta roles ack sa --module <name>                            # คนใน SA lane ยืนยันว่าเห็น handoff แล้ว (อีก decision)
 
 # 2) (ครั้งเดียวต่อเครื่อง) bind machine เข้ากับ Knowledge root
 #    V11: ตั้งชื่อ root ได้ (--root <name>); named operation แรก migrate installation.yaml เป็น v2

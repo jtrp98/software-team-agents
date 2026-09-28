@@ -794,7 +794,7 @@ export async function runBoundedRunVerb(rest: string[], defaultProjectRoot: stri
       stateViewPath: defaultStateViewPath(args.projectRoot),
       contractRoot,
       budget: { ...DEFAULT_BUDGET, token_budget: configuredTokenBudget(args.projectRoot) },
-      stageEntryGuard: boundedRunStageGuard(frozenRun),
+      stageEntryGuard: boundedRunStageGuard(frozenRun, store),
       humanDecisionVerifier: resolveHumanDecisionChannel(),
     });
     const executorOptions: TaskExecutorOptions = {
