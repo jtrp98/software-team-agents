@@ -237,7 +237,7 @@ describe("StaApi (V13 TASK-021)", () => {
       return { ...ctx, pendingGate: pendingGate! };
     }
 
-    it("accepts a Controller-relayed chat answer only for the pending request", async () => {
+    it.each([false, true])("accepts a Controller-relayed chat answer only for the pending request (unknownActor=%s)", async (unknownActor) => {
       const { api, registry } = setupTestApi({ verifier: createChatRelayChannel() });
       registry.create({ taskId: "TASK-CHAT", classification: incremental() });
       await api.execute({ taskId: "TASK-CHAT" });
@@ -247,8 +247,23 @@ describe("StaApi (V13 TASK-021)", () => {
       const submission = {
         requestId: gate!.requestId,
         approved: true,
-        credential: { kind: "controller-chat-relay", conversationId: "conv-1", messageId: "msg-1", actorId: "user-1", messageText: "อนุมัติ" },
+        credential: { kind: "controller-chat-relay", conversationId: "conv-1", messageId: "msg-1", actorId: unknownActor ? null : "user-1", ...(unknownActor ? { actorUnavailableReason: "host-does-not-expose-actor" } : {}), messageText: `approve ${gate!.requestId}` },
       };
+      expect(gate!.prompt).toContain(`approve ${gate!.requestId}`);
+      expect(gate!.prompt).toContain("cannot independently authenticate");
+      expect(await api.approve({ taskId: "TASK-CHAT", requestId: gate!.requestId, submission: undefined as unknown as typeof submission, caller: { kind: "controller" } }))
+        .toMatchObject({ ok: false, code: "refused" });
+      for (const invalid of [
+        { ...submission, requestId: "apr_00000000000000000000000000000000" },
+        { ...submission, approved: undefined },
+        { ...submission, credential: { ...submission.credential, actorId: "" } },
+        { ...submission, credential: { ...submission.credential, messageText: "still reviewing" } },
+        { ...submission, credential: { ...submission.credential, messageText: `reject ${gate!.requestId}` } },
+      ]) {
+        expect(await api.approve({ taskId: "TASK-CHAT", requestId: gate!.requestId, submission: invalid, caller: { kind: "controller" } }))
+          .toMatchObject({ ok: false, code: "refused" });
+        expect(registry.resume("TASK-CHAT").pendingApprovalRequest()?.requestId).toBe(gate!.requestId);
+      }
       expect(await api.approve({ taskId: "TASK-CHAT", requestId: gate!.requestId, submission, caller: { kind: "controller" } }))
         .toMatchObject({ ok: true, approved: true });
       expect(await api.approve({ taskId: "TASK-CHAT", requestId: gate!.requestId, submission, caller: { kind: "controller" } }))

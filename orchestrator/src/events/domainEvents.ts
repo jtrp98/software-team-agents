@@ -72,8 +72,9 @@ export interface ApprovalDecidedEvent {
   requestId: string;
   type: ApprovalType;
   approved: boolean;
-  /** The authenticated actor, as the trusted channel identified them. */
-  actorId: string;
+  /** Controller-reported actor; null only when the host explicitly does not expose it. */
+  actorId: string | null;
+  actorUnavailableReason?: "host-does-not-expose-actor";
   channel: string;
   evidenceRef: string;
   decisionId: string;

@@ -13,6 +13,7 @@ import { checkGate, gateContextFor, type StoredGateEvidence } from "../gates/gat
 import {
   ApprovalDecisionError,
   ApprovalType,
+  describeHumanActor,
   applyHumanDecision,
   approvalTypeForEdge,
   findApproval,
@@ -321,7 +322,7 @@ function rejectionReason(record: ApprovalRecord): string {
   const decision = record.decision;
   return (
     `${record.scope.type} request ${record.requestId} was rejected` +
-    `${decision ? ` by ${decision.actor.id} via ${decision.source.channel}` : ""}` +
+    `${decision ? ` by ${describeHumanActor(decision.actor)} via ${decision.source.channel}` : ""}` +
     `${decision?.note ? `: ${decision.note}` : ""}`
   );
 }
@@ -917,6 +918,7 @@ export class Orchestrator {
         type: request.scope.type,
         approved: verified.decision.approved,
         actorId: verified.decision.actor.id,
+        ...(verified.decision.actor.id === null ? { actorUnavailableReason: verified.decision.actor.unavailableReason } : {}),
         channel: verified.decision.source.channel,
         evidenceRef: verified.decision.source.evidenceRef,
       },
@@ -930,6 +932,7 @@ export class Orchestrator {
       type: request.scope.type,
       approved: verified.decision.approved,
       actorId: verified.decision.actor.id,
+      ...(verified.decision.actor.id === null ? { actorUnavailableReason: verified.decision.actor.unavailableReason } : {}),
       channel: verified.decision.source.channel,
       evidenceRef: verified.decision.source.evidenceRef,
       decisionId: verified.decision.decisionId,

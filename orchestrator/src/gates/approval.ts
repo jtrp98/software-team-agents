@@ -68,17 +68,30 @@ export const ApprovalScopeSchema = z.strictObject({
 });
 export type ApprovalScope = z.infer<typeof ApprovalScopeSchema>;
 
+export const HOST_ACTOR_UNAVAILABLE = "host-does-not-expose-actor" as const;
+export const HumanDecisionActorSchema = z.union([
+  z.strictObject({ kind: z.literal("human"), id: z.string().min(1) }),
+  z.strictObject({ kind: z.literal("human"), id: z.null(), unavailableReason: z.literal(HOST_ACTOR_UNAVAILABLE) }),
+]);
+
+/** A display label, never an identity persisted in place of an unavailable ID. */
+export function describeHumanActor(actor: z.infer<typeof HumanDecisionActorSchema>): string {
+  return actor.id ?? `unknown actor (${actor.unavailableReason})`;
+}
+
 /** A decision as recorded after the trusted channel and the ledger checks both accepted it. */
 export const HumanDecisionRecordSchema = z.strictObject({
   /** Channel-issued unique id. A second decision carrying the same id is a replay. */
   decisionId: z.string().min(1),
   approved: z.boolean(),
-  actor: z.strictObject({ kind: z.literal("human"), id: z.string().min(1) }),
+  actor: HumanDecisionActorSchema,
   /** Channel and reference; a chat-relay reference is a Controller assertion, not independent identity proof. */
   source: z.strictObject({ channel: z.string().min(1), evidenceRef: z.string().min(1) }),
   decidedAt: z.number(),
   /** What they said beyond yes/no. The reason a rejection is actionable rather than just a stop. */
   note: z.string().nullable(),
+}).refine((record) => record.actor.id !== null || record.source.channel === "chat-relay", {
+  message: "unavailable actor is permitted only for explicit Controller chat relay",
 });
 export type HumanDecisionRecord = z.infer<typeof HumanDecisionRecordSchema>;
 

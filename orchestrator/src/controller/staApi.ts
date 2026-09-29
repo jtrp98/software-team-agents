@@ -8,6 +8,7 @@ import {
   type HumanDecisionVerifier,
 } from "../gates/humanDecision.js";
 import { resolveHumanDecisionChannel } from "../gates/humanChannelConfig.js";
+import { chatRelayInstructions } from "../gates/chatRelayChannel.js";
 import { ApprovalDecisionError } from "../gates/approval.js";
 import type { LaneAction } from "../gates/laneApproval.js";
 import { LaneActRefusedError, LaneDecisionService } from "../roles/laneDecisions.js";
@@ -231,7 +232,9 @@ export interface SemanticLaneDecisionResponse {
   action: LaneAction;
   requestId?: string;
   /** What the request covers, as STA recorded it. */
-  items?: readonly { id: string; version: number }[];
+  items?: readonly { id: string; version: number; digest: string }[];
+  /** Human-facing answer format and Controller-asserted identity limitation. */
+  prompt?: string;
   approved?: boolean;
   /** The request reference STA gave the Controller for presentation in chat. */
   announcement?: { channel: string; ref: string; url: string | null } | null;
@@ -356,7 +359,7 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
           requestId: pending.requestId,
           type: pending.scope.type,
           reason: pending.reason,
-          prompt: APPROVAL_PROMPT[pending.scope.type] ?? pending.reason,
+          prompt: `${APPROVAL_PROMPT[pending.scope.type] ?? pending.reason}. ${chatRelayInstructions(pending.requestId)}`,
           announcement: orch.approvalPublication(pending.requestId, evidence),
         }
       : null;
@@ -688,6 +691,13 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
         };
       }
 
+      if (params.submission?.requestId !== params.requestId) {
+        return {
+          ok: false, taskId: params.taskId, requestId: params.requestId, code: "refused",
+          denialReason: "Submission request does not match the requested approval",
+        };
+      }
+
       try {
         // A fresh request must be presented to the human before the Controller
         // can relay an answer on a later call.
@@ -737,6 +747,11 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
         throw new UntrustedHumanDecisionError(`Chat lane decision must be relayed by Controller; got ${params.caller?.kind ?? "unspecified"}`);
       }
       const base = { module: params.module, lane: params.lane, action: params.action };
+      // The lane API owns the top-level request ID. A runtime caller cannot
+      // smuggle a different one through the typed Omit<> submission shape.
+      if (params.submission && Object.prototype.hasOwnProperty.call(params.submission, "requestId")) {
+        return { ok: false, ...base, requestId: params.requestId, code: "refused", denialReason: "Lane submission must not override the top-level request ID" };
+      }
       const lanes = new LaneDecisionService({ store, verifier: humanDecisionVerifier, now });
       try {
         let requestId = params.requestId;
@@ -749,7 +764,8 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
           }
         }
         const record = store.loadLaneRequest(requestId)!;
-        const items = record.scope.items.map((item) => ({ id: item.id, version: item.version }));
+        const items = record.scope.items.map((item) => ({ ...item }));
+        const prompt = `${APPROVAL_PROMPT[record.scope.type]}. ${chatRelayInstructions(requestId)}`;
         const publication = await lanes.publish(requestId);
         const announcement = publication ? { channel: publication.channel, ref: publication.ref, url: publication.url } : null;
         if (publication?.fresh || (params.requestId === undefined && publication)) {
@@ -758,13 +774,14 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
             ...base,
             requestId,
             items,
+            prompt,
             announcement,
             code: "announced",
             denialReason: `request announced on ${publication.channel} (${publication.url ?? publication.ref}); an authorized approver answers there first`,
           };
         }
-        const { record: decided } = await lanes.submit({ requestId, ...(params.submission ?? {}) });
-        return { ok: true, ...base, requestId, items, announcement, approved: decided.decision!.approved };
+        const { record: decided } = await lanes.submit({ ...(params.submission ?? {}), requestId });
+        return { ok: true, ...base, requestId, items, prompt, announcement, approved: decided.decision!.approved };
       } catch (e) {
         if (e instanceof NoTrustedHumanChannelError) {
           return { ok: false, ...base, ...(params.requestId ? { requestId: params.requestId } : {}), code: "no-trusted-channel", denialReason: e.message };

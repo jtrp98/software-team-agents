@@ -1,5 +1,7 @@
 import { CliUsageError } from "../../cli.js";
-import { ApprovalDecisionError } from "../../gates/approval.js";
+import { ApprovalDecisionError, describeHumanActor } from "../../gates/approval.js";
+import { chatRelayCredential } from "../chatRelay.js";
+import { chatRelayInstructions } from "../../gates/chatRelayChannel.js";
 import { resolveHumanDecisionChannel } from "../../gates/humanChannelConfig.js";
 import { NoTrustedHumanChannelError, UntrustedHumanDecisionError } from "../../gates/humanDecision.js";
 import type { LaneAction, LaneApprovalRecord } from "../../gates/laneApproval.js";
@@ -54,7 +56,7 @@ function describeRequest(record: LaneApprovalRecord): string {
   const { scope } = record;
   return (
     `lane request ${record.requestId} (${scope.type}, module ${scope.module}): ` +
-    scope.items.map((item) => `${item.id} v${item.version}`).join(", ")
+    scope.items.map((item) => `${item.id} v${item.version} sha256:${item.digest}`).join(", ")
   );
 }
 
@@ -73,13 +75,8 @@ async function runLaneDecision(
   const no = rest.includes("--no");
   const note = flagValue(rest, "--note");
   if (yes && no) throw new CliUsageError(`roles ${act}: --yes and --no are mutually exclusive`);
-  const conversationId = flagValue(rest, "--chat-conversation-id");
-  const messageId = flagValue(rest, "--chat-message-id");
-  const actorId = flagValue(rest, "--chat-actor-id");
-  const messageText = flagValue(rest, "--chat-text");
-  if ((yes || no) && (!requestId || [conversationId, messageId, actorId, messageText].some((value) => !value?.trim()))) {
-    throw new CliUsageError(`roles ${act}: Controller relay requires --request and all four --chat-* fields`);
-  }
+  if ((yes || no) && !requestId) throw new CliUsageError(`roles ${act}: Controller relay requires --request`);
+  const credential = yes || no ? chatRelayCredential(rest) : undefined;
   const knowledgeRoot = flagValue(rest, "--knowledge-root") ?? projectRoot;
 
   const store = new SqliteTaskStore(flagValue(rest, "--state-db") ?? defaultStateDbPath(projectRoot));
@@ -90,6 +87,7 @@ async function runLaneDecision(
         const request = service.request(knowledgeRoot, moduleFlag, lane, act, ids.length > 0 ? ids : undefined);
         console.log(`[orchestrator] pending ${describeRequest(request)}`);
         console.log(`[orchestrator]   ${APPROVAL_PROMPT[request.scope.type]}`);
+        console.log(`[orchestrator]   ${chatRelayInstructions(request.requestId)}`);
         const publication = await service.publish(request.requestId);
         if (!publication) {
           throw new NoTrustedHumanChannelError(request.requestId);
@@ -108,6 +106,7 @@ async function runLaneDecision(
         );
       }
       console.log(`[orchestrator] ${describeRequest(existing)}`);
+      console.log(`[orchestrator]   ${chatRelayInstructions(existing.requestId)}`);
       const publication = await service.publish(requestId);
       if (!publication) throw new NoTrustedHumanChannelError(requestId);
       if (!yes && !no) {
@@ -118,11 +117,11 @@ async function runLaneDecision(
         requestId,
         approved: yes,
         ...(note === undefined ? {} : { note }),
-        credential: { kind: "controller-chat-relay", conversationId, messageId, actorId, messageText },
+        credential,
       });
       if (settleError) console.error(`[orchestrator] decision recorded, but the channel could not settle its announcement: ${settleError}`);
       const decision = decided.decision!;
-      console.log(`[orchestrator] ${decision.approved ? (act === "signoff" ? "signed off" : "acknowledged") : "rejected"} ${requestId} (${decision.actor.id} via ${decision.source.channel}).`);
+      console.log(`[orchestrator] ${decision.approved ? (act === "signoff" ? "signed off" : "acknowledged") : "rejected"} ${requestId} (${describeHumanActor(decision.actor)} via ${decision.source.channel}).`);
       return decision.approved ? 0 : 3;
     } catch (e) {
       if (e instanceof NoTrustedHumanChannelError) {
@@ -270,7 +269,7 @@ export async function runRolesVerb(rest: string[], defaultProjectRoot: string): 
           const items = record.scope.items.map((item) => `${item.id}@${item.version}:${item.digest}`).join(", ");
           const decision = record.decision;
           console.log(`  ${record.requestId} ${record.scope.lane} ${record.scope.action} ${record.status} [${items}]`);
-          if (decision) console.log(`    ${decision.source.channel} ${decision.source.evidenceRef} ${decision.actor.id} ${decision.decidedAt} ${decision.note ?? ""}`);
+          if (decision) console.log(`    ${decision.source.channel} ${decision.source.evidenceRef} ${describeHumanActor(decision.actor)} ${decision.decidedAt} ${decision.note ?? ""}`);
         }
       }
       return 0;

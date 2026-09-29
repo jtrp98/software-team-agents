@@ -3,7 +3,7 @@ import { z } from "zod";
 import { AgentStage } from "../types.js";
 import { stableHash } from "../artifacts/executionPacket.js";
 import { ArtifactType } from "../artifacts/schemas.js";
-import { ApprovalType } from "../gates/approval.js";
+import { ApprovalType, HOST_ACTOR_UNAVAILABLE } from "../gates/approval.js";
 import { HandoffIntentSchema, RecoveryActionSchema, RECOVERY_POLICY_VERSION } from "../retry/recoveryPolicy.js";
 import { RepairRouteSchema } from "../retry/repairRoute.js";
 
@@ -187,10 +187,16 @@ const ApprovalDecisionPayloadSchema = z.strictObject({
   decisionId: z.string().min(1),
   type: z.enum(ApprovalType),
   approved: z.boolean(),
-  actorId: z.string().min(1),
+  actorId: z.string().min(1).nullable(),
+  actorUnavailableReason: z.literal(HOST_ACTOR_UNAVAILABLE).optional(),
   channel: z.string().min(1),
   evidenceRef: z.string().min(1),
-});
+}).refine((payload) =>
+  payload.actorId === null
+    ? payload.channel === "chat-relay" && payload.actorUnavailableReason === HOST_ACTOR_UNAVAILABLE
+    : payload.actorUnavailableReason === undefined,
+  { message: "unavailable actor requires explicit chat-relay host metadata" },
+);
 
 const ApprovalPublicationPayloadSchema = z.strictObject({
   kind: z.literal("approval-publication"),

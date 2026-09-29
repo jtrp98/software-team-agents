@@ -739,7 +739,7 @@ describe("T31 verbs — run/status/approve/retry/resume/pause/cancel", () => {
     }
   });
 
-  it("Controller relays a bubble-chat answer through sta approve, and audit survives restart", async () => {
+  it.each([[true, false], [false, false], [true, true], [false, true]])("synthetic Controller relay approved=%s unknownActor=%s survives SQLite reopen", async (approved, unknownActor) => {
     const dir = tmpDir();
     vi.mocked(resolveHumanDecisionChannel).mockReturnValue(createChatRelayChannel());
     try {
@@ -751,18 +751,43 @@ describe("T31 verbs — run/status/approve/retry/resume/pause/cancel", () => {
       registry.close();
 
       const args = ["approve", "T-CHAT-DEPLOY", "--project-root", dir, "--request", requestId];
+      const flag = approved ? "--yes" : "--no";
       expect(await runCli(args, dir)).toBe(APPROVE_EXIT_ANNOUNCED);
       await expect(runCli([...args, "--yes"], dir)).rejects.toThrow(/Controller relay requires/);
-      const relay = ["--chat-conversation-id", "conv-1", "--chat-message-id", "msg-1", "--chat-actor-id", "human-1", "--chat-text", "I approve this deploy"];
-      expect(await runCli([...args, "--yes", ...relay], dir)).toBe(0);
+      const actorFlags = unknownActor ? ["--chat-actor-unavailable"] : ["--chat-actor-id", "human-1"];
+      const relay = ["--chat-conversation-id", "conv-1", "--chat-message-id", "msg-1", ...actorFlags, "--chat-text", `approve ${requestId}`];
+      await expect(runCli([...args, "--yes", ...relay, ...(unknownActor ? ["--chat-actor-id", "human-1"] : ["--chat-actor-unavailable"])], dir)).rejects.toThrow(/mutually exclusive/);
+      for (const text of ["still reviewing", "approve", "approve apr_00000000000000000000000000000000", `reject ${requestId}`]) {
+        expect(await runCli([...args, "--yes", ...relay.slice(0, -1), text], dir)).toBe(APPROVE_EXIT_REFUSED);
+        const unchanged = new SqliteTaskStore(defaultStateDbPath(dir));
+        expect(unchanged.loadTask("T-CHAT-DEPLOY")?.approvals[0]).toMatchObject({ status: "pending", decision: null });
+        expect(unchanged.eventsForTask("T-CHAT-DEPLOY").map((event) => event.type)).not.toContain("APPROVAL_DECIDED");
+        unchanged.close();
+      }
+      const messageText = `${approved ? "approve" : "reject"} ${requestId}`;
+      const answer = [...relay.slice(0, -1), messageText];
+      expect(await runCli([...args, flag, ...answer], dir)).toBe(approved ? 0 : 3);
       const reopened = new SqliteTaskStore(defaultStateDbPath(dir));
       expect(reopened.loadTask("T-CHAT-DEPLOY")?.approvals[0]).toMatchObject({
-        status: "approved",
-        decision: { source: { channel: "chat-relay", evidenceRef: "chat:conv-1/msg-1" }, note: "I approve this deploy" },
+        status: approved ? "approved" : "rejected",
+        decision: { approved, source: { channel: "chat-relay", evidenceRef: "chat:conv-1/msg-1" }, note: messageText },
       });
       expect(reopened.eventsForTask("T-CHAT-DEPLOY").map((event) => event.type)).toContain("APPROVAL_DECIDED");
       reopened.close();
-      expect(await runCli([...args, "--yes", ...relay], dir)).toBe(1);
+      expect(await runCli([...args, flag, ...answer], dir)).toBe(1);
+      const auditLog = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      try {
+        expect(await runCli(["audit", "T-CHAT-DEPLOY", "--decisions", "--project-root", dir], dir)).toBe(0);
+        const audit = auditLog.mock.calls.flat().join("\n");
+        expect(audit).toContain(requestId);
+        expect(audit).toContain(messageText);
+        expect(audit).toContain("chat:conv-1/msg-1");
+        expect(audit).toContain(unknownActor ? "unknown (host-does-not-expose-actor)" : "chat-user:human-1");
+        if (unknownActor) expect(audit).not.toContain("who=human");
+        expect(audit).toContain("Controller assertions");
+      } finally {
+        auditLog.mockRestore();
+      }
     } finally {
       vi.mocked(resolveHumanDecisionChannel).mockReturnValue(UNCONFIGURED_HUMAN_CHANNEL);
       fs.rmSync(dir, { recursive: true, force: true });

@@ -172,6 +172,7 @@ export function projectLaneWorkspace(
       items: record.scope.items.map((item) => ({ ...item })),
       at: iso(decision.decidedAt),
       by: decision.actor.id,
+      ...(decision.actor.id === null ? { actorUnavailableReason: decision.actor.unavailableReason } : {}),
       note: decision.note,
       requestId: record.requestId,
       decisionId: decision.decisionId,
@@ -184,13 +185,17 @@ export function projectLaneWorkspace(
   }
   const seen: SeenRef[] = [...latestAck.values()]
     .filter(({ record }) => record.status === "approved")
-    .map(({ record, ref }) => ({
-      id: ref.id,
-      version: ref.version,
-      digest: ref.digest,
-      at: iso((record.decision as HumanDecisionRecord).decidedAt),
-      by: (record.decision as HumanDecisionRecord).actor.id,
-    }))
+    .map(({ record, ref }) => {
+      const actor = (record.decision as HumanDecisionRecord).actor;
+      return {
+        id: ref.id,
+        version: ref.version,
+        digest: ref.digest,
+        at: iso((record.decision as HumanDecisionRecord).decidedAt),
+        by: actor.id,
+        ...(actor.id === null ? { actorUnavailableReason: actor.unavailableReason } : {}),
+      };
+    })
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return { ...emptyWorkspace(lane, module, now), seen, signoffs };
 }

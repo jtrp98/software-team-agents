@@ -167,7 +167,7 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
       return {
         // The recorded human answer. In chat-relay mode the actor ID is
         // Controller-reported and is not independently authenticated by STA.
-        actor: str(payload, "actorId") ?? HUMAN_ACTOR,
+        actor: payload["actorId"] === null ? null : str(payload, "actorId") ?? HUMAN_ACTOR,
         reason: str(payload, "note"),
         input: str(payload, "requestId"),
         output: approved ? "approved" : "rejected",
@@ -366,6 +366,13 @@ export function formatAuditTrail(entries: readonly AuditEntry[], opts: FormatAud
     if (entry.reason) lines.push(`    why:      ${entry.reason}`);
     if (entry.input) lines.push(`    in:       ${entry.input}`);
     if (entry.output) lines.push(`    out:      ${entry.output}`);
+    if (entry.type === "APPROVAL_DECIDED") {
+      const channel = str(entry.payload, "channel");
+      const reference = str(entry.payload, "evidenceRef");
+      if (channel && reference) lines.push(`    source:   ${channel} ${reference}`);
+      if (entry.payload["actorId"] === null) lines.push(`    actor:    unknown (${str(entry.payload, "actorUnavailableReason") ?? "unavailable"}); audit cannot identify the person`);
+      if (channel === "chat-relay") lines.push("    assurance: actor and message reference are Controller assertions, not independently authenticated by STA");
+    }
   }
   return lines.join("\n");
 }

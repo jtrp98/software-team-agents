@@ -307,12 +307,16 @@ describe("who may decide", () => {
     try {
       const asked = await api.laneDecision({ module: MODULE, lane: "ba", action: "signoff", caller: { kind: "controller" } });
       expect(asked).toMatchObject({ ok: false, code: "announced", announcement: { channel: "chat-relay" } });
+      expect(asked.items).toEqual(store.loadLaneRequest(asked.requestId!)!.scope.items);
+      expect(asked.items!.every((item) => /^[0-9a-f]{64}$/.test(item.digest))).toBe(true);
+      expect(asked.prompt).toContain(`approve ${asked.requestId}`);
+      expect(asked.prompt).toContain("cannot independently authenticate");
       const answer = await api.laneDecision({
         module: MODULE, lane: "ba", action: "signoff", requestId: asked.requestId,
         caller: { kind: "controller" },
         submission: {
           approved: true,
-          credential: { kind: "controller-chat-relay", conversationId: "conv-lane", messageId: "msg-lane", actorId: "user-1", messageText: "อนุมัติ BA sign-off" },
+          credential: { kind: "controller-chat-relay", conversationId: "conv-lane", messageId: "msg-lane", actorId: "user-1", messageText: `approve ${asked.requestId}` },
         },
       });
       expect(answer).toMatchObject({ ok: true, approved: true });
@@ -339,7 +343,7 @@ describe("who may decide", () => {
         caller: { kind: "controller" },
         submission: { approved: true, credential: {
           kind: "controller-chat-relay", conversationId: "conv-history", messageId: "msg-history",
-          actorId: "user-1", messageText: "approve BA sign-off",
+          actorId: "user-1", messageText: `approve ${asked.requestId}`,
         } },
       })).toMatchObject({ ok: true, approved: true });
       expect(await runRolesVerb(["history", "--module", MODULE, "--knowledge-root", root, "--state-db", dbFile], root)).toBe(0);
@@ -352,29 +356,140 @@ describe("who may decide", () => {
     }
   });
 
-  it("Controller relays BA sign-off through sta roles after a bubble-chat answer", async () => {
+  it.each([[true, false], [false, false], [true, true], [false, true]])("synthetic lane CLI relay approved=%s unknownActor=%s persists with displayed digests", async (approved, unknownActor) => {
     const root = tmp();
     writeApprovedKnowledge(root);
     const dbFile = path.join(tmp("lane-cli-chat-"), "state.db");
+    const logs: string[] = [];
+    const log = vi.spyOn(console, "log").mockImplementation((...parts) => { logs.push(parts.join(" ")); });
     vi.mocked(resolveHumanDecisionChannel).mockReturnValue(createChatRelayChannel());
     try {
       expect(await runRolesVerb(["signoff", "ba", "--module", MODULE, "--knowledge-root", root, "--state-db", dbFile], root)).toBe(4);
       const store = new SqliteTaskStore(dbFile);
       const requestId = store.laneRequests(canonicalKnowledgeRoot(root), MODULE)[0]!.requestId;
+      const request = store.loadLaneRequest(requestId)!;
+      for (const item of request.scope.items) expect(logs.join("\n")).toContain(`${item.id} v${item.version} sha256:${item.digest}`);
+      expect(logs.join("\n")).toContain(`approve ${requestId}`);
+      expect(logs.join("\n")).toContain("cannot independently authenticate");
       store.close();
       const args = ["signoff", "ba", "--module", MODULE, "--knowledge-root", root, "--state-db", dbFile, "--request", requestId];
-      await expect(runRolesVerb([...args, "--yes"], root)).rejects.toThrow(/all four --chat-/);
-      expect(await runRolesVerb([...args, "--yes", "--chat-conversation-id", "conv-cli", "--chat-message-id", "msg-cli", "--chat-actor-id", "user-1", "--chat-text", "Approve BA sign-off"], root)).toBe(0);
+      await expect(runRolesVerb([...args, "--yes"], root)).rejects.toThrow(/Controller relay requires/);
+      const relay = ["--chat-conversation-id", "conv-cli", "--chat-message-id", "msg-cli", ...(unknownActor ? ["--chat-actor-unavailable"] : ["--chat-actor-id", "user-1"]), "--chat-text"];
+      expect(await runRolesVerb([...args, "--yes", ...relay, "still reviewing"], root)).toBe(6);
+      expect(await runRolesVerb([...args, approved ? "--yes" : "--no", ...relay, `${approved ? "approve" : "reject"} ${requestId}`], root)).toBe(approved ? 0 : 3);
       const reopened = new SqliteTaskStore(dbFile);
       expect(reopened.loadLaneRequest(requestId)?.decision?.source.evidenceRef).toBe("chat:conv-cli/msg-cli");
+      expect(reopened.loadLaneRequest(requestId)?.decision?.actor.id).toBe(unknownActor ? null : "chat-user:user-1");
+      expect(reopened.loadLaneRequest(requestId)?.status).toBe(approved ? "approved" : "rejected");
       reopened.close();
     } finally {
+      log.mockRestore();
       vi.mocked(resolveHumanDecisionChannel).mockReturnValue(UNCONFIGURED_HUMAN_CHANNEL);
     }
   });
 });
 
 describe("durability", () => {
+  it.each([false, true])("synthetic chat BA sign-off and separate SA ack survive SQLite reopen and block stale items (unknownActor=%s)", async (unknownActor) => {
+    const root = tmp();
+    writeApprovedKnowledge(root);
+    const dbFile = path.join(tmp("lane-chat-handoff-"), "state.db");
+    const relay = (requestId: string, messageId: string, approved = true) => ({
+      approved,
+      credential: { kind: "controller-chat-relay", conversationId: "synthetic-handoff", messageId, actorId: unknownActor ? null : "fixture-user",
+        ...(unknownActor ? { actorUnavailableReason: "host-does-not-expose-actor" } : {}),
+        messageText: `${approved ? "approve" : "reject"} ${requestId}` },
+    });
+    let store = new SqliteTaskStore(dbFile);
+    let api = createStaApi({ projectRoot: root, store, humanDecisionVerifier: createChatRelayChannel() });
+    const reopen = () => {
+      api.close();
+      store.close();
+      store = new SqliteTaskStore(dbFile);
+      api = createStaApi({ projectRoot: root, store, humanDecisionVerifier: createChatRelayChannel() });
+    };
+    try {
+      const ba = { module: MODULE, lane: "ba" as const, action: "signoff" as const, caller: { kind: "controller" } };
+      const asked = await api.laneDecision(ba);
+      const requestId = asked.requestId!;
+      expect(entry(root, store, AgentStage.SYSTEM_ANALYST).allowed).toBe(false);
+      for (const submission of [
+        undefined,
+        { ...relay(requestId, "ba-message"), credential: undefined },
+        { ...relay(requestId, "ba-message"), credential: { ...relay(requestId, "ba-message").credential, messageText: "still reviewing" } },
+        { ...relay(requestId, "ba-message"), credential: { ...relay(requestId, "ba-message").credential, messageText: `reject ${requestId}` } },
+      ]) {
+        expect(await api.laneDecision({ ...ba, requestId, submission })).toMatchObject({ ok: false, code: "refused" });
+        expect(store.loadLaneRequest(requestId)).toMatchObject({ status: "pending", decision: null });
+      }
+      expect(await api.laneDecision({ ...ba, module: "other-module", requestId, submission: relay(requestId, "ba-message") }))
+        .toMatchObject({ ok: false, code: "refused" });
+      const redirected = { ...relay(requestId, "ba-message"), requestId: "apr_00000000000000000000000000000000" };
+      expect(await api.laneDecision({ ...ba, requestId, submission: redirected }))
+        .toMatchObject({ ok: false, code: "refused", denialReason: expect.stringContaining("override") });
+      expect(store.loadLaneRequest(requestId)).toMatchObject({ status: "pending", decision: null });
+      expect(await api.laneDecision({ ...ba, requestId, submission: relay(requestId, "ba-message") })).toMatchObject({ ok: true });
+      reopen();
+      expect(store.loadLaneRequest(requestId)?.scope.items).toEqual(asked.items);
+      expect(entry(root, store, AgentStage.SYSTEM_ANALYST).allowed).toBe(false); // BA approval does not acknowledge for SA.
+      expect(await api.laneDecision({ ...ba, requestId, submission: relay(requestId, "ba-message") })).toMatchObject({ ok: false });
+
+      const sa = { ...ba, lane: "sa" as const, action: "ack" as const };
+      const ack = await api.laneDecision(sa);
+      expect(ack.items).toEqual(asked.items);
+      expect(await api.laneDecision({ ...sa, requestId: ack.requestId, submission: relay(ack.requestId!, "ba-message") }))
+        .toMatchObject({ ok: false, code: "refused" }); // The same chat reference cannot answer both acts.
+      expect(store.loadLaneRequest(ack.requestId!)?.status).toBe("pending");
+      expect(await api.laneDecision({ ...sa, requestId: ack.requestId, submission: relay(ack.requestId!, "sa-message") }))
+        .toMatchObject({ ok: true });
+      reopen();
+      expect(entry(root, store, AgentStage.SYSTEM_ANALYST)).toEqual({ allowed: true });
+      const records = store.laneRequests(canonicalKnowledgeRoot(root), MODULE);
+      expect(records.map((r) => r.decision?.source.evidenceRef)).toEqual([
+        "chat:synthetic-handoff/ba-message", "chat:synthetic-handoff/sa-message",
+      ]);
+      const historyLog = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      try {
+        expect(await runRolesVerb(["history", "--module", MODULE, "--knowledge-root", root, "--state-db", dbFile], root)).toBe(0);
+        const history = historyLog.mock.calls.flat().join("\n");
+        if (unknownActor) expect(history).toContain("unknown actor (host-does-not-expose-actor)");
+        for (const record of records) {
+          expect(history).toContain(record.requestId);
+          expect(history).toContain(record.decision!.source.evidenceRef);
+          for (const item of record.scope.items) expect(history).toContain(item.digest);
+        }
+      } finally {
+        historyLog.mockRestore();
+      }
+      const req = KnowledgeBase.load(root).get("REQ-003")!;
+      writeKnowledgeItem({ ...req, title: `${req.title} edited after acknowledgement` }, root, { force: true });
+      expect(entry(root, store, AgentStage.SYSTEM_ANALYST).allowed).toBe(false);
+    } finally {
+      api.close();
+      store.close();
+    }
+  });
+
+  it.each(["version", "digest"] as const)("chat lane decision refuses a stale pending %s", async (change) => {
+    const root = tmp();
+    writeApprovedKnowledge(root);
+    const store = new MemoryTaskStore();
+    const api = createStaApi({ projectRoot: root, store, humanDecisionVerifier: createChatRelayChannel() });
+    try {
+      const lane = { module: MODULE, lane: "ba" as const, action: "signoff" as const, caller: { kind: "controller" } };
+      const asked = await api.laneDecision(lane);
+      const req = KnowledgeBase.load(root).get("REQ-003")!;
+      writeKnowledgeItem({ ...req, ...(change === "version" ? { version: req.version + 1 } : { title: `${req.title} edited` }) }, root, { force: true });
+      expect(await api.laneDecision({ ...lane, requestId: asked.requestId, submission: {
+        approved: true, credential: { kind: "controller-chat-relay", conversationId: "fixture", messageId: "stale", actorId: "fixture-user", messageText: `approve ${asked.requestId}` },
+      } })).toMatchObject({ ok: false, code: "refused", denialReason: expect.stringContaining("stale") });
+      expect(store.loadLaneRequest(asked.requestId!)).toMatchObject({ status: "withdrawn", decision: null });
+      expect(entry(root, store, AgentStage.SYSTEM_ANALYST).allowed).toBe(false);
+    } finally {
+      api.close();
+    }
+  });
+
   it("a valid decision survives a restart: a fresh store and guard read the same persisted decisions", async () => {
     const root = tmp();
     const dbFile = path.join(tmp("lane-db-"), "state.db");

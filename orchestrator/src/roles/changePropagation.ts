@@ -156,7 +156,7 @@ export function notificationsFor(
         currentVersion: versionOf(kb, id),
         via: [id],
         message:
-          `${id} changed since ${verdict.signoff?.by} signed the ${LANE_LABEL[lane]} lane off — the gate has reopened ` +
+          `${id} changed since ${verdict.signoff?.by ?? "unknown actor (host does not expose identity)"} signed the ${LANE_LABEL[lane]} lane off — the gate has reopened ` +
           "and the lane needs signing again",
       });
     }

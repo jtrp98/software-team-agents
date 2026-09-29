@@ -36,8 +36,9 @@ export interface SeenRef {
   version: number;
   digest: string;
   at: string;
-  /** The actor id the trusted channel authenticated (e.g. `github-user:<id>`), never a typed name. */
-  by: string;
+  /** Controller-reported actor, or null when the host does not expose it. */
+  by: string | null;
+  actorUnavailableReason?: "host-does-not-expose-actor";
 }
 
 /** One `{id, version, digest}` a sign-off covered. */
@@ -49,8 +50,9 @@ export interface LaneSignoff {
   status: "approved" | "rejected";
   items: SignoffItemRef[];
   at: string;
-  /** The actor id the trusted channel authenticated. */
-  by: string;
+  /** Controller-reported actor, or null when the host does not expose it. */
+  by: string | null;
+  actorUnavailableReason?: "host-does-not-expose-actor";
   note: string | null;
   /** The lane-ledger request and channel decision this sign-off is. */
   requestId: string;

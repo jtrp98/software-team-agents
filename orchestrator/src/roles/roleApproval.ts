@@ -86,13 +86,13 @@ export function describeSignoff(verdict: SignoffVerdict, lane: RoleLane): string
     case "none":
       return `nobody has signed off the ${lane.toUpperCase()} lane yet (gate: ${LANE_SIGNOFF_TYPE[lane]})`;
     case "current":
-      return `signed off by ${verdict.signoff?.by} on ${verdict.signoff?.at.slice(0, 10)}`;
+      return `signed off by ${verdict.signoff?.by ?? "unknown actor (host does not expose identity)"} on ${verdict.signoff?.at.slice(0, 10)}`;
     case "stale":
       return (
-        `the sign-off by ${verdict.signoff?.by} no longer covers what is approved — ${verdict.changed.join(", ")} ` +
+        `the sign-off by ${verdict.signoff?.by ?? "unknown actor (host does not expose identity)"} no longer covers what is approved — ${verdict.changed.join(", ")} ` +
         "changed since, so it has to be looked at again"
       );
     case "rejected":
-      return `rejected by ${verdict.signoff?.by}${verdict.signoff?.note ? `: ${verdict.signoff.note}` : ""}`;
+      return `rejected by ${verdict.signoff?.by ?? "unknown actor (host does not expose identity)"}${verdict.signoff?.note ? `: ${verdict.signoff.note}` : ""}`;
   }
 }

@@ -191,6 +191,7 @@
                   "status": { "type": "string", "enum": ["pending", "approved", "rejected", "withdrawn"] },
                   "reason": { "type": "string", "minLength": 1 },
                   "decided_by": { "type": ["string", "null"] },
+                  "actor_unavailable_reason": { "const": "host-does-not-expose-actor", "description": "The Controller reports that the host did not expose the actor ID; audit cannot identify the person." },
                   "decided_via": { "type": ["string", "null"] },
                   "decided_at": { "type": ["string", "null"] }
                 }

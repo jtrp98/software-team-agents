@@ -133,6 +133,7 @@ export function taskToYamlValue(
         status: a.status,
         reason: a.reason,
         decided_by: a.decision?.actor.id ?? null,
+        ...(a.decision?.actor.id === null ? { actor_unavailable_reason: a.decision.actor.unavailableReason } : {}),
         decided_via: a.decision?.source.channel ?? null,
         decided_at: a.decision ? new Date(a.decision.decidedAt).toISOString() : null,
       })),

@@ -205,7 +205,7 @@ export const USAGE =
   "usage (verbs — thin wrappers over the flag-based form below, prefer these):\n" +
   "  sta run --task-id <id> --module <name> <classification flags> [--test-strategy <cross-task,multi-system,migration,security,release>] [--frontend-target <id>] [--backend-target <id>] [--phase <n,n>] [--depends-on <id,id>] [--ad-hoc] [--env <local|dev|staging|production>] [--autonomy <read-only|propose|edit|full>] [--runtime <claude-code|codex|opencode|antigravity|zcode>] [--model <name>] [--effort <name>] [--token-budget <n>] [--root <name>] [--project-root <path>] [--state-db <path>]\n" +
   "  sta status [<task-id>] [--watch] [--interval <seconds>] [--project-root <path>]   no id = every task; with id = that task's detail\n" +
-  "  sta approve <task-id> --request <request-id> [--yes|--no --chat-conversation-id <id> --chat-message-id <id> --chat-actor-id <id> --chat-text <text>]   Controller shows the pending gate in chat, then relays the human answer with its chat reference\n" +
+  "  sta approve <task-id> --request <request-id> [--yes|--no --chat-conversation-id <id> --chat-message-id <id> (--chat-actor-id <id>|--chat-actor-unavailable) --chat-text <text>]   Controller shows the pending gate in chat, then relays the human answer with its chat reference\n" +
   "  sta resume  <task-id> --module <name> [--root <name>] [--project-root <path>]   continue a task already in the store; --root must match the root frozen at intake (it is an assertion, never a re-selection)\n" +
   "  sta retry   <task-id> --module <name> [--root <name>] [--project-root <path>]   same as resume — there is no daemon here for the two to mean different things\n" +
   "  sta pause  <task-id> [--project-root <path>]   freeze a task; run/resume/retry refuse it until resumed\n" +
@@ -236,8 +236,8 @@ export const USAGE =
   "  sta rollback [--backup <name>] [--project-root <path>]   undo the most recent upgrade/migrate, or a named one from `--list-backups`\n" +
   "  sta list-backups [--project-root <path>]   list this project's .sta/backups/ snapshots, oldest first\n" +
   "  sta roles [--module <name>] [--project-root <path>]   where BA, SA, UXUI and DEV each stand against knowledge/\n" +
-  "  sta roles signoff <ba|sa|uxui|dev> --module <name> [--request <request-id> --yes|--no --chat-conversation-id <id> --chat-message-id <id> --chat-actor-id <id> --chat-text <text>]   Controller asks in chat, then relays the human lane sign-off\n" +
-  "  sta roles ack <ba|sa|uxui|dev> [<id>[,<id>...]] --module <name> [--request <request-id> --yes|--no --chat-conversation-id <id> --chat-message-id <id> --chat-actor-id <id> --chat-text <text>]   Controller asks in chat, then relays the human acknowledgement\n" +
+  "  sta roles signoff <ba|sa|uxui|dev> --module <name> [--request <request-id> --yes|--no --chat-conversation-id <id> --chat-message-id <id> (--chat-actor-id <id>|--chat-actor-unavailable) --chat-text <text>]   Controller asks in chat, then relays the human lane sign-off\n" +
+  "  sta roles ack <ba|sa|uxui|dev> [<id>[,<id>...]] --module <name> [--request <request-id> --yes|--no --chat-conversation-id <id> --chat-message-id <id> (--chat-actor-id <id>|--chat-actor-unavailable) --chat-text <text>]   Controller asks in chat, then relays the human acknowledgement\n" +
   "  sta roles history --module <name> [--knowledge-root <path>] [--json]   read pending and decided lane requests with item versions, actor and chat reference\n" +
   "    signoff/ack exit codes: 0 decided yes · 3 rejected · 4 announced, answer on the channel then re-run with --request · 5 no trusted channel · 6 refused (stale/replay/wrong scope)\n" +
   "  sta roles inbox [<ba|sa|uxui|dev>] [--module <name>]   what each lane has to look at, derived fresh\n" +

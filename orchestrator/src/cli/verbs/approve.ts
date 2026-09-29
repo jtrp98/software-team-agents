@@ -1,4 +1,6 @@
-import { ApprovalDecisionError, ApprovalType } from "../../gates/approval.js";
+import { ApprovalDecisionError, ApprovalType, describeHumanActor } from "../../gates/approval.js";
+import { chatRelayCredential } from "../chatRelay.js";
+import { chatRelayInstructions } from "../../gates/chatRelayChannel.js";
 import { NoTrustedHumanChannelError, UntrustedHumanDecisionError } from "../../gates/humanDecision.js";
 import { CliUsageError } from "../../cli.js";
 import { flagValue, openStore, positionalArg } from "../support.js";
@@ -66,17 +68,12 @@ export async function runApproveVerb(rest: string[], defaultProjectRoot: string)
         `${scope.from && scope.to ? `, ${scope.from} -> ${scope.to}` : ""}): ${pending.reason}`,
     );
     console.log(`[orchestrator]   ${APPROVAL_PROMPT[scope.type]}`);
+    console.log(`[orchestrator]   ${chatRelayInstructions(pending.requestId)}`);
     if (!requestId) {
       throw new CliUsageError(`approve: --request <request-id> is required; the pending request is ${pending.requestId}`);
     }
     if (yes && no) throw new CliUsageError("approve: --yes and --no are mutually exclusive");
-    const conversationId = flagValue(rest, "--chat-conversation-id");
-    const messageId = flagValue(rest, "--chat-message-id");
-    const actorId = flagValue(rest, "--chat-actor-id");
-    const messageText = flagValue(rest, "--chat-text");
-    if ((yes || no) && [conversationId, messageId, actorId, messageText].some((value) => !value?.trim())) {
-      throw new CliUsageError("approve: Controller relay requires --chat-conversation-id, --chat-message-id, --chat-actor-id and --chat-text");
-    }
+    const credential = yes || no ? chatRelayCredential(rest) : undefined;
 
     try {
       if (requestId === pending.requestId) {
@@ -91,14 +88,11 @@ export async function runApproveVerb(rest: string[], defaultProjectRoot: string)
           requestId,
           approved: yes,
           ...(note === undefined ? {} : { note }),
-          credential: {
-            kind: "controller-chat-relay",
-            conversationId, messageId, actorId, messageText,
-          },
+          credential,
         });
         registry.refreshStateView();
         if (settleError) console.error(`[orchestrator] decision recorded, but the channel could not settle its announcement: ${settleError}`);
-        console.log(`[orchestrator] ${decision.approved ? "approved" : "rejected"} ${requestId} (${decision.actor.id} via ${decision.source.channel}).`);
+        console.log(`[orchestrator] ${decision.approved ? "approved" : "rejected"} ${requestId} (${describeHumanActor(decision.actor)} via ${decision.source.channel}).`);
         return decision.approved ? 0 : 3;
       }
       throw new ApprovalDecisionError("unknown-request", `pending request is ${pending.requestId}, not ${requestId}`);
