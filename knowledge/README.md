@@ -95,12 +95,18 @@ table of the STA state DB), never files:
 - **acknowledgement (ack)** — a separate decision by the person in the *receiving* lane that
   they have seen those exact versions. The handoff watermark is built from these.
 
-Each lane and act has its own gate type, and so its own approver allowlist in the human-owned
-github-app configuration: `ba-signoff`, `sa-signoff`, `uxui-signoff`, `dev-signoff`, `ba-ack`,
-`sa-ack`, `uxui-ack`, `dev-ack`. STA opens a pending request over the exact current items,
-announces it on the trusted channel (the same one `sta approve` uses) and records a decision
-only when the channel verifies it; an item edited or bumped after the request or the decision
-makes it stale. With no channel configured the request stays pending.
+Each lane and act has its own gate type — `ba-signoff`, `sa-signoff`, `uxui-signoff`,
+`dev-signoff`, `ba-ack`, `sa-ack`, `uxui-ack`, `dev-ack` — and every one of them is decided
+through the same trusted channel as `sta approve`: the Controller chat relay (V13 TASK-027,
+`req.md` §25). STA opens a pending request over the exact current items and the Controller
+presents it in the bubble chat — request ID, gate type, scope, item versions/digests and the
+exact answer text to send; the Human's literal reply is relayed back with its
+conversation/message/actor reference (`sta roles signoff/ack <lane> --module <name>
+--request <id>`), and STA records the decision only after checking pending, scope, replay
+and item versions. STA cannot verify the actor or message reference independently of the
+Controller — that is the residual risk the Human accepted (2026-09-29), not an identity
+proof. An item edited or bumped after the request or the decision makes it stale. With no
+relayed answer the request stays pending; there is no fallback channel.
 
 What is **not** authority, anywhere: a file under `knowledge/_roles/**` (nothing reads it; the
 path stays in `UNIVERSAL_DENY` so no agent can leave one there), an item file's own

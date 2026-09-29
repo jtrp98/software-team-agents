@@ -119,7 +119,7 @@ for (const flag of [
     fs.mkdirSync(path.join(tmpInit, ".git"));
     run(
       "initialize installation-check fixture",
-      [q("node"), q(path.join(repoRoot, "orchestrator", "dist", "targetcli", "cli.js")), "init", "--role", "dev", "--target-root", q(tmpInit)].join(" "),
+      [q("node"), q(path.join(repoRoot, "orchestrator", "dist", "targetcli", "cli.js")), "init", "--target-root", q(tmpInit)].join(" "),
       { quiet: true, timeoutMs: 120_000 },
     );
     run("checker --check-installation (fresh init)", `${distCli} --check-installation --project-root ${q(tmpInit)}`, { quiet: true });

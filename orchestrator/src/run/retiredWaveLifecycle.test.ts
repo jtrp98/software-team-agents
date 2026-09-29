@@ -91,11 +91,16 @@ describe("T-V8-029 — the retired wave lifecycle is unreachable, not merely unu
     expect(offenders).toEqual([]);
   });
 
-  it("keeps exactly one readiness authority: the ledger's, with no plan-document advisory left", () => {
+  it("leaves no readiness read model on the ledger: bounded-run derives readiness from engine views", () => {
     const planGraph = ALL_SOURCES.find(({ file }) => file.endsWith(path.join("docs", "planGraph.ts")))!.text;
     expect(planGraph).not.toContain("PlanReadinessAdvisory");
+    // V13 TASK-026 removed `RunLedger.readiness` — it had no production caller;
+    // bounded-run reads `engineViewOfRun` and prints readiness from those views.
     const ledger = ALL_SOURCES.find(({ file }) => file.endsWith(path.join("ledger", "runLedger.ts")))!.text;
-    expect(ledger).toContain("readiness(");
+    expect(ledger).not.toContain("readiness(");
+    const boundedRun = ALL_SOURCES.find(({ file }) => file.endsWith(path.join("cli", "verbs", "boundedRun.ts")))!.text;
+    expect(boundedRun).toContain("engineViewOfRun");
+    expect(boundedRun).toContain("[bounded-run] readiness:");
   });
 
   it("keeps the legacy journal readers, because an old record must stay inspectable", async () => {

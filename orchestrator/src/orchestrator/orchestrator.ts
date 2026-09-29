@@ -800,16 +800,17 @@ export class Orchestrator {
   }
 
   /**
-   * Announces the pending request on the trusted channel (github-app: opens
-   * one Issue) and persists where, exactly once per request. Returns null when
+   * Announces the pending request on the trusted channel (chat-relay: binds
+   * the request ID for the Controller to present in chat) and persists where,
+   * exactly once per request. Returns null when
    * nothing is pending or the channel has nothing to announce (unconfigured).
    * A channel failure throws and leaves the request pending — publication is
    * how a person learns of the question, never a decision.
    *
    * The channel is awaited outside any store transaction; the record is then
    * written only if the request is still the pending one. A crash between the
-   * two can leave one unrecorded announcement behind (a second Issue on the
-   * next publish), never a decision.
+   * two can leave one unrecorded announcement behind (a second presentation of
+   * the same request on the next publish), never a decision.
    */
   async publishPendingApproval(): Promise<(ApprovalPublication & { requestId: string; fresh: boolean }) | null> {
     const pending = this.pendingApprovalRequest();

@@ -147,11 +147,6 @@ export const TERMINAL_RUN_STATUSES: ReadonlySet<LedgerRunStatus> = new Set<Ledge
   "COMPLETED", "REFUSED", "CANCELLED", "STALE",
 ]);
 
-/** Statuses that mean this task's work is durably on the run branch. */
-export const SETTLED_TASK_STATUSES: ReadonlySet<LedgerTaskStatus> = new Set<LedgerTaskStatus>([
-  "CHECKPOINTED", "DONE",
-]);
-
 /** The published transition table, for evidence and for the audit export's self-description. */
 export function transitionVocabulary(): {
   run: Record<string, readonly string[]>;

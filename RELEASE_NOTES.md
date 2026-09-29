@@ -1,5 +1,140 @@
 # Release Notes
 
+## software-team-agents 7.0.0 — V13 (2026-09-29)
+
+> **Version 7.0.0 and release date 2026-09-29 confirmed by the release owner during the V13 close
+> round; the Major bucket is the mechanical result of the version rule at the bottom of this file:
+> V13 refuses and deletes paths that previously passed.** Root `package.json` and
+> `package-lock.json` still carry `6.0.0` until the owner bumps them; `templates/manifest.json` is
+> re-stamped by `npm run build`. The private development package
+> `@software-team-agents/orchestrator` remains independently versioned at `0.3.0`.
+
+**Bucket: Major (`6.0.0 → 7.0.0`, confirmed).** V13 completes the
+cutover to one canonical governed execution path (Human → Controller → STA → Role Agent →
+certified executor → deterministic evidence → persisted state) and deletes the old paths: the
+GitHub App approval channel, session-role/self-declared authority, governance bypass flags and
+QA-skip paths, legacy workflow/packet/single-repo state, and the GitHub fixture loader. Human
+approvals move to the Controller chat relay; lane sign-off/ack move to a durable lane ledger; only
+schema-v2 runtime state is readable.
+
+### Track A — Controller chat relay replaces the GitHub App approval channel (breaking)
+
+- The only production human-decision channel is `chat-relay` (`req.md` §25): STA mints a pending
+  request; the Controller presents request ID, gate type, scope and item versions/digests in the
+  bubble chat; the human answers with `approve <request-id>` or `reject <request-id>` on the first
+  line (a single Markdown code block may wrap the answer); the Controller relays the original
+  answer with conversation/message ID and actor (`--chat-actor-id`, or `--chat-actor-unavailable`
+  when the host does not expose one) through `sta approve` / `sta roles signoff|ack`. STA verifies
+  pending, scope, replay and item version/digest before persisting; an absent or non-matching
+  answer leaves the request pending and there is no fallback channel. Bare `--yes/--no` without a
+  chat reference is refused.
+- Honest assurance statement: STA cannot independently authenticate the Controller-reported
+  actor/message reference — it is a Controller assertion, not identity proof. The human accepted
+  this reduced assurance explicitly (2026-09-29); retrospective checking compares the real chat
+  with `sta audit <task-id> --decisions` and `sta roles history --module <name>`.
+- The `github-app` channel is deleted (TASK-026): Issues, App key handling, approver allowlists,
+  `orchestrator/src/gates/githubAppChannel.*` and the `github-app.json` fixture loader in
+  `humanChannelConfig.ts`. The protected `~/.sta-approval-channel/` directory and its guard deny
+  markers remain by design: they keep key/config files left on real machines unreadable by role
+  agents (the a1 defense floor).
+
+### Track B — lane sign-off/ack and knowledge approval live in a durable lane ledger (breaking)
+
+- `sta roles signoff|ack` per lane (`ba|sa|uxui|dev`) are pending requests bound to
+  module/lane/action/item `{id, version, digest}` in the `lane_decisions` ledger (state schema
+  v22); decisions are chat-relay verifications, not files. A `knowledge/_roles/**` file and
+  `status: approved` in an item file are authority nowhere — the path stays in the universal deny
+  floor. Sign-off also approves the lane's knowledge items; a later item edit makes the request
+  stale.
+
+### Track C — schema v2-only state cutover (breaking)
+
+- The runtime reads `RuntimeTaskV2` only: legacy execution packets, no-RuntimeTask branches,
+  `--mode legacy-project` (refused fail-closed) and the single-repo wave-run execution paths are
+  deleted. Old task data is exportable once through the legacy cutover archive and then unreadable
+  by the new runtime — no compatibility shim, no old/new switch.
+
+### Track D — certification scope narrowed to Codex and Claude Code; uncertified runtimes refused before spawn
+
+- STA-dispatched executors that require certification are **Codex and Claude Code (Windows)**
+  only. Antigravity, OpenCode and ZCode are interactive role play outside STA dispatch; the a1
+  preflight refuses their production dispatch before spawn for every role (suite-proven:
+  `approvalIsolation.test.ts` over the concrete adapters × 12 roles).
+- **Certification status is honestly incomplete (TASK-025): no runtime is certified in V13.** The
+  contract suite, chat-relay real UAT (real human BA sign-off / SA ack / reject with restart and
+  audit comparison) and all repository gates are green, but real governed end-to-end UAT stopped
+  at: Codex BA refused for missing interactive-prompts (the domain of the deferred TASK-032) and
+  Claude Code document writes blocked by the a1 exact-file EPERM limitation. R15 was closed by the
+  human decision "if the code passes, close the round" on green code verification; the
+  certification gap is carried into the next version as a recorded exception, not waived.
+
+### Track E — governance bypass and legacy surface deleted (breaking for old scripts)
+
+- Removed and refused: the `session-role` command and `.workflow/session-role.json` authority
+  (replaced by STA-issued scoped attempt grants, `sta grant issue|verify|consume`),
+  `--allow-unguarded-runtime`, `--no-deterministic-gate`, `--no-document-gate`,
+  `--no-qa-optimization`, the QA `skip` effort and synthetic PASS, the target-CLI `--role` flag,
+  the `buildPrompt` compatibility wrapper, `RunLedger.setTaskStatus`/`RunLedger.readiness`
+  (bounded-run derives readiness from engine views), the API adapter, and the legacy wave
+  execution surface (read-only readers for old records are kept).
+- Reviewer is a real dispatched role with its own artifact; QA evidence cannot be synthesized;
+  artifact provenance, postflight changed-file scope, document/code verification and fresh
+  self-contained role packets are mandatory on every governed attempt.
+
+### Breaking changes and required operator action
+
+1. Chat relay replaces Issue approvals: `sta approve --yes/--no` without a chat reference now
+   fails closed. The Controller must relay the human's original answer with its chat reference.
+2. `github-app.json`, its private key and the approver allowlists are no longer read by anything;
+   keep them out of agent reach or remove them locally (the guard floor still denies the
+   directory).
+3. Old `.workflow` state (legacy packets, wave runs, `_roles` files) is unreadable by the new
+   runtime; export once first if the history is needed.
+4. Every flag listed under Track E is gone; wrappers invoking them get usage errors. Update
+   scripts, then rerun `sta doctor`.
+5. `sta run --runtime antigravity|opencode|zcode` is refused before spawn — those runtimes are
+   role play only.
+
+### Migration order for existing installations
+
+1. Update the Framework, then run `software-team-agents sync` in every workspace to refresh the
+   guard payload.
+2. Archive legacy task data once via the legacy cutover export, then let the v2-only runtime take
+   over the state DB.
+3. Controllers: implement the chat-relay presentation/relay loop per `req.md` §25; humans answer
+   in chat with the exact request ID.
+4. Remove wrappers that rely on deleted flags or the github-app channel; rerun `sta doctor`.
+
+### Known gaps — input to the next version
+
+- Certification (TASK-025) incomplete as above; TASK-032 (trusted business-intake so BA can run
+  without an interactive runtime) is deferred by human decision — BA stays role play, humans write
+  the requirement and sign via chat relay.
+- `codeintel/consent.test.ts` ("a consent record is reused within the same revision") times out at
+  its 5 s limit when the full suite runs under load and passes isolated/in a clean rerun — seen in
+  the R15 baseline and twice in the V13 close round; kept as a recorded flake per the release
+  owner's decision (2026-09-29). Root-causing it is an input to the next version.
+- `sta status` through a globally installed older CLI refuses the newer state DB schema (expects
+  v19, finds v22); use a freshly built local CLI until the global install is refreshed.
+
+### Release status
+
+**RELEASABLE — deterministic repository checks passed (2026-09-29).** `npm run release:check`
+passed all 30 steps on the confirming run (`round-17-release-check-final.log`), including the
+packaged `.tgz` E2E in a fresh environment; during the close round the release owner approved
+updating the two gate scripts that still asserted the retired `--role` flag (`release-gate.mjs`
+installation fixture, `packaged-e2e.mjs` step 24) so the gate now proves the V13 fail-closed
+behaviour. Green on the same tree: typecheck, build (125 templates + manifest,
+framework_version `6.0.0`), the full Vitest suite **4,239 passed / 10 skipped, exit 0**, and
+`docs:check` / `--check-git-ownership` / the five `--check-*` repository flags. Recorded
+exceptions carried by human decision: no runtime is certified (TASK-025 incomplete — Codex
+interactive-prompts, Claude document-write EPERM; TASK-032 deferred) and the
+`consent.test.ts` load flake (passes isolated). Bumping the root `package.json` to `7.0.0`,
+tagging, pushing, publishing, deployment, migration, and state-changing Git remain separate human
+actions.
+
+---
+
 ## software-team-agents 6.0.0 — V12 (2026-09-23)
 
 > **Version 6.0.0 read mechanically from the bucket table at the bottom of this file (Major) and

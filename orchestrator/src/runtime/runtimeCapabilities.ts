@@ -93,8 +93,6 @@ export enum RuntimeCapability {
   EVIDENCE_COLLECTION = "evidence-collection",
 }
 
-export const ALL_RUNTIME_CAPABILITIES: readonly RuntimeCapability[] = Object.values(RuntimeCapability);
-
 /**
  * V13 TASK-016 — what makes a runtime a governed *executor* rather than just
  * something that can run a prompt: the lifecycle port's resume, cancel and

@@ -41,5 +41,3 @@ export enum Capability {
   /** Only a person can give this — never an agent. */
   APPROVAL = "approval",
 }
-
-export const ALL_CAPABILITIES: Capability[] = Object.values(Capability);

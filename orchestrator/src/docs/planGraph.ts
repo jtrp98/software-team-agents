@@ -36,9 +36,10 @@ import {
  * is the plan-side mirror a person or a driver reads before creating tasks.
  *
  * Document readiness is a human view only, and after T-V8-029 that is all it
- * is: planned execution reads the frozen ledger DAG (`RunLedger.readiness`),
- * not this file, and there is no longer any export that prints a readiness
- * warning and proceeds past an unmet edge.
+ * is: planned execution derives readiness from the engine's own views
+ * (`engineViewOfRun` inside bounded-run) — the ledger exposes no readiness
+ * read model (V13 TASK-026) — and there is no longer any export that prints a
+ * readiness warning and proceeds past an unmet edge.
  */
 
 export type WorkPlanTask = PlanTask;

@@ -409,8 +409,9 @@ export class LaneDecisionService {
   }
 
   /**
-   * Announces the pending request on the trusted channel (github-app: opens
-   * one Issue) and persists where, once per request. Null when the channel
+   * Announces the pending request on the trusted channel (chat-relay: binds
+   * the request ID for the Controller to present in chat) and persists where,
+   * once per request. Null when the channel
    * has nothing to announce (unconfigured). The request stays pending either way.
    */
   async publish(requestId: string): Promise<(ApprovalPublication & { requestId: string; fresh: boolean }) | null> {

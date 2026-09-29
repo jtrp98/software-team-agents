@@ -338,8 +338,3 @@ export class ReviewSeparationError extends Error {
     this.name = "ReviewSeparationError";
   }
 }
-
-export function assertReviewSeparation(projectRoot: string = defaultProjectRoot()): void {
-  const result = checkReviewSeparation(projectRoot);
-  if (!result.ok) throw new ReviewSeparationError(result.problems);
-}

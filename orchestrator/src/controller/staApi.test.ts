@@ -6,9 +6,6 @@ import { TaskRegistry } from "../orchestrator/taskRegistry.js";
 import { ALLOW_EVERY_STAGE_TEST_GUARD } from "../orchestrator/stageGuards.testSupport.js";
 import { testHumanVerifier, trustedCredential } from "../gates/humanDecision.testSupport.js";
 import { UntrustedHumanDecisionError, type HumanDecisionVerifier } from "../gates/humanDecision.js";
-import { createGithubAppChannel } from "../gates/githubAppChannel.js";
-import { FIXTURE_APP_ID, fixtureAppKeys, GithubFixture } from "../gates/githubAppChannel.testSupport.js";
-import { ApprovalType } from "../gates/approval.js";
 import { createChatRelayChannel } from "../gates/chatRelayChannel.js";
 import { withStageEvidence } from "../evidence/stageEvidence.testSupport.js";
 import type { AgentExecutorResult } from "../orchestrator/orchestrator.js";
@@ -193,35 +190,6 @@ describe("StaApi (V13 TASK-021)", () => {
           caller: { kind: "human" },
         }),
       ).rejects.toThrow(/Controller cannot impersonate human authority/);
-    });
-  });
-
-  describe("github-app channel through the Controller API (V13 TASK-027)", () => {
-    it("announces the gate when execute parks, exposes only the link, and reads the decision from the Issue", async () => {
-      const fixture = new GithubFixture();
-      const verifier = createGithubAppChannel({
-        appId: FIXTURE_APP_ID,
-        repository: { owner: fixture.owner, name: fixture.repo },
-        approvers: { [ApprovalType.SCHEMA_CONFIRMATION]: [1001] },
-        privateKey: fixtureAppKeys().privateKey,
-        transport: fixture.transport,
-      });
-      const { registry, api } = setupTestApi({ verifier });
-      registry.create({ taskId: "TASK-GH", classification: incremental() });
-      const executed = await api.execute({ taskId: "TASK-GH" });
-      expect(executed.announcementError).toBeUndefined();
-      const status = await api.status({ taskId: "TASK-GH" });
-      const gate = "requiredGate" in status ? status.requiredGate! : null;
-      expect(gate?.announcement).toEqual({ channel: "github-app", ref: "acme/approvals#1", url: "https://github.com/acme/approvals/issues/1" });
-
-      // Nobody has answered yet: refused, still pending.
-      const early = await api.approve({ taskId: "TASK-GH", requestId: gate!.requestId, submission: { requestId: gate!.requestId }, caller: { kind: "controller" } });
-      expect(early).toMatchObject({ ok: false, code: "refused" });
-
-      fixture.comment(1, `sta-approve: ${gate!.requestId}`, { id: 1001, login: "approver-one", type: "User" }, new Date(Date.now() + 60_000).toISOString());
-      const decided = await api.approve({ taskId: "TASK-GH", requestId: gate!.requestId, submission: { requestId: gate!.requestId }, caller: { kind: "controller" } });
-      expect(decided).toMatchObject({ ok: true, approved: true });
-      expect(fixture.issues.get(1)!.state).toBe("closed");
     });
   });
 

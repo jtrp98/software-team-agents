@@ -121,9 +121,9 @@ async function waitingStop(
     io.log(`[orchestrator] task ${taskId} stuck waiting: ${status.from} -> ${status.to} has no pending approval request to answer.`);
     return { kind: "STUCK", reason: status.reason };
   }
-  // Announce the question on the trusted channel (github-app: one Issue per
-  // request, persisted). A failure leaves the request pending and is said
-  // out loud; it never answers anything.
+  // Announce the question on the trusted channel (chat-relay: the Controller
+  // presents the request ID in chat, and STA persists that binding). A failure
+  // leaves the request pending and is said out loud; it never answers anything.
   try {
     const publication = await orchestrator.publishPendingApproval();
     if (publication) io.log(`[orchestrator] request ${publication.requestId} is announced on ${publication.channel}: ${publication.url ?? publication.ref}`);

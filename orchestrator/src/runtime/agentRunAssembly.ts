@@ -833,8 +833,3 @@ export function securityArtifactResult(
       artifact.overallStatus === "FAIL" ? (classifySecurityFailure(securityMd, req.taskId) ?? undefined) : undefined,
   };
 }
-
-/** The three stages whose verdict lives in a document rather than in an exit status. */
-export function isDocumentVerdictStage(stage: AgentStage): boolean {
-  return stage === AgentStage.REVIEWER || stage === AgentStage.QA_ENGINEER || stage === AgentStage.SECURITY;
-}

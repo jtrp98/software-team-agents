@@ -6,8 +6,6 @@ import { AgentStage, TaskLevel } from "../types.js";
 import { ApprovalDecisionError, ApprovalType } from "../gates/approval.js";
 import { createChatRelayChannel } from "../gates/chatRelayChannel.js";
 import { resolveHumanDecisionChannel } from "../gates/humanChannelConfig.js";
-import { createGithubAppChannel, GITHUB_APP_CHANNEL } from "../gates/githubAppChannel.js";
-import { FIXTURE_APP_ID, fixtureAppKeys, GithubFixture, type FixtureUser } from "../gates/githubAppChannel.testSupport.js";
 import { NoTrustedHumanChannelError, UNCONFIGURED_HUMAN_CHANNEL, UntrustedHumanDecisionError } from "../gates/humanDecision.js";
 import { testHumanVerifier, trustedCredential } from "../gates/humanDecision.testSupport.js";
 import { writeKnowledgeItem } from "../knowledge/knowledgeStore.js";
@@ -531,91 +529,5 @@ describe("durability", () => {
     } finally {
       reopened.close();
     }
-  });
-});
-
-describe("the github-app channel decides lane requests exactly as it decides task gates", () => {
-  const APPROVER: FixtureUser = { id: 1001, login: "approver-one", type: "User" };
-  const T0 = Date.parse("2026-01-01T00:00:00Z");
-  const at = (minutes: number) => new Date(T0 + minutes * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z");
-  const channel = (fixture: GithubFixture, approvers: Partial<Record<ApprovalType, readonly number[]>>) =>
-    createGithubAppChannel({ appId: FIXTURE_APP_ID, repository: { owner: fixture.owner, name: fixture.repo }, approvers, privateKey: fixtureAppKeys().privateKey, transport: fixture.transport });
-
-  it("announces the lane request, records the approver's comment, and the decision survives a restart", async () => {
-    const root = tmp();
-    writeApprovedKnowledge(root);
-    const dbFile = path.join(tmp("lane-db-"), "state.db");
-    const fixture = new GithubFixture();
-    const verifier = channel(fixture, { [ApprovalType.BA_SIGNOFF]: [APPROVER.id] });
-
-    const store = new SqliteTaskStore(dbFile);
-    let requestId: string;
-    try {
-      const service = new LaneDecisionService({ store, verifier, now: () => T0 });
-      const request = service.request(root, MODULE, "ba", "signoff");
-      requestId = request.requestId;
-      const published = await service.publish(requestId);
-      expect(published).toMatchObject({ channel: GITHUB_APP_CHANNEL, fresh: true });
-      const issue = fixture.issues.get(1)!;
-      expect(issue.title).toContain(requestId);
-      expect(issue.body).toContain(`Lane: \`ba\` (signoff)`);
-      expect(issue.body).toContain("REQ-003 v1");
-      expect(await service.publish(requestId)).toMatchObject({ fresh: false });
-    } finally {
-      store.close();
-    }
-
-    fixture.comment(1, `sta-approve: ${requestId}\nrequirements read end to end`, APPROVER, at(5));
-    const restarted = new SqliteTaskStore(dbFile);
-    try {
-      const service = new LaneDecisionService({ store: restarted, verifier: channel(fixture, { [ApprovalType.BA_SIGNOFF]: [APPROVER.id] }), now: () => T0 + 10 * 60_000 });
-      const { record } = await service.submit({ requestId });
-      expect(record.decision).toMatchObject({ approved: true, actor: { kind: "human", id: "github-user:1001" }, source: { channel: GITHUB_APP_CHANNEL } });
-      expect(record.decision?.decisionId).toMatch(/^github-comment:/);
-      expect(fixture.issues.get(1)?.state).toBe("closed");
-    } finally {
-      restarted.close();
-    }
-
-    const again = new SqliteTaskStore(dbFile);
-    try {
-      expect(loadGovernedKnowledge(root, again).kb.get("REQ-003")?.status).toBe("approved");
-    } finally {
-      again.close();
-    }
-  });
-
-  it("an approver of another gate (task deploy, or another lane) cannot sign this lane off", async () => {
-    const root = tmp();
-    writeApprovedKnowledge(root);
-    const fixture = new GithubFixture();
-    const verifier = channel(fixture, { [ApprovalType.DEPLOY]: [APPROVER.id], [ApprovalType.SA_SIGNOFF]: [APPROVER.id] });
-    const ledger = new MemoryTaskStore();
-    const service = new LaneDecisionService({ store: ledger, verifier, now: () => T0 });
-    const request = service.request(root, MODULE, "ba", "signoff");
-    await service.publish(request.requestId);
-    fixture.comment(1, `sta-approve: ${request.requestId}`, APPROVER, at(5));
-    const refused = await rejection(service.submit({ requestId: request.requestId }));
-    expect(refused).toBeInstanceOf(UntrustedHumanDecisionError);
-    expect(refused.message).toMatch(/not-an-approver/);
-    expect(ledger.loadLaneRequest(request.requestId)?.status).toBe("pending");
-  });
-
-  it("a comment naming one lane request is not a decision for another", async () => {
-    const root = tmp();
-    writeApprovedKnowledge(root);
-    writeApprovedKnowledge(root, "orders");
-    const fixture = new GithubFixture();
-    const verifier = channel(fixture, { [ApprovalType.BA_SIGNOFF]: [APPROVER.id] });
-    const ledger = new MemoryTaskStore();
-    const service = new LaneDecisionService({ store: ledger, verifier, now: () => T0 });
-    const first = service.request(root, MODULE, "ba", "signoff");
-    const second = service.request(root, "orders", "ba", "signoff");
-    await service.publish(first.requestId);
-    await service.publish(second.requestId);
-    fixture.comment(2, `sta-approve: ${first.requestId}`, APPROVER, at(5));
-    const refused = await rejection(service.submit({ requestId: second.requestId }));
-    expect(refused.message).toMatch(/other-request/);
-    expect(ledger.loadLaneRequest(second.requestId)?.status).toBe("pending");
   });
 });

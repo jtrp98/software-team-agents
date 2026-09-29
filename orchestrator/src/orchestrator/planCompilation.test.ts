@@ -194,16 +194,6 @@ describe("T-V8-017 — atomic whole-plan registration", () => {
     expect(fs.existsSync(path.join(root, ".workflow", "state.yaml"))).toBe(true);
   });
 
-  it("makes readiness come from the fixed DAG, not from a plan.md re-read", () => {
-    register();
-    expect(ledger.readiness(runId).ready).toEqual(["BE-004"]);
-    // Editing plan.md afterwards changes nothing about the frozen run.
-    fs.writeFileSync(path.join(root, "_docs", "module", "orders", "plan.md"), canonicalFixture);
-    expect(ledger.readiness(runId)).toEqual({
-      ready: ["BE-004"], waiting: [{ task_id: "FE-010", waiting_on: ["BE-004"] }], blocked: [], settled: [],
-    });
-  });
-
   it("selects an explicit task scope and orders it by the graph, not by the selection", () => {
     const result = register({ scope: { kind: "tasks", taskIds: ["FE-010", "BE-004"] } });
     expect(result.run.task_order).toEqual(["BE-004", "FE-010"]);

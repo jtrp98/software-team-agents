@@ -53,7 +53,7 @@ export interface HumanDecisionSubmission {
  */
 export interface ApprovalPublication {
   channel: string;
-  /** The channel's own locator for the announcement (github-app: `owner/repo#<issue>`). */
+  /** The channel's own locator for the announcement (chat-relay: the request ID). */
   ref: string;
   /** Where a person answers, when the channel has a page for it. */
   url: string | null;
@@ -90,8 +90,8 @@ export interface HumanDecisionVerifier {
    */
   verify<R extends HumanDecisionRequest>(request: R, submission: HumanDecisionSubmission, context: HumanDecisionContext): Promise<VerifiedDecisionFor<R>>;
   /**
-   * Called once the decision is committed (github-app: closes the Issue).
-   * Best effort — the decision is already durable; a failure here is reported,
+   * Called once the decision is committed. Best effort — the decision is
+   * already durable; a failure here is reported,
    * never rolled back into the ledger.
    */
   settle?(request: HumanDecisionRequest, decision: HumanDecisionRecord, publication: ApprovalPublication | null): Promise<void>;

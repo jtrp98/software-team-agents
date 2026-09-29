@@ -228,30 +228,12 @@ describe("T-V8-016 — idempotency and actionable conflicts", () => {
 
   it("names what is missing rather than returning an empty answer", () => {
     expect(() => ledger.projectTaskStatus(runId, "NOPE-1", "READY")).toThrow(LedgerNotFoundError);
-    expect(() => ledger.readiness("01HZZZZZZZZZZZZZZZZZZZZZZZ")).toThrow(LedgerNotFoundError);
   });
 });
 
-describe("T-V8-016 — readiness, checkpoints and read-through state", () => {
+describe("T-V8-016 — checkpoints and read-through state", () => {
   beforeEach(() => {
     store.transaction(() => { ledger.createRun(makeRun()); ledger.registerTasks(makeTasks()); });
-  });
-
-  it("answers readiness from the frozen DAG, not from a plan file", () => {
-    expect(ledger.readiness(runId)).toEqual({ ready: ["BE-004"], waiting: [{ task_id: "FE-010", waiting_on: ["BE-004"] }], blocked: [], settled: [] });
-    ledger.projectTaskStatus(runId, "BE-004", "READY");
-    ledger.projectTaskStatus(runId, "BE-004", "RUNNING");
-    ledger.projectTaskStatus(runId, "BE-004", "VERIFYING");
-    ledger.projectTaskStatus(runId, "BE-004", "CHECKPOINTED");
-    expect(ledger.readiness(runId)).toEqual({ ready: ["FE-010"], waiting: [], blocked: [], settled: ["BE-004"] });
-  });
-
-  it("treats a blocked upstream as unsatisfiable rather than skippable", () => {
-    ledger.projectTaskStatus(runId, "BE-004", "BLOCKED", { reason: "human gate" });
-    const readiness = ledger.readiness(runId);
-    expect(readiness.blocked).toEqual(["BE-004"]);
-    expect(readiness.ready).toEqual([]);
-    expect(readiness.waiting).toEqual([{ task_id: "FE-010", waiting_on: ["BE-004"] }]);
   });
 
   it("records a checkpoint once and reads retries/approvals through their own authority", () => {

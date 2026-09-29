@@ -28,6 +28,8 @@
   [`STANDARDS_MATRIX.md`](../STANDARDS_MATRIX.md) (maintainer-facing — ไม่ ship ลง payload)
 - Release checklist: เมื่อ release แตะ standards, policies, workflows หรือ role contracts ผู้ดูแลต้อง review
   `STANDARDS_MATRIX.md` ตาม cadence ที่หัวไฟล์ และแก้ matrix กับ `policies/standards.md` ใน edit เดียวกัน
+- บันทึก release + คู่มือ migration รายเวอร์ชัน → [`../RELEASE_NOTES.md`](../RELEASE_NOTES.md) — breaking
+  changes, migration order และ validation ต่อเวอร์ชัน (ใหม่สุดอยู่บนสุด)
 - Runtime support + routing → [`runtimes.md`](runtimes.md)
 - Guards + การวินิจฉัย → [`guards.md`](guards.md)
 - แก้ปัญหา → [`troubleshooting.md`](troubleshooting.md)

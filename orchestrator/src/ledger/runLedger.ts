@@ -195,14 +195,6 @@ export const LedgerEventSchema = z.strictObject({
 export type LedgerEvent = z.infer<typeof LedgerEventSchema>;
 export type NewLedgerEvent = z.input<typeof LedgerEventSchema>;
 
-export interface LedgerReadiness {
-  /** Frozen order, filtered to tasks whose dependencies are all settled. */
-  ready: string[];
-  waiting: Array<{ task_id: string; waiting_on: string[] }>;
-  blocked: string[];
-  settled: string[];
-}
-
 export class LedgerConflictError extends Error {
   constructor(message: string) {
     super(message);
@@ -273,7 +265,6 @@ export interface RunLedger {
     to: LedgerTaskStatus,
     options?: { reason?: string },
   ): LedgerTask;
-  readiness(runIdValue: string): LedgerReadiness;
 
   /** Write-once by `attempt_id`; a replay with identical bytes is accepted, a changed one refuses. */
   freezeAttempt(attempt: LedgerAttempt): void;

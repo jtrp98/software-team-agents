@@ -43,8 +43,8 @@ export const EVIDENCE_KINDS = [
   "scope-postflight",
   /**
    * V13 TASK-027 — where STA announced a pending approval request on its
-   * trusted channel (github-app: the Issue it opened). A decision is looked
-   * for only there, and the binding survives a restart.
+   * trusted channel (chat-relay: the request ID the Controller must present).
+   * A decision is looked for only there, and the binding survives a restart.
    */
   "approval-publication",
   /** A trusted human decision applied to a pending approval request. */
@@ -203,7 +203,7 @@ const ApprovalPublicationPayloadSchema = z.strictObject({
   requestId: z.string().min(1),
   type: z.enum(ApprovalType),
   channel: z.string().min(1),
-  /** The channel's own locator (github-app: `owner/repo#<issue>`). */
+  /** The channel's own locator (chat-relay: the request ID). */
   ref: z.string().min(1),
   url: z.string().min(1).nullable(),
   /** What the person was shown as the subject of the approval: the task's latest artifact digests at the time of asking. */

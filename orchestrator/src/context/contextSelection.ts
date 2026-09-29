@@ -4,7 +4,8 @@ import { ArtifactType } from "../artifacts/schemas.js";
 /**
  * Four context classes, each a behaviour that lives elsewhere in this codebase
  * (not a data structure of its own):
- *   MANDATORY — always assembled for a stage (buildPrompt header, this policy's
+ *   MANDATORY — always assembled for a stage (the packet header that
+ *     `buildPromptParts` renders, this policy's
  *     `reads`, status.md pointers).
  *   TASK_SPECIFIC — module docs sliced to the run (ContextManager/selectDocContext).
  *   ON_DEMAND — never preloaded, only pointed to (renderSlicedDocs), so a stage

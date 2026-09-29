@@ -3,7 +3,6 @@ import type { Finding } from "../artifacts/finding.js";
 import type { ApprovalRecord } from "../gates/approval.js";
 import { readFindingsForTask } from "../state/runtimeArtifacts.js";
 import type { SqliteTaskStore } from "../store/sqliteStore.js";
-import { taskGraphFromPlan } from "../graph/taskGraph.js";
 import {
   LedgerAmbiguityError,
   LedgerAttemptSchema,
@@ -16,14 +15,12 @@ import {
   type LedgerAttempt,
   type LedgerCheckpoint,
   type LedgerEvent,
-  type LedgerReadiness,
   type LedgerRun,
   type LedgerTask,
   type NewLedgerEvent,
   type RunLedger,
 } from "./runLedger.js";
 import {
-  SETTLED_TASK_STATUSES,
   TERMINAL_RUN_STATUSES,
   applyAttemptStatus,
   applyRunStatus,
@@ -195,38 +192,6 @@ export class SqliteRunLedger implements RunLedger {
       });
       return updated;
     });
-  }
-
-  /**
-   * Readiness from the frozen DAG plus ledger status — the single authority
-   * T-V8-017 requires. It deliberately reads no plan file: the plan the run
-   * froze is the one it walks, and a later edit to `plan.md` must force an
-   * explicit recompile, not quietly change which task runs next.
-   */
-  readiness(runId: string): LedgerReadiness {
-    const tasks = this.readTasks(runId);
-    if (tasks.length === 0) throw new LedgerNotFoundError("run", runId);
-    const graph = taskGraphFromPlan(
-      tasks.map((task) => ({
-        id: task.task_id,
-        owner: task.owner,
-        phase: task.phase,
-        dependsOn: task.depends_on,
-        produces: task.produces,
-        consumes: task.consumes,
-      })),
-    );
-    const settled = tasks.filter((task) => SETTLED_TASK_STATUSES.has(task.status)).map((task) => task.task_id);
-    const blocked = tasks.filter((task) => task.status === "BLOCKED").map((task) => task.task_id);
-    const ready: string[] = [];
-    const waiting: Array<{ task_id: string; waiting_on: string[] }> = [];
-    for (const task of tasks) {
-      if (SETTLED_TASK_STATUSES.has(task.status) || task.status === "BLOCKED") continue;
-      const waitingOn = graph.waitingOn(task.task_id, settled, blocked);
-      if (waitingOn.length === 0) ready.push(task.task_id);
-      else waiting.push({ task_id: task.task_id, waiting_on: waitingOn });
-    }
-    return { ready, waiting, blocked, settled };
   }
 
   // -- attempts ------------------------------------------------------------

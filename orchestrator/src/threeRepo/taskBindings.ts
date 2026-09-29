@@ -35,10 +35,6 @@ export interface TaskBindingValidationResult {
 
 export class TaskBindingError extends Error {}
 
-export function targetBindingsOf(task: Pick<PersistedTask, "targetBindings">): TargetBindings {
-  return task.targetBindings;
-}
-
 export function uniqueBoundTargetIds(bindings: TargetBindings): string[] {
   return [...new Set(bindings.targets.map((binding) => binding.target_id))];
 }

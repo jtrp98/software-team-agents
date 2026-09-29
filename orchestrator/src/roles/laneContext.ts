@@ -2,7 +2,7 @@ import { AgentStage } from "../types.js";
 import { KNOWLEDGE_KINDS, type KnowledgeKind } from "../knowledge/knowledgeModel.js";
 import type { KnowledgeQuery } from "../knowledge/knowledgeBase.js";
 import type { KnowledgeContext, RetrievedItem } from "../knowledge/knowledgeContext.js";
-import { canSeeKind, viewNameFor } from "../knowledge/roleView.js";
+import { canSeeKind } from "../knowledge/roleView.js";
 import { LANE_LABEL, type RoleLane, rolesInLane } from "./roleLane.js";
 
 /**
@@ -54,11 +54,6 @@ export function kindsForLane(lane: RoleLane): KnowledgeKind[] {
 
 export function laneCanSee(lane: RoleLane, kind: KnowledgeKind): boolean {
   return kindsForLane(lane).includes(kind);
-}
-
-/** The view name behind a lane, for a message that has to explain why something is not visible. */
-export function viewOfLane(lane: RoleLane): string {
-  return viewNameFor(rolesInLane(lane)[0]);
 }
 
 /**

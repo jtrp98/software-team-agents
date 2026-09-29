@@ -106,7 +106,7 @@ export const LaneApprovalRecordSchema = z
     decision: HumanDecisionRecordSchema.nullable(),
     /** Set exactly when status is withdrawn: what the request covered changed before anyone answered. */
     withdrawal: z.strictObject({ at: z.number(), reason: z.string().min(1) }).nullable(),
-    /** Where STA announced the request on its channel (github-app: the Issue). A decision is read only there. */
+    /** Where STA announced the request on its channel (chat-relay: the request ID). A decision is read only there. */
     publication: LanePublicationSchema.nullable(),
   })
   .superRefine((record, ctx) => {
