@@ -174,6 +174,38 @@ describe("Full pipeline integration", () => {
     expect(reloaded.retries.qa).toBe(1);
   });
 
+  it("TASK-025 rebuilds a fresh controller for every new-feature role and retains owner-linked evidence", async () => {
+    const taskId = "T-V13-FRESH-ROLES";
+    const store = openStore();
+    const classification = classifyTask({ isNewFeatureModuleOrProject: true, touchesBackend: true });
+    new Orchestrator(taskId, classification, { ...human, store });
+    const ran: AgentStage[] = [];
+    const executor = makeExecutor({});
+    let final: ReturnType<Orchestrator["status"]> | undefined;
+    for (let turn = 0; turn < 40; turn++) {
+      // No live Orchestrator object survives a step: each turn reloads the SQLite authority.
+      const controller = Orchestrator.resume(taskId, store, human);
+      const status = await controller.step((request) => {
+        ran.push(request.stage);
+        return executor(request);
+      });
+      if (status.kind === "WAITING_FOR_HUMAN") await decidePending(controller, true);
+      if (status.kind === "DEPLOYED" || status.kind === "BLOCKED") { final = status; break; }
+    }
+    expect(final?.kind).toBe("DEPLOYED");
+    const required = [AgentStage.BUSINESS_ANALYST, AgentStage.SYSTEM_ANALYST,
+      AgentStage.BACKEND_ENGINEER, AgentStage.REVIEWER, AgentStage.QA_ENGINEER];
+    for (const stage of required) expect(ran).toContain(stage);
+    const evidence = store.evidenceForTask(taskId);
+    const ids = new Set(evidence.map((record) => record.evidenceId));
+    expect(ids.size).toBe(evidence.length);
+    for (const stage of required) {
+      expect(evidence.some((record) => record.kind === "role-run" && record.stage === stage && record.role === stage), stage).toBe(true);
+      expect(evidence.some((record) => record.kind === "stage-completion" && record.stage === stage), stage).toBe(true);
+    }
+    expect(evidence.some((record) => record.kind === "task-completion" && record.refs.length > 0)).toBe(true);
+  });
+
   it("escalates to BLOCKED past the retry ceiling, and the block survives a crash — resuming doesn't quietly reset the retry count", async () => {
     const store = openStore();
     const classification = classifyTask({ isClearBugFix: true, touchesBackend: true });

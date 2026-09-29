@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { AgentStage } from "../types.js";
 import { approvalIsolationDenial } from "../cli/composition/approvalIsolation.js";
 import { AntigravityAdapter } from "./antigravityAdapter.js";
 import { ClaudeCodeAdapter, claudeIsolationInvocationFor, claudeIsolationRunDirs } from "./claudeCodeAdapter.js";
@@ -48,6 +49,25 @@ describe("TASK-027 a1 approval isolation", () => {
           .toContain("APPROVAL_ISOLATION_UNAVAILABLE");
       }
     }
+  });
+
+  it("TASK-025 refuses Antigravity, OpenCode and ZCode for every governed role before spawn", () => {
+    const { workspace, approval, req } = fixture();
+    let spawns = 0;
+    const neverSpawn = () => { spawns++; throw new Error("must not spawn"); };
+    const runtimes = [
+      new AntigravityAdapter({ projectRoot: workspace, spawnSync: neverSpawn }),
+      new OpenCodeAdapter({ projectRoot: workspace, spawnSync: neverSpawn }),
+      new ZcodeAdapter({ projectRoot: workspace, spawnSync: neverSpawn }),
+    ];
+    const roles = Object.values(AgentStage).filter((stage) => stage !== AgentStage.HUMAN);
+    for (const runtime of runtimes) {
+      for (const role of roles) {
+        expect(approvalIsolationDenial(runtime, { ...req, role }, approval), `${runtime.id}/${role}`)
+          .toContain("APPROVAL_ISOLATION_UNAVAILABLE");
+      }
+    }
+    expect(spawns).toBe(0);
   });
 
   it("accepts Codex only with a native approval-channel read/write deny and disjoint write grants", () => {

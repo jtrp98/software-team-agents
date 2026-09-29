@@ -2190,6 +2190,27 @@ describe("createRuntimeExecutor — contract dispatch preflight (V13 TASK-005)",
     expect(recordDispatch).not.toHaveBeenCalled();
   });
 
+  it("TASK-025 runs the a1 preflight before dispatch for every executable role", async () => {
+    const root = tmpProject();
+    const approval = path.join(root, "approval-channel");
+    fs.mkdirSync(approval);
+    const stages = Object.values(AgentStage).filter((stage) => stage !== AgentStage.HUMAN);
+    for (const id of ["antigravity", "opencode", "zcode"]) {
+      for (const stage of stages) {
+        const runtime = new MockRuntimeAdapter({ id });
+        const recordDispatch = vi.fn();
+        const result = await createRuntimeExecutor({
+          runtime, projectRoot: root, moduleName: () => "sales-crm", guards: () => NO_GUARDS,
+          approvalIsolationPreflight: (adapter, request) => approvalIsolationDenial(adapter, request, approval),
+        })({ stage, taskId: `T-A1-${id}-${stage}`, context: [], recordDispatch });
+        expect(result.outcome.failure_reason, `${id}/${stage}`).toContain("APPROVAL_ISOLATION_UNAVAILABLE");
+        expect(runtime.requests, `${id}/${stage}`).toEqual([]);
+        expect(runtime.attempts.size, `${id}/${stage}`).toBe(0);
+        expect(recordDispatch, `${id}/${stage}`).not.toHaveBeenCalled();
+      }
+    }
+  });
+
   it("refuses dispatch, before any guard resolution, when the on-disk contract disagrees with the registry", async () => {
     const root = tmpProject();
     const contractFile = path.join(root, "contracts", "backend-engineer.yaml");

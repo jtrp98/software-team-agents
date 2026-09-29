@@ -10,6 +10,7 @@ import { laneContext, laneGet } from "../../roles/laneContext.js";
 import {
   LaneActRefusedError,
   LaneDecisionService,
+  canonicalKnowledgeRoot,
   laneItemRefs,
   laneWorkspaces,
   loadGovernedKnowledge,
@@ -35,11 +36,8 @@ import { APPROVE_EXIT_ANNOUNCED, APPROVE_EXIT_NO_TRUSTED_CHANNEL, APPROVE_EXIT_R
  * `signoff` and `ack` use the production trusted channel — the same one
  * `sta approve` uses. The first call opens a pending lane request with an
  * STA-minted id over the exact current `{id, version, digest}` of the items
- * and announces it (github-app: an Issue); a later call with `--request`
- * reads the approver's `sta-approve|sta-reject: <request-id>` comment. With no
- * trusted channel configured the request stays pending and nothing is
- * recorded. Nothing on the command line identifies the person: `--by` is
- * refused, and `--yes`/`--no` only state what the caller expects.
+ * and announces it to the Controller. After the human answers in chat, the
+ * Controller relays it here with the exact request and chat reference.
  */
 
 const DECISION_ACTS: Record<string, LaneAction> = { signoff: "signoff", ack: "ack" };
@@ -73,8 +71,15 @@ async function runLaneDecision(
   const requestId = flagValue(rest, "--request");
   const yes = rest.includes("--yes");
   const no = rest.includes("--no");
-  if (yes && no) throw new CliUsageError(`roles ${act}: --yes and --no are mutually exclusive`);
   const note = flagValue(rest, "--note");
+  if (yes && no) throw new CliUsageError(`roles ${act}: --yes and --no are mutually exclusive`);
+  const conversationId = flagValue(rest, "--chat-conversation-id");
+  const messageId = flagValue(rest, "--chat-message-id");
+  const actorId = flagValue(rest, "--chat-actor-id");
+  const messageText = flagValue(rest, "--chat-text");
+  if ((yes || no) && (!requestId || [conversationId, messageId, actorId, messageText].some((value) => !value?.trim()))) {
+    throw new CliUsageError(`roles ${act}: Controller relay requires --request and all four --chat-* fields`);
+  }
   const knowledgeRoot = flagValue(rest, "--knowledge-root") ?? projectRoot;
 
   const store = new SqliteTaskStore(flagValue(rest, "--state-db") ?? defaultStateDbPath(projectRoot));
@@ -90,10 +95,7 @@ async function runLaneDecision(
           throw new NoTrustedHumanChannelError(request.requestId);
         }
         console.log(`[orchestrator] request ${request.requestId} is announced on ${publication.channel}: ${publication.url ?? publication.ref}`);
-        console.log(
-          `[orchestrator] an authorized approver answers there with a new comment \`sta-approve: ${request.requestId}\` or ` +
-            `\`sta-reject: ${request.requestId}\`; then run \`sta roles ${act} ${lane} --module ${moduleFlag} --request ${request.requestId}\`.`,
-        );
+        console.log("[orchestrator] show this request to the human in chat; then relay the answer with --request, --yes or --no and its chat reference.");
         return APPROVE_EXIT_ANNOUNCED;
       }
 
@@ -107,22 +109,20 @@ async function runLaneDecision(
       }
       console.log(`[orchestrator] ${describeRequest(existing)}`);
       const publication = await service.publish(requestId);
-      if (publication?.fresh) {
-        console.log(`[orchestrator] request ${requestId} is announced on ${publication.channel}: ${publication.url ?? publication.ref}; an authorized approver answers there first.`);
+      if (!publication) throw new NoTrustedHumanChannelError(requestId);
+      if (!yes && !no) {
+        console.log(`[orchestrator] request ${requestId} is pending on ${publication.channel}; show it to the human in chat first.`);
         return APPROVE_EXIT_ANNOUNCED;
       }
-      const { record, settleError } = await service.submit({
+      const { record: decided, settleError } = await service.submit({
         requestId,
-        ...(yes || no ? { approved: yes } : {}),
+        approved: yes,
         ...(note === undefined ? {} : { note }),
+        credential: { kind: "controller-chat-relay", conversationId, messageId, actorId, messageText },
       });
       if (settleError) console.error(`[orchestrator] decision recorded, but the channel could not settle its announcement: ${settleError}`);
-      const decision = record.decision!;
-      console.log(
-        decision.approved
-          ? `[orchestrator] ${act === "signoff" ? "signed off" : "acknowledged"} ${LANE_LABEL[lane]} for ${moduleFlag} (${decision.actor.id} via ${decision.source.channel}).`
-          : `[orchestrator] rejected ${requestId} (${decision.actor.id} via ${decision.source.channel}) — recorded.`,
-      );
+      const decision = decided.decision!;
+      console.log(`[orchestrator] ${decision.approved ? (act === "signoff" ? "signed off" : "acknowledged") : "rejected"} ${requestId} (${decision.actor.id} via ${decision.source.channel}).`);
       return decision.approved ? 0 : 3;
     } catch (e) {
       if (e instanceof NoTrustedHumanChannelError) {
@@ -242,7 +242,7 @@ export async function runRolesVerb(rest: string[], defaultProjectRoot: string): 
   const args = positionalArgs(rest);
   if (rest.includes("--by") || rest.includes("--as")) {
     throw new CliUsageError(
-      `roles: ${rest.includes("--by") ? "--by" : "--as"} is not an identity — a lane decision is authenticated by the trusted human channel, never by a name on the command line`,
+      `roles: ${rest.includes("--by") ? "--by" : "--as"} is not an identity or chat reference — a lane decision needs the pending request and Controller-relayed chat fields`,
     );
   }
   if (args[0] === "approve") {
@@ -256,7 +256,30 @@ export async function runRolesVerb(rest: string[], defaultProjectRoot: string): 
   const act = DECISION_ACTS[args[0] ?? ""];
   if (act) return runLaneDecision(act, args, rest, projectRoot, moduleFlag);
 
-  const SUB_COMMANDS = ["inbox", "impact", "context"];
+  if (args[0] === "history") {
+    if (!moduleFlag) throw new CliUsageError("roles history: --module <name> is required");
+    const store = new SqliteTaskStore(flagValue(rest, "--state-db") ?? defaultStateDbPath(projectRoot));
+    try {
+      const root = canonicalKnowledgeRoot(flagValue(rest, "--knowledge-root") ?? projectRoot);
+      const records = store.laneRequests(root, moduleFlag);
+      if (rest.includes("--json")) {
+        console.log(JSON.stringify(records, null, 2));
+      } else {
+        console.log(`[orchestrator] ${records.length} lane request(s) for ${moduleFlag}:`);
+        for (const record of records) {
+          const items = record.scope.items.map((item) => `${item.id}@${item.version}:${item.digest}`).join(", ");
+          const decision = record.decision;
+          console.log(`  ${record.requestId} ${record.scope.lane} ${record.scope.action} ${record.status} [${items}]`);
+          if (decision) console.log(`    ${decision.source.channel} ${decision.source.evidenceRef} ${decision.actor.id} ${decision.decidedAt} ${decision.note ?? ""}`);
+        }
+      }
+      return 0;
+    } finally {
+      store.close();
+    }
+  }
+
+  const SUB_COMMANDS = ["inbox", "impact", "context", "history"];
   if (args.length > 0 && !SUB_COMMANDS.includes(args[0])) {
     throw new CliUsageError(`roles: unknown sub-command "${args[0]}" — one of signoff, ack, ${SUB_COMMANDS.join(", ")}`);
   }

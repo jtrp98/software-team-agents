@@ -9,6 +9,7 @@ import { Orchestrator } from "../orchestrator/orchestrator.js";
 import { ApprovalType } from "./approval.js";
 import { NoTrustedHumanChannelError, UNCONFIGURED_HUMAN_CHANNEL, type HumanDecisionVerifier } from "./humanDecision.js";
 import { GITHUB_APP_CHANNEL } from "./githubAppChannel.js";
+import { CHAT_RELAY_CHANNEL } from "./chatRelayChannel.js";
 import { FIXTURE_APP_ID, fixtureAppKeys, GithubFixture } from "./githubAppChannel.testSupport.js";
 import * as mocked from "./humanChannelConfig.js";
 import { APPROVAL_CHANNEL_DIR_NAME } from "../agents/pathPermissions.js";
@@ -58,6 +59,9 @@ async function refusalOf(verifier: HumanDecisionVerifier): Promise<Error> {
 }
 
 describe("approval-channel configuration (V13 TASK-027)", () => {
+  it("production resolves only the Controller chat relay, without reading App configuration", () => {
+    expect(actual.resolveHumanDecisionChannel().channel).toBe(CHAT_RELAY_CHANNEL);
+  });
   it("lives in one fixed directory under the OS account home; HOME/USERPROFILE cannot move it", () => {
     const expected = path.join(os.userInfo().homedir, APPROVAL_CHANNEL_DIR_NAME);
     const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE, HOMEDRIVE: process.env.HOMEDRIVE, HOMEPATH: process.env.HOMEPATH };

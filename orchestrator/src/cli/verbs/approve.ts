@@ -30,14 +30,9 @@ export const APPROVE_EXIT_ANNOUNCED = 4;
 /**
  * `approve <task-id> --request <request-id> [--yes|--no] [--note <text>]`
  *
- * Asks the task's trusted human channel for the decision on one exact pending
- * request. Nothing here identifies the person: no environment variable, OS
- * user name or flag is accepted as an actor. With the github-app channel the
- * first call opens the request's Issue (exit 4); a later call reads the
- * approver's `sta-approve|sta-reject: <request-id>` comment from GitHub. The
- * answer is the comment's: `--yes`/`--no` only states what the caller
- * expects, and a mismatch is refused. With no trusted channel configured the
- * submission is refused and the request stays pending.
+ * Shows one pending request or records the Controller's relay of the Human's
+ * chat answer. STA checks the pending request and requires chat reference
+ * fields; it cannot authenticate their origin independently.
  */
 export async function runApproveVerb(rest: string[], defaultProjectRoot: string): Promise<number> {
   const projectRoot = flagValue(rest, "--project-root") ?? defaultProjectRoot;
@@ -75,34 +70,38 @@ export async function runApproveVerb(rest: string[], defaultProjectRoot: string)
       throw new CliUsageError(`approve: --request <request-id> is required; the pending request is ${pending.requestId}`);
     }
     if (yes && no) throw new CliUsageError("approve: --yes and --no are mutually exclusive");
+    const conversationId = flagValue(rest, "--chat-conversation-id");
+    const messageId = flagValue(rest, "--chat-message-id");
+    const actorId = flagValue(rest, "--chat-actor-id");
+    const messageText = flagValue(rest, "--chat-text");
+    if ((yes || no) && [conversationId, messageId, actorId, messageText].some((value) => !value?.trim())) {
+      throw new CliUsageError("approve: Controller relay requires --chat-conversation-id, --chat-message-id, --chat-actor-id and --chat-text");
+    }
 
     try {
       if (requestId === pending.requestId) {
         const publication = await orchestrator.publishPendingApproval();
-        if (publication) {
-          console.log(`[orchestrator] request ${publication.requestId} is announced on ${publication.channel}: ${publication.url ?? publication.ref}`);
-          if (publication.fresh) {
-            console.log(
-              `[orchestrator] an authorized approver answers there with a new comment \`sta-approve: ${requestId}\` or \`sta-reject: ${requestId}\`; ` +
-                "run this command again afterwards.",
-            );
-            return APPROVE_EXIT_ANNOUNCED;
-          }
+        if (!publication) throw new NoTrustedHumanChannelError(requestId);
+        console.log(`[orchestrator] request ${publication.requestId} is announced on ${publication.channel}: ${publication.url ?? publication.ref}`);
+        if (!yes && !no) {
+          console.log("[orchestrator] show this request to the human in chat, then relay the answer with --yes or --no and its chat reference.");
+          return APPROVE_EXIT_ANNOUNCED;
         }
+        const { decision, settleError } = await orchestrator.submitHumanDecision({
+          requestId,
+          approved: yes,
+          ...(note === undefined ? {} : { note }),
+          credential: {
+            kind: "controller-chat-relay",
+            conversationId, messageId, actorId, messageText,
+          },
+        });
+        registry.refreshStateView();
+        if (settleError) console.error(`[orchestrator] decision recorded, but the channel could not settle its announcement: ${settleError}`);
+        console.log(`[orchestrator] ${decision.approved ? "approved" : "rejected"} ${requestId} (${decision.actor.id} via ${decision.source.channel}).`);
+        return decision.approved ? 0 : 3;
       }
-      const { decision, settleError } = await orchestrator.submitHumanDecision({
-        requestId,
-        ...(yes || no ? { approved: yes } : {}),
-        ...(note === undefined ? {} : { note }),
-      });
-      registry.refreshStateView();
-      if (settleError) console.error(`[orchestrator] decision recorded, but the channel could not settle its announcement: ${settleError}`);
-      console.log(
-        decision.approved
-          ? `[orchestrator] approved ${requestId} (${decision.actor.id} via ${decision.source.channel}).`
-          : `[orchestrator] rejected ${requestId} (${decision.actor.id} via ${decision.source.channel}) — recorded, will not be asked again on resume.`,
-      );
-      return decision.approved ? 0 : 3;
+      throw new ApprovalDecisionError("unknown-request", `pending request is ${pending.requestId}, not ${requestId}`);
     } catch (e) {
       if (e instanceof NoTrustedHumanChannelError) {
         console.error(`[orchestrator] refused: ${e.message}`);

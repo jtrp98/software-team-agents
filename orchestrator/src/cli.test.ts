@@ -13,7 +13,10 @@ import { defaultProjectRoot } from "./agents/agentContract.js";
 import { classifyTask } from "./classification/taskClassifier.js";
 import { SqliteTaskStore } from "./store/sqliteStore.js";
 import { TaskRegistry } from "./orchestrator/taskRegistry.js";
-import { APPROVE_EXIT_NO_TRUSTED_CHANNEL, APPROVE_EXIT_REFUSED } from "./cli/verbs/approve.js";
+import { APPROVE_EXIT_ANNOUNCED, APPROVE_EXIT_NO_TRUSTED_CHANNEL, APPROVE_EXIT_REFUSED } from "./cli/verbs/approve.js";
+import { createChatRelayChannel } from "./gates/chatRelayChannel.js";
+import { resolveHumanDecisionChannel } from "./gates/humanChannelConfig.js";
+import { UNCONFIGURED_HUMAN_CHANNEL } from "./gates/humanDecision.js";
 import { defaultStateDbPath, defaultStateViewPath } from "./store/stateView.js";
 import { acquireTaskLock, releaseTaskLock } from "./concurrency/taskLock.js";
 import { Environment } from "./environment/environment.js";
@@ -717,12 +720,11 @@ describe("T31 verbs — run/status/approve/retry/resume/pause/cancel", () => {
       process.env.USERNAME = "definitely-a-human";
       const args = ["approve", "T-DEPLOY", "--project-root", dir];
       await expect(runCli([...args, "--yes"], dir)).rejects.toThrow(/--request <request-id> is required/);
-      expect(await runCli([...args, "--request", requestId, "--yes"], dir)).toBe(APPROVE_EXIT_NO_TRUSTED_CHANNEL);
-      expect(await runCli([...args, "--request", requestId, "--no"], dir)).toBe(APPROVE_EXIT_NO_TRUSTED_CHANNEL);
-      // V13 TASK-027: the answer can be left to the channel — still closed without one.
+      await expect(runCli([...args, "--request", requestId, "--yes"], dir)).rejects.toThrow(/Controller relay requires/);
+      await expect(runCli([...args, "--request", requestId, "--no"], dir)).rejects.toThrow(/Controller relay requires/);
       expect(await runCli([...args, "--request", requestId], dir)).toBe(APPROVE_EXIT_NO_TRUSTED_CHANNEL);
       await expect(runCli([...args, "--request", requestId, "--yes", "--no"], dir)).rejects.toThrow(/mutually exclusive/);
-      expect(await runCli([...args, "--request", "apr_ffffffffffffffffffffffffffffffff", "--yes"], dir)).toBe(APPROVE_EXIT_REFUSED);
+      expect(await runCli([...args, "--request", "apr_ffffffffffffffffffffffffffffffff"], dir)).toBe(APPROVE_EXIT_REFUSED);
 
       const reopened = new SqliteTaskStore(defaultStateDbPath(dir));
       const ledger = reopened.loadTask("T-DEPLOY")!.approvals;
@@ -733,6 +735,36 @@ describe("T31 verbs — run/status/approve/retry/resume/pause/cancel", () => {
     } finally {
       if (previousUser === undefined) delete process.env.USERNAME;
       else process.env.USERNAME = previousUser;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("Controller relays a bubble-chat answer through sta approve, and audit survives restart", async () => {
+    const dir = tmpDir();
+    vi.mocked(resolveHumanDecisionChannel).mockReturnValue(createChatRelayChannel());
+    try {
+      const store = new SqliteTaskStore(defaultStateDbPath(dir));
+      const registry = new TaskRegistry({ stageEntryGuard: ALLOW_EVERY_STAGE_TEST_GUARD, store, stateViewPath: defaultStateViewPath(dir) });
+      const orch = registry.create({ taskId: "T-CHAT-DEPLOY", classification: classifyTask({ isProductionDeployOrMigration: true }) });
+      expect((await orch.step(() => ({ outcome: { tokens: 1, cost: 0, result: "PASS" } }))).kind).toBe("WAITING_FOR_HUMAN");
+      const requestId = orch.pendingApprovalRequest()!.requestId;
+      registry.close();
+
+      const args = ["approve", "T-CHAT-DEPLOY", "--project-root", dir, "--request", requestId];
+      expect(await runCli(args, dir)).toBe(APPROVE_EXIT_ANNOUNCED);
+      await expect(runCli([...args, "--yes"], dir)).rejects.toThrow(/Controller relay requires/);
+      const relay = ["--chat-conversation-id", "conv-1", "--chat-message-id", "msg-1", "--chat-actor-id", "human-1", "--chat-text", "I approve this deploy"];
+      expect(await runCli([...args, "--yes", ...relay], dir)).toBe(0);
+      const reopened = new SqliteTaskStore(defaultStateDbPath(dir));
+      expect(reopened.loadTask("T-CHAT-DEPLOY")?.approvals[0]).toMatchObject({
+        status: "approved",
+        decision: { source: { channel: "chat-relay", evidenceRef: "chat:conv-1/msg-1" }, note: "I approve this deploy" },
+      });
+      expect(reopened.eventsForTask("T-CHAT-DEPLOY").map((event) => event.type)).toContain("APPROVAL_DECIDED");
+      reopened.close();
+      expect(await runCli([...args, "--yes", ...relay], dir)).toBe(1);
+    } finally {
+      vi.mocked(resolveHumanDecisionChannel).mockReturnValue(UNCONFIGURED_HUMAN_CHANNEL);
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });

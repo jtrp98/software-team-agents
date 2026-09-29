@@ -165,8 +165,8 @@ export function describeEvent(type: string, payload: Record<string, unknown>): A
       const approved = payload["approved"] === true;
       const approvalType = str(payload, "type");
       return {
-        // The one event a person, not the pipeline, is the author of — as the
-        // trusted channel authenticated them.
+        // The recorded human answer. In chat-relay mode the actor ID is
+        // Controller-reported and is not independently authenticated by STA.
         actor: str(payload, "actorId") ?? HUMAN_ACTOR,
         reason: str(payload, "note"),
         input: str(payload, "requestId"),

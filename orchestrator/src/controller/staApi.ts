@@ -67,9 +67,8 @@ export interface SemanticRequiredGate {
   reason: string;
   prompt: string;
   /**
-   * Where STA announced the request on its trusted channel (github-app: the
-   * Issue a person answers on), from persisted evidence. Null until STA has
-   * published it. A link to follow, never a way to answer.
+   * Pending request reference for Controller presentation in chat, from
+   * persisted evidence. Null until STA has published it.
    */
   announcement: { channel: string; ref: string; url: string | null } | null;
 }
@@ -207,10 +206,9 @@ export interface SemanticApproveResponse {
 }
 
 /**
- * A person's lane sign-off or acknowledgement (V13 TASK-028), through the
- * same trusted channel `approve` uses. Without `requestId`, STA opens (or
- * reuses) the pending lane request over the exact current items and
- * announces it; with it, STA reads the decision from the channel.
+ * A person's lane sign-off or acknowledgement (V13 TASK-028). Without
+ * requestId, STA opens the pending lane request over the current items for
+ * Controller presentation; with it, Controller relays the chat answer.
  */
 export interface SemanticLaneDecisionParams {
   module: string;
@@ -235,7 +233,7 @@ export interface SemanticLaneDecisionResponse {
   /** What the request covers, as STA recorded it. */
   items?: readonly { id: string; version: number }[];
   approved?: boolean;
-  /** Where STA announced the request; a link to follow, never a way to answer. */
+  /** The request reference STA gave the Controller for presentation in chat. */
   announcement?: { channel: string; ref: string; url: string | null } | null;
   code?: string;
   denialReason?: string;
@@ -660,15 +658,11 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
     },
 
     async approve(params: SemanticApproveParams): Promise<SemanticApproveResponse> {
-      // 1. Controller cannot approve as Human
-      if (params.caller?.kind === "controller") {
+      // The Controller relays an explicit chat answer. The verifier requires a
+      // message reference; the pending request and ledger remain STA-owned.
+      if (params.caller?.kind !== "controller") {
         throw new UntrustedHumanDecisionError(
-          "Controller cannot approve as Human: approval gates require trusted human authority.",
-        );
-      }
-      if (!params.caller || params.caller.kind !== "human") {
-        throw new UntrustedHumanDecisionError(
-          `Approval actor must be human; got ${params.caller?.kind ?? "unspecified"}`,
+          `Chat approval must be relayed by Controller; got ${params.caller?.kind ?? "unspecified"}`,
         );
       }
 
@@ -695,8 +689,8 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
       }
 
       try {
-        // The channel announces the question before anyone can answer it; a
-        // fresh announcement means no comment can exist yet.
+        // A fresh request must be presented to the human before the Controller
+        // can relay an answer on a later call.
         const publication = await orch.publishPendingApproval();
         if (publication?.fresh) {
           return {
@@ -739,12 +733,8 @@ export function createStaApi(options: StaApiOptions = {}): StaApi {
     },
 
     async laneDecision(params: SemanticLaneDecisionParams): Promise<SemanticLaneDecisionResponse> {
-      // Same caller boundary as approve: the Controller never answers for a person.
-      if (params.caller?.kind === "controller") {
-        throw new UntrustedHumanDecisionError("Controller cannot sign off or acknowledge a lane: lane decisions require trusted human authority.");
-      }
-      if (!params.caller || params.caller.kind !== "human") {
-        throw new UntrustedHumanDecisionError(`Lane decision actor must be human; got ${params.caller?.kind ?? "unspecified"}`);
+      if (params.caller?.kind !== "controller") {
+        throw new UntrustedHumanDecisionError(`Chat lane decision must be relayed by Controller; got ${params.caller?.kind ?? "unspecified"}`);
       }
       const base = { module: params.module, lane: params.lane, action: params.action };
       const lanes = new LaneDecisionService({ store, verifier: humanDecisionVerifier, now });

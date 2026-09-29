@@ -7,10 +7,11 @@ import { APPROVAL_CHANNEL_DIR_NAME } from "../agents/pathPermissions.js";
 import { ApprovalType } from "./approval.js";
 import { createGithubAppChannel, type GithubTransport } from "./githubAppChannel.js";
 import { UNCONFIGURED_HUMAN_CHANNEL, unconfiguredHumanChannel, type HumanDecisionVerifier } from "./humanDecision.js";
+import { createChatRelayChannel } from "./chatRelayChannel.js";
 
 /**
- * Where the human-owned approval-channel configuration lives, and how STA
- * composes its production trusted channel from it (V13 TASK-027).
+ * Legacy GitHub App fixture loader and the sandbox's protected directory.
+ * Production resolves only the Controller chat relay (V13 TASK-027 amendment).
  *
  * The directory is fixed: `<account home>/.sta-approval-channel/`, with the
  * home taken from the OS account database (`os.userInfo()`), never from
@@ -26,9 +27,8 @@ import { UNCONFIGURED_HUMAN_CHANNEL, unconfiguredHumanChannel, type HumanDecisio
  *                                 "approvers": { "deploy": [<github user id>], … } }
  *   github-app.private-key.pem  the App's private key, as GitHub issued it
  *
- * No configuration means `UNCONFIGURED_HUMAN_CHANNEL`; a broken one (bad
- * JSON, unknown field, missing or unreadable key) is a closed channel that
- * says why. Neither ever falls back to another channel.
+ * The fixture loader below is retained only for historical tests until the
+ * TASK-026 dead-code cleanup. Production never calls it or reads App files.
  */
 
 export const GITHUB_APP_CONFIG_FILE = "github-app.json";
@@ -56,17 +56,10 @@ export interface ChannelLoadOptions {
 }
 
 /**
- * The production trusted channel. Every composition that builds a task
- * registry calls this; nothing else constructs a channel outside tests.
+ * The sole production channel. No environment/configuration chooses another.
  */
 export function resolveHumanDecisionChannel(): HumanDecisionVerifier {
-  let dir: string;
-  try {
-    dir = approvalChannelDir();
-  } catch (e) {
-    return unconfiguredHumanChannel(`the OS account home directory could not be resolved: ${e instanceof Error ? e.message : String(e)}`);
-  }
-  return loadHumanDecisionChannelFrom(dir);
+  return createChatRelayChannel();
 }
 
 /** Loads the channel from `dir`. Exported for fixture tests; production passes only `approvalChannelDir()`. */

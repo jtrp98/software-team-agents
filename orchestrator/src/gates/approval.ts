@@ -8,8 +8,10 @@ import { TaskState } from "../types.js";
  * Every question STA asks is a pending request with an immutable `requestId`
  * and an immutable scope (task, type, guarded edge). A decision is accepted
  * only when it names that exact pending request, matches its scope, carries a
- * decision id never seen before in this ledger, and was produced by a trusted
- * human channel (`humanDecision.ts`). There is no other way to move a request
+ * decision id never seen before in this ledger, and was produced by the
+ * configured human-decision channel (`humanDecision.ts`). In chat-relay mode
+ * the Controller-reported actor/message are not independently authenticated.
+ * There is no other way to move a request
  * out of `pending` except `withdrawApproval`, which records that STA itself
  * found the gate discharged by evidence — it never records a human "yes".
  *
@@ -72,7 +74,7 @@ export const HumanDecisionRecordSchema = z.strictObject({
   decisionId: z.string().min(1),
   approved: z.boolean(),
   actor: z.strictObject({ kind: z.literal("human"), id: z.string().min(1) }),
-  /** Which trusted channel authenticated the actor, and the channel's own reference for that proof. */
+  /** Channel and reference; a chat-relay reference is a Controller assertion, not independent identity proof. */
   source: z.strictObject({ channel: z.string().min(1), evidenceRef: z.string().min(1) }),
   decidedAt: z.number(),
   /** What they said beyond yes/no. The reason a rejection is actionable rather than just a stop. */

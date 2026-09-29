@@ -1,9 +1,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { AgentStage, TaskLevel } from "../types.js";
 import { ApprovalDecisionError, ApprovalType } from "../gates/approval.js";
+import { createChatRelayChannel } from "../gates/chatRelayChannel.js";
+import { resolveHumanDecisionChannel } from "../gates/humanChannelConfig.js";
 import { createGithubAppChannel, GITHUB_APP_CHANNEL } from "../gates/githubAppChannel.js";
 import { FIXTURE_APP_ID, fixtureAppKeys, GithubFixture, type FixtureUser } from "../gates/githubAppChannel.testSupport.js";
 import { NoTrustedHumanChannelError, UNCONFIGURED_HUMAN_CHANNEL, UntrustedHumanDecisionError } from "../gates/humanDecision.js";
@@ -13,6 +15,7 @@ import { KnowledgeBase } from "../knowledge/knowledgeBase.js";
 import { checkRoleLaneEntry } from "../orchestrator/stageGuards.js";
 import { LANE_FIXTURE_MODULE as MODULE, LANE_FIXTURE_NOW as NOW, decideLane, writeApprovedKnowledge, writeSignedOffHandoffs } from "../orchestrator/stageGuards.testSupport.js";
 import { createStaApi } from "../controller/staApi.js";
+import { runRolesVerb } from "../cli/verbs/roles.js";
 import { MemoryTaskStore } from "../store/memoryStore.js";
 import Database from "../store/sqliteDatabase.js";
 import { SqliteTaskStore } from "../store/sqliteStore.js";
@@ -257,17 +260,17 @@ describe("who may decide", () => {
     expect(ledger.loadLaneRequest(request.requestId)?.status).toBe("pending");
   });
 
-  it("the Controller API refuses a Controller or agent caller, and fails closed with no channel", async () => {
+  it("the Controller API refuses agent callers and fails closed with no channel", async () => {
     const root = tmp();
     writeApprovedKnowledge(root);
     const store = new MemoryTaskStore();
     const api = createStaApi({ projectRoot: root, store, humanDecisionVerifier: UNCONFIGURED_HUMAN_CHANNEL });
     try {
-      for (const caller of [{ kind: "controller" }, { kind: "agent" }, undefined]) {
+      for (const caller of [{ kind: "agent" }, undefined]) {
         await expect(api.laneDecision({ module: MODULE, lane: "ba", action: "signoff", ...(caller ? { caller } : {}) })).rejects.toThrow(UntrustedHumanDecisionError);
       }
       expect(store.laneRequests(root, MODULE)).toEqual([]);
-      const closed = await api.laneDecision({ module: MODULE, lane: "ba", action: "signoff", caller: { kind: "human" } });
+      const closed = await api.laneDecision({ module: MODULE, lane: "ba", action: "signoff", caller: { kind: "controller" } });
       expect(closed).toMatchObject({ ok: false, code: "no-trusted-channel" });
       expect(store.laneRequests(root, MODULE).map((r) => r.status)).toEqual(["pending"]);
     } finally {
@@ -285,7 +288,7 @@ describe("who may decide", () => {
         module: MODULE,
         lane: "ba",
         action: "signoff",
-        caller: { kind: "human" },
+        caller: { kind: "controller" },
         submission: { approved: true, credential: trustedCredential() },
       });
       expect(decided).toMatchObject({ ok: true, approved: true });
@@ -293,6 +296,80 @@ describe("who may decide", () => {
       expect(loadGovernedKnowledge(root, store).kb.get("REQ-003")?.status).toBe("approved");
     } finally {
       api.close();
+    }
+  });
+
+  it("accepts a Controller chat relay for the exact lane items after presenting the request", async () => {
+    const root = tmp();
+    writeApprovedKnowledge(root);
+    const store = new MemoryTaskStore();
+    const api = createStaApi({ projectRoot: root, store, humanDecisionVerifier: createChatRelayChannel() });
+    try {
+      const asked = await api.laneDecision({ module: MODULE, lane: "ba", action: "signoff", caller: { kind: "controller" } });
+      expect(asked).toMatchObject({ ok: false, code: "announced", announcement: { channel: "chat-relay" } });
+      const answer = await api.laneDecision({
+        module: MODULE, lane: "ba", action: "signoff", requestId: asked.requestId,
+        caller: { kind: "controller" },
+        submission: {
+          approved: true,
+          credential: { kind: "controller-chat-relay", conversationId: "conv-lane", messageId: "msg-lane", actorId: "user-1", messageText: "อนุมัติ BA sign-off" },
+        },
+      });
+      expect(answer).toMatchObject({ ok: true, approved: true });
+      expect(store.loadLaneRequest(asked.requestId!)?.decision?.source.channel).toBe("chat-relay");
+      expect(loadGovernedKnowledge(root, store).kb.get("REQ-003")?.status).toBe("approved");
+    } finally {
+      api.close();
+    }
+  });
+
+  it("shows a durable lane chat decision in read-only roles history", async () => {
+    const root = tmp();
+    writeApprovedKnowledge(root);
+    const dbFile = path.join(tmp("lane-history-"), "state.db");
+    const store = new SqliteTaskStore(dbFile);
+    const api = createStaApi({ projectRoot: root, store, humanDecisionVerifier: createChatRelayChannel() });
+    const logs: string[] = [];
+    const log = vi.spyOn(console, "log").mockImplementation((...parts) => { logs.push(parts.join(" ")); });
+    try {
+      const asked = await api.laneDecision({ module: MODULE, lane: "ba", action: "signoff", caller: { kind: "controller" } });
+      expect(asked.requestId).toBeDefined();
+      expect(await api.laneDecision({
+        module: MODULE, lane: "ba", action: "signoff", requestId: asked.requestId,
+        caller: { kind: "controller" },
+        submission: { approved: true, credential: {
+          kind: "controller-chat-relay", conversationId: "conv-history", messageId: "msg-history",
+          actorId: "user-1", messageText: "approve BA sign-off",
+        } },
+      })).toMatchObject({ ok: true, approved: true });
+      expect(await runRolesVerb(["history", "--module", MODULE, "--knowledge-root", root, "--state-db", dbFile], root)).toBe(0);
+      expect(logs.join("\n")).toContain("chat:conv-history/msg-history");
+      expect(logs.join("\n")).toContain(asked.requestId);
+    } finally {
+      log.mockRestore();
+      api.close();
+      store.close();
+    }
+  });
+
+  it("Controller relays BA sign-off through sta roles after a bubble-chat answer", async () => {
+    const root = tmp();
+    writeApprovedKnowledge(root);
+    const dbFile = path.join(tmp("lane-cli-chat-"), "state.db");
+    vi.mocked(resolveHumanDecisionChannel).mockReturnValue(createChatRelayChannel());
+    try {
+      expect(await runRolesVerb(["signoff", "ba", "--module", MODULE, "--knowledge-root", root, "--state-db", dbFile], root)).toBe(4);
+      const store = new SqliteTaskStore(dbFile);
+      const requestId = store.laneRequests(canonicalKnowledgeRoot(root), MODULE)[0]!.requestId;
+      store.close();
+      const args = ["signoff", "ba", "--module", MODULE, "--knowledge-root", root, "--state-db", dbFile, "--request", requestId];
+      await expect(runRolesVerb([...args, "--yes"], root)).rejects.toThrow(/all four --chat-/);
+      expect(await runRolesVerb([...args, "--yes", "--chat-conversation-id", "conv-cli", "--chat-message-id", "msg-cli", "--chat-actor-id", "user-1", "--chat-text", "Approve BA sign-off"], root)).toBe(0);
+      const reopened = new SqliteTaskStore(dbFile);
+      expect(reopened.loadLaneRequest(requestId)?.decision?.source.evidenceRef).toBe("chat:conv-cli/msg-cli");
+      reopened.close();
+    } finally {
+      vi.mocked(resolveHumanDecisionChannel).mockReturnValue(UNCONFIGURED_HUMAN_CHANNEL);
     }
   });
 });

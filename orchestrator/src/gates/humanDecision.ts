@@ -5,11 +5,10 @@ import type { LaneApprovalRecord } from "./laneApproval.js";
  * The trusted human channel: the only thing that may turn a submission into
  * a human decision STA will record.
  *
- * A verifier authenticates who answered and that they are authorized for this
- * request, using proof the channel itself controls (a signature, an external
- * system's review record, …). Environment variables, OS user names, CLI flags,
- * prompt text and executor output are never proof: every agent STA runs can
- * set or produce them.
+ * The current production chat relay receives the Controller's report of a
+ * human answer. STA checks its pending request, scope and replay, but cannot
+ * independently authenticate the chat actor or message reference. This lower
+ * assurance was explicitly accepted by the human for the V13 cutover.
  *
  * The port is asynchronous because a real channel reads its proof from
  * outside the process (V13 TASK-027: GitHub Issue comments over HTTPS). The
@@ -17,9 +16,7 @@ import type { LaneApprovalRecord } from "./laneApproval.js";
  * and re-checks the ledger inside it, so no transaction is held across I/O
  * and no blocking sync wrapper exists.
  *
- * Production resolves the channel from `humanChannelConfig.ts`: the
- * `github-app` channel when its human-owned configuration is complete, else
- * `UNCONFIGURED_HUMAN_CHANNEL`, which fails every approval closed.
+ * Production resolves the single chat-relay channel from humanChannelConfig.
  */
 /**
  * Every question a trusted channel can be asked: a task's gate request
@@ -41,8 +38,7 @@ export interface HumanDecisionSubmission {
   requestId: string;
   /**
    * The answer the caller expects. A channel that carries the answer itself
-   * (github-app: the comment says approve or reject) may be asked without
-   * one; when present, the verified answer must equal it.
+   * may be asked without one; when present, the returned answer must equal it.
    */
   approved?: boolean;
   note?: string;
@@ -88,9 +84,9 @@ export interface HumanDecisionVerifier {
    */
   publish?(announcement: ApprovalAnnouncement): Promise<ApprovalPublication>;
   /**
-   * Authenticates and authorizes the submission for exactly this request, or
-   * throws. Returns the decision in the ledger's shape; the orchestrator still
-   * applies every ledger check (pending, scope, replay) afterwards.
+   * Checks the channel submission for exactly this request, or throws. In
+   * production chat-relay mode it cannot independently authenticate the
+   * Controller-reported actor/message. STA applies pending/scope/replay checks.
    */
   verify<R extends HumanDecisionRequest>(request: R, submission: HumanDecisionSubmission, context: HumanDecisionContext): Promise<VerifiedDecisionFor<R>>;
   /**
@@ -106,7 +102,7 @@ export class NoTrustedHumanChannelError extends Error {
     super(
       `no trusted human identity channel is configured — approval request ${requestId} cannot be decided` +
         (detail ? ` (${detail})` : "") +
-        ". STA fails closed here: a human must install and configure the github-app approval channel (V13 TASK-027).",
+        ". STA fails closed here until a Controller relays the human's chat answer.",
     );
     this.name = "NoTrustedHumanChannelError";
   }
